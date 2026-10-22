@@ -69,7 +69,7 @@ async function main(): Promise<void> {
   const directory = join(temporary, "browser-apt");
   await mkdir(directory, { recursive: true });
   apt(["update"]);
-  const cli = fileURLToPath(new URL("../web/node_modules/playwright/cli.js", import.meta.url));
+  const cli = fileURLToPath(new URL("../node_modules/playwright/cli.js", import.meta.url));
   const report = spawnSync(process.execPath, [cli, "install-deps", "--dry-run"].concat(browsers), { encoding: "utf8" });
   if (report.error) throw report.error;
   if (report.status !== 0 && report.status !== 1) throw new Error(report.stderr || "Playwright dependency inspection failed");

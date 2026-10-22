@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { qualityGates } from "./quality";
-import { inBatches, missingPackages, parseArchives } from "./ci-browser-deps";
+import { inBatches, missingPackages, parseArchives } from "../web/scripts/ci-browser-deps";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const quality = workflow.split("\n  quality:\n")[1]!.split("\n  rust:\n")[0]!;
@@ -142,7 +142,7 @@ for (const { job, browsers } of [
 ]) {
   test(`${job} prefetches verified apt archives instead of serial browser dependency downloads`, () => {
     const section = (workflow.split(`\n  ${job}:\n`)[1] ?? "").split(/\n  \S/)[0] ?? "";
-    expect(section).toContain(`bun ../scripts/ci-browser-deps.ts ${browsers}`);
+    expect(section).toContain(`bun scripts/ci-browser-deps.ts ${browsers}`);
     expect(section).toContain(`bunx playwright install ${browsers}`);
     expect(section).not.toContain("playwright install --with-deps");
     expect(section).toContain("${{ runner.temp }}/browser-apt/*.deb");
