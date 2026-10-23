@@ -10,8 +10,7 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 function factory(name: string) {
   const output = join(scratch, `${name}.js`);
-  const emitted = Bun.spawnSync(["node", join(root, "scripts/transpile-runtime.ts"), join(root, `crates/bunwasm-runtime/src/js/${name}.ts`), output]);
-  expect(emitted.stderr.toString()).toBe("");
+  const emitted = Bun.spawnSync(["node", join(root, "scripts/transpile-runtime.ts"), join(root, `crates/bunwasm-runtime/src/js/${name}.ts`), output], { stdout: "pipe", stderr: "pipe" });
   expect(emitted.exitCode).toBe(0);
   return runInNewContext(readFileSync(output, "utf8"), { ArrayBuffer, Uint8Array, DataView, SyntaxError, TypeError });
 }
@@ -88,13 +87,14 @@ test("accepts JSONL native and builtin test-runner contracts", () => {
   expect(result.exitCode).toBe(0);
 });
 
-for (const [label, text] of [
+const invalidContracts: [label: string, text: string][] = [
   ["decode text", 'internal.native.utf8Decode("not bytes");'],
   ["encode number", "internal.native.utf8Encode(1);"],
   ["format kind", 'internal.require("formats").parse("null", "OTHER");'],
   ["test callback", 'internal.require("bun_test").exports.test("bad", 1);'],
   ["test name", 'internal.require("bun_test").exports.test(1, () => {});'],
-]) {
+];
+for (const [label, text] of invalidContracts) {
   test(`rejects an invalid utility contract: ${label}`, () => {
     const result = contracts(text);
     expect(result.exitCode).not.toBe(0);

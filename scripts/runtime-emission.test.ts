@@ -22,6 +22,38 @@ test("erases types without printing constructors or moving source positions", ()
     .toBe('(function (value        ) { "use strict"; throw new TypeError(value); })\n');
 });
 
+test("empties type-only lines and keeps template text and every other position", () => {
+  const text = [
+    "(function (value: string) {",
+    "  type Local = { a: string };",
+    "  interface Shape {",
+    "    b: number;",
+    "  }",
+    "  ",
+    "  const kept = `",
+    "   ",
+    "  ${value as string}`;",
+    "  return kept as string;",
+    "})",
+    "",
+  ].join("\n");
+  writeFileSync(join(source, "blank.ts"), text);
+  expect(emit(join(source, "blank.ts")).split("\n")).toEqual([
+    "(function (value        ) {",
+    "",
+    "",
+    "",
+    "",
+    "  ",
+    "  const kept = `",
+    "   ",
+    "  ${value          }`;",
+    "  return kept          ;",
+    "})",
+    "",
+  ]);
+});
+
 test("converted Glob preserves replacement error classes and their stacks", async () => {
   const { runInNewContext } = await import("node:vm");
   const generated = emit(join(root, "crates/bunwasm-runtime/src/js/glob.ts"));

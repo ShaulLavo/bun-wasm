@@ -174,6 +174,25 @@ declare namespace BunWasm {
 }
 
 declare namespace BunWasm {
+  type DataFormat = "JSON" | "JSONC" | "JSON5" | "TOML" | "YAML";
+  type TestCallback = () => unknown;
+  type TestRegistrar = (name: string, callback?: TestCallback, timeout?: number) => unknown;
+  type TestHook = (callback: TestCallback, timeout?: number) => unknown;
+  interface Native {
+    utf8Encode(value: string): Uint8Array<ArrayBuffer>;
+    /** `fatal` throws on invalid UTF-8 instead of substituting U+FFFD. */
+    utf8Decode(bytes: Uint8Array, fatal?: boolean): string;
+  }
+  interface Internal {
+    require(name: "formats"): { parse(input: unknown, format: DataFormat): unknown };
+    require(name: "bun_test"): { exports: {
+      test: TestRegistrar & Record<"skip" | "todo" | "only", TestRegistrar>;
+      describe(name: string, callback: () => unknown): unknown;
+    } & Record<"beforeAll" | "afterAll" | "beforeEach" | "afterEach", TestHook> };
+  }
+}
+
+declare namespace BunWasm {
   interface CertificateData {
     raw: Uint8Array;
     subject?: string; issuer?: string;
