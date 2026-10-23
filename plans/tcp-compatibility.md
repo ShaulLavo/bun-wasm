@@ -20,6 +20,10 @@ remain on the socket; the previous connection is closed before dialing again.
 Focused checks: `bun test web/tests/node-net-onread.test.ts` and
 `scripts/test.sh --no-build --engine ENGINE net-onread`.
 
+The current-main `5fa3a24f` QuickJS guest reproduces two passes and one timeout
+in unmodified `socket-reconnect-live.test.ts` at patched Bun `d71508d31...`.
+The own-source QuickJS guest after this change passes all three cases.
+
 The following is the historical reproduction, not a new measurement:
 
 Reproduce without changing upstream files:

@@ -175,3 +175,11 @@ Run `bun test web/tests/node-net-onread.test.ts`. The real-guest companion is
 `tests/fixtures/net-onread`, selected with `scripts/test.sh --no-build --engine
 ENGINE net-onread`. Before/after logs and guest evidence are retained in
 `/work/reports/wave-20261022/bun-wasm/tcp-queue/` for coordinator review.
+
+The exact-main QuickJS census of unmodified
+`js/node/net/socket-reconnect-live.test.ts` at patched Bun `d71508d31...`
+has two passes and one paused-reconnect timeout. The own-source QuickJS guest
+after this change passes all three cases with no timeout.
+Native Bun 1.4.3 reports zero callback bytes in its `bytesRead` property.
+The dedicated fixture retains this adapter's byte-count contract with a
+`manual` marker instead of treating that native counter as expected output.
