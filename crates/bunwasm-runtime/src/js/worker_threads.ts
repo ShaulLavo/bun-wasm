@@ -685,6 +685,9 @@
     if (portOps.isClosed(port)) throw Object.assign(new Error("Cannot send data on closed MessagePort"), { code: "ERR_CLOSED_MESSAGE_PORT" });
     throw Object.assign(new Error("VM contexts are not supported in bun-wasm"), { code: "ERR_NOT_SUPPORTED_IN_WASM" });
   }
+  function isBuildError(error: unknown): error is Error {
+    return error instanceof Error && error.name === "BuildError" && "__bunwasmFormatted" in error;
+  }
   function initialize() {
     if (!config || initialized) return;
     initialized = true;
@@ -705,7 +708,9 @@
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "exiting", child: route[route.length - 1], code, messages: parentPort ? portOps.sent(parentPort) : 0 } });
       parentChannel?.drain();
     };
-    internal.workerError = error => {
+    internal.workerError = reported => {
+      // Like Bun, a parse failure reaches the parent as a SyntaxError, not the loader's BuildError.
+      const error = isBuildError(reported) ? new SyntaxError(reported.message) : reported;
       let graph: Graph;
       try { graph = codec.encode(error); }
       catch { graph = codec.encode(Object.assign(new Error("Cannot serialize worker error"), { code: "ERR_WORKER_UNSERIALIZABLE_ERROR" })); }

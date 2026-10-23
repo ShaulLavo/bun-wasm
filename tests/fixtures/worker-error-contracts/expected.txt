@@ -1,0 +1,10 @@
+missing entry ["Error","Error","MODULE_NOT_FOUND","Cannot find module '<dir>/does-not-exist.js'"]
+missing entry exit 1
+syntax error ["SyntaxError","SyntaxError",null,"Expected \";\" but found \"bar\""]
+syntax error exit 1
+trace_events ["Error","Error","ERR_TRACE_EVENTS_UNAVAILABLE","Trace events are unavailable"]
+trace_events exit 1
+execve message ["TypeError","ERR_WORKER_UNSUPPORTED_OPERATION","Calling process.execve is not supported in workers"]
+execve exit 0
+main execve ["TypeError","ERR_FEATURE_UNAVAILABLE_ON_PLATFORM","The feature process.execve is unavailable on the current platform, which is being used to run Node.js"]
+main trace_events ["Error","ERR_TRACE_EVENTS_UNAVAILABLE","Trace events are unavailable"]

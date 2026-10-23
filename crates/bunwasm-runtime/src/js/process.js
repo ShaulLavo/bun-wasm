@@ -32,6 +32,8 @@
     return Object.assign(new Error(`${syscall} ${code}`), { code, errno, syscall });
   }
 
+  let execveWarned = false;
+
   // Like Node, assigned values become strings (`process.env.N = 1` -> "1").
   const env = new Proxy(native.env(), {
     set(target, key, value) {
@@ -266,6 +268,16 @@
     },
     reallyExit: (code) => { internal.traceExit("process.reallyExit", code | 0); native.exit(code | 0); },
     abort: () => { internal.traceExit("process.abort", 134); native.exit(134); },
+    // Bun's contract where the process image cannot be replaced (its Windows build):
+    // workers are rejected first, then the main thread warns once and throws.
+    execve() {
+      if (!internal.require("worker_threads").isMainThread) {
+        throw Object.assign(new TypeError("Calling process.execve is not supported in workers"), { code: "ERR_WORKER_UNSUPPORTED_OPERATION" });
+      }
+      if (!execveWarned) process.emitWarning("process.execve is an experimental feature and might change at any time", "ExperimentalWarning");
+      execveWarned = true;
+      throw Object.assign(new TypeError("The feature process.execve is unavailable on the current platform, which is being used to run Node.js"), { code: "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM" });
+    },
     kill(pid, signal = "SIGTERM") {
       const number = typeof signal === "number" ? signal : signals[String(signal).toUpperCase()];
       if (!Number.isInteger(number) || number < 0 || number > 64) throw new TypeError(`Unknown signal: ${signal}`);
