@@ -1,3 +1,4 @@
 occupied port real ok
 occupied port fake ok
 closed startup stays closed
+callback relisten exits cleanly

@@ -44,3 +44,13 @@ stopped.close();
 await closed;
 expect(announced).toBe(false);
 console.log("closed startup stays closed");
+
+const reused = createServer();
+await new Promise<void>((resolve, reject) => {
+  reused.on("error", reject);
+  reused.listen(0, "127.0.0.1", () => {
+    reused.close();
+    reused.listen(0, "127.0.0.1", () => reused.close(error => error ? reject(error) : resolve()));
+  });
+});
+console.log("callback relisten exits cleanly");

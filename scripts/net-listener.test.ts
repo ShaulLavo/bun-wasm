@@ -78,17 +78,27 @@ test("an unreferenced startup waiter does not keep the guest alive", () => {
 });
 
 function httpFixture() {
-  let address: string | number = -2;
+  let listener = 6;
   let accepts = 0;
-  const connections = [8];
+  const listeners = new Map<number, { ready: boolean; open: boolean; connections: number[] }>();
+  const delivered: number[] = [];
+  const ticks: (() => void)[] = [];
   const events: string[] = [];
   const load = (name: string) => {
     const text = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}`, import.meta.url), "utf8");
     return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${text}`), { TextEncoder });
   };
   const native = {
-    hostListen: () => 7, hostLocalPort: () => 1234, hostLocalAddr: () => address,
-    hostAccept: () => { accepts++; return connections.shift() ?? -2; }, hostClose: () => 0,
+    hostListen() { listeners.set(++listener, { ready: false, open: true, connections: [] }); return listener; },
+    hostLocalPort: () => 1234,
+    hostLocalAddr(handle: number) { return listeners.get(handle)?.ready ? "{}" : -2; },
+    hostAccept(handle: number) {
+      accepts++;
+      const state = listeners.get(handle);
+      if (!state?.open) return -1;
+      return state.ready ? state.connections.shift() ?? -2 : -2;
+    },
+    hostClose(handle: number) { const state = listeners.get(handle); if (state) state.open = false; return 0; },
   };
   const modules = {
     events: EventEmitter, buffer: { Buffer }, net_listener: factory({ native }),
@@ -98,15 +108,27 @@ function httpFixture() {
     native,
     web: {}, builtinFactories: {},
     require: (name: keyof typeof modules) => modules[name],
-    builtin: () => ({ Readable, Writable }), nextTick: (_callback: () => void) => {},
+    builtin: () => ({ Readable, Writable }), nextTick(callback: () => void) { ticks.push(callback); },
     pumpIo: () => false, ioPending: () => 0,
   };
   const { createServer } = load("net.js")(internal).nodeHttp("http:");
   const server = createServer();
-  server._onConnection = () => server.emit("connection");
+  server._onConnection = (conn: { handle: number }) => { delivered.push(conn.handle); server.emit("connection"); };
   server.on("connection", () => events.push("connection"));
   server.on("listening", () => events.push("listening"));
-  return { server, events, internal, accepts: () => accepts, ready() { address = "{}"; } };
+  function ready(connections = [8]) {
+    const state = listeners.get(listener);
+    if (!state) throw new Error("Missing host listener");
+    state.ready = true;
+    state.connections = connections;
+  }
+  function pump() {
+    while (ticks.length) ticks.shift()?.();
+    internal.pumpIo();
+    while (ticks.length) ticks.shift()?.();
+  }
+  return { server, events, internal, delivered, accepts: () => accepts, ready, pump };
+
 }
 
 test("HTTP listening precedes delivery of an already queued connection", () => {
@@ -143,5 +165,67 @@ test("unref in the HTTP listen callback also unreferences acceptance", () => {
   state.ready();
   state.internal.pumpIo();
   expect(state.events).toEqual(["listening"]);
+  expect(state.internal.ioPending()).toBe(0);
+});
+
+
+test("HTTP close and relisten in the listen callback has one startup and no leaked waiter", () => {
+  const state = httpFixture();
+  state.server.listen(1234, () => { state.server.close(); state.server.listen(2345); });
+  state.ready();
+  state.pump();
+  state.pump();
+  expect(state.events).toEqual(["listening"]);
+  expect(state.accepts()).toBe(0);
+  expect(state.internal.ioPending()).toBe(1);
+  state.ready([80, 81]);
+  state.pump();
+  state.pump();
+  expect(state.events).toEqual(["listening", "listening", "connection", "connection"]);
+  expect(state.delivered).toEqual([80, 81]);
+  expect(state.internal.ioPending()).toBe(1);
+  state.server.close();
+  state.pump();
+  expect(state.internal.ioPending()).toBe(0);
+});
+
+test("HTTP close after a callback relisten leaves no waiter keeping the guest alive", () => {
+  const state = httpFixture();
+  state.server.listen(1234, () => { state.server.close(); state.server.listen(2345); });
+  state.ready();
+  state.pump();
+  state.ready([]);
+  state.pump();
+  state.server.close();
+  state.pump();
+  expect(state.internal.ioPending()).toBe(0);
+});
+
+test("plain HTTP relisten delivers each queued connection once and closes cleanly", () => {
+  const state = httpFixture();
+  for (const connections of [[80, 81], [82, 83]]) {
+    state.server.listen(1234);
+    state.ready(connections);
+    state.pump();
+    state.pump();
+    state.pump();
+    expect(state.internal.ioPending()).toBe(1);
+    state.server.close();
+    state.pump();
+    expect(state.internal.ioPending()).toBe(0);
+  }
+  expect(state.delivered).toEqual([80, 81, 82, 83]);
+  expect(state.events).toEqual(["listening", "connection", "connection", "listening", "connection", "connection"]);
+});
+
+test("a nested I/O pump in the listen callback cannot announce the same startup twice", () => {
+  const state = httpFixture();
+  state.server.listen(1234, () => state.pump());
+  state.ready();
+  state.pump();
+  state.pump();
+  expect(state.events).toEqual(["listening", "connection"]);
+  state.server.close();
+  state.pump();
   expect(state.internal.ioPending()).toBe(0);
 });

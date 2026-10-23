@@ -1777,7 +1777,11 @@ publishing `listening` before the host has bound its socket. A pending bind keep
 the waiter alive. Success emits `listening` before registering the accept waiter,
 so a queued connection cannot overtake the listen callback. Closing in that
 callback prevents acceptance, and its `ref`/`unref` choice applies to the new
-accept waiter. Failure releases the handle and emits the original host error
+accept waiter. Each startup owns a distinct waiter identity, checked before
+polling and after invoking listeners. Closing and re-listening inside the callback
+cannot let the previous startup install an accept waiter for the new listener.
+An announcing startup does not announce again during a nested I/O pump.
+Failure releases the handle and emits the original host error
 without starting acceptance. Closing cancels startup and `ref`/`unref` apply to
 both startup and accept waiters. The Node host's synchronous
 port probe is not proof that its later named-host bind succeeded. No delay or
