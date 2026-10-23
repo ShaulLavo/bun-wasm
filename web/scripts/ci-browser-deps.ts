@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,9 +54,34 @@ async function downloadArchive(archive: Archive, directory: string): Promise<voi
     stdout: "inherit", stderr: "inherit", env: { ...process.env, LC_ALL: "C" },
   });
   if (await child.exited !== 0) throw new Error(`APT archive download failed: ${archive.filename}`);
+}
+
+async function archiveMatches(archive: Archive, target: string): Promise<boolean> {
+  if (!await Bun.file(target).exists()) return false;
   const bytes = await readFile(target);
-  const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-  if (bytes.length !== archive.size || hash !== archive.sha256) throw new Error(`APT archive verification failed: ${archive.filename}`);
+  if (bytes.length !== archive.size) return false;
+  return new Bun.CryptoHasher("sha256").update(bytes).digest("hex") === archive.sha256;
+}
+
+export async function prefetchArchive(archive: Archive, directory: string, download = downloadArchive): Promise<void> {
+  const target = join(directory, archive.filename);
+  if (await archiveMatches(archive, target)) {
+    console.log(`Reuse verified APT archive ${archive.filename}`);
+    return;
+  }
+  await rm(target, { force: true });
+  await download(archive, directory);
+  if (!await archiveMatches(archive, target)) throw new Error(`APT archive verification failed: ${archive.filename}`);
+}
+
+export async function planArchives(install: string[], temporary: string, run = apt): Promise<Archive[]> {
+  const directory = await mkdtemp(join(temporary, "browser-apt-plan-"));
+  try {
+    const plan = run(["--print-uris", "--download-only"].concat(install, ["-o", `Dir::Cache::archives=${directory}`]), true);
+    return parseArchives(plan);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 async function main(): Promise<void> {
@@ -77,10 +102,9 @@ async function main(): Promise<void> {
   const packages = missingPackages(report.stdout);
   if (!packages.length) return;
   const install = ["install", "--yes", "--no-install-recommends", "-o", `Dir::Cache::archives=${directory}`, "-o", "Acquire::ForceHash=SHA256", "-o", "APT::Keep-Downloaded-Packages=true"].concat(packages);
-  const plan = apt(["--print-uris", "--download-only"].concat(install), true);
-  const archives = parseArchives(plan);
+  const archives = await planArchives(install, temporary);
   console.log(`Prefetch ${archives.length} signed-index apt archives with concurrency 16`);
-  await inBatches(archives, 16, archive => downloadArchive(archive, directory));
+  await inBatches(archives, 16, archive => prefetchArchive(archive, directory));
   apt(install);
 }
 
