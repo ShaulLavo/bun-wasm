@@ -20,3 +20,8 @@ test("Next cleanup and observer code stays within three block levels", () => {
   const failures = paths.flatMap(path => deepBlocks(new URL(path, import.meta.url).pathname));
   expect(failures).toEqual([]);
 });
+
+test("Safari runner and cleanup code stays within three block levels", () => {
+  const paths = ["browser-safari.ts", "safari-webdriver.ts", "safari-shell.ts", "safari-observers.ts", "safari-open-descriptor-worker.ts", "engine-interruption-result.ts"];
+  expect(paths.flatMap(path => deepBlocks(new URL(`../web/tests/${path}`, import.meta.url).pathname))).toEqual([]);
+});
