@@ -337,7 +337,8 @@ open. Pending binds cannot accept, and `unref` in that callback applies to the
 accept waiter. Close-and-relisten callbacks keep one waiter per startup and leave
 zero referenced waiters after final close. Plain relisten delivers each queued
 connection once; a guest fixture also requires the reused server process to exit.
-The strict runtime check and 120 unit tests, lint and project type
+After rebasing onto main `23e2125d`, the strict runtime check and 131 unit tests,
+lint and project type
 checks pass after this ordering fix. The following guest runs predate the review
 fix. Six listener/process/framing
 fixtures pass on each engine, and the unchanged upstream pipeline file passes
