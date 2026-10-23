@@ -19,6 +19,15 @@ function emit(name: string, compact = false) {
   return readFileSync(output, "utf8");
 }
 
+function thrownName(action: () => unknown) {
+  try {
+    action();
+  } catch (error) {
+    return error && typeof error === "object" && "name" in error ? error.name : undefined;
+  }
+  return undefined;
+}
+
 function syntaxHash(source: string) {
   const file = ts.createSourceFile("runtime.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   function syntax(node: ts.Node): unknown {
@@ -44,6 +53,19 @@ for (const [name, hash] of Object.entries(originalTokens)) {
     expect(Buffer.byteLength(emit(name, true))).toBeLessThanOrEqual(originalEmbeddedBytes[name as keyof typeof originalEmbeddedBytes]);
   });
 }
+
+test("compact factories preserve strict classic-script semantics", () => {
+  for (const name of Object.keys(originalTokens)) {
+    const source = emit(name, true);
+    expect(thrownName(() => runInNewContext(`(function () { return (${source}).caller; })()`))).toBe("TypeError");
+  }
+
+  const source = emit("stack_trace", true);
+  expect(thrownName(() => runInNewContext(`(function () {
+    (${source})({ native: { engine: "jsc" }, defineHidden: Object.assign });
+    return Error.captureStackTrace.caller;
+  })()`))).toBe("TypeError");
+});
 
 test("emitted builtin loader keeps caches, private symbols and unsupported errors", () => {
   const factory = runInNewContext(emit("bun_builtins", true));

@@ -20,5 +20,15 @@ if (!options.includes("--minify-whitespace")) {
   const output = new Bun.Transpiler({ loader: "ts", minifyWhitespace: true })
     .transformSync(`globalThis.factory = ${input}`);
   if (!output.startsWith(prefix) || !output.endsWith(";")) throw new Error("Unexpected compact runtime output");
-  writeFileSync(destination, `(${output.slice(prefix.length, -1)})\n`);
+  const factory = output.slice(prefix.length, -1);
+  const openingBrace = factory.indexOf("{");
+  const inputOpeningBrace = input.indexOf("{");
+  if (openingBrace < 0 || inputOpeningBrace < 0) throw new Error("Unexpected compact runtime factory");
+  const strictDirective = (body: string) => body.match(/^(["'])use strict\1;/)?.[0];
+  const directive = strictDirective(input.slice(inputOpeningBrace + 1).trimStart());
+  const body = factory.slice(openingBrace + 1).trimStart();
+  const emitted = directive && !strictDirective(body)
+    ? `${factory.slice(0, openingBrace + 1)}${directive}${factory.slice(openingBrace + 1)}`
+    : factory;
+  writeFileSync(destination, `(${emitted})\n`);
 }
