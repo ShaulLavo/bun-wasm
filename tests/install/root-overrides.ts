@@ -117,6 +117,7 @@ async function transitive() {
 
 async function changed() {
   assert.ok(registry);
+  registry.latest.set("versioned", "1.1.0");
   const dependencies = { "uses-one": "1.0.0", "uses-latest": "1.0.0", "selector-fits": "<2.0.0" };
   const directory = project("changed", { dependencies });
   await run(directory, ["install"]);
@@ -137,7 +138,7 @@ async function changed() {
     assert.match(production.stderr, /lockfile.*frozen/);
     assert.equal(contents(directory), lock);
     await run(directory, ["install"]);
-    const expected = "versioned" in overrides ? overrides.versioned : "1.1.0";
+    const expected = "versioned" in overrides || "versioned@^1" in overrides ? "2.0.0" === overrides.versioned ? "2.0.0" : "1.0.0" : "1.1.0";
     assert.equal(installed(directory, "versioned"), expected);
     const saved = contents(directory);
     await run(directory, ["install", "--frozen-lockfile"]);
@@ -146,6 +147,8 @@ async function changed() {
 }
 
 async function targets() {
+  assert.ok(registry);
+  registry.latest.set("versioned", "1.0.0");
   const directory = project("targets", { dependencies: { "selector-fits": "^1" }, overrides: { "selector-fits": "npm:versioned@2.0.0" } });
   await run(directory, ["install"]);
   assert.equal(installed(directory, "selector-fits"), "2.0.0");
