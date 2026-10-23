@@ -30,6 +30,7 @@ test("native checks share one conditional job and the cached target directory", 
 test("native fixture smoke selects decoder and URL behavior without another build", () => {
   const commands = Array.from(rust.matchAll(/^\s+bash scripts\/test\.sh (.+)$/gm), match => match[1]!.trim().split(/\s+/));
   expect(commands).toEqual([["--no-build", "node-misc", "runtime-ts-url-decoder"]]);
+  expect(rust).toContain('BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts');
   expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
 });
 

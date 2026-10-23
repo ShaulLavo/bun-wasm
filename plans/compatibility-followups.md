@@ -100,49 +100,69 @@ failure to hide it.
 
 Status: Approved
 
-Adding `semverIntersects` lets `cli/install/semver.test.ts` register its tests.
-Five package-manager cases fail on all three engines. The JSC measurement has
-345 passes and five failures in that file, with no timeout. The separate
-`regression/issue/08040.test.ts` still passes. Evidence is in
-`/work/reports/bun-wasm-track2-2026-10-15/initial-after/`, especially
-`jsc-after.json`. These failures are outside the semver host-function bridge.
+Reconciled against main `e0c85f2973ecaa594660ef36186daa08fdb13cf0` on
+2026-10-24. The unchanged `cli/install/semver.test.ts` has 345 passes and five
+failures on QuickJS, JSC and the browser host, without timeouts. The older report
+below is superseded by `/work/reports/bun-wasm/package-options-20261024/`.
 
-Reproduce with a clean source reference and rebuilt artifacts:
+`--lockfile-only` is already implemented. Its range-intersection test passes.
+The local package-options fixture proves metadata resolution, lockfile writes,
+no payload requests or node_modules creation, preserved existing payloads,
+immutable frozen locks and a later ordinary frozen install.
+
+The package-options lane repairs the existing-package no-match diagnostic and
+routes `pm version` before install option parsing. Failed current/requested
+version validation preserves the original manifest bytes. Stable increments and
+specific versions have positive native controls. Git operations, prerelease
+increments and lifecycle execution remain explicitly unsupported in this bounded
+command adapter.
+
+The separately assigned package-script PATH prerequisite distinguishes a missing
+PATH from an explicit empty or restricted value. Native Bun 1.4.4 preserves the
+explicit suffix but injects its own temporary Node proxy. The portable dispatcher
+keeps deliberate guest restrictions and only supplies `/bin:/usr/bin` when PATH
+is absent. This addresses the Vite worker's immediate Node ENOENT/504 branch,
+not its separate optimization delay. The explicit-PATH Vite control still
+exceeded the unchanged 90-second deadline. No Vite app pass is established.
+
+Two unchanged upstream failures need separate work:
+
+- The resolver does not implement root overrides. At upstream lines 1673-1710,
+  `selector-fits` declares `<2.0.0` and the matching override
+  `selector-fits@^1.0.0` requests `0.5.0`. The resolver installs `1.0.0`.
+  Invalid selector rows pass only because overrides are ignored. Follow
+  `Resolver::resolve`, `children` and `target` in
+  `crates/bunwasm-runtime/src/install/resolve.rs`. Add selector intersection
+  using Bun's parser, reject selectors with skipped/overflow tokens, and apply
+  overrides to root and transitive edges. Persist override metadata and
+  invalidate affected pins so changed overrides cannot bypass frozen-lock
+  checks. `install/mod.rs::lockfile`, `write_lock` and production `same_lock`
+  currently omit that metadata. Keep upstream tests frozen and add local
+  registry controls for initial, repeated and changed frozen installs.
+- The seeded range differential still accepts overflowing numeric components
+  after wildcards. Seed `1936026998` includes
+  `Bun.semver.satisfies("2.0.0", ">=2.*.18446744073709551616+2") === true`
+  while node-semver returns false. This is inside the patched upstream semver
+  parser, outside the install adapters. The full failures and additional
+  examples are in `before-upstream-quickjs-logs/cli/install/semver.test.ts.log`
+  under the report directory. Do not restore a collection failure or relax the
+  differential assertion to hide it.
+
+Reproduce on each engine with current artifacts and the canonical shared queue:
 
 ```sh
 source env.sh
-bash /work/tmp/wave-heavy/run.sh --class light "serial semver package-manager follow-up" -- \
-  env PATH="$PATH" scripts/bun-suite.sh --engine jsc --network loopback --jobs 1 \
-  --suite /work/projects/bun-wasm/vendor/bun \
+bun /work/platform-production/heavy/current/run.js --class light semver-install -- \
+  scripts/bun-suite.sh --engine jsc --network loopback --jobs 1 \
+  --suite "$PWD/vendor/bun" \
   --dependencies "$PWD/docs/bun-test-suite/dependencies/node_modules" \
   --output /work/tmp/bun-wasm-semver-package-manager.json cli/install/semver.test.ts
 ```
 
-The runner snapshots the reference tree and executes tests in its disposable
-copies. It does not run them in the shared checkout. Use a clean reference
-because the runner rejects tracked source modifications.
-
-The observed gaps are:
-
-- `bun install --lockfile-only` fails with `error: Unknown install option: --lockfile-only`.
-  The cases at upstream lines 1432 and 1673 need normal dependency and override
-  resolution while writing only the lockfile. The argument parser currently
-  rejects the option at `crates/bunwasm-runtime/src/install/mod.rs:54`.
-- A dependency range above `u64::MAX` reports
-  `No version matching "^99999999999999999999" found for specifier "foo"`.
-  The test at upstream line 1646 expects the suffix ` (but package exists)`.
-  `crates/bunwasm-runtime/src/install/resolve.rs:293` drops that distinction even
-  though registry metadata was found. The invalid range is already rejected.
-- `bun pm version <version> --no-git-tag-version` is not implemented. The two
-  cases in the table at upstream lines 1715 and 1730 expect invalid current or requested
-  versions to fail without changing `package.json`. They instead reach the
-  install option parser and report
-  `error: Unknown install option: --no-git-tag-version`.
-
-Implement these in the package-manager track with its existing install fixtures.
-Keep the upstream tests unchanged. Rerun the exact file on all three engines.
-The portable bridge PR separately fixes the engine-specific Symbol error wording
-and browser host GC recursion observed during the initial measurement.
+The runner snapshots the clean source reference into disposable copies. It does
+not edit upstream source or execute tests in the shared reference checkout.
+JSC must pass `check_jsc_inputs_stamp` in the consumer's source and environment;
+a hosted pass or mismatched local prebuild is not a waiver.
 
 ## Stack overflow paths that still trap
 
