@@ -45,8 +45,8 @@ function runFixture(artifact: string, fixture: string, scratch: string): void {
   const work = join(scratch, fixture);
   cpSync(source, work, { recursive: true });
   const run = spawnSync("node", ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--wasm", artifact,
-    "--dir", `${work}::/`, "--env", "PWD=/", "--env", "HOME=/", "--env", "BUNWASM_TEST=1", "--", "run", "/index.ts"],
-  { cwd: work, encoding: "utf8", timeout: 60_000, env: { ...process.env, AGENT: "0", CLAUDECODE: "" } });
+    "--engine", `jsc=${artifact}`, "--dir", `${work}::/`, "--env", "PATH=/opt/bun/jsc/bin:/bin:/usr/bin", "--env", "PWD=/", "--env", "HOME=/", "--env", "BUNWASM_TEST=1", "--", "run", "/index.ts"],
+  { cwd: work, encoding: "utf8", timeout: 60_000, env: { ...process.env, BUN_WASM_SCRATCH_ROOT: scratch, TMPDIR: scratch, AGENT: "0", CLAUDECODE: "" } });
   process.stdout.write(run.stdout ?? "");
   process.stderr.write(run.stderr ?? "");
   if (run.error) throw run.error;
