@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { chmod, copyFile, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { guestBuilds, hash } from "../../scripts/guest-source-manifest.ts";
-import { fixtureGit, withReceiptFixture, wasm } from "./guest-receipt-fixture.ts";
+import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture, wasm } from "./guest-receipt-fixture.ts";
 
 test("guest receipt binds committed repository, selected engine, consumed inputs, tools and exact final bytes", async () => {
   await withReceiptFixture(async (options, artifact) => {
@@ -40,34 +40,16 @@ test("write command validation can pass its verified receipt as build inputs", a
 });
 
 test("receipt CLI snapshots and writes a tiny committed source fixture without compiling", async () => {
-  await withReceiptFixture(async (options, artifact) => {
-    const root = options.repository;
-    const cli = join(root, "scripts/guest-build-receipt.ts");
-    for (const name of ["guest-build-receipt.ts", "guest-source-manifest.ts"]) await copyFile(new URL(`../../scripts/${name}`, import.meta.url), join(root, "scripts", name));
-    await writeFile(join(root, ".gitignore"), (await readFile(join(root, ".gitignore"), "utf8")) + "node_modules/\n");
-    fixtureGit(root, "add", "scripts", ".gitignore");
-    fixtureGit(root, "commit", "-m", "fixture receipt CLI");
-    const bin = join(options.sdk, "bin");
-    await mkdir(bin);
-    const fake = join(root, "fake-tool");
-    await writeFile(fake, `#!/bin/sh\nif [ "$1" = "--print" ]; then printf '%s\\n' ${JSON.stringify(options.rustTargetLib)}; else printf 'fixture tool 1\\n'; fi\n`);
-    const rustup = join(bin, "rustup");
-    await writeFile(rustup, `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(fake)}\n`);
-    await chmod(rustup, 0o700);
-    for (const name of ["clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"]) await symlink(fake, join(bin, name));
-    const installed = join(root, "node_modules/waffle");
-    await mkdir(join(root, "node_modules"));
-    await symlink(options.waffle, installed);
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, BUN_WASM_SYSROOT: options.sysroot, WASI_SDK_PATH: options.sdk, WASI_SDK: options.sdk, BUN_CODEGEN_DIR: "", RUSTC: fake };
-    const started = Bun.spawnSync([process.execPath, cli, "inputs", "browser"], { env });
+  await withCliReceiptFixture(async fixture => {
+    const started = receiptCli(fixture, "inputs", "browser");
     expect(started.stderr.toString()).toBe("");
     expect(started.exitCode).toBe(0);
-    const snapshot = join(root, "dist/inputs.json");
+    const snapshot = join(fixture.root, "dist/inputs.json");
     await writeFile(snapshot, started.stdout);
-    const finished = Bun.spawnSync([process.execPath, cli, "write", artifact, snapshot], { env });
+    const finished = receiptCli(fixture, "write", fixture.artifact, snapshot);
     expect(finished.stderr.toString()).toBe("");
     expect(finished.exitCode).toBe(0);
-    const receipt: unknown = await Bun.file(`${artifact}.build.json`).json();
+    const receipt: unknown = await Bun.file(`${fixture.artifact}.build.json`).json();
     expect(() => verifyGuestBuildReceipt(wasm, receipt)).not.toThrow();
   });
 });
@@ -164,6 +146,7 @@ test("manifest validation rejects missing tools, files, omissions and contradict
     const receipt = await writeGuestBuildReceipt(options, artifact, inputs);
     const variants = [
       { ...receipt.sourceManifest, tools: [] },
+      ...["node", "rust-lld"].map(name => ({ ...receipt.sourceManifest, tools: receipt.sourceManifest.tools.filter(tool => tool.name !== name) })),
       { ...receipt.sourceManifest, groups: [] },
       { ...receipt.sourceManifest, omissions: [] },
       { ...receipt.sourceManifest, source: { head: "comparison base", tree: receipt.sourceManifest.source.tree } },
