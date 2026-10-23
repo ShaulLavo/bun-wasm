@@ -49,7 +49,7 @@ still depends on private stream modules and native Bun socket hooks.
 
 ## Other first blockers
 
-Status: Resolver input and diagnostic fixes implemented, 2026-10-23.
+Status: Done for resolver input and diagnostic fixes, 2026-10-23.
 TLS, Unix sockets and private-hook capability checks remain Approved, blocked
 on their owning runtime features.
 
@@ -60,12 +60,12 @@ resolver details and asynchronous connect-error delivery. Only valid bracketed
 IPv6 literals lose brackets. Legacy IPv4 spellings still reach the platform
 resolver. The dedicated `net-dns-errors` fixture retains these inputs.
 
-The following describes the first blockers that still need their own features:
+The own-source QuickJS guest passes the dedicated fixture. Its unchanged
+upstream DNS file has 24 passes, zero failures and five skips. The Rust host
+and Node engine host still own platform resolution; browser raw internet TCP
+remains unavailable.
 
-`js/bun/net/socket-dns-error.test.ts` still has host and diagnostic edge cases.
-Reproduce its exact inputs with the same isolated command before changing DNS
-normalization. The Rust host and Node engine host own resolution; browser raw
-internet TCP remains unavailable.
+The following first blockers still need their own features:
 
 TLS and Unix socket files need capabilities beyond this plain TCP adapter.
 `socket.test.ts` and syscall-fault files first import private `createSocketPair`

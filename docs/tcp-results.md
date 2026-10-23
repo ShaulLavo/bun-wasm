@@ -179,6 +179,15 @@ The focused test uses real Waffle TCP pipes, with separate invalid-name and
 valid IPv6-loopback checks. TLS and Unix sockets, private testing hooks and
 native Node child executables remain capability limits rather than DNS fixes.
 
+After rebuilding the own-source QuickJS guest, the unchanged upstream file has
+24 passes, zero failures and five skips, with no timeout. The dedicated
+`net-dns-errors` fixture passes. Two focused checks pass with 15 assertions,
+along with runtime and web type checks, lint and native Bun fixture control.
+The real-guest wrapper also passes 108 runtime prerequisite tests with 1,634
+assertions. Reproduce with `scripts/test.sh --no-build net-dns-errors` and the
+isolated upstream command. Full records are in
+`/work/reports/wave-20261022/bun-wasm/tcp-queue/dns-upstream-after.json`.
+
 ## Same-size HMR recheck, 2026-10-23
 
 Three runs of `ENGINES=browser node web/tests/browser-net.mjs chromium`
