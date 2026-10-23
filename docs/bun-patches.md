@@ -25,7 +25,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
 | [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
-| [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, async handler dispatch and streaming wrappers on all engines. |
+| [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, async handler dispatch, private indexed storage and streaming wrappers on all engines. |
 | [X509Certificate adapters](#x509certificate) | Host feature | Original BoringSSL data bindings and Node certificate wrapper over existing KeyObjects. |
 | [X.509 hostname option matcher](#x509-hostname-option-matcher) | Port | Adapt Bun's OpenSSL-compatible Rust matcher because BoringSSL removed four option behaviors. |
 | [X.509 alternative name formatting and Node license](#x509-alternative-name-formatting) | Port | Translate Bun and Node certificate-name quoting to Rust without JSC and retain the Node MIT notices. |
@@ -2588,6 +2588,13 @@ upstream extraction and seeking paths remain intact. Other GNU PAX sparse
 versions report an unsupported-format error.
 
 ## HTMLRewriter
+
+Private handler registrations and synchronous output chunks append with a
+captured `Object.defineProperty`, not indexed assignment through `push`.
+An indexed accessor on `Array.prototype` therefore cannot intercept them.
+This is an original storage fix, compared against Bun's
+`test/js/workerd/html-rewriter-leak.test.ts` at pin
+`9510e74152073d850a18758ca41114d8f214ffa6`. Lifetime abandonment is unchanged.
 
 Class **Host feature**, **original adapters** in `crates/bunwasm-runtime/src/html_rewriter.rs`,
 `src/js/html_rewriter.ts`, the native table and global registry.

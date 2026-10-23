@@ -598,7 +598,8 @@ ruled out. Final gate outcomes for this lane are recorded separately in its PR.
 
 ## HTMLRewriter lifetime and intrinsic storage parity
 
-Status: Approved. Continue from the shared lol-html adapter after the API PR.
+Status: Approved. Indexed prototype accessor interception is resolved. Lifetime
+and abandoned-stream checks remain Approved.
 
 The 2026-10-17 HTML/X509 lane adds the parser, handlers, async Response rewriting,
 streaming readers and Node certificates. Its [measurement](../docs/bun-test-suite/htmlrewriter-x509.md)
@@ -631,8 +632,10 @@ Inspect `Rewrite.asyncStep`, `stream`, `buffered`, and `close` in
 `crates/bunwasm-runtime/src/js/html_rewriter.ts`, plus the parser-session table in
 `src/html_rewriter.rs`. The async wrapper awaits an assimilated handler promise;
 unreachable never-settling promises do not yet trigger native-style abandonment.
-Private handler and output arrays also need protection from indexed prototype
-accessors. Use real weak references and owned native-state measurements; neither
+Private handler and synchronous output arrays now append own data properties,
+so indexed prototype accessors cannot intercept registrations or output chunks.
+`html-intrinsic-storage` reproduces both paths. Use real weak references and
+owned native-state measurements for the remaining lifetime work; neither
 zero heap counters nor a clean exit alone proves release.
 
 Keep the full HTML file's direct-stream collection failure separate. Other newly
