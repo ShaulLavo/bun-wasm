@@ -14,6 +14,8 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [HTTP/2 response compatibility class](#http2-response-compatibility-class) | Port | Adapt Bun's response class and link-header validation to the existing Node stream implementation without JSC intrinsics. |
+| [HTTP/2 builtin registration](#http2-response-compatibility-class) | Host feature | Original factory registration exposes one shared response constructor through named, default and CommonJS exports. |
 | [Quality fixes in adapted source](#quality-fixes-in-adapted-source) | Port | Mechanical formatting and lint fixes in the existing Bun/Node ports, without changing their upstream revision. |
 | [Native-host XML and optional hooks](#native-host-xml-and-optional-hooks) | Host feature | Scalar XML indexing and explicit unsupported trace/macro hooks let the full workspace link on the native host. |
 | [Quality checks and original adapters](#quality-checks-and-original-adapters) | Host feature | Original quality commands and tighter host/test typings, with small control-flow extractions. |
@@ -3400,3 +3402,31 @@ receipt. Blocking CI selects it for JSC embedding, allocation, build and fixture
 inputs. The Rust job reuses its toolchain, sources and dependencies;
 it builds JSC once and executes both fixtures against that linked guest in the
 Node WASI host. QuickJS and host syntax checks are not JSC execution evidence.
+
+## HTTP/2 response compatibility class
+
+`crates/bunwasm-runtime/src/js/http2_response.ts` is a **Port** of Bun's
+`src/js/node/http2.ts`, specifically `Http2ServerResponse`, response stream event
+handlers, header helpers and the compatibility socket proxy. Link-header validation
+comes from `src/js/internal/validators.ts`. The upstream revision is
+`9510e74152073d850a18758ca41114d8f214ffa6`. The read-only local Bun source at
+`d71508d31edf06765c12adf0df137ef531539f68` includes this repository's existing
+patch series, including the link-header regex correction. No upstream file changes
+in this addition. Bun's MIT notice remains in `crates/bunwasm-runtime/generated/builtins/LICENSE.md`.
+
+The port replaces Bun intrinsics with ordinary JavaScript, uses the existing
+Node Stream implementation and validators, and retains headers, trailers, status,
+body forwarding, push-response wrapping and finish/close event ordering. HTTP/2
+error constructors are local coded errors. WeakMaps replace Bun-private response,
+trailer and proxy-socket slots. The response has no request object because this
+adapter does not implement `Http2ServerRequest`. Session socket forwarding uses
+`session.socket` instead of Bun's private socket slot and native byte counter.
+The standalone link validator avoids a missing primordial in the stream bundle's
+unused validator copy. These changes let the class run under all guest engines.
+
+The `node:http2` factory registration in `builtins.js` is an **original host
+adapter**. It exposes this constructor, not an HTTP/1 alias or a sentinel class.
+The existing unsupported `createServer`, `createSecureServer` and `connect`
+functions are unchanged. The original `astro-http2-response` fixture compares the
+class against native Bun 1.4.4 using a controlled writable stream. It proves the
+response-class boundary, not HTTP/2 transport or complete Astro compatibility.
