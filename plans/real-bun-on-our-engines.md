@@ -330,7 +330,13 @@ main `5fa3a24f` because the occupied listener announced `listening`. It now pass
 with real and fake timers, and immediate close cancels startup. The fix waits on
 `hostLocalAddr` through an I/O waiter before publishing either success or the
 host bind error. No timer, delay, retry, or Node socket-probe change is involved.
-Four deterministic startup-waiter checks pass. Six listener/process/framing
+Eight deterministic startup and actual HTTP factory checks pass. The review
+regression first delivered a queued `connection` before `listening`; acceptance
+now starts only after the listen callback returns and only if it left the server
+open. Pending binds cannot accept, and `unref` in that callback applies to the
+accept waiter. The strict runtime check and 116 unit tests, lint and project type
+checks pass after this ordering fix. The following guest runs predate the review
+fix. Six listener/process/framing
 fixtures pass on each engine, and the unchanged upstream pipeline file passes
 on all three. The final rebuilt browser guest also passes the focused listener,
 framing and stream fixtures on UpCloud-4, with remote teardown verified.

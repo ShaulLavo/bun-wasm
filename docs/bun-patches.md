@@ -1774,9 +1774,12 @@ No upstream code is copied. Bun's `test/js/bun/test/test-timers.test.ts` at
 
 The HTTP startup waiter polls the existing `hostLocalAddr` contract instead of
 publishing `listening` before the host has bound its socket. A pending bind keeps
-the waiter alive; success emits `listening`; failure releases the handle, removes
-its accept waiter and emits the original host error. Closing cancels startup and
-`ref`/`unref` apply to both startup and accept waiters. The Node host's synchronous
+the waiter alive. Success emits `listening` before registering the accept waiter,
+so a queued connection cannot overtake the listen callback. Closing in that
+callback prevents acceptance, and its `ref`/`unref` choice applies to the new
+accept waiter. Failure releases the handle and emits the original host error
+without starting acceptance. Closing cancels startup and `ref`/`unref` apply to
+both startup and accept waiters. The Node host's synchronous
 port probe is not proof that its later named-host bind succeeded. No delay or
 retry is used, and fake timers do not control the I/O waiter.
 
