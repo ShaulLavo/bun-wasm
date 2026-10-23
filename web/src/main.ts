@@ -88,6 +88,25 @@ fs.onOwnershipLost = () => {
   engineSelect.disabled = true;
   fileSelect.disabled = true;
 };
+try {
+  await fs.mkdirp("/tmp");
+  // Background persistence can save a prefix of startup. Publish completion only after
+  // every example is present; a missing marker retries an interrupted seed from scratch.
+  // After completion, missing examples are intentional deletions and stay deleted.
+  const initialized = `${HOME}/.bunwasm-initialized`;
+  if (!await fs.lookup(initialized)) {
+    await fs.remove(HOME);
+    await fs.mkdirp(HOME);
+    for (const [name, source] of Object.entries(examples)) await fs.writeFile(`${HOME}/${name}`, source);
+    await fs.mkdirp(initialized);
+    await fs.flush();
+  }
+} catch (error) {
+  // The terminal is not initialized yet, but storage/lock failures must be visible.
+  setStatus(String(error), "error");
+  throw error;
+}
+
 // ---------- bun.wasm ----------
 
 let wasm: { module: WebAssembly.Module; size: number } | { error: string } | null = null;
@@ -125,29 +144,10 @@ async function loadWasm(): Promise<void> {
 // Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
 const moduleScope: Promise<boolean> = registerModuleScope();
 
-try {
-  await fs.mkdirp("/tmp");
-  // Background persistence can save a prefix of startup. Publish completion only after
-  // every example is present; a missing marker retries an interrupted seed from scratch.
-  // After completion, missing examples are intentional deletions and stay deleted.
-  const initialized = `${HOME}/.bunwasm-initialized`;
-  if (!await fs.lookup(initialized)) {
-    await fs.remove(HOME);
-    await fs.mkdirp(HOME);
-    for (const [name, source] of Object.entries(examples)) await fs.writeFile(`${HOME}/${name}`, source);
-    await fs.mkdirp(initialized);
-    await fs.flush();
-  }
-} catch (error) {
-  // The terminal is not initialized yet, but storage/lock failures must be visible.
-  setStatus(String(error), "error");
-  throw error;
-}
-
 let current: Run | null = null;
 
 async function runBun(args: string[], cwd: string, io: Output): Promise<number> {
-  await wasmReady;
+  const [{ startRun }] = await Promise.all([import("./runner"), wasmReady]);
   if (!wasm || "error" in wasm) {
     io.err(`\x1b[31m${wasm?.error ?? "bun.wasm unavailable"}\x1b[0m\r\n`);
     return 127;
@@ -166,7 +166,7 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
   const scoped = await moduleScope;
   runButton.disabled = true;
   try {
-    const [{ startRun }] = await Promise.all([import("./runner"), fs.drain()]);
+    await fs.drain();
     const run = startRun({ engine, module: wasm.module, args, env, runtime, moduleScope: scoped, trace, network }, {
       stdout: (data) => io.out(data),
       stderr: (data) => io.err(data),
