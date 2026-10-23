@@ -289,7 +289,9 @@ pub fn module_imports(source: &str, path: &str) -> Result<Vec<ModuleImport>, Str
 
 fn scan_imports(state: &State, source: &str, path: &str) -> Result<Vec<ModuleImport>, String> {
     let (result, dynamic) = bun_js_parser::with_bunwasm_dynamic_imports(|| {
-        scan(state, source, path, |scanned| static_imports(&scanned.import_records))
+        scan(state, source, path, |scanned| {
+            static_imports(&scanned.import_records)
+        })
     });
     let mut imports = result?;
     imports.extend(dynamic.into_iter().map(|start| ModuleImport {
@@ -363,22 +365,61 @@ fn await_hook_edits(state: &State, source: &str) -> Result<Vec<Edit>, String> {
     result?;
     let mut edits = Vec::new();
     for (start, end) in spans.awaits {
-        edits.push(Edit { at: start, closes: false, owner: start, text: "__bunwasm_resume(__bunwasm_capture(), " });
-        edits.push(Edit { at: end, closes: true, owner: start, text: ")" });
+        edits.push(Edit {
+            at: start,
+            closes: false,
+            owner: start,
+            text: "__bunwasm_resume(__bunwasm_capture(), ",
+        });
+        edits.push(Edit {
+            at: end,
+            closes: true,
+            owner: start,
+            text: ")",
+        });
     }
     for each in spans.for_awaits {
         let owner = each.start;
-        edits.push(Edit { at: owner, closes: false, owner, text: "{ const __bunwasm_ctx = __bunwasm_capture(); " });
+        edits.push(Edit {
+            at: owner,
+            closes: false,
+            owner,
+            text: "{ const __bunwasm_ctx = __bunwasm_capture(); ",
+        });
         if each.body_is_block {
-            edits.push(Edit { at: each.body_start + 1, closes: false, owner, text: " __bunwasm_resume(__bunwasm_ctx);" });
-            edits.push(Edit { at: each.body_end, closes: true, owner, text: " __bunwasm_resume(__bunwasm_ctx); }" });
+            edits.push(Edit {
+                at: each.body_start + 1,
+                closes: false,
+                owner,
+                text: " __bunwasm_resume(__bunwasm_ctx);",
+            });
+            edits.push(Edit {
+                at: each.body_end,
+                closes: true,
+                owner,
+                text: " __bunwasm_resume(__bunwasm_ctx); }",
+            });
         } else {
-            edits.push(Edit { at: each.body_start, closes: false, owner, text: "{ __bunwasm_resume(__bunwasm_ctx); " });
-            edits.push(Edit { at: each.body_end, closes: true, owner, text: " } __bunwasm_resume(__bunwasm_ctx); }" });
+            edits.push(Edit {
+                at: each.body_start,
+                closes: false,
+                owner,
+                text: "{ __bunwasm_resume(__bunwasm_ctx); ",
+            });
+            edits.push(Edit {
+                at: each.body_end,
+                closes: true,
+                owner,
+                text: " } __bunwasm_resume(__bunwasm_ctx); }",
+            });
         }
     }
     edits.sort_by(|a, b| {
-        let nesting = if a.closes { b.owner.cmp(&a.owner) } else { a.owner.cmp(&b.owner) };
+        let nesting = if a.closes {
+            b.owner.cmp(&a.owner)
+        } else {
+            a.owner.cmp(&b.owner)
+        };
         a.at.cmp(&b.at).then(b.closes.cmp(&a.closes)).then(nesting)
     });
     edits.dedup_by(|a, b| a.at == b.at && a.owner == b.owner && a.text == b.text);
@@ -430,7 +471,10 @@ pub fn function_await_hooks(args: &[String], kind: &str) -> Option<Vec<String>> 
         }
         let local: Vec<Edit> = mine
             .iter()
-            .map(|edit| Edit { at: edit.at - range.start, ..*edit })
+            .map(|edit| Edit {
+                at: edit.at - range.start,
+                ..*edit
+            })
             .collect();
         out.push(splice(arg, &local));
         rest = after;
@@ -822,7 +866,9 @@ mod tests {
         let out = hooked(source);
         assert_eq!(
             out,
-            format!("\"use strict\";\nconst f = async function () {{\n  const a = b\n  {OPEN}await c) // done\n  return a\n}};\n//# sourceURL=webpack-internal:///./a.js\n")
+            format!(
+                "\"use strict\";\nconst f = async function () {{\n  const a = b\n  {OPEN}await c) // done\n  return a\n}};\n//# sourceURL=webpack-internal:///./a.js\n"
+            )
         );
         assert_eq!(out.lines().count(), source.lines().count());
     }
@@ -832,18 +878,24 @@ mod tests {
         let out = hooked("async () => `${await (await a)}` + await b.c(d)?.e + await /x/.test(y)");
         assert_eq!(
             out,
-            format!("async () => `${{{OPEN}await ({OPEN}await a)))}}` + {OPEN}await b.c(d)?.e) + {OPEN}await /x/.test(y))")
+            format!(
+                "async () => `${{{OPEN}await ({OPEN}await a)))}}` + {OPEN}await b.c(d)?.e) + {OPEN}await /x/.test(y))"
+            )
         );
     }
 
     #[test]
     fn for_await_restores_in_its_body_and_after_it() {
-        let out = hooked("async () => { outer: for await (const n of g()) { if (n) continue outer; } }");
+        let out =
+            hooked("async () => { outer: for await (const n of g()) { if (n) continue outer; } }");
         assert_eq!(
             out,
-            format!("async () => {{ {LOOP}outer: for await (const n of g()) {{ {RESUME} if (n) continue outer; }} {RESUME} }} }}")
+            format!(
+                "async () => {{ {LOOP}outer: for await (const n of g()) {{ {RESUME} if (n) continue outer; }} {RESUME} }} }}"
+            )
         );
-        let out = hooked("async () => { for await (const a of x) for await (const b of y) await f(); }");
+        let out =
+            hooked("async () => { for await (const a of x) for await (const b of y) await f(); }");
         assert_eq!(
             out,
             format!(
@@ -854,7 +906,10 @@ mod tests {
 
     #[test]
     fn offsets_are_bytes_and_unhookable_source_is_left_alone() {
-        assert_eq!(hooked("\"é\"; async () => await x"), format!("\"é\"; async () => {OPEN}await x)"));
+        assert_eq!(
+            hooked("\"é\"; async () => await x"),
+            format!("\"é\"; async () => {OPEN}await x)")
+        );
         assert_eq!(eval_await_hooks("const s = 'await';"), None);
         assert_eq!(eval_await_hooks("async () => { await }"), None);
         assert_eq!(eval_await_hooks("no hooks here"), None);
@@ -862,10 +917,18 @@ mod tests {
 
     #[test]
     fn function_arguments_are_hooked_one_by_one() {
-        let args = ["a".to_owned(), "b = 1".to_owned(), "await a;\nreturn b".to_owned()];
+        let args = [
+            "a".to_owned(),
+            "b = 1".to_owned(),
+            "await a;\nreturn b".to_owned(),
+        ];
         assert_eq!(
             function_await_hooks(&args, "async"),
-            Some(vec!["a".to_owned(), "b = 1".to_owned(), format!("{OPEN}await a);\nreturn b")])
+            Some(vec![
+                "a".to_owned(),
+                "b = 1".to_owned(),
+                format!("{OPEN}await a);\nreturn b")
+            ])
         );
         assert_eq!(function_await_hooks(&args[..1], "async"), None);
     }
