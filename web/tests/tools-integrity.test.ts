@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import { loadWasm } from "../src/runner";
+import { loadWasm } from "../src/engine-loader";
 
 const valid = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const substituted = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, 2, 1, 120]);

@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { cpus, loadavg, release } from "node:os";
+import { readdir } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import { gzipSync } from "node:zlib";
@@ -28,13 +29,13 @@ interface Download {
 }
 const { values } = parseArgs({ options: {
   root: { type: "string", default: resolve(import.meta.dir, "..") },
-  baseline: { type: "string" }, revision: { type: "string" }, "baseline-revision": { type: "string" }, output: { type: "string" },
+  baseline: { type: "string" }, before: { type: "string" }, "before-revision": { type: "string" }, revision: { type: "string" }, "baseline-revision": { type: "string" }, output: { type: "string" },
   samples: { type: "string", default: "5" }, port: { type: "string", default: "48941" },
 } });
 const count = Number(values.samples), port = Number(values.port);
 assert.ok(Number.isInteger(count) && count > 0 && count <= 20);
 assert.ok(Number.isInteger(port) && port > 1024 && port < 65536);
-const variants = [{ label: "current", root: resolve(values.root) }].concat(values.baseline ? [{ label: "baseline", root: resolve(values.baseline) }] : []);
+const variants = [{ label: "current", root: resolve(values.root) }].concat(values.baseline ? [{ label: "baseline", root: resolve(values.baseline) }] : [], values.before ? [{ label: "before", root: resolve(values.before) }] : []);
 let browser: Browser | undefined;
 let launching: Promise<Browser> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -106,20 +107,18 @@ function instrument(app: string): void {
       value.term.onWriteParsed(() => {
         const buffer = value.term.buffer.active;
         const text = Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString() ?? "").join("\n");
-        if (text.includes("user@bun:")) state.prompt ??= performance.now();
+        if (app !== "web" || state.prompt !== null || !text.includes("user@bun:")) return;
+        state.prompt = performance.now();
+        queueMicrotask(() => {
+          state.spawn = performance.now();
+          void value.shell.submit('bun -e \'console.log("LIGHT_OUTPUT_" + "OK")\'').then(() => { state.complete = performance.now(); });
+        });
       });
     },
   });
 }
 
 async function webCommand(page: Page): Promise<void> {
-  await page.waitForFunction(() => window.lightCapture.prompt !== null);
-  // Submit immediately at the first prompt, including any unfinished WASM download in startup.
-  await page.evaluate(() => {
-    const capture = window.lightCapture;
-    capture.spawn = performance.now();
-    void Reflect.get(window, "playground").shell.submit('bun -e \'console.log("LIGHT_OUTPUT_" + "OK")\'').then(() => { capture.complete = performance.now(); });
-  });
   await page.waitForFunction(() => window.lightCapture.complete !== null);
   assert.ok(await page.evaluate(() => window.lightCapture.output !== null), "bun -e must print the sentinel");
 }
@@ -137,6 +136,10 @@ async function summarize(rows: Download[], capture: Capture, root: string, app: 
     return { path, sha256: createHash("sha256").update(code).digest("hex"), ...await sourceAttribution(resolve(root, app, "dist", path), code) };
   }));
   const beforeFiles = files.filter(file => initial.some(row => row.path === file.path));
+  const runtimeBytes = (rows: typeof relative) => rows.reduce((total, row) => {
+    const file = files.find(file => file.path === row.path);
+    return { bytes: total.bytes + (file?.runtime?.bytes ?? 0), gzip: total.gzip + (file?.runtime?.gzip ?? 0) };
+  }, { bytes: 0, gzip: 0 });
   return {
     promptMs: capture.prompt, firstSpawnMs: capture.spawn, firstOutputMs: capture.output,
     spawnToOutputMs: capture.output === null ? null : capture.output - split,
@@ -144,6 +147,7 @@ async function summarize(rows: Download[], capture: Capture, root: string, app: 
     beforeSpawn: { all: totals(initial), javascript: totals(initial.filter(row => row.path.endsWith(".js"))) },
     firstSpawnAdditional: { all: totals(spawned), javascript: totals(spawned.filter(row => row.path.endsWith(".js"))) },
     afterSpawnCumulative: { all: totals(relative), javascript: totals(js) },
+    runtimeAttribution: { beforeSpawn: runtimeBytes(initial), afterSpawn: runtimeBytes(relative) },
     initialProcessService: beforeFiles.filter(file => file.processService.length).map(file => ({ path: file.path, sources: file.processService })),
     workerDemoUi: files.filter(file => file.path !== "main.js" && file.uiSources.length).map(file => ({ path: file.path, sources: file.uiSources })),
     downloads: relative, files,
@@ -195,7 +199,18 @@ async function measureVariants(order: typeof variants, iteration: number) {
   return results;
 }
 
+async function preload(root: string): Promise<void> {
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const path = resolve(root, entry.name);
+    if (entry.isDirectory()) { await preload(path); continue; }
+    if (!/\.(?:js|css|html|json|gz)$/.test(path)) continue;
+    const file = Bun.file(path), raw = await file.bytes();
+    payloads.set(path, { raw, zipped: path.endsWith(".gz") ? raw : gzipSync(raw, { level: 9 }), type: file.type });
+  }
+}
+
 try {
+  for (const variant of variants) for (const app of ["web", "sandbox"]) await preload(resolve(variant.root, app, "dist"));
   server = Bun.serve({ hostname: "127.0.0.1", port, fetch: serve });
   const samples = [];
   for (let iteration = 0; iteration < count; iteration++) {
@@ -204,8 +219,8 @@ try {
   }
   const report = {
     date: new Date().toISOString(), environment: { cpu: cpus()[0]?.model, kernel: release(), bun: Bun.version, load: loadavg() },
-    method: "Cold browser process/context per sample; production builds, actual loopback HTTP gzip level 9 response bodies logged by server across page, dedicated workers and service workers. No request interception, mocks, bundler-size substitution, network throttling or OS page-cache flush. Alternating revision order. Before spawn is shell submission or sandbox command banner. Sandbox has no shell prompt; its first output belongs to the auto-started dev server, not bun -e. 300ms follow-on observation. Source-map spans are attribution estimates; gzip fragments are NOT wire bytes. Default persistent filesystem and React sandbox. Headers match isolated local preview with JS/HTML/template gzip added.",
-    variants: await Promise.all(variants.map(async variant => ({ label: variant.label, ...await provenance(variant.root, variant.label === "current" ? values.revision : values["baseline-revision"]) }))), samples,
+    method: "Cold browser process/context per sample; production builds, actual loopback HTTP gzip level 9 response bodies logged by server across page, dedicated workers and service workers. No request interception, mocks, bundler-size substitution, network throttling or OS page-cache flush. Compression happens before navigation, not on the request path. Alternating revision order. Before spawn is shell submission or sandbox command banner. Sandbox has no shell prompt; its first output belongs to the auto-started dev server, not bun -e. 300ms follow-on observation. Source-map spans are attribution estimates; gzip fragments are NOT wire bytes. Default persistent filesystem and React sandbox. Headers match isolated local preview with JS/HTML/template gzip added.",
+    variants: await Promise.all(variants.map(async variant => ({ label: variant.label, ...await provenance(variant.root, variant.label === "current" ? values.revision : variant.label === "before" ? values["before-revision"] : values["baseline-revision"]) }))), samples,
   };
   const json = JSON.stringify(report, null, 2) + "\n";
   if (values.output) await Bun.write(values.output, json); else console.log(json);
