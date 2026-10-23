@@ -175,3 +175,19 @@ No JIT: tight loops are ~1.3x slower than QuickJS; RegExp (YARR interpreter) and
 - The nextTick queue runs between microtask drains, not between individual promise jobs
   (JSC drains its queue in one call).
 - VM teardown aborts in `AtomStringImpl::remove`; the binary never destroys its VM.
+
+## CI Binaryen setup
+
+The blocking native job installs the official Linux x86_64 Binaryen `version_133`
+archive with `bun scripts/ci-binaryen.ts` before either JSC cache branch. The
+installer checks SHA256 on both downloads and restored archives, then checks the
+exact `wasm-opt` version and `--spill-pointers` support before adding its bin
+directory to `GITHUB_PATH`. The installer owns the pin and participates in the
+SDK, native and JSC cache keys. The existing finalization and both embedding
+fixtures still run on one JSC guest build.
+
+Archive and published checksum are from the
+[official release](https://github.com/WebAssembly/binaryen/releases/tag/version_133).
+Setup tests do not replace actual JSC execution evidence. The private fresh build
+and both fixture passes recorded for PR 131 belong to source `30e39dcb`; a later
+CI-only change does not relabel that guest as a new build.

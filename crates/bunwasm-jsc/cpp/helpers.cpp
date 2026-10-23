@@ -184,7 +184,9 @@ extern "C" {
 // A global context whose global object has the module loader hooks above.
 JSGlobalContextRef bunjsc_create_context()
 {
-    JSC::initialize();
+    // Native Bun enables the SharedArrayBuffer constructor (ZigGlobalObject.cpp). Its storage
+    // stays in this guest; the worker codec refuses to send it to another one.
+    JSC::initialize([] { JSC::Options::useSharedArrayBuffer() = true; });
     Ref<VM> vm = VM::createContextGroup();
     JSLockHolder locker(vm.ptr());
     // The default method table (private to JSGlobalObject), read off a plain global object,

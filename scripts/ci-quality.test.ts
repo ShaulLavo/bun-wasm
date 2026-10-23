@@ -328,10 +328,36 @@ test("native cache stays bounded per input revision, and the SDK is not copied p
   expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched");
 });
 
+test("native target cache is saved after all selected JSC builds and checks", () => {
+  const save = rust.indexOf("      - name: Save the complete native build once per input revision");
+  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(1);
+  expect(rust).toContain("JSC_CARGO_TARGET_DIR=$CARGO_TARGET_DIR");
+  for (const command of ["bash scripts/build-jsc.sh", "bash scripts/build-bun-jsc.sh", "bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm"]) {
+    const step = rust.indexOf(command);
+    expect(step).toBeGreaterThan(-1);
+    expect(save).toBeGreaterThan(step);
+  }
+});
+
 test("preinstalled native tools skip apt and fallback removes the known slow mirror", () => {
   for (const section of [quality, rust]) {
     expect(section).toContain("if command -v cmake");
     expect(section.indexOf("then exit 0; fi")).toBeLessThan(section.indexOf("sudo apt-get update"));
     expect(section).toContain("/etc/apt/apt-mirrors.txt");
   }
+});
+
+test("cold and restored JSC setup install Binaryen before sourcing common.sh", () => {
+  const setup = rust.match(/      - name: Install pinned Binaryen\n((?:        .*\n|          .*\n)+)/)?.[0] ?? "";
+  expect(setup).toContain("bun scripts/ci-binaryen.ts");
+  expect(setup).toContain("needs.quality.outputs.jsc == 'true'");
+  expect(setup).not.toContain("cache-hit");
+  expect(rust.indexOf(setup)).toBeLessThan(rust.indexOf("name: Build or validate the single JSC prebuild"));
+});
+
+test("Binaryen pin and installer identity participate in tool, native and JSC caches", () => {
+  const keys = rust.split("\n").filter(line => /key: (?:binaryen-133|native-v|jsc-v)|^\s+native-v/.test(line));
+  expect(keys).toHaveLength(5);
+  expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz");
+  for (const key of keys) expect(key).toContain("'scripts/ci-binaryen.ts'");
 });

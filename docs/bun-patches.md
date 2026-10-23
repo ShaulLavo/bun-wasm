@@ -82,6 +82,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [0011](#0011-lint-layout-assertions) | Port | Make semantic type-argument and lint-message size assertions pointer-width aware. |
 | [0012](#0012-wasi-lint-rule-docs) | Port | Generate and embed Bun's compressed lint rule docs in WASI artifacts. |
 | [0013](#0013-strict-wasi-lint-boundaries) | Port | Correct native-only cfgs and mark individual native poller/watcher declarations unused on WASI. |
+| [WASI resizable buffer allocation](#wasi-resizable-buffer-allocation) | Port | Return a catchable allocation failure before unsupported virtual reservation or protection. |
+| [JSC SharedArrayBuffer embedding](#jsc-sharedarraybuffer-embedding) | Host feature | Original constructor option and source-attributed embedding checks. |
 | [`jsc/webkit-wasi.patch`, platform hunks](#webkit-platform-hunks) | Port | Compile the C-loop interpreter and WTF for WASI. |
 | [`jsc/webkit-wasi.patch`, module slots](#webkit-module-import-slots) | Upstream bug | Give import slots a full JSValue stride and initialize the whole slot. |
 | [`jsc/webkit-wasi.patch`, non-JIT declarations](#webkit-non-jit-declarations) | Upstream bug | Expose a required enum without DFG and add two missing includes. |
@@ -3371,3 +3373,30 @@ No shell interpreter, process manager or Waffle implementation is copied or patc
 receipt, execution and teardown tooling. The installed package builds its own shell assets.
 `message-listener-probe.ts` is an original dispatch-based observer of the preview handler.
 Its negative control removes the wrong callback and requires teardown to reject the still-live handler.
+
+## WASI resizable buffer allocation
+
+Class **Port**. `jsc/webkit-wasi.patch` changes WebKit's
+`Source/JavaScriptCore/runtime/ArrayBuffer.cpp` at
+`3d3257150c40a1aabdc5f8b48d5b33d0413674cb`.
+`tryAllocateResizableMemory` returns null on WASI before physical accounting,
+virtual page reservation, or protection. WASI does not provide these virtual
+backing stores. The unchanged ArrayBuffer and SharedArrayBuffer constructors
+turn null into a catchable JavaScript allocation error. Fixed-size buffers
+keep their upstream allocation and sharing modes. No JavaScript algorithm is copied.
+
+## JSC SharedArrayBuffer embedding
+
+Class **Host feature**, original adapters. `crates/bunwasm-jsc/cpp/helpers.cpp`
+enables WebKit's native SharedArrayBuffer constructor with `useSharedArrayBuffer`.
+The API comes from WebKit `runtime/OptionsList.h` at the revision above. Bun
+sets the same option in `src/jsc/bindings/ZigGlobalObject.cpp` at
+`9510e74152073d850a18758ca41114d8f214ffa6`. No constructor is copied or aliased.
+Cross-guest sharing still throws DataCloneError.
+
+`scripts/jsc-embedding.ts` binds the guest hash to the committed local source,
+validated JSC input stamp, native archive hashes, and existing Bun/sysroot build
+receipt. Blocking CI selects it for JSC embedding, allocation, build and fixture
+inputs. The Rust job reuses its toolchain, sources and dependencies;
+it builds JSC once and executes both fixtures against that linked guest in the
+Node WASI host. QuickJS and host syntax checks are not JSC execution evidence.
