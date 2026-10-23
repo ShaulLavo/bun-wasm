@@ -5,13 +5,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { chromium, firefox, webkit } from "playwright";
+import { chromium, firefox, webkit, type Page } from "playwright";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const engine = process.argv[2] ?? "chromium";
 const browserType = engine === "chromium" ? chromium : engine === "firefox" ? firefox : engine === "webkit" ? webkit : undefined;
 if (!browserType) throw new Error(`Unknown browser ${engine}`);
 const assets = new Map<string, Blob>();
+const languageAssets = new Set<string>();
+const requests: string[] = [];
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let browserLaunch: ReturnType<typeof chromium.launch> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -185,6 +187,37 @@ async function startupSteal(base: string, app: string, rejectPending: boolean) {
   } finally { await context.close(); }
 }
 
+async function openEditorFile(page: Page, path: string): Promise<void> {
+  await page.locator("#file-select").selectOption(path);
+  await page.waitForFunction(path => document.querySelector("#file-name")?.textContent === path, path);
+  assert.ok(await page.locator(".cm-content span[class]").count() > 0, `${path}: syntax highlighting`);
+}
+
+async function languageChecks(base: string, languageAssets: Set<string>, requests: string[]): Promise<void> {
+  const context = await browser!.newContext();
+  const page = await context.newPage();
+  try {
+    const start = requests.length;
+    await page.goto(`${base}/sandbox/`);
+    await page.waitForFunction(() => document.querySelector("#file-name")?.textContent === "src/App.tsx");
+    assert.deepEqual(requests.slice(start).filter(path => languageAssets.has(path)), []);
+    await openEditorFile(page, "src/App.css");
+    await page.locator(".cm-content").fill("h1 { color: red; }");
+    await page.locator(".cm-content").press("ControlOrMeta+s");
+    await page.waitForFunction(() => document.querySelector("#save-state")?.textContent === "saved");
+    await openEditorFile(page, "index.html");
+    await openEditorFile(page, "src/App.tsx");
+    await openEditorFile(page, "src/App.css");
+    assert.equal(await page.locator(".cm-content").innerText(), "h1 { color: red; }");
+    assert.ok(requests.slice(start).some(path => languageAssets.has(path)));
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector("#file-name")?.textContent === "src/App.tsx");
+    await openEditorFile(page, "src/App.css");
+    assert.equal(await page.locator(".cm-content").innerText(), "h1 { color: red; }");
+    console.log(`ok ${engine} sandbox: lazy CSS/HTML highlighting, TypeScript switch-back, saved edit and reload`);
+  } finally { await context.close(); }
+}
+
 try {
   scratch = await mkdtemp(join(process.env.EDITOR_SCRATCH_ROOT ?? tmpdir(), "bw-editor-"));
   process.env.TMPDIR = scratch;
@@ -226,12 +259,17 @@ try {
     });
     assert.equal(build.success, true, build.logs.map(String).join("\n"));
     assert.equal(filesystemOwners, 1, `${app}: startup gate must instrument the runtime-owned filesystem`);
-    for (const output of build.outputs) assets.set(`${prefix}/${output.path.slice(outdir.length + 1)}`, output);
+    for (const output of build.outputs) {
+      const path = `${prefix}/${output.path.slice(outdir.length + 1)}`;
+      assets.set(path, output);
+      if (/node_modules\/@codemirror\/lang-(?:css|html)\//.test(await output.text())) languageAssets.add(path);
+    }
     assets.set(`${prefix}/`, Bun.file(join(root, app, "index.html")));
   }
   assets.set("/sandbox/template.json", new Blob([JSON.stringify({ files: {
     "index.html": "<!doctype html><h1>Editor persistence test</h1>",
     "src/App.tsx": "export default 'original template';",
+    "src/App.css": "h1 { color: blue; }",
     "deleted.ts": "delete me",
     "package.json": "{}",
   } })], { type: "application/json" }));
@@ -239,6 +277,7 @@ try {
     hostname: "127.0.0.1", port: Number(process.env.EDITOR_PORT ?? 0),
     fetch(request) {
       const path = new URL(request.url).pathname;
+      requests.push(path);
       const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" };
       if (path === "/favicon.ico") return new Response(null, { status: 204, headers });
       const asset = assets.get(path);
@@ -247,6 +286,7 @@ try {
   });
   browserLaunch = browserType.launch({ headless: true, downloadsPath: join(scratch, "downloads"), tracesDir: join(scratch, "traces") });
   browser = await browserLaunch;
+  await languageChecks(`http://127.0.0.1:${server.port}`, languageAssets, requests);
   const context = await browser.newContext();
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);
