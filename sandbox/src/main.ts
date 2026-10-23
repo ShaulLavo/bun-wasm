@@ -275,7 +275,7 @@ async function startDevServer(): Promise<void> {
     BUN_WASM_STARTUP: "1",
   };
   const started = performance.now();
-  const { startRun } = await import("../../web/src/runner");
+  const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes()]);
   if (revision !== serverRevision) return;
   const output = new StartupOutput((text) => term.write(text), startupRecord);
   serverTiming = { started, visibleStart };

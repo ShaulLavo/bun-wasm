@@ -147,7 +147,7 @@ const moduleScope: Promise<boolean> = registerModuleScope();
 let current: Run | null = null;
 
 async function runBun(args: string[], cwd: string, io: Output): Promise<number> {
-  const [{ startRun }] = await Promise.all([import("./runner"), wasmReady]);
+  const [{ startRun }] = await Promise.all([import("./runner"), wasmReady, runtime.processes()]);
   if (!wasm || "error" in wasm) {
     io.err(`\x1b[31m${wasm?.error ?? "bun.wasm unavailable"}\x1b[0m\r\n`);
     return 127;
