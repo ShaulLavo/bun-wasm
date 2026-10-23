@@ -1,0 +1,13 @@
+result 3
+calls [{"arguments":[1,2]}]
+frozen true true
+report [{"message":"Expected the add function to be executed 2 time(s) but was executed 1 time(s).","actual":1,"expected":2,"operator":"add"}]
+verify AssertionError ERR_ASSERTION Expected the add function to be executed 2 time(s) but was executed 1 time(s). 1
+verified
+after reset 0
+noop 1
+TypeError ERR_INVALID_ARG_VALUE The argument 'tracked' is not a tracked function. Received [Function: add]
+RangeError ERR_OUT_OF_RANGE The value of "expected" is out of range. It must be >= 1 && <= 4294967295. Received 0
+RangeError ERR_OUT_OF_RANGE The value of "expected" is out of range. It must be an integer. Received 1.5
+TypeError ERR_INVALID_ARG_TYPE The "expected" argument must be of type number. Received type string ('2')
+multiple Functions were not called the expected number of times 3

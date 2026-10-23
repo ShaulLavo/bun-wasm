@@ -11,7 +11,8 @@
     if (formatting) return value;
     const own = Object.getOwnPropertyDescriptor(target, "stack");
     if (own ? own.configurable : Object.isExtensible(target)) {
-      Object.defineProperty(target, "stack", { value, writable: true, configurable: true, enumerable: false });
+      // Null-prototype descriptors: an inherited Object.prototype.get must not turn them into accessors.
+      Object.defineProperty(target, "stack", { __proto__: null, value, writable: true, configurable: true, enumerable: false });
     }
     return value;
   }
@@ -101,6 +102,7 @@
         formatted.delete(target);
         const raw = target.stack;
         Object.defineProperty(target, "stack", {
+          __proto__: null,
           configurable: true,
           enumerable: false,
           get() { return formatStack(this, raw); },

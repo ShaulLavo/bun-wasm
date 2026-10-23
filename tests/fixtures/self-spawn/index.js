@@ -46,7 +46,8 @@ let forkText = "";
 forked.stdout.on("data", (chunk) => { forkText += chunk; });
 await new Promise((resolve, reject) => { forked.on("error", reject); forked.on("close", resolve); });
 console.log("fork", forkText.trim(), forked.exitCode);
-try { forked.send("hello"); } catch (error) { console.log("ipc", error.code); }
+forked.on("error", (error) => console.log("ipc error", error.code));
+console.log("ipc after close", forked.connected, forked.send("hello"));
 for (const execute of [execSync, execFileSync]) {
   try { execute("not-a-bun-command"); } catch (error) {
     console.log("exec error", error.code === "ENOENT", error.error !== error && typeof JSON.stringify(error) === "string");

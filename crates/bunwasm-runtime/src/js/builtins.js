@@ -343,15 +343,31 @@
     }
 
     class AsyncLocalStorage {
+      #defaultValue = undefined;
+      #name = "";
+      constructor(options) {
+        if (options === undefined) return;
+        if (options === null || typeof options !== "object" || Array.isArray(options)) {
+          const err = new TypeError(`The "options" argument must be of type object. Received ${internal.describe(options)}`);
+          err.code = "ERR_INVALID_ARG_TYPE";
+          throw err;
+        }
+        this.#defaultValue = options.defaultValue;
+        if (options.name !== undefined) this.#name = `${options.name}`;
+      }
+      get name() {
+        return this.#name;
+      }
+      // A storage bound in the current frame, even to undefined, hides the default.
       getStore() {
         const frame = currentFrame();
-        return frame ? frame.get(this) : undefined;
+        return frame && frame.has(this) ? frame.get(this) : this.#defaultValue;
       }
       run(store, callback, ...args) {
         return internal.runInContext(frameWith(this, store), callback, undefined, args);
       }
       exit(callback, ...args) {
-        return internal.runInContext(frameWithout(this), callback, undefined, args);
+        return internal.runInContext(frameWith(this, undefined), callback, undefined, args);
       }
       enterWith(store) {
         native.setAsyncContext(frameWith(this, store));

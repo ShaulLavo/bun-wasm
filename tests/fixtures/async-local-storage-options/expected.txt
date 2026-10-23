@@ -1,0 +1,21 @@
+plain store undefined
+plain name ""
+default store "default"
+name "requests"
+run "bound"
+exit undefined
+run undefined undefined
+after run "default"
+default 42 42
+default null null
+default 0 0
+default false false
+numeric name "7"
+after await "inner"
+entered "entered"
+disabled "fallback"
+ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received null
+ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received type string ('options')
+ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received type number (1)
+ERR_INVALID_ARG_TYPE The "options" argument must be of type object. Received an instance of Array
+timer "outer"
