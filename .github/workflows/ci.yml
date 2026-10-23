@@ -184,6 +184,10 @@ jobs:
         run: |
           source env.sh
           bun run quality --native
+      - name: Check host-engine source cache invalidation
+        run: |
+          source env.sh
+          cargo test --locked --release -j 2 -p bunwasm-runtime --no-default-features --features engine-host --lib modules::tests::host_
       - name: Build once and run native runtime fixtures
         run: |
           source env.sh
@@ -194,7 +198,7 @@ jobs:
           cargo build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli
           mkdir -p dist
           cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm" dist/
-          bash scripts/test.sh --no-build node-misc runtime-ts-url-decoder
+          bash scripts/test.sh --no-build node-misc runtime-ts-url-decoder source-cache
 
       - name: Configure private JSC build paths
         if: needs.quality.outputs.jsc == 'true'
@@ -233,6 +237,24 @@ jobs:
             dist/bun-jsc.wasm.build.json
             dist/bun-jsc.wasm.embedding.json
           if-no-files-found: error
+
+      - name: Build one host-engine guest for real-browser source cache acceptance
+        run: |
+          source env.sh
+          export WASI_SDK="$WASI_SDK_PATH"
+          inputs=$(bun scripts/guest-build-receipt.ts inputs)
+          cargo build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli --no-default-features --features engine-host,bun-build
+          mkdir -p dist/source-cache-browser
+          cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm" dist/source-cache-browser/bun-browser.wasm
+          bun scripts/guest-build-receipt.ts write dist/source-cache-browser/bun-browser.wasm "$inputs"
+          git rev-parse HEAD HEAD^{tree} > dist/source-cache-browser/source.txt
+          sha256sum dist/source-cache-browser/bun-browser.wasm >> dist/source-cache-browser/source.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-cache-browser-guest
+          path: dist/source-cache-browser/
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Save the complete native build once per input revision
         if: steps.native-cache.outputs.cache-hit != 'true'
@@ -341,8 +363,9 @@ jobs:
           if-no-files-found: error
 
   browser-process:
+    needs: [quality, rust, process-bundles]
+    if: ${{ !cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped') }}
     name: Processes (${{ matrix.browser }})
-    needs: process-bundles
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -405,3 +428,18 @@ jobs:
           TMPDIR: ${{ runner.temp }}
           BUN_WASM_RUNTIME_PROC_BUNDLE: ${{ runner.temp }}/process-bundles/runtime-proc
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-runtime-proc.ts ${{ matrix.browser }}
+
+      - uses: actions/download-artifact@v4
+        if: needs.rust.result == 'success'
+        with:
+          name: source-cache-browser-guest
+          path: dist/source-cache-browser
+      - name: Real Bun source cache in one Waffle browser runtime
+        if: needs.rust.result == 'success'
+        env:
+          BUN_WASM_RUNTIME_PROC_ARTIFACT: ${{ github.workspace }}/dist/source-cache-browser/bun-browser.wasm
+          BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache
+          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
+          BUN_WASM_RUNTIME_PROC_PORT: "4187"
+          TMPDIR: ${{ runner.temp }}
+        run: bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}

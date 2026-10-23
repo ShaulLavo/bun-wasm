@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { changedPaths, needsJsc, needsRust } from "./ci-changes";
 
 test.each([
-  "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json",
+  "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "tests/fixtures/source-cache/index.ts",
+  "web/tests/bun-runtime-proc-fixtures.ts", "web/tests/bun-runtime-proc-browser.ts", "web/tests/bun-runtime-proc-main.ts",
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "crates/bunwasm-runtime/src/lib.rs", "vendor/bun/src/parser.rs", "patches/bun/001.patch",
   "third_party/libc/src/lib.rs", "Cargo.lock", "Cargo.toml", ".cargo/config.toml", "rust-toolchain.toml",
