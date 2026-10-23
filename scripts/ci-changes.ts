@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 
-const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/"];
+const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/astro-http2-response/"];
 const nativeFiles = new Set([
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
   "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
@@ -10,7 +10,7 @@ const nativeFiles = new Set([
 ]);
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 
-const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "tests/fixtures/shared-array-buffer/", "tests/jsc-embedding/"];
+const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
   "crates/bunwasm-runtime/src/engine_jsc.rs", "scripts/build-bun-jsc.sh", "scripts/build-jsc.sh",
   "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "scripts/ci-changes.ts", ".github/workflows/ci.yml",

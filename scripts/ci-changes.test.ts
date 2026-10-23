@@ -145,3 +145,9 @@ test("unrelated page changes skip JSC; its selected gate builds and executes onc
   expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
   expect(workflow).toContain("bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm");
 });
+
+test("the Astro response fixture selects the existing native and JSC gates", () => {
+  const paths = ["tests/fixtures/astro-http2-response/index.ts"];
+  expect(needsRust(paths)).toBe(true);
+  expect(needsJsc(paths)).toBe(true);
+});
