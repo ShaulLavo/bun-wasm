@@ -14,7 +14,7 @@ const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "tests/fixtures/shared-ar
 const jscFiles = new Set([
   "crates/bunwasm-runtime/src/engine_jsc.rs", "scripts/build-bun-jsc.sh", "scripts/build-jsc.sh",
   "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "scripts/ci-changes.ts", ".github/workflows/ci.yml",
-  "env.sh", "scripts/build-wasi-sysroot.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
+  "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/ci-binaryen.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
 ]);
 
 export function needsJsc(paths: readonly string[]): boolean {

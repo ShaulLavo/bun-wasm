@@ -335,3 +335,18 @@ test("preinstalled native tools skip apt and fallback removes the known slow mir
     expect(section).toContain("/etc/apt/apt-mirrors.txt");
   }
 });
+
+test("cold and restored JSC setup install Binaryen before sourcing common.sh", () => {
+  const setup = rust.match(/      - name: Install pinned Binaryen\n((?:        .*\n|          .*\n)+)/)?.[0] ?? "";
+  expect(setup).toContain("bun scripts/ci-binaryen.ts");
+  expect(setup).toContain("needs.quality.outputs.jsc == 'true'");
+  expect(setup).not.toContain("cache-hit");
+  expect(rust.indexOf(setup)).toBeLessThan(rust.indexOf("name: Build or validate the single JSC prebuild"));
+});
+
+test("Binaryen pin and installer identity participate in tool, native and JSC caches", () => {
+  const keys = rust.split("\n").filter(line => /key: (?:binaryen-133|native-v|jsc-v)|^\s+native-v/.test(line));
+  expect(keys).toHaveLength(5);
+  expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz");
+  for (const key of keys) expect(key).toContain("'scripts/ci-binaryen.ts'");
+});

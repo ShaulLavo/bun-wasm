@@ -130,7 +130,7 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
 
 for (const path of [
   "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp", "scripts/jsc-embedding.ts",
-  "scripts/build-bun-jsc.sh", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
+  "scripts/build-bun-jsc.sh", "scripts/ci-binaryen.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
 ]) {
   test.each(["pull_request", "push"])(`${path} selects actual JSC embedding execution for %s`, event => {
     expect(needsJsc([path])).toBe(true);

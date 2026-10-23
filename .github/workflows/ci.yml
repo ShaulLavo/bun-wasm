@@ -129,6 +129,14 @@ jobs:
           echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
+      - uses: actions/cache@v4
+        if: needs.quality.outputs.jsc == 'true'
+        with:
+          path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
+          key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
+      - name: Install pinned Binaryen
+        if: needs.quality.outputs.jsc == 'true'
+        run: bun scripts/ci-binaryen.ts
       - uses: actions/cache/restore@v4
         with:
           path: ~/.bun/install/cache
@@ -153,9 +161,9 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
           restore-keys: |
-            native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-
+            native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-
       - name: Install pinned Rust dependency checker
         run: |
           source env.sh
@@ -197,7 +205,7 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
 
       - name: Configure private JSC build paths
         if: needs.quality.outputs.jsc == 'true'
@@ -211,7 +219,7 @@ jobs:
         id: jsc-cache
         with:
           path: ${{ runner.temp }}/jsc
-          key: jsc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'env.sh', 'bun.lock') }}
+          key: jsc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts') }}
       - name: Build or validate the single JSC prebuild
         if: needs.quality.outputs.jsc == 'true'
         run: |
