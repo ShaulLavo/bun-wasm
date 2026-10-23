@@ -14,6 +14,7 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [Data-format input limits](#data-format-input-limits) | Host feature | Original TypeScript byte-length guard reports the public range error before native parsing. |
 | [Quality fixes in adapted source](#quality-fixes-in-adapted-source) | Port | Mechanical formatting and lint fixes in the existing Bun/Node ports, without changing their upstream revision. |
 | [Native-host XML and optional hooks](#native-host-xml-and-optional-hooks) | Host feature | Scalar XML indexing and explicit unsupported trace/macro hooks let the full workspace link on the native host. |
 | [Quality checks and original adapters](#quality-checks-and-original-adapters) | Host feature | Original quality commands and tighter host/test typings, with small control-flow extractions. |
@@ -2869,6 +2870,18 @@ Waffle is consumed unchanged as a pinned Git peer/development dependency; the pa
 does not embed its implementation or create a second runtime. Existing worker and net
 imports use explicit extensions for strict module resolution. No upstream patch or
 copied implementation was introduced by this packaging work.
+
+## Data-format input limits
+
+`crates/bunwasm-runtime/src/js/formats_limit.ts` is an original bun-wasm adapter,
+not copied or adapted upstream source. The legacy `formats.js` factory calls it
+after converting input to a byte view and before passing bytes to the Rust
+parser. Inputs above the scanner's signed 32-bit position limit throw a
+`RangeError` with code `ERR_OUT_OF_RANGE` and the received byte length. The
+public error contract is checked against Bun's YAML test at
+`test/js/bun/yaml/yaml.test.ts`, revision
+`9510e74152073d850a18758ca41114d8f214ffa6`. Small views over larger buffers remain
+valid; no input byte is copied or scanned by this guard.
 
 ## Quality fixes in adapted source
 

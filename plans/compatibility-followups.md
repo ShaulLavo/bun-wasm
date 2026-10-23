@@ -46,8 +46,7 @@ Status: Approved
 
 ## YAML stringify: throwing Symbol.toPrimitive on a boxed primitive
 
-Status: Resolved for boxed primitive coercion. The separate browser large-input
-error-code gap remains Approved.
+Status: Resolved for boxed primitive coercion and the large-input error code.
 
 The YAML coercion adapter now consults `Symbol.toPrimitive` with the string or
 number hint, preserves thrown values and reports invalid object results. It also
@@ -75,6 +74,14 @@ scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 \
 
 Start at `yamlStringify` in
 `crates/bunwasm-runtime/src/js/formats.js`. Keep the upstream test unchanged.
+
+`Bun.YAML.parse` now rejects inputs above 2,147,483,647 bytes before native
+parsing with `ERR_OUT_OF_RANGE` and Bun's complete message.
+`scripts/formats-input-limit.test.ts` reproduces the old uncoded error with a
+real 2 GiB virtual byte view and keeps small views over a large buffer valid.
+The `yaml-input-limit` fixture runs the upstream case on every engine: QuickJS
+and JSC inside wasm32 cannot reserve the 2 GiB view and skip it, as the upstream
+test does. The upstream YAML test is unchanged.
 
 ## Integration with the separate HTTP/WebSocket lane
 

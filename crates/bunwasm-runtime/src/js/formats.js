@@ -42,13 +42,15 @@
     return native.utf8Encode(fixed);
   }
 
+  const { checkSize } = internal.require("formats_limit");
+
   function parse(input, format) {
     if (format !== "YAML" && input == null) throw new TypeError("Expected a string to parse");
     if (format === "JSONC" || format === "JSON") input = textBytes(input, true);
     else if (input instanceof Blob) input = input._bytes();
     else if (ArrayBuffer.isView(input) || input instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && input instanceof SharedArrayBuffer)) input = internal.toUint8(input);
     else input = textBytes(input, false);
-    if (input.byteLength > 0x7fffffff) throw new RangeError("input.byteLength must be <= 2147483647");
+    checkSize(input);
     return hydrate(jsonParse(native.parseData(input, format)));
   }
 
