@@ -31,14 +31,21 @@ for (const name of ["chromium", "webkit"]) {
     page.on("pageerror", error => pageErrors.push(String(error)));
     const result = await page.evaluate(async sources => {
       const native = { ReadableStream, WritableStream, TransformStream };
+      // Median of seven runs after three warm-up runs; still noisy on a busy host.
       async function constructionTime(Ctor) {
         const count = 10000;
-        const start = performance.now();
-        for (let i = 0; i < count; i++) {
-          const stream = new Ctor({ start(controller) { controller.close(); } });
-          await stream.cancel();
+        async function run() {
+          const start = performance.now();
+          for (let i = 0; i < count; i++) {
+            const stream = new Ctor({ start(controller) { controller.close(); } });
+            await stream.cancel();
+          }
+          return performance.now() - start;
         }
-        return { count, milliseconds: performance.now() - start };
+        for (let i = 0; i < 3; i++) await run();
+        const runs = [];
+        for (let i = 0; i < 7; i++) runs.push(await run());
+        return { count, milliseconds: runs.toSorted((a, b) => a - b)[3], runs };
       }
       const nativeConstruction = sources.benchmark ? await constructionTime(native.ReadableStream) : undefined;
       const dispose = sources.hostBridge ? new Function(sources.hostBridge.replace("export function installNativeStreamState", "function installNativeStreamState") + ";return installNativeStreamState();")() : () => {};
