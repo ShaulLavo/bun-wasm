@@ -10,6 +10,18 @@ paths. Keep private-field assertions separate from user-visible failures.
 
 ## Socket read callbacks and reconnect options
 
+Status: Done for callback delivery and constructor options, 2026-10-23.
+
+The original adapter now forwards constructor options from `connect`, caps host
+reads at the current callback buffer, and keeps callback reads stopped while
+paused across reconnect. A callback returning false pauses the socket until
+resume. Fixed and generated buffers share the same path. Byte counts and EOF
+remain on the socket; the previous connection is closed before dialing again.
+Focused checks: `bun test web/tests/node-net-onread.test.ts` and
+`scripts/test.sh --no-build --engine ENGINE net-onread`.
+
+The following is the historical reproduction, not a new measurement:
+
 Reproduce without changing upstream files:
 
 ```sh
@@ -25,8 +37,8 @@ bash /work/tmp/wave-heavy/run.sh --class light "net reconnect probe" -- \
 At upstream `ddab8382bdf6b02f22653758d901fb83ceb85aa8`, the paused reconnect case
 still reaches its two-second test timeout. The other two cases pass after this
 PR. The child fixture uses `onread: { buffer, callback }`; `Socket._receive` in
-`crates/bunwasm-runtime/src/js/node_net.js` currently implements stream delivery
-only. The connect factory also constructs Socket without forwarding constructor
+`crates/bunwasm-runtime/src/js/node_net.js` then implemented stream delivery
+only. The connect factory also constructed Socket without forwarding constructor
 readable/writable options. Trace those together before adding another read
 path. Preserve pause, reference state, byte counts and closure of the old handle.
 The existing raw Node test file has only a 15-second file budget and can time

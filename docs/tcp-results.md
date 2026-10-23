@@ -161,3 +161,17 @@ an existing server owns its guest port. After the fix, two helpers forward
 requests independently through the same guest port, the existing server still
 answers, and both preview ports can be rebound after teardown.
 This host-only change does not require a new guest artifact.
+
+## Socket callbacks and reconnect options, 2026-10-23
+
+At main `5fa3a24f`, three focused adapter tests fail because no onread callback
+is invoked. After the correction, four tests pass with 21 assertions over the
+production adapters, waiter scheduler, real Duplex and installed Waffle TCP
+pipes. They cover fixed buffers, generated buffers, callback-requested pause,
+a paused live reconnect, byte counts, old-handle closure and constructor options.
+These are focused checks, not a replacement census of the upstream suites.
+
+Run `bun test web/tests/node-net-onread.test.ts`. The real-guest companion is
+`tests/fixtures/net-onread`, selected with `scripts/test.sh --no-build --engine
+ENGINE net-onread`. Before/after logs and guest evidence are retained in
+`/work/reports/wave-20261022/bun-wasm/tcp-queue/` for coordinator review.

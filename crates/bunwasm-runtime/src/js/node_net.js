@@ -9,7 +9,8 @@
 
     class Socket extends Duplex {
       constructor(options = {}) {
-        super(Object.assign({ allowHalfOpen: false, highWaterMark: 65536 }, options));
+        super(Object.assign({ allowHalfOpen: false, readableHighWaterMark: 65536, writableHighWaterMark: 65536 }, options));
+        this._onread = internal.require("node_net_onread")(options.onread);
         this._conn = null;
         this._phase = "idle";
         this._referenced = true;
@@ -48,7 +49,8 @@
         this._conn = conn;
         this._phase = "open";
         this._updatePeer();
-        conn.canRead = () => this.readable && this._readReady;
+        conn.canRead = () => this.readable && this._readReady && (!this._onread || !this.isPaused());
+        if (this._onread) conn.readCapacity = () => this._onread.capacity();
         conn.onData = chunk => this._receive(chunk);
         conn.onEnd = () => this._receiveEnd();
         conn.onError = err => this.destroy(err);
@@ -161,6 +163,10 @@
       _receive(chunk) {
         this.bytesRead += chunk.length;
         this._touch();
+        if (this._onread) {
+          if (this._onread.deliver(chunk) === false) this.pause();
+          return;
+        }
         this._readReady = this.push(Buffer.from(chunk));
       }
       _read() {
@@ -304,7 +310,10 @@
       ref() { this._referenced = true; if (this._accepting) this._accepting.ref = true; if (this._starting) this._starting.ref = true; return this; }
       unref() { this._referenced = false; if (this._accepting) this._accepting.ref = false; if (this._starting) this._starting.ref = false; return this; }
     }
-    const connect = (...args) => new Socket().connect(...args);
+    const connect = (...args) => {
+      const [options] = _normalizeArgs(args);
+      return new Socket(options).connect(...args);
+    };
     return { Socket, Server, Stream: Socket, createServer: (options, listener) => new Server(options, listener), connect, createConnection: connect };
   };
 })
