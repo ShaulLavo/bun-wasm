@@ -3318,5 +3318,9 @@ A callable proxy preserves construction, subclassing and prototype identity.
 Its apply path initializes inherited receivers through the shared initializer
 and EventEmitter constructor rather than returning a different object.
 The adapter snapshots options, validates keepalive delay and exposes public
-defaults. Unspecified native listeners request IPv6 any. Waffle-owned browser
+defaults. Unspecified native listeners request IPv6 any. The original native
+adapter in `crates/bunwasm-host/src/net/tcp.rs` clears `IPV6_V6ONLY` before
+binding and tries IPv4 any if that bind cannot be created. Bun
+`packages/bun-usockets/src/bsd.c` at the pinned revision is the behavior
+reference, not copied source. Waffle-owned browser
 endpoint metadata and private Bun worker fields are deliberately unchanged.

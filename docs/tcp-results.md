@@ -187,3 +187,13 @@ fail. The runtime embedding and lifecycle prerequisites also pass, 108 tests
 and 1,634 assertions. Run `scripts/test.sh --no-build net-server-contracts`
 and the isolated upstream command above. Raw after results are retained in
 `/work/reports/wave-20261022/bun-wasm/tcp-queue/server-upstream-after.json`.
+
+
+Review regressions reproduce both default-listener failures with the old host:
+`net-default-bind` gets ECONNREFUSED in an isolated network namespace with
+`net.ipv6.bindv6only=1`, and a listen error when a disposable syscall filter
+returns EAFNOSUPPORT for AF_INET6 socket creation. The corrected host explicitly
+allows dual-stack reads and falls back to IPv4 any. Native Node 26.7 passes
+both controls. Bun 1.4.2 passes the IPv6-only-system-default control but fails
+the EAFNOSUPPORT control, unlike the intended fallback contract. Its upstream
+report and the control source are retained under `/work/reports/upstream-bugs/`.
