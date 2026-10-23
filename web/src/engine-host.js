@@ -455,7 +455,7 @@ class EngineHost {
         return host.importKey(spec);
       },
       evalScript(code, filename) {
-        return host.evalAt(NativeString(code), filename || "evalmachine.<anonymous>");
+        return host.evalAt(host.awaitHooked(NativeString(code)), filename || "evalmachine.<anonymous>");
       },
       loadPolyfill(name) {
         return host.evalPolyfill(name);
@@ -495,6 +495,14 @@ class EngineHost {
 
   indexOf(name) {
     return this.wasm.describe().natives.indexOf(name);
+  }
+
+  // A script compiled at run time (vm, Module#_compile, a direct eval) with
+  // the AsyncLocalStorage hooks the transpiler gives files (see installGlobals).
+  awaitHooked(source) {
+    if (!source.includes("await")) return source;
+    const hooked = this.native.awaitHooks([source], "script");
+    return hooked ? hooked[0] : source;
   }
 
   // Indirect eval: global scope, sloppy unless the code says otherwise; the
@@ -642,6 +650,9 @@ class EngineHost {
       }
       return value;
     });
+    // Code a direct eval compiles skips the transpiler, so the printer passes
+    // its source through this (webpack's dev `eval-source-map` modules, say).
+    hidden("__bunwasm_evalSource", (source) => (typeof source === "string" ? host.awaitHooked(source) : source));
     // Without a networking host, user code gets the host's own fetch.
     if (this.o.fetch && !this.native.hostCaps.fetch) this.installFetch(this.o.fetch);
   }

@@ -1,0 +1,8 @@
+direct eval: direct eval direct eval
+for await in eval: 1:for await in eval 2:for await in eval 1:for await in eval 2:for await in eval after:for await in eval
+Function: Function
+AsyncFunction: AsyncFunction
+vm.runInThisContext: vm.runInThisContext
+vm.runInNewContext: vm.runInNewContext
+Module#_compile: Module#_compile
+outside: undefined

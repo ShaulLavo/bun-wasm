@@ -850,6 +850,22 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
         ))
     });
     let st = state.clone();
+    t.add("awaitHooks", move |a| {
+        let sources = a
+            .array(0)
+            .ok_or_else(|| NativeError::type_error("expected sources"))?
+            .iter()
+            .map(|value| match value {
+                Val::Str(s) => Ok(s.clone()),
+                _ => Err(NativeError::type_error("expected source string")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(match st.transpiler.await_hooks(&sources, a.str(1)?) {
+            Some(hooked) => Val::Array(hooked.into_iter().map(Val::Str).collect()),
+            None => Val::Null,
+        })
+    });
+    let st = state.clone();
     t.add("registerObjectModule", move |a| {
         Ok(st.resolver.register_object_module(a.str(0)?).into())
     });

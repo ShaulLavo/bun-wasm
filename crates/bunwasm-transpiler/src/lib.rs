@@ -212,9 +212,9 @@ fn configure_public(
     Ok(())
 }
 
-/// Locate import keywords in original generated-function arguments. The full
-/// function grammar distinguishes import expressions from property names.
-pub fn function_imports(args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, String> {
+/// The function a `Function` constructor builds from `args` (parameters, then
+/// the body), with each argument's byte range in it.
+fn function_source(args: &[String], kind: &str) -> (String, Vec<std::ops::Range<usize>>) {
     let prefix = match kind {
         "async" => "async function",
         "generator" => "function*",
@@ -234,6 +234,13 @@ pub fn function_imports(args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, 
         ranges.push(start..source.len());
     }
     source.push_str("\n})");
+    (source, ranges)
+}
+
+/// Locate import keywords in original generated-function arguments. The full
+/// function grammar distinguishes import expressions from property names.
+pub fn function_imports(args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, String> {
+    let (source, ranges) = function_source(args, kind);
     let (_, mut offsets) = with_state(|state| {
         let (result, offsets) = bun_js_parser::with_bunwasm_dynamic_imports(|| {
             run(state, &source, "<Function>", Loader::Js, None, false)
@@ -281,6 +288,27 @@ pub fn module_imports(source: &str, path: &str) -> Result<Vec<ModuleImport>, Str
 }
 
 fn scan_imports(state: &State, source: &str, path: &str) -> Result<Vec<ModuleImport>, String> {
+    let (result, dynamic) = bun_js_parser::with_bunwasm_dynamic_imports(|| {
+        scan(state, source, path, |scanned| static_imports(&scanned.import_records))
+    });
+    let mut imports = result?;
+    imports.extend(dynamic.into_iter().map(|start| ModuleImport {
+        start,
+        end: start + 6,
+        specifier: None,
+    }));
+    imports.sort_by_key(|import| import.start);
+    imports.dedup_by_key(|import| import.start);
+    Ok(imports)
+}
+
+/// Parse JavaScript with Bun's scan pass (no binding, transforming or printing).
+fn scan<T>(
+    state: &State,
+    source: &str,
+    path: &str,
+    f: impl FnOnce(&bun_js_parser::ScanPassResult) -> T,
+) -> Result<T, String> {
     // Match the runtime's same-length replacement so spans still address the input.
     let source = match source.strip_prefix("#!") {
         Some(rest) => Cow::Owned(format!("//{rest}")),
@@ -292,35 +320,122 @@ fn scan_imports(state: &State, source: &str, path: &str) -> Result<Vec<ModuleImp
     let src = bun_ast::Source::init_path_string(path.as_bytes(), source.as_bytes());
     let mut log = bun_ast::Log::init();
     let mut scanned = bun_js_parser::ScanPassResult::init();
-    let (result, dynamic) = bun_js_parser::with_bunwasm_dynamic_imports(|| {
-        let mut options =
-            bun_js_parser::ParserOptions::init(state.transpiler.options.jsx.clone(), BunLoader::Js);
-        options.features.commonjs_at_runtime = true;
-        let mut parser = bun_js_parser::Parser::init(
-            options,
-            &mut log,
-            &src,
-            &state.transpiler.options.define,
-            &arena,
-        )
-        .map_err(|e| format!("failed to scan {path}: {e:?}"))?;
-        parser
-            .scan_imports(&mut scanned)
-            .map_err(|e| format!("failed to scan {path}: {e:?}"))
-    });
-    result?;
+    let mut options =
+        bun_js_parser::ParserOptions::init(state.transpiler.options.jsx.clone(), BunLoader::Js);
+    options.features.commonjs_at_runtime = true;
+    bun_js_parser::Parser::init(
+        options,
+        &mut log,
+        &src,
+        &state.transpiler.options.define,
+        &arena,
+    )
+    .and_then(|mut parser| parser.scan_imports(&mut scanned))
+    .map_err(|e| format!("failed to scan {path}: {e:?}"))?;
     if log.errors > 0 {
         return Err(format_log(&log, path));
     }
-    let mut imports = static_imports(&scanned.import_records);
-    imports.extend(dynamic.into_iter().map(|start| ModuleImport {
-        start,
-        end: start + 6,
-        specifier: None,
-    }));
-    imports.sort_by_key(|import| import.start);
-    imports.dedup_by_key(|import| import.start);
-    Ok(imports)
+    Ok(f(&scanned))
+}
+
+/// Text spliced in at one source offset by [`await_hook_edits`].
+struct Edit {
+    at: usize,
+    /// Closes something opened earlier: goes before openings at the same offset.
+    closes: bool,
+    /// Where the `await` or loop the text belongs to starts. At one offset,
+    /// inner constructs close first and outer ones open first.
+    owner: usize,
+    text: &'static str,
+}
+
+/// The browser engine's AsyncLocalStorage hooks (see [`with_await_hooks`])
+/// for source that Bun's printer never sees, as edits at the spans Bun's
+/// parser recorded: `await x` gets the printer's
+/// `__bunwasm_resume(__bunwasm_capture(), await x)`, and a `for await` loop
+/// its `{ const ctx = capture(); for await (…) { resume(ctx); body } resume(ctx); }`.
+/// Every other byte stays, so lines, comments and `//# sourceURL` survive.
+/// The inserted text starts with an identifier or `{`, which never continues
+/// the expression before it, so automatic semicolons fall where they did.
+fn await_hook_edits(state: &State, source: &str) -> Result<Vec<Edit>, String> {
+    let (result, spans) =
+        bun_js_parser::with_bunwasm_await_spans(|| scan(state, source, "<eval>", |_| ()));
+    result?;
+    let mut edits = Vec::new();
+    for (start, end) in spans.awaits {
+        edits.push(Edit { at: start, closes: false, owner: start, text: "__bunwasm_resume(__bunwasm_capture(), " });
+        edits.push(Edit { at: end, closes: true, owner: start, text: ")" });
+    }
+    for each in spans.for_awaits {
+        let owner = each.start;
+        edits.push(Edit { at: owner, closes: false, owner, text: "{ const __bunwasm_ctx = __bunwasm_capture(); " });
+        if each.body_is_block {
+            edits.push(Edit { at: each.body_start + 1, closes: false, owner, text: " __bunwasm_resume(__bunwasm_ctx);" });
+            edits.push(Edit { at: each.body_end, closes: true, owner, text: " __bunwasm_resume(__bunwasm_ctx); }" });
+        } else {
+            edits.push(Edit { at: each.body_start, closes: false, owner, text: "{ __bunwasm_resume(__bunwasm_ctx); " });
+            edits.push(Edit { at: each.body_end, closes: true, owner, text: " } __bunwasm_resume(__bunwasm_ctx); }" });
+        }
+    }
+    edits.sort_by(|a, b| {
+        let nesting = if a.closes { b.owner.cmp(&a.owner) } else { a.owner.cmp(&b.owner) };
+        a.at.cmp(&b.at).then(b.closes.cmp(&a.closes)).then(nesting)
+    });
+    edits.dedup_by(|a, b| a.at == b.at && a.owner == b.owner && a.text == b.text);
+    Ok(edits)
+}
+
+fn splice(source: &str, edits: &[Edit]) -> String {
+    let extra: usize = edits.iter().map(|edit| edit.text.len()).sum();
+    let mut out = String::with_capacity(source.len() + extra);
+    let mut at = 0;
+    for edit in edits {
+        out.push_str(&source[at..edit.at]);
+        out.push_str(edit.text);
+        at = edit.at;
+    }
+    out.push_str(&source[at..]);
+    out
+}
+
+/// A direct `eval`'s source with the browser engine's `await` hooks, or
+/// `None` when it has no `await` to hook or doesn't parse (the engine then
+/// reports its own SyntaxError).
+pub fn eval_await_hooks(source: &str) -> Option<String> {
+    if !source.contains("await") {
+        return None;
+    }
+    let edits = with_state(|state| await_hook_edits(state, source)).ok()?;
+    (!edits.is_empty()).then(|| splice(source, &edits))
+}
+
+/// [`eval_await_hooks`] for `Function` constructor arguments, parsed as the
+/// function the engine builds from them.
+pub fn function_await_hooks(args: &[String], kind: &str) -> Option<Vec<String>> {
+    if args.is_empty() || !args.iter().any(|arg| arg.contains("await")) {
+        return None;
+    }
+    let (source, ranges) = function_source(args, kind);
+    let edits = with_state(|state| await_hook_edits(state, &source)).ok()?;
+    if edits.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(args.len());
+    let mut rest = edits.as_slice();
+    for (arg, range) in args.iter().zip(&ranges) {
+        let count = rest.iter().take_while(|edit| edit.at <= range.end).count();
+        let (mine, after) = rest.split_at(count);
+        if mine.iter().any(|edit| edit.at < range.start) {
+            return None;
+        }
+        let local: Vec<Edit> = mine
+            .iter()
+            .map(|edit| Edit { at: edit.at - range.start, ..*edit })
+            .collect();
+        out.push(splice(arg, &local));
+        rest = after;
+    }
+    rest.is_empty().then_some(out)
 }
 
 fn static_imports(records: &[bun_ast::ImportRecord]) -> Vec<ModuleImport> {
@@ -687,4 +802,71 @@ fn format_log(log: &bun_ast::Log, path: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{eval_await_hooks, function_await_hooks};
+
+    const OPEN: &str = "__bunwasm_resume(__bunwasm_capture(), ";
+    const LOOP: &str = "{ const __bunwasm_ctx = __bunwasm_capture(); ";
+    const RESUME: &str = "__bunwasm_resume(__bunwasm_ctx);";
+
+    fn hooked(source: &str) -> String {
+        eval_await_hooks(source).expect("source has hooks")
+    }
+
+    #[test]
+    fn await_keeps_lines_comments_and_automatic_semicolons() {
+        let source = "\"use strict\";\nconst f = async function () {\n  const a = b\n  await c // done\n  return a\n};\n//# sourceURL=webpack-internal:///./a.js\n";
+        let out = hooked(source);
+        assert_eq!(
+            out,
+            format!("\"use strict\";\nconst f = async function () {{\n  const a = b\n  {OPEN}await c) // done\n  return a\n}};\n//# sourceURL=webpack-internal:///./a.js\n")
+        );
+        assert_eq!(out.lines().count(), source.lines().count());
+    }
+
+    #[test]
+    fn nested_and_compound_operands_close_after_their_last_token() {
+        let out = hooked("async () => `${await (await a)}` + await b.c(d)?.e + await /x/.test(y)");
+        assert_eq!(
+            out,
+            format!("async () => `${{{OPEN}await ({OPEN}await a)))}}` + {OPEN}await b.c(d)?.e) + {OPEN}await /x/.test(y))")
+        );
+    }
+
+    #[test]
+    fn for_await_restores_in_its_body_and_after_it() {
+        let out = hooked("async () => { outer: for await (const n of g()) { if (n) continue outer; } }");
+        assert_eq!(
+            out,
+            format!("async () => {{ {LOOP}outer: for await (const n of g()) {{ {RESUME} if (n) continue outer; }} {RESUME} }} }}")
+        );
+        let out = hooked("async () => { for await (const a of x) for await (const b of y) await f(); }");
+        assert_eq!(
+            out,
+            format!(
+                "async () => {{ {LOOP}for await (const a of x) {{ {RESUME} {LOOP}for await (const b of y) {{ {RESUME} {OPEN}await f()); }} {RESUME} }} }} {RESUME} }} }}"
+            )
+        );
+    }
+
+    #[test]
+    fn offsets_are_bytes_and_unhookable_source_is_left_alone() {
+        assert_eq!(hooked("\"é\"; async () => await x"), format!("\"é\"; async () => {OPEN}await x)"));
+        assert_eq!(eval_await_hooks("const s = 'await';"), None);
+        assert_eq!(eval_await_hooks("async () => { await }"), None);
+        assert_eq!(eval_await_hooks("no hooks here"), None);
+    }
+
+    #[test]
+    fn function_arguments_are_hooked_one_by_one() {
+        let args = ["a".to_owned(), "b = 1".to_owned(), "await a;\nreturn b".to_owned()];
+        assert_eq!(
+            function_await_hooks(&args, "async"),
+            Some(vec!["a".to_owned(), "b = 1".to_owned(), format!("{OPEN}await a);\nreturn b")])
+        );
+        assert_eq!(function_await_hooks(&args[..1], "async"), None);
+    }
 }

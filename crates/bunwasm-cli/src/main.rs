@@ -88,6 +88,14 @@ mod bun_transpiler {
             bunwasm_transpiler::function_imports(args, kind)
         }
 
+        fn await_hooks(&self, sources: &[String], kind: &str) -> Option<Vec<String>> {
+            if kind != "script" {
+                return bunwasm_transpiler::function_await_hooks(sources, kind);
+            }
+            let [source] = sources else { return None };
+            bunwasm_transpiler::eval_await_hooks(source).map(|code| vec![code])
+        }
+
         fn parse_data(
             &self,
             source: &[u8],
@@ -126,8 +134,9 @@ mod bun_transpiler {
                 Loader::Jsonc => BunLoader::Jsonc,
                 Loader::Text => BunLoader::Text,
             };
-            let preserve_source =
-                loader == BunLoader::Js && !(AWAIT_HOOKS && source.contains("await"));
+            // A direct eval's argument needs the printer's `__bunwasm_evalSource` wrapper.
+            let preserve_source = loader == BunLoader::Js
+                && !(AWAIT_HOOKS && (source.contains("await") || source.contains("eval(")));
             // These extensions decide the format before parser classification in
             // State::detect_format, so unchanged JS only needs semantic imports.
             if preserve_source && (path.ends_with(".mjs") || path.ends_with(".cjs")) {

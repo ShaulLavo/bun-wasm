@@ -13,6 +13,12 @@
     },
   });
 
+  // The host engine has no AsyncContext: give `await` the transpiler's hooks.
+  function withAwaitHooks(strings, kind) {
+    if (native.engine !== "host" || !strings.some(value => value.includes("await"))) return strings;
+    return native.awaitHooks(strings, kind) || strings;
+  }
+
   function argumentsWithImports(Native, args, kind) {
     const strings = Array.from(args, value => `${value}`);
     const hasImports = strings.some(value => value.includes("import"));
@@ -20,7 +26,7 @@
     // Keep the engine's parameter/body validation and SyntaxError behavior.
     Reflect.apply(Native, undefined, strings);
     const origin = callerSourceOrigin();
-    if (origin === null) return strings;
+    if (origin === null) return withAwaitHooks(strings, kind);
     const path = origin.startsWith("file:") ? internal.require("node_url").fileURLToPath(origin) : origin;
     let result = strings;
     if (hasImports) {
@@ -33,6 +39,7 @@
         return source;
       });
     }
+    result = withAwaitHooks(result, kind);
     if (native.engine === "host" && result.length > 0) result[result.length - 1] += `\n//# sourceURL=${path}`;
     return result;
   }
