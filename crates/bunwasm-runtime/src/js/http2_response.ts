@@ -285,7 +285,19 @@
       if (chunk !== undefined && chunk !== null) this.write(chunk, encoding);
       this.#state.headRequest = stream.headRequest;
       this.#state.ending = true;
-      if (typeof callback === "function") (stream.writableEnded ? this : stream).once("finish", callback);
+      if (typeof callback === "function") {
+        const done = callback;
+        const onFinish = () => {
+          stream.removeListener("finish", onFinish);
+          this.removeListener("finish", onFinish);
+          done();
+        };
+        if (stream.writableEnded) this.once("finish", callback);
+        else {
+          stream.once("finish", onFinish);
+          this.once("finish", onFinish);
+        }
+      }
       if (!this.headersSent) this.writeHead(this.#state.statusCode);
       if (this.#state.closed || stream.destroyed) this[closed]();
       else stream.end();

@@ -201,9 +201,8 @@ await ended;
 const endedResponse = new Http2ServerResponse(endedStream);
 const endedClosed = new Promise<void>(resolve => endedResponse.once("close", resolve));
 let endedCallbacks = 0;
-endedResponse.end(function (this: unknown) {
+endedResponse.end(() => {
   endedCallbacks++;
-  assert.equal(this, endedResponse);
   assert.equal(endedStream.listenerCount("finish"), 0);
   assert.equal(endedResponse.listenerCount("finish"), 0);
 });

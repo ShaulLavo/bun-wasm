@@ -14,7 +14,7 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [HTTP/2 response compatibility class](#http2-response-compatibility-class) | Port | Adapt Bun's response class and link-header validation to the existing Node stream implementation without JSC intrinsics. |
+| [HTTP/2 response compatibility class](#http2-response-compatibility-class) | Port | Adapt Bun's response class, paired end-completion listeners and link-header validation to the existing Node stream implementation without JSC intrinsics. |
 | [HTTP/2 builtin registration](#http2-response-compatibility-class) | Host feature | Original factory registration exposes one shared response constructor through named, default and CommonJS exports. |
 | [Quality fixes in adapted source](#quality-fixes-in-adapted-source) | Port | Mechanical formatting and lint fixes in the existing Bun/Node ports, without changing their upstream revision. |
 | [Native-host XML and optional hooks](#native-host-xml-and-optional-hooks) | Host feature | Scalar XML indexing and explicit unsupported trace/macro hooks let the full workspace link on the native host. |
@@ -3423,6 +3423,18 @@ adapter does not implement `Http2ServerRequest`. Session socket forwarding uses
 `session.socket` instead of Bun's private socket slot and native byte counter.
 The standalone link validator avoids a missing primordial in the stream bundle's
 unused validator copy. These changes let the class run under all guest engines.
+
+The end-callback refinement also ports `Http2ServerResponse.end` from
+`src/js/node/http2.ts` at Bun revision
+`38afee6c84fcf48c0edb2466aa4b27d287a59c30`, verified against installed native Bun
+1.4.4 at that revision. It registers one completion handler on both stream and
+response finish, then removes both listeners before invoking the callback. This
+completes callbacks when a Writable closes before finish, preserves ordinary
+finish ordering and avoids retaining the unused listener. TypeScript captures
+the narrowed callback in a local constant. Already-ended streams and repeated
+end calls retain their existing native branches. The fixture covers all three
+end overloads, both finish orders, listener cleanup and stream error identity.
+No transport implementation or dependency revision changes with this refinement.
 
 The `node:http2` factory registration in `builtins.js` is an **original host
 adapter**. It exposes this constructor, not an HTTP/1 alias or a sentinel class.
