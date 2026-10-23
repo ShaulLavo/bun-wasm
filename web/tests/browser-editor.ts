@@ -34,6 +34,33 @@ const timeout = setTimeout(() => {
   void cleanup().finally(() => process.exit(1));
 }, 90_000);
 
+async function filesystemInfoCheck(base: string, mode: "memory" | "fast" | null): Promise<void> {
+  const context = await browser!.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(`${base}/playground/${mode ? `?mode=${mode}` : ""}`);
+    await page.waitForFunction(() => !!window.playground);
+    assert.deepEqual(await page.evaluate(() => {
+      const fs = window.playground!.fs;
+      return { mode: fs.vfs.mode, persistent: fs.vfs.persistent };
+    }), { mode: mode ?? "fast", persistent: mode !== "memory" });
+    const input = page.locator(".xterm-helper-textarea");
+    await input.pressSequentially("help > /tmp/filesystem-info.txt");
+    await input.press("Enter");
+    await page.waitForFunction(async () => {
+      const fs = window.playground?.fs;
+      if (!fs || !await fs.lookup("/tmp/filesystem-info.txt")) return false;
+      return new TextDecoder().decode(await fs.readFile("/tmp/filesystem-info.txt")).includes("filesystem:");
+    });
+    const output = await page.evaluate(async () => new TextDecoder().decode(await window.playground!.fs.readFile("/tmp/filesystem-info.txt")));
+    const storage = mode === "memory" ? "memory-only browser storage" : "persistent browser storage";
+    const durability = mode === "memory" ? "do not survive" : "survive";
+    assert.ok(output.includes(`filesystem: ${storage}, preopened at /, cwd /home/user; editor saves ${durability} reload`), output);
+    if (mode === "memory") assert.doesNotMatch(output, /persistent browser storage|editor saves survive reload/);
+    console.log(`ok ${engine} playground: ${mode ?? "default fast"} shell help reports ${storage}; editor saves ${durability} reload`);
+  } finally { await context.close(); }
+}
+
 async function fastWaitCheck(base: string) {
   // The test-owned filesystem requests Waffle's supported waiting policy, not a
   // product backend selector. The page and IndexedDB worker remain real.
@@ -226,6 +253,7 @@ try {
   page.on("response", response => { if (response.status() >= 400) console.error(`HTTP ${response.status()}: ${response.url()}`); });
   const base = `http://127.0.0.1:${server.port}`;
 
+  for (const mode of ["memory", "fast", null] as const) await filesystemInfoCheck(base, mode);
   await unsupportedModeChecks(base);
   await startupFailureCheck(base);
   await startupStealChecks(base);

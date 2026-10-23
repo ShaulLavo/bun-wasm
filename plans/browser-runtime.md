@@ -111,6 +111,25 @@ than it is today. The process layer loads on the first spawn.
   relay mode above.
 - **Not adopted:** `@wasmer/sdk`, a fork of `@bjorn3/browser_wasi_shim`, SLICC code.
 
+## Controlled engine navigation
+
+Status: Approved, blocked on Waffle's reversible writer and admission contract.
+
+The engine selector in `web/src/main.ts` still navigates immediately. The accepted
+Waffle pin `b20fad173ebaa225cb87c51776f35edaaafd4a40`, package `0.0.67`, has no
+reversible barrier covering guest writers and pending process admissions.
+`fs.drain()` orders page mutations, but a guest can write during a held `flush()`.
+Quiesce permanently revokes writers, disposal is terminal, and a completed root
+can leave independent descendants alive. None provides recovery after a failed flush.
+
+Waffle owns the missing admission and writer contract. After that lands, Bun must
+order incoming guest and editor writes, await admitted work, flush, and navigate
+only on success. Prove held and rejected flushes prevent navigation, admitted writes
+cannot overtake the barrier or disappear, and failed flushes allow recovery.
+Keep one runtime, borrowed lifetime ownership, and editor saves' targeted flush.
+The pin and truthful memory diagnostic do not complete this navigation requirement
+or certify FAST, SAFE, or storage durability.
+
 ## Layers
 
 | Layer | Contents | Loaded by |
@@ -445,6 +464,20 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
    process layer loaded only on first spawn, and no slower startup. The budget is a guide, not a
    hard gate (owner, 2026-10-16): modest overshoot is fine when it buys something.
 10. Verified on Chromium, Firefox and real Safari (owner's Mac); iOS Safari where storage allows.
+
+### Accepted Waffle core size, 2026-10-23
+
+The `0.0.58` to `0.0.67` pin grows the standalone core from 25,949 to 29,721
+minified bytes and from 8,445 to 9,649 bytes gzip. The largest input increases are
+`core/fd-reopen.ts` at 2,398 minified bytes and `core/wasi.ts` at 801. They preserve
+independent reopened file offsets, descriptor paths, rights and file flags.
+Publication and descriptor lifetime checks account for most of the remaining growth.
+Every input in this gate belongs to Waffle. Moving Bun launchers or UI helpers behind
+first spawn cannot reduce this standalone export without excluding runtime features.
+Following item 9, the core cap is now 9,984 bytes gzip, leaving 335 bytes of margin.
+`bun scripts/runtime-size.ts --json` reports per-input minified bytes for future comparisons;
+gzip remains a whole-output measurement. The process and interrupt-rewriter lazy-load
+gates remain blocking and unchanged.
 
 ## References
 

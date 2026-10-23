@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { resolveRuntimePackage } from "./browser-build";
 import { join } from "node:path";
-import { initialJavaScript, checkCoreBudget, checkLazyProcessService, checkLazyInterruptRewriter, processServiceInputs, bunProcessAdapterInputs } from "./runtime-size";
+import { initialJavaScript, checkCoreBudget, checkLazyProcessService, checkLazyInterruptRewriter, processServiceInputs, bunProcessAdapterInputs, moduleContributions } from "./runtime-size";
 
 const runtime = resolveRuntimePackage(join(import.meta.dir, "../web/src/main.ts"));
 const installed = (file: string) => join(runtime.path, file);
@@ -49,8 +49,8 @@ test("Bun policy attribution names current adapters without hiding generic servi
 });
 
 test("core gzip budget includes boundary, reports actionable excess", () => {
-  expect(() => checkCoreBudget(8.5 * 1024)).not.toThrow();
-  expect(() => checkCoreBudget(8.5 * 1024 + 1)).toThrow("core exceeds 8704 B gzip budget by 1 B");
+  expect(() => checkCoreBudget(9.75 * 1024)).not.toThrow();
+  expect(() => checkCoreBudget(9.75 * 1024 + 1)).toThrow("core exceeds 9984 B gzip budget by 1 B");
 });
 
 test("Bun light initial downloads allow the tiny fatal check but never the binary rewriter", () => {
@@ -66,4 +66,17 @@ test("lookalike proc and interrupt paths outside the installed package are not a
   const paths = ["/outside-the-package/runtime/proc/supervisor.ts", "/cache/other.runtime.git/proc/supervisor.ts", "/cache/other.runtime.git/interrupt/rewriter.ts"];
   expect(processServiceInputs(paths, runtime)).toEqual([]);
   expect(() => checkLazyInterruptRewriter(paths, runtime)).not.toThrow();
+});
+
+test("module attribution sums JS outputs, normalizes installed paths, and excludes maps", () => {
+  const outputs = {
+    "index.js": { inputs: { [installed("core/wasi.ts")]: { bytesInOutput: 100 }, "web/src/runner.ts": { bytesInOutput: 10 } } },
+    "chunks/shared.js": { inputs: { [installed("core/wasi.ts")]: { bytesInOutput: 20 }, [installed("core/path.ts")]: { bytesInOutput: 5 } } },
+    "index.js.map": { inputs: { [installed("core/wasi.ts")]: { bytesInOutput: 1000 } } },
+  };
+  expect(moduleContributions(outputs, runtime)).toEqual([
+    { path: "core/wasi.ts", minified: 120 },
+    { path: "web/src/runner.ts", minified: 10 },
+    { path: "core/path.ts", minified: 5 },
+  ]);
 });
