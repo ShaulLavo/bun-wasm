@@ -238,7 +238,13 @@ with each native or engine contract used, keep strict checking enabled, and comp
 engines before and after each group. Regenerate copied/generated files from their generators
 rather than changing their output by hand. Reconcile this list with the merged tree first.
 
-Remaining files from the original inventory, reconciled with main `d48dc3d2`:
+Group 1 verification after rebasing onto main `23e2125d`: strict runtime
+checking and 127 unit tests pass, including copied-buffer/lifecycle and generated
+Function module-origin checks, plus positive/negative native contract probes.
+Lint, project type checks and the duplicate gate pass. The three-engine fixture
+comparison is pending the queued guest build; do not mark this section done.
+
+Remaining files from the original inventory, reconciled with main `23e2125d`:
 
 - `crates/bunwasm-runtime/src/js/assert.js`
 - `crates/bunwasm-runtime/src/js/bootstrap.js`
