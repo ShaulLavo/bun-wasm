@@ -32,21 +32,22 @@ async function clearWorkspace(driver: Driver, origin: string) {
   await driver.navigate(`${origin}/cleanup.html`);
   await driver.evaluate("for(const db of await indexedDB.databases()){await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(db.name);r.onsuccess=resolve;r.onerror=()=>reject(r.error);r.onblocked=()=>reject(Error('database blocked'));});}const root=await navigator.storage.getDirectory();for await(const name of root.keys())await root.removeEntry(name,{recursive:true});for(const registration of await navigator.serviceWorker.getRegistrations())await registration.unregister();for(const name of await caches.keys())await caches.delete(name);return true;");
 }
+async function cleanupResources(driver: Driver | undefined, servers: readonly ReturnType<typeof Bun.serve>[], cleanupErrors: string[]) {
+  for (const server of servers) {
+    if (!driver) continue;
+    try { await clearWorkspace(driver, `http://127.0.0.1:${server.port}`); }
+    catch (error) { cleanupErrors.push(String(error)); }
+  }
+  try { await driver?.close(); } catch (error) { cleanupErrors.push(String(error)); }
+  for (const server of servers) await server.stop(true);
+  if (cleanupErrors.length) process.exitCode = 1;
+}
 async function run() {
   const rows: unknown[] = [], cleanupErrors: string[] = [];
   const servers: ReturnType<typeof Bun.serve>[] = [];
   let driver: Driver | undefined;
   let cleanupPromise: Promise<void> | undefined;
-  async function cleanupResources() {
-    for (const server of servers) {
-      try { if (driver) await clearWorkspace(driver, `http://127.0.0.1:${server.port}`); }
-      catch (error) { cleanupErrors.push(String(error)); }
-    }
-    try { await driver?.close(); } catch (error) { cleanupErrors.push(String(error)); }
-    for (const server of servers) await server.stop(true);
-    if (cleanupErrors.length) process.exitCode = 1;
-  }
-  function cleanup() { return cleanupPromise ??= cleanupResources(); }
+  function cleanup() { return cleanupPromise ??= cleanupResources(driver, servers, cleanupErrors); }
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
   const deadline = setTimeout(() => { void cleanup().finally(() => process.exit(1)); }, 8 * 60_000);
   async function check(engine: string) {

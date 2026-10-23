@@ -9,6 +9,7 @@ import { bunRuntimeProcScenarios } from "./bun-runtime-proc-fixtures";
 import { assertBunRuntimeProcDiagnostics } from "./bun-runtime-proc-diagnostics";
 import { BUN_WASM_ASSET } from "../../src/guest-asset.generated";
 import { object, safariDriver } from "./safari-webdriver";
+import { assertEngineInterruptionResult } from "./engine-interruption-result";
 
 type Driver = Awaited<ReturnType<typeof safariDriver>>;
 const action = process.argv[2], directory = resolve(process.argv[3] ?? ".");
@@ -93,7 +94,44 @@ async function checkPersistence(driver: Driver, origin: string, storage: string)
     await driver.evaluate("await globalThis.persistenceHarness?.destroy();return true;");
   }
 }
+const runtimeCases = ["pipes", "job-wait"].flatMap(scenario => ["automatic", "explicit"].map(mode => ({ scenario, mode })));
+export function selectSafariCaseNames(options: { prefix?: string; guestDirectory?: string; publishedDefault: boolean }) {
+  if (options.prefix && "engine-interruption".startsWith(options.prefix)) {
+    assert.ok(options.guestDirectory, "engine-interruption requires SAFARI_GUEST_DIR");
+  }
+  const names = ["artifact-free-process"].concat(
+    runtimeCases.map(({ scenario, mode }) => `runtime-proc/${scenario}/${mode}`),
+    ["generic-control"].concat(bunRuntimeProcScenarios.map(row => row.name)).map(scenario => `${options.publishedDefault ? "published" : "current"}-bun/${scenario}`),
+    options.guestDirectory ? ["engine-interruption"] : [],
+    ["persistence/indexeddb", "persistence/opfs"],
+  );
+  const selected = names.filter(name => !options.prefix || name.startsWith(options.prefix));
+  assert.ok(selected.length > 0, `SAFARI_CASE matched no scenarios: ${options.prefix}`);
+  return selected;
+}
+export function assertSafariCaseRows(rows: readonly { name: string }[], selected: readonly string[]) {
+  assert.ok(rows.length > 0, "Safari gate executed no scenarios");
+  assert.deepEqual(rows.map(row => row.name), selected, "every selected Safari scenario executed once");
+}
+async function clearOrigin(driver: Driver, server: ReturnType<typeof Bun.serve>) {
+  await driver.navigate(`http://127.0.0.1:${server.port}/__safari-empty.html`);
+  await driver.evaluate("for(const db of await indexedDB.databases()){await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(db.name);r.onsuccess=resolve;r.onerror=()=>reject(r.error);r.onblocked=()=>reject(Error('database cleanup blocked'));});}const root=await navigator.storage.getDirectory();for await(const name of root.keys())await root.removeEntry(name,{recursive:true});return true;");
+}
+async function cleanupResources(driver: Driver | undefined, servers: readonly ReturnType<typeof Bun.serve>[]) {
+  const errors: unknown[] = [];
+  for (const server of servers) {
+    if (!driver) continue;
+    try { await clearOrigin(driver, server); } catch (error) { errors.push(error); }
+  }
+  try { await driver?.close(); } catch (error) { errors.push(error); }
+  for (const server of servers) {
+    try { await server.stop(true); } catch (error) { errors.push(error); }
+  }
+  if (errors.length) throw new AggregateError(errors, `Safari cleanup failed: ${errors.map(String).join("; ")}`);
+}
 async function run() {
+  const selected = selectSafariCaseNames({ prefix: process.env.SAFARI_CASE, guestDirectory: process.env.SAFARI_GUEST_DIR,
+    publishedDefault: process.env.BUN_WASM_RUNTIME_PROC_PUBLISHED_DEFAULT === "1" });
   const report: { capabilities?: unknown; rows: { name: string; ok: boolean; result?: unknown; error?: string; diagnostics?: unknown }[]; cleanup?: unknown } = { rows: [] };
   let driver: Driver | undefined;
   const servers: ReturnType<typeof Bun.serve>[] = [];
@@ -114,28 +152,12 @@ async function run() {
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: respond });
     servers.push(server); return server;
   }
-  async function clearOrigin(server: ReturnType<typeof Bun.serve>) {
-    if (!driver) return;
-    await driver.navigate(`http://127.0.0.1:${server.port}/__safari-empty.html`);
-    await driver.evaluate("for(const db of await indexedDB.databases()){await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(db.name);r.onsuccess=resolve;r.onerror=()=>reject(r.error);r.onblocked=()=>reject(Error('database cleanup blocked'));});}const root=await navigator.storage.getDirectory();for await(const name of root.keys())await root.removeEntry(name,{recursive:true});return true;");
-  }
-  async function cleanupResources() {
-    const errors: unknown[] = [];
-    for (const server of servers) {
-      try { await clearOrigin(server); } catch (error) { errors.push(error); }
-    }
-    try { await driver?.close(); } catch (error) { errors.push(error); }
-    for (const server of servers) {
-      try { await server.stop(true); } catch (error) { errors.push(error); }
-    }
-    if (errors.length) throw new AggregateError(errors, `Safari cleanup failed: ${errors.map(String).join("; ")}`);
-  }
   let cleanupPromise: Promise<void> | undefined;
-  function cleanup() { return cleanupPromise ??= cleanupResources(); }
+  function cleanup() { return cleanupPromise ??= cleanupResources(driver, servers); }
   for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
   const deadline = setTimeout(() => { void cleanup().finally(() => process.exit(1)); }, 45 * 60_000);
   async function check(name: string, test: (owned: Driver, origin: string) => Promise<unknown>) {
-    if (process.env.SAFARI_CASE && !name.startsWith(process.env.SAFARI_CASE)) return;
+    if (!selected.includes(name)) return;
     assert.ok(driver);
     const server = serve();
     try { report.rows.push({ name, ok: true, result: await test(driver, `http://127.0.0.1:${server.port}`) }); }
@@ -146,14 +168,12 @@ async function run() {
     driver = await safariDriver(); report.capabilities = driver.capabilities;
     console.log(JSON.stringify({ capabilities: driver.capabilities, driver: driver.pid }));
     await check("artifact-free-process", checkProcess);
-    const runtimeCases = ["pipes", "job-wait"].flatMap(scenario => ["automatic", "explicit"].map(mode => ({ scenario, mode })));
     for (const { scenario, mode } of runtimeCases) await check(`runtime-proc/${scenario}/${mode}`, (d, o) => checkRuntimeProc(d, o, scenario, mode));
     for (const scenario of ["generic-control"].concat(bunRuntimeProcScenarios.map(row => row.name))) await check(`${process.env.BUN_WASM_RUNTIME_PROC_PUBLISHED_DEFAULT === "1" ? "published" : "current"}-bun/${scenario}`, (d, o) => checkBun(d, o, scenario));
     if (process.env.SAFARI_GUEST_DIR) await check("engine-interruption", async (d, o) => {
       await d.navigate(`${o}/engine/`);
       const result = await d.result("engineInterruptionResult", 650_000);
-      assert.equal(result.ok, true, JSON.stringify(result));
-      assert.equal(object(result.cleanup).safe, true);
+      assertEngineInterruptionResult({ ...result, pageErrors: (await observations(d)).pageErrors }, false);
       return result;
     });
     for (const storage of ["indexeddb", "opfs"]) await check(`persistence/${storage}`, (d, o) => checkPersistence(d, o, storage));
@@ -163,7 +183,10 @@ async function run() {
     catch (error) { report.cleanup = { ok: false, error: String(error) }; process.exitCode = 1; }
     if (process.env.SAFARI_OUTPUT) await Bun.write(process.env.SAFARI_OUTPUT, JSON.stringify(report, null, 2) + "\n");
   }
+  assertSafariCaseRows(report.rows, selected);
   if (report.rows.some(row => !row.ok)) process.exitCode = 1;
 }
-if (action === "--build") await build();
-else { assert.equal(action, "--run", "Use --build <directory> or --run <directory>"); await run(); }
+if (import.meta.main) {
+  if (action === "--build") await build();
+  else { assert.equal(action, "--run", "Use --build <directory> or --run <directory>"); await run(); }
+}

@@ -7,6 +7,28 @@ export function object(value: unknown): Record<string, unknown> {
   return value;
 }
 
+type WebDriverRequest = (path: string, body?: unknown, method?: string) => Promise<unknown>;
+async function waitForDriver(request: WebDriverRequest, driver: ReturnType<typeof Bun.spawn>) {
+  for (let attempt = 0; ; attempt++) {
+    try { await request("/status"); return; }
+    catch (error) { if (attempt >= 40 || driver.exitCode !== null) throw error; await Bun.sleep(100); }
+  }
+}
+async function waitForResult(request: WebDriverRequest, path: string, name: string, timeout = 90_000) {
+  const end = Date.now() + timeout;
+  let nextProgress = Date.now() + 10_000;
+  while (Date.now() < end) {
+    const value = await request(path, { script: "return globalThis[arguments[0]] ?? null;", args: [name] });
+    if (value !== null) return object(value);
+    if (Date.now() >= nextProgress) {
+      console.log(JSON.stringify({ waitingFor: name, progress: await request(path, { script: "return globalThis.engineInterruptionProgress?.() ?? globalThis.processProgress?.() ?? null", args: [] }) }));
+      nextProgress = Date.now() + 10_000;
+    }
+    await Bun.sleep(100);
+  }
+  throw new Error(`Result timed out: ${name}`);
+}
+
 /** Real Safari only. Session deletion never touches the owner's normal windows. */
 export async function safariDriver() {
   assert.equal(process.platform, "darwin", "Reserve the Mac before running real Safari");
@@ -46,33 +68,14 @@ export async function safariDriver() {
     }
     throw new Error(`Safari navigation did not complete: ${url}`);
   }
-  async function waitForDriver() {
-    for (let attempt = 0; ; attempt++) {
-      try { await request("/status"); return; }
-      catch (error) { if (attempt >= 40 || driver.exitCode !== null) throw error; await Bun.sleep(100); }
-    }
-  }
   try {
-    await waitForDriver();
+    await waitForDriver(request, driver);
     const opened = object(await request("/session", { capabilities: { alwaysMatch: { browserName: "safari" } } }));
     assert.equal(typeof opened.sessionId, "string");
     assert.ok(typeof opened.sessionId === "string"); session = opened.sessionId;
     await request(`/session/${session}/timeouts`, { script: 120_000, pageLoad: 30_000, implicit: 0 });
     return { capabilities: opened.capabilities, port, pid: driver.pid, evaluate, navigate, close,
-      async result(name: string, timeout = 90_000) {
-        const end = Date.now() + timeout;
-        let nextProgress = Date.now() + 10_000;
-        while (Date.now() < end) {
-          const value = await request(`/session/${session}/execute/sync`, { script: "return globalThis[arguments[0]] ?? null;", args: [name] });
-          if (value !== null) return object(value);
-          if (Date.now() >= nextProgress) {
-            console.log(JSON.stringify({ waitingFor: name, progress: await request(`/session/${session}/execute/sync`, { script: "return globalThis.engineInterruptionProgress?.() ?? globalThis.processProgress?.() ?? null", args: [] }) }));
-            nextProgress = Date.now() + 10_000;
-          }
-          await Bun.sleep(100);
-        }
-        throw new Error(`Result timed out: ${name}`);
-      },
+      result: (name: string, timeout?: number) => waitForResult(request, `/session/${session}/execute/sync`, name, timeout),
       async controlC() {
         await request(`/session/${session}/actions`, { actions: [{ type: "key", id: "terminal", actions: [
           { type: "keyDown", value: "\uE009" }, { type: "keyDown", value: "c" },

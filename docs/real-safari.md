@@ -29,7 +29,9 @@ that origin's databases and OPFS files before closing the session and listeners.
 For a freshly built browser guest, omit the published-default opt-in and set
 `BUN_WASM_RUNTIME_PROC_ARTIFACT` to its absolute path. `SAFARI_CASE` selects a case
 prefix, such as `artifact-free-process`, `runtime-proc/`, `current-bun/` or
-`persistence/`. A failing row makes the runner exit nonzero.
+`persistence/`. Unknown or empty selections fail before Safari starts; selecting
+`engine-interruption` requires `SAFARI_GUEST_DIR`. The final report also rejects
+missing selected rows. A failing row makes the runner exit nonzero.
 
 The existing `browser-engine-interruption.ts safari` gate covers CPU-bound WASM,
 QuickJS, JSC and browser JS with real workers. Supply current-main guests through
