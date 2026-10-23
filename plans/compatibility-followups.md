@@ -495,23 +495,16 @@ and engine combinations. This is no longer a Worker delivery blocker.
 
 ### Node stream adapter census after unavailable worker detection
 
-The PR12 round-5 merge includes main `0cffef1`. All 22 selected Node adapter
-files are currently nonpassing on QuickJS, JSC and Node-host browser. The shared
-upstream harness imports `worker_threads` at `test/js/node/test/common/index.js:34`
-and receives `ERR_NOT_SUPPORTED_IN_WASM`. Main intentionally changed that module
-to reject loading so packages can detect absent worker support. Do not restore
-the earlier fabricated worker constructor to make this harness collect.
-
-Reproduce with `scripts/bun-suite.sh --node-parallel --engine quickjs --jobs 1
---timeout 15 --network loopback --output <fresh-output.json>
-js/node/test/parallel/test-readable-from-web-enqueue-then-close.js`, repeated for
-JSC and browser. The full fixed selection is
-`docs/bun-test-suite/stream-adapter-files.txt`. Exact outcomes and wasm provenance
-are retained at `/work/reports/bun-wasm-streams-round5-2026-10-16/final-adapter-*.json`.
-All three current full fixture gates pass 152/152. Runtime stream behavior is
-not established by these non-collecting upstream files. The compatibility track
-owns resolving the upstream harness/capability boundary and removes the retained
-evidence after reproduction and independent review.
+Status: Resolved by main. `worker_threads` loads again since guest workers landed
+(#37), so the shared harness at `test/js/node/test/common/index.js:34` collects.
+On main `d48dc3d2` plus the JSC buffer-transfer change, the fixed selection in
+`docs/bun-test-suite/stream-adapter-files.txt` gives 21 passes and one skip on
+QuickJS and the Node-host browser engine, and 19 passes, one skip and two failures
+on JSC (`scripts/bun-suite.sh --node-parallel --jobs 1 --timeout 15 --network
+loopback`). The skip is `test-stream-readable-to-web.js`, which reports `missing
+crypto` because `process.versions.openssl` is absent. Both JSC failures are
+`SharedArrayBuffer is not defined`, handled under shared memory above. The round-5
+records in `/work/reports/bun-wasm-streams-round5-2026-10-16/` can be removed.
 
 ### Native stream construction overhead
 
@@ -793,39 +786,23 @@ now pass on all engines. This does not resolve the React optimized-dependency
 
 ## JSC native-output buffer transfer
 
-Status: Approved. The engine/runtime track owns this follow-up.
+Status: Resolved. The JSC C API's `JSObjectGetTypedArrayBytesPtr` and
+`JSObjectGetArrayBufferBytesPtr` call WebKit's `ArrayBuffer::pinAndLock()`, and
+`isDetachable()` is false for a locked buffer. Every buffer the JSC adapter filled
+(`engine_jsc.rs::uint8_array`) or read (`bunwasm-jsc::Js::bytes`) therefore stayed
+non-detachable for good: native outputs such as `TextEncoder.encode`, `readFileSync`
+and `Buffer.from(string)`, and JavaScript buffers passed to `TextDecoder.decode` or
+`writeFileSync`. Native Bun 1.4.2 transfers all of them.
 
-The PR #59 review-fix gate observed a separate buffer-ownership gap on JSC.
-At task commit `df5c87c7`, `scripts/test.sh --engine jsc transpiler-review`
-reports `DataCloneError: ArrayBuffer is not detachable` at the transfer of a
-TextEncoder-produced buffer. The same fixture passes its mutation, minification
-and import-preservation checks. Native Bun 1.4.2 permits this transfer; a fresh
-JavaScript-owned ArrayBuffer also transfers successfully on our JSC engine.
-The review regression now uses that transferable caller-owned storage, while
-retaining direct TextEncoder and DataView mutation checks on every engine.
-
-Reproduce the external-buffer operation with a rebuilt JSC artifact:
-
-```sh
-export PATH=$HOME/.local/share/mise/shims:$PATH
-source env.sh
-wasmtime run --dir .::/ dist/bun-jsc.wasm -e 'const bytes = new TextEncoder().encode("const z=3"); structuredClone(bytes.buffer, { transfer: [bytes.buffer] }); console.log(bytes.byteLength);'
-```
-
-Run through the heavy wrapper. Expected native Bun output is zero. The observed
-JSC fixture diagnostic is retained in
-`/work/reports/bun-wasm-small-causes/review-fixes/after-jsc.log`, including the
-source line and exit 1. All ten focused fixtures pass on JSC after changing only
-the detach case to JavaScript-owned storage.
-
-Inspect `crates/bunwasm-runtime/src/engine_jsc.rs`, `uint8_array`: it creates a
-JavaScript Uint8Array, then calls `JSObjectGetTypedArrayBytesPtr` to populate it.
-That C API access may pin the backing store. The detachable check in
-`crates/bunwasm-jsc/cpp/helpers.cpp`, `bunjsc_is_detachable_buffer`, delegates to
-WebKit's `ArrayBuffer::isDetachable`. Confirm the pinning mechanism before
-changing allocation or ownership; do not force-detach locked native storage.
-Cover native-produced byte buffers as well as JavaScript-created buffers.
-The coordinator owns the evidence until this follow-up is reproduced.
+`bunjsc_buffer_bytes` in `crates/bunwasm-jsc/cpp/helpers.cpp` now returns the view's
+or buffer's bytes without pinning; both callers copy or fill them before any
+JavaScript runs, so nothing can detach the storage meanwhile. No locked storage is
+force-detached. `tests/fixtures/native-output-transfer` transfers native outputs,
+native inputs, an offset view and a JavaScript-created buffer on every engine;
+on a JSC build before the fix it stops at the first case with `DataCloneError:
+ArrayBuffer is not detachable`. `transpiler-review` transfers its `TextEncoder`
+buffer directly again, and the worker codec and WebAssembly adapters no longer
+copy bytes to keep them detachable.
 
 ## Browser immutable promise limitations
 

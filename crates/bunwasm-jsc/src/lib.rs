@@ -256,31 +256,18 @@ impl Js {
 
     /// The bytes of a typed array, DataView-less ArrayBuffer or nothing.
     pub fn bytes(self, v: JSValueRef) -> Option<Vec<u8>> {
-        // SAFETY: valid context and value; the pointer is read before any JS runs.
+        // SAFETY: valid context and value; the bytes are copied before any JS runs.
         unsafe {
-            let kind = JSValueGetTypedArrayType(self.ctx, v, ptr::null_mut());
-            if kind == kJSTypedArrayTypeNone {
+            if JSValueGetTypedArrayType(self.ctx, v, ptr::null_mut()) == kJSTypedArrayTypeNone {
                 return None;
             }
-            let obj = JSValueToObject(self.ctx, v, ptr::null_mut());
-            let (p, len, offset) = if kind == kJSTypedArrayTypeArrayBuffer {
-                (
-                    JSObjectGetArrayBufferBytesPtr(self.ctx, obj, ptr::null_mut()),
-                    JSObjectGetArrayBufferByteLength(self.ctx, obj, ptr::null_mut()),
-                    0,
-                )
-            } else {
-                (
-                    JSObjectGetTypedArrayBytesPtr(self.ctx, obj, ptr::null_mut()),
-                    JSObjectGetTypedArrayByteLength(self.ctx, obj, ptr::null_mut()),
-                    JSObjectGetTypedArrayByteOffset(self.ctx, obj, ptr::null_mut()),
-                )
-            };
+            // Unpinned, unlike JSObjectGet*BytesPtr, so the buffer stays transferable.
+            let mut len = 0;
+            let p = bunjsc_buffer_bytes(self.ctx, v, &mut len);
             if len == 0 || p.is_null() {
                 return Some(Vec::new());
             }
-            // JSC returns the backing buffer pointer, so views need their byte offset.
-            Some(core::slice::from_raw_parts(p.cast::<u8>().add(offset), len).to_vec())
+            Some(core::slice::from_raw_parts(p, len).to_vec())
         }
     }
 
