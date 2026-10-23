@@ -81,7 +81,8 @@ empty value. Development source overrides do not receive committed-source receip
 Imported Bun's tracked `src`, `Cargo.toml`, and `Cargo.lock` bytes must match their
 committed blobs even with `assume-unchanged` or `skip-worktree`. Checks disable Git's
 optional index refresh. They do not clear flags or rewrite a borrowed index.
-The BoringSSL inventory includes both directly compiled decrepit translation units.
+The BoringSSL inventory includes both directly compiled decrepit translation units
+and their directly included `decrepit/macros.h` header.
 
 Before the guest compiler runs, `guest-build-receipt.ts environment` resolves the
 active Rustup compiler and Cargo, the compiler sysroot's host `rust-lld`, and Node's

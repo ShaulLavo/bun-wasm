@@ -20,8 +20,9 @@ async function snapshot(fixture: Parameters<typeof receiptCli>[0]) {
   return path;
 }
 
-for (const path of ["decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc"]) test(`producer inventory rejects compiled BoringSSL drift: ${path}`, async () => {
+for (const path of ["decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h"]) test(`producer inventory rejects compiled BoringSSL drift: ${path}`, async () => {
   await withCliReceiptFixture(async fixture => {
+    await writeFile(join(fixture.root, "vendor/boringssl", path), "original compiled input\n");
     const inputs = await snapshot(fixture);
     await writeFile(join(fixture.root, "vendor/boringssl", path), "changed compiled source\n");
     const finished = receiptCli(fixture, "write", fixture.artifact, inputs);
