@@ -110,8 +110,12 @@ async function exercise(name: string, mode: "prepare" | "publicAdapter") {
     assert.deepEqual(errors, [], "no browser diagnostics");
     console.log(JSON.stringify({ browser: name, mode, result, serviceWorker: true, socket, stream, cleanup: released, errors }));
   } catch (error) {
-    console.error(JSON.stringify({ browser: name, mode, diagnostics: await page.evaluate(() => Reflect.get(globalThis, "networkConsumer")?.diagnostics()), errors }));
-    const released = await releaseConsumer(page);
+    const diagnostics = await page.evaluate(() => Reflect.get(globalThis, "networkConsumer")?.diagnostics())
+      .catch(diagnosticError => ({ unavailable: String(diagnosticError) }));
+    console.error(JSON.stringify({ browser: name, mode, failed: true, error: String(error), diagnostics, errors }));
+    const released = await releaseConsumer(page).catch(cleanupError => {
+      throw new AggregateError([error, cleanupError], "scenario failed and page cleanup could not be verified");
+    });
     console.log(JSON.stringify({ browser: name, mode, failed: true, cleanup: released }));
     throw error;
   } finally { await context.close(); }

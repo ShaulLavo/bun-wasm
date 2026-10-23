@@ -617,3 +617,19 @@ Stop the server and driver, shut down only a simulator booted by the run, and re
 and the owned lock. Evidence remains under `/work/reports/bun-wasm-safari-fencing-2026-10-17/`
 until the coordinator resolves PR #62. Earlier rejected lifecycle approaches remain in
 `/work/reports/bun-wasm-safari-lifecycle-2026-10-17/` under the same cleanup owner.
+
+## Published guest network acceptance follow-up
+
+Status: Approved. Blocked on guest publication qualification, not receipt checks.
+
+[The current descriptor's network check](../docs/network-published-guest-acceptance.md)
+accepts its matching receipt but fails the unchanged six-scenario browser matrix.
+The published guest rejects child IPC at its original
+`crates/bunwasm-runtime/src/js/spawn.ts:187`; public-adapter streams also fail or
+crash. PR #98 adds IPC to current source, and PR #103's newer local candidate
+passed a separate matrix. Neither updates the current descriptor by implication.
+
+Qualify one explicitly selected, receipt-bound guest from reviewed source through
+the full network matrix and existing publication gates before changing the
+published descriptor. Reuse that build across gates. Keep the current failures,
+HTTP/WebSocket/backpressure assertions and old reviewed-hash evidence intact.
