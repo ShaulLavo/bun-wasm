@@ -216,8 +216,23 @@ jobs:
           sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
           test -s /etc/apt/apt-mirrors.txt
           cat /etc/apt/apt-mirrors.txt
+      - name: Identify browser setup cache inputs
+        id: browser-image
+        run: echo "image=$ImageVersion" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: browser-cache
+        with:
+          path: ${{ runner.temp }}/browser-apt/*.deb
+          key: browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-chromium-webkit-${{ hashFiles('web/bun.lock', 'web/scripts/ci-browser-deps.ts') }}
+      - name: Prefetch and install verified browser system packages
+        run: bun scripts/ci-browser-deps.ts chromium webkit
+      - uses: actions/cache/save@v4
+        if: steps.browser-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/browser-apt/*.deb
+          key: ${{ steps.browser-cache.outputs.cache-primary-key }}
       - name: Install Chromium and WebKit
-        run: bunx playwright install --with-deps chromium webkit
+        run: bunx playwright install chromium webkit
       - name: Web host browser gates
         env:
           EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
@@ -245,8 +260,23 @@ jobs:
           sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
           test -s /etc/apt/apt-mirrors.txt
           cat /etc/apt/apt-mirrors.txt
+      - name: Identify browser setup cache inputs
+        id: browser-image
+        run: echo "image=$ImageVersion" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: browser-cache
+        with:
+          path: ${{ runner.temp }}/browser-apt/*.deb
+          key: browser-apt-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.browser-image.outputs.image }}-${{ matrix.browser }}-${{ hashFiles('web/bun.lock', 'web/scripts/ci-browser-deps.ts') }}
+      - name: Prefetch and install verified browser system packages
+        run: bun scripts/ci-browser-deps.ts ${{ matrix.browser }}
+      - uses: actions/cache/save@v4
+        if: steps.browser-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/browser-apt/*.deb
+          key: ${{ steps.browser-cache.outputs.cache-primary-key }}
       - name: Install browser
-        run: bunx playwright install --with-deps ${{ matrix.browser }}
+        run: bunx playwright install ${{ matrix.browser }}
       - name: Process supervisor, generic preview1 and interrupt gate (no Rust or dist artifacts)
         env:
           PROCESS_SMOKE_PORT: "4186"

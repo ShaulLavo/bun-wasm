@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { qualityGates } from "./quality";
+import { inBatches, missingPackages, parseArchives, planArchives, prefetchArchive } from "../web/scripts/ci-browser-deps";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const quality = workflow.split("\n  quality:\n")[1]!.split("\n  rust:\n")[0]!;
@@ -100,8 +101,8 @@ test("CMake preflight has one always-on lightweight owner, independent of native
 });
 
 for (const { job, install } of [
-  { job: "web", install: "bunx playwright install --with-deps chromium webkit" },
-  { job: "browser-process", install: "bunx playwright install --with-deps ${{ matrix.browser }}" },
+  { job: "web", install: "bunx playwright install chromium webkit" },
+  { job: "browser-process", install: "bunx playwright install ${{ matrix.browser }}" },
 ]) {
   test(`${job} selects the existing HTTPS apt mirrors before installing browsers`, () => {
     const section = (workflow.split(`\n  ${job}:\n`)[1] ?? "").split(/\n  \S/)[0] ?? "";
@@ -129,6 +130,153 @@ for (const { job, install } of [
       expect(spawnSync("bash", ["-euc", run]).status).not.toBe(0);
       rmSync(mirrors);
       expect(spawnSync("bash", ["-euc", run]).status).not.toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const { job, browsers } of [
+  { job: "web", browsers: "chromium webkit" },
+  { job: "browser-process", browsers: "${{ matrix.browser }}" },
+]) {
+  test(`${job} prefetches verified apt archives instead of serial browser dependency downloads`, () => {
+    const section = (workflow.split(`\n  ${job}:\n`)[1] ?? "").split(/\n  \S/)[0] ?? "";
+    expect(section).toContain(`bun scripts/ci-browser-deps.ts ${browsers}`);
+    expect(section).toContain(`bunx playwright install ${browsers}`);
+    expect(section).not.toContain("playwright install --with-deps");
+    expect(section).toContain("${{ runner.temp }}/browser-apt/*.deb");
+    expect(section).not.toContain("~/.cache/ms-playwright");
+    expect(section).not.toContain("uses: actions/cache@v4");
+    const restore = section.indexOf("uses: actions/cache/restore@v4");
+    const setup = section.indexOf(`run: bun scripts/ci-browser-deps.ts ${browsers}`);
+    const save = section.indexOf("uses: actions/cache/save@v4");
+    const browserInstall = section.indexOf(`run: bunx playwright install ${browsers}`);
+    expect(restore).toBeGreaterThan(0);
+    expect(restore).toBeLessThan(setup);
+    expect(save).toBeGreaterThan(setup);
+    expect(save).toBeLessThan(browserInstall);
+    expect(section).toContain("if: steps.browser-cache.outputs.cache-hit != 'true'");
+    expect(section).toContain("key: ${{ steps.browser-cache.outputs.cache-primary-key }}");
+    expect(section).toContain("timeout-minutes: 10");
+  });
+}
+
+test("browser dependency reports fail closed and retain every missing package", () => {
+  expect(missingPackages("All system dependencies are installed.\n")).toEqual([]);
+  expect(missingPackages("Missing system dependencies (2):\n  fonts-noto-color-emoji\n  libcodec2-1.2\n")).toEqual(["fonts-noto-color-emoji", "libcodec2-1.2"]);
+  expect(() => missingPackages("Missing system dependencies (2):\n  libcodec2-1.2\n")).toThrow("Invalid");
+  expect(() => missingPackages("Missing system dependencies (1):\n  --allow-unauthenticated\n")).toThrow("Invalid");
+  expect(() => missingPackages("apt simulation failed")).toThrow("Unexpected");
+});
+
+test("apt prefetch uses signed-index SHA256 hashes and preserves mirror resolution", () => {
+  const hash = "a".repeat(64);
+  const uri = "mirror+file:/etc/apt/apt-mirrors.txt/pool/main/a/archive.deb";
+  const row = `'${uri}' archive_1.0_amd64.deb 42 SHA256:${hash}`;
+  expect(parseArchives(`Reading package lists...\n${row}\n`)).toEqual([{ uri, filename: "archive_1.0_amd64.deb", size: 42, sha256: hash }]);
+  expect(parseArchives(row.replace(uri, "https://archive.ubuntu.com/ubuntu/pool/main/a/archive.deb"))).toHaveLength(1);
+  expect(() => parseArchives(row.replace("SHA256:", "MD5Sum:"))).toThrow("SHA256");
+  expect(() => parseArchives(row.replace("archive_1.0_amd64.deb", "../archive.deb"))).toThrow("SHA256");
+  expect(() => parseArchives(row.replace(uri, "http://azure.archive.ubuntu.com/ubuntu/pool/main/a/archive.deb"))).toThrow("transport");
+  expect(() => parseArchives(row.replace(" 42 ", " 0 "))).toThrow("size");
+});
+
+test("prefetch starts a bounded batch before waiting, unlike serial apt downloads", async () => {
+  const started: number[] = [];
+  const release: (() => void)[] = [];
+  const download = (item: number) => new Promise<void>(resolve => {
+    started.push(item);
+    release.push(resolve);
+  });
+  const result = inBatches([1, 2, 3, 4, 5], 3, download);
+  expect(started).toEqual([1, 2, 3]);
+  for (const resolve of release.splice(0)) resolve();
+  await Bun.sleep(0);
+  expect(started).toEqual([1, 2, 3, 4, 5]);
+  for (const resolve of release) resolve();
+  await result;
+});
+
+test("failed prefetch waits for active downloads and never starts the next batch", async () => {
+  const started: number[] = [];
+  let settled = false;
+  const download = async (item: number) => {
+    started.push(item);
+    if (item === 1) throw new Error("hash mismatch");
+    await Bun.sleep(5);
+    settled = true;
+  };
+  await expect(inBatches([1, 2, 3], 2, download)).rejects.toThrow("hash mismatch");
+  expect(started).toEqual([1, 2]);
+  expect(settled).toBe(true);
+  await expect(inBatches([], 0, download)).rejects.toThrow("positive concurrency");
+});
+
+for (const cached of ["verified archive", "tampered archive", "truncated", "missing"]) {
+  test(`apt prefetch verifies ${cached} cache contents before reuse`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-cache-"));
+    try {
+      const contents = "verified archive";
+      const filename = "archive_1.0_amd64.deb";
+      const target = join(directory, filename);
+      const archive = { uri: "https://example.invalid/archive.deb", filename, size: contents.length, sha256: new Bun.CryptoHasher("sha256").update(contents).digest("hex") };
+      if (cached !== "missing") writeFileSync(target, cached);
+      if (cached === "tampered archive") expect(cached.length).toBe(archive.size);
+      let downloads = 0;
+      const download = async () => {
+        expect(await Bun.file(target).exists()).toBe(false);
+        downloads++;
+        writeFileSync(target, contents);
+      };
+      await prefetchArchive(archive, directory, download);
+      expect(downloads).toBe(cached === contents ? 0 : 1);
+      expect(readFileSync(target, "utf8")).toBe(contents);
+      await prefetchArchive(archive, directory, download);
+      expect(downloads).toBe(cached === contents ? 0 : 1);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
+
+test("apt prefetch rejects a same-size download with the wrong SHA256", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-cache-"));
+  try {
+    const filename = "archive_1.0_amd64.deb";
+    const contents = "verified archive";
+    const archive = { uri: "https://example.invalid/archive.deb", filename, size: contents.length, sha256: new Bun.CryptoHasher("sha256").update(contents).digest("hex") };
+    await expect(prefetchArchive(archive, directory, async () => {
+      writeFileSync(join(directory, filename), "tampered archive");
+    })).rejects.toThrow("APT archive verification failed");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+for (const fail of [false, true]) {
+  test(`apt plans against an empty archive directory and cleans up on ${fail ? "failure" : "success"}`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-plan-"));
+    try {
+      writeFileSync(join(directory, "cached.deb"), "untrusted cache");
+      const install = ["install", "-o", `Dir::Cache::archives=${directory}`, "libexample"];
+      const run = (args: string[], capture = false) => {
+        expect(capture).toBe(true);
+        expect(args.slice(0, 2)).toEqual(["--print-uris", "--download-only"]);
+        expect(args.slice(2, -2)).toEqual(install);
+        const override = args.at(-1) ?? "";
+        expect(override).toStartWith("Dir::Cache::archives=");
+        const empty = override.slice("Dir::Cache::archives=".length);
+        expect(empty).not.toBe(directory);
+        expect(readdirSync(empty)).toEqual([]);
+        writeFileSync(join(empty, "lock"), "");
+        if (fail) throw new Error("apt planning failed");
+        return "";
+      };
+      const plan = planArchives(install, directory, run);
+      if (fail) await expect(plan).rejects.toThrow("apt planning failed");
+      if (!fail) expect(await plan).toEqual([]);
+      expect(readdirSync(directory)).toEqual(["cached.deb"]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
