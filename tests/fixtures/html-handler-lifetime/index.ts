@@ -52,7 +52,8 @@ async function cancelled(inside: boolean) {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
   let cancellation: Promise<void> | undefined;
   let cancelledWith: unknown;
-  const input = new ReadableStream<Uint8Array>({ start(value) { controller = value; }, cancel(value) { cancelledWith = value; } });
+  let cancels = 0;
+  const input = new ReadableStream<Uint8Array>({ start(value) { controller = value; }, cancel(value) { cancels++; cancelledWith = value; } });
   const response = new HTMLRewriter().on("p", { element() {
     if (inside) cancellation = reader.cancel(reason);
     entered.resolve();
@@ -65,6 +66,7 @@ async function cancelled(inside: boolean) {
   if (!inside) cancellation = reader.cancel(reason);
   await cancellation;
   assert.equal(cancelledWith, reason);
+  assert.equal(cancels, 1);
   assert.equal((await read).done, true);
   assert.equal(htmlRewriterCount(), baseline);
   return { response, reader, pending, input: new WeakRef(input) };
@@ -77,6 +79,14 @@ console.log("cancellation releases parked input streams before handler settlemen
 
 const failure = { marker: "handler rejection" };
 await assert.rejects(new HTMLRewriter().on("p", { async element() { await tick(); throw failure; } }).transform(new Response("<p>x</p>")).text(), error => error === failure);
+let thenReads = 0;
+const ignored = { get then() { throw new Error("handler fulfillment value must not be assimilated"); } };
+const thenable = { get then() {
+  thenReads++;
+  return (resolve: (value: unknown) => void) => resolve(ignored);
+} };
+assert.equal(await new HTMLRewriter().on("p", { element: () => thenable }).transform(new Response("<p>thenable</p>")).text(), "<p>thenable</p>");
+assert.equal(thenReads, 1);
 const reachable = Promise.withResolvers<void>();
 const response = new HTMLRewriter().on("p", { element: () => reachable.promise }).transform(new Response("<p>reachable</p>"));
 await collected(() => htmlRewriterCount() === baseline + 1);
