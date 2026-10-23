@@ -28,12 +28,16 @@
         "scripts/wasm-size-breakdown.ts",
         "scripts/stream-polyfill-node-hooks.ts",
         "scripts/http-suite-report.ts",
-        "scripts/ci-report.ts"
+        "scripts/ci-report.ts",
+        "tests/shell-consumer/{main,worker,fs-worker,sw}.ts"
       ],
       "project": [
         "src/**/*.ts",
         "scripts/**/*.{ts,mts,mjs,js}",
         "tests/package/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "^bash-web(?:/.*)?$"
       ]
     },
     "web": {

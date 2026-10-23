@@ -93,6 +93,40 @@ review and artifact selection, omit `NETWORK_CONSUMER_PREFLIGHT_ONLY` and set
 `NETWORK_CONSUMER_PORT` to an explicit free port for the existing browser gate. It runs both
 `prepare` and `publicAdapter` modes for each browser named on the command line.
 
+### Real bash-web composition
+
+The installer also supplies networking to Bun launched by an external shell. A shell-launched
+Bun server and nested Bun processes use the page's existing network service, not a private network.
+
+`bun run test:browser:shell-consumer` installs a packed Bun package and bash-web at
+`c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5`, sharing Waffle 0.0.67 at
+`b20fad173ebaa225cb87c51776f35edaaafd4a40`. It builds the installed shell's workers, runtime-backed
+shell guest and utility guests explicitly. Git `prepare` alone does not build that shell guest.
+The test imports `bun-wasm`, `bun-wasm/worker` and bash-web's public exports, not checkout workers
+or a shell substitute. Rust, the `wasm32-wasip1` target, wasi-sdk 34 and cached Playwright 1.64.1
+browsers are prerequisites. Source `env.sh` on this workstation and use its heavy-job queue.
+
+```sh
+SHELL_CONSUMER_GUEST=/absolute/accepted/bun-browser.wasm \
+SHELL_CONSUMER_EXPECTED_INPUTS=/absolute/accepted-inputs.json \
+SHELL_CONSUMER_PORT=43831 \
+  bun run test:browser:shell-consumer
+# Record WebKit separately with the same inputs:
+# bun web/tests/browser-shell-consumer.ts webkit
+```
+
+The accepted inputs and `.build.json` checks are the same as the network gate above.
+`SHELL_CONSUMER_PREFLIGHT_ONLY=1` checks them without building or opening a browser.
+Each case reports its own outcome and later cases still run after failures; any failure keeps
+the command red. Reports include package pins, worker paths, guest hashes, process ancestry,
+fixed pipe allocation sizes, terminal queue peaks, actual service-worker preview delivery and
+resource teardown. A separate live consumer must survive shell/adapter disposal until the page
+owner disposes the runtime. WebKit is not real Safari acceptance.
+
+This is a standalone artifact-backed command, not another step in the ten-minute artifact-free
+CI browser job. Compiling an installed Rust shell and providing an accepted Bun guest do not fit
+that job's existing budget. Its receipt preflight controls run in the ordinary unit suite.
+
 ### Worker bundling
 
 The example above is the tested Vite pattern. Vite must emit ES module workers:

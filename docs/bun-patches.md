@@ -52,6 +52,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
 | [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun/Node and native adapters consume eight-byte typed process/job completions, map seven portable startup errnos, and preserve failed Node streams. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
+| [Real shell consumer probes](#real-shell-consumer-probes) | Host feature | Original installed-package composition and contract probes adapted from bash-web acceptance commands, without copying a shell implementation. |
 | [Runtime-owned network consumer](#runtime-owned-network-consumer) | Host feature | Original per-process session wiring over Waffle's borrowed runtime network, with physical-stop cleanup and shared preview observation. |
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
 | [Descriptor kinds and storage modes](#descriptor-kinds-and-storage-modes) | Host feature | Original Rust descriptor-kind adapters and page startup handling adopt the pinned Waffle contract without guessing pipe types or changing workspace names. |
@@ -3307,3 +3308,15 @@ and ordinary conversion methods, preserving thrown values. It validates an
 exotic hook's result before scalar conversion, retains Boolean's internal value,
 and applies the same rules to YAML indentation. JSON5 and TOML conversion are
 unchanged. This replaces direct `valueOf()` calls that skipped the hook.
+
+## Real shell consumer probes
+
+`tests/shell-consumer/` is an original consumer of the public Bun, bash-web and Waffle packages.
+The lookup, files/cwd/env, EPIPE, inherited-stdin and Ctrl+C probe commands follow
+`bash-web/tests/external-commands.spec.ts`, `tests/pipelines.acceptance.spec.ts` and
+`tests/runtime-shell.spec.ts` at `c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5`.
+The small guest snippets and expected markers retain those contracts. The additional ticker,
+binary byte checker, network preview and borrowed-consumer lifetime probes are original.
+No shell interpreter, process manager or Waffle implementation is copied or patched.
+`web/tests/browser-shell-consumer.ts` and `shell-consumer-install.ts` are original build,
+receipt, execution and teardown tooling. The installed package builds its own shell assets.
