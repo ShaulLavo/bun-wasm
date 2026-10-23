@@ -440,15 +440,33 @@ and errors. Do not alter the real package sources to bypass this lookup.
 
 ### Browser-host round-trip deadline
 
-Only the browser engine times out in
-`js/node/test/parallel/test-worker-message-port-message-before-close.js` at the
-shared fifteen-second deadline. This file performs 10,000 cross-guest port round
-trips. QuickJS and JSC complete it in the same census. No output appears before
-the browser deadline. Reproduce it alone with `scripts/bun-suite.sh --engine
-browser --jobs 1 --timeout 60 --output <fresh.json>` and that file path before
-claiming either a scheduling bug or a performance cause. Start by tracing control
-pipe notification in `web/src/subprocess.js`, including its four-millisecond
-watch interval. No timing optimization or cause is claimed by this measurement.
+Status: Resolved. Waiting guests now wake on the event instead of a timer.
+
+On main `d48dc3d2`, `test-worker-message-port-message-before-close.js` (10,000
+sequential cross-guest port round trips) timed out at 30 seconds on every engine,
+not only the browser engine. A 200-round-trip probe (parent and worker echoing over
+`parentPort`) measured the cause: about 10.3 ms per round trip on QuickJS and JSC
+and 25.8 ms on the Node-host browser engine, against 0.01 ms in native Bun. Those
+are fixed wait intervals, not work:
+
+- The native host's `procPoll` (`crates/bunwasm-host/src/process/mod.rs`) re-checked
+  its subscriptions in a 10 ms sleep loop. It now reads the guest's `Notify`
+  generation before checking and waits on its condition variable, which pipe wakers
+  and child completion already bump. Changes that do not bump it (cancellation,
+  write space) keep the 10 ms rescan bound.
+- The browser engine's loop (`web/src/engine-host.js`) rescheduled itself every
+  25 ms while the program only waited on I/O. It now also arms `Atomics.waitAsync`
+  on the process wake word that Waffle pipes and child events publish on, read
+  before stepping I/O so a change in between is not lost. The 25 ms rescan remains
+  the fallback, and the only path where `Atomics.waitAsync` is missing. The Node host
+  passes its process client's wake word; the browser executor passes Waffle's
+  `runtimeState.wake`.
+
+After the change the same probe takes 0.24 ms per round trip on QuickJS and JSC and
+0.92 ms on the browser engine, and the upstream file passes on all three engines
+with `scripts/bun-suite.sh --node-parallel --jobs 1 --timeout 30 --network loopback`.
+The earlier "four-millisecond watch interval in `web/src/subprocess.js`" no longer
+exists; that file was replaced by the process broker.
 
 ### Worker errors exposed by the review fixes
 

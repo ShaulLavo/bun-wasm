@@ -881,6 +881,7 @@ impl Processes {
         let deadline =
             (timeout >= 0).then(|| Instant::now() + Duration::from_millis(timeout as u64));
         loop {
+            let seen = self.notify.generation();
             if self.cancel.interrupted() {
                 return Ok(Vec::new());
             }
@@ -920,7 +921,9 @@ impl Processes {
                     .saturating_duration_since(Instant::now())
                     .min(Duration::from_millis(10))
             });
-            std::thread::sleep(left);
+            // Pipe wakers and child completions bump `notify`, ending the wait at once. Changes
+            // that do not (cancellation, write space) keep the 10 ms rescan bound.
+            self.notify.wait_past(seen, left);
         }
     }
 }
