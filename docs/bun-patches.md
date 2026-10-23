@@ -33,6 +33,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`third_party/licenses/lol-html-LICENSE`](#htmlrewriter) | Port | Retain the vendored parser's BSD license for wasm distribution. |
 | [Third-party interrupt instrumentation](#third-party-interrupt-instrumentation) | Host feature | Original TypeScript binary rewriter, content-addressed loader and rescued browser fixtures; module-internal countdowns avoid per-entry host calls. |
 | [Portable installer and package command adapters](#portable-installer-and-package-commands) | Host feature | Original filesystem, lockfile and command adapters over Bun's matcher, parsers and semver. |
+| [Root string overrides](#root-string-overrides) | Host feature | Original edge-selection and lock metadata adapters over Bun's range parser. |
 | [No-git package version command](#no-git-package-version-command) | Port | Adapt Bun version validation and stable-version increments to the portable no-git command. |
 | [Foreign lockfile migration](#foreign-lockfile-migration) | Host feature | Original format and credential-boundary adapters preserve selected records, workspace locations, optional edges and credential-free sources. |
 | [Migration archive fixtures](#migration-archive-fixtures) | Host feature | Unchanged abbrev archives verify the real npm workspace fixture and extraction against its recorded checksums. |
@@ -2413,6 +2414,32 @@ are explicitly unsupported. A lifecycle declaration fails before writing unless
 scripts are ignored. It does not install packages or change lockfiles.
 The local fixture tests include native Bun controls and exact invalid-version
 messages with byte-for-byte preservation of failed manifests.
+
+## Root string overrides
+
+Class **Host feature**, original adapters in
+`crates/bunwasm-runtime/src/install/overrides.rs`, `resolve.rs` and `mod.rs`.
+Comparison sources are Bun `src/install/lockfile/OverrideMap.rs`,
+`src/install/lockfile/override_selector.rs` and `src/semver/intersects.rs` at
+`9510e74152073d850a18758ca41114d8f214ffa6`, with local patched source at
+`d71508d31edf06765c12adf0df137ef531539f68`. No upstream implementation is copied
+or patched by this change.
+
+The adapter applies root string rules to root and transitive dependency edges.
+Version selectors use Bun's parser and `Group::intersects`, including scoped
+names. `Group::has_skipped` retains the portable installer's existing rejection
+of unrecognised tokens. Numeric overflow follows the existing parser's null set.
+There is no additional wildcard or numeric parser. Native Bun 1.4.4 controls
+cover disjoint selectors, replacement aliases and tags, stable pins, and frozen
+lock rejection after changes. Native Bun accepts some skipped-token selectors
+that the portable installer rejects. The fixture labels that distinction.
+
+Lock metadata keeps flat strings and version-selected `{".": "replacement"}`
+entries. The resolver preserves original dependency declarations, invalidates
+pins only for changed rule names, and compares override metadata even for
+production frozen installs. Nested object rules are explicitly unsupported.
+`tests/install/root-overrides.ts` uses only a local fixture registry and owns
+its child processes, listener and scratch directory.
 
 ## Portable installer and package commands
 
