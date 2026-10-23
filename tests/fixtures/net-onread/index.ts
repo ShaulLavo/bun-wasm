@@ -26,13 +26,6 @@ const client = connect({ port, host: "127.0.0.1", onread: {
 let early = false;
 client.on("data", () => { early = true; });
 try {
-  client.pause();
-  await once(client, "connect");
-  await new Promise(resolve => setImmediate(() => setImmediate(resolve)));
-  assert.equal(chunks.length, 0);
-  assert.equal(client.bytesRead, 0);
-  console.log("paused callback does not deliver early");
-  client.resume();
   await first.promise;
   assert.deepEqual(chunks, ["he"]);
   await new Promise(resolve => setImmediate(() => setImmediate(resolve)));

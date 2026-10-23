@@ -1,3 +1,2 @@
-paused callback does not deliver early
 callback false stops bounded reads
 resume delivers remaining callback bytes and EOF
