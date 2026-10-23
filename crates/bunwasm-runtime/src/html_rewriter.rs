@@ -311,6 +311,10 @@ pub(crate) fn install(t: &mut Table) {
     t.add("htmlToken", move |a| {
         with_rewriter(&table, a, Rewrite::token)
     });
+    let table = rewriters.clone();
+    t.add("htmlRewriterCount", move |_| {
+        Ok((table.borrow().active.len() as f64).into())
+    });
     t.add("htmlClose", move |a| {
         rewriters.borrow_mut().active.remove(&a.u32(0)?);
         Ok(Val::Undefined)

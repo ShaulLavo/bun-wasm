@@ -170,6 +170,7 @@ declare namespace BunWasm {
     htmlStep(id: number, action: "write" | "end" | "resume", bytes: Uint8Array): HTMLStep;
     htmlToken<K extends keyof HTMLTokenValues>(id: number, action: K, value: string, html: boolean, extra?: string | number): HTMLTokenValues[K];
     htmlClose(id: number): void;
+    htmlRewriterCount(): number;
   }
 }
 

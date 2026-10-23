@@ -1,0 +1,3 @@
+unreachable handler promises reject held reads and release native sessions
+cancellation releases parked input streams before handler settlement
+reachable promises and exact asynchronous rejection values are preserved
