@@ -119,8 +119,9 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/events.js`](#node-event-emitter) | Port | Adapt Node listener bookkeeping without native async hooks. |
 | [`event_emitter_async_resource.ts`](#node-event-emitter) | Port | Adapt Bun's async emitter to the guest AsyncResource context bridge. |
 | [`crates/bunwasm-runtime/src/js/events.js`, listener publication](#node-event-emitter) | Host feature | Original mutation hook publishes signal dispositions before user listener-removal callbacks. |
-| [`crates/bunwasm-runtime/src/js/util.js`](#node-utility-fragments) | Port | Adapt argument parsing, comparison helpers, and inspection tables. |
-| [`crates/bunwasm-runtime/src/js/assert.js`](#node-assertions) | Port | Adapt assertion helpers and messages to the local inspector and equality implementation. |
+| [`crates/bunwasm-runtime/src/js/util.ts`](#node-utility-fragments) | Port | Adapt argument parsing, comparison helpers, and inspection tables. |
+| [`crates/bunwasm-runtime/src/js/assert.ts`](#node-assertions) | Port | Adapt assertion helpers and messages to the local inspector and equality implementation. |
+| [`crates/bunwasm-runtime/src/js/assert_util_types.d.ts`](#runtime-typescript) and assert/util regression tests | Host feature | Original type contracts and behavior, AST, and source-position tests. |
 | [`crates/bunwasm-runtime/src/js/bun_sqlite.js`](#bun-sqlite) | Port | Move Bun's SQLite wrapper and inherited transaction code onto Rust SQLite natives. |
 | [`crates/bunwasm-runtime/src/js/array_buffer_sink.ts`](#bun-array-buffer-sink) | Port | Adapt Bun's byte sink lifecycle and option parsing to engine-owned typed arrays. |
 | [`crates/bunwasm-runtime/src/engine_quickjs.rs`, string boundary](#quickjs-string-boundary) | Host feature | Decode lone UTF-16 surrogates as replacement characters at the native boundary. Original adapter. |
@@ -1230,15 +1231,19 @@ allocation in the existing bridge.
 
 ### Node utility fragments
 
-`crates/bunwasm-runtime/src/js/util.js`. Class **Port**. Upstream Node `lib/internal/util/parse_args/{parse_args,utils}.js`, `lib/internal/util/comparisons.js`, `lib/internal/util.js`, and `lib/util.js` at the Node comparison revision. Also compare Bun `src/js/node/util.ts` and inspection tables in `src/js/internal/util/inspect.js` at the Bun pin. The direct Node import revision is not recorded.
+`crates/bunwasm-runtime/src/js/util.ts`. Class **Port**. Upstream Node `lib/internal/util/parse_args/{parse_args,utils}.js`, `lib/internal/util/comparisons.js`, `lib/internal/util.js`, and `lib/util.js` at the Node comparison revision. Also compare Bun `src/js/node/util.ts` and inspection tables in `src/js/internal/util/inspect.js` at the Bun pin. The direct Node import revision is not recorded.
 
 Adapt parse-argument tokenization, own-property option lookup, short-option groups, strict validation, defaults, and negative options. Replace internal errors and primordials with local helpers and Bun's messages and token names. Retain comparison helper structure and memo conventions, inheritance and promisification fragments, and inspection option/color/style tables. Replace native type checks with intrinsic brand checks and engine hooks. Formatting delegates to the separate inspection port. Bun's deep-equality variant and the surrounding module wiring are local implementations, not copies of Node's whole utility module.
 
+The strict TypeScript migration adds only erased annotations. Parser tokens form a discriminated union, comparison dispatch overloads bind arrays, maps and sets to their iteration kind, and intrinsic brand checks narrow external values. Original JavaScript syntax and strict directives remain pinned by an AST test.
+
 ### Node assertions
 
-`crates/bunwasm-runtime/src/js/assert.js`. Class **Port**. Upstream `src/js/node/assert.ts` and `src/js/internal/assert/assertion_error.ts` at the Bun pin, which carry Node assertion code.
+`crates/bunwasm-runtime/src/js/assert.ts`. Class **Port**. Upstream `src/js/node/assert.ts` and `src/js/internal/assert/assertion_error.ts` at the Bun pin, which carry Node assertion code.
 
 Retain assertion dispatch, expected-exception matching, async rejection helpers, readable operator messages, and assertion-error formatting conventions. Replace internal imports, native diff helpers, and primordials with the local utility inspector, equality functions, and a JavaScript diff renderer. Source-expression recovery is omitted, so `ok(false)` reports `false == true`. This runs assertions without Bun's internal bindings. The adapted helpers are separate from the locally written diff implementation.
+
+The strict TypeScript migration preserves the original JavaScript AST and strict directive. Type-only class fields retain constructor assignment order. Error property matching and async rejection inputs remain unknown until the existing runtime checks establish their shape.
 
 ### Bun SQLite
 
@@ -1695,6 +1700,8 @@ of 9,409 bytes. The converted pair is not counted among those 35 existing module
 `node:test` registration adapter renamed from JavaScript with strict types. Their UTF-8,
 data-format and test-runner contracts live in `src/js/runtime.d.ts`. Neither copies Bun's
 C++ JSONL binding or Bun's `node:test` module.
+
+`src/js/assert_util_types.d.ts`, the process declarations added to `src/js/runtime.d.ts`, `scripts/runtime-assert-util.test.ts`, and `tests/fixtures/runtime-ts-assert-util/index.ts` are **original adapters and tests**, class **Host feature**. They model the existing utility and assertion contracts without copying upstream types or tests. The tests pin the approved JavaScript AST, check every emitted token against its TypeScript line and column, reject invalid contracts, and exercise the same fixture on native Bun and all three guest engines. The utility and assertion sections above classify the adapted Bun and Node implementations separately.
 
 ## Standalone crypto linkage
 

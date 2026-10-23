@@ -1,4 +1,13 @@
 declare namespace BunWasm {
+  interface ColorStream { hasColors?(): boolean; isTTY?: boolean }
+  interface RuntimeProcess {
+    cwd(): string;
+    nextTick?(callback: (this: unknown, ...args: unknown[]) => unknown, ...args: unknown[]): void;
+    emitWarning?(message: string, kind?: string, code?: string): void;
+    noDeprecation?: boolean; throwDeprecation?: boolean; pid?: number;
+    env?: Record<string, string | undefined>; stdout?: ColorStream; argv?: string[];
+  }
+
   type FunctionKind = "normal" | "async" | "generator" | "async-generator";
   interface Native {
     functionImports(args: readonly string[], kind: FunctionKind): number[][];
@@ -80,7 +89,7 @@ declare namespace BunWasm {
   }
 }
 
-declare const process: { cwd(): string };
+declare const process: BunWasm.RuntimeProcess;
 declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
 

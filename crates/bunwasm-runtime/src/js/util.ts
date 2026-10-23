@@ -2,7 +2,7 @@
 // "inspect" polyfill. Also exports two non-standard helpers used by other
 // polyfills: `_deepEqual` (Node's isDeepStrictEqual / deepStrictEqual
 // semantics) and `bunDeepEquals` (Bun.deepEquals semantics).
-(function (internal) {
+(function (internal: BunWasm.Internal) {
   "use strict";
 
   const kCustomInspect = Symbol.for("nodejs.util.inspect.custom");
@@ -18,13 +18,13 @@
   // Errors
   // ---------------------------------------------------------------------------
 
-  function makeError(Ctor, code, message) {
+  function makeError(Ctor: new(message?: string) => BunWasm.UtilityError, code: string, message: string) {
     const err = new Ctor(message);
     err.code = code;
     return err;
   }
 
-  function describeReceived(value) {
+  function describeReceived(value: unknown) {
     if (value === null || value === undefined) return String(value);
     if (typeof value === "function") return `function ${value.name}`;
     if (typeof value === "object") {
@@ -40,21 +40,21 @@
     return `type ${typeof value} (${String(value)})`;
   }
 
-  function invalidArgType(name, expected, value) {
+  function invalidArgType(name: string, expected: string, value: unknown) {
     const kind = name.includes(".") ? "property" : "argument";
     const subject = name.endsWith(" argument") ? `The ${name}` : `The "${name}" ${kind}`;
     return makeError(TypeError, "ERR_INVALID_ARG_TYPE", `${subject} must be ${expected}. Received ${describeReceived(value)}`);
   }
 
-  function validateFunction(value, name) {
+  function validateFunction(value: unknown, name: string): asserts value is BunWasm.UtilityFunction {
     if (typeof value !== "function") throw invalidArgType(name, "of type function", value);
   }
 
-  function validateString(value, name) {
+  function validateString(value: unknown, name: string): asserts value is string {
     if (typeof value !== "string") throw invalidArgType(name, "of type string", value);
   }
 
-  function validateObject(value, name) {
+  function validateObject(value: unknown, name: string): asserts value is Record<string, unknown> {
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
       throw invalidArgType(name, "of type object", value);
     }
@@ -79,7 +79,7 @@
     numericSeparator: false,
   };
 
-  function inspect(value, opts) {
+  function inspect(value: unknown, opts?: BunWasm.InspectOptions | boolean) {
     let options = opts;
     // Legacy signature: inspect(obj, showHidden, depth, colors).
     if (typeof opts !== "object" || opts === null) {
@@ -88,11 +88,11 @@
       if (arguments.length > 2 && arguments[2] !== undefined) options.depth = arguments[2];
       if (arguments.length > 3 && arguments[3] !== undefined) options.colors = arguments[3];
     }
-    return inspectModule().nodeInspect(value, options);
+    return inspectModule().nodeInspect(value, options as BunWasm.InspectOptions);
   }
 
   // Forwards to the inspect module's own tables when it provides them.
-  function forwardProperty(name, fallback) {
+  function forwardProperty<K extends "defaultOptions" | "colors" | "styles">(name: K, fallback: NonNullable<BunWasm.InspectFunction[K]>) {
     let local = fallback;
     Object.defineProperty(inspect, name, {
       enumerable: true,
@@ -102,7 +102,7 @@
         const shared = mod.nodeInspect && mod.nodeInspect[name];
         return shared !== undefined ? shared : local;
       },
-      set(value) {
+      set(value: NonNullable<BunWasm.InspectFunction[K]>) {
         const mod = inspectModule();
         if (name === "defaultOptions") validateObject(value, "options");
         if (mod.nodeInspect && mod.nodeInspect[name] !== undefined) {
@@ -115,7 +115,7 @@
     });
   }
 
-  const ansiColors = {
+  const ansiColors: Record<string, number[]> = {
     reset: [0, 0],
     bold: [1, 22],
     dim: [2, 22],
@@ -161,7 +161,7 @@
     bgCyanBright: [106, 49],
     bgWhiteBright: [107, 49],
   };
-  const colorAliases = {
+  const colorAliases: Record<string, string> = {
     grey: "gray",
     blackBright: "gray",
     bgGrey: "bgGray",
@@ -206,7 +206,7 @@
     return mod.nodeFormat.apply(null, arguments);
   }
 
-  function formatWithOptions(inspectOptions) {
+  function formatWithOptions(inspectOptions: unknown) {
     validateObject(inspectOptions, "inspectOptions");
     const mod = inspectModule();
     return mod.nodeFormatWithOptions.apply(null, arguments);
@@ -216,27 +216,27 @@
   // promisify / callbackify / inherits / deprecate
   // ---------------------------------------------------------------------------
 
-  function promisify(original) {
+  function promisify(original: unknown) {
     validateFunction(original, "original");
     if (original[kCustomPromisify]) {
       const fn = original[kCustomPromisify];
       validateFunction(fn, "util.promisify.custom");
       return Object.defineProperty(fn, kCustomPromisify, { value: fn, enumerable: false, writable: false, configurable: true });
     }
-    const argumentNames = original[kCustomPromisifyArgs];
+    const argumentNames = original[kCustomPromisifyArgs] as string[] | undefined;
 
-    function fn() {
-      const args = Array.prototype.slice.call(arguments);
-      return new Promise((resolve, reject) => {
-        const callback = function (err) {
+    function fn(this: unknown) {
+      const args: unknown[] = Array.prototype.slice.call(arguments);
+      return new Promise<unknown>((resolve, reject) => {
+        const callback = function (err: unknown) {
           if (err) {
             reject(err);
             return;
           }
-          const values = Array.prototype.slice.call(arguments, 1);
+          const values: unknown[] = Array.prototype.slice.call(arguments, 1);
           resolve(argumentNames === undefined ? values[0] : namedValues(argumentNames, values));
         };
-        Reflect.apply(original, this, args.concat([callback]));
+        Reflect.apply(original as BunWasm.UtilityFunction, this, args.concat([callback]));
       });
     }
 
@@ -250,13 +250,13 @@
   }
   promisify.custom = kCustomPromisify;
 
-  function namedValues(names, values) {
-    const obj = {};
+  function namedValues(names: string[], values: unknown[]) {
+    const obj: Record<string, unknown> = {};
     for (let i = 0; i < names.length; i++) obj[names[i]] = values[i];
     return obj;
   }
 
-  function nextTick(fn, a, b) {
+  function nextTick(fn: BunWasm.UtilityFunction, a: unknown, b?: unknown) {
     if (typeof process !== "undefined" && typeof process.nextTick === "function") {
       process.nextTick(fn, a, b);
       return;
@@ -264,22 +264,22 @@
     queueMicrotask(() => fn(a, b));
   }
 
-  function falsyRejection(reason) {
+  function falsyRejection(reason: unknown) {
     const err = makeError(Error, "ERR_FALSY_VALUE_REJECTION", "Promise was rejected with a falsy value");
     err.reason = reason;
     return err;
   }
 
-  function callbackify(original) {
+  function callbackify(original: unknown) {
     validateFunction(original, "original");
-    function callbackified() {
-      const args = Array.prototype.slice.call(arguments);
+    function callbackified(this: unknown) {
+      const args: unknown[] = Array.prototype.slice.call(arguments);
       const maybeCb = args.pop();
       validateFunction(maybeCb, "last argument");
       const cb = maybeCb.bind(this);
-      Reflect.apply(original, this, args).then(
-        (ret) => nextTick(cb, null, ret),
-        (rej) => nextTick(cb, rej ? rej : falsyRejection(rej)),
+      (Reflect.apply(original as BunWasm.UtilityFunction, this, args) as PromiseLike<unknown>).then(
+        (ret: unknown) => nextTick(cb, null, ret),
+        (rej: unknown) => nextTick(cb, rej ? rej : falsyRejection(rej)),
       );
     }
     const descriptors = Object.getOwnPropertyDescriptors(original);
@@ -291,7 +291,7 @@
     return callbackified;
   }
 
-  function inherits(ctor, superCtor) {
+  function inherits(ctor: { prototype: object } | null | undefined, superCtor: { prototype?: object } | null | undefined) {
     if (ctor === undefined || ctor === null) throw invalidArgType("ctor", "of type function", ctor);
     if (superCtor === undefined || superCtor === null) throw invalidArgType("superCtor", "of type function", superCtor);
     if (superCtor.prototype === undefined) {
@@ -301,9 +301,9 @@
     Object.setPrototypeOf(ctor.prototype, superCtor.prototype);
   }
 
-  const warnedCodes = new Set();
+  const warnedCodes = new Set<string>();
 
-  function emitDeprecation(msg, code) {
+  function emitDeprecation(msg: string, code?: string) {
     const proc = typeof process !== "undefined" ? process : undefined;
     if (proc && proc.noDeprecation) return;
     if (proc && typeof proc.emitWarning === "function") {
@@ -311,7 +311,7 @@
       return;
     }
     if (proc && proc.throwDeprecation) {
-      const err = new Error(msg);
+      const err: BunWasm.UtilityError = new Error(msg);
       err.name = "DeprecationWarning";
       if (code) err.code = code;
       throw err;
@@ -320,19 +320,19 @@
     console.error(`(node:${pid}) ${code ? `[${code}] ` : ""}DeprecationWarning: ${msg}`);
   }
 
-  function deprecate(fn, msg, code) {
+  function deprecate(fn: unknown, msg: string, code?: string) {
     validateFunction(fn, "fn");
     if (code !== undefined) validateString(code, "code");
     let warned = false;
-    function deprecated() {
+    function deprecated(this: unknown) {
       if (!warned) {
         warned = true;
         const seen = code !== undefined && warnedCodes.has(code);
         if (code !== undefined) warnedCodes.add(code);
         if (!seen) emitDeprecation(msg, code);
       }
-      if (new.target) return Reflect.construct(fn, arguments, new.target);
-      return Reflect.apply(fn, this, arguments);
+      if (new.target) return Reflect.construct(fn as Function, arguments, new.target);
+      return Reflect.apply(fn as Function, this, arguments);
     }
     Object.setPrototypeOf(deprecated, fn);
     if (fn.prototype) deprecated.prototype = fn.prototype;
@@ -345,15 +345,15 @@
 
   const objectToString = Object.prototype.toString;
   const TypedArrayProto = Object.getPrototypeOf(Uint8Array.prototype);
-  const typedArrayTag = Object.getOwnPropertyDescriptor(TypedArrayProto, Symbol.toStringTag).get;
+  const typedArrayTag = (Object.getOwnPropertyDescriptor(TypedArrayProto, Symbol.toStringTag) as { get: (this: unknown) => string | undefined }).get;
 
-  function getterOf(proto, key) {
+  function getterOf(proto: object | undefined, key: PropertyKey) {
     const desc = proto ? Object.getOwnPropertyDescriptor(proto, key) : undefined;
     return desc ? desc.get : undefined;
   }
 
   // True when calling `method` with `value` as receiver does not throw.
-  function brandCheck(method, value, args) {
+  function brandCheck(method: Function | undefined, value: unknown, args?: unknown[]) {
     if (typeof method !== "function" || value === null || typeof value !== "object") return false;
     try {
       method.apply(value, args || []);
@@ -370,67 +370,67 @@
   const dvByteLength = getterOf(DataView.prototype, "byteLength");
   const regexpSource = getterOf(RegExp.prototype, "source");
 
-  function tagOf(value) {
+  function tagOf(value: unknown) {
     return objectToString.call(value).slice(8, -1);
   }
 
-  function typedArrayName(value) {
+  function typedArrayName(value: unknown): string | undefined {
     return typedArrayTag.call(value);
   }
 
-  function isTypedArray(value) {
+  function isTypedArray(value: unknown): value is BunWasm.NumericView {
     return typedArrayName(value) !== undefined;
   }
 
-  function isDate(value) {
+  function isDate(value: unknown): value is Date {
     return brandCheck(Date.prototype.getTime, value);
   }
 
-  function isRegExp(value) {
+  function isRegExp(value: unknown): value is RegExp {
     return value !== RegExp.prototype && brandCheck(regexpSource, value);
   }
 
-  function isMap(value) {
+  function isMap(value: unknown): value is Map<unknown, unknown> {
     return brandCheck(mapSize, value);
   }
 
-  function isSet(value) {
+  function isSet(value: unknown): value is Set<unknown> {
     return brandCheck(setSize, value);
   }
 
-  function isArrayBuffer(value) {
+  function isArrayBuffer(value: unknown): value is ArrayBuffer {
     return brandCheck(abByteLength, value);
   }
 
-  function isSharedArrayBuffer(value) {
+  function isSharedArrayBuffer(value: unknown): value is SharedArrayBuffer {
     return brandCheck(sabByteLength, value);
   }
 
-  function isAnyArrayBuffer(value) {
+  function isAnyArrayBuffer(value: unknown): value is ArrayBuffer | SharedArrayBuffer {
     return isArrayBuffer(value) || isSharedArrayBuffer(value);
   }
 
-  function isNumberObject(value) {
+  function isNumberObject(value: unknown): value is BunWasm.BoxedPrimitive<number> {
     return brandCheck(Number.prototype.valueOf, value);
   }
 
-  function isStringObject(value) {
+  function isStringObject(value: unknown): value is BunWasm.BoxedPrimitive<string> {
     return brandCheck(String.prototype.valueOf, value);
   }
 
-  function isBooleanObject(value) {
+  function isBooleanObject(value: unknown): value is BunWasm.BoxedPrimitive<boolean> {
     return brandCheck(Boolean.prototype.valueOf, value);
   }
 
-  function isBigIntObject(value) {
+  function isBigIntObject(value: unknown): value is BunWasm.BoxedPrimitive<bigint> {
     return typeof BigInt === "function" && brandCheck(BigInt.prototype.valueOf, value);
   }
 
-  function isSymbolObject(value) {
+  function isSymbolObject(value: unknown): value is BunWasm.BoxedPrimitive<symbol> {
     return brandCheck(Symbol.prototype.valueOf, value);
   }
 
-  function isBoxedPrimitive(value) {
+  function isBoxedPrimitive(value: unknown): value is BunWasm.BoxedPrimitive<number | string | boolean | bigint | symbol> {
     return (
       isNumberObject(value) ||
       isStringObject(value) ||
@@ -440,40 +440,40 @@
     );
   }
 
-  function isPromise(value) {
+  function isPromise(value: unknown): value is Promise<unknown> {
     if (typeof internal.isPromise === "function") return internal.isPromise(value);
     return value instanceof Promise;
   }
 
-  function isNativeError(value) {
+  function isNativeError(value: unknown): value is Error {
     if (typeof internal.isError === "function") return internal.isError(value);
     if (typeof Error.isError === "function") return Error.isError(value);
     return value instanceof Error;
   }
 
-  function isProxy(value) {
+  function isProxy(value: unknown) {
     return typeof internal.isProxy === "function" ? internal.isProxy(value) : false;
   }
 
-  function isModuleNamespaceObject(value) {
+  function isModuleNamespaceObject(value: unknown) {
     if (typeof internal.isModuleNamespaceObject === "function") return internal.isModuleNamespaceObject(value);
     if (value === null || typeof value !== "object" || Object.getPrototypeOf(value) !== null) return false;
     const desc = Object.getOwnPropertyDescriptor(value, Symbol.toStringTag);
     return desc !== undefined && desc.value === "Module" && !desc.writable && !desc.configurable;
   }
 
-  function isFunctionWithTag(value, tags) {
+  function isFunctionWithTag(value: unknown, tags: string[]) {
     return typeof value === "function" && tags.includes(tagOf(value));
   }
 
-  function typedArrayCheck(name) {
-    return (value) => typedArrayName(value) === name;
+  function typedArrayCheck(name: string) {
+    return (value: unknown) => typedArrayName(value) === name;
   }
 
   const types = {
     isExternal: () => false,
     isDate,
-    isArgumentsObject: (value) => value !== null && typeof value === "object" && tagOf(value) === "Arguments",
+    isArgumentsObject: (value: unknown) => value !== null && typeof value === "object" && tagOf(value) === "Arguments",
     isBigIntObject,
     isBooleanObject,
     isNumberObject,
@@ -482,26 +482,26 @@
     isBoxedPrimitive,
     isNativeError,
     isRegExp,
-    isAsyncFunction: (value) => isFunctionWithTag(value, ["AsyncFunction", "AsyncGeneratorFunction"]),
-    isGeneratorFunction: (value) => isFunctionWithTag(value, ["GeneratorFunction", "AsyncGeneratorFunction"]),
-    isGeneratorObject: (value) =>
+    isAsyncFunction: (value: unknown) => isFunctionWithTag(value, ["AsyncFunction", "AsyncGeneratorFunction"]),
+    isGeneratorFunction: (value: unknown) => isFunctionWithTag(value, ["GeneratorFunction", "AsyncGeneratorFunction"]),
+    isGeneratorObject: (value: unknown) =>
       value !== null && typeof value === "object" && ["Generator", "AsyncGenerator"].includes(tagOf(value)),
     isPromise,
     isMap,
     isSet,
-    isMapIterator: (value) => value !== null && typeof value === "object" && tagOf(value) === "Map Iterator",
-    isSetIterator: (value) => value !== null && typeof value === "object" && tagOf(value) === "Set Iterator",
-    isWeakMap: (value) => brandCheck(WeakMap.prototype.has, value, [{}]),
-    isWeakSet: (value) => brandCheck(WeakSet.prototype.has, value, [{}]),
+    isMapIterator: (value: unknown) => value !== null && typeof value === "object" && tagOf(value) === "Map Iterator",
+    isSetIterator: (value: unknown) => value !== null && typeof value === "object" && tagOf(value) === "Set Iterator",
+    isWeakMap: (value: unknown) => brandCheck(WeakMap.prototype.has, value, [{}]),
+    isWeakSet: (value: unknown) => brandCheck(WeakSet.prototype.has, value, [{}]),
     isArrayBuffer,
-    isDataView: (value) => brandCheck(dvByteLength, value),
+    isDataView: (value: unknown) => brandCheck(dvByteLength, value),
     isSharedArrayBuffer,
     isProxy,
     isModuleNamespaceObject,
     isAnyArrayBuffer,
     isCryptoKey: value => internal.crypto.isKey(value),
     isKeyObject: value => { internal.builtin("node:crypto"); return internal.nodeCryptoIsKeyObject(value); },
-    isArrayBufferView: (value) => ArrayBuffer.isView(value),
+    isArrayBufferView: (value: unknown) => ArrayBuffer.isView(value),
     isTypedArray,
     isUint8Array: typedArrayCheck("Uint8Array"),
     isUint8ClampedArray: typedArrayCheck("Uint8ClampedArray"),
@@ -515,36 +515,36 @@
     isFloat64Array: typedArrayCheck("Float64Array"),
     isBigInt64Array: typedArrayCheck("BigInt64Array"),
     isBigUint64Array: typedArrayCheck("BigUint64Array"),
-    isEventTarget: (value) => typeof EventTarget === "function" && value instanceof EventTarget,
-  };
+    isEventTarget: (value: unknown) => typeof EventTarget === "function" && value instanceof EventTarget,
+  } satisfies Record<string, (value: unknown) => boolean>;
 
   // ---------------------------------------------------------------------------
   // Node deep equality (isDeepStrictEqual / assert.deepStrictEqual)
   // ---------------------------------------------------------------------------
 
-  const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
-  const isEnumerable = (obj, key) => Object.prototype.propertyIsEnumerable.call(obj, key);
+  const hasOwn = (obj: unknown, key: PropertyKey) => Object.prototype.hasOwnProperty.call(obj, key);
+  const isEnumerable = (obj: unknown, key: PropertyKey) => Object.prototype.propertyIsEnumerable.call(obj, key);
   const kNoIterator = 0;
   const kIsArray = 1;
   const kIsSet = 2;
   const kIsMap = 3;
 
-  function isIndexKey(key) {
+  function isIndexKey(key: PropertyKey) {
     return typeof key === "string" && key !== "" && String(Number(key) >>> 0) === key && Number(key) !== 4294967295;
   }
 
   // Own enumerable non-index keys (strings, plus symbols when `withSymbols`).
-  function nonIndexKeys(obj, withSymbols) {
-    const keys = Object.keys(obj).filter((key) => !isIndexKey(key));
+  function nonIndexKeys(obj: object, withSymbols: boolean): (string | symbol)[] {
+    const keys: (string | symbol)[] = Object.keys(obj).filter((key) => !isIndexKey(key));
     if (!withSymbols) return keys;
     return keys.concat(Object.getOwnPropertySymbols(obj).filter((sym) => isEnumerable(obj, sym)));
   }
 
-  function bytesOf(view) {
+  function bytesOf(view: ArrayBufferView) {
     return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
   }
 
-  function equalBytes(a, b) {
+  function equalBytes(a: Uint8Array, b: Uint8Array) {
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
       if (a[i] !== b[i]) return false;
@@ -552,7 +552,7 @@
     return true;
   }
 
-  function looseEqualElements(a, b) {
+  function looseEqualElements(a: ArrayLike<unknown>, b: ArrayLike<unknown>) {
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
       if (a[i] != b[i]) return false;
@@ -560,7 +560,7 @@
     return true;
   }
 
-  function equalBoxed(a, b) {
+  function equalBoxed(a: unknown, b: unknown) {
     if (isNumberObject(a)) return isNumberObject(b) && Object.is(Number.prototype.valueOf.call(a), Number.prototype.valueOf.call(b));
     if (isStringObject(a)) return isStringObject(b) && String.prototype.valueOf.call(a) === String.prototype.valueOf.call(b);
     if (isBooleanObject(a)) return isBooleanObject(b) && Boolean.prototype.valueOf.call(a) === Boolean.prototype.valueOf.call(b);
@@ -569,7 +569,7 @@
     return false;
   }
 
-  function isSpecialObject(value) {
+  function isSpecialObject(value: unknown) {
     return (
       Array.isArray(value) ||
       ArrayBuffer.isView(value) ||
@@ -584,21 +584,21 @@
     );
   }
 
-  function nodePrimitiveEqual(a, b, strict) {
+  function nodePrimitiveEqual(a: unknown, b: unknown, strict: boolean) {
     if (strict) return typeof a === "number" && a !== a && b !== b;
     if (b === null || typeof b !== "object") return a == b || (a !== a && b !== b);
     return false;
   }
 
-  const wellKnownConstructors = new Set(
-    [Object, Array, Function, RegExp, Promise, String, Symbol, BigInt, Boolean, Number, Date, Error, Map, Set, WeakMap, WeakSet, ArrayBuffer, DataView]
+  const wellKnownConstructors = new Set<unknown>(
+    ([Object, Array, Function, RegExp, Promise, String, Symbol, BigInt, Boolean, Number, Date, Error, Map, Set, WeakMap, WeakSet, ArrayBuffer, DataView] as Function[])
       .concat([Int8Array, Int16Array, Int32Array, Uint8Array, Uint8ClampedArray, Uint16Array, Uint32Array, Float32Array, Float64Array, BigInt64Array, BigUint64Array])
       .concat(typeof Float16Array === "function" ? [Float16Array] : []),
   );
 
   // Node's strict rule: an inherited (or well-known) constructor must match;
   // otherwise the prototypes themselves must be identical.
-  function sameConstructorOrPrototype(val1, val2) {
+  function sameConstructorOrPrototype(val1: object, val2: object) {
     const ctor = val1.constructor;
     if (wellKnownConstructors.has(ctor) || (ctor !== undefined && !hasOwn(val1, "constructor"))) {
       return ctor === val2.constructor;
@@ -606,7 +606,7 @@
     return Object.getPrototypeOf(val1) === Object.getPrototypeOf(val2);
   }
 
-  function nodeDeepEqual(val1, val2, strict, memos) {
+  function nodeDeepEqual(val1: unknown, val2: unknown, strict: boolean, memos?: BunWasm.EqualityMemo): boolean {
     if (val1 === val2) return val1 !== 0 || Object.is(val1, val2) || !strict;
     if (strict) {
       if (typeof val1 !== "object") return nodePrimitiveEqual(val1, val2, true);
@@ -620,22 +620,22 @@
     return nodeCompareObjects(val1, val2, strict, memos);
   }
 
-  function nodeCompareErrors(val1, val2, strict, memos) {
+  function nodeCompareErrors(val1: BunWasm.ComparisonError, val2: unknown, strict: boolean, memos?: BunWasm.EqualityMemo): boolean {
     if (!isNativeError(val2) && !(val2 instanceof Error)) return false;
     if (val1.message !== val2.message || val1.name !== val2.name) return false;
     if (hasOwn(val1, "cause") !== hasOwn(val2, "cause")) return false;
     if (hasOwn(val1, "cause") && !nodeDeepEqual(val1.cause, val2.cause, strict, memos)) return false;
     if (hasOwn(val1, "errors") !== hasOwn(val2, "errors")) return false;
-    return !hasOwn(val1, "errors") || nodeDeepEqual(val1.errors, val2.errors, strict, memos);
+    return !hasOwn(val1, "errors") || nodeDeepEqual(val1.errors, (val2 as BunWasm.ComparisonError).errors, strict, memos);
   }
 
-  function nodeCompareViews(val1, val2, strict, memos) {
+  function nodeCompareViews(val1: ArrayBufferView, val2: unknown, strict: boolean, memos?: BunWasm.EqualityMemo): boolean {
     if (typedArrayName(val1) !== typedArrayName(val2)) return false;
     if (!ArrayBuffer.isView(val2)) return false;
     const name = typedArrayName(val1);
     const isFloat = name === "Float32Array" || name === "Float64Array" || name === "Float16Array";
     if (!strict && isFloat) {
-      if (!looseEqualElements(val1, val2)) return false;
+      if (!looseEqualElements(val1 as BunWasm.NumericView, val2 as BunWasm.NumericView)) return false;
     } else if (!equalBytes(bytesOf(val1), bytesOf(val2))) {
       return false;
     }
@@ -644,7 +644,7 @@
     return keyCheck(val1, val2, strict, memos, kNoIterator, keys1);
   }
 
-  function nodeCompareObjects(val1, val2, strict, memos) {
+  function nodeCompareObjects(val1: object, val2: object, strict: boolean, memos?: BunWasm.EqualityMemo): boolean {
     if (Array.isArray(val1)) {
       if (!Array.isArray(val2) || val1.length !== val2.length) return false;
       const keys1 = nonIndexKeys(val1, strict);
@@ -683,11 +683,15 @@
     return keyCheck(val1, val2, strict, memos, kNoIterator);
   }
 
-  function enumerableSymbols(obj) {
+  function enumerableSymbols(obj: object) {
     return Object.getOwnPropertySymbols(obj).filter((sym) => isEnumerable(obj, sym));
   }
 
-  function keyCheck(val1, val2, strict, memos, iterationType, providedKeys) {
+  function keyCheck(val1: unknown[], val2: unknown[], strict: boolean, memos: BunWasm.EqualityMemo | undefined, iterationType: 1, providedKeys?: (string | symbol)[]): boolean;
+  function keyCheck(val1: Set<unknown>, val2: Set<unknown>, strict: boolean, memos: BunWasm.EqualityMemo | undefined, iterationType: 2, providedKeys?: (string | symbol)[]): boolean;
+  function keyCheck(val1: Map<unknown, unknown>, val2: Map<unknown, unknown>, strict: boolean, memos: BunWasm.EqualityMemo | undefined, iterationType: 3, providedKeys?: (string | symbol)[]): boolean;
+  function keyCheck(val1: object, val2: object, strict: boolean, memos: BunWasm.EqualityMemo | undefined, iterationType: 0, providedKeys?: (string | symbol)[]): boolean;
+  function keyCheck(val1: object, val2: object, strict: boolean, memos: BunWasm.EqualityMemo | undefined, iterationType: 0 | 1 | 2 | 3, providedKeys?: (string | symbol)[]): boolean {
     let aKeys = providedKeys;
     if (aKeys === undefined) {
       aKeys = Object.keys(val1);
@@ -707,13 +711,13 @@
     }
     const empty = aKeys.length === 0;
     if (empty && iterationType === kNoIterator) return true;
-    if (empty && iterationType === kIsArray && val1.length === 0) return true;
-    if (empty && (iterationType === kIsSet || iterationType === kIsMap) && val1.size === 0) return true;
+    if (empty && iterationType === kIsArray && (val1 as unknown[]).length === 0) return true;
+    if (empty && (iterationType === kIsSet || iterationType === kIsMap) && (val1 as Set<unknown> | Map<unknown, unknown>).size === 0) return true;
     return withMemo(val1, val2, memos, (memo) => objEquiv(val1, val2, strict, aKeys, memo, iterationType));
   }
 
   // Cycle detection shared by both deep-equality flavours (Node's memo scheme).
-  function withMemo(val1, val2, memos, compare) {
+  function withMemo(val1: object, val2: object, memos: BunWasm.EqualityMemo | undefined, compare: (memo: BunWasm.EqualityMemo) => boolean): boolean {
     let memo = memos;
     if (memo === undefined) {
       memo = { val1: new Map(), val2: new Map(), position: 0 };
@@ -733,7 +737,7 @@
     return result;
   }
 
-  function arrayEquiv(a, b, strict, memos) {
+  function arrayEquiv(a: unknown[], b: unknown[], strict: boolean, memos: BunWasm.EqualityMemo): boolean {
     for (let i = 0; i < a.length; i++) {
       if (hasOwn(a, i)) {
         if (!hasOwn(b, i) || !nodeDeepEqual(a[i], b[i], strict, memos)) return false;
@@ -743,24 +747,24 @@
       // Sparse array: compare the remaining keys in bulk.
       const keysA = Object.keys(a);
       for (const key of keysA) {
-        if (!hasOwn(b, key) || !nodeDeepEqual(a[key], b[key], strict, memos)) return false;
+        if (!hasOwn(b, key) || !nodeDeepEqual((a as unknown[] & Record<string, unknown>)[key], (b as unknown[] & Record<string, unknown>)[key], strict, memos)) return false;
       }
       return keysA.length === Object.keys(b).length;
     }
     return true;
   }
 
-  function objEquiv(a, b, strict, keys, memos, iterationType) {
-    if (iterationType === kIsSet && !setEquiv(a, b, strict, memos)) return false;
-    if (iterationType === kIsMap && !mapEquiv(a, b, strict, memos)) return false;
-    if (iterationType === kIsArray && !arrayEquiv(a, b, strict, memos)) return false;
+  function objEquiv(a: object, b: object, strict: boolean, keys: (string | symbol)[], memos: BunWasm.EqualityMemo, iterationType: 0 | 1 | 2 | 3): boolean {
+    if (iterationType === kIsSet && !setEquiv(a as Set<unknown>, b as Set<unknown>, strict, memos)) return false;
+    if (iterationType === kIsMap && !mapEquiv(a as Map<unknown, unknown>, b as Map<unknown, unknown>, strict, memos)) return false;
+    if (iterationType === kIsArray && !arrayEquiv(a as unknown[], b as unknown[], strict, memos)) return false;
     for (const key of keys) {
-      if (!nodeDeepEqual(a[key], b[key], strict, memos)) return false;
+      if (!nodeDeepEqual((a as Record<PropertyKey, unknown>)[key], (b as Record<PropertyKey, unknown>)[key], strict, memos)) return false;
     }
     return true;
   }
 
-  function findLooseMatchingPrimitives(prim) {
+  function findLooseMatchingPrimitives(prim: unknown) {
     switch (typeof prim) {
       case "undefined":
         return null;
@@ -776,13 +780,13 @@
     return true;
   }
 
-  function setMightHaveLoosePrim(a, b, prim) {
+  function setMightHaveLoosePrim(a: Set<unknown>, b: Set<unknown>, prim: unknown) {
     const altValue = findLooseMatchingPrimitives(prim);
     if (altValue != null) return altValue;
     return b.has(altValue) && !a.has(altValue);
   }
 
-  function mapMightHaveLoosePrim(a, b, prim, item, memo) {
+  function mapMightHaveLoosePrim(a: Map<unknown, unknown>, b: Map<unknown, unknown>, prim: unknown, item: unknown, memo: BunWasm.EqualityMemo) {
     const altValue = findLooseMatchingPrimitives(prim);
     if (altValue != null) return altValue;
     const curB = b.get(altValue);
@@ -790,7 +794,7 @@
     return !a.has(altValue) && nodeDeepEqual(item, curB, false, memo);
   }
 
-  function setHasEqualElement(set, val1, strict, memo) {
+  function setHasEqualElement(set: Set<unknown>, val1: unknown, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
     for (const val2 of set) {
       if (nodeDeepEqual(val1, val2, strict, memo)) {
         set.delete(val2);
@@ -800,12 +804,12 @@
     return false;
   }
 
-  function isObjectValue(value) {
+  function isObjectValue(value: unknown) {
     return typeof value === "object" && value !== null;
   }
 
-  function setEquiv(a, b, strict, memo) {
-    let set = null;
+  function setEquiv(a: Set<unknown>, b: Set<unknown>, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
+    let set: Set<unknown> | null = null;
     for (const val of a) {
       if (isObjectValue(val)) {
         set = set || new Set();
@@ -827,7 +831,7 @@
     return set.size === 0;
   }
 
-  function mapHasEqualEntry(set, map, key1, item1, strict, memo) {
+  function mapHasEqualEntry(set: Set<unknown>, map: Map<unknown, unknown>, key1: unknown, item1: unknown, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
     for (const key2 of set) {
       if (nodeDeepEqual(key1, key2, strict, memo) && nodeDeepEqual(item1, map.get(key2), strict, memo)) {
         set.delete(key2);
@@ -837,8 +841,8 @@
     return false;
   }
 
-  function mapEquiv(a, b, strict, memo) {
-    let set = null;
+  function mapEquiv(a: Map<unknown, unknown>, b: Map<unknown, unknown>, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
+    let set: Set<unknown> | null = null;
     for (const [key, item1] of a) {
       if (isObjectValue(key)) {
         set = set || new Set();
@@ -866,7 +870,7 @@
     return set.size === 0;
   }
 
-  function isDeepStrictEqual(a, b) {
+  function isDeepStrictEqual(a: unknown, b: unknown) {
     return nodeDeepEqual(a, b, true);
   }
 
@@ -880,24 +884,24 @@
   // - Date/RegExp/Map/Set/ArrayBuffer compare contents only; arrays ignore
   //   non-index properties; errors compare name, message, cause and own props
 
-  function constructorName(obj) {
+  function constructorName(obj: object) {
     const proto = Object.getPrototypeOf(obj);
     if (proto === null) return "Object";
     const ctor = proto.constructor;
     return typeof ctor === "function" && ctor.name ? ctor.name : "Object";
   }
 
-  function bunDeepEquals(a, b, strict) {
+  function bunDeepEquals(a: unknown, b: unknown, strict?: boolean) {
     return bunEq(a, b, strict === true, undefined);
   }
 
-  function bunEq(a, b, strict, memo) {
+  function bunEq(a: unknown, b: unknown, strict: boolean, memo?: BunWasm.EqualityMemo): boolean {
     if (Object.is(a, b)) return true;
     if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
     return withMemo(a, b, memo, (m) => bunCompareObjects(a, b, strict, m));
   }
 
-  function bunCompareSets(a, b, strict, memo) {
+  function bunCompareSets(a: Set<unknown>, b: unknown, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
     if (!isSet(b) || a.size !== b.size) return false;
     for (const v of a) {
       if (b.has(v)) continue;
@@ -913,7 +917,7 @@
     return true;
   }
 
-  function bunCompareMaps(a, b, strict, memo) {
+  function bunCompareMaps(a: Map<unknown, unknown>, b: unknown, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
     if (!isMap(b) || a.size !== b.size) return false;
     for (const [k, v] of a) {
       if (b.has(k)) {
@@ -932,7 +936,7 @@
     return true;
   }
 
-  function bunCompareTypedArrays(a, b, strict) {
+  function bunCompareTypedArrays(a: BunWasm.NumericView, b: BunWasm.NumericView, strict: boolean) {
     if (typedArrayName(a) !== typedArrayName(b) || a.length !== b.length) return false;
     if (strict) return equalBytes(bytesOf(a), bytesOf(b));
     for (let i = 0; i < a.length; i++) {
@@ -941,7 +945,7 @@
     return true;
   }
 
-  function bunCompareArrays(a, b, strict, memo) {
+  function bunCompareArrays(a: unknown[], b: unknown, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
     if (!Array.isArray(b)) return false;
     if (strict && a.length !== b.length) return false;
     const len = Math.max(a.length, b.length);
@@ -952,7 +956,7 @@
     return true;
   }
 
-  function bunCompareErrors(a, b, strict, memo) {
+  function bunCompareErrors(a: Error, b: unknown, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
     if (!(isNativeError(b) || b instanceof Error)) return false;
     if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
     if (a.name !== b.name || a.message !== b.message) return false;
@@ -963,12 +967,12 @@
   }
 
   // Type-specific comparison; returns true/false, or undefined to continue with properties.
-  function bunCompareSpecial(a, b, strict, memo) {
+  function bunCompareSpecial(a: object, b: object, strict: boolean, memo: BunWasm.EqualityMemo): boolean | undefined {
     if (isSet(a) || isSet(b)) return isSet(a) && bunCompareSets(a, b, strict, memo);
     if (isMap(a) || isMap(b)) return isMap(a) && bunCompareMaps(a, b, strict, memo);
     if (isAnyArrayBuffer(a) || isAnyArrayBuffer(b)) {
       if (isArrayBuffer(a) !== isArrayBuffer(b) || isSharedArrayBuffer(a) !== isSharedArrayBuffer(b)) return false;
-      return equalBytes(new Uint8Array(a), new Uint8Array(b));
+      return equalBytes(new Uint8Array(a as ArrayBuffer | SharedArrayBuffer), new Uint8Array(b as ArrayBuffer | SharedArrayBuffer));
     }
     if (isDate(a) || isDate(b)) return isDate(a) && isDate(b) && a.getTime() === b.getTime();
     if (isRegExp(a) || isRegExp(b)) return isRegExp(a) && isRegExp(b) && a.source === b.source && a.flags === b.flags;
@@ -985,11 +989,11 @@
     return undefined;
   }
 
-  function ownEnumerableKeys(obj) {
-    return Object.keys(obj).concat(enumerableSymbols(obj));
+  function ownEnumerableKeys(obj: object): (string | symbol)[] {
+    return (Object.keys(obj) as (string | symbol)[]).concat(enumerableSymbols(obj));
   }
 
-  function bunCompareObjects(a, b, strict, memo) {
+  function bunCompareObjects(a: object, b: object, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
     const special = bunCompareSpecial(a, b, strict, memo);
     if (special !== undefined) return special;
     if (isTypedArray(a) || isBoxedPrimitive(a)) return bunStrictProps(a, b, memo, nonIndexKeys(a, true));
@@ -1000,7 +1004,7 @@
 
   // Mirrors JSC's fast property enumeration: no indexed or accessor own
   // properties, no own "__proto__" and no exotic arguments object.
-  function isPlainLayout(obj) {
+  function isPlainLayout(obj: object) {
     if (tagOf(obj) === "Arguments" || hasOwn(obj, "__proto__")) return false;
     for (const key of Reflect.ownKeys(obj)) {
       if (isIndexKey(key)) return false;
@@ -1010,52 +1014,52 @@
     return true;
   }
 
-  function bunStrictProps(a, b, memo, keysA) {
+  function bunStrictProps(a: object, b: object, memo: BunWasm.EqualityMemo, keysA: (string | symbol)[]): boolean {
     if (keysA.length !== nonIndexKeys(b, true).length) return false;
     for (const key of keysA) {
-      if (!isEnumerable(b, key) || !bunEq(a[key], b[key], true, memo)) return false;
+      if (!isEnumerable(b, key) || !bunEq((a as Record<PropertyKey, unknown>)[key], (b as Record<PropertyKey, unknown>)[key], true, memo)) return false;
     }
     return true;
   }
 
   // Own-property comparison. Non-strict lookups on the other side also see
   // non-enumerable own properties, like JSC's getDirect().
-  function bunFastProps(a, b, strict, memo) {
+  function bunFastProps(a: object, b: object, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
     const keysA = ownEnumerableKeys(a);
     for (const key of keysA) {
       const present = strict ? isEnumerable(b, key) : hasOwn(b, key);
-      if (!strict && a[key] === undefined && !present) continue;
-      if (!present || !bunEq(a[key], b[key], strict, memo)) return false;
+      if (!strict && (a as Record<PropertyKey, unknown>)[key] === undefined && !present) continue;
+      if (!present || !bunEq((a as Record<PropertyKey, unknown>)[key], (b as Record<PropertyKey, unknown>)[key], strict, memo)) return false;
     }
     let remain = keysA.length;
     for (const key of ownEnumerableKeys(b)) {
-      if (!strict && b[key] === undefined) continue;
+      if (!strict && (b as Record<PropertyKey, unknown>)[key] === undefined) continue;
       if (!hasOwn(a, key) || remain === 0) return false;
       remain--;
     }
     return true;
   }
 
-  function forInKeys(obj) {
-    const keys = [];
+  function forInKeys(obj: object): (string | symbol)[] {
+    const keys: (string | symbol)[] = [];
     for (const key in obj) keys.push(key);
     return keys.concat(enumerableSymbols(obj));
   }
 
   // JSC's generic path: enumerable keys including inherited ones; keys of `b`
   // beyond the length of `a`'s list only need to hold undefined.
-  function bunSlowProps(a, b, strict, memo) {
+  function bunSlowProps(a: object, b: object, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
     const keysA = forInKeys(a);
     const keysB = forInKeys(b);
     if (strict && keysA.length !== keysB.length) return false;
     for (const key of keysA) {
-      const value = a[key];
+      const value = (a as Record<PropertyKey, unknown>)[key];
       const present = key in b;
       if (!strict && value === undefined && !present) continue;
-      if (!present || !bunEq(value, b[key], strict, memo)) return false;
+      if (!present || !bunEq(value, (b as Record<PropertyKey, unknown>)[key], strict, memo)) return false;
     }
     for (let i = keysA.length; i < keysB.length; i++) {
-      if (b[keysB[i]] !== undefined) return false;
+      if ((b as Record<PropertyKey, unknown>)[keysB[i]] !== undefined) return false;
     }
     return true;
   }
@@ -1072,12 +1076,12 @@
     "|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~]))";
   const ansiRegex = new RegExp(ansiPattern, "g");
 
-  function stripVTControlCharacters(str) {
+  function stripVTControlCharacters(str: unknown) {
     validateString(str, "str");
     return str.replace(ansiRegex, "");
   }
 
-  function toUSVString(input) {
+  function toUSVString(input: unknown) {
     const str = String(input);
     if (typeof str.toWellFormed === "function") return str.toWellFormed();
     return str.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "�");
@@ -1087,7 +1091,7 @@
     return typeof process !== "undefined" && process.env ? process.env : {};
   }
 
-  function streamHasColors(stream) {
+  function streamHasColors(stream: BunWasm.ColorStream | undefined) {
     const env = envOf();
     if (env.FORCE_COLOR !== undefined) return env.FORCE_COLOR !== "0" && env.FORCE_COLOR !== "false";
     if (env.NO_COLOR !== undefined || env.NODE_DISABLE_COLORS !== undefined) return false;
@@ -1096,7 +1100,7 @@
     return stream.isTTY === true && env.TERM !== "dumb";
   }
 
-  function styleText(formatArg, text, options) {
+  function styleText(formatArg: string | string[], text: unknown, options?: { validateStream?: boolean; stream?: BunWasm.ColorStream }) {
     validateString(text, "text");
     const validateStream = options && options.validateStream !== undefined ? options.validateStream : true;
     const stream =
@@ -1114,7 +1118,7 @@
     return `${left}${text}${right}`;
   }
 
-  function invalidFormat(key) {
+  function invalidFormat(key: unknown) {
     const allowed = Object.keys(ansiColors)
       .map((name) => `'${name}'`)
       .join(", ");
@@ -1126,9 +1130,9 @@
   // debuglog
   // ---------------------------------------------------------------------------
 
-  let debugPattern;
+  let debugPattern: RegExp | null | undefined;
 
-  function debugEnabledFor(section) {
+  function debugEnabledFor(section: string) {
     if (debugPattern === undefined) {
       const value = envOf().NODE_DEBUG;
       if (!value) {
@@ -1144,9 +1148,9 @@
     return debugPattern !== null && debugPattern.test(section);
   }
 
-  function debuglog(section, cb) {
+  function debuglog(section: unknown, cb?: (logger: () => void) => void) {
     const upper = String(section).toUpperCase();
-    let enabled;
+    let enabled: boolean | undefined;
     function logger() {
       if (enabled === undefined) {
         enabled = debugEnabledFor(upper);
@@ -1154,7 +1158,7 @@
       }
       if (!enabled) return;
       const pid = typeof process !== "undefined" && process.pid !== undefined ? process.pid : 0;
-      console.error("%s %d: %s", upper, pid, format.apply(null, arguments));
+      console.error("%s %d: %s", upper, pid, (format as { apply(receiver: unknown, args: IArguments): string }).apply(null, arguments));
     }
     Object.defineProperty(logger, "enabled", {
       configurable: true,
@@ -1172,47 +1176,47 @@
   // ---------------------------------------------------------------------------
 
   // Bun words parseArgs validation errors as `The "x" property must be ..., got <type>`.
-  function argsTypeError(name, expected, value) {
+  function argsTypeError(name: string, expected: string, value: unknown) {
     const got = Array.isArray(value) ? "array" : value === null ? "null" : typeof value;
     return makeError(TypeError, "ERR_INVALID_ARG_TYPE", `The "${name}" property must be ${expected}, got ${got}`);
   }
 
-  function argsCheck(ok, name, expected, value) {
+  function argsCheck(ok: boolean, name: string, expected: string, value: unknown): asserts ok {
     if (!ok) throw argsTypeError(name, expected, value);
   }
 
-  function parseArgsError(code, message) {
+  function parseArgsError(code: string, message: string) {
     return makeError(TypeError, code, message);
   }
 
-  function objectGetOwn(obj, key) {
-    return obj && hasOwn(obj, key) ? obj[key] : undefined;
+  function objectGetOwn(obj: unknown, key: string): unknown {
+    return obj && hasOwn(obj, key) ? (obj as Record<string, unknown>)[key] : undefined;
   }
 
-  function optionsGetOwn(options, longOption, key) {
+  function optionsGetOwn(options: Record<string, unknown>, longOption: string, key: string) {
     return hasOwn(options, longOption) ? objectGetOwn(options[longOption], key) : undefined;
   }
 
-  function findLongOptionForShort(shortOption, options) {
+  function findLongOptionForShort(shortOption: string, options: Record<string, unknown>) {
     const entry = Object.entries(options).find(([, config]) => objectGetOwn(config, "short") === shortOption);
     return entry ? entry[0] : shortOption;
   }
 
-  const isOptionValue = (value) => value != null;
-  const isOptionLikeValue = (value) => value != null && value.length > 1 && value[0] === "-";
-  const isLoneShortOption = (arg) => arg.length === 2 && arg[0] === "-" && arg[1] !== "-";
-  const isLoneLongOption = (arg) => arg.length > 2 && arg.startsWith("--") && !arg.includes("=", 3);
-  const isLongOptionAndValue = (arg) => arg.length > 2 && arg.startsWith("--") && arg.includes("=", 3);
+  const isOptionValue = (value: string | undefined) => value != null;
+  const isOptionLikeValue = (value: string | undefined) => value != null && value.length > 1 && value[0] === "-";
+  const isLoneShortOption = (arg: string) => arg.length === 2 && arg[0] === "-" && arg[1] !== "-";
+  const isLoneLongOption = (arg: string) => arg.length > 2 && arg.startsWith("--") && !arg.includes("=", 3);
+  const isLongOptionAndValue = (arg: string) => arg.length > 2 && arg.startsWith("--") && arg.includes("=", 3);
 
-  function isShortOptionStart(arg) {
+  function isShortOptionStart(arg: string) {
     return arg.length > 2 && arg[0] === "-" && arg[1] !== "-";
   }
 
-  function shortTakesValue(arg, options) {
+  function shortTakesValue(arg: string, options: Record<string, unknown>) {
     return optionsGetOwn(options, findLongOptionForShort(arg[1], options), "type") === "string";
   }
 
-  function expandShortGroup(arg, options) {
+  function expandShortGroup(arg: string, options: Record<string, unknown>) {
     const expanded = [];
     for (let i = 1; i < arg.length; i++) {
       const shortOption = arg[i];
@@ -1228,20 +1232,20 @@
     return expanded;
   }
 
-  function optionToken(name, rawName, index, value, inlineValue) {
+  function optionToken(name: string, rawName: string, index: number, value: string | undefined, inlineValue: boolean | undefined): BunWasm.OptionToken {
     return { kind: "option", name, rawName, index, value, inlineValue };
   }
 
   // Tokens expanded from a short-option group ("-abc"); Bun names them without the dash.
-  const groupTokens = new WeakSet();
+  const groupTokens = new WeakSet<BunWasm.OptionToken>();
 
-  function argsToTokens(args, options) {
-    const tokens = [];
+  function argsToTokens(args: string[], options: Record<string, unknown>) {
+    const tokens: BunWasm.ParseToken[] = [];
     let index = -1;
     let groupCount = 0;
     const remaining = args.slice();
     while (remaining.length > 0) {
-      const arg = remaining.shift();
+      const arg = remaining.shift()!;
       const nextArg = remaining[0];
       const inGroup = groupCount > 0;
       if (inGroup) groupCount--;
@@ -1292,7 +1296,7 @@
     return tokens;
   }
 
-  function checkOptionLikeValue(token) {
+  function checkOptionLikeValue(token: BunWasm.OptionToken) {
     if (token.inlineValue || !isOptionLikeValue(token.value)) return;
     const example = token.rawName.startsWith("--")
       ? `'${token.rawName}=-XYZ'`
@@ -1303,14 +1307,14 @@
     );
   }
 
-  function unknownOption(rawName, allowPositionals) {
+  function unknownOption(rawName: string, allowPositionals: boolean) {
     const suggestDashDash = allowPositionals
       ? `. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- ${JSON.stringify(rawName)}`
       : "";
     return parseArgsError("ERR_PARSE_ARGS_UNKNOWN_OPTION", `Unknown option '${rawName}'${suggestDashDash}`);
   }
 
-  function checkOptionUsage(config, token) {
+  function checkOptionUsage(config: { options: Record<string, unknown>; allowNegative: boolean; allowPositionals: boolean }, token: BunWasm.OptionToken) {
     let name = token.name;
     if (!hasOwn(config.options, name)) {
       const negated = config.allowNegative && name.startsWith("no-");
@@ -1332,7 +1336,7 @@
     }
   }
 
-  function storeOption(longOption, optionValue, options, values, allowNegative) {
+  function storeOption(longOption: string, optionValue: string | boolean | undefined, options: Record<string, unknown>, values: Record<string, unknown>, allowNegative: boolean) {
     if (longOption === "__proto__") return;
     let name = longOption;
     let value = optionValue === undefined ? true : optionValue;
@@ -1345,21 +1349,21 @@
       return;
     }
     if (values[name] === undefined) values[name] = [value];
-    else values[name].push(value);
+    else (values[name] as (string | boolean)[]).push(value);
   }
 
-  function validateDefault(type, multiple, value, name) {
+  function validateDefault(type: string, multiple: unknown, value: unknown, name: string) {
     if (!multiple) return argsCheck(typeof value === type, name, `of type ${type}`, value);
     argsCheck(Array.isArray(value), name, "an instance of Array", value);
     // Bun reports the array itself as the received value for a bad element.
     value.forEach((item, i) => argsCheck(typeof item === type, `${name}[${i}]`, `of type ${type}`, value));
   }
 
-  function isPlainObjectArg(value) {
+  function isPlainObjectArg(value: unknown): value is Record<string, unknown> {
     return value !== null && typeof value === "object" && !Array.isArray(value);
   }
 
-  function validateOptionConfig(longOption, config) {
+  function validateOptionConfig(longOption: string, config: unknown) {
     argsCheck(isPlainObjectArg(config), `options.${longOption}`, "of type object", config);
     const type = objectGetOwn(config, "type");
     if (type !== "string" && type !== "boolean") {
@@ -1385,14 +1389,14 @@
     return process.argv.slice(2);
   }
 
-  function parseArgs(config = {}) {
+  function parseArgs(config: unknown = {}) {
     const args = objectGetOwn(config, "args") ?? mainArgs();
     const strict = objectGetOwn(config, "strict") ?? true;
     const allowPositionals = objectGetOwn(config, "allowPositionals") ?? !strict;
     const returnTokens = objectGetOwn(config, "tokens") ?? false;
     const allowNegative = objectGetOwn(config, "allowNegative") ?? false;
     const options = objectGetOwn(config, "options") ?? { __proto__: null };
-    const parseConfig = { args, strict, options, allowPositionals, allowNegative };
+    const parseConfig: { args: unknown; strict: unknown; options: unknown; allowPositionals: unknown; allowNegative: unknown } = { args, strict, options, allowPositionals, allowNegative };
 
     argsCheck(Array.isArray(args), "args", "an instance of Array", args);
     argsCheck(typeof strict === "boolean", "strict", "of type boolean", strict);
@@ -1403,10 +1407,10 @@
     for (const [longOption, optionConfig] of Object.entries(options)) validateOptionConfig(longOption, optionConfig);
 
     const tokens = argsToTokens(args, options);
-    const result = { values: { __proto__: null }, positionals: [] };
+    const result: { values: Record<string, unknown>; positionals: string[]; tokens?: BunWasm.ParseToken[] } = { values: { __proto__: null }, positionals: [] };
     if (returnTokens) result.tokens = tokens;
 
-    function storeNegativeOption(token, options, values) {
+    function storeNegativeOption(token: BunWasm.OptionToken, options: Record<string, unknown>, values: Record<string, unknown>) {
       if (!token.name.startsWith("no-") || token.value !== undefined || hasOwn(options, token.name)) return false;
       const positive = token.name.slice(3);
       if (optionsGetOwn(options, positive, "type") !== "boolean") return false;
@@ -1419,7 +1423,7 @@
       if (token.kind === "option") {
         if (allowNegative && storeNegativeOption(token, options, result.values)) continue;
         if (strict) {
-          checkOptionUsage(parseConfig, token);
+          checkOptionUsage(parseConfig as { options: Record<string, unknown>; allowNegative: boolean; allowPositionals: boolean }, token);
           checkOptionLikeValue(token);
         }
         storeOption(token.name, token.value, options, result.values, allowNegative);
@@ -1446,26 +1450,26 @@
   // Legacy helpers and module object
   // ---------------------------------------------------------------------------
 
-  function isError(e) {
+  function isError(e: unknown) {
     return isNativeError(e) || objectToString.call(e) === "[object Error]" || e instanceof Error;
   }
 
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  const pad2 = (n) => String(n).padStart(2, "0");
+  const pad2 = (n: number) => String(n).padStart(2, "0");
 
   function log() {
     const d = new Date();
     const time = [pad2(d.getHours()), pad2(d.getMinutes()), pad2(d.getSeconds())].join(":");
-    console.log("%s - %s", `${d.getDate()} ${months[d.getMonth()]} ${time}`, format.apply(null, arguments));
+    console.log("%s - %s", `${d.getDate()} ${months[d.getMonth()]} ${time}`, (format as { apply(receiver: unknown, args: IArguments): string }).apply(null, arguments));
   }
 
-  function extend(target, source) {
+  function extend(target: Record<string, unknown>, source: unknown) {
     if (source === null || typeof source !== "object") return target;
-    for (const key of Object.keys(source)) target[key] = source[key];
+    for (const key of Object.keys(source)) target[key] = (source as Record<string, unknown>)[key];
     return target;
   }
 
-  function isBuffer(value) {
+  function isBuffer(value: unknown) {
     return internal.require("buffer").Buffer.isBuffer(value);
   }
 
@@ -1480,22 +1484,22 @@
     inherits,
     inspect,
     isArray: Array.isArray,
-    isBoolean: (arg) => typeof arg === "boolean",
+    isBoolean: (arg: unknown) => typeof arg === "boolean",
     isBuffer,
     isDate,
     isDeepStrictEqual,
     isError,
-    isFunction: (arg) => typeof arg === "function",
-    isNull: (arg) => arg === null,
-    isNullOrUndefined: (arg) => arg === null || arg === undefined,
-    isNumber: (arg) => typeof arg === "number",
-    isObject: (arg) => arg !== null && typeof arg === "object",
+    isFunction: (arg: unknown) => typeof arg === "function",
+    isNull: (arg: unknown) => arg === null,
+    isNullOrUndefined: (arg: unknown) => arg === null || arg === undefined,
+    isNumber: (arg: unknown) => typeof arg === "number",
+    isObject: (arg: unknown) => arg !== null && typeof arg === "object",
     // Bun reports bigints as non-primitive here.
-    isPrimitive: (arg) => arg === null || (typeof arg !== "object" && typeof arg !== "function" && typeof arg !== "bigint"),
+    isPrimitive: (arg: unknown) => arg === null || (typeof arg !== "object" && typeof arg !== "function" && typeof arg !== "bigint"),
     isRegExp,
-    isString: (arg) => typeof arg === "string",
-    isSymbol: (arg) => typeof arg === "symbol",
-    isUndefined: (arg) => arg === undefined,
+    isString: (arg: unknown) => typeof arg === "string",
+    isSymbol: (arg: unknown) => typeof arg === "symbol",
+    isUndefined: (arg: unknown) => arg === undefined,
     log,
     parseArgs,
     promisify,
