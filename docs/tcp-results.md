@@ -161,3 +161,18 @@ an existing server owns its guest port. After the fix, two helpers forward
 requests independently through the same guest port, the existing server still
 answers, and both preview ports can be rebound after teardown.
 This host-only change does not require a new guest artifact.
+
+## Server public contracts, 2026-10-23
+
+An exact-main QuickJS guest at `5fa3a24f` reproduces 27 passing, 13 failing,
+and three skipped cases in unmodified `js/node/net/server.spec.ts` at patched
+Bun `d71508d31edf06765c12adf0df137ef531539f68`.
+The constructor checks cover callable use, subclass identity, arity, primitive
+option rejection, copied options, public defaults and keepalive delay validation.
+Three focused tests first fail and then pass. Native Bun also passes the
+`net-server-contracts` fixture, including default IPv6-any address and family.
+
+The browser shared network still needs Waffle to retain local bind address
+and family. Its `browser/net/host.ts` listener address and
+`browser/net/namespace.ts` accepted peer both report IPv4 loopback.
+Private `_connections`, `_unref`, and worker fields are not public API fixes.

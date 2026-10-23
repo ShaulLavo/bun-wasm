@@ -157,6 +157,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters and `web/src/engine-host.js` provider capture`](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 | [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. |
+| [Server constructor contract](#server-constructor-contract) | Host feature | Original callable-constructor and public option adapter, with native IPv6-any defaults. |
 | [Embedded WHATWG Streams](#whatwg-reader-lock-errors) | Port | Pinned portable streams with Bun reader-lock error text. |
 | [Streams AST hooks](#whatwg-reader-lock-errors) | Host feature | Original generator adapter preserves Node completion hooks and error codes. |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming bodies, response cancellation independent of transport disposal before and during writer ownership, Agent pool and upgrade response adapters shared by all engines. |
@@ -3305,3 +3306,15 @@ and ordinary conversion methods, preserving thrown values. It validates an
 exotic hook's result before scalar conversion, retains Boolean's internal value,
 and applies the same rules to YAML indentation. JSON5 and TOML conversion are
 unchanged. This replaces direct `valueOf()` calls that skipped the hook.
+
+## Server constructor contract
+
+Class **Host feature**, **original adapter** in
+`crates/bunwasm-runtime/src/js/node_net_server.ts` and `node_net.js`.
+No upstream implementation is copied. Bun `src/js/node/net.ts` at pinned
+`9510e74152073d850a18758ca41114d8f214ffa6` is the public-contract reference.
+The existing EventEmitter-backed server keeps its transport and disposal code.
+A callable proxy preserves construction, subclassing and prototype identity.
+The adapter snapshots options, validates keepalive delay and exposes public
+defaults. Unspecified native listeners request IPv6 any. Waffle-owned browser
+endpoint metadata and private Bun worker fields are deliberately unchanged.
