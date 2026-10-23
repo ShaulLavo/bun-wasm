@@ -7,10 +7,17 @@ const shellCommit = "c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5";
 const waffleCommit = "b20fad173ebaa225cb87c51776f35edaaafd4a40";
 const waffle = `git+https://github.com/ShaulLavo/waffle.git#${waffleCommit}`;
 export type Execute = (command: string[], cwd: string, env?: NodeJS.ProcessEnv) => Promise<void>;
+async function manifest(directory: string) {
+  const value: unknown = await Bun.file(join(directory, "package.json")).json();
+  assert.ok(value && typeof value === "object" && "version" in value && typeof value.version === "string", "package version");
+  const peers: unknown = Reflect.get(value, "peerDependencies");
+  assert.ok(peers && typeof peers === "object" && "waffle" in peers && typeof peers.waffle === "string", "package Waffle peer");
+  return { version: value.version, peer: peers.waffle };
+}
 export async function installConsumer(root: string, directory: string, execute: Execute) {
   await mkdir(directory, { recursive: true });
-  const metadata = await Bun.file(join(root, "package.json")).json();
-  assert.equal(metadata.peerDependencies.waffle, waffle, "Bun must declare the accepted shared Waffle peer");
+  const metadata = await manifest(root);
+  assert.equal(metadata.peer, waffle, "Bun must declare the accepted shared Waffle peer");
   await execute([process.execPath, "pm", "pack", "--destination", directory, "--quiet"], root);
   const archives = (await readdir(directory)).filter(file => /^bun-wasm-.*\.tgz$/.test(file));
   assert.equal(archives.length, 1, "one newly packed public Bun package");
@@ -32,11 +39,14 @@ export async function bundleConsumer(root: string, directory: string, output: st
   const shell = join(directory, "node_modules/bash-web");
   const bun = join(directory, "node_modules/bun-wasm");
   const runtime = join(directory, "node_modules/waffle");
-  const metadata = await Promise.all([shell, bun, runtime].map(path => Bun.file(join(path, "package.json")).json()));
-  assert.equal(metadata[0].version, "0.0.91", "selected shell release");
-  assert.equal(metadata[2].version, "0.0.67", "selected shared runtime release");
-  assert.equal(metadata[0].peerDependencies.waffle, waffle);
-  assert.equal(metadata[1].peerDependencies.waffle, waffle);
+  const [shellMetadata, bunMetadata] = await Promise.all([shell, bun].map(manifest));
+  assert.ok(shellMetadata && bunMetadata, "both installed consumer manifests");
+  const runtimeMetadata: unknown = await Bun.file(join(runtime, "package.json")).json();
+  assert.ok(runtimeMetadata && typeof runtimeMetadata === "object" && "version" in runtimeMetadata, "runtime manifest");
+  assert.equal(shellMetadata.version, "0.0.91", "selected shell release");
+  assert.equal(runtimeMetadata.version, "0.0.67", "selected shared runtime release");
+  assert.equal(shellMetadata.peer, waffle);
+  assert.equal(bunMetadata.peer, waffle);
   const lock = await readFile(join(directory, "bun.lock"), "utf8");
   assert.ok(lock.includes(shellCommit) && lock.includes(waffleCommit), "full Git commit pins in installed lockfile");
   for (const consumer of [shell, bun]) assert.equal(await realpath(join(resolveRuntimePackage(join(consumer, "src/index.ts")).path, "package.json")), await realpath(join(runtime, "package.json")), "one physical peer installation");
@@ -54,5 +64,5 @@ export async function bundleConsumer(root: string, directory: string, output: st
   for (const utility of ["cat", "mkdir"]) await cp(join(shell, `dist/${utility}.wasm`), join(output, `programs/${utility}.wasm`));
   await Bun.write(join(output, "index.html"), '<!doctype html><title>Real shell and Bun</title><script type="module" src="./main.js"></script>');
   await Bun.write(join(output, "bundle-inputs.json"), JSON.stringify(built.metafile));
-  return { shell: { commit: shellCommit, version: metadata[0].version, guest: { path: "programs/shell-engine.wasm", sha256: await digest(shellGuest), bytes: Bun.file(shellGuest).size }, worker: { path: "shell-worker.js", sha256: await digest(shellWorker) } }, bun: { version: metadata[1].version, archiveSha256: await digest(join(directory, `bun-wasm-${metadata[1].version}.tgz`)), worker: "worker.js", publicExport: "bun-wasm/worker" }, waffle: { commit: waffleCommit, version: metadata[2].version, worker: "fs-worker.js" }, installedLockSha256: await digest(join(directory, "bun.lock")), output: resolve(output) };
+  return { shell: { commit: shellCommit, version: shellMetadata.version, guest: { path: "programs/shell-engine.wasm", sha256: await digest(shellGuest), bytes: Bun.file(shellGuest).size }, worker: { path: "shell-worker.js", sha256: await digest(shellWorker) } }, bun: { version: bunMetadata.version, archiveSha256: await digest(join(directory, `bun-wasm-${bunMetadata.version}.tgz`)), worker: "worker.js", publicExport: "bun-wasm/worker" }, waffle: { commit: waffleCommit, version: runtimeMetadata.version, worker: "fs-worker.js" }, installedLockSha256: await digest(join(directory, "bun.lock")), output: resolve(output) };
 }

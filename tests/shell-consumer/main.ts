@@ -132,6 +132,7 @@ async function ticker() {
 async function binary() {
   const detail = await outputCase(commands.binary, [`BINARY_EXACT:${binaryBytes}`, "BINARY_STATUS:0:0 0"]);
   check(detail.peakTerminal <= OUTPUT_CAPACITY, "bounded terminal queue");
+  check(detail.peakPipes <= 4, "bounded simultaneous observed shell pipes");
   check(pipes.size > 0, "observed actual runtime pipe allocations");
   for (const pipe of pipes.values()) check(pipe.capacity <= 65536 && pipe.bytes <= 8 * 1024 * 1024, "fixed bounded pipe allocation");
   return { ...detail, exactBytes: binaryBytes, pipes: Array.from(pipes.values()) };
@@ -164,7 +165,7 @@ async function interrupt() {
     await changed("/background-alive");
     await shell.send("echo DESCENDANT_STATUS:$?; kill %1; wait; echo DESCENDANTS_REAPED");
     await shell.output("DESCENDANT_STATUS:130"); await shell.output("DESCENDANTS_REAPED"); await shell.ready();
-    await shell.send("echo PROMPT_USABLE"); await shell.output("\r\nPROMPT_USABLE"); await shell.ready();
+    await shell.send("echo PROMPT_USABLE"); await shell.output("\nPROMPT_USABLE"); await shell.ready();
     return { ...shell.stats(), status: 130, foreground: foreground.map(({ pid, parentPid, job }) => ({ pid, parentPid, job })), background };
   } finally { await shell.dispose(); }
 }

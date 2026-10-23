@@ -48,13 +48,20 @@ function execute(command: string[], cwd: string, env = process.env): Promise<voi
 }
 function cleanup() {
   return cleanupPromise ??= (async () => {
-    for (const child of ownedCommands) kill(child);
+    await Promise.all(Array.from(ownedCommands, child => new Promise<void>(resolve => { child.once("close", () => resolve()); kill(child); })));
     try { await (browser ?? await launching?.catch(() => undefined))?.close(); }
     finally { server?.stop(true); if (scratch) await rm(scratch, { recursive: true, force: true }); }
   })();
 }
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => void cleanup().finally(() => process.exit(1)));
 const deadline = setTimeout(() => { console.error("shell consumer deadline"); void cleanup().finally(() => process.exit(1)); }, 900000);
+function caseResults(value: unknown) {
+  assert.ok(value && typeof value === "object" && "results" in value && Array.isArray(value.results), "consumer results");
+  return value.results.map((item: unknown) => {
+    assert.ok(item && typeof item === "object" && "name" in item && typeof item.name === "string" && "ok" in item && typeof item.ok === "boolean", "case result");
+    return { name: item.name, ok: item.ok };
+  });
+}
 async function exercise(browserName: string, type: BrowserType, installation: string) {
   assert.ok(existsSync(type.executablePath()), `cached ${browserName} executable required`);
   launching = type.launch({ headless: true }); browser = await launching;
@@ -66,10 +73,12 @@ async function exercise(browserName: string, type: BrowserType, installation: st
   try {
     await page.goto(`http://127.0.0.1:${port}/`);
     await page.waitForFunction(() => Reflect.has(globalThis, "shellConsumer"));
-    const result = await page.evaluate(() => Reflect.get(globalThis, "shellConsumer").exercise());
+    const result: unknown = await page.evaluate(() => Reflect.get(globalThis, "shellConsumer").exercise());
     console.log(JSON.stringify({ browser: browserName, installation, result, errors }));
-    failed = result.results.some((item: { ok: boolean }) => !item.ok);
-    const previewCase = result.results.find((item: { name: string }) => item.name === "preview");
+    const cases = caseResults(result);
+    assert.deepEqual(cases.map(item => item.name), ["lookup", "files-cwd-env-exit9", "epipe", "nested-stdin", "live-ticker", "binary", "interrupt", "preview"]);
+    failed = cases.some(item => !item.ok);
+    const previewCase = cases.find(item => item.name === "preview");
     if (previewCase?.ok) {
       const preview = await context.newPage();
       const response = await preview.goto(`http://127.0.0.1:${port}/__preview/31976/`);
