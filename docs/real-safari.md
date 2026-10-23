@@ -51,3 +51,13 @@ chord per engine, requires status 130 and the prompt, then runs another command.
 Retrieve reports before removing every copied directory and guest from the Mac.
 Verify the task's safaridriver and loopback listeners are gone, then release the
 reservation. Keep reusable Linux guests only at the coordinator's requested path.
+
+For the installed real bash-web consumer, build its existing fixture with
+`bundleConsumer` from `web/tests/shell-consumer-install.ts`. Copy
+`safari-observers.js` from the Safari fixture build into that output and load it
+before `main.js`. Serve the selected receipt-verified guest as `bun-guest.wasm`.
+Run `SAFARI_SHELL_CONSUMER=1 SAFARI_OUTPUT=consumer.json ~/.bun/bin/bun shell-runner.mjs <consumer-output>`.
+This preserves all eight original consumer cases and adds real-Safari admission,
+shared-preview delivery, and physical worker/listener cleanup assertions. The
+consumer interrupt case calls the terminal bridge. Run the playground mode
+separately for the trusted WebDriver keyboard chord.
