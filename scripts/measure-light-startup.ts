@@ -7,7 +7,7 @@ import { readdir } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import { gzipSync } from "node:zlib";
-import { chromium, type Browser, type Page } from "../web/node_modules/playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { sourceAttribution } from "./measure-light-sources";
 
 interface Capture {
