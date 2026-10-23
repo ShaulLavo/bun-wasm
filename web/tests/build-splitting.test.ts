@@ -102,3 +102,22 @@ test("service worker remains a standalone classic script alongside split entries
   expect(new Bun.Transpiler({ loader: "js" }).scan(source).imports).toEqual([]);
   expect(source).not.toMatch(/\bexport\s/);
 });
+
+
+test("lazy worker chunks never import their worker entry again", async () => {
+  const dir = await mkdtemp(join(import.meta.dir, "../node_modules/.worker-identity-test-"));
+  owned.push(dir);
+  await Bun.write(join(dir, "main.ts"), "console.log('page');");
+  await Bun.write(join(dir, "worker.ts"), "export class Token {} self.onmessage = async () => postMessage((await import('./lazy')).make() instanceof Token);");
+  await Bun.write(join(dir, "lazy.ts"), "import { Token } from './worker'; export const make = () => new Token();");
+  const out = join(dir, "dist");
+  const result = await buildBrowserEntries([join(dir, "main.ts"), join(dir, "worker.ts")], out);
+  const outputs = result.metafile!.outputs;
+  const worker = Object.keys(outputs).find(path => path.endsWith("/worker.js"))!;
+  expect(outputs[worker]!.imports).toHaveLength(1);
+  for (const output of Object.values(outputs)) expect(output.imports.some(imported => imported.path === worker)).toBe(false);
+  expect(result.outputs.some(output => output.path.includes("bunwasm-worker-anchor"))).toBe(false);
+  expect(await Bun.file(join(out, "bunwasm-worker-anchor.js")).exists()).toBe(false);
+  expect(Object.keys(result.metafile!.inputs).some(path => path.includes("bunwasm-worker-anchor"))).toBe(false);
+  expect(initialJavaScript(outputs, [worker]).length).toBeGreaterThan(1);
+});

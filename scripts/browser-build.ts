@@ -1,5 +1,6 @@
 import { relative, join, resolve, isAbsolute, dirname } from "node:path";
 import { existsSync, realpathSync, readFileSync } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 
 const runtimeName = "waffle";
@@ -97,13 +98,48 @@ async function checked(config: Parameters<typeof Bun.build>[0]) {
   return result;
 }
 
+const workerAnchor = "bunwasm-worker-anchor";
+function anchorPlugin(entry: string): Bun.BunPlugin {
+  return {
+    name: workerAnchor,
+    setup(build) {
+      build.onResolve({ filter: /^bunwasm-worker-anchor$/ }, () => ({ path: workerAnchor, namespace: workerAnchor }));
+      build.onLoad({ filter: /.*/, namespace: workerAnchor }, () => ({ contents: `import ${JSON.stringify(entry)};`, loader: "ts" }));
+    },
+  };
+}
+
+function importsWorkerEntry(result: Awaited<ReturnType<typeof checked>>, outdir: string): boolean {
+  const entry = result.outputs.find(output => output.kind === "entry-point");
+  if (!entry) throw new Error("Browser realm has no entry output");
+  const outputs = result.metafile!.outputs;
+  return Object.entries(outputs).some(([path, output]) => output.imports.some(imported => {
+    if (imported.external) return false;
+    const dependency = imported.path in outputs ? imported.path : join(dirname(path), imported.path);
+    return resolve(outdir, dependency) === entry.path;
+  }));
+}
+
+async function buildRealm(config: Parameters<typeof Bun.build>[0], entry: string, worker: boolean) {
+  const result = await checked({ ...config, entrypoints: [entry] });
+  if (!worker || !importsWorkerEntry(result, config.outdir!)) return result;
+  // WebKit can evaluate a module-worker entry again when a lazy chunk imports it.
+  // A second build root moves those exports into ordinary, cached modules instead.
+  const anchored = await checked({ ...config, entrypoints: [entry, workerAnchor], plugins: (config.plugins ?? []).concat([anchorPlugin(entry)]) });
+  const auxiliary = anchored.outputs.filter(output => [workerAnchor + ".js", workerAnchor + ".js.map"].includes(relative(config.outdir!, output.path)));
+  await Promise.all(auxiliary.map(output => unlink(output.path)));
+  const outputs = Object.fromEntries(Object.entries(anchored.metafile!.outputs).filter(([path]) => !auxiliary.some(output => resolve(config.outdir!, path) === output.path)));
+  const inputs = Object.fromEntries(Object.entries(anchored.metafile!.inputs).filter(([path]) => !path.endsWith(workerAnchor)));
+  return { ...anchored, outputs: anchored.outputs.filter(output => !auxiliary.includes(output)), metafile: { ...anchored.metafile!, outputs, inputs } };
+}
+
 export async function buildBrowserEntries(entrypoints: string[], outdir: string, options: { runtimeWorker?: boolean } = {}) {
   // Each worker has its own module cache. A multi-entry build hoists the whole shared
   // core/filesystem closure into every realm, even when that realm needs only a subset.
   // Bundle each realm separately so its initial graph can be tree-shaken independently.
   const config = browserBuildConfig(entrypoints, outdir, options);
   const builds = [];
-  for (const entry of config.entrypoints!) builds.push(await checked({ ...config, entrypoints: [entry] }));
+  for (const [index, entry] of config.entrypoints!.entries()) builds.push(await buildRealm(config, entry, index > 0));
   const first = builds[0];
   if (!first) throw new Error("Browser build needs an entry");
   const outputs = new Map<string, typeof first.outputs[number]>();
