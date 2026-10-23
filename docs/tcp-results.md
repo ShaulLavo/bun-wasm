@@ -161,3 +161,20 @@ an existing server owns its guest port. After the fix, two helpers forward
 requests independently through the same guest port, the existing server still
 answers, and both preview ports can be rebound after teardown.
 This host-only change does not require a new guest artifact.
+
+## Resolver inputs and diagnostics, 2026-10-23
+
+The exact-main QuickJS guest at `5fa3a24f` produces 20 pass, four fail and
+five skips in unmodified `js/bun/net/socket-dns-error.test.ts`, patched
+Bun `d71508d31edf06765c12adf0df137ef531539f68`. Three failures are missing
+`hostname` on synchronous listen errors. The fourth dials bracketed IPv4
+and reports ECONNREFUSED instead of rejecting the original name.
+
+The guest adapter now validates host syntax before invoking host resolution.
+It rejects whitespace, malformed brackets, non-address colons, empty labels
+and oversized labels, while leaving legacy IPv4 spelling to the platform.
+Valid bracketed IPv6 literals are unwrapped. Resolver errors carry the original
+hostname, code, syscall and message; connect errors arrive asynchronously.
+The focused test uses real Waffle TCP pipes, with separate invalid-name and
+valid IPv6-loopback checks. TLS and Unix sockets, private testing hooks and
+native Node child executables remain capability limits rather than DNS fixes.

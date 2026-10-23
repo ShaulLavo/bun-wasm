@@ -157,6 +157,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters and `web/src/engine-host.js` provider capture`](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 | [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. |
+| [TCP hostname validation](#tcp-hostname-validation) | Host feature | Original validation and resolver diagnostics before the host networking ABI. |
 | [Embedded WHATWG Streams](#whatwg-reader-lock-errors) | Port | Pinned portable streams with Bun reader-lock error text. |
 | [Streams AST hooks](#whatwg-reader-lock-errors) | Host feature | Original generator adapter preserves Node completion hooks and error codes. |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming bodies, response cancellation independent of transport disposal before and during writer ownership, Agent pool and upgrade response adapters shared by all engines. |
@@ -3305,3 +3306,16 @@ and ordinary conversion methods, preserving thrown values. It validates an
 exotic hook's result before scalar conversion, retains Boolean's internal value,
 and applies the same rules to YAML indentation. JSON5 and TOML conversion are
 unchanged. This replaces direct `valueOf()` calls that skipped the hook.
+
+## TCP hostname validation
+
+Class **Host feature**, **original adapter** in
+`crates/bunwasm-runtime/src/js/net_hostname.ts`, `node_net.js` and `net.js`.
+No upstream implementation is copied. The public-contract references are
+Bun `test/js/bun/net/socket-dns-error.test.ts` and `src/js/node/net.ts`,
+pinned base `9510e74152073d850a18758ca41114d8f214ffa6`, patched tree
+`d71508d31edf06765c12adf0df137ef531539f68`. The helper reuses the existing
+classified IP predicate. Invalid host syntax fails before crossing the host
+networking ABI, connect errors retain asynchronous socket delivery, and listen
+resolver errors retain the caller's hostname. Platform resolution still owns
+valid names and legacy IPv4 forms. TLS and raw internet TCP are not added.

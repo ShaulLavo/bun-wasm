@@ -49,6 +49,19 @@ still depends on private stream modules and native Bun socket hooks.
 
 ## Other first blockers
 
+Status: Resolver input and diagnostic fixes implemented, 2026-10-23.
+TLS, Unix sockets and private-hook capability checks remain Approved, blocked
+on their owning runtime features.
+
+The exact-main DNS run has 20 passing, four failing and five skipped cases.
+Three listen failures lose `hostname`; bracketed IPv4 is incorrectly dialed.
+The adapter now rejects malformed names before listening or dialing, preserving
+resolver details and asynchronous connect-error delivery. Only valid bracketed
+IPv6 literals lose brackets. Legacy IPv4 spellings still reach the platform
+resolver. The dedicated `net-dns-errors` fixture retains these inputs.
+
+The following describes the first blockers that still need their own features:
+
 `js/bun/net/socket-dns-error.test.ts` still has host and diagnostic edge cases.
 Reproduce its exact inputs with the same isolated command before changing DNS
 normalization. The Rust host and Node engine host own resolution; browser raw
