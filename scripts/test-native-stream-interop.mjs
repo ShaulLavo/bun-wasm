@@ -13,6 +13,7 @@ function inputs() {
   sources.asyncHooks = builtins.slice(builtins.indexOf("  function asyncHooksModule()"), builtins.indexOf("  function diagnosticsChannelModule()"));
   sources.hostBridge = stripTypeScriptTypes(readFileSync(join(root, "web/src/native-stream-state.ts"), "utf8"));
   sources.fromControls = stripTypeScriptTypes(readFileSync(new URL("../web/tests/native-readable-from-controls.ts", import.meta.url), "utf8"));
+  sources.completionControls = stripTypeScriptTypes(readFileSync(new URL("../web/tests/native-stream-completion-controls.ts", import.meta.url), "utf8"));
   sources.fixture = readFileSync(join(root, "tests/fixtures/node-native-web-streams/index.js"), "utf8");
   return sources;
 }
@@ -88,6 +89,9 @@ for (const name of ["chromium", "webkit"]) {
         const rows = await checkFrom(native.ReadableStream);
         globalThis.__nativeStreamResults = globalThis.__nativeStreamResults.concat(rows);
       } catch (failure) { error = String(failure); }
+      const checkCompletion = new Function(sources.completionControls.replace("export async function checkNativeStreamCompletion", "async function checkNativeStreamCompletion") + ";return checkNativeStreamCompletion;")();
+      const completionRows = await checkCompletion();
+      globalThis.__nativeStreamResults = globalThis.__nativeStreamResults.concat(completionRows);
       const brands = Object.fromEntries(Object.entries(native).map(([name, Ctor]) => [name, {
         sameConstructor: globalThis[name] === Ctor,
         samePrototype: globalThis[name].prototype === Ctor.prototype,
