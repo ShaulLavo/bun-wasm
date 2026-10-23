@@ -6,6 +6,7 @@
   const jsonParse = JSON.parse;
   const jsonStringify = JSON.stringify;
   const unbox = (v) => v instanceof Number || v instanceof String || v instanceof Boolean ? v.valueOf() : v;
+  const yamlUnbox = internal.require("yaml_coercion");
   const omitted = (v) => v === undefined || typeof v === "function" || typeof v === "symbol";
 
   function hydrate(graph) {
@@ -90,7 +91,7 @@
       return base + (safe && !count ? "" : count);
     }
     function visit(v, key) {
-      v = unbox(v);
+      v = yamlUnbox(v);
       if (typeof v === "bigint") throw new TypeError("YAML.stringify cannot serialize BigInt");
       if (v === null || typeof v !== "object") return;
       const prev = seen.get(v);
@@ -112,7 +113,7 @@
   function yamlStringify(value, replacer, space) {
     if (omitted(value)) return undefined;
     if (replacer != null) throw new TypeError("YAML.stringify does not support the replacer argument");
-    const unit = spacing(space);
+    const unit = spacing(yamlUnbox(space));
     const seen = aliases(value);
     let depth = 0, offset = 0;
     const newline = () => unit ? "\n" + unit.repeat(depth) + " ".repeat(offset) : "";
@@ -146,7 +147,7 @@
       return out;
     }
     function emit(v, afterKey) {
-      v = unbox(v);
+      v = yamlUnbox(v);
       if (v !== null && typeof v === "object") return collection(v, afterKey);
       const prefix = afterKey ? " " : "";
       if (typeof v === "string") return prefix + yamlString(v);

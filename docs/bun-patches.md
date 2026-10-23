@@ -21,6 +21,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Generated `bun:wrap` helpers](#bun-wrap-helpers) | Host feature | Load Bun's unmodified runtime helpers through the builtin registry. |
 | [Partial strict comparison](#partial-strict-comparison) | Port | Translate Bun's native partial-comparison rules to TypeScript for all engines. |
 | [Small public runtime adapters](#small-public-runtime-adapters) | Host feature | Original matcher, native and browser promise reaction, version, web-brand and resolver-diagnostic adapters. |
+| [YAML boxed coercion](#yaml-boxed-coercion) | Host feature | Original wrapper conversion preserves user coercion errors and indentation semantics. |
 | [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
 | [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
@@ -3277,3 +3278,15 @@ only physical worker cleanup releases that session and its module cache. Parent
 exit and adapter uninstall leave admitted children alive. The existing installer
 fetch cache remains the default policy; injected network fetch stays separate from
 asset-download fetch. Preview1 receives no network session.
+
+## YAML boxed coercion
+
+`crates/bunwasm-runtime/src/js/yaml_coercion.ts` and its calls from `formats.js`
+are **Host feature**, an **original adapter**. Comparison source is Bun
+`src/runtime/api/YAMLObject.rs` at pin
+`9510e74152073d850a18758ca41114d8f214ffa6`, not copied implementation. The
+adapter performs string/number wrapper conversion through user primitive hooks
+and ordinary conversion methods, preserving thrown values. It validates an
+exotic hook's result before scalar conversion, retains Boolean's internal value,
+and applies the same rules to YAML indentation. JSON5 and TOML conversion are
+unchanged. This replaces direct `valueOf()` calls that skipped the hook.
