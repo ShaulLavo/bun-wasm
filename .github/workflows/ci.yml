@@ -439,6 +439,7 @@ jobs:
         env:
           BUN_WASM_RUNTIME_PROC_ARTIFACT: ${{ github.workspace }}/dist/source-cache-browser/bun-browser.wasm
           BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache
+          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
           BUN_WASM_RUNTIME_PROC_PORT: "4187"
           TMPDIR: ${{ runner.temp }}
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}

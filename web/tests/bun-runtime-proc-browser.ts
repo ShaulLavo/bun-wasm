@@ -135,7 +135,7 @@ async function runSiteSmoke(browser: Browser, name: string) {
 
 try {
   const { chromium, firefox, webkit } = await import("playwright");
-  const { buildBrowserEntries } = await import("../../scripts/browser-build");
+  const { processBundle } = await import("../scripts/ci-process-bundles");
   const types = { chromium, firefox, webkit };
   for (const name of names) assert.ok(existsSync(types[name as keyof typeof types].executablePath()), `cached ${name} required; this gate never downloads browsers`);
   const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? originalTmpdir ?? tmpdir();
@@ -143,9 +143,8 @@ try {
   process.env.TMPDIR = scratch;
   console.log(JSON.stringify({ resources: { existing: { artifact: artifactReceipt, installedPackages: "read only", browserCaches: "read only" },
     created: { scratch, listener: `127.0.0.1:${requestedPort}`, browsers: names, downloads: publishedDefault ? { immutableGuest: BUN_WASM_ASSET!.url, storage: "browser memory only" } : "none" } }, siteSmoke: site ? { build: site } : "pending: provide BUN_WASM_RUNTIME_PROC_SITE_DIR for production site/sandbox smoke" }));
-  const root = resolve(import.meta.dir, "../.."), out = join(scratch, "dist");
-  await buildBrowserEntries([join(import.meta.dir, "bun-runtime-proc-main.ts"), join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts")], out, { runtimeWorker: true });
-  await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./bun-runtime-proc-main.js"></script>');
+  const out = join(scratch, "dist");
+  await processBundle("bun-runtime-proc", out);
   server = Bun.serve({ hostname: "127.0.0.1", port: requestedPort, reusePort: false, async fetch(request) {
     const url = new URL(request.url);
     const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };

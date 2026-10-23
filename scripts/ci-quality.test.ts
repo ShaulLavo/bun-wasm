@@ -380,3 +380,16 @@ test("source cache runs in real browsers using one source-built host guest", () 
   expect(hostBuild).toBeGreaterThan(-1);
   expect(save).toBeGreaterThan(hostBuild);
 });
+
+test("Bun acceptance has one distinct shared producer and no per-browser build", () => {
+  const producer = readFileSync(new URL("../web/scripts/ci-process-bundles.ts", import.meta.url), "utf8");
+  const controller = readFileSync(new URL("../web/tests/bun-runtime-proc-browser.ts", import.meta.url), "utf8");
+  const processes = workflow.split("\n  browser-process:\n")[1]!;
+  const acceptance = processes.split("      - name: Real Bun source cache in one Waffle browser runtime\n")[1]!;
+  expect(producer).toContain('["supervisor", "runtime-proc", "interrupt", "bun-runtime-proc"]');
+  expect(producer).toContain('fixture === "bun-runtime-proc" ? "bun-runtime-proc-main"');
+  expect(controller).toContain('await processBundle("bun-runtime-proc", out)');
+  expect(controller).not.toContain("buildBrowserEntries");
+  expect(acceptance).toContain("BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles");
+  expect(acceptance).not.toContain("BUN_WASM_RUNTIME_PROC_BUNDLE:");
+});
