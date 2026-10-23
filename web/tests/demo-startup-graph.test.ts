@@ -20,5 +20,11 @@ for (const app of ["web", "sandbox"]) test(`${app} loads Bun execution only on t
     }
     expect(eager.some(path => path.endsWith("/engine-loader.ts"))).toBe(true);
     expect(Object.keys(result.metafile!.inputs).some(path => path.endsWith("/runner.ts"))).toBe(true);
+    const filesystem = Object.keys(outputs).find(path => path.endsWith("/fs-worker.js"));
+    expect(filesystem).toBeDefined();
+    const filesystemInputs = initialJavaScript(outputs, [filesystem!]).flatMap(path => Object.keys(outputs[path]!.inputs));
+    // A combined build hoists page-only dependencies into a shared chunk the fs-worker downloads.
+    expect(filesystemInputs.some(path => path.endsWith("/core/wasi.ts"))).toBe(false);
+    expect(filesystemInputs.some(path => path.includes("@xterm/") || path.includes("@codemirror/"))).toBe(false);
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });

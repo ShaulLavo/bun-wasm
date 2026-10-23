@@ -87,11 +87,6 @@ function instrument(app: string): void {
     constructor(url: string | URL, options?: WorkerOptions) {
       super(url, options);
       state.workers.push({ url: String(url), at: performance.now() });
-      this.addEventListener("message", event => {
-        if (event.data?.type !== "stdout") return;
-        const text = new TextDecoder().decode(event.data.data);
-        if (text.includes("LIGHT_OUTPUT_" + "OK")) state.output ??= performance.now();
-      });
     }
   };
   new MutationObserver(() => {
@@ -112,6 +107,7 @@ function instrument(app: string): void {
       value.term.onWriteParsed(() => {
         const buffer = value.term.buffer.active;
         const text = Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString() ?? "").join("\n");
+        if (app === "web" && text.includes("LIGHT_OUTPUT_" + "OK")) state.output ??= performance.now();
         if (app !== "web" || state.prompt !== null || !text.includes("user@bun:")) return;
         state.prompt = performance.now();
         queueMicrotask(() => {
@@ -224,7 +220,7 @@ try {
   }
   const report = {
     date: new Date().toISOString(), environment: { cpu: cpus()[0]?.model, kernel: release(), bun: Bun.version, load: loadavg() },
-    method: "Cold browser process/context per sample; production builds, actual loopback HTTP gzip level 9 response bodies logged by server across page, dedicated workers and service workers. No request interception, mocks, bundler-size substitution, network throttling or OS page-cache flush. Compression happens before navigation, not on the request path. Alternating revision order. Before spawn is shell submission or sandbox command banner. Sandbox has no shell prompt; its first output belongs to the auto-started dev server, not bun -e. 300ms follow-on observation. Source-map spans are attribution estimates; gzip fragments are NOT wire bytes. Default persistent filesystem and React sandbox. Headers match isolated local preview with JS/HTML/template gzip added.",
+    method: "Cold browser process/context per sample; production builds, actual loopback HTTP gzip level 9 response bodies logged by server across page, dedicated workers and service workers. No request interception, mocks, bundler-size substitution, network throttling or OS page-cache flush. Compression happens before navigation, not on the request path. Alternating revision order. Phases use server request arrival against shell submission or sandbox command banner. Web prompt and stdout are observed after terminal parsing. Sandbox has no shell prompt; its first output belongs to the auto-started dev server, not bun -e. 300ms follow-on observation. Source-map spans are attribution estimates; gzip fragments are NOT wire bytes. Default persistent filesystem and React sandbox. Headers match isolated local preview with JS/HTML/template gzip added.",
     variants: await Promise.all(variants.map(async variant => ({ label: variant.label, ...await provenance(variant.root, variant.label === "current" ? values.revision : variant.label === "before" ? values["before-revision"] : values["baseline-revision"]) }))), samples,
   };
   const json = JSON.stringify(report, null, 2) + "\n";
