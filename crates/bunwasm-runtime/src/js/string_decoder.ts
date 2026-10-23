@@ -1,19 +1,18 @@
 // node:string_decoder polyfill. Multi-byte characters split across writes are
 // buffered (up to 4 bytes) until complete; base64 keeps partial 3-byte groups.
-(function (internal) {
+(function (internal: BunWasm.Internal) {
   "use strict";
+  type Encoding = "utf8" | "utf16le" | "latin1" | "base64" | "base64url" | "hex" | "ascii";
 
   function getBuffer() {
     return internal.require("buffer").Buffer;
   }
 
-  function makeError(Ctor, code, message) {
-    const err = new Ctor(message);
-    err.code = code;
-    return err;
+  function makeError(Ctor: new (message: string) => Error, code: string, message: string) {
+    return Object.assign(new Ctor(message), { code });
   }
 
-  function normalizeEncoding(enc) {
+  function normalizeEncoding(enc: unknown): Encoding | undefined {
     if (enc === undefined || enc === null || enc === "") return "utf8";
     switch (String(enc).toLowerCase()) {
       case "utf8":
@@ -40,7 +39,7 @@
     }
   }
 
-  function describeReceived(value) {
+  function describeReceived(value: unknown) {
     if (value === null || value === undefined) return String(value);
     if (typeof value === "function") return `function ${value.name}`;
     if (typeof value === "object") {
@@ -50,7 +49,7 @@
     return `type ${typeof value} (${String(value)})`;
   }
 
-  function toBytes(buf) {
+  function toBytes(buf: unknown) {
     if (buf instanceof Uint8Array) return buf;
     if (ArrayBuffer.isView(buf)) return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
     throw makeError(
@@ -64,7 +63,7 @@
   // `missing` bytes still needed to finish the buffered character and
   // `buffered` bytes of it held in `lastChar`.
 
-  function makeString(bytes, encoding) {
+  function makeString(bytes: Uint8Array, encoding: Encoding) {
     if (bytes.length === 0) return "";
     return getBuffer().from(bytes.buffer, bytes.byteOffset, bytes.length).toString(encoding);
   }
@@ -72,7 +71,7 @@
   const kBufferedEncodings = ["utf8", "utf16le", "base64", "base64url"];
 
   // Consumes the start of `data` to finish a character from the previous chunk.
-  function finishPending(self, data) {
+  function finishPending(self: StringDecoder, data: Uint8Array) {
     let offset = 0;
     if (self.encoding === "utf8") {
       for (let i = 0; i < data.length && i < self._missing; i++) {
@@ -97,7 +96,7 @@
   }
 
   // How many trailing UTF-8 bytes to hold back; sets `_missing`.
-  function utf8Tail(self, data) {
+  function utf8Tail(self: StringDecoder, data: Uint8Array) {
     let buffered = 0;
     for (let i = data.length - 1; ; i--) {
       buffered++;
@@ -117,7 +116,7 @@
     }
   }
 
-  function tailLength(self, data) {
+  function tailLength(self: StringDecoder, data: Uint8Array) {
     const last = data[data.length - 1];
     switch (self.encoding) {
       case "utf8":
@@ -143,7 +142,7 @@
     }
   }
 
-  function decodeChunk(self, input) {
+  function decodeChunk(self: StringDecoder, input: Uint8Array) {
     let data = input;
     let prepend = "";
     if (kBufferedEncodings.includes(self.encoding) && self._missing > 0) {
@@ -158,7 +157,7 @@
     return prepend + makeString(data.subarray(0, data.length - tail), self.encoding);
   }
 
-  function flush(self) {
+  function flush(self: StringDecoder) {
     if (self.encoding === "utf16le" && self._buffered % 2 === 1) {
       self._missing--;
       self._buffered--;
@@ -170,7 +169,11 @@
   }
 
   class StringDecoder {
-    constructor(encoding) {
+    declare encoding: Encoding;
+    declare lastChar: BunWasm.BufferBytes;
+    declare _missing: number;
+    declare _buffered: number;
+    constructor(encoding?: unknown) {
       const normalized = normalizeEncoding(encoding);
       if (normalized === undefined) throw makeError(TypeError, "ERR_UNKNOWN_ENCODING", `Unknown encoding: ${encoding}`);
       this.encoding = normalized;
@@ -187,18 +190,18 @@
       return this._buffered + this._missing;
     }
 
-    write(input) {
+    write(input: unknown) {
       if (typeof input === "string") return input;
       return decodeChunk(this, toBytes(input));
     }
 
-    end(input) {
+    end(input?: unknown) {
       let out = "";
       if (input !== undefined) out = this.write(input);
       return out + flush(this);
     }
 
-    text(input, offset) {
+    text(input: unknown, offset?: number) {
       this._missing = 0;
       this._buffered = 0;
       return this.write(toBytes(input).subarray(offset));

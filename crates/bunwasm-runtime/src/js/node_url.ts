@@ -1,37 +1,31 @@
 // node:url: WHATWG URL plus Node's file-URL helpers and the legacy
 // url.parse/format/resolve API.
-(function (internal) {
+(function (internal: BunWasm.Internal) {
   "use strict";
+  type HttpOptions = Record<string, string | number>;
+  type UrlFields = { [Key in "protocol" | "auth" | "host" | "port" | "hostname" | "hash" | "search" | "pathname"]?: string | null } & { slashes?: boolean | null; query?: unknown };
   const native = internal.native;
 
-  function invalidArg(name, expected, value) {
-    const err = new TypeError(`The "${name}" argument must be ${expected}. Received ${internal.describe(value)}`);
-    err.code = "ERR_INVALID_ARG_TYPE";
-    return err;
+  function invalidArg(name: string, expected: string, value: unknown) {
+    return Object.assign(new TypeError(`The "${name}" argument must be ${expected}. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_TYPE" });
   }
 
-  function fileURLToPath(input) {
+  function fileURLToPath(input: unknown) {
     const url = typeof input === "string" ? new URL(input) : input;
     if (!(url instanceof URL)) throw invalidArg("path", "of type string or an instance of URL", input);
     if (url.protocol !== "file:") {
-      const err = new TypeError("The URL must be of scheme file");
-      err.code = "ERR_INVALID_URL_SCHEME";
-      throw err;
+      throw Object.assign(new TypeError("The URL must be of scheme file"), { code: "ERR_INVALID_URL_SCHEME" });
     }
     if (url.hostname !== "" && url.hostname !== "localhost") {
-      const err = new TypeError(`File URL host must be "localhost" or empty on linux`);
-      err.code = "ERR_INVALID_FILE_URL_HOST";
-      throw err;
+      throw Object.assign(new TypeError(`File URL host must be "localhost" or empty on linux`), { code: "ERR_INVALID_FILE_URL_HOST" });
     }
     if (/%2f/i.test(url.pathname)) {
-      const err = new TypeError("File URL path must not include encoded / characters");
-      err.code = "ERR_INVALID_FILE_URL_PATH";
-      throw err;
+      throw Object.assign(new TypeError("File URL path must not include encoded / characters"), { code: "ERR_INVALID_FILE_URL_PATH" });
     }
     return decodeURIComponent(url.pathname);
   }
 
-  function pathToFileURL(path) {
+  function pathToFileURL(path: unknown) {
     const resolved = internal.require("path").resolve(String(path));
     const withSlash = String(path).endsWith("/") && !resolved.endsWith("/") ? resolved + "/" : resolved;
     const encoded = withSlash.replace(/%/g, "%25").replace(/\\/g, "%5C").replace(/\n/g, "%0A").replace(/\r/g, "%0D").replace(/\t/g, "%09");
@@ -43,6 +37,18 @@
   // --- legacy API -------------------------------------------------------------
 
   class Url {
+    declare protocol: string | null;
+    declare slashes: boolean | null;
+    declare auth: string | null;
+    declare host: string | null;
+    declare port: string | null;
+    declare hostname: string | null;
+    declare hash: string | null;
+    declare search: string | null;
+    declare query: string | Record<string, unknown> | null;
+    declare pathname: string | null;
+    declare path: string | null;
+    declare href: string | null;
     constructor() {
       this.protocol = null;
       this.slashes = null;
@@ -59,9 +65,9 @@
     }
   }
 
-  const SLASHED_PROTOCOLS = new Set(["http:", "https:", "ftp:", "gopher:", "file:", "ws:", "wss:"]);
+  const SLASHED_PROTOCOLS = new Set<string | null>(["http:", "https:", "ftp:", "gopher:", "file:", "ws:", "wss:"]);
 
-  function parse(input, parseQueryString = false, slashesDenoteHost = false) {
+  function parse(input: unknown, parseQueryString = false, slashesDenoteHost = false): Url {
     if (input instanceof Url) return input;
     if (typeof input !== "string") throw invalidArg("url", "of type string", input);
     const result = new Url();
@@ -120,7 +126,7 @@
     return result;
   }
 
-  function format(obj, options) {
+  function format(obj: string | URL | UrlFields, options?: Partial<Record<"auth" | "fragment" | "search", boolean>>) {
     if (typeof obj === "string") obj = parse(obj);
     if (obj instanceof URL) {
       const opts = options || {};
@@ -160,7 +166,7 @@
     return protocol + host + pathname + search + hash;
   }
 
-  function resolve(from, to) {
+  function resolve(from: string, to: string) {
     const base = new URL(from, "resolve://");
     const resolved = new URL(to, base);
     if (resolved.protocol === "resolve:") {
@@ -170,8 +176,8 @@
     return resolved.href;
   }
 
-  function urlToHttpOptions(url) {
-    const options = {
+  function urlToHttpOptions(url: URL) {
+    const options: HttpOptions = {
       protocol: url.protocol,
       hostname: url.hostname.startsWith("[") ? url.hostname.slice(1, -1) : url.hostname,
       hash: url.hash,
@@ -194,9 +200,9 @@
     parse,
     format,
     resolve,
-    resolveObject: (from, to) => parse(resolve(from, to)),
-    domainToASCII: (domain) => native.domainToASCII(String(domain)),
-    domainToUnicode: (domain) => String(domain),
+    resolveObject: (from: string, to: string) => parse(resolve(from, to)),
+    domainToASCII: (domain: unknown) => native.domainToASCII(String(domain)),
+    domainToUnicode: (domain: unknown) => String(domain),
     urlToHttpOptions,
   };
 })

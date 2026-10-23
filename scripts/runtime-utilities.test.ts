@@ -81,8 +81,8 @@ function contracts(text: string) {
   return Bun.spawnSync([join(root, "web/node_modules/.bin/tsc"), "-p", config], { stdout: "pipe", stderr: "pipe" });
 }
 
-test("accepts JSONL native and builtin test-runner contracts", () => {
-  const result = contracts('internal.native.utf8Decode(internal.native.utf8Encode("é"));\ninternal.require("formats").parse("null", "JSON");\ninternal.require("bun_test").exports.test("works", () => 1, 10);');
+test("accepts JSONL, test-runner, URL and query-string contracts", () => {
+  const result = contracts('internal.native.utf8Decode(internal.native.utf8Encode("é"));\ninternal.require("formats").parse("null", "JSON");\ninternal.require("bun_test").exports.test("works", () => 1, 10);\ninternal.native.domainToASCII("a.com").toLowerCase();\ninternal.builtin("node:querystring").stringify(internal.builtin("node:querystring").parse("a=1"));');
   expect(result.stdout.toString()).toBe("");
   expect(result.exitCode).toBe(0);
 });
@@ -93,6 +93,8 @@ const invalidContracts: [label: string, text: string][] = [
   ["format kind", 'internal.require("formats").parse("null", "OTHER");'],
   ["test callback", 'internal.require("bun_test").exports.test("bad", 1);'],
   ["test name", 'internal.require("bun_test").exports.test(1, () => {});'],
+  ["domain input", "internal.native.domainToASCII(1);"],
+  ["query input", 'internal.builtin("node:querystring").parse({});'],
 ];
 for (const [label, text] of invalidContracts) {
   test(`rejects an invalid utility contract: ${label}`, () => {

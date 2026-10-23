@@ -1,0 +1,51 @@
+utf8 split 3 [[["",2,3],["",1,3],["€",0,0]],""]
+utf8 split 4 [[["",2,4],["😀",0,0]],""]
+utf8 bad continuation [[["",1,3],["�AB",0,0]],""]
+utf8 truncated end [[["A",2,4]],"�"]
+utf8 lone continuation [[["��A",0,0]],""]
+utf16le odd [[["",1,2],["A",1,2],["B",0,0]],""]
+utf16le surrogate [[["",2,4],["😀",0,0]],""]
+utf16le dangling surrogate [[["\ud83d",1,2]],""]
+base64 groups [[["",2,3],["Zm9v",2,3],["",1,3]],"YmE="]
+base64url groups [[["",1,3],["-__-",0,0]],""]
+hex [[["01ab",0,0],["ff",0,0]],""]
+latin1 [[["éA",0,0]],""]
+ascii [[["AC",0,0]],""]
+default encoding "utf8"
+null encoding "utf8"
+upper encoding "utf16le"
+unknown encoding throws TypeError ERR_UNKNOWN_ENCODING Unknown encoding: klingon
+write string "as-is"
+write view "hi"
+write number throws TypeError ERR_INVALID_ARG_TYPE The "buf" argument must be of type Buffer, TypedArray, or DataView. Received type number (7)
+write object throws TypeError ERR_INVALID_ARG_TYPE The "buf" argument must be of type Buffer, TypedArray, or DataView. Received an instance of Object
+write null throws TypeError ERR_INVALID_ARG_TYPE The "buf" argument must be of type Buffer, TypedArray, or DataView. Received null
+end chunk "€"
+text offset "BC"
+--- url
+fileURLToPath "/tmp/a b#c.txt"
+fileURLToPath URL "/x/y"
+fileURLToPath scheme throws TypeError ERR_INVALID_URL_SCHEME The URL must be of scheme file
+fileURLToPath host throws TypeError ERR_INVALID_FILE_URL_HOST File URL host must be "localhost" or empty on linux
+fileURLToPath slash throws TypeError ERR_INVALID_FILE_URL_PATH File URL path must not include encoded / characters
+pathToFileURL "file:///tmp/a%20b%25c%5Cd%09e"
+pathToFileURL slash "file:///tmp/dir/"
+parse full {"protocol":"https:","slashes":true,"auth":"user:pw","host":"host.com:8080","port":"8080","hostname":"host.com","hash":"#frag","search":"?x=1&y=2","query":"x=1&y=2","pathname":"/p/a","path":"/p/a?x=1&y=2","href":"https://user:pw@host.com:8080/p/a?x=1&y=2#frag"}
+parse query {"x":["1","2"]}
+parse empty query {}
+parse relative {"protocol":null,"slashes":null,"auth":null,"host":null,"port":null,"hostname":null,"hash":null,"search":"?q","query":"q","pathname":"/just/a/path","path":"/just/a/path?q","href":"/just/a/path?q"}
+parse slashes host "host"
+parse slashes plain "//host/path"
+parse mailto "mailto:someone@example.com"
+parse type throws TypeError ERR_INVALID_ARG_TYPE The "url" argument must be of type string. Received type number (7)
+format object "https://example.com:8443/x y?a=1&b=2#h"
+format search "http://a.com/p%3F%23?q=1"
+format file "file:///etc/hosts"
+format string "http://example.com/a"
+format URL options "https://a.com/p"
+resolve ["http://a.com/d","/one/three","http://b.com/x"]
+resolveObject "http://a.com/b/c?d"
+domainToASCII ["xn--espaol-zwa.com",""]
+domainToUnicode "example.com"
+urlToHttpOptions {"protocol":"http:","hostname":"::1","hash":"#c","search":"?b","pathname":"/a","path":"/a?b","href":"http://u%20x:p@[::1]:81/a?b#c","port":81,"auth":"u x:p"}
+urlToHttpOptions plain {"protocol":"https:","hostname":"example.com","hash":"","search":"","pathname":"/","path":"/","href":"https://example.com/"}

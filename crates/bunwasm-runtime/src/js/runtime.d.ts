@@ -189,6 +189,13 @@ declare namespace BunWasm {
       describe(name: string, callback: () => unknown): unknown;
     } & Record<"beforeAll" | "afterAll" | "beforeEach" | "afterEach", TestHook> };
   }
+  interface Native {
+    /** Host of `http://<domain>/` as the URL crate parses it, or "" when it does not parse. */
+    domainToASCII(domain: string): string;
+  }
+  interface Internal {
+    builtin(name: "node:querystring"): { parse(query: string): Record<string, unknown>; stringify(query: object): string };
+  }
 }
 
 declare namespace BunWasm {
