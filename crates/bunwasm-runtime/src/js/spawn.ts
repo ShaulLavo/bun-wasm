@@ -403,6 +403,11 @@
     return true;
   }
 
+  // Bounded: a descendant that inherited the pipe may keep writing after the child exits.
+  function drainPipe(state: OutputState) {
+    for (let chunks = 0; chunks < 64 && readPipe(state, state.consume); chunks++);
+  }
+
   function writer(fd: number): Sink {
     const queue: Uint8Array[] = [];
     let closing = false;
@@ -609,6 +614,8 @@
           pendingSpawn = false;
           (spec.options._onSpawn as () => void)();
         }
+        // Everything the child wrote is in its pipes now: queue it before the exit settles.
+        if (status) for (const state of states) drainPipe(state);
         if (status) { sink.destroy(); finish(status); }
       }
       if (!settled) {
@@ -850,12 +857,15 @@
     }
 
     function reportExit(child: Loose, code: number) {
-      child.signalCode = child._child.signalCode;
-      child.exitCode = child.signalCode === null ? code : null;
-      child.emit("exit", child.exitCode, child.signalCode);
-      // Web stream completion schedules Node stream end callbacks as immediates.
-      // Give those callbacks a turn before close, including unread output pipes.
-      Promise.all(child._drains).then(() => internal.realTimers.setImmediate(() => child.emit("close", child.exitCode, child.signalCode)));
+      // The output queued at exit reaches the Node streams in microtasks; report the exit after it.
+      internal.realTimers.setImmediate(() => {
+        child.signalCode = child._child.signalCode;
+        child.exitCode = child.signalCode === null ? code : null;
+        child.emit("exit", child.exitCode, child.signalCode);
+        // Web stream completion schedules Node stream end callbacks as immediates.
+        // Give those callbacks a turn before close, including unread output pipes.
+        Promise.all(child._drains).then(() => internal.realTimers.setImmediate(() => child.emit("close", child.exitCode, child.signalCode)));
+      });
     }
 
     function nodeSpawnError(error: Loose, command: string, args: string[], sync: boolean) {
