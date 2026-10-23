@@ -3317,5 +3317,9 @@ The existing Socket and connection scheduler retain lifecycle, byte counts and
 EOF; an optional read-capacity function bounds native reads to the callback
 buffer. The callback adapter validates options, refreshes generated buffers and
 reports callback exceptions through the runtime uncaught-exception path.
-The connect factory passes its normalized options to Duplex construction;
-directional watermarks are defaults only, rather than overriding caller values.
+The connect factory forwards normalized constructor options, with null treated
+as empty options. Like Bun, it removes `signal` before Duplex construction; the
+Socket owns abort handling. Directional watermarks are defaults only. Callback
+false stops only handle reads, not stream pause state or events. The Socket
+`read` and `resume` hooks restart those reads, following the same public contract
+as Bun `src/js/node/net.ts` at the revision above.

@@ -1,2 +1,5 @@
-callback false stops bounded reads
+callback false stops the handle without pausing
+read(0) restarts bounded callback reads
 resume delivers remaining callback bytes and EOF
+Socket accepts null options
+pre-aborted signal closes once

@@ -14,9 +14,11 @@ Status: Done for callback delivery and constructor options, 2026-10-23.
 
 The original adapter now forwards constructor options from `connect`, caps host
 reads at the current callback buffer, and keeps callback reads stopped while
-paused across reconnect. A callback returning false pauses the socket until
-resume. Fixed and generated buffers share the same path. Byte counts and EOF
+paused across reconnect. A callback returning false stops handle reads without changing `isPaused()` or
+emitting `pause`. Both `read(0)` and `resume()` restart delivery. Fixed and generated buffers share the same path. Byte counts and EOF
 remain on the socket; the previous connection is closed before dialing again.
+Null Socket options remain valid. Socket owns abort handling, so a pre-aborted
+signal closes it once rather than also aborting through Duplex.
 Focused checks: `bun test web/tests/node-net-onread.test.ts` and
 `scripts/test.sh --no-build --engine ENGINE net-onread`.
 

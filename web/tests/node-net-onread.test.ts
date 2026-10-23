@@ -21,7 +21,7 @@ test("connect forwards onread and stream constructor options", async () => {
   } finally { await fixture.dispose(); }
 });
 
-test("callback false stops reads until resume without losing the next buffer", async () => {
+test("callback false stops the handle without pausing; read(0) and resume restart it", async () => {
   const fixture = networkFixture();
   const { net, own, pump } = fixture;
   try {
@@ -29,12 +29,20 @@ test("callback false stops reads until resume without losing the next buffer", a
     const chunks: string[] = [];
     let allocations = 0;
     const client = own(net.connect({ port: fixture.port(server), host: "127.0.0.1",
-      onread: { buffer: () => { allocations++; return Buffer.alloc(2); }, callback(count: number, bytes: Uint8Array) { chunks.push(Buffer.from(bytes).toString("utf8", 0, count)); return chunks.length !== 1; } },
+      onread: { buffer: () => { allocations++; return Buffer.alloc(2); }, callback(count: number, bytes: Uint8Array) { chunks.push(Buffer.from(bytes).toString("utf8", 0, count)); return chunks.length > 2; } },
     }));
+    let pauses = 0;
+    client.on("pause", () => { pauses++; });
     await pump();
     expect(chunks).toEqual(["ab"]);
-    expect(client.isPaused()).toBe(true);
+    expect(client.isPaused()).toBe(false);
+    expect(pauses).toBe(0);
     expect(client.bytesRead).toBe(2);
+    client.read(0);
+    await pump();
+    expect(chunks).toEqual(["ab", "cd"]);
+    expect(client.isPaused()).toBe(false);
+    expect(pauses).toBe(0);
     client.resume();
     await pump();
     expect(chunks).toEqual(["ab", "cd", "ef"]);
@@ -79,5 +87,31 @@ test("connect preserves a disabled readable or writable side", async () => {
     expect(writeOnly.readable).toBe(false);
     expect(readOnly.writable).toBe(false);
     expect(readOnly.allowHalfOpen).toBe(true);
+  } finally { await fixture.dispose(); }
+});
+
+
+test("Socket accepts null constructor options", async () => {
+  const fixture = networkFixture();
+  try {
+    const socket = fixture.own(Reflect.construct(fixture.net.Socket, [null]));
+    expect(socket.readable).toBe(true);
+    expect(socket.writable).toBe(true);
+  } finally { await fixture.dispose(); }
+});
+
+test("an already-aborted connect signal closes once", async () => {
+  const fixture = networkFixture();
+  const { net, own, pump } = fixture;
+  try {
+    const server = own(net.createServer(peer => { own(peer); })).listen(0, "127.0.0.1");
+    const client = own(net.connect({ port: fixture.port(server), host: "127.0.0.1", signal: AbortSignal.abort() }));
+    const errors: string[] = [];
+    let closes = 0;
+    client.on("error", error => { errors.push("code" in error ? String(error.code) : error.message); });
+    client.on("close", () => { closes++; });
+    await pump();
+    expect(errors).toEqual(["ABORT_ERR"]);
+    expect(closes).toBe(1);
   } finally { await fixture.dispose(); }
 });
