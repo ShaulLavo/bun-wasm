@@ -75,9 +75,17 @@ function cleanup() {
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
 const deadline = setTimeout(() => { console.error("Bun runtime_proc gate deadline exceeded"); void cleanup().finally(() => process.exit(1)); }, Math.max(120_000, names.length * scenarios.length * 100_000));
 let ownedPort: number | undefined;
+function normalizeConsoleErrors(): void {
+  const error = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    error(...args.map(value => value instanceof Error ? String(value) : value));
+  };
+}
+
 async function runScenario(browser: Browser, name: string, scenario: string) {
   let failed = false;
   const page: Page = await browser.newPage();
+  await page.addInitScript(normalizeConsoleErrors);
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
   const guestRequests: string[] = [];
