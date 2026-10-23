@@ -1,5 +1,5 @@
 import { basename, join, resolve } from "node:path";
-import { captureSourceManifest, git, guestBuilds, hash, run, sourceOptions, type GuestBuild, type SourceManifest, type SourceOptions } from "./guest-source-manifest.ts";
+import { captureSourceManifest, git, guestBuilds, guestToolEnvironment, hash, run, sourceOptions, type GuestBuild, type SourceManifest, type SourceOptions } from "./guest-source-manifest.ts";
 
 const root = resolve(import.meta.dir, "..");
 
@@ -73,12 +73,12 @@ function verifyManifest(value: unknown): asserts value is SourceManifest {
   if (new Set(names).size !== names.length || required.some(name => !names.includes(name))) throw new Error("Missing guest source manifest group");
   if (!Array.isArray(value.tools) || !value.tools.every(tool => record(tool) && typeof tool.name === "string" && typeof tool.path === "string" && tool.path.length > 0 && digest(tool.sha256, 64) && typeof tool.version === "string" && tool.version.length > 0)) throw new Error("Invalid guest source manifest tools");
   const tools = value.tools.map(tool => tool.name);
-  if (new Set(tools).size !== tools.length || ["rustc", "cargo", "bun", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja"].some(name => !tools.includes(name))) throw new Error("Missing guest source manifest tool");
+  if (new Set(tools).size !== tools.length || ["rustc", "cargo", "bun", "node", "rust-lld", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja"].some(name => !tools.includes(name))) throw new Error("Missing guest source manifest tool");
   if (value.build !== "quickjs" && value.build !== "quickjs-minimal" && !tools.includes("wasm-opt")) throw new Error("Missing guest optimizer identity");
   if (!Array.isArray(value.omissions) || !value.omissions.length || !value.omissions.every(item => typeof item === "string" && item.length > 0)) throw new Error("Missing guest source manifest omissions");
 }
 
-export function isGuestBuild(value: unknown): value is GuestBuild {
+function isGuestBuild(value: unknown): value is GuestBuild {
   return typeof value === "string" && Object.hasOwn(guestBuilds, value);
 }
 
@@ -98,7 +98,9 @@ if (import.meta.main) {
   const sysroot = process.env.BUN_WASM_SYSROOT;
   if (!sysroot) throw new Error("Source env.sh before building a guest");
   const [command, argument, snapshot] = process.argv.slice(2);
-  if (command === "inputs" && isGuestBuild(argument)) {
+  if (command === "environment") {
+    console.log(guestToolEnvironment(root));
+  } else if (command === "inputs" && isGuestBuild(argument)) {
     console.log(JSON.stringify(await prepareGuestBuildInputs(sourceOptions(root, sysroot, argument))));
   } else if (command === "write" && argument && snapshot) {
     const inputs: unknown = await Bun.file(snapshot).json();
@@ -109,6 +111,6 @@ if (import.meta.main) {
     verifyGuestBuildReceipt(bytes, receipt);
     await writeGuestBuildReceipt(sourceOptions(root, sysroot, receipt.sourceManifest.build), argument, receipt);
   } else {
-    throw new Error("Usage: guest-build-receipt.ts inputs BUILD | write ARTIFACT INPUTS_FILE");
+    throw new Error("Usage: guest-build-receipt.ts environment | inputs BUILD | write ARTIFACT INPUTS_FILE");
   }
 }

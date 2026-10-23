@@ -73,3 +73,24 @@ log. Engine labels must match artifact names. Browser acceptance, immutable stor
 checks, public readback, and descriptor generation remain separate gates. A later
 source merge or descriptor commit does not change previously published guest bytes.
 The old public `e63f4b4f...` guest has not been rebuilt or republished by this change.
+
+## Selected source and executables
+
+Qualified entry points reject `BUNWASM_JS_OVERRIDE_DIR`, including an explicitly
+empty value. Development source overrides do not receive committed-source receipts.
+Imported Bun's tracked `src`, `Cargo.toml`, and `Cargo.lock` bytes must match their
+committed blobs even with `assume-unchanged` or `skip-worktree`. Checks disable Git's
+optional index refresh. They do not clear flags or rewrite a borrowed index.
+The BoringSSL inventory includes both directly compiled decrepit translation units.
+
+Before the guest compiler runs, `guest-build-receipt.ts environment` resolves the
+active Rustup compiler and Cargo, the compiler sysroot's host `rust-lld`, and Node's
+reported `process.execPath`. The shell entry points use the absolute Cargo path,
+set `RUSTC` and the target linker to those executables, and prepend the real Node
+binary directory to PATH. The same resolver supplies the receipt inventory.
+Unresolved explicit compiler dispatchers, compiler wrappers, alternate target
+linkers, and linker overrides in Rust flags are refused. No version-skew fallback
+is provided. SDK `wasm-ld` remains recorded separately from Rust's actual linker.
+
+Matching start and end snapshots detect persistent drift. They do not detect an
+input changed during compilation and restored before the end snapshot.

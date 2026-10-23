@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import { lstat, readdir, readFile, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const guestBuilds = {
   browser: { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-transpiler", "bun-build"] },
@@ -12,8 +12,8 @@ export const guestBuilds = {
 export type GuestBuild = keyof typeof guestBuilds;
 export const hash = (bytes: Uint8Array | string) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
-export interface InputFile { readonly path: string; readonly sha256: string; readonly bytes: number }
-export interface InputGroup { readonly name: string; readonly files: readonly InputFile[] }
+interface InputFile { readonly path: string; readonly sha256: string; readonly bytes: number }
+interface InputGroup { readonly name: string; readonly files: readonly InputFile[] }
 export interface SourceManifest {
   readonly schema: 1;
   readonly build: GuestBuild;
@@ -36,7 +36,7 @@ export interface SourceOptions {
 }
 
 export function run(command: string[], cwd: string): string {
-  const result = Bun.spawnSync(command, { cwd, stdin: "ignore" });
+  const result = Bun.spawnSync(command, { cwd, stdin: "ignore", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
   if (result.exitCode !== 0) throw new Error(`Guest source check failed: ${result.stderr.toString()}`);
   return result.stdout.toString().trim();
 }
@@ -83,9 +83,8 @@ async function group(name: string, root: string, paths: readonly string[], linke
   return { name, files };
 }
 
-async function repositoryGroup(repository: string): Promise<InputGroup> {
+async function committedGroup(name: string, repository: string, paths: readonly string[]): Promise<InputGroup> {
   if (git(repository, "status", "--porcelain", "--untracked-files=normal")) throw new Error("Guest repository source must be committed and clean");
-  const paths = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "package.json", "bun.lock", "crates", "third_party", "scripts", "patches", "jsc"];
   const entries = git(repository, "ls-tree", "-rz", "HEAD", "--", ...paths).split("\0").filter(Boolean);
   const files: InputFile[] = [];
   for (const entry of entries) {
@@ -100,12 +99,12 @@ async function repositoryGroup(repository: string): Promise<InputGroup> {
     if (blob !== object) throw new Error(`Guest repository input differs from committed source: ${path}`);
     files.push({ path, sha256: hash(bytes), bytes: bytes.byteLength });
   }
-  return { name: "repository", files };
+  return { name, files };
 }
 
 async function tool(name: string, path: string, repository: string) {
   const physical = await realpath(path);
-  const flags = name === "rustc" ? ["-vV"] : name === "cargo" ? ["-Vv"] : ["--version"];
+  const flags = name === "rustc" ? ["-vV"] : name === "cargo" ? ["-Vv"] : name === "rust-lld" ? ["-flavor", "wasm", "--version"] : ["--version"];
   return { name, path: physical, sha256: (await fingerprint(physical)).sha256, version: run([path].concat(flags), repository) };
 }
 
@@ -123,9 +122,11 @@ async function verifySysrootInputs(options: SourceOptions, groups: readonly Inpu
 export async function captureSourceManifest(options: SourceOptions): Promise<SourceManifest> {
   const { repository, build, sysroot, sdk, waffle, boringssl, rustTargetLib } = options;
   const source = { head: git(repository, "rev-parse", "HEAD"), tree: git(repository, "rev-parse", "HEAD^{tree}") };
-  const groups = [await repositoryGroup(repository)];
-  groups.push(await group("bun", join(repository, "vendor/bun"), ["src", "Cargo.toml", "Cargo.lock", "build/debug/codegen", "vendor/lolhtml", "vendor/rust-argon2"]));
-  groups.push(await group("boringssl", boringssl, ["CMakeLists.txt", "cmake", "include", "crypto", "gen", "third_party", "util"]));
+  const groups = [await committedGroup("repository", repository, ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "package.json", "bun.lock", "crates", "third_party", "scripts", "patches", "jsc"])];
+  const bun = join(repository, "vendor/bun");
+  await committedGroup("bun", bun, ["src", "Cargo.toml", "Cargo.lock"]);
+  groups.push(await group("bun", bun, ["src", "Cargo.toml", "Cargo.lock", "build/debug/codegen", "vendor/lolhtml", "vendor/rust-argon2"]));
+  groups.push(await group("boringssl", boringssl, ["CMakeLists.txt", "cmake", "include", "crypto", "gen", "third_party", "util", "decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc"]));
   groups.push(await group("waffle-libc", waffle, ["package.json", "scripts/build-wasi-libc.sh", "patches/wasi-libc/preopen-scan.patch"]));
   groups.push(await group("sysroot", sysroot, ["bun-wasm-sysroot.json", "include", "lib"], [sdk]));
   groups.push(await group("sdk", sdk, ["VERSION", "lib/clang"]));
@@ -142,7 +143,7 @@ export async function captureSourceManifest(options: SourceOptions): Promise<Sou
   return {
     schema: 1, build, source, groups, tools,
     omissions: [
-      "Allowlisted snapshots include source/config supersets, not an observed compiler dependency graph or proof of execution.",
+      "Allowlisted start/end snapshots detect persistent drift, not changes restored between snapshots, an observed compiler dependency graph or proof of execution.",
       "Cargo registry/git cache source bytes are not inventoried; Cargo.lock records resolutions and registry checksums.",
       "Ambient environment, user/global Cargo configuration, host shared libraries and intermediate build-cache provenance are not inventoried.",
       "Waffle browser runtime is not compiled into this guest; only its installed libc builder and patch are inventoried.",
@@ -151,14 +152,51 @@ export async function captureSourceManifest(options: SourceOptions): Promise<Sou
   };
 }
 
+function rustTools(repository: string) {
+  for (const name of ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"]) {
+    if (process.env[name]) throw new Error(`${name} is not supported for qualified guest receipts`);
+  }
+  for (const name of ["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS"]) {
+    if (/linker\s*=/.test(process.env[name] ?? "")) throw new Error(`${name} linker override is not supported for qualified guest receipts`);
+  }
+  const rustc = realpathSync(run(["rustup", "which", "rustc"], repository));
+  if (process.env.RUSTC && realpathSync(process.env.RUSTC) !== rustc) throw new Error("RUSTC must be the active Rustup compiler executable, not a dispatcher or override");
+  const sysroot = run([rustc, "--print", "sysroot"], repository);
+  const host = /^host: (.+)$/m.exec(run([rustc, "-vV"], repository))?.[1];
+  if (!host || !/^[a-zA-Z0-9_-]+$/.test(host)) throw new Error("Missing Rust compiler host identity");
+  const linker = realpathSync(join(sysroot, "lib/rustlib", host, "bin/rust-lld"));
+  const selected = process.env.CARGO_TARGET_WASM32_WASIP1_LINKER;
+  if (selected && realpathSync(selected) !== linker) throw new Error("CARGO_TARGET_WASM32_WASIP1_LINKER must be the active compiler's rust-lld");
+  return { rustc, cargo: realpathSync(run(["rustup", "which", "cargo"], repository)), "rust-lld": linker };
+}
+
+function nodeExecutable(repository: string): string {
+  const path = run(["node", "-p", "process.execPath"], repository);
+  if (!isAbsolute(path)) throw new Error("Node must report its actual executable path");
+  return realpathSync(path);
+}
+
+export function guestToolEnvironment(repository: string): string {
+  const tools = rustTools(repository);
+  const node = nodeExecutable(repository);
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+  return [
+    `export RUSTC=${quote(tools.rustc)}`,
+    `export GUEST_CARGO=${quote(tools.cargo)}`,
+    `export CARGO_TARGET_WASM32_WASIP1_LINKER=${quote(tools["rust-lld"])}`,
+    "export RUSTC_WRAPPER='' RUSTC_WORKSPACE_WRAPPER=''",
+    `export PATH=${quote(dirname(node))}:"$PATH"`,
+  ].join("\n");
+}
+
 export function sourceOptions(repository: string, sysroot: string, build: GuestBuild): SourceOptions {
+  if (process.env.BUNWASM_JS_OVERRIDE_DIR !== undefined) throw new Error("BUNWASM_JS_OVERRIDE_DIR is not supported for qualified guest receipts");
   const sdk = process.env.WASI_SDK_PATH;
   if (!sdk) throw new Error("Source env.sh before recording guest inputs");
   if (process.env.BUN_CODEGEN_DIR && resolve(process.env.BUN_CODEGEN_DIR) !== join(repository, "vendor/bun/build/debug/codegen")) throw new Error("Guest manifest requires the default Bun codegen directory");
   if (process.env.WASI_SDK && realpathSync(process.env.WASI_SDK) !== realpathSync(sdk)) throw new Error("WASI_SDK must match WASI_SDK_PATH for a guest manifest");
-  const compiler = (name: string) => run(["rustup", "which", name], repository);
-  const rustc = process.env.RUSTC ?? compiler("rustc");
-  const tools: Record<string, string> = { rustc, cargo: compiler("cargo"), bun: process.execPath };
+  const rust = rustTools(repository);
+  const tools: Record<string, string> = { ...rust, node: nodeExecutable(repository), bun: process.execPath };
   for (const name of ["clang", "clang++", "llvm-ar", "wasm-ld"]) tools[name] = join(sdk, "bin", name);
   for (const name of ["cmake", "ninja", "wasm-opt"]) {
     const path = Bun.which(name);
@@ -170,7 +208,7 @@ export function sourceOptions(repository: string, sysroot: string, build: GuestB
     repository, sysroot, build, sdk, tools,
     waffle: resolve(realpathSync(Bun.resolveSync("waffle/package.json", repository)), ".."),
     boringssl: process.env.BUNWASM_BORINGSSL_SOURCE ?? join(repository, "vendor/boringssl"),
-    rustTargetLib: run([rustc, "--print", "target-libdir", "--target", "wasm32-wasip1"], repository),
+    rustTargetLib: run([rust.rustc, "--print", "target-libdir", "--target", "wasm32-wasip1"], repository),
     jscBuild: process.env.JSC_BUILD_DIR ?? "/work/tmp/bun-wasm-jsc",
   };
 }
