@@ -21,6 +21,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Generated `bun:wrap` helpers](#bun-wrap-helpers) | Host feature | Load Bun's unmodified runtime helpers through the builtin registry. |
 | [Partial strict comparison](#partial-strict-comparison) | Port | Translate Bun's native partial-comparison rules to TypeScript for all engines. |
 | [Small public runtime adapters](#small-public-runtime-adapters) | Host feature | Original matcher, native and browser promise reaction, version, web-brand and resolver-diagnostic adapters. |
+| [Typed WebSocket byte-stream adapter](#typed-websocket-byte-stream-adapter) | Host feature | Original frame, peer and callback contracts, with unchanged emitted runtime syntax. |
 | [YAML boxed coercion](#yaml-boxed-coercion) | Host feature | Original wrapper conversion preserves user coercion errors and indentation semantics. |
 | [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
@@ -3410,3 +3411,28 @@ receipt. Blocking CI selects it for JSC embedding, allocation, build and fixture
 inputs. The Rust job reuses its toolchain, sources and dependencies;
 it builds JSC once and executes both fixtures against that linked guest in the
 Node WASI host. QuickJS and host syntax checks are not JSC execution evidence.
+
+
+## Typed WebSocket byte-stream adapter
+
+Class **Host feature**. `crates/bunwasm-runtime/src/js/websocket.ts` is the
+original bun-wasm RFC 6455 byte-stream adapter, previously `websocket.js` at
+`ac43127c85addabed7e0c2a4883247ae074e858c`. It does not copy an upstream
+implementation. Its contract follows RFC 6455 sections 4 through 7 and the
+existing Bun WebSocket API. The separately generated `ws_builtin.js` remains the
+unchanged websockets/ws v8.18.3 implementation documented above.
+
+This conversion adds erased types for frames, peer state, connection callbacks,
+server handler arguments, queued Blob and byte sends, and the existing two-argument
+`hostConnect` native in `src/natives.rs`. It does not change HTTP, TLS or native
+WebSocket behavior. Caught-value and state assertions retain existing property
+reads rather than adding guards or changing their errors. The classic-script
+factory, strict directive, events and error ordering retain their original AST.
+The preview bundler resolves a private factory import to the same TypeScript
+source and adds only its existing export wrapper. No upstream revision changes.
+
+`scripts/runtime-ts-small.test.ts` compares the actual Node-stripped JavaScript
+AST with the original source. `scripts/runtime-types.test.ts` rejects invalid
+native arguments, callbacks, state values and queued payloads. The original
+network fixtures and `runtime-ts-websocket` exercise actual guests with local
+fixture peers, including ordered Blob sends and open and close state delivery.
