@@ -49,6 +49,15 @@ async function preflight(root: string, env: NodeJS.ProcessEnv = {}) {
   } finally { child.kill(); await child.exited; }
 }
 
+async function rejectsBeforeBrowserSetup(root: string, message: string, env: NodeJS.ProcessEnv = {}) {
+  for (const preflightOnly of ["1", "0"]) {
+    const result = await preflight(root, { ...env, NETWORK_CONSUMER_PREFLIGHT_ONLY: preflightOnly });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(message);
+    expect(result.stdout).toBe("");
+  }
+}
+
 test("network preflight accepts a matching receipt and selected build inputs without browser setup", async () => {
   await fixture(async (root, artifact) => {
     const result = await preflight(root);
@@ -65,18 +74,14 @@ test("network preflight accepts a matching receipt and selected build inputs wit
 test("network preflight rejects a missing build receipt before browser setup", async () => {
   await fixture(async (root, artifact) => {
     await rm(`${artifact}.build.json`);
-    const result = await preflight(root);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain(`${artifact}.build.json`);
+    await rejectsBeforeBrowserSetup(root, `${artifact}.build.json`);
   });
 });
 
 test("network preflight rejects changed artifact bytes before browser setup", async () => {
   await fixture(async (root, artifact) => {
     await writeFile(artifact, new Uint8Array([0, 97, 115, 109, 2, 0, 0, 0]));
-    const result = await preflight(root);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("does not match artifact bytes");
+    await rejectsBeforeBrowserSetup(root, "does not match artifact bytes");
   });
 });
 
@@ -84,18 +89,14 @@ for (const field of ["bunHead", "bunTree", "sysrootReceiptSha256"] as const) {
   test(`network preflight rejects wrong selected ${field} before browser setup`, async () => {
     await fixture(async root => {
       await writeFile(join(root, "accepted-inputs.json"), JSON.stringify({ ...inputs, [field]: "d".repeat(inputs[field].length) }));
-      const result = await preflight(root);
-      expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain(`matches accepted ${field}`);
+      await rejectsBeforeBrowserSetup(root, `matches accepted ${field}`);
     });
   });
 }
 
 test("network preflight requires independently selected build inputs", async () => {
   await fixture(async root => {
-    const result = await preflight(root, { NETWORK_CONSUMER_EXPECTED_INPUTS: "" });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("NETWORK_CONSUMER_EXPECTED_INPUTS must be an absolute");
+    await rejectsBeforeBrowserSetup(root, "NETWORK_CONSUMER_EXPECTED_INPUTS must be an absolute", { NETWORK_CONSUMER_EXPECTED_INPUTS: "" });
   });
 });
 
@@ -103,9 +104,7 @@ for (const value of [null, [], {}, { ...inputs, bunHead: "invalid" }]) {
   test(`network preflight rejects malformed selected inputs ${JSON.stringify(value)}`, async () => {
     await fixture(async root => {
       await writeFile(join(root, "accepted-inputs.json"), JSON.stringify(value));
-      const result = await preflight(root);
-      expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain("accepted");
+      await rejectsBeforeBrowserSetup(root, "accepted");
     });
   });
 }
@@ -113,8 +112,21 @@ for (const value of [null, [], {}, { ...inputs, bunHead: "invalid" }]) {
 test("network preflight rejects a malformed build receipt before browser setup", async () => {
   await fixture(async (root, artifact) => {
     await writeFile(`${artifact}.build.json`, JSON.stringify({ ...receipt, bunHead: "invalid" }));
-    const result = await preflight(root);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("Invalid guest build receipt: bunHead");
+    await rejectsBeforeBrowserSetup(root, "Invalid guest build receipt: bunHead");
+  });
+});
+
+test("network gate rejects a changed artifact byte count before browser setup", async () => {
+  await fixture(async (root, artifact) => {
+    await writeFile(`${artifact}.build.json`, JSON.stringify({ ...receipt, artifactBytes: guest.byteLength + 1 }));
+    await rejectsBeforeBrowserSetup(root, "does not match artifact bytes");
+  });
+});
+
+test("network gate rejects a missing accepted inputs file before browser setup", async () => {
+  await fixture(async root => {
+    const acceptedInputs = join(root, "accepted-inputs.json");
+    await rm(acceptedInputs);
+    await rejectsBeforeBrowserSetup(root, acceptedInputs);
   });
 });

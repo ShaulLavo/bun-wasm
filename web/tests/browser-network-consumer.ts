@@ -69,6 +69,19 @@ async function verifyIsolation(context: BrowserContext, page: Page) {
     assert.equal(await page.evaluate(() => Reflect.get(globalThis, "networkConsumer").survivor()), true);
   } finally { await other.close(); }
 }
+async function releaseConsumer(page: Page) {
+  const released = await page.evaluate(() => Reflect.get(globalThis, "networkConsumer").cleanup());
+  assert.deepEqual({ workers: released.workers, listeners: released.listeners }, { workers: 0, listeners: 0 });
+  return released;
+}
+async function exerciseModes(name: string): Promise<unknown[]> {
+  const failures: unknown[] = [];
+  for (const mode of ["prepare", "publicAdapter"] as const) {
+    try { await exercise(name, mode); }
+    catch (error) { failures.push(error); }
+  }
+  return failures;
+}
 async function exercise(name: string, mode: "prepare" | "publicAdapter") {
   if (!browser) throw new Error("browser not launched");
   const context = await browser.newContext();
@@ -93,12 +106,13 @@ async function exercise(name: string, mode: "prepare" | "publicAdapter") {
     const stream = await preview.evaluate(cancelStream);
     assert.equal(stream.status, 200);
     assert.ok(stream.chunk! > 0, "paused response still streams before cancellation");
-    const released = await page.evaluate(() => Reflect.get(globalThis, "networkConsumer").cleanup());
-    assert.deepEqual({ workers: released.workers, listeners: released.listeners }, { workers: 0, listeners: 0 });
+    const released = await releaseConsumer(page);
     assert.deepEqual(errors, [], "no browser diagnostics");
     console.log(JSON.stringify({ browser: name, mode, result, serviceWorker: true, socket, stream, cleanup: released, errors }));
   } catch (error) {
     console.error(JSON.stringify({ browser: name, mode, diagnostics: await page.evaluate(() => Reflect.get(globalThis, "networkConsumer")?.diagnostics()), errors }));
+    const released = await releaseConsumer(page);
+    console.log(JSON.stringify({ browser: name, mode, failed: true, cleanup: released }));
     throw error;
   } finally { await context.close(); }
 }
@@ -125,13 +139,15 @@ try {
     if (!path.startsWith(out + sep) || !await Bun.file(path).exists()) return new Response(null, { status: 404, headers });
     return new Response(Bun.file(path), { headers });
   } });
+  let failures: unknown[] = [];
   for (const name of names) {
     const type = types[name as keyof typeof types];
     assert.ok(existsSync(type.executablePath()), `cached ${name} required`);
     launching = type.launch({ headless: true }); browser = await launching;
-    await exercise(name, "prepare"); await exercise(name, "publicAdapter");
+    failures = failures.concat(await exerciseModes(name));
     await browser.close(); browser = undefined; launching = undefined;
   }
+  if (failures.length > 0) throw new AggregateError(failures, `${failures.length} network consumer scenarios failed`);
 } finally {
   clearTimeout(deadline); await cleanup();
   assert.equal(scratch ? existsSync(scratch) : false, false, "owned source bundles removed");
