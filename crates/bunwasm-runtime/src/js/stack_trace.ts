@@ -1,12 +1,12 @@
-(function (internal) {
+(function (internal: BunWasm.Internal) {
   "use strict";
   const { native } = internal;
   const capture = Error.captureStackTrace;
   const defaultPrepare = Error.prepareStackTrace;
-  const formatted = new WeakMap();
+  const formatted = new WeakMap<object, unknown>();
   let formatting = false;
 
-  function store(target, value) {
+  function store(target: object, value: unknown) {
     formatted.set(target, value);
     if (formatting) return value;
     const own = Object.getOwnPropertyDescriptor(target, "stack");
@@ -16,7 +16,7 @@
     return value;
   }
 
-  function validateCaptureTarget(target) {
+  function validateCaptureTarget(target: object) {
     if (!Object.isExtensible(target)) throw new TypeError("Cannot capture stack on a non-extensible target");
     if (Object.getOwnPropertyDescriptor(target, "stack")?.configurable === false) {
       throw new TypeError("Cannot redefine non-configurable stack");
@@ -27,15 +27,15 @@
     getThis() { return undefined; },
     getTypeName() { return null; },
     getMethodName() { return null; },
-    getScriptNameOrSourceURL() { return this.getFileName(); },
-    isEval() { return /^(?:<input>|<eval>)$/.test(this.getFileName()); },
+    getScriptNameOrSourceURL(this: BunWasm.StackCallSite) { return this.getFileName(); },
+    isEval(this: BunWasm.StackCallSite) { return /^(?:<input>|<eval>)$/.test(this.getFileName()); },
     getEvalOrigin() { return undefined; },
-    toString() { return internal.formatCallSite(this); },
-  };
+    toString(this: BunWasm.StackCallSite) { return internal.formatCallSite(this); },
+  } satisfies ThisType<BunWasm.StackCallSite>;
 
   class CallSite {
-    #frame;
-    constructor(frame) { this.#frame = frame; internal.mappedCallSites.add(this); }
+    #frame: BunWasm.StackFrame;
+    constructor(frame: BunWasm.StackFrame) { this.#frame = frame; internal.mappedCallSites.add(this); }
     getFileName() { return this.#frame.file; }
     getFunctionName() { return this.#frame.name || null; }
     getFunction() { return undefined; }
@@ -47,11 +47,11 @@
   }
   internal.defineHidden(CallSite.prototype, methods);
 
-  function defaultStack(target, raw) {
-    return native.engine === "quickjs" ? Reflect.apply(defaultPrepare, Error, [target, raw]) : raw;
+  function defaultStack(target: object, raw: unknown) {
+    return native.engine === "quickjs" ? Reflect.apply(defaultPrepare!, Error, [target, raw]) : raw;
   }
 
-  function formatStack(target, raw) {
+  function formatStack(target: object, raw: unknown) {
     if (formatted.has(target)) return formatted.get(target);
     if (formatting) return store(target, defaultStack(target, raw));
     formatting = true;
@@ -70,32 +70,32 @@
   }
 
   if (native.engine === "quickjs") {
-    const holder = {};
+    const holder: { stack?: BunWasm.StackCallSite[] } = {};
     Error.prepareStackTrace = (error, sites) => sites;
     capture(holder);
     Error.prepareStackTrace = defaultPrepare;
-    const prototype = Object.getPrototypeOf(holder.stack[0]);
+    const prototype = Object.getPrototypeOf(holder.stack![0]);
     internal.defineHidden(prototype, methods);
     const nativeStack = Object.getOwnPropertyDescriptor(Error.prototype, "stack");
     const nativePrepare = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
-    nativePrepare.set.call(Error, (_error, sites) => sites);
+    nativePrepare!.set!.call(Error, (_error: object, sites: unknown) => sites);
     Object.defineProperty(Error, "prepareStackTrace", { value: defaultPrepare, writable: true, configurable: true });
 
     Object.defineProperty(Error.prototype, "stack", {
       configurable: true,
       get() {
         if (formatted.has(this)) return formatted.get(this);
-        const sites = nativeStack.get.call(this);
+        const sites = nativeStack!.get!.call(this);
         if (!Array.isArray(sites)) return sites;
         return formatStack(this, sites);
       },
-      set(value) { store(this, value); },
+      set(value: unknown) { store(this, value); },
     });
   }
 
   if (native.engine === "quickjs" || native.engine === "jsc") {
     internal.defineHidden(Error, {
-      captureStackTrace: function captureStackTrace(target, constructorOpt) {
+      captureStackTrace: function captureStackTrace(target: { stack?: unknown }, constructorOpt?: unknown) {
         validateCaptureTarget(target);
         capture(target, typeof constructorOpt === "function" ? constructorOpt : captureStackTrace);
         formatted.delete(target);
@@ -104,7 +104,7 @@
           configurable: true,
           enumerable: false,
           get() { return formatStack(this, raw); },
-          set(value) { store(this, value); },
+          set(value: unknown) { store(this, value); },
         });
       },
     });

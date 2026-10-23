@@ -134,7 +134,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
 | [`crates/bunwasm-semver/src/lib.rs`](#portable-semver-host-functions) | Port | Compile Bun's semver host functions unchanged against a portable `bun_jsc` subset. |
 | [`crates/bunwasm-bun-jsc/`, `crates/bunwasm-bun-jsc-macros/`, runtime semver and host GC adapters](#portable-semver-host-functions) | Host feature | Original adapters connect Bun's host functions to the shared data-native interface and preserve the host GC hook. |
-| [`crates/bunwasm-runtime/src/js/stack_trace.js`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
+| [`crates/bunwasm-runtime/src/js/stack_trace.ts`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
 | [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, `web/src/engine-host.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
 | [Waffle browser services](#waffle-preparation) | Host feature | The Waffle package owns the browser runtime, worker/executor, filesystem, terminal, network and preview adapters separately from Bun policy. |
@@ -151,7 +151,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures and local registry recorder, with no copied framework implementation. |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
-| [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.js`, `src/js/bun_builtin_globals.ts`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
+| [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.ts`, `src/js/bun_builtin_globals.ts`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
 | [`web/src/crypto-host.js`, `crypto-inputs.js`](#native-crypto-capabilities) | Host feature | Preserve native crypto, fill the verified AES-192 gap and enforce the runtime input bound. |
 | [`crates/bunwasm-crypto-sys/`, standalone crypto linkage](#standalone-crypto-linkage) | Host feature | Original native archive owner shared by runtime and parser/glue consumers. |
 | [`third_party/licenses/boringssl-LICENSE`](#webcrypto-backend) | Port | Retain BoringSSL license notices with the wasm backend. |
@@ -701,7 +701,7 @@ pure Bun semver parser used by package installation. See
 
 ## Structured call sites
 
-`crates/bunwasm-runtime/src/js/stack_trace.js` is an original adapter for the public
+`crates/bunwasm-runtime/src/js/stack_trace.ts` is an original adapter for the public
 `Error.captureStackTrace` and `Error.prepareStackTrace` contracts. It does not copy
 Bun, Node or WebKit source. QuickJS-ng at the vendored rquickjs-sys 0.13.0 revision
 already supplies structured frames but omits queries used by stack-inspection
@@ -717,6 +717,8 @@ selected lazily by the Error prototype accessor or capture accessor. Successful
 results, including non-string values, are memoized; formatter exceptions propagate
 at access. A holder without a cached reentrant default permits a later read to retry.
 No engine constructor is replaced.
+The adapter is strict TypeScript. Erased annotations describe raw stack values, mapped
+frames and the engine-owned accessors without changing executable statements.
 Receiver and method metadata unavailable from these engines returns undefined or
 null; eval-origin metadata is unavailable and returns undefined. Engine placeholders such
 as `<input>` are not reported as source origins.
@@ -1364,7 +1366,7 @@ The numbered JavaScript files in `crates/bunwasm-runtime/generated/builtins/` re
 
 ## Builtin loader adapter
 
-Class **Host feature**. `scripts/generate-bun-builtins.mjs`, its shell runner, the selection manifest, and `crates/bunwasm-runtime/src/js/bun_builtins.js` are original adapters. `src/js/bun_builtin_globals.ts` is the original bootstrap capture of intrinsic constructors, before application code can replace public globals. They call Bun's codegen and consume its generated module protocol. They do not copy the codegen implementation. Rust source lookup and Engine natives are original bun-wasm glue. The loader uses lazy factories, isolated caches, explicit unsupported errors, and the existing builtin implementations for dependencies not switched yet. [bun-builtins.md](bun-builtins.md) records its limits and hook status.
+Class **Host feature**. `scripts/generate-bun-builtins.mjs`, its shell runner, the selection manifest, and `crates/bunwasm-runtime/src/js/bun_builtins.ts` are original adapters. `src/js/bun_builtin_globals.ts` is the original bootstrap capture of intrinsic constructors, before application code can replace public globals. They call Bun's codegen and consume its generated module protocol. They do not copy the codegen implementation. Rust source lookup and Engine natives are original bun-wasm glue. The loader uses lazy factories, isolated caches, explicit unsupported errors, and the existing builtin implementations for dependencies not switched yet. Its strict TypeScript annotations describe the generated factory protocol, registry indexes, private symbols and captured intrinsic constructors; no generated builtin output is edited. [bun-builtins.md](bun-builtins.md) records its limits and hook status.
 
 
 ## WebCrypto backend
