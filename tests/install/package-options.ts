@@ -31,16 +31,19 @@ function project(name: string, manifest: object) {
   return directory;
 }
 
-async function run(directory: string, args: string[], code = 0) {
+async function run(directory: string, args: string[], code = 0, path?: string) {
   assert.ok(registry);
   const engine = process.env.INSTALL_ENGINE ?? "quickjs";
   const native = process.env.INSTALL_NATIVE_BUN === "1";
   const wasm = resolve(root, "dist", engine === "quickjs" ? "bun.wasm" : `bun-${engine}.wasm`);
-  const executable = native ? "bun" : engine === "browser" ? "node" : process.env.BUN_WASM_LAUNCHER;
+  const executable = native ? process.execPath : engine === "browser" ? Bun.which("node") : process.env.BUN_WASM_LAUNCHER;
   assert.ok(executable, "Set BUN_WASM_LAUNCHER for embedded engines");
-  const guest = ["--wasm", wasm, "--dir", `${directory}::/`, "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache", "--"].concat(args);
+  const guest = ["--wasm", wasm, "--dir", `${directory}::/`, "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache"].concat(path === undefined ? [] : ["--env", `PATH=${path}`], ["--"], args);
   const argv = native ? args : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(guest) : guest;
-  const child = spawn(executable, argv, { cwd: directory, env: { ...process.env, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(directory, "cache") }, stdio: ["ignore", "pipe", "pipe"] });
+  const env = { ...process.env, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(directory, "cache") };
+  delete env.PATH;
+  if (path !== undefined) env.PATH = path;
+  const child = spawn(executable, argv, { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] });
   children.add(child);
   let stdout = "", stderr = "";
   child.stdout?.on("data", bytes => { stdout += bytes; });
@@ -129,7 +132,28 @@ async function validVersion() {
   assert.equal(existsSync(join(directory, "node_modules")), false);
 }
 
-const cases = { lockOnly, missingVersion, invalidVersion, validVersion };
+async function scriptPath() {
+  const directory = project("script-path", { scripts: { probe: "bun probe.ts" } });
+  writeFileSync(join(directory, "probe.ts"), `
+    const result = { path: process.env.PATH, node: Bun.which("node"), output: "" };
+    try { result.output = new TextDecoder().decode(Bun.spawnSync(["node", "-e", "console.log('path-child')"]).stdout).trim(); } catch {}
+    console.log(JSON.stringify(result));
+  `);
+  for (const path of [undefined, "", "/restricted", "/bin:/usr/bin"]) {
+    const result = await run(directory, ["run", "probe.ts"], 0, path);
+    const value = JSON.parse(result.stdout);
+    if (path === undefined || path === "/bin:/usr/bin") {
+      assert.ok(value.node, `node must be on the default/inherited path: ${result.stdout}`);
+      assert.equal(value.output, "path-child");
+      continue;
+    }
+    assert.equal(value.node, null, `explicit PATH must not acquire a default: ${result.stdout}`);
+    assert.equal(value.output, "");
+    assert.ok(value.path.endsWith(path));
+  }
+}
+
+const cases = { lockOnly, missingVersion, invalidVersion, validVersion, scriptPath };
 let failed = 0;
 try {
   registry = await createRegistry();
