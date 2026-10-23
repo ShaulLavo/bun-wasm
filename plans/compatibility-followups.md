@@ -495,23 +495,16 @@ and engine combinations. This is no longer a Worker delivery blocker.
 
 ### Node stream adapter census after unavailable worker detection
 
-The PR12 round-5 merge includes main `0cffef1`. All 22 selected Node adapter
-files are currently nonpassing on QuickJS, JSC and Node-host browser. The shared
-upstream harness imports `worker_threads` at `test/js/node/test/common/index.js:34`
-and receives `ERR_NOT_SUPPORTED_IN_WASM`. Main intentionally changed that module
-to reject loading so packages can detect absent worker support. Do not restore
-the earlier fabricated worker constructor to make this harness collect.
-
-Reproduce with `scripts/bun-suite.sh --node-parallel --engine quickjs --jobs 1
---timeout 15 --network loopback --output <fresh-output.json>
-js/node/test/parallel/test-readable-from-web-enqueue-then-close.js`, repeated for
-JSC and browser. The full fixed selection is
-`docs/bun-test-suite/stream-adapter-files.txt`. Exact outcomes and wasm provenance
-are retained at `/work/reports/bun-wasm-streams-round5-2026-10-16/final-adapter-*.json`.
-All three current full fixture gates pass 152/152. Runtime stream behavior is
-not established by these non-collecting upstream files. The compatibility track
-owns resolving the upstream harness/capability boundary and removes the retained
-evidence after reproduction and independent review.
+Status: Resolved by main. `worker_threads` loads again since guest workers landed
+(#37), so the shared harness at `test/js/node/test/common/index.js:34` collects.
+On main `d48dc3d2` plus the JSC buffer-transfer change, the fixed selection in
+`docs/bun-test-suite/stream-adapter-files.txt` gives 21 passes and one skip on
+QuickJS and the Node-host browser engine, and 19 passes, one skip and two failures
+on JSC (`scripts/bun-suite.sh --node-parallel --jobs 1 --timeout 15 --network
+loopback`). The skip is `test-stream-readable-to-web.js`, which reports `missing
+crypto` because `process.versions.openssl` is absent. Both JSC failures are
+`SharedArrayBuffer is not defined`, handled under shared memory above. The round-5
+records in `/work/reports/bun-wasm-streams-round5-2026-10-16/` can be removed.
 
 ### Native stream construction overhead
 
