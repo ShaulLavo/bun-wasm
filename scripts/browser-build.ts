@@ -112,11 +112,12 @@ export async function buildBrowserEntries(entrypoints: string[], outdir: string,
     if (previous && await previous.text() !== await output.text()) throw new Error(`Conflicting browser output: ${output.path}`);
     outputs.set(output.path, output);
   }
-  const result = { ...first, outputs: Array.from(outputs.values()), metafile: {
+  const metafile: NonNullable<typeof first.metafile> = {
     ...first.metafile!,
     inputs: Object.assign({}, ...builds.map(build => build.metafile!.inputs)),
     outputs: Object.assign({}, ...builds.map(build => build.metafile!.outputs)),
-  } };
+  };
+  const result = { ...first, outputs: Array.from(outputs.values()), metafile };
   // Safari can fetch the bootstrap directly, before service-worker interception is ready.
   const worker = result.outputs.find((output) => relative(outdir, output.path) === "worker.js");
   if (!worker) throw new Error("Browser build is missing worker.js");
