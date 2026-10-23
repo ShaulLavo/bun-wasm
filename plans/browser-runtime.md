@@ -465,6 +465,20 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
    hard gate (owner, 2026-10-16): modest overshoot is fine when it buys something.
 10. Verified on Chromium, Firefox and real Safari (owner's Mac); iOS Safari where storage allows.
 
+### Accepted Waffle core size, 2026-10-23
+
+The `0.0.58` to `0.0.67` pin grows the standalone core from 25,949 to 29,721
+minified bytes and from 8,445 to 9,649 bytes gzip. The largest input increases are
+`core/fd-reopen.ts` at 2,398 minified bytes and `core/wasi.ts` at 801. They preserve
+independent reopened file offsets, descriptor paths, rights and file flags.
+Publication and descriptor lifetime checks account for most of the remaining growth.
+Every input in this gate belongs to Waffle. Moving Bun launchers or UI helpers behind
+first spawn cannot reduce this standalone export without excluding runtime features.
+Following item 9, the core cap is now 9,984 bytes gzip, leaving 335 bytes of margin.
+`bun scripts/runtime-size.ts --json` reports per-input minified bytes for future comparisons;
+gzip remains a whole-output measurement. The process and interrupt-rewriter lazy-load
+gates remain blocking and unchanged.
+
 ## References
 
 - `/work/reports/browser-shell-research/browser-runtime.md`: prior art, browser support, coupling
