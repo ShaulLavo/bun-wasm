@@ -30,11 +30,11 @@ test("emitted JSONL preserves partial parsing and UTF-8 read offsets", () => {
   expect(result.read).toBe(11);
   expect(result.done).toBe(false);
   expect(result.error).toBeNull();
-  const invalid = parse.parseChunk('true\n{"bad":}');
+  const invalid = parse.parseChunk("true\n{bad}");
   expect(invalid.values).toEqual([true]);
   expect(invalid.error).toBeInstanceOf(SyntaxError);
-  expect(() => parse.parse("invalid")).toThrow("Failed to parse JSONL");
-  expect(parse.parseChunk({ toString: () => "null 7" }).values).toEqual([null, 7]);
+  expect(() => parse.parse(null)).toThrow("JSONL.parse requires a string argument");
+  expect(parse.parseChunk({ toString: () => "null\n7" }).values).toEqual([null, 7]);
 });
 
 test("emitted node:test adapter preserves registration selection and hook identity", () => {

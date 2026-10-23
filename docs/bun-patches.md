@@ -1672,6 +1672,16 @@ constructor calls, class fields and source coordinates. The loader still
 looks up the same extension-free names. Existing `.js` sources remain raw. No TypeScript parser
 or typecheck is added to the wasm runtime.
 
+A line that held only erased types (an alias, interface or overload) is emptied rather than
+left as spaces. Line terminators and every remaining token's line and column are unchanged,
+and template text is never erased, so no string content moves. This removed 248 padded lines,
+about 10 KB, from the embedded runtime at `868a0ce8`.
+
+`src/js/jsonl.ts` and `src/js/node_test.ts` are the existing original JSONL tokenizer and
+`node:test` registration adapter renamed from JavaScript with strict types. Their UTF-8,
+data-format and test-runner contracts live in `src/js/runtime.d.ts`. Neither copies Bun's
+C++ JSONL binding or Bun's `node:test` module.
+
 ## Standalone crypto linkage
 
 Class **Host feature**. `crates/bunwasm-crypto-sys/` is the original RSA FFI and build
