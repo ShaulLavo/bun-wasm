@@ -9,6 +9,9 @@ import { parseArgs } from "node:util";
 import { gzipSync } from "node:zlib";
 import { chromium, type Browser, type Page } from "playwright";
 import { sourceAttribution } from "./measure-light-sources";
+import type { Shell } from "../web/src/shell";
+
+type ObservedDemo = { term: ConstructorParameters<typeof Shell>[0]; shell?: Pick<Shell, "submit"> };
 
 interface Capture {
   prompt: number | null;
@@ -92,35 +95,42 @@ function instrument(app: string): void {
   new MutationObserver(() => {
     if (app === "sandbox" && document.querySelector<HTMLElement>("#server-dot")?.dataset.state === "up") state.previewReady ??= performance.now();
   }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-state"] });
+  let demo: ObservedDemo;
+  let write: ObservedDemo["term"]["write"];
+  function complete(): void { state.complete = performance.now(); }
+  function submit(): void {
+    state.spawn = performance.now();
+    void demo.shell?.submit('bun -e \'console.log("LIGHT_OUTPUT_" + "OK")\'').then(complete);
+  }
+  function parsed(): void {
+    const buffer = demo.term.buffer.active;
+    const text = Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString() ?? "").join("\n");
+    if (app === "web" && text.includes("LIGHT_OUTPUT_" + "OK")) state.output ??= performance.now();
+    if (app !== "web" || state.prompt !== null || !text.includes("user@bun:")) return;
+    state.prompt = performance.now();
+    queueMicrotask(submit);
+  }
+  function writeOutput(data: string | Uint8Array, callback?: () => void): void {
+    const text = typeof data === "string" ? data : new TextDecoder().decode(data);
+    if (app === "sandbox" && text.includes("bun ./index.html")) state.spawn ??= performance.now();
+    else if (app === "sandbox" && state.spawn !== null && text.trim()) state.output ??= performance.now();
+    state.text += text;
+    write(data, callback);
+  }
   Object.defineProperty(window, app === "web" ? "playground" : "sandbox", {
     configurable: true,
-    set(value) {
+    set(value: ObservedDemo) {
       Object.defineProperty(window, app === "web" ? "playground" : "sandbox", { value, configurable: true });
-      const write = value.term.write.bind(value.term);
-      value.term.write = (data: string | Uint8Array, callback?: () => void) => {
-        const text = typeof data === "string" ? data : new TextDecoder().decode(data);
-        if (app === "sandbox" && text.includes("bun ./index.html")) state.spawn ??= performance.now();
-        else if (app === "sandbox" && state.spawn !== null && text.trim()) state.output ??= performance.now();
-        state.text += text;
-        return write(data, callback);
-      };
-      value.term.onWriteParsed(() => {
-        const buffer = value.term.buffer.active;
-        const text = Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString() ?? "").join("\n");
-        if (app === "web" && text.includes("LIGHT_OUTPUT_" + "OK")) state.output ??= performance.now();
-        if (app !== "web" || state.prompt !== null || !text.includes("user@bun:")) return;
-        state.prompt = performance.now();
-        queueMicrotask(() => {
-          state.spawn = performance.now();
-          void value.shell.submit('bun -e \'console.log("LIGHT_OUTPUT_" + "OK")\'').then(() => { state.complete = performance.now(); });
-        });
-      });
+      demo = value;
+      write = value.term.write.bind(value.term);
+      value.term.write = writeOutput;
+      value.term.onWriteParsed(parsed);
     },
   });
 }
 
 async function webCommand(page: Page): Promise<void> {
-  await page.waitForFunction(() => window.lightCapture.complete !== null);
+  await page.waitForFunction(() => window.lightCapture.complete !== null && window.lightCapture.output !== null);
   assert.ok(await page.evaluate(() => window.lightCapture.output !== null), "bun -e must print the sentinel");
 }
 
