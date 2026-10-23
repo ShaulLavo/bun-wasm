@@ -303,13 +303,25 @@ fn esm_prologue(source: &str) -> String {
 }
 
 impl State {
-    /// Read, transpile and classify a file. Results are cached.
+    /// Read, transpile and classify a file. Results are cached while the
+    /// file's content stays the same.
     pub fn load_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
+        let raw = match std::fs::read(path) {
+            Ok(raw) => raw,
+            // A virtual module (`[eval]`) has no file behind it.
+            Err(e) => {
+                return self
+                    .sources
+                    .borrow()
+                    .get(path)
+                    .cloned()
+                    .ok_or_else(|| crate::natives::io_error(e, "open", Some(path)));
+            }
+        };
+        self.revalidate(path, &raw);
         if let Some(hit) = self.sources.borrow().get(path) {
             return Ok(hit.clone());
         }
-        let raw =
-            std::fs::read(path).map_err(|e| crate::natives::io_error(e, "open", Some(path)))?;
         let raw = String::from_utf8(raw)
             .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
         let loader = SourceLoader::from_path(path);
@@ -422,6 +434,9 @@ impl State {
     /// a real ES module, that copy's positions win).
     #[cfg(feature = "engine-host")]
     pub fn esm_as_cjs(&self, path: &str) -> Result<crate::transpiler::Transpiled, NativeError> {
+        if let Ok(raw) = std::fs::read(path) {
+            self.revalidate(path, &raw);
+        }
         if let Some(hit) = self.cjs_sources.borrow().get(path) {
             return Ok(hit.clone());
         }
@@ -470,6 +485,27 @@ impl State {
             .borrow_mut()
             .insert(path.to_owned(), imports.clone());
         Ok(imports)
+    }
+
+    /// Forget what was cached for `path` when its content changed since.
+    /// Dev servers rewrite their output in place (webpack's server chunks),
+    /// and `delete require.cache[path]` then expects the new code.
+    fn revalidate(&self, path: &str, raw: &[u8]) {
+        let digest = bun_wyhash::hash(raw);
+        let previous = self
+            .source_digests
+            .borrow_mut()
+            .insert(path.to_owned(), digest);
+        if previous.is_none_or(|seen| seen == digest) {
+            return;
+        }
+        self.sources.borrow_mut().remove(path);
+        self.positions.borrow_mut().remove(path);
+        #[cfg(feature = "engine-host")]
+        {
+            self.source_imports.borrow_mut().remove(path);
+            self.cjs_sources.borrow_mut().remove(path);
+        }
     }
 
     /// Remember that `len` characters were injected before line 1 of `path`.
@@ -569,6 +605,30 @@ pub fn eval_entry(state: &State, code: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rewritten_files_load_again() {
+        let dir = std::env::temp_dir().join(format!("bunwasm-revalidate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("chunk.js");
+        let path = file.to_str().unwrap();
+        let state = State::new(
+            Vec::new(),
+            Box::new(crate::transpiler::PassthroughTranspiler),
+        );
+        let load = |state: &State| state.load_source(path).unwrap().0.to_string();
+        std::fs::write(&file, "module.exports = 1;").unwrap();
+        assert_eq!(load(&state), "module.exports = 1;");
+        state.record_prologue(path, 3);
+        assert_eq!(load(&state), "module.exports = 1;");
+        assert!(state.positions.borrow().contains_key(path));
+        std::fs::write(&file, "module.exports = 2;").unwrap();
+        assert_eq!(load(&state), "module.exports = 2;");
+        assert!(!state.positions.borrow().contains_key(path));
+        std::fs::remove_dir_all(&dir).unwrap();
+        let (name, _) = eval_entry(&state, "console.log(1)");
+        assert_eq!(&*state.load_source(&name).unwrap().0, "console.log(1)");
+    }
 
     #[test]
     fn detection() {
