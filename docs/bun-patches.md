@@ -2663,7 +2663,8 @@ when the handler cancels before returning its promise. This releases the
 suspended input graph before the handler settles. Thenable fulfillment still
 discards its value, and rejection values pass through unchanged. The comparison
 source is Bun's unchanged `test/js/workerd/html-rewriter-leak.test.ts` and
-`src/runtime/api/html_rewriter.rs` at the same pin. No implementation was copied.
+`src/runtime/api/html_rewriter.rs` at revision
+`d71508d31edf06765c12adf0df137ef531539f68`. No implementation was copied.
 `bun:internal-for-testing.htmlRewriterCount()` reports the actual Rust parser
 session table length; it does not synthesize heap statistics.
 
