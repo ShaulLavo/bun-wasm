@@ -137,3 +137,107 @@ const derived = new Derived(new ResponseStream());
 assert.ok(derived instanceof Http2ServerResponse);
 derived.end();
 console.log("http2 duplicate tuples, push response and subclasses");
+
+class ClosingStream extends ResponseStream {
+  _final(_callback: () => void) { this.destroy(); }
+}
+type EndOverload = "callback" | "chunk-callback" | "chunk-encoding-callback";
+async function verifyEnd(StreamClass: typeof ResponseStream, overload: EndOverload) {
+  const stream = new StreamClass();
+  const response = new Http2ServerResponse(stream);
+  const events: string[] = [];
+  let callbacks = 0;
+  stream.on("finish", () => { events.push("stream-finish"); });
+  response.on("finish", () => { events.push("response-finish"); });
+  const closed = new Promise<void>(resolve => response.once("close", () => { events.push("close"); resolve(); }));
+  const done = function (this: unknown, ...args: unknown[]) {
+    callbacks++;
+    assert.equal(this, undefined);
+    assert.deepEqual(args, []);
+    assert.equal(stream.listenerCount("finish"), 1);
+    assert.equal(response.listenerCount("finish"), 1);
+    events.push("callback");
+  };
+  if (overload === "callback") assert.equal(response.end(done), response);
+  if (overload === "chunk-callback") assert.equal(response.end("body", done), response);
+  if (overload === "chunk-encoding-callback") assert.equal(response.end("body", "utf8", done), response);
+  await closed;
+  assert.equal(callbacks, 1);
+  assert.deepEqual(stream.chunks, overload === "callback" ? [] : ["body"]);
+  assert.deepEqual(events, StreamClass === ClosingStream
+    ? ["response-finish", "callback", "close"]
+    : ["stream-finish", "callback", "response-finish", "close"]);
+  stream.emit("finish");
+  response.emit("finish");
+  assert.equal(callbacks, 1);
+  assert.equal(stream.listenerCount("finish"), 1);
+  assert.equal(response.listenerCount("finish"), 1);
+  stream.removeAllListeners("finish");
+  response.removeAllListeners("finish");
+}
+for (const StreamClass of [ClosingStream, ResponseStream]) {
+  for (const overload of ["callback", "chunk-callback", "chunk-encoding-callback"] satisfies EndOverload[]) {
+    await verifyEnd(StreamClass, overload);
+  }
+}
+console.log("http2 end overloads complete once and remove paired finish listeners");
+
+const repeatStream = new ClosingStream();
+const repeatResponse = new Http2ServerResponse(repeatStream);
+const repeatClosed = new Promise<void>(resolve => repeatResponse.once("close", resolve));
+let repeatCallbacks = 0;
+repeatResponse.end(() => { repeatCallbacks++; });
+const repeatEnded = new Promise<void>(resolve => repeatResponse.end(() => { repeatCallbacks++; resolve(); }));
+await Promise.all([repeatClosed, repeatEnded]);
+await new Promise<void>(resolve => repeatResponse.end(() => { repeatCallbacks++; resolve(); }));
+assert.equal(repeatCallbacks, 3);
+assert.equal(repeatStream.listenerCount("finish"), 0);
+assert.equal(repeatResponse.listenerCount("finish"), 0);
+
+const endedStream = new ResponseStream({ autoDestroy: false });
+const ended = new Promise<void>(resolve => endedStream.once("finish", resolve));
+endedStream.end();
+await ended;
+const endedResponse = new Http2ServerResponse(endedStream);
+const endedClosed = new Promise<void>(resolve => endedResponse.once("close", resolve));
+let endedCallbacks = 0;
+endedResponse.end(function (this: unknown) {
+  endedCallbacks++;
+  assert.equal(this, endedResponse);
+  assert.equal(endedStream.listenerCount("finish"), 0);
+  assert.equal(endedResponse.listenerCount("finish"), 0);
+});
+endedStream.destroy();
+await endedClosed;
+assert.equal(endedCallbacks, 1);
+console.log("http2 repeated end and already-ended stream lifecycle");
+
+const failure = new Error("http2 controlled stream failure");
+class FailingStream extends ResponseStream {
+  _final(_callback: () => void) { this.destroy(failure); }
+}
+const failingStream = new FailingStream();
+const failingResponse = new Http2ServerResponse(failingStream);
+const failureEvents: string[] = [];
+failingStream.on("error", error => { assert.equal(error, failure); failureEvents.push("stream-error"); });
+failingResponse.on("error", () => { assert.fail("stream errors must not be replaced or forwarded"); });
+failingResponse.on("finish", () => { failureEvents.push("response-finish"); });
+const failedClosed = new Promise<void>(resolve => failingResponse.once("close", resolve));
+failingResponse.end("body", "utf8", (...args: unknown[]) => {
+  assert.deepEqual(args, []);
+  assert.equal(failingStream.listenerCount("finish"), 0);
+  assert.equal(failingResponse.listenerCount("finish"), 1);
+  failureEvents.push("callback");
+});
+await failedClosed;
+assert.deepEqual(failureEvents, ["stream-error", "response-finish", "callback"]);
+class ThrowingStream extends ResponseStream {
+  _write(_chunk: Uint8Array, _encoding: string, _callback: () => void) { throw failure; }
+}
+const throwingStream = new ThrowingStream();
+const throwingResponse = new Http2ServerResponse(throwingStream);
+assert.throws(() => throwingResponse.end("body", () => { assert.fail("write threw before end"); }), error => error === failure);
+assert.equal(throwingStream.listenerCount("finish"), 0);
+assert.equal(throwingResponse.listenerCount("finish"), 0);
+throwingResponse.destroy();
+console.log("http2 end preserves stream error identity");
