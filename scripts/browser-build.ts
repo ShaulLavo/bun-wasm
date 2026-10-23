@@ -114,7 +114,6 @@ function importsWorkerEntry(result: Awaited<ReturnType<typeof checked>>, outdir:
   if (!entry) throw new Error("Browser realm has no entry output");
   const outputs = result.metafile!.outputs;
   return Object.entries(outputs).some(([path, output]) => output.imports.some(imported => {
-    if (imported.external) return false;
     const dependency = imported.path in outputs ? imported.path : join(dirname(path), imported.path);
     return resolve(outdir, dependency) === entry.path;
   }));
