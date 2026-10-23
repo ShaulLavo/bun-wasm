@@ -48,7 +48,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Compression constants](#compression-and-archive-adapters) | Port | Public Brotli and Zstd constant names and integer values for the Node adapter. |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
 | [Global Web Worker adapter](#web-worker-adapter) | Host feature | Original TypeScript EventTarget and worker-global adapters over the existing thread transport. |
-| [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, browser module loading and stream adapters over separate host guest instances, with dynamically bound control pipes and typed wait outcomes. |
+| [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, coded constructors, browser module loading and stream adapters over separate host guest instances, with dynamically bound control pipes and typed wait outcomes. |
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
 | [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun/Node and native adapters consume eight-byte typed process/job completions, map seven portable startup errnos, and preserve failed Node streams. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
@@ -1672,6 +1672,14 @@ No upstream implementation changed. `scripts/test-transpiler-example.sh` and its
 invocation from `scripts/build.sh` remain unchanged.
 
 ## Worker threads adapter
+
+The public `MessagePort` and `MessageChannel` constructor proxies are original
+host adapters. They attach Node's constructor error codes without exposing the
+private construction token or changing the internal class and static-private
+brands. Instances retain the public constructor identity and subclass behavior.
+Compared with Bun `src/js/node/worker_threads.ts` and Node's
+`test/parallel/test-worker-message-port-constructor.js` at Bun pin
+`9510e74152073d850a18758ca41114d8f214ffa6`. This is not copied upstream code.
 
 `crates/bunwasm-runtime/src/js/worker_threads.ts` implements worker metadata,
 guest lifecycle and routed port ownership. `worker_codec.ts` serializes cyclic
