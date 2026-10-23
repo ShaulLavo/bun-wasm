@@ -203,7 +203,7 @@ async function openEditorFile(page: Page, path: string): Promise<void> {
 }
 
 async function languageChecks(base: string, languageAssets: ReadonlySet<string>, requests: readonly string[]): Promise<void> {
-  const context = await browser!.newContext();
+  const context = await browser!.newContext({ viewport: { width: 390, height: 844 } });
   const page = await context.newPage();
   try {
     const start = requests.length;
