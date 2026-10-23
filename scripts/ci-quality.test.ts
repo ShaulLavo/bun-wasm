@@ -373,5 +373,10 @@ test("source cache runs in real browsers using one source-built host guest", () 
   expect(processes).toContain("BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache");
   expect(processes).toContain("BUN_WASM_RUNTIME_PROC_PORT: \"4187\"");
   expect(processes).toContain("bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}");
-
+  expect(processes.match(/^    needs:/gm)).toHaveLength(1);
+  expect(processes).toContain("needs.process-bundles.result == 'success'");
+  const hostBuild = rust.indexOf("name: Build one host-engine guest for real-browser source cache acceptance");
+  const save = rust.indexOf("name: Save the complete native build once per input revision");
+  expect(hostBuild).toBeGreaterThan(-1);
+  expect(save).toBeGreaterThan(hostBuild);
 });

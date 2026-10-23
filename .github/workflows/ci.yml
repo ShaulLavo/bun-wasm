@@ -267,7 +267,6 @@ jobs:
             ${{ env.CARGO_TARGET_DIR }}
           key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
 
-
   package:
     name: Browser adapter package
     runs-on: ubuntu-latest
@@ -440,7 +439,6 @@ jobs:
         env:
           BUN_WASM_RUNTIME_PROC_ARTIFACT: ${{ github.workspace }}/dist/source-cache-browser/bun-browser.wasm
           BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache
-          BUN_WASM_RUNTIME_PROC_BUNDLE: ${{ runner.temp }}/process-bundles/runtime-proc
           BUN_WASM_RUNTIME_PROC_PORT: "4187"
           TMPDIR: ${{ runner.temp }}
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}
