@@ -238,6 +238,24 @@ jobs:
             dist/bun-jsc.wasm.embedding.json
           if-no-files-found: error
 
+      - name: Build one host-engine guest for real-browser source cache acceptance
+        run: |
+          source env.sh
+          export WASI_SDK="$WASI_SDK_PATH"
+          inputs=$(bun scripts/guest-build-receipt.ts inputs)
+          cargo build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli --no-default-features --features engine-host,bun-build
+          mkdir -p dist/source-cache-browser
+          cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm" dist/source-cache-browser/bun-browser.wasm
+          bun scripts/guest-build-receipt.ts write dist/source-cache-browser/bun-browser.wasm "$inputs"
+          git rev-parse HEAD HEAD^{tree} > dist/source-cache-browser/source.txt
+          sha256sum dist/source-cache-browser/bun-browser.wasm >> dist/source-cache-browser/source.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-cache-browser-guest
+          path: dist/source-cache-browser/
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Save the complete native build once per input revision
         if: steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -248,6 +266,7 @@ jobs:
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
           key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+
 
   package:
     name: Browser adapter package
@@ -345,8 +364,9 @@ jobs:
           if-no-files-found: error
 
   browser-process:
+    needs: [quality, rust, process-bundles]
+    if: ${{ !cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped') }}
     name: Processes (${{ matrix.browser }})
-    needs: process-bundles
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -409,3 +429,18 @@ jobs:
           TMPDIR: ${{ runner.temp }}
           BUN_WASM_RUNTIME_PROC_BUNDLE: ${{ runner.temp }}/process-bundles/runtime-proc
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-runtime-proc.ts ${{ matrix.browser }}
+
+      - uses: actions/download-artifact@v4
+        if: needs.rust.result == 'success'
+        with:
+          name: source-cache-browser-guest
+          path: dist/source-cache-browser
+      - name: Real Bun source cache in one Waffle browser runtime
+        if: needs.rust.result == 'success'
+        env:
+          BUN_WASM_RUNTIME_PROC_ARTIFACT: ${{ github.workspace }}/dist/source-cache-browser/bun-browser.wasm
+          BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache
+          BUN_WASM_RUNTIME_PROC_BUNDLE: ${{ runner.temp }}/process-bundles/runtime-proc
+          BUN_WASM_RUNTIME_PROC_PORT: "4187"
+          TMPDIR: ${{ runner.temp }}
+        run: bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}

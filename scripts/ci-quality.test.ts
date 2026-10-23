@@ -24,13 +24,14 @@ test("native checks share one conditional job and the cached target directory", 
   expect(rust).toContain("restore-keys: |\n            native-v");
   expect(rust).not.toContain("Swatinem/rust-cache");
   expect(rust).toContain("bun run quality --native");
-  expect(rust).not.toContain("cargo test");
+  expect(rust.match(/cargo test /g)).toHaveLength(1);
+  expect(rust).toContain("--lib modules::tests::host_");
 });
 
 test("native fixture smoke selects decoder and URL behavior without another build", () => {
   const commands = Array.from(rust.matchAll(/^\s+bash scripts\/test\.sh (.+)$/gm), match => match[1]!.trim().split(/\s+/));
-  expect(commands).toEqual([["--no-build", "node-misc", "runtime-ts-url-decoder"]]);
-  expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
+  expect(commands).toEqual([["--no-build", "node-misc", "runtime-ts-url-decoder", "source-cache"]]);
+  expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(2);
 });
 
 test("Rust tests are compiled and run once, with Clippy covering test targets", () => {
@@ -309,7 +310,7 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
   const browsers = workflow.split("\n  browser-process:\n")[1]!;
   expect(producer).toContain("bun web/scripts/ci-process-bundles.ts");
   expect(producer).toContain("actions/upload-artifact@v4");
-  expect(browsers).toContain("needs: process-bundles");
+  expect(browsers).toContain("needs: [quality, rust, process-bundles]");
   expect(browsers).toContain("actions/download-artifact@v4");
   expect(browsers).toContain("BUN_WASM_PROCESS_BUNDLES:");
   expect(browsers).toContain("BUN_WASM_RUNTIME_PROC_BUNDLE:");
@@ -360,4 +361,17 @@ test("Binaryen pin and installer identity participate in tool, native and JSC ca
   expect(keys).toHaveLength(5);
   expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz");
   for (const key of keys) expect(key).toContain("'scripts/ci-binaryen.ts'");
+});
+
+test("source cache runs in real browsers using one source-built host guest", () => {
+  const processes = workflow.split("\n  browser-process:\n")[1]!;
+  expect(rust).toContain("--no-default-features --features engine-host,bun-build");
+  expect(rust).toContain("uses: actions/upload-artifact@v4");
+  expect(processes).toContain("uses: actions/download-artifact@v4");
+  expect(processes).toContain("needs: [quality, rust, process-bundles]");
+  expect(processes).toContain("needs.rust.result == 'skipped'");
+  expect(processes).toContain("BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache");
+  expect(processes).toContain("BUN_WASM_RUNTIME_PROC_PORT: \"4187\"");
+  expect(processes).toContain("bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}");
+
 });

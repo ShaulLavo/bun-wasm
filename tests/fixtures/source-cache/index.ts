@@ -8,12 +8,15 @@ async function sharedCache() {
   mkdirSync("alias", { recursive: true });
   writeFileSync("first.mjs", 'export const value = "first";');
   writeFileSync("second.mjs", 'export const value = "second";');
-  writeFileSync("chunk.cjs", 'module.exports = { value: 1, load: () => import("./first.mjs") };');
+  const original = 'module.exports = { value: 1, load: () => import("./first.mjs") };';
+  const rewritten = 'module.exports = { value: 2, load: () => import("./first.mjs") };';
+  assert.equal(Buffer.byteLength(rewritten), Buffer.byteLength(original));
+  writeFileSync("chunk.cjs", original);
   const path = require.resolve("./chunk.cjs");
   const first = require(path);
   assert.equal(first, require("./alias/../chunk.cjs"));
   assert.equal((await first.load()).value, "first");
-  writeFileSync("chunk.cjs", 'module.exports = { value: 2, load: () => import("./first.mjs") };');
+  writeFileSync("chunk.cjs", rewritten);
   assert.equal(require(path), first);
   assert.equal(first.value, 1);
   delete require.cache[path];
@@ -70,7 +73,10 @@ async function convertedCache() {
   console.log("source cache: ESM-to-CommonJS bytes and imports refresh after deletion");
 }
 
-if (process.argv.includes("--host-engine")) {
+if (process.argv.includes("--browser-cache")) {
+  await sharedCache();
+  await convertedCache();
+} else if (process.argv.includes("--host-engine")) {
   await convertedCache();
 } else {
   await sharedCache();
