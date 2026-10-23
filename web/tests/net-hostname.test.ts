@@ -20,15 +20,27 @@ test("invalid socket hostnames report resolver errors without opening a connecti
   } finally { await fixture.dispose(); }
 });
 
-test("a bracketed IPv6 loopback reaches the listener", async () => {
+test("node:net preserves brackets for both connect and listen resolution", async () => {
   const fixture = networkFixture();
-  const { net, own, pump } = fixture;
   try {
-    const server = own(net.createServer(peer => own(peer).end("IPv6"))).listen(0, "::1");
-    const chunks: string[] = [];
-    const client = own(net.connect(fixture.port(server), "[::1]"));
-    client.on("data", chunk => chunks.push(chunk.toString()));
-    await pump();
-    expect(chunks.join("")).toBe("IPv6");
+    await rejectedHost(fixture, "[::1]");
+    const server = fixture.own(fixture.net.createServer());
+    let failure: Error | undefined;
+    server.on("error", value => { failure = value; });
+    server.listen(0, "[::1]");
+    expect(failure).toBeUndefined();
+    await fixture.pump();
+    expect(failure).toMatchObject({ code: "ENOTFOUND", syscall: "getaddrinfo", hostname: "[::1]" });
+    expect(server.listening).toBe(false);
+  } finally { await fixture.dispose(); }
+});
+
+test("connect rejects non-string hosts synchronously", async () => {
+  const fixture = networkFixture();
+  try {
+    for (const host of [123, false, {}, []]) {
+      const socket = fixture.own(new fixture.net.Socket());
+      expect(() => Reflect.apply(socket.connect, socket, [{ port: 80, host }])).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }));
+    }
   } finally { await fixture.dispose(); }
 });
