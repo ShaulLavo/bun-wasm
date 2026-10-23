@@ -1,0 +1,2 @@
+Node 26 output. Native Bun 1.4.2 matches except that a worker started with
+--no-deprecation leaves process.noDeprecation unset; Node applies the flag.

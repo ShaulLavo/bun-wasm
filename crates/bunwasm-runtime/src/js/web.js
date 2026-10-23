@@ -683,6 +683,7 @@
   class Blob {
     #bytes;
     #type;
+    #name;
     constructor(parts = [], options = {}) {
       if (parts !== null && typeof parts === "object" && typeof parts[Symbol.iterator] !== "function") {
         throw new TypeError("new Blob() expects an Array");
@@ -699,6 +700,13 @@
     }
     get type() {
       return this.#type;
+    }
+    // Bun's extension: any Blob may carry a name, and fetching its object URL keeps it.
+    get name() {
+      return this.#name;
+    }
+    set name(value) {
+      if (typeof value === "string") this.#name = value;
     }
     _setType(type) {
       this.#type = type;
@@ -743,15 +751,11 @@
   internal.formatBytes = formatBytes;
 
   class File extends Blob {
-    #name;
     #lastModified;
     constructor(parts, name, options = {}) {
       super(parts, options);
-      this.#name = String(name);
+      this.name = String(name);
       this.#lastModified = options.lastModified === undefined ? Date.now() : Number(options.lastModified);
-    }
-    get name() {
-      return this.#name;
     }
     get lastModified() {
       return this.#lastModified;
@@ -918,7 +922,9 @@
     },
     async blob() {
       const type = this.headers.get("content-type") || "";
-      return new Blob([await this._consume()], { type });
+      const blob = new Blob([await this._consume()], { type });
+      blob.name = this._blobName;
+      return blob;
     },
     async formData() {
       throw new TypeError("formData() is not supported in bun-wasm");
@@ -1090,11 +1096,22 @@
       return res;
     }
     if (url.startsWith("data:")) return fetchDataUrl(url);
+    if (url.startsWith("blob:")) return fetchObjectUrl(url);
     // Hosts implementing the bun_wasm ABI (docs/host-abi.md) do real HTTP.
     if (native.hostCaps.fetch) return internal.require("net").fetch(input, init);
     const err = new TypeError(`fetch() is not available in bun-wasm: WASI has no network access (${url})`);
     err.code = "ERR_NO_NETWORK";
     throw err;
+  }
+
+  // Object URLs from this or any other guest. Like Bun, the response's blob keeps the name.
+  async function fetchObjectUrl(url) {
+    const blob = await internal.require("web_worker").resolveObjectURL(url);
+    if (!blob) throw Object.assign(new TypeError(`Failed to resolve ${url}`), { code: "ERR_INVALID_ARG_VALUE" });
+    const res = new Response(blob);
+    res._blobName = blob.name;
+    Response._setUrl(res, url);
+    return res;
   }
 
   function fetchDataUrl(url) {

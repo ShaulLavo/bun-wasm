@@ -52,7 +52,7 @@
           return ["port", { id: snapshot.id, peer: snapshot.peer, version: snapshot.version, sent: snapshot.sent,
             received: snapshot.received, pending: snapshot.pending, closing: snapshot.closing, closed: snapshot.closed }, queue];
         }
-        if (internal.isProxy?.(object)) throw cloneError();
+        if (internal.isProxy?.(object) && !internal.isProcessEnv?.(object)) throw cloneError();
         // JSC's bytes C API pins its input. Encode a copy so the sender remains detachable.
         if (object instanceof ArrayBuffer) return ["buffer", internal.native.base64Encode(new Uint8Array(object).slice(), false), object.resizable ? object.maxByteLength : 0];
         if (ArrayBuffer.isView(object)) return ["view", tag(object), visit(object.buffer, implicit), object.byteOffset, object.byteLength];

@@ -55,23 +55,34 @@
     if (!Array.isArray(list) || !list.every(path => typeof path === "string")) throw new TypeError("preload must be a string or an array of strings");
     return list.map(filePath);
   }
+  // The worker starts and fails with Bun's entry diagnostic as its error event.
+  function entryFailure(message: string) {
+    return { filename: `throw new Error(${JSON.stringify(`BuildMessage: ${message}`)});`, eval: true };
+  }
+  // Like `bun <file>`, a bare name may still be a file relative to the working directory.
+  function resolveEntry(path: string): string | null {
+    try { return internal.native.resolve(path, process.cwd() + "/", false); }
+    catch { /* try it as a file below */ }
+    const file = internal.require("path").resolve(process.cwd(), path);
+    try { return internal.native.exists(file) ? file : null; }
+    catch { return null; }
+  }
   function target(value: unknown) {
     if (!(value instanceof URL) && typeof value !== "string") throw new TypeError("Worker requires a URL or path");
     const specifier = String(value);
     if (specifier.startsWith("data:")) return { filename: new URL(specifier), eval: false };
     if (specifier.startsWith("blob:")) {
       const blob = blobs.get(specifier);
-      if (!blob) return { filename: `throw new Error(${JSON.stringify(`BuildMessage: ModuleNotFound resolving "${specifier}" (entry point)`)});`, eval: true };
+      if (!blob) return entryFailure(`ModuleNotFound resolving "${specifier}" (entry point)`);
       const path = blob instanceof File ? blob.name : /typescript/.test(blob.type) ? "worker.ts" : "worker.js";
-      try { return { filename: internal.native.workerSource(new TextDecoder().decode(blob._bytes()), path), eval: true }; }
+      try { return { filename: internal.native.workerSource(new TextDecoder().decode(blob._bytes()), path), eval: true, objectUrl: specifier }; }
       catch (error) { return { filename: `throw new SyntaxError(${JSON.stringify(error instanceof Error ? error.message : String(error))});`, eval: true }; }
     }
     const path = filePath(specifier);
-    let resolved = path;
-    try { resolved = internal.native.resolve(path, process.cwd() + "/", false); }
-    catch { resolved = internal.require("path").resolve(process.cwd(), path); }
+    const resolved = resolveEntry(path);
+    if (resolved === null) return entryFailure(`ModuleNotFound resolving "${specifier}" (entry point)`);
     if (resolved.startsWith("node:") || resolved === "bun" || resolved.startsWith("bun:")) {
-      return { filename: `throw new Error(${JSON.stringify(`BuildMessage: Cannot use "${specifier}" as an entry point: it resolves to a builtin module`)});`, eval: true };
+      return entryFailure(`Cannot use "${specifier}" as an entry point: it resolves to a builtin module`);
     }
     return { filename: resolved, eval: false };
   }
@@ -97,7 +108,7 @@
         env: "env" in options ? options.env : undefined,
         execArgv: "execArgv" in options ? options.execArgv : undefined,
         workerData: "data" in options ? options.data : undefined,
-        eval: entry.eval, _web: { name, preload },
+        eval: entry.eval, _web: { name, preload, objectUrl: "objectUrl" in entry ? entry.objectUrl : undefined },
       });
       this.threadId = this.#worker.threadId;
       this.#worker.on("online", () => { if (this.#phase === "running") this.dispatchEvent(new Event("open")); });
@@ -131,6 +142,23 @@
     get [Symbol.toStringTag]() { return "Worker"; }
   }
 
+  // Bun reports a blob entry whose URL was revoked before the worker loaded it.
+  async function requireObjectUrl(url: string) {
+    if (!(await internal.objectURLs?.lookup(url))) throw new Error("BuildMessage: Blob URL is missing");
+  }
+  function objectUrlRecord(blob: Blob): BunWasm.ObjectUrlRecord {
+    const name = (blob as Blob & { name?: unknown }).name;
+    return { bytes: internal.native.base64Encode(blob._bytes(), false), type: blob.type, name: typeof name === "string" ? name : null };
+  }
+  function recordBlob(value: BunWasm.ObjectUrlRecord) {
+    const blob = new Blob([internal.native.base64Decode(value.bytes)], { type: value.type });
+    if (value.name !== null) Object.assign(blob, { name: value.name });
+    return blob;
+  }
+  internal.localObjectURL = url => {
+    const blob = blobs.get(url);
+    return blob ? objectUrlRecord(blob) : null;
+  };
   function initialize(port: BunWasm.WebParentPort, options: BunWasm.WebWorkerOptions, webMessageEvent: (event: MessageEvent) => MessageEvent) {
     const scope = new EventTarget();
     const initImportMeta = internal.initImportMeta;
@@ -139,6 +167,7 @@
     internal.initImportMeta = (meta, path) => {
       initImportMeta(meta, path, false);
       Object.defineProperty(meta, "__bunwasm_workerEntry", { value: ready, configurable: true });
+      Object.defineProperty(meta, "__bunwasm_objectURLAlive", { value: requireObjectUrl, configurable: true });
     };
     const runMain = internal.runMain;
     internal.runMain = async path => {
@@ -217,8 +246,21 @@
     createObjectURL(blob: Blob) {
       if (!(blob instanceof Blob)) throw new TypeError("Expected a Blob");
       const url = "blob:bun-wasm:" + internal.randomUUID();
-      blobs.set(url, blob); return url;
+      blobs.set(url, blob);
+      // Other guests find a worker's URLs through the root; the root's own stay local.
+      if (internal.objectURLs?.shared) internal.objectURLs.add(url, objectUrlRecord(blob));
+      return url;
     },
-    revokeObjectURL(url: string) { blobs.delete(String(url)); },
+    revokeObjectURL(url: string) {
+      blobs.delete(String(url));
+      internal.objectURLs?.revoke(String(url));
+    },
+    // The Blob behind an object URL created in this or any other guest, or null once revoked.
+    async resolveObjectURL(url: string) {
+      const local = blobs.get(url);
+      if (local) return local;
+      const value = await internal.objectURLs?.lookup(url);
+      return value ? recordBlob(value) : null;
+    },
   };
 })

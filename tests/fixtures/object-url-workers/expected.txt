@@ -1,0 +1,8 @@
+echo hello
+after revoke still running
+revoked before load BuildMessage: Blob URL is missing
+local fetch shared bytes renamed
+main reads worker URL from a worker worker-file
+worker reads worker URL ["from a worker","worker-file"]
+after creator revoked ["TypeError","ERR_INVALID_ARG_VALUE"]
+main after revoke TypeError ERR_INVALID_ARG_VALUE

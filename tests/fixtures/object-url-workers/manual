@@ -1,0 +1,2 @@
+Native Bun 1.4.2 output. Its "revoked before load" line is a race in Bun (its own
+worker_blob test retries it); bun-wasm checks the URL when the worker starts, so it always loses.

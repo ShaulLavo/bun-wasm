@@ -2,38 +2,72 @@
 
 ## Global Web Worker census
 
-Status: Approved.
+Status: Approved. The census bullets below are resolved; `worker.test.ts` now
+reaches the two new mismatches at the end of the list.
 
 The global constructor passes its lifecycle, transfer, preload, dependency-loading,
-and top-level-await fixtures on all engines and in Chromium/WebKit. The eleven
-upstream cause files now pass three files per engine. The
+and top-level-await fixtures on all engines and in Chromium/WebKit. The
 [measurement](../docs/worker-threads.md#global-constructor-measurement) records exact
 counts and provenance. Reproduce through the suite slot with
 `scripts/measure-web-workers.sh <engine> <fresh-output.json>` after private builds.
 Raw logs are in `/work/reports/bun-wasm-web-worker/final/after-<engine>-logs/`.
+`tests/fixtures/worker-census-contracts` covers the first two bullets.
 
-- `worker-fixture-env.js` posts `process.env`, but `worker_codec.ts` rejects its
-  Proxy representation with `DataCloneError`. Give the native environment object
-  an explicit serialization contract without allowing arbitrary proxies.
-- `worker.test.ts` requests `--no-deprecation` and `--tls-min-v1.2`; the
-  `worker_threads.ts::execArguments` validator rejects them. Implement their
-  runtime behavior before accepting them. VM timeout cases require `node:vm`,
-  not changes to Worker delivery. The final run completes the entire worker file
-  on every engine; earlier scheduling-related file timeouts are resolved by main.
-- `worker-entry-point.test.ts` receives its error event for a builtin alias, but
-  the guest additionally prints the generated throw to stderr. The too-long
-  entry-path case receives the shared loader's diagnostic instead of Bun's
-  `BuildMessage` text. Trace `web_worker.ts::target` and bootstrap fatal reporting
-  together; retain ordinary explicit worker stderr.
-- `worker_blob.test.ts` has four passes and two failures. Construction currently
-  snapshots a local Blob, so immediate revocation does not cancel startup.
-  A URL created in another guest is absent from the local Map. Add a broker-owned
-  registry and its lookup/revocation lifetime rather than copying registry state.
+- Resolved: `process.env` is a Proxy, and `worker_codec.ts` and `structuredClone`
+  rejected it with `DataCloneError`. The environment object now clones as the plain
+  object it presents (`internal.isProcessEnv`); every other Proxy is still refused.
+- Resolved: worker `execArgv` accepts `--no-deprecation` and the TLS version flags.
+  `--no-deprecation` sets the worker's `process.noDeprecation`, and
+  `process.emitWarning` now drops `DeprecationWarning` when it is set, as Node does.
+  `--tls-min-v1.0` to `--tls-max-v1.3` set the worker's `tls.DEFAULT_MIN_VERSION` and
+  `DEFAULT_MAX_VERSION`. Native Bun 1.4.2 ignores `--no-deprecation` in a worker; the
+  fixture follows Node 26. VM timeout cases still need `node:vm`.
+- Resolved: `worker-entry-point.test.ts`'s builtin alias printed the generated throw
+  to stderr. A worker's uncaught error now goes only to its parent's error event, as
+  in Bun and Node: an unhandled `worker_threads` error still rethrows in the parent,
+  and an unhandled Web Worker error stays silent like Bun's. An entry that does not
+  resolve, including the 100,000-character path, now reports Bun's
+  `BuildMessage: ModuleNotFound resolving "<specifier>" (entry point)`; a bare name
+  that is a file in the working directory still starts, as with `bun <file>`.
+- Resolved: `worker_blob.test.ts` failed two cases. Construction snapshotted a local
+  Blob, so revoking the URL right after `new Worker(url)` did not stop the worker, and
+  a URL created in another guest was absent from the local Map. The root guest now
+  owns a registry of object URLs that workers create (`worker_threads.ts`, over the
+  existing `root()`/`down()` routes): a worker's `createObjectURL` registers the
+  bytes, type and name, `revokeObjectURL` anywhere removes them, a worker's exit drops
+  its URLs, and a lookup that misses locally asks the root. A blob entry checks that
+  its URL is still alive when the worker starts, so a synchronous revoke gives Bun's
+  `BuildMessage: Blob URL is missing`. `fetch("blob:...")` uses the same lookup and
+  fails like Bun (`ERR_INVALID_ARG_VALUE`) once the URL is revoked. Like Bun, any Blob
+  may carry a writable `name`, and the fetched blob keeps it.
+  `tests/fixtures/object-url-workers` covers these on every engine.
 - BroadcastChannel GC stress and several termination cases exceed the existing
-  four-child host budget. Shared buffers/Atomics cannot cross guests. Preserve
-  those limits until the transport supplies actual sharing and capacity.
-  BroadcastChannel close-task ordering and custom inspection failures also
-  predate the constructor; their diagnostics remain in the same raw census.
+  four-child host budget. Shared buffers/Atomics cannot cross guests (see shared
+  memory below). Preserve those limits until the transport supplies actual sharing
+  and capacity. BroadcastChannel close-task ordering and custom inspection failures
+  also predate the constructor; their diagnostics remain in the same raw census.
+
+Measured on QuickJS with `scripts/bun-suite.sh --jobs 1 --timeout 180 --network loopback`
+before and after these changes: `worker-entry-point.test.ts` 1/2 to 2/2,
+`worker_blob.test.ts` 4/6 to 6/6, and `worker.test.ts` 32 to 34 passing of 42
+(the too-long entry path and the `fs.readFile` termination race now pass). JSC
+matches QuickJS. The remaining `worker.test.ts` failures:
+
+- `worker-env` and `worker-env with a lot of properties`: the environment now
+  clones, but a worker given an explicit `env` also sees `BUNWASM_EXEC_PATH`,
+  `BUN_WASM_STACK_KIB`, `PATH` and `PWD`, which the spawn path adds for every guest.
+  Bun gives the worker exactly the object passed. Start at `worker_threads.ts`
+  (`env.BUNWASM_WORKER_INIT`) and the guest spawn environment in `spawn.ts`.
+- `argv / execArgv options` and `worker with argv/execArgv`: the flags now pass, but
+  under `bun test` Bun's worker `argv` starts with the parent's `argv[0]` and
+  `argv[1]` (`"bun", "test"`), while ours starts with the executable and the entry
+  path. Compare with a native control outside the test runner before changing it.
+- `worker with eval = true succeeds with valid code` (already failing before):
+  the eval code calls the global `postMessage`, which native Bun defines in
+  `node:worker_threads` workers too; ours throws `ReferenceError: postMessage is not
+  defined`.
+- The `node:vm` timeout, forceful-interrupt and 96-worker resolve-race cases stay
+  with `node:vm` and the host budget below.
 
 An earlier combined browser run lost three previously passing Node lifetime
 assertions to `EAGAIN` after stress cases. All three pass in a fresh same-artifact
@@ -41,8 +75,6 @@ diagnostic; the final unfiltered comparison loses no observed passing assertions
 Do not treat unavailable heap counters as evidence of leak freedom. The
 coordinator owns removal of these review records after accepting the follow-up
 evidence.
-
-Status: Approved
 
 ## YAML stringify: throwing Symbol.toPrimitive on a boxed primitive
 
