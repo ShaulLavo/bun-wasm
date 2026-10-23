@@ -60,6 +60,11 @@
     return pending;
   }
 
+  function parserRegistration(registration: Registration) {
+    const handlers = Object.keys(registration.handlers).map(kind => `,${JSON.stringify(kind)}:true`).join("");
+    return `{"selector":${JSON.stringify(registration.selector)}${handlers}}`;
+  }
+
   class Token {
     #attributesVersion = 0;
     #rewrite: Rewrite | undefined;
@@ -132,8 +137,7 @@
     constructor(registrations: Registration[]) {
       this.registrations = registrations;
       this.#nextEndTag = registrations.length;
-      this.id = native.htmlCreate(JSON.stringify(registrations.map(({ selector, handlers }) => Object.assign({ selector },
-        Object.fromEntries(Object.keys(handlers).map(kind => [kind, true]))))));
+      this.id = native.htmlCreate(`[${registrations.map(parserRegistration).join(",")}]`);
       finalizers.register(this, this.id, this);
     }
     close() {

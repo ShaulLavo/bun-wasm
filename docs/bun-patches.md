@@ -2655,6 +2655,11 @@ An indexed accessor on `Array.prototype` therefore cannot intercept them.
 This is an original storage fix, compared against Bun's
 `test/js/workerd/html-rewriter-leak.test.ts` at pin
 `9510e74152073d850a18758ca41114d8f214ffa6`.
+The registration wire format serializes only primitive strings through
+`JSON.stringify`. QuickJS-ng's object serialization pushes objects into a
+private JS array and invokes inherited indexed setters. The HTML adapter now
+joins its fixed-shape records directly, without changing the engine or #113's
+own-property append fix.
 
 The original lifetime adapter now observes the returned native promise without
 retaining it in the registry's held callback. Collection rejects a separate
