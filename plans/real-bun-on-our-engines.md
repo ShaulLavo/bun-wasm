@@ -338,12 +338,12 @@ accept waiter. Close-and-relisten callbacks keep one waiter per startup and leav
 zero referenced waiters after final close. Plain relisten delivers each queued
 connection once; a guest fixture also requires the reused server process to exit.
 After rebasing onto main `23e2125d`, the strict runtime check and 131 unit tests,
-lint and project type
-checks pass after this ordering fix. The following guest runs predate the review
-fix. Six listener/process/framing
-fixtures pass on each engine, and the unchanged upstream pipeline file passes
-on all three. The final rebuilt browser guest also passes the focused listener,
-framing and stream fixtures on UpCloud-4, with remote teardown verified.
+lint, project type checks and duplicate gate pass. A browser guest rebuilt from
+`24439c73` passes the listener process-exit, framing and stream fixtures, three
+passed and zero failed. The test server and scratch cleanup were checked locally.
+The earlier six-fixture listener/process/framing runs and unchanged upstream
+pipeline runs passed on all three engines, but predate both review fixes.
+The earlier UpCloud-4 browser replay also passed, with remote teardown verified.
 The unchanged upstream timer file reports eight passes and three pre-existing
 lazy matcher failures, recorded separately below. All listener tests pass.
 Evidence is in `/work/reports/wave-20261022/bun-wasm/real-bun-followups/` and
