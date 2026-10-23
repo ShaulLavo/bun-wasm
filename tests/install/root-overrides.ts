@@ -67,6 +67,15 @@ async function run(directory: string, args: string[], expected = 0) {
   return { stdout, stderr };
 }
 
+function lockedSelector(directory: string) {
+  const lock = Bun.JSONC.parse(contents(directory));
+  assert.ok(lock && typeof lock === "object" && "packages" in lock);
+  const packages = lock.packages;
+  assert.ok(packages && typeof packages === "object" && "selector-fits" in packages);
+  assert.ok(Array.isArray(packages["selector-fits"]));
+  return packages["selector-fits"][0];
+}
+
 async function selectors() {
   const dependencies = { "selector-fits": "<2.0.0", "@fixture/selected": "<2.0.0", "selector-misses": "^2.0.0" };
   const overrides = { "selector-fits@^1.0.0": "0.5.0", "@fixture/selected@^1": "0.5.0", "selector-misses@^1": "0.5.0" };
@@ -76,7 +85,8 @@ async function selectors() {
   assert.equal(installed(directory, "@fixture/selected"), "0.5.0");
   assert.equal(installed(directory, "selector-misses"), "2.0.0");
   const lock = contents(directory);
-  assert.ok(Bun.JSONC.parse(lock).overrides, "root overrides persist");
+  const parsed = Bun.JSONC.parse(lock);
+  assert.ok(parsed && typeof parsed === "object" && "overrides" in parsed, "root overrides persist");
   rmSync(join(directory, "node_modules"), { recursive: true, force: true });
   await run(directory, ["install", "--frozen-lockfile"]);
   assert.equal(installed(directory, "selector-fits"), "0.5.0");
@@ -88,7 +98,7 @@ async function invalidSelectors() {
   for (const [index, selector] of rows.entries()) {
     const directory = project(`invalid-${index}`, { dependencies: { "selector-fits": "<2.0.0" }, overrides: { [`selector-fits@${selector}`]: "0.5.0" } });
     await run(directory, ["install", "--lockfile-only"]);
-    assert.equal(Bun.JSONC.parse(contents(directory)).packages["selector-fits"][0], "selector-fits@1.0.0", selector);
+    assert.equal(lockedSelector(directory), "selector-fits@1.0.0", selector);
     const lock = contents(directory);
     await run(directory, ["install", "--lockfile-only", "--frozen-lockfile"]);
     assert.equal(contents(directory), lock);
@@ -96,11 +106,11 @@ async function invalidSelectors() {
 }
 
 async function skippedSelectors() {
-  if (process.env.INSTALL_NATIVE_BUN === "1") return;
+
   for (const [index, selector] of ["^1 && <2", "1.2.3.4"].entries()) {
     const directory = project(`skipped-${index}`, { dependencies: { "selector-fits": "<2.0.0" }, overrides: { [`selector-fits@${selector}`]: "0.5.0" } });
     await run(directory, ["install", "--lockfile-only"]);
-    assert.equal(Bun.JSONC.parse(contents(directory)).packages["selector-fits"][0], "selector-fits@1.0.0");
+    assert.equal(lockedSelector(directory), "selector-fits@1.0.0");
   }
 }
 
@@ -127,7 +137,7 @@ async function changed() {
     const previous = installed(directory, "versioned");
     save(directory, { dependencies, overrides });
     const manifest = contents(directory, "package.json");
-    const before = registry.requests.length;
+    const before: number = registry.requests.length;
     const result = await run(directory, ["install", "--frozen-lockfile"], 1);
     assert.match(result.stderr, /lockfile.*frozen/);
     assert.equal(contents(directory), lock);
@@ -147,6 +157,22 @@ async function changed() {
   }
 }
 
+async function unaffectedPins() {
+  assert.ok(registry);
+  registry.latest.set("versioned", "1.0.0");
+  const dependencies = { versioned: "latest", "uses-latest": "1.0.0", "selector-fits": "^1" };
+  const directory = project("unaffected", { dependencies });
+  await run(directory, ["install"]);
+  registry.latest.set("versioned", "2.0.0");
+  save(directory, { dependencies, overrides: { "selector-fits": "0.5.0" } });
+  await run(directory, ["install"]);
+  assert.equal(installed(directory, "selector-fits"), "0.5.0");
+  assert.equal(installed(directory, "versioned"), "1.0.0");
+  const lock = contents(directory);
+  await run(directory, ["install", "--frozen-lockfile"]);
+  assert.equal(contents(directory), lock);
+}
+
 async function targets() {
   assert.ok(registry);
   registry.latest.set("versioned", "1.0.0");
@@ -157,14 +183,40 @@ async function targets() {
   const tagged = project("tag", { dependencies: { versioned: "^2" }, overrides: { versioned: "latest" } });
   await run(tagged, ["install"]);
   assert.equal(installed(tagged, "versioned"), "1.0.0");
+  const lock = contents(tagged);
+  registry.latest.set("versioned", "2.0.0");
   await run(tagged, ["install", "--frozen-lockfile"]);
+  assert.equal(installed(tagged, "versioned"), "1.0.0");
+  assert.equal(contents(tagged), lock);
+
+  const transitiveAlias = project("transitive-alias", { dependencies: { "uses-one": "1.0.0", "uses-two": "1.0.0" }, overrides: { versioned: "npm:@fixture/selected@0.5.0" } });
+  await run(transitiveAlias, ["install"]);
+  assert.equal(installed(transitiveAlias, "versioned"), "0.5.0");
+  assert.equal(existsSync(join(transitiveAlias, "node_modules/uses-one/node_modules/versioned")), false);
+  const aliasLock = contents(transitiveAlias);
+  await run(transitiveAlias, ["install", "--frozen-lockfile"]);
+  assert.equal(contents(transitiveAlias), aliasLock);
+
+  registry.latest.set("versioned", "1.0.0");
+  const transitiveTag = project("transitive-tag", { dependencies: { "uses-one": "1.0.0", "uses-two": "1.0.0" }, overrides: { versioned: "latest" } });
+  await run(transitiveTag, ["install"]);
+  assert.equal(installed(transitiveTag, "versioned"), "1.0.0");
+  const tagLock = contents(transitiveTag);
+  registry.latest.set("versioned", "2.0.0");
+  await run(transitiveTag, ["install", "--frozen-lockfile"]);
+  assert.equal(installed(transitiveTag, "versioned"), "1.0.0");
+  assert.equal(contents(transitiveTag), tagLock);
 }
 
 try {
   const packages = ["selector-fits", "selector-misses", "@fixture/selected"].flatMap(name => ["0.5.0", "1.0.0", "2.0.0"].map(version => packageFixture(name, version)));
   registry = await createRegistry(packages.concat([packageFixture("uses-scoped", "1.0.0", { dependencies: { "@fixture/selected": "^1" } })]));
-  for (const test of [selectors, invalidSelectors, skippedSelectors, transitive, changed, targets]) {
+  for (const test of [selectors, invalidSelectors, skippedSelectors, transitive, changed, unaffectedPins, targets]) {
     if (process.env.INSTALL_CASE && process.env.INSTALL_CASE !== test.name) continue;
+    if (process.env.INSTALL_NATIVE_BUN === "1" && test === skippedSelectors) {
+      console.log("SKIP skippedSelectors: portable parser flags reject tokens native Bun accepts");
+      continue;
+    }
     await test();
     console.log(`PASS ${test.name}`);
   }
