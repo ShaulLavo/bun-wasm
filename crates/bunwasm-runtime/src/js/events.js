@@ -594,5 +594,11 @@
     };
   };
 
+  Object.defineProperty(EventEmitter, "EventEmitterAsyncResource", {
+    enumerable: true,
+    configurable: true,
+    get() { return internal.require("event_emitter_async_resource"); },
+  });
+
   return EventEmitter;
 });
