@@ -241,8 +241,16 @@ rather than changing their output by hand. Reconcile this list with the merged t
 Group 1 verification after rebasing onto main `9a087474`: strict runtime
 checking and 127 unit tests pass, including copied-buffer/lifecycle and generated
 Function module-origin checks, plus positive/negative native contract probes.
-Lint, project type checks and the duplicate gate pass. The three-engine fixture
-comparison is pending the queued guest build; do not mark this section done.
+Lint, project type checks and the duplicate gate pass. The six sink/import
+fixtures pass before and after this group on QuickJS, JSC and browser, six passed
+and zero failed per engine per run. All three guests were rebuilt from `963426a0`;
+each after run also passes strict runtime checking and 127 unit tests. The first
+build rejected another worktree's BoringSSL cache without changing it. A fresh
+lane-owned cache passed preflight and was removed after the completed replay.
+Evidence is in `types-group1-guests.log`, `types-group1-resume-guests.log` and
+`types-group1-baseline-manifest.txt` under
+`/work/reports/wave-20261022/bun-wasm/real-bun-followups/`.
+This closes group 1 only; keep the overall section in progress.
 
 Remaining files from the original inventory, reconciled with main `9a087474`:
 
