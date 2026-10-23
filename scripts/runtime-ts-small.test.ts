@@ -26,3 +26,22 @@ for (const [name, hash] of Object.entries(originals)) {
     expect(createHash("sha256").update(runtimeSyntax(emitted)).digest("hex")).toBe(hash);
   });
 }
+
+test("SQLite preserves each emitted runtime token's TypeScript source position", () => {
+  const source = join(root, "crates/bunwasm-runtime/src/js/bun_sqlite.ts");
+  const output = join(scratch, "sqlite.js");
+  const result = Bun.spawnSync(["node", join(root, "scripts/transpile-runtime.ts"), source, output]);
+  expect(result.exitCode).toBe(0);
+  const original = readFileSync(source, "utf8").split("\n");
+  const emitted = readFileSync(output, "utf8");
+  const parsed = ts.createSourceFile("sqlite.js", emitted, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  expect(emitted.split("\n").length).toBe(original.length);
+  function visit(node: ts.Node) {
+    const children = node.getChildren(parsed);
+    if (children.length) return children.forEach(visit);
+    const start = node.getStart(parsed);
+    const { line, character } = parsed.getLineAndCharacterOfPosition(start);
+    expect(original[line]?.slice(character, character + node.getWidth(parsed))).toBe(node.getText(parsed));
+  }
+  visit(parsed);
+});

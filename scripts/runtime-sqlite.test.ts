@@ -2,7 +2,6 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import ts from "typescript-api";
 
 const root = resolve(import.meta.dir, "..");
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-runtime-sqlite-"));
@@ -27,24 +26,6 @@ function check(text: string) {
 function wrapper(text: string) {
   return `const install = ${readFileSync(source, "utf8")}\ndeclare const internal: BunWasm.Internal;\nconst db = new (install(internal).Database)();\n${text}`;
 }
-
-test("SQLite preserves each emitted runtime token's TypeScript source position", () => {
-  const output = join(scratch, "sqlite.js");
-  const result = Bun.spawnSync(["node", join(root, "scripts/transpile-runtime.ts"), source, output]);
-  expect(result.exitCode).toBe(0);
-  const original = readFileSync(source, "utf8").split("\n");
-  const emitted = readFileSync(output, "utf8");
-  const parsed = ts.createSourceFile("sqlite.js", emitted, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  expect(emitted.split("\n").length).toBe(original.length);
-  function visit(node: ts.Node) {
-    const children = node.getChildren(parsed);
-    if (children.length) return children.forEach(visit);
-    const start = node.getStart(parsed);
-    const { line, character } = parsed.getLineAndCharacterOfPosition(start);
-    expect(original[line]?.slice(character, character + node.getWidth(parsed))).toBe(node.getText(parsed));
-  }
-  visit(parsed);
-});
 
 test("SQLite native modes and safe row IDs have their actual distinct result types", () => {
   const result = check(native + `
