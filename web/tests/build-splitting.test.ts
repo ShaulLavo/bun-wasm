@@ -29,7 +29,7 @@ for (const fixture of [
   expect(initial).toHaveLength(fixture.initial);
   const mainKey = Object.keys(outputs).find((path) => path.endsWith("/main.js"))!;
   expect(initialJavaScript(outputs, [mainKey])).toEqual([mainKey]);
-  const initialCode = (await Promise.all(initial.map((path) => Bun.file(path).text()))).join("\n");
+  const initialCode = (await Promise.all(initial.map((path) => Bun.file(join(out, path)).text()))).join("\n");
   expect(initialCode).toContain("toUpperCase");
   expect(initialCode).not.toContain("dynamic chunk");
   expect(initialCode).not.toContain("DYNAMIC CHUNK");
