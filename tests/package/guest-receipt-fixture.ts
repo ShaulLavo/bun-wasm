@@ -106,4 +106,3 @@ export async function withCliReceiptFixture(action: (fixture: CliFixture) => Pro
 export function receiptCli(fixture: CliFixture, ...args: string[]) {
   return Bun.spawnSync([process.execPath, fixture.cli].concat(args), { cwd: fixture.root, env: fixture.env });
 }
-
