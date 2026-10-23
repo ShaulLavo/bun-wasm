@@ -41,7 +41,7 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - name: Install locked JavaScript tools and application dependencies
         run: |
-          bun install --frozen-lockfile
+          bun install --frozen-lockfile --ignore-scripts
           (cd web && bun install --frozen-lockfile)
           (cd sandbox && bun install --frozen-lockfile)
           (cd site && bun install --frozen-lockfile)
@@ -51,6 +51,9 @@ jobs:
         run: bun run quality --javascript
       - name: Install lightweight CMake preflight tools
         run: |
+          if command -v cmake && command -v ninja && command -v g++; then exit 0; fi
+          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+          test -s /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++
       - name: Test CMake cache toolchain preflight
@@ -102,13 +105,17 @@ jobs:
           targets: wasm32-wasip1
       - name: Install native build tools
         run: |
+          if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
+             ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
+          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+          test -s /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config
       - uses: actions/cache@v4
         id: sdk
         with:
-          path: ${{ env.WASM_TOOLS }}
-          key: wasi-sdk-34.0-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'bun.lock', 'env.sh') }}
+          path: ${{ env.WASM_TOOLS }}/wasi-sdk
+          key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
       - name: Install pinned WASI SDK
         if: steps.sdk.outputs.cache-hit != 'true'
         run: |
@@ -120,11 +127,11 @@ jobs:
           echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --ignore-scripts
       - uses: actions/cache@v4
         with:
           path: |
@@ -136,7 +143,7 @@ jobs:
           source env.sh
           bash scripts/sync-bun.sh
           bash scripts/sync-crypto.sh
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: native-cache
         with:
           path: |
@@ -144,14 +151,19 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json') }}
-          restore-keys: native-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+          restore-keys: |
+            native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-
       - name: Install pinned Rust dependency checker
         run: |
           source env.sh
           if ! cargo machete --version 2>/dev/null | command grep -qx '0.9.2'; then
             cargo install cargo-machete --version 0.9.2 --locked --jobs 2
           fi
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
+          key: wasi-sysroot-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'bun.lock', 'env.sh') }}
       - name: Build patched WASI sysroot
         run: |
           source env.sh
@@ -165,6 +177,7 @@ jobs:
       - name: Build and run node-misc through the native launcher
         run: |
           source env.sh
+          bun scripts/quality-input-times.ts
           export WASI_SDK="$WASI_SDK_PATH"
           bun install --cwd web --frozen-lockfile
           cargo build --release --locked -j 2 -p bunwasm-host
@@ -172,6 +185,17 @@ jobs:
           mkdir -p dist
           cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm" dist/
           bash scripts/test.sh --no-build node-misc
+
+      - name: Save the complete native build once per input revision
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/bin/cargo-machete
+            ${{ env.CARGO_TARGET_DIR }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
 
   package:
     name: Browser adapter package
@@ -185,9 +209,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile
       - run: bun run check
-      - run: bun run build
       - run: bun run test
         env:
           TMPDIR: ${{ runner.temp }}
@@ -209,6 +236,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - name: Web host unit, CLI shim, type and bundle gates
         run: bash ../scripts/test-web-host.sh --unit
       - name: Use Ubuntu HTTPS archives for browser dependencies
@@ -238,8 +269,34 @@ jobs:
           EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
         run: bash ../scripts/test-web-host.sh --browser
 
+  process-bundles:
+    name: Shared process browser bundles
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun install --cwd web --frozen-lockfile --linker=isolated
+      - name: Build each process fixture once for all browsers
+        run: bun web/scripts/ci-process-bundles.ts "$RUNNER_TEMP/process-bundles"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: process-bundles
+          path: ${{ runner.temp }}/process-bundles
+          retention-days: 1
+          if-no-files-found: error
+
   browser-process:
     name: Processes (${{ matrix.browser }})
+    needs: process-bundles
+    env:
+      BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -254,6 +311,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: process-bundles
+          path: ${{ runner.temp }}/process-bundles
       - run: bun install --frozen-lockfile --linker=isolated
       - name: Use Ubuntu HTTPS archives for browser dependencies
         run: |
@@ -289,4 +354,5 @@ jobs:
       - name: Process pipes, CLI ABI and foreground stop (isolated install, no Rust or dist artifacts)
         env:
           TMPDIR: ${{ runner.temp }}
+          BUN_WASM_RUNTIME_PROC_BUNDLE: ${{ runner.temp }}/process-bundles/runtime-proc
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-runtime-proc.ts ${{ matrix.browser }}

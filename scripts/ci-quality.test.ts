@@ -21,7 +21,7 @@ test("native checks share one conditional job and the cached target directory", 
   expect(rust).toContain("CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target");
   expect(rust).toContain("${{ env.CARGO_TARGET_DIR }}");
   expect(rust).toContain("${{ env.CARGO_HOME }}/registry");
-  expect(rust).toContain("restore-keys: native-v");
+  expect(rust).toContain("restore-keys: |\n            native-v");
   expect(rust).not.toContain("Swatinem/rust-cache");
   expect(rust).toContain("bun run quality --native");
   expect(rust).not.toContain("cargo test");
@@ -67,14 +67,14 @@ test("cached build inputs are compared before the native gate", () => {
 });
 
 test("toolchain and preflight changes cannot restore an incompatible native cache", () => {
-  const keys = rust.split("\n").filter(line => /(?:key|restore-keys): native-v/.test(line));
-  expect(keys).toHaveLength(2);
+  const keys = rust.split("\n").filter(line => /key: native-v|^\s+native-v/.test(line));
+  expect(keys).toHaveLength(3);
   for (const key of keys) {
     for (const input of ["jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh"]) {
       expect(key.slice(0, key.indexOf(" }}-", key.indexOf("hashFiles")))).toContain(`'${input}'`);
     }
   }
-  expect(keys[0]).toContain("hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json')");
+  expect(keys[0]).toContain("hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts')");
 });
 
 test("crypto declares the toolchain and CMake preflight as Cargo build inputs", () => {
@@ -282,3 +282,50 @@ for (const fail of [false, true]) {
     }
   });
 }
+
+test("package preparation builds once, and non-package installs skip lifecycle builds", () => {
+  const adapter = workflow.split("\n  package:\n")[1]!.split("\n  web:\n")[0]!;
+  expect(adapter).toContain("run: bun install --frozen-lockfile");
+  expect(adapter).not.toContain("run: bun run build");
+  expect(quality).toContain("bun install --frozen-lockfile --ignore-scripts");
+  expect(rust).toContain("bun install --frozen-lockfile --ignore-scripts");
+});
+
+test("the WASI lint probe cannot dirty release build timestamps", () => {
+  const gates = rust.indexOf("bun run quality --native");
+  const restore = rust.indexOf("bun scripts/quality-input-times.ts", gates);
+  expect(restore).toBeGreaterThan(gates);
+  expect(restore).toBeLessThan(rust.indexOf("cargo build --release", gates));
+});
+
+test("one artifact supplies all process browsers without recompiling fixtures", () => {
+  const producer = workflow.split("\n  process-bundles:\n")[1]!.split("\n  browser-process:\n")[0]!;
+  const browsers = workflow.split("\n  browser-process:\n")[1]!;
+  expect(producer).toContain("bun web/scripts/ci-process-bundles.ts");
+  expect(producer).toContain("actions/upload-artifact@v4");
+  expect(browsers).toContain("needs: process-bundles");
+  expect(browsers).toContain("actions/download-artifact@v4");
+  expect(browsers).toContain("BUN_WASM_PROCESS_BUNDLES:");
+  expect(browsers).toContain("BUN_WASM_RUNTIME_PROC_BUNDLE:");
+  expect(browsers).toContain("--frozen-lockfile --linker=isolated");
+});
+
+test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
+  expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
+  expect(rust).toContain("uses: actions/cache/save@v4");
+  expect(rust).toContain("if: steps.native-cache.outputs.cache-hit != 'true'");
+  expect(rust).not.toContain("github.run_id");
+  expect(rust).not.toContain("github.run_attempt");
+  const sdkKey = rust.split("\n").find(line => line.includes("key: wasi-sdk-"))!;
+  expect(sdkKey).not.toContain("hashFiles");
+  expect(sdkKey).not.toContain("steps.homes.outputs.image");
+  expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched");
+});
+
+test("preinstalled native tools skip apt and fallback removes the known slow mirror", () => {
+  for (const section of [quality, rust]) {
+    expect(section).toContain("if command -v cmake");
+    expect(section.indexOf("then exit 0; fi")).toBeLessThan(section.indexOf("sudo apt-get update"));
+    expect(section).toContain("/etc/apt/apt-mirrors.txt");
+  }
+});

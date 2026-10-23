@@ -77,7 +77,7 @@ source/build-input roots. Changed, added or renamed inputs get a fresh time.
 This keeps a fresh checkout from rebuilding every embedded runtime or C archive,
 without hiding real edits. Symlinks are fingerprinted without modifying targets.
 Rustup, Bun downloads, pinned
-upstream sources, and WASI SDK/sysroot each have caches. The sysroot cache key
+upstream sources, the fixed WASI SDK and the patched sysroot each have caches. The sysroot cache key
 includes the runner image and builder/dependency inputs; its existing receipt
 still verifies every tool and archive. Rust cache keys include upstream patches,
 third-party inputs, the WASI crypto toolchain, CMake preflight dependencies and
@@ -198,3 +198,37 @@ Run individual checks with `bun run quality:lint`, `quality:types`,
 `quality:unused`, `quality:duplicates`, `quality:probes`, `quality:rust` or
 `quality:wasi`.
 Apply Rust formatting with `bun scripts/quality-rust.ts --write`.
+
+
+## CI work ownership and measurements
+
+The package job's locked install runs `prepare` and builds the package once.
+Quality and native installs use `--ignore-scripts`; their checks consume source,
+not the generated package. The process-bundle job builds the supervisor,
+interruption and process-pipe fixtures once, then all three browser jobs download
+that run's artifact. Browser tests still run separately in each engine, including
+isolated dependency installation. Missing artifacts fail, rather than rebuilding.
+
+Native selection ignores root version-only bumps. Root dependency or command
+changes still select native checks, as do `scripts/test.sh` and the node-misc
+fixtures. The second input-timestamp restore, after the required failing WASI
+lint probe, prevents unchanged release inputs from appearing newly edited.
+
+Native tool setup first checks the runner's existing commands and libclang.
+Only missing tools require apt; that fallback removes the known slow HTTP mirror.
+The fixed SDK cache no longer includes the changing patched sysroot. Native
+cache restore/save are separate; only a cache miss writes a complete snapshot
+after the launcher check passes. Keys identify inputs, never run IDs or attempts.
+Only quality writes the shared Bun download cache. Other jobs restore it.
+
+To compare completed runs and keep timestamped cache/build evidence:
+
+```sh
+bun scripts/ci-report.ts RUN_ID > summary.md 2> cache-build-evidence.log
+```
+
+Inspect `gh api --paginate repos/ShaulLavo/bun-wasm/actions/caches` before
+changing cache policy. Closed PR caches are isolated from later PRs but still
+consume the shared quota. Remove only identified obsolete entries, not live
+lanes or the main-branch toolchain/build caches. Process bundles are short-lived
+run artifacts, not more entries in the repository's cache quota.
