@@ -1,7 +1,7 @@
 declare namespace BunWasm {
   type FunctionKind = "normal" | "async" | "generator" | "async-generator";
   interface Native {
-    functionImports(arguments: readonly string[], kind: FunctionKind): number[][];
+    functionImports(args: readonly string[], kind: FunctionKind): number[][];
     resolve(specifier: string, referrer: string, require: boolean): string;
     importModule(path: string): Promise<unknown>;
     utf8Encode(value: string): Uint8Array<ArrayBuffer>;
