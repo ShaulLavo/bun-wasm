@@ -36,6 +36,16 @@ declare namespace BunWasm {
     runInContext(context: unknown, callback: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]): unknown;
     handleUncaught(error: unknown): boolean;
   }
+  interface AsyncResourceOptions { triggerAsyncId?: number; requireManualDestroy?: boolean }
+  interface AsyncResource {
+    runInAsyncScope<Args extends unknown[], Result>(callback: (...args: Args) => Result, receiver: unknown, ...args: Args): Result;
+    asyncId(): number;
+    triggerAsyncId(): number;
+    emitDestroy(): this;
+  }
+  interface Internal {
+    builtin(name: "node:async_hooks"): { AsyncResource: { new(type: string, options?: AsyncResourceOptions): AsyncResource } };
+  }
   type EventListener = (...args: unknown[]) => void;
   interface NodeEmitter {
     on(this: object, event: string | symbol, listener: EventListener): unknown;
@@ -53,7 +63,7 @@ declare namespace BunWasm {
     setMaxListeners(this: object, count: number): unknown;
   }
   interface Internal {
-    require(name: "events"): { new(): NodeEmitter; call(target: object): void; prototype: NodeEmitter };
+    require(name: "events"): { new(options?: { captureRejections?: boolean }): NodeEmitter; call(target: object): void; prototype: NodeEmitter };
     require(name: "structured_clone"): { structuredClone(value: unknown, options?: unknown): unknown };
     messagePortRefs: number;
     isMarkedAsUntransferable?: (value: unknown) => boolean;

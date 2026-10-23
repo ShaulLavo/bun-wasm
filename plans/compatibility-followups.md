@@ -697,7 +697,8 @@ checking WebKit module/Blob URL lifetime. Its exact log is
 six Chromium/WebKit engine runs. The lane leaves this gate failure visible.
 ## Framework follow-ups after exit provenance, 2026-10-17
 
-Status: Approved.
+Status: Approved. Vitest events export resolved by the async emitter adapter.
+Other framework investigations remain Approved.
 
 The shared `ws` require-dispatch failure and Vite's stdin-triggered shutdown are
 fixed. Vanilla installs, renders, reloads source edits and builds on QuickJS,
@@ -759,7 +760,10 @@ evidence.
   builtin dispatch. Their plain-message errors are now retained by classification.
 - **Vitest events adapter.** Both configured pools stop at the missing
   `EventEmitterAsyncResource` export on every engine, before a worker pool starts.
-  Implement its async-context behavior rather than inferring another worker gap.
+  The async emitter adapter now exports it and runs listeners in the resource's
+  creation context, including promise continuations. `events-async-resource`
+  covers ESM/CommonJS identity, subclass construction, errors and context
+  restoration. Rerun the pinned Vitest application to classify its next blocker.
 
 The same investigation reproduced and fixed callback starvation independently
 of the framework outcomes. A recurring immediate starved I/O on QuickJS/JSC
