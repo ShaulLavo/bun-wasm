@@ -115,6 +115,15 @@ check are in `/work/reports/bun-wasm-streams-review2-2026-10-16/next-after/`.
 
 ### HTTP response chunk framing after the adapter census
 
+Status: Done. PR #80, `c4794d69`, added incremental response framing and
+forwarding. On 2026-10-23, the original unchanged
+`js/node/test/parallel/test-webstreams-pipeline.js` exits successfully on
+QuickJS, JSC and browser at main `d48dc3d2` with this lane's listener fix.
+`net-http-response-framing` and `net-streams` also pass on all three engines.
+The original mismatch below is historical, not an open follow-up.
+Replay JSON and logs are in
+`/work/reports/wave-20261022/bun-wasm/real-bun-followups/pipeline-*`.
+
 The round-3 Web Streams fix replaces the minimal Node stream classes and fixes
 HTTP source and request lifecycle integration. The unchanged Node adapter census
 now reaches an HTTP data-chunk mismatch in
@@ -142,6 +151,16 @@ hang. The compatibility track owns the framing follow-up and evidence removal
 after reproduction.
 
 ### Browser-host child port release
+
+Status: Approved, still open after the 2026-10-23 code audit. The isolated
+`self-spawn-network` replay passes on all three engines, but that does not prove
+that asynchronous worker termination precedes observable child completion.
+Current main `d48dc3d2` pins Waffle `b20fad1`; its
+`proc/supervisor.ts:complete` publishes exit before `stopHandle`. The Node
+adapter in `web/scripts/node-spawn.ts` returns the worker termination promise
+but supplies no network quiescence fence. The old `web/src/subprocess.js` no
+longer exists. Reproduce the ordering deterministically before changing it;
+do not classify a successful isolated retry as closure of the race below.
 
 The Web Streams round-3 full browser gate observed one `self-spawn-network`
 failure after an earlier full run passed that fixture. The child serves a
@@ -254,7 +273,15 @@ Remaining files at this change:
 
 ## Pristine process gate failures during small API verification
 
-Status: Approved. The process/runtime track owns the remaining gate failures.
+Status: Done. PR #52, `390bda6d`, fixed broken-pipe handling, and PR #87,
+`2f20be1b`, corrected missing-process contracts. The unchanged `node-misc` and
+`pipe-closed-output` fixtures pass on QuickJS, JSC and browser in the
+2026-10-23 replay. Unhandled output exits 1; handled output retains its exit
+code, callback identity, ordering and survival checks. No expectation was
+weakened. The original failures below predate these fixes. Evidence is in
+`/work/reports/wave-20261022/bun-wasm/real-bun-followups/listen-all-final.log`.
+The first light-class JSC attempt exited 137 before output; the suite-class
+rerun passes and is the verification result.
 
 The small API lane built pristine main `b7cf06cde1fbf977b748d97d86ba102262d3f03f`
 and its branch independently. All seven new API/CLI fixtures pass on QuickJS,
