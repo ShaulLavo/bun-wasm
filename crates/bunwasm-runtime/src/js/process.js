@@ -52,6 +52,9 @@
     },
   });
 
+  // The environment proxy clones as the plain object it presents; other proxies stay uncloneable.
+  internal.isProcessEnv = (value) => value === env;
+
   function hrtime(previous) {
     const ns = internal.fakeTimers?.elapsedNanoseconds ?? native.nanoseconds();
     let sec = Math.floor(ns / 1e9);
@@ -295,6 +298,7 @@
       if (internal.workerNoWarnings) return;
       const opts = type !== null && typeof type === "object" ? type : { type, code };
       const name = warning instanceof Error ? warning.name : opts.type || "Warning";
+      if (name === "DeprecationWarning" && process.noDeprecation) return;
       const message = warning instanceof Error ? warning.message : String(warning);
       if (process.listenerCount("warning") > 0) {
         const err = warning instanceof Error ? warning : Object.assign(new Error(message), { name });

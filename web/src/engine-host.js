@@ -653,7 +653,8 @@ class EngineHost {
     const polyfillFetch = globalThis.fetch;
     async function fetch(input, init = {}) {
       const url = input instanceof web.Request ? input.url : NativeString(input instanceof web.URL ? input.href : input);
-      if (url.startsWith("file:") || url.startsWith("data:")) return polyfillFetch(input, init);
+      // The runtime serves these itself; blob: URLs resolve through its object URL registry.
+      if (url.startsWith("file:") || url.startsWith("data:") || url.startsWith("blob:")) return polyfillFetch(input, init);
       const req = input instanceof web.Request && Object.keys(init).length === 0 ? input : new web.Request(input, init);
       // The runtime's AbortSignal drives a native one for the host request.
       const signal = init.signal || (input instanceof web.Request ? input.signal : undefined);

@@ -790,9 +790,10 @@
       globalThis.process.emit("uncaughtException", err, "uncaughtException");
       return true;
     }
+    // A worker's uncaught error belongs to its parent's error event, as in Bun and Node.
     if (internal.workerError) internal.workerError(err);
     internal.traceExit("uncaught-exception", 1, err);
-    printFatal(err);
+    if (!internal.workerError) printFatal(err);
     globalThis.process.exitCode = 1;
     emitExit(1);
     return false;
@@ -805,7 +806,7 @@
     }
     if (internal.workerError) internal.workerError(reason);
     internal.traceExit("unhandled-rejection", 1, reason);
-    printFatal(reason);
+    if (!internal.workerError) printFatal(reason);
     // Bun reports exit code 0 to "exit" listeners here (and still exits 1).
     emitExit(0);
     return false;

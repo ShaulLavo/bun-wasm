@@ -47,6 +47,7 @@ declare namespace BunWasm {
     execArgv: string[];
     execPath: string;
     exitCode?: number;
+    noDeprecation?: boolean;
     cwd(): string;
     exit(code?: number): never;
     on(event: string, callback: EventListener): unknown;
@@ -84,7 +85,7 @@ declare namespace BunWasm {
     /** 16-byte subscriptions in, 16-byte events out. */
     procPoll(subscriptions: Uint8Array, timeoutMs: number): Uint8Array | number;
     base64Encode(bytes: Uint8Array, url: boolean): string;
-    base64Decode(value: string): Uint8Array;
+    base64Decode(value: string): Uint8Array<ArrayBuffer>;
     transferArrayBuffers(buffers: ArrayBuffer[]): void;
     isWasmMemoryBuffer?(value: unknown): boolean;
     hostPoll(timeout: number): number;
@@ -121,6 +122,16 @@ declare namespace BunWasm {
     clonePorts?: (value: unknown, options: unknown) => unknown;
     isMessagePort?: (value: unknown) => boolean;
     isProxy?: (value: unknown) => boolean;
+    isProcessEnv?: (value: unknown) => boolean;
+    /** The guest-shared object URL registry (worker_threads.ts). `shared` is true in workers. */
+    objectURLs?: {
+      shared: boolean;
+      add(url: string, value: ObjectUrlRecord): void;
+      revoke(url: string): void;
+      lookup(url: string): Promise<ObjectUrlRecord | null>;
+    };
+    /** The root's own object URLs, read for other guests' lookups (web_worker.ts). */
+    localObjectURL?: (url: string) => ObjectUrlRecord | null;
     isWasmMemoryBuffer?: (value: unknown) => boolean;
   }
 }
@@ -150,6 +161,7 @@ declare namespace BunWasm {
   }
   interface Internal {
     builtin(name: "node:module"): { createRequire(path: string): (specifier: string) => unknown };
+    builtin(name: "node:tls"): Record<string, unknown>;
     workerNoWarnings?: boolean;
     require(name: "spawn"): { spawn(argv: string[], options: Record<string, unknown>): WorkerChild };
     require(name: "worker_stdio"): {
@@ -164,7 +176,9 @@ declare namespace BunWasm {
 }
 
 declare namespace BunWasm {
-  interface WebWorkerOptions { name: string; preload: string[]; }
+  interface WebWorkerOptions { name: string; preload: string[]; objectUrl?: string; }
+  /** An object URL's Blob as it crosses guests: base64 bytes, type and Bun's optional name. */
+  interface ObjectUrlRecord { bytes: string; type: string; name: string | null; }
   interface WebParentPort extends NodeEmitter, EventTarget {
     start(): void;
     postMessage(value: unknown, transfer?: unknown): void;
@@ -178,6 +192,7 @@ declare namespace BunWasm {
   }
   interface Native {
     resolve(specifier: string, from: string, require: boolean): string;
+    exists(path: string): boolean;
     workerSource(source: string, path: string): string;
   }
   interface Internal {
