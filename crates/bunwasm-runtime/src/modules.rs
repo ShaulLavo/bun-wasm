@@ -630,6 +630,133 @@ mod tests {
         assert_eq!(&*state.load_source(&name).unwrap().0, "console.log(1)");
     }
 
+    #[cfg(feature = "engine-host")]
+    struct TestModule(std::path::PathBuf);
+
+    #[cfg(feature = "engine-host")]
+    impl TestModule {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("bunwasm-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> String {
+            self.0.join("module.mjs").to_str().unwrap().to_owned()
+        }
+
+        fn write(&self, source: &str) {
+            std::fs::write(self.path(), source).unwrap();
+        }
+    }
+
+    #[cfg(feature = "engine-host")]
+    impl Drop for TestModule {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[cfg(feature = "engine-host")]
+    struct CacheTranspiler(Rc<std::cell::Cell<usize>>);
+
+    #[cfg(feature = "engine-host")]
+    impl crate::Transpiler for CacheTranspiler {
+        fn transpile(&self, source: &str, _: &str, _: SourceLoader) -> Result<String, String> {
+            Ok(source.to_owned())
+        }
+
+        fn transpile_with_map(
+            &self,
+            source: &str,
+            _: &str,
+            _: SourceLoader,
+        ) -> Result<crate::Transpiled, String> {
+            let imports = source
+                .match_indices("import(")
+                .map(|(start, _)| crate::transpiler::ModuleImport {
+                    start,
+                    end: start + "import".len(),
+                    kind: crate::transpiler::ModuleImportKind::Dynamic,
+                })
+                .collect();
+            Ok(crate::Transpiled {
+                code: source.to_owned(),
+                imports,
+                ..Default::default()
+            })
+        }
+
+        fn esm_to_cjs(&self, path: &str) -> Result<crate::Transpiled, String> {
+            self.0.set(self.0.get() + 1);
+            let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+            self.transpile_with_map(&source, path, SourceLoader::Js)
+        }
+    }
+
+    #[cfg(feature = "engine-host")]
+    #[test]
+    fn host_import_spans_refresh_after_rewrite() {
+        let file = TestModule::new("host-import-cache");
+        let path = file.path();
+        let state = State::new(Vec::new(), Box::new(CacheTranspiler(Rc::default())));
+        file.write("export const load = () => import('./first.mjs');");
+        let (source, _) = state.load_source(&path).unwrap();
+        let first = state.host_imports(&path, &source).unwrap();
+        state.record_prologue(&path, 5);
+        let (unchanged, _) = state.load_source(&path).unwrap();
+        assert!(Rc::ptr_eq(&source, &unchanged));
+        assert!(Rc::ptr_eq(
+            &first,
+            &state.host_imports(&path, &unchanged).unwrap()
+        ));
+        assert!(state.positions.borrow().contains_key(&path));
+        file.write("/* café 🥞 prefix */ export const load = () => import('./second.mjs');");
+        let (changed, _) = state.load_source(&path).unwrap();
+        let second = state.host_imports(&path, &changed).unwrap();
+        assert!(!Rc::ptr_eq(&first, &second));
+        assert_eq!(second.len(), 1);
+        assert!(second[0].start > first[0].start);
+        assert_eq!(&changed[second[0].start..second[0].end], "import");
+        assert!(!state.positions.borrow().contains_key(&path));
+    }
+
+    #[cfg(feature = "engine-host")]
+    #[test]
+    fn host_esm_cjs_refreshes_with_and_without_source_load() {
+        let file = TestModule::new("host-converted-cache");
+        let path = file.path();
+        let conversions = Rc::new(std::cell::Cell::new(0));
+        let state = State::new(Vec::new(), Box::new(CacheTranspiler(conversions.clone())));
+        file.write("export const value = 1;");
+        assert_eq!(
+            state.esm_as_cjs(&path).unwrap().code,
+            "export const value = 1;"
+        );
+        state.record_prologue(&path, 5);
+        assert_eq!(
+            state.esm_as_cjs(&path).unwrap().code,
+            "export const value = 1;"
+        );
+        assert_eq!(conversions.get(), 1);
+        assert!(state.positions.borrow().contains_key(&path));
+        file.write("export const value = 2;");
+        assert_eq!(
+            state.esm_as_cjs(&path).unwrap().code,
+            "export const value = 2;"
+        );
+        assert_eq!(conversions.get(), 2);
+        assert!(!state.positions.borrow().contains_key(&path));
+        state.load_source(&path).unwrap();
+        file.write("export const value = 3;");
+        state.load_source(&path).unwrap();
+        assert_eq!(
+            state.esm_as_cjs(&path).unwrap().code,
+            "export const value = 3;"
+        );
+        assert_eq!(conversions.get(), 3);
+    }
+
     #[test]
     fn detection() {
         assert!(has_esm_syntax("import x from 'y'"));
