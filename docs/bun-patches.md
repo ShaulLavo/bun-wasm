@@ -14,6 +14,7 @@ Each row has one class. A file with independent changes has separate rows.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [Socket callback adapter](#socket-callback-adapter) | Host feature | Original bounded onread delivery and connect constructor-option forwarding. |
 | [Quality fixes in adapted source](#quality-fixes-in-adapted-source) | Port | Mechanical formatting and lint fixes in the existing Bun/Node ports, without changing their upstream revision. |
 | [Native-host XML and optional hooks](#native-host-xml-and-optional-hooks) | Host feature | Scalar XML indexing and explicit unsupported trace/macro hooks let the full workspace link on the native host. |
 | [Quality checks and original adapters](#quality-checks-and-original-adapters) | Host feature | Original quality commands and tighter host/test typings, with small control-flow extractions. |
@@ -3305,3 +3306,20 @@ and ordinary conversion methods, preserving thrown values. It validates an
 exotic hook's result before scalar conversion, retains Boolean's internal value,
 and applies the same rules to YAML indentation. JSON5 and TOML conversion are
 unchanged. This replaces direct `valueOf()` calls that skipped the hook.
+
+## Socket callback adapter
+
+Class **Host feature**, **original adapter** in `src/js/node_net_onread.ts`,
+`src/js/node_net.js` and `src/js/net.js` under `crates/bunwasm-runtime`. No Bun
+or Node implementation is copied. Bun `src/js/node/net.ts` at the pinned
+`9510e74152073d850a18758ca41114d8f214ffa6` is the public-contract reference.
+The existing Socket and connection scheduler retain lifecycle, byte counts and
+EOF; an optional read-capacity function bounds native reads to the callback
+buffer. The callback adapter validates options, refreshes generated buffers and
+reports callback exceptions through the runtime uncaught-exception path.
+The connect factory forwards normalized constructor options, with null treated
+as empty options. Like Bun, it removes `signal` before Duplex construction; the
+Socket owns abort handling. Directional watermarks are defaults only. Callback
+false stops only handle reads, not stream pause state or events. The Socket
+`read` and `resume` hooks restart those reads, following the same public contract
+as Bun `src/js/node/net.ts` at the revision above.

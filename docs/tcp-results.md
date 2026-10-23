@@ -161,3 +161,37 @@ an existing server owns its guest port. After the fix, two helpers forward
 requests independently through the same guest port, the existing server still
 answers, and both preview ports can be rebound after teardown.
 This host-only change does not require a new guest artifact.
+
+## Socket callbacks and reconnect options, 2026-10-23
+
+At main `5fa3a24f`, three focused adapter tests fail because no onread callback
+is invoked. After the review corrections, eight tests pass with 33 assertions over the
+production adapters, waiter scheduler, real Duplex and installed Waffle TCP
+pipes. They cover fixed buffers, generated buffers, callback-requested read stops,
+a paused live reconnect, byte counts, old-handle closure and constructor options.
+The false callback leaves `isPaused()` false and emits no `pause`; both `read(0)`
+and `resume()` restart reads. Null constructor options and one close event for
+a pre-aborted signal have regressions too. Direct Socket construction also owns
+live and pre-aborted signals without passing them to Duplex. These checks failed
+before their respective fixes. Native Bun 1.4.2 and Node 26.7 agree on these public behaviors.
+These are focused checks, not a replacement census of the upstream suites.
+
+Run `bun test web/tests/node-net-onread.test.ts`. The real-guest companion is
+`tests/fixtures/net-onread`, selected with `scripts/test.sh --no-build --engine
+ENGINE net-onread`. Before/after logs and guest evidence are retained in
+`/work/reports/wave-20261022/bun-wasm/tcp-queue/` for coordinator review.
+
+The exact-main QuickJS census of unmodified
+`js/node/net/socket-reconnect-live.test.ts` at patched Bun `d71508d31...`
+has two passes and one paused-reconnect timeout. The own-source QuickJS guest
+after this change passes all three cases with no timeout.
+Native Bun 1.4.3 reports zero callback bytes in its `bytesRead` property.
+The dedicated fixture retains this adapter's byte-count contract with a
+`manual` marker instead of treating that native counter as expected output.
+
+The own-source QuickJS guest also passes the dedicated bounded-buffer fixture.
+It delivers two-byte callback chunks, stops after callback false, resumes to
+EOF, preserves byte counts, and emits no stream data events. The UpCloud
+fixture-only run is `tcp-onread-guest5-5b0727ac88ad` in the report logs.
+Its remote teardown is verified. The earlier remote wrapper could not run
+its unrelated Rust embedding prerequisite because rustc is absent there.
