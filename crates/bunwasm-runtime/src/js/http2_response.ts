@@ -275,8 +275,8 @@
       return this.#stream.write(chunk, encoding, callback);
     }
     end(chunk?: unknown, encoding?: unknown, callback?: (...args: unknown[]) => void): this {
-      if (typeof chunk === "function") { const done = chunk; callback = (...args: unknown[]) => done(...args); chunk = null; }
-      else if (typeof encoding === "function") { const done = encoding; callback = (...args: unknown[]) => done(...args); encoding = "utf8"; }
+      if (typeof chunk === "function") { const done = chunk; callback = function (this: unknown, ...args: unknown[]) { Reflect.apply(done, this, args); }; chunk = null; }
+      else if (typeof encoding === "function") { const done = encoding; callback = function (this: unknown, ...args: unknown[]) { Reflect.apply(done, this, args); }; encoding = "utf8"; }
       const stream = this.#stream;
       if ((this.#state.closed || this.#state.ending) && this.#state.headRequest === stream.headRequest) {
         if (typeof callback === "function") process.nextTick(callback);

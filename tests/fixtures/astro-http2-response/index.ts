@@ -194,21 +194,31 @@ assert.equal(repeatCallbacks, 3);
 assert.equal(repeatStream.listenerCount("finish"), 0);
 assert.equal(repeatResponse.listenerCount("finish"), 0);
 
-const endedStream = new ResponseStream({ autoDestroy: false });
-const ended = new Promise<void>(resolve => endedStream.once("finish", resolve));
-endedStream.end();
-await ended;
-const endedResponse = new Http2ServerResponse(endedStream);
-const endedClosed = new Promise<void>(resolve => endedResponse.once("close", resolve));
-let endedCallbacks = 0;
-endedResponse.end(() => {
-  endedCallbacks++;
-  assert.equal(endedStream.listenerCount("finish"), 0);
-  assert.equal(endedResponse.listenerCount("finish"), 0);
-});
-endedStream.destroy();
-await endedClosed;
-assert.equal(endedCallbacks, 1);
+async function verifyAlreadyEnded(overload: EndOverload) {
+  const stream = new ResponseStream({ autoDestroy: false });
+  const finished = new Promise<void>(resolve => stream.once("finish", resolve));
+  stream.end();
+  await finished;
+  const response = new Http2ServerResponse(stream);
+  const closed = new Promise<void>(resolve => response.once("close", resolve));
+  let callbacks = 0;
+  const done = function (this: unknown, ...args: unknown[]) {
+    callbacks++;
+    assert.equal(this, response);
+    assert.deepEqual(args, []);
+    assert.equal(stream.listenerCount("finish"), 0);
+    assert.equal(response.listenerCount("finish"), 0);
+  };
+  if (overload === "callback") assert.equal(response.end(done), response);
+  if (overload === "chunk-callback") assert.equal(response.end(null, done), response);
+  if (overload === "chunk-encoding-callback") assert.equal(response.end(null, "utf8", done), response);
+  stream.destroy();
+  await closed;
+  assert.equal(callbacks, 1);
+}
+for (const overload of ["callback", "chunk-callback", "chunk-encoding-callback"] satisfies EndOverload[]) {
+  await verifyAlreadyEnded(overload);
+}
 console.log("http2 repeated end and already-ended stream lifecycle");
 
 const failure = new Error("http2 controlled stream failure");
