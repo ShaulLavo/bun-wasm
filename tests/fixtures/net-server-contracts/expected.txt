@@ -1,0 +1,2 @@
+callable Server validates options and preserves public defaults
+unspecified listener uses IPv6 any address

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import EventEmitter from "node:events";
+import type { Socket } from "node:net";
 import { networkFixture } from "./node-net-fixture";
 
 test("Server supports callable construction, subclassing and the public prototype", async () => {
@@ -29,7 +30,7 @@ test("Server rejects primitive options and snapshots constructor options", async
     const options = { allowHalfOpen: true, pauseOnConnect: true, highWaterMark: 42 };
     const server = own(net.createServer(options, peer => own(peer))).listen(0, "127.0.0.1");
     options.highWaterMark = 91;
-    let accepted;
+    let accepted: Socket | undefined;
     server.on("connection", peer => { accepted = peer; });
     own(net.connect(fixture.port(server), "127.0.0.1"));
     await pump();
