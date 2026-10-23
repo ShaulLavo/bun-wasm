@@ -224,8 +224,11 @@ Only quality writes the shared Bun download cache. Other jobs restore it.
 To compare completed runs and keep timestamped cache/build evidence:
 
 ```sh
-bun scripts/ci-report.ts RUN_ID > summary.md 2> cache-build-evidence.log
+bun scripts/ci-report.ts RUN_ID ATTEMPT > summary.md 2> cache-build-evidence.log
 ```
+
+The optional attempt selects one rerun. Total execution wall time spans its first
+job start through its last job finish, excluding queue time and pauses between attempts.
 
 Inspect `gh api --paginate repos/ShaulLavo/bun-wasm/actions/caches` before
 changing cache policy. Closed PR caches are isolated from later PRs but still
