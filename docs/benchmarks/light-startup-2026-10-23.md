@@ -146,7 +146,7 @@ The build compiler and installed toolchain are identical across revisions. Main
 `d48dc3d2` includes the accepted Waffle pin. Later main commits `7fd1baa9` and `56d2dd3c`
 change CI or test checks, not the measured browser source, build settings or runtime pin.
 The measured fixed commit is `26476bdb`; its browser inputs match the reachable PR commit
-`51f70ccd` after rebasing over CI changes. The JSON preserves the actual measured SHA.
+`c5b193a2` after rebasing over CI changes. The JSON preserves the actual measured SHA.
 
 Evidence came from exclusive cloud gate
 `light-downloads-process-overlap-20261023T065410Z-sio89l8o`. JS quality passed, 79 focused

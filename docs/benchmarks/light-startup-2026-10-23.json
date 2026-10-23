@@ -3,7 +3,7 @@
     "gate": "light-downloads-process-overlap-20261023T065410Z-sio89l8o",
     "logSha256": "effacec6a00be27671d5ae16e664efdb23f8cc183b03862bb2eff414ff8b8be8",
     "extraction": "Removed exact interleaved missing QuickJS/JSC artifact warnings from the combined stdout/stderr log, then decoded the two complete JSON objects. Bundle file metadata is interned by hash; sample.bundleGraph refers to bundleGraphs.",
-    "equivalentBrowserSourceCommit": "51f70ccdf24c07c19da6cdcc962373debef9bb94",
+    "equivalentBrowserSourceCommit": "c5b193a27823aac33ef43e0ef035414b4bedf962",
     "sourceEquivalence": "Browser sources, production build settings and dependency pins match measured 26476bdb431b4d61bf52104d8fbd41efb5707da2 after rebasing over CI-only main changes. Package version bumps do not enter the browser bundles.",
     "warningLinesRemoved": {
       "publishedSuffix": 8,
