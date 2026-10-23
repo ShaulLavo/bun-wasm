@@ -323,16 +323,21 @@ has reproduced and resolved these blockers.
 
 ## Browser occupied-port follow-up after fake timers
 
-Status: Approved, implementation under verification on 2026-10-23.
+Status: Done, verified on 2026-10-23.
 
 The focused `net-http-listen-error` regression first failed on pristine browser
 main `5fa3a24f` because the occupied listener announced `listening`. It now passes
 with real and fake timers, and immediate close cancels startup. The fix waits on
 `hostLocalAddr` through an I/O waiter before publishing either success or the
 host bind error. No timer, delay, retry, or Node socket-probe change is involved.
-Four deterministic startup-waiter checks pass. The original upstream timer file
-and rebuilt all-engine fixtures remain required before marking this done.
-Evidence is in `/work/reports/wave-20261022/bun-wasm/real-bun-followups/`.
+Four deterministic startup-waiter checks pass. Six listener/process/framing
+fixtures pass on each engine, and the unchanged upstream pipeline file passes
+on all three. The final rebuilt browser guest also passes the focused listener,
+framing and stream fixtures on UpCloud-4, with remote teardown verified.
+The unchanged upstream timer file reports eight passes and three pre-existing
+lazy matcher failures, recorded separately below. All listener tests pass.
+Evidence is in `/work/reports/wave-20261022/bun-wasm/real-bun-followups/` and
+`/work/reports/machine-fleet/remote-gate/real-bun-listener-final-20261023T064132Z-1r84crw0/`.
 
 The 12-file fake-timer after measurement passes 42 tests on QuickJS and JSC.
 Browser passes 41, with one 2-second timeout in
@@ -362,3 +367,31 @@ scripts/bun-suite.sh --engine browser --jobs 1 --timeout 15 --network loopback \
 Raw output is retained in
 `/work/reports/bun-wasm-fake-timers/after-browser-logs/js/bun/test/test-timers.test.ts.log`.
 The coordinator owns this evidence until the networking follow-up is verified.
+
+
+### Lazy test matcher initialization after replacing timer globals
+
+Status: Approved, separate from the occupied-port fix. On 2026-10-23, the
+unchanged `js/bun/test/test-timers.test.ts` replay reports eight passes and
+three failures on browser. All HTTP/TCP listener tests pass. Each failure
+replaces `globalThis.setTimeout` with a string, symbol or bigint before
+`Bun.jest()` initializes the matcher adapter.
+
+A pristine browser guest from main `5fa3a24f`, SHA-256
+`2bb4fe06c65d3a09c75f6c6c84f3ccbababea2ce966d432447dc5be05d33865f`,
+reproduces the string case with exit 1. Native Bun 1.4.2 prints `ok`:
+
+```sh
+node --experimental-wasm-jspi web/scripts/node-host.mjs --wasm \
+  /work/tmp/bun-wasm-real-bun-followups-artifacts/bun-browser.wasm -- -e "globalThis.setTimeout = 'x'; const jest = Bun.jest().jest; jest.useFakeTimers(); console.log('ok');"
+```
+
+The guest throws `TypeError: setTimeout.bind is not a function`.
+Inspect `crates/bunwasm-runtime/src/js/test_matchers.ts:11`, which captures
+`schedule` from the mutable global during lazy initialization rather than
+using the bootstrap's saved timer. This is not caused by listener binding
+or the new startup waiter. Evidence and the native control are in
+`/work/reports/wave-20261022/bun-wasm/real-bun-followups/timers-pristine-control.log`;
+full upstream results are in `timers-browser.json` and `timers-browser-logs/`
+in the same directory. The real-Bun follow-up lane retains this baseline
+artifact until the timer follow-up is reproduced, then removes it.
