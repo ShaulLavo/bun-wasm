@@ -94,7 +94,7 @@ export async function withCliReceiptFixture(action: (fixture: CliFixture) => Pro
     await executable(node, `if [ "$1" = "-p" ]; then echo ${JSON.stringify(node)}; else echo 'fixture node 1'; fi`);
     await executable(join(bin, "rustup"), `if [ "$2" = rustc ]; then echo ${JSON.stringify(rustc)}; else echo ${JSON.stringify(join(root, "fake-tool"))}; fi`);
     await executable(join(bin, "node"), `exec ${JSON.stringify(node)} "$@"`);
-    for (const name of ["clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"]) await symlink(join(root, "fake-tool"), join(bin, name));
+    for (const name of ["cargo", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"]) await symlink(join(root, "fake-tool"), join(bin, name));
     await mkdir(join(root, "node_modules"));
     await symlink(options.waffle, join(root, "node_modules/waffle"));
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, BUN_WASM_SYSROOT: options.sysroot, WASI_SDK_PATH: options.sdk, WASI_SDK: options.sdk };
