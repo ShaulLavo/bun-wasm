@@ -245,6 +245,20 @@ impl<'a> Args<'a> {
             _ => None,
         }
     }
+    /// An array of source strings (`Function` arguments, eval sources).
+    pub fn sources(&self, i: usize) -> Result<Vec<String>, NativeError> {
+        let items = self
+            .array(i)
+            .ok_or_else(|| NativeError::type_error("expected an array of sources"))?;
+        items.iter().map(source_string).collect()
+    }
+}
+
+fn source_string(value: &Val) -> Result<String, NativeError> {
+    match value {
+        Val::Str(s) => Ok(s.clone()),
+        _ => Err(NativeError::type_error("expected source string")),
+    }
 }
 
 fn describe(v: &Val) -> &'static str {

@@ -15,8 +15,8 @@
 
   // The host engine has no AsyncContext: give `await` the transpiler's hooks.
   function withAwaitHooks(strings, kind) {
-    if (native.engine !== "host" || !strings.some(value => value.includes("await"))) return strings;
-    return native.awaitHooks(strings, kind) || strings;
+    if (native.engine !== "host") return strings;
+    return native.awaitHooked(strings, kind) || strings;
   }
 
   function argumentsWithImports(Native, args, kind) {

@@ -1,26 +1,27 @@
-From 4301c2d306b6cbb08e6f07e49ae30fe8b0f1c09a Mon Sep 17 00:00:00 2001
+From 99d3e3d4136fe55909d065aca604819c51fa5842 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Fri, 23 Oct 2026 08:58:49 +0300
-Subject: [PATCH 14/14] wasm: record await spans for run-time AsyncLocalStorage
- hooks
+Subject: [PATCH 14/14] wasm: record await spans for run-time AsyncLocalStorage hooks
 
 A scoped parser collector records each `await` expression's keyword start
-and operand end, and each `for await` loop's start (its outermost label)
-and body span, using the end of the previous token the lexer now keeps.
-With BUNWASM_AWAIT_HOOKS on, the printer passes a direct eval's argument
-through `__bunwasm_evalSource`, so the browser engine can splice its
-AsyncLocalStorage hooks into source compiled at run time while the call
-stays a direct eval.
+and operand end, each `for await` loop's start (its outermost label) and
+body span, and the argument span of each call to the bare identifier
+`eval`, using the end of the previous token the lexer now keeps. 0010's
+collector shares its restore guard. With BUNWASM_AWAIT_HOOKS on, the
+printer passes a direct eval's argument through `__bunwasm_evalSource`,
+so the browser engine can splice its AsyncLocalStorage hooks into source
+compiled at run time while the call stays a direct eval.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- src/js_parser/lexer.rs              |  8 ++++
- src/js_parser/lib.rs                | 72 +++++++++++++++++++++++++++++
- src/js_parser/parse/mod.rs          |  1 +
- src/js_parser/parse/parse_prefix.rs |  1 +
- src/js_parser/parse/parse_stmt.rs   |  5 ++
- src/js_printer/lib.rs               |  9 ++++
- 6 files changed, 96 insertions(+)
+ src/js_parser/lexer.rs              |   8 ++
+ src/js_parser/lib.rs                | 118 +++++++++++++++++++++++++---
+ src/js_parser/parse/mod.rs          |   1 +
+ src/js_parser/parse/parse_prefix.rs |   1 +
+ src/js_parser/parse/parse_stmt.rs   |   5 ++
+ src/js_parser/parse/parse_suffix.rs |  13 +++
+ src/js_printer/lib.rs               |   9 +++
+ 7 files changed, 143 insertions(+), 12 deletions(-)
 
 diff --git a/src/js_parser/lexer.rs b/src/js_parser/lexer.rs
 index 063d2206..5695cdc7 100644
@@ -77,22 +78,74 @@ index 063d2206..5695cdc7 100644
              regex_flags_start: None,
              arena,
 diff --git a/src/js_parser/lib.rs b/src/js_parser/lib.rs
-index 045bf990..1ba2b4d1 100644
+index 045bf990..5e67c14b 100644
 --- a/src/js_parser/lib.rs
 +++ b/src/js_parser/lib.rs
-@@ -799,3 +799,75 @@ fn bunwasm_dynamic_import(loc: bun_ast::Loc) {
+@@ -771,21 +771,36 @@ pub mod renamer {
+     // — they live in `bun_js_printer`.
+ }
+ 
++/// bun-wasm: puts a parse collector's previous value back, also on unwind.
++struct BunwasmRestore<T: 'static> {
++    slot: &'static std::thread::LocalKey<core::cell::RefCell<Option<T>>>,
++    previous: Option<T>,
++}
++
++impl<T: 'static> Drop for BunwasmRestore<T> {
++    fn drop(&mut self) {
++        let previous = self.previous.take();
++        self.slot.with(|slot| slot.replace(previous));
++    }
++}
++
++/// Run `f` with a fresh collector in `slot`, then return what it collected.
++fn bunwasm_collect<C: Default + 'static, T>(
++    slot: &'static std::thread::LocalKey<core::cell::RefCell<Option<C>>>,
++    f: impl FnOnce() -> T,
++) -> (T, C) {
++    let previous = slot.with(|slot| slot.replace(Some(C::default())));
++    let _restore = BunwasmRestore { slot, previous };
++    let result = f();
++    let collected = slot.with(|slot| slot.take().unwrap_or_default());
++    (result, collected)
++}
++
+ /// bun-wasm: collect dynamic-import keyword locations during a semantic parse.
+ /// Property names, literals, and import.meta never enter parse_import_expr's
+-/// dynamic-import branch. The guard restores the outer collector on unwind.
++/// dynamic-import branch.
+ pub fn with_bunwasm_dynamic_imports<T>(f: impl FnOnce() -> T) -> (T, Vec<usize>) {
+-    struct Restore(Option<Vec<usize>>);
+-    impl Drop for Restore {
+-        fn drop(&mut self) {
+-            BUNWASM_DYNAMIC_IMPORTS.with(|slot| { slot.replace(self.0.take()); });
+-        }
+-    }
+-    let previous = BUNWASM_DYNAMIC_IMPORTS.with(|slot| slot.replace(Some(Vec::new())));
+-    let _restore = Restore(previous);
+-    let result = f();
+-    let imports = BUNWASM_DYNAMIC_IMPORTS.with(|slot| slot.take().unwrap_or_default());
+-    (result, imports)
++    bunwasm_collect(&BUNWASM_DYNAMIC_IMPORTS, f)
+ }
+ 
+ thread_local! {
+@@ -799,3 +814,82 @@ fn bunwasm_dynamic_import(loc: bun_ast::Loc) {
          }
      });
  }
 +
-+/// bun-wasm: `await` expressions and `for await` loops seen by a parse, as
-+/// UTF-8 byte offsets, so a host engine without AsyncContext can splice its
-+/// AsyncLocalStorage hooks into source it compiles at run time (eval).
++/// bun-wasm: `await` expressions, `for await` loops and direct `eval` calls
++/// seen by a parse, as UTF-8 byte offsets, so a host engine without
++/// AsyncContext can splice its AsyncLocalStorage hooks into source it
++/// compiles at run time (eval).
 +#[derive(Default, Debug)]
 +pub struct BunwasmAwaitSpans {
 +    /// The `await` keyword's start and the end of its operand.
 +    pub awaits: Vec<(usize, usize)>,
 +    pub for_awaits: Vec<BunwasmForAwait>,
++    /// A direct `eval(...)` call's start, and the span between its parentheses.
++    pub evals: Vec<(usize, usize, usize)>,
 +}
 +
 +#[derive(Debug)]
@@ -104,51 +157,55 @@ index 045bf990..1ba2b4d1 100644
 +    pub body_is_block: bool,
 +}
 +
-+/// Collect [`BunwasmAwaitSpans`] while `f` parses. Same guard as above.
++/// Collect [`BunwasmAwaitSpans`] while `f` parses.
 +pub fn with_bunwasm_await_spans<T>(f: impl FnOnce() -> T) -> (T, BunwasmAwaitSpans) {
-+    struct Restore(Option<BunwasmAwaitSpans>);
-+    impl Drop for Restore {
-+        fn drop(&mut self) {
-+            BUNWASM_AWAIT_SPANS.with(|slot| { slot.replace(self.0.take()); });
-+        }
-+    }
-+    let previous = BUNWASM_AWAIT_SPANS.with(|slot| slot.replace(Some(BunwasmAwaitSpans::default())));
-+    let _restore = Restore(previous);
-+    let result = f();
-+    let spans = BUNWASM_AWAIT_SPANS.with(|slot| slot.take().unwrap_or_default());
-+    (result, spans)
++    bunwasm_collect(&BUNWASM_AWAIT_SPANS, f)
 +}
 +
 +thread_local! {
 +    static BUNWASM_AWAIT_SPANS: core::cell::RefCell<Option<BunwasmAwaitSpans>> = const { core::cell::RefCell::new(None) };
 +}
 +
-+fn bunwasm_await(loc: bun_ast::Loc, end: usize) {
++fn bunwasm_spans(record: impl FnOnce(&mut BunwasmAwaitSpans)) {
 +    BUNWASM_AWAIT_SPANS.with_borrow_mut(|slot| {
 +        if let Some(spans) = slot {
-+            spans.awaits.push((loc.start as usize, end));
++            record(spans);
 +        }
 +    });
 +}
 +
++fn bunwasm_await(loc: bun_ast::Loc, end: usize) {
++    bunwasm_spans(|spans| spans.awaits.push((loc.start as usize, end)));
++}
++
 +fn bunwasm_for_await(loc: bun_ast::Loc, body_start: bun_ast::Loc, body_is_block: bool, body_end: usize) {
-+    BUNWASM_AWAIT_SPANS.with_borrow_mut(|slot| {
-+        if let Some(spans) = slot {
-+            spans.for_awaits.push(BunwasmForAwait {
-+                start: loc.start as usize,
-+                body_start: body_start.start as usize,
-+                body_end,
-+                body_is_block,
-+            });
-+        }
++    bunwasm_spans(|spans| {
++        spans.for_awaits.push(BunwasmForAwait {
++            start: loc.start as usize,
++            body_start: body_start.start as usize,
++            body_end,
++            body_is_block,
++        });
 +    });
++}
++
++/// A call whose target is the bare identifier `eval`: `open` and `close` are
++/// its parentheses.
++fn bunwasm_direct_eval(call: bun_ast::Loc, open: bun_ast::Loc, close: bun_ast::Loc) {
++    bunwasm_spans(|spans| {
++        spans.evals.push((call.start as usize, open.start as usize + 1, close.start as usize));
++    });
++}
++
++fn bunwasm_collecting_spans() -> bool {
++    BUNWASM_AWAIT_SPANS.with_borrow(Option::is_some)
 +}
 +
 +/// A label's body was the `for await` that starts at `body`: the hooks' block
 +/// goes around the label, so `continue label` still names the loop.
 +fn bunwasm_label_for_await(body: bun_ast::Loc, label: bun_ast::Loc) {
-+    BUNWASM_AWAIT_SPANS.with_borrow_mut(|slot| {
-+        let Some(last) = slot.as_mut().and_then(|spans| spans.for_awaits.last_mut()) else {
++    bunwasm_spans(|spans| {
++        let Some(last) = spans.for_awaits.last_mut() else {
 +            return;
 +        };
 +        if last.start == body.start as usize {
@@ -204,6 +261,38 @@ index 5298b27d..6919891e 100644
          Ok(p.s(S::Label { name: _name, stmt }, loc))
      }
  
+diff --git a/src/js_parser/parse/parse_suffix.rs b/src/js_parser/parse/parse_suffix.rs
+index 76c1603f..260f2d2b 100644
+--- a/src/js_parser/parse/parse_suffix.rs
++++ b/src/js_parser/parse/parse_suffix.rs
+@@ -373,6 +373,15 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         Ok(Continuation::Next)
+     }
+ 
++    /// bun-wasm: the bare identifier `eval` (the visit pass marks such a call
++    /// as a direct eval), while await spans are being collected.
++    fn bunwasm_is_eval(&self, target: &Expr) -> bool {
++        let ExprData::EIdentifier(ident) = &target.data else {
++            return false;
++        };
++        crate::bunwasm_collecting_spans() && self.load_name_from_ref(ident.ref_) == b"eval"
++    }
++
+     fn sfx_t_open_paren(
+         p: &mut Self,
+         level: Level,
+@@ -384,7 +393,11 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             return Ok(Continuation::Done);
+         }
+ 
++        let open_paren = p.lexer.loc();
+         let list_loc = p.parse_call_args()?;
++        if old_optional_chain.is_none() && p.bunwasm_is_eval(left) {
++            crate::bunwasm_direct_eval(left.loc, open_paren, list_loc.loc);
++        }
+         let loc = left.loc;
+         let target = *left;
+         *left = p.new_expr(
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
 index 015fbba1..b6964eaf 100644
 --- a/src/js_printer/lib.rs

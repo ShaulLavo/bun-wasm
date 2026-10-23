@@ -345,20 +345,26 @@ struct Edit {
     at: usize,
     /// Closes something opened earlier: goes before openings at the same offset.
     closes: bool,
-    /// Where the `await` or loop the text belongs to starts. At one offset,
-    /// inner constructs close first and outer ones open first.
+    /// Where the `await`, loop or `eval` call the text belongs to starts. At
+    /// one offset, inner constructs close first and outer ones open first.
     owner: usize,
     text: &'static str,
 }
 
+/// A hook for source compiled at run time: the UTF-16 offset in the original
+/// JavaScript string, and the text inserted there.
+pub type HookEdit = (usize, &'static str);
+
 /// The browser engine's AsyncLocalStorage hooks (see [`with_await_hooks`])
 /// for source that Bun's printer never sees, as edits at the spans Bun's
 /// parser recorded: `await x` gets the printer's
-/// `__bunwasm_resume(__bunwasm_capture(), await x)`, and a `for await` loop
-/// its `{ const ctx = capture(); for await (…) { resume(ctx); body } resume(ctx); }`.
+/// `__bunwasm_resume(__bunwasm_capture(), await x)`, a `for await` loop
+/// its `{ const ctx = capture(); for await (…) { resume(ctx); body } resume(ctx); }`,
+/// and a direct `eval(x)` the printer's `eval(__bunwasm_evalSource(x))`.
 /// Every other byte stays, so lines, comments and `//# sourceURL` survive.
-/// The inserted text starts with an identifier or `{`, which never continues
-/// the expression before it, so automatic semicolons fall where they did.
+/// Text inserted outside parentheses starts with an identifier or `{`, which
+/// never continues the expression before it, so automatic semicolons fall
+/// where they did.
 fn await_hook_edits(state: &State, source: &str) -> Result<Vec<Edit>, String> {
     let (result, spans) =
         bun_js_parser::with_bunwasm_await_spans(|| scan(state, source, "<eval>", |_| ()));
@@ -375,6 +381,20 @@ fn await_hook_edits(state: &State, source: &str) -> Result<Vec<Edit>, String> {
             at: end,
             closes: true,
             owner: start,
+            text: ")",
+        });
+    }
+    for (call, open, close) in spans.evals {
+        edits.push(Edit {
+            at: open,
+            closes: false,
+            owner: call,
+            text: "__bunwasm_evalSource(",
+        });
+        edits.push(Edit {
+            at: close,
+            closes: true,
+            owner: call,
             text: ")",
         });
     }
@@ -426,34 +446,42 @@ fn await_hook_edits(state: &State, source: &str) -> Result<Vec<Edit>, String> {
     Ok(edits)
 }
 
-fn splice(source: &str, edits: &[Edit]) -> String {
-    let extra: usize = edits.iter().map(|edit| edit.text.len()).sum();
-    let mut out = String::with_capacity(source.len() + extra);
+/// `edits` (sorted byte offsets into `source`) at UTF-16 offsets. The host
+/// splices them into its own string: JavaScript strings may hold lone
+/// surrogates, which reach us as U+FFFD, also one UTF-16 unit.
+fn utf16_edits(source: &str, edits: &[Edit]) -> Vec<HookEdit> {
     let mut at = 0;
-    for edit in edits {
-        out.push_str(&source[at..edit.at]);
-        out.push_str(edit.text);
-        at = edit.at;
-    }
-    out.push_str(&source[at..]);
-    out
+    let mut units = 0;
+    edits
+        .iter()
+        .map(|edit| {
+            units += source[at..edit.at].encode_utf16().count();
+            at = edit.at;
+            (units, edit.text)
+        })
+        .collect()
 }
 
-/// A direct `eval`'s source with the browser engine's `await` hooks, or
-/// `None` when it has no `await` to hook or doesn't parse (the engine then
-/// reports its own SyntaxError).
-pub fn eval_await_hooks(source: &str) -> Option<String> {
-    if !source.contains("await") {
+/// Whether run-time source may need a hook: an `await`, or a direct `eval`
+/// whose own source might have one.
+fn may_need_hooks(source: &str) -> bool {
+    source.contains("await") || source.contains("eval")
+}
+
+/// The hooks for a direct `eval`'s source, or `None` when it needs none or
+/// doesn't parse (the engine then reports its own SyntaxError).
+pub fn eval_await_edits(source: &str) -> Option<Vec<HookEdit>> {
+    if !may_need_hooks(source) {
         return None;
     }
     let edits = with_state(|state| await_hook_edits(state, source)).ok()?;
-    (!edits.is_empty()).then(|| splice(source, &edits))
+    (!edits.is_empty()).then(|| utf16_edits(source, &edits))
 }
 
-/// [`eval_await_hooks`] for `Function` constructor arguments, parsed as the
-/// function the engine builds from them.
-pub fn function_await_hooks(args: &[String], kind: &str) -> Option<Vec<String>> {
-    if args.is_empty() || !args.iter().any(|arg| arg.contains("await")) {
+/// [`eval_await_edits`] for `Function` constructor arguments, parsed as the
+/// function the engine builds from them: one list per argument.
+pub fn function_await_edits(args: &[String], kind: &str) -> Option<Vec<Vec<HookEdit>>> {
+    if args.is_empty() || !args.iter().any(|arg| may_need_hooks(arg)) {
         return None;
     }
     let (source, ranges) = function_source(args, kind);
@@ -476,7 +504,7 @@ pub fn function_await_hooks(args: &[String], kind: &str) -> Option<Vec<String>> 
                 ..*edit
             })
             .collect();
-        out.push(splice(arg, &local));
+        out.push(utf16_edits(arg, &local));
         rest = after;
     }
     rest.is_empty().then_some(out)
@@ -850,17 +878,43 @@ fn format_log(log: &bun_ast::Log, path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{eval_await_hooks, function_await_hooks};
+    use super::{HookEdit, eval_await_edits, function_await_edits};
 
     const OPEN: &str = "__bunwasm_resume(__bunwasm_capture(), ";
     const LOOP: &str = "{ const __bunwasm_ctx = __bunwasm_capture(); ";
     const RESUME: &str = "__bunwasm_resume(__bunwasm_ctx);";
+    const EVAL: &str = "__bunwasm_evalSource(";
 
-    fn hooked(source: &str) -> String {
-        eval_await_hooks(source).expect("source has hooks")
+    /// What the host does with the edits: splice them into its UTF-16 string.
+    fn apply(source: &str, edits: &[HookEdit]) -> String {
+        let units: Vec<u16> = source.encode_utf16().collect();
+        let mut out = Vec::new();
+        let mut at = 0;
+        for (offset, text) in edits {
+            out.extend_from_slice(&units[at..*offset]);
+            out.extend(text.encode_utf16());
+            at = *offset;
+        }
+        out.extend_from_slice(&units[at..]);
+        String::from_utf16(&out).unwrap()
     }
 
+    fn hooked(source: &str) -> String {
+        apply(source, &eval_await_edits(source).expect("source has hooks"))
+    }
+
+    /// Bun's transpiler state is per thread and the runtime has one thread.
+    /// Every check runs on this test's thread.
     #[test]
+    fn run_time_source_hooks() {
+        await_keeps_lines_comments_and_automatic_semicolons();
+        nested_and_compound_operands_close_after_their_last_token();
+        for_await_restores_in_its_body_and_after_it();
+        direct_eval_arguments_pass_through_the_host();
+        offsets_are_utf16_and_unhookable_source_is_left_alone();
+        function_arguments_are_hooked_one_by_one();
+    }
+
     fn await_keeps_lines_comments_and_automatic_semicolons() {
         let source = "\"use strict\";\nconst f = async function () {\n  const a = b\n  await c // done\n  return a\n};\n//# sourceURL=webpack-internal:///./a.js\n";
         let out = hooked(source);
@@ -873,7 +927,6 @@ mod tests {
         assert_eq!(out.lines().count(), source.lines().count());
     }
 
-    #[test]
     fn nested_and_compound_operands_close_after_their_last_token() {
         let out = hooked("async () => `${await (await a)}` + await b.c(d)?.e + await /x/.test(y)");
         assert_eq!(
@@ -884,7 +937,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn for_await_restores_in_its_body_and_after_it() {
         let out =
             hooked("async () => { outer: for await (const n of g()) { if (n) continue outer; } }");
@@ -904,32 +956,50 @@ mod tests {
         );
     }
 
-    #[test]
-    fn offsets_are_bytes_and_unhookable_source_is_left_alone() {
+    fn direct_eval_arguments_pass_through_the_host() {
+        let out = hooked("async () => eval(await s) + eval?.(x) + (0, eval)(y) + eval()");
         assert_eq!(
-            hooked("\"é\"; async () => await x"),
-            format!("\"é\"; async () => {OPEN}await x)")
+            out,
+            format!(
+                "async () => eval({EVAL}{OPEN}await s))) + eval?.(x) + (0, eval)(y) + eval({EVAL}))"
+            )
         );
-        assert_eq!(eval_await_hooks("const s = 'await';"), None);
-        assert_eq!(eval_await_hooks("async () => { await }"), None);
-        assert_eq!(eval_await_hooks("no hooks here"), None);
+        assert_eq!(
+            hooked("eval(eval(a), b)"),
+            format!("eval({EVAL}eval({EVAL}a)), b))")
+        );
     }
 
-    #[test]
+    fn offsets_are_utf16_and_unhookable_source_is_left_alone() {
+        assert_eq!(
+            hooked("\"é😀\"; async () => await x"),
+            format!("\"é😀\"; async () => {OPEN}await x)")
+        );
+        assert_eq!(eval_await_edits("const s = 'await';"), None);
+        assert_eq!(eval_await_edits("async () => { await }"), None);
+        assert_eq!(eval_await_edits("no hooks here"), None);
+    }
+
     fn function_arguments_are_hooked_one_by_one() {
         let args = [
             "a".to_owned(),
             "b = 1".to_owned(),
             "await a;\nreturn b".to_owned(),
         ];
+        let edits = function_await_edits(&args, "async").expect("body has hooks");
+        let out: Vec<String> = args
+            .iter()
+            .zip(&edits)
+            .map(|(arg, edits)| apply(arg, edits))
+            .collect();
         assert_eq!(
-            function_await_hooks(&args, "async"),
-            Some(vec![
+            out,
+            [
                 "a".to_owned(),
                 "b = 1".to_owned(),
                 format!("{OPEN}await a);\nreturn b")
-            ])
+            ]
         );
-        assert_eq!(function_await_hooks(&args[..1], "async"), None);
+        assert_eq!(function_await_edits(&args[..1], "async"), None);
     }
 }

@@ -2,10 +2,8 @@
 // development server runs every server module through a direct eval
 // (webpack's `eval-source-map` devtool), with its sourceURL comment.
 import { AsyncLocalStorage } from "node:async_hooks";
-import Module from "node:module";
 import vm from "node:vm";
 
-type Compiled = Module & { _compile(code: string, filename: string): void };
 type Probe = (get: () => unknown, tick: () => Promise<void>) => Promise<unknown>;
 
 const als = new AsyncLocalStorage<string>();
@@ -36,19 +34,28 @@ const loops: () => Promise<string> = eval(`(async () => {
   return seen.join(" ");
 })`);
 
+const nested: () => Promise<unknown> = eval(`(async () => {
+  await tick();
+  return eval("(async () => { await tick(); return get(); })()");
+})`);
+
+// A string built at run time may hold a lone surrogate; the hooks keep it.
+const lone: () => Promise<string> = eval(
+  "(async () => { await tick(); return get() + ' ' + '" + String.fromCharCode(0xd800) + "'.charCodeAt(0); })",
+);
+
 const AsyncFunction = (async () => {}).constructor as FunctionConstructor;
-const compiled = new Module("/compiled.js") as Compiled;
-compiled._compile("module.exports = async (get, tick) => { await tick(); return get(); };", "/compiled.js");
 const probe = (value: unknown) => value as Probe;
 
 const cases: Record<string, () => Promise<unknown>> = {
   "direct eval": () => direct(),
   "for await in eval": () => loops(),
+  "eval in eval": () => nested(),
+  "lone surrogate": () => lone(),
   "Function": () => probe(new Function("get", "tick", "return (async () => { await tick(); return get(); })()"))(get, tick),
   "AsyncFunction": () => probe(new AsyncFunction("get", "tick", "await tick(); return get();"))(get, tick),
   "vm.runInThisContext": () => probe(vm.runInThisContext("(async (get, tick) => { await tick(); return get(); })"))(get, tick),
   "vm.runInNewContext": () => vm.runInNewContext("(async () => { await tick(); return get(); })()", { get, tick }),
-  "Module#_compile": () => probe(compiled.exports)(get, tick),
 };
 
 for (const [name, run] of Object.entries(cases)) {

@@ -225,6 +225,23 @@ class Reader {
 
 // --- calling the wasm --------------------------------------------------------------------
 
+// An `await`, or a direct eval whose source may have one.
+function mayNeedHooks(source) {
+  return source.includes("await") || source.includes("eval");
+}
+
+// `edits` is `[offset, text, …]` in UTF-16 units, so the string keeps every
+// code unit it had, lone surrogates included.
+function spliceEdits(source, edits) {
+  let out = "";
+  let at = 0;
+  for (let i = 0; i < edits.length; i += 2) {
+    out += source.slice(at, edits[i]) + edits[i + 1];
+    at = edits[i];
+  }
+  return out + source.slice(at);
+}
+
 function wasmCaller(exports) {
   const memory = memoryViews(exports.memory);
   const result = () => {
@@ -424,6 +441,13 @@ class EngineHost {
   valueNatives() {
     const host = this;
     return {
+      // Source compiled at run time with the AsyncLocalStorage hooks the
+      // transpiler gives files, or null when none is needed.
+      awaitHooked(sources, kind) {
+        if (!sources.some(mayNeedHooks)) return null;
+        const edits = host.native.awaitHookEdits(sources, kind);
+        return edits && sources.map((source, i) => spliceEdits(source, edits[i]));
+      },
       exit(code) {
         const status = (code | 0) & 0xff;
         host.exit(status);
@@ -497,11 +521,9 @@ class EngineHost {
     return this.wasm.describe().natives.indexOf(name);
   }
 
-  // A script compiled at run time (vm, Module#_compile, a direct eval) with
-  // the AsyncLocalStorage hooks the transpiler gives files (see installGlobals).
+  // A script compiled at run time (vm, Module#_compile, a direct eval).
   awaitHooked(source) {
-    if (!source.includes("await")) return source;
-    const hooked = this.native.awaitHooks([source], "script");
+    const hooked = this.native.awaitHooked([source], "script");
     return hooked ? hooked[0] : source;
   }
 

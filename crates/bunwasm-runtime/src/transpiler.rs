@@ -96,10 +96,15 @@ pub trait Transpiler {
         Err("generated imports need Bun's parser".to_owned())
     }
 
-    /// The host engine's AsyncLocalStorage `await` hooks for source compiled
-    /// at run time: `kind` "script" is one direct-eval source, the others are
-    /// `Function` constructor arguments of that kind. `None` leaves them as is.
-    fn await_hooks(&self, _sources: &[String], _kind: &str) -> Option<Vec<String>> {
+    /// The host engine's AsyncLocalStorage hooks for source compiled at run
+    /// time, as (UTF-16 offset, text) edits per source: `kind` "script" is one
+    /// direct-eval source, the others are `Function` constructor arguments of
+    /// that kind. `None` leaves them as is.
+    fn await_hook_edits(
+        &self,
+        _sources: &[String],
+        _kind: &str,
+    ) -> Option<Vec<Vec<(usize, &'static str)>>> {
         None
     }
 

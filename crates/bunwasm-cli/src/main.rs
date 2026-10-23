@@ -67,6 +67,13 @@ mod bun_transpiler {
             .collect()
     }
 
+    /// `eval` followed by `(`, across whitespace: a possible direct eval.
+    fn may_call_eval(source: &str) -> bool {
+        source
+            .match_indices("eval")
+            .any(|(at, _)| source[at + 4..].trim_start().starts_with('('))
+    }
+
     /// Bun's real parser and printer (crates/bunwasm-transpiler).
     ///
     /// Plain JavaScript keeps its original text unless await hooks are needed.
@@ -88,12 +95,16 @@ mod bun_transpiler {
             bunwasm_transpiler::function_imports(args, kind)
         }
 
-        fn await_hooks(&self, sources: &[String], kind: &str) -> Option<Vec<String>> {
+        fn await_hook_edits(
+            &self,
+            sources: &[String],
+            kind: &str,
+        ) -> Option<Vec<Vec<(usize, &'static str)>>> {
             if kind != "script" {
-                return bunwasm_transpiler::function_await_hooks(sources, kind);
+                return bunwasm_transpiler::function_await_edits(sources, kind);
             }
             let [source] = sources else { return None };
-            bunwasm_transpiler::eval_await_hooks(source).map(|code| vec![code])
+            bunwasm_transpiler::eval_await_edits(source).map(|edits| vec![edits])
         }
 
         fn parse_data(
@@ -136,7 +147,7 @@ mod bun_transpiler {
             };
             // A direct eval's argument needs the printer's `__bunwasm_evalSource` wrapper.
             let preserve_source = loader == BunLoader::Js
-                && !(AWAIT_HOOKS && (source.contains("await") || source.contains("eval(")));
+                && !(AWAIT_HOOKS && (source.contains("await") || may_call_eval(source)));
             // These extensions decide the format before parser classification in
             // State::detect_format, so unchanged JS only needs semantic imports.
             if preserve_source && (path.ends_with(".mjs") || path.ends_with(".cjs")) {
