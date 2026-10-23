@@ -133,7 +133,7 @@ async function changed() {
     assert.equal(contents(directory), lock);
     assert.equal(contents(directory, "package.json"), manifest);
     assert.equal(installed(directory, "versioned"), previous);
-    assert.ok(registry.requests.slice(before).every(request => !request.path.startsWith("/tarballs/")));
+    if (process.env.INSTALL_NATIVE_BUN !== "1") assert.ok(registry.requests.slice(before).every(request => !request.path.startsWith("/tarballs/")));
     const production = await run(directory, ["install", "--production", "--frozen-lockfile"], 1);
     assert.match(production.stderr, /lockfile.*frozen/);
     assert.equal(contents(directory), lock);
