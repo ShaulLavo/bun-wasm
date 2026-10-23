@@ -40,7 +40,8 @@ try {
   client.resume();
   await first.promise;
   assert.deepEqual(chunks, ["he"]);
-  assert.equal(client.isPaused(), true);
+  await new Promise(resolve => setImmediate(() => setImmediate(resolve)));
+  assert.deepEqual(chunks, ["he"]);
   assert.equal(client.bytesRead, 2);
   console.log("callback false stops bounded reads");
   client.resume();
