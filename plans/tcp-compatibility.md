@@ -64,7 +64,16 @@ campaign rather than posting new issues.
 
 ## CLI preview port isolation
 
-Status: Approved.
+Status: Done, 2026-10-23.
+
+The helper now allocates a separate real loopback port for each guest listener
+and reports that actual preview URL. The mapping stays keyed by guest port.
+`bun test web/tests/cli-preview.test.ts` first failed with EADDRINUSE when a
+real listener occupied the guest port. After the fix, two independent helpers
+serve that same guest port without touching the existing listener. Teardown
+stops both previews and the test binds their real ports again.
+
+The following is the historical reproduction:
 
 During the round-two TCP gates, `scripts/test-web.sh` failed ten CLI fixture
 comparisons with an extra diagnostic:

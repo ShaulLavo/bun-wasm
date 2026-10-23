@@ -150,3 +150,14 @@ fail on every reviewed engine; the destroy case is a passing baseline control.
 
 Round-two logs and artifact hashes are retained in
 `/work/reports/bun-wasm-tcp-fanout-2026-10-16/` until coordinator acceptance.
+
+## CLI preview ports, 2026-10-23
+
+The CLI helper no longer binds virtual guest port numbers in the real host
+namespace. Each preview binds port zero and prints its allocated URL.
+The focused `web/tests/cli-preview.test.ts` uses real Waffle pipes and real
+Bun HTTP servers. Before the fix, the first preview throws EADDRINUSE when
+an existing server owns its guest port. After the fix, two helpers forward
+requests independently through the same guest port, the existing server still
+answers, and both preview ports can be rebound after teardown.
+This host-only change does not require a new guest artifact.
