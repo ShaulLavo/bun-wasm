@@ -46,6 +46,15 @@ Status: Approved
 
 ## YAML stringify: throwing Symbol.toPrimitive on a boxed primitive
 
+Status: Resolved for boxed primitive coercion. The separate browser large-input
+error-code gap remains Approved.
+
+The YAML coercion adapter now consults `Symbol.toPrimitive` with the string or
+number hint, preserves thrown values and reports invalid object results. It also
+applies that conversion to indentation. `yaml-boxed-coercion` covers the guest
+path; `scripts/yaml-coercion.test.ts` reproduces the original failure without a
+guest build. Boolean wrappers retain their internal boolean value.
+
 `js/bun/yaml/yaml.test.ts` used to trap with `wasm trap: call stack exhausted`
 on QuickJS before its final report. The wave/stack-overflow PR turns that
 recursion into a RangeError, and the file now runs to completion on every
