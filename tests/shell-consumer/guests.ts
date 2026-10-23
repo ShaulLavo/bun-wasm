@@ -4,8 +4,8 @@ export const previewPort = 31976;
 export const guests: Record<string, string> = {
   "files.ts": `import fs from 'node:fs';
 console.log('CONTEXT:'+process.cwd()+':'+process.env.TEST_VALUE);
-console.log(fs.readFileSync('input.txt','utf8'));
-fs.writeFileSync('output.txt','created'); fs.mkdirSync('subdir'); fs.unlinkSync('delete.txt'); process.exit(9);`,
+fs.writeFileSync('output',fs.readFileSync('input')); fs.unlinkSync('deleted');
+fs.mkdirSync('nested'); fs.writeFileSync('nested/new','created'); process.exit(9);`,
   "endless.ts": `setInterval(()=>process.stdout.write('first\\n'),1);`,
   "stdin-reader.ts": `console.log('NESTED_STDIN:'+await Bun.stdin.text());`,
   "stdin-parent.ts": `const child=Bun.spawn(['bun','run','/fixtures/stdin-reader.ts'],{stdin:'inherit',stdout:'inherit',stderr:'inherit'}); process.exit(await child.exited);`,
@@ -25,7 +25,7 @@ if(offset!==${binaryBytes})throw Error('wrong count '+offset);console.log('BINAR
 
 export const commands = {
   lookup: `bun -e 'console.log("EXTERNAL_OK")'`,
-  files: `mkdir demo; cd demo; export TEST_VALUE=from-shell; printf source >input.txt; printf delete >delete.txt; bun run /fixtures/files.ts >captured.txt; echo FILE_STATUS:$?; cat captured.txt; cat output.txt; echo; test ! -f delete.txt && echo DELETE_OK; printf appended >>input.txt; bun -e 'console.log("MERGED:"+require("node:fs").readFileSync("input.txt","utf8"))'`,
+  files: `mkdir demo; cd demo; export TEST_VALUE=from-shell; printf source > input; printf remove > deleted; bun run /fixtures/files.ts > captured; echo FILE_STATUS:$?; cat captured; cat output; echo; cat nested/new; echo; bun -e 'if(!require("node:fs").existsSync("deleted"))console.log("DELETE_OK")'; printf appended >> output; bun -e 'console.log("MERGED:"+require("node:fs").readFileSync("output","utf8"))'`,
   epipe: `set -o pipefail; bun run /fixtures/endless.ts | { IFS= read -r line; echo "$line"; }; printf 'STATUS:%s:%s\\n' "$?" "\${PIPESTATUS[*]}"`,
   stdin: `printf payload | bun run /fixtures/stdin-parent.ts`,
   ticker: `bun run /fixtures/ticker.ts | while IFS= read -r line; do echo "FILTER:$line"; done`,

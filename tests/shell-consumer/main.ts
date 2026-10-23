@@ -6,6 +6,7 @@ import { createRuntime, type ProcessAdmissionEvent, type RuntimeSupervisor } fro
 import { PreviewRouter } from "waffle/browser/preview";
 import { activated } from "waffle/browser/service-worker";
 import { binaryBytes, commands, guests, previewPort } from "./guests";
+import { MessageListenerProbe } from "./message-listener-probe";
 
 const workers = new Map<Worker, string>();
 const created: string[] = [];
@@ -33,8 +34,7 @@ const runtime = createRuntime({
 });
 const router = new PreviewRouter({ baseURL: location.href, prefix: "__preview" });
 const listeners = new Map<number, RuntimeNetworkHelper>();
-const onPreview = (event: MessageEvent) => router.onMessage(event);
-let previewListener = false;
+const previewListener = new MessageListenerProbe(navigator.serviceWorker, event => router.onMessage(event));
 let registration: ServiceWorkerRegistration | undefined;
 let installation: BunAdapterInstallation | undefined;
 let supervisor: RuntimeSupervisor | undefined;
@@ -184,7 +184,8 @@ async function record(name: string, execute: () => Promise<unknown>) {
 }
 async function setup() {
   check(crossOriginIsolated, "cross-origin isolation");
-  navigator.serviceWorker.addEventListener("message", onPreview); previewListener = true;
+  navigator.serviceWorker.addEventListener("message", previewListener.listener);
+  check(previewListener.count() === 1, "page listener probe reaches the registered preview handler");
   navigator.serviceWorker.startMessages();
   registration = await navigator.serviceWorker.register("./sw.js", { scope: "./__preview/" });
   await activated(registration);
@@ -229,12 +230,11 @@ async function cleanup() {
   } finally {
     await runtime.dispose();
     for (const shell of Array.from(sessions)) await shell.dispose();
-    if (previewListener) navigator.serviceWorker.removeEventListener("message", onPreview);
-    previewListener = false;
+    navigator.serviceWorker.removeEventListener("message", previewListener.listener);
     await registration?.unregister();
   }
   check(workers.size === 0, `zero owned workers, got ${workers.size}`);
   check(listeners.size === 0, `zero guest listeners, got ${listeners.size}`);
-  return { workers: workers.size, listeners: listeners.size, pageListeners: Number(previewListener), sessions: sessions.size, borrowerPreservedUntilOwnerDisposal: true };
+  return { workers: workers.size, listeners: listeners.size, pageListeners: previewListener.assertRemoved(), sessions: sessions.size, borrowerPreservedUntilOwnerDisposal: true };
 }
 Reflect.set(globalThis, "shellConsumer", { exercise, cleanup, diagnostics });
