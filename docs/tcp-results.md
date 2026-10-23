@@ -202,3 +202,15 @@ Next dev. The historical timeout did not recur, so no cause or fix is claimed.
 The `tcp-hmr-main-20261023T060420Z-axmpj2oh` remote receipt retains all three
 passing runs and confirms that task processes, browser profiles, source and
 guest copies were removed.
+
+### DNS review corrections, 2026-10-23
+
+The review regressions fail before the fix for node:net bracketed IPv6 and
+synchronous host-type validation. Bun.listen and node:net now reject `[::1]`
+with ENOTFOUND and the unchanged hostname. Only Bun.connect and Bun.serve
+accept brackets. Truthy non-string node:net hosts throw ERR_INVALID_ARG_TYPE
+synchronously; native Bun and Node still accept falsy default-host values.
+The guest fixture has a manual marker because its malformed-host expectation
+follows pinned upstream Bun 1.4.4, not reference Bun 1.4.2. The older reference
+still dials bracketed IPv4, malformed mapped IPv6 and trailing-newline IPv4.
+The earlier native-fixture-pass claim was incorrect and is withdrawn.

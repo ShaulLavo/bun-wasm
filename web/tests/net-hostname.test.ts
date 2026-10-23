@@ -38,7 +38,7 @@ test("node:net preserves brackets for both connect and listen resolution", async
 test("connect rejects non-string hosts synchronously", async () => {
   const fixture = networkFixture();
   try {
-    for (const host of [123, false, {}, []]) {
+    for (const host of [123, true, {}, []]) {
       const socket = fixture.own(new fixture.net.Socket());
       expect(() => Reflect.apply(socket.connect, socket, [{ port: 80, host }])).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }));
     }

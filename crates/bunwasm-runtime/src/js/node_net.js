@@ -74,6 +74,7 @@
       }
       connect(...args) {
         const [options, callback] = _normalizeArgs(args);
+        if (options.host && typeof options.host !== "string") throw error(TypeError, "ERR_INVALID_ARG_TYPE", 'The "options.host" property must be of type string');
         if (!native.hostCaps.connect) throw error(Error, "ENOTSUP", "net.connect is not supported in bun-wasm without a networking host");
         if (this.connecting) {
           internal.nextTick(() => this.destroy(error(Error, "EALREADY", "Socket is already connecting")));

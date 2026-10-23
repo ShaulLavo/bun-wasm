@@ -1,2 +1,5 @@
 invalid hosts fail before listening or dialing, with resolver details
-only a bracketed IPv6 literal is unwrapped
+Bun.connect accepts bracketed IPv6
+Bun.listen and node:net preserve bracketed names
+non-string node:net hosts throw synchronously
+Bun.serve accepts bracketed IPv6

@@ -3310,7 +3310,7 @@ unchanged. This replaces direct `valueOf()` calls that skipped the hook.
 ## TCP hostname validation
 
 Class **Host feature**, **original adapter** in
-`crates/bunwasm-runtime/src/js/net_hostname.ts`, `node_net.js` and `net.js`.
+`crates/bunwasm-runtime/src/js/net_hostname.ts`, `node_net.js`, `bun_tcp.js` and `net.js`.
 No upstream implementation is copied. The public-contract references are
 Bun `test/js/bun/net/socket-dns-error.test.ts` and `src/js/node/net.ts`,
 pinned base `9510e74152073d850a18758ca41114d8f214ffa6`, patched tree
@@ -3318,4 +3318,8 @@ pinned base `9510e74152073d850a18758ca41114d8f214ffa6`, patched tree
 classified IP predicate. Invalid host syntax fails before crossing the host
 networking ABI, connect errors retain asynchronous socket delivery, and listen
 resolver errors retain the caller's hostname. Platform resolution still owns
-valid names and legacy IPv4 forms. TLS and raw internet TCP are not added.
+valid names and legacy IPv4 forms. Only Bun.connect and Bun.serve opt into
+unwrapping valid bracketed IPv6. Bun.listen and node:net resolve bracketed
+names unchanged and reject them with ENOTFOUND. Node connect rejects truthy
+non-string host arguments synchronously, as native Bun and Node do. TLS and
+raw internet TCP are not added.

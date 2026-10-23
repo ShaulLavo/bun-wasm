@@ -570,7 +570,7 @@
     if (options.tls) throw new Error("Bun.serve TLS is not supported by this networking host");
     const htmlServer = internal.require("html_server");
     const ws = internal.require("websocket");
-    const hostname = options.hostname || "0.0.0.0";
+    const hostname = internal.require("net_hostname")(options.hostname || "0.0.0.0", true);
     const requested = options.port !== undefined ? Number(options.port) : Number(globalThis.process.env.BUN_PORT || globalThis.process.env.PORT || 3000);
     const listener = listenOrThrow(hostname, requested);
     const port = native.hostLocalPort(listener);

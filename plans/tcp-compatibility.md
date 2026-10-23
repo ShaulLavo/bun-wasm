@@ -56,8 +56,8 @@ on their owning runtime features.
 The exact-main DNS run has 20 passing, four failing and five skipped cases.
 Three listen failures lose `hostname`; bracketed IPv4 is incorrectly dialed.
 The adapter now rejects malformed names before listening or dialing, preserving
-resolver details and asynchronous connect-error delivery. Only valid bracketed
-IPv6 literals lose brackets. Legacy IPv4 spellings still reach the platform
+resolver details and asynchronous connect-error delivery. Only Bun.connect and Bun.serve unwrap valid bracketed
+IPv6 literals; Bun.listen and node:net reject bracketed names unchanged. Legacy IPv4 spellings still reach the platform
 resolver. The dedicated `net-dns-errors` fixture retains these inputs.
 
 The own-source QuickJS guest passes the dedicated fixture. Its unchanged
