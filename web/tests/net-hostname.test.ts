@@ -1,18 +1,21 @@
 import { expect, test } from "bun:test";
 import { networkFixture } from "./node-net-fixture";
 
+async function rejectedHost(fixture: ReturnType<typeof networkFixture>, hostname: string) {
+  const socket = fixture.own(new fixture.net.Socket());
+  let error: Error | undefined;
+  socket.on("error", value => { error = value; });
+  socket.connect(80, hostname);
+  expect(error).toBeUndefined();
+  await fixture.pump();
+  expect(error).toMatchObject({ name: "Error", code: "ENOTFOUND", syscall: "getaddrinfo", hostname, message: `getaddrinfo ENOTFOUND ${hostname}` });
+}
+
 test("invalid socket hostnames report resolver errors without opening a connection", async () => {
   const fixture = networkFixture();
-  const { net, own, pump } = fixture;
   try {
     for (const hostname of ["this is not a hostname", "localhost:80", "a..b", "[127.0.0.1]", "[]", "::1/64", "a".repeat(64) + ".com"]) {
-      const socket = own(new net.Socket());
-      let error: Error | undefined;
-      socket.on("error", value => { error = value; });
-      socket.connect(80, hostname);
-      expect(error).toBeUndefined();
-      await pump();
-      expect(error).toMatchObject({ name: "Error", code: "ENOTFOUND", syscall: "getaddrinfo", hostname, message: `getaddrinfo ENOTFOUND ${hostname}` });
+      await rejectedHost(fixture, hostname);
     }
   } finally { await fixture.dispose(); }
 });
