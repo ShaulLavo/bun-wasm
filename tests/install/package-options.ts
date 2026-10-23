@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { createRegistry } from "./registry.mjs";
 
 const root = resolve(import.meta.dir, "../..");
-const scratch = mkdtempSync("/work/tmp/bun-wasm-package-options-");
+const scratch = mkdtempSync(join(process.env.BUN_WASM_TEST_TMP ?? tmpdir(), "bun-wasm-package-options-"));
 const children = new Set<ReturnType<typeof spawn>>();
 let registry: Awaited<ReturnType<typeof createRegistry>> | undefined;
 let cleaned = false;
