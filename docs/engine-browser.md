@@ -153,7 +153,8 @@ The host engine exposes neither, so the browser engine reconstructs both:
 - **AsyncLocalStorage across `await`:**
   - For this build, Bun's printer (patch `0008`) prints `await x` as `__bunwasm_resume(__bunwasm_capture(), await x)`. Arguments evaluate in order, so the context is captured before the suspension and restored when the function resumes.
   - `for await` loops get the same hooks: `{ const c = capture(); for await (…) { resume(c); … } resume(c); }`.
-  - Plain `.js` files that contain `await` go through the transpiler in this build so that they get the hooks, and their stacks stay source-mapped.
+  - Plain `.js` files that contain `await` or `eval(` go through the transpiler in this build so that they get the hooks, and their stacks stay source-mapped.
+  - Source compiled at run time gets the same hooks, spliced in at the spans Bun's scan pass records (patch 0014). This covers direct eval, `vm` scripts, `Module#_compile` and the `Function` constructors. The printer passes a direct eval's argument through `__bunwasm_evalSource`, and the splice does the same for a direct eval inside such source, so the call stays direct. The wasm returns UTF-16 offsets and the host inserts the text into its own string, so every other code unit stays, including lone surrogates, line numbers and `//# sourceURL`. Next.js's dev server needs this: webpack's `eval-source-map` devtool evaluates every server module with a direct eval.
   - `then` callbacks, timers, ticks and immediates carry their own context.
   - The TC39 AsyncContext proposal (`AsyncContext.Variable`) would make the hooks unnecessary. It was at stage 2 at the time of writing and no engine we target ships it, even behind a flag.
   - **Leak, and how it is contained:** a resumed context would stay set for whatever runs after the function suspends again or returns. A microtask puts the previous context back once the resumed job left it unchanged. Native jobs queued before that microtask (for example a MessagePort event in user code) can still see the resumed context.
@@ -181,7 +182,7 @@ These follow from running on a standard JS engine without engine hooks. Every fi
 | what | browser engine |
 |---|---|
 | Promise state | Known only for promises settled where the host sees it (see above). Others print as `<pending>`, and `Bun.peek` returns them unchanged. |
-| AsyncLocalStorage | Carried across `await` by the transpiler hooks. Code that skips the transpiler (`eval`, `new Function`) and native jobs (see above) are not covered. |
+| AsyncLocalStorage | Carried across `await` by the transpiler hooks, in files and in code compiled at run time. Indirect eval (`(0, eval)(code)`) and native jobs (see above) are not covered. |
 | `require()` of an ES module | A converted CommonJS copy, separate from the ES module instance if the file is also imported. |
 | Import cycles | Need the module store (a service worker in the browser). Without it, a cycle is an error. |
 | Proxy detection, Map/Set iterator entries in `console.log` | Inspection prints less, e.g. a Proxy prints as its target. |

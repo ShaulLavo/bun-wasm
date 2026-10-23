@@ -1,7 +1,7 @@
 From b3aeae0ea1334015293715e77e08538a149eaa4f Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 02:10:37 +0300
-Subject: [PATCH 06/13] wasm: openat access mode and fd paths on wasi
+Subject: [PATCH 06/14] wasm: openat access mode and fd paths on wasi
 
 wasi-libc's O_RDONLY is a real bit, so an O_DIRECTORY-only open gets
 EINVAL; add O_RDONLY when no access mode is given. get_fd_path asks
