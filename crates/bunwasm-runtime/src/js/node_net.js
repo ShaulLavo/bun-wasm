@@ -303,7 +303,7 @@
       [Symbol.asyncDispose]() { return disposeNodeServer(this, true); }
       ref() { this._referenced = true; if (this._accepting) this._accepting.ref = true; if (this._starting) this._starting.ref = true; return this; }
       unref() { this._referenced = false; if (this._accepting) this._accepting.ref = false; if (this._starting) this._starting.ref = false; return this; }
-    }
+    });
     const connect = (...args) => new Socket().connect(...args);
     return { Socket, Server, Stream: Socket, createServer: (options, listener) => new Server(options, listener), connect, createConnection: connect };
   };
