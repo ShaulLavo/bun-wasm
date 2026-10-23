@@ -70,8 +70,8 @@ At its build commit, `crates/bunwasm-runtime/src/js/spawn.ts:187` explicitly
 rejects `options.ipc`. Current source supports IPC. Do not remove IPC from the
 scenario to admit the older guest.
 
-Each `publicAdapter` scenario reaches the stream check after HTTP preview,
-service-worker routing and WebSocket echo assertions. The streamed-response
+In that run, each `publicAdapter` scenario reaches the stream check after HTTP
+preview, service-worker routing and WebSocket echo assertions. The streamed-response
 implementation is also older than the accepted newer local candidate; that
 candidate's PR #103 matrix is separate evidence, not a substitute here.
 
@@ -85,3 +85,14 @@ including failed results and verified teardown, is retained under
 `/work/reports/machine-fleet/remote-gate/bun-network-published-r2-20261023T054629Z-6ocz__m5/`.
 Selection and local controls are under
 `/work/reports/wave-20261022/bun-wasm/network-published-20261023/`.
+
+A final-source repeat at `ba0d15dd464537617f96c559f8105774125abc06` also
+attempted all six combinations and exited 1. IPC, Chromium stream HTTP 500 and
+Firefox stream NetworkError failures repeated. WebKit crashed earlier in that
+repeat: preview returned HTTP 404 and the owner page could not provide
+diagnostics or cleanup counts. The driver retains the original assertion
+failure alongside the failed cleanup, rather than replacing it with a diagnostic
+error. The other five page cleanup receipts again report zero workers/listeners.
+Final evidence is
+`/work/reports/machine-fleet/remote-gate/bun-network-published-final-20261023T055143Z-354bjm4k/`.
+Independent actual-host readback found no owned processes or staged paths.
