@@ -39,8 +39,10 @@ const listenError = once(rejectedServer, "error");
 rejectedServer.listen(0, "[::1]");
 check((await listenError)[0], "[::1]");
 const rejectedSocket = net.connect(80, "[::1]");
-check((await once(rejectedSocket, "error"))[0], "[::1]");
-await new Promise(resolve => rejectedSocket.once("close", resolve));
+const socketError = once(rejectedSocket, "error");
+const socketClosed = new Promise(resolve => rejectedSocket.once("close", resolve));
+check((await socketError)[0], "[::1]");
+await socketClosed;
 console.log("Bun.listen and node:net preserve bracketed names");
 for (const host of [123, true, {}, []]) {
   assert.throws(() => net.connect({ host, port: 80 }), { code: "ERR_INVALID_ARG_TYPE" });
