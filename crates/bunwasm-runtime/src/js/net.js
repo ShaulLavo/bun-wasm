@@ -415,9 +415,10 @@
   }
 
   function listenOrThrow(hostname, port) {
-    const handle = native.hostListen(hostname, port);
+    const handle = native.hostListen(internal.require("net_hostname")(hostname), port);
     if (handle >= 0) return handle;
     const err = hostError(0, `Failed to listen at ${hostname}`);
+    if (err.code === "ENOTFOUND") err.hostname = hostname;
     if (err.code === "EADDRINUSE") {
       err.message = `Failed to start server. Is port ${port} in use?`;
       err.syscall = "listen";
@@ -569,7 +570,7 @@
     if (options.tls) throw new Error("Bun.serve TLS is not supported by this networking host");
     const htmlServer = internal.require("html_server");
     const ws = internal.require("websocket");
-    const hostname = options.hostname || "0.0.0.0";
+    const hostname = internal.require("net_hostname")(options.hostname || "0.0.0.0", true);
     const requested = options.port !== undefined ? Number(options.port) : Number(globalThis.process.env.BUN_PORT || globalThis.process.env.PORT || 3000);
     const listener = listenOrThrow(hostname, requested);
     const port = native.hostLocalPort(listener);

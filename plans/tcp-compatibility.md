@@ -49,10 +49,23 @@ still depends on private stream modules and native Bun socket hooks.
 
 ## Other first blockers
 
-`js/bun/net/socket-dns-error.test.ts` still has host and diagnostic edge cases.
-Reproduce its exact inputs with the same isolated command before changing DNS
-normalization. The Rust host and Node engine host own resolution; browser raw
-internet TCP remains unavailable.
+Status: Done for resolver input and diagnostic fixes, 2026-10-23.
+TLS, Unix sockets and private-hook capability checks remain Approved, blocked
+on their owning runtime features.
+
+The exact-main DNS run has 20 passing, four failing and five skipped cases.
+Three listen failures lose `hostname`; bracketed IPv4 is incorrectly dialed.
+The adapter now rejects malformed names before listening or dialing, preserving
+resolver details and asynchronous connect-error delivery. Only Bun.connect and
+Bun.serve unwrap valid bracketed IPv6 literals. Bun.listen and node:net reject
+bracketed names unchanged. Legacy IPv4 spellings still reach the platform resolver. The dedicated `net-dns-errors` fixture retains these inputs.
+
+The own-source QuickJS guest passes the dedicated fixture. Its unchanged
+upstream DNS file has 24 passes, zero failures and five skips. The Rust host
+and Node engine host still own platform resolution; browser raw internet TCP
+remains unavailable.
+
+The following first blockers still need their own features:
 
 TLS and Unix socket files need capabilities beyond this plain TCP adapter.
 `socket.test.ts` and syscall-fault files first import private `createSocketPair`
@@ -99,7 +112,16 @@ Do not stop another session or mask the diagnostic in fixture expectations.
 
 ## Same-size HMR update timeout
 
-Status: Approved for bounded reproduction if the timeout recurs.
+Status: Done for bounded current-main reproduction, 2026-10-23. Not reproduced.
+
+Three Chromium/browser runs at exact main `5fa3a24f` pass the unchanged
+15-second assertion. Both preview documents update the same-size text, retain
+their markers, and receive CSS changes. These use Bun's plain HTML dev server,
+not Next dev. No causal fix or longer timeout is justified by this result.
+Evidence: `tcp-hmr-main-20261023T060420Z-axmpj2oh` under
+`/work/reports/machine-fleet/remote-gate/`, including verified teardown.
+
+The following is the historical failure:
 
 The main-integration gate at code commit 20f9684 timed out once in
 `web/tests/browser-net.mjs:259` after replacing the HTML app text with an

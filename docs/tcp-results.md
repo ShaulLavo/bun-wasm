@@ -161,3 +161,67 @@ an existing server owns its guest port. After the fix, two helpers forward
 requests independently through the same guest port, the existing server still
 answers, and both preview ports can be rebound after teardown.
 This host-only change does not require a new guest artifact.
+
+## Resolver inputs and diagnostics, 2026-10-23
+
+The exact-main QuickJS guest at `5fa3a24f` produces 20 pass, four fail and
+five skips in unmodified `js/bun/net/socket-dns-error.test.ts`, patched
+Bun `d71508d31edf06765c12adf0df137ef531539f68`. Three failures are missing
+`hostname` on synchronous listen errors. The fourth dials bracketed IPv4
+and reports ECONNREFUSED instead of rejecting the original name.
+
+The guest adapter now validates host syntax before invoking host resolution.
+It rejects whitespace, malformed brackets, non-address colons, empty labels
+and oversized labels, while leaving legacy IPv4 spelling to the platform.
+Only Bun.connect and Bun.serve unwrap valid bracketed IPv6 literals.
+Bun.listen and node:net reject bracketed names unchanged. Resolver errors carry
+the original hostname, code, syscall and message; connect errors arrive
+asynchronously. The focused test uses real Waffle TCP pipes for invalid names,
+bracket-preserving resolution and synchronous host-type checks. TLS and Unix sockets, private testing hooks and
+native Node child executables remain capability limits rather than DNS fixes.
+
+After rebuilding the own-source QuickJS guest, the unchanged upstream file has
+24 passes, zero failures and five skips, with no timeout. The dedicated
+`net-dns-errors` fixture passed on that pre-review guest. After review fixes,
+three focused checks pass with 23 assertions, along with runtime and web type
+checks and lint. Native controls cover the corrected entry-point differences;
+the full malformed-host fixture deliberately differs from Bun 1.4.2.
+The real-guest wrapper also passes 108 runtime prerequisite tests with 1,634
+assertions. Reproduce with `scripts/test.sh --no-build net-dns-errors` and the
+isolated upstream command. Full records are in
+`/work/reports/wave-20261022/bun-wasm/tcp-queue/dns-upstream-after.json`.
+
+## Same-size HMR recheck, 2026-10-23
+
+Three runs of `ENGINES=browser node web/tests/browser-net.mjs chromium`
+pass at exact main `5fa3a24fc83bf2cb315f87f7f8ced28d507cb1fe` on UpCloud 4.
+The browser guest has SHA-256
+`e63f4b4fe731881f14b75b5491a36f41fbe1edef5f6c2fc1a0cf20454cb6d2f3`;
+its build context names the same source commit and its receipt matches its bytes.
+Each run updates the same-size HTML app text in both the preview tab and iframe,
+preserves both documents and updates CSS. The original 15-second assertion
+and equal-length strings are unchanged. This plain Bun HTML check does not use
+Next dev. The historical timeout did not recur, so no cause or fix is claimed.
+The `tcp-hmr-main-20261023T060420Z-axmpj2oh` remote receipt retains all three
+passing runs and confirms that task processes, browser profiles, source and
+guest copies were removed.
+
+### DNS review corrections, 2026-10-23
+
+The review regressions fail before the fix for node:net bracketed IPv6 and
+synchronous host-type validation. Bun.listen and node:net now reject `[::1]`
+with ENOTFOUND and the unchanged hostname. Only Bun.connect and Bun.serve
+accept brackets. Truthy non-string node:net hosts throw ERR_INVALID_ARG_TYPE
+synchronously; native Bun and Node still accept falsy default-host values.
+The guest fixture has a manual marker because its malformed-host expectation
+follows pinned upstream Bun 1.4.4, not reference Bun 1.4.2. The older reference
+still dials bracketed IPv4, malformed mapped IPv6 and trailing-newline IPv4.
+The earlier native-fixture-pass claim was incorrect and is withdrawn.
+
+The corrected focused adapter checks pass three tests with 23 assertions,
+including asynchronous resolver errors and synchronous host-type rejection.
+Runtime and web TypeScript checks and targeted lint pass. Native Bun 1.4.4
+and Node 24.22.1 controls agree on bracket handling and truthy host validation.
+The remote run `tcp-dns-review-validated-20261023T075824Z-e89l2_bm` records
+those checks and verified teardown. CI runs `net-dns-errors` on the QuickJS
+guest it builds from the PR source, reusing the existing native build job.
