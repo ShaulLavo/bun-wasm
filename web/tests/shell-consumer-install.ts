@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, readdir, readFile, realpath } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, realpath, symlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { buildBrowserEntries, buildClassicWorker, resolveRuntimePackage } from "../../scripts/browser-build";
 
@@ -27,6 +27,10 @@ export async function installConsumer(root: string, directory: string, execute: 
   }, trustedDependencies: ["bun-wasm", "bash-web", "waffle", "esbuild"] }, null, 2));
   await execute([process.execPath, "install"], directory);
   const shell = join(directory, "node_modules/bash-web");
+  // Shell's builder uses a checkout-local peer path. Preserve the single hoisted
+  // Waffle installation while supplying that build-time directory layout.
+  await mkdir(join(shell, "node_modules"), { recursive: true });
+  await symlink("../../waffle", join(shell, "node_modules/waffle"), "dir");
   // Git prepare emits workers only. Build the real runtime-backed shell guest too,
   // without demos, test guests or the compatibility corpus.
   await execute([process.execPath, "scripts/build-worker.mjs"], shell);
