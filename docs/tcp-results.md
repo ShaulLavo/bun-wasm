@@ -173,16 +173,19 @@ and reports ECONNREFUSED instead of rejecting the original name.
 The guest adapter now validates host syntax before invoking host resolution.
 It rejects whitespace, malformed brackets, non-address colons, empty labels
 and oversized labels, while leaving legacy IPv4 spelling to the platform.
-Valid bracketed IPv6 literals are unwrapped. Resolver errors carry the original
-hostname, code, syscall and message; connect errors arrive asynchronously.
-The focused test uses real Waffle TCP pipes, with separate invalid-name and
-valid IPv6-loopback checks. TLS and Unix sockets, private testing hooks and
+Only Bun.connect and Bun.serve unwrap valid bracketed IPv6 literals.
+Bun.listen and node:net reject bracketed names unchanged. Resolver errors carry
+the original hostname, code, syscall and message; connect errors arrive
+asynchronously. The focused test uses real Waffle TCP pipes for invalid names,
+bracket-preserving resolution and synchronous host-type checks. TLS and Unix sockets, private testing hooks and
 native Node child executables remain capability limits rather than DNS fixes.
 
 After rebuilding the own-source QuickJS guest, the unchanged upstream file has
 24 passes, zero failures and five skips, with no timeout. The dedicated
-`net-dns-errors` fixture passes. Two focused checks pass with 15 assertions,
-along with runtime and web type checks, lint and native Bun fixture control.
+`net-dns-errors` fixture passed on that pre-review guest. After review fixes,
+three focused checks pass with 23 assertions, along with runtime and web type
+checks and lint. Native controls cover the corrected entry-point differences;
+the full malformed-host fixture deliberately differs from Bun 1.4.2.
 The real-guest wrapper also passes 108 runtime prerequisite tests with 1,634
 assertions. Reproduce with `scripts/test.sh --no-build net-dns-errors` and the
 isolated upstream command. Full records are in
@@ -214,3 +217,11 @@ The guest fixture has a manual marker because its malformed-host expectation
 follows pinned upstream Bun 1.4.4, not reference Bun 1.4.2. The older reference
 still dials bracketed IPv4, malformed mapped IPv6 and trailing-newline IPv4.
 The earlier native-fixture-pass claim was incorrect and is withdrawn.
+
+The corrected focused adapter checks pass three tests with 23 assertions,
+including asynchronous resolver errors and synchronous host-type rejection.
+Runtime and web TypeScript checks and targeted lint pass. Native Bun 1.4.4
+and Node 24.22.1 controls agree on bracket handling and truthy host validation.
+The remote run `tcp-dns-review-validated-20261023T075824Z-e89l2_bm` records
+those checks and verified teardown. CI runs `net-dns-errors` on the QuickJS
+guest it builds from the PR source, reusing the existing native build job.
