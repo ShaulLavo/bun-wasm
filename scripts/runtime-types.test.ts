@@ -51,3 +51,18 @@ test("accepts generated-function parser and module-loader contracts", () => {
   expect(result.stdout.toString()).toBe("");
   expect(result.exitCode).toBe(0);
 });
+
+
+test("accepts format graph, boxed coercion and shared buffer input contracts", () => {
+  const result = check('native.parseData(new Uint8Array(), "YAML");\ndeclare const internal: BunWasm.Internal;\ninternal.require("yaml_coercion")(new String("value"));\ninternal.toUint8(new SharedArrayBuffer(4));');
+  expect(result.stdout.toString()).toBe("");
+  expect(result.exitCode).toBe(0);
+});
+
+for (const source of ['native.parseData("bytes", "YAML");', 'native.parseData(new Uint8Array(), "CSV");']) {
+  test(`rejects invalid format graph call ${source}`, () => {
+    const result = check(source);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout.toString()).toContain("error TS");
+  });
+}

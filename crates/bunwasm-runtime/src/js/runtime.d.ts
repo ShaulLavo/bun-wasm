@@ -229,3 +229,31 @@ declare namespace BunWasm {
 }
 
 declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;
+
+declare namespace BunWasm {
+  interface FormatTemporalValue {
+    toString(options: { calendarName: string; timeZoneName: string }): string;
+  }
+  interface FormatInstant extends FormatTemporalValue {
+    epochNanoseconds: bigint;
+    toZonedDateTimeISO(offset: string): FormatTemporalValue;
+  }
+  interface FormatBlob extends Blob { _bytes(): Uint8Array }
+  interface Native {
+    /** Serialized tagged graph from bunwasm-transpiler/src/data.rs. */
+    parseData(bytes: Uint8Array, format: DataFormat): string;
+  }
+  interface Internal {
+    require(name: "yaml_coercion"): (value: unknown) => unknown;
+    toUint8(value: ArrayBuffer | SharedArrayBuffer | ArrayBufferView): Uint8Array;
+  }
+}
+
+declare var Bun: { inspect(value: unknown): string };
+declare var Temporal: {
+  Instant: { from(value: string): BunWasm.FormatInstant };
+  PlainDate: { from(value: string): BunWasm.FormatTemporalValue };
+  PlainDateTime: { from(value: string): BunWasm.FormatTemporalValue };
+  PlainTime: { from(value: string): BunWasm.FormatTemporalValue };
+  ZonedDateTime: { from(value: string): BunWasm.FormatTemporalValue };
+};
