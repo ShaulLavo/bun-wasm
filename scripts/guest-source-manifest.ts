@@ -125,7 +125,7 @@ export async function captureSourceManifest(options: SourceOptions): Promise<Sou
   const source = { head: git(repository, "rev-parse", "HEAD"), tree: git(repository, "rev-parse", "HEAD^{tree}") };
   const groups = [await repositoryGroup(repository)];
   groups.push(await group("bun", join(repository, "vendor/bun"), ["src", "Cargo.toml", "Cargo.lock", "build/debug/codegen", "vendor/lolhtml", "vendor/rust-argon2"]));
-  if (build !== "tools") groups.push(await group("boringssl", boringssl, ["CMakeLists.txt", "cmake", "include", "crypto", "gen", "third_party", "util"]));
+  groups.push(await group("boringssl", boringssl, ["CMakeLists.txt", "cmake", "include", "crypto", "gen", "third_party", "util"]));
   groups.push(await group("waffle-libc", waffle, ["package.json", "scripts/build-wasi-libc.sh", "patches/wasi-libc/preopen-scan.patch"]));
   groups.push(await group("sysroot", sysroot, ["bun-wasm-sysroot.json", "include", "lib"], [sdk]));
   groups.push(await group("sdk", sdk, ["VERSION", "lib/clang"]));
@@ -133,7 +133,9 @@ export async function captureSourceManifest(options: SourceOptions): Promise<Sou
   await verifySysrootInputs(options, groups);
   if (build === "jsc" || build === "tools") {
     if (!options.jscBuild) throw new Error("JSC build requires JSC_BUILD_DIR");
-    groups.push(await group("jsc-prebuild", options.jscBuild, ["build/jsc/.bunwasm-inputs", "build/jsc/compile_commands.json", "inputs/wasi-jsc.cmake", "inputs/shim/wasi-compat.h", "build/jsc/lib/libJavaScriptCore.a", "build/jsc/lib/libWTF.a", "build/jsc/lib/libbmalloc.a", "icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a"]));
+    const paths = ["build/jsc/.bunwasm-inputs", "build/jsc/compile_commands.json", "inputs/wasi-jsc.cmake", "inputs/shim/wasi-compat.h", "build/jsc/lib/libJavaScriptCore.a", "build/jsc/lib/libWTF.a", "build/jsc/lib/libbmalloc.a", "icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a"];
+    if (build === "tools") paths.push("webkit/Source/JavaScriptCore/yarr", "webkit/Source/JavaScriptCore/runtime/OptionsList.h", "build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp");
+    groups.push(await group("jsc-prebuild", options.jscBuild, paths));
   }
   const tools = await Promise.all(Object.entries(options.tools).map(([name, path]) => tool(name, path, repository)));
   if (git(repository, "rev-parse", "HEAD") !== source.head || git(repository, "status", "--porcelain", "--untracked-files=normal")) throw new Error("Guest source changed while collecting manifest");
@@ -144,7 +146,7 @@ export async function captureSourceManifest(options: SourceOptions): Promise<Sou
       "Cargo registry/git cache source bytes are not inventoried; Cargo.lock records resolutions and registry checksums.",
       "Ambient environment, user/global Cargo configuration, host shared libraries and intermediate build-cache provenance are not inventoried.",
       "Waffle browser runtime is not compiled into this guest; only its installed libc builder and patch are inventoried.",
-      "JSC/tools prebuild archives, compiler flags and input stamp identify linked inputs; WebKit/ICU headers and full prebuild source closure are not inventoried. JSC embedding receipt remains separate.",
+      "JSC/tools prebuild archives, compiler flags and input stamp identify linked inputs; direct tools Yarr sources are inventoried, but remaining WebKit/ICU headers and full prebuild source closure are not. JSC embedding receipt remains separate.",
     ],
   };
 }

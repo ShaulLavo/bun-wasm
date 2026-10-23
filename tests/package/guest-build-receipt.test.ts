@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { guestBuilds, hash } from "../../scripts/guest-source-manifest.ts";
@@ -27,6 +27,48 @@ test("guest receipt binds committed repository, selected engine, consumed inputs
     expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, sourceManifest: { ...receipt.sourceManifest, build: "quickjs" } })).toThrow("digest mismatch");
     const { sourceManifest: _, ...oldReceipt } = receipt;
     expect(() => verifyGuestBuildReceipt(wasm, oldReceipt)).toThrow("source manifest");
+  });
+});
+
+test("write command validation can pass its verified receipt as build inputs", async () => {
+  await withReceiptFixture(async (options, artifact) => {
+    const inputs = await prepareGuestBuildInputs(options);
+    const verified = { ...inputs, artifactSha256: hash(wasm), artifactBytes: wasm.byteLength };
+    verifyGuestBuildReceipt(wasm, verified);
+    await expect(writeGuestBuildReceipt(options, artifact, verified)).resolves.toEqual(verified);
+  });
+});
+
+test("receipt CLI snapshots and writes a tiny committed source fixture without compiling", async () => {
+  await withReceiptFixture(async (options, artifact) => {
+    const root = options.repository;
+    const cli = join(root, "scripts/guest-build-receipt.ts");
+    for (const name of ["guest-build-receipt.ts", "guest-source-manifest.ts"]) await copyFile(new URL(`../../scripts/${name}`, import.meta.url), join(root, "scripts", name));
+    await writeFile(join(root, ".gitignore"), (await readFile(join(root, ".gitignore"), "utf8")) + "node_modules/\n");
+    fixtureGit(root, "add", "scripts", ".gitignore");
+    fixtureGit(root, "commit", "-m", "fixture receipt CLI");
+    const bin = join(options.sdk, "bin");
+    await mkdir(bin);
+    const fake = join(root, "fake-tool");
+    await writeFile(fake, `#!/bin/sh\nif [ "$1" = "--print" ]; then printf '%s\\n' ${JSON.stringify(options.rustTargetLib)}; else printf 'fixture tool 1\\n'; fi\n`);
+    const rustup = join(bin, "rustup");
+    await writeFile(rustup, `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(fake)}\n`);
+    await chmod(rustup, 0o700);
+    for (const name of ["clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"]) await symlink(fake, join(bin, name));
+    const installed = join(root, "node_modules/waffle");
+    await mkdir(join(root, "node_modules"));
+    await symlink(options.waffle, installed);
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, BUN_WASM_SYSROOT: options.sysroot, WASI_SDK_PATH: options.sdk, WASI_SDK: options.sdk, BUN_CODEGEN_DIR: "", RUSTC: fake };
+    const started = Bun.spawnSync([process.execPath, cli, "inputs", "browser"], { env });
+    expect(started.stderr.toString()).toBe("");
+    expect(started.exitCode).toBe(0);
+    const snapshot = join(root, "dist/inputs.json");
+    await writeFile(snapshot, started.stdout);
+    const finished = Bun.spawnSync([process.execPath, cli, "write", artifact, snapshot], { env });
+    expect(finished.stderr.toString()).toBe("");
+    expect(finished.exitCode).toBe(0);
+    const receipt: unknown = await Bun.file(`${artifact}.build.json`).json();
+    expect(() => verifyGuestBuildReceipt(wasm, receipt)).not.toThrow();
   });
 });
 
@@ -104,7 +146,7 @@ for (const build of ["quickjs", "quickjs-minimal", "tools", "jsc"] as const) tes
     const receipt = await writeGuestBuildReceipt(selected, artifact, inputs);
     expect(receipt.sourceManifest.build).toBe(build);
     expect(receipt.sourceManifest.groups.some(group => group.name === "jsc-prebuild")).toBe(build === "jsc" || build === "tools");
-    expect(receipt.sourceManifest.groups.some(group => group.name === "boringssl")).toBe(build !== "tools");
+    expect(receipt.sourceManifest.groups.some(group => group.name === "boringssl")).toBe(true);
   });
 });
 
@@ -138,5 +180,16 @@ test("build start refuses a sysroot receipt that names a different installed lib
   await withReceiptFixture(async options => {
     await writeFile(join(options.waffle, "scripts/build-wasi-libc.sh"), "different builder");
     await expect(prepareGuestBuildInputs(options)).rejects.toThrow("does not match installed builder");
+  });
+});
+
+for (const path of ["vendor/boringssl/crypto/input.c", "jsc-build/webkit/Source/JavaScriptCore/yarr/YarrPattern.cpp", "jsc-build/webkit/Source/JavaScriptCore/runtime/OptionsList.h", "jsc-build/build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp"]) test(`tools receipt binds directly consumed native source at ${path}`, async () => {
+  await withReceiptFixture(async options => {
+    const selected = { ...options, build: "tools" } as const;
+    const artifact = join(options.repository, "dist", guestBuilds.tools.artifact);
+    await writeFile(artifact, wasm);
+    const inputs = await prepareGuestBuildInputs(selected);
+    await writeFile(join(options.repository, path), "changed native input");
+    await expect(writeGuestBuildReceipt(selected, artifact, inputs)).rejects.toThrow("changed during the build");
   });
 });

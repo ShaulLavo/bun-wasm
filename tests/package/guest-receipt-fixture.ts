@@ -59,7 +59,7 @@ export async function withReceiptFixture(run: (options: SourceOptions, artifact:
     for (const path of ["CMakeLists.txt", "cmake/input.cmake", "include/openssl/evp.h", "crypto/input.c", "gen/sources.cmake", "third_party/input.h", "util/input.c"]) await put(root, `vendor/boringssl/${path}`);
     await put(root, "fake-tool", "#!/bin/sh\nprintf 'fixture tool 1\\n'\n");
     await chmod(join(root, "fake-tool"), 0o700);
-    for (const path of ["build/jsc/.bunwasm-inputs", "build/jsc/compile_commands.json", "inputs/wasi-jsc.cmake", "inputs/shim/wasi-compat.h", "build/jsc/lib/libJavaScriptCore.a", "build/jsc/lib/libWTF.a", "build/jsc/lib/libbmalloc.a", "icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a"]) await put(root, `jsc-build/${path}`);
+    for (const path of ["build/jsc/.bunwasm-inputs", "build/jsc/compile_commands.json", "inputs/wasi-jsc.cmake", "inputs/shim/wasi-compat.h", "build/jsc/lib/libJavaScriptCore.a", "build/jsc/lib/libWTF.a", "build/jsc/lib/libbmalloc.a", "icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a", "webkit/Source/JavaScriptCore/yarr/YarrPattern.cpp", "webkit/Source/JavaScriptCore/runtime/OptionsList.h", "build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp"]) await put(root, `jsc-build/${path}`);
     const artifact = join(root, "dist", guestBuilds.browser.artifact);
     await put(root, "dist/bun-browser.wasm", "");
     await writeFile(artifact, wasm);

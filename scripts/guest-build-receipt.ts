@@ -36,7 +36,9 @@ export async function prepareGuestBuildInputs(options: SourceOptions): Promise<G
 
 export async function writeGuestBuildReceipt(options: SourceOptions, artifact: string, inputs: GuestBuildInputs): Promise<GuestBuildReceipt> {
   const current = await readInputs(options);
-  if (JSON.stringify(current) !== JSON.stringify(inputs)) throw new Error("Guest source or toolchain changed during the build");
+  const unchanged = current.bunHead === inputs.bunHead && current.bunTree === inputs.bunTree
+    && current.sysrootReceiptSha256 === inputs.sysrootReceiptSha256 && current.sourceManifestSha256 === inputs.sourceManifestSha256;
+  if (!unchanged) throw new Error("Guest source or toolchain changed during the build");
   if (basename(artifact) !== guestBuilds[inputs.sourceManifest.build].artifact) throw new Error("Guest artifact name does not match selected build");
   const bytes = await Bun.file(artifact).bytes();
   const receipt = { ...inputs, artifactSha256: hash(bytes), artifactBytes: bytes.byteLength };
@@ -65,8 +67,7 @@ function verifyManifest(value: unknown): asserts value is SourceManifest {
   if (!record(value) || value.schema !== 1 || !isGuestBuild(value.build)) throw new Error("Invalid guest source manifest schema/build");
   if (!record(value.source) || !digest(value.source.head, 40) || !digest(value.source.tree, 40)) throw new Error("Invalid guest source manifest commit/tree");
   if (!Array.isArray(value.groups) || !value.groups.every(group => record(group) && typeof group.name === "string" && validFiles(group.files))) throw new Error("Invalid guest source manifest files");
-  const required = ["repository", "bun", "waffle-libc", "sysroot", "sdk", "rust-target"];
-  if (value.build !== "tools") required.push("boringssl");
+  const required = ["repository", "bun", "waffle-libc", "sysroot", "sdk", "rust-target", "boringssl"];
   if (value.build === "jsc" || value.build === "tools") required.push("jsc-prebuild");
   const names = value.groups.map(group => group.name);
   if (new Set(names).size !== names.length || required.some(name => !names.includes(name))) throw new Error("Missing guest source manifest group");

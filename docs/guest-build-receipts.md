@@ -32,7 +32,8 @@ The explicit groups cover these inputs:
   and the installed lol-html and rust-argon2 trees. `sync-bun.sh --check` still
   requires the committed Bun tree to match the pinned source and patch series.
 - `boringssl`. The selected source's CMake inputs, headers, crypto, generated code,
-  third-party sources, and utility sources. Tools-only builds do not consume it.
+  third-party sources, and utility sources. Tools-only builds consume it through
+  `bunwasm-glue`.
 - `waffle-libc`. The installed package metadata, libc builder, and preopen patch.
 - `sysroot`. The existing sysroot receipt and actual `include` and `lib` contents,
   including SDK overlays. The top-level receipt hash must match this inventory.
@@ -42,7 +43,8 @@ The explicit groups cover these inputs:
   Rust target-library bytes have their own `rust-target` group.
 - `jsc-prebuild`. JSC and tools builds also inventory the existing input stamp,
   compiler database, copied toolchain/shim inputs, and linked archives. The JSC
-  embedding receipt remains separate.
+  embedding receipt remains separate. Tools builds also inventory their directly
+  compiled Yarr source tree, generated Unicode source, and option defaults.
 
 Groups are bounded source/config supersets, not compiler-observed dependency lists.
 Cargo registry/git cache bytes, ambient environment, user/global Cargo configuration,
