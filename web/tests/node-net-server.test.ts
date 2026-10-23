@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import EventEmitter from "node:events";
-import type { Socket } from "node:net";
+import type { Socket, Server } from "node:net";
 import { networkFixture } from "./node-net-fixture";
 
 test("Server supports callable construction, subclassing and the public prototype", async () => {
@@ -50,5 +50,26 @@ test("Server exposes Bun's public option defaults and validates keepalive delay"
       .toMatchObject({ keepAlive: true, keepAliveInitialDelay: 0, noDelay: true });
     expect(() => Reflect.construct(net.Server, [{ keepAliveInitialDelay: "invalid" }]))
       .toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }));
+  } finally { await fixture.dispose(); }
+});
+
+
+test("Server.call initializes an inherited receiver and accepts connections", async () => {
+  const fixture = networkFixture();
+  const { net, own, pump } = fixture;
+  try {
+    const receiver: Server = own(Object.create(net.Server.prototype));
+    let connections = 0;
+    Reflect.apply(net.Server, receiver, [{ pauseOnConnect: true }, (peer: Socket) => { own(peer); connections++; }]);
+    expect(Reflect.get(receiver, "pauseOnConnect")).toBe(true);
+    receiver.listen(0, "127.0.0.1");
+    own(net.connect(fixture.port(receiver), "127.0.0.1"));
+    await pump();
+    expect(connections).toBe(1);
+    await new Promise<void>((resolve, reject) => receiver.getConnections((error, count) => {
+      if (error) { reject(error); return; }
+      expect(count).toBe(1);
+      resolve();
+    }));
   } finally { await fixture.dispose(); }
 });

@@ -15,9 +15,13 @@
       noDelay: Boolean(copy.noDelay),
     });
   }
-  function callable(implementation: Function) {
+  function callable(implementation: Function, initialize: Function) {
     const Server = new Proxy(implementation, {
-      apply(target, _receiver, args) { return Reflect.construct(target, args); },
+      apply(target, receiver, args) {
+        if (!(receiver instanceof target)) return Reflect.construct(target, args);
+        Reflect.apply(Object.getPrototypeOf(target), receiver, []);
+        return Reflect.apply(initialize, receiver, args);
+      },
     });
     Object.defineProperty(Server, "length", { value: 2, configurable: true });
     Object.defineProperty(Server.prototype, "constructor", { value: Server, writable: true, configurable: true });

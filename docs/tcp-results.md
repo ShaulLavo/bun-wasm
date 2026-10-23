@@ -169,7 +169,10 @@ and three skipped cases in unmodified `js/node/net/server.spec.ts` at patched
 Bun `d71508d31edf06765c12adf0df137ef531539f68`.
 The constructor checks cover callable use, subclass identity, arity, primitive
 option rejection, copied options, public defaults and keepalive delay validation.
-Three focused tests first fail and then pass. Native Bun also passes the
+Three original focused tests first fail and then pass. A review regression
+for `Server.call(this, options)` fails on the uninitialized receiver before the
+fix; all four focused tests then pass with 20 assertions. It accepts a real
+Waffle connection and reports one active connection on that same receiver. Native Bun also passes the
 `net-server-contracts` fixture, including default IPv6-any address and family.
 
 The browser shared network still needs Waffle to retain local bind address

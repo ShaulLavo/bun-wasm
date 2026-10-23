@@ -3315,6 +3315,8 @@ No upstream implementation is copied. Bun `src/js/node/net.ts` at pinned
 `9510e74152073d850a18758ca41114d8f214ffa6` is the public-contract reference.
 The existing EventEmitter-backed server keeps its transport and disposal code.
 A callable proxy preserves construction, subclassing and prototype identity.
+Its apply path initializes inherited receivers through the shared initializer
+and EventEmitter constructor rather than returning a different object.
 The adapter snapshots options, validates keepalive delay and exposes public
 defaults. Unspecified native listeners request IPv6 any. Waffle-owned browser
 endpoint metadata and private Bun worker fields are deliberately unchanged.

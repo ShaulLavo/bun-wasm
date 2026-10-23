@@ -38,7 +38,8 @@ Status: Done for public construction and native default addresses, 2026-10-23.
 Browser address metadata needs Waffle.
 
 `Server` is callable, has arity two, rejects primitive options, copies options,
-and exposes Bun's public defaults. Native listeners use IPv6 any when no host
+and exposes Bun's public defaults. `Server.call(this, options)` initializes an
+inherited receiver, including its event emitter and connection tracking. Native listeners use IPv6 any when no host
 is supplied. Private connection counters and worker fields remain unimplemented.
 Waffle currently records listener and accepted endpoints as IPv4 loopback;
 the adapter does not forge IPv6 address results for those browser handles.
