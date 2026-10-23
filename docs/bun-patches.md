@@ -1674,8 +1674,10 @@ or typecheck is added to the wasm runtime.
 
 A line that held only erased types (an alias, interface or overload) is emptied rather than
 left as spaces. Line terminators and every remaining token's line and column are unchanged,
-and template text is never erased, so no string content moves. This removed 248 padded lines,
-about 10 KB, from the embedded runtime at `868a0ce8`.
+and template text is never erased, so no string content moves. Against `868a0ce8`,
+emptying 242 type-only lines in the 35 existing TypeScript modules saves 10,012 emitted
+bytes. The JSONL and `node:test` conversions add 603 bytes, for a net emitted reduction
+of 9,409 bytes. The converted pair is not counted among those 35 existing modules.
 
 `src/js/jsonl.ts` and `src/js/node_test.ts` are the existing original JSONL tokenizer and
 `node:test` registration adapter renamed from JavaScript with strict types. Their UTF-8,

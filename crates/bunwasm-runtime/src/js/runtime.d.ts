@@ -179,7 +179,6 @@ declare namespace BunWasm {
   type TestRegistrar = (name: string, callback?: TestCallback, timeout?: number) => unknown;
   type TestHook = (callback: TestCallback, timeout?: number) => unknown;
   interface Native {
-    utf8Encode(value: string): Uint8Array<ArrayBuffer>;
     /** `fatal` throws on invalid UTF-8 instead of substituting U+FFFD. */
     utf8Decode(bytes: Uint8Array, fatal?: boolean): string;
   }
