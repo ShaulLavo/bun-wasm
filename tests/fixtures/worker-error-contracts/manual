@@ -1,0 +1,2 @@
+The worker lines are native Bun 1.4.2 output. The two main-thread lines are hand-written:
+native Bun really replaces its process image there and has a tracing agent.
