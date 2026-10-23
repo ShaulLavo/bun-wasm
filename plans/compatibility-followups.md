@@ -405,20 +405,51 @@ the exact selection and full gate results. Raw records are retained under
 
 ### Shared memory and transferable engine objects
 
-`tests/esbuild/run.mjs`, with `ESBUILD_CHECKS=sync.cjs`, still has no fully passing
-engine run before or after guest workers. Its four synchronous APIs need a shared
-buffer between the caller and worker. QuickJS and the browser engine now stop in
-`worker_codec.ts` with `DataCloneError`; JSC stops in esbuild's `lib/main.js:1941`
-with `SharedArrayBuffer is not defined`. The three raw runs are in
-`esbuild-before.log` and `esbuild-after.log`. The final aggregate repeats earlier
-output, so raw occurrences of `PASS` are not a count of independent checks.
+Status: JSC constructor fixed. Cross-guest sharing is blocked on an engine and
+process-model decision for the owner.
 
-Implement real shared backing storage and atomic access across guest instances.
-Do not copy SharedArrayBuffer bytes or force the package onto its other backend.
-WebAssembly.Module cloning also remains unsupported by the guest codec. Keep
-these objects separate from the existing byte-copy ArrayBuffer transfer and
-routed MessagePort transfer. Reproduce through the heavy wrapper using the
-commands in the worker report and the unchanged official esbuild package.
+`tests/esbuild/run.mjs`, with `ESBUILD_CHECKS=sync.cjs`, still has no fully passing
+engine run. Its four synchronous APIs need a shared buffer between the caller and
+worker. QuickJS and the browser engine stop in `worker_codec.ts` with
+`DataCloneError`. JSC stopped earlier, at esbuild's `lib/main.js:1941` with
+`SharedArrayBuffer is not defined`: our JSC never set the
+`useSharedArrayBuffer` option that native Bun sets in `ZigGlobalObject.cpp`.
+`bunjsc_create_context` now sets it, so JSC has the constructor like the other
+engines and reaches the same `DataCloneError`. `tests/fixtures/shared-array-buffer`
+checks construction, views, `slice` and the refused send on every engine.
+
+Two engine gaps remain inside a single guest. Our QuickJS build has no `Atomics`
+global at all (`typeof Atomics === "undefined"`), and a growable
+`SharedArrayBuffer` throws `TypeError: growable SharedArrayBuffer requires SAB
+allocator hooks`; QuickJS-ng needs its atomics configuration and allocator hooks for
+both. On JSC, any resizable buffer traps the guest, on main too:
+`new ArrayBuffer(4, { maxByteLength: 8 })` (and now the growable
+`SharedArrayBuffer`) ends in `bun.wasm trapped` at
+`JSC::BufferMemoryManager::tryAllocateGrowableBoundsCheckingMemory`, which calls
+`Gigacage::tryAllocateZeroedVirtualPages` to reserve address space that WASI cannot
+provide. That needs a WASI arm in `jsc/webkit-wasi.patch` (fail with an ordinary
+out-of-memory result, or commit zeroed memory for the maximum size) and a JSC
+rebuild. Reproduce with `bun-wasm --wasm dist/bun-jsc.wasm -e 'new ArrayBuffer(4,
+{ maxByteLength: 8 })'`. The same option
+was the only failure in two of the 22 stream adapter files on JSC
+(`test-webstreams-adapters-writable-buffer-sources.js`,
+`test-webstreams-compression-bad-chunks.js`).
+
+Real sharing cannot be added in the codec. Each guest is a separate wasm instance
+with its own linear memory, and QuickJS and JSC keep SharedArrayBuffer storage in
+that memory, reached by ordinary loads and stores from C. Two guests can only see
+the same bytes if the storage lives in memory both can address: either an imported
+shared memory that the engines' C code reaches as a second memory (clang has no
+general support for that), or all guests of a process tree running as threads of
+one shared linear memory (wasm threads, a different process model from Waffle's
+one-instance-per-process). Copying the bytes would not be sharing, and forcing
+esbuild onto its other backend is excluded. The owner needs to choose whether to
+pursue a threaded guest model before this item can continue.
+
+`WebAssembly.Module` cloning also stays unsupported. In-guest modules are compiled
+by wasmi from bytes the adapter does not retain, and the browser engine's modules
+are native V8 objects whose bytes cannot be recovered, so neither can be sent as
+the bytes a receiving guest would need.
 
 ### Vite's builtin lookup before worker pools
 
