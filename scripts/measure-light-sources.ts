@@ -52,7 +52,7 @@ export async function sourceAttribution(path: string, code: string) {
       previous = column;
     }
     if (source && previous < line.length) mapped.add(source);
-    if (source && !isUi(source)) runtime.push(line.slice(previous) + "\n");
+    if (source && !isUi(source)) runtime.push(line.slice(previous) + (index < lines.length - 1 ? "\n" : ""));
   }
   const bytes = Buffer.from(runtime.join(""));
   return { runtime: { bytes: bytes.length, gzip: bytes.length ? gzipSync(bytes, { level: 9 }).length : 0 }, uiSources: Array.from(mapped).filter(isUi), processService: Array.from(mapped).filter(isProcessService) };

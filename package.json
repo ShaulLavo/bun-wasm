@@ -67,7 +67,8 @@
     "quality:probes": "bun test scripts/quality-probes.test.ts scripts/ci-changes.test.ts scripts/ci-quality.test.ts scripts/quality-input-times.test.ts scripts/next-framework-nesting.test.ts",
     "quality:rust": "bun scripts/quality-rust.ts",
     "quality:wasi": "bun scripts/quality-wasi.ts",
-    "test:browser:shell-consumer": "bun web/tests/browser-shell-consumer.ts chromium firefox"
+    "test:browser:shell-consumer": "bun web/tests/browser-shell-consumer.ts chromium firefox",
+    "bench:light-startup": "bun scripts/measure-light-startup.ts"
   },
   "peerDependencies": {
     "waffle": "git+https://github.com/ShaulLavo/waffle.git#b20fad173ebaa225cb87c51776f35edaaafd4a40"

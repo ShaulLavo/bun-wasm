@@ -16,6 +16,7 @@ interface Capture {
   output: number | null;
   complete: number | null;
   timeOrigin: number;
+  previewReady: number | null;
   text: string;
   workers: { url: string; at: number }[];
 }
@@ -79,7 +80,7 @@ async function serve(request: Request): Promise<Response> {
 
 // Observe the real terminal and workers without replacing fetch, routing requests, or changing bundles.
 function instrument(app: string): void {
-  const state: Capture = { prompt: null, spawn: null, output: null, complete: null, timeOrigin: performance.timeOrigin, text: "", workers: [] };
+  const state: Capture = { prompt: null, spawn: null, output: null, complete: null, timeOrigin: performance.timeOrigin, text: "", workers: [], previewReady: null };
   window.lightCapture = state;
   const NativeWorker = Worker;
   window.Worker = class extends NativeWorker {
@@ -89,10 +90,13 @@ function instrument(app: string): void {
       this.addEventListener("message", event => {
         if (event.data?.type !== "stdout") return;
         const text = new TextDecoder().decode(event.data.data);
-        if (text.includes("LIGHT_OUTPUT_" + "OK") || app === "sandbox" && !text.startsWith("[bunwasm:startup]")) state.output ??= performance.now();
+        if (text.includes("LIGHT_OUTPUT_" + "OK")) state.output ??= performance.now();
       });
     }
   };
+  new MutationObserver(() => {
+    if (app === "sandbox" && document.querySelector<HTMLElement>("#server-dot")?.dataset.state === "up") state.previewReady ??= performance.now();
+  }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-state"] });
   Object.defineProperty(window, app === "web" ? "playground" : "sandbox", {
     configurable: true,
     set(value) {
@@ -101,6 +105,7 @@ function instrument(app: string): void {
       value.term.write = (data: string | Uint8Array, callback?: () => void) => {
         const text = typeof data === "string" ? data : new TextDecoder().decode(data);
         if (app === "sandbox" && text.includes("bun ./index.html")) state.spawn ??= performance.now();
+        else if (app === "sandbox" && state.spawn !== null && text.trim()) state.output ??= performance.now();
         state.text += text;
         return write(data, callback);
       };
@@ -143,7 +148,7 @@ async function summarize(rows: Download[], capture: Capture, root: string, app: 
   return {
     promptMs: capture.prompt, firstSpawnMs: capture.spawn, firstOutputMs: capture.output,
     spawnToOutputMs: capture.output === null ? null : capture.output - split,
-    commandCompleteMs: capture.complete, workers: capture.workers,
+    commandCompleteMs: capture.complete, previewReadyMs: capture.previewReady, workers: capture.workers,
     beforeSpawn: { all: totals(initial), javascript: totals(initial.filter(row => row.path.endsWith(".js"))) },
     firstSpawnAdditional: { all: totals(spawned), javascript: totals(spawned.filter(row => row.path.endsWith(".js"))) },
     afterSpawnCumulative: { all: totals(relative), javascript: totals(js) },

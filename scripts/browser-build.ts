@@ -98,7 +98,25 @@ async function checked(config: Parameters<typeof Bun.build>[0]) {
 }
 
 export async function buildBrowserEntries(entrypoints: string[], outdir: string, options: { runtimeWorker?: boolean } = {}) {
-  const result = await checked(browserBuildConfig(entrypoints, outdir, options));
+  // Each worker has its own module cache. A multi-entry build hoists the whole shared
+  // core/filesystem closure into every realm, even when that realm needs only a subset.
+  // Bundle each realm separately so its initial graph can be tree-shaken independently.
+  const config = browserBuildConfig(entrypoints, outdir, options);
+  const builds = [];
+  for (const entry of config.entrypoints!) builds.push(await checked({ ...config, entrypoints: [entry] }));
+  const first = builds[0];
+  if (!first) throw new Error("Browser build needs an entry");
+  const outputs = new Map<string, typeof first.outputs[number]>();
+  for (const output of builds.flatMap(build => build.outputs)) {
+    const previous = outputs.get(output.path);
+    if (previous && await previous.text() !== await output.text()) throw new Error(`Conflicting browser output: ${output.path}`);
+    outputs.set(output.path, output);
+  }
+  const result = { ...first, outputs: Array.from(outputs.values()), metafile: {
+    ...first.metafile!,
+    inputs: Object.assign({}, ...builds.map(build => build.metafile!.inputs)),
+    outputs: Object.assign({}, ...builds.map(build => build.metafile!.outputs)),
+  } };
   // Safari can fetch the bootstrap directly, before service-worker interception is ready.
   const worker = result.outputs.find((output) => relative(outdir, output.path) === "worker.js");
   if (!worker) throw new Error("Browser build is missing worker.js");
