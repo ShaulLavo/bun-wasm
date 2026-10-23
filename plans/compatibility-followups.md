@@ -508,22 +508,45 @@ records in `/work/reports/bun-wasm-streams-round5-2026-10-16/` can be removed.
 
 ### Native stream construction overhead
 
-The PR12 round-5 bounded probe creates, closes and cancels 10,000 native
-readables, then repeats through the construction bridge. On the M1 Mac with
-Chromium 153 it measured 14.1ms native and 35.3ms bridged; WebKit 26.6 measured
-19ms and 45ms. These single-run timings include serial cancellation awaits,
-have no warmup/GC control and are labeled noisy, not a performance improvement.
-Reproduce with `node scripts/test-native-stream-interop.mjs --benchmark` using
-Playwright Chromium and WebKit. Raw source and browser/version provenance are
-in `/work/reports/bun-wasm-streams-round5-2026-10-16/mac-final30.log`.
+Status: Resolved. Completion records are now allocated lazily.
 
-Completion records are currently allocated eagerly by `construct` in
-`web/src/native-stream-state.ts`. If stream construction is hot in a real app,
-measure lazy completion-record allocation while retaining eager controller
-capture, pre-start abort propagation, native brands and both Transform ports.
-The 30-case browser fixture and all-engine lifecycle fixtures must stay green.
-The compatibility/performance track owns that work and evidence removal after
-reproduction. Round 5 deliberately leaves allocation behavior unchanged.
+`construct` in `web/src/native-stream-state.ts` used to give every bridged stream a
+closed promise, its resolvers, a rejection handler and a `WeakRef` up front. Only
+Node's `finished()` reads that promise (`kIsClosedPromise`), and most streams never
+reach it. The promise and resolvers are now made on first read, a settlement that
+happens first is recorded and applied then, and the `WeakRef` is made when the
+record first joins a session or the poll set. Eager controller capture, pre-start
+abort propagation, native brands and both Transform ports are unchanged.
+
+`node scripts/test-native-stream-interop.mjs --benchmark` now reports, for native
+streams and for the bridge in the same page, the median of seven runs of 10,000
+create/close/cancel cycles after three warm-up runs. For the table below the same
+experimental headless measurement ran on five fresh pages per variant, in fixed
+native/eager/lazy order, with the bridge source from before and after this change.
+Other jobs were running on the PC. The medians were:
+
+| Browser | Native | Eager bridge (before) | Lazy bridge (after) |
+| --- | --- | --- | --- |
+| Chromium 156 | 16.3 ms | 42.7 ms | 37.7 ms |
+| WebKit 27.2 | 19 ms | 62 ms (31-67) | 30 ms (28-30) |
+
+These timings cover only this 10,000-cycle workload. They do not establish a
+general 2x construction or application speedup. No quiet, counterbalanced run was
+recorded.
+
+The direct host-source browser gate (`node scripts/test-native-stream-interop.mjs`)
+now includes eight completion controls in TypeScript, alongside the existing 73
+cases. They check lazy allocation, cached promise and WeakRef identity, and late
+success, error, cancellation, asynchronous abort, and Transform completion. Falsy
+rejection reasons keep their exact identity. The eager parent fails the allocation
+control. Deleting settlement replay fails the late-promise controls while the old
+73 cases still pass. CI runs these controls through `scripts/test-web-host.sh --browser`.
+
+Earlier guest fixture and adapter results used a retained binary whose whole-source
+identity is not proven. These host-only checks do not endorse that binary, and no
+guest rebuild is needed for this coverage change.
+The round-5 log in `/work/reports/bun-wasm-streams-round5-2026-10-16/` can be
+removed with the census records above.
 
 ### Browser memory-growth gate after shared filesystem main
 
