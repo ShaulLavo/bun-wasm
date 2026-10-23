@@ -180,7 +180,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, buffer tag predicate](#quickjs-data-conversion) | Host feature | Original nonthrowing class query for ordinary and shared buffers. |
 | [`crates/bunwasm-runtime/src/js/function.ts`](#generated-function-imports) | Host feature | Original generated-function adapter with module-relative dynamic imports. |
 | [`src/js/bun_console_constructor.js`](#bun-console-constructor) | Port | Generate Bun's Console constructor with lexical engine-independent hooks. |
-| [`scripts/generate-bun-console.mjs`, `src/js/console_constructor.js`, global Console wiring](#bun-console-constructor) | Host feature | Original generation and runtime adapters expose the shared constructor and its streams. |
+| [`scripts/generate-bun-console.mjs`, `src/js/console_constructor.ts`, `src/js/console.ts`](#bun-console-constructor) | Host feature | Original generation and runtime adapters expose the shared constructor and its streams. |
 
 ## Waffle preparation
 
@@ -1147,7 +1147,7 @@ Retain the small callback that stores the emitted `bun_sourcemap::Chunk` in an `
 
 `crates/bunwasm-runtime/src/js/inspect.js`, the Bun formatting factory. Class **Port**. Upstream `src/jsc/ConsoleObject.rs`, `src/jsc/VirtualMachine.rs` (`print_error_instance_body`), and `src/jsc/bindings/bindings.cpp` (`JSC__JSValue__forEachPropertyImpl` and `JSC__JSValue__forEachPropertyOrdered`) at the Bun pin.
 
-Translate Rust and C++ formatting into JavaScript, retaining the estimated-line-length accounting, type-specific rendering, error frames, and property order. Replace direct JSC operations with intrinsic brand checks and host inspection calls. This preserves Bun's console and `Bun.inspect` output across QuickJS, JSC, and the browser engine without the native console bindings. `console.js` routes output and manages groups, counters, and timers using this formatter. It is an original adapter.
+Translate Rust and C++ formatting into JavaScript, retaining the estimated-line-length accounting, type-specific rendering, error frames, and property order. Replace direct JSC operations with intrinsic brand checks and host inspection calls. This preserves Bun's console and `Bun.inspect` output across QuickJS, JSC, and the browser engine without the native console bindings. `console.ts` routes output and manages groups, counters, and timers using this formatter. It is an original adapter.
 
 ### Node inspection
 
@@ -1469,12 +1469,19 @@ source. This function is a Bun global-object builtin, outside its module registr
 Bun's `src/js/node/console.ts` only exports the global singleton, so switching
 that module's factory cannot supply the missing constructor.
 
-`src/js/console_constructor.js` is an original adapter. It supplies ordinary
+`src/js/console_constructor.ts` is an original adapter. It supplies ordinary
 JavaScript brand checks, uncurried calls, validation errors, and Bun's existing string-width API. Its public dependencies use the runtime's
 builtin module registry. The ordinary polyfill loader compiles the generated
 function on first access to `console.Console`. The global singleton keeps its
 Bun formatter; new instances use Bun's Node Console and existing Node inspector.
-`src/js/console.js` adds the lazy constructor and the global stdio properties.
+`src/js/console.ts` adds the lazy constructor and the global stdio properties.
+The strict TypeScript conversion of these two handwritten adapters adds typed
+formatter arguments, native output bytes, timer state, validator inputs and
+uncurried intrinsic calls. It preserves the executable AST, strict directives,
+native error constructors and token line/column positions after Node type erasure.
+The comparison source is `ac43127c85addabed7e0c2a4883247ae074e858c`.
+The generated constructor and its generator are unchanged. Neither handwritten
+adapter copies additional upstream source.
 The original `src/js/bun.js` adapter now derives `Bun.enableANSIColors` from
 FORCE_COLOR, NO_COLOR, and stderr's TTY state. Bun's Console reads this flag
 when automatic color mode encounters FORCE_COLOR; the old constant false

@@ -80,7 +80,7 @@ declare namespace BunWasm {
   }
 }
 
-declare const process: { cwd(): string };
+declare var process: { cwd(): string; stdout: BunWasm.WorkerWritable; stderr: BunWasm.WorkerWritable };
 declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
 
@@ -291,7 +291,10 @@ declare namespace BunWasm {
   }
 }
 
-declare var Bun: { inspect(value: unknown): string };
+declare var Bun: {
+  inspect(value: unknown): string;
+  stringWidth(value: string, options?: { ambiguousIsNarrow?: boolean; countAnsiEscapeCodes?: boolean }): number;
+};
 declare var Temporal: {
   Instant: { from(value: string): BunWasm.FormatInstant };
   PlainDate: { from(value: string): BunWasm.FormatTemporalValue };
