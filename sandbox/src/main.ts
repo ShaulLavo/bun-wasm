@@ -15,7 +15,8 @@ import type { BunNetworkOptions, RuntimeNetworkHelper } from "../../web/src/net/
 import { Previews } from "../../web/src/preview";
 import { createRuntime } from "waffle";
 import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../web/src/shared-fs";
-import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
+import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../../web/src/engine-loader";
+import type { Run } from "../../web/src/runner";
 import { enableTerminalCopy } from "../../web/src/terminal-copy";
 import { linkLocalUrls } from "../../web/src/terminal-links";
 import { measureStartup, showPageStartupFailure } from "../../web/src/startup";
@@ -274,6 +275,8 @@ async function startDevServer(): Promise<void> {
     BUN_WASM_STARTUP: "1",
   };
   const started = performance.now();
+  const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes()]);
+  if (revision !== serverRevision) return;
   const output = new StartupOutput((text) => term.write(text), startupRecord);
   serverTiming = { started, visibleStart };
   const current = startRun({ engine, module: wasm.module, args: ["./index.html"], env, runtime, moduleScope: scoped, network }, {

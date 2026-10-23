@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
-import { browserBuildConfig, resolveRuntimePackage } from "./browser-build";
+import { browserBuildConfig, buildBrowserEntries, resolveRuntimePackage } from "./browser-build";
 
 test("browser build uses consumer exports through a dotted Git cache, not sibling source", async () => {
   const scratch = await mkdtemp(join(process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-package-resolver-"));
@@ -42,5 +42,22 @@ test("browser build uses consumer exports through a dotted Git cache, not siblin
     expect(context.sameErrorClass).toBe(true);
     expect(installed.relativeInput(join(cached, "proc/supervisor.ts"))).toBe("proc/supervisor.ts");
     expect(installed.relativeInput(join(dirname(cached), "unrelated/proc/supervisor.ts"))).toBeUndefined();
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
+test("browser realms tree-shake shared modules independently", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-realm-build-"));
+  try {
+    await writeFile(join(scratch, "shared.ts"), 'export const common = () => "common-marker"; export const page = () => "page-only-marker"; export const worker = () => "worker-only-marker";');
+    await writeFile(join(scratch, "main.ts"), 'import { common, page } from "./shared"; console.log(common(), page());');
+    await writeFile(join(scratch, "worker.ts"), 'import { common, worker } from "./shared"; console.log(common(), worker());');
+    const build = await buildBrowserEntries([join(scratch, "main.ts"), join(scratch, "worker.ts")], join(scratch, "dist"));
+    const code = await Bun.file(join(scratch, "dist/worker.js")).text();
+    expect(code).toContain("worker-only-marker");
+    expect(code).toContain("common-marker");
+    expect(code).not.toContain("page-only-marker");
+    const output = Object.entries(build.metafile!.outputs).find(([path]) => path.endsWith("/worker.js"))?.[1];
+    expect(output).toBeDefined();
+    expect(output!.imports).toEqual([]);
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });

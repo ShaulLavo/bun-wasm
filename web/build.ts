@@ -13,7 +13,7 @@ const wasmSource = resolve(here, process.env.BUN_WASM ?? "../dist/bun.wasm");
 
 rmSync(out, { recursive: true, force: true });
 
-// Main and worker share chunks; the helper also mirrors chunks into the worker's scope.
+// Bundle each browser realm independently and mirror worker chunks into its scope.
 const result = await buildBrowserEntries([join(here, "src/main.ts"), join(here, "src/worker.ts"), join(here, "src/fs-worker.ts")], out, { runtimeWorker: true });
 
 // The service worker is a classic script (module service workers are newer in Safari).

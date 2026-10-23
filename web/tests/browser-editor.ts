@@ -207,13 +207,15 @@ try {
             return { path: join(root, "web/tests/fixtures/startup-filesystem.ts") };
           });
           // Only the engine and preview host are replaced; editor/startup/save code ships unchanged.
-          build.onLoad({ filter: /\/web\/src\/runner\.ts$/ }, () => ({ loader: "ts", contents: `
+          build.onLoad({ filter: /\/web\/src\/engine-loader\.ts$/ }, () => ({ loader: "ts", contents: `
             export const ENGINES = Object.fromEntries(["browser", "quickjs", "jsc"].map(key => [key, { name: key, wasm: "not-built.wasm" }]));
             export class WasmMissing extends Error {}
             export const isEngine = (key) => Object.hasOwn(ENGINES, key);
             export async function loadWasm() { throw new WasmMissing("Artifact-free editor test"); }
             export async function registerModuleScope() { return false; }
             export const mb = (size) => String(size);
+          ` }));
+          build.onLoad({ filter: /\/web\/src\/runner\.ts$/ }, () => ({ loader: "ts", contents: `
             export function startRun() { throw new Error("This test must not start a guest"); }
           ` }));
           build.onLoad({ filter: /\/web\/src\/preview\.ts$/ }, () => ({ loader: "ts", contents: `

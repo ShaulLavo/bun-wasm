@@ -465,6 +465,36 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
    hard gate (owner, 2026-10-16): modest overshoot is fine when it buys something.
 10. Verified on Chromium, Firefox and real Safari (owner's Mac); iOS Safari where storage allows.
 
+### Item 9 download measurement, 2026-10-23
+
+Status: Approved, still open. [Measurement and reproduction](../docs/benchmarks/light-startup-2026-10-23.md)
+and [60-sample JSON](../docs/benchmarks/light-startup-2026-10-23.json) compare main `d48dc3d2`,
+pre-review fixed browser inputs `26476bdb`, and pre-Waffle main `04022389` in Chromium 156 on one cloud host.
+Run `bun run bench:light-startup --samples 5 --port 48941 --before <built-main> --baseline
+<built-old-main> --output <result.json>` after building web and sandbox in each checkout.
+
+In those pre-review samples, independent realm builds and deferred Bun execution adapters
+remove 216,931 raw / 64,108 gzip initial web JS bytes. Process-service code is absent until command submission; worker
+JS contains no demo UI. Runtime source-span estimates still total 308,510 raw / 91,392 gzip
+initial bytes, above the 100 KiB / 35 KiB guide. Waffle's filesystem worker alone downloads
+146,933 / 40,346 bytes. Investigate `waffle/browser/fs-worker.ts` and its filesystem
+service/backend imports, including both storage backends, without weakening the core gate.
+
+The matched-guest control still regresses from old main: web prompt 194.82 to 351.67 ms,
+first output 378.19 to 536.32 ms; sandbox preview 405.50 to 569.09 ms. These are five-sample
+medians on each revision, fresh browser storage and actual gzip HTTP transfers. The original
+old guest is unavailable; the control uses one preserved compatible guest on all hosts.
+Next profile Waffle's `onStartupStage` around filesystem startup and page seeding/setup.
+The source of the full latency gap has not been isolated. Keep item 9 open until the runtime
+budget and historical startup comparison pass. This is separate from the core-chunk gate.
+
+Final reviewed worker layout `8d1d8717` passes all seven CI checks, including Linux WebKit.
+Its performance is unmeasured. The frozen-source 30-sample rerun hit its 3,600-second queue
+deadline before admission, with zero samples and verified actual-host teardown. The earlier
+figures above remain historical, not measurements of that final layout. The benchmark JSON
+records the failed attempt and planned source/guest provenance. Re-run the same command on
+an exclusive host before claiming final download savings or startup performance.
+
 ### Accepted Waffle core size, 2026-10-23
 
 The `0.0.58` to `0.0.67` pin grows the standalone core from 25,949 to 29,721
