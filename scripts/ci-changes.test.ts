@@ -10,7 +10,7 @@ test.each([
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "crates/bunwasm-runtime/src/lib.rs", "vendor/bun/src/parser.rs", "patches/bun/001.patch",
   "third_party/libc/src/lib.rs", "Cargo.lock", "Cargo.toml", ".cargo/config.toml", "rust-toolchain.toml",
-  "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts",
+  "env.sh", "tests/fixtures/node-misc/main.js", "scripts/test.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts",
   "scripts/quality-wasi-probe.ts", "scripts/quality.ts", "scripts/ci-changes.ts", "package.json", "bun.lock",
   ".github/workflows/ci.yml", "scripts/build.sh", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
 ])("native input %s retains every Rust gate", path => {
@@ -109,3 +109,21 @@ for (const path of [
     expect(quality).not.toMatch(/^\s+(?:if|needs):/m);
   });
 }
+
+
+test("patch-only manifest bumps skip Rust but dependency and script edits retain it", () => {
+  if (!fixture) throw new Error("Fixture not initialized");
+  const first = commitInput("package.json");
+  writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.1", scripts: { quality: "bun quality.ts" } }));
+  git(["commit", "-qam", "manifest inputs"]);
+  const manifestBase = git(["rev-parse", "HEAD"]);
+  writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.2", scripts: { quality: "bun quality.ts" } }));
+  git(["commit", "-qam", "patch bump"]);
+  const bumped = git(["rev-parse", "HEAD"]);
+  expect(select(manifestBase, bumped)).toBe("rust=false");
+  expect(select(manifestBase, bumped, "push")).toBe("rust=false");
+  writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.3", scripts: { quality: "bun changed-quality.ts" } }));
+  git(["commit", "-qam", "change native driver"]);
+  expect(select(bumped, git(["rev-parse", "HEAD"]))).toBe("rust=true");
+  expect(() => select(first, bumped)).toThrow();
+});

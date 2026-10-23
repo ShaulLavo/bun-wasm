@@ -10,10 +10,9 @@ import { loadavg, tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import type { Browser, Page } from "playwright";
 import { cleanupInterruptResources, finishInterruptCleanup } from "waffle/testing/interrupt-browser-runner-control";
-import { resolveRuntimePackage } from "../../scripts/browser-build";
+import { processBundle } from "../scripts/ci-process-bundles";
 
 const root = resolve(import.meta.dir, "../..");
-const runtimePackage = resolveRuntimePackage(import.meta.filename);
 const args = process.argv.slice(2), benchmark = args.includes("--benchmark");
 const names = args.filter(name => name !== "--benchmark"); if (!names.length) names.push("chromium", "firefox");
 for (const name of names) assert.ok(["chromium", "firefox", "webkit", "safari"].includes(name), `unknown browser ${name}`);
@@ -99,9 +98,7 @@ try {
   if (stopping) throw new Error("interrupt browser setup was cancelled");
   process.env.TMPDIR = scratch;
   const out = join(scratch!, "dist");
-  const built = await Bun.build({ entrypoints: [join(runtimePackage.physical, "tests/interrupt-browser.ts"), join(runtimePackage.physical, "tests/fixtures/interrupt-browser-worker.ts")], outdir: out, target: "browser", format: "esm", splitting: true, minify: true, naming: { entry: "[name].[ext]", chunk: "chunks/[name]-[hash].[ext]" } });
-  assert.ok(built.success, built.logs.map(String).join("\n"));
-  await Bun.write(join(out, "index.html"), '<!doctype html><title>Interrupt gate</title><script type="module" src="/interrupt-browser.js"></script>');
+  await processBundle("interrupt", out);
   let prototypeSha256: string | undefined;
   if (benchmark) {
     const source = await Bun.file(artifacts.prototype!).text(); prototypeSha256 = new Bun.CryptoHasher("sha256").update(source).digest("hex");
