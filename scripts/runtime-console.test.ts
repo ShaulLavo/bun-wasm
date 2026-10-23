@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import ts from "typescript-api";
+import { runtimeSyntax } from "./runtime-syntax";
 
 const root = resolve(import.meta.dir, "..");
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-console-"));
@@ -21,19 +22,9 @@ function emitted(name: string): { text: string; source: string } {
   return { text: readFileSync(output, "utf8"), source: readFileSync(`${path}.ts`, "utf8") };
 }
 
-function syntax(text: string): string {
-  const source = ts.createSourceFile("runtime.js", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  function visit(node: ts.Node): unknown {
-    if (ts.isParenthesizedExpression(node)) return visit(node.expression);
-    const children = node.getChildren(source);
-    return children.length ? [node.kind, children.map(visit)] : [node.kind, node.getText(source)];
-  }
-  return JSON.stringify(visit(source));
-}
-
 for (const [name, hash] of Object.entries(originals)) {
   test(`${name} preserves the approved executable AST and strict directive`, () => {
-    expect(new Bun.CryptoHasher("sha256").update(syntax(emitted(name).text)).digest("hex")).toBe(hash);
+    expect(new Bun.CryptoHasher("sha256").update(runtimeSyntax(emitted(name).text)).digest("hex")).toBe(hash);
   });
   test(`${name} preserves every emitted token's TypeScript line and column`, () => {
     const output = emitted(name);
