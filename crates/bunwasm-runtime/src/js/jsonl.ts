@@ -1,12 +1,17 @@
 // JSONL is a streaming JSON parser in native Bun's JSC bindings. Keep token
 // boundaries and progress here, and parse each complete value with Bun's Rust parser.
-(function (internal) {
+(function (internal: BunWasm.Internal) {
   "use strict";
+  type State = "value" | "key" | "firstKey" | "colon" | "afterArray" | "afterObject" | "firstValue" | "complete";
+  type Fail = { end?: undefined; error?: true; incomplete?: true };
+  type Scan = { end: number; error?: undefined } | Fail;
+  type Step = { end: number; state: State; open?: State; close?: true } | Fail;
   const native = internal.native;
   const formats = internal.require("formats");
-  const ws = (c) => c === " " || c === "\n" || c === "\r" || c === "\t";
+  const ws = (c: string) => c === " " || c === "\n" || c === "\r" || c === "\t";
+  const tag = (token: Scan, state: State): Step => Object.assign(token, { state });
 
-  function stringToken(s, i) {
+  function stringToken(s: string, i: number): Scan {
     for (let p = i + 1; p < s.length; p++) {
       if (s[p] === '"') return { end: p + 1 };
       if (s.charCodeAt(p) < 32) return { error: true };
@@ -24,7 +29,7 @@
     return { incomplete: true };
   }
 
-  function scalar(s, i) {
+  function scalar(s: string, i: number): Scan {
     const c = s[i];
     if (c === '"') return stringToken(s, i);
     const word = c === "t" ? "true" : c === "f" ? "false" : c === "n" ? "null" : null;
@@ -42,28 +47,28 @@
     return { end };
   }
 
-  function keyToken(s, i, state) {
+  function keyToken(s: string, i: number, state: State): Step {
     if (s[i] === "}" && state === "firstKey") return { end: i + 1, state: "complete", close: true };
     if (s[i] !== '"') return { error: true };
-    return Object.assign(stringToken(s, i), { state: "colon" });
+    return tag(stringToken(s, i), "colon");
   }
-  function afterToken(s, i, state) {
+  function afterToken(s: string, i: number, state: State): Step {
     const array = state === "afterArray";
     if (s[i] === (array ? "]" : "}")) return { end: i + 1, state: "complete", close: true };
     if (s[i] === ",") return { end: i + 1, state: array ? "value" : "key" };
     return { error: true };
   }
-  function step(s, i, state) {
+  function step(s: string, i: number, state: State): Step {
     if (state === "key" || state === "firstKey") return keyToken(s, i, state);
     if (state === "colon") return s[i] === ":" ? { end: i + 1, state: "value" } : { error: true };
     if (state === "afterArray" || state === "afterObject") return afterToken(s, i, state);
     if (state === "firstValue" && s[i] === "]") return { end: i + 1, state: "complete", close: true };
     if (s[i] === "{" || s[i] === "[") return { end: i + 1, state: s[i] === "{" ? "firstKey" : "firstValue", open: s[i] === "{" ? "afterObject" : "afterArray" };
-    return Object.assign(scalar(s, i), { state: "complete" });
+    return tag(scalar(s, i), "complete");
   }
-  function one(s, start) {
-    const stack = [];
-    let i = start, state = "value";
+  function one(s: string, start: number): Scan {
+    const stack: State[] = [];
+    let i = start, state: State = "value";
     while (true) {
       while (ws(s[i])) i++;
       if (i >= s.length) return { incomplete: true };
@@ -79,20 +84,21 @@
     }
   }
 
-  function parseChunk(input, start, end) {
+  function parseChunk(input: unknown, start?: unknown, end?: unknown) {
     if (input == null) throw new TypeError("JSONL.parseChunk requires a string argument");
-    const bytes = ArrayBuffer.isView(input) && !(input instanceof DataView);
-    let source = bytes ? internal.toUint8(input) : String(input);
-    const length = source.length;
-    start = typeof start === "number" && start > 0 ? Math.min(Math.trunc(start), length) : 0;
-    end = typeof end === "number" && end >= 0 ? Math.min(Math.trunc(end), length) : length;
-    start = Math.min(start, end);
-    source = source.slice(start, end);
+    const bytes = ArrayBuffer.isView(input) && !(input instanceof DataView) ? internal.toUint8(input) : null;
+    let text = bytes ? "" : String(input);
+    const length = bytes ? bytes.length : text.length;
+    const last = typeof end === "number" && end >= 0 ? Math.min(Math.trunc(end), length) : length;
+    const first = Math.min(typeof start === "number" && start > 0 ? Math.min(Math.trunc(start), length) : 0, last);
     let bom = 0;
-    if (bytes && start === 0 && source[0] === 239 && source[1] === 187 && source[2] === 191) { source = source.subarray(3); bom = 3; }
-    const text = bytes ? native.utf8Decode(source) : source;
-    const values = [];
-    let cursor = 0, read = 0, error = null, done = true;
+    if (bytes) {
+      let view = bytes.slice(first, last);
+      if (first === 0 && view[0] === 239 && view[1] === 187 && view[2] === 191) { view = view.subarray(3); bom = 3; }
+      text = native.utf8Decode(view);
+    } else text = text.slice(first, last);
+    const values: unknown[] = [];
+    let cursor = 0, read = 0, error: SyntaxError | null = null, done = true;
     while (cursor < text.length) {
       while (ws(text[cursor])) cursor++;
       if (cursor === text.length) break;
@@ -103,9 +109,9 @@
       read = token.end;
       cursor = read;
     }
-    return { values, read: start + bom + (bytes ? native.utf8Encode(text.slice(0, read)).length : read), done, error };
+    return { values, read: first + bom + (bytes ? native.utf8Encode(text.slice(0, read)).length : read), done, error };
   }
-  function parse(input) {
+  function parse(input: unknown) {
     if (input == null) throw new TypeError("JSONL.parse requires a string argument");
     const result = parseChunk(input);
     if (result.error && !result.values.length) throw result.error;
