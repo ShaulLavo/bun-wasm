@@ -97,7 +97,7 @@ export async function withCliReceiptFixture(action: (fixture: CliFixture) => Pro
     for (const name of ["clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"]) await symlink(join(root, "fake-tool"), join(bin, name));
     await mkdir(join(root, "node_modules"));
     await symlink(options.waffle, join(root, "node_modules/waffle"));
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, BUN_WASM_SYSROOT: options.sysroot, WASI_SDK_PATH: options.sdk, WASI_SDK: options.sdk };
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, BUN_WASM_SYSROOT: options.sysroot, WASI_SDK_PATH: options.sdk, WASI_SDK: options.sdk };
     for (const name of ["BUN_CODEGEN_DIR", "BUNWASM_JS_OVERRIDE_DIR", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_TARGET_WASM32_WASIP1_LINKER"]) delete env[name];
     await action({ root, artifact, cli: join(root, "scripts/guest-build-receipt.ts"), env, node, rustc, linker });
   });

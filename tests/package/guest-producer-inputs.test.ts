@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { prepareGuestBuildInputs, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
@@ -130,5 +130,53 @@ test("explicit active compiler is accepted and a Node dispatcher retarget is det
     await executable(alternate, `if [ "$1" = "-p" ]; then echo ${JSON.stringify(alternate)}; else echo 'fixture node 1'; fi`);
     await executable(join(fixture.root, "sdk/bin/node"), `exec ${JSON.stringify(alternate)} "$@"`);
     expect(receiptCli(fixture, "write", fixture.artifact, inputs).exitCode).not.toBe(0);
+  });
+});
+
+async function browserProducerFixture(fixture: Parameters<typeof receiptCli>[0]) {
+  const root = fixture.root;
+  await copyFile(new URL("../../scripts/build-bun-browser.sh", import.meta.url), join(root, "scripts/build-bun-browser.sh"));
+  await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), "export {};\n");
+  await executable(join(root, "scripts/sync-crypto.sh"), "exit 0");
+  await writeFile(join(root, "env.sh"), `export TMPDIR=${JSON.stringify(join(root, "private"))}\n`);
+  fixtureGit(root, "add", "scripts", "env.sh");
+  fixtureGit(root, "commit", "-m", "synthetic browser producer, no compiler invocation");
+  const raw = join(root, "private/target/wasm32-wasip1/release/bun.wasm");
+  await executable(join(root, "fake-tool"), `
+if [ "$1" = build ]; then
+  printf '%s\\n' "$RUSTC" "$CARGO_TARGET_WASM32_WASIP1_LINKER" "$(command -v node)" > ${JSON.stringify(join(root, "dist/producer.txt"))}
+  mkdir -p ${JSON.stringify(dirname(raw))}
+  printf '\\000asm\\001\\000\\000\\000' > ${JSON.stringify(raw)}
+  exit 0
+fi
+if [ "$1" = -O2 ]; then
+  while [ "$1" != -o ]; do shift; done
+  cp ${JSON.stringify(raw)} "$2"
+  exit 0
+fi
+echo 'fixture tool 1'
+`);
+  fixture.env.BROWSER_CARGO_TARGET_DIR = join(root, "private/target");
+  return Bun.spawnSync(["bash", join(root, "scripts/build-bun-browser.sh")], { env: fixture.env, cwd: root });
+}
+
+test("actual browser entry point uses pinned tools for a fixture-only artifact producer", async () => {
+  await withCliReceiptFixture(async fixture => {
+    const finished = await browserProducerFixture(fixture);
+    expect(finished.stderr.toString()).toBe("");
+    expect(finished.exitCode).toBe(0);
+    expect((await readFile(join(fixture.root, "dist/producer.txt"), "utf8")).trim().split("\n")).toEqual([fixture.rustc, fixture.linker, fixture.node]);
+    expect(await Bun.file(`${fixture.artifact}.build.json`).exists()).toBe(true);
+  });
+});
+
+test("actual browser entry point stops before a fixture producer on an unresolved compiler", async () => {
+  await withCliReceiptFixture(async fixture => {
+    fixture.env.RUSTC = fixture.node;
+    const finished = await browserProducerFixture(fixture);
+    expect(finished.exitCode).not.toBe(0);
+    expect(finished.stderr.toString()).toContain("RUSTC");
+    expect(await Bun.file(join(fixture.root, "dist/producer.txt")).exists()).toBe(false);
+    expect(await Bun.file(`${fixture.artifact}.build.json`).exists()).toBe(false);
   });
 });
