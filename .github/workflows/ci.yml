@@ -194,7 +194,7 @@ jobs:
           cargo build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli
           mkdir -p dist
           cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm" dist/
-          bash scripts/test.sh --no-build node-misc runtime-ts-url-decoder
+          bash scripts/test.sh --no-build node-misc runtime-ts-url-decoder astro-http2-response
 
       - name: Configure private JSC build paths
         if: needs.quality.outputs.jsc == 'true'
