@@ -196,17 +196,6 @@ jobs:
           cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm" dist/
           bash scripts/test.sh --no-build node-misc runtime-ts-url-decoder
 
-      - name: Save the complete native build once per input revision
-        if: steps.native-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ${{ env.CARGO_HOME }}/registry
-            ${{ env.CARGO_HOME }}/git
-            ${{ env.CARGO_HOME }}/bin/cargo-machete
-            ${{ env.CARGO_TARGET_DIR }}
-          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
-
       - name: Configure private JSC build paths
         if: needs.quality.outputs.jsc == 'true'
         run: |
@@ -244,6 +233,17 @@ jobs:
             dist/bun-jsc.wasm.build.json
             dist/bun-jsc.wasm.embedding.json
           if-no-files-found: error
+
+      - name: Save the complete native build once per input revision
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/bin/cargo-machete
+            ${{ env.CARGO_TARGET_DIR }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
 
   package:
     name: Browser adapter package

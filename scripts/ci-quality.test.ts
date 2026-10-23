@@ -328,6 +328,17 @@ test("native cache stays bounded per input revision, and the SDK is not copied p
   expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched");
 });
 
+test("native target cache is saved after all selected JSC builds and checks", () => {
+  const save = rust.indexOf("      - name: Save the complete native build once per input revision");
+  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(1);
+  expect(rust).toContain("JSC_CARGO_TARGET_DIR=$CARGO_TARGET_DIR");
+  for (const command of ["bash scripts/build-jsc.sh", "bash scripts/build-bun-jsc.sh", "bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm"]) {
+    const step = rust.indexOf(command);
+    expect(step).toBeGreaterThan(-1);
+    expect(save).toBeGreaterThan(step);
+  }
+});
+
 test("preinstalled native tools skip apt and fallback removes the known slow mirror", () => {
   for (const section of [quality, rust]) {
     expect(section).toContain("if command -v cmake");
