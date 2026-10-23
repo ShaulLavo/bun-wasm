@@ -115,6 +115,15 @@ check are in `/work/reports/bun-wasm-streams-review2-2026-10-16/next-after/`.
 
 ### HTTP response chunk framing after the adapter census
 
+Status: Done. PR #80, `c4794d69`, added incremental response framing and
+forwarding. On 2026-10-23, the original unchanged
+`js/node/test/parallel/test-webstreams-pipeline.js` exits successfully on
+QuickJS, JSC and browser at main `d48dc3d2` with this lane's listener fix.
+`net-http-response-framing` and `net-streams` also pass on all three engines.
+The original mismatch below is historical, not an open follow-up.
+Replay JSON and logs are in
+`/work/reports/wave-20261022/bun-wasm/real-bun-followups/pipeline-*`.
+
 The round-3 Web Streams fix replaces the minimal Node stream classes and fixes
 HTTP source and request lifecycle integration. The unchanged Node adapter census
 now reaches an HTTP data-chunk mismatch in
@@ -142,6 +151,16 @@ hang. The compatibility track owns the framing follow-up and evidence removal
 after reproduction.
 
 ### Browser-host child port release
+
+Status: Approved, still open after the 2026-10-23 code audit. The isolated
+`self-spawn-network` replay passes on all three engines, but that does not prove
+that asynchronous worker termination precedes observable child completion.
+Current main `d48dc3d2` pins Waffle `b20fad1`; its
+`proc/supervisor.ts:complete` publishes exit before `stopHandle`. The Node
+adapter in `web/scripts/node-spawn.ts` returns the worker termination promise
+but supplies no network quiescence fence. The old `web/src/subprocess.js` no
+longer exists. Reproduce the ordering deterministically before changing it;
+do not classify a successful isolated retry as closure of the race below.
 
 The Web Streams round-3 full browser gate observed one `self-spawn-network`
 failure after an earlier full run passed that fixture. The child serves a
@@ -254,7 +273,15 @@ Remaining files at this change:
 
 ## Pristine process gate failures during small API verification
 
-Status: Approved. The process/runtime track owns the remaining gate failures.
+Status: Done. PR #52, `390bda6d`, fixed broken-pipe handling, and PR #87,
+`2f20be1b`, corrected missing-process contracts. The unchanged `node-misc` and
+`pipe-closed-output` fixtures pass on QuickJS, JSC and browser in the
+2026-10-23 replay. Unhandled output exits 1; handled output retains its exit
+code, callback identity, ordering and survival checks. No expectation was
+weakened. The original failures below predate these fixes. Evidence is in
+`/work/reports/wave-20261022/bun-wasm/real-bun-followups/listen-all-final.log`.
+The first light-class JSC attempt exited 137 before output; the suite-class
+rerun passes and is the verification result.
 
 The small API lane built pristine main `b7cf06cde1fbf977b748d97d86ba102262d3f03f`
 and its branch independently. All seven new API/CLI fixtures pass on QuickJS,
@@ -296,7 +323,31 @@ has reproduced and resolved these blockers.
 
 ## Browser occupied-port follow-up after fake timers
 
-Status: Approved.
+Status: Done, verified on 2026-10-23.
+
+The focused `net-http-listen-error` regression first failed on pristine browser
+main `5fa3a24f` because the occupied listener announced `listening`. It now passes
+with real and fake timers, and immediate close cancels startup. The fix waits on
+`hostLocalAddr` through an I/O waiter before publishing either success or the
+host bind error. No timer, delay, retry, or Node socket-probe change is involved.
+Twelve deterministic startup and actual HTTP factory checks pass. The review
+regression first delivered a queued `connection` before `listening`; acceptance
+now starts only after the listen callback returns and only if it left the server
+open. Pending binds cannot accept, and `unref` in that callback applies to the
+accept waiter. Close-and-relisten callbacks keep one waiter per startup and leave
+zero referenced waiters after final close. Plain relisten delivers each queued
+connection once; a guest fixture also requires the reused server process to exit.
+After rebasing onto main `23e2125d`, the strict runtime check and 131 unit tests,
+lint, project type checks and duplicate gate pass. A browser guest rebuilt from
+`24439c73` passes the listener process-exit, framing and stream fixtures, three
+passed and zero failed. The test server and scratch cleanup were checked locally.
+The earlier six-fixture listener/process/framing runs and unchanged upstream
+pipeline runs passed on all three engines, but predate both review fixes.
+The earlier UpCloud-4 browser replay also passed, with remote teardown verified.
+The unchanged upstream timer file reports eight passes and three pre-existing
+lazy matcher failures, recorded separately below. All listener tests pass.
+Evidence is in `/work/reports/wave-20261022/bun-wasm/real-bun-followups/` and
+`/work/reports/machine-fleet/remote-gate/real-bun-listener-final-20261023T064132Z-1r84crw0/`.
 
 The 12-file fake-timer after measurement passes 42 tests on QuickJS and JSC.
 Browser passes 41, with one 2-second timeout in
@@ -326,3 +377,31 @@ scripts/bun-suite.sh --engine browser --jobs 1 --timeout 15 --network loopback \
 Raw output is retained in
 `/work/reports/bun-wasm-fake-timers/after-browser-logs/js/bun/test/test-timers.test.ts.log`.
 The coordinator owns this evidence until the networking follow-up is verified.
+
+
+### Lazy test matcher initialization after replacing timer globals
+
+Status: Approved, separate from the occupied-port fix. On 2026-10-23, the
+unchanged `js/bun/test/test-timers.test.ts` replay reports eight passes and
+three failures on browser. All HTTP/TCP listener tests pass. Each failure
+replaces `globalThis.setTimeout` with a string, symbol or bigint before
+`Bun.jest()` initializes the matcher adapter.
+
+A pristine browser guest from main `5fa3a24f`, SHA-256
+`2bb4fe06c65d3a09c75f6c6c84f3ccbababea2ce966d432447dc5be05d33865f`,
+reproduces the string case with exit 1. Native Bun 1.4.2 prints `ok`:
+
+```sh
+node --experimental-wasm-jspi web/scripts/node-host.mjs --wasm \
+  /work/tmp/bun-wasm-real-bun-followups-artifacts/bun-browser.wasm -- -e "globalThis.setTimeout = 'x'; const jest = Bun.jest().jest; jest.useFakeTimers(); console.log('ok');"
+```
+
+The guest throws `TypeError: setTimeout.bind is not a function`.
+Inspect `crates/bunwasm-runtime/src/js/test_matchers.ts:11`, which captures
+`schedule` from the mutable global during lazy initialization rather than
+using the bootstrap's saved timer. This is not caused by listener binding
+or the new startup waiter. Evidence and the native control are in
+`/work/reports/wave-20261022/bun-wasm/real-bun-followups/timers-pristine-control.log`;
+full upstream results are in `timers-browser.json` and `timers-browser-logs/`
+in the same directory. The real-Bun follow-up lane retains this baseline
+artifact until the timer follow-up is reproduced, then removes it.

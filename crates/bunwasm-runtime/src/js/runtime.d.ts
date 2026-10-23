@@ -8,6 +8,8 @@ declare namespace BunWasm {
       join(windows: boolean, paths: Uint8Array[]): Uint8Array;
       relative(windows: boolean, from: Uint8Array, to: Uint8Array): Uint8Array;
     };
+    hostLocalAddr(handle: number): string | number;
+    hostClose(handle: number): number;
     registerObjectModule(name: string): string;
     clearObjectModules(): void;
     readonly engine: "quickjs" | "jsc" | "host";

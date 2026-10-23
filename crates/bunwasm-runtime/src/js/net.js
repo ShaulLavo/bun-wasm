@@ -1102,8 +1102,10 @@
         this._port = native.hostLocalPort(this._listener);
         this._host = opts.host || "::";
         this.listening = true;
-        this._accepting = acceptLoop(this._listener, (conn) => this._onConnection(conn));
-        internal.nextTick(() => this.emit("listening"));
+        internal.require("net_listener").start(this, {
+          addWaiter, hostError,
+          accept: () => acceptLoop(this._listener, (conn) => this._onConnection(conn)),
+        });
         return this;
       }
       _onConnection(conn) {
@@ -1183,10 +1185,14 @@
         return this;
       }
       ref() {
+        this._referenced = true;
+        if (this._starting) this._starting.ref = true;
         if (this._accepting) this._accepting.ref = true;
         return this;
       }
       unref() {
+        this._referenced = false;
+        if (this._starting) this._starting.ref = false;
         if (this._accepting) this._accepting.ref = false;
         return this;
       }
