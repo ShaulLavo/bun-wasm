@@ -3400,8 +3400,8 @@ Cross-guest sharing still throws DataCloneError.
 validated JSC input stamp, native archive hashes, and existing Bun/sysroot build
 receipt. Blocking CI selects it for JSC embedding, allocation, build and fixture
 inputs. The Rust job reuses its toolchain, sources and dependencies;
-it builds JSC once and executes both fixtures against that linked guest in the
-Node WASI host. QuickJS and host syntax checks are not JSC execution evidence.
+it builds JSC once and executes the selected fixtures against that linked guest
+in the Node WASI host. QuickJS and host syntax checks are not JSC execution evidence.
 
 ## HTTP/2 response compatibility class
 
