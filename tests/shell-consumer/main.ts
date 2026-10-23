@@ -165,6 +165,7 @@ async function interrupt() {
     await changed("/background-alive");
     await shell.send("echo DESCENDANT_STATUS:$?; kill %1; wait; echo DESCENDANTS_REAPED");
     await shell.output("DESCENDANT_STATUS:130"); await shell.output("DESCENDANTS_REAPED"); await shell.ready();
+    check(workers.size === baselineWorkers - 1, "wait reaps the unrelated background worker");
     await shell.send("echo PROMPT_USABLE"); await shell.output("\nPROMPT_USABLE"); await shell.ready();
     return { ...shell.stats(), status: 130, foreground: foreground.map(({ pid, parentPid, job }) => ({ pid, parentPid, job })), background };
   } finally { await shell.dispose(); }

@@ -46,9 +46,12 @@ function execute(command: string[], cwd: string, env = process.env): Promise<voi
     child.once("close", code => { kill(child); ownedCommands.delete(child); if (code === 0) resolve(); else reject(new Error(`${command.join(" ")} exited ${code}`)); });
   });
 }
+function stopCommand(child: ChildProcess) {
+  return new Promise<void>(resolve => { child.once("close", () => resolve()); kill(child); });
+}
 function cleanup() {
   return cleanupPromise ??= (async () => {
-    await Promise.all(Array.from(ownedCommands, child => new Promise<void>(resolve => { child.once("close", () => resolve()); kill(child); })));
+    await Promise.all(Array.from(ownedCommands, stopCommand));
     try { await (browser ?? await launching?.catch(() => undefined))?.close(); }
     finally { server?.stop(true); if (scratch) await rm(scratch, { recursive: true, force: true }); }
   })();
