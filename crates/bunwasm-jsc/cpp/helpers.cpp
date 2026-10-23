@@ -362,6 +362,25 @@ bool bunjsc_is_detachable_buffer(JSContextRef ctx, JSValueRef value)
     return buffer && !buffer->impl()->isDetached() && buffer->impl()->isDetachable();
 }
 
+// A typed array's, DataView's or ArrayBuffer's bytes, left unpinned.
+// JSObjectGet{TypedArray,ArrayBuffer}BytesPtr pin and lock the buffer for good,
+// so every buffer native code read or filled could never be transferred.
+// Callers copy or fill the bytes before any JavaScript runs.
+uint8_t* bunjsc_buffer_bytes(JSContextRef ctx, JSValueRef value, size_t* length)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    JSValue js = toJS(global, value);
+    std::span<uint8_t> bytes;
+    if (auto* view = dynamicDowncast<JSArrayBufferView>(js)) {
+        if (!view->isOutOfBounds())
+            bytes = { static_cast<uint8_t*>(view->vector()), view->byteLength() };
+    } else if (auto* buffer = dynamicDowncast<JSArrayBuffer>(js))
+        bytes = buffer->impl()->mutableSpan();
+    *length = bytes.size();
+    return bytes.data();
+}
+
 void bunjsc_detach_buffer(JSContextRef ctx, JSValueRef value)
 {
     JSGlobalObject* global = toJS(ctx);

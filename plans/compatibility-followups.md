@@ -793,39 +793,23 @@ now pass on all engines. This does not resolve the React optimized-dependency
 
 ## JSC native-output buffer transfer
 
-Status: Approved. The engine/runtime track owns this follow-up.
+Status: Resolved. The JSC C API's `JSObjectGetTypedArrayBytesPtr` and
+`JSObjectGetArrayBufferBytesPtr` call WebKit's `ArrayBuffer::pinAndLock()`, and
+`isDetachable()` is false for a locked buffer. Every buffer the JSC adapter filled
+(`engine_jsc.rs::uint8_array`) or read (`bunwasm-jsc::Js::bytes`) therefore stayed
+non-detachable for good: native outputs such as `TextEncoder.encode`, `readFileSync`
+and `Buffer.from(string)`, and JavaScript buffers passed to `TextDecoder.decode` or
+`writeFileSync`. Native Bun 1.4.2 transfers all of them.
 
-The PR #59 review-fix gate observed a separate buffer-ownership gap on JSC.
-At task commit `df5c87c7`, `scripts/test.sh --engine jsc transpiler-review`
-reports `DataCloneError: ArrayBuffer is not detachable` at the transfer of a
-TextEncoder-produced buffer. The same fixture passes its mutation, minification
-and import-preservation checks. Native Bun 1.4.2 permits this transfer; a fresh
-JavaScript-owned ArrayBuffer also transfers successfully on our JSC engine.
-The review regression now uses that transferable caller-owned storage, while
-retaining direct TextEncoder and DataView mutation checks on every engine.
-
-Reproduce the external-buffer operation with a rebuilt JSC artifact:
-
-```sh
-export PATH=$HOME/.local/share/mise/shims:$PATH
-source env.sh
-wasmtime run --dir .::/ dist/bun-jsc.wasm -e 'const bytes = new TextEncoder().encode("const z=3"); structuredClone(bytes.buffer, { transfer: [bytes.buffer] }); console.log(bytes.byteLength);'
-```
-
-Run through the heavy wrapper. Expected native Bun output is zero. The observed
-JSC fixture diagnostic is retained in
-`/work/reports/bun-wasm-small-causes/review-fixes/after-jsc.log`, including the
-source line and exit 1. All ten focused fixtures pass on JSC after changing only
-the detach case to JavaScript-owned storage.
-
-Inspect `crates/bunwasm-runtime/src/engine_jsc.rs`, `uint8_array`: it creates a
-JavaScript Uint8Array, then calls `JSObjectGetTypedArrayBytesPtr` to populate it.
-That C API access may pin the backing store. The detachable check in
-`crates/bunwasm-jsc/cpp/helpers.cpp`, `bunjsc_is_detachable_buffer`, delegates to
-WebKit's `ArrayBuffer::isDetachable`. Confirm the pinning mechanism before
-changing allocation or ownership; do not force-detach locked native storage.
-Cover native-produced byte buffers as well as JavaScript-created buffers.
-The coordinator owns the evidence until this follow-up is reproduced.
+`bunjsc_buffer_bytes` in `crates/bunwasm-jsc/cpp/helpers.cpp` now returns the view's
+or buffer's bytes without pinning; both callers copy or fill them before any
+JavaScript runs, so nothing can detach the storage meanwhile. No locked storage is
+force-detached. `tests/fixtures/native-output-transfer` transfers native outputs,
+native inputs, an offset view and a JavaScript-created buffer on every engine;
+on a JSC build before the fix it stops at the first case with `DataCloneError:
+ArrayBuffer is not detachable`. `transpiler-review` transfers its `TextEncoder`
+buffer directly again, and the worker codec and WebAssembly adapters no longer
+copy bytes to keep them detachable.
 
 ## Browser immutable promise limitations
 

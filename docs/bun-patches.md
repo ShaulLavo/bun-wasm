@@ -1726,7 +1726,9 @@ The original atomic-transfer native checks the complete buffer list before
 detachment. QuickJS uses its public detach operation plus the inspection helper
 above. The JSC adapter adds original `JSArrayBuffer` inspection and detach hooks
 in `crates/bunwasm-jsc/cpp/helpers.cpp`, against the same pinned WebKit headers as
-the existing helpers. The browser adapter in `web/src/buffer-transfer.ts` captures the host's structured
+the existing helpers. Its original unpinned byte accessor replaces the C API's
+`JSObjectGet{TypedArray,ArrayBuffer}BytesPtr`, which pin and lock a buffer for
+good, so buffers native code reads or fills stay detachable. The browser adapter in `web/src/buffer-transfer.ts` captures the host's structured
 clone operation and tracks native WebAssembly memory buffers through their
 buffer getter. It rejects the whole list before Chromium can partially detach
 it. WebKit and Node already preserve earlier buffers in this case. Copied
