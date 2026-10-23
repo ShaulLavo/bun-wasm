@@ -1,0 +1,5 @@
+once, prepend, receiver, symbols and listener identity
+emit snapshot and remove-all LIFO identity
+error monitor, error identity and validation
+one leak warning with emitter, event and count
+promise once, abort listener and queued iterator close

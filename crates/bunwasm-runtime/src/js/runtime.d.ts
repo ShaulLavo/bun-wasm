@@ -80,7 +80,7 @@ declare namespace BunWasm {
   }
 }
 
-declare const process: { cwd(): string };
+declare const process: { cwd(): string; emitWarning?(warning: Error): void };
 declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
 

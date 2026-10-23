@@ -116,9 +116,10 @@ Each row has one class. A file with independent changes has separate rows.
 | [`vendor/bun/src/runtime/node/path.rs`](#node-path) | Port | Adapt the public path argument traversal and validation order to the JavaScript boundary. |
 | [`crates/bunwasm-runtime/src/js/path.ts`](#node-path) and `src/node_path.rs` | Host feature | Original adapters for JavaScript validation, guest cwd, and lossless UTF-16 transport. |
 | [`crates/bunwasm-runtime/src/js/buffer.js`](#node-buffer-fragments) | Port | Adapt Node Buffer construction and concatenation routines over typed arrays. |
-| [`crates/bunwasm-runtime/src/js/events.js`](#node-event-emitter) | Port | Adapt Node listener bookkeeping without native async hooks. |
+| [`crates/bunwasm-runtime/src/js/events.ts`](#node-event-emitter) | Port | Adapt Node listener bookkeeping without native async hooks. |
+| [`events-types.d.ts`](#node-event-emitter) | Host feature | Original erased contracts for the existing emitter and its internal dependencies. |
 | [`event_emitter_async_resource.ts`](#node-event-emitter) | Port | Adapt Bun's async emitter to the guest AsyncResource context bridge. |
-| [`crates/bunwasm-runtime/src/js/events.js`, listener publication](#node-event-emitter) | Host feature | Original mutation hook publishes signal dispositions before user listener-removal callbacks. |
+| [`crates/bunwasm-runtime/src/js/events.ts`, listener publication](#node-event-emitter) | Host feature | Original mutation hook publishes signal dispositions before user listener-removal callbacks. |
 | [`crates/bunwasm-runtime/src/js/util.js`](#node-utility-fragments) | Port | Adapt argument parsing, comparison helpers, and inspection tables. |
 | [`crates/bunwasm-runtime/src/js/assert.js`](#node-assertions) | Port | Adapt assertion helpers and messages to the local inspector and equality implementation. |
 | [`crates/bunwasm-runtime/src/js/bun_sqlite.js`](#bun-sqlite) | Port | Move Bun's SQLite wrapper and inherited transaction code onto Rust SQLite natives. |
@@ -1207,9 +1208,15 @@ Retain recognizable Buffer constructor dispatch, `fromObject` array-like handlin
 
 ### Node event emitter
 
-`crates/bunwasm-runtime/src/js/events.js`. Class **Port**. Comparison sources are Node `lib/events.js` at the Node comparison revision and Bun `src/js/node/events.ts` at the Bun pin. The direct Node import revision is not recorded.
+`crates/bunwasm-runtime/src/js/events.ts`. Class **Port**. Comparison sources are Node `lib/events.js` at the Node comparison revision and Bun `src/js/node/events.ts` at the Bun pin. The direct Node import revision is not recorded.
 
 Retain listener storage conventions, once-wrapper state, listener removal, and remove-all behavior. Replace primordials, internal validators, and native async-resource or EventTarget integration with local validation and runtime scheduling. The module also supplies local promise and async-iterator helpers. These changes provide Node-style listener semantics on the guest event loop without native async hooks.
+
+The TypeScript conversion adds erased listener storage, once-state, iterator and
+internal dependency contracts. It retains the exact JavaScript AST, including its
+strict directive and lazy async-resource export. `events-types.d.ts` is an original
+type adapter, not upstream source. No listener, native-context or async-resource
+behavior changes.
 
 The listener-publication hook is a separate **Host feature**, an **original adapter**, not copied
 from Node or Bun. It runs immediately after listener storage mutates and before user removal
