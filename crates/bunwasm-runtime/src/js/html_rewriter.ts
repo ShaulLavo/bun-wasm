@@ -18,11 +18,46 @@
     return String(value);
   }
 
-  function promise(value: unknown): Promise<unknown> | undefined {
+  type Pending = { promise: Promise<void>; cancel(): void };
+  const abandoned = new FinalizationRegistry<(error: unknown) => void>(reject => {
+    reject(new Error("HTMLRewriter content handler returned a Promise that will never settle"));
+  });
+
+  // This scope must not reach the observed promise through the registry's held callback.
+  function handlerWaiter() {
+    const token = {};
+    let settlement: { resolve(): void; reject(error: unknown): void } | undefined;
+    const waiting = new Promise<void>((resolve, reject) => { settlement = { resolve, reject }; });
+    function fulfilled() {
+      const current = settlement;
+      settlement = undefined;
+      abandoned.unregister(token);
+      current?.resolve();
+    }
+    function rejected(error: unknown) {
+      const current = settlement;
+      settlement = undefined;
+      abandoned.unregister(token);
+      current?.reject(error);
+    }
+    return { promise: waiting, fulfilled, rejected, cancel: fulfilled, token };
+  }
+
+  function observe(value: unknown): Promise<unknown> | undefined {
+    if (internal.isPromise(value)) return value;
     if ((typeof value !== "object" || value === null) && typeof value !== "function") return;
     const then = Reflect.get(value, "then");
     if (typeof then !== "function") return;
     return new Promise<void>((resolve, reject) => Reflect.apply(then, value, [() => resolve(undefined), reject]));
+  }
+
+  function promise(value: unknown): Pending | undefined {
+    const observed = observe(value);
+    if (!observed) return;
+    const pending = handlerWaiter();
+    abandoned.register(observed, pending.rejected, pending.token);
+    internal.promiseThen(observed, pending.fulfilled, pending.rejected);
+    return pending;
   }
 
   class Token {
@@ -90,6 +125,7 @@
     readonly id: number;
     closed = false;
     active: Token | undefined;
+    #pending: Pending | undefined;
     readonly #endTags = new Map<number, Registration>();
     #nextEndTag: number;
     readonly registrations: Registration[];
@@ -103,6 +139,8 @@
     close() {
       if (this.closed) return;
       this.closed = true;
+      this.#pending?.cancel();
+      this.#pending = undefined;
       if (this.active) this.active.detach();
       this.active = undefined;
       this.registrations.length = 0;
@@ -149,7 +187,10 @@
       append(output, step.output);
       while (step.event) {
         const pending = this.invoke(step.event);
-        if (pending) { pending.catch(() => {}); throw new TypeError("HTMLRewriter.transform() cannot synchronously return a body when a handler returns a Promise. Use a Response input."); }
+        if (pending) {
+          pending.cancel();
+          throw new TypeError("HTMLRewriter.transform() cannot synchronously return a body when a handler returns a Promise. Use a Response input.");
+        }
         step = this.resume();
         append(output, step.output);
       }
@@ -158,7 +199,10 @@
       if (step.output.length) controller.enqueue(step.output);
       while (step.event && !this.closed) {
         const pending = this.invoke(step.event);
-        if (pending) await pending;
+        if (this.closed) { pending?.cancel(); return; }
+        this.#pending = pending;
+        try { if (pending) await pending.promise; }
+        finally { this.#pending = undefined; }
         if (this.closed) return;
         step = this.resume();
         if (step.output.length) controller.enqueue(step.output);
