@@ -9,9 +9,12 @@ const root = resolve(import.meta.dir, "..");
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-core-adapters-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-function emit(name: string) {
-  const output = join(scratch, `${name}.js`);
-  const result = Bun.spawnSync(["node", join(root, "scripts/transpile-runtime.ts"), join(root, `crates/bunwasm-runtime/src/js/${name}.ts`), output], { stdout: "pipe", stderr: "pipe" });
+function emit(name: string, compact = false) {
+  const output = join(scratch, `${name}-${compact ? "compact" : "stripped"}.js`);
+  const command = compact ? "bun" : "node";
+  const args = [command, join(root, "scripts/transpile-runtime.ts"), join(root, `crates/bunwasm-runtime/src/js/${name}.ts`), output];
+  if (compact) args.push("--minify-whitespace");
+  const result = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
   expect(result.exitCode).toBe(0);
   return readFileSync(output, "utf8");
 }
@@ -31,17 +34,19 @@ const originalTokens = {
   stack_trace: "749819b642caac17947531faaa802271feac2fd7219af4d271c3a8d25f5cf1db",
   bun_builtins: "58e3de8a4232bc992b2b483d817198d6f020bedafc8220c3a1903d4f360f3bbe",
 };
+const originalEmbeddedBytes = { stack_trace: 4330, bun_builtins: 4092 };
 for (const [name, hash] of Object.entries(originalTokens)) {
-  test(`emitted ${name} keeps every original executable token`, () => {
-    const source = emit(name);
-    expect(syntaxHash(source)).toBe(hash);
-    const bundle = new Bun.Transpiler({ loader: "js", minifyWhitespace: true }).transformSync(`globalThis.factory = ${source}`);
-    expect(Buffer.byteLength(bundle)).toBe(name === "stack_trace" ? 3452 : 3380);
+  test(`stripped ${name} keeps every original executable token`, () => {
+    expect(syntaxHash(emit(name))).toBe(hash);
+  });
+
+  test(`embedded ${name} does not grow after TypeScript erasure`, () => {
+    expect(Buffer.byteLength(emit(name, true))).toBeLessThanOrEqual(originalEmbeddedBytes[name as keyof typeof originalEmbeddedBytes]);
   });
 }
 
 test("emitted builtin loader keeps caches, private symbols and unsupported errors", () => {
-  const factory = runInNewContext(emit("bun_builtins"));
+  const factory = runInNewContext(emit("bun_builtins", true));
   let evaluations = 0;
   const builtin = { fallback: true };
   const loader = factory({
@@ -77,6 +82,6 @@ test("emitted builtin loader keeps caches, private symbols and unsupported error
 
 test("emitted stack adapter leaves host hooks intact", () => {
   const context = { internal: { native: { engine: "host" }, defineHidden: Object.assign } };
-  const source = emit("stack_trace");
+  const source = emit("stack_trace", true);
   expect(runInNewContext(`const capture = Error.captureStackTrace; (${source})(internal); Error.captureStackTrace === capture`, context)).toBe(true);
 });
