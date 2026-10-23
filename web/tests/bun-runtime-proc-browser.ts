@@ -54,8 +54,9 @@ if (site) for (const path of ["index.html", "playground/index.html"]) assert.ok(
 const selected = process.env.BUN_WASM_RUNTIME_PROC_SCENARIO;
 const requestedPort = Number(process.env.BUN_WASM_RUNTIME_PROC_PORT ?? "4187");
 assert.ok(Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort <= 65535, "explicit valid loopback port required");
-const scenarios = selected ? [selected] : ["generic-control"].concat(bunRuntimeProcScenarios.map(scenario => scenario.name));
-assert.ok(scenarios.every(name => name === "generic-control" || bunRuntimeProcScenarios.some(scenario => scenario.name === name)), "known Bun runtime_proc scenario required");
+const availableScenarios = bunRuntimeProcScenarios.filter(scenario => scenario.name !== "source-cache" || engine === "browser");
+const scenarios = selected ? [selected] : ["generic-control"].concat(availableScenarios.map(scenario => scenario.name));
+assert.ok(scenarios.every(name => name === "generic-control" || availableScenarios.some(scenario => scenario.name === name)), "known matching-engine Bun runtime_proc scenario required");
 const originalTmpdir = process.env.TMPDIR;
 let scratch: string | undefined;
 let scratchCreation: Promise<string> | undefined;
