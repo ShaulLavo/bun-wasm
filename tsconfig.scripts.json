@@ -5,7 +5,7 @@
     "scripts/**/*.mts",
     "site/*.ts",
     "tests/check-worker-regressions.ts",
-    "tests/install/**/*.ts"
+    "tests/install/package-options.ts"
   ],
   "compilerOptions": {
     "allowJs": true,
