@@ -1103,7 +1103,8 @@
         this._host = opts.host || "::";
         this.listening = true;
         this._accepting = acceptLoop(this._listener, (conn) => this._onConnection(conn));
-        internal.nextTick(() => this.emit("listening"));
+        this._accepting.ref = this._referenced !== false;
+        internal.require("net_listener").start(this, { addWaiter, waiters, hostError });
         return this;
       }
       _onConnection(conn) {
@@ -1183,10 +1184,14 @@
         return this;
       }
       ref() {
+        this._referenced = true;
+        if (this._starting) this._starting.ref = true;
         if (this._accepting) this._accepting.ref = true;
         return this;
       }
       unref() {
+        this._referenced = false;
+        if (this._starting) this._starting.ref = false;
         if (this._accepting) this._accepting.ref = false;
         return this;
       }

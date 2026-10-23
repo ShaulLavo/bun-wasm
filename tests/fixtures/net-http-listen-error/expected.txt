@@ -1,0 +1,3 @@
+occupied port real ok
+occupied port fake ok
+closed startup stays closed

@@ -296,7 +296,16 @@ has reproduced and resolved these blockers.
 
 ## Browser occupied-port follow-up after fake timers
 
-Status: Approved.
+Status: Approved, implementation under verification on 2026-10-23.
+
+The focused `net-http-listen-error` regression first failed on pristine browser
+main `5fa3a24f` because the occupied listener announced `listening`. It now passes
+with real and fake timers, and immediate close cancels startup. The fix waits on
+`hostLocalAddr` through an I/O waiter before publishing either success or the
+host bind error. No timer, delay, retry, or Node socket-probe change is involved.
+Four deterministic startup-waiter checks pass. The original upstream timer file
+and rebuilt all-engine fixtures remain required before marking this done.
+Evidence is in `/work/reports/wave-20261022/bun-wasm/real-bun-followups/`.
 
 The 12-file fake-timer after measurement passes 42 tests on QuickJS and JSC.
 Browser passes 41, with one 2-second timeout in
