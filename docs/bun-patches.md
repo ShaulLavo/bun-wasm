@@ -33,6 +33,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`third_party/licenses/lol-html-LICENSE`](#htmlrewriter) | Port | Retain the vendored parser's BSD license for wasm distribution. |
 | [Third-party interrupt instrumentation](#third-party-interrupt-instrumentation) | Host feature | Original TypeScript binary rewriter, content-addressed loader and rescued browser fixtures; module-internal countdowns avoid per-entry host calls. |
 | [Portable installer and package command adapters](#portable-installer-and-package-commands) | Host feature | Original filesystem, lockfile and command adapters over Bun's matcher, parsers and semver. |
+| [No-git package version command](#no-git-package-version-command) | Port | Adapt Bun version validation and stable-version increments to the portable no-git command. |
 | [Foreign lockfile migration](#foreign-lockfile-migration) | Host feature | Original format and credential-boundary adapters preserve selected records, workspace locations, optional edges and credential-free sources. |
 | [Migration archive fixtures](#migration-archive-fixtures) | Host feature | Unchanged abbrev archives verify the real npm workspace fixture and extraction against its recorded checksums. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
@@ -2392,11 +2393,33 @@ coalescing and withdrawal, bounded sleep waits, and unwind propagation. These
 are original guest control-flow adapters with no ABI change, not copied Bun,
 libc or host code.
 
+## No-git package version command
+
+Class **Port**. `crates/bunwasm-runtime/src/install/version.rs`
+adapts validation, diagnostics and stable-version increments from
+`src/cli/pm_version_command.rs` at Bun revision
+`9510e74152073d850a18758ca41114d8f214ffa6`, with local patched source at
+`d71508d31edf06765c12adf0df137ef531539f68`.
+It uses Bun's complete-version parser and the upstream JavaScript safe-integer
+limit. The local command has its own argument dispatch before install options,
+then validates the request and current bump version before any manifest write.
+Specific versions are normalized without build metadata, matching native Bun
+1.4.4 controls. Existing atomic installer writes publish the changed manifest.
+
+The bounded adapter supports patch, minor, major and specific versions with
+`--no-git-tag-version`, plus `--allow-same-version`, `--dry-run` and
+`--ignore-scripts`. Prerelease increments, Git operations and lifecycle execution
+are explicitly unsupported. A lifecycle declaration fails before writing unless
+scripts are ignored. It does not install packages or change lockfiles.
+The local fixture tests include native Bun controls and exact invalid-version
+messages with byte-for-byte preservation of failed manifests.
+
 ## Portable installer and package commands
 
 Class **Host feature**. Original adapters in `crates/bunwasm-runtime/src/install/`,
 `src/js/package_scripts.ts`, and `crates/bunwasm-cli/src/main.rs`. No upstream
-source is copied or changed by these adapters. They use Bun's `src/glob/` walker,
+source is copied or changed by these adapters, apart from the version adaptation
+listed above. They use Bun's `src/glob/` walker,
 `src/semver/` parser, and the existing transpiler data parser from revision
 `9510e74152073d850a18758ca41114d8f214ffa6`.
 
@@ -2435,6 +2458,16 @@ Explicit bin names require an exact match. The host-engine import-meta hook
 reads the resolved main path after script expansion, matching the embedded engines. The local adapter preserves published
 cache use under `--no-install`. Member updates invalidate only the member's
 selected lock entries, leaving unrelated root pins intact.
+
+The package-script PATH adapter keeps the caller's explicit PATH, including an
+empty value. Only a missing PATH receives `/bin:/usr/bin`, matching the runtime's
+existing executable-search default. Ancestor package bins still precede it.
+This is an original adapter change. Native Bun controls preserve the explicit
+suffix but additionally inject a temporary Node proxy. The portable adapter does
+not inject that proxy and keeps deliberately restricted guest paths restricted.
+This repairs the immediate Node ENOENT branch measured in the Vite worker. It
+does not establish successful Vite dependency optimization; the explicit-PATH
+control still exceeded the unchanged 90-second deadline.
 
 The TypeScript package-script dispatcher runs JavaScript and TypeScript binaries
 inside the selected engine. It handles quoted arguments and environment

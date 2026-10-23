@@ -40,7 +40,7 @@ async function run(directory: string, args: string[], code = 0, path?: string) {
   assert.ok(executable, "Set BUN_WASM_LAUNCHER for embedded engines");
   const guest = ["--wasm", wasm, "--dir", `${directory}::/`, "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache"].concat(path === undefined ? [] : ["--env", `PATH=${path}`], ["--"], args);
   const argv = native ? args : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(guest) : guest;
-  const env = { ...process.env, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(directory, "cache") };
+  const env: NodeJS.ProcessEnv = { ...process.env, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(directory, "cache") };
   delete env.PATH;
   if (path !== undefined) env.PATH = path;
   const child = spawn(executable, argv, { cwd: directory, env, stdio: ["ignore", "pipe", "pipe"] });
@@ -110,6 +110,10 @@ async function invalidVersion() {
     { version: "1.0.18446744073709551616", arg: "patch", stderr: 'error: Current version "1.0.18446744073709551616" is not a valid semver\n' },
     { version: "1.0.0", arg: "1.0.18446744073709551616", stderr: 'error: Invalid version argument: "1.0.18446744073709551616"\nnote: Valid options: patch, minor, major, prepatch, preminor, premajor, prerelease, from-git, or a specific semver version\n' },
   ];
+  for (const invalid of ["9007199254740992.0.0", "1.2"]) {
+    rows.push({ version: invalid, arg: "patch", stderr: `error: Current version "${invalid}" is not a valid semver\n` });
+    rows.push({ version: "1.0.0", arg: invalid, stderr: `error: Invalid version argument: "${invalid}"\nnote: Valid options: patch, minor, major, prepatch, preminor, premajor, prerelease, from-git, or a specific semver version\n` });
+  }
   for (const [index, row] of rows.entries()) {
     const directory = project(`invalid-version-${index}`, { name: "root", version: row.version });
     const before = contents(directory);
@@ -122,14 +126,42 @@ async function invalidVersion() {
 
 async function validVersion() {
   const directory = project("valid-version", { name: "root", version: "1.2.3" });
-  const rows: [string, string][] = [["patch", "1.2.4"], ["minor", "1.3.0"], ["major", "2.0.0"], ["3.4.5-rc.1", "3.4.5-rc.1"]];
+  const rows: [string, string][] = [["patch", "1.2.4"], ["minor", "1.3.0"], ["major", "2.0.0"], ["v3.4.5-rc.1+build", "3.4.5-rc.1"], ["patch", "3.4.5"]];
   for (const [arg, expected] of rows) {
     const result = await run(directory, ["pm", "version", arg, "--no-git-tag-version"]);
     assert.equal(result.stdout, `v${expected}\n`);
     assert.equal(JSON.parse(contents(directory)).version, expected);
   }
+  const before = contents(directory);
+  const dry = await run(directory, ["pm", "version", "minor", "--no-git-tag-version", "--dry-run"]);
+  assert.equal(dry.stdout, "v3.5.0\n");
+  assert.equal(contents(directory), before);
+  const same = await run(directory, ["pm", "version", "3.4.5", "--no-git-tag-version"], 1);
+  assert.equal(same.stderr, "error: Version not changed\n");
+  assert.equal(contents(directory), before);
   assert.equal(existsSync(join(directory, "bun.lock")), false);
   assert.equal(existsSync(join(directory, "node_modules")), false);
+}
+
+async function scriptPathCase(directory: string, entry: string, path: string | undefined) {
+  const result = await run(directory, ["run", entry], 0, path);
+  const value = JSON.parse(result.stdout);
+  if (path === undefined || path === "/bin:/usr/bin") {
+    assert.ok(value.node, `node must be on the default/inherited path: ${result.stdout}`);
+    assert.equal(value.output, "path-child");
+    return;
+  }
+  if (process.env.INSTALL_NATIVE_BUN === "1") {
+    assert.match(value.node, /^\/tmp\/bun-node-[^/]+\/node$/);
+    assert.equal(value.output, "path-child");
+    assert.ok(value.path.endsWith(`:${path}`));
+    assert.equal(value.path.split(":").includes("/bin"), false);
+    assert.equal(value.path.split(":").includes("/usr/bin"), false);
+    return;
+  }
+  assert.equal(value.node, null, `explicit PATH must not acquire a default: ${result.stdout}`);
+  assert.equal(value.output, "");
+  assert.ok(value.path.endsWith(path));
 }
 
 async function scriptPath() {
@@ -139,17 +171,10 @@ async function scriptPath() {
     try { result.output = new TextDecoder().decode(Bun.spawnSync(["node", "-e", "console.log('path-child')"]).stdout).trim(); } catch {}
     console.log(JSON.stringify(result));
   `);
-  for (const path of [undefined, "", "/restricted", "/bin:/usr/bin"]) {
-    const result = await run(directory, ["run", "probe.ts"], 0, path);
-    const value = JSON.parse(result.stdout);
-    if (path === undefined || path === "/bin:/usr/bin") {
-      assert.ok(value.node, `node must be on the default/inherited path: ${result.stdout}`);
-      assert.equal(value.output, "path-child");
-      continue;
+  for (const entry of ["probe.ts", "probe"]) {
+    for (const path of [undefined, "", "/restricted", "/bin:/usr/bin"]) {
+      await scriptPathCase(directory, entry, path);
     }
-    assert.equal(value.node, null, `explicit PATH must not acquire a default: ${result.stdout}`);
-    assert.equal(value.output, "");
-    assert.ok(value.path.endsWith(path));
   }
 }
 
