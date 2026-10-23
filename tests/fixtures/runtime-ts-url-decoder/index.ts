@@ -86,7 +86,7 @@ attempt("format query URLSearchParams", () => url.format({ pathname: "/", query:
 attempt("format query string ignored", () => url.format({ pathname: "/", query: "a=1" }));
 attempt("format search wins", () => url.format({ pathname: "/", search: "?fixed", query: { a: ["1", "2"] } }));
 attempt("format empty search", () => url.format({ pathname: "/", search: "", query: { a: ["1", "2"] } }));
-const domains = ["xn--espaol-zwa.com", "xn--bcher-kva.de", "xn--fiqs8s", "español.com", "EXAMPLE.COM.", "xn--iñvalid.com", "xn--", "a b", "a/b", "a?b", "a#b", "user@xn--espaol-zwa.com", "foo:81", "127.0.0.1", "0x7f.1", "[::1]", "%65xample.com", "%E2%98%83.com", ""];
+const domains = ["xn--espaol-zwa.com", "xn--bcher-kva.de", "xn--fiqs8s", "español.com", "EXAMPLE.COM.", "xn--iñvalid.com", "xn--", "a b", "a/b", "a?b", "a#b", "a\\b", "a\nb", "a\tb", " a ", "[::ffff:127.0.0.1]", "123", "1.2.3.999", "xn--a.com", "a%00b", "user@xn--espaol-zwa.com", "foo:81", "127.0.0.1", "0x7f.1", "[::1]", "%65xample.com", "%E2%98%83.com", ""];
 for (const domain of domains) {
   attempt("domainToUnicode " + JSON.stringify(domain), () => url.domainToUnicode(domain));
 }
@@ -97,4 +97,8 @@ const coercionError = new Error("domain coercion failed");
 attempt("domainToUnicode throwing coercion", () => {
   try { url.domainToUnicode({ toString() { throw coercionError; } } as unknown as string); }
   catch (error) { return error === coercionError; }
+});
+attempt("domainToUnicode symbol", () => {
+  try { url.domainToUnicode(Symbol("x") as unknown as string); return false; }
+  catch (error) { return error instanceof TypeError; }
 });

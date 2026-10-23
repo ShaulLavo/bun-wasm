@@ -330,18 +330,20 @@ because those groups keep behaviour identical:
   `JSC::streamingJSONParse` in Bun's WebKit fork (`Source/JavaScriptCore/runtime/JSONObject.cpp`
   at the pinned WebKit commit). Port its token and separator rules into `src/js/jsonl.ts`, then
   add these calls to the fixture and regenerate it with `scripts/test.sh --update`.
-- `node:url` differs from native Bun 1.4.2 in three calls. The `runtime-ts-url-decoder`
-  fixture leaves them out:
+- `node:url` parity now covers the three recorded gaps in `runtime-ts-url-decoder`.
+  Installed Bun 1.4.2 and 1.4.4 agree on the expanded fixture. `fileURLToPath(7)`
+  reports the `url` string argument, `format` uses URLSearchParams query semantics,
+  and the `domainToUnicode` native reuses Rust URL/IDNA validation and decoding.
+  The fixture also covers invalid input types, scheme errors, form escaping,
+  repeated query pairs, record coercion, invalid IDNA, hostname delimiters, IP
+  addresses, and throwing domain coercion.
 
-  | Call | Native Bun 1.4.2 | bun-wasm |
-  | --- | --- | --- |
-  | `fileURLToPath(7)` | `The "url" argument must be of type string. Received type number (7)` | `The "path" argument must be of type string or an instance of URL. ...` |
-  | `format({ ..., query: { a: "1", b: ["2", "3"] } })` | `?a=1&b=2%2C3` | `?a=1&b=2&b=3` |
-  | `domainToUnicode("xn--espaol-zwa.com")` | `español.com` | `xn--espaol-zwa.com` (returned unchanged) |
-
-  The fixes belong in `src/js/node_url.ts` (`fileURLToPath`, `format`, `domainToUnicode`);
-  `domainToUnicode` needs a native punycode decoder next to `domainToASCII` in
-  `crates/bunwasm-runtime/src/natives.rs`.
+  Approved remaining file-URL boundary follow-up, observed with installed Bun 1.4.4:
+  `fileURLToPath("file:///a%ZZ")` returns `/a%ZZ`, while our `decodeURIComponent`
+  throws. `fileURLToPath("file:///a%C3")` returns an empty string, while ours throws.
+  Reproduce both through `bun -e` and the emitted `node_url` factory, then compare
+  the file-path byte decoding in Bun's native binding before changing it. The
+  argument/query/IDNA fix deliberately does not redesign file-path decoding.
 - Bun's own `node:test` (`vendor/bun/src/js/node/test.ts`, 2,874 lines) depends on
   `internal/test_runner`, `internal/validators` and the JSC test runner's `jest(Bun.main)`
   entry. Replacing our 22-line adapter with it is a separate port, not part of a type
