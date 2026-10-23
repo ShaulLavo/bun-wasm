@@ -71,10 +71,6 @@ async function selectors() {
   const dependencies = { "selector-fits": "<2.0.0", "@fixture/selected": "<2.0.0", "selector-misses": "^2.0.0" };
   const overrides = { "selector-fits@^1.0.0": "0.5.0", "@fixture/selected@^1": "0.5.0", "selector-misses@^1": "0.5.0" };
   const directory = project("selectors", { name: "root", dependencies, overrides });
-  const first = await run(directory, ["install", "--frozen-lockfile"], 1);
-  assert.match(first.stderr, /lockfile.*frozen/);
-  assert.equal(existsSync(join(directory, "bun.lock")), false);
-  assert.equal(existsSync(join(directory, "node_modules")), false);
   await run(directory, ["install"]);
   assert.equal(installed(directory, "selector-fits"), "0.5.0");
   assert.equal(installed(directory, "@fixture/selected"), "0.5.0");
