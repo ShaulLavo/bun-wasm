@@ -34,6 +34,25 @@ out after advancing beyond its earlier missing-export collection error.
 
 ## Server constructor and default-address contracts
 
+Status: Done for public construction and native default addresses, 2026-10-23.
+Browser address metadata needs Waffle.
+
+`Server` is callable, has arity two, rejects primitive options, copies options,
+and exposes Bun's public defaults. `Server.call(this, options)` initializes an
+inherited receiver, including its event emitter and connection tracking. Native listeners use IPv6 any when no host
+is supplied, explicitly allow IPv4 connections even with system IPv6-only
+defaults, and fall back to IPv4 when IPv6 is unavailable. The focused native
+regressions isolate IPv6 denial to a child process, never host-global sysctls.
+Private connection counters and worker fields remain unimplemented.
+Waffle currently records listener and accepted endpoints as IPv4 loopback;
+the adapter does not forge IPv6 address results for those browser handles.
+
+The own-source QuickJS guest passes the dedicated fixture. The unchanged
+upstream file improves to 37 passing, three failing and three skipped cases.
+Only private `_connections`, `_unref` and `_usingWorkers` checks still fail.
+
+The following is the current-main baseline before this change:
+
 Use the same command with `js/node/net/server.spec.ts` and a fresh output path.
 The measured QuickJS run has 27 passing, 13 failing and three skipped cases.
 Failures include legacy callable construction, function arity, invalid option

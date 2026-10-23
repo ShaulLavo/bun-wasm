@@ -161,3 +161,39 @@ an existing server owns its guest port. After the fix, two helpers forward
 requests independently through the same guest port, the existing server still
 answers, and both preview ports can be rebound after teardown.
 This host-only change does not require a new guest artifact.
+
+## Server public contracts, 2026-10-23
+
+An exact-main QuickJS guest at `5fa3a24f` reproduces 27 passing, 13 failing,
+and three skipped cases in unmodified `js/node/net/server.spec.ts` at patched
+Bun `d71508d31edf06765c12adf0df137ef531539f68`.
+The constructor checks cover callable use, subclass identity, arity, primitive
+option rejection, copied options, public defaults and keepalive delay validation.
+Three original focused tests first fail and then pass. A review regression
+for `Server.call(this, options)` fails on the uninitialized receiver before the
+fix; all four focused tests then pass with 20 assertions. It accepts a real
+Waffle connection and reports one active connection on that same receiver. Native Bun also passes the
+`net-server-contracts` fixture, including default IPv6-any address and family.
+
+The browser shared network still needs Waffle to retain local bind address
+and family. Its `browser/net/host.ts` listener address and
+`browser/net/namespace.ts` accepted peer both report IPv4 loopback.
+Private `_connections`, `_unref`, and worker fields are not public API fixes.
+
+The own-source QuickJS guest passes `net-server-contracts`. Its unchanged
+upstream Server file has 37 passes, three failures and three skips, with no
+timeout. Only `_connections`, `_unref` and `_usingWorkers` assertions still
+fail. The runtime embedding and lifecycle prerequisites also pass, 108 tests
+and 1,634 assertions. Run `scripts/test.sh --no-build net-server-contracts`
+and the isolated upstream command above. Raw after results are retained in
+`/work/reports/wave-20261022/bun-wasm/tcp-queue/server-upstream-after.json`.
+
+
+Review regressions reproduce both default-listener failures with the old host:
+`net-default-bind` gets ECONNREFUSED in an isolated network namespace with
+`net.ipv6.bindv6only=1`, and a listen error when a disposable syscall filter
+returns EAFNOSUPPORT for AF_INET6 socket creation. The corrected host explicitly
+allows dual-stack reads and falls back to IPv4 any. Native Node 26.7 passes
+both controls. Bun 1.4.2 passes the IPv6-only-system-default control but fails
+the EAFNOSUPPORT control, unlike the intended fallback contract. Its upstream
+report and the control source are retained under `/work/reports/upstream-bugs/`.

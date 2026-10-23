@@ -1,0 +1,3 @@
+callable Server validates options and preserves public defaults
+unspecified listener uses IPv6 any address
+legacy Server.call initializes the receiver and accepts connections
