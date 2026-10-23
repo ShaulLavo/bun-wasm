@@ -138,8 +138,9 @@ async function changed() {
     assert.match(production.stderr, /lockfile.*frozen/);
     assert.equal(contents(directory), lock);
     await run(directory, ["install"]);
-    const expected = "versioned" in overrides || "versioned@^1" in overrides ? "2.0.0" === overrides.versioned ? "2.0.0" : "1.0.0" : "1.1.0";
+    const expected = "versioned" in overrides ? overrides.versioned : "1.1.0";
     assert.equal(installed(directory, "versioned"), expected);
+    if ("versioned@^1" in overrides) assert.equal(installed(directory, "uses-one/node_modules/versioned"), "1.0.0");
     const saved = contents(directory);
     await run(directory, ["install", "--frozen-lockfile"]);
     assert.equal(contents(directory), saved);
