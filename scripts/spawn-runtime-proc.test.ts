@@ -111,10 +111,8 @@ test("the idle loop sleeps on exactly the descriptors and child the waiter watch
   expect(kinds()[1]![1]).toBe(child.pid);
   fake.childWrite(record, 1, "tail");
   fake.exit(record, 0);
-  waiters[0].step();
-  // Exited and reaped, but output is still being drained: only the pipe remains.
-  expect(kinds().map(([kind]) => kind)).toEqual([0]);
-  waiters[0].step();
+  // The exit step drains what the child wrote, through its EOF, so nothing is left to watch.
+  expect(waiters[0].step()).toBe(true);
   expect(kinds()).toEqual([]);
 });
 
@@ -697,6 +695,8 @@ for (const outcome of [[0, 0], [2, 44]] satisfies Array<[0, number] | [2, number
     expect(events).toEqual([]);
     child.on("spawn", () => events.push("late-spawn"));
     await pump();
+    // Node's exit comes a turn after the output the child queued before exiting.
+    await new Promise(resolve => setImmediate(resolve));
     expect(events).toEqual(outcome[0] === 0 ? ["spawn", "late-spawn", "exit"] : ["error"]);
     expect(fake.pipes.size).toBe(0);
   });

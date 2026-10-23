@@ -1196,6 +1196,8 @@
       constructor(options, callback) {
         super({ autoDestroy: false });
         this._options = options;
+        // Response events run in the caller's async context, like Node's per-request parser.
+        this._asyncContext = internal.native.getAsyncContext();
         this._abortController = new AbortController();
         this._chunks = [];
         this._headers = Object.create(null);
@@ -1428,13 +1430,14 @@
         this.reusedSocket = Boolean(reused);
         if (this.agent && !reused) this.agent._pool.track(key, socket);
         this.socket = this.connection = socket;
-        const receive = chunk => this._receiveHttp(chunk);
-        const fail = err => this._failHttp(err);
-        const eof = () => {
+        const inRequestContext = fn => (...args) => internal.runInContext(this._asyncContext, fn, this, args);
+        const receive = inRequestContext(chunk => this._receiveHttp(chunk));
+        const fail = inRequestContext(err => this._failHttp(err));
+        const eof = inRequestContext(() => {
           if (this._httpState.state !== "response") { fail(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })); return; }
           try { this._deliverResponse(this._httpState.decoder.end()); }
           catch (error) { fail(error); }
-        };
+        });
         const timeout = () => this.emit("timeout");
         this._httpState = { state: "pending", buffer: new Uint8Array(0), limit, cleanup: () => {
           socket.removeListener("data", receive);

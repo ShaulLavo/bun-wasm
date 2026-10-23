@@ -10,6 +10,7 @@ execFile 45
 kill true true
 unsupported true
 fork fork-arg 0
-ipc ERR_NOT_SUPPORTED_IN_WASM
+ipc after close false false
 exec error true true
 exec error true true
+ipc error ERR_IPC_CHANNEL_CLOSED

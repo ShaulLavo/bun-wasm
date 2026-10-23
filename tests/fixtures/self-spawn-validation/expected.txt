@@ -2,4 +2,4 @@ large sync true
 large async true
 large options sync true
 large options async true
-ipc true
+ipc function

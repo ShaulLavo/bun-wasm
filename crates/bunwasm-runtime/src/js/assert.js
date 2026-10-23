@@ -260,9 +260,8 @@
       }
       super(text);
       this.generatedMessage = !message;
-      this.actual = actual;
-      this.expected = expected;
-      this.operator = operator;
+      if (options.details) setDetails(this, options.details);
+      else Object.assign(this, { actual, expected, operator });
       Object.defineProperty(this, "name", { value: "AssertionError", enumerable: false, writable: true, configurable: true });
       this.code = "ERR_ASSERTION";
       this.diff = "simple";
@@ -272,6 +271,130 @@
     toString() {
       return `${this.name} [${this.code}]: ${this.message}`;
     }
+  }
+
+  // One property group per failed call check (CallTracker.verify), as in Node.
+  function setDetails(error, details) {
+    for (let i = 0; i < details.length; i++) {
+      error["message " + i] = details[i].message;
+      error["actual " + i] = details[i].actual;
+      error["expected " + i] = details[i].expected;
+      error["operator " + i] = details[i].operator;
+      error["stack trace " + i] = details[i].stack;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // CallTracker (Bun's src/js/internal/assert/calltracker.ts, deprecated as DEP0173)
+  // ---------------------------------------------------------------------------
+
+  class CallTrackerContext {
+    #expected;
+    #calls = [];
+    #name;
+    #stackTrace;
+    constructor({ expected, stackTrace, name }) {
+      this.#expected = expected;
+      this.#stackTrace = stackTrace;
+      this.#name = name;
+    }
+    track(thisArg, args) {
+      this.#calls.push(Object.freeze({ thisArg, arguments: Object.freeze(Array.prototype.slice.call(args)) }));
+    }
+    get delta() {
+      return this.#calls.length - this.#expected;
+    }
+    reset() {
+      this.#calls = [];
+    }
+    getCalls() {
+      return Object.freeze(this.#calls.slice());
+    }
+    report() {
+      if (this.delta === 0) return undefined;
+      const message = `Expected the ${this.#name} function to be executed ${this.#expected} time(s) but was executed ${this.#calls.length} time(s).`;
+      return { message, actual: this.#calls.length, expected: this.#expected, operator: this.#name, stack: this.#stackTrace };
+    }
+  }
+
+  function validateExpectedCalls(expected) {
+    if (typeof expected !== "number") throw invalidArgType("expected", "of type number", expected);
+    if (Number.isInteger(expected) && expected >= 1 && expected <= 0xffffffff) return;
+    const range = Number.isInteger(expected) ? ">= 1 && <= 4294967295" : "an integer";
+    throw makeError(RangeError, "ERR_OUT_OF_RANGE", `The value of "expected" is out of range. It must be ${range}. Received ${expected}`);
+  }
+
+  class CallTracker {
+    #callChecks = new Set();
+    #trackedFunctions = new WeakMap();
+    #getTrackedFunction(tracked) {
+      if (this.#trackedFunctions.has(tracked)) return this.#trackedFunctions.get(tracked);
+      throw makeError(TypeError, "ERR_INVALID_ARG_VALUE", `The argument 'tracked' is not a tracked function. Received ${inspect(tracked)}`);
+    }
+    reset(tracked) {
+      if (tracked === undefined) {
+        this.#callChecks.forEach(check => check.reset());
+        return;
+      }
+      this.#getTrackedFunction(tracked).reset();
+    }
+    getCalls(tracked) {
+      return this.#getTrackedFunction(tracked).getCalls();
+    }
+    calls(fn, expected = 1) {
+      if (globalThis.process && globalThis.process._exiting) {
+        throw makeError(Error, "ERR_UNAVAILABLE_DURING_EXIT", "Cannot call function in process exit handler");
+      }
+      if (typeof fn === "number") {
+        expected = fn;
+        fn = () => {};
+      } else if (fn === undefined) {
+        fn = () => {};
+      }
+      validateExpectedCalls(expected);
+      const context = new CallTrackerContext({ expected, stackTrace: new Error(), name: fn.name || "calls" });
+      // A null-prototype handler, so traps inherited from Object.prototype are never used.
+      const tracked = new Proxy(fn, {
+        __proto__: null,
+        apply(target, thisArg, argList) {
+          context.track(thisArg, argList);
+          return Reflect.apply(target, thisArg, argList);
+        },
+      });
+      this.#callChecks.add(context);
+      this.#trackedFunctions.set(tracked, context);
+      return tracked;
+    }
+    report() {
+      const errors = [];
+      for (const context of this.#callChecks) {
+        const message = context.report();
+        if (message !== undefined) errors.push(message);
+      }
+      return errors;
+    }
+    verify() {
+      const errors = this.report();
+      if (errors.length === 0) return;
+      const message = errors.length === 1 ? errors[0].message : "Functions were not called the expected number of times";
+      throw new AssertionError({ message, details: errors });
+    }
+  }
+
+  // Like Bun: created on first access and wrapped to warn once when constructed.
+  function defineCallTracker(target) {
+    let tracker;
+    Object.defineProperty(target, "CallTracker", {
+      get() {
+        if (tracker === undefined) tracker = util().deprecate(CallTracker, "assert.CallTracker is deprecated.", "DEP0173");
+        return tracker;
+      },
+      set(value) {
+        Object.defineProperty(this, "CallTracker", { value, writable: true, enumerable: true, configurable: true });
+      },
+      configurable: true,
+      enumerable: true,
+    });
   }
 
   function innerFail(obj) {
@@ -696,6 +819,8 @@
 
   assert.strict = strict;
   strict.strict = strict;
+  defineCallTracker(assert);
+  defineCallTracker(strict);
 
   return assert;
 });

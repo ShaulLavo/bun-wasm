@@ -1228,6 +1228,8 @@ Adapt parse-argument tokenization, own-property option lookup, short-option grou
 
 Retain assertion dispatch, expected-exception matching, async rejection helpers, readable operator messages, and assertion-error formatting conventions. Replace internal imports, native diff helpers, and primordials with the local utility inspector, equality functions, and a JavaScript diff renderer. Source-expression recovery is omitted, so `ok(false)` reports `false == true`. This runs assertions without Bun's internal bindings. The adapted helpers are separate from the locally written diff implementation.
 
+`assert.CallTracker` is adapted from Bun's `src/js/internal/assert/calltracker.ts` at the Bun pin, with its lazy DEP0173 getter from `src/js/node/assert.ts` and the `details` properties of `assertion_error.ts`. Primordials and internal validators are replaced with local checks that keep Node's error codes and messages.
+
 ### Bun SQLite
 
 `crates/bunwasm-runtime/src/js/bun_sqlite.js`. Class **Port**. Upstream `src/js/bun/sqlite.ts` and the behavior implemented by `src/jsc/bindings/sqlite/JSSQLStatement.cpp` at the Bun pin.

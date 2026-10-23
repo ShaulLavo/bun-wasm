@@ -283,66 +283,42 @@ investigating each failure.
 
 ## Node parallel tests after main-thread worker imports
 
-Status: Approved
+Status: Resolved. The worker-thread main-thread adapter lets Node's shared helper
+load, and the bounded census in [the worker-thread report](../docs/worker-threads.md)
+reached these module gaps. On main `d48dc3d2` all of the files below still failed
+on QuickJS, JSC and the Node-host browser engine, except the `node:test` import,
+which main had already fixed (`test-arm-math-illegal-instruction.js` passes).
 
-The worker-thread main-thread adapter lets Node's shared helper load. The bounded
-160-file census in [the worker-thread report](../docs/worker-threads.md) now reaches
-existing module gaps. Keep these separate from guest-worker execution.
+- `test-als-defaultvalue.js` and `test-als-defaultvalue-original.js`:
+  `AsyncLocalStorage` now takes Node's `{ defaultValue, name }` options. `getStore()`
+  returns the default when the current frame has no binding for the storage, and
+  `exit()` binds `undefined` like Node and Bun, so the default does not leak into it.
+  `tests/fixtures/async-local-storage-options` matches native Bun and Node.
+- `test-assert-calltracker-*.js`: `node:test` loads; the files then needed
+  `assert.CallTracker`, which is ported from Bun's
+  `src/js/internal/assert/calltracker.ts` with its lazy DEP0173 getter, and
+  `AssertionError` now records per-check `details`. Fixture `assert-calltracker`.
+- `test-async-local-storage-http-agent.js`: the response callback ran with no
+  store. `ClientRequest` now keeps the async context of the `http.request()` call
+  and runs its socket response handlers in it, as Node's per-request parser does.
+- `test-child-process-can-write-to-stdout.js`: still reproduced on every engine.
+  The child waiter in `spawn.ts` settled the exit before reading the output pipes
+  in that step, so Node's `exit` could fire before `data`. The exit step now drains
+  what the child already wrote (bounded, since a descendant may hold the pipe), and
+  Node's `exit` is reported a turn later, after the stream adapters deliver the
+  queued chunks. Fixture `child-output-before-exit`, including a 200 KB output.
 
-- `js/node/test/parallel/test-als-defaultvalue-original.js` and
-  `test-als-defaultvalue.js` fail with `AssertionError: Expected values to be
-  strictly equal` and `expected: "default"` on all engines. The
-  `AsyncLocalStorage` class at `crates/bunwasm-runtime/src/js/builtins.js:370` has
-  no options constructor and `getStore()` returns `undefined` without a frame.
-  Add the actual default-value and naming contract, then measure these files.
-- `test-arm-math-illegal-instruction.js` and
-  `test-assert-calltracker-getCalls.js` reach `No such built-in module: node:test`.
-  Implement the Node test API through the builtin loader where possible, with its
-  lifecycle and reporting behavior; do not merely suppress the import.
-- `test-async-local-storage-http-agent.js` times out with no stdout or stderr
-  after five seconds on QuickJS and fifteen seconds on JSC. The test requires a
-  response after `r2.write(payload)` before calling `r2.end('')` in that response
-  callback. That census used a buffered `ClientRequest.write` path. PR #35 now
-  starts socket writes before `end()` through `_write`; repeat this test on the
-  HTTP integration before retaining the old client-buffering diagnosis. Inspect
-  incoming request-body dispatch and async-context propagation for any remaining
-  exchange failure. The browser engine fails earlier at the first response callback,
-  with `actual: undefined`, `expected: "first"` for `cls.getStore()` at upstream
-  line 39. Implement request streaming through the HTTP host contract and
-  preserve async context across the response callbacks. The timeout is newly
-  reached after the helper import succeeds; there were no passing files lost.
-
-- `test-child-process-can-write-to-stdout.js` intermittently fails on the timer-corrected
-  browser wasm before the WebSocket rebase. Its exit listener sees
-  `output === ''` instead of
-  `'hello, world!\n'` at upstream line 21. The first post-change census passed it;
-  the timer-corrected census failed it. Two of three isolated repetitions on that
-  same wasm fail, and one passes. The combined census after the WebSocket rebase
-  passes it. These are `final-after-browser.json` and
-  `stdout-repeat-{1,2,3}.json`. Start at the child waiter in
-  `crates/bunwasm-runtime/src/js/spawn.js:248`, which resolves exit before reading
-  pipes in that turn, and Node event reporting at line 415. Trace host pipe
-  completion and Node data-event delivery before choosing a change; preserve the
-  distinct exit and close events. PR 30 later changed pipe handling and stream
-  error callbacks, so repeat the reproduction on that integration before assuming
-  the failure remains. No subprocess code changes in this PR.
-
-Exact source, runtime and dependency hashes, errors and timeout records are in
-`/work/reports/bun-wasm-worker-threads/before-<engine>.json` and
-`rebased-after-<engine>.json`, with `before-jsc-warm.json` as the valid JSC
-baseline. The earlier `final-after-*` files retain the stdout investigation.
-Those files are retained until coordinator acceptance. Reproduce one failure
-after rebuilding the engine and warming the native launcher:
+Reproduce one file after rebuilding the engine and warming the native launcher:
 
 ```sh
 source env.sh
-scripts/bun-suite.sh --engine quickjs --jobs 1 --timeout 60 \
-  --output /work/tmp/bun-wasm-node-http-agent.json \
+scripts/bun-suite.sh --node-parallel --engine quickjs --jobs 1 --timeout 30 \
+  --network loopback --output /work/tmp/bun-wasm-node-http-agent.json \
   js/node/test/parallel/test-async-local-storage-http-agent.js
 ```
 
-Select either ALS or node:test file above with the same command when working on
-that module. Use the heavy-job wrapper and a private native launcher target.
+The older records in `/work/reports/bun-wasm-worker-threads/` stay until
+coordinator acceptance.
 
 ## MessagePort constructor errors and immediate-loop timer starvation
 
@@ -415,21 +391,28 @@ commands in the worker report and the unchanged official esbuild package.
 
 ### Vite's builtin lookup before worker pools
 
-The same frozen offline cache gives six successful installs and twelve failed
-commands both before and after. This includes Vite React dev/build, Vitest's
-default pool, and its explicit `--pool=threads` row on all three engines.
-The first diagnostic is `ENOENT: no such file or directory, open 'ws'` at Vite's
-`import.meta.require("ws").WebSocketServer` in `dist/node/chunks/config.js`.
-The Vitest browser-engine log points to line 20578; the Vite React build log
-points to line 23728. The error precedes worker construction. The portable ws
-builtin is present, so inspect whether `import.meta.require` follows the same
-builtin lookup as ordinary `require`; the exact cause is not established here.
+Status: Resolved by main. The `ws` lookup and the Vitest events export are fixed;
+Vitest now stops at DNS, before its worker pools, which belongs to networking.
 
-Reproduce with `scripts/app-matrix.sh --apps=vitest,vite-react --hosts=native
---engines=quickjs,jsc,browser --timeout=45 --cache=<offline-mirror>
---launcher=<private-launcher> --output=<fresh-directory>`. The retained
-`apps-before-complete/` and `apps-after/` records both have zero registry misses
-and errors. Do not alter the real package sources to bypass this lookup.
+The census diagnostic was `ENOENT: no such file or directory, open 'ws'` at Vite's
+`process.versions.bun ? import.meta.require("ws").WebSocketServer : ...` in
+`dist/node/chunks/config.js`. It no longer occurs on main: `import.meta.require("ws")`
+resolves the portable builtin from package ESM loaded by `import` and by `require`
+on QuickJS and JSC (the shared `ws` require-dispatch fix recorded under
+[Framework follow-ups after exit provenance](#framework-follow-ups-after-exit-provenance-2026-10-17)).
+With the default offline mirror (`/work/cache/bun-wasm-app-matrix`),
+`scripts/app-matrix.sh --apps=vite-react,vitest --hosts=native
+--engines=quickjs,jsc,browser --timeout=90` on 2026-10-23 gives:
+
+- Vite React on the Node-host browser engine: install, dev server and build pass.
+- Vite React on QuickJS and JSC: install passes; the dev server and build stop at
+  esbuild's service (`[commonjs--resolver] The service was stopped: spawn node
+  ENOENT` from `esbuild/lib/main.js:708`), covered by
+  [Framework blockers reached after esbuild](#framework-blockers-reached-after-esbuild).
+- Vitest, default pool and `--pool=threads`, all engines: install passes. The
+  `EventEmitterAsyncResource` export landed in #110; with it startup reaches
+  `dns.promises.lookup is not supported in bun-wasm: WASI has no network access`,
+  still before a worker pool starts. That belongs to the networking track.
 
 ### Browser-host round-trip deadline
 
