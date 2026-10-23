@@ -1,74 +1,142 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
+import { guestBuilds, hash } from "../../scripts/guest-source-manifest.ts";
+import { fixtureGit, withReceiptFixture, wasm } from "./guest-receipt-fixture.ts";
 
-async function fixture(run: (root: string, sysroot: string, artifact: string, git: (...args: string[]) => string) => Promise<void>) {
-  const root = await mkdtemp(join(tmpdir(), "bun-wasm-guest-receipt-"));
-  try {
-    const vendor = join(root, "vendor/bun"), sysroot = join(root, "sysroot");
-    for (const path of [vendor, sysroot, join(root, "scripts"), join(root, "patches/bun")]) await mkdir(path, { recursive: true });
-    const git = (...args: string[]) => {
-      const result = Bun.spawnSync(["git", "-C", vendor].concat(args));
-      if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-      return result.stdout.toString().trim();
-    };
-    git("init", "-b", "fixture");
-    git("config", "user.name", "Guest receipt fixture");
-    git("config", "user.email", "fixture@example.invalid");
-    await writeFile(join(vendor, "source.txt"), "pinned source\n");
-    git("add", "source.txt");
-    git("commit", "-m", "pinned source");
-    const script = await readFile(new URL("../../scripts/sync-bun.sh", import.meta.url), "utf8");
-    await writeFile(join(root, "scripts/sync-bun.sh"), script.replace(/^BUN_COMMIT=.*$/m, `BUN_COMMIT=${git("rev-parse", "HEAD")}`));
-    await writeFile(join(root, "env.sh"), `export TMPDIR=${JSON.stringify(root)}\n`);
-    await writeFile(join(sysroot, "bun-wasm-sysroot.json"), '{"fixture":"patched inputs"}\n');
-    const artifact = join(root, "guest.wasm");
-    await writeFile(artifact, new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-    await run(root, sysroot, artifact, git);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-}
-
-test("guest build receipt records checked Bun source, sysroot receipt and final artifact bytes", async () => {
-  await fixture(async (root, sysroot, artifact, git) => {
-    const inputs = await prepareGuestBuildInputs(root, sysroot);
-    const receipt = await writeGuestBuildReceipt(root, sysroot, artifact, inputs);
-    expect(receipt.bunHead).toBe(git("rev-parse", "HEAD"));
-    expect(receipt.bunTree).toBe(git("rev-parse", "HEAD^{tree}"));
-    expect(receipt.sysrootReceiptSha256).toBe(new Bun.CryptoHasher("sha256").update(await Bun.file(join(sysroot, "bun-wasm-sysroot.json")).bytes()).digest("hex"));
+test("guest receipt binds committed repository, selected engine, consumed inputs, tools and exact final bytes", async () => {
+  await withReceiptFixture(async (options, artifact) => {
+    const inputs = await prepareGuestBuildInputs(options);
+    const receipt = await writeGuestBuildReceipt(options, artifact, inputs);
+    expect(receipt.sourceManifest.source).toEqual({ head: fixtureGit(options.repository, "rev-parse", "HEAD"), tree: fixtureGit(options.repository, "rev-parse", "HEAD^{tree}") });
+    expect(receipt.bunHead).toBe(fixtureGit(join(options.repository, "vendor/bun"), "rev-parse", "HEAD"));
+    expect(receipt.sourceManifest.build).toBe("browser");
+    expect(receipt.sourceManifest.groups.map(group => group.name)).toEqual(["repository", "bun", "boringssl", "waffle-libc", "sysroot", "sdk", "rust-target"]);
+    expect(receipt.sourceManifest.groups.find(group => group.name === "bun")?.files.map(file => file.path)).toContain("build/debug/codegen/build_options.rs");
+    expect(receipt.sourceManifest.tools.find(tool => tool.name === "clang")?.version).toBe("fixture tool 1");
+    expect(JSON.stringify(receipt)).not.toContain("secret.txt");
+    expect(receipt.sourceManifest.omissions.length).toBeGreaterThan(0);
     expect(receipt.artifactBytes).toBe(8);
+    expect(receipt.sysrootReceiptSha256).toBe(hash(await readFile(join(options.sysroot, "bun-wasm-sysroot.json"))));
     expect(await Bun.file(`${artifact}.build.json`).json()).toEqual(receipt);
-    const bytes = await Bun.file(artifact).bytes();
-    expect(() => verifyGuestBuildReceipt(bytes, receipt)).not.toThrow();
-    expect(() => verifyGuestBuildReceipt(bytes, { ...receipt, bunHead: "stale" })).toThrow("bunHead");
-    expect(() => verifyGuestBuildReceipt(bytes, { ...receipt, artifactSha256: "0".repeat(64) })).toThrow("does not match");
+    expect(() => verifyGuestBuildReceipt(wasm, receipt)).not.toThrow();
+    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, bunHead: "stale" })).toThrow("bunHead");
+    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, artifactSha256: "0".repeat(64) })).toThrow("does not match");
     expect(() => verifyGuestBuildReceipt(new Uint8Array([1]), receipt)).toThrow("does not match");
+    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, sourceManifest: { ...receipt.sourceManifest, build: "quickjs" } })).toThrow("digest mismatch");
+    const { sourceManifest: _, ...oldReceipt } = receipt;
+    expect(() => verifyGuestBuildReceipt(wasm, oldReceipt)).toThrow("source manifest");
   });
 });
 
 test("guest build preparation rejects stale imported source without repairing it", async () => {
-  await fixture(async (root, sysroot, artifact, git) => {
-    await writeFile(join(root, "vendor/bun/source.txt"), "different committed source\n");
-    git("commit", "-am", "different source");
-    const head = git("rev-parse", "HEAD");
-    await expect(prepareGuestBuildInputs(root, sysroot)).rejects.toThrow("differs from the checked-in patch series");
-    expect(git("rev-parse", "HEAD")).toBe(head);
+  await withReceiptFixture(async (options, artifact) => {
+    const vendor = join(options.repository, "vendor/bun");
+    await writeFile(join(vendor, "src/input.rs"), "different committed source\n");
+    fixtureGit(vendor, "commit", "-am", "different source");
+    const head = fixtureGit(vendor, "rev-parse", "HEAD");
+    await expect(prepareGuestBuildInputs(options)).rejects.toThrow("differs from the checked-in patch series");
+    expect(fixtureGit(vendor, "rev-parse", "HEAD")).toBe(head);
     expect(await Bun.file(`${artifact}.build.json`).exists()).toBe(false);
   });
 });
 
-for (const change of ["source", "commit", "sysroot"] as const) test(`guest build cannot acquire a receipt after ${change} changes`, async () => {
-  await fixture(async (root, sysroot, artifact, git) => {
-    const inputs = await prepareGuestBuildInputs(root, sysroot);
-    if (change === "sysroot") await writeFile(join(sysroot, "bun-wasm-sysroot.json"), "changed input receipt\n");
-    else {
-      await writeFile(join(root, "vendor/bun/source.txt"), "changed during build\n");
-      if (change === "commit") git("commit", "-am", "changed during build");
-    }
-    await expect(writeGuestBuildReceipt(root, sysroot, artifact, inputs)).rejects.toThrow("changed during the build");
+for (const path of ["crates/fixture/src/lib.rs", "patches/bun/fixture.config", "Cargo.lock"]) test(`dirty claimed repository source is rejected at ${path}`, async () => {
+  await withReceiptFixture(async (options) => {
+    await writeFile(join(options.repository, path), "dirty\n");
+    await expect(prepareGuestBuildInputs(options)).rejects.toThrow("committed and clean");
+  });
+});
+
+for (const path of ["vendor/bun/src/input.rs", "vendor/bun/build/debug/codegen/build_options.rs", "vendor/bun/vendor/lolhtml/src/lib.rs", "vendor/boringssl/crypto/input.c", "waffle/patches/wasi-libc/preopen-scan.patch", "sysroot/bun-wasm-sysroot.json", "sysroot/include/stdio.h", "sdk/VERSION", "rustlib/libstd.rlib", "fake-tool", "crates/fixture/src/lib.rs"]) test(`input drift refuses a new receipt at ${path}`, async () => {
+  await withReceiptFixture(async (options, artifact) => {
+    const inputs = await prepareGuestBuildInputs(options);
+    await writeFile(join(options.repository, path), "changed during build\n");
+    await expect(writeGuestBuildReceipt(options, artifact, inputs)).rejects.toThrow();
     expect(await Bun.file(`${artifact}.build.json`).exists()).toBe(false);
+  });
+});
+
+test("new repository commit cannot relabel an already-started build", async () => {
+  await withReceiptFixture(async (options, artifact) => {
+    const inputs = await prepareGuestBuildInputs(options);
+    fixtureGit(options.repository, "commit", "--allow-empty", "-m", "new head, same tree");
+    await expect(writeGuestBuildReceipt(options, artifact, inputs)).rejects.toThrow("changed during the build");
+  });
+});
+
+test("allowlisted source symlinks cannot escape into private files", async () => {
+  await withReceiptFixture(async (options) => {
+    await symlink(join(options.repository, "private/secret.txt"), join(options.boringssl, "crypto/private.h"));
+    await expect(prepareGuestBuildInputs(options)).rejects.toThrow("escapes allowlist");
+  });
+});
+
+test("sysroot SDK overlays are hashed by content and cyclic links are rejected", async () => {
+  await withReceiptFixture(async (options, artifact) => {
+    await mkdir(join(options.sdk, "overlay"));
+    await writeFile(join(options.sdk, "overlay/header.h"), "sdk input");
+    await symlink(join(options.sdk, "overlay"), join(options.sysroot, "include/c++"));
+    const inputs = await prepareGuestBuildInputs(options);
+    await writeFile(join(options.sdk, "overlay/header.h"), "changed sdk overlay");
+    await expect(writeGuestBuildReceipt(options, artifact, inputs)).rejects.toThrow("changed during the build");
+    await symlink(options.sysroot, join(options.sysroot, "include/loop"));
+    await expect(prepareGuestBuildInputs(options)).rejects.toThrow("Cyclic");
+  });
+});
+
+test("artifact/build mismatch is refused without creating a sidecar", async () => {
+  await withReceiptFixture(async (options, artifact) => {
+    const inputs = await prepareGuestBuildInputs(options);
+    await expect(writeGuestBuildReceipt(options, join(options.repository, "dist/bun.wasm"), inputs)).rejects.toThrow("selected build");
+    expect(await Bun.file(`${artifact}.build.json`).exists()).toBe(false);
+  });
+});
+
+
+for (const build of ["quickjs", "quickjs-minimal", "tools", "jsc"] as const) test(`receipt records the selected ${build} build without compiling it`, async () => {
+  await withReceiptFixture(async options => {
+    const selected = { ...options, build };
+    const artifact = join(options.repository, "dist", guestBuilds[build].artifact);
+    await writeFile(artifact, wasm);
+    const inputs = await prepareGuestBuildInputs(selected);
+    const receipt = await writeGuestBuildReceipt(selected, artifact, inputs);
+    expect(receipt.sourceManifest.build).toBe(build);
+    expect(receipt.sourceManifest.groups.some(group => group.name === "jsc-prebuild")).toBe(build === "jsc" || build === "tools");
+    expect(receipt.sourceManifest.groups.some(group => group.name === "boringssl")).toBe(build !== "tools");
+  });
+});
+
+test("assume-unchanged cannot hide a modified committed build input", async () => {
+  await withReceiptFixture(async options => {
+    fixtureGit(options.repository, "update-index", "--assume-unchanged", "crates/fixture/src/lib.rs");
+    await writeFile(join(options.repository, "crates/fixture/src/lib.rs"), "hidden modification");
+    await expect(prepareGuestBuildInputs(options)).rejects.toThrow("differs from committed source");
+  });
+});
+
+test("manifest validation rejects missing tools, files, omissions and contradictory sysroot identity", async () => {
+  await withReceiptFixture(async (options, artifact) => {
+    const inputs = await prepareGuestBuildInputs(options);
+    const receipt = await writeGuestBuildReceipt(options, artifact, inputs);
+    const variants = [
+      { ...receipt.sourceManifest, tools: [] },
+      { ...receipt.sourceManifest, groups: [] },
+      { ...receipt.sourceManifest, omissions: [] },
+      { ...receipt.sourceManifest, source: { head: "comparison base", tree: receipt.sourceManifest.source.tree } },
+    ];
+    for (const sourceManifest of variants) {
+      const invalid = { ...receipt, sourceManifest, sourceManifestSha256: hash(JSON.stringify(sourceManifest)) };
+      expect(() => verifyGuestBuildReceipt(wasm, invalid)).toThrow();
+    }
+    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, sysrootReceiptSha256: "f".repeat(64) })).toThrow("differs from source manifest");
+  });
+});
+
+test("build start refuses a sysroot receipt that names a different installed libc builder", async () => {
+  await withReceiptFixture(async options => {
+    await writeFile(join(options.waffle, "scripts/build-wasi-libc.sh"), "different builder");
+    await expect(prepareGuestBuildInputs(options)).rejects.toThrow("does not match installed builder");
   });
 });
