@@ -178,3 +178,18 @@ hostname, code, syscall and message; connect errors arrive asynchronously.
 The focused test uses real Waffle TCP pipes, with separate invalid-name and
 valid IPv6-loopback checks. TLS and Unix sockets, private testing hooks and
 native Node child executables remain capability limits rather than DNS fixes.
+
+## Same-size HMR recheck, 2026-10-23
+
+Three runs of `ENGINES=browser node web/tests/browser-net.mjs chromium`
+pass at exact main `5fa3a24fc83bf2cb315f87f7f8ced28d507cb1fe` on UpCloud 4.
+The browser guest has SHA-256
+`e63f4b4fe731881f14b75b5491a36f41fbe1edef5f6c2fc1a0cf20454cb6d2f3`;
+its build context names the same source commit and its receipt matches its bytes.
+Each run updates the same-size HTML app text in both the preview tab and iframe,
+preserves both documents and updates CSS. The original 15-second assertion
+and equal-length strings are unchanged. This plain Bun HTML check does not use
+Next dev. The historical timeout did not recur, so no cause or fix is claimed.
+The `tcp-hmr-main-20261023T060420Z-axmpj2oh` remote receipt retains all three
+passing runs and confirms that task processes, browser profiles, source and
+guest copies were removed.

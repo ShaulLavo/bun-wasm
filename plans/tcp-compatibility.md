@@ -112,7 +112,16 @@ Do not stop another session or mask the diagnostic in fixture expectations.
 
 ## Same-size HMR update timeout
 
-Status: Approved for bounded reproduction if the timeout recurs.
+Status: Done for bounded current-main reproduction, 2026-10-23. Not reproduced.
+
+Three Chromium/browser runs at exact main `5fa3a24f` pass the unchanged
+15-second assertion. Both preview documents update the same-size text, retain
+their markers, and receive CSS changes. These use Bun's plain HTML dev server,
+not Next dev. No causal fix or longer timeout is justified by this result.
+Evidence: `tcp-hmr-main-20261023T060420Z-axmpj2oh` under
+`/work/reports/machine-fleet/remote-gate/`, including verified teardown.
+
+The following is the historical failure:
 
 The main-integration gate at code commit 20f9684 timed out once in
 `web/tests/browser-net.mjs:259` after replacing the HTML app text with an
