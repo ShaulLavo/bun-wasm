@@ -1,0 +1,5 @@
+clone object kept true
+proxy DataCloneError
+posted kept
+worker env kept
+worker flags {"noDeprecation":true,"min":"TLSv1.3","max":"TLSv1.3","execArgv":["--no-deprecation","--tls-min-v1.3","--tls-max-v1.3"]}

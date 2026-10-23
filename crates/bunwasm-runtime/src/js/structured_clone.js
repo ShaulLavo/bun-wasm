@@ -73,7 +73,7 @@
   const isTypedArray = (v) => typedArrayTag.call(v) !== undefined;
 
   function isUncloneable(value) {
-    if (typeof internal.isProxy === "function" && internal.isProxy(value)) return true;
+    if (typeof internal.isProxy === "function" && internal.isProxy(value) && !internal.isProcessEnv?.(value)) return true;
     if (value instanceof Promise || brand(WeakMap.prototype.has, value, [{}]) || brand(WeakSet.prototype.has, value, [{}])) {
       return true;
     }

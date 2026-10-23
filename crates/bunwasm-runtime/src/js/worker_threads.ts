@@ -17,6 +17,11 @@
   const owners = new Map<string, { owner: Route | null; origin: Route; version: number; peer: string | null; sent: number; ready: boolean }>();
   const pending = new Map<string, Record<string, unknown>[]>();
   const members = new Map<string, { route: Route; group: string }>();
+  // Root only: object URLs that workers created, so any guest can fetch them or start a worker
+  // from them until they are revoked or their creator exits. The root's own URLs stay local.
+  const objectUrls = new Map<string, { owner: Route; value: BunWasm.ObjectUrlRecord }>();
+  const urlLookups = new Map<number, (value: BunWasm.ObjectUrlRecord | null) => void>();
+  let nextLookup = 0;
   let nextPort = 0;
   let nextWorker = 0;
   let applyingEnv = false;
@@ -53,7 +58,19 @@
     if (value === undefined || value === null) return null;
     const input = record(value);
     if (typeof input.name !== "string" || !Array.isArray(input.preload) || !input.preload.every(path => typeof path === "string")) throw new TypeError("Invalid web worker initialization");
-    return { name: input.name, preload: input.preload };
+    if (input.objectUrl !== undefined && typeof input.objectUrl !== "string") throw new TypeError("Invalid web worker initialization");
+    return { name: input.name, preload: input.preload, objectUrl: input.objectUrl };
+  }
+  function objectUrlRecord(value: unknown): BunWasm.ObjectUrlRecord | null {
+    if (value === null) return null;
+    const item = record(value);
+    if (typeof item.bytes !== "string" || typeof item.type !== "string" || item.name !== null && typeof item.name !== "string") throw new Error("Invalid object URL record");
+    return { bytes: item.bytes, type: item.type, name: item.name };
+  }
+  function lookupObjectUrl(body: Record<string, unknown>) {
+    if (typeof body.url !== "string" || typeof body.id !== "number") throw new Error("Invalid object URL lookup");
+    const value = objectUrls.get(body.url)?.value ?? internal.localObjectURL?.(body.url) ?? null;
+    down(parseRoute(body.from), { kind: "url-found", id: body.id, value });
   }
   function invalidArgument(name: string) {
     return Object.assign(new TypeError(`The "${name}" argument has an invalid type`), { code: "ERR_INVALID_ARG_TYPE" });
@@ -166,9 +183,17 @@
         for (const member of members.values()) if (!sameRoute(member.route, source)) down(member.route, body);
         return;
       }
+      case "url-add": {
+        const value = objectUrlRecord(body.value);
+        if (typeof body.url === "string" && value) objectUrls.set(body.url, { owner: parseRoute(body.owner), value });
+        return;
+      }
+      case "url-revoke": if (typeof body.url === "string") objectUrls.delete(body.url); return;
+      case "url-lookup": lookupObjectUrl(body); return;
       case "gone": {
         const path = parseRoute(body.path);
         for (const [key, member] of members) if (hasPrefix(member.route, path)) members.delete(key);
+        for (const [url, entry] of objectUrls) if (hasPrefix(entry.owner, path)) objectUrls.delete(url);
         for (const [id, endpoint] of owners) {
           if (!hasPrefix(endpoint.owner || endpoint.origin, path)) continue;
           if (endpoint.peer) routePacket({ kind: "port-close", id: endpoint.peer, sequence: endpoint.sent });
@@ -195,6 +220,12 @@
     }
     if (body.kind === "broadcast" && typeof body.name === "string") {
       for (const channel of channels.get(body.name) || []) BroadcastChannel.receive(channel, codec.decode(body.graph));
+      return;
+    }
+    if (body.kind === "url-found" && typeof body.id === "number") {
+      const resolve = urlLookups.get(body.id);
+      urlLookups.delete(body.id);
+      resolve?.(objectUrlRecord(body.value));
       return;
     }
     if (typeof body.child === "number") { children.get(body.child)?.event(body); return; }
@@ -534,14 +565,23 @@
   function webEntry(target: { argv: string[]; name: string }, web: BunWasm.WebWorkerOptions) {
     if (target.argv[0] === "run") return target;
     const preloads = web.preload.map(path => `await import(${JSON.stringify(path)});`).join("\n");
-    return { argv: ["-e", preloads + "\n;import.meta.__bunwasm_workerEntry?.();\n" + target.argv[1]], name: target.name };
+    // A blob entry loads only while its URL is alive, so a revoke right after construction wins.
+    const alive = web.objectUrl === undefined ? "" : `await import.meta.__bunwasm_objectURLAlive(${JSON.stringify(web.objectUrl)});\n`;
+    return { argv: ["-e", alive + preloads + "\n;import.meta.__bunwasm_workerEntry?.();\n" + target.argv[1]], name: target.name };
   }
+  // Node's TLS version flags set the worker's tls module defaults.
+  const tlsDefaults: Record<string, [string, string]> = {
+    "--tls-min-v1.0": ["DEFAULT_MIN_VERSION", "TLSv1"], "--tls-min-v1.1": ["DEFAULT_MIN_VERSION", "TLSv1.1"],
+    "--tls-min-v1.2": ["DEFAULT_MIN_VERSION", "TLSv1.2"], "--tls-min-v1.3": ["DEFAULT_MIN_VERSION", "TLSv1.3"],
+    "--tls-max-v1.2": ["DEFAULT_MAX_VERSION", "TLSv1.2"], "--tls-max-v1.3": ["DEFAULT_MAX_VERSION", "TLSv1.3"],
+  };
+  const execFlags = ["--no-warnings", "--no-deprecation", "--expose-gc", "--experimental-strip-types"].concat(Object.keys(tlsDefaults));
   function execArguments(value: unknown) {
     if (value === undefined) return process.execArgv.slice();
     if (!Array.isArray(value) || !value.every(arg => typeof arg === "string")) throw invalidArgument("execArgv");
     for (let index = 0; index < value.length; index++) {
       const arg = value[index];
-      if (["--no-warnings", "--expose-gc", "--experimental-strip-types"].includes(arg) || arg.startsWith("--require=")) continue;
+      if (execFlags.includes(arg) || arg.startsWith("--require=")) continue;
       if ((arg === "--require" || arg === "-r") && index + 1 < value.length) { index++; continue; }
       throw Object.assign(new Error(`Invalid execArgv flag: ${arg}`), { code: "ERR_WORKER_INVALID_EXEC_ARGV" });
     }
@@ -723,6 +763,8 @@
       if (arg.startsWith("--require=")) requirePreload(arg.slice(10));
       if (arg === "--expose-gc") Object.defineProperty(globalThis, "gc", { configurable: true, writable: true, value: () => native.gc() });
       if (arg === "--no-warnings") internal.workerNoWarnings = true;
+      if (arg === "--no-deprecation") process.noDeprecation = true;
+      if (Object.hasOwn(tlsDefaults, arg)) Reflect.set(internal.builtin("node:tls"), tlsDefaults[arg][0], tlsDefaults[arg][1]);
     }
     if (!config.web) parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
   }
@@ -736,9 +778,21 @@
   });
   internal.require("net");
   internal.workerPump = pump;
+  internal.objectURLs = {
+    shared: route.length > 0,
+    add(url, value) { root({ kind: "url-add", url, owner: route, value }); },
+    revoke(url) { root({ kind: "url-revoke", url }); },
+    lookup(url) {
+      const id = nextLookup++;
+      return new Promise(resolve => {
+        urlLookups.set(id, resolve);
+        root({ kind: "url-lookup", url, id, from: route });
+      });
+    },
+  };
   internal.workerEnvChange = (key, value) => { if (!applyingEnv) root({ kind: "env", source: route, group: envGroup, key, value }); };
   internal.addIoWaiter({
-    get ref() { return Boolean(parentChannel && (parentChannel.pending || parentPort?.hasRef()) || Array.from(children.values()).some(child => child.ref)); },
+    get ref() { return Boolean(parentChannel && (parentChannel.pending || urlLookups.size > 0 || parentPort?.hasRef()) || Array.from(children.values()).some(child => child.ref)); },
     step() { return pump() ? "progress" : false; },
     // Every open control channel: the idle loop wakes for a frame from any of them.
     subscriptions() {
