@@ -442,7 +442,7 @@ try {
   equal(activeWorkers.size, 0, "every task-created guest and filesystem worker was terminated");
   Object.assign(globalThis, { processResult: { ok: true, checks, benchmark, cleanup: { activeWorkers: activeWorkers.size } } });
 } catch (error) {
-  Object.assign(globalThis, { processResult: { ok: false, checks, error: error instanceof Error ? error.stack : String(error) } });
+  Object.assign(globalThis, { processResult: { ok: false, checks, error: String(error), stack: error instanceof Error ? error.stack : undefined } });
 } finally {
   try { await activeRuntime?.dispose(); }
   catch (error) { Object.assign(globalThis, { processResult: { ok: false, checks, cleanupError: String(error) } }); }
