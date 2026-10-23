@@ -66,6 +66,21 @@ try {
   assert.equal(closes, 1);
   assert.deepEqual(errors, ["ABORT_ERR"]);
   console.log("pre-aborted signal closes once");
+  for (const preAborted of [false, true]) {
+    const controller = new AbortController();
+    if (preAborted) controller.abort();
+    const socket = new Socket({ signal: controller.signal });
+    const errors = [];
+    let closes = 0;
+    socket.on("error", error => { errors.push(error.code); });
+    socket.on("close", () => { closes++; });
+    controller.abort();
+    await new Promise(resolve => socket.once("close", resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(errors, ["ABORT_ERR"]);
+    assert.equal(closes, 1);
+  }
+  console.log("Socket constructor owns live and pre-aborted signals");
 } finally {
   client.destroy();
   for (const peer of peers) peer.destroy();

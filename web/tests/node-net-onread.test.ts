@@ -115,3 +115,20 @@ test("an already-aborted connect signal closes once", async () => {
     expect(closes).toBe(1);
   } finally { await fixture.dispose(); }
 });
+
+test.each([false, true])("Socket constructor owns its abort signal, pre-aborted=%s", async preAborted => {
+  const fixture = networkFixture();
+  try {
+    const controller = new AbortController();
+    if (preAborted) controller.abort();
+    const socket = fixture.own(new fixture.net.Socket({ signal: controller.signal }));
+    const errors: string[] = [];
+    let closes = 0;
+    socket.on("error", error => { errors.push("code" in error ? String(error.code) : error.message); });
+    socket.on("close", () => { closes++; });
+    controller.abort();
+    await fixture.pump();
+    expect(errors).toEqual(["ABORT_ERR"]);
+    expect(closes).toBe(1);
+  } finally { await fixture.dispose(); }
+});

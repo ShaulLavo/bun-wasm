@@ -25,6 +25,7 @@
         this.bytesRead = 0;
         this.bytesWritten = 0;
         this.once("finish", () => this._drainEmptyEof());
+        if (options.signal) this._useSignal(options.signal);
       }
       emit(event, ...args) {
         if (event === "close" && args.length === 0) return super.emit(event, Boolean(this._closeHadError));

@@ -18,7 +18,8 @@ paused across reconnect. A callback returning false stops handle reads without c
 emitting `pause`. Both `read(0)` and `resume()` restart delivery. Fixed and generated buffers share the same path. Byte counts and EOF
 remain on the socket; the previous connection is closed before dialing again.
 Null Socket options remain valid. Socket owns abort handling, so a pre-aborted
-signal closes it once rather than also aborting through Duplex.
+signal closes it once rather than also aborting through Duplex. Direct Socket
+construction handles both live and already-aborted signals too.
 Focused checks: `bun test web/tests/node-net-onread.test.ts` and
 `scripts/test.sh --no-build --engine ENGINE net-onread`.
 

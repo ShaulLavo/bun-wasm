@@ -3,3 +3,4 @@ read(0) restarts bounded callback reads
 resume delivers remaining callback bytes and EOF
 Socket accepts null options
 pre-aborted signal closes once
+Socket constructor owns live and pre-aborted signals

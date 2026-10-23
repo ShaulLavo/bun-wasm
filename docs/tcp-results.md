@@ -165,14 +165,15 @@ This host-only change does not require a new guest artifact.
 ## Socket callbacks and reconnect options, 2026-10-23
 
 At main `5fa3a24f`, three focused adapter tests fail because no onread callback
-is invoked. After the review corrections, six tests pass with 29 assertions over the
+is invoked. After the review corrections, eight tests pass with 33 assertions over the
 production adapters, waiter scheduler, real Duplex and installed Waffle TCP
 pipes. They cover fixed buffers, generated buffers, callback-requested read stops,
 a paused live reconnect, byte counts, old-handle closure and constructor options.
 The false callback leaves `isPaused()` false and emits no `pause`; both `read(0)`
 and `resume()` restart reads. Null constructor options and one close event for
-a pre-aborted signal have regressions too. The four new checks failed before
-the fixes. Native Bun 1.4.2 and Node 26.7 agree on these public behaviors.
+a pre-aborted signal have regressions too. Direct Socket construction also owns
+live and pre-aborted signals without passing them to Duplex. These checks failed
+before their respective fixes. Native Bun 1.4.2 and Node 26.7 agree on these public behaviors.
 These are focused checks, not a replacement census of the upstream suites.
 
 Run `bun test web/tests/node-net-onread.test.ts`. The real-guest companion is
