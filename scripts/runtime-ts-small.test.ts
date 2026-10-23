@@ -9,8 +9,9 @@ const root = resolve(import.meta.dir, "..");
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-ts-small-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-// Hash the original JavaScript AST at e0c85f29. Ignore only redundant expression parentheses.
+// Pin the original ASTs at e0c85f29, and SQLite at ac43127c. Ignore only redundant expression parentheses.
 const originals = {
+  bun_sqlite: "b16a65d13a67fecf1c3f847afcdc26bc3430762ddb75653244bf3820ebebb6e0",
   cookie: "5cc1305618ad7b836b36694847306b57aa21a4a6d8bd977ffd3e5901cc21b34f",
   formats: "2e6b5465d602987a9a0a5a455d7ced74ab893db48fc4617cb23cd89d24bae930",
   intl: "74d0927e7dbc59c832d8ede9a6ec7e7ff6a220cd6aa077ed17fc2abff6d66c24",
