@@ -45,7 +45,6 @@ test("browser build uses consumer exports through a dotted Git cache, not siblin
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 
-
 test("browser realms tree-shake shared modules independently", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-realm-build-"));
   try {

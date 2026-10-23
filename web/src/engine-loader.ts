@@ -163,4 +163,3 @@ export async function registerModuleScope(): Promise<boolean> {
     return false;
   }
 }
-
