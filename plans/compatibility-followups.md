@@ -346,6 +346,13 @@ that module. Use the heavy-job wrapper and a private native launcher target.
 
 ## MessagePort constructor errors and immediate-loop timer starvation
 
+Status: Resolved. Public constructors now carry the Node error codes while
+preserving constructor identity, subclassing and internal port brands. Timer
+fairness was already fixed by `63aae2264` through a bounded immediate snapshot.
+`worker-port-constructors` and `worker-port-timer-fairness` cover both contracts
+independently. The observations
+below are historical.
+
 PR #31 review verification measured five unmodified Node message-port files on
 all three engines before and after the close and receive fixes. Each engine
 passes 3/5 files in both runs. The two failures below predate those fixes.
