@@ -10,8 +10,19 @@ const nativeFiles = new Set([
 ]);
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 
+const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "tests/fixtures/shared-array-buffer/", "tests/jsc-embedding/"];
+const jscFiles = new Set([
+  "crates/bunwasm-runtime/src/engine_jsc.rs", "scripts/build-bun-jsc.sh", "scripts/build-jsc.sh",
+  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "scripts/ci-changes.ts", ".github/workflows/ci.yml",
+  "env.sh", "scripts/build-wasi-sysroot.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
+]);
+
+export function needsJsc(paths: readonly string[]): boolean {
+  return paths.some(path => jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
+}
+
 export function needsRust(paths: readonly string[]): boolean {
-  return paths.some(path => nativeFiles.has(path) || nativeScripts.test(path) || nativeDirectories.some(root => path.startsWith(root)));
+  return needsJsc(paths) || paths.some(path => nativeFiles.has(path) || nativeScripts.test(path) || nativeDirectories.some(root => path.startsWith(root)));
 }
 
 export function changedPaths(base: string, head: string, pullRequest: boolean): string[] {
@@ -42,5 +53,5 @@ if (import.meta.main) {
   const paths = changedPaths(base, head, process.env.GITHUB_EVENT_NAME === "pull_request");
   const native = nativeChanges(paths, base, head);
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
-  console.log(`rust=${needsRust(native)}`);
+  console.log(`rust=${needsRust(native)}\njsc=${needsJsc(paths)}`);
 }

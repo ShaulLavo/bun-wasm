@@ -422,18 +422,12 @@ Two engine gaps remain inside a single guest. Our QuickJS build has no `Atomics`
 global at all (`typeof Atomics === "undefined"`), and a growable
 `SharedArrayBuffer` throws `TypeError: growable SharedArrayBuffer requires SAB
 allocator hooks`; QuickJS-ng needs its atomics configuration and allocator hooks for
-both. On JSC, any resizable buffer traps the guest, on main too:
-`new ArrayBuffer(4, { maxByteLength: 8 })` (and now the growable
-`SharedArrayBuffer`) ends in `bun.wasm trapped` at
-`JSC::BufferMemoryManager::tryAllocateGrowableBoundsCheckingMemory`, which calls
-`Gigacage::tryAllocateZeroedVirtualPages` to reserve address space that WASI cannot
-provide. That needs a WASI arm in `jsc/webkit-wasi.patch` (fail with an ordinary
-out-of-memory result, or commit zeroed memory for the maximum size) and a JSC
-rebuild. Reproduce with `bun-wasm --wasm dist/bun-jsc.wasm -e 'new ArrayBuffer(4,
-{ maxByteLength: 8 })'`. The same option
-was the only failure in two of the 22 stream adapter files on JSC
-(`test-webstreams-adapters-writable-buffer-sources.js`,
-`test-webstreams-compression-bad-chunks.js`).
+both. JSC now rejects resizable backing stores at the WASI allocation boundary with
+an ordinary catchable allocation error. Fixed SharedArrayBuffer remains native.
+`tests/jsc-embedding/growable-memory` checks rejection and subsequent fixed
+allocation. Its blocking embedding gate uses the linked JSC guest and verifies
+source, archive and artifact receipts. Supported growable backing stores remain
+future work. Do not run the old unsupported allocation path for a baseline.
 
 Real sharing cannot be added in the codec. Each guest is a separate wasm instance
 with its own linear memory, and QuickJS and JSC keep SharedArrayBuffer storage in
