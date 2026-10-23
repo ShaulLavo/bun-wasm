@@ -28,6 +28,10 @@ const invalid: [string, string][] = [
   ["boolean cwd", 'native.globScan("*", true, false, false, false, false, true);'],
   ["string flag", 'native.globScan("*", "/", "not a flag", false, false, false, true);'],
   ["string optional flag", 'native.globScan("*", "/", false, false, false, false, true, "not a flag");'],
+  ["non-string UTF-8 encoding", 'native.utf8Encode(7);'],
+  ["non-byte concatenation", 'declare const internal: BunWasm.Internal; internal.concatBytes(["text"]);'],
+  ["unknown generated-function kind", 'native.functionImports([], "constructor");'],
+  ["non-string module specifier", 'native.resolve(7, "/index.ts", false);'],
   ["runtime type error", 'const value: number = "wrong";'],
 ];
 for (const [label, source] of invalid) {
@@ -37,3 +41,13 @@ for (const [label, source] of invalid) {
     expect(result.stdout.toString()).toContain("error TS");
   });
 }
+
+test("accepts native byte-sink encoding and concatenation contracts", () => {
+  expect(check('native.utf8Encode("text");\ndeclare const internal: BunWasm.Internal;\ninternal.concatBytes([new Uint8Array(2)]);').exitCode).toBe(0);
+});
+
+test("accepts generated-function parser and module-loader contracts", () => {
+  const result = check('native.functionImports(["return 1"], "normal");\nnative.importModule(native.resolve("./x", "/index.ts", false));');
+  expect(result.stdout.toString()).toBe("");
+  expect(result.exitCode).toBe(0);
+});

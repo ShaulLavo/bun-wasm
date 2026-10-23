@@ -1,5 +1,10 @@
 declare namespace BunWasm {
+  type FunctionKind = "normal" | "async" | "generator" | "async-generator";
   interface Native {
+    functionImports(args: readonly string[], kind: FunctionKind): number[][];
+    resolve(specifier: string, referrer: string, require: boolean): string;
+    importModule(path: string): Promise<unknown>;
+    utf8Encode(value: string): Uint8Array<ArrayBuffer>;
     nodePath: {
       resolveWindows(cwd: Uint8Array, paths: Uint8Array[]): Uint8Array;
       lexical(windows: boolean, operation: "isAbsolute", path: Uint8Array): boolean;
@@ -26,6 +31,9 @@ declare namespace BunWasm {
   type GlobScanOptions = Parameters<Native["globScan"]> extends [pattern: string, ...options: infer Options] ? Options : never;
 
   interface Internal {
+    defineGlobal(name: string, value: unknown): void;
+    require(name: "builtins"): { "bun:jsc": () => { callerSourceOrigin(): string | null } };
+    require(name: "node_url"): { fileURLToPath(url: string | URL): string };
     readonly native: Native;
     readonly builtinFactories: Record<string, () => object>;
     readonly realTimers: {
@@ -135,7 +143,7 @@ declare namespace BunWasm {
     describe(value: unknown): string;
     nextTick(callback: (...args: unknown[]) => void, ...args: unknown[]): void;
     toUint8(value: ArrayBuffer | ArrayBufferView): Uint8Array;
-    concatBytes(chunks: Uint8Array[]): Uint8Array;
+    concatBytes(chunks: readonly Uint8Array[]): Uint8Array<ArrayBuffer>;
     require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
     require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
     builtin(name: "node:stream"): {
@@ -194,3 +202,5 @@ declare namespace BunWasm {
     x509(op: "checkIssued" | "verify", data: Uint8Array, other: Uint8Array): boolean;
   }
 }
+
+declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;

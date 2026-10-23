@@ -120,7 +120,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/util.js`](#node-utility-fragments) | Port | Adapt argument parsing, comparison helpers, and inspection tables. |
 | [`crates/bunwasm-runtime/src/js/assert.js`](#node-assertions) | Port | Adapt assertion helpers and messages to the local inspector and equality implementation. |
 | [`crates/bunwasm-runtime/src/js/bun_sqlite.js`](#bun-sqlite) | Port | Move Bun's SQLite wrapper and inherited transaction code onto Rust SQLite natives. |
-| [`crates/bunwasm-runtime/src/js/array_buffer_sink.js`](#bun-array-buffer-sink) | Port | Adapt Bun's byte sink lifecycle and option parsing to engine-owned typed arrays. |
+| [`crates/bunwasm-runtime/src/js/array_buffer_sink.ts`](#bun-array-buffer-sink) | Port | Adapt Bun's byte sink lifecycle and option parsing to engine-owned typed arrays. |
 | [`crates/bunwasm-runtime/src/engine_quickjs.rs`, string boundary](#quickjs-string-boundary) | Host feature | Decode lone UTF-16 surrogates as replacement characters at the native boundary. Original adapter. |
 | [`web/src/engine-host.js`, GC hook](#host-gc-hook) | Host feature | Capture host GC before guest code replaces globals. Original adapter. |
 | [`crates/bunwasm-runtime/src/js/cookie.js`](#bun-cookies) | Port | Translate Bun's cookie parsing, validation, and binding behavior. |
@@ -167,11 +167,11 @@ Each row has one class. A file with independent changes has separate rows.
 | [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations, with Node listener identity. |
 | [`src/js/exit_provenance.ts` and lifecycle hooks](#runtime-exit-provenance) | Host feature | Original opt-in exit diagnostics over the existing event loop and error handlers. |
 | [`scripts/generate-ws.sh` and builtin resolution](#portable-ws-builtin) | Host feature | Original module wrapper supplies Bun's builtin ws import and require on every engine. |
-| [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
+| [`crates/bunwasm-runtime/src/js/function.ts`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
 | [`patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch`](#generated-function-parser-locations) | Port | Bun parser and printer import metadata, reused unchanged from the semantic-import lane. |
 | [`crates/bunwasm-runtime/src/engine_quickjs.rs`, data conversion; `host.rs`, native-test import gate](#quickjs-data-conversion) | Host feature | Original adapter checks buffer tags before calling a throwing getter. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, buffer tag predicate](#quickjs-data-conversion) | Host feature | Original nonthrowing class query for ordinary and shared buffers. |
-| [`crates/bunwasm-runtime/src/js/function.js`](#generated-function-imports) | Host feature | Original generated-function adapter with module-relative dynamic imports. |
+| [`crates/bunwasm-runtime/src/js/function.ts`](#generated-function-imports) | Host feature | Original generated-function adapter with module-relative dynamic imports. |
 | [`src/js/bun_console_constructor.js`](#bun-console-constructor) | Port | Generate Bun's Console constructor with lexical engine-independent hooks. |
 | [`scripts/generate-bun-console.mjs`, `src/js/console_constructor.js`, global Console wiring](#bun-console-constructor) | Host feature | Original generation and runtime adapters expose the shared constructor and its streams. |
 
@@ -809,7 +809,7 @@ buffer. It copies no upstream implementation.
 
 ## Generated function imports
 
-`crates/bunwasm-runtime/src/js/function.js` is an original adapter for the public
+`crates/bunwasm-runtime/src/js/function.ts` is an original adapter for the public
 Function, AsyncFunction, GeneratorFunction and AsyncGeneratorFunction constructors.
 It uses the caller-origin helper and Bun parser keyword positions to route
 generated dynamic imports through the runtime resolver. No Bun, Node, QuickJS or WebKit implementation is
@@ -826,6 +826,12 @@ visible in generated function source, as is the dynamic-import replacement.
 This fixes the published Prettier 3.6.2 CLI's generated import without changing
 its package or fixture. Caller-origin lookup temporarily uses the runtime's own
 stack formatter so user custom formatters cannot change module resolution.
+
+The adapter is now a strictly checked TypeScript factory. The parser kind is a
+closed union, and native import-position, resolution and module-loading
+contracts live in `src/js/runtime.d.ts`. Offset replacement uses a separate
+helper to keep nesting bounded; it still applies descending parser offsets to
+the same constructor argument strings. No upstream code is copied.
 
 ## Caller source origin
 
@@ -1268,6 +1274,12 @@ bounds before copying. Own properties and accessors cannot replace those interna
 This byte-view extraction is also an original binding adapter.
 The unsupported GC-tuning member is absent from `Bun.unsafe`, so the upstream harness's
 capability check can run byte-content tests without requesting unavailable GC controls.
+
+The runtime adapter is now a strictly checked TypeScript factory. Its native UTF-8
+encoder and byte concatenation contracts live in `src/js/runtime.d.ts`. The
+intrinsic buffer/view getters are captured with checked accessor lookups; input
+option fields remain unknown until their existing boolean/number checks narrow
+them. Byte copies and sink lifecycle behavior are unchanged.
 
 ### Host GC hook
 

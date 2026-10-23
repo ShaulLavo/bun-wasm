@@ -94,3 +94,50 @@ test("builtin helper prepares runnable globals from the TypeScript factory", asy
   expect(globals.Array.isArray([])).toBe(true);
   expect(JSON.parse(readFileSync(join(directory, "catalog.json"), "utf8"))).toBeDefined();
 });
+
+test("converted byte sink keeps its factory and copied-buffer behavior", async () => {
+  const { runInNewContext } = await import("node:vm");
+  const generated = emit(join(root, "crates/bunwasm-runtime/src/js/array_buffer_sink.ts"));
+  const factory = runInNewContext(generated, { Uint8Array, ArrayBuffer, SharedArrayBuffer, DataView });
+  const { ArrayBufferSink } = factory({
+    native: { utf8Encode: (value: string) => new TextEncoder().encode(value) },
+    concatBytes(chunks: Uint8Array[]) {
+      const bytes = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.byteLength, 0));
+      let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+      return bytes;
+    },
+  });
+  const sink = new ArrayBufferSink();
+  sink.start({ stream: true, asUint8Array: true });
+  const input = Uint8Array.of(1, 2, 3);
+  expect(sink.write(input)).toBe(3);
+  input.fill(9);
+  expect(Array.from(sink.flush())).toEqual([1, 2, 3]);
+  expect(sink.write("ok")).toBe(2);
+  expect(Array.from(sink.end())).toEqual([111, 107]);
+  sink.close();
+  expect(() => sink.write("no")).toThrow("already been closed");
+});
+
+test("converted Function adapter preserves construction and module origins", async () => {
+  const { createContext, runInContext } = await import("node:vm");
+  const context = createContext({});
+  const generated = emit(join(root, "crates/bunwasm-runtime/src/js/function.ts"));
+  const factory = runInContext(generated, context);
+  const resolutions: unknown[][] = [];
+  factory({
+    native: {
+      engine: "quickjs",
+      functionImports: (strings: string[]) => strings.map(source => source.includes("import") ? [source.indexOf("import")] : []),
+      resolve(...args: unknown[]) { resolutions.push(args); return "/loaded.ts"; },
+      importModule: async (path: string) => ({ path }),
+    },
+    require: () => ({ "bun:jsc": () => ({ callerSourceOrigin: () => "/entry.ts" }) }),
+    defineGlobal(name: string, value: unknown) { context[name] = value; },
+  });
+  expect(runInContext('new Function("return 7")()', context)).toBe(7);
+  expect(() => runInContext('new Function("return @")', context)).toThrow();
+  expect(await runInContext('new Function("return import(\\\"./leaf\\\")")()', context)).toEqual({ path: "/loaded.ts" });
+  expect(resolutions).toEqual([["./leaf", "/entry.ts", false]]);
+});
