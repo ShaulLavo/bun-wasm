@@ -295,8 +295,6 @@ jobs:
   browser-process:
     name: Processes (${{ matrix.browser }})
     needs: process-bundles
-    env:
-      BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -344,15 +342,18 @@ jobs:
         run: bunx playwright install ${{ matrix.browser }}
       - name: Process supervisor, generic preview1 and interrupt gate (no Rust or dist artifacts)
         env:
+          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
           PROCESS_SMOKE_PORT: "4186"
           TMPDIR: ${{ runner.temp }}
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-process.ts ${{ matrix.browser }}
       - name: Injected third-party interrupt checks (no Rust or dist artifacts)
         env:
+          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
           INTERRUPT_SCRATCH_ROOT: ${{ runner.temp }}
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-interrupt.ts ${{ matrix.browser }}
       - name: Process pipes, CLI ABI and foreground stop (isolated install, no Rust or dist artifacts)
         env:
+          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
           TMPDIR: ${{ runner.temp }}
           BUN_WASM_RUNTIME_PROC_BUNDLE: ${{ runner.temp }}/process-bundles/runtime-proc
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-runtime-proc.ts ${{ matrix.browser }}
