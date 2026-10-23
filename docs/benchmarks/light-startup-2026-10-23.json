@@ -3,11 +3,30 @@
     "gate": "light-downloads-process-overlap-20261023T065410Z-sio89l8o",
     "logSha256": "effacec6a00be27671d5ae16e664efdb23f8cc183b03862bb2eff414ff8b8be8",
     "extraction": "Removed exact interleaved missing QuickJS/JSC artifact warnings from the combined stdout/stderr log, then decoded the two complete JSON objects. Bundle file metadata is interned by hash; sample.bundleGraph refers to bundleGraphs.",
-    "equivalentBrowserSourceCommit": "c5b193a27823aac33ef43e0ef035414b4bedf962",
-    "sourceEquivalence": "Browser sources, production build settings and dependency pins match measured 26476bdb431b4d61bf52104d8fbd41efb5707da2 after rebasing over CI-only main changes. Package version bumps do not enter the browser bundles.",
     "warningLinesRemoved": {
       "publishedSuffix": 8,
       "matchedLegacyGuestSuffix": 0
+    },
+    "measurementScope": "Historical pre-review measurement of 26476bdb431b4d61bf52104d8fbd41efb5707da2. The Linux WebKit worker-entry identity fix subsequently changed worker output layout. These samples do not measure that final layout.",
+    "finalWorkerLayout": {
+      "status": "unmeasured",
+      "commit": "8d1d8717e9eaa55df058a828f4fcb7257bd49067",
+      "gate": "pr126-worker-identity-final-downloads-20261023T080835Z-w982wj5r",
+      "sourceArchiveSha256": "8bc09f08b3a2f6c9bed17d15822fd4c44c3c55fce05f0c10f98220199bef6230",
+      "logSha256": "0ed38b79464a1018fab4465e2102deff1d791059e6ffa18fb952eda258b4bef3",
+      "reason": "The exclusive upcloud-4 queue never admitted the benchmark before its 3600-second deadline. The measurement command did not run. No final-layout performance samples exist.",
+      "plannedBeforeCommit": "9a087474",
+      "plannedBaselineCommit": "04022389",
+      "plannedGuestSha256": "935010625e28051815aae6d3c7e95eb2d0d2251db3e9ab67a0e5ac795ae87422",
+      "plannedSamples": 30,
+      "completedSamples": 0,
+      "deadlineSeconds": 3600,
+      "elapsedSeconds": 3601.857,
+      "dispatcherStatus": 124,
+      "remoteQueueStatus": 143,
+      "remoteStatus": 129,
+      "teardown": "ok",
+      "cleanupVerification": "After dispatcher teardown, a separate actual-host probe confirmed both owned directories and the queue entry absent. No task server or browser started."
     }
   },
   "published": {

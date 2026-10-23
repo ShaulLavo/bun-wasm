@@ -1,7 +1,8 @@
 # Bun light downloads and startup
 
-This measures served production builds, not bundle-file estimates. The comparison uses main
-`d48dc3d2`, this PR, and the pre-Waffle main commit `04022389` from October 16.
+This measures served production builds, not bundle-file estimates. The original comparison
+uses main `d48dc3d2`, the pre-review PR build `26476bdb`, and the pre-Waffle main commit
+`04022389` from October 16.
 
 ## Reproduce
 
@@ -64,12 +65,13 @@ The artifact-free size report still uses its own combined build configuration. I
 substitute for these production-build downloads. This PR does not change that report or its
 size gate.
 
-## Download results
+## Historical pre-review download results
 
 [Raw results](light-startup-2026-10-23.json) contain every request, worker-creation time,
 all-asset totals and mapped chunk identities for 60 browser samples. Values below are bytes,
 not KiB. JS totals include UI and repeated downloads. They were identical across five samples
-for each app/revision. "After" is cumulative, not another copy to add to "before".
+for each app/revision. "Fixed" below means pre-review build `26476bdb`, not the final
+worker layout. "After" is cumulative, not another copy to add to "before".
 
 | App / revision | Before command raw / gzip | Additional raw / gzip | After command raw / gzip |
 | --- | ---: | ---: | ---: |
@@ -104,7 +106,7 @@ process service was already lazy. The leak fixed here was the Bun-specific execu
 adapter graph, plus redundant cross-realm shared chunks. Tests also check the initial
 metafile graph, rather than relying only on source-map classification.
 
-## Cold startup results
+## Historical pre-review cold startup results
 
 Times are milliseconds from navigation. Each cell is median [minimum, maximum], five
 fresh browser processes. Web output is the first parsed `bun -e` sentinel. Sandbox has
@@ -145,8 +147,9 @@ legacy guest everywhere; it prints the sentinel and serves React on all three ho
 The build compiler and installed toolchain are identical across revisions. Main
 `d48dc3d2` includes the accepted Waffle pin. Later main commits `7fd1baa9` and `56d2dd3c`
 change CI or test checks, not the measured browser source, build settings or runtime pin.
-The measured fixed commit is `26476bdb`; its browser inputs match the reachable PR commit
-`c5b193a2` after rebasing over CI changes. The JSON preserves the actual measured SHA.
+The original measured fixed commit is `26476bdb`. It predates the review fix for Linux
+WebKit worker-entry identity. Its figures describe that historical build, not the final
+worker layout. The JSON preserves the actual measured SHA.
 
 Evidence came from exclusive cloud gate
 `light-downloads-process-overlap-20261023T065410Z-sio89l8o`. JS quality passed, 79 focused
@@ -155,12 +158,38 @@ fail as expected. All 60 browser samples succeeded; queue exit and teardown stat
 The JSON extraction receipt records removal of exact interleaved missing-artifact warning
 lines from combined stdout/stderr. No measurements were replaced or edited.
 
+## Final worker layout and review fixes
+
+The reviewed build is `8d1d8717e9eaa55df058a828f4fcb7257bd49067`. Linux WebKit evaluated
+worker entries twice when lazy chunks imported them, breaking process-class identity.
+The builder now detects those back edges and moves shared exports into ordinary chunks.
+The editor fixture also mocks the new engine-loader boundary. Split tests cover the correct
+one-chunk realm-local fixture and a genuinely shared static/dynamic worker fixture.
+
+All seven CI checks passed on this exact build in run `39922213548`, including Web host,
+Processes on Chromium/Firefox/WebKit, and Rust workspace tests. An independent review
+passed 57 focused tests and verified worker identities, lazy process services, no worker
+demo UI, and complete mirrored chunks. These are correctness checks, not download timings.
+
+Final-layout performance is **unmeasured**. A frozen-source 30-sample rerun was queued on
+UpCloud's exclusive four-vCPU host, but its 3,600-second deadline expired before admission.
+No benchmark command or browser sample ran. The planned main control was `9a087474`,
+the old control was `04022389`, and all three would use the identical legacy guest above.
+The original published guest was unavailable for this rerun. No historical sample has
+been relabeled as a final-layout result, and no final size or startup claim is accepted.
+
+The JSON's `evidence.finalWorkerLayout` records the source/archive hash, planned guest,
+zero completed samples, deadline, statuses, and cleanup. Retained gate evidence is
+`pr126-worker-identity-final-downloads-20261023T080835Z-w982wj5r`. The dispatcher returned
+124 for its deadline and verified teardown. A separate actual-host probe confirmed the
+owned checkout, staging directory, and queue entry absent. No task browser or server started.
+
 ## Budget verdict and remaining work
 
-Item 9 remains open. Runtime source-span estimates for initial web JS are 72,549 raw /
-25,987 gzip bytes on old main, 524,484 / 154,902 on main and 308,510 / 91,392 after this fix.
-Fixed runtime is about 301 KiB raw / 89 KiB gzip, well above 100 / 35, even after excluding
-terminal and editor UI. Fragment gzip is an attribution estimate, not a wire-size claim.
+Item 9 remains open. Historical pre-review runtime source-span estimates for initial web JS
+are 72,549 raw / 25,987 gzip bytes on old main, 524,484 / 154,902 on main and
+308,510 / 91,392 on pre-review fixed. That runtime is about 301 KiB raw / 89 KiB gzip,
+well above 100 / 35, even after excluding terminal and editor UI. Fragment gzip is an attribution estimate, not a wire-size claim.
 The entire filesystem worker alone downloads 146,933 raw / 40,346 gzip bytes on web,
 which already exceeds both guides.
 
