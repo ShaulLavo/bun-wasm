@@ -43,6 +43,10 @@ is supplied. Private connection counters and worker fields remain unimplemented.
 Waffle currently records listener and accepted endpoints as IPv4 loopback;
 the adapter does not forge IPv6 address results for those browser handles.
 
+The own-source QuickJS guest passes the dedicated fixture. The unchanged
+upstream file improves to 37 passing, three failing and three skipped cases.
+Only private `_connections`, `_unref` and `_usingWorkers` checks still fail.
+
 The following is the current-main baseline before this change:
 
 Use the same command with `js/node/net/server.spec.ts` and a fresh output path.

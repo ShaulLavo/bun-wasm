@@ -176,3 +176,11 @@ The browser shared network still needs Waffle to retain local bind address
 and family. Its `browser/net/host.ts` listener address and
 `browser/net/namespace.ts` accepted peer both report IPv4 loopback.
 Private `_connections`, `_unref`, and worker fields are not public API fixes.
+
+The own-source QuickJS guest passes `net-server-contracts`. Its unchanged
+upstream Server file has 37 passes, three failures and three skips, with no
+timeout. Only `_connections`, `_unref` and `_usingWorkers` assertions still
+fail. The runtime embedding and lifecycle prerequisites also pass, 108 tests
+and 1,634 assertions. Run `scripts/test.sh --no-build net-server-contracts`
+and the isolated upstream command above. Raw after results are retained in
+`/work/reports/wave-20261022/bun-wasm/tcp-queue/server-upstream-after.json`.
