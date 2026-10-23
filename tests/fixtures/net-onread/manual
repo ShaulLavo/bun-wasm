@@ -1,1 +1,1 @@
-This fixture retains the adapter callback byte counters. Native Bun and Node report zero for onread bytesRead.
+This fixture retains the adapter callback byte counters. Native Bun 1.4.3 reports zero for onread bytesRead.

@@ -183,3 +183,10 @@ after this change passes all three cases with no timeout.
 Native Bun 1.4.3 reports zero callback bytes in its `bytesRead` property.
 The dedicated fixture retains this adapter's byte-count contract with a
 `manual` marker instead of treating that native counter as expected output.
+
+The own-source QuickJS guest also passes the dedicated bounded-buffer fixture.
+It delivers two-byte callback chunks, stops after callback false, resumes to
+EOF, preserves byte counts, and emits no stream data events. The UpCloud
+fixture-only run is `tcp-onread-guest5-5b0727ac88ad` in the report logs.
+Its remote teardown is verified. The earlier remote wrapper could not run
+its unrelated Rust embedding prerequisite because rustc is absent there.
