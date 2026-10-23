@@ -1,29 +1,29 @@
-(function (internal) {
+(function (internal: BunWasm.Internal) {
   "use strict";
   const { Array, Error, Function, Map, Object, Proxy, RangeError, Reflect, Set, String, Symbol, TypeError, URIError } = internal.bunBuiltinGlobals;
   const native = internal.native;
   const names = native.bunBuiltinNames();
-  const cache = new Map();
-  const loading = new Set();
-  const privateNames = new Map();
+  const cache = new Map<number, unknown>();
+  const loading = new Set<number>();
+  const privateNames = new Map<string, symbol>();
   const apply = Reflect.apply;
   const call = Function.prototype.call;
   const functionApply = Function.prototype.apply;
   const bind = Function.prototype.bind;
   const defineProperty = Object.defineProperty;
 
-  function unsupported(what) {
-    const error = new Error(`Bun builtin ${what} is not implemented in bun-wasm`);
+  function unsupported(what: string) {
+    const error: Error & { code?: string } = new Error(`Bun builtin ${what} is not implemented in bun-wasm`);
     error.code = "ERR_BUN_BUILTIN_UNSUPPORTED";
     return error;
   }
 
-  function privateName(name) {
+  function privateName(name: string) {
     if (!privateNames.has(name)) privateNames.set(name, Symbol(name));
-    return privateNames.get(name);
+    return privateNames.get(name)!;
   }
 
-  function requireBuiltin(id) {
+  function requireBuiltin(id: string | number): unknown {
     if (typeof id === "string") id = names.indexOf(id);
     if (cache.has(id)) return cache.get(id);
     const name = names[id];
@@ -45,48 +45,48 @@
     }
   }
 
-  const hooks = {
+  const hooks: Record<PropertyKey, unknown> = {
     undefined,
     getPrototypeOf: Object.getPrototypeOf,
     setPrototypeOf: Object.setPrototypeOf,
     getOwnPropertyDescriptor: Object.getOwnPropertyDescriptor,
-    isCallable: value => typeof value === "function",
-    isObject: value => value !== null && (typeof value === "object" || typeof value === "function"),
+    isCallable: (value: unknown) => typeof value === "function",
+    isObject: (value: unknown) => value !== null && (typeof value === "object" || typeof value === "function"),
     isJSArray: Array.isArray,
     isArray: Array.isArray,
     isPromise: native.isPromise,
     isProxy: native.isProxy,
     isError: native.isError,
-    newArrayWithSize: length => new Array(length),
-    getByIdDirect: (object, key) => Object.getOwnPropertyDescriptor(object, key)?.value,
-    putByIdDirect(object, key, value) {
+    newArrayWithSize: (length: number) => new Array(length),
+    getByIdDirect: (object: object, key: PropertyKey) => Object.getOwnPropertyDescriptor(object, key)?.value,
+    putByIdDirect(object: object, key: PropertyKey, value: unknown) {
       defineProperty(object, key, { value, writable: true, enumerable: true, configurable: true });
       return value;
     },
-    putByIdDirectPrivate(object, key, value) {
+    putByIdDirectPrivate(object: object, key: string, value: unknown) {
       defineProperty(object, privateName(key), { value, writable: true, configurable: true });
       return value;
     },
-    getByIdDirectPrivate: (object, key) => object[privateName(key)],
+    getByIdDirectPrivate: (object: Record<symbol, unknown>, key: string) => object[privateName(key)],
     privateName,
-    uncurry(fn, operation) {
-      if (operation === "call") return (...args) => apply(call, fn, args);
-      if (operation === "apply") return (...args) => apply(functionApply, fn, args);
-      return (...args) => apply(bind, fn, args);
+    uncurry(fn: (...args: unknown[]) => unknown, operation: string) {
+      if (operation === "call") return (...args: unknown[]) => apply(call, fn, args);
+      if (operation === "apply") return (...args: unknown[]) => apply(functionApply, fn, args);
+      return (...args: unknown[]) => apply(bind, fn, args);
     },
     internalModuleRegistry: cache,
-    getInternalField: (registry, id) => registry.get(id),
+    getInternalField: (registry: Map<number, unknown>, id: number) => registry.get(id),
     createInternalModuleById: requireBuiltin,
-    lazy(id) {
+    lazy(id: number) {
       const symbol = native.bunBuiltinHookName(id);
       const message = `native hook ${id} (${symbol})`;
       if (!symbol.startsWith("js2native_wrap_")) throw unsupported(message);
       return function () { throw unsupported(message); };
     },
-    makeTypeError: message => new TypeError(message),
-    throwTypeError(message) { throw new TypeError(message); },
-    throwRangeError(message) { throw new RangeError(message); },
-    makeErrorWithCode(id, ..._args) {
+    makeTypeError: (message: string) => new TypeError(message),
+    throwTypeError(message: string) { throw new TypeError(message); },
+    throwRangeError(message: string) { throw new RangeError(message); },
+    makeErrorWithCode(id: number, ..._args: unknown[]) {
       const code = native.bunBuiltinErrorCode(id);
       if (code === "ERR_INVALID_URI") return Object.assign(new URIError("URI malformed"), { code });
       throw unsupported(`error constructor ${code}`);

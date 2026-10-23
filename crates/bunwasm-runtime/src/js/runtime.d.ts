@@ -229,3 +229,45 @@ declare namespace BunWasm {
 }
 
 declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;
+declare namespace BunWasm {
+  interface StackFrame { file: string; name: string; line: number; column: number }
+  interface StackCallSite {
+    getFileName(): string;
+    getFunctionName(): string | null;
+    getFunction(): unknown;
+    getLineNumber(): number;
+    getColumnNumber(): number;
+    isNative(): boolean;
+    isConstructor(): boolean;
+    isToplevel(): boolean;
+  }
+  interface Native {
+    bunBuiltinNames(): string[];
+    bunBuiltinSource(id: number): string | undefined;
+    bunBuiltinHookName(id: number): string;
+    bunBuiltinErrorCode(id: number): string;
+    evalScript(source: string, filename: string): (intrinsics: Record<string, unknown>) => unknown;
+    isPromise(value: unknown): boolean;
+    isProxy(value: unknown): boolean;
+    isError(value: unknown): boolean;
+  }
+  interface Internal {
+    bunBuiltinGlobals: Record<string, unknown> & {
+      Array: ArrayConstructor; Error: ErrorConstructor; Function: FunctionConstructor;
+      Map: MapConstructor; Object: ObjectConstructor; Proxy: ProxyConstructor;
+      RangeError: RangeErrorConstructor; Reflect: typeof Reflect; Set: SetConstructor;
+      String: StringConstructor; Symbol: SymbolConstructor; TypeError: TypeErrorConstructor;
+      URIError: URIErrorConstructor;
+    };
+    builtin(name: string): unknown;
+    defineHidden(target: object, values: object): void;
+    mappedCallSites: WeakSet<object>;
+    formatCallSite(site: StackCallSite): string;
+    require(name: "inspect"): { parseStack(raw: unknown): StackFrame[] };
+  }
+}
+
+interface ErrorConstructor {
+  captureStackTrace(target: object, constructorOpt?: Function): void;
+  prepareStackTrace: ((target: object, raw: unknown) => unknown) | undefined;
+}

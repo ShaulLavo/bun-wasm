@@ -15,7 +15,7 @@ fi
 cp "$root/tests/builtins/loader.js" "$scratch/loader.js"
 cp "$root/tests/builtins/intrinsic-globals.js" "$scratch/intrinsic-globals.js"
 printf 'import "./loader.js";\nimport "./intrinsic-globals.js";\n' > "$scratch/index.js"
-cp "$root/crates/bunwasm-runtime/src/js/bun_builtins.js" "$scratch/runtime.js"
+node "$root/scripts/transpile-runtime.ts" "$root/crates/bunwasm-runtime/src/js/bun_builtins.ts" "$scratch/runtime.js"
 node "$root/scripts/transpile-runtime.ts" "$root/crates/bunwasm-runtime/src/js/bun_builtin_globals.ts" "$scratch/globals.js"
 cp "$root/crates/bunwasm-runtime/generated/builtins/"*.js "$scratch/"
 cp "$root/crates/bunwasm-runtime/generated/builtins/catalog.json" "$scratch/catalog.json"

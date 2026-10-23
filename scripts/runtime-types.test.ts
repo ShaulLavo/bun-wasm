@@ -32,6 +32,10 @@ const invalid: [string, string][] = [
   ["non-byte concatenation", 'declare const internal: BunWasm.Internal; internal.concatBytes(["text"]);'],
   ["unknown generated-function kind", 'native.functionImports([], "constructor");'],
   ["non-string module specifier", 'native.resolve(7, "/index.ts", false);'],
+  ["builtin index text", 'native.bunBuiltinSource("module");'],
+  ["builtin hook object", 'native.bunBuiltinHookName({});'],
+  ["stack frame text", 'declare const internal: BunWasm.Internal; internal.formatCallSite("not a frame");'],
+  ["stack target primitive", 'Error.captureStackTrace(7);'],
   ["runtime type error", 'const value: number = "wrong";'],
 ];
 for (const [label, source] of invalid) {
@@ -48,6 +52,12 @@ test("accepts native byte-sink encoding and concatenation contracts", () => {
 
 test("accepts generated-function parser and module-loader contracts", () => {
   const result = check('native.functionImports(["return 1"], "normal");\nnative.importModule(native.resolve("./x", "/index.ts", false));');
+  expect(result.stdout.toString()).toBe("");
+  expect(result.exitCode).toBe(0);
+});
+
+test("accepts builtin registry and structured stack contracts", () => {
+  const result = check('native.bunBuiltinSource(0);\nnative.evalScript("(function () {})", "bun-builtin:example")({});\ndeclare const internal: BunWasm.Internal;\ninternal.require("inspect").parseStack(undefined);\nError.captureStackTrace({});\nError.prepareStackTrace = (_target, raw) => raw;');
   expect(result.stdout.toString()).toBe("");
   expect(result.exitCode).toBe(0);
 });
