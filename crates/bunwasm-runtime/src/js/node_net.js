@@ -110,7 +110,9 @@
         if (!this.destroyed) this._dial(Object.assign({}, options, { host: address }), targetPort);
       }
       _dial(options, targetPort) {
-        const target = options.host || "localhost";
+        let target;
+        try { target = internal.require("net_hostname")(options.host || "localhost"); }
+        catch (err) { internal.nextTick(() => this.destroy(err)); return; }
         const family = internal.require("net_address").isIP(target);
         // The host ABI resolves names only after opening a connection. Deny names when a
         // BlockList is present so DNS cannot bypass the address check.

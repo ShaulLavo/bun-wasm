@@ -415,9 +415,10 @@
   }
 
   function listenOrThrow(hostname, port) {
-    const handle = native.hostListen(hostname, port);
+    const handle = native.hostListen(internal.require("net_hostname")(hostname), port);
     if (handle >= 0) return handle;
     const err = hostError(0, `Failed to listen at ${hostname}`);
+    if (err.code === "ENOTFOUND") err.hostname = hostname;
     if (err.code === "EADDRINUSE") {
       err.message = `Failed to start server. Is port ${port} in use?`;
       err.syscall = "listen";
