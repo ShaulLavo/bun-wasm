@@ -170,6 +170,7 @@ async function run(data: GuestData) {
     const { startEngineHost } = await import("../src/engine-host.js");
     await startEngineHost({ instance, moduleUrls: "data", modules, fetch: nodeFetch,
       net: processHost.engineNet(config.withNet ? createNodeNet({ net, http, https, zlib }) : undefined),
+      processWake: processHost.client.wake,
       onExit: finish,
     });
   } catch (error) {

@@ -995,3 +995,5 @@ fn executable_symlinks_resolve_in_guest_namespace_without_erasing_components() {
         assert_eq!(access_result(&mut p, id), expected, "{path}");
     }
 }
+
+mod poll_wake;
