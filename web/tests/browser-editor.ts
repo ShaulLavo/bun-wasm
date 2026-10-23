@@ -187,13 +187,22 @@ async function startupSteal(base: string, app: string, rejectPending: boolean) {
   } finally { await context.close(); }
 }
 
+function addEditorAssets(build: Awaited<ReturnType<typeof Bun.build>>, prefix: string, outdir: string): void {
+  for (const output of build.outputs) assets.set(`${prefix}/${output.path.slice(outdir.length + 1)}`, output);
+  if (!build.metafile) throw new Error("Missing editor fixture graph");
+  for (const [path, output] of Object.entries(build.metafile.outputs)) {
+    if (!Object.keys(output.inputs).some(input => /node_modules\/@codemirror\/lang-(?:css|html)\//.test(input))) continue;
+    languageAssets.add(`${prefix}/${path.replace(/^\.\//, "")}`);
+  }
+}
+
 async function openEditorFile(page: Page, path: string): Promise<void> {
   await page.locator("#file-select").selectOption(path);
   await page.waitForFunction(path => document.querySelector("#file-name")?.textContent === path, path);
   assert.ok(await page.locator(".cm-content span[class]").count() > 0, `${path}: syntax highlighting`);
 }
 
-async function languageChecks(base: string, languageAssets: Set<string>, requests: string[]): Promise<void> {
+async function languageChecks(base: string, languageAssets: ReadonlySet<string>, requests: readonly string[]): Promise<void> {
   const context = await browser!.newContext();
   const page = await context.newPage();
   try {
@@ -228,7 +237,7 @@ try {
     const build = await Bun.build({
       outdir,
       entrypoints: [join(root, app, "src/main.ts"), join(root, "web/src/fs-worker.ts")],
-      target: "browser", format: "esm", splitting: true,
+      target: "browser", format: "esm", splitting: true, metafile: true,
       naming: { entry: "[name].[ext]", chunk: "chunks/[name]-[hash].[ext]", asset: "[name]-[hash].[ext]" },
       plugins: [{
         name: "artifact-free-editor-host",
@@ -259,11 +268,7 @@ try {
     });
     assert.equal(build.success, true, build.logs.map(String).join("\n"));
     assert.equal(filesystemOwners, 1, `${app}: startup gate must instrument the runtime-owned filesystem`);
-    for (const output of build.outputs) {
-      const path = `${prefix}/${output.path.slice(outdir.length + 1)}`;
-      assets.set(path, output);
-      if (/node_modules\/@codemirror\/lang-(?:css|html)\//.test(await output.text())) languageAssets.add(path);
-    }
+    addEditorAssets(build, prefix, outdir);
     assets.set(`${prefix}/`, Bun.file(join(root, app, "index.html")));
   }
   assets.set("/sandbox/template.json", new Blob([JSON.stringify({ files: {
