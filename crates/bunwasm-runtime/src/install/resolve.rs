@@ -867,3 +867,6 @@ pub fn lock_info(meta: &Value) -> Value {
 #[cfg(test)]
 #[path = "platform_tests.rs"]
 mod platform_tests;
+
+#[cfg(test)]
+mod override_tests;
