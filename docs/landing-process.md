@@ -32,3 +32,12 @@ It makes no guest, native, API or upstream-pin changes. The original single-page
 `git log ad5716e5 -- docs/bun-patches.md`. The map and splitter identify each
 record's original section; Git does not model a one-to-many file split as 143
 independent renames.
+
+For this landing PR, check its exact clean head against that pinned base:
+
+```sh
+bun scripts/migrations/prove-landing.ts "$(git rev-parse HEAD)"
+```
+
+This also compares source tree identities, pins, version records and discovered
+check ownership. It is a historical landing proof, not a gate for later features.

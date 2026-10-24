@@ -58,7 +58,7 @@ export function splitLedger(source: string) {
     if (!path) throw new Error(`Unresolved classification ${anchor}`);
     ownedRows.set(path, (ownedRows.get(path) ?? []).concat([row]));
   }
-  const files = new Map<string, string>([[ledger, entrypoint], [`${directory}/scope.md`, prefix.slice(0, table)]]);
+  const files = new Map<string, string>([[ledger, entrypoint], [`${directory}/scope.md`, prefix.slice(0, table).trimEnd() + "\n"]]);
   for (const section of sections) {
     const context = section.parent ? `\n[Parent context](${posix.basename(section.parent)}).\n` : "";
     const rows = ownedRows.get(section.path) ?? [];

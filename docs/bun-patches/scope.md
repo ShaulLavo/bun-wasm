@@ -11,4 +11,3 @@ Each row has one class. A file with independent changes has separate rows.
 - **Port** means the change is required by wasm32, WASI, or the browser. Missing support for this new target is not a Bun bug.
 - **Host feature** means bun-wasm adds a hook or behavior for its host.
 - **Upstream bug** means the original code is incorrect independently of the new host. This includes incorrect 32-bit algorithms even when the distributed native Bun binary cannot reach them.
-
