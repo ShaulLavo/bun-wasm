@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import ts from "typescript-api";
 
-function deepBlocks(file: string): string[] {
-  const root = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+function deepBlocks(file: string, text = readFileSync(file, "utf8")): string[] {
+  const root = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const failures: string[] = [];
   function visit(node: ts.Node, depth: number) {
     const block = ts.isBlock(node) || ts.isCaseBlock(node);
@@ -24,4 +24,13 @@ test("Next cleanup and observer code stays within three block levels", () => {
 test("Safari runner and cleanup code stays within three block levels", () => {
   const paths = ["browser-safari.ts", "safari-webdriver.ts", "safari-shell.ts", "safari-observers.ts", "safari-open-descriptor-worker.ts", "engine-interruption-result.ts"];
   expect(paths.flatMap(path => deepBlocks(new URL(`../web/tests/${path}`, import.meta.url).pathname))).toEqual([]);
+});
+
+test("raw parser controls stay within three block levels", () => {
+  const path = new URL("runtime-util-controls.ts", import.meta.url).pathname;
+  const text = readFileSync(path, "utf8");
+  expect(deepBlocks(path, text)).toEqual([]);
+  const nested = text.replace("const observed = captureParseError(parseArgs, raw);", "let observed: unknown; try { parseArgs({ args: [raw], allowPositionals: true, tokens: true }); } catch (error) { observed = error; }");
+  expect(nested).not.toBe(text);
+  expect(deepBlocks(path, nested).map(failure => failure.split(": ")[1])).toEqual(["depth 4", "depth 4"]);
 });

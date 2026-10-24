@@ -2,7 +2,7 @@
 // methods attached; `assert.strict` is the strict-mode variant. Messages follow
 // native Bun (Node's assertion_error.js). No source access, so `ok(false)`
 // reports "false == true" like Bun rather than echoing the expression.
-(function (internal) {
+(function (internal: BunWasm.Internal) {
   "use strict";
 
   const NO_EXCEPTION = Symbol("NO_EXCEPTION");
@@ -12,7 +12,7 @@
   }
 
   // Node's inspectValue(): stable, expanded, no custom inspectors.
-  function inspectValue(value) {
+  function inspectValue(value: unknown) {
     return internal.require("inspect").nodeInspect(value, {
       compact: false,
       customInspect: false,
@@ -25,17 +25,17 @@
     });
   }
 
-  function inspect(value, opts) {
+  function inspect(value: unknown, opts?: BunWasm.InspectOptions) {
     return internal.require("inspect").nodeInspect(value, opts);
   }
 
-  function makeError(Ctor, code, message) {
+  function makeError(Ctor: new(message?: string) => BunWasm.UtilityError, code: string, message: string) {
     const err = new Ctor(message);
     err.code = code;
     return err;
   }
 
-  function describeReceived(value) {
+  function describeReceived(value: unknown) {
     if (value === null || value === undefined) return String(value);
     if (typeof value === "function") return `function ${value.name}`;
     if (typeof value === "object") {
@@ -50,7 +50,7 @@
     return `type ${typeof value} (${String(value)})`;
   }
 
-  function invalidArgType(name, expected, value) {
+  function invalidArgType(name: string, expected: string, value: unknown) {
     return makeError(
       TypeError,
       "ERR_INVALID_ARG_TYPE",
@@ -62,7 +62,7 @@
   // Diff messages
   // ---------------------------------------------------------------------------
 
-  const kReadableOperator = {
+  const kReadableOperator: Record<string, string> = {
     deepStrictEqual: "Expected values to be strictly deep-equal:",
     partialDeepStrictEqual: "Expected values to be partially and strictly deep-equal:",
     strictEqual: "Expected values to be strictly equal:",
@@ -78,17 +78,17 @@
   const kMaxShortStringLength = 12;
   const kNopLinesToCollapse = 5;
 
-  function isObjectLike(value) {
+  function isObjectLike(value: unknown) {
     return (typeof value === "object" && value !== null) || typeof value === "function";
   }
 
-  function linesEqual(a, b, commaDisparity) {
+  function linesEqual(a: string, b: string, commaDisparity: boolean) {
     if (a === b) return true;
     return commaDisparity && (a + "," === b || a === b + ",");
   }
 
   // LCS line diff. Entries: [op, line] with op "nop" | "insert" (actual) | "delete" (expected).
-  function lineDiff(actual, expected, commaDisparity) {
+  function lineDiff(actual: string[], expected: string[], commaDisparity: boolean) {
     const n = actual.length;
     const m = expected.length;
     const table = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
@@ -99,11 +99,11 @@
           : Math.max(table[i + 1][j], table[i][j + 1]);
       }
     }
-    const out = [];
+    const out: BunWasm.AssertionDiff[] = [];
     let i = 0;
     let j = 0;
-    let inserts = [];
-    let deletes = [];
+    let inserts: BunWasm.AssertionDiff[] = [];
+    let deletes: BunWasm.AssertionDiff[] = [];
     const flush = () => {
       out.push.apply(out, inserts.concat(deletes));
       inserts = [];
@@ -125,7 +125,7 @@
     return out;
   }
 
-  function collapsedNops(diff, idx, nopCount) {
+  function collapsedNops(diff: BunWasm.AssertionDiff[], idx: number, nopCount: number) {
     if (nopCount === kNopLinesToCollapse + 1) return { text: `  ${diff[idx - 1][1]}\n`, skipped: false };
     if (nopCount === kNopLinesToCollapse + 2) {
       return { text: `  ${diff[idx - 2][1]}\n  ${diff[idx - 1][1]}\n`, skipped: false };
@@ -134,7 +134,7 @@
     return { text: "", skipped: false };
   }
 
-  function printDiff(diff) {
+  function printDiff(diff: BunWasm.AssertionDiff[]) {
     let message = "";
     let skipped = false;
     let nopCount = 0;
@@ -154,7 +154,7 @@
     return { message: `\n${message.trimEnd()}`, skipped };
   }
 
-  function stackedDiff(actual, expected) {
+  function stackedDiff(actual: string, expected: string) {
     let message = `\n+ ${actual}\n- ${expected}`;
     if (actual.length + expected.length > 80) return message;
     for (let i = 0; i < actual.length; i++) {
@@ -165,7 +165,7 @@
     return message;
   }
 
-  function simpleDiff(actual, inspectedActual, expected, inspectedExpected) {
+  function simpleDiff(actual: unknown, inspectedActual: string, expected: unknown, inspectedExpected: string) {
     let len = inspectedActual.length + inspectedExpected.length;
     if (typeof actual === "string") len -= 2;
     if (typeof expected === "string") len -= 2;
@@ -175,7 +175,7 @@
     return { message: stackedDiff(inspectedActual, inspectedExpected), header: undefined };
   }
 
-  function createErrDiff(actual, expected, operatorName, customMessage) {
+  function createErrDiff(actual: unknown, expected: unknown, operatorName: string, customMessage?: unknown) {
     let operator = operatorName;
     if (operator === "strictEqual" && isObjectLike(actual) && isObjectLike(expected)) operator = "strictEqualObject";
     const inspectedActual = inspectValue(actual);
@@ -209,11 +209,11 @@
     return `${headerText}\n${header}${skipped ? "\n... Skipped lines" : ""}\n${message}\n`;
   }
 
-  function truncate(str, max) {
+  function truncate(str: string, max: number) {
     return str.length > max ? `${str.slice(0, max - 3)}...` : str;
   }
 
-  function notEqualMessage(actual, operator) {
+  function notEqualMessage(actual: unknown, operator: string) {
     let base = kReadableOperator[operator];
     if (operator === "notStrictEqual" && isObjectLike(actual)) base = kReadableOperator.notStrictEqualObject;
     const lines = inspectValue(actual).split("\n");
@@ -221,7 +221,7 @@
     return `${base}\n\n${lines.join("\n")}\n`;
   }
 
-  function otherMessage(actual, expected, operator) {
+  function otherMessage(actual: unknown, expected: unknown, operator: string) {
     let res = inspectValue(actual);
     let other = inspectValue(expected);
     const known = kReadableOperator[operator];
@@ -234,7 +234,7 @@
     return `${res} ${operator} ${other}`;
   }
 
-  function generateMessage(actual, expected, operator) {
+  function generateMessage(actual: unknown, expected: unknown, operator: string) {
     if (operator === "deepStrictEqual" || operator === "strictEqual" || operator === "partialDeepStrictEqual") return createErrDiff(actual, expected, operator);
     if (operator === "notDeepStrictEqual" || operator === "notStrictEqual") return notEqualMessage(actual, operator);
     return otherMessage(actual, expected, operator);
@@ -245,7 +245,13 @@
   // ---------------------------------------------------------------------------
 
   class AssertionError extends Error {
-    constructor(options) {
+    declare generatedMessage: boolean;
+    declare actual: unknown;
+    declare expected: unknown;
+    declare operator: string;
+    declare code: string;
+    declare diff: string;
+    constructor(options: BunWasm.AssertionOptions) {
       if (options === null || typeof options !== "object") throw invalidArgType("options", "of type object", options);
       const { message, operator, stackStartFn } = options;
       const { actual, expected } = options;
@@ -274,7 +280,7 @@
     }
   }
 
-  function innerFail(obj) {
+  function innerFail(obj: BunWasm.AssertionOptions): never {
     if (obj.message instanceof Error) throw obj.message;
     throw new AssertionError(obj);
   }
@@ -283,7 +289,7 @@
   // Assertions
   // ---------------------------------------------------------------------------
 
-  function innerOk(fn, argLen, value, message) {
+  function innerOk(fn: Function, argLen: number, value: unknown, message?: unknown) {
     if (value) return;
     let generatedMessage = false;
     let text = message;
@@ -305,34 +311,34 @@
     innerOk(ok, arguments.length, arguments[0], arguments[1]);
   }
 
-  function requireArgs(count, min) {
+  function requireArgs(count: number, min: number) {
     if (count < min) {
       throw makeError(TypeError, "ERR_MISSING_ARGS", 'The "actual" and "expected" arguments must be specified');
     }
   }
 
-  function looseEqual(a, b) {
+  function looseEqual(a: unknown, b: unknown) {
     return a == b || (a !== a && b !== b);
   }
 
-  function equal(actual, expected, message) {
+  function equal(actual?: unknown, expected?: unknown, message?: unknown) {
     requireArgs(arguments.length, 2);
     if (!looseEqual(actual, expected)) innerFail({ actual, expected, message, operator: "==", stackStartFn: equal });
   }
 
-  function notEqual(actual, expected, message) {
+  function notEqual(actual?: unknown, expected?: unknown, message?: unknown) {
     requireArgs(arguments.length, 2);
     if (looseEqual(actual, expected)) innerFail({ actual, expected, message, operator: "!=", stackStartFn: notEqual });
   }
 
-  function strictEqual(actual, expected, message) {
+  function strictEqual(actual?: unknown, expected?: unknown, message?: unknown) {
     requireArgs(arguments.length, 2);
     if (!Object.is(actual, expected)) {
       innerFail({ actual, expected, message, operator: "strictEqual", stackStartFn: strictEqual });
     }
   }
 
-  function notStrictEqual(actual, expected, message) {
+  function notStrictEqual(actual?: unknown, expected?: unknown, message?: unknown) {
     requireArgs(arguments.length, 2);
     if (Object.is(actual, expected)) {
       innerFail({ actual, expected, message, operator: "notStrictEqual", stackStartFn: notStrictEqual });
@@ -340,36 +346,36 @@
   }
 
   // Bun's loose deep equality is Bun.deepEquals(a, b, false).
-  function looseDeepEqual(a, b) {
+  function looseDeepEqual(a: unknown, b: unknown) {
     return util().bunDeepEquals(a, b, false);
   }
 
-  function strictDeepEqual(a, b) {
+  function strictDeepEqual(a: unknown, b: unknown) {
     return util().isDeepStrictEqual(a, b);
   }
 
-  function deepEqual(actual, expected, message) {
+  function deepEqual(actual?: unknown, expected?: unknown, message?: unknown) {
     requireArgs(arguments.length, 2);
     if (!looseDeepEqual(actual, expected)) {
       innerFail({ actual, expected, message, operator: "deepEqual", stackStartFn: deepEqual });
     }
   }
 
-  function notDeepEqual(actual, expected, message) {
+  function notDeepEqual(actual?: unknown, expected?: unknown, message?: unknown) {
     requireArgs(arguments.length, 2);
     if (looseDeepEqual(actual, expected)) {
       innerFail({ actual, expected, message, operator: "notDeepEqual", stackStartFn: notDeepEqual });
     }
   }
 
-  function deepStrictEqual(actual, expected, message) {
+  function deepStrictEqual(actual?: unknown, expected?: unknown, message?: unknown) {
     requireArgs(arguments.length, 2);
     if (!strictDeepEqual(actual, expected)) {
       innerFail({ actual, expected, message, operator: "deepStrictEqual", stackStartFn: deepStrictEqual });
     }
   }
 
-  function notDeepStrictEqual(actual, expected, message) {
+  function notDeepStrictEqual(actual?: unknown, expected?: unknown, message?: unknown) {
     requireArgs(arguments.length, 2);
     if (strictDeepEqual(actual, expected)) {
       innerFail({ actual, expected, message, operator: "notDeepStrictEqual", stackStartFn: notDeepStrictEqual });
@@ -378,7 +384,7 @@
 
   let warnedFail = false;
 
-  function fail(actual, expected, message, operator, stackStartFn) {
+  function fail(actual?: unknown, expected?: unknown, message?: unknown, operator?: string, stackStartFn?: Function) {
     const argsLen = arguments.length;
     if (argsLen === 0) {
       const err = new AssertionError({ message: "Failed", operator: "fail", stackStartFn: fail });
@@ -403,15 +409,15 @@
     throw err;
   }
 
-  function isRegExp(value) {
+  function isRegExp(value: unknown): value is RegExp {
     return util().types.isRegExp(value);
   }
 
-  function isError(value) {
+  function isError(value: unknown): value is Error {
     return util().types.isNativeError(value) || value instanceof Error;
   }
 
-  function internalMatch(string, regexp, message, fn) {
+  function internalMatch(string: unknown, regexp: unknown, message: unknown, fn: Function) {
     if (!isRegExp(regexp)) throw invalidArgType("regexp", "an instance of RegExp", regexp);
     const match = fn === assertMatch;
     if (typeof string === "string" && regexp.test(string) === match) return;
@@ -430,21 +436,21 @@
     throw err;
   }
 
-  function assertMatch(string, regexp, message) {
+  function assertMatch(string: unknown, regexp: unknown, message?: unknown) {
     internalMatch(string, regexp, message, assertMatch);
   }
   Object.defineProperty(assertMatch, "name", { value: "match" });
 
-  function doesNotMatch(string, regexp, message) {
+  function doesNotMatch(string: unknown, regexp: unknown, message?: unknown) {
     internalMatch(string, regexp, message, doesNotMatch);
   }
 
-  function ifError(err) {
+  function ifError(err: unknown) {
     if (err === null || err === undefined) return;
     let message = "ifError got unwanted exception: ";
-    if (typeof err === "object" && typeof err.message === "string") {
-      if (err.message.length === 0 && err.constructor) message += err.constructor.name;
-      else message += err.message;
+    if (typeof err === "object" && typeof (err as { message?: unknown }).message === "string") {
+      if ((err as { message: string }).message.length === 0 && err.constructor) message += err.constructor.name;
+      else message += (err as { message: string }).message;
     } else {
       message += inspect(err);
     }
@@ -457,7 +463,7 @@
   // throws / rejects
   // ---------------------------------------------------------------------------
 
-  function getActual(fn) {
+  function getActual(fn: unknown) {
     if (typeof fn !== "function") throw invalidArgType("fn", "of type function", fn);
     try {
       fn();
@@ -467,11 +473,11 @@
     return NO_EXCEPTION;
   }
 
-  function isPromiseLike(value) {
-    return value !== null && typeof value === "object" && typeof value.then === "function" && typeof value.catch === "function";
+  function isPromiseLike(value: unknown): value is PromiseLike<unknown> & { catch: Function } {
+    return value !== null && typeof value === "object" && typeof (value as { then?: unknown }).then === "function" && typeof (value as { catch?: unknown }).catch === "function";
   }
 
-  async function waitForActual(promiseFn) {
+  async function waitForActual(promiseFn: unknown) {
     let resultPromise;
     if (typeof promiseFn === "function") {
       resultPromise = promiseFn();
@@ -496,7 +502,8 @@
   }
 
   class Comparison {
-    constructor(obj, keys, actual) {
+    [key: string]: unknown;
+    constructor(obj: Record<string, unknown>, keys: string[], actual?: Record<string, unknown>) {
       for (const key of keys) {
         if (!(key in obj)) continue;
         const matchesRegExp =
@@ -506,7 +513,7 @@
     }
   }
 
-  function compareExceptionKey(actual, expected, key, message, keys, fn) {
+  function compareExceptionKey(actual: Record<string, unknown>, expected: Record<string, unknown>, key: string, message: unknown, keys: string[], fn: Function) {
     if (key in actual && strictDeepEqual(actual[key], expected[key])) return;
     if (!message) {
       const a = new Comparison(actual, keys);
@@ -520,7 +527,7 @@
     innerFail({ actual, expected, message, operator: fn.name, stackStartFn: fn });
   }
 
-  function validateWithObject(actual, expected, message, fn) {
+  function validateWithObject(actual: unknown, expected: Record<string, unknown>, message: unknown, fn: Function) {
     if (typeof actual !== "object" || actual === null) {
       const err = new AssertionError({ actual, expected, message, operator: "deepStrictEqual", stackStartFn: fn });
       err.operator = fn.name;
@@ -533,12 +540,12 @@
     }
     for (const key of keys) {
       const isMatchingRegExp =
-        typeof actual[key] === "string" && isRegExp(expected[key]) && expected[key].test(actual[key]);
-      if (!isMatchingRegExp) compareExceptionKey(actual, expected, key, message, keys, fn);
+        typeof (actual as Record<string, unknown>)[key] === "string" && isRegExp(expected[key]) && expected[key].test((actual as Record<string, string>)[key]);
+      if (!isMatchingRegExp) compareExceptionKey(actual as Record<string, unknown>, expected, key, message, keys, fn);
     }
   }
 
-  function wrongClassMessage(actual, expected) {
+  function wrongClassMessage(actual: unknown, expected: Function) {
     let message = `The error is expected to be an instance of "${expected.name}". Received `;
     if (!isError(actual)) return `${message}"${inspect(actual, { depth: -1 })}"`;
     const name = (actual.constructor && actual.constructor.name) || actual.name;
@@ -547,11 +554,11 @@
     return message;
   }
 
-  function expectedException(actual, expected, message, fn) {
+  function expectedException(actual: unknown, expected: object, message: unknown, fn: Function) {
     let generated = false;
     let text = message;
     if (typeof expected !== "function") {
-      if (!isRegExp(expected)) return validateWithObject(actual, expected, message, fn);
+      if (!isRegExp(expected)) return validateWithObject(actual, expected as Record<string, unknown>, message, fn);
       const str = String(actual);
       if (expected.test(str)) return undefined;
       if (!text) {
@@ -580,7 +587,7 @@
     throw err;
   }
 
-  function expectsError(stackStartFn, actual, error, message, argCount) {
+  function expectsError(stackStartFn: Function, actual: unknown, error: unknown, message: unknown, argCount: number) {
     let expected = error;
     let text = message;
     if (typeof expected === "string") {
@@ -591,7 +598,7 @@
       throw invalidArgType("error", "of type function or an instance of Error, RegExp, or Object", expected);
     }
     if (actual === NO_EXCEPTION) {
-      let details = expected && expected.name ? ` (${expected.name})` : "";
+      let details = expected && (expected as { name?: unknown }).name ? ` (${(expected as { name?: unknown }).name})` : "";
       details += text ? `: ${text}` : ".";
       const fnType = stackStartFn === rejects ? "rejection" : "exception";
       innerFail({
@@ -605,7 +612,7 @@
     if (expected) expectedException(actual, expected, text, stackStartFn);
   }
 
-  function hasMatchingError(actual, expected) {
+  function hasMatchingError(actual: unknown, expected: unknown) {
     if (typeof expected !== "function") {
       if (isRegExp(expected)) return expected.test(String(actual));
       throw invalidArgType("expected", "of type function or an instance of RegExp", expected);
@@ -615,7 +622,7 @@
     return Reflect.apply(expected, {}, [actual]) === true;
   }
 
-  function expectsNoError(stackStartFn, actual, error, message) {
+  function expectsNoError(stackStartFn: Function, actual: unknown, error: unknown, message: unknown) {
     if (actual === NO_EXCEPTION) return;
     let expected = error;
     let text = message;
@@ -630,26 +637,26 @@
         actual,
         expected,
         operator: stackStartFn.name,
-        message: `Got unwanted ${fnType}${details}\nActual message: "${actual && actual.message}"`,
+        message: `Got unwanted ${fnType}${details}\nActual message: "${actual && (actual as { message?: unknown }).message}"`,
         stackStartFn,
       });
     }
     throw actual;
   }
 
-  function throws(promiseFn, error, message) {
+  function throws(promiseFn: unknown, error?: unknown, message?: unknown) {
     expectsError(throws, getActual(promiseFn), error, message, arguments.length);
   }
 
-  async function rejects(promiseFn, error, message) {
+  async function rejects(promiseFn: unknown, error?: unknown, message?: unknown) {
     expectsError(rejects, await waitForActual(promiseFn), error, message, arguments.length);
   }
 
-  function doesNotThrow(fn, error, message) {
+  function doesNotThrow(fn: unknown, error?: unknown, message?: unknown) {
     expectsNoError(doesNotThrow, getActual(fn), error, message);
   }
 
-  async function doesNotReject(fn, error, message) {
+  async function doesNotReject(fn: unknown, error?: unknown, message?: unknown) {
     expectsNoError(doesNotReject, await waitForActual(fn), error, message);
   }
 
