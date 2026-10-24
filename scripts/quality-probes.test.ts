@@ -1,3 +1,5 @@
+import "./app-matrix/classify.test.ts";
+import "./app-matrix/classify-types.test.ts";
 import { beforeAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";

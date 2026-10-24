@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
-import { firstError } from "./classify.mjs";
+import { firstError } from "./classify.ts";
 
 test("system errors in framework logs retain their diagnostic", () => {
   expect(firstError('1 | import.meta.require("ws")\nENOENT: no such file or directory, open \'ws\'\n    at /vite/config.js:23728:63')).toBe("ENOENT: no such file or directory, open 'ws'");
