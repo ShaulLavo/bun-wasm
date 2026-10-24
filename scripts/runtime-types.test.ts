@@ -64,12 +64,12 @@ test("accepts builtin registry and structured stack contracts", () => {
 
 
 test("accepts format graph, boxed coercion and shared buffer input contracts", () => {
-  const result = check('native.parseData(new Uint8Array(), "YAML");\ndeclare const internal: BunWasm.Internal;\ninternal.require("yaml_coercion")(new String("value"));\ninternal.toUint8(new SharedArrayBuffer(4));');
+  const result = check('native.parseData(new Uint8Array(), "YAML");\ndeclare const internal: BunWasm.Internal;\ninternal.require("yaml_coercion")(new String("value"));\ninternal.toUint8(new SharedArrayBuffer(4));\ninternal.require("formats_limit").checkSize({ byteLength: 2147483648 });');
   expect(result.stdout.toString()).toBe("");
   expect(result.exitCode).toBe(0);
 });
 
-for (const source of ['native.parseData("bytes", "YAML");', 'native.parseData(new Uint8Array(), "CSV");']) {
+for (const source of ['native.parseData("bytes", "YAML");', 'native.parseData(new Uint8Array(), "CSV");', 'native.parseData({ byteLength: 1 }, "YAML");', 'declare const internal: BunWasm.Internal; internal.require("formats_limit").checkSize({ byteLength: "1" });']) {
   test(`rejects invalid format graph call ${source}`, () => {
     const result = check(source);
     expect(result.exitCode).not.toBe(0);
