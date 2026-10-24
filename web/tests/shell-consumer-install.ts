@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { buildBrowserEntries, buildClassicWorker, resolveRuntimePackage } from "../../scripts/browser-build";
 
 const shellCommit = "c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5";
-const waffleCommit = "b20fad173ebaa225cb87c51776f35edaaafd4a40";
+const waffleCommit = "c2cc1d318af6791f6b2e3d207cc56df9d7bf542a";
 const waffle = `git+https://github.com/ShaulLavo/waffle.git#${waffleCommit}`;
 export type Execute = (command: string[], cwd: string, env?: NodeJS.ProcessEnv) => Promise<void>;
 async function manifest(directory: string) {
@@ -48,7 +48,7 @@ export async function bundleConsumer(root: string, directory: string, output: st
   const runtimeMetadata: unknown = await Bun.file(join(runtime, "package.json")).json();
   assert.ok(runtimeMetadata && typeof runtimeMetadata === "object" && "version" in runtimeMetadata, "runtime manifest");
   assert.equal(shellMetadata.version, "0.0.91", "selected shell release");
-  assert.equal(runtimeMetadata.version, "0.0.67", "selected shared runtime release");
+  assert.equal(runtimeMetadata.version, "0.0.90", "selected shared runtime release");
   assert.equal(shellMetadata.peer, waffle);
   assert.equal(bunMetadata.peer, waffle);
   const lock = await readFile(join(directory, "bun.lock"), "utf8");

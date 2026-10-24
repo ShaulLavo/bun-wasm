@@ -1,14 +1,13 @@
 import { expect, test } from "bun:test";
 import { outcomeWord } from "waffle/proc/outcome";
 import { processRuntimeFixture } from "./process-runtime-fixture";
-import type { ProcessService } from "waffle";
-import type { ProcessContext } from "waffle/proc";
+import type { ProcessService, RuntimeProcessContext } from "waffle";
 import { bunLauncher } from "../src/bun-launcher";
 import type { RunRequest } from "../src/bun-executor";
 
 test("Bun child launches receive a per-process networking ring", async () => {
   const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-  const context = { outcome: outcomeWord(), registerRevocation: () => () => {}, module, interruptible: false, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: {}, cwd: "/" } } as unknown as ProcessContext;
+  const context = { identity: { pid: 1, parentPid: 0, host: null }, outcome: outcomeWord(), registerRevocation: () => () => {}, module, interruptible: false, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
   let request: RunRequest | undefined;
   const service = { launchWorker(_context: unknown, options: { request: RunRequest }) { request = options.request; return { terminate() {} }; } } as unknown as ProcessService;
   const options = { workerUrl: "https://example.test/worker.js", runtime: processRuntimeFixture({}) };
@@ -102,7 +101,7 @@ test("child launch revocation during activation allocates no session", async () 
   let allocations = 0, revoke = () => {};
   runtime.network = () => gate.promise;
   const network = { createHelper(options: Parameters<typeof capability.createHelper>[0]) { allocations++; return capability.createHelper(options); } };
-  const context = { module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), outcome: outcomeWord(), registerRevocation(hook: () => void) { revoke = hook; return () => {}; }, request: { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/" } } as unknown as ProcessContext;
+  const context = { identity: { pid: 1, parentPid: 0, host: null }, module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), outcome: outcomeWord(), registerRevocation(hook: () => void) { revoke = hook; return () => {}; }, request: { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
   const service = { launchWorker() { throw new Error("must not launch"); } } as unknown as ProcessService;
   try {
     const launching = bunLauncher("browser", { runtime, workerUrl: "https://example.test/worker.js" })(context, service);
@@ -114,7 +113,7 @@ test("child launch revocation during activation allocates no session", async () 
 
 test("child helper lives until physical cleanup, not its logical outcome or adapter lifetime", async () => {
   const runtime = processRuntimeFixture({});
-  const context = { module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), outcome: outcomeWord(), registerRevocation: () => () => {}, request: { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/" } } as unknown as ProcessContext;
+  const context = { identity: { pid: 1, parentPid: 0, host: null }, module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), outcome: outcomeWord(), registerRevocation: () => () => {}, request: { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
   const stopped: number[] = [];
   let helper: RuntimeNetworkHelper | undefined;
   const options: BunNetworkOptions = { listening(_port, owner) { helper = owner; }, stopped: port => stopped.push(port) };
@@ -142,7 +141,7 @@ for (const phase of ["before launch", "during tools load"] as const) test(`revok
   const loading = Promise.withResolvers<WebAssembly.Module>();
   let activations = 0, loads = 0, revoke = () => {};
   runtime.network = async () => { activations++; return capability; };
-  const context = { module, outcome: outcomeWord(), registerRevocation(hook: () => void) { revoke = hook; return () => {}; }, request: { executable: "/bin/bun", argv: ["bun", "lint", "input.ts"], env: {}, cwd: "/" } } as unknown as ProcessContext;
+  const context = { identity: { pid: 1, parentPid: 0, host: null }, module, outcome: outcomeWord(), registerRevocation(hook: () => void) { revoke = hook; return () => {}; }, request: { executable: "/bin/bun", argv: ["bun", "lint", "input.ts"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
   const service = { launchWorker() { throw new Error("must not launch"); } } as unknown as ProcessService;
   try {
     if (phase === "before launch") claimOutcome(context.outcome, { kind: "start-failed", code: 13 });

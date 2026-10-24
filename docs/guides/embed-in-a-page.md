@@ -8,13 +8,13 @@ bun-wasm is not on npm. You install it as a Git dependency.
 
 ## Install the package
 
-Pin both repositories to exact commits. The Waffle commit must be the one in bun-wasm's own `peerDependencies`. At this revision that is `b20fad173ebaa225cb87c51776f35edaaafd4a40`.
+Pin both repositories to exact commits. The Waffle commit must be the one in bun-wasm's own `peerDependencies`. At this revision that is `c2cc1d318af6791f6b2e3d207cc56df9d7bf542a`.
 
 ```json
 {
 	"dependencies": {
 		"bun-wasm": "github:ShaulLavo/bun-wasm#<commit>",
-		"waffle": "github:ShaulLavo/waffle#b20fad173ebaa225cb87c51776f35edaaafd4a40"
+		"waffle": "github:ShaulLavo/waffle#c2cc1d318af6791f6b2e3d207cc56df9d7bf542a"
 	},
 	"trustedDependencies": ["bun-wasm", "waffle"]
 }

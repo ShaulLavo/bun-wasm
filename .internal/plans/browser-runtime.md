@@ -130,6 +130,42 @@ Keep one runtime, borrowed lifetime ownership, and editor saves' targeted flush.
 The pin and truthful memory diagnostic do not complete this navigation requirement
 or certify FAST, SAFE, or storage durability.
 
+### Waffle consumer pin refresh — 2026-10-24
+
+Status: Approved; consumer pin update owned by bun-wasm.
+
+The root package, web package, sandbox package, and their lockfiles move together from
+Waffle `0.0.67` at `b20fad173ebaa225cb87c51776f35edaaafd4a40` to Waffle `0.0.90` at
+`c2cc1d318af6791f6b2e3d207cc56df9d7bf542a`. The selected revision is the actual `main`
+head after merge, not a tag or guessed release commit. GitHub's post-merge run `40115292961`
+was green on October 24, 2026, with `changes`, `site`, `package`, `libc` and `browser`
+checks completed successfully; the commit was authored at `2026-10-24T17:15:26Z`.
+
+This refresh preserves package versions. The Waffle libc builder and preopen patch are
+byte-identical to the old pin. CI still owns fresh native and browser guest validation;
+no old guest receives a new receipt for this pin.
+The consumer gate remains responsible for installing one shared runtime, building the
+installed shell and Bun browser entries, and checking the resulting lockfile and bundles.
+It does not advertise or depend on unverified link export/public import, SAFE mode, or
+aggregate guarantees.
+
+Repin cadence: one Waffle consumer repin on 2026-10-24; do not repin again on this track
+before 2026-10-25.
+
+Remaining consumer validation for this refresh belongs to bun-wasm, not Waffle approval.
+The optional installed-shell fixture still selects bash-web
+`c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5`, whose declared Waffle peer is the old
+`b20fad173ebaa225cb87c51776f35edaaafd4a40` pin. Its exact-peer assertion in
+`web/tests/shell-consumer-install.ts` will reject this selection before bundling.
+Do not weaken that assertion or mix a shell feature-queue update into this PR.
+The parent must select a separately reviewed shell consumer pin with this Waffle peer
+before claiming the installed-shell gate. That gate also needs a fresh accepted Bun
+browser guest and its matching `SHELL_CONSUMER_EXPECTED_INPUTS` receipt, supplied with
+`SHELL_CONSUMER_GUEST` and a free `SHELL_CONSUMER_PORT`. This checkout has neither input.
+Use the existing natural CI guest producer rather than relabeling an old binary or
+rebuilding its native prerequisites in another lane. Independent review and the PR's
+required native, JSC and browser CI gates remain pending at the implementation handoff.
+
 ## Layers
 
 | Layer | Contents | Loaded by |

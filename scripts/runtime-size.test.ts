@@ -29,12 +29,13 @@ test("initial download accounting refuses unmeasured static external scripts", (
 });
 
 test("the first-spawn service gate allows reservation primitives but rejects service code", () => {
-  const inputs = ["proc/stub.ts", "proc/identity.ts", "proc/intrinsics.ts", "proc/control.ts", "proc/directory.ts", "proc/outcome.ts", "proc/start-errno.ts", "proc/start-failure.ts", "proc/wait-status.ts", "proc/signals.ts", "proc/types.ts"].map(installed).concat(["web/src/bun-launcher.ts", "web/src/subprocess-broker.ts"]);
+  const inputs = ["proc/stub.ts", "proc/identity.ts", "proc/intrinsics.ts", "proc/intrinsics/core.ts", "proc/intrinsics/host.ts", "proc/errors.ts", "proc/control.ts", "proc/directory.ts", "proc/outcome.ts", "proc/start-errno.ts", "proc/start-failure.ts", "proc/wait-status.ts", "proc/signals.ts", "proc/types.ts"].map(installed).concat(["web/src/bun-launcher.ts", "web/src/subprocess-broker.ts"]);
   expect(() => checkLazyProcessService(inputs, runtime)).not.toThrow();
   expect(processServiceInputs(inputs.concat([installed("proc/table.ts")]), runtime)).toEqual([installed("proc/table.ts")]);
   expect(() => checkLazyProcessService(inputs.concat([installed("proc/supervisor.ts")]), runtime)).toThrow("process service is eager");
   expect(() => checkLazyProcessService(inputs.concat([installed("proc/index.ts")]), runtime)).toThrow("process service is eager");
   expect(() => checkLazyProcessService(inputs.concat([installed("proc/registry.ts")]), runtime)).toThrow("process service is eager");
+  expect(() => checkLazyProcessService(inputs.concat([installed("proc/intrinsics/future-service.ts")]), runtime)).toThrow("process service is eager");
   expect(() => checkLazyProcessService(inputs.concat([installed("proc/future-service.ts")]), runtime)).toThrow("process service is eager");
   expect(() => checkLazyProcessService(inputs.concat([installed("dist/proc/supervisor.js")]), runtime)).toThrow("process service is eager");
 });

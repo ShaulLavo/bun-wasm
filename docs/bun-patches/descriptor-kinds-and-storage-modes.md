@@ -3,7 +3,19 @@
 Class **Host feature**. These are original adapters, not copied or translated upstream code.
 The matching contract was written against Waffle main `f6017d12f59c81dae75eece5a6cb62c0470d166e`, specifically
 `proc/abi.ts`, `core/descriptors.ts`, `fs/vfs.ts` and `browser/shared-fs.ts`. The root package,
-web page and sandbox now pin Waffle `b20fad173ebaa225cb87c51776f35edaaafd4a40` together, including their lockfiles.
+web page and sandbox now pin Waffle `c2cc1d318af6791f6b2e3d207cc56df9d7bf542a` together, including their lockfiles.
+
+The 2026-10-24 consumer refresh also updates original launcher fixtures for the required
+`RuntimeProcessContext.identity`, delegates identity reservation and bounded payload methods
+through the persistence test wrapper, and narrows directory entries before reading children.
+The shell lists a non-directory entry without assuming it has children. These changes adapt
+to Waffle's public types and entry kinds; they copy no upstream implementation. The real
+installer tests arrange the blocked parent during mutation rather than before preflight,
+because Waffle now reports an intermediate non-directory during lookup. They retain the
+rollback race and expect the canonical WASI ENOTDIR value, 54. The consumer WASI fixture
+now tests real symlink capability confinement instead of expecting unsupported creation.
+The first-spawn bundle check classifies Waffle's split intrinsic-capture modules and typed
+process errors as eager control code. Unknown nested modules still fail that check.
 
 `crates/bunwasm-runtime/src/host.rs` imports `runtime_proc.fd_kind`. The original descriptor
 metadata adapter in `natives.rs` retains libc fstat and its rights checks before restoring the
