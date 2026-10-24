@@ -99,8 +99,8 @@ The installer also supplies networking to Bun launched by an external shell. A s
 Bun server and nested Bun processes use the page's existing network service, not a private network.
 
 `bun run test:browser:shell-consumer` installs a packed Bun package and bash-web at
-`c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5`, sharing Waffle 0.0.67 at
-`b20fad173ebaa225cb87c51776f35edaaafd4a40`. It builds the installed shell's workers, runtime-backed
+`c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5`, sharing Waffle 0.0.90 at
+`c2cc1d318af6791f6b2e3d207cc56df9d7bf542a`. It builds the installed shell's workers, runtime-backed
 shell guest and utility guests explicitly. Git `prepare` alone does not build that shell guest.
 The test imports `bun-wasm`, `bun-wasm/worker` and bash-web's public exports, not checkout workers
 or a shell substitute. Rust, the `wasm32-wasip1` target, wasi-sdk 34 and cached Playwright 1.64.1

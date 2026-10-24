@@ -7,6 +7,7 @@ import { ProcessIdentityAllocator } from "waffle/proc/identity";
 import { ProcessTable } from "waffle/proc/table";
 import { compileInterruptible } from "waffle/interrupt/loader";
 import { getVfsDescriptor } from "waffle";
+import { createProcessIdentity } from "waffle/browser/process-context";
 import type { Runtime, GuestLauncher, ProcessService, RuntimeFilesystem, RuntimeConsumer } from "waffle";
 
 /** A process-only fixture: no page owner, filesystem worker, browser cache or service locator.
@@ -18,7 +19,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
 } = {}): Runtime {
   const unused = (): never => { throw new Error("Unexpected filesystem operation in process-only fixture"); };
   let filesystem: RuntimeFilesystem = {
-    vfs: getVfsDescriptor("memory"), state: { status: "ready" }, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
+    vfs: getVfsDescriptor("memory"), state: { status: "ready" }, workspace: undefined, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
     revoke: unused, reap: unused, quiesce: unused, drain: unused, flush: unused,
     lookup: unused, readFile: unused, listFiles: unused,
     mkdirp: unused, writeFile: unused, remove: unused, move: unused, ...overrides,
@@ -49,7 +50,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
   const consumers = new Set<RuntimeConsumer>();
   let service!: ProcessService;
   return {
-    filesystem, identities,
+    hostIdentity: null, filesystem, identities,
     async network() { if (disposed) throw new Error("Runtime is disposed"); return network; },
     get disposed() { return disposed; },
     retainConsumer(consumer) {
@@ -79,11 +80,11 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
     processes() {
       if (disposed) return Promise.reject(new Error("Runtime is disposed"));
       return activation ??= Promise.resolve().then(() => {
-        broker = new BrowserProcessBroker({ filesystem, identities, registry, table, activate: options.activate,
+        broker = new BrowserProcessBroker({ filesystem, identities, registry, table, hostIdentity: null, activate: options.activate,
           launch: context => {
             const launch = adapters.get(context.adapter);
             if (!launch) throw new Error(`Unknown adapter: ${context.adapter}`);
-            return launch(context, service);
+            return launch({ ...context, identity: createProcessIdentity(context, null) }, service);
           },
         });
         if (disposed) broker.suspend();

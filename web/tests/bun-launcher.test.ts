@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { outcomeWord } from "waffle/proc/outcome";
-import type { ProcessService } from "waffle";
-import type { ProcessContext } from "waffle/proc";
+import type { ProcessService, RuntimeProcessContext } from "waffle";
 import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
 
 // Only the launch request is under test; the real service and ABI are covered elsewhere.
@@ -12,7 +11,7 @@ function service(launches: Launch[]): ProcessService {
 }
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
 const runtime = processRuntimeFixture({});
-const context = { outcome: outcomeWord(), registerRevocation: () => () => {}, module, interruptible: false, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { A: "1" }, cwd: "/work" } } as unknown as ProcessContext;
+const context = { identity: { pid: 1, parentPid: 0, host: null }, outcome: outcomeWord(), registerRevocation: () => () => {}, module, interruptible: false, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { A: "1" }, cwd: "/work" } } as unknown as RuntimeProcessContext;
 
 const location = Object.getOwnPropertyDescriptor(globalThis, "location");
 const caches = Object.getOwnPropertyDescriptor(globalThis, "caches");
@@ -90,7 +89,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) test(`${engine} lin
   const launcher = bunLauncher(engine, { runtime, workerUrl: "./worker.js", async loadTools() { loads++; return tools; } });
   for (const args of [["lint", "input.ts"], ["--cwd", "/project", "fmt", "--check", "input.ts"]]) {
     const launches: Launch[] = [];
-    const toolContext = { ...context, request: { ...context.request, argv: ["bun"].concat(args) } } as ProcessContext;
+    const toolContext = { ...context, request: { ...context.request, argv: ["bun"].concat(args) } };
     await launcher(toolContext, service(launches));
     expect(launches).toHaveLength(1);
     expect(launches[0]!.request).toMatchObject({ module: tools, engine, args: ["bun"].concat(args), env: { A: "1", PWD: "/work", BUNWASM_EXEC_PATH: "/bin/bun" } });
@@ -98,7 +97,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) test(`${engine} lin
   expect(loads).toBe(2);
   for (const args of [["run", "lint"], ["-e", "'fmt'"], ["build", "fmt"]]) {
     const launches: Launch[] = [];
-    await launcher({ ...context, request: { ...context.request, argv: ["bun"].concat(args) } } as ProcessContext, service(launches));
+    await launcher({ ...context, request: { ...context.request, argv: ["bun"].concat(args) } }, service(launches));
     expect(launches[0]!.request.module).toBe(module);
   }
   expect(loads).toBe(2);
@@ -107,7 +106,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) test(`${engine} lin
 test("a rejected tools module prevents worker launch", async () => {
   const launches: Launch[] = [];
   const launcher = bunLauncher("browser", { runtime, workerUrl: "./__bunwasm/worker.js", async loadTools() { throw new Error("tools integrity mismatch"); } });
-  const toolContext = { ...context, request: { ...context.request, argv: ["bun", "lint", "input.ts"] } } as ProcessContext;
+  const toolContext = { ...context, request: { ...context.request, argv: ["bun", "lint", "input.ts"] } };
   await expect(launcher(toolContext, service(launches))).rejects.toThrow("tools integrity mismatch");
   expect(launches).toEqual([]);
   expect(deleted).toEqual([]);

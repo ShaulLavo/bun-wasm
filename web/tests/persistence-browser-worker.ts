@@ -175,6 +175,9 @@ const commands: Record<string, (args: any) => Promise<unknown>> = {
     const start = performance.now();
     const storage = backendName === "opfs" ? await OpfsStorage.open(name) : await IndexedDBStorage.open(name);
     const observed: StorageBackend = {
+      reserveIdentity: workspace => storage.reserveIdentity(workspace),
+      readRange: (key, range) => storage.readRange(key, range),
+      retainPayload: (key, expectedSize, metadata) => storage.retainPayload(key, expectedSize, metadata),
       load: () => storage.load(),
       async read(key: string) { reads++; const bytes = await storage.read(key); readBytes += bytes.length; return bytes; },
       async persist(batch: PersistenceBatch) {
