@@ -132,9 +132,56 @@ test("the refined Cargo cache keeps Cargo inputs and leaves JSC-only inputs to t
   expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == ''");
   expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'");
   expect(rust).toContain("JSC_CARGO_TARGET_DIR=$RUNNER_TEMP/jsc/target");
-  expect(rust).toContain("key: jsc-v2-");
+  expect(rust).toContain("key: jsc-prebuild-v1-");
+  expect(rust).toContain("key: jsc-cargo-v1-");
   expect(rust).toContain("'scripts/ci-binaryen.ts'");
   expect(rust).toContain("'crates/**'");
+});
+
+test("JSC prebuild and Cargo caches keep separate authoritative identities", () => {
+  const prebuildKeys = rust.split("\n").filter(line => line.includes("key: jsc-prebuild-v1-"));
+  const cargoKeys = rust.split("\n").filter(line => line.includes("key: jsc-cargo-v1-"));
+  expect(prebuildKeys).toHaveLength(2);
+  expect(cargoKeys).toHaveLength(2);
+  expect(rust).toContain("path: ${{ runner.temp }}/jsc/prebuild");
+  expect(rust).toContain("path: ${{ runner.temp }}/jsc/target");
+  expect(rust).not.toContain("path: ${{ runner.temp }}/jsc\n");
+
+  const groups = (key: string) => Array.from(key.matchAll(/hashFiles\(([^)]+)\)/g), match =>
+    Array.from(match[1]!.matchAll(/'([^']+)'/g), item => item[1]!));
+  const matches = (pattern: string, path: string) => {
+    if (pattern.endsWith("/**")) return path.startsWith(pattern.slice(0, -2));
+    if (!pattern.includes("*")) return pattern === path;
+    const [prefix, suffix] = pattern.split("*");
+    return path.startsWith(prefix!) && path.endsWith(suffix!);
+  };
+  const changedGroups = (key: string, path: string) => groups(key)
+    .map((patterns, index) => patterns.some(pattern => matches(pattern, path)) ? index : -1)
+    .filter(index => index >= 0);
+  const prebuild = prebuildKeys[0]!;
+  const cargo = cargoKeys[0]!;
+
+  expect(changedGroups(prebuild, "crates/bunwasm-runtime/src/engine_jsc.rs")).toEqual([]);
+  expect(changedGroups(cargo, "crates/bunwasm-runtime/src/engine_jsc.rs")).toEqual([1]);
+  for (const input of ["jsc/wasi-jsc.cmake", "scripts/build-wasi-sysroot.ts", "env.sh", "scripts/ci-binaryen.ts"]) {
+    expect(changedGroups(prebuild, input)).toEqual([0]);
+  }
+  expect(changedGroups(cargo, "jsc/wasi-jsc.cmake")).toEqual([0, 1]);
+  expect(changedGroups(cargo, "rust-toolchain.toml")).toEqual([1]);
+
+  const build = rust.split("name: Build or validate the single JSC prebuild")[1]!;
+  expect(build).toContain("steps.jsc-prebuild-cache.outputs.cache-hit");
+  expect(build).toContain("bash scripts/build-jsc.sh");
+  expect(rust).not.toContain("steps.jsc-cache");
+  const hostBuild = rust.indexOf("name: Build one host-engine guest for real-browser source cache acceptance");
+  const jscGate = rust.indexOf("name: Blocking JSC embedding and allocation checks");
+  for (const save of [
+    rust.indexOf("name: Save the JSC prebuild cache once per input revision"),
+    rust.indexOf("name: Save the JSC Cargo cache once per input revision"),
+  ]) {
+    expect(save).toBeGreaterThan(jscGate);
+    expect(save).toBeGreaterThan(hostBuild);
+  }
 });
 
 test("crypto declares the toolchain and CMake preflight as Cargo build inputs", () => {
@@ -376,7 +423,7 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
-  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(2);
+  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(4);
   expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-hit != 'true'");
   expect(rust).not.toContain("github.run_id");
   expect(rust).not.toContain("github.run_attempt");
@@ -417,8 +464,8 @@ test("cold and restored JSC setup install Binaryen before sourcing common.sh", (
 });
 
 test("Binaryen pin and installer identity participate in tool, fallback and JSC caches", () => {
-  const keys = rust.split("\n").filter(line => /key: (?:binaryen-133|native-v4|jsc-v2)|^\s+native-v4/.test(line));
-  expect(keys).toHaveLength(5);
+  const keys = rust.split("\n").filter(line => /key: (?:binaryen-133|native-v4|jsc-(?:prebuild|cargo)-v1)|^\s+native-v4/.test(line));
+  expect(keys).toHaveLength(8);
   expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz");
   for (const key of keys) {
     expect(key).toContain("'scripts/ci-binaryen.ts'");

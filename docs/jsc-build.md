@@ -149,9 +149,13 @@ then leaves out: wasi-sdk's sysroot as the library search path (rustc's `-lc` re
 its `crt1-command.o`, and `libc++`/`libc++abi` from the sysroot's `noeh` directory.
 wasi-libc's mman/signal/getpid emulation libraries stay out: bunwasm-posix defines those
 functions. The changed `RUSTFLAGS` would invalidate the shared cargo cache, so this build uses its
-own target dir (`$JSC_BUILD_DIR/target`). CI uses the same private target directory
-so JSC artifacts do not share the QuickJS target cache. The JSC cache key includes
-the Rust source and JSC build inputs that can affect that target.
+own target dir (`$JSC_BUILD_DIR/target`). CI keeps that directory physically separate
+from the reusable JSC prebuild at `$RUNNER_TEMP/jsc/prebuild`, so cache restore cannot
+overlay Cargo files onto WebKit or ICU outputs. The prebuild cache is keyed only by
+its C++/sysroot/toolchain inputs and its stamp is checked on reuse; the private Cargo
+cache adds the Rust and Cargo inputs that can affect the final guest. A Rust-only edit
+therefore keeps the unchanged prebuild candidate, while a changed C++ or sysroot input
+changes both identities and must rebuild or validate a fresh prebuild.
 
 ### Numbers
 

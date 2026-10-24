@@ -216,21 +216,27 @@ jobs:
       - name: Configure private JSC build paths
         if: needs.quality.outputs.jsc == 'true'
         run: |
-          echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc" >> "$GITHUB_ENV"
+          echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
           echo "JSC_CARGO_TARGET_DIR=$RUNNER_TEMP/jsc/target" >> "$GITHUB_ENV"
           echo "JOBS=2" >> "$GITHUB_ENV"
           echo "CAGE=" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         if: needs.quality.outputs.jsc == 'true'
-        id: jsc-cache
+        id: jsc-prebuild-cache
         with:
-          path: ${{ runner.temp }}/jsc
-          key: jsc-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-bun-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'scripts/sync-*.sh', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts', 'Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+          path: ${{ runner.temp }}/jsc/prebuild
+          key: jsc-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts') }}
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.jsc == 'true'
+        id: jsc-cargo-cache
+        with:
+          path: ${{ runner.temp }}/jsc/target
+          key: jsc-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/sync-*.sh', 'Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
       - name: Build or validate the single JSC prebuild
         if: needs.quality.outputs.jsc == 'true'
         run: |
           source env.sh
-          if [[ '${{ steps.jsc-cache.outputs.cache-hit }}' == 'true' ]]; then
+          if [[ '${{ steps.jsc-prebuild-cache.outputs.cache-hit }}' == 'true' ]]; then
             source jsc/common.sh
             check_jsc_inputs_stamp
           else
@@ -268,6 +274,20 @@ jobs:
           path: dist/source-cache-browser/
           if-no-files-found: error
           retention-days: 1
+
+      - name: Save the JSC prebuild cache once per input revision
+        if: needs.quality.outputs.jsc == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/jsc/prebuild
+          key: jsc-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts') }}
+
+      - name: Save the JSC Cargo cache once per input revision
+        if: needs.quality.outputs.jsc == 'true' && steps.jsc-cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/jsc/target
+          key: jsc-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/sync-*.sh', 'Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
 
       - name: Save the refined native Cargo cache once per input revision
         if: steps.native-cargo-cache.outputs.cache-hit != 'true'

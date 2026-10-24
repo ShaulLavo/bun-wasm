@@ -83,9 +83,11 @@ archive. The refined Cargo cache keeps upstream patches, third-party inputs, the
 WASI crypto toolchain, its CMake toolchain and guard, and Rust gate/build inputs.
 Cargo explicitly watches the crypto toolchain and CMake guard, and the timestamp
 receipt fingerprints those source files too. JSC-only CMake checks and Binaryen
-stay in the JSC cache, which
-uses a private Cargo target directory. The old full native key remains as a
-fallback while the refined layer proves reuse. A source hash refreshes each cache
+stay in a separate JSC prebuild cache. Its private Cargo target has its own cache
+identity, with the same C++/sysroot/toolchain inputs plus the Rust and Cargo inputs
+that can affect that target. A Rust-only edit therefore keeps the validated prebuild
+candidate while rebuilding the affected Cargo artifacts. The old full native key
+remains as a fallback while the refined layer proves reuse. A source hash refreshes each cache
 after crate or compiled process-request fixture edits, with a same-toolchain/input
 restore prefix for reuse.
 Cache logs show restored paths,
