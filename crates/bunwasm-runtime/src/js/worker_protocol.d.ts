@@ -35,6 +35,7 @@ declare namespace BunWasm {
     encode(value: unknown, transfer?: unknown, forbidden?: readonly string[]): WorkerGraph;
     decode(value: unknown): unknown;
   }
+  interface WorkerErrorData { graph: WorkerGraph; code: unknown; }
   interface WorkerLimits {
     maxOldGenerationSizeMb?: number;
     maxYoungGenerationSizeMb?: number;
@@ -116,6 +117,7 @@ declare namespace BunWasm {
     addIoWaiter<W extends IoWaiter>(waiter: W): W;
     workerPump?: () => boolean;
     workerError?: (error: unknown) => void;
+    workerErrorData?: (error: unknown) => WorkerErrorData;
     workerExit?: (code: number) => void;
     workerEnvChange?: (key: string, value: unknown) => void;
     clonePorts?: (value: unknown, options: unknown) => unknown;
