@@ -6,6 +6,8 @@ phase="${1:-all}"
 case "$phase" in --setup|--unit|--browser|all) ;; *) echo "usage: $0 [--setup|--unit|--browser]" >&2; exit 2 ;; esac
 
 if [[ "$phase" != --browser ]]; then
+  # Host AST controls need root tools, not package export builds.
+  (cd "$root" && bun install --frozen-lockfile --ignore-scripts)
   # Both applications consume Waffle as the exact Git dependency recorded in their locks.
   (cd "$root/web" && bun install --frozen-lockfile)
   (cd "$root/sandbox" && bun install --frozen-lockfile)
