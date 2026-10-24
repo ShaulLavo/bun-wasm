@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/runtime-inspector-contracts.test.ts",
+  "localRuntime": true
+}

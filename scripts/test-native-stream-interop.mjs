@@ -6,8 +6,9 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const argument = name => { const at = process.argv.indexOf(name); return at < 0 ? undefined : process.argv[at + 1]; };
 function inputs() {
   const sourceRoot = join(root, "crates/bunwasm-runtime/src/js");
-  const names = ["buffer", "events", "node_stream_core", "node_stream_web", "node_stream_bindings", "native_stream_state"];
+  const names = ["buffer", "node_stream_core", "node_stream_web", "node_stream_bindings", "native_stream_state"];
   const sources = Object.fromEntries(names.filter(name => existsSync(join(sourceRoot, name + ".js"))).map(name => [name, readFileSync(join(sourceRoot, name + ".js"), "utf8")]));
+  sources.events = stripTypeScriptTypes(readFileSync(join(sourceRoot, "events.ts"), "utf8"));
   sources.streams = stripTypeScriptTypes(readFileSync(join(sourceRoot, "streams.ts"), "utf8"));
   sources.compression_streams = stripTypeScriptTypes(readFileSync(join(sourceRoot, "compression_streams.ts"), "utf8"));
   const builtins = readFileSync(join(sourceRoot, "builtins.js"), "utf8");
