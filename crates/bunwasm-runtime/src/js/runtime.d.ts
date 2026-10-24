@@ -80,7 +80,7 @@ declare namespace BunWasm {
   }
 }
 
-declare const process: { cwd(): string };
+declare var process: { cwd(): string; stdout: BunWasm.WorkerWritable; stderr: BunWasm.WorkerWritable };
 declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
 
@@ -229,3 +229,80 @@ declare namespace BunWasm {
 }
 
 declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;
+declare namespace BunWasm {
+  interface StackFrame { file: string; name: string; line: number; column: number }
+  interface ConsoleInspector { parseStack(raw: unknown): StackFrame[] }
+  interface StackCallSite {
+    getFileName(): string;
+    getFunctionName(): string | null;
+    getFunction(): unknown;
+    getLineNumber(): number;
+    getColumnNumber(): number;
+    isNative(): boolean;
+    isConstructor(): boolean;
+    isToplevel(): boolean;
+  }
+  interface Native {
+    bunBuiltinNames(): string[];
+    bunBuiltinSource(id: number): string | undefined;
+    bunBuiltinHookName(id: number): string;
+    bunBuiltinErrorCode(id: number): string;
+    evalScript(source: string, filename: string): (intrinsics: Record<string, unknown>) => unknown;
+    isPromise(value: unknown): boolean;
+    isProxy(value: unknown): boolean;
+    isError(value: unknown): boolean;
+  }
+  interface Internal {
+    bunBuiltinGlobals: Record<string, unknown> & {
+      Array: ArrayConstructor; Error: ErrorConstructor; Function: FunctionConstructor;
+      Map: MapConstructor; Object: ObjectConstructor; Proxy: ProxyConstructor;
+      RangeError: RangeErrorConstructor; Reflect: typeof Reflect; Set: SetConstructor;
+      String: StringConstructor; Symbol: SymbolConstructor; TypeError: TypeErrorConstructor;
+      URIError: URIErrorConstructor;
+    };
+    builtin(name: string): unknown;
+    defineHidden(target: object, values: object): void;
+    mappedCallSites: WeakSet<object>;
+    formatCallSite(site: StackCallSite): string;
+    require(name: "inspect"): ConsoleInspector;
+  }
+}
+
+interface ErrorConstructor {
+  captureStackTrace(target: object, constructorOpt?: Function): void;
+  prepareStackTrace: ((target: object, raw: unknown) => unknown) | undefined;
+}
+
+declare namespace BunWasm {
+  interface FormatTemporalValue {
+    toString(options: { calendarName: string; timeZoneName: string }): string;
+  }
+  interface FormatInstant extends FormatTemporalValue {
+    epochNanoseconds: bigint;
+    toZonedDateTimeISO(offset: string): FormatTemporalValue;
+  }
+  interface Native {
+    /** Serialized tagged graph from bunwasm-transpiler/src/data.rs. */
+    parseData(bytes: Uint8Array, format: DataFormat): string;
+  }
+  interface Internal {
+    require(name: "yaml_coercion"): (value: unknown) => unknown;
+    require(name: "formats_limit"): { checkSize(input: { readonly byteLength: number }): void };
+    toUint8(value: ArrayBuffer | SharedArrayBuffer | ArrayBufferView): Uint8Array;
+  }
+}
+
+// Runtime Blob is installed by web.js, with synchronous access to its stored bytes.
+interface Blob { _bytes(): Uint8Array }
+
+declare var Bun: {
+  inspect(value: unknown): string;
+  stringWidth(value: string, options?: { ambiguousIsNarrow?: boolean; countAnsiEscapeCodes?: boolean }): number;
+};
+declare var Temporal: {
+  Instant: { from(value: string): BunWasm.FormatInstant };
+  PlainDate: { from(value: string): BunWasm.FormatTemporalValue };
+  PlainDateTime: { from(value: string): BunWasm.FormatTemporalValue };
+  PlainTime: { from(value: string): BunWasm.FormatTemporalValue };
+  ZonedDateTime: { from(value: string): BunWasm.FormatTemporalValue };
+};

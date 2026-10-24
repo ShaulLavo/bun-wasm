@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/runtime-sqlite.test.ts",
+  "batch": "10-web"
+}

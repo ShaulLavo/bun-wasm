@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { compareEngines, failure, stageOutput } from "./classify.mjs";
+import { compareEngines, failure, stageOutput } from "./classify.ts";
 import { sha256 } from "./registry.mjs";
 
 const evidence = resolve(process.argv[2] ?? "/work/reports/bun-wasm-app-matrix-2026-10-15");

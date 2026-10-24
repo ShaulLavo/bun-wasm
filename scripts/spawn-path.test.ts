@@ -112,3 +112,16 @@ for (const executable of ["bunx", "/bunx"]) test(`real package normalization exp
   expect(child.request.executable).toBe("/bin/bun");
   fake.exit(child, 0);
 });
+
+for (const PATH of [undefined, "", "/restricted", "/custom:/bin"]) test(`package scripts preserve PATH intent for ${String(PATH)}`, () => {
+  const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/package_scripts.ts", import.meta.url), "utf8");
+  const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.packageFactory = ${source}`));
+  const process = { env: PATH === undefined ? {} : { PATH }, cwd: () => "/work/project", argv: ["bun", "app.ts"] };
+  const path = require("node:path").posix;
+  const packages = factory({
+    native: { mainArg: () => "app.ts", exists: () => false, resolve: (file: string) => file, setMainPath() {} },
+    require: (name: string) => name === "process" ? process : path,
+  });
+  packages.resolve("app.ts");
+  expect(process.env).toMatchObject({ PATH: `/work/project/node_modules/.bin:/work/node_modules/.bin:/node_modules/.bin:${PATH ?? "/bin:/usr/bin"}` });
+});

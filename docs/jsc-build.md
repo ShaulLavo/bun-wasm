@@ -40,7 +40,7 @@ Re-stamping alone cannot repair old compiler flags. The build directory must kee
 Never copy a configured JSC build directory with `cp -a` to make a new prebuild. Its CMake cache
 and `build.ninja` retain absolute paths to the original directory, so a copied build reconfigures
 and writes into the original. Configure a fresh `JSC_BUILD_DIR` instead. This takes about 20 minutes
-on the PC. Reusing a WebKit source checkout is fine after resetting it.
+on a workstation. Reusing a WebKit source checkout is fine after resetting it.
 
 A full build from nothing takes about 10 minutes at `-j6` on this machine (ICU ~3, JSC ~6). Every compile step runs inside
 `systemd-run --user --scope -p MemoryMax=5G -p CPUWeight=20 nice -n 10` (`CAGE=` turns that off,
@@ -149,7 +149,13 @@ then leaves out: wasi-sdk's sysroot as the library search path (rustc's `-lc` re
 its `crt1-command.o`, and `libc++`/`libc++abi` from the sysroot's `noeh` directory.
 wasi-libc's mman/signal/getpid emulation libraries stay out: bunwasm-posix defines those
 functions. The changed `RUSTFLAGS` would invalidate the shared cargo cache, so this build uses its
-own target dir (`$JSC_BUILD_DIR/target`).
+own target dir (`$JSC_BUILD_DIR/target`). CI keeps that directory physically separate
+from the reusable JSC prebuild at `$RUNNER_TEMP/jsc/prebuild`, so cache restore cannot
+overlay Cargo files onto WebKit or ICU outputs. The prebuild cache is keyed only by
+its C++/sysroot/toolchain inputs and its stamp is checked on reuse; the private Cargo
+cache adds the Rust and Cargo inputs that can affect the final guest. A Rust-only edit
+therefore keeps the unchanged prebuild candidate, while a changed C++ or sysroot input
+changes both identities and must rebuild or validate a fresh prebuild.
 
 ### Numbers
 
@@ -188,6 +194,4 @@ fixtures still run on one JSC guest build.
 
 Archive and published checksum are from the
 [official release](https://github.com/WebAssembly/binaryen/releases/tag/version_133).
-Setup tests do not replace actual JSC execution evidence. The private fresh build
-and both fixture passes recorded for PR 131 belong to source `30e39dcb`; a later
-CI-only change does not relabel that guest as a new build.
+Setup tests do not replace actual JSC execution. A CI-only change does not make an existing guest a new build.

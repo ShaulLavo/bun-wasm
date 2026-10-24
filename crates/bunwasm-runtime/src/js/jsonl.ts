@@ -1,5 +1,5 @@
 // Token stopping and separator rules adapted from Bun WebKit LiteralParser.cpp.
-// Upstream revision and license are in docs/bun-patches.md#jsonl-streaming-tokens.
+// Upstream revision and license are in docs/bun-patches/jsonl-streaming-tokens.md#jsonl-streaming-tokens.
 // Complete values still use Bun's Rust parser.
 (function (internal: BunWasm.Internal) {
   "use strict";
