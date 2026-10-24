@@ -20,10 +20,11 @@ emptying 242 type-only lines in the 35 existing TypeScript modules saves 10,012 
 bytes. The JSONL and `node:test` conversions add 603 bytes, for a net emitted reduction
 of 9,409 bytes. The converted pair is not counted among those 35 existing modules.
 
-`src/js/jsonl.ts` and `src/js/node_test.ts` are the existing original JSONL tokenizer and
+`src/js/jsonl.ts` and `src/js/node_test.ts` were originally the JSONL tokenizer and
 `node:test` registration adapter renamed from JavaScript with strict types. Their UTF-8,
-data-format and test-runner contracts live in `src/js/runtime.d.ts`. Neither copies Bun's
-C++ JSONL binding or Bun's `node:test` module.
+data-format and test-runner contracts live in `src/js/runtime.d.ts`. The later
+[JSONL token port](jsonl-streaming-tokens.md#jsonl-streaming-tokens) adapts Bun WebKit semantics. The test adapter
+does not copy Bun's `node:test` module.
 
 
 ## Classification
