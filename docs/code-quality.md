@@ -55,6 +55,22 @@ The WASI crypto toolchain, its CMake cache preflight dependencies, and the share
 process-request JSON compiled into host tests also select native checks.
 Browser-only and documentation changes install no Rust toolchain or SDK.
 
+After the patched sysroot and input timestamps are ready, the native job restores
+both private JSC caches. One Bash step then starts the selected JSC C/C++ prebuild
+in its own process group. The foreground still runs native quality, host source-cache
+tests, launcher/QuickJS production and native fixtures in that order. Only the JSC
+prebuild overlaps them. It writes the private prebuild directory, not Cargo targets,
+Bun sources or guest outputs. JSC-specific environment changes stay in the child.
+
+The step installs cleanup before starting that child. Either branch failing fails
+the step. Cancellation kills and reaps only the owned JSC process group, including
+its compiler descendants. The prebuild log retains stderr and is included in the
+always-run guest diagnostic upload. Both branches must succeed before JSC Cargo,
+embedding checks, the host/tools producers, guest consumers or the four final cache
+saves can run. No Cargo builds overlap and no prebuild cache is saved early. This
+removes a serial dependency; actual cold completion and contention require hosted
+CI evidence, not a timing claim from the dependency graph.
+
 Host Clippy covers all test/example targets once. Host tests run once, in release
 mode, including integration and documentation tests. Both WASI feature graphs
 remain checked; their features are not interchangeable. All Clippy commands use

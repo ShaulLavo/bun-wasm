@@ -150,3 +150,22 @@ test("engine-specific changes keep their own native gates", () => {
   }
   expect(needsJsc(["web/guest-tests/jsc.test.ts"])).toBe(true);
 });
+
+test("the one prebuild joins before JSC Cargo and every later producer, consumer and save", () => {
+  const names = nativeStepNames();
+  const owner = "Blocking native checks with one owned JSC prebuild";
+  const later = ["Blocking JSC embedding and allocation checks", "Build one host-engine guest for real-browser source cache acceptance", "Build the single tools fixture in the existing native target", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)", "Save the JSC prebuild cache once per input revision", "Save the JSC Cargo cache once per input revision", "Save the refined native Cargo cache once per input revision", "Save the complete native fallback once per input revision"];
+  expect(names.filter(value => value === owner)).toHaveLength(1);
+  for (const step of later) {
+    expect(names.filter(value => value === step)).toHaveLength(1);
+    expect(names.indexOf(step)).toBeGreaterThan(names.indexOf(owner));
+  }
+  expect(workflow.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
+  expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
+  const overlap = rust.split(`      - name: ${owner}\n`)[1]!.split("      - name: Blocking JSC embedding")[0]!;
+  expect(overlap).toContain('run_native_checks\n          if [[ -n "$jsc_pid" ]]; then\n            wait "$jsc_pid"\n          fi');
+  expect(overlap).not.toContain("continue-on-error");
+  expect(overlap).not.toContain("uses: actions/cache/save");
+  expect(rust).toContain("dist/web-guests-*.log\n            ${{ runner.temp }}/jsc-prebuild.log");
+  expect(rust).toContain("if: always()\n        with:\n          name: web-guest-fixture-receipts");
+});

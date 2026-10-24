@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -251,7 +251,7 @@ test("JSC prebuild and Cargo caches keep separate authoritative identities", () 
   expect(changedGroups(cargo, "jsc/wasi-jsc.cmake")).toEqual([0, 1]);
   expect(changedGroups(cargo, "rust-toolchain.toml")).toEqual([1]);
 
-  const build = rust.split("name: Build or validate the single JSC prebuild")[1]!;
+  const build = rust.split("name: Blocking native checks with one owned JSC prebuild")[1]!;
   expect(build).toContain("steps.jsc-prebuild-cache.outputs.cache-hit");
   expect(build).toContain("bash scripts/build-jsc.sh");
   expect(rust).not.toContain("steps.jsc-cache");
@@ -544,7 +544,7 @@ test("cold and restored JSC setup install Binaryen before sourcing common.sh", (
   expect(setup).toContain("bun scripts/ci-binaryen.ts");
   expect(setup).not.toContain("needs.quality.outputs.jsc");
   expect(setup).not.toContain("cache-hit");
-  expect(rust.indexOf(setup)).toBeLessThan(rust.indexOf("name: Build or validate the single JSC prebuild"));
+  expect(rust.indexOf(setup)).toBeLessThan(rust.indexOf("name: Blocking native checks with one owned JSC prebuild"));
 });
 
 test("Binaryen pin and installer identity participate in tool, fallback and JSC caches", () => {
@@ -735,4 +735,276 @@ test("native v4 fallback still excludes incompatible environment and toolchain i
     changed.set(path, Buffer.concat([readFileSync(new URL(`../${path}`, import.meta.url)), Buffer.from("\nchanged input\n")]));
     expect(saved.startsWith(expandNativeKey(prefix, changed))).toBe(false);
   }
+});
+
+const overlapStepName = "Blocking native checks with one owned JSC prebuild";
+
+function overlapScript(): string {
+  return workflowString(workflowField(nativeWorkflowStep("name", overlapStepName), "run"));
+}
+
+function replaceWorkload(script: string, functionName: string, body: string): string {
+  const pattern = new RegExp(`^${functionName}\\(\\) \\{\\n[^]*?^\\}`, "m");
+  if (!pattern.test(script)) throw new Error(`Missing owned workload: ${functionName}`);
+  return script.replace(pattern, () => `${functionName}() {\n${body}\n}`);
+}
+
+test("only the disjoint prebuild overlaps the unchanged sequential native gates", () => {
+  const script = overlapScript();
+  const step = nativeWorkflowStep("name", overlapStepName);
+  expect(workflowField(step, "shell")).toBe("bash");
+  expect(workflowField(step, "env")).toEqual({
+    CI_JSC_SELECTED: "${{ needs.quality.outputs.jsc }}",
+    CI_JSC_PREBUILD_HIT: "${{ steps.jsc-prebuild-cache.outputs.cache-hit }}",
+  });
+  const before = rust.slice(0, rust.indexOf(`name: ${overlapStepName}`));
+  for (const prerequisite of ["Build patched WASI sysroot", "Preserve unchanged build-script input timestamps", "Configure private JSC build paths", "id: jsc-prebuild-cache", "id: jsc-cargo-cache"]) {
+    expect(before).toContain(prerequisite);
+  }
+  const native = script.match(/^run_native_checks\(\) \{\n([^]*?)^\}/m)?.[1] ?? "";
+  const commands = ["bun run quality --native", "cargo test --locked", "bun scripts/quality-input-times.ts", "cargo build --release --locked -j 2 -p bunwasm-host", "guest-build-receipt.ts inputs", "cargo build --release --locked -j 2 --target wasm32-wasip1", "guest-build-receipt.ts write dist/bun.wasm", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts"];
+  const positions = commands.map(command => native.indexOf(command));
+  expect(positions).toEqual(positions.toSorted((a, b) => a - b));
+  for (const command of commands) expect(native).toContain(command);
+  const prebuild = script.match(/^run_jsc_prebuild\(\) \{\n([^]*?)^\}/m)?.[1] ?? "";
+  expect(prebuild).toContain('export JOBS=2 CAGE=');
+  expect(prebuild).toContain('if [[ "$CI_JSC_PREBUILD_HIT" == \'true\' ]]; then');
+  expect(prebuild).toContain("check_jsc_inputs_stamp");
+  expect(prebuild.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
+  expect(prebuild).not.toContain("cargo");
+  expect(script.indexOf("trap cleanup EXIT")).toBeLessThan(script.indexOf("  set -m"));
+  expect(script).toContain(') > "$jsc_log" 2>&1 &\n  jsc_pid=$!');
+  expect(script).toContain("set +m\n    trap - EXIT INT TERM\n    run_jsc_prebuild");
+  expect(script).toContain('run_native_checks\nif [[ -n "$jsc_pid" ]]; then\n  wait "$jsc_pid"\nfi');
+  expect(script).not.toContain("tee");
+});
+
+type OverlapControl = { selected?: boolean; nativeFirst?: boolean; nativeStatus?: number; jscStatus?: number; signal?: "SIGINT" | "SIGTERM" };
+
+async function waitForControlFile(path: string): Promise<string> {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const value = await Bun.file(path).exists() ? readFileSync(path, "utf8") : "";
+    if (value) return value;
+    await Bun.sleep(5);
+  }
+  throw new Error(`Synthetic overlap did not reach ${path}`);
+}
+
+function controlWorkloads(): string {
+  const jsc = `
+  printf '%s' "$BASHPID" > "$RUNNER_TEMP/jsc-pid"
+  printf 'prebuild stderr retained\\n' >&2
+  bash -c 'printf "%s" "$$" > "$RUNNER_TEMP/descendant-pid"; exec sleep 30' &
+  descendant=$!
+  while [[ ! -f "$RUNNER_TEMP/jsc-release" ]]; do sleep 0.01; done
+  if [[ "$(cat "$RUNNER_TEMP/jsc-release")" == 0 ]]; then
+    kill "$descendant"
+    wait "$descendant" || true
+  fi
+  printf 'jsc-done\\n' >> "$RUNNER_TEMP/events"
+  return "$(cat "$RUNNER_TEMP/jsc-release")"`;
+  const native = `
+  printf 'native-start\\n' >> "$RUNNER_TEMP/events"
+  while [[ ! -f "$RUNNER_TEMP/native-release" ]]; do read -r -t 0.02 _ || true; done
+  printf 'native-done\\n' >> "$RUNNER_TEMP/events"
+  return "$(cat "$RUNNER_TEMP/native-release")"`;
+  return replaceWorkload(replaceWorkload(overlapScript(), "run_jsc_prebuild", jsc), "run_native_checks", native);
+}
+
+async function checkOverlapControl(control: OverlapControl) {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-owned-prebuild-"));
+  const child = Bun.spawn(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", controlWorkloads()], {
+    env: { ...process.env, RUNNER_TEMP: directory, CI_JSC_SELECTED: String(control.selected !== false) },
+    stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  const outsider = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+  const output = new Response(child.stdout).text();
+  const errors = new Response(child.stderr).text();
+  try {
+    await waitForControlFile(join(directory, "events"));
+    if (control.selected !== false) await waitForControlFile(join(directory, "descendant-pid"));
+    await releaseOverlapControl(control, directory, child);
+    const status = await waitForControlExit(child);
+    expect(status).toBe(control.signal === "SIGINT" ? 130 : control.signal === "SIGTERM" ? 143 : control.nativeStatus || control.jscStatus || 0);
+    expect(outsider.exitCode).toBeNull();
+    expect(await errors).not.toContain("unbound variable");
+    await assertOverlapOutcome(control, directory, await output);
+  } finally {
+    // The fallback kills only the group whose PID the synthetic workload recorded.
+    const pidFile = join(directory, "jsc-pid");
+    if (await Bun.file(pidFile).exists()) signalOwnedGroup(Number(readFileSync(pidFile, "utf8")));
+    if (child.exitCode === null) child.kill("SIGKILL");
+    outsider.kill();
+    await Promise.all([child.exited, outsider.exited, output, errors]);
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+async function waitForControlExit(child: ReturnType<typeof Bun.spawn>): Promise<number> {
+  const deadline = Date.now() + 3000;
+  while (child.exitCode === null && Date.now() < deadline) await Bun.sleep(5);
+  if (child.exitCode === null) throw new Error("Owned overlap did not exit");
+  return child.exited;
+}
+
+function signalOwnedGroup(pid: number) {
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error(`Invalid owned process group: ${pid}`);
+  try { process.kill(-pid, "SIGKILL"); }
+  catch (error) { if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error; }
+}
+
+async function releaseOverlapControl(control: OverlapControl, directory: string, child: ReturnType<typeof Bun.spawn>) {
+  if (control.signal) {
+    if (control.nativeFirst) await releaseNativeForJoin(directory);
+    child.kill(control.signal);
+    return;
+  }
+  if (control.selected === false || control.nativeStatus) {
+    writeFileSync(join(directory, "native-release"), String(control.nativeStatus ?? 0));
+    return;
+  }
+  const first = control.nativeFirst ? "native" : "jsc";
+  const second = control.nativeFirst ? "jsc" : "native";
+  writeFileSync(join(directory, `${first}-release`), String(first === "jsc" ? control.jscStatus ?? 0 : 0));
+  await waitForEvent(directory, `${first}-done`);
+  expect(child.exitCode).toBeNull();
+  writeFileSync(join(directory, `${second}-release`), String(second === "jsc" ? control.jscStatus ?? 0 : 0));
+}
+
+async function releaseNativeForJoin(directory: string) {
+  writeFileSync(join(directory, "native-release"), "0");
+  await waitForEvent(directory, "native-done");
+}
+
+async function waitForEvent(directory: string, event: string) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (readFileSync(join(directory, "events"), "utf8").includes(event)) return;
+    await Bun.sleep(5);
+  }
+  throw new Error(`Missing overlap event: ${event}`);
+}
+
+async function assertOverlapOutcome(control: OverlapControl, directory: string, output: string) {
+  if (control.selected === false) {
+    expect(output).toBe("");
+    expect(await Bun.file(join(directory, "jsc-pid")).exists()).toBe(false);
+    expect(await Bun.file(join(directory, "jsc-prebuild.log")).exists()).toBe(false);
+    return;
+  }
+  expect(output).toContain("prebuild stderr retained");
+  expect(readFileSync(join(directory, "jsc-prebuild.log"), "utf8")).toContain("prebuild stderr retained");
+  for (const file of ["jsc-pid", "descendant-pid"]) {
+    const pid = Number(readFileSync(join(directory, file), "utf8"));
+    await waitForProcessExit(pid);
+  }
+}
+
+function processExists(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error;
+    return false;
+  }
+}
+
+async function waitForProcessExit(pid: number) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (!processExists(pid)) return;
+    await Bun.sleep(5);
+  }
+  throw new Error(`Owned process ${pid} survived cleanup`);
+}
+
+for (const [label, control] of [
+  ["native finishes first", { nativeFirst: true }],
+  ["prebuild finishes first", {}],
+  ["native fails", { nativeStatus: 37 }],
+  ["prebuild fails", { jscStatus: 42 }],
+  ["cancel with SIGINT", { signal: "SIGINT" }],
+  ["cancel with SIGTERM", { signal: "SIGTERM" }],
+  ["cancel join with SIGINT", { signal: "SIGINT", nativeFirst: true }],
+  ["cancel join with SIGTERM", { signal: "SIGTERM", nativeFirst: true }],
+  ["JSC unselected", { selected: false }],
+] satisfies [string, OverlapControl][]) {
+  test(`extracted owned prebuild lifecycle: ${label}`, () => checkOverlapControl(control), 10000);
+}
+
+test("the owned scheduling fragment changes exact native keys without widening fallback compatibility", () => {
+  const changedWorkflow = workflow.replace("          run_native_checks\n", "          run_native_checks # changed producer\n");
+  expect(changedWorkflow).not.toBe(workflow);
+  for (const { id, saveName, compatible } of [
+    { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", compatible: false },
+    { id: "native-cache", saveName: "Save the complete native fallback once per input revision", compatible: true },
+  ]) {
+    const contract = nativeCacheContract(id, saveName);
+    const inputs = nativeCacheInputs(contract.primary);
+    const saved = expandNativeKey(contract.primary, inputs);
+    inputs.set(".github/workflows/ci.yml", Buffer.from(changedWorkflow));
+    expect(expandNativeKey(contract.primary, inputs)).not.toBe(saved);
+    expect(expandNativeKey(contract.save, inputs)).toBe(expandNativeKey(contract.primary, inputs));
+    expect(saved.startsWith(expandNativeKey(contract.prefix, inputs))).toBe(compatible);
+  }
+});
+
+for (const hit of [false, true]) {
+  test(`extracted JSC branch propagates ${hit ? "stamp validation" : "builder"} failure without leaking its environment`, () => {
+    const directory = mkdtempSync(join(tmpdir(), "bun-wasm-prebuild-branch-"));
+    try {
+      mkdirSync(join(directory, "jsc"));
+      mkdirSync(join(directory, "scripts"));
+      writeFileSync(join(directory, "env.sh"), "export JSC_CHILD_ONLY=private\n");
+      writeFileSync(join(directory, "jsc/common.sh"), 'check_jsc_inputs_stamp() { echo stamp-rejected >&2; return 43; }\n');
+      writeFileSync(join(directory, "scripts/build-jsc.sh"), 'echo build-rejected >&2\nexit 44\n');
+      const script = replaceWorkload(overlapScript(), "run_native_checks", '  test "${JSC_CHILD_ONLY-unset}" = unset\n  test "${JOBS-unset}" = unset\n  test "${CAGE-unset}" = unset');
+      const env = { ...process.env, RUNNER_TEMP: directory, CI_JSC_SELECTED: "true", CI_JSC_PREBUILD_HIT: String(hit) };
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], { cwd: directory, env, encoding: "utf8", timeout: 3000 });
+      expect(result.status).toBe(hit ? 43 : 44);
+      expect(result.stdout).toContain(hit ? "stamp-rejected" : "build-rejected");
+      expect(result.stdout).not.toContain(hit ? "build-rejected" : "stamp-rejected");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+test("extracted foreground commands fail on an intermediate pipeline, not just the last command", () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-native-failure-"));
+  try {
+    const script = replaceWorkload(overlapScript(), "run_native_checks", '  false | true\n  echo masked-failure');
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+      env: { ...process.env, RUNNER_TEMP: directory, CI_JSC_SELECTED: "false" }, encoding: "utf8", timeout: 3000,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).not.toContain("masked-failure");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("cancellation between fork and PID capture still reaps the sole owned group", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-prebuild-fork-signal-"));
+  try {
+    const script = controlWorkloads().replace('  jsc_pid=$!', () => '  while [[ ! -s "$RUNNER_TEMP/descendant-pid" ]]; do sleep 0.01; done\n  kill -TERM "$$"\n  jsc_pid=$!');
+    expect(script).not.toBe(controlWorkloads());
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+      env: { ...process.env, RUNNER_TEMP: directory, CI_JSC_SELECTED: "true" }, encoding: "utf8", timeout: 3000,
+    });
+    expect(result.status).toBe(143);
+    await assertOverlapOutcome({ signal: "SIGTERM" }, directory, result.stdout);
+  } finally {
+    const pidFile = join(directory, "jsc-pid");
+    if (await Bun.file(pidFile).exists()) signalOwnedGroup(Number(readFileSync(pidFile, "utf8")));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed diagnostic display cannot replace the real prebuild exit status", () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-prebuild-status-"));
+  try {
+    const script = replaceWorkload(replaceWorkload(overlapScript(), "run_jsc_prebuild", "  return 42"), "run_native_checks", "  true")
+      .replace('cat "$jsc_log"', "false");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+      env: { ...process.env, RUNNER_TEMP: directory, CI_JSC_SELECTED: "true" }, encoding: "utf8", timeout: 3000,
+    });
+    expect(result.status).toBe(42);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });
