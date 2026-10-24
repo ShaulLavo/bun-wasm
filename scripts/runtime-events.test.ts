@@ -41,6 +41,8 @@ test("emitted events retains publication rollback, once identity and strict rece
       if (type === "reject") throw rejection;
     },
   });
+  expect(EventEmitter.prototype._events).toBeUndefined();
+  expect(() => EventEmitter.prototype._events["never"]).toThrow();
   const emitter = new EventEmitter();
   function listener() {}
   expect(() => emitter.on("reject", listener)).toThrow(rejection);
@@ -90,6 +92,7 @@ const id: number = asyncEmitter.asyncResource.asyncId();
 
 const invalid: [string, string][] = [
   ["listener value", 'emitter.on("event", 7);'],
+  ["prototype storage", 'EventEmitter.prototype._events["never"];'],
   ["prototype listener", 'EventEmitter.prototype.on("event", 7);'],
   ["event name", 'emitter.emit({}, 1);'],
   ["capture option", 'new EventEmitter({ captureRejections: "yes" });'],
