@@ -86,6 +86,7 @@ declare namespace BunWasm {
   interface RuntimeProcess {
     cwd(): string;
     nextTick?(callback: (this: unknown, ...args: unknown[]) => unknown, ...args: unknown[]): void;
+    emitWarning?(warning: Error): void;
     emitWarning?(message: string, kind?: string, code?: string): void;
     noDeprecation?: boolean;
     throwDeprecation?: boolean;
@@ -251,7 +252,22 @@ declare namespace BunWasm {
 declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;
 declare namespace BunWasm {
   interface StackFrame { file: string; name: string; line: number; column: number }
-  interface ConsoleInspector { parseStack(raw: unknown): StackFrame[] }
+  interface InspectOptions {
+    showHidden?: boolean; depth?: number | null; colors?: boolean; customInspect?: boolean;
+    showProxy?: boolean; maxArrayLength?: number | null; maxStringLength?: number | null;
+    breakLength?: number; compact?: boolean | number; sorted?: boolean | ((a: string, b: string) => number);
+    getters?: boolean | "get" | "set"; numericSeparator?: boolean;
+  }
+  interface InspectFunction {
+    (value: unknown, options?: InspectOptions): string;
+    defaultOptions?: InspectOptions;
+    colors?: Record<string, number[]>;
+    styles?: Record<string, string>;
+  }
+  interface ConsoleInspector {
+    nodeInspect: InspectFunction;
+    parseStack(raw: unknown): StackFrame[];
+  }
   interface StackCallSite {
     getFileName(): string;
     getFunctionName(): string | null;

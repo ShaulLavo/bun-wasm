@@ -334,11 +334,14 @@ because those groups keep behaviour identical:
   The fix belongs in `src/js/node_test.ts` `register`: accept an optional leading name and
   take the name from the function when it is missing. Add both calls to the
   `runtime-ts-node-test` fixture and regenerate its expected output with native Bun.
-- `Bun.JSONL` differs from native Bun 1.4.2 in these cases (probed with native `bun` and the
+- `Bun.JSONL` token and separator parity is implemented in `src/js/jsonl.ts`, pending
+  parent review. The `jsonl-parity` fixture covers the following original counterexamples
+  and UTF-8 slices, separators, and incremental replay. Bun 1.4.4 matches the preserved
+  Bun 1.4.2 control byte-for-byte. Before the fix, these cases differed (probed with native `bun` and the
   emitted factory; the conversion keeps them unchanged, and the `runtime-ts-jsonl` fixture
   covers only the cases where both agree):
 
-  | Call | Native Bun 1.4.2 | bun-wasm |
+  | Call | Native Bun 1.4.2 | bun-wasm before fix |
   | --- | --- | --- |
   | `parseChunk('"a\\u00')` | error | incomplete, `error: null` |
   | `parseChunk("1e+")` | `values: [1]`, `read: 1`, error | incomplete |
@@ -351,8 +354,8 @@ because those groups keep behaviour identical:
   Native values must be newline-separated, and some malformed tokens read as incomplete.
   Bun's `jsFunctionJSONLParseChunk` (`src/jsc/bindings/BunObject.cpp`) delegates to
   `JSC::streamingJSONParse` in Bun's WebKit fork (`Source/JavaScriptCore/runtime/JSONObject.cpp`
-  at the pinned WebKit commit). Port its token and separator rules into `src/js/jsonl.ts`, then
-  add these calls to the fixture and regenerate it with `scripts/test.sh --update`.
+  at the pinned WebKit commit). The port keeps Rust-backed value materialization and
+  the iterative container stack. Regenerate the fixture with `scripts/test.sh --update jsonl-parity`.
 - `node:url` differs from native Bun 1.4.2 in three calls. The `runtime-ts-url-decoder`
   fixture leaves them out:
 

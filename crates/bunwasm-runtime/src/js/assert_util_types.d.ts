@@ -1,17 +1,5 @@
 declare namespace BunWasm {
   interface UtilityError extends Error { code?: string; reason?: unknown }
-  interface InspectOptions {
-    showHidden?: boolean; depth?: number | null; colors?: boolean; customInspect?: boolean;
-    showProxy?: boolean; maxArrayLength?: number | null; maxStringLength?: number | null;
-    breakLength?: number; compact?: boolean | number; sorted?: boolean | ((a: string, b: string) => number);
-    getters?: boolean | "get" | "set"; numericSeparator?: boolean;
-  }
-  interface InspectFunction {
-    (value: unknown, options?: InspectOptions): string;
-    defaultOptions?: InspectOptions;
-    colors?: Record<string, number[]>;
-    styles?: Record<string, string>;
-  }
   interface AssertionOptions {
     actual?: unknown; expected?: unknown; message?: unknown; operator: string; stackStartFn?: Function;
   }
@@ -23,7 +11,6 @@ declare namespace BunWasm {
     types: { isRegExp(value: unknown): value is RegExp; isNativeError(value: unknown): value is Error };
   }
   interface ConsoleInspector {
-    nodeInspect: InspectFunction;
     nodeFormat: { (...args: unknown[]): string; apply(receiver: unknown, args: IArguments): string };
     nodeFormatWithOptions: { (options: InspectOptions, ...args: unknown[]): string; apply(receiver: unknown, args: IArguments): string };
   }
