@@ -131,6 +131,34 @@ for (const [label, source] of candidates) {
     await expect(rejected).rejects.toBe(f.failure);
   });
 
+  test(`${label}: custom bind results retain their shared host-table receiver`, async () => {
+    const calls: { name: Operation; receiver: unknown; args: unknown[] }[] = [];
+    const provider = Object.fromEntries(methods.map(name => {
+      const method = () => { throw new Error("Unbound method must not run"); };
+      Object.defineProperty(method, "bind", { value(receiver: unknown) {
+        expect(receiver).toBe(provider);
+        return function (this: unknown, ...args: unknown[]) {
+          calls.push({ name, receiver: this, args });
+          return Promise.resolve(name === "verify" ? true : new ArrayBuffer(1));
+        };
+      } });
+      return [name, method];
+    }));
+    install(source(), { crypto: { isWasmKey: () => false }, native: { subtleCrypto: provider } });
+    const key = new FixtureKey(), bytes = Uint8Array.of(1);
+    for (const name of ["sign", "verify", "encrypt", "decrypt"] as const) {
+      await invoke(Reflect.get(provider, name), provider, ["HMAC", key, bytes, bytes]);
+    }
+    const receiver = calls[0]?.receiver;
+    expect(receiver).not.toBe(provider);
+    expect(Object.keys(Object(receiver))).toEqual(methods);
+    expect(calls.map(call => call.name)).toEqual(["sign", "verify", "encrypt", "decrypt"]);
+    for (const call of calls) {
+      expect(call.receiver).toBe(receiver);
+      expect(call.args).toEqual(["HMAC", key, bytes, bytes]);
+    }
+  });
+
   test(`${label}: disabled and falsy providers never read crypto methods`, () => {
     for (const provider of [undefined, null, false, 0, ""]) {
       install(source(), { crypto: {}, native: { subtleCrypto: provider } });
