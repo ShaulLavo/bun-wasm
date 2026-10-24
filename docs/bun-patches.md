@@ -158,7 +158,8 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-crypto-sys/`, standalone crypto linkage](#standalone-crypto-linkage) | Host feature | Original native archive owner shared by runtime and parser/glue consumers. |
 | [`third_party/licenses/boringssl-LICENSE`](#webcrypto-backend) | Port | Retain BoringSSL license notices with the wasm backend. |
 | [`crates/bunwasm-runtime/src/crypto.rs`, GCM adapter and `third_party/licenses/aes-gcm-MIT`](#webcrypto-backend) | Port | Adapt RustCrypto GCM to WebCrypto nonce and tag lengths. |
-| [`crates/bunwasm-runtime/src/js/crypto_keys.js` and `crypto_host_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
+| [`crypto_host_keys.ts` and `crypto_host_types.d.ts`](#host-key-typescript-contracts) | Host feature | Strict original host-key bridge contracts with ordered provider capture and typed snapshots. |
+| [`crates/bunwasm-runtime/src/js/crypto_keys.js` and `crypto_host_keys.ts`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
 | [`crates/bunwasm-runtime/src/js/crypto.js`, shared key adapters and `web/src/engine-host.js` provider capture`](#webcrypto-backend) | Host feature | Original WebCrypto validation and opaque keys over RustCrypto. |
 | [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. |
@@ -1504,7 +1505,7 @@ No upstream source was copied or changed for these corrections.
 
 ### Node key review corrections
 
-Class **Host feature**. The original `crypto_host_keys.js` adapter retains the browser's
+Class **Host feature**. The original `crypto_host_keys.ts` adapter retains the browser's
 native provider and connects its asynchronous keys to synchronous Node key records. It
 imports wasm keys into that provider before native operations. Matching native KeyObject
 roundtrips retain their native CryptoKey. Secret conversion uses raw material instead of
@@ -3410,3 +3411,23 @@ receipt. Blocking CI selects it for JSC embedding, allocation, build and fixture
 inputs. The Rust job reuses its toolchain, sources and dependencies;
 it builds JSC once and executes both fixtures against that linked guest in the
 Node WASI host. QuickJS and host syntax checks are not JSC execution evidence.
+
+## Host-key TypeScript contracts
+
+Class **Host feature**. `crates/bunwasm-runtime/src/js/crypto_host_keys.ts` and
+`crypto_host_types.d.ts` are original adapters, not copied upstream implementations.
+The source is the local host-key adapter at `ac43127c85addabed7e0c2a4883247ae074e858c`.
+The contracts describe native CryptoKeys, structured import and export data, and
+operation-specific asynchronous results. The provider still validates formats,
+algorithms, usages and data. Missing byte arguments remain native validation inputs.
+
+The approved executable changes replace the two dynamic method tables with explicit
+captures followed by explicit bindings, tag cloned import data, and replace the
+four-operation loop with named adapters sharing a result-generic implementation.
+The hidden conversion cache uses one `get` instead of `has` followed by `get`.
+The import bridge reads the tagged clone instead of repeating the format branch.
+All other factory statements retain their original AST, including the strict
+directive and final receiver-aware wrappers. Type erasure preserves the new source's
+executable token lines and columns; the restructure does not preserve old locations.
+The original snapshot is test data with a pinned SHA-256, not a second runtime.
+No portable key implementation, native engine, or cryptographic algorithm changes.

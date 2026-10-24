@@ -13,7 +13,7 @@ if [[ "$phase" != --browser ]]; then
   (
     cd "$root/web"
     node_modules/.bin/tsc -p ../crates/bunwasm-runtime/tsconfig.json
-    bun test ../scripts/runtime-emission.test.ts ../scripts/runtime-types.test.ts ../scripts/runtime-signal-dispatch.test.ts ../scripts/worker-codec.test.ts ../scripts/worker-selectors.test.ts ../scripts/worker-outcome.test.ts ../scripts/spawn-runtime-proc.test.ts ../scripts/spawn-path.test.ts ../scripts/native-fixture-launchers.test.ts
+    bun test ../scripts/crypto-host-keys.test.ts ../scripts/runtime-emission.test.ts ../scripts/runtime-types.test.ts ../scripts/runtime-signal-dispatch.test.ts ../scripts/worker-codec.test.ts ../scripts/worker-selectors.test.ts ../scripts/worker-outcome.test.ts ../scripts/spawn-runtime-proc.test.ts ../scripts/spawn-path.test.ts ../scripts/native-fixture-launchers.test.ts
     bun test ../scripts/icu-inputs.test.ts ../scripts/jsc-inputs.test.ts
     bun test ../scripts/run-with-timeout.test.ts ../scripts/runtime-installed.test.ts ../scripts/runtime-size.test.ts
     bun run test

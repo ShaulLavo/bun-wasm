@@ -12,6 +12,7 @@
         "scripts/bench/error-construction.js",
         "tests/package/fixtures/vite-main.ts",
         "scripts/*.test.ts",
+        "scripts/fixtures/crypto-host-native-control.ts",
         "scripts/bench-module-preparation.ts",
         "scripts/bun-suite-small-causes.ts",
         "scripts/check-await-observer.ts",

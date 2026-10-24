@@ -268,6 +268,16 @@ Temporal operations, byte conversion and YAML coercion. The CI-discovered
 and Intl fixtures without adding a native build. Verification records are under
 `/work/reports/bun-wasm/ts-small-20261024/`.
 
+The host-key group converts only `crypto_host_keys.js` at pinned PR140 source
+`ac43127c85addabed7e0c2a4883247ae074e858c`. The approved bounded restructure
+uses explicit method tables, result-preserving operation adapters and tagged import
+snapshots. Portable crypto and native engines remain unchanged. The script suite
+has one blocking owner in `scripts/test-web-host.sh --unit`; the focused runtime
+fixture belongs to the existing native fixture step. Original and converted
+instrumented controls cover getters, receivers, promises, coercion and cache identity.
+Position checks compare emitted JavaScript with the new TypeScript, not the old file.
+Verification records belong to `/work/reports/bun-wasm/ts-host-crypto-keys-20261024/`.
+
 Remaining files, reconciled with main `e0c85f29` and these three TypeScript groups:
 
 - `crates/bunwasm-runtime/src/js/assert.js`
@@ -282,7 +292,6 @@ Remaining files, reconciled with main `e0c85f29` and these three TypeScript grou
 - `crates/bunwasm-runtime/src/js/bun_test.js`
 - `crates/bunwasm-runtime/src/js/console_constructor.js`
 - `crates/bunwasm-runtime/src/js/console.js`
-- `crates/bunwasm-runtime/src/js/crypto_host_keys.js`
 - `crates/bunwasm-runtime/src/js/crypto.js`
 - `crates/bunwasm-runtime/src/js/crypto_keys.js`
 - `crates/bunwasm-runtime/src/js/events.js`
