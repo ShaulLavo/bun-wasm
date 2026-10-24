@@ -280,6 +280,15 @@ and Intl fixtures without adding a native build. Verification records are under
 `/work/reports/bun-wasm/ts-small-20261024/`.
 
 
+Small host-tool slice, 2026-10-24: `scripts/app-matrix/classify.mjs` becomes
+strict `classify.ts` against main `9a39a9ad`. Only its imports and source identity
+inventory change. Readonly row contracts retain caller fields; diagnostics,
+stage boundaries and QuickJS-only reclassification stay unchanged. Focused runtime
+and positive/negative type tests belong to `quality:probes`; ordinary scripts
+checking owns the source. This delivers one host-tool slice, not the remaining
+runtime conversion. Evidence is under
+`/work/reports/wave-20261022/bun-wasm/reboot-20261024-0930/classify-ts/`.
+
 Remaining files after the stack/builtin and cookie/data-format/Intl conversions:
 
 - `crates/bunwasm-runtime/src/js/assert.js`
