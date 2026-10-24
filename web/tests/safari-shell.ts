@@ -28,9 +28,34 @@ async function checkEngine(driver: Driver, origin: string, engine: string) {
   assert.equal(recovered.status, 0); assert.match(String(recovered.text), /SHELL_RECOVERED/);
   return { engine, ready, ...interrupted, recovered };
 }
+export function assertShellConsumerResult(value: unknown) {
+  const result = object(value);
+  assert.ok(Array.isArray(result.results), "consumer results");
+  const rows = result.results.map(object);
+  assert.deepEqual(rows.map(row => row.name), ["lookup", "files-cwd-env-exit9", "epipe", "nested-stdin", "live-ticker", "binary", "interrupt", "preview"]);
+  assert.ok(rows.every(row => row.ok === true), JSON.stringify(rows));
+  return result;
+}
+async function checkConsumer(driver: Driver, origin: string) {
+  await driver.navigate(`${origin}/`);
+  const result = assertShellConsumerResult(await driver.evaluate("const end=Date.now()+30000;while(!globalThis.shellConsumer){if(Date.now()>end)throw Error('consumer startup timed out');await new Promise(r=>setTimeout(r,25));}return await globalThis.shellConsumer.exercise();"));
+  const preview = await driver.evaluate("const frame=document.createElement('iframe');const loaded=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('preview timed out')),30000);frame.onload=()=>{clearTimeout(timer);resolve(frame.contentDocument.body.innerText);};});frame.src='/__preview/31976/';document.body.append(frame);return await loaded;");
+  assert.equal(preview, "REAL_SHELL_PREVIEW", "shared service worker serves the real Bun preview");
+  assert.deepEqual(object(await driver.evaluate("return globalThis.safariObservations;")).pageErrors, []);
+  return { engine: "consumer", result, preview };
+}
+async function cleanupConsumer(driver: Driver) {
+  const released = await driver.evaluate("return await globalThis.shellConsumer?.cleanup();");
+  assert.deepEqual(released, { workers: 0, listeners: 0, pageListeners: 0, sessions: 0, borrowerPreservedUntilOwnerDisposal: true });
+  return released;
+}
 async function clearWorkspace(driver: Driver, origin: string) {
   await driver.navigate(`${origin}/cleanup.html`);
   await driver.evaluate("for(const db of await indexedDB.databases()){await new Promise((resolve,reject)=>{const r=indexedDB.deleteDatabase(db.name);r.onsuccess=resolve;r.onerror=()=>reject(r.error);r.onblocked=()=>reject(Error('database blocked'));});}const root=await navigator.storage.getDirectory();for await(const name of root.keys())await root.removeEntry(name,{recursive:true});for(const registration of await navigator.serviceWorker.getRegistrations())await registration.unregister();for(const name of await caches.keys())await caches.delete(name);return true;");
+}
+async function recordConsumerCleanup(driver: Driver, rows: unknown[]) {
+  try { rows.push({ engine: "consumer-cleanup", ok: true, released: await cleanupConsumer(driver) }); }
+  catch (error) { rows.push({ engine: "consumer-cleanup", ok: false, error: String(error) }); process.exitCode = 1; }
 }
 async function cleanupResources(driver: Driver | undefined, servers: readonly ReturnType<typeof Bun.serve>[], cleanupErrors: string[]) {
   for (const server of servers) {
@@ -54,17 +79,21 @@ async function run() {
     assert.ok(driver);
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: respond }); servers.push(server);
     const origin = `http://127.0.0.1:${server.port}`;
-    try { rows.push({ origin, ok: true, ...await checkEngine(driver, origin, engine) }); }
+    try {
+      const result = engine === "consumer" ? await checkConsumer(driver, origin) : await checkEngine(driver, origin, engine);
+      rows.push({ origin, ok: true, ...result });
+    }
     catch (error) {
       rows.push({ engine, origin, ok: false, error: String(error), diagnostics: await driver.evaluate("return {text:globalThis.safariShellText?.(),running:globalThis.playground?.shell.running,status:globalThis.playground?.shell.lastExit};").catch(String) });
       process.exitCode = 1;
     }
-    console.log(JSON.stringify(rows.at(-1)));
+    if (engine === "consumer") await recordConsumerCleanup(driver, rows);
+    console.log(JSON.stringify(rows));
   }
   let capabilities: unknown;
   try {
     driver = await safariDriver(); capabilities = driver.capabilities;
-    for (const engine of ["quickjs", "jsc", "browser"]) await check(engine);
+    for (const engine of process.env.SAFARI_SHELL_CONSUMER === "1" ? ["consumer"] : ["quickjs", "jsc", "browser"]) await check(engine);
   } finally {
     clearTimeout(deadline); await cleanup();
     const report = { capabilities, rows, cleanup: { ok: cleanupErrors.length === 0, errors: cleanupErrors } };

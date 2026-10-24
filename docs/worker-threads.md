@@ -69,7 +69,7 @@ metadata for a child handle; it is never a worker pipe. Native completion closes
 the worker's input reader and output writer before publishing its result, so
 late parent writes fail with EPIPE while buffered worker output drains to EOF.
 These channels are separate from stdio selectors 0–2 and their inheritance modes.
-See [the host ABI](host-abi.md#bun-child-processes).
+See [the host ABI](host-abi.md#process-imports).
 
 Native `resourceLimits` maps the combined old and young heap limit to the guest's
 WebAssembly memory budget. Node hosts also pass limits to the physical V8 worker.
@@ -128,172 +128,6 @@ as event-loop callbacks. Exit drains the outgoing control pipe before host
 teardown. Worker streams have no cumulative subprocess capture limit.
 
 
-## Guest worker measurement
-
-The review-fix census corrects the initial result below. Error propagation had
-hidden five failing worker scripts. The same 120-file selection now passes
-64/120 on each engine, compared with the earlier 67/120. Nested uncaught errors
-and unref'd termination add two passing files. The five exposed API and
-diagnostic gaps are recorded in
-[the compatibility follow-ups](../plans/compatibility-followups.md#worker-errors-exposed-by-the-review-fixes).
-Observed assertion counters remain zero for these standalone Node scripts.
-QuickJS/JSC have no timeouts. The browser retains the one known 10,000-round-trip
-timeout at the unchanged fifteen-second deadline.
-
-The 16 process-level review cases pass on Node, native guests, Node-hosted guests,
-and all six Chromium/WebKit and engine combinations. Before the fixes, the three
-retained artifacts pass 2/16 each. The constructor-only case kept the parent
-alive until its external ten-second cutoff. Sender buffer and port ownership,
-two-million-byte exit messages, lifecycle listener exceptions, unref termination,
-both 70 MiB output streams and termination after exit are checked directly.
-Raw review evidence is retained at `/work/reports/bun-wasm-worker-r37/` until
-coordinator acceptance.
-
-After integrating main's Streams and persistence changes and the merged Step 1
-PR, the full fixture gates pass 175/175 per engine. The full web gate passes 266
-unit tests and all browser checks. Runtime units pass 212 tests; the runtime
-factory/type gate passes 24. Sandbox HMR passes all six browser/engine runs.
-The worker census remains 64/120 on every engine. Repeated Vite/React and Vitest
-rows retain six passing installs and twelve failed commands at Vite's bare `ws`
-lookup. The official esbuild synchronous worker check remains 0/3 because shared
-buffers cannot cross guest boundaries.
-
-Chromium's native structured clone can partially detach a transfer list before
-rejecting a WebAssembly memory buffer. The browser adapter tracks those buffers
-through the native getter and rejects the complete list before native transfer.
-The same mixed-buffer and constructor-rollback cases pass in Chromium and WebKit.
-
-### Initial guest execution measurement
-
-Measured 2026-10-17. The same 120 tracked `.js` files under Node's parallel
-suite contain a `new Worker` or namespaced Worker construction. The upstream
-suite revision is `cd95fa7a13b3f13be73e512b38ec111c1c228084`. The baseline is
-Step 1 at `8596b11a`; the tested worker implementation is `9f780ca4`, rebased
-onto the reviewed Step 1 revision `dba93905` and main through #34. This comparison
-also includes those intervening port-close and shared-filesystem fixes.
-
-| Engine | Fully passing before | Fully passing after | Observed passes before/after | Timeouts before/after |
-| --- | ---: | ---: | ---: | ---: |
-| QuickJS | 21/120 | 67/120 | 0/0 | 0/0 |
-| JSC | 21/120 | 67/120 | 0/0 | 0/0 |
-| Browser | 21/120 | 67/120 | 0/0 | 0/1 |
-
-That initial run reported forty-six additional clean exits on each engine. The
-review-fix measurement above corrects five false passes and adds two real passes.
-These are Node assertion scripts. A clean script exit counts as fully passing,
-including files which skip before constructing a worker. They report no individual
-assertion counts, so observed test passes remain zero. The browser timeout is
-`test-worker-message-port-message-before-close.js`, which runs 10,000 port round
-trips within the common fifteen-second file bound.
-
-`scripts/measure-worker-execution.sh` reproduces the exact selection with two jobs
-and a fifteen-second deadline on every engine. It warms the native module first.
-Build the launcher and engines in private targets, then run through the heavy wrapper:
-
-```sh
-source env.sh
-export CARGO_TARGET_DIR=/work/tmp/bun-wasm-worker-check-target
-bash /work/tmp/wave-heavy/run.sh --class suite worker-execution-census -- \
-  env PATH="$PATH" scripts/measure-worker-execution.sh quickjs \
-  /work/tmp/bun-wasm-worker-quickjs.json
-```
-
-Use `jsc` or `browser` for the other engines. The original baseline snapshot,
-selection, raw results, artifact hashes and exact gate scripts are retained in
-`/work/reports/bun-wasm-worker-execution/` until coordinator acceptance.
-
-The final batched gate passes 158 fixtures on each engine, 243 web unit tests,
-all six real-browser Worker runs, and all six HMR runs. The full web gate then
-fails in the independently confirmed main memory-growth regression at
-`web/tests/browser-memory.mjs:65`, where Chromium's guest command times out with
-`null !== 0`. That failure also appears in the
-[Step 1 independent review](https://github.com/ShaulLavo/bun-wasm/pull/31#issuecomment-6225280460).
-It remains an external gate blocker; this is not an all-green result.
-
-### Worker-dependent app checks
-
-Vite React and Vitest, including an explicit `--pool=threads` command, have the
-same results before and after. All six installs pass; none of their twelve app
-commands pass. They stop while Vite calls `import.meta.require("ws")`, before
-reaching their worker backend. The offline mirror has 1,295 entries, with no
-missing or corrupt records during either comparison.
-
-The unchanged `esbuild-wasm@0.25.12` synchronous fixture also remains at zero of
-three fully passing engine runs. QuickJS and the browser engine reach
-`DataCloneError` while cloning its SharedArrayBuffer. JSC stops because
-SharedArrayBuffer is unavailable. This feature does not supply shared memory
-between guests or force esbuild onto a different backend.
-
-```sh
-source env.sh
-scripts/app-matrix.sh --apps=vitest,vite-react --hosts=native \
-  --engines=quickjs,jsc,browser --timeout=45 --cache=/path/to/offline-mirror \
-  --launcher="$CARGO_TARGET_DIR/release/bun-wasm" --output=/path/to/results
-MATRIX_CACHE=/path/to/offline-mirror \
-  BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" \
-  ESBUILD_CHECKS=sync.cjs bun tests/esbuild/run.mjs
-```
-
-## Main-thread import measurement
-
-The unmodified first 160 tracked `.js` files under
-`test/js/node/test/parallel`, sorted by path, were measured before and after this
-change. The upstream revision, runner, dependencies, selection, and per-engine
-deadlines are identical within each comparison. The original runtime baseline is
-`f5d18cf`; the combined branch also includes the WebSocket builtin from
-`40f7956`, which the selected files do not import. These census records predate
-the closed-pipe merge `4da6a6b`; the required gates are repeated after rebasing
-onto that host change.
-
-| Engine | Fully passing files before | Fully passing files after | Observed test passes before/after | Timeouts before/after |
-| --- | ---: | ---: | ---: | ---: |
-| QuickJS | 0/160 | 61/160 | 0/0 | 0/1 |
-| JSC | 0/160 | 61/160 | 0/0 | 0/1 |
-| Browser | 0/160 | 60/160 | 0/0 | 0/0 |
-
-These are Node assertion scripts. The suite runner counts a clean script exit as
-a fully passing file and does not count its individual assertions. There are no
-newly failing files that previously passed. Before the change, the common helper
-stopped while importing `worker_threads`; after it, tests reach their own code.
-
-The browser censuses pass 59 or 60 files because
-`test-child-process-can-write-to-stdout.js` intermittently sees empty stdout in
-its exit listener. The timer-corrected artifact before rebasing onto the WebSocket
-builtin passed 59 files; two of three isolated repetitions on that wasm failed
-the stdout assertion, and one passed. The combined artifact after rebasing onto
-`40f7956` passes 60 files. The table uses that combined artifact's full census.
-Earlier measurements and all repetitions are retained.
-
-The newly reached timeout is `test-async-local-storage-http-agent.js`, which needs
-HTTP request streaming. The browser engine instead fails an earlier async-context
-assertion in that file. ALS default values, `node:test`, and other remaining gaps
-are recorded in [the compatibility follow-ups](../plans/compatibility-followups.md#node-parallel-tests-after-main-thread-worker-imports).
-
-QuickJS and browser runs use four jobs with a five-second file deadline. JSC runs
-use two jobs with a fifteen-second deadline. Native launcher modules are compiled
-once before the census. The first cold JSC attempt was interrupted because its
-five-second deadline expired before guest code ran; it is excluded from the table.
-The baseline builds use frozen copies of the original runtime factories through
-`BUNWASM_JS_OVERRIDE_DIR`. The added worker module is unreachable from those
-original factories.
-
-The selection and warm-up are reproducible with
-`scripts/measure-worker-threads.sh`. Run it through the heavy-job wrapper after
-building the chosen engine and the native launcher in a private Cargo target:
-
-```sh
-source env.sh
-export CARGO_TARGET_DIR=/work/tmp/bun-wasm-worker-threads-target
-bash /work/tmp/wave-heavy/run.sh --class suite worker-threads-census -- \
-  env PATH="$PATH" scripts/measure-worker-threads.sh quickjs \
-  /work/tmp/bun-wasm-worker-threads-new-quickjs.json
-```
-
-Use `jsc` or `browser` for the other engines. Raw before/after JSON, JSONL, build
-logs, gate logs, selection, and artifact hashes are retained in
-`/work/reports/bun-wasm-worker-threads/` until coordinator acceptance.
-
-
 ## Global Web Worker
 
 The global `Worker` constructor wraps the same guest execution as
@@ -336,55 +170,11 @@ with `--engine jsc` and `--engine browser`. The full web gate also runs
 `web/tests/browser-web-workers.ts` in
 Chromium and WebKit on all engines.
 
-### Global constructor measurement
+## Measurements
 
-Measured 2026-10-17 with the exact eleven `web-worker` cause files in
-`scripts/measure-web-workers.sh`. Each engine uses one job, loopback-only
-networking, a fifteen-second file deadline, and the same dependencies.
+These counts come from the upstream Bun suite at revision `5e0baa66516f3af00b008cdf1521c681317741e8`, run with `scripts/bun-suite.sh` through the measurement scripts below. Each script takes an engine (`quickjs`, `jsc` or `browser`) and a result path.
 
-| Engine | Fully passing files before/after | Observed assertions before/after | File timeouts before/after |
-| --- | ---: | ---: | ---: |
-| QuickJS | 0/11 → 3/11 | 22 → 60 | 0 → 0 |
-| JSC | 0/11 → 3/11 | 20 → 58 | 0 → 0 |
-| Browser | 0/11 → 3/11 | 23 → 61 | 0 → 0 |
-
-The newly passing files check `Bun.isMainThread`, Comlink, and MessagePort context
-destruction. Passing these checks does not establish leak freedom; unavailable
-heap counters remain a limitation of the suite adapters.
-
-No previously passing assertion fails or becomes unobserved afterward.
-All engines complete `worker.test.ts` with 31 passes and 11 failures.
-Earlier integration runs timed out in this file, including at a separate
-sixty-second diagnostic deadline. The final integration includes main's
-event-loop scheduling fixes and has no file timeouts.
-
-The baseline suite revision is `cd95fa7a13b3f13be73e512b38ec111c1c228084`; the final
-run uses `5e0baa66516f3af00b008cdf1521c681317741e8`. Their complete test trees are
-identical at `7d3cb10bd796680db5b458041eea9451944bdedf`; the intervening changes are
-Rust lint-driver edits. Dependency hashes and execution settings match. The
-runtime comparison also includes intervening main host changes through #56,
-the event-loop fixes in #42, and HTMLRewriter/X509 in #41.
-
-Remaining failures include the four-child budget, cross-guest SharedArrayBuffer,
-environment-proxy cloning, unsupported execution flags and VM APIs, loader-error
-diagnostics, BroadcastChannel close/inspection behavior, and shared object-URL
-lifetime. [The follow-up plan](../plans/compatibility-followups.md#global-web-worker-census)
-records the reproduction and affected adapters.
-
-The full fixture gates pass 211/211 on each engine, with no known-main exceptions.
-The full web gate, all six Chromium/WebKit global-Worker combinations, and all
-six sandbox HMR runs pass. The three lifetime assertions flagged by an earlier
-combined browser run also pass in a fresh, same-artifact filtered diagnostic.
-
-Raw results, source/dependency provenance, reproducer output, and exact gate
-scripts are retained at `/work/reports/bun-wasm-web-worker/` until coordinator
-acceptance. Build the launcher and all engines in private targets, then reproduce:
-
-```sh
-source env.sh
-export CARGO_TARGET_DIR=/work/tmp/bun-wasm-web-worker-check-target
-bash /work/tmp/wave-heavy/run.sh --class suite web-worker-census -- \
-  env PATH="$PATH" scripts/measure-web-workers.sh quickjs /work/tmp/bun-wasm-web-worker-quickjs.json
-```
-
-Repeat with `jsc` and `browser` and separate result paths.
+- `node:worker_threads` execution: of the 120 tracked files in Node's parallel suite that construct a `Worker`, 64 pass on each engine. The browser engine has one known timeout, a 10,000-round-trip test at the 15-second file deadline. The official esbuild synchronous worker check fails 0/3 because shared buffers cannot cross guest boundaries. Reproduce with `scripts/measure-worker-execution.sh <engine> <result.json>`.
+- Main-thread import: the first 160 files of `test/js/node/test/parallel` pass 61 (QuickJS), 61 (JSC) and 60 (browser), up from 0 before `worker_threads` existed. Reproduce with `scripts/measure-worker-threads.sh <engine> <result.json>`.
+- Global `Worker`: the eleven `web-worker` cause files pass 3/11 on every engine, with 60 (QuickJS), 58 (JSC) and 61 (browser) observed assertions. `worker.test.ts` completes with 31 passes and 11 failures on each engine. Reproduce with `scripts/measure-web-workers.sh <engine> <result.json>`.
+- Open gaps: the four-child budget, cross-guest `SharedArrayBuffer`, environment-proxy cloning, unsupported execution flags and VM APIs, loader-error diagnostics, `BroadcastChannel` close and inspection behavior, and shared object-URL lifetime.

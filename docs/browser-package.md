@@ -203,14 +203,13 @@ loaded hashes and byte counts, then uploads only the verified snapshot bytes.
 
 ```sh
 source env.sh
-export PLAYWRIGHT_BROWSERS_PATH=/work/cache/ms-playwright
+export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
 bun scripts/publish-guest.ts dist/bun-browser.wasm --output src/guest-asset.generated.ts
 ```
 
 To run the same acceptance without publishing, use
 `cd web && bun run test:browser:engine-interruption`. Set
 `BUN_WASM_INTERRUPTION_DIST=/absolute/full-build-directory` to select matching builds.
-On the PC, run either command through the shared heavy runner with `--class browser`.
 The harness records per-browser outcomes, exact artifact hashes, native wait samples,
 notify-removal negative controls and owned-resource cleanup in its JSON output.
 

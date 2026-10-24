@@ -11,6 +11,7 @@ interface BunRuntimeCommand {
 }
 export interface BunRuntimeScenario {
   name: string;
+  fileURLs?: Readonly<Record<string, string>>;
   commands: BunRuntimeCommand[];
   pipe?: "pipeline" | "input" | "signal";
   input?: string;
@@ -169,6 +170,13 @@ const workerHighFds = `const f=require('node:fs'),opened=[];if(process.env.BUNWA
 const workerControls = `const {Worker}=require('node:worker_threads');const worker=new Worker(${JSON.stringify(workerHighFds)},{eval:true});let message;worker.on('message',value=>{message=value});await new Promise((resolve,reject)=>{worker.on('error',reject);worker.on('exit',code=>code===0?resolve():reject(Error('Worker exit '+code)))});if(message!=='worker-high-fds-ok')throw Error('missing Worker control roundtrip');console.log(message);`;
 const ordinary: NonNullable<BunRuntimeCommand["fds"]> = [{ child: 0, parent: 0 }, { child: 1, parent: 1 }, { child: 2, parent: 2 }];
 const mainScenarios: BunRuntimeScenario[] = [
+  { name: "source-cache", fileURLs: { "/home/user/source-cache.ts": "/source-cache-fixture.ts" },
+    commands: [{ source: 'process.argv.push("--browser-cache"); await import("/home/user/source-cache.ts");' }],
+    stdout: "source cache: evaluated CommonJS identity and same-length reload pass\n"
+      + "source cache: changed dynamic-import spans and separate paths pass\n"
+      + "source cache: JSON identity and reload pass\n"
+      + "source cache: ESM import identity stays cached\n"
+      + "source cache: ESM-to-CommonJS bytes and imports refresh after deletion\nexternal-root-ok\n" },
   { name: "nested", commands: [{ source: `const p=Bun.spawn(['bun','-e',${JSON.stringify(nested)}],{stdin:'inherit',stdout:'inherit',stderr:'inherit'});if(await p.exited!==0)throw Error('child failed');console.log('nested-ok');` }], stdout: "nested-node\nnested-ok\nexternal-root-ok\n", stderr: "nested-err\n" },
   { name: "pipeline-merged", pipe: "pipeline", commands: [
     { source: `console.log('pipeline-out');console.error('pipeline-err');`, fds: [{ child: 0, parent: 0 }, { child: 1, parent: "writer" }, { child: 2, parent: "writer" }] },

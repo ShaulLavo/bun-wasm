@@ -1,0 +1,5 @@
+statement shapes, identity and metadata pass
+bindings and safe integer conversion pass
+transaction modes, receiver, nested rollback and error reuse pass
+cache, file ownership, serialization and close lifecycle pass
+owned database cleanup pass
