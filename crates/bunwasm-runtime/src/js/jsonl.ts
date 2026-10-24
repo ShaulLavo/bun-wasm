@@ -1,87 +1,102 @@
-// JSONL is a streaming JSON parser in native Bun's JSC bindings. Keep token
-// boundaries and progress here, and parse each complete value with Bun's Rust parser.
+// Token stopping and separator rules adapted from Bun WebKit LiteralParser.cpp.
+// Upstream revision and license are in docs/bun-patches.md#jsonl-streaming-tokens.
+// Complete values still use Bun's Rust parser.
 (function (internal: BunWasm.Internal) {
   "use strict";
   type State = "value" | "key" | "firstKey" | "colon" | "afterArray" | "afterObject" | "firstValue" | "complete";
-  type Fail = { end?: undefined; error?: true; incomplete?: true };
-  type Scan = { end: number; error?: undefined } | Fail;
-  type Step = { end: number; state: State; open?: State; close?: true } | Fail;
+  type Fail = { kind: "error" } | { kind: "incomplete" };
+  type Token = { kind: "value" | "string" | "punctuation" | "invalid"; end: number };
+  type Scan = Token | Fail;
+  type Step = { kind: "step"; end: number; state: State; open?: State; close?: true } | Fail;
   const native = internal.native;
   const formats = internal.require("formats");
   const ws = (c: string) => c === " " || c === "\n" || c === "\r" || c === "\t";
-  const tag = (token: Scan, state: State): Step => Object.assign(token, { state });
+  const failAt = (s: string, end: number): Fail => ({ kind: end === s.length ? "incomplete" : "error" });
 
   function stringToken(s: string, i: number): Scan {
     for (let p = i + 1; p < s.length; p++) {
-      if (s[p] === '"') return { end: p + 1 };
-      if (s.charCodeAt(p) < 32) return { error: true };
+      if (s[p] === '"') return { kind: "string", end: p + 1 };
+      if (s.charCodeAt(p) < 32) return { kind: "error" };
       if (s[p] !== "\\") continue;
       p++;
-      if (p === s.length) return { incomplete: true };
-      if (s[p] !== "u" && !'"\\/bfnrt'.includes(s[p])) return { error: true };
-      if (s[p] === "u") {
-        const part = s.slice(p + 1, p + 5);
-        if (!/^[0-9a-fA-F]*$/.test(part)) return { error: true };
-        if (part.length < 4) return { incomplete: true };
-        p += 4;
-      }
+      if (p === s.length) return { kind: "incomplete" };
+      if (s[p] !== "u" && !'"\\/bfnrt'.includes(s[p])) return { kind: "error" };
+      if (s[p] !== "u") continue;
+      if (!/^[0-9a-fA-F]{4}$/.test(s.slice(p + 1, p + 5))) return { kind: "error" };
+      p += 4;
     }
-    return { incomplete: true };
+    return { kind: "incomplete" };
   }
 
-  function scalar(s: string, i: number): Scan {
+  function numberToken(s: string, i: number): Scan {
+    const integer = /^-?(?:0|[1-9][0-9]*)/.exec(s.slice(i));
+    if (!integer) return failAt(s, i + 1);
+    let end = i + integer[0].length;
+    if (s[end] === ".") {
+      const fraction = /^\.[0-9]+/.exec(s.slice(end));
+      if (!fraction) return failAt(s, end + 1);
+      end += fraction[0].length;
+    }
+    const exponent = /^[eE][-+]?[0-9]+/.exec(s.slice(end));
+    if (exponent) end += exponent[0].length;
+    return { kind: "value", end };
+  }
+
+  function lex(s: string, i: number): Scan {
     const c = s[i];
     if (c === '"') return stringToken(s, i);
+    if (c === "-" || (c >= "0" && c <= "9")) return numberToken(s, i);
     const word = c === "t" ? "true" : c === "f" ? "false" : c === "n" ? "null" : null;
-    if (word) {
-      const part = s.slice(i, i + word.length);
-      if (!word.startsWith(part)) return { error: true };
-      return part.length < word.length ? { incomplete: true } : { end: i + word.length };
-    }
-    if (c !== "-" && !(c >= "0" && c <= "9")) return { error: true };
-    const rest = s.slice(i);
-    const token = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?/.exec(rest);
-    if (!token) return rest === "-" ? { incomplete: true } : { error: true };
-    const end = i + token[0].length;
-    if ((s[end] === "." || s[end] === "e" || s[end] === "E") && /^(?:\.[0-9]*)?(?:[eE][-+]?[0-9]*)?$/.test(s.slice(end))) return { incomplete: true };
-    return { end };
+    if (word && s.startsWith(word, i)) return { kind: "value", end: i + word.length };
+    if ("{}[]:(),.=;".includes(c)) return { kind: "punctuation", end: i + 1 };
+    const identifier = /^[A-Za-z_$][\w$\u200c\u200d]*/.exec(s.slice(i));
+    return { kind: "invalid", end: i + (identifier ? identifier[0].length : 0) };
   }
 
-  function keyToken(s: string, i: number, state: State): Step {
-    if (s[i] === "}" && state === "firstKey") return { end: i + 1, state: "complete", close: true };
-    if (s[i] !== '"') return { error: true };
-    return tag(stringToken(s, i), "colon");
+  function keyToken(s: string, i: number, state: State, token: Token): Step {
+    if (s[i] === "}" && state === "firstKey") return { kind: "step", end: token.end, state: "complete", close: true };
+    if (token.kind !== "string") return failAt(s, token.end);
+    return { kind: "step", end: token.end, state: "colon" };
   }
-  function afterToken(s: string, i: number, state: State): Step {
+  function afterToken(s: string, i: number, state: State, token: Token): Step {
     const array = state === "afterArray";
-    if (s[i] === (array ? "]" : "}")) return { end: i + 1, state: "complete", close: true };
-    if (s[i] === ",") return { end: i + 1, state: array ? "value" : "key" };
-    return { error: true };
+    if (s[i] === (array ? "]" : "}")) return { kind: "step", end: token.end, state: "complete", close: true };
+    if (s[i] === ",") return { kind: "step", end: token.end, state: array ? "value" : "key" };
+    return failAt(s, token.end);
   }
-  function step(s: string, i: number, state: State): Step {
-    if (state === "key" || state === "firstKey") return keyToken(s, i, state);
-    if (state === "colon") return s[i] === ":" ? { end: i + 1, state: "value" } : { error: true };
-    if (state === "afterArray" || state === "afterObject") return afterToken(s, i, state);
-    if (state === "firstValue" && s[i] === "]") return { end: i + 1, state: "complete", close: true };
-    if (s[i] === "{" || s[i] === "[") return { end: i + 1, state: s[i] === "{" ? "firstKey" : "firstValue", open: s[i] === "{" ? "afterObject" : "afterArray" };
-    return tag(scalar(s, i), "complete");
+  function step(s: string, i: number, state: State, token: Token): Step {
+    if (state === "key" || state === "firstKey") return keyToken(s, i, state, token);
+    if (state === "colon") return s[i] === ":" ? { kind: "step", end: token.end, state: "value" } : failAt(s, token.end);
+    if (state === "afterArray" || state === "afterObject") return afterToken(s, i, state, token);
+    if (state === "firstValue" && s[i] === "]") return { kind: "step", end: token.end, state: "complete", close: true };
+    if (s[i] === "{" || s[i] === "[") return { kind: "step", end: token.end, state: s[i] === "{" ? "firstKey" : "firstValue", open: s[i] === "{" ? "afterObject" : "afterArray" };
+    if (token.kind === "value" || token.kind === "string") return { kind: "step", end: token.end, state: "complete" };
+    return failAt(s, token.end);
   }
   function one(s: string, start: number): Scan {
     const stack: State[] = [];
     let i = start, state: State = "value";
     while (true) {
       while (ws(s[i])) i++;
-      if (i >= s.length) return { incomplete: true };
-      const token = step(s, i, state);
-      if (!token.end) return token;
-      i = token.end;
-      state = token.state;
-      if (token.open) stack.push(token.open);
-      if (token.close) stack.pop();
+      if (i >= s.length) return { kind: "incomplete" };
+      const token = lex(s, i);
+      if (token.kind === "error" || token.kind === "incomplete") return token;
+      const next = step(s, i, state, token);
+      if (next.kind !== "step") return next;
+      i = next.end;
+      state = next.state;
+      if (next.open) stack.push(next.open);
+      if (next.close) stack.pop();
       if (state !== "complete") continue;
-      if (!stack.length) return { end: i };
+      if (!stack.length) return { kind: "value", end: i };
       state = stack[stack.length - 1];
     }
+  }
+
+  function separator(s: string, start: number): number {
+    let i = start;
+    while (i < s.length && ws(s[i]) && s[i] !== "\n") i++;
+    return i === s.length || s[i] === "\n" ? i : -1;
   }
 
   function parseChunk(input: unknown, start?: unknown, end?: unknown) {
@@ -103,11 +118,12 @@
       while (ws(text[cursor])) cursor++;
       if (cursor === text.length) break;
       const token = one(text, cursor);
-      if (!token.end) { done = false; if (token.error) error = new SyntaxError("Failed to parse JSONL"); break; }
+      if (token.kind === "error" || token.kind === "incomplete") { done = false; error = token.kind === "error" ? new SyntaxError("Failed to parse JSONL") : null; break; }
       try { values.push(formats.parse(text.slice(cursor, token.end), "JSON")); }
       catch { error = new SyntaxError("Failed to parse JSONL"); done = false; break; }
       read = token.end;
-      cursor = read;
+      cursor = separator(text, read);
+      if (cursor < 0) { error = new SyntaxError("Failed to parse JSONL"); done = false; break; }
     }
     return { values, read: first + bom + (bytes ? native.utf8Encode(text.slice(0, read)).length : read), done, error };
   }
