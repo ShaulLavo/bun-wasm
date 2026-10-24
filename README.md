@@ -16,6 +16,8 @@ hello from Bun.serve
 
 That is a terminal in a browser tab. The [playground](https://bun.sprockt.dev/playground/) ran every command in the tab, and the [React sandbox](https://bun.sprockt.dev/) bundles and hot-reloads an app the same way. Output is trimmed.
 
+It is for people building in-browser development tools (playgrounds, tutorials, online editors, sandboxes) that need to run Bun and Node code without a server, and for anyone testing how far Bun's toolchain runs on WebAssembly. It is pre-1.0 and experimental, and many popular apps do not run yet (see [Status](#status)), so it does not replace Bun on your machine.
+
 ![The bun.wasm sandbox: a file tree and src/App.tsx on the left, a running React page with a counter on the right, and Bun's dev server output in the terminal below](docs/assets/sandbox.png)
 
 ## Why
@@ -80,7 +82,7 @@ Bun's Rust crates and a runtime written in this repo make up the `bun` guest, `w
 
 ## Status
 
-Pre-1.0 and experimental. The package is `bun-wasm` 0.0.58, marked private, and is not on npm. You install it as a Git dependency. The repository has no tags or releases.
+Pre-1.0 and experimental. The package is `bun-wasm` 0.0.60, marked private, and is not on npm. You install it as a Git dependency. The repository has no tags or releases.
 
 - Memory: each guest is capped at 512 MiB.
 - Threads: each guest is single-threaded. Workers are separate guests.
