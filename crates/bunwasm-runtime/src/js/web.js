@@ -155,6 +155,8 @@
 
   // --- URLSearchParams / URL --------------------------------------------------
 
+  const { toUSVString, initFromObject, convertMethodArgs } = internal.require("url_search_params");
+
   // application/x-www-form-urlencoded byte serializer.
   function formEncode(str) {
     return encodeURIComponent(str)
@@ -196,7 +198,7 @@
         this.#list = initFromObject(init);
         return;
       }
-      const str = String(init);
+      const str = toUSVString(init);
       this.#list = parseQuery(str.startsWith("?") ? str.slice(1) : str);
     }
     static _attach(params, url) {
@@ -212,32 +214,34 @@
       return this.#list.length;
     }
     append(name, value) {
-      this.#list.push([String(name), String(value)]);
+      this.#list.push([toUSVString(name), toUSVString(value)]);
       this.#update();
     }
     delete(name, value) {
-      const n = String(name);
-      this.#list = this.#list.filter(([k, v]) => k !== n || (value !== undefined && v !== String(value)));
+      const [n, val] = convertMethodArgs(() => this.#list, name, value);
+      this.#list = this.#list.filter(([k, v]) => k !== n || (val !== undefined && v !== val));
       this.#update();
     }
     get(name) {
-      const hit = this.#list.find(([k]) => k === String(name));
+      const [n] = convertMethodArgs(() => this.#list, name);
+      const hit = this.#list.find(([k]) => k === n);
       return hit ? hit[1] : null;
     }
     getAll(name) {
-      return this.#list.filter(([k]) => k === String(name)).map(([, v]) => v);
+      const [n] = convertMethodArgs(() => this.#list, name);
+      return this.#list.filter(([k]) => k === n).map(([, v]) => v);
     }
     has(name, value) {
-      const n = String(name);
-      return this.#list.some(([k, v]) => k === n && (value === undefined || v === String(value)));
+      const [n, val] = convertMethodArgs(() => this.#list, name, value);
+      return this.#list.some(([k, v]) => k === n && (val === undefined || v === val));
     }
     set(name, value) {
-      const n = String(name);
+      const [n, val] = convertMethodArgs(() => this.#list, name, value, true);
       const i = this.#list.findIndex(([k]) => k === n);
       if (i < 0) {
-        this.#list.push([n, String(value)]);
+        this.#list.push([n, val]);
       } else {
-        this.#list[i][1] = String(value);
+        this.#list[i][1] = val;
         this.#list = this.#list.filter(([k], j) => k !== n || j <= i);
       }
       this.#update();
@@ -268,17 +272,6 @@
     get [Symbol.toStringTag]() {
       return "URLSearchParams";
     }
-  }
-
-  function initFromObject(init) {
-    if (typeof init[Symbol.iterator] === "function") {
-      return Array.from(init, (pair) => {
-        const entry = Array.from(pair);
-        if (entry.length !== 2) throw new TypeError("Each query pair must be an iterable [name, value] tuple");
-        return [String(entry[0]), String(entry[1])];
-      });
-    }
-    return Object.keys(init).map((k) => [k, String(init[k])]);
   }
 
   // Component array, or undefined when the input doesn't parse.
