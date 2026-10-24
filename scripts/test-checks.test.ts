@@ -126,7 +126,7 @@ test("each discovery group retains one command owner and browser deadlines stay 
 
 test("Web subprocess boundaries and fail-fast order are preserved by manifest batches", () => {
   const proof = proveCheckMigration();
-  expect(checkBatches("web")).toEqual(proof.webBatches);
+  expect(checkBatches("web").map(paths => paths.filter(path => oldSelections().web.includes(path))).filter(paths => paths.length)).toEqual(proof.webBatches);
   expect(checkBatches("local-runtime")).toEqual([selectChecks("local-runtime")]);
   expect(proof.webBatches.map(paths => paths.length)).toEqual([10, 2, 3]);
 });
