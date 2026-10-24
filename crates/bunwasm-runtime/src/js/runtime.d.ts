@@ -81,7 +81,7 @@ declare namespace BunWasm {
   }
 }
 
-declare var process: { cwd(): string; stdout: BunWasm.WorkerWritable; stderr: BunWasm.WorkerWritable };
+declare var process: { cwd(): string; stdout: BunWasm.WorkerWritable; stderr: BunWasm.WorkerWritable; emitWarning?(warning: Error): void };
 declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
 

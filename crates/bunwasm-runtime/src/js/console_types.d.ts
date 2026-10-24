@@ -6,6 +6,7 @@ declare namespace BunWasm {
     showHidden?: boolean; getters?: boolean; customInspect?: boolean;
   }
   interface ConsoleInspector {
+    nodeInspect(value: unknown, options?: ConsoleInspectOptions): string;
     formatArgs(args: readonly unknown[], options?: ConsoleInspectOptions): string;
     bunInspect(value: unknown, options?: ConsoleInspectOptions): string;
   }
