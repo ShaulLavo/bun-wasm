@@ -3,8 +3,20 @@
 // statement class (JSSQLStatement.cpp) is split here: this file decides what
 // to bind (named parameters, strict mode, BigInt ranges) and shapes results;
 // the native side binds positional values, steps and builds rows.
-(function (internal) {
+(function (internal: BunWasm.Internal) {
   "use strict";
+
+
+  type DatabaseOptions = { readonly?: unknown; readwrite?: unknown; create?: unknown; strict?: unknown; safeIntegers?: unknown };
+  type TransactionStatements = Record<"begin" | "commit" | "rollback" | "savepoint" | "release" | "rollbackTo", Statement>;
+  type Controller = Record<"default" | "deferred" | "immediate" | "exclusive", TransactionStatements>;
+  type Transaction<This, Args extends unknown[], Result> = ((this: This, ...args: Args) => Result) & {
+    readonly default: Transaction<This, Args, Result>;
+    readonly deferred: Transaction<This, Args, Result>;
+    readonly immediate: Transaction<This, Args, Result>;
+    readonly exclusive: Transaction<This, Args, Result>;
+    readonly database: Database;
+  };
 
   const sql = internal.native.sqlite;
 
@@ -13,9 +25,9 @@
   const kPrepareOwned = Symbol("prepareOwned");
 
   const defineProperties = Object.defineProperties;
-  const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
-  const isArray = Array.isArray;
-  const isTypedArray = ArrayBuffer.isView;
+  const hasOwn = (obj: object, key: PropertyKey) => Object.prototype.hasOwnProperty.call(obj, key);
+  const isArray: (value: unknown) => value is unknown[] = Array.isArray;
+  const isTypedArray: (value: unknown) => value is ArrayBufferView = ArrayBuffer.isView;
 
   const constants = {
     SQLITE_OPEN_READONLY: 0x00000001,
@@ -91,14 +103,14 @@
 
   // Statements and databases nobody finalized or closed are released when
   // collected, like Bun's GC finalizers.
-  const statementCleanup = new FinalizationRegistry((id) => sql.release(id));
-  const databaseCleanup = new FinalizationRegistry((id) => sql.close(id, true));
+  const statementCleanup = new FinalizationRegistry<BunWasm.SQLiteStatementHandle>((id) => sql.release(id));
+  const databaseCleanup = new FinalizationRegistry<BunWasm.SQLiteDatabaseHandle>((id) => sql.close(id, true));
 
   // --- binding ---------------------------------------------------------------
 
   // A JS value as something native.sqlite binds: null, boolean, number,
   // bigint, string or Uint8Array.
-  function bindable(value, safeIntegers) {
+  function bindable(value: unknown, safeIntegers: boolean): BunWasm.SQLiteBinding {
     if (value === undefined || value === null) return null;
     switch (typeof value) {
       case "boolean":
@@ -116,23 +128,23 @@
     throw new TypeError("Binding expected string, TypedArray, boolean, number, bigint or null");
   }
 
-  function missing(name) {
+  function missing(name: string | number) {
     return new Error(`Missing parameter "${name}"`);
   }
 
   // Parameter names after the prefix ($, :, @, ?) in strict mode.
-  function keyOf(name, strict) {
+  function keyOf(name: string, strict: boolean) {
     return strict ? name.slice(1) : name;
   }
 
-  const isNumber = (key) => /^[0-9]+$/.test(key);
+  const isNumber = (key: string) => /^[0-9]+$/.test(key);
 
   // Strict mode with `?NNN` parameters: keys are 1-based positions.
-  function hasNumberedNames(names, strict) {
+  function hasNumberedNames(names: (string | null)[], strict: boolean) {
     return strict && names.some((name) => name !== null && isNumber(name.slice(1)));
   }
 
-  function numberedKey(name, i) {
+  function numberedKey(name: string | null, i: number) {
     if (name === null) return i;
     const key = name.slice(1);
     return isNumber(key) ? Number(key) - 1 : key;
@@ -140,7 +152,7 @@
 
   // Positional values for an object of named (or indexed) parameters.
   // Missing keys bind NULL, or throw in strict mode.
-  function objectValues(target, names, strict, safeIntegers) {
+  function objectValues(target: Record<string | number, unknown>, names: (string | null)[], strict: boolean, safeIntegers: boolean) {
     const numbered = hasNumberedNames(names, strict);
     const onlyIndexed = names.every((name) => name === null);
     return Array.from(names, (name, i) => {
@@ -158,10 +170,10 @@
 
   // Positional values for `bindings` (an array or an object of named
   // parameters) given the statement's parameter names (null for `?`).
-  function toValues(bindings, names, strict, safeIntegers) {
+  function toValues(bindings: unknown, names: (string | null)[], strict: boolean, safeIntegers: boolean) {
     if (!isArray(bindings)) {
       if (bindings === null || typeof bindings !== "object") throw new Error("Expected array");
-      return objectValues(bindings, names, strict, safeIntegers);
+      return objectValues(bindings as Record<string | number, unknown>, names, strict, safeIntegers);
     }
     if (bindings.length === 0) return [];
     if (bindings.length !== names.length) {
@@ -172,7 +184,7 @@
 
   // Bun's calling convention: `(a, b)` and `([a, b])` bind positionally,
   // `({ $a })` by name. Returns the bindings value, or undefined for none.
-  function bindingsOf(args) {
+  function bindingsOf(args: unknown[]) {
     if (args.length === 0) return undefined;
     const arg0 = args[0];
     if (!isArray(arg0) && (!arg0 || typeof arg0 !== "object" || isTypedArray(arg0))) return args;
@@ -182,17 +194,17 @@
   // --- Statement -------------------------------------------------------------
 
   class Statement {
-    #id;
+    #id: BunWasm.SQLiteStatementHandle;
     // Keeps the Database (and so its connection) alive while this lives.
     // oxlint-disable-next-line no-unused-private-class-members -- Strong reference keeps the connection alive until the statement is collected.
-    #db;
-    #names;
-    #strict;
-    #safeIntegers;
-    #proto = null;
+    #db: Database;
+    #names: (string | null)[];
+    #strict: boolean;
+    #safeIntegers: boolean;
+    #proto: object | null = null;
 
     // `params` (from `db.prepare(sql, params)`) are bound right away.
-    constructor(id, db, internalFlags, params) {
+    constructor(id: BunWasm.SQLiteStatementHandle, db: Database, internalFlags: number, params?: unknown) {
       this.#id = id;
       this.#db = db;
       this.#names = sql.paramNames(id);
@@ -206,41 +218,41 @@
 
     // Values to bind for a call's arguments, or undefined to keep the
     // previous bindings.
-    #values(args) {
+    #values(args: unknown[]) {
       const bindings = bindingsOf(args);
       if (bindings === undefined) return undefined;
       return toValues(bindings, this.#names, this.#strict, this.#safeIntegers);
     }
 
-    #shape(row) {
+    #shape<Row extends BunWasm.SQLiteRow | null>(row: Row): Row {
       if (this.#proto !== null && row !== null) Object.setPrototypeOf(row, this.#proto);
       return row;
     }
 
-    get(...args) {
+    get(...args: unknown[]) {
       return this.#shape(sql.rows(this.#id, this.#values(args), 0, this.#safeIntegers));
     }
 
-    all(...args) {
+    all(...args: unknown[]) {
       const rows = sql.rows(this.#id, this.#values(args), 1, this.#safeIntegers);
       if (this.#proto !== null) rows.forEach((row) => this.#shape(row));
       return rows;
     }
 
-    values(...args) {
+    values(...args: unknown[]) {
       return sql.rows(this.#id, this.#values(args), 2, this.#safeIntegers);
     }
 
-    raw(...args) {
+    raw(...args: unknown[]) {
       return sql.rows(this.#id, this.#values(args), 3, this.#safeIntegers);
     }
 
-    run(...args) {
+    run(...args: unknown[]) {
       const [changes, lastInsertRowid] = sql.run(this.#id, this.#values(args), this.#safeIntegers);
       return { changes, lastInsertRowid };
     }
 
-    *iterate(...args) {
+    *iterate(...args: unknown[]) {
       const values = this.#values(args);
       for (let row = sql.next(this.#id, values, true, this.#safeIntegers); row !== null; row = sql.next(this.#id, undefined, false, this.#safeIntegers)) {
         yield this.#shape(row);
@@ -272,13 +284,13 @@
       return sql.expandedSql(this.#id);
     }
 
-    safeIntegers(updatedValue) {
+    safeIntegers(updatedValue?: unknown) {
       if (updatedValue === undefined) return this.#safeIntegers;
       this.#safeIntegers = !!updatedValue;
       return this;
     }
 
-    as(ClassType) {
+    as(ClassType: (abstract new (...args: never[]) => object) & { prototype: object | null }) {
       if (typeof ClassType !== "function") throw new TypeError("Expected class to be a constructor or undefined");
       this.#proto = ClassType.prototype;
       return this;
@@ -311,29 +323,30 @@
 
   // --- Database --------------------------------------------------------------
 
-  function absolutePath(filename) {
+  function absolutePath(filename: string) {
     if (filename.startsWith("/")) return filename;
     return internal.require("path").resolve(filename);
   }
 
-  function isAnyArrayBuffer(value) {
+  function isAnyArrayBuffer(value: unknown): value is ArrayBuffer | SharedArrayBuffer {
     if (value instanceof ArrayBuffer) return true;
     return typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer;
   }
 
-  function unsupported(what) {
+  function unsupported(what: string) {
     return new Error(`${what} is not supported in bun.wasm (SQLite is compiled in and WASI has no dlopen)`);
   }
 
-  const cachedCount = Symbol.for("Bun.Database.cache.count");
+  const cachedCount: unique symbol = Symbol.for("Bun.Database.cache.count");
 
   class Database {
+    declare exec: Database["run"];
     #internalFlags = 0;
-    #handle;
-    #queryCache = new Map();
-    filename;
+    #handle: BunWasm.SQLiteDatabaseHandle;
+    #queryCache = new Map<string, Statement>();
+    filename: string;
 
-    constructor(filenameGiven, options) {
+    constructor(filenameGiven?: unknown, options?: DatabaseOptions | number | null) {
       if (filenameGiven !== undefined && typeof filenameGiven !== "string") {
         if (!isTypedArray(filenameGiven)) {
           throw new TypeError(`Expected 'filename' to be a string, got '${typeof filenameGiven}'`);
@@ -368,7 +381,7 @@
       databaseCleanup.register(this, this.#handle, this);
     }
 
-    #flagsFromOptions(options) {
+    #flagsFromOptions(options: DatabaseOptions) {
       let flags = 0;
       if (options.readonly) flags = constants.SQLITE_OPEN_READONLY;
       if ("readOnly" in options) throw new TypeError('Misspelled option "readOnly" should be "readonly"');
@@ -390,7 +403,7 @@
       return sql.inTransaction(this.#handle);
     }
 
-    static open(filename, options) {
+    static open(filename?: unknown, options?: DatabaseOptions | number | null) {
       return new Database(filename, options);
     }
 
@@ -398,12 +411,12 @@
       throw new Error("This build of sqlite3 does not support dynamic extension loading");
     }
 
-    serialize(optionalName) {
+    serialize(optionalName?: string) {
       const bytes = sql.serialize(this.#handle, optionalName || "main");
       return internal.require("buffer").Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     }
 
-    static deserialize(serialized, options = false) {
+    static deserialize(serialized: unknown, options: unknown = false) {
       const bytes = isAnyArrayBuffer(serialized) ? new Uint8Array(serialized) : serialized;
       if (typeof options === "boolean") return new Database(bytes, { readonly: options });
       if (options && typeof options === "object") return new Database(bytes, options);
@@ -422,7 +435,7 @@
       throw unsupported("Database.fileControl");
     }
 
-    close(throwOnError = false) {
+    close(throwOnError: unknown = false) {
       // Native close finalizes the statements the database owns (query cache
       // and transaction controller).
       this.#queryCache.clear();
@@ -436,7 +449,7 @@
       this.#queryCache.clear();
     }
 
-    run(query, ...params) {
+    run(query: unknown, ...params: unknown[]) {
       const strict = (this.#internalFlags & kStrictFlag) !== 0;
       const safeIntegers = (this.#internalFlags & kSafeIntegersFlag) !== 0;
       const bindings = bindingsOf(params);
@@ -445,7 +458,7 @@
       }
       const text = String(query);
       // Bind to the first statement's parameters (by their names).
-      let values = null;
+      let values: BunWasm.SQLiteBinding[] | null = null;
       if (bindings !== undefined) {
         const names = sql.firstParamNames(this.#handle, text);
         if (names !== null) values = toValues(bindings, names, strict, safeIntegers);
@@ -454,11 +467,11 @@
       return { changes, lastInsertRowid };
     }
 
-    prepare(query, params, flags = 0) {
+    prepare(query: unknown, params?: unknown, flags = 0) {
       return new Statement(sql.prepare(this.#handle, String(query), flags || 0, false), this, this.#internalFlags, params);
     }
 
-    [kPrepareOwned](query, flags) {
+    [kPrepareOwned](query: string, flags: number) {
       return new Statement(sql.prepare(this.#handle, query, flags, true), this, this.#internalFlags);
     }
 
@@ -468,7 +481,7 @@
       return this.#queryCache.size;
     }
 
-    query(query) {
+    query(query: unknown) {
       if (typeof query !== "string") {
         throw new TypeError(`Expected 'query' to be a string, got '${typeof query}'`);
       }
@@ -488,13 +501,13 @@
       const max = Database.MAX_QUERY_CACHE_SIZE;
       if (max <= 0) return stmt;
       // Evicted statements stay usable; close() still finalizes them.
-      if (cache.size >= max) cache.delete(cache.keys().next().value);
+      if (cache.size >= max) cache.delete(cache.keys().next().value!);
       cache.set(query, stmt);
       return stmt;
     }
 
     // Transactions follow better-sqlite3's lib/methods/transaction.js, as in Bun.
-    transaction(fn, self) {
+    transaction<This, Args extends unknown[], Result>(fn: (this: This, ...args: Args) => Result, self?: unknown) {
       if (typeof fn !== "function") throw new TypeError("Expected first argument to be a function");
 
       const controller = getController(this, self);
@@ -510,16 +523,17 @@
       defineProperties(properties.deferred.value, properties);
       defineProperties(properties.immediate.value, properties);
       defineProperties(properties.exclusive.value, properties);
-      return properties.default.value;
+      return properties.default.value as Transaction<This, Args, Result>;
     }
   }
 
   Database.prototype.exec = Database.prototype.run;
 
-  const controllers = new WeakMap();
+  const controllers = new WeakMap<Database, Controller>();
 
   // The database's cached transaction statements.
-  function getController(db) {
+  function getController(db: Database, _self?: unknown): Controller;
+  function getController(db: Database) {
     const existing = controllers.get(db);
     if (existing) return existing;
     const shared = {
@@ -541,8 +555,8 @@
 
   // A transaction function: BEGIN/COMMIT at the top level, a savepoint when
   // nested, and a rollback when `fn` throws.
-  function wrapTransaction(fn, db, { begin, commit, rollback, savepoint, release, rollbackTo }) {
-    return function transaction(...args) {
+  function wrapTransaction<This, Args extends unknown[], Result>(fn: (this: This, ...args: Args) => Result, db: Database, { begin, commit, rollback, savepoint, release, rollbackTo }: TransactionStatements) {
+    return function transaction(this: This, ...args: Args) {
       const nested = db.inTransaction;
       const before = nested ? savepoint : begin;
       const after = nested ? release : commit;
@@ -565,7 +579,7 @@
   // Never thrown itself (errors from SQLite are plain Errors named
   // "SQLiteError"); `instanceof` checks the name.
   class SQLiteError extends Error {
-    static [Symbol.hasInstance](instance) {
+    static [Symbol.hasInstance](instance: { name?: unknown } | null | undefined) {
       return instance?.name === "SQLiteError";
     }
 
