@@ -47,6 +47,16 @@ and stream hooks are available. Do not invent private worker/counter fields to
 make reflection tests pass. The original adapter is needed because that module
 still depends on private stream modules and native Bun socket hooks.
 
+## Pure hostname data slice
+
+Status: Approved, limited to syntax and error records.
+
+`net_hostname.ts` and the shared listen wrapper reject malformed syntax before
+the host call. The paired `Bun.serve` hostname expression unwraps valid bracketed
+IPv6. Synthetic source tests cover validation and hostname copying onto an
+existing `ENOTFOUND` error. They do not establish resolver delivery, real bind,
+connect, listener startup or socket lifecycle behavior. Those checks remain held.
+
 ## Other first blockers
 
 `js/bun/net/socket-dns-error.test.ts` still has host and diagnostic edge cases.

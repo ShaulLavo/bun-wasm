@@ -42,6 +42,7 @@ declare namespace BunWasm {
       setImmediate(callback: () => void): unknown;
       clearImmediate(handle: unknown): void;
     };
+    require(name: "net_address"): { isIPv6(value: string): boolean };
     require(name: "path"): { resolve(...paths: string[]): string; dirname(path: string): string; basename(path: string): string };
     runInContext(context: unknown, callback: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]): unknown;
     handleUncaught(error: unknown): boolean;
