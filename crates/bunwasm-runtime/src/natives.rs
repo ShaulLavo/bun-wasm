@@ -1217,6 +1217,18 @@ fn install_url(t: &mut Table) {
             .unwrap_or_default();
         Ok(host.into())
     });
+    t.add("domainToUnicode", |a| {
+        let mut url = url::Url::parse("http://domain.invalid/").expect("valid base URL");
+        if url::quirks::set_hostname(&mut url, a.str(0)?).is_err() {
+            return Ok("".into());
+        }
+        let domain = match url.host() {
+            Some(url::Host::Domain(domain)) => url::quirks::domain_to_unicode(domain),
+            Some(host) => host.to_string(),
+            None => String::new(),
+        };
+        Ok(domain.into())
+    });
 }
 
 /// The `bun_wasm` host ABI (docs/host-abi.md) for the JS networking layer
