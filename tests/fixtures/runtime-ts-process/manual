@@ -1,0 +1,1 @@
+Guest adapter property shapes and raw environment descriptors intentionally differ from native Bun/Node. Native controls are retained in the migration report.
