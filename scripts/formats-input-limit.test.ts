@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 
 type SizeInput = { readonly byteLength: number };
@@ -16,13 +16,13 @@ type FormatInternal = {
 };
 type Formats = { parse(input: unknown, format: Format): unknown };
 
-const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-format-limit-"));
+const scratch = mkdtempSync("/work/tmp/bun-wasm-format-limit-");
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 function source(name: string) {
   const output = join(scratch, `${name}.js`);
-  const result = Bun.spawnSync(["node", new URL("./transpile-runtime.ts", import.meta.url).pathname,
-    new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url).pathname, output], { stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(["node", fileURLToPath(new URL("./transpile-runtime.ts", import.meta.url)),
+    fileURLToPath(new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url)), output], { stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) throw new Error(result.stderr.toString());
   return readFileSync(output, "utf8");
 }
@@ -81,6 +81,22 @@ test("converted synthetic length rejects before parsing with the Bun error data"
     message: 'The value of "input.byteLength" is out of range. It must be <= 2147483647. Received 2147483648',
   });
   expect(calls).toEqual([]);
+});
+
+test("size guard snapshots an accessor before formatting the coded error", () => {
+  let reads = 0;
+  const input: SizeInput = {
+    get byteLength() {
+      reads += 1;
+      return reads === 1 ? 2 ** 31 : 0;
+    },
+  };
+  const error = failure(() => sizeGuard().checkSize(input));
+  expect(reads).toBe(1);
+  expect(error).toMatchObject({
+    code: "ERR_OUT_OF_RANGE",
+    message: 'The value of "input.byteLength" is out of range. It must be <= 2147483647. Received 2147483648',
+  });
 });
 
 test("size-only seam accepts zero and the inclusive signed 32-bit limit without allocating bytes", () => {
