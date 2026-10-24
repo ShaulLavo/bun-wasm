@@ -47,6 +47,26 @@ and stream hooks are available. Do not invent private worker/counter fields to
 make reflection tests pass. The original adapter is needed because that module
 still depends on private stream modules and native Bun socket hooks.
 
+### Constructor-only split, October 24, 2026
+
+Status: Approved, implementation submitted for independent review. Native
+listener/default-address acceptance remains HOLD, including old PR #116.
+
+The isolated replacement starts at main
+`63aa39f85f6e9b723b5e8846f58cca25a22bd8f6`. It adds a TypeScript constructor helper
+with callable/subclass identity, option snapshots, current stream defaults,
+truthy BlockList validation and public list identity. Inherited receivers get
+ordinary emitter and connection-set state; the receiver test emits only a
+synthetic connection event. The tests live in `web/tests/node-net-server.test.ts`
+for existing unit-test discovery. They use fail-fast transport/lifecycle stubs.
+
+No listener, accept, IPv6, Rust, socket fixture or CI changes are included.
+`net_listener.ts` and the existing default IPv4 bind remain byte-for-byte intact.
+The queued synthetic checks do not validate any guest or host boundary, and old
+guest/CI results are not acceptance evidence for this replacement. Parent owns
+independent review and the landing decision. The three private-field checks stay
+outside this split.
+
 ## Other first blockers
 
 `js/bun/net/socket-dns-error.test.ts` still has host and diagnostic edge cases.

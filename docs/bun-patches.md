@@ -22,6 +22,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Partial strict comparison](#partial-strict-comparison) | Port | Translate Bun's native partial-comparison rules to TypeScript for all engines. |
 | [Small public runtime adapters](#small-public-runtime-adapters) | Host feature | Original matcher, native and browser promise reaction, version, web-brand and resolver-diagnostic adapters. |
 | [YAML boxed coercion](#yaml-boxed-coercion) | Host feature | Original wrapper conversion preserves user coercion errors and indentation semantics. |
+| [Node Server constructor adapter](#node-server-constructor-adapter) | Host feature | Original TypeScript option snapshots, stream defaults, BlockList validation and callable receiver initialization; no listener changes. |
 | [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
 | [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
@@ -562,6 +563,28 @@ constructor and private HTTP upgrade hooks. Those bindings are not available
 on our engines. The portable upstream implementation uses the existing
 node:net and node:http adapters instead. It adds no host networking path.
 See [the ws builtin](ws-builtin.md) for generation and verification.
+
+## Node Server constructor adapter
+
+`crates/bunwasm-runtime/src/js/node_net_server.ts` and the constructor wiring in
+`src/js/node_net.js` are original **Host feature** adapters. The comparison source
+is Bun `src/js/node/net.ts`, `Server`, at
+`d71508d31edf06765c12adf0df137ef531539f68`, the patched checkout based on the Bun
+pin `9510e74152073d850a18758ca41114d8f214ffa6`. No upstream implementation is copied.
+
+The TypeScript helper snapshots options, rejects primitive options and nonnumeric
+keepalive delays, preserves raw `allowHalfOpen`, and normalizes boolean and delay
+fields. An absent high-water mark calls the existing stream default getter at
+construction time. Only truthy `blockList` values require `BlockList.isBlockList`;
+a valid list is exposed by identity. The proxy preserves callable construction,
+arity, prototype identity, subclasses and initialization of inherited receivers.
+The receiver uses the existing connection set, not fabricated private Bun fields.
+
+`web/tests/node-net-server.test.ts` uses synthetic objects and event delivery.
+Transport, timer and lifecycle dependencies fail if invoked. It never calls
+listen, connect, accept, close or an I/O pump. Listener startup, bind addresses,
+IPv6, native sockets, guest execution and filtering behavior are unchanged and
+not validated by these constructor checks.
 
 ## TCP and IP helpers
 
