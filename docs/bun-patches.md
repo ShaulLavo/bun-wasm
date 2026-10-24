@@ -37,6 +37,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Migration archive fixtures](#migration-archive-fixtures) | Host feature | Unchanged abbrev archives verify the real npm workspace fixture and extraction against its recorded checksums. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
+| [Strict handwritten stream adapter](#strict-handwritten-stream-adapter) | Host feature | Original text-stream wrapper and native codec contracts, with bounded local normalization and descriptor validation. |
 | [Compression and archive adapters](#compression-and-archive-adapters) | Host feature | Original Web stream driver, Bun function wrappers, archive reader and native handle registry. |
 | [`src/js/zlib.ts`, Node zlib streams](#compression-and-archive-adapters) | Port | Node's `lib/zlib.js` stream, flush, limit and validation logic over the native handle. |
 | [`src/compression.rs`, native codec contexts](#compression-and-archive-adapters) | Port | Bun's native zlib, Brotli and Zstd handle calls and its Web stream coder steps. |
@@ -3410,3 +3411,31 @@ receipt. Blocking CI selects it for JSC embedding, allocation, build and fixture
 inputs. The Rust job reuses its toolchain, sources and dependencies;
 it builds JSC once and executes both fixtures against that linked guest in the
 Node WASI host. QuickJS and host syntax checks are not JSC execution evidence.
+
+
+## Strict handwritten stream adapter
+
+Class **Host feature**, original bun-wasm source: `src/js/streams.ts` replaces
+`src/js/streams.js` from bun-wasm `ac43127c85addabed7e0c2a4883247ae074e858c`.
+This wrapper is not copied from an upstream file. `src/js/runtime.d.ts` describes
+the existing native decoder in `src/streams.rs`, portable stream constructors,
+compression factory and byte-input validator. Generated `streams_polyfill.js`,
+Node stream ports and native codec implementations are unchanged.
+
+The executable delta has two parts. Decoder construction keeps converted label
+and options in separate const locals instead of overwriting parameters. Label
+conversion still precedes dictionary validation, then reads `fatal` and
+`ignoreBOM` once in that order. Prototype enumeration now throws a TypeError
+if an enumerated own descriptor is missing, before assignment. It never skips a
+member or falls back. This check applies only to the wrapper's private stable
+adapter prototypes. All other executable syntax is unchanged after accounting
+for these two edits and redundant expression parentheses.
+
+Host engines retain their own text constructors. Portable engines retain native
+numeric handles, controller flow, private-field brands, finalizer registration,
+release ordering and error identities. Type erasure preserves the final
+TypeScript token positions, not every original JavaScript column. The wrapper
+suite in `web/tests/runtime-streams.test.ts` is discovered by the existing web
+unit command. The native fixture smoke selects `runtime-ts-streams` once.
+Evidence and actual emitted-byte accounting are under
+`/work/reports/bun-wasm/ts-streams-20261024/`.
