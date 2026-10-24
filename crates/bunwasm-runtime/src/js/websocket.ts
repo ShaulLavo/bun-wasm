@@ -208,9 +208,23 @@
 
   function serverSocket(conn: BunWasm.WebSocketServerConnection, handlers: () => BunWasm.WebSocketHandlers, options: { data?: unknown }, remove: (socket: BunWasm.WebSocketServerSocket) => void, publish: BunWasm.WebSocketPublish) {
     const topics = new Set<string>();
-    const invoke = <K extends keyof BunWasm.WebSocketHandlerArgs>(name: K, ...args: BunWasm.WebSocketHandlerArgs[K]) => {
+    const callHandler = (invocation: BunWasm.WebSocketInvocation) => {
+      const current = handlers();
+      switch (invocation[0]) {
+        case "open": return current.open?.(socket);
+        case "message": return current.message?.(socket, invocation[1]);
+        case "ping": return current.ping?.(socket, invocation[1]);
+        case "pong": return current.pong?.(socket, invocation[1]);
+        case "error": return current.error?.(socket, invocation[1]);
+        case "close": return current.close?.(socket, invocation[1], invocation[2]);
+        case "drain": return current.drain?.(socket);
+      }
+      const unhandled: never = invocation;
+      return unhandled;
+    };
+    const invoke = (...invocation: BunWasm.WebSocketInvocation) => {
       try {
-        const result = (handlers()[name] as BunWasm.WebSocketHandler<K> | undefined)?.(socket, ...args);
+        const result = callHandler(invocation);
         if (result && typeof result.then === "function") result.catch((err) => invokeError(err));
       } catch (err) { invokeError(err); }
     };
@@ -362,7 +376,7 @@
         this._head = null;
         this._peer = new Peer(this._conn as BunWasm.WebSocketConnection, true, {
           message: (data) => event(this, "message", { data: this._binary(data), origin: new URL(this.url).origin }),
-          error: (err) => event(this, "error", { error: err, message: (err as { message?: string }).message }),
+          error: (err) => event(this, "error", { error: err, message: err.message }),
           ping: (data) => event(this, "ping", { data: this._binary(data) }),
           pong: (data) => event(this, "pong", { data: this._binary(data) }),
           close: ({ code, reason, clean }) => {

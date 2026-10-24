@@ -63,6 +63,9 @@ declare namespace BunWasm {
     drain: [];
   }
   type WebSocketHandler<K extends keyof WebSocketHandlerArgs> = (socket: WebSocketServerSocket, ...args: WebSocketHandlerArgs[K]) => void | Promise<unknown>;
+  type WebSocketInvocation = {
+    [K in keyof WebSocketHandlerArgs]: [name: K, ...args: WebSocketHandlerArgs[K]];
+  }[keyof WebSocketHandlerArgs];
   type WebSocketHandlers = {
     [K in keyof WebSocketHandlerArgs]?: WebSocketHandler<K>;
   } & { maxPayloadLength?: number; publishToSelf?: boolean };

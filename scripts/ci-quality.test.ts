@@ -1,8 +1,11 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { discoverChecks, automaticChecks, checkCommand, selectChecks } from "./test-checks";
+import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { qualityGates } from "./quality";
 import { inBatches, missingPackages, parseArchives, planArchives, prefetchArchive } from "../web/scripts/ci-browser-deps";
 
@@ -24,13 +27,30 @@ test("native checks share one conditional job and the cached target directory", 
   expect(rust).toContain("restore-keys: |\n            native-v");
   expect(rust).not.toContain("Swatinem/rust-cache");
   expect(rust).toContain("bun run quality --native");
-  expect(rust).not.toContain("cargo test");
+  expect(rust.match(/cargo test /g)).toHaveLength(1);
+  expect(rust).toContain("--lib modules::tests::host_");
 });
 
 test("native fixture smoke selects the typed runtime behavior without another build", () => {
-  const commands = Array.from(rust.matchAll(/^\s+bash scripts\/test\.sh (.+)$/gm), match => match[1]!.trim().split(/\s+/));
-  expect(commands).toEqual([["--no-build", "node-misc", "runtime-ts-url-decoder", "runtime-ts-small", "runtime-ts-websocket", "cookie-api", "data-formats", "yaml-boxed-coercion", "engine-regexp-json-intl"]]);
-  expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
+  expect(rust.match(/bun scripts\/test-checks\.ts native/g)).toHaveLength(1);
+  const command = checkCommand("native");
+  expect(command).toEqual(["bash", join(import.meta.dir, "test.sh"), "--no-build"].concat(selectChecks("native").map(path => path.slice("tests/fixtures/".length))));
+  const baseline = oldSelections().native.toSorted().map(path => path.slice("tests/fixtures/".length));
+  expect(command.slice(3).filter(name => baseline.includes(name))).toEqual(baseline);
+  expect(rust).toContain('BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts');
+  expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(2);
+});
+
+test("every migrated selection retains one blocking owner and the original local runtime set", () => {
+  expect(proveCheckMigration().deduplicated).toHaveLength(7);
+  expect(selectChecks("cmake")).toEqual(["scripts/cmake-cache.test.ts"]);
+  const checks = discoverChecks().map(check => check.path).concat(automaticChecks().map(check => check.path));
+  expect(new Set(checks).size).toBe(checks.length);
+  expect(selectChecks("quality")).toContain("scripts/runtime-ts-small.test.ts");
+  expect(selectChecks("web")).toContain("scripts/runtime-sqlite.test.ts");
+  expect(selectChecks("runtime")).not.toContain("scripts/runtime-emission.test.ts");
+  expect(workflow.match(/run: bash \.\.\/scripts\/test-web-host\.sh --unit/g)).toHaveLength(1);
+  expect(quality.match(/run: bun run quality --javascript/g)).toHaveLength(1);
 });
 
 test("Rust tests are compiled and run once, with Clippy covering test targets", () => {
@@ -72,8 +92,8 @@ test("cached build inputs are compared before the native gate", () => {
   expect(rust.indexOf("bun scripts/quality-input-times.ts")).toBeLessThan(rust.indexOf("bun run quality --native"));
 });
 
-test("toolchain and preflight changes cannot restore an incompatible native cache", () => {
-  const keys = rust.split("\n").filter(line => /key: native-v|^\s+native-v/.test(line));
+test("the full-key native fallback rejects incompatible toolchain and preflight inputs", () => {
+  const keys = rust.split("\n").filter(line => /native-v4-/.test(line));
   expect(keys).toHaveLength(3);
   for (const key of keys) {
     for (const input of ["jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh"]) {
@@ -83,26 +103,190 @@ test("toolchain and preflight changes cannot restore an incompatible native cach
   expect(keys[0]).toContain("hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts')");
 });
 
+test("the refined Cargo cache keeps Cargo inputs and leaves JSC-only inputs to the JSC layer", () => {
+  const cargoKeys = rust.split("\n").filter(line => /native-cargo-v2-/.test(line));
+  expect(cargoKeys).toHaveLength(3);
+  for (const key of cargoKeys) {
+    expect(key).toContain("scripts/build-wasi-sysroot.ts");
+    expect(key).toContain("jsc/wasi-jsc.cmake");
+    expect(key).toContain("scripts/check-cmake-cache.cmake");
+    expect(key).not.toContain("scripts/check-wasi-cmake-cache.sh");
+    expect(key).not.toContain("scripts/ci-binaryen.ts");
+  }
+  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == ''");
+  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'");
+  expect(rust).toContain("JSC_CARGO_TARGET_DIR=$RUNNER_TEMP/jsc/target");
+  expect(rust).toContain("key: jsc-prebuild-v1-");
+  expect(rust).toContain("key: jsc-cargo-v1-");
+  expect(rust).toContain("'scripts/ci-binaryen.ts'");
+  expect(rust).toContain("'crates/**'");
+});
+
+type CacheFiles = Readonly<Record<string, string>>;
+
+function nativeKeyTemplates(namespace: string) {
+  const lines = rust.split("\n").filter(line => line.trim().startsWith(`${namespace}-`) || line.trim().startsWith(`key: ${namespace}-`));
+  const [primary, prefix, save] = lines.map(line => line.trim().replace(/^key: /, ""));
+  if (!primary || !prefix || !save || lines.length !== 3) throw new Error(`Missing cache keys for ${namespace}`);
+  return { primary, prefix, save };
+}
+
+function fixtureHash(expression: string, files: CacheFiles): string {
+  const patterns = Array.from(expression.matchAll(/'([^']+)'/g), match => new Bun.Glob(match[1]!));
+  const paths = Object.keys(files).sort().filter(path => patterns.some(pattern => pattern.match(path)));
+  if (paths.length === 0) return "";
+  const digest = createHash("sha256");
+  for (const path of paths) digest.update(createHash("sha256").update(files[path]!).digest());
+  return digest.digest("hex");
+}
+
+function fixtureCacheKey(template: string, files: CacheFiles, image = "20261012.334.1"): string {
+  return template.replace(/\$\{\{ (.*?) \}\}/g, (_, expression: string) => {
+    if (expression === "runner.os") return "Linux";
+    if (expression === "runner.arch") return "X64";
+    if (expression === "steps.homes.outputs.image") return image;
+    if (!expression.startsWith("hashFiles(")) throw new Error(`Unexpected cache expression: ${expression}`);
+    return fixtureHash(expression, files);
+  });
+}
+
+const nativeCargoNamespace = rust.match(/key: (native-cargo-v\d+)-/)![1]!;
+
+const nativeCacheFiles: CacheFiles = {
+  "Cargo.toml": '[workspace.package]\nversion = "0.0.51"',
+  "Cargo.lock": 'name = "bunwasm-runtime"\nversion = "0.0.51"',
+  "crates/bunwasm-runtime/Cargo.toml": 'version.workspace = true',
+  "crates/bunwasm-runtime/src/engine_jsc.rs": "old Rust source",
+  "crates/bunwasm-runtime/build.rs": "native compiler flags",
+  "crates/bunwasm-crypto-sys/c/rsa.c": "native C source",
+  "crates/bunwasm-jsc/cpp/helpers.cpp": "JSC Cargo C++ helper",
+  ".cargo/config.toml": "SQLite compile flags",
+  "rust-toolchain.toml": "nightly-2026-09-15",
+  ".github/workflows/ci.yml": workflow,
+  "env.sh": "SDK/sysroot environment",
+  "bun.lock": "installed sysroot builder identity",
+  "scripts/build-wasi-sysroot.ts": "sysroot builder",
+  "scripts/sync-crypto.sh": "BoringSSL source pin",
+  "patches/bun/0001.patch": "upstream patch",
+  "third_party/zlib-ng/zlib.h.in": "native header",
+  "jsc/wasi-jsc.cmake": "WASI C++ toolchain",
+  "scripts/check-cmake-cache.cmake": "CMake preflight",
+};
+
+function changedCacheFile(path: string, contents = "changed"): CacheFiles {
+  return { ...nativeCacheFiles, [path]: contents };
+}
+
+test("native Cargo patch releases and Rust edits restore a previously saved compatible primary", () => {
+  const keys = nativeKeyTemplates(nativeCargoNamespace);
+  const saved = fixtureCacheKey(keys.save, nativeCacheFiles);
+  expect(saved).toBe(fixtureCacheKey(keys.primary, nativeCacheFiles));
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles))).toBe(true);
+  for (const path of ["Cargo.toml", "Cargo.lock", "crates/bunwasm-runtime/Cargo.toml", "crates/bunwasm-runtime/src/engine_jsc.rs"]) {
+    const files = changedCacheFile(path, nativeCacheFiles[path]!.replaceAll("0.0.51", "0.0.52") + "\nchanged");
+    expect(fixtureCacheKey(keys.primary, files)).not.toBe(saved);
+    expect(saved.startsWith(fixtureCacheKey(keys.prefix, files))).toBe(true);
+    expect(fixtureCacheKey(keys.save, files)).toBe(fixtureCacheKey(keys.primary, files));
+  }
+  expect(fixtureCacheKey(keys.primary, changedCacheFile(".git/HEAD"))).toBe(saved);
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, changedCacheFile(".git/HEAD")))).toBe(true);
+});
+
+test("native compatibility changes cannot select the prior Cargo cache", () => {
+  const keys = nativeKeyTemplates(nativeCargoNamespace);
+  const saved = fixtureCacheKey(keys.save, nativeCacheFiles);
+  for (const path of Object.keys(nativeCacheFiles).filter(path => !path.includes("Cargo.") && !path.endsWith("engine_jsc.rs"))) {
+    const files = changedCacheFile(path);
+    expect(fixtureCacheKey(keys.primary, files)).not.toBe(saved);
+    expect(saved.startsWith(fixtureCacheKey(keys.prefix, files))).toBe(false);
+  }
+  const sdkChange = changedCacheFile(".github/workflows/ci.yml", workflow.replaceAll("wasi-sdk-34", "wasi-sdk-35"));
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, sdkChange))).toBe(false);
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles, "next-image"))).toBe(false);
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace("Linux-X64", "Linux-ARM64"))).toBe(false);
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace("Linux-X64", "macOS-X64"))).toBe(false);
+});
+
+test("old Cargo-first keys cannot use the new compatibility prefix, and fallback never overlays a match", () => {
+  const old = nativeKeyTemplates("native-v4");
+  const keys = nativeKeyTemplates(nativeCargoNamespace);
+  const oldSaved = fixtureCacheKey(old.save, nativeCacheFiles);
+  expect(oldSaved.startsWith(fixtureCacheKey(old.prefix, changedCacheFile("Cargo.lock")))).toBe(false);
+  expect(oldSaved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles))).toBe(false);
+  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == ''");
+  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-hit != 'true'");
+  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'");
+});
+
+test("JSC prebuild and Cargo caches keep separate authoritative identities", () => {
+  const prebuildKeys = rust.split("\n").filter(line => line.includes("key: jsc-prebuild-v1-"));
+  const cargoKeys = rust.split("\n").filter(line => line.includes("key: jsc-cargo-v1-"));
+  expect(prebuildKeys).toHaveLength(2);
+  expect(cargoKeys).toHaveLength(2);
+  expect(rust).toContain("path: ${{ runner.temp }}/jsc/prebuild");
+  expect(rust).toContain("path: ${{ runner.temp }}/jsc/target");
+  expect(rust).not.toContain("path: ${{ runner.temp }}/jsc\n");
+
+  const groups = (key: string) => Array.from(key.matchAll(/hashFiles\(([^)]+)\)/g), match =>
+    Array.from(match[1]!.matchAll(/'([^']+)'/g), item => item[1]!));
+  const matches = (pattern: string, path: string) => {
+    if (pattern.endsWith("/**")) return path.startsWith(pattern.slice(0, -2));
+    if (!pattern.includes("*")) return pattern === path;
+    const [prefix, suffix] = pattern.split("*");
+    return path.startsWith(prefix!) && path.endsWith(suffix!);
+  };
+  const changedGroups = (key: string, path: string) => groups(key)
+    .map((patterns, index) => patterns.some(pattern => matches(pattern, path)) ? index : -1)
+    .filter(index => index >= 0);
+  const prebuild = prebuildKeys[0]!;
+  const cargo = cargoKeys[0]!;
+
+  expect(changedGroups(prebuild, "crates/bunwasm-runtime/src/engine_jsc.rs")).toEqual([]);
+  expect(changedGroups(cargo, "crates/bunwasm-runtime/src/engine_jsc.rs")).toEqual([1]);
+  for (const input of ["jsc/wasi-jsc.cmake", "scripts/build-wasi-sysroot.ts", "env.sh", "scripts/ci-binaryen.ts"]) {
+    expect(changedGroups(prebuild, input)).toEqual([0]);
+  }
+  expect(changedGroups(cargo, "jsc/wasi-jsc.cmake")).toEqual([0, 1]);
+  expect(changedGroups(cargo, "rust-toolchain.toml")).toEqual([1]);
+
+  const build = rust.split("name: Build or validate the single JSC prebuild")[1]!;
+  expect(build).toContain("steps.jsc-prebuild-cache.outputs.cache-hit");
+  expect(build).toContain("bash scripts/build-jsc.sh");
+  expect(rust).not.toContain("steps.jsc-cache");
+  const hostBuild = rust.indexOf("name: Build one host-engine guest for real-browser source cache acceptance");
+  const jscGate = rust.indexOf("name: Blocking JSC embedding and allocation checks");
+  for (const save of [
+    rust.indexOf("name: Save the JSC prebuild cache once per input revision"),
+    rust.indexOf("name: Save the JSC Cargo cache once per input revision"),
+  ]) {
+    expect(save).toBeGreaterThan(jscGate);
+    expect(save).toBeGreaterThan(hostBuild);
+  }
+});
+
 test("crypto declares the toolchain and CMake preflight as Cargo build inputs", () => {
   const build = readFileSync(new URL("../crates/bunwasm-crypto-sys/build.rs", import.meta.url), "utf8");
   expect(build).toContain('println!("cargo:rerun-if-changed=../../jsc/wasi-jsc.cmake")');
   expect(build).toContain('println!("cargo:rerun-if-changed={}", guard.display())');
+  const cargoKey = rust.split("\n").find(line => /native-cargo-v2-/.test(line))!;
+  expect(cargoKey).toContain("jsc/wasi-jsc.cmake");
+  expect(cargoKey).toContain("scripts/check-cmake-cache.cmake");
   const times = readFileSync(new URL("./quality-input-times.ts", import.meta.url), "utf8");
   expect(times).toContain('"jsc/wasi-jsc.cmake"');
   expect(times).toContain('"tests/fixtures/runtime-proc-spawn-requests.json"');
 });
 
 test("merged main keeps its CMake and package identity checks with one owner each", () => {
-  expect(workflow.match(/bun test scripts\/cmake-cache.test.ts/g)).toHaveLength(1);
-  expect(workflow.match(/bun test scripts\/node-fs-readv.test.ts scripts\/node-fs-runtime-proc.test.ts scripts\/browser-build.test.ts/g)).toHaveLength(1);
+  expect(workflow.match(/bun scripts\/test-checks\.ts cmake/g)).toHaveLength(1);
+  expect(workflow.match(/bun scripts\/test-checks\.ts package-extra/g)).toHaveLength(1);
   expect(workflow.match(/^  rust:$/gm)).toHaveLength(1);
   expect(workflow).not.toContain("continue-on-error");
 });
 
 test("CMake preflight has one always-on lightweight owner, independent of native selection", () => {
-  expect(quality).toContain("run: bun test scripts/cmake-cache.test.ts");
+  expect(quality).toContain("run: bun scripts/test-checks.ts cmake");
   expect(quality).toContain("sudo apt-get install -y cmake ninja-build g++");
-  expect(quality).not.toMatch(/^\s+(?:if|needs):/m);
+  expect(quality).not.toMatch(/^ {4}(?:if|needs):/m);
   expect(rust).not.toContain("scripts/cmake-cache.test.ts");
 });
 
@@ -309,7 +493,7 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
   const browsers = workflow.split("\n  browser-process:\n")[1]!;
   expect(producer).toContain("bun web/scripts/ci-process-bundles.ts");
   expect(producer).toContain("actions/upload-artifact@v4");
-  expect(browsers).toContain("needs: process-bundles");
+  expect(browsers).toContain("needs: [quality, rust, process-bundles]");
   expect(browsers).toContain("actions/download-artifact@v4");
   expect(browsers).toContain("BUN_WASM_PROCESS_BUNDLES:");
   expect(browsers).toContain("BUN_WASM_RUNTIME_PROC_BUNDLE:");
@@ -318,8 +502,9 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
-  expect(rust).toContain("uses: actions/cache/save@v4");
-  expect(rust).toContain("if: steps.native-cache.outputs.cache-hit != 'true'");
+  expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
+  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(4);
+  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-hit != 'true'");
   expect(rust).not.toContain("github.run_id");
   expect(rust).not.toContain("github.run_attempt");
   const sdkKey = rust.split("\n").find(line => line.includes("key: wasi-sdk-"))!;
@@ -329,13 +514,16 @@ test("native cache stays bounded per input revision, and the SDK is not copied p
 });
 
 test("native target cache is saved after all selected JSC builds and checks", () => {
-  const save = rust.indexOf("      - name: Save the complete native build once per input revision");
-  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(1);
-  expect(rust).toContain("JSC_CARGO_TARGET_DIR=$CARGO_TARGET_DIR");
+  const saves = [
+    rust.indexOf("      - name: Save the refined native Cargo cache once per input revision"),
+    rust.indexOf("      - name: Save the complete native fallback once per input revision"),
+  ];
+  expect(saves.every(index => index > -1)).toBe(true);
+  expect(rust).toContain("JSC_CARGO_TARGET_DIR=$RUNNER_TEMP/jsc/target");
   for (const command of ["bash scripts/build-jsc.sh", "bash scripts/build-bun-jsc.sh", "bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm"]) {
     const step = rust.indexOf(command);
     expect(step).toBeGreaterThan(-1);
-    expect(save).toBeGreaterThan(step);
+    for (const save of saves) expect(save).toBeGreaterThan(step);
   }
 });
 
@@ -355,9 +543,43 @@ test("cold and restored JSC setup install Binaryen before sourcing common.sh", (
   expect(rust.indexOf(setup)).toBeLessThan(rust.indexOf("name: Build or validate the single JSC prebuild"));
 });
 
-test("Binaryen pin and installer identity participate in tool, native and JSC caches", () => {
-  const keys = rust.split("\n").filter(line => /key: (?:binaryen-133|native-v|jsc-v)|^\s+native-v/.test(line));
-  expect(keys).toHaveLength(5);
+test("Binaryen pin and installer identity participate in tool, fallback and JSC caches", () => {
+  const keys = rust.split("\n").filter(line => /key: (?:binaryen-133|native-v4|jsc-(?:prebuild|cargo)-v1)|^\s+native-v4/.test(line));
+  expect(keys).toHaveLength(8);
   expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz");
-  for (const key of keys) expect(key).toContain("'scripts/ci-binaryen.ts'");
+  for (const key of keys) {
+    expect(key).toContain("'scripts/ci-binaryen.ts'");
+  }
+  expect(rust.split("\n").filter(line => /native-cargo-v2-/.test(line)).every(line => !line.includes("scripts/ci-binaryen.ts"))).toBe(true);
+});
+
+test("source cache runs in real browsers using one source-built host guest", () => {
+  const processes = workflow.split("\n  browser-process:\n")[1]!;
+  expect(rust).toContain("--no-default-features --features engine-host,bun-build");
+  expect(rust).toContain("uses: actions/upload-artifact@v4");
+  expect(processes).toContain("uses: actions/download-artifact@v4");
+  expect(processes).toContain("needs: [quality, rust, process-bundles]");
+  expect(processes).toContain("needs.rust.result == 'skipped'");
+  expect(processes).toContain("BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache");
+  expect(processes).toContain("BUN_WASM_RUNTIME_PROC_PORT: \"4187\"");
+  expect(processes).toContain("bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}");
+  expect(processes.match(/^    needs:/gm)).toHaveLength(1);
+  expect(processes).toContain("needs.process-bundles.result == 'success'");
+  const hostBuild = rust.indexOf("name: Build one host-engine guest for real-browser source cache acceptance");
+  const save = rust.indexOf("name: Save the refined native Cargo cache once per input revision");
+  expect(hostBuild).toBeGreaterThan(-1);
+  expect(save).toBeGreaterThan(hostBuild);
+});
+
+test("Bun acceptance has one distinct shared producer and no per-browser build", () => {
+  const producer = readFileSync(new URL("../web/scripts/ci-process-bundles.ts", import.meta.url), "utf8");
+  const controller = readFileSync(new URL("../web/tests/bun-runtime-proc-browser.ts", import.meta.url), "utf8");
+  const processes = workflow.split("\n  browser-process:\n")[1]!;
+  const acceptance = processes.split("      - name: Real Bun source cache in one Waffle browser runtime\n")[1]!;
+  expect(producer).toContain('["supervisor", "runtime-proc", "interrupt", "bun-runtime-proc"]');
+  expect(producer).toContain('fixture === "bun-runtime-proc" ? "bun-runtime-proc-main"');
+  expect(controller).toContain('await processBundle("bun-runtime-proc", out)');
+  expect(controller).not.toContain("buildBrowserEntries");
+  expect(acceptance).toContain("BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles");
+  expect(acceptance).not.toContain("BUN_WASM_RUNTIME_PROC_BUNDLE:");
 });
