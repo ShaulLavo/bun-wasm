@@ -58,9 +58,9 @@ test("exported AssertionError retains separate ordered detail groups and raw val
     "message 0", "actual 0", "expected 0", "operator 0", "stack trace 0",
     "message 1", "actual 1", "expected 1", "operator 1", "stack trace 1",
   ]);
+  const fields: [string, string][] = [["message", "message"], ["actual", "actual"], ["expected", "expected"], ["operator", "operator"], ["stack trace", "stack"]];
   for (const [index, detail] of details.entries()) {
-    for (const [key, source] of [["message", "message"], ["actual", "actual"], ["expected", "expected"], ["operator", "operator"], ["stack trace", "stack"]]) {
-      if (!key || !source) throw new Error("Missing detail mapping");
+    for (const [key, source] of fields) {
       expect(field(error, `${key} ${index}`)).toBe(Reflect.get(detail, source));
     }
   }
