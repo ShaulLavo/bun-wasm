@@ -42,6 +42,7 @@ declare namespace BunWasm {
       setImmediate(callback: () => void): unknown;
       clearImmediate(handle: unknown): void;
     };
+    require(name: "net_address"): { isIPv6(value: string): boolean };
     require(name: "path"): { resolve(...paths: string[]): string; dirname(path: string): string; basename(path: string): string };
     runInContext(context: unknown, callback: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]): unknown;
     handleUncaught(error: unknown): boolean;
@@ -80,7 +81,7 @@ declare namespace BunWasm {
   }
 }
 
-declare var process: { cwd(): string; stdout: BunWasm.WorkerWritable; stderr: BunWasm.WorkerWritable };
+declare var process: { cwd(): string; stdout: BunWasm.WorkerWritable; stderr: BunWasm.WorkerWritable; emitWarning?(warning: Error): void };
 declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
 
@@ -306,3 +307,50 @@ declare var Temporal: {
   PlainTime: { from(value: string): BunWasm.FormatTemporalValue };
   ZonedDateTime: { from(value: string): BunWasm.FormatTemporalValue };
 };
+
+declare namespace BunWasm {
+  /** Exactly the values admitted by typeof callback === "function", with no argument validation. */
+  type ProcessWriteCallback = Function;
+  interface ProcessWriter extends NodeEmitter {
+    fd: number; writable: boolean; destroyed: boolean; isTTY: boolean; columns: number; rows: number;
+    write(chunk: unknown, encoding?: unknown, callback?: unknown): boolean;
+    end(chunk?: unknown, encoding?: unknown, callback?: unknown): ProcessWriter;
+    cork(): void; uncork(): void; setDefaultEncoding(): ProcessWriter;
+    getColorDepth(): number; hasColors(): boolean; getWindowSize(): number[];
+    _writableState: { ended: boolean };
+  }
+  interface ProcessReader extends NodeEmitter {
+    fd: number; isTTY: boolean; readable: boolean;
+    setEncoding(encoding: unknown): ProcessReader;
+    resume(): ProcessReader; pause(): ProcessReader; setRawMode(): ProcessReader;
+    ref(): ProcessReader; unref(): ProcessReader; read(): null;
+    [Symbol.asyncIterator](): AsyncGenerator<string | BufferBytes>;
+  }
+  interface ProcessWarningOptions { type?: unknown; code?: unknown }
+  interface Native {
+    readonly platformInfo: { version: string; revision: string; arch: string };
+    /** Starts as strings; the process Proxy permits raw Symbol values and accessor results. */
+    env(): Record<PropertyKey, unknown>;
+    argv(): string[];
+    execPath(): string;
+    chdir(path: string): void;
+    nanoseconds(): number;
+    isatty(fd: number): boolean;
+    writeStdout(bytes: string | Uint8Array, flush?: boolean): void;
+    writeStderr(bytes: string | Uint8Array, flush?: boolean): void;
+    readStdin(): Uint8Array;
+    memoryUsage(): { rss: number; heapTotal: number; heapUsed: number; external: number; arrayBuffers: number };
+  }
+  interface Internal {
+    nextTick(callback: Function, ...args: unknown[]): void;
+    fakeTimers?: { elapsedNanoseconds: number };
+    emitExit(code: number): void;
+    traceExit(reason: string, code: number): void;
+    getMainModule(): unknown;
+    listenerChanged?: (target: object, name?: string | symbol) => void;
+    require(name: "process_signals"): (process: NodeEmitter, names: ReadonlyMap<number, readonly string[]>) => () => boolean;
+    pumpSignals?: () => boolean;
+    /** The byte helper accepts arbitrary input and throws for unsupported shapes. */
+    toUint8(value: unknown): Uint8Array;
+  }
+}
