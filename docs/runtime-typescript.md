@@ -45,10 +45,10 @@ To regenerate it for inspection:
 
 ```sh
 source env.sh
-node scripts/transpile-runtime.ts crates/bunwasm-runtime/src/js/glob.ts /work/tmp/bun-wasm-glob.js
-nl -ba /work/tmp/bun-wasm-glob.js
-rm /work/tmp/bun-wasm-glob.js
+node scripts/transpile-runtime.ts crates/bunwasm-runtime/src/js/glob.ts /tmp/bun-wasm-glob.js
+nl -ba /tmp/bun-wasm-glob.js
+rm /tmp/bun-wasm-glob.js
 ```
 
-No source-map registration or runtime lookup is required. The remaining conversion
-is an Approved follow-up in [the runtime plan](../plans/real-bun-on-our-engines.md#typescript-follow-up).
+No source-map registration or runtime lookup is required. Some runtime modules are still
+JavaScript. Convert them to TypeScript as you change them.

@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/runtime-size.test.ts",
+  "batch": "12-web"
+}

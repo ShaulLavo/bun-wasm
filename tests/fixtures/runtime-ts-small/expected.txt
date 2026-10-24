@@ -1,0 +1,13 @@
+typed=%E8%AF%BB; Path=/; Max-Age=10; SameSite=Strict false
+[["typed","读"],["first","1"],["second","2"]] ["typed","first","second"] ["读","1","2"]
+null true 2
+true yes
+{value:Infinity,text:'quote\''}
+values = [1, 2]
+
+[table]
+enabled = true
+Á|👩‍👩‍👧‍👦
+$1,234.50
+2/29/24
+few

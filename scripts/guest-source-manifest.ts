@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const guestBuilds = {
   browser: { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-transpiler", "bun-build"] },
+  "source-cache-browser": { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-build"] },
   quickjs: { artifact: "bun.wasm", package: "bunwasm-cli", features: ["default"] },
   "quickjs-minimal": { artifact: "bun.wasm", package: "bunwasm-cli", features: [] },
   jsc: { artifact: "bun-jsc.wasm", package: "bunwasm-cli", features: ["engine-jsc", "bun-transpiler", "bun-build"] },
