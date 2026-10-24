@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm",
-  "version": "0.0.60",
+  "version": "0.0.61",
   "private": true,
   "type": "module",
   "exports": {
@@ -64,7 +64,7 @@
     "quality:types": "tsc -p tsconfig.scripts.json && tsc -p web/tsconfig.quality.json && tsc -p sandbox/tsconfig.quality.json",
     "quality:unused": "knip --no-progress",
     "quality:duplicates": "jscpd --config .jscpd.json --baseline .jscpd-baseline.json --fail-on-new-clones 0 --fail-on-empty",
-    "quality:probes": "bun test scripts/quality-probes.test.ts scripts/ci-binaryen.test.ts scripts/jsc-embedding.test.ts scripts/ci-changes.test.ts scripts/ci-quality.test.ts scripts/quality-input-times.test.ts scripts/next-framework-nesting.test.ts scripts/runtime-ts-small.test.ts",
+    "quality:probes": "bun scripts/test-checks.ts quality",
     "quality:rust": "bun scripts/quality-rust.ts",
     "quality:wasi": "bun scripts/quality-wasi.ts",
     "test:browser:shell-consumer": "bun web/tests/browser-shell-consumer.ts chromium firefox",

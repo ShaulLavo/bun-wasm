@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { changedPaths, needsJsc, needsRust } from "./ci-changes";
 
 test.each([
+  "checks/native-console.json", "checks/runtime-leaf.json", "scripts/test-checks.ts", "tests/fixtures/console-format/index.js",
   "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "tests/fixtures/source-cache/index.ts",
   "web/tests/bun-runtime-proc-fixtures.ts", "web/tests/bun-runtime-proc-browser.ts", "web/tests/bun-runtime-proc-main.ts",
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
@@ -19,7 +20,7 @@ test.each([
   expect(needsRust([path])).toBe(true);
 });
 
-test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts"])("JavaScript/documentation input %s needs no Rust compilation", path => {
+test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
   expect(needsRust([path])).toBe(false);
 });
 
@@ -107,8 +108,8 @@ for (const path of [
 ]) {
   test.each(["pull_request", "push"])(`${path} keeps the blocking lightweight CMake owner for a real %s event`, event => {
     expect(select(base, commitInput(path), event)).toBe(`rust=${needsRust([path])}\njsc=${needsJsc([path])}`);
-    expect(quality).toContain("run: bun test scripts/cmake-cache.test.ts");
-    expect(quality).not.toMatch(/^\s+(?:if|needs):/m);
+    expect(quality).toContain("run: bun scripts/test-checks.ts cmake");
+    expect(quality).not.toMatch(/^ {4}(?:if|needs):/m);
   });
 }
 
