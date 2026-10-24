@@ -47,6 +47,8 @@ def arguments():
     parser.add_argument("--timeout", type=float, default=15, help="wall seconds per file, excluding copying")
     parser.add_argument("--test-timeout", type=int, default=2000, help="milliseconds per individual test")
     parser.add_argument("--suite", type=Path, default=ROOT / "vendor/bun")
+    parser.add_argument("--wasm", type=Path, help="explicit externally qualified guest; never builds")
+    parser.add_argument("--node", type=Path, default=Path(shutil.which("node") or "node"), help="explicit Node executable for browser engine")
     parser.add_argument("--launcher", type=Path, default=Path(os.environ["CARGO_TARGET_DIR"]) / "release/bun-wasm")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--log-dir", type=Path, help="retain bounded per-file output for diagnosing the full selected census")
@@ -65,6 +67,7 @@ def arguments():
     opts.started = time.monotonic()
     opts.suite = opts.suite.resolve()
     opts.launcher = opts.launcher.resolve()
+    opts.node = opts.node.resolve()
     if opts.dependencies:
         opts.dependencies = opts.dependencies.resolve()
     opts.output = opts.output or Path(f"/work/tmp/bun-wasm-bun-suite-results/{opts.engine}.json")
@@ -191,6 +194,7 @@ def provenance(opts, wasm):
             "tools_sha256": digest(wasm.with_name("bun-tools.wasm")) if wasm.with_name("bun-tools.wasm").is_file() else None,
             "runner_sha256": digest(Path(__file__)),
             "launcher_sha256": digest(opts.launcher) if opts.engine != "browser" else digest(ROOT / "web/scripts/node-host.mjs"),
+            "node_sha256": digest(opts.node) if opts.engine == "browser" else None,
             "host_sources": {path: digest(ROOT / path) for path in BROWSER_HOST_SOURCES} if opts.engine == "browser" else {},
             "runtime_package": runtime_package_provenance() if opts.engine == "browser" else {},
             "dependencies": dependency_digest(opts.suite / "node_modules"),
@@ -241,7 +245,7 @@ def command(opts, wasm, work, preloads, path):
         tests += [part for preload in preloads for part in ["--preload", "/bun/test/" + preload.removeprefix("./")]]
         tests += ["/bun/test/" + path]
     if opts.engine == "browser":
-        return ["node", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm), "--net"] + dirs + flags + ["--"] + tests
+        return [str(opts.node), "--expose-gc", "--no-warnings", str(ROOT / "web/scripts/node-host.mjs"), "--wasm", str(wasm), "--net"] + dirs + flags + ["--"] + tests
     return [str(opts.launcher), "--wasm", str(wasm)] + dirs + flags + tests
 
 
@@ -256,7 +260,7 @@ def parse_output(text):
         counts["errors" if status.startswith("error") else status] = int(count)
     lines = [line for line in text.splitlines() if line.strip() and not re.match(r"^\((pass|skip|todo)\)", line)]
     errors = [line for line in lines if re.search(r"error:|Error:|Expected:|Received:|not supported|not a function|Cannot find|SyntaxError|trap|panicked|Timed out", line, re.I)]
-    return {"counts": counts, "failing_tests": failures, "first_errors": errors[:20], "excerpt": "\n".join(lines[:55])[:10000], "complete": bool(re.search(r"^Ran \d+ tests? across", text, re.M))}
+    return {"cases": [{"status": status, "name": name} for status, name in MARKER.findall(text)], "counts": counts, "failing_tests": failures, "first_errors": errors[:20], "excerpt": "\n".join(lines[:55])[:10000], "complete": bool(re.search(r"^Ran \d+ tests? across", text, re.M))}
 
 
 def worker(opts, wasm, source, scratch, preloads, pending, finished):
@@ -379,7 +383,7 @@ def main():
     opts = arguments()
     if git(opts.suite, "status", "--porcelain", "--untracked-files=no"):
         raise SystemExit("Suite has tracked modifications; commit or restore them first")
-    wasm = ROOT / "dist" / {"quickjs": "bun.wasm", "jsc": "bun-jsc.wasm", "browser": "bun-browser.wasm"}[opts.engine]
+    wasm = opts.wasm or ROOT / "dist" / {"quickjs": "bun.wasm", "jsc": "bun-jsc.wasm", "browser": "bun-browser.wasm"}[opts.engine]
     opts.output.parent.mkdir(parents=True, exist_ok=True)
     meta = provenance(opts, wasm)
     records = load_results(opts, meta)
@@ -395,7 +399,7 @@ def main():
         signal.signal(sig, interrupt)
     write_results(opts, meta, records, selected)
     try:
-        with tempfile.TemporaryDirectory(prefix="bun-wasm-bun-suite-", dir="/work/tmp") as temporary:
+        with tempfile.TemporaryDirectory(prefix="bun-wasm-bun-suite-", dir=os.environ.get("TMPDIR", "/work/tmp")) as temporary:
             scratch = Path(temporary)
             source = snapshot(opts, scratch)
             frozen_wasm = scratch / "engine.wasm"

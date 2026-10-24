@@ -73,10 +73,10 @@ async function cleanupScenario(scratch: string, owned: Map<number, Identity>, co
   await rm(scratch, { recursive: true, force: true });
   console.info(JSON.stringify({ cleanup: "pass", scratch, removed: !existsSync(scratch), owned: Array.from(all.values()), remaining: live(all) }));
 }
-async function ready(directory: string) {
+async function ready(directory: string, marker = "ready") {
   const until = performance.now() + 5000;
-  while (!existsSync(join(directory, "ready"))) {
-    if (performance.now() >= until) throw new Error("browser fixture did not become ready");
+  while (!existsSync(join(directory, marker))) {
+    if (performance.now() >= until) throw new Error(`fixture did not become ready: ${marker}`);
     await delay(25);
   }
 }
@@ -100,7 +100,7 @@ function expectedStatus(mode: string, signal: "SIGINT" | "SIGTERM" | undefined) 
   if (mode === "failed-browser") return 137;
   return mode === "quick-launcher" ? 7 : 124;
 }
-export async function ownedScenario(mode: "launcher" | "browser" | "quick-launcher" | "failed-browser", runtime: "node" | "bun" = "node", signal?: "SIGINT" | "SIGTERM", env: NodeJS.ProcessEnv = {}) {
+export async function ownedScenario(mode: "launcher" | "browser" | "quick-launcher" | "failed-browser", runtime: "node" | "bun" = "node", signal?: "SIGINT" | "SIGTERM", env: NodeJS.ProcessEnv = {}, secondsOverride?: string) {
   const scratch = await mkdtemp(join(existsSync("/work/tmp") ? "/work/tmp" : tmpdir(), "bw-dl-"));
   const controlDirectory = join(scratch, "control");
   const owned = new Map<number, Identity>(), controls = new Map<number, Identity>();
@@ -123,14 +123,14 @@ export async function ownedScenario(mode: "launcher" | "browser" | "quick-launch
     timer = setInterval(() => { capture(scratch, owned); capture(controlDirectory, controls); }, 25);
     if (browser) await ready(controlDirectory);
     const deadline = !signal && mode !== "failed-browser" && mode !== "quick-launcher";
-    const seconds = deadline ? mode === "browser" ? "3" : "1" : "30";
+    const seconds = secondsOverride ?? (deadline ? mode === "browser" ? "3" : "1" : "30");
     const began = performance.now();
     const child = Bun.spawn([runtime, wrapper, seconds, "node", fixture, mode, scratch], {
       stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env, TMPDIR: scratch, TMP: scratch, TEMP: scratch },
     });
     remember(child.pid, owned);
     if (mode === "failed-browser" && process.platform === "linux") await resumeAfterLauncherExit(scratch, child.pid);
-    if (signal) { await ready(scratch); child.kill(signal); }
+    if (signal) { await ready(scratch, mode === "launcher" ? "worker-ready" : "ready"); child.kill(signal); }
     const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
     capture(scratch, owned);
     console.info(JSON.stringify({ mode, runtime, code, stderr, workerReady: existsSync(join(scratch, "worker-ready")), workerTerm: existsSync(join(scratch, "worker-term")), blockedBrowserImport: existsSync(join(scratch, "worker-browser-import.pid")) }));

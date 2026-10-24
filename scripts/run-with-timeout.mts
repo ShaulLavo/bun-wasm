@@ -8,9 +8,9 @@ await enableSubreaper();
 
 type ProcessIdentity = { pid: number; parent: number; group: number; session: number; birth: string; state: string };
 const [seconds, command, ...args] = process.argv.slice(2);
-const timeout = Number(seconds) * 1000;
-if (!command || !Number.isFinite(timeout) || timeout <= 0) {
-  throw new Error("Usage: run-with-timeout.mts <seconds> <command> [args...]");
+const timeout = seconds === "none" ? undefined : Number(seconds) * 1000;
+if (!command || timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
+  throw new Error("Usage: run-with-timeout.mts <seconds|none> <command> [args...]");
 }
 const owned = new Map<number, ProcessIdentity>();
 let root: ProcessIdentity | undefined;
@@ -110,7 +110,7 @@ try {
     capture();
   }
   tracker = setInterval(() => capture(), 50);
-  timer = setTimeout(() => {
+  if (timeout !== undefined) timer = setTimeout(() => {
     timedOut = true;
     diagnoseTimeout();
     void stop();

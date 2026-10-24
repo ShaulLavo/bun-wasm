@@ -15,6 +15,10 @@ test("command deadline preserves ordinary command exit and output", async () => 
   expect(await run("5", ["-e", 'console.log("ordinary-exit"); process.exit(7)'])).toEqual({ code: 7, stdout: "ordinary-exit\n", stderr: "" });
 });
 
+test("supervision without a new deadline preserves command output and exit", async () => {
+  expect(await run("none", ["-e", 'console.log("no-added-deadline"); process.exit(7)'])).toEqual({ code: 7, stdout: "no-added-deadline\n", stderr: "" });
+});
+
 test("command deadline diagnoses and removes its descendant process group", async () => {
   const scratch = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-deadline-"));
   try {
@@ -63,3 +67,7 @@ for (const runtime of ["node", "bun"] as const) {
     NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${new URL("./fixtures/deadline-worker-import-control.ts", import.meta.url).href}`].filter(Boolean).join(" "),
   }), 12000);
 }
+
+test("supervision without deadline reaps descendants after ordinary exit", () => ownedScenario("quick-launcher", "node", undefined, {}, "none"), 12000);
+
+test("supervision without deadline handles interruption and descendant grace", () => ownedScenario("launcher", "node", "SIGTERM", {}, "none"), 12000);
