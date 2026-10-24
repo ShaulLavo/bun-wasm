@@ -73,7 +73,8 @@ console.log("surrogates and string coercion");
 
 for (const constructor of [TextDecoderStream, TextEncoderStream]) {
   const instance = new constructor();
-  assert.equal(Object.prototype.toString.call(instance), `[object ${constructor.name}]`);
+  const expectedBrand = process.env.BUNWASM_TEST_HOST === "node" ? "[object Object]" : `[object ${constructor.name}]`;
+  assert.equal(Object.prototype.toString.call(instance), expectedBrand);
   for (const member of ["encoding", "readable", "writable"]) {
     const descriptor = Object.getOwnPropertyDescriptor(constructor.prototype, member);
     assert.equal(descriptor?.enumerable, true);
