@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { apps } from "./apps.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
-import { failure, compareEngines, stageOutput } from "./classify.mjs";
+import { failure, compareEngines, stageOutput } from "./classify.ts";
 import { readGuest, serverCommand } from "./browser.mjs";
 
 test("playground server exit zero before HTTP assertion fails", async () => {

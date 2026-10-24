@@ -1,6 +1,6 @@
 [package]
 name = "bunwasm-runtime"
-version = "0.0.48"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Bun-compatible JS runtime for wasm32-wasip1, on QuickJS-ng or JavaScriptCore behind an Engine trait"

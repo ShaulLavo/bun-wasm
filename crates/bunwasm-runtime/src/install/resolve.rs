@@ -510,7 +510,7 @@ impl Resolver {
             .filter(|v| matches(v, range))
             .max_by(|a, b| order(a, b))
             .ok_or_else(|| {
-                format!("No version matching \"{range}\" found for specifier \"{name}\"")
+                format!("No version matching \"{range}\" found for specifier \"{name}\" (but package exists)")
             })?;
         let replacement = platform_package(name, version);
         if replacement != name {

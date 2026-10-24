@@ -57,8 +57,7 @@ existing HTTP streaming path. The other file timeout is the existing native
 Web Stream consumer-state file. Passing heap-counter assertions does not prove
 leak freedom, because per-type/protected counters remain unavailable.
 
-The [compatibility follow-up](../../plans/compatibility-followups.md#htmlrewriter-lifetime-and-intrinsic-storage-parity)
-records the next reproduction and relevant implementation points.
+The lifetime and intrinsic-storage parity gap was open when this was measured.
 
 ## Wasm sizes
 
@@ -134,9 +133,7 @@ Both new fixtures pass on all three rebuilt engines, including an additional
 header-snapshot regression checked against Bun. The intermediate QuickJS artifact
 fails that new header regression before the rebuild. Each full fixture gate
 reports **202 passed, 2 failed**. `node-misc` expects the old subprocess errors,
-and `pipe-closed-output` observes SIGPIPE exit 141. The
-[compatibility follow-up](../../plans/compatibility-followups.md#full-fixture-gates-after-the-process-signal-integration)
-records reproduction and the runtime track's remaining work.
+and `pipe-closed-output` observes SIGPIPE exit 141. Both were open when this was measured.
 
 The original fail-fast batch stopped at the first QuickJS gate. A continuation
 builds all three engines and collects every remaining check. HMR passes all six

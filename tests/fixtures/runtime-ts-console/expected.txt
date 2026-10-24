@@ -1,0 +1,4 @@
+formatting, routing, groups and counters
+native write error identity
+option validation codes and native constructors
+detached methods, lazy constructor and stdio descriptors
