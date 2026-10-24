@@ -80,7 +80,7 @@ declare namespace BunWasm {
   }
 }
 
-declare const process: { cwd(): string };
+declare var process: { cwd(): string; stdout: BunWasm.WorkerWritable; stderr: BunWasm.WorkerWritable };
 declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
 
@@ -231,6 +231,7 @@ declare namespace BunWasm {
 declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;
 declare namespace BunWasm {
   interface StackFrame { file: string; name: string; line: number; column: number }
+  interface ConsoleInspector { parseStack(raw: unknown): StackFrame[] }
   interface StackCallSite {
     getFileName(): string;
     getFunctionName(): string | null;
@@ -263,7 +264,7 @@ declare namespace BunWasm {
     defineHidden(target: object, values: object): void;
     mappedCallSites: WeakSet<object>;
     formatCallSite(site: StackCallSite): string;
-    require(name: "inspect"): { parseStack(raw: unknown): StackFrame[] };
+    require(name: "inspect"): ConsoleInspector;
   }
 }
 
@@ -291,7 +292,10 @@ declare namespace BunWasm {
   }
 }
 
-declare var Bun: { inspect(value: unknown): string };
+declare var Bun: {
+  inspect(value: unknown): string;
+  stringWidth(value: string, options?: { ambiguousIsNarrow?: boolean; countAnsiEscapeCodes?: boolean }): number;
+};
 declare var Temporal: {
   Instant: { from(value: string): BunWasm.FormatInstant };
   PlainDate: { from(value: string): BunWasm.FormatTemporalValue };
