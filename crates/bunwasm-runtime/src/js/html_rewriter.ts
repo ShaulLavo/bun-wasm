@@ -18,6 +18,7 @@
     return String(value);
   }
 
+  const promiseThen = Promise.prototype.then;
   type Pending = { promise: Promise<void>; cancel(): void };
   const abandoned = new FinalizationRegistry<(error: unknown) => void>(reject => {
     reject(new Error("HTMLRewriter content handler returned a Promise that will never settle"));
@@ -44,10 +45,10 @@
   }
 
   function observe(value: unknown): Promise<unknown> | undefined {
-    if (internal.isPromise(value)) return value;
     if ((typeof value !== "object" || value === null) && typeof value !== "function") return;
     const then = Reflect.get(value, "then");
     if (typeof then !== "function") return;
+    if (internal.isPromise(value) && then === promiseThen) return value;
     return new Promise<void>((resolve, reject) => Reflect.apply(then, value, [() => resolve(undefined), reject]));
   }
 
@@ -56,7 +57,8 @@
     if (!observed) return;
     const pending = handlerWaiter();
     abandoned.register(observed, pending.rejected, pending.token);
-    internal.promiseThen(observed, pending.fulfilled, pending.rejected);
+    try { Reflect.apply(promiseThen, observed, [pending.fulfilled, pending.rejected]); }
+    catch (error) { pending.cancel(); throw error; }
     return pending;
   }
 

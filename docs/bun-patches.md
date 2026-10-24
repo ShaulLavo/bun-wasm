@@ -25,7 +25,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
 | [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
-| [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, cancellable async handler waits, private indexed storage and streaming wrappers on all engines. |
+| [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, cancellable async handler waits, observable Promise handlers, private indexed storage and streaming wrappers on all engines. |
 | [X509Certificate adapters](#x509certificate) | Host feature | Original BoringSSL data bindings and Node certificate wrapper over existing KeyObjects. |
 | [X.509 hostname option matcher](#x509-hostname-option-matcher) | Port | Adapt Bun's OpenSSL-compatible Rust matcher because BoringSSL removed four option behaviors. |
 | [X.509 alternative name formatting and Node license](#x509-alternative-name-formatting) | Port | Translate Bun and Node certificate-name quoting to Rust without JSC and retain the Node MIT notices. |
@@ -2666,7 +2666,15 @@ retaining it in the registry's held callback. Collection rejects a separate
 waiter with the abandonment error. Cancellation settles that waiter, including
 when the handler cancels before returning its promise. This releases the
 suspended input graph before the handler settles. Thenable fulfillment still
-discards its value, and rejection values pass through unchanged. The comparison
+discards its value, and rejection values pass through unchanged. Promise handlers
+read `then` once before the native brand check. A custom callable keeps its
+original receiver, a throwing getter keeps its exact error, and a non-callable
+`then` does not park the rewrite. Only a native Promise whose method equals the
+captured `Promise.prototype.then` is observed directly. Other thenables keep the
+value-discarding wrapper. The captured method attaches the reactions, preserving
+constructor and species access. A synchronous attachment error unregisters and
+settles the waiter before it escapes. These are original adapter changes, not
+changes to global Promise machinery. The comparison
 source is Bun's unchanged `test/js/workerd/html-rewriter-leak.test.ts` and
 `src/runtime/api/html_rewriter.rs` at revision
 `d71508d31edf06765c12adf0df137ef531539f68`. No implementation was copied.

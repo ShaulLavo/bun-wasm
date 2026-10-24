@@ -32,7 +32,6 @@ declare namespace BunWasm {
 
   interface Internal {
     isPromise(value: unknown): value is Promise<unknown>;
-    promiseThen<T, U>(value: Promise<T>, fulfilled: (value: T) => U, rejected?: (error: unknown) => U): Promise<U>;
     defineGlobal(name: string, value: unknown): void;
     require(name: "builtins"): { "bun:jsc": () => { callerSourceOrigin(): string | null } };
     require(name: "node_url"): { fileURLToPath(url: string | URL): string };

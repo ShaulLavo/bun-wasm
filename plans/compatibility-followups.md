@@ -667,6 +667,12 @@ ruled out. Final gate outcomes for this lane are recorded separately in its PR.
 Status: Approved. Indexed prototype accessor interception is resolved. Lifetime
 and abandoned-stream checks remain Approved.
 
+The recovered unmerged candidate now rejects abandoned handler waits and settles
+those waits on output cancellation. Recovery also restores observable `then`
+getters, overridden methods and non-callable values on native Promises. Cheap
+adapter checks pass, but final-source guest acceptance remains pending under the
+no-build recovery restriction. See [bounded lifecycle evidence](../docs/bun-test-suite/html-lifecycle.md).
+
 The 2026-10-17 HTML/X509 lane adds the parser, handlers, async Response rewriting,
 streaming readers and Node certificates. Its [measurement](../docs/bun-test-suite/htmlrewriter-x509.md)
 records 9/10/10 fully passing files in the 21-file QuickJS/JSC/browser selection.
@@ -697,7 +703,8 @@ Do not classify that timeout as a demonstrated parser lifetime leak.
 Inspect `Rewrite.asyncStep`, `stream`, `buffered`, and `close` in
 `crates/bunwasm-runtime/src/js/html_rewriter.ts`, plus the parser-session table in
 `src/html_rewriter.rs`. The async wrapper awaits an assimilated handler promise;
-unreachable never-settling promises do not yet trigger native-style abandonment.
+the merged base does not yet trigger native-style abandonment for unreachable
+never-settling promises. The unmerged candidate above supplies that behavior.
 Private handler and synchronous output arrays now append own data properties,
 so indexed prototype accessors cannot intercept registrations or output chunks.
 `html-intrinsic-storage` reproduces both paths. Use real weak references and
