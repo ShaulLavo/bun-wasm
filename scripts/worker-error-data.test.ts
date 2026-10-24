@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import type { WorkerCodec, WorkerCodecHooks, WorkerErrorData } from "./worker-error-data-types";
 
 const context = {
   ArrayBuffer, BigInt64Array, BigUint64Array, Boolean, Buffer, DataView, Date, DOMException,
@@ -19,7 +20,7 @@ const workerSource = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalT
 const codecSource = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.codecFactory = ${readFileSync(
   new URL("../crates/bunwasm-runtime/src/js/worker_codec.ts", import.meta.url), "utf8")}`);
 
-type CodecRuntime = { create(hooks: BunWasm.WorkerCodecHooks): BunWasm.WorkerCodec };
+type CodecRuntime = { create(hooks: WorkerCodecHooks): WorkerCodec };
 type CodecFactory = (internal: { native: typeof native }) => CodecRuntime;
 type WorkerInternal = {
   native: typeof native;
@@ -27,7 +28,7 @@ type WorkerInternal = {
   require(name: string): unknown;
   addIoWaiter(): void;
   messagePortRefs: number;
-  workerErrorData?: (error: unknown) => BunWasm.WorkerErrorData;
+  workerErrorData?: (error: unknown) => WorkerErrorData;
 };
 
 function isCodecFactory(value: unknown): value is CodecFactory {
@@ -45,13 +46,13 @@ function isWorkerFactory(value: unknown): value is (internal: WorkerInternal) =>
 function workerErrorData() {
   const codecFactoryValue = runInNewContext(codecSource, context);
   if (!isCodecFactory(codecFactoryValue)) throw new Error("Codec factory was not emitted");
-  let implementation: BunWasm.WorkerCodec | undefined;
+  let implementation: WorkerCodec | undefined;
   const modules: Record<string, unknown> = {
     process: { env: {}, execArgv: [], execPath: "bun", cwd: () => "/" },
     events: EventEmitter,
     structured_clone: { structuredClone },
     worker_codec: {
-      create(hooks: BunWasm.WorkerCodecHooks) {
+      create(hooks: WorkerCodecHooks) {
         const codecRuntime = codecFactoryValue({ native });
         if (!isCodecRuntime(codecRuntime)) throw new Error("Codec runtime was not created");
         implementation = codecRuntime.create(hooks);
