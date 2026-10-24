@@ -69,7 +69,7 @@ metadata for a child handle; it is never a worker pipe. Native completion closes
 the worker's input reader and output writer before publishing its result, so
 late parent writes fail with EPIPE while buffered worker output drains to EOF.
 These channels are separate from stdio selectors 0–2 and their inheritance modes.
-See [the host ABI](host-abi.md#bun-child-processes).
+See [the host ABI](host-abi.md#process-imports).
 
 Native `resourceLimits` maps the combined old and young heap limit to the guest's
 WebAssembly memory budget. Node hosts also pass limits to the physical V8 worker.
