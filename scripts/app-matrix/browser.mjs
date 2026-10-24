@@ -6,7 +6,7 @@ import { checkCommand, checkInstall } from "./checks.mjs";
 import { browserDiagnostics } from "./browser-diagnostics.ts";
 import { verifyBrowserServer, stoppedPreviewError } from "./server-browser.ts";
 import { observeHmr } from "./hmr.ts";
-import { failure, stageOutput } from "./classify.mjs";
+import { failure, stageOutput } from "./classify.ts";
 
 export function earlyServerExit(command, stage) {
   const classified = failure(command.output, stage);

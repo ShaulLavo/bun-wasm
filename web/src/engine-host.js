@@ -45,6 +45,8 @@ const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const nativeDateNow = globalThis.Date.now.bind(globalThis.Date);
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
 const nativeGc = typeof globalThis.gc === "function" ? globalThis.gc.bind(globalThis) : null;
+const nativeAtomicsLoad = Atomics.load;
+const nativeWaitAsync = typeof Atomics.waitAsync === "function" ? Atomics.waitAsync : null;
 const NativeMessageChannel = globalThis.MessageChannel;
 const NativeAbortController = globalThis.AbortController;
 const NativePromise = globalThis.Promise;
@@ -283,6 +285,8 @@ class ExitSignal {
  *   networking: the bun_wasm ABI (docs/host-abi.md) as the JS functions net.js
  *   calls (hostListen, hostRead, …), which slots they cover, and a way to be
  *   told when any handle may have changed
+ * @param {Int32Array} [o.processWake]  the process wake word that pipe and child changes publish on;
+ *   the loop waits on it while the program waits on I/O
  * @returns {Promise<number>} the exit code (if onExit returns)
  */
 export function startEngineHost(o) {
@@ -318,6 +322,7 @@ class EngineHost {
     }) : null;
     this.handoffs = new Map();
     this.asyncContext = undefined;
+    this.wakeArmed = false;
     if (NativeMessageChannel) {
       this.channel = new NativeMessageChannel();
       this.channel.port1.onmessage = () => {
@@ -880,6 +885,8 @@ class EngineHost {
   // then decide when to come back.
   pump() {
     if (this.exited) return;
+    // Read before stepping I/O, so a change published meanwhile still ends the next wait.
+    const observedWake = this.o.processWake ? nativeAtomicsLoad(this.o.processWake, 0) : 0;
     this.guard(() => this.internal.pumpSignals(), false);
     if (this.exited) return;
     if (this.testComplete) return this.finish();
@@ -893,6 +900,7 @@ class EngineHost {
     if (this.exited) return;
     if (next >= 0 || this.pendingAsync > 0 || io > 0) this.idleWait = false;
     if (next === 0) return this.schedule(0);
+    if (io > 0) this.wakeOnProcessChange(observedWake);
     // A sender may be another worker, so shared pending signals do not necessarily post a
     // message here. Only bound waits that already keep the guest alive; handlers alone must
     // not create a timer or stop an otherwise idle program from finishing.
@@ -902,6 +910,20 @@ class EngineHost {
       return undefined;
     }
     return this.finish();
+  }
+
+  // Pipe and child changes publish on the process wake word: run the loop for them rather than
+  // waiting out the bounded rescan. Other sources still rely on that rescan.
+  wakeOnProcessChange(observed) {
+    const word = this.o.processWake;
+    if (!word || !nativeWaitAsync || this.wakeArmed) return;
+    const wait = nativeWaitAsync(word, 0, observed);
+    if (!wait.async) return this.schedule(0);
+    this.wakeArmed = true;
+    nativePromiseThen(wait.value, () => {
+      this.wakeArmed = false;
+      this.schedule(0);
+    });
   }
 
   finish() {

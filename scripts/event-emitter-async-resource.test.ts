@@ -12,8 +12,7 @@ function events() {
     },
     require(name: string) {
       if (modules.has(name)) return modules.get(name);
-      const extension = name === "events" ? "js" : "ts";
-      const source = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url), "utf8");
+      const source = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url), "utf8");
       const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`));
       const module = factory(internal);
       modules.set(name, module);

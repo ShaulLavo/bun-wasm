@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { failure } from "./classify.mjs";
+import { failure } from "./classify.ts";
 
 export async function checkCommand(command, result, read) {
   const check = command.check;

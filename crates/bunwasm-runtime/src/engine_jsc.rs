@@ -214,12 +214,14 @@ fn uint8_array(bytes: &[u8]) -> JSValueRef {
         k.get()
     });
     // SAFETY: a fresh array of `len` bytes; its storage is written before any JS runs.
+    // bunjsc_buffer_bytes leaves it unpinned, so the result stays transferable.
     unsafe {
         let len = JSValueMakeNumber(c, bytes.len() as f64);
         let arr = JSObjectCallAsConstructor(c, ctor, 1, &len, ptr::null_mut());
         if !bytes.is_empty() {
-            let data = JSObjectGetTypedArrayBytesPtr(c, arr, ptr::null_mut()).cast::<u8>();
-            ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
+            let mut size = 0;
+            let data = bunjsc_buffer_bytes(c, arr, &mut size);
+            ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len().min(size));
         }
         arr
     }

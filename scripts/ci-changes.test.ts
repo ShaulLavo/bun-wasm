@@ -3,21 +3,24 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { changedPaths, needsRust } from "./ci-changes";
+import { changedPaths, needsJsc, needsRust } from "./ci-changes";
 
 test.each([
-  "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json",
+  "checks/native-console.json", "checks/runtime-leaf.json", "scripts/test-checks.ts", "tests/fixtures/console-format/index.js",
+  "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "tests/fixtures/source-cache/index.ts",
+  "web/tests/bun-runtime-proc-fixtures.ts", "web/tests/bun-runtime-proc-browser.ts", "web/tests/bun-runtime-proc-main.ts",
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "crates/bunwasm-runtime/src/lib.rs", "vendor/bun/src/parser.rs", "patches/bun/001.patch",
   "third_party/libc/src/lib.rs", "Cargo.lock", "Cargo.toml", ".cargo/config.toml", "rust-toolchain.toml",
-  "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts",
+  "tests/install/package-options.ts", "tests/install/registry.mjs",
+  "env.sh", "tests/fixtures/node-misc/main.js", "scripts/test.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts",
   "scripts/quality-wasi-probe.ts", "scripts/quality.ts", "scripts/ci-changes.ts", "package.json", "bun.lock",
   ".github/workflows/ci.yml", "scripts/build.sh", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
 ])("native input %s retains every Rust gate", path => {
   expect(needsRust([path])).toBe(true);
 });
 
-test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts"])("JavaScript/documentation input %s needs no Rust compilation", path => {
+test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
   expect(needsRust([path])).toBe(false);
 });
 
@@ -69,12 +72,12 @@ function select(start: string, end: string, event = "pull_request"): string {
 }
 
 test("real PR diff catches a native file renamed into JavaScript", () => {
-  expect(select(base, native)).toBe("rust=true");
-  expect(select(native, javascript)).toBe("rust=false");
+  expect(select(base, native)).toBe("rust=true\njsc=false");
+  expect(select(native, javascript)).toBe("rust=false\njsc=false");
 });
 
 test("multi-commit main push includes earlier native changes", () => {
-  expect(select(base, javascript, "push")).toBe("rust=true");
+  expect(select(base, javascript, "push")).toBe("rust=true\njsc=false");
 });
 
 test("unavailable commit comparison fails rather than skipping native checks", () => {
@@ -93,7 +96,7 @@ function commitInput(path: string): string {
 
 for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh"]) {
   test.each(["pull_request", "push"])(`${path} retains native checks through the real %s event CLI`, event => {
-    expect(select(base, commitInput(path), event)).toBe("rust=true");
+    expect(select(base, commitInput(path), event)).toBe(`rust=true\njsc=${needsJsc([path])}`);
   });
 }
 
@@ -104,8 +107,44 @@ for (const path of [
   "scripts/real-runtime-network-tls.sh", "jsc/shim/wasi-compat.h", "jsc/shim/wasi-compat.c", "jsc/shim/madvise.c",
 ]) {
   test.each(["pull_request", "push"])(`${path} keeps the blocking lightweight CMake owner for a real %s event`, event => {
-    expect(select(base, commitInput(path), event)).toBe("rust=false");
-    expect(quality).toContain("run: bun test scripts/cmake-cache.test.ts");
-    expect(quality).not.toMatch(/^\s+(?:if|needs):/m);
+    expect(select(base, commitInput(path), event)).toBe(`rust=${needsRust([path])}\njsc=${needsJsc([path])}`);
+    expect(quality).toContain("run: bun scripts/test-checks.ts cmake");
+    expect(quality).not.toMatch(/^ {4}(?:if|needs):/m);
   });
 }
+
+
+test("patch-only manifest bumps skip Rust but dependency and script edits retain it", () => {
+  if (!fixture) throw new Error("Fixture not initialized");
+  const first = commitInput("package.json");
+  writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.1", scripts: { quality: "bun quality.ts" } }));
+  git(["commit", "-qam", "manifest inputs"]);
+  const manifestBase = git(["rev-parse", "HEAD"]);
+  writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.2", scripts: { quality: "bun quality.ts" } }));
+  git(["commit", "-qam", "patch bump"]);
+  const bumped = git(["rev-parse", "HEAD"]);
+  expect(select(manifestBase, bumped)).toBe("rust=false\njsc=false");
+  expect(select(manifestBase, bumped, "push")).toBe("rust=false\njsc=false");
+  writeFileSync(join(fixture, "package.json"), JSON.stringify({ version: "0.0.3", scripts: { quality: "bun changed-quality.ts" } }));
+  git(["commit", "-qam", "change native driver"]);
+  expect(select(bumped, git(["rev-parse", "HEAD"]))).toBe("rust=true\njsc=false");
+  expect(() => select(first, bumped)).toThrow();
+});
+
+for (const path of [
+  "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp", "scripts/jsc-embedding.ts",
+  "scripts/build-bun-jsc.sh", "scripts/ci-binaryen.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
+]) {
+  test.each(["pull_request", "push"])(`${path} selects actual JSC embedding execution for %s`, event => {
+    expect(needsJsc([path])).toBe(true);
+    expect(select(base, commitInput(path), event)).toBe("rust=true\njsc=true");
+  });
+}
+
+test("unrelated page changes skip JSC; its selected gate builds and executes once", () => {
+  expect(needsJsc(["web/src/page.ts", "docs/jsc-build.md"])).toBe(false);
+  expect(workflow).toContain("if: needs.quality.outputs.jsc == 'true'");
+  expect(workflow.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
+  expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
+  expect(workflow).toContain("bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm");
+});

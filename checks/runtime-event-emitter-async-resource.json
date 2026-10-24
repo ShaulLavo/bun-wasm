@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/event-emitter-async-resource.test.ts",
+  "localRuntime": true
+}

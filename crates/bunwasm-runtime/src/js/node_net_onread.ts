@@ -1,12 +1,12 @@
 (function (internal: Pick<BunWasm.Internal, "handleUncaught" | "native">) {
   type ReadBuffer = Uint8Array | true;
+  const typedArrayTag = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), Symbol.toStringTag)?.get;
+  function isReadBuffer(value: unknown): value is Uint8Array {
+    return ArrayBuffer.isView(value) && typedArrayTag?.call(value) === "Uint8Array";
+  }
   function allocate(factory: (() => unknown) | null, previous: ReadBuffer): ReadBuffer {
     const value = factory?.();
-    return value instanceof Uint8Array ? value : previous;
-  }
-  function callback(fn: Function, count: number, buffer: ReadBuffer): unknown {
-    try { return Reflect.apply(fn, undefined, [count, buffer]); }
-    catch (error) { if (!internal.handleUncaught(error)) internal.native.exit(1); }
+    return isReadBuffer(value) ? value : previous;
   }
   return function onread(value: unknown) {
     if (!value) return null;
@@ -14,9 +14,9 @@
     if (!("callback" in value) || typeof value.callback !== "function") throw new TypeError("onread.callback must be a function");
     if (!("buffer" in value)) return null;
     const supplied = value.buffer;
-    if (!(supplied instanceof Uint8Array) && typeof supplied !== "function") return null;
+    if (!(isReadBuffer(supplied)) && typeof supplied !== "function") return null;
     const factory = typeof supplied === "function" ? () => supplied() : null;
-    let buffer = supplied instanceof Uint8Array ? supplied : allocate(factory, true);
+    let buffer = isReadBuffer(supplied) ? supplied : allocate(factory, true);
     const fn = value.callback;
     return {
       capacity(): number {
@@ -26,9 +26,13 @@
       },
       deliver(chunk: Uint8Array): unknown {
         if (buffer !== true) buffer.set(chunk);
-        const result = callback(fn, chunk.length, buffer);
-        buffer = allocate(factory, buffer);
-        return result;
+        try {
+          const result: unknown = Reflect.apply(fn, undefined, [chunk.length, buffer]);
+          buffer = allocate(factory, buffer);
+          return result;
+        } catch (error) {
+          if (!internal.handleUncaught(error)) internal.native.exit(1);
+        }
       },
     };
   };

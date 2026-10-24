@@ -20,7 +20,9 @@ interface CaseResources {
   cleanupErrors: unknown[];
 }
 let currentCase: CaseResources | undefined;
+let currentIdentity: FunctionalCaseIdentity | undefined;
 const functional = new FunctionalCases();
+Object.assign(globalThis, { engineInterruptionProgress: () => ({ currentIdentity, outcomes: functional.outcomes }) });
 function captureContext(read: () => unknown): unknown {
   try { return read(); } catch (error) { return { diagnosticError: String(error) }; }
 }
@@ -201,7 +203,7 @@ async function runCase(identity: FunctionalCaseIdentity, body: () => Promise<unk
   const beforeWorkers = new Set(activeWorkers), beforeScopes = new Set(scopes);
   const settings = { hooks, observeCheckpoints, idleWaitTimeoutMs, instrumentPreview1Root, notify: observedAtomics.notify };
   let passed = false;
-  currentCase = resources;
+  currentCase = resources; currentIdentity = identity;
   try {
     return await functional.run(identity, async () => {
       const result = await body(); passed = true; return result;

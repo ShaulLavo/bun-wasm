@@ -8,7 +8,7 @@ import { chromium } from "playwright";
 import { nextPageContract } from "./next-framework-contract";
 import { stopProcessGroup } from "./next-framework-process";
 
-assert.equal(Bun.version, "1.4.2", "Native control requires Bun 1.4.2");
+assert.equal(Bun.version, "1.4.4", "Native control requires Bun 1.4.4");
 const reports = resolve(process.env.NEXT_REPORTS ?? "/work/tmp/bun-wasm-next-control");
 mkdirSync(reports, { recursive: true });
 const fixture = resolve(import.meta.dir, "../../examples/frameworks");

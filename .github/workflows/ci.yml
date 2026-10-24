@@ -19,13 +19,14 @@ jobs:
     timeout-minutes: 10
     outputs:
       rust: ${{ steps.changes.outputs.rust }}
+      jsc: ${{ steps.changes.outputs.jsc }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -35,13 +36,19 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bun scripts/ci-changes.ts "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
+      - name: Feature PRs preserve current package and workspace versions
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'release') && !contains(github.event.pull_request.labels.*.name, 'consumer-pin')
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: bun scripts/feature-versions.ts "$BASE" "$HEAD"
       - uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - name: Install locked JavaScript tools and application dependencies
         run: |
-          bun install --frozen-lockfile
+          bun install --frozen-lockfile --ignore-scripts
           (cd web && bun install --frozen-lockfile)
           (cd sandbox && bun install --frozen-lockfile)
           (cd site && bun install --frozen-lockfile)
@@ -51,12 +58,15 @@ jobs:
         run: bun run quality --javascript
       - name: Install lightweight CMake preflight tools
         run: |
+          if command -v cmake && command -v ninja && command -v g++; then exit 0; fi
+          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+          test -s /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build g++
       - name: Test CMake cache toolchain preflight
         env:
           TMPDIR: ${{ runner.temp }}
-        run: bun test scripts/cmake-cache.test.ts
+        run: bun scripts/test-checks.ts cmake
 
   rust:
     name: Rust workspace tests (QuickJS host)
@@ -87,7 +97,7 @@ jobs:
           echo "image=$ImageVersion" >> "$GITHUB_OUTPUT"
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -102,13 +112,18 @@ jobs:
           targets: wasm32-wasip1
       - name: Install native build tools
         run: |
+          if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
+             command -v ruby && command -v gperf && command -v bison &&
+             ldconfig -p | grep -E 'libclang(-[0-9]+)?\.so' > /dev/null; then exit 0; fi
+          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+          test -s /etc/apt/apt-mirrors.txt
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config
+          sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
       - uses: actions/cache@v4
         id: sdk
         with:
-          path: ${{ env.WASM_TOOLS }}
-          key: wasi-sdk-34.0-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'bun.lock', 'env.sh') }}
+          path: ${{ env.WASM_TOOLS }}/wasi-sdk
+          key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
       - name: Install pinned WASI SDK
         if: steps.sdk.outputs.cache-hit != 'true'
         run: |
@@ -121,10 +136,18 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - uses: actions/cache@v4
+        if: needs.quality.outputs.jsc == 'true'
+        with:
+          path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
+          key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
+      - name: Install pinned Binaryen
+        if: needs.quality.outputs.jsc == 'true'
+        run: bun scripts/ci-binaryen.ts
+      - uses: actions/cache/restore@v4
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --ignore-scripts
       - uses: actions/cache@v4
         with:
           path: |
@@ -136,22 +159,39 @@ jobs:
           source env.sh
           bash scripts/sync-bun.sh
           bash scripts/sync-crypto.sh
-      - uses: actions/cache@v4
-        id: native-cache
+      - uses: actions/cache/restore@v4
+        id: native-cargo-cache
         with:
           path: |
             ${{ env.CARGO_HOME }}/registry
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json') }}
-          restore-keys: native-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/quality*.ts', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh') }}-
+          key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('.github/workflows/ci.yml', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/sync-*.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp') }}-${{ hashFiles('Cargo.*', 'crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+          restore-keys: |
+            native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('.github/workflows/ci.yml', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/sync-*.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp') }}-
+      - uses: actions/cache/restore@v4
+        id: native-cache
+        if: steps.native-cargo-cache.outputs.cache-matched-key == ''
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/bin/cargo-machete
+            ${{ env.CARGO_TARGET_DIR }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+          restore-keys: |
+            native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-
       - name: Install pinned Rust dependency checker
         run: |
           source env.sh
           if ! cargo machete --version 2>/dev/null | command grep -qx '0.9.2'; then
             cargo install cargo-machete --version 0.9.2 --locked --jobs 2
           fi
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
+          key: wasi-sysroot-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'bun.lock', 'env.sh') }}
       - name: Build patched WASI sysroot
         run: |
           source env.sh
@@ -162,24 +202,120 @@ jobs:
         run: |
           source env.sh
           bun run quality --native
-      - name: Build and run native launcher regression fixtures
+      - name: Check host-engine source cache invalidation
         run: |
           source env.sh
+          cargo test --locked --release -j 2 -p bunwasm-runtime --no-default-features --features engine-host --lib modules::tests::host_
+      - name: Build once and run native runtime fixtures
+        run: |
+          source env.sh
+          bun scripts/quality-input-times.ts
           export WASI_SDK="$WASI_SDK_PATH"
           bun install --cwd web --frozen-lockfile
           cargo build --release --locked -j 2 -p bunwasm-host
           cargo build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli
           mkdir -p dist
           cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm" dist/
-          git rev-parse HEAD
-          sha256sum dist/bun.wasm
-          fixtures=(node-misc)
-          for fixture in net-server-contracts net-default-bind net-onread net-dns-errors; do
-            if [ -f "tests/fixtures/$fixture/expected.txt" ]; then
-              fixtures+=("$fixture")
-            fi
-          done
-          bash scripts/test.sh --no-build "${fixtures[@]}"
+          bun scripts/test-checks.ts native
+          BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts
+
+      - name: Configure private JSC build paths
+        if: needs.quality.outputs.jsc == 'true'
+        run: |
+          echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
+          echo "JSC_CARGO_TARGET_DIR=$RUNNER_TEMP/jsc/target" >> "$GITHUB_ENV"
+          echo "JOBS=2" >> "$GITHUB_ENV"
+          echo "CAGE=" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.jsc == 'true'
+        id: jsc-prebuild-cache
+        with:
+          path: ${{ runner.temp }}/jsc/prebuild
+          key: jsc-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts') }}
+      - uses: actions/cache/restore@v4
+        if: needs.quality.outputs.jsc == 'true'
+        id: jsc-cargo-cache
+        with:
+          path: ${{ runner.temp }}/jsc/target
+          key: jsc-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/sync-*.sh', 'Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+      - name: Build or validate the single JSC prebuild
+        if: needs.quality.outputs.jsc == 'true'
+        run: |
+          source env.sh
+          if [[ '${{ steps.jsc-prebuild-cache.outputs.cache-hit }}' == 'true' ]]; then
+            source jsc/common.sh
+            check_jsc_inputs_stamp
+          else
+            bash scripts/build-jsc.sh
+          fi
+      - name: Blocking JSC embedding and allocation checks
+        if: needs.quality.outputs.jsc == 'true'
+        run: |
+          source env.sh
+          bash scripts/build-bun-jsc.sh
+          bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm
+      - uses: actions/upload-artifact@v4
+        if: always() && needs.quality.outputs.jsc == 'true'
+        with:
+          name: jsc-embedding-receipts
+          path: |
+            dist/bun-jsc.wasm.build.json
+            dist/bun-jsc.wasm.embedding.json
+          if-no-files-found: error
+
+      - name: Build one host-engine guest for real-browser source cache acceptance
+        run: |
+          source env.sh
+          export WASI_SDK="$WASI_SDK_PATH"
+          inputs=$(bun scripts/guest-build-receipt.ts inputs)
+          cargo build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli --no-default-features --features engine-host,bun-build
+          mkdir -p dist/source-cache-browser
+          cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm" dist/source-cache-browser/bun-browser.wasm
+          bun scripts/guest-build-receipt.ts write dist/source-cache-browser/bun-browser.wasm "$inputs"
+          git rev-parse HEAD HEAD^{tree} > dist/source-cache-browser/source.txt
+          sha256sum dist/source-cache-browser/bun-browser.wasm >> dist/source-cache-browser/source.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-cache-browser-guest
+          path: dist/source-cache-browser/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Save the JSC prebuild cache once per input revision
+        if: needs.quality.outputs.jsc == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/jsc/prebuild
+          key: jsc-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts') }}
+
+      - name: Save the JSC Cargo cache once per input revision
+        if: needs.quality.outputs.jsc == 'true' && steps.jsc-cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/jsc/target
+          key: jsc-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/sync-*.sh', 'Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+
+      - name: Save the refined native Cargo cache once per input revision
+        if: steps.native-cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/bin/cargo-machete
+            ${{ env.CARGO_TARGET_DIR }}
+          key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('.github/workflows/ci.yml', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/sync-*.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp') }}-${{ hashFiles('Cargo.*', 'crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+
+      - name: Save the complete native fallback once per input revision
+        if: steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/bin/cargo-machete
+            ${{ env.CARGO_TARGET_DIR }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
 
   package:
     name: Browser adapter package
@@ -189,18 +325,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - run: bun install --frozen-lockfile
       - run: bun run check
-      - run: bun run build
       - run: bun run test
         env:
           TMPDIR: ${{ runner.temp }}
       - name: Test vectored reads and browser dependency resolution
-        run: bun test scripts/node-fs-readv.test.ts scripts/node-fs-runtime-proc.test.ts scripts/browser-build.test.ts
+        run: bun scripts/test-checks.ts package-extra
 
   web:
     name: Web host
@@ -213,10 +352,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
       - name: Web host unit, CLI shim, type and bundle gates
         run: bash ../scripts/test-web-host.sh --unit
       - name: Use Ubuntu HTTPS archives for browser dependencies
@@ -246,7 +389,32 @@ jobs:
           EDITOR_SCRATCH_ROOT: ${{ runner.temp }}
         run: bash ../scripts/test-web-host.sh --browser
 
+  process-bundles:
+    name: Shared process browser bundles
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun install --cwd web --frozen-lockfile --linker=isolated
+      - name: Build each process fixture once for all browsers
+        run: bun web/scripts/ci-process-bundles.ts "$RUNNER_TEMP/process-bundles"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: process-bundles
+          path: ${{ runner.temp }}/process-bundles
+          retention-days: 1
+          if-no-files-found: error
+
   browser-process:
+    needs: [quality, rust, process-bundles]
+    if: ${{ !cancelled() && needs.quality.result == 'success' && needs.process-bundles.result == 'success' && (needs.rust.result == 'success' || needs.rust.result == 'skipped') }}
     name: Processes (${{ matrix.browser }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -261,7 +429,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: process-bundles
+          path: ${{ runner.temp }}/process-bundles
       - run: bun install --frozen-lockfile --linker=isolated
       - name: Use Ubuntu HTTPS archives for browser dependencies
         run: |
@@ -287,14 +463,33 @@ jobs:
         run: bunx playwright install ${{ matrix.browser }}
       - name: Process supervisor, generic preview1 and interrupt gate (no Rust or dist artifacts)
         env:
+          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
           PROCESS_SMOKE_PORT: "4186"
           TMPDIR: ${{ runner.temp }}
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-process.ts ${{ matrix.browser }}
       - name: Injected third-party interrupt checks (no Rust or dist artifacts)
         env:
+          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
           INTERRUPT_SCRATCH_ROOT: ${{ runner.temp }}
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-interrupt.ts ${{ matrix.browser }}
       - name: Process pipes, CLI ABI and foreground stop (isolated install, no Rust or dist artifacts)
         env:
+          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
           TMPDIR: ${{ runner.temp }}
+          BUN_WASM_RUNTIME_PROC_BUNDLE: ${{ runner.temp }}/process-bundles/runtime-proc
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/browser-runtime-proc.ts ${{ matrix.browser }}
+
+      - uses: actions/download-artifact@v4
+        if: needs.rust.result == 'success'
+        with:
+          name: source-cache-browser-guest
+          path: dist/source-cache-browser
+      - name: Real Bun source cache in one Waffle browser runtime
+        if: needs.rust.result == 'success'
+        env:
+          BUN_WASM_RUNTIME_PROC_ARTIFACT: ${{ github.workspace }}/dist/source-cache-browser/bun-browser.wasm
+          BUN_WASM_RUNTIME_PROC_SCENARIO: source-cache
+          BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles
+          BUN_WASM_RUNTIME_PROC_PORT: "4187"
+          TMPDIR: ${{ runner.temp }}
+        run: bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}

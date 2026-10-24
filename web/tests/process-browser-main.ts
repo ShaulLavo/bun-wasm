@@ -19,9 +19,19 @@ function equal(actual: unknown, expected: unknown, label: string) { if (actual !
 function truth(value: unknown, label: string): asserts value { if (!value) throw new Error(label); }
 const checks: string[] = [];
 const activeWorkers = new Set<Worker>();
+let currentTest = "startup";
+const workerProgress: { url: string; events: unknown[] }[] = [];
+Object.assign(globalThis, { processProgress: () => ({ checks, currentTest, activeWorkers: activeWorkers.size, workers: workerProgress }) });
 const NativeWorker = globalThis.Worker;
 globalThis.Worker = class extends NativeWorker {
-  constructor(url: string | URL, options?: WorkerOptions) { super(url, options); activeWorkers.add(this); }
+  constructor(url: string | URL, options?: WorkerOptions) {
+    super(url, options); activeWorkers.add(this);
+    const progress: { url: string; events: unknown[] } = { url: String(url), events: [] }; workerProgress.push(progress);
+    this.addEventListener("error", event => progress.events.push({ error: event.message }));
+    this.addEventListener("message", event => {
+      if (["phase", "exit", "error"].includes(event.data?.type)) progress.events.push(event.data);
+    });
+  }
   override terminate() { activeWorkers.delete(this); super.terminate(); }
 };
 let activeRuntime: Runtime | undefined;
@@ -160,7 +170,7 @@ async function exit(child: Child, expected: number) {
   await until(() => { drain(child); return waitStatus(child) !== -2; }, `pid ${child.pid} exit`);
   drain(child); equal(waitStatus(child), expected, `pid ${child.pid} status (${child.stderr})`);
 }
-async function test(name: string, run: () => Promise<void>) { await run(); checks.push(name); }
+async function test(name: string, run: () => Promise<void>) { currentTest = name; await run(); checks.push(name); }
 
 try {
   truth(crossOriginIsolated, "process tests require cross-origin isolation");
@@ -432,7 +442,7 @@ try {
   equal(activeWorkers.size, 0, "every task-created guest and filesystem worker was terminated");
   Object.assign(globalThis, { processResult: { ok: true, checks, benchmark, cleanup: { activeWorkers: activeWorkers.size } } });
 } catch (error) {
-  Object.assign(globalThis, { processResult: { ok: false, checks, error: error instanceof Error ? error.stack : String(error) } });
+  Object.assign(globalThis, { processResult: { ok: false, checks, error: String(error), stack: error instanceof Error ? error.stack : undefined } });
 } finally {
   try { await activeRuntime?.dispose(); }
   catch (error) { Object.assign(globalThis, { processResult: { ok: false, checks, cleanupError: String(error) } }); }

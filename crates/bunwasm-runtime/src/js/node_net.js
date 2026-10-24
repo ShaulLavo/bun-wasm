@@ -9,11 +9,9 @@
 
     class Socket extends Duplex {
       constructor(options = {}) {
-        options = options || {};
-        const streamOptions = Object.assign({ allowHalfOpen: false, readableHighWaterMark: 65536, writableHighWaterMark: 65536 }, options);
-        delete streamOptions.signal;
-        super(streamOptions);
-        this._onread = internal.require("node_net_onread")(options.onread);
+        const { onread, signal, streamOptions } = internal.require("node_net_socket_state")(options);
+        super(Object.assign({ allowHalfOpen: false, highWaterMark: 65536 }, streamOptions));
+        this._onread = internal.require("node_net_onread")(onread);
         this._conn = null;
         this._phase = "idle";
         this._referenced = true;
@@ -25,7 +23,7 @@
         this.bytesRead = 0;
         this.bytesWritten = 0;
         this.once("finish", () => this._drainEmptyEof());
-        if (options.signal) this._useSignal(options.signal);
+        if (signal) this._useSignal(signal);
       }
       emit(event, ...args) {
         if (event === "close" && args.length === 0) return super.emit(event, Boolean(this._closeHadError));
@@ -257,17 +255,11 @@
       }
     }
 
-    class Server extends EventEmitter {
+    const serverContract = internal.require("node_net_server");
+    const Server = serverContract.callable(class Server extends EventEmitter {
       constructor(options = {}, listener) {
         super();
-        if (typeof options === "function") { listener = options; options = {}; }
-        this._options = options || {};
-        this.allowHalfOpen = Boolean(this._options.allowHalfOpen);
-        this.pauseOnConnect = Boolean(this._options.pauseOnConnect);
-        this._referenced = true;
-        this.listening = false;
-        this._connections = new Set();
-        if (listener) this.on("connection", listener);
+        serverContract.initialize(this, options, listener);
       }
       listen(...args) {
         if (this.listening) throw error(Error, "ERR_SERVER_ALREADY_LISTEN", "Listen method has been called more than once without closing");
@@ -324,7 +316,7 @@
       [Symbol.asyncDispose]() { return disposeNodeServer(this, true); }
       ref() { this._referenced = true; if (this._accepting) this._accepting.ref = true; if (this._starting) this._starting.ref = true; return this; }
       unref() { this._referenced = false; if (this._accepting) this._accepting.ref = false; if (this._starting) this._starting.ref = false; return this; }
-    }
+    });
     const connect = (...args) => {
       const [options] = _normalizeArgs(args);
       return new Socket(options).connect(...args);

@@ -4,6 +4,7 @@
 // Safari is actual desktop Safari via its existing WebDriver permission, not Playwright WebKit.
 // The same page/worker harness runs on the Mac fleet host; do not enable automation settings here.
 import assert from "node:assert/strict";
+import { assertEngineInterruptionResult } from "./engine-interruption-result";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { tmpdir, availableParallelism, loadavg } from "node:os";
@@ -80,23 +81,6 @@ export async function finishRunnerCleanup(options: {
   const errors = (prepared.errors ?? []).concat(closed.errors ?? [], listener.errors ?? [], rest.errors ?? []);
   return { ...prepared, ...closed, ...listener, ...rest, safe: prepared.safe && closed.safe && listener.safe && rest.safe, ...(errors.length ? { errors } : {}) };
 }
-function assertGreenResult(result: Record<string, any>, benchmark: boolean): void {
-  assert.equal(result.ok, true, JSON.stringify(result));
-  assert.equal(result.cleanup?.safe, true, "page execution quiescence and cleanup");
-  // WebDriver JSON cloning represents an absent undefined page field as null.
-  assert.equal(result.unsafeCleanup ?? undefined, undefined, "page unsafe cleanup");
-  assert.ok(Array.isArray(result.outcomes) && result.outcomes.length > 0, "page functional outcomes");
-  assert.ok(result.outcomes.every((outcome: any) => outcome.ok === true && outcome.cleanup?.safe === true), "all page functional cases passed safely");
-  assert.deepEqual(result.pageErrors ?? [], [], "page errors");
-  assert.equal(result.checks.length, 32, "fourteen engine proofs each plus four browser/Preview1 proofs");
-  assert.equal(result.checks.filter((check: any) => check.route === "runtimeProcess").length, 14, "new-route fatal, pending, page-idle and sleepSync proof on both engines");
-  for (const engine of ["quickjs", "jsc"]) {
-    assert.equal(result.checks.filter((check: any) => check.engine === engine).length, 14, `${engine} complete legacy/new-route case set`);
-  }
-  assert.equal(new Set(result.checks.map((check: any) => `${check.engine}:${check.name}`)).size, 32, "all named proofs are distinct");
-  assert.equal(result.cleanup.activeWorkers, 0, "worker cleanup");
-  if (benchmark) assert.equal(result.benchmarks.length, 2, "per-engine overhead measurements");
-}
 
 // Import-safe orchestration lets failure/teardown paths be exercised without a
 // browser or WASM. Functional RED is independent from unsafe resource cleanup.
@@ -130,7 +114,7 @@ export async function runBrowserGate(options: {
           report.cleanup = { ...result.cleanup, safe: false };
           output.unsafeCleanup = `${name}: ${result.unsafeCleanup ?? "page execution quiescence or resource cleanup is unproved"}`;
         }
-        assertGreenResult(result, Boolean(options.benchmark));
+        assertEngineInterruptionResult(result, Boolean(options.benchmark));
       } catch (error) { report.ok = false; report.error = errorText(error); }
       finally {
         let closed: RunnerCleanup;

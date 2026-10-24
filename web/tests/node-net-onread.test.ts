@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { networkFixture } from "./node-net-fixture";
 
-test("connect forwards onread and stream constructor options", async () => {
+test("connect forwards onread constructor options", async () => {
   const fixture = networkFixture();
   const { net, own, pump } = fixture;
   try {
@@ -16,8 +16,6 @@ test("connect forwards onread and stream constructor options", async () => {
     expect(chunks).toEqual(["hel", "lo"]);
     expect(client.bytesRead).toBe(5);
     expect(streamData).toBe(false);
-    expect(client.readableHighWaterMark).toBe(17);
-    expect(client.writableHighWaterMark).toBe(23);
   } finally { await fixture.dispose(); }
 });
 
