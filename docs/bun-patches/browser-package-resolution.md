@@ -16,3 +16,5 @@ acceptance. No upstream source is copied.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`scripts/browser-build.ts`](#browser-package-resolution) | Host feature | Resolve the consumer's exported runtime files through an absolute package path that works with Bun's isolated linker. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -68,3 +68,5 @@ plugin path-validation bug; no upstream loader or global package state changes.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [esbuild distribution, worker capability, and subprocess adapters](#esbuild-webassembly-distribution) | Host feature | Select the unchanged official wasm distribution, detect unavailable workers, and support asynchronous stdin through process descriptors with live shared filesystem changes and large files. |
+
+[Ledger scope and pinned revisions](scope.md).

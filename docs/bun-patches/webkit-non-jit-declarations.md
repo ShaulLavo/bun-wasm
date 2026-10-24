@@ -14,3 +14,5 @@ This is a judgment call. The build failures are in a non-JIT configuration and d
 | [`jsc/webkit-wasi.patch`, non-JIT declarations](#webkit-non-jit-declarations) | Upstream bug | Expose a required enum without DFG and add two missing includes. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

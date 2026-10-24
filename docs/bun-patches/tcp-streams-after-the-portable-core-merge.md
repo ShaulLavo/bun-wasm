@@ -26,3 +26,5 @@ zero-length and owned-copy cases. No upstream implementation is copied.
 
 
 [Parent context](http-framing.md).
+
+[Ledger scope and pinned revisions](scope.md).

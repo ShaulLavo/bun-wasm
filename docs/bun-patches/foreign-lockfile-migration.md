@@ -57,3 +57,5 @@ intentional fixes to older native behavior, and the pinned native canary used fo
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Foreign lockfile migration](#foreign-lockfile-migration) | Host feature | Original format and credential-boundary adapters preserve selected records, workspace locations, optional edges and credential-free sources. |
+
+[Ledger scope and pinned revisions](scope.md).

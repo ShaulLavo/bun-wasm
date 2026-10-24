@@ -24,3 +24,5 @@ removal by the original callback, and callback receiver on both overloads.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`src/js/fs_watch.ts` and `node_fs.js` wiring](#portable-filesystem-watcher) | Host feature | Original polling watcher over the shared WASI file operations, with Node listener identity. |
+
+[Ledger scope and pinned revisions](scope.md).

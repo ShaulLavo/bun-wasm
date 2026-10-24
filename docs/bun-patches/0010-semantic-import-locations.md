@@ -14,3 +14,5 @@ The original adapters in `crates/bunwasm-transpiler/src/lib.rs`, `crates/bunwasm
 | [0010](#0010-semantic-import-locations) | Host feature | Collect semantic import locations in Bun's scan and print passes for host module linking. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

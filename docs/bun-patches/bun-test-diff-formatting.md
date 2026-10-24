@@ -12,3 +12,5 @@ Translate the colorless formatting path, sorted keys, expected/received sections
 | [`crates/bunwasm-runtime/src/js/bun_test.js`, diff formatting](#bun-test-diff-formatting) | Port | Translate Bun's colorless diff rendering around a local line differ. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

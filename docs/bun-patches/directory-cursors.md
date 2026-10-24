@@ -34,3 +34,5 @@ this adapter does not promise that order. Directory enumeration order is unspeci
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/directory.rs`, `src/js/node_fs.js`, `web/src/engine-host.js`, directory cursors](#directory-cursors) | Host feature | Original directory handles, bounded reads, recursive traversal and Node Dir adapters. |
+
+[Ledger scope and pinned revisions](scope.md).

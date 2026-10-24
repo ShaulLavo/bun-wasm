@@ -72,3 +72,5 @@ or a pre-import fixture observer; no production mutable hook or export was added
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Patched sysroot, native descriptor bridge and JSC receipts](#patched-sysroot-and-native-descriptor-bridge) | Port | Consume Waffle's wasi-libc preopen-scan patch through its installed builder, keep inherited WASI descriptors in the runtime's real fd namespace with shared offsets, and reject stale ICU/JSC inputs through exact receipts. |
+
+[Ledger scope and pinned revisions](scope.md).

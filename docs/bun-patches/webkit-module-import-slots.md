@@ -14,3 +14,5 @@ The mismatch concerns pointer width and slot addressing, not a missing WASI API.
 | [`jsc/webkit-wasi.patch`, module slots](#webkit-module-import-slots) | Upstream bug | Give import slots a full JSValue stride and initialize the whole slot. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

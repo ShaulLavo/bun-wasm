@@ -23,3 +23,5 @@ functional delta and still detects unrelated edits. No new guest result is claim
 | [`crates/bunwasm-runtime/src/js/{formats,formats_limit}.ts`](#data-format-adapter) | Host feature | Original tagged-graph, serialization and input-length error adapters over Bun's Rust data parsers. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

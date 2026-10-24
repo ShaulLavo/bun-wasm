@@ -30,3 +30,5 @@ See [the ws builtin](../ws-builtin.md) for generation and verification.
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/ws_builtin.js`](#portable-ws-builtin) | Port | Bundle the unchanged published ws implementation for the shared Node APIs. |
 | [`scripts/generate-ws.sh` and builtin resolution](#portable-ws-builtin) | Host feature | Original module wrapper supplies Bun's builtin ws import and require on every engine. |
+
+[Ledger scope and pinned revisions](scope.md).

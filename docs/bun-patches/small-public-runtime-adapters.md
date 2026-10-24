@@ -60,3 +60,5 @@ public wording; other JSON failures keep serde's diagnostic text.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Small public runtime adapters](#small-public-runtime-adapters) | Host feature | Original matcher, native and browser promise reaction, version, web-brand and resolver-diagnostic adapters. |
+
+[Ledger scope and pinned revisions](scope.md).

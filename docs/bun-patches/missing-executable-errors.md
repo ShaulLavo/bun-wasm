@@ -44,3 +44,5 @@ close-event tests in `test/js/node/child_process/child_process.test.ts`.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun/Node and native adapters consume eight-byte typed process/job completions, map seven portable startup errnos, and preserve failed Node streams. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -31,3 +31,5 @@ allocation in the existing bridge.
 | [`crates/bunwasm-runtime/src/js/events.js`, listener publication](#node-event-emitter) | Host feature | Original mutation hook publishes signal dispositions before user listener-removal callbacks. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

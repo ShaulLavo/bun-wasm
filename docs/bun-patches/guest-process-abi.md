@@ -90,3 +90,5 @@ libc or host code.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, process-aware idle waits, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
+
+[Ledger scope and pinned revisions](scope.md).

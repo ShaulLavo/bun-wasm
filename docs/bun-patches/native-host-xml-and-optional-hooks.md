@@ -34,3 +34,5 @@ an unread named payload type or a dead-code exemption.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Native-host XML and optional hooks](#native-host-xml-and-optional-hooks) | Host feature | Scalar XML indexing and explicit unsupported trace/macro hooks let the full workspace link on the native host. |
+
+[Ledger scope and pinned revisions](scope.md).

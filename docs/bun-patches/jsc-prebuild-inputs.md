@@ -19,3 +19,5 @@ bypassed.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint and content-preserving config staging avoid rebuilding unchanged WebKit objects for workstation scratch policy. |
+
+[Ledger scope and pinned revisions](scope.md).

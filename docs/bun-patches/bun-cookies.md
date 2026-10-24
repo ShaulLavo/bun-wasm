@@ -12,3 +12,5 @@ Translate cookie parsing, attribute validation, serialization, CookieMap behavio
 | [`crates/bunwasm-runtime/src/js/cookie.ts`](#bun-cookies) | Port | Translate Bun's cookie parsing, validation, and binding behavior. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

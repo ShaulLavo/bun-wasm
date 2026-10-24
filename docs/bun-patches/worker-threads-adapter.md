@@ -75,3 +75,5 @@ promise continuations between messages. BroadcastChannel receive returns
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, coded constructors, browser module loading and stream adapters over separate host guest instances, with dynamically bound control pipes and typed wait outcomes. |
+
+[Ledger scope and pinned revisions](scope.md).

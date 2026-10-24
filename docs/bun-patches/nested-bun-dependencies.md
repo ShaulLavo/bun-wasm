@@ -15,3 +15,5 @@ Bun's compiler-free `scripts/build.ts --mode=codegen --profile=debug --buildDir=
 | [`vendor/bun/vendor/rust-argon2`, inherited patch](#nested-bun-dependencies) | Host feature | Preserve Bun's low-memory Argon2 hash verification behavior. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

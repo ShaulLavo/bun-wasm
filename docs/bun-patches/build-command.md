@@ -12,3 +12,5 @@ Retain the option setup, `BundleV2::generate_from_cli` flow, output writing, and
 | [`crates/bunwasm-build/src/lib.rs`](#build-command) | Port | Extract Bun's build command from its JSC runtime. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

@@ -17,3 +17,5 @@ No upstream cryptographic implementation is copied or changed.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`web/src/crypto-host.js`, `crypto-inputs.js`](#native-crypto-capabilities) | Host feature | Preserve native crypto, fill the verified AES-192 gap and enforce the runtime input bound. |
+
+[Ledger scope and pinned revisions](scope.md).

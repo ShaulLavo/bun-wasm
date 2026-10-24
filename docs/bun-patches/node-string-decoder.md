@@ -12,3 +12,5 @@ Translate the buffered/missing-byte state machine into TypeScript using a four-b
 | [`crates/bunwasm-runtime/src/js/string_decoder.ts`](#node-string-decoder) | Port | Translate Node's chunk-decoder state machine to TypeScript. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

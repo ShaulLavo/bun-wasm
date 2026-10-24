@@ -51,3 +51,5 @@ Wasmtime implementation is copied or patched by these new modules; the Wasmtime 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Native process descriptor bridge](#native-process-descriptor-bridge) | Host feature | Original Wasmtime linker, memory-sharing Wasm delegation wrappers and shared-description adapters route process pipes through preview1 fds without copying wasi-libc or Wasmtime implementations. |
+
+[Ledger scope and pinned revisions](scope.md).

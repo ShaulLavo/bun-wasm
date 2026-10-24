@@ -19,3 +19,5 @@ Node WASI host. QuickJS and host syntax checks are not JSC execution evidence.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [JSC SharedArrayBuffer embedding](#jsc-sharedarraybuffer-embedding) | Host feature | Original constructor option and source-attributed embedding checks. |
+
+[Ledger scope and pinned revisions](scope.md).

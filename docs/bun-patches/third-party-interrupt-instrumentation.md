@@ -34,3 +34,5 @@ bundled only into the disposable measurement app, never into the shipped runtime
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Third-party interrupt instrumentation](#third-party-interrupt-instrumentation) | Host feature | Original TypeScript binary rewriter, content-addressed loader and rescued browser fixtures; module-internal countdowns avoid per-entry host calls. |
+
+[Ledger scope and pinned revisions](scope.md).

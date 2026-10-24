@@ -20,3 +20,5 @@ refusal to overwrite tracked or untracked work.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Vendor source synchronization](#vendor-source-synchronization) | Host feature | Original patch-tree verification updates existing clones and detached worktrees without overwriting local changes. |
+
+[Ledger scope and pinned revisions](scope.md).

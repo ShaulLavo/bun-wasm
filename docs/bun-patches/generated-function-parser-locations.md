@@ -29,3 +29,5 @@ parser collector. The existing shared vendor checkout was read, never edited.
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/function.ts`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
 | [`patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch`](#generated-function-parser-locations) | Port | Bun parser and printer import metadata, reused unchanged from the semantic-import patch. |
+
+[Ledger scope and pinned revisions](scope.md).

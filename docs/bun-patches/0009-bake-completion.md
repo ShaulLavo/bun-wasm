@@ -12,3 +12,5 @@ File `0009-Drive-bake-completion-from-the-WASI-mini-event-loop.patch`. Class **P
 | [0009](#0009-bake-completion) | Port | Complete bake bundles through the synchronous WASI event loop. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

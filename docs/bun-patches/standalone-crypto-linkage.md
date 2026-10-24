@@ -17,3 +17,5 @@ invocation from `scripts/build.sh` remain unchanged.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-crypto-sys/`, standalone crypto linkage](#standalone-crypto-linkage) | Host feature | Original native archive owner shared by runtime and parser/glue consumers. |
+
+[Ledger scope and pinned revisions](scope.md).

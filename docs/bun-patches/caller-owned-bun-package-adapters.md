@@ -28,3 +28,5 @@ copied implementation was introduced by this packaging work.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -17,3 +17,5 @@ The browser driver calls the existing playground test helpers. Recorded dependen
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures, registry recorder and typed classifier, with no copied framework implementation. |
+
+[Ledger scope and pinned revisions](scope.md).

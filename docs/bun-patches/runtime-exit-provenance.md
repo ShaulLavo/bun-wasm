@@ -17,3 +17,5 @@ the flag is absent.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`src/js/exit_provenance.ts` and lifecycle hooks](#runtime-exit-provenance) | Host feature | Original opt-in exit diagnostics over the existing event loop and error handlers. |
+
+[Ledger scope and pinned revisions](scope.md).

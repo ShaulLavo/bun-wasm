@@ -13,3 +13,5 @@ checks both an open connection and a connection closed after its response.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/net.js`, HTTP socket state](#http-socket-state) | Host feature | Original HTTP socket writability getter over the host connection state. |
+
+[Ledger scope and pinned revisions](scope.md).

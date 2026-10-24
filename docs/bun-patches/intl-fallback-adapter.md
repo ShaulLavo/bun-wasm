@@ -10,3 +10,5 @@
 | [`crates/bunwasm-runtime/src/js/intl.ts`](#intl-fallback-adapter) | Host feature | Original en-US fallback for engines without the corresponding native Intl constructors. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

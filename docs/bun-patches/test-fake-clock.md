@@ -31,3 +31,5 @@ drain at 100,000 callbacks to reject an endless interval or recursive timer.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Test fake-clock adapter](#test-fake-clock) | Host feature | Original TypeScript scheduler and Date adapter shared by all engines. |
+
+[Ledger scope and pinned revisions](scope.md).

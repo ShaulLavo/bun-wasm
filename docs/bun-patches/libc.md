@@ -14,3 +14,5 @@ The vendored package omits upstream tests and Cargo's `.cargo_vcs_info.json`. Ot
 | [`third_party/libc/src/wasi/mod.rs` and `posix_compat.rs`](#libc) | Port | Declare missing WASI POSIX types and functions. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

@@ -26,3 +26,5 @@ from `src/js/internal/assert/assertion_error.ts` at the same revision.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Partial strict comparison](#partial-strict-comparison) | Port | Translate Bun's native partial-comparison rules to TypeScript for all engines. |
+
+[Ledger scope and pinned revisions](scope.md).

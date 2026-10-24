@@ -28,3 +28,14 @@ test("duplicate sections and unknown anchors fail instead of silently losing con
   expect(() => splitLedger("| Patch or source |\n## Same\n## Same\n")).toThrow("Duplicate anchor");
   expect(() => rewriteLinks("[Bad](bun-patches.md#absent)", "docs/guide.md", "docs/guide.md", new Map())).toThrow("Unresolved ledger link");
 });
+
+test("the stable entrypoint cannot become another feature ledger, and every legacy anchor has one record", () => {
+  const output = migrationOutputs(root);
+  expect(readFileSync(`${root}docs/bun-patches.md`, "utf8")).toBe(output.files.get("docs/bun-patches.md")!);
+  for (const [anchor, path] of output.anchors) {
+    const text = readFileSync(`${root}${path}`, "utf8");
+    const headings = Array.from(text.matchAll(/^#{1,6} (.+)$/gm), match => match[1]!.toLowerCase().replace(/[^\p{L}\p{N}_ -]/gu, "").replaceAll(" ", "-"));
+    expect(headings.includes(anchor) || text.includes(`<a id="${anchor}"></a>`)).toBe(true);
+    expect(text).toContain("[Ledger scope and pinned revisions](scope.md).");
+  }
+});

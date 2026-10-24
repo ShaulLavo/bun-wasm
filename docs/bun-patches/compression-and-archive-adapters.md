@@ -80,3 +80,5 @@ Archives reuse `tar` 0.4.46 with default features disabled and the
 | [`third_party/brotli/`](#compression-and-archive-adapters) | Port | Google Brotli 1.2.0 C source at Bun's pinned revision, built by `build.rs`. |
 | [`third_party/zlib-ng/`](#compression-and-archive-adapters) | Port | zlib-ng 2.3.3 portable C source, Bun's pinned zlib, built by `build.rs`. |
 | [Compression constants](#compression-and-archive-adapters) | Port | Public Brotli and Zstd constant names and integer values for the Node adapter. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -12,3 +12,5 @@ Retain HTTP option extraction, IPv6 hostname handling, auth decoding, legacy fie
 | [`crates/bunwasm-runtime/src/js/node_url.ts`](#node-url-helpers) | Port | Adapt Node URL helpers around the local URL implementation. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

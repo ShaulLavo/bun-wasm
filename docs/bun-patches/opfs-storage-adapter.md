@@ -20,3 +20,5 @@ evidence are maintained with Waffle in
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`waffle/fs/opfs.ts`, OPFS access-handle and quota adapters](#opfs-storage-adapter) | Host feature | Original one-file-per-payload storage adapter with guidance for occupied workspaces; adapts SLICC-kernel's Apache-2.0 `src/fs/opfs.ts` at 88c5bb3 for NotReadableError retries and QuotaExceededError mapping while retaining bun-wasm's checksummed snapshots, lazy index and bounded cache. |
+
+[Ledger scope and pinned revisions](scope.md).

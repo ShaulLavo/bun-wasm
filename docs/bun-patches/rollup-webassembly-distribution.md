@@ -23,3 +23,5 @@ executes the real published parser and hashes through the recorded registry.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters. |
+
+[Ledger scope and pinned revisions](scope.md).

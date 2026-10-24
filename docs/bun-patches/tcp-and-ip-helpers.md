@@ -40,3 +40,5 @@ The upstream comparisons are recorded in [TCP support](../tcp.md).
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. |
+
+[Ledger scope and pinned revisions](scope.md).

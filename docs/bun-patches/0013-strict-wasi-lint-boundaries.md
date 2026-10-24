@@ -32,3 +32,5 @@ Class **Port**. Upstream remains Bun
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [0013](#0013-strict-wasi-lint-boundaries) | Port | Correct native-only cfgs and mark individual native poller/watcher declarations unused on WASI. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -36,3 +36,5 @@ them. Byte copies and sink lifecycle behavior are unchanged.
 | [`crates/bunwasm-runtime/src/js/array_buffer_sink.ts`](#bun-array-buffer-sink) | Port | Adapt Bun's byte sink lifecycle and option parsing to engine-owned typed arrays. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

@@ -21,3 +21,5 @@ read-only. These are dependency build selections, not copied or patched implemen
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/crypto_keys.js` and `crypto_host_keys.js`, Node key adapters](#node-crypto-key-adapters) | Host feature | Original Node key objects, encodings and signatures over the WebCrypto backend. |
+
+[Ledger scope and pinned revisions](scope.md).

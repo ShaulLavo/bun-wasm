@@ -20,3 +20,5 @@ Its negative control removes the wrong callback and requires teardown to reject 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Real shell consumer probes](#real-shell-consumer-probes) | Host feature | Original installed-package composition and contract probes adapted from bash-web acceptance commands, without copying a shell implementation. |
+
+[Ledger scope and pinned revisions](scope.md).

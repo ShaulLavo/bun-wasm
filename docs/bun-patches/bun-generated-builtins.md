@@ -10,3 +10,5 @@ The numbered JavaScript files in `crates/bunwasm-runtime/generated/builtins/` re
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/generated/builtins/`](#bun-generated-builtins) | Port | Lower Bun-generated JavaScript builtins to a lexical intrinsic table shared by all engines. |
+
+[Ledger scope and pinned revisions](scope.md).

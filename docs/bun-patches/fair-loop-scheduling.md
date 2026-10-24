@@ -23,3 +23,5 @@ and adds no host ABI slot.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`src/js/loop_scheduler.ts` and callback batching](#fair-loop-scheduling) | Host feature | Original portable I/O turns, pending-signal dispatch before check callbacks, and bounded immediate batches. |
+
+[Ledger scope and pinned revisions](scope.md).

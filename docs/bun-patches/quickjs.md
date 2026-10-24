@@ -23,3 +23,5 @@ No existing binding source or C header is modified. Our Rust engine declares the
 | [`third_party/rquickjs-sys/build.rs`](#quickjs) | Host feature | Rebuild when the locally patched C sources or binding header change. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

@@ -16,3 +16,5 @@ The TypeScript conversion preserves the ported executable syntax, strict directi
 | [`crates/bunwasm-runtime/src/js/bun_sqlite.ts`](#bun-sqlite) | Port | Move Bun's SQLite wrapper and inherited transaction code onto Rust SQLite natives. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

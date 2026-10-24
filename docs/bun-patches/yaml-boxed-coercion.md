@@ -16,3 +16,5 @@ unchanged. This replaces direct `valueOf()` calls that skipped the hook.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [YAML boxed coercion](#yaml-boxed-coercion) | Host feature | Original wrapper conversion preserves user coercion errors and indentation semantics. |
+
+[Ledger scope and pinned revisions](scope.md).

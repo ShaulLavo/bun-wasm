@@ -9,3 +9,5 @@ Node and covers the five hostname options and standalone issuer metadata.
 
 
 [Parent context](certificate-regression-fixtures.md).
+
+[Ledger scope and pinned revisions](scope.md).

@@ -14,3 +14,5 @@ Without it browser-engine `AsyncLocalStorage` loses its frame across suspension 
 | [0008](#0008-await-context-hooks) | Host feature | Add optional printer hooks to preserve browser async context. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

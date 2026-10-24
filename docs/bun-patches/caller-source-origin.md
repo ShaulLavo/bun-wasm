@@ -17,3 +17,5 @@ in WebKit, and CommonJS origins work in QuickJS, wasm JSC and the Node host.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/{builtins,bootstrap}.js`, `web/src/engine-host.js`, caller origin](#caller-source-origin) | Host feature | Read caller origins through the existing engine stack parser. Original adapter. |
+
+[Ledger scope and pinned revisions](scope.md).

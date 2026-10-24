@@ -47,3 +47,5 @@ async setup are not implemented.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Lint process environment](#lint-process-environment) | Host feature | Original `configuration_process.rs` adapter and test host run ordinary runtime_proc children with bounded time/output; runtime adapters register object modules. |
+
+[Ledger scope and pinned revisions](scope.md).

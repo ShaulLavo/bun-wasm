@@ -30,3 +30,5 @@ the same constructor argument strings. No upstream code is copied.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/function.ts`](#generated-function-imports) | Host feature | Original generated-function adapter with module-relative dynamic imports. |
+
+[Ledger scope and pinned revisions](scope.md).

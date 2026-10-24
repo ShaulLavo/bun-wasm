@@ -22,3 +22,5 @@ short host temporary root, avoiding Chromium Unix-socket path limits.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Quality checks and original adapters](#quality-checks-and-original-adapters) | Host feature | Original quality commands and tighter host/test typings, with small control-flow extractions. |
+
+[Ledger scope and pinned revisions](scope.md).

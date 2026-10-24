@@ -16,3 +16,5 @@ asset-download fetch. Preview1 receives no network session.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Runtime-owned network consumer](#runtime-owned-network-consumer) | Host feature | Original per-process session wiring over Waffle's borrowed runtime network, with physical-stop cleanup and shared preview observation. |
+
+[Ledger scope and pinned revisions](scope.md).

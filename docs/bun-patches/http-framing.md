@@ -88,3 +88,5 @@ The caller-supplied connection path retains caller ownership of TLS setup.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming bodies, response cancellation independent of transport disposal before and during writer ownership, Agent pool and upgrade response adapters shared by all engines. |
+
+[Ledger scope and pinned revisions](scope.md).

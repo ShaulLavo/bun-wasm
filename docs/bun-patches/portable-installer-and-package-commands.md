@@ -84,3 +84,5 @@ the real TypeScript command dispatcher with an explicitly empty filesystem.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Portable installer and package command adapters](#portable-installer-and-package-commands) | Host feature | Original filesystem, lockfile and command adapters over Bun's matcher, parsers and semver. |
+
+[Ledger scope and pinned revisions](scope.md).

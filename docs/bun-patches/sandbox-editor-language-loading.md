@@ -12,3 +12,5 @@ The existing editor-state cache and open revision guard also cover the import wa
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Sandbox editor language loading](#sandbox-editor-language-loading) | Host feature | Original demand-loaded editor extensions over unchanged CodeMirror packages. |
+
+[Ledger scope and pinned revisions](scope.md).

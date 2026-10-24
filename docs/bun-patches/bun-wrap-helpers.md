@@ -14,3 +14,5 @@ The generator and registry wiring are original bun-wasm adapters.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Generated `bun:wrap` helpers](#bun-wrap-helpers) | Host feature | Load Bun's unmodified runtime helpers through the builtin registry. |
+
+[Ledger scope and pinned revisions](scope.md).

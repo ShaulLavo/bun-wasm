@@ -12,3 +12,5 @@ Adapt parse-argument tokenization, own-property option lookup, short-option grou
 | [`crates/bunwasm-runtime/src/js/util.js`](#node-utility-fragments) | Port | Adapt argument parsing, comparison helpers, and inspection tables. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

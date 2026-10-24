@@ -78,3 +78,5 @@ before compilation and publishes only verified bytes to its startup cache.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Lint and format command adapters](#lint-and-format-commands) | Port | Compile Bun's native linter, formatter, CLI parsers, and Yarr regex bindings for WASI. |
+
+[Ledger scope and pinned revisions](scope.md).

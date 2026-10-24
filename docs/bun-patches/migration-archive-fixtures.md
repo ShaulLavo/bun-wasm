@@ -16,3 +16,5 @@ without contacting a public registry.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Migration archive fixtures](#migration-archive-fixtures) | Host feature | Unchanged abbrev archives verify the real npm workspace fixture and extraction against its recorded checksums. |
+
+[Ledger scope and pinned revisions](scope.md).

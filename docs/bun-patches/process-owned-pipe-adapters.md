@@ -23,3 +23,5 @@ Node, WebKit or third-party pipe implementation is copied or patched by these mo
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -39,3 +39,5 @@ guest source on the host JavaScript engine.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Child process JSON IPC](#child-process-json-ipc) | Host feature | Original TypeScript JSON framing and lifecycle adapter over Waffle runtime_proc pipes, including implicit fork channels and process bootstrap. |
+
+[Ledger scope and pinned revisions](scope.md).

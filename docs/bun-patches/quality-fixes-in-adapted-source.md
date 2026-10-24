@@ -21,3 +21,5 @@ unused ABI fields are identified separately from WASI callback code.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Quality fixes in adapted source](#quality-fixes-in-adapted-source) | Port | Mechanical formatting and lint fixes in the existing Bun/Node ports, without changing their upstream revision. |
+
+[Ledger scope and pinned revisions](scope.md).

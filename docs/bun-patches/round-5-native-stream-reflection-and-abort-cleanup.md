@@ -4,3 +4,5 @@ Class **Host feature**, original bridge refinement. `web/src/native-stream-state
 
 
 [Parent context](http-framing.md).
+
+[Ledger scope and pinned revisions](scope.md).

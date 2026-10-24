@@ -28,6 +28,7 @@ ArrayBufferSink overview pointed to a nonexistent anchor; its new record owns
 an explicit alias for that spelling.
 
 The proof compares every generated record and rewritten crosslink byte for byte.
-It makes no guest, native, API or upstream-pin changes. Review history with
-`git log --follow -- docs/bun-patches/<record>.md`; the original single-page
-history remains available at the pinned commit in the splitter.
+It makes no guest, native, API or upstream-pin changes. The original single-page history remains available with
+`git log ad5716e5 -- docs/bun-patches.md`. The map and splitter identify each
+record's original section; Git does not model a one-to-many file split as 143
+independent renames.

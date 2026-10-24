@@ -32,3 +32,5 @@ JSC-specific generated classes and stream sinks and cannot run through the built
 | --- | --- | --- |
 | [HTMLRewriter adapters and lol-html linkage](#htmlrewriter) | Host feature | Original parser sessions, async handler dispatch, private indexed storage and streaming wrappers on all engines. |
 | [`third_party/licenses/lol-html-LICENSE`](#htmlrewriter) | Port | Retain the vendored parser's BSD license for wasm distribution. |
+
+[Ledger scope and pinned revisions](scope.md).

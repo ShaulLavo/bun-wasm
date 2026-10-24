@@ -47,3 +47,5 @@ contents are captured when constructing a worker.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Global Web Worker adapter](#web-worker-adapter) | Host feature | Original TypeScript EventTarget and worker-global adapters over the existing thread transport. |
+
+[Ledger scope and pinned revisions](scope.md).

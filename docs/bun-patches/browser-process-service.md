@@ -85,3 +85,5 @@ harnesses are original test programs, not copies of the spike implementations.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`waffle/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry, jobs, registered signal dispositions including Node/Bun's ignored SIGPIPE default, immutable final-kind query and byte-sized exit statuses. |
+
+[Ledger scope and pinned revisions](scope.md).

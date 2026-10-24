@@ -26,3 +26,5 @@ worker paused inside a locked write followed by a rejected late write.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`waffle/fs/`, filesystem quiescence](#filesystem-quiescence) | Host feature | Original shared admission and revocation fence lets controllers stop workers only after direct filesystem operations finish. |
+
+[Ledger scope and pinned revisions](scope.md).

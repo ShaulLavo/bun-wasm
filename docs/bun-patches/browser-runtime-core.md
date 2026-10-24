@@ -71,3 +71,5 @@ exported and relative imports, hiding isolated-cache directory names. No upstrea
 | --- | --- | --- |
 | [`waffle/core/`, `waffle/fs/`, MemFS and pipe adapters](#browser-runtime-core) | Host feature | Original WASI, shared filesystem, IndexedDB persistence, lazy residency, startup diagnostics and descriptor adapters. |
 | [`web/tests/persistence-browser-worker.ts`, persistence corpus](#browser-runtime-core) | Host feature | Original browser test adapter reproduces the local storage spike's generated sizes and synthetic bytes; no package contents or upstream implementation. |
+
+[Ledger scope and pinned revisions](scope.md).

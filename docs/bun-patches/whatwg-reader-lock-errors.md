@@ -26,3 +26,5 @@ upstream MIT license under `third_party/streams/`.
 | --- | --- | --- |
 | [Embedded WHATWG Streams](#whatwg-reader-lock-errors) | Port | Pinned portable streams with Bun reader-lock error text. |
 | [Streams AST hooks](#whatwg-reader-lock-errors) | Host feature | Original generator adapter preserves Node completion hooks and error codes. |
+
+[Ledger scope and pinned revisions](scope.md).

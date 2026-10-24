@@ -63,7 +63,7 @@ export function splitLedger(source: string) {
     const context = section.parent ? `\n[Parent context](${posix.basename(section.parent)}).\n` : "";
     const rows = ownedRows.get(section.path) ?? [];
     const classification = rows.length ? `\n## Classification\n\n| Patch or source | Class | Change |\n| --- | --- | --- |\n${rows.join("\n")}\n` : "";
-    files.set(section.path, rewriteLinks(section.text + classification, ledger, section.path, anchors) + context);
+    files.set(section.path, rewriteLinks(section.text + classification, ledger, section.path, anchors) + context + "\n[Ledger scope and pinned revisions](scope.md).\n");
   }
   files.set(mappingPath, JSON.stringify({ base: migrationBase, anchors: Object.fromEntries(anchors) }, null, 2) + "\n");
   return { files, anchors, sectionCount: sections.length, rowCount: rows.length };

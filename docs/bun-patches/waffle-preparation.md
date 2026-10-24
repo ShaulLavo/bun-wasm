@@ -45,3 +45,5 @@ packaging changes.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Waffle browser services](#waffle-preparation) | Host feature | The Waffle package owns the browser runtime, worker/executor, filesystem, terminal, network and preview adapters separately from Bun policy. |
+
+[Ledger scope and pinned revisions](scope.md).

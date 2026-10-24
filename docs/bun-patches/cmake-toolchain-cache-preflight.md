@@ -24,3 +24,5 @@ This is build safety for the wasm port, not a copied CMake implementation.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [CMake toolchain cache preflight](#cmake-toolchain-cache-preflight) | Port | Reject an existing CMake cache whose recorded compiler, toolchain file, target, system, processor or sysroot does not match the requested native or WASI configure/build. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -72,3 +72,5 @@ of blank EOF lines and one mixed space/tab indent.
 | [`web/src/native-stream-state.ts`](#native-browser-stream-completion) | Host feature | Original native completion bridge and WHATWG iterable conversion adapter preserve native construction and cancellation. |
 
 [Parent context](http-framing.md).
+
+[Ledger scope and pinned revisions](scope.md).

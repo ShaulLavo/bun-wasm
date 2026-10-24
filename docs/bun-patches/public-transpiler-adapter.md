@@ -23,3 +23,5 @@ This does not implement Bun's macro callbacks or worker-pool scheduling.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Bun public transpiler adapter](#public-transpiler-adapter) | Port | Adapt the real Rust parse/print and scan paths to the engine-independent native boundary. |
+
+[Ledger scope and pinned revisions](scope.md).

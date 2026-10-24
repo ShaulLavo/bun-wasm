@@ -21,3 +21,5 @@ hostname match. The BoringSSL source remains unchanged.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [X.509 hostname option matcher](#x509-hostname-option-matcher) | Port | Adapt Bun's OpenSSL-compatible Rust matcher because BoringSSL removed four option behaviors. |
+
+[Ledger scope and pinned revisions](scope.md).

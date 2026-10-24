@@ -32,3 +32,5 @@ request shapes, version detection or compatibility fallback are added. See
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Descriptor kinds and storage modes](#descriptor-kinds-and-storage-modes) | Host feature | Original Rust descriptor-kind adapters and page startup handling adopt the pinned Waffle contract without guessing pipe types or changing workspace names. |
+
+[Ledger scope and pinned revisions](scope.md).

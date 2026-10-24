@@ -29,3 +29,5 @@ and explicit overrides (including `0` and empty) are preserved. The isolated
 | [Cross-platform web test adapters](#cross-platform-web-tests) | Host feature | Original scratch, child-process cleanup, command-deadline and existing-browser-cache adapters run the same assertions on Linux and macOS. |
 
 [Parent context](http-framing.md).
+
+[Ledger scope and pinned revisions](scope.md).

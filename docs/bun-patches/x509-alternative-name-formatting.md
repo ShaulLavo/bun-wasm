@@ -22,3 +22,5 @@ implementation is taken from that version.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [X.509 alternative name formatting and Node license](#x509-alternative-name-formatting) | Port | Translate Bun and Node certificate-name quoting to Rust without JSC and retain the Node MIT notices. |
+
+[Ledger scope and pinned revisions](scope.md).

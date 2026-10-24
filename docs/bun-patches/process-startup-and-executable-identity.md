@@ -46,3 +46,5 @@ service, pipes and interrupt rewriting still cannot load before first use.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Process startup and executable identity](#process-startup-and-executable-identity) | Host feature | Original startup-before-wait observation, admitted executable metadata, lazy-root cancellation and Node child tool routing; no upstream implementation copied. |
+
+[Ledger scope and pinned revisions](scope.md).

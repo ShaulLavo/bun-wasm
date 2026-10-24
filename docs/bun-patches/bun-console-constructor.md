@@ -57,3 +57,5 @@ frame-only formatter still receives the Console Trace header.
 | --- | --- | --- |
 | [`src/js/bun_console_constructor.js`](#bun-console-constructor) | Port | Generate Bun's Console constructor with lexical engine-independent hooks. |
 | [`scripts/generate-bun-console.mjs`, `src/js/console_constructor.ts`, `src/js/console.ts`](#bun-console-constructor) | Host feature | Original generation and runtime adapters expose the shared constructor and its streams. |
+
+[Ledger scope and pinned revisions](scope.md).

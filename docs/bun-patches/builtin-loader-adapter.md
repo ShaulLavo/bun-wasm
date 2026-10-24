@@ -9,3 +9,5 @@ Class **Host feature**. `scripts/generate-bun-builtins.mjs`, its shell runner, t
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`scripts/generate-bun-builtins.mjs`, `src/js/bun_builtins.ts`, `src/js/bun_builtin_globals.ts`](#builtin-loader-adapter) | Host feature | Generate the selected builtin closure and load factories through Engine. |
+
+[Ledger scope and pinned revisions](scope.md).

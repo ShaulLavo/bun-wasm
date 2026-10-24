@@ -52,3 +52,5 @@ native operation; QuickJS retains its existing native-operation interrupt polls.
 | --- | --- | --- |
 | [`jsc/webkit-wasi.patch`, C-loop host interruption](#engine-interruption) | Host feature | Poll the process host at saved interpreter trap points; preserve native uncatchable termination. |
 | [Engine signal adapters](#engine-interruption) | Host feature | Original QuickJS/JSC callbacks poll fatal cancellation without entering JS; handled signals stay pending for ordinary event-loop delivery. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -15,3 +15,5 @@ Retained libc and rquickjs-sys files were compared byte-for-byte with the matchi
 
 SQLite is supplied by the unmodified `libsqlite3-sys` crate. `.cargo/config.toml` sets its documented compile flags to match Bun where possible and disable unsupported WASI facilities; it does not rewrite the amalgamation. No additional third-party source rewrites were found in crate build scripts. Test fixture npm packages are source inputs for compatibility tests, not runtime forks.
 
+
+[Ledger scope and pinned revisions](scope.md).

@@ -12,3 +12,5 @@ Translate Rust and C++ formatting into JavaScript, retaining the estimated-line-
 | [`crates/bunwasm-runtime/src/js/inspect.js`, Bun formatter](#bun-console-formatter) | Port | Translate Bun's formatter and property enumeration to JavaScript. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

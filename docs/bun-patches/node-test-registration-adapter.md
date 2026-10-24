@@ -18,3 +18,5 @@ owns callback and hook errors; this change adds no options or TestContext behavi
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Node test registration adapter](#node-test-registration-adapter) | Host feature | Original optional-name normalization preserves callback names, explicit names, runner selection and timeout forwarding. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -10,3 +10,5 @@
 | [`crates/bunwasm-runtime/src/js/sqlite_types.d.ts`](#sqlite-native-declarations) | Host feature | Original declarations for the existing Rust SQLite calls and dynamic result modes. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

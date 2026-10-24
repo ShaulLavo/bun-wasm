@@ -12,3 +12,5 @@ File `0004-wasm-thread-pool-runs-scheduled-tasks-inline-on-sing.patch`. Class **
 | [0004](#0004-inline-thread-pool) | Port | Drain scheduled tasks on the calling thread. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

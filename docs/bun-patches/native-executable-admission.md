@@ -27,3 +27,5 @@ runtime. These traversal rules are an original Rust adapter, not copied filesyst
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-host/src/process/executables.rs`](#native-executable-admission) | Host feature | Original native executable markers, exact module selection and live process-owned access requests. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -23,3 +23,5 @@ the wasm32 linter check; all native rule crates, formatter, and driver pass
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [0011](#0011-lint-layout-assertions) | Port | Make semantic type-argument and lint-message size assertions pointer-width aware. |
+
+[Ledger scope and pinned revisions](scope.md).

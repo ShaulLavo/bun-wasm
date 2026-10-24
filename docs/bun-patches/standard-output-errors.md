@@ -42,3 +42,5 @@ worker host, plus the host engine under Node.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Standard output error adapters](#standard-output-errors) | Host feature | Original Rust and worker adapters preserve EPIPE and block on temporary output backpressure. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -12,3 +12,5 @@ File `0006-wasm-openat-access-mode-and-fd-paths-on-wasi.patch`. Class **Port**.
 | [0006](#0006-open-flags-and-file-descriptor-paths) | Port | Adapt WASI open flags and track paths for opened descriptors. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

@@ -19,3 +19,5 @@ before making the child waitable. No upstream patch is added by these adapters.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Cross-worker descriptor ownership](#cross-worker-descriptor-ownership) | Host feature | Original process and filesystem adapters transfer open descriptions, preserve shared file offsets and revoke process-owned endpoints before publishing exit. |
+
+[Ledger scope and pinned revisions](scope.md).

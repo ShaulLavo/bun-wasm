@@ -12,3 +12,5 @@ Retain the small callback that stores the emitted `bun_sourcemap::Chunk` in an `
 | [`crates/bunwasm-transpiler/src/lib.rs`, source-map collector](#transpiler-source-map-collector) | Port | Retain Bun's small printer callback outside its runtime crate. |
 
 [Parent context](bun-patch-series.md).
+
+[Ledger scope and pinned revisions](scope.md).

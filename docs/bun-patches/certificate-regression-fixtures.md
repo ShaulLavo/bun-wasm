@@ -17,3 +17,5 @@ KeyObjects, issuer checks and legacy fields on every engine.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Certificate regression fixtures](#certificate-regression-fixtures) | Port | Retain unchanged upstream certificate and test-key data for metadata, signature and escaping checks. |
+
+[Ledger scope and pinned revisions](scope.md).

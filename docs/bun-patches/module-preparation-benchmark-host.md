@@ -16,3 +16,5 @@ and remove its fixtures. No Bun, Node, wasi-libc or third-party implementation i
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Module preparation benchmark host](#module-preparation-benchmark-host) | Host feature | Original Node benchmark harness runs the actual guest in a worker with the shared process broker and descriptor ABI, preserving responsive synchronous process calls. |
+
+[Ledger scope and pinned revisions](scope.md).

@@ -20,3 +20,5 @@ Without this dispatch, collected directory owners retain their native cursors.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
+
+[Ledger scope and pinned revisions](scope.md).

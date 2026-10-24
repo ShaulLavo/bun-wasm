@@ -25,3 +25,5 @@ messages with byte-for-byte preservation of failed manifests.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [No-git package version command](#no-git-package-version-command) | Port | Adapt Bun version validation and stable-version increments to the portable no-git command. |
+
+[Ledger scope and pinned revisions](scope.md).

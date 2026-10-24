@@ -38,3 +38,5 @@ versions report an unsupported-format error.
 | [`third_party/tar/src/entry.rs`, symlink timestamp adapter](#tar-wasi-extraction) | Host feature | Original Rust adapter for no-follow WASI timestamp updates. |
 | [`third_party/tar/src/pax_sparse.rs`, GNU PAX sparse adapter](#tar-wasi-extraction) | Host feature | Original GNU PAX sparse 1.0 parser that feeds the upstream sparse block reader. |
 | [`third_party/tar/`, WASI extraction](#tar-wasi-extraction) | Port | WASI symlink support and permission handling over the unchanged tar extractor. |
+
+[Ledger scope and pinned revisions](scope.md).

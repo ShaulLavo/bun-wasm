@@ -38,3 +38,5 @@ adapters derived from behavior probes, with no Node/V8 implementation copied.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/stack_trace.ts`](#structured-call-sites) | Host feature | Original CallSite adapter for QuickJS and JSC stack capture. |
+
+[Ledger scope and pinned revisions](scope.md).

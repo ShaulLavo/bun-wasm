@@ -8,3 +8,5 @@ JWK; RSA signatures reject unsupported padding before dispatch. No upstream impl
 was copied or changed for these corrections.
 
 [Parent context](bun-console-constructor.md).
+
+[Ledger scope and pinned revisions](scope.md).

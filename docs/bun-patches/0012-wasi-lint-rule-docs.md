@@ -18,3 +18,5 @@ Native Bun's code generation and embedding behavior is unchanged.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [0012](#0012-wasi-lint-rule-docs) | Port | Generate and embed Bun's compressed lint rule docs in WASI artifacts. |
+
+[Ledger scope and pinned revisions](scope.md).

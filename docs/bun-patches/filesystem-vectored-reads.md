@@ -51,3 +51,5 @@ its final cursor check and owns all opened descriptors.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Filesystem vectored reads](#filesystem-vectored-reads) | Host feature | Original readv/readvSync and FileHandle.readv adapters avoid summed-capacity allocations, use one bounded read for non-regular descriptors, preserve shared cursors and follow Bun's empty-vector contract. |
+
+[Ledger scope and pinned revisions](scope.md).

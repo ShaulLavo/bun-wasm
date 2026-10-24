@@ -53,3 +53,5 @@ is copied into this consumer.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Node startup diagnostic drain](#node-startup-diagnostic-drain) | Host feature | Use Waffle's public cancellable, bounded asynchronous diagnostic drain for the Node process host's immediate stderr writes. |
+
+[Ledger scope and pinned revisions](scope.md).

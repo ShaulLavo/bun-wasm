@@ -26,3 +26,5 @@ retry is used, and fake timers do not control the I/O waiter.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [HTTP listener readiness](#http-listener-readiness) | Host feature | Original typed startup waiter reports HTTP listener success or bind errors after the host finishes binding. |
+
+[Ledger scope and pinned revisions](scope.md).

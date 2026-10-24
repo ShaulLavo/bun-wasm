@@ -31,3 +31,5 @@ All other retained upstream files are unchanged.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Wasmi memory identity and growth](#wasmi-memory-identity-and-growth) | Port | Expose stable memory identity and successful growth, including zero-page growth. |
+
+[Ledger scope and pinned revisions](scope.md).

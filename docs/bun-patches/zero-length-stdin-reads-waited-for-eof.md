@@ -10,3 +10,5 @@ The normal `scripts/test.sh` runner uses the open-pipe driver for this fixture. 
 
 
 [Parent context](port-bugs-fixed-in-bun-wasms-own-code.md).
+
+[Ledger scope and pinned revisions](scope.md).

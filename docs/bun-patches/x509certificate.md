@@ -23,3 +23,5 @@ contract using the shared native table.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [X509Certificate adapters](#x509certificate) | Host feature | Original BoringSSL data bindings and Node certificate wrapper over existing KeyObjects. |
+
+[Ledger scope and pinned revisions](scope.md).

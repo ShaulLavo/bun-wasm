@@ -31,3 +31,5 @@ C++ JSONL binding or Bun's `node:test` module.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
+
+[Ledger scope and pinned revisions](scope.md).

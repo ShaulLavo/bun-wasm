@@ -15,3 +15,5 @@ keep their upstream allocation and sharing modes. No JavaScript algorithm is cop
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [WASI resizable buffer allocation](#wasi-resizable-buffer-allocation) | Port | Return a catchable allocation failure before unsupported virtual reservation or protection. |
+
+[Ledger scope and pinned revisions](scope.md).
