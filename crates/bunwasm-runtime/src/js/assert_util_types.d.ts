@@ -22,20 +22,21 @@ declare namespace BunWasm {
     isDeepStrictEqual(a: unknown, b: unknown): boolean;
     types: { isRegExp(value: unknown): value is RegExp; isNativeError(value: unknown): value is Error };
   }
+  interface ConsoleInspector {
+    nodeInspect: InspectFunction;
+    nodeFormat: { (...args: unknown[]): string; apply(receiver: unknown, args: IArguments): string };
+    nodeFormatWithOptions: { (options: InspectOptions, ...args: unknown[]): string; apply(receiver: unknown, args: IArguments): string };
+  }
   interface Internal {
     require(name: "util"): UtilityModule;
-    require(name: "inspect"): {
-      nodeInspect: InspectFunction;
-      nodeFormat: { (...args: unknown[]): string; apply(receiver: unknown, args: IArguments): string };
-      nodeFormatWithOptions: { (options: InspectOptions, ...args: unknown[]): string; apply(receiver: unknown, args: IArguments): string };
-    };
+    require(name: "inspect"): ConsoleInspector;
     require(name: "partial_assert"): {
       create(fail: (options: AssertionOptions) => never, requireArgs: (count: number, min: number) => void): (actual: unknown, expected: unknown, message?: unknown) => void;
     };
   }
 }
 interface ErrorConstructor {
-  captureStackTrace?(target: object, constructor?: Function): void;
+  captureStackTrace(target: object, constructor?: Function): void;
   isError?(value: unknown): value is Error;
 }
 

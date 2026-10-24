@@ -484,9 +484,8 @@ tests, one collection error, and zero timeouts.
 QuickJS's unchanged failure is the recursive child in
 `console-constructor-exception.test.ts`. It traps with `wasm trap: call stack
 exhausted` before JavaScript can catch a RangeError. Both the original runtime
-and the Console runtime exhibit the same trap. The
-[stack follow-up](../../plans/compatibility-followups.md#quickjs-recursion-traps-before-javascript-can-catch-the-error)
-records the command, backtrace, and engine policy to investigate. The new local
+and the Console runtime exhibit the same trap. The cause was open when this was measured. See
+[Stack overflow in wasm](../stack-limits.md). The new local
 fixtures pass on every engine, including asynchronous stream callbacks and the
 Writable destroy hook used by the upstream tests.
 
@@ -631,8 +630,7 @@ QuickJS and JSC reject the llhttp wasm table export at
 `crates/bunwasm-runtime/src/js/webassembly.js:136`; the Next caller is
 `node_modules/next/dist/compiled/@edge-runtime/primitives/load.js:5630`.
 Browser build reaches `ChildProcess.send` at `crates/bunwasm-runtime/src/js/spawn.js:411`.
-Both require broader runtime work and are recorded in
-[compatibility follow-ups](../../plans/compatibility-followups.md#next-after-directory-handles).
+Both need broader runtime work and were open when this was measured.
 Browser dev still exits without a useful diagnostic, so no source location is established.
 
 The directory review regressions fail with the reviewed factory on every engine

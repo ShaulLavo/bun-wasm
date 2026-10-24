@@ -78,8 +78,7 @@ the graph is limited to 10,000 packages and 128 nesting levels.
 ## Workspaces and commands
 
 Native hosts create workspace and package-bin links. The page filesystem does
-not yet support symbolic links, so workspace and local-link installs still need
-the [filesystem prerequisite](../plans/browser-runtime.md#installer-filesystem-link-prerequisite).
+not yet support symbolic links, so workspace and local-link installs fail in the browser until it does.
 For package bins, ENOTSUP or EPERM from link creation produces a warning naming
 the package and bin. Installation continues and writes its lockfile. Other
 errors remain fatal. Node's native WASI also rejects some relative links under
@@ -173,8 +172,7 @@ three engines. The headless Node host uses a separate fetch worker during synchr
 Rust CLI startup, then keeps its existing asynchronous network adapter for JS.
 See [the fixture README](install-fixtures.md).
 
-Raw bounded upstream results and command logs live in
-`/work/reports/bun-wasm-install/` for coordinator review. The install subset is
+The install subset is
 `cli/install` (113 files), run unchanged with `scripts/bun-suite.sh --network
 loopback --jobs 2`. The checked-in full baseline is deliberately unchanged.
 
@@ -292,31 +290,26 @@ Those results do not exercise the published esbuild package, which has its own
 recorded-registry check above. The full upstream baseline is unchanged.
 
 [Framework results](app-matrix/esbuild-results.md) record the subsequent Vite,
-Astro, and SvelteKit blockers. TCP and ws review heads changed after that pinned
-integration measurement; the report does not claim to measure those later heads.
+Astro, and SvelteKit blockers. The report does not measure TCP and ws changes made after that pinned integration.
 
 The esbuild package checks cover synchronous APIs and watch edits without an
 explicit rebuild request on every engine, including Chromium and WebKit pages.
 See [the package-check instructions](esbuild-checks.md) for offline
-mirror requirements and the retained official package recording.
+mirror requirements.
 
 ## Historical combined installer measurement, 2026-10-17
 
-This frozen comparison predates the split into command/workspace and migration
-PRs. Its migration counts describe the implementation moved to the follow-up,
-not the remaining command/workspace PR.
+This frozen comparison predates the split of workspace and command support from lockfile migration. Its migration counts describe the migration implementation.
 
 The fixed [25-file selection](bun-test-suite/installer-files.txt) covers every
-workspace, manifest-header, lock-migration, update and bunx cause assigned by PR #40.
+workspace, manifest-header, lock-migration, update and bunx failure causes.
 Each unchanged upstream file has a 15-second deadline and 2-second initial test
 timeout, one worker, with loopback-only networking. The paired artifacts are main
 `2759d45b` before and installer commit `9651da83` after, including the selected
 workspace update fix. Both sides use the same suite, launcher, host sources,
 dependencies and deadlines. Only the wasm hash differs within each engine pair.
 
-The branch later integrates main `205ad909`. Installer sources, CLI wiring,
-package-command dispatch and installer regression fixtures are unchanged by that
-integration. The tables describe the frozen pair, including its artifact sizes.
+The tables describe the frozen pair, including its artifact sizes.
 
 | Engine | Observed passes before / after | Fully passing files before / after | Timeouts before / after |
 |---|---|---|---|

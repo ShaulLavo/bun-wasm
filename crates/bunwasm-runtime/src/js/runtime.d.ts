@@ -1,13 +1,4 @@
 declare namespace BunWasm {
-  interface ColorStream { hasColors?(): boolean; isTTY?: boolean }
-  interface RuntimeProcess {
-    cwd(): string;
-    nextTick?(callback: (this: unknown, ...args: unknown[]) => unknown, ...args: unknown[]): void;
-    emitWarning?(message: string, kind?: string, code?: string): void;
-    noDeprecation?: boolean; throwDeprecation?: boolean; pid?: number;
-    env?: Record<string, string | undefined>; stdout?: ColorStream; argv?: string[];
-  }
-
   type FunctionKind = "normal" | "async" | "generator" | "async-generator";
   interface Native {
     functionImports(args: readonly string[], kind: FunctionKind): number[][];
@@ -89,7 +80,26 @@ declare namespace BunWasm {
   }
 }
 
-declare const process: BunWasm.RuntimeProcess;
+declare namespace BunWasm {
+  interface ColorStream { hasColors?(): boolean; isTTY?: boolean }
+  interface RuntimeProcess {
+    cwd(): string;
+    nextTick?(callback: (this: unknown, ...args: unknown[]) => unknown, ...args: unknown[]): void;
+    emitWarning?(message: string, kind?: string, code?: string): void;
+    noDeprecation?: boolean;
+    throwDeprecation?: boolean;
+    pid?: number;
+    env?: Record<string, string | undefined>;
+    stdout?: ColorStream;
+    stderr?: WorkerWritable;
+    argv?: string[];
+  }
+}
+
+declare var process: BunWasm.RuntimeProcess & {
+  stdout: BunWasm.WorkerWritable;
+  stderr: BunWasm.WorkerWritable;
+};
 declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
 
@@ -238,6 +248,49 @@ declare namespace BunWasm {
 }
 
 declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;
+declare namespace BunWasm {
+  interface StackFrame { file: string; name: string; line: number; column: number }
+  interface ConsoleInspector { parseStack(raw: unknown): StackFrame[] }
+  interface StackCallSite {
+    getFileName(): string;
+    getFunctionName(): string | null;
+    getFunction(): unknown;
+    getLineNumber(): number;
+    getColumnNumber(): number;
+    isNative(): boolean;
+    isConstructor(): boolean;
+    isToplevel(): boolean;
+  }
+  interface Native {
+    bunBuiltinNames(): string[];
+    bunBuiltinSource(id: number): string | undefined;
+    bunBuiltinHookName(id: number): string;
+    bunBuiltinErrorCode(id: number): string;
+    evalScript(source: string, filename: string): (intrinsics: Record<string, unknown>) => unknown;
+    isPromise(value: unknown): boolean;
+    isProxy(value: unknown): boolean;
+    isError(value: unknown): boolean;
+  }
+  interface Internal {
+    bunBuiltinGlobals: Record<string, unknown> & {
+      Array: ArrayConstructor; Error: ErrorConstructor; Function: FunctionConstructor;
+      Map: MapConstructor; Object: ObjectConstructor; Proxy: ProxyConstructor;
+      RangeError: RangeErrorConstructor; Reflect: typeof Reflect; Set: SetConstructor;
+      String: StringConstructor; Symbol: SymbolConstructor; TypeError: TypeErrorConstructor;
+      URIError: URIErrorConstructor;
+    };
+    builtin(name: string): unknown;
+    defineHidden(target: object, values: object): void;
+    mappedCallSites: WeakSet<object>;
+    formatCallSite(site: StackCallSite): string;
+    require(name: "inspect"): ConsoleInspector;
+  }
+}
+
+interface ErrorConstructor {
+  captureStackTrace(target: object, constructorOpt?: Function): void;
+  prepareStackTrace: ((target: object, raw: unknown) => unknown) | undefined;
+}
 
 declare namespace BunWasm {
   interface FormatTemporalValue {
@@ -247,18 +300,24 @@ declare namespace BunWasm {
     epochNanoseconds: bigint;
     toZonedDateTimeISO(offset: string): FormatTemporalValue;
   }
-  interface FormatBlob extends Blob { _bytes(): Uint8Array }
   interface Native {
     /** Serialized tagged graph from bunwasm-transpiler/src/data.rs. */
     parseData(bytes: Uint8Array, format: DataFormat): string;
   }
   interface Internal {
     require(name: "yaml_coercion"): (value: unknown) => unknown;
+    require(name: "formats_limit"): { checkSize(input: { readonly byteLength: number }): void };
     toUint8(value: ArrayBuffer | SharedArrayBuffer | ArrayBufferView): Uint8Array;
   }
 }
 
-declare var Bun: { inspect(value: unknown): string };
+// Runtime Blob is installed by web.js, with synchronous access to its stored bytes.
+interface Blob { _bytes(): Uint8Array }
+
+declare var Bun: {
+  inspect(value: unknown): string;
+  stringWidth(value: string, options?: { ambiguousIsNarrow?: boolean; countAnsiEscapeCodes?: boolean }): number;
+};
 declare var Temporal: {
   Instant: { from(value: string): BunWasm.FormatInstant };
   PlainDate: { from(value: string): BunWasm.FormatTemporalValue };

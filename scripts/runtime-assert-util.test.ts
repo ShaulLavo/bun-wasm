@@ -92,6 +92,39 @@ const proc: BunWasm.RuntimeProcess = { cwd: () => "/", argv: ["bun"], nextTick: 
   expect(result.exitCode).toBe(0);
 });
 
+for (const declarations of [
+  ["runtime.d.ts", "console_types.d.ts", "assert_util_types.d.ts"],
+  ["assert_util_types.d.ts", "console_types.d.ts", "runtime.d.ts"],
+]) {
+  test(`accepts integrated inspector and process contracts with ${declarations.join(" before ")}`, () => {
+    const integratedProbe = join(scratch, "integrated-probe.ts");
+    const integratedConfig = join(scratch, "integrated-tsconfig.json");
+    writeFileSync(integratedProbe, `
+      declare const internal: BunWasm.Internal;
+      const parsed: BunWasm.StackFrame[] = internal.require("inspect").parseStack(undefined);
+      const formatted: string = internal.require("inspect").formatArgs(["value", 1]);
+      const inspected: string = internal.require("inspect").bunInspect({}, { depth: 0 });
+      const nodeInspected: string = internal.require("inspect").nodeInspect({}, { depth: null, getters: "get" });
+      const nodeFormatted: string = internal.require("inspect").nodeFormat("%s", 1);
+      const withOptions: string = internal.require("inspect").nodeFormatWithOptions({ colors: false }, "%s", 1);
+      process.stdout.write("out");
+      process.stderr.write("err");
+      process = process;
+      process.stdout.hasColors?.();
+      process.nextTick?.(() => {});
+      Error.captureStackTrace({});
+    `);
+    writeFileSync(integratedConfig, JSON.stringify({
+      extends: join(root, "crates/bunwasm-runtime/tsconfig.json"),
+      include: [],
+      files: declarations.map(name => join(runtime, name)).concat([integratedProbe]),
+    }));
+    const result = Bun.spawnSync([join(root, "web/node_modules/.bin/tsc"), "-p", integratedConfig]);
+    expect(result.stdout.toString()).toBe("");
+    expect(result.exitCode).toBe(0);
+  });
+}
+
 const invalid = [
   'internal.require("inspect").nodeInspect({}, { depth: "deep" });',
   'internal.require("inspect").nodeFormatWithOptions({ getters: "all" }, "%s");',

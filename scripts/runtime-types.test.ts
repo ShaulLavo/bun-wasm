@@ -32,6 +32,10 @@ const invalid: [string, string][] = [
   ["non-byte concatenation", 'declare const internal: BunWasm.Internal; internal.concatBytes(["text"]);'],
   ["unknown generated-function kind", 'native.functionImports([], "constructor");'],
   ["non-string module specifier", 'native.resolve(7, "/index.ts", false);'],
+  ["builtin index text", 'native.bunBuiltinSource("module");'],
+  ["builtin hook object", 'native.bunBuiltinHookName({});'],
+  ["stack frame text", 'declare const internal: BunWasm.Internal; internal.formatCallSite("not a frame");'],
+  ["stack target primitive", 'Error.captureStackTrace(7);'],
   ["runtime type error", 'const value: number = "wrong";'],
 ];
 for (const [label, source] of invalid) {
@@ -52,17 +56,47 @@ test("accepts generated-function parser and module-loader contracts", () => {
   expect(result.exitCode).toBe(0);
 });
 
-
-test("accepts format graph, boxed coercion and shared buffer input contracts", () => {
-  const result = check('native.parseData(new Uint8Array(), "YAML");\ndeclare const internal: BunWasm.Internal;\ninternal.require("yaml_coercion")(new String("value"));\ninternal.toUint8(new SharedArrayBuffer(4));');
+test("accepts builtin registry and structured stack contracts", () => {
+  const result = check('native.bunBuiltinSource(0);\nnative.evalScript("(function () {})", "bun-builtin:example")({});\ndeclare const internal: BunWasm.Internal;\ninternal.require("inspect").parseStack(undefined);\nError.captureStackTrace({});\nError.prepareStackTrace = (_target, raw) => raw;');
   expect(result.stdout.toString()).toBe("");
   expect(result.exitCode).toBe(0);
 });
 
-for (const source of ['native.parseData("bytes", "YAML");', 'native.parseData(new Uint8Array(), "CSV");']) {
+
+test("accepts format graph, boxed coercion and shared buffer input contracts", () => {
+  const result = check('native.parseData(new Uint8Array(), "YAML");\ndeclare const internal: BunWasm.Internal;\ninternal.require("yaml_coercion")(new String("value"));\ninternal.toUint8(new SharedArrayBuffer(4));\ninternal.require("formats_limit").checkSize({ byteLength: 2147483648 });');
+  expect(result.stdout.toString()).toBe("");
+  expect(result.exitCode).toBe(0);
+});
+
+for (const source of ['native.parseData("bytes", "YAML");', 'native.parseData(new Uint8Array(), "CSV");', 'native.parseData({ byteLength: 1 }, "YAML");', 'declare const internal: BunWasm.Internal; internal.require("formats_limit").checkSize({ byteLength: "1" });']) {
   test(`rejects invalid format graph call ${source}`, () => {
     const result = check(source);
     expect(result.exitCode).not.toBe(0);
     expect(result.stdout.toString()).toContain("error TS");
+  });
+}
+
+for (const declarations of [
+  ["runtime.d.ts", "console_types.d.ts"],
+  ["console_types.d.ts", "runtime.d.ts"],
+]) {
+  test(`accepts both inspector API families with ${declarations.join(" before ")}`, () => {
+    const inspectorProbe = join(scratch, "inspector-probe.ts");
+    const inspectorConfig = join(scratch, "inspector-tsconfig.json");
+    writeFileSync(inspectorProbe, `
+      declare const internal: BunWasm.Internal;
+      const parsedStackFrames: BunWasm.StackFrame[] = internal.require("inspect").parseStack(undefined);
+      const formatted: string = internal.require("inspect").formatArgs(["value", 1]);
+      const inspected: string = internal.require("inspect").bunInspect({}, { depth: 0, compact: true });
+    `);
+    writeFileSync(inspectorConfig, JSON.stringify({
+      extends: join(root, "crates/bunwasm-runtime/tsconfig.json"),
+      include: [],
+      files: declarations.map(name => join(root, "crates/bunwasm-runtime/src/js", name)).concat([inspectorProbe]),
+    }));
+    const result = Bun.spawnSync([join(root, "web/node_modules/.bin/tsc"), "-p", inspectorConfig], { stdout: "pipe", stderr: "pipe" });
+    expect(result.stdout.toString()).toBe("");
+    expect(result.exitCode).toBe(0);
   });
 }
