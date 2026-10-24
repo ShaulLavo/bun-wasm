@@ -10,7 +10,7 @@ The browser engine's result reader uses absolute offsets into the shared full-me
 
 ## Reproduce
 
-Build all three wasm artifacts and install the web and site dependencies. Build baseline hosts in a separate worktree. Point both site builds at the same rebuilt wasm files with absolute `BUN_WASM`, `JSC_WASM` and `BUN_BROWSER_WASM` paths. Serve each site on a free port with `ROOT=$PWD/site/dist PORT=0 bun web/serve.ts`. Run this branch’s benchmark script against each URL. `PLAYWRIGHT` can point to an installed Playwright module.
+Build all three wasm artifacts and install the web and site dependencies. Build baseline hosts in a separate worktree. Point both site builds at the same rebuilt wasm files with absolute `BUN_WASM`, `JSC_WASM` and `BUN_BROWSER_WASM` paths. Serve each site on a free port with `ROOT=$PWD/site/dist PORT=0 bun web/serve.ts`. Run the benchmark script against each URL. `PLAYWRIGHT` can point to an installed Playwright module.
 
 ```sh
 node web/tests/bench-memory.mjs http://127.0.0.1:<port>/ before.json
@@ -20,7 +20,7 @@ node web/tests/compare-memory.mjs before.json after.json
 
 The benchmark takes five samples per browser, each in a fresh context. Each sample measures navigation to the playground's ready status, 50,000 small `Bun.hash` native calls through the browser-engine bridge, 50,000 `process.cwd()` calls returning strings, 2,000 `console.log` calls through WASI `fd_write`, and navigation to the React sandbox's first counter render. Microbenchmarks warm up once before measurement. Guest timings exclude worker startup and terminal draining; wall timings include shell execution and output delivery. Fresh contexts clear browser storage and the sandbox's dependency-bundle cache. Browser processes are reused across samples, so wasm compilation can benefit from process caches. The sandbox bundles React with bun.wasm.
 
-These are host measurements on a machine shared with other wave lanes. Startup and first render include work beyond memory views. They do not establish a general speedup. Each sample records React root commits through the DevTools renderer hook, and the comparator requires matching counts. No React component or render logic changes.
+These are host measurements on a a machine that was running other work. Startup and first render include work beyond memory views. They do not establish a general speedup. Each sample records React root commits through the DevTools renderer hook, and the comparator requires matching counts. No React component or render logic changes.
 
 ## Growth checks
 
@@ -69,4 +69,4 @@ webkit React root commits: before 1,1,1,1,1; after 1,1,1,1,1.
 
 Integer native-call guest time fell 4.7% in Chromium and 16.0% in WebKit. Small-write guest time rose 4.1% and 9.6%. String-returning calls, startup and first render showed small changes. Wall times also include worker startup and message delivery. These are mixed results on a shared machine, rather than evidence of a uniform speedup.
 
-The repository has no `trace --compare` command. The committed comparator checks identical wasm hashes, different host-worker hashes, equal React root-commit counts and the recorded timings. Raw runs and support screenshots are retained in `/work/reports/bun-wasm-resizable` for coordinator review.
+The repository has no `trace --compare` command. The committed comparator checks identical wasm hashes, different host-worker hashes, equal React root-commit counts and the recorded timings.

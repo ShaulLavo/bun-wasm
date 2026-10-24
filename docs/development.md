@@ -15,7 +15,7 @@ The native build runs on Linux x86_64. The CI job "Rust workspace tests (QuickJS
 | cmake, ninja, nasm, clang, libclang-dev, pkg-config, ruby, gperf, bison | Current distro packages | Native dependency builds |
 | Binaryen | 133 | `wasm-opt`. The JSC guest requires it. The other builds use it when present. |
 
-`env.sh` sets the toolchain environment, and every build script sources it. Its defaults point at a workstation layout under `/work/cache`. Override `RUSTUP_HOME`, `CARGO_HOME`, `WASM_TOOLS`, `WASI_SDK_PATH`, `BUN_WASM_SYSROOT` and `CARGO_TARGET_DIR` before sourcing it to use your own paths. Large builds need several GB of RAM, so lower `-j` on a small machine.
+`env.sh` sets the toolchain environment, and every build script sources it. Its defaults point at the maintainer's workstation layout under `/work/cache`. Override `RUSTUP_HOME`, `CARGO_HOME`, `WASM_TOOLS`, `WASI_SDK_PATH`, `BUN_WASM_SYSROOT` and `CARGO_TARGET_DIR` before sourcing it to use your own paths. Large builds need several GB of RAM, so lower `-j` on a small machine.
 
 ## Build the guests and the launcher
 
@@ -61,7 +61,7 @@ printf 'console.log("hello from bun-wasm");\n' > index.ts
 
 1. Commit the change on the `wasm` branch inside `vendor/bun`. Keep it small: add `target_os = "wasi"` arms and host hooks.
 2. Run `scripts/export-patches.sh` to rewrite `patches/bun/*.patch`.
-3. Add a classified row and a section to [`docs/bun-patches.md`](bun-patches.md) in the same change. Record the upstream path and revision, what changed, and why.
+3. Add or update your own classified record under [`docs/bun-patches/`](bun-patches/) in the same change. Record the upstream path and revision, what changed, and why.
 
 [ADR 005](adr/005-patch-bun-minimally-and-keep-a-ledger.md) explains the policy.
 

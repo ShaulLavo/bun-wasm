@@ -41,10 +41,7 @@ compiler identification or ABI probes. Both the initial detection and each
 reconfiguration retain the 15-second process-tree deadline. Failed configures
 print stdout as well as stderr, so compiler-probe progress is not lost.
 
-This removes redundant compiler probes from the cache-guard tests. Main run
-`39443166670` timed out in a static C ABI archive probe, with `ar` in state D.
-The same suite passed locally with both deadline-wrapper versions, so the hosted
-stall's underlying cause is not established and is not attributed to the wrapper.
+This removes redundant compiler probes from the cache-guard tests. A hosted run once timed out in a static C ABI archive probe, with `ar` in state D. The cause of that stall is not established.
 The initial real compiler detection remains subject to host failures.
 
 The existing Rust job runs `bun run quality --native` only when native inputs
@@ -93,7 +90,7 @@ restore prefix for reuse.
 Cache logs show restored paths,
 keys, sizes and hits. A hit alone is not proof that Cargo reused build output.
 
-Moving native work to the PC or UpCloud requires an owner-approved runner or
+Moving native work to an external machine requires an approved runner or
 an authenticated dispatcher. CI does not silently skip those checks when no
 private executor is configured.
 
@@ -255,5 +252,5 @@ job start through its last job finish, excluding queue time and pauses between a
 Inspect `gh api --paginate repos/ShaulLavo/bun-wasm/actions/caches` before
 changing cache policy. Closed PR caches are isolated from later PRs but still
 consume the shared quota. Remove only identified obsolete entries, not live
-lanes or the main-branch toolchain/build caches. Process bundles are short-lived
+branches or the main-branch toolchain/build caches. Process bundles are short-lived
 run artifacts, not more entries in the repository's cache quota.

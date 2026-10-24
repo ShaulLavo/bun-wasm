@@ -11,7 +11,7 @@ bun-wasm compiles Bun's own Rust crates for a target Bun does not support. Every
 
 Patches to Bun are commits on the `wasm` branch of a pinned `vendor/bun` checkout, exported to `patches/bun/*.patch` by `scripts/export-patches.sh`. `scripts/sync-bun.sh` re-creates the checkout from the pin and the patch bytes. Patches stay minimal: add `target_os = "wasi"` arms and host hooks, and do not rewrite. Prefer Bun's own `src/js` modules through the builtin loader over writing new ones.
 
-Every new or changed patch, copied file or adapted implementation gets a classified row and a section in [`docs/bun-patches.md`](../bun-patches.md) in the same change. The row records the upstream path and revision, the local changes and the reasons. Original adapters are listed separately. Each row has one class: port, host feature or upstream bug.
+Every new or changed patch, copied file or adapted implementation gets its own classified Markdown record under [`docs/bun-patches/`](../bun-patches/) in the same change. The record contains a classified row and records the upstream path and revision, the local changes and the reasons. Original adapters are listed separately. Each row has one class: port, host feature or upstream bug.
 
 ## Alternatives considered
 
@@ -19,4 +19,4 @@ Every new or changed patch, copied file or adapted implementation gets a classif
 
 ## Consequences
 
-Upgrading Bun means rebasing a short patch series and checking the ledger row by row. The ledger is long (about 3,500 lines at this revision), and a change without its row is incomplete. The class column separates changes the target forces (ports), additions for this host (host features) and bugs in upstream code.
+Upgrading Bun means rebasing a short patch series and checking each changed record. A change without its own provenance record is incomplete. The stable entrypoint is not a feature-edit target. The class column separates changes the target forces (ports), additions for this host (host features) and bugs in upstream code.
