@@ -10,14 +10,19 @@ function parser(text: string): Parser {
   return runInNewContext(text)({ require: () => ({ nodeInspect: (value: unknown) => String(value) }) });
 }
 
+function captureParseError(parseArgs: Parser["parseArgs"], raw: null | undefined): unknown {
+  let observed: unknown;
+  try { parseArgs({ args: [raw], allowPositionals: true, tokens: true }); } catch (error) { observed = error; }
+  return observed;
+}
+
 function rawParserControls(text: string) {
   const { parseArgs } = parser(text);
   const observations: unknown[] = [];
   const raws = [1, true, {}, null, undefined, Symbol("raw")];
   for (const raw of raws) {
     if (raw == null) {
-      let observed: unknown;
-      try { parseArgs({ args: [raw], allowPositionals: true, tokens: true }); } catch (error) { observed = error; }
+      const observed = captureParseError(parseArgs, raw);
       assert.equal(String(observed), `TypeError: Cannot read properties of ${raw} (reading 'length')`);
       observations.push([typeof raw, String(observed)]);
       continue;
