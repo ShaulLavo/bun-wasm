@@ -159,7 +159,7 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', '.github/workflows/ci.yml') }}
           restore-keys: |
             native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-
       - name: Install pinned Rust dependency checker
@@ -292,7 +292,7 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', '.github/workflows/ci.yml') }}
 
   package:
     name: Browser adapter package

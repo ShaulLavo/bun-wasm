@@ -28,3 +28,16 @@ shared Node-host/test contracts. Shared runtime, tool, host and fixture changes
 also select JSC. Engine-specific Rust and test files keep their own checks. Page, editor,
 sandbox UI and documentation changes do not build engines. New shared host
 imports need a matching selection rule and regression check.
+
+The native restore and save primary keys include the tools builder and the CI
+workflow. Adding or changing the tools producer cannot exactly hit a pre-tools
+cache and suppress saving its new outputs. The existing v4 compatibility prefix
+is unchanged, so a compatible older cache can supply dependencies before the
+blocking gates and final save. Workflow-only edits conservatively change the
+exact key but still allow that compatible restore.
+
+When integrating the refined native cache from PR 152, keep this producer
+identity in the refined native primary and save pair. Its v2 compatibility
+fingerprint already includes the whole workflow. Include the tools builder as
+well. Tools stays in the native Cargo target, not the separate JSC target, and
+all fixture preparation and consumers must precede every selected final save.

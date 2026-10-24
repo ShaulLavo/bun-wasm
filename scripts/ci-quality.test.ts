@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { qualityGates } from "./quality";
 import { inBatches, missingPackages, parseArchives, planArchives, prefetchArchive } from "../web/scripts/ci-browser-deps";
@@ -392,4 +394,108 @@ test("Bun acceptance has one distinct shared producer and no per-browser build",
   expect(controller).not.toContain("buildBrowserEntries");
   expect(acceptance).toContain("BUN_WASM_PROCESS_BUNDLES: ${{ runner.temp }}/process-bundles");
   expect(acceptance).not.toContain("BUN_WASM_RUNTIME_PROC_BUNDLE:");
+});
+
+function workflowField(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null || !(key in value)) throw new Error(`Missing workflow field: ${key}`);
+  return Reflect.get(value, key);
+}
+
+function workflowString(value: unknown): string {
+  if (typeof value !== "string") throw new Error("Expected workflow string");
+  return value;
+}
+
+function nativeCacheContract() {
+  const parsed: unknown = Bun.YAML.parse(workflow);
+  const steps: unknown = workflowField(workflowField(workflowField(parsed, "jobs"), "rust"), "steps");
+  if (!Array.isArray(steps)) throw new Error("Expected native steps");
+  const step = (key: string, value: string): unknown => {
+    const matches = steps.filter((item: unknown) => typeof item === "object" && item !== null && key in item && Reflect.get(item, key) === value);
+    expect(matches).toHaveLength(1);
+    return matches[0];
+  };
+  const restore = step("id", "native-cache");
+  const save = step("name", "Save the complete native build once per input revision");
+  const inputs = workflowField(restore, "with");
+  return {
+    primary: workflowString(workflowField(inputs, "key")),
+    prefix: workflowString(workflowField(inputs, "restore-keys")).trim(),
+    save: workflowString(workflowField(workflowField(save, "with"), "key")),
+    condition: workflowString(workflowField(save, "if")),
+    restorePath: workflowField(inputs, "path"),
+    savePath: workflowField(workflowField(save, "with"), "path"),
+  };
+}
+
+function cachePatterns(template: string): string[] {
+  return Array.from(template.matchAll(/hashFiles\(([^)]+)\)/g)).flatMap(match =>
+    Array.from((match[1] ?? "").matchAll(/'([^']+)'/g), part => part[1] ?? ""));
+}
+
+function nativeCacheInputs(template: string): Map<string, Buffer> {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const paths = new Set(cachePatterns(template).flatMap(pattern =>
+    Array.from(new Bun.Glob(pattern).scanSync({ cwd: root, onlyFiles: true, dot: true }))));
+  return new Map(Array.from(paths, path => [path, readFileSync(join(root, path))]));
+}
+
+function expandNativeKey(template: string, inputs: ReadonlyMap<string, Buffer>): string {
+  return template.replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_whole: string, expression: string) => {
+    if (expression === "runner.os") return "Linux";
+    if (expression === "runner.arch") return "X64";
+    if (expression === "steps.homes.outputs.image") return "20261012.334.1";
+    if (!expression.startsWith("hashFiles(")) throw new Error(`Unexpected cache expression: ${expression}`);
+    const globs = cachePatterns(`\${{ ${expression} }}`).map(pattern => new Bun.Glob(pattern));
+    const paths = Array.from(inputs.keys()).sort().filter(path => globs.some(glob => glob.match(path)));
+    if (paths.length === 0) return "";
+    const hash = createHash("sha256");
+    for (const path of paths) {
+      const bytes = inputs.get(path);
+      if (!bytes) throw new Error(`Missing keyed input: ${path}`);
+      hash.update(createHash("sha256").update(bytes).digest());
+    }
+    return hash.digest("hex");
+  });
+}
+
+test("native cache keys distinguish tools builders and producers before allowing a gated save", () => {
+  const contract = nativeCacheContract();
+  expect(contract.primary).toBe(contract.save);
+  expect(contract.restorePath).toBe(contract.savePath);
+  expect(contract.condition).toBe("steps.native-cache.outputs.cache-hit != 'true'");
+  const inputs = nativeCacheInputs(contract.primary);
+  const saved = expandNativeKey(contract.save, inputs);
+  const primary = expandNativeKey(contract.primary, inputs);
+  expect(primary).toBe(saved);
+  const canSave = (requested: string, matched: string, gatesSucceeded: boolean) => gatesSucceeded && requested !== matched;
+  expect(canSave(primary, saved, true)).toBe(false);
+  expect(canSave(primary, "", false)).toBe(false);
+  for (const path of ["scripts/build-bun-tools.sh", ".github/workflows/ci.yml"]) {
+    const changed = new Map(inputs);
+    const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    const before = path.endsWith(".sh") ? source.replace("cargo build --locked", "cargo build") :
+      source.replace(/      - name: Build the single tools fixture[^]*?(?=      - name: Blocking Web guest cases)/, "");
+    expect(before).not.toBe(source);
+    changed.set(path, Buffer.from(before));
+    const oldSaved = expandNativeKey(contract.save, changed);
+    expect(oldSaved).not.toBe(saved);
+    expect(expandNativeKey(contract.primary, inputs)).not.toBe(oldSaved);
+    expect(oldSaved.startsWith(expandNativeKey(contract.prefix, inputs))).toBe(true);
+    expect(expandNativeKey(contract.primary, changed)).toBe(oldSaved);
+    expect(canSave(expandNativeKey(contract.primary, changed), oldSaved, true)).toBe(false);
+    expect(canSave(primary, oldSaved, true)).toBe(true);
+    expect(canSave(primary, oldSaved, false)).toBe(false);
+  }
+});
+
+test("native v4 fallback still excludes incompatible environment and toolchain inputs", () => {
+  const { primary, prefix } = nativeCacheContract();
+  const inputs = nativeCacheInputs(primary);
+  const saved = expandNativeKey(primary, inputs);
+  for (const path of ["env.sh", ".cargo/config.toml", "rust-toolchain.toml", "scripts/ci-binaryen.ts"]) {
+    const changed = new Map(inputs);
+    changed.set(path, Buffer.concat([readFileSync(new URL(`../${path}`, import.meta.url)), Buffer.from("\nchanged input\n")]));
+    expect(saved.startsWith(expandNativeKey(prefix, changed))).toBe(false);
+  }
 });
