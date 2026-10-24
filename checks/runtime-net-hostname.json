@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/net-hostname.test.ts",
+  "localRuntime": true
+}
