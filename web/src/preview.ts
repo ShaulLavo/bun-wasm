@@ -7,12 +7,15 @@ export { activated } from "waffle/browser/service-worker";
 export type PreviewState = "ready" | "unsupported" | "failed";
 
 export class Previews extends PreviewRouter {
-  /** Resolves once the service worker can intercept preview URLs (or registration failed). */
-  readonly ready: Promise<PreviewState>;
+  private registration: Promise<PreviewState> | undefined;
+
+  /** First preview use registers its scope; module loading owns its separate eager scope. */
+  get ready(): Promise<PreviewState> {
+    return this.registration ??= this.registerWorker();
+  }
 
   constructor() {
     super({ baseURL: location.href, prefix: PREVIEW_DIR });
-    this.ready = this.registerWorker();
   }
 
   private async registerWorker(): Promise<PreviewState> {
