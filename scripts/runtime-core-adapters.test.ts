@@ -38,12 +38,82 @@ function syntaxHash(source: string) {
   return createHash("sha256").update(JSON.stringify(syntax(file))).digest("hex");
 }
 
-// Hashes come from the JavaScript factories at 23e2125d. Ignore only arrow-parameter parentheses.
+function stackDescriptorRecords(source: string): { target: string; properties: string[]; nullPrototype: boolean }[] {
+  const file = ts.createSourceFile("stack_trace.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const records: { target: string; properties: string[]; nullPrototype: boolean }[] = [];
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node) && node.expression.getText(file) === "Object.defineProperty") {
+      const [target, key, descriptor] = node.arguments;
+      if (target && ts.isStringLiteral(key) && key.text === "stack" && descriptor && ts.isObjectLiteralExpression(descriptor)) {
+        const nullPrototype = descriptor.properties.some(property => ts.isPropertyAssignment(property)
+          && property.name?.getText(file) === "__proto__"
+          && property.initializer.kind === ts.SyntaxKind.NullKeyword);
+        records.push({ target: target.getText(file), properties: descriptor.properties.map(property => property.name?.getText(file) ?? "<computed>"), nullPrototype });
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  return records;
+}
+
+function defineStackFromPrototype(prototype: object, fields: PropertyDescriptor): { stack?: unknown } {
+  const descriptor = Object.assign(Object.create(prototype), fields);
+  const target = {};
+  Object.defineProperty(target, "stack", descriptor);
+  return target;
+}
+
+function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unknown } {
+  const descriptor = Object.assign(Object.create(null), fields);
+  const target = {};
+  Object.defineProperty(target, "stack", descriptor);
+  return target;
+}
+
+// Hashes pin the emitted factory syntax at frozen main ec7fab1c; descriptor records have an explicit AST delta.
 const originalTokens = {
-  stack_trace: "749819b642caac17947531faaa802271feac2fd7219af4d271c3a8d25f5cf1db",
+  stack_trace: "f93b885e1790884372992b6469ec91e6b5e365ce87faab230df3f3608e525efe",
   bun_builtins: "58e3de8a4232bc992b2b483d817198d6f020bedafc8220c3a1903d4f360f3bbe",
 };
 const originalEmbeddedBytes = { stack_trace: 4330, bun_builtins: 4092 };
+test("stack descriptor records are the only executable delta", () => {
+  const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/stack_trace.ts"), "utf8");
+  const records = stackDescriptorRecords(source);
+  expect(records).toEqual([
+    { target: "target", properties: ["__proto__", "value", "writable", "configurable", "enumerable"], nullPrototype: true },
+    { target: "Error.prototype", properties: ["configurable", "get", "set"], nullPrototype: false },
+    { target: "target", properties: ["__proto__", "configurable", "enumerable", "get", "set"], nullPrototype: true },
+  ]);
+});
+
+test("null-prototype descriptors ignore synthetic inherited descriptor fields", () => {
+  expect(() => defineStackFromPrototype({ get() { return "inherited getter"; } }, {
+    value: "formatted",
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  })).toThrow(TypeError);
+  expect(() => defineStackFromPrototype({ value: "inherited value" }, {
+    configurable: true,
+    enumerable: false,
+    get() { return "formatted"; },
+    set() {},
+  })).toThrow(TypeError);
+  expect(defineStackWithNullPrototype({
+    value: "formatted",
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  }).stack).toBe("formatted");
+  expect(defineStackWithNullPrototype({
+    configurable: true,
+    enumerable: false,
+    get() { return "formatted"; },
+    set() {},
+  }).stack).toBe("formatted");
+});
+
 for (const [name, hash] of Object.entries(originalTokens)) {
   test(`stripped ${name} keeps every original executable token`, () => {
     expect(syntaxHash(emit(name))).toBe(hash);
