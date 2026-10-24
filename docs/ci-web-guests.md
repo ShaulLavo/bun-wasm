@@ -29,15 +29,16 @@ also select JSC. Engine-specific Rust and test files keep their own checks. Page
 sandbox UI and documentation changes do not build engines. New shared host
 imports need a matching selection rule and regression check.
 
-The native restore and save primary keys include the tools builder and the CI
-workflow. Adding or changing the tools producer cannot exactly hit a pre-tools
-cache and suppress saving its new outputs. The existing v4 compatibility prefix
-is unchanged, so a compatible older cache can supply dependencies before the
-blocking gates and final save. Workflow-only edits conservatively change the
-exact key but still allow that compatible restore.
+The native v2 and v4 restore/save primary keys include the tools builder and
+workflow. A builder-only edit changes both exact keys while retaining both
+compatibility prefixes. A workflow edit changes the v2 compatibility fingerprint,
+so it cannot reuse the old v2 target. The v4 compatibility prefix stays unchanged,
+so a workflow-only producer edit can still restore compatible v4 dependencies.
+Neither edit can exactly hit the pre-tools primary and suppress a fresh save.
 
-When integrating the refined native cache from PR 152, keep this producer
-identity in the refined native primary and save pair. Its v2 compatibility
-fingerprint already includes the whole workflow. Include the tools builder as
-well. Tools stays in the native Cargo target, not the separate JSC target, and
-all fixture preparation and consumers must precede every selected final save.
+The v4 fallback runs only when v2 has no matched key. A v2 prefix hit does not
+restore or save v4. Tools always builds once in the native Cargo target, even on
+an exact hit, never in either separate JSC directory. Both guest gates and receipt
+preparation precede all four final saves. Default success gating prevents any
+selected cache save after a failed guest gate. JSC prebuild validation and its
+separate Cargo cache retain their existing identities and guards.

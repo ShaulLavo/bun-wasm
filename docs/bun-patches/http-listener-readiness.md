@@ -1,0 +1,30 @@
+## HTTP listener readiness
+
+Class **Host feature**, **original adapter** in `src/js/net_listener.ts` and the
+`http.Server.listen`, `ref` and `unref` integration in `src/js/net.js`.
+No upstream code is copied. Bun's `test/js/bun/test/test-timers.test.ts` at
+`9510e74152073d850a18758ca41114d8f214ffa6` supplies the occupied-port behavior.
+
+The HTTP startup waiter polls the existing `hostLocalAddr` contract instead of
+publishing `listening` before the host has bound its socket. A pending bind keeps
+the waiter alive. Success emits `listening` before registering the accept waiter,
+so a queued connection cannot overtake the listen callback. Closing in that
+callback prevents acceptance, and its `ref`/`unref` choice applies to the new
+accept waiter. Each startup owns a distinct waiter identity, checked before
+polling and after invoking listeners. Closing and re-listening inside the callback
+cannot let the previous startup install an accept waiter for the new listener.
+An announcing startup does not announce again during a nested I/O pump.
+Failure releases the handle and emits the original host error
+without starting acceptance. Closing cancels startup and `ref`/`unref` apply to
+both startup and accept waiters. The Node host's synchronous
+port probe is not proof that its later named-host bind succeeded. No delay or
+retry is used, and fake timers do not control the I/O waiter.
+
+
+## Classification
+
+| Patch or source | Class | Change |
+| --- | --- | --- |
+| [HTTP listener readiness](#http-listener-readiness) | Host feature | Original typed startup waiter reports HTTP listener success or bind errors after the host finishes binding. |
+
+[Ledger scope and pinned revisions](scope.md).

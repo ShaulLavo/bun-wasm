@@ -73,11 +73,30 @@ test("all seven artifact-backed cases leave the fixture-free Web glob", () => {
   expect(web).not.toContain("test-web-guests.ts");
 });
 
-test("the existing native producer owns each guest group once, before cache save", () => {
+function nativeStepNames(): string[] {
+  const parsed: unknown = Bun.YAML.parse(workflow);
+  if (typeof parsed !== "object" || parsed === null || !("jobs" in parsed)) throw new Error("Missing workflow jobs");
+  const jobs = parsed.jobs;
+  if (typeof jobs !== "object" || jobs === null || !("rust" in jobs)) throw new Error("Missing native job");
+  const job = jobs.rust;
+  if (typeof job !== "object" || job === null || !("steps" in job) || !Array.isArray(job.steps)) throw new Error("Missing native steps");
+  return job.steps.map((step: unknown) => {
+    if (typeof step !== "object" || step === null || !("name" in step) || typeof step.name !== "string") return "";
+    return step.name;
+  });
+}
+
+test("the existing native producer owns each guest group once, before all four saves", () => {
+  const names = nativeStepNames();
+  const consumers = ["Build the single tools fixture in the existing native target", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)"];
+  const saves = ["Save the JSC prebuild cache once per input revision", "Save the JSC Cargo cache once per input revision", "Save the refined native Cargo cache once per input revision", "Save the complete native fallback once per input revision"];
+  for (const name of consumers.concat(saves)) expect(names.filter(value => value === name)).toHaveLength(1);
+  for (const save of saves) {
+    for (const consumer of consumers) expect(names.indexOf(consumer)).toBeLessThan(names.indexOf(save));
+  }
   for (const command of ["test-web-guests.ts quickjs browser", "test-web-guests.ts jsc", "bash scripts/build-bun-tools.sh"]) {
     expect(workflow.split(command)).toHaveLength(2);
     expect(rust.indexOf(command)).toBeGreaterThan(0);
-    expect(rust.indexOf(command)).toBeLessThan(rust.indexOf("name: Save the complete native build"));
   }
   expect(rust).toContain('TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2');
   expect(rust).toContain('guest-build-receipt.ts write dist/bun.wasm "$inputs"');
