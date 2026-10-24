@@ -1,0 +1,6 @@
+{
+  "owner": "web",
+  "path": "scripts/spawn-runtime-proc.test.ts",
+  "localRuntime": true,
+  "batch": "10-web"
+}

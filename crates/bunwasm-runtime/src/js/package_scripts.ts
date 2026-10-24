@@ -140,7 +140,7 @@
       bins.push(path.resolve(directory, "node_modules", ".bin"));
       if (path.dirname(directory) === directory) break;
     }
-    process.env.PATH = bins.concat(process.env.PATH ? [process.env.PATH] : []).join(":");
+    process.env.PATH = bins.concat(process.env.PATH ?? "/bin:/usr/bin").join(":");
     for (let depth = 0; depth < 32; depth++) {
       if (kind === "command") { file = commandFile(cwd, name); break; }
       const command = name && !name.includes("/") ? script(cwd, name) : undefined;

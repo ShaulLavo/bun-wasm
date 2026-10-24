@@ -3,7 +3,7 @@
 import type { BunWasmAsset } from "./assets.js";
 
 export const BUN_WASM_ASSET: BunWasmAsset | null = {
-  "url": "https://bun-artifacts.shaulavo.dev/6d2c90d4adba7a964c819b63f44ea54b3f91478106b3a7c90722546380f8adfc/bun.wasm.gz",
-  "sha256": "6d2c90d4adba7a964c819b63f44ea54b3f91478106b3a7c90722546380f8adfc",
-  "bytes": 15180188
+  "url": "https://bun-artifacts.shaulavo.dev/e63f4b4fe731881f14b75b5491a36f41fbe1edef5f6c2fc1a0cf20454cb6d2f3/bun.wasm.gz",
+  "sha256": "e63f4b4fe731881f14b75b5491a36f41fbe1edef5f6c2fc1a0cf20454cb6d2f3",
+  "bytes": 15234118
 };

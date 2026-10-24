@@ -56,7 +56,7 @@ Run from this package checkout with Bun installed. A fresh checkout needs the ro
 
 ```sh
 source env.sh
-export PLAYWRIGHT_BROWSERS_PATH=/work/cache/ms-playwright
+export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
 bun install --frozen-lockfile
 bun install --cwd site --frozen-lockfile
 bun install --cwd web --frozen-lockfile
@@ -92,6 +92,9 @@ Publication first snapshots all three matching real engine builds from `dist/` (
 The publisher uses the site's lockfile-pinned Wrangler for the upload. It creates only a temporary `bun-wasm-guest-publish-*` directory (under `TMPDIR` when set, otherwise `/work/tmp` when available, otherwise the OS temporary directory). Success, failure, and interruption stop the upload child before removing that directory. It does not create a Worker or permanent upload service.
 
 `src/guest-asset.generated.ts` records the last verified publication; update it only after the matching full-build acceptance and public read-back succeed.
+
+The current default browser guest is the one named in `src/guest-asset.generated.ts`.
+Its source inputs live in the `.build.json` receipt that `scripts/guest-build-receipt.ts` wrote next to the artifact.
 
 ## Verification and disposable tests
 

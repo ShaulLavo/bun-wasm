@@ -1,8 +1,6 @@
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 
-import { css } from "@codemirror/lang-css";
-import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
 import { EditorState, type Extension } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -15,7 +13,8 @@ import type { BunNetworkOptions, RuntimeNetworkHelper } from "../../web/src/net/
 import { Previews } from "../../web/src/preview";
 import { createRuntime } from "waffle";
 import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../web/src/shared-fs";
-import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
+import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../../web/src/engine-loader";
+import type { Run } from "../../web/src/runner";
 import { enableTerminalCopy } from "../../web/src/terminal-copy";
 import { linkLocalUrls } from "../../web/src/terminal-links";
 import { measureStartup, showPageStartupFailure } from "../../web/src/startup";
@@ -274,6 +273,8 @@ async function startDevServer(): Promise<void> {
     BUN_WASM_STARTUP: "1",
   };
   const started = performance.now();
+  const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes()]);
+  if (revision !== serverRevision) return;
   const output = new StartupOutput((text) => term.write(text), startupRecord);
   serverTiming = { started, visibleStart };
   const current = startRun({ engine, module: wasm.module, args: ["./index.html"], env, runtime, moduleScope: scoped, network }, {
@@ -401,9 +402,9 @@ function reportError(error: unknown): void {
 
 // ---------- editor ----------
 
-function language(path: string): Extension {
-  if (/\.css$/.test(path)) return css();
-  if (/\.html?$/.test(path)) return html();
+async function language(path: string): Promise<Extension> {
+  if (/\.css$/.test(path)) return (await import("@codemirror/lang-css")).css();
+  if (/\.html?$/.test(path)) return (await import("@codemirror/lang-html")).html();
   return javascript({ typescript: /\.(m|c)?tsx?$/.test(path), jsx: /x$/.test(path) });
 }
 
@@ -419,11 +420,11 @@ class Editor {
     this.view = new EditorView({ parent });
   }
 
-  private extensions(path: string): Extension[] {
+  private async extensions(path: string): Promise<Extension[]> {
     const readOnly = path.startsWith("node_modules/");
     return [
       basicSetup,
-      language(path),
+      await language(path),
       oneDark,
       EditorView.lineWrapping,
       EditorState.readOnly.of(readOnly),
@@ -438,9 +439,10 @@ class Editor {
     let state = this.states.get(path);
     if (!state) {
       const text = decode(await fs.readFile(abs(path)) ?? new Uint8Array());
+      const extensions = await this.extensions(path);
       state = this.states.get(path);
       if (state) return state;
-      state = EditorState.create({ doc: text, extensions: this.extensions(path) });
+      state = EditorState.create({ doc: text, extensions });
       this.states.set(path, state);
     }
     return state;

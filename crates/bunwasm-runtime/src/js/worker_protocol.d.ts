@@ -35,6 +35,7 @@ declare namespace BunWasm {
     encode(value: unknown, transfer?: unknown, forbidden?: readonly string[]): WorkerGraph;
     decode(value: unknown): unknown;
   }
+  interface WorkerErrorData { graph: WorkerGraph; code: unknown; }
   interface WorkerLimits {
     maxOldGenerationSizeMb?: number;
     maxYoungGenerationSizeMb?: number;
@@ -110,14 +111,15 @@ declare namespace BunWasm {
     require(name: "process"): GuestProcess;
     require(name: "worker_codec"): { create(hooks: WorkerCodecHooks): WorkerCodec };
     require(name: "worker_channel"): { open(input: number, output: number): WorkerChannel };
-    require(name: "worker_threads"): { initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
+    require(name: "worker_threads"): { isMainThread: boolean; initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
     require(name: "net"): unknown;
     require(name: "node_url"): { fileURLToPath(url: URL): string };
     addIoWaiter<W extends IoWaiter>(waiter: W): W;
     workerPump?: () => boolean;
     workerError?: (error: unknown) => void;
+    workerErrorData?: (error: unknown) => WorkerErrorData;
     workerExit?: (code: number) => void;
-    workerEnvChange?: (key: string, value: string | undefined) => void;
+    workerEnvChange?: (key: string, value: unknown) => void;
     clonePorts?: (value: unknown, options: unknown) => unknown;
     isMessagePort?: (value: unknown) => boolean;
     isProxy?: (value: unknown) => boolean;

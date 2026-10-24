@@ -41,10 +41,7 @@ compiler identification or ABI probes. Both the initial detection and each
 reconfiguration retain the 15-second process-tree deadline. Failed configures
 print stdout as well as stderr, so compiler-probe progress is not lost.
 
-This removes redundant compiler probes from the cache-guard tests. Main run
-`39443166670` timed out in a static C ABI archive probe, with `ar` in state D.
-The same suite passed locally with both deadline-wrapper versions, so the hosted
-stall's underlying cause is not established and is not attributed to the wrapper.
+This removes redundant compiler probes from the cache-guard tests. A hosted run once timed out in a static C ABI archive probe, with `ar` in state D. The cause of that stall is not established.
 The initial real compiler detection remains subject to host failures.
 
 The existing Rust job runs `bun run quality --native` only when native inputs
@@ -76,19 +73,24 @@ restores timestamps only for unchanged files and directories under the owned
 source/build-input roots. Changed, added or renamed inputs get a fresh time.
 This keeps a fresh checkout from rebuilding every embedded runtime or C archive,
 without hiding real edits. Symlinks are fingerprinted without modifying targets.
-Rustup, Bun downloads, pinned
-upstream sources, and WASI SDK/sysroot each have caches. The sysroot cache key
-includes the runner image and builder/dependency inputs; its existing receipt
-still verifies every tool and archive. Rust cache keys include upstream patches,
-third-party inputs, the WASI crypto toolchain, CMake preflight dependencies and
-native gate/build scripts. Cargo explicitly watches the crypto toolchain, and
-the timestamp receipt fingerprints it too. A source hash refreshes the cache
+Rustup, Bun downloads, pinned upstream sources, the fixed WASI SDK and the patched
+sysroot each have caches. The sysroot cache key includes the runner image and
+builder/dependency inputs; its existing receipt still verifies every tool and
+archive. The refined Cargo cache keeps upstream patches, third-party inputs, the
+WASI crypto toolchain, its CMake toolchain and guard, and Rust gate/build inputs.
+Cargo explicitly watches the crypto toolchain and CMake guard, and the timestamp
+receipt fingerprints those source files too. JSC-only CMake checks and Binaryen
+stay in a separate JSC prebuild cache. Its private Cargo target has its own cache
+identity, with the same C++/sysroot/toolchain inputs plus the Rust and Cargo inputs
+that can affect that target. A Rust-only edit therefore keeps the validated prebuild
+candidate while rebuilding the affected Cargo artifacts. The old full native key
+remains as a fallback while the refined layer proves reuse. A source hash refreshes each cache
 after crate or compiled process-request fixture edits, with a same-toolchain/input
 restore prefix for reuse.
 Cache logs show restored paths,
 keys, sizes and hits. A hit alone is not proof that Cargo reused build output.
 
-Moving native work to the PC or UpCloud requires an owner-approved runner or
+Moving native work to an external machine requires an approved runner or
 an authenticated dispatcher. CI does not silently skip those checks when no
 private executor is configured.
 
@@ -183,7 +185,31 @@ with the current scan when reviewing a baseline edit.
 
 Do not update the baseline to make an unexplained regression pass. If an
 intentional duplicate is necessary, review its source and the baseline change
-in the same PR. The explicit maintenance command is:
+in the same PR.
+
+The assert/util strict TypeScript conversion migrates exactly one existing
+fingerprint, `559db8d4f8200ec1` to `432876565c1cd6b7`, with count 1 unchanged.
+Both identify the same 21-line error-formatting clone in the adapted implementations.
+The original JavaScript has 178 tokens; erased type annotations raise the typed
+scanner count to 196. The migration preserves the original runtime AST and token
+positions instead of extracting shared code. `scripts/runtime-assert-util.test.ts`
+pins that proof, and the typed-adapter copy probe still rejects new duplication.
+This remains a separate one-for-one format migration, not room for a different clone.
+
+Integrating the already-converted events module with typed util also migrates the
+existing 12-line events/util error-formatting clone from `33ad45a23a9c5c95` to
+`f35a9b37be0e8d3c`, with count 1 unchanged. The scanner reports 107 original
+JavaScript tokens and 109 TypeScript tokens, including the typed signature at the
+clone boundary. The entire describeReceived bodies remain byte-identical to
+original source `ac43127c85addabed7e0c2a4883247ae074e858c`; only parameter types
+were added. Each conversion alone separates the pair into different scanner
+formats; their integration restores the same pair in TypeScript. No implementation
+was copied or refactored for this correction. The total remains 21 baseline
+entries with count 1 each. The other 19 entries, scan configuration and
+zero-new-clone limit stay unchanged. Both existing copy-rejection probes remain
+blocking.
+
+The explicit maintenance command is:
 
 ```sh
 bunx --no-install jscpd --config .jscpd.json --baseline .jscpd-baseline.json --update-baseline --fail-on-empty
@@ -198,3 +224,57 @@ Run individual checks with `bun run quality:lint`, `quality:types`,
 `quality:unused`, `quality:duplicates`, `quality:probes`, `quality:rust` or
 `quality:wasi`.
 Apply Rust formatting with `bun scripts/quality-rust.ts --write`.
+
+
+## CI work ownership and measurements
+
+The package job's locked install runs `prepare` and builds the package once.
+Quality and native installs use `--ignore-scripts`; their checks consume source,
+not the generated package. The process-bundle job builds the supervisor,
+interruption and process-pipe fixtures once, then all three browser jobs download
+that run's artifact. Browser tests still run separately in each engine, including
+isolated dependency installation. Missing artifacts fail, rather than rebuilding.
+
+Native selection ignores root version-only bumps. Root dependency or command
+changes still select native checks, as do `scripts/test.sh` and the node-misc
+fixtures. The second input-timestamp restore, after the required failing WASI
+lint probe, prevents unchanged release inputs from appearing newly edited.
+
+Native tool setup first checks the runner's existing commands and libclang.
+Only missing tools require apt; that fallback removes the known slow HTTP mirror.
+The fixed SDK cache no longer includes the changing patched sysroot. Native
+cache restore/save are separate; only a cache miss writes a complete snapshot
+after the launcher check passes. Keys identify inputs, never run IDs or attempts.
+Only quality writes the shared Bun download cache. Other jobs restore it.
+
+`native-cargo-v2` puts compatibility inputs before the Cargo and source hash.
+The restore prefix retains the OS, architecture, runner image, Rust toolchain,
+Cargo config, SDK and job configuration, upstream pins and patches, native C/C++
+sources and build scripts, and sysroot inputs. The workflow itself is hashed so
+an SDK pin or compiler-command change cannot select an incompatible v2 target.
+`Cargo.*` stays in the exact-key suffix. Cargo validates manifest, dependency,
+feature, profile, and Rust source fingerprints after a compatible prefix restore.
+The existing input-time check restores timestamps only for unchanged content.
+
+This namespace change cannot match old `native-cargo-v1` or `native-v4` entries.
+The first eligible run needs a new v2 snapshot unless the unchanged, narrower
+`native-v4` fallback matches. That fallback runs only when v2 restored nothing,
+so it cannot overlay a v2 prefix hit. Saves still follow all selected JSC checks
+and host output production, and exact hits do not save again. Later compatible
+main-run logs must show the actual restored key and compile counts before any
+savings claim. Historical cold and warm timings do not measure this change.
+
+To compare completed runs and keep timestamped cache/build evidence:
+
+```sh
+bun scripts/ci-report.ts RUN_ID ATTEMPT > summary.md 2> cache-build-evidence.log
+```
+
+The optional attempt selects one rerun. Total execution wall time spans its first
+job start through its last job finish, excluding queue time and pauses between attempts.
+
+Inspect `gh api --paginate repos/ShaulLavo/bun-wasm/actions/caches` before
+changing cache policy. Closed PR caches are isolated from later PRs but still
+consume the shared quota. Remove only identified obsolete entries, not live
+branches or the main-branch toolchain/build caches. Process bundles are short-lived
+run artifacts, not more entries in the repository's cache quota.

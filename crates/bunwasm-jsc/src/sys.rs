@@ -166,11 +166,6 @@ unsafe extern "C" {
         deallocatorContext: *mut c_void,
         exception: *mut JSValueRef,
     ) -> JSObjectRef;
-    pub fn JSObjectGetTypedArrayBytesPtr(
-        ctx: JSContextRef,
-        object: JSObjectRef,
-        exception: *mut JSValueRef,
-    ) -> *mut c_void;
     pub fn JSObjectGetTypedArrayByteLength(
         ctx: JSContextRef,
         object: JSObjectRef,
@@ -181,11 +176,6 @@ unsafe extern "C" {
         object: JSObjectRef,
         exception: *mut JSValueRef,
     ) -> usize;
-    pub fn JSObjectGetArrayBufferBytesPtr(
-        ctx: JSContextRef,
-        object: JSObjectRef,
-        exception: *mut JSValueRef,
-    ) -> *mut c_void;
     pub fn JSObjectGetArrayBufferByteLength(
         ctx: JSContextRef,
         object: JSObjectRef,
@@ -255,6 +245,8 @@ unsafe extern "C" {
     pub fn bunjsc_is_error(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_is_detachable_buffer(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_detach_buffer(ctx: JSContextRef, value: JSValueRef);
+    pub fn bunjsc_buffer_bytes(ctx: JSContextRef, value: JSValueRef, length: *mut usize)
+    -> *mut u8;
     pub fn bunjsc_get_async_context(ctx: JSContextRef) -> JSValueRef;
     pub fn bunjsc_set_async_context(ctx: JSContextRef, value: JSValueRef);
     pub fn bunjsc_promise_state(ctx: JSContextRef, value: JSValueRef) -> c_int;

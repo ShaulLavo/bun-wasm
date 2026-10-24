@@ -226,7 +226,7 @@
     onmessageerror: ((event: MessageEvent) => unknown) | null = null;
     constructor(key: object, snapshot?: Snapshot) {
       super();
-      if (key !== token) throw new TypeError("Illegal constructor");
+      if (key !== token) throw Object.assign(new TypeError("Illegal constructor"), { code: "ERR_CONSTRUCT_CALL_INVALID" });
       const id = `${routeKey(route)}:${nextPort++}`;
       const value = snapshot || { id, peer: null, version: 0, sent: 0, received: 0, queue: [], pending: [], closing: null, closed: false };
       this.#state = { ...value, pending: new Map(value.pending), peerClosing: value.closing,
@@ -453,6 +453,14 @@
     readonly port1: MessagePort; readonly port2: MessagePort;
     constructor() { [this.port1, this.port2] = portOps.pair(); }
   }
+  const PublicMessagePort = new Proxy(MessagePort, {
+    apply() { throw Object.assign(new TypeError("Illegal constructor"), { code: "ERR_CONSTRUCT_CALL_INVALID" }); },
+  });
+  const PublicMessageChannel = new Proxy(MessageChannel, {
+    apply() { throw Object.assign(new TypeError("Cannot call a class constructor without new"), { code: "ERR_CONSTRUCT_CALL_REQUIRED" }); },
+  });
+  Object.defineProperty(MessagePort.prototype, "constructor", { value: PublicMessagePort, writable: true, configurable: true });
+  Object.defineProperty(MessageChannel.prototype, "constructor", { value: PublicMessageChannel, writable: true, configurable: true });
   const codec = internal.require("worker_codec").create({
     isPort: value => value instanceof MessagePort,
     prepare: portOps.prepare,
@@ -461,6 +469,7 @@
   });
   internal.isMessagePort = value => value instanceof MessagePort;
   internal.clonePorts = (value, options) => codec.decode(codec.encode(value, transfers(options)));
+  internal.workerErrorData = encodeWorkerError;
 
   class BroadcastChannel extends EventTarget {
     readonly name: string;
@@ -688,6 +697,18 @@
   function isBuildError(error: unknown): error is Error {
     return error instanceof Error && error.name === "BuildError" && "__bunwasmFormatted" in error;
   }
+  function encodeWorkerError(reported: unknown): BunWasm.WorkerErrorData {
+    let error = isBuildError(reported) ? new SyntaxError(reported.message) : reported;
+    let graph: Graph;
+    try { graph = codec.encode(error); }
+    catch {
+      error = Object.assign(new Error("Cannot serialize worker error"), { code: "ERR_WORKER_UNSERIALIZABLE_ERROR" });
+      graph = codec.encode(error);
+    }
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    return { graph, code };
+  }
+
   function initialize() {
     if (!config || initialized) return;
     initialized = true;
@@ -709,12 +730,7 @@
       parentChannel?.drain();
     };
     internal.workerError = reported => {
-      // Like Bun, a parse failure reaches the parent as a SyntaxError, not the loader's BuildError.
-      const error = isBuildError(reported) ? new SyntaxError(reported.message) : reported;
-      let graph: Graph;
-      try { graph = codec.encode(error); }
-      catch { graph = codec.encode(Object.assign(new Error("Cannot serialize worker error"), { code: "ERR_WORKER_UNSERIALIZABLE_ERROR" })); }
-      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      const { graph, code } = encodeWorkerError(reported);
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "error", child: route[route.length - 1], graph, code } });
     };
     if (config.web) {
@@ -734,7 +750,7 @@
   const initialState: { parentPort: MessagePort | null; workerData: unknown } = { parentPort, workerData: null };
   const exports = Object.assign(initialState, {
     isMainThread: !config, threadId,
-    resourceLimits: config?.resourceLimits || {}, SHARE_ENV, MessageChannel, MessagePort, BroadcastChannel, Worker,
+    resourceLimits: config?.resourceLimits || {}, SHARE_ENV, MessageChannel: PublicMessageChannel, MessagePort: PublicMessagePort, BroadcastChannel, Worker,
     markAsUntransferable, isMarkedAsUntransferable, moveMessagePortToContext, receiveMessageOnPort, initialize,
     getEnvironmentData(key: unknown) { return environmentData.get(key); },
     setEnvironmentData(key: unknown, value: unknown) { if (value === undefined) environmentData.delete(key); else environmentData.set(key, value); },
