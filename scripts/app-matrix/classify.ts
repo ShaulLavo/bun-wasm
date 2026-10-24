@@ -4,7 +4,7 @@ export interface ComparisonRow {
   readonly app: string;
   readonly host: string;
   readonly stage: string;
-  readonly engine: "quickjs" | "jsc" | "browser";
+  readonly engine: "quickjs" | "jsc" | "browser" | "reference";
   readonly status: "pass" | "fail" | "blocked";
   readonly category?: "a" | "b" | "c" | "d" | "e" | "f";
   readonly passesOn?: readonly ComparisonRow["engine"][];

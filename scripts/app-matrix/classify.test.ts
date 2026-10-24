@@ -72,7 +72,7 @@ test("only matching QuickJS failures get category f, retaining extra fields and 
   const jsc: Readonly<ComparisonRow> = Object.freeze({ ...pass, engine: "jsc" });
   const unmatched = [
     { ...pass, app: "other" }, { ...pass, host: "playground" }, { ...pass, stage: "build" },
-    { ...pass, engine: "quickjs" }, { ...jsc, status: "fail" }, { ...jsc, status: "blocked" },
+    { ...pass, engine: "quickjs" }, { ...pass, engine: "reference" }, { ...jsc, status: "fail" }, { ...jsc, status: "blocked" },
   ] satisfies ComparisonRow[];
   const initial: ComparisonRow[] = [failed];
   expect(compareEngines(Object.freeze(initial.concat(unmatched)))[0]).toBe(failed);

@@ -20,11 +20,12 @@ function check(source: string) {
 test("accepts readonly rows and retains extra fields and narrow classification outputs", () => {
   const result = check(`
     const row = Object.freeze({ app: "prettier", host: "native", stage: "check", engine: "quickjs", status: "fail", category: "c", passesOn: Object.freeze(["browser"] satisfies ("quickjs" | "jsc" | "browser")[]), marker: 7 });
-    const results = compareEngines(Object.freeze([row]));
+    const reference = Object.freeze({ ...row, engine: "reference" });
+    const results = compareEngines(Object.freeze([row, reference]));
     for (const result of results) {
       const marker: number = result.marker;
       const category: "a" | "b" | "c" | "d" | "e" | "f" | undefined = result.category;
-      const engines: readonly ("quickjs" | "jsc" | "browser")[] | undefined = result.passesOn;
+      const engines: readonly ("quickjs" | "jsc" | "browser" | "reference")[] | undefined = result.passesOn;
       void [marker, category, engines];
     }
     const category: "a" | "b" | "c" | "d" = failure("Error: missing", "build").category;
