@@ -23,7 +23,7 @@ async function documentLink(fixture: Fixture, target = "CLAUDE.md") {
   return vendor;
 }
 
-for (const [path, target] of [["src/AGENTS.md", "CLAUDE.md"], ["src/cli", "runtime/cli"], ["src/js/AGENTS.md", "CLAUDE.md"]]) {
+for (const [path, target] of [["src/AGENTS.md", "CLAUDE.md"], ["src/cli", "runtime/cli"], ["src/js/AGENTS.md", "CLAUDE.md"]] satisfies [string, string][]) {
   test(`qualified CLI accepts the committed upstream link shape ${path}`, async () => {
     await withCliReceiptFixture(async fixture => {
       const vendor = join(fixture.root, "vendor/bun");
