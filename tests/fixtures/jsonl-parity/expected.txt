@@ -1,0 +1,88 @@
+{"text":"\"a\\u00","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"\"a\\u","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"\"a\\u0X00\"","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"\"a\\","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"\"a\\q\"","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"\"a\n\"","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"\"unfinished","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"-","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"-x","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"1.","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"1.x","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"1e","result":{"values":[1],"read":1,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"1e+","result":{"values":[1],"read":1,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"1e-","result":{"values":[1],"read":1,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"1eX","result":{"values":[1],"read":1,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"1e+2","result":{"values":[100],"read":4,"done":true,"error":null}}
+{"text":"1.e2","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"01","result":{"values":[0],"read":1,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"-01","result":{"values":[0],"read":2,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"true [","result":{"values":[true],"read":4,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"true 7","result":{"values":[true],"read":4,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"true\t7\n","result":{"values":[true],"read":4,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"true\r7","result":{"values":[true],"read":4,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"true\r\n7","result":{"values":[true,7],"read":7,"done":true,"error":null}}
+{"text":"true\n7","result":{"values":[true,7],"read":6,"done":true,"error":null}}
+{"text":"true\n\n7\n","result":{"values":[true,7],"read":7,"done":true,"error":null}}
+{"text":"true invalid","result":{"values":[true],"read":4,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"true\ninvalid","result":{"values":[true],"read":4,"done":false,"error":null}}
+{"text":"true\ninvalid\n","result":{"values":[true],"read":4,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"true\n{\"bad\":}","result":{"values":[true],"read":4,"done":false,"error":null}}
+{"text":"[1,]","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"[1,] ","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"[1,]\n","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"truX","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"truX ","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"truX\n","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"invalid","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"invalid ","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"{bad}","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"{bad","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"{\"a\":}","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"{\"a\":} ","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"{\"a\"}","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"{\"a\":truX}","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"{\"a\":1e+}","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"[true false]","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"[1 2]","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"[true false] ","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"]","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"] ","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":":","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"@","result":{"values":[],"read":0,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"\"é\"\n[1,]","result":{"values":["é"],"read":3,"done":false,"error":null}}
+{"text":"{","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"[","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"[1,","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"{\"a\":","result":{"values":[],"read":0,"done":false,"error":null}}
+{"text":"null\n[","result":{"values":[null],"read":4,"done":false,"error":null}}
+{"text":"null\n[1,]","result":{"values":[null],"read":4,"done":false,"error":null}}
+{"text":" \t\r\n","result":{"values":[],"read":0,"done":true,"error":null}}
+{"text":"7 \n ","result":{"values":[7],"read":1,"done":true,"error":null}}
+{"text":"\"text\"{}","result":{"values":["text"],"read":6,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"{}{}","result":{"values":[{}],"read":2,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"text":"[\n1,\n2\n]\nfalse","result":{"values":[[1,2],false],"read":14,"done":true,"error":null}}
+{"parse":"invalid","values":[]}
+{"parse":"invalid ","error":"Failed to parse JSONL"}
+{"parse":"{bad}","error":"Failed to parse JSONL"}
+{"parse":"[1,]","values":[]}
+{"parse":"\"a\\u00","error":"Failed to parse JSONL"}
+{"parse":"1e+","values":[1]}
+{"parse":"true 7","values":[true]}
+{"bytes":"\"é\"\n[1,]","result":{"values":["é"],"read":7,"done":false,"error":null}}
+{"view":"\"é\"\n[1,]","result":{"values":["é"],"read":7,"done":false,"error":null}}
+{"slice":"\"é\"\n[1,]","result":{"values":["é"],"read":9,"done":false,"error":null}}
+{"bytes":"\"😀\"\n{\"bad\":}","result":{"values":["😀"],"read":9,"done":false,"error":null}}
+{"view":"\"😀\"\n{\"bad\":}","result":{"values":["😀"],"read":9,"done":false,"error":null}}
+{"slice":"\"😀\"\n{\"bad\":}","result":{"values":["😀"],"read":11,"done":false,"error":null}}
+{"bytes":"\"é\" 7","result":{"values":["é"],"read":7,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"view":"\"é\" 7","result":{"values":["é"],"read":7,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"slice":"\"é\" 7","result":{"values":["é"],"read":9,"done":false,"error":{"name":"SyntaxError","message":"Failed to parse JSONL"}}}
+{"bytes":"\"é\"\n7\n","result":{"values":["é",7],"read":9,"done":true,"error":null}}
+{"view":"\"é\"\n7\n","result":{"values":["é",7],"read":9,"done":true,"error":null}}
+{"slice":"\"é\"\n7\n","result":{"values":["é",7],"read":11,"done":true,"error":null}}
+{"stream":{"values":[],"read":0,"done":false,"error":null,"pending":"{\"a\":"}}
+{"stream":{"values":[{"a":1}],"read":7,"done":false,"error":null,"pending":"\n\"a\\"}}
+{"stream":{"values":["a\n"],"read":6,"done":false,"error":null,"pending":"\n[true,"}}
+{"stream":{"values":[[true,false]],"read":13,"done":true,"error":null,"pending":"\n"}}
+{"streamed":[{"a":1},"a\n",[true,false]]}

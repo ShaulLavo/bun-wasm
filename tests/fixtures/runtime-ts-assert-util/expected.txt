@@ -1,0 +1,11 @@
+assert sync true true
+args {"verbose":true,"file":"value","color":false} tail option,option,option,positional
+strings red a�b true
+types true true true true true true
+format value:7 { a: [Array] }
+promisify custom 42
+promisify receiver 7
+callback falsy ERR_FALSY_VALUE_REJECTION 0
+assert async ok
+stack assertionStackMarker true
+stack utilityStackMarker true

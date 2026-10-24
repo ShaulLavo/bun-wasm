@@ -155,7 +155,7 @@
 
   // --- URLSearchParams / URL --------------------------------------------------
 
-  const { toUSVString, initFromObject } = internal.require("url_search_params");
+  const { toUSVString, initFromObject, convertMethodArgs } = internal.require("url_search_params");
 
   // application/x-www-form-urlencoded byte serializer.
   function formEncode(str) {
@@ -218,28 +218,25 @@
       this.#update();
     }
     delete(name, value) {
-      const n = toUSVString(name);
-      const val = value === undefined ? undefined : toUSVString(value);
+      const [n, val] = convertMethodArgs(() => this.#list, name, value);
       this.#list = this.#list.filter(([k, v]) => k !== n || (val !== undefined && v !== val));
       this.#update();
     }
     get(name) {
-      const n = toUSVString(name);
+      const [n] = convertMethodArgs(() => this.#list, name);
       const hit = this.#list.find(([k]) => k === n);
       return hit ? hit[1] : null;
     }
     getAll(name) {
-      const n = toUSVString(name);
+      const [n] = convertMethodArgs(() => this.#list, name);
       return this.#list.filter(([k]) => k === n).map(([, v]) => v);
     }
     has(name, value) {
-      const n = toUSVString(name);
-      const val = value === undefined ? undefined : toUSVString(value);
+      const [n, val] = convertMethodArgs(() => this.#list, name, value);
       return this.#list.some(([k, v]) => k === n && (val === undefined || v === val));
     }
     set(name, value) {
-      const n = toUSVString(name);
-      const val = toUSVString(value);
+      const [n, val] = convertMethodArgs(() => this.#list, name, value, true);
       const i = this.#list.findIndex(([k]) => k === n);
       if (i < 0) {
         this.#list.push([n, val]);

@@ -117,7 +117,7 @@ declare namespace BunWasm {
     workerPump?: () => boolean;
     workerError?: (error: unknown) => void;
     workerExit?: (code: number) => void;
-    workerEnvChange?: (key: string, value: string | undefined) => void;
+    workerEnvChange?: (key: string, value: unknown) => void;
     clonePorts?: (value: unknown, options: unknown) => unknown;
     isMessagePort?: (value: unknown) => boolean;
     isProxy?: (value: unknown) => boolean;

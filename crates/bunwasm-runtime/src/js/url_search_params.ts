@@ -7,6 +7,13 @@
     return String(value).replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, part => part.length === 2 ? part : "\uFFFD");
   }
 
+  function convertMethodArgs(readList: () => Pair[], name: unknown, value?: unknown, requiredValue = false): [string, string | undefined] {
+    readList();
+    const key = toUSVString(name);
+    const converted = value === undefined && !requiredValue ? undefined : toUSVString(value);
+    return [key, converted];
+  }
+
   function sequence(value: object, iterator: Function): Iterable<unknown> {
     return { [Symbol.iterator]: () => Reflect.apply(iterator, value, []) };
   }
@@ -40,5 +47,5 @@
     return Array.from(entries);
   }
 
-  return { toUSVString, initFromObject };
+  return { toUSVString, initFromObject, convertMethodArgs };
 })

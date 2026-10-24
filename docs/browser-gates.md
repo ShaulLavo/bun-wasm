@@ -26,7 +26,7 @@ gate stops a real detached Chromium with SIGSTOP, then checks its removal after
 the deadline, abrupt launcher SIGKILL, wrapper SIGTERM and Bun wrapper SIGINT.
 Both Node and Bun launcher-failure cases must retain exit 137. The browser cases
 keep a separate real Chromium and its launcher alive as unrelated controls.
-The Chromium regression runs after browser installation, not in the unit gate.
+The Chromium launcher gate runs after browser installation, not in the unit gate.
 
 CI's web host unit gate runs a byte-encoded guest through `web/scripts/run.ts`.
 It links the same `runtime_proc` imports as Bun, exercises handled signal delivery
@@ -38,25 +38,11 @@ exit codes 130 and 137, and verifies worker cleanup before the next run. The
 resolver unit test independently checks that a package export and a relative
 import produce one class identity in the bundle.
 
-## October 18 regression
+## Package identity in the browser bundle
 
-The process migration in `06e08907` gave all guests direct `runtime_proc` imports.
-The CLI comparison shim still supplied only WASI imports. It now shares its
-filesystem and descriptor table with Waffle's existing `ProcessABI` and root
-`ProcessSupervisor`. The comparison shim has no registered child executables.
+The browser bundle resolver resolves internal relative imports through the same installed package path as the package import. Under an isolated installation a logical symlink path and the physical cache path would otherwise both be bundled, which duplicates Waffle's `OutcomeCell` and `TaggedCells` classes and breaks their `instanceof` checks. The process browser matrix above guards this.
 
-The same migration changed the Waffle pin from `5677fc64` to `a0a0f879`.
-That brought in the `OutcomeCell` and `TaggedCells` classes added in Waffle
-`b1f2b7dd`. These failures predate the libc, immediate-callback and default-guest
-changes listed in the incident report.
-
-The browser bundle resolver returned logical package symlink paths. Under an
-isolated installation, relative imports resolved through the physical cache path.
-Bun bundled both paths, duplicating `OutcomeCell` and `TaggedCells`. An
-`instanceof` check then treated a control-cell object as a typed array, so process
-stop threw inside `Atomics`. Resolving internal relative imports through the same installed package path fixes
-the identity at the build boundary. This also preserves support for dotted cache
-directory names, which Bun rejects as physical paths returned by a build plugin. Waffle's ABI and class checks need no changes.
+The CLI comparison shim shares its filesystem and descriptor table with Waffle's `ProcessABI` and root `ProcessSupervisor`, and has no registered child executables, because every guest imports `runtime_proc` directly.
 
 These adapters and byte-encoded fixtures are original bun-wasm code. They contain
 no copied or adapted upstream implementation.

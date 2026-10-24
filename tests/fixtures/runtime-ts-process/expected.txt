@@ -1,0 +1,10 @@
+env 17 raw raw
+stdout getter function true true
+stdout keys _events,_eventsCount,_maxListeners,fd,writable,destroyed,isTTY,columns,rows,write,end,cork,uncork,setDefaultEncoding,getColorDepth,hasColors,getWindowSize,_writableState
+stdout states true false false
+window [80,24] 1 false
+write control
+signals 0 0
+reader fixture input true null
+iterator after EOF 0
+callback order write,tick 1
