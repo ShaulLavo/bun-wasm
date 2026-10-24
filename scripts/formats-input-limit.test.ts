@@ -1,5 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
@@ -16,7 +17,7 @@ type FormatInternal = {
 };
 type Formats = { parse(input: unknown, format: Format): unknown };
 
-const scratch = mkdtempSync("/work/tmp/bun-wasm-format-limit-");
+const scratch = mkdtempSync(join(process.env.RUNNER_TEMP ?? process.env.TMPDIR ?? tmpdir(), "bun-wasm-format-limit-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 function source(name: string) {
