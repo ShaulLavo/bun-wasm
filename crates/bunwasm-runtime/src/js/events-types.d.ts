@@ -96,7 +96,7 @@ declare namespace BunWasm.Events {
 declare namespace BunWasm {
   interface Internal {
     listenerChanged?(target: object, type?: Events.Name): void;
-    require(name: "inspect"): { nodeInspect(value: unknown): string };
+    require(name: "inspect"): ConsoleInspector;
     require(name: "event_emitter_async_resource"): Events.AsyncConstructor;
   }
 }

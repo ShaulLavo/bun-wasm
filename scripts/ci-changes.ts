@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { discoverChecks } from "./test-checks";
 
-const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/"];
+const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/install/"];
 const nativeFiles = new Set([
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
   "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
@@ -8,6 +9,8 @@ const nativeFiles = new Set([
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "scripts/ci-changes.ts", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
 ]);
+const nativeCheckDirectories = discoverChecks().filter(check => check.owner === "native").map(check => `${check.path}/`);
+const nativeCheckManifests = /^checks\/(?:native|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 
 const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "tests/fixtures/shared-array-buffer/", "tests/jsc-embedding/"];
@@ -22,7 +25,7 @@ export function needsJsc(paths: readonly string[]): boolean {
 }
 
 export function needsRust(paths: readonly string[]): boolean {
-  return needsJsc(paths) || paths.some(path => nativeFiles.has(path) || nativeScripts.test(path) || nativeDirectories.some(root => path.startsWith(root)));
+  return needsJsc(paths) || paths.some(path => path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || nativeCheckDirectories.some(root => path.startsWith(root)) || path.startsWith("web/tests/bun-runtime-proc-") || nativeFiles.has(path) || nativeScripts.test(path) || nativeDirectories.some(root => path.startsWith(root)));
 }
 
 export function changedPaths(base: string, head: string, pullRequest: boolean): string[] {

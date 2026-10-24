@@ -199,7 +199,7 @@ function check(body: string) {
   writeFileSync(probe, `const createEvents = ${source}\ndeclare const internal: BunWasm.Internal;\nconst EventEmitter = createEvents(internal);\nconst emitter = new EventEmitter();\n${body}\n`);
   writeFileSync(config, JSON.stringify({
     extends: join(root, "crates/bunwasm-runtime/tsconfig.json"), include: [],
-    files: [join(directory, "runtime.d.ts"), join(directory, "events-types.d.ts"), probe],
+    files: [join(directory, "runtime.d.ts"), join(directory, "console_types.d.ts"), join(directory, "events-types.d.ts"), probe],
   }));
   return Bun.spawnSync([join(root, "web/node_modules/.bin/tsc"), "-p", config]);
 }

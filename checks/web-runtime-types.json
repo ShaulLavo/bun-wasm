@@ -1,0 +1,6 @@
+{
+  "owner": "web",
+  "path": "scripts/runtime-types.test.ts",
+  "localRuntime": true,
+  "batch": "10-web"
+}

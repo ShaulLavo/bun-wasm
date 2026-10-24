@@ -21,7 +21,7 @@ INSTALL_ENGINE=browser BUN_WASM=dist/bun-browser.wasm node tests/install/run.mjs
 INSTALL_NATIVE_BUN=1 node tests/install/run.mjs
 ```
 
-`BUN_WASM_LAUNCHER` overrides `/work/tmp/bun-wasm-target/release/bun-wasm`.
+`BUN_WASM_LAUNCHER` overrides the default launcher path.
 `INSTALL_CASES` selects a comma separated subset. The native reference uses Bun's hoisted
 linker, matching bun-wasm's layout. `archiveSafety` accepts rejecting an unsafe archive or
 ignoring its unsafe entries, and checks that extraction writes no files outside the package.
