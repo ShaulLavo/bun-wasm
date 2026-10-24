@@ -3439,3 +3439,13 @@ original AST hash, strict directive and token positions. Its original/converted 
 cover own-key order, descriptors, constructor-call state, reentrancy, thrown callbacks, errors,
 exit coercion, environment hooks and signals. `runtime-ts-process` pins the real guest adapter;
 native reference differences are evidence, not reasons to change the guest's expected output.
+
+Recovery keeps the same runtime source and emitted bytes. Additional controls reject callback
+snapshots, reset-on-throw, callback receiver changes, and Symbol value coercion. They exercise
+falsy thrown values and environment setters as well as getter results. Compiler rejection
+checks require the intended diagnostic, including the factory's unknown stored exitCode.
+Native pipe controls are separate from the unchanged guest fixture. Native Bun and Node lack
+its unconditional terminal methods on redirected stdout, reject environment accessors and
+Symbol keys, and mark stdin unreadable at EOF. Bun also reports no SIGIO listener when the
+prototype method registers that alias. These observations do not grant native parity or
+turn the original failing native-public fixture into a successful control.

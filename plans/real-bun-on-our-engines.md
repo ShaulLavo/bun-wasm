@@ -274,7 +274,10 @@ construction and captured pending Failure preserve stdio callbacks, reader lifec
 signal dispositions, property descriptors, raw environment values and exit coercion.
 Executable changes and the unchanged remainder are AST-checked; the focused factory
 controls and `runtime-ts-process` fixture have normal blocking discovery. Evidence and
-three-engine qualification are under `/work/reports/bun-wasm/ts-process-20261024/`.
+three-engine recovery qualification are under `/work/reports/bun-wasm/reboot-process-20261024/`.
+The retained guests were built at `d3123305`; the later changes affect test controls only.
+Native public controls remain failed at the guest-only terminal method on piped stdout.
+Separate native reference controls pin those differences without weakening the guest fixture.
 Events remains owned by its separate group. No held worker, timer, ALS, terminal or
 spawn implementation changes are included.
 

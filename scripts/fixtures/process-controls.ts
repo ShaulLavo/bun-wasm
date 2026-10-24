@@ -17,15 +17,15 @@ export async function processControls(eventsFactory: (internal: object) => Funct
     const envChanges: unknown[][] = [];
     const dispositions = new Map<number, number>();
     const exits: unknown[][] = [];
-    const state: { writeError: unknown; reads: number; bytes: Uint8Array; exitMutation: unknown } = { writeError: null, reads: 0, bytes: new TextEncoder().encode("input"), exitMutation: undefined };
+    const state: { writeFailure: { error: unknown } | null; reads: number; bytes: Uint8Array; exitMutation: unknown } = { writeFailure: null, reads: 0, bytes: new TextEncoder().encode("input"), exitMutation: undefined };
     const exitSentinel = new Error("native exit");
     const internal = {
       native: {
         platformInfo: { version: "test", revision: "test", arch: "wasm32" },
         env: () => ({}), argv: () => ["bun", "fixture.ts"], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
         hostSignal(number: number, mode: number) { if (mode !== 3) dispositions.set(number, mode); return 0; },
-        writeStdout(...args: unknown[]) { writes.push(args); if (state.writeError) throw state.writeError; },
-        writeStderr(...args: unknown[]) { writes.push(args); if (state.writeError) throw state.writeError; },
+        writeStdout(...args: unknown[]) { writes.push(args); if (state.writeFailure) throw state.writeFailure.error; },
+        writeStderr(...args: unknown[]) { writes.push(args); if (state.writeFailure) throw state.writeFailure.error; },
         readStdin() { state.reads++; return state.bytes; },
         utf8Decode(bytes: Uint8Array) { return new TextDecoder().decode(bytes); },
         exit(code: number) { exits.push(["native", code]); throw exitSentinel; },
@@ -56,7 +56,7 @@ export async function processControls(eventsFactory: (internal: object) => Funct
 
   const writer = fixture();
   const error = new Error("write failure identity");
-  writer.state.writeError = error;
+  writer.state.writeFailure = { error };
   const order: string[] = [];
   const stdout = writer.guest.stdout;
   stdout.on("error", value => { assert.equal(value, error); order.push("error"); });
@@ -73,24 +73,42 @@ export async function processControls(eventsFactory: (internal: object) => Funct
   assert.equal(stdout.writable, true);
   assert.equal(stdout.destroyed, false);
   assert.deepEqual(writer.writes, [["first", true]]);
-  writer.state.writeError = null;
+  writer.state.writeFailure = null;
   assert.equal(stdout.write("recovered", value => { assert.equal(value, null); order.push("success"); }), true);
   writer.drain(writer.ticks);
   assert.equal(order.at(-1), "success");
   controls.push("writer coalescing, reentrant callback growth, tick/error ordering, same error, and recovery");
 
+  for (const rawError of [undefined, null, false, 0, "", 1n, Symbol("write error"), { raw: true }]) {
+    const raw = fixture();
+    raw.state.writeFailure = { error: rawError };
+    let callbacks = 0;
+    assert.equal(raw.guest.stdout.write("x", function (this: unknown, value) {
+      assert.equal(this, undefined);
+      assert.equal(value, rawError);
+      callbacks++;
+    }), false);
+    raw.drain(raw.ticks);
+    assert.equal(callbacks, 1);
+    assert.equal(raw.guest.stdout.writable, true);
+  }
+  controls.push("falsy and non-Error throws keep raw identity and the callback has no receiver");
+
   const thrown = fixture();
   const callbackError = new Error("callback threw");
-  thrown.state.writeError = error;
+  thrown.state.writeFailure = { error };
   assert.equal(thrown.guest.stdout.write("x", () => { throw callbackError; }), false);
+  let laterCallback = false;
+  thrown.guest.stdout.write("queued", () => { laterCallback = true; });
   assert.throws(() => thrown.drain(thrown.ticks), (value: unknown) => value === callbackError);
   assert.equal(thrown.guest.stdout.writable, false);
   assert.equal(thrown.guest.stdout.write("later", () => {}), false);
   assert.equal(thrown.ticks.length, 0);
+  assert.equal(laterCallback, false);
   controls.push("throwing callback leaves the original pending failure and writable flag unchanged");
 
   const unhandled = fixture();
-  unhandled.state.writeError = error;
+  unhandled.state.writeFailure = { error };
   unhandled.guest.stdout.write("no callback", undefined);
   const flush = unhandled.ticks.shift();
   assert.ok(flush);
@@ -99,7 +117,7 @@ export async function processControls(eventsFactory: (internal: object) => Funct
   assert.equal(unhandled.ticks.length, 1);
   assert.throws(() => unhandled.drain(unhandled.ticks), (value: unknown) => value === error);
   const consumed = fixture();
-  consumed.state.writeError = error;
+  consumed.state.writeFailure = { error };
   consumed.guest.stdout.write("consumed", value => assert.equal(value, error));
   consumed.drain(consumed.ticks);
   assert.equal(consumed.guest.stdout.writable, true);
@@ -140,9 +158,21 @@ export async function processControls(eventsFactory: (internal: object) => Funct
   assert.equal(env.guest.env.DATA, "7");
   controls.push("environment accessor and symbol values stay raw while assigned string-key values are coerced");
 
+  const envOrder: unknown[] = [];
+  Object.defineProperty(env.guest.env, "SETTER", {
+    configurable: true,
+    get() { envOrder.push("get"); return raw; },
+    set(value: unknown) { envOrder.push(value); },
+  });
+  envOrder.length = 0;
+  env.guest.env.SETTER = 23;
+  assert.deepEqual(envOrder, ["23", "get"]);
+  assert.deepEqual(env.envChanges.at(-1), ["SETTER", raw]);
+  controls.push("environment assignment coerces before the setter and publishes the raw getter result once");
+
   const envError = new Error("environment getter");
   assert.throws(() => Object.defineProperty(env.guest.env, "THROW", { get() { throw envError; } }), (value: unknown) => value === envError);
-  assert.equal(env.envChanges.length, 2);
+  assert.equal(env.envChanges.length, 4);
   const rawSymbol = Symbol("defined raw");
   Object.defineProperty(env.guest.env, rawSymbol, { value: raw, configurable: true });
   assert.equal(env.guest.env[rawSymbol], raw);

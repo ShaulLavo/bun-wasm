@@ -66,15 +66,29 @@ test("erasure preserves executable token positions, including exit operator brid
   }
 });
 
+async function controls(source: string) {
+  const context = createContext({ TextEncoder, TextDecoder, Uint8Array, Error, TypeError });
+  const events = runInContext(readFileSync(join(root, "crates/bunwasm-runtime/src/js/events.js"), "utf8"), context);
+  const factory = runInContext(source, context);
+  return JSON.parse(JSON.stringify(await processControls(events, factory, assert)));
+}
+
 test("original and converted factories preserve lifecycle, identity, descriptors and coercions", async () => {
-  async function controls(source: string) {
-    const context = createContext({ TextEncoder, TextDecoder, Uint8Array, Error, TypeError });
-    const events = runInContext(readFileSync(join(root, "crates/bunwasm-runtime/src/js/events.js"), "utf8"), context);
-    const factory = runInContext(source, context);
-    return JSON.parse(JSON.stringify(await processControls(events, factory, assert)));
-  }
   expect(await controls(emitted)).toEqual(await controls(original));
 });
+
+const mutations: readonly [string, string, string][] = [
+  ["callback snapshots lose reentrant appends", "for (const callback of callbacks)", "for (const callback of callbacks.slice())"],
+  ["callback throws must prevent reset", "for (const callback of callbacks) callback(error);", "try { for (const callback of callbacks) callback(error); } finally { failure = null; stream.writable = true; }"],
+  ["callbacks must not acquire a receiver", "callback(error);", "callback.call(stream, error);"],
+  ["Symbol environment values stay raw", 'typeof key === "symbol" ? value : String(value)', "String(value)"],
+];
+for (const [name, before, after] of mutations) {
+  test(`controls reject a semantic mutation: ${name}`, async () => {
+    assert.ok(emitted.includes(before));
+    await assert.rejects(() => controls(emitted.replace(before, after)));
+  });
+}
 
 function contract(source: string) {
   const probe = join(scratch, "probe.ts");
@@ -94,8 +108,31 @@ i.require("process_signals")(i.require("events").prototype, new Map());`);
   expect(result.stdout.toString()).toBe("");
   expect(result.exitCode).toBe(0);
 });
-for (const call of ["n.writeStdout(1)", "n.chdir(false)", "n.isatty('fd')", "const s: string = n.env().RAW", "const x: string = n.memoryUsage().rss", "i.nextTick(7)"]) {
+for (const call of ["n.writeStdout(1)", "n.chdir(false)", "n.isatty('fd')", "const s: string = n.env().RAW", "const x: string = n.memoryUsage().rss", "i.nextTick(7)", "i.workerEnvChange(7, 'x')"]) {
   test(`rejects false process contract: ${call}`, () => {
-    expect(contract(`declare const n: BunWasm.Native; declare const i: BunWasm.Internal; ${call};`).exitCode).not.toBe(0);
+    const result = contract(`declare const n: BunWasm.Native; declare const i: BunWasm.Internal; ${call};`);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout.toString()).toMatch(/error TS(?:2322|2345|2769)/);
+  });
+}
+
+
+test("the factory keeps stored exitCode unknown rather than claiming a number", () => {
+  const result = contract(`declare const i: BunWasm.Internal;
+const factory = ${readFileSync(sourcePath, "utf8")};
+const guest = factory(i);
+const code: number = guest.exitCode;
+guest.exitCode = Symbol("raw");`);
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stdout.toString()).toContain("Type 'unknown' is not assignable to type 'number'");
+});
+
+for (const engine of ["bun", "node"]) {
+  test(`${engine} pipe controls pin native differences without changing the guest fixture`, () => {
+    const result = Bun.spawnSync([engine, new URL("./fixtures/process-native-controls.ts", import.meta.url).pathname], {
+      stdin: Bun.file(join(root, "tests/fixtures/runtime-ts-process/stdin")), timeout: 15_000,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe(`PASS native pipe process controls ${engine}\n`);
   });
 }
