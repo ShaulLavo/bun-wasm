@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import manifest from "../package.json";
+import webManifest from "../web/package.json";
 import { qualityGates } from "./quality";
 import { inBatches, missingPackages, parseArchives, planArchives, prefetchArchive } from "../web/scripts/ci-browser-deps";
 
@@ -34,6 +37,37 @@ test("native fixture smoke selects the typed runtime behavior without another bu
   expect(rust).toContain('BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts');
   expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(2);
 });
+
+for (const { suite, owner } of [
+  { suite: "scripts/runtime-ts-small.test.ts", owner: "Code quality" },
+  { suite: "scripts/runtime-sqlite.test.ts", owner: "Web host" },
+]) {
+  test(`${suite} is discovered by exactly one blocking CI owner`, () => {
+    const root = fileURLToPath(new URL("../", import.meta.url));
+    const runtime = readFileSync(new URL("./check-runtime.sh", import.meta.url), "utf8");
+    const fixture = readFileSync(new URL("./test.sh", import.meta.url), "utf8");
+    const web = readFileSync(new URL("./test-web-host.sh", import.meta.url), "utf8");
+    expect(quality.match(/run: bun run quality --javascript/g)).toHaveLength(1);
+    expect(rust.match(/bash scripts\/test\.sh --no-build/g)).toHaveLength(1);
+    expect(fixture.match(/"\$root\/scripts\/check-runtime\.sh"/g)).toHaveLength(1);
+    expect(workflow.match(/run: bash \.\.\/scripts\/test-web-host\.sh --unit/g)).toHaveLength(1);
+    const routes = [
+      { job: "Code quality", cwd: root, source: manifest.scripts["quality:probes"] },
+      { job: "Rust workspace", cwd: root, source: runtime },
+      { job: "Web host", cwd: join(root, "web"), source: web + "\n" + webManifest.scripts.test },
+      { job: "Browser adapter package", cwd: root, source: manifest.scripts.test },
+    ];
+    const owners = routes.flatMap(({ job, cwd, source }) => {
+      const commands = Array.from(source.matchAll(/(?:^|\n)[ \t]*bun test\b([^\n]*)/g), match => match[1]!);
+      const arguments_ = commands.flatMap(command => command.trim().split(/\s+/));
+      expect(arguments_.every(argument => /\.test\.[cm]?[jt]sx?$/.test(argument))).toBe(true);
+      return commands.filter(command => command.trim().split(/\s+/).some(argument =>
+        new Bun.Glob(resolve(cwd, argument.replaceAll('"', "").replaceAll("$root", root))).match(resolve(root, suite)),
+      )).map(() => job);
+    });
+    expect(owners).toEqual([owner]);
+  });
+}
 
 test("Rust tests are compiled and run once, with Clippy covering test targets", () => {
   const script = readFileSync(new URL("./quality-rust.ts", import.meta.url), "utf8");
