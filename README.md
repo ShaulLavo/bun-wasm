@@ -99,4 +99,4 @@ Pre-1.0 and experimental. The package is `bun-wasm` 0.0.58, marked private, and 
 
 ## License and contributing
 
-The workspace declares `license = "MIT"` in `Cargo.toml`. The repository has no `LICENSE` file yet. Read [Development](docs/development.md) before you change code, and [AGENTS.md](AGENTS.md) if you are an agent. The project takes no GitHub issues.
+[MIT](LICENSE). Upstream and third-party notices are in `crates/bunwasm-runtime/generated/builtins/LICENSE.md`. Read [Development](docs/development.md) before you change code, and [AGENTS.md](AGENTS.md) if you are an agent. The project takes no GitHub issues. Report security issues through [SECURITY.md](SECURITY.md).
