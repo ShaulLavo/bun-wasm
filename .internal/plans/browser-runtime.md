@@ -152,6 +152,20 @@ aggregate guarantees.
 Repin cadence: one Waffle consumer repin on 2026-10-24; do not repin again on this track
 before 2026-10-25.
 
+Remaining consumer validation for this refresh belongs to bun-wasm, not Waffle approval.
+The optional installed-shell fixture still selects bash-web
+`c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5`, whose declared Waffle peer is the old
+`b20fad173ebaa225cb87c51776f35edaaafd4a40` pin. Its exact-peer assertion in
+`web/tests/shell-consumer-install.ts` will reject this selection before bundling.
+Do not weaken that assertion or mix a shell feature-queue update into this PR.
+The parent must select a separately reviewed shell consumer pin with this Waffle peer
+before claiming the installed-shell gate. That gate also needs a fresh accepted Bun
+browser guest and its matching `SHELL_CONSUMER_EXPECTED_INPUTS` receipt, supplied with
+`SHELL_CONSUMER_GUEST` and a free `SHELL_CONSUMER_PORT`. This checkout has neither input.
+Use the existing natural CI guest producer rather than relabeling an old binary or
+rebuilding its native prerequisites in another lane. Independent review and the PR's
+required native, JSC and browser CI gates remain pending at the implementation handoff.
+
 ## Layers
 
 | Layer | Contents | Loaded by |

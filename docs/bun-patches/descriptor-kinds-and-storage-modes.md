@@ -12,7 +12,10 @@ The shell lists a non-directory entry without assuming it has children. These ch
 to Waffle's public types and entry kinds; they copy no upstream implementation. The real
 installer tests arrange the blocked parent during mutation rather than before preflight,
 because Waffle now reports an intermediate non-directory during lookup. They retain the
-rollback race and expect the canonical WASI ENOTDIR value, 54.
+rollback race and expect the canonical WASI ENOTDIR value, 54. The consumer WASI fixture
+now tests real symlink capability confinement instead of expecting unsupported creation.
+The first-spawn bundle check classifies Waffle's split intrinsic-capture modules and typed
+process errors as eager control code. Unknown nested modules still fail that check.
 
 `crates/bunwasm-runtime/src/host.rs` imports `runtime_proc.fd_kind`. The original descriptor
 metadata adapter in `natives.rs` retains libc fstat and its rights checks before restoring the
