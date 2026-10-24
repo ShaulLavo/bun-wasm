@@ -155,3 +155,9 @@ for (const path of ["web/src/main.ts", "sandbox/src/main.ts", "site/src/main.ts"
     expect(select(base, commitInput(path), event)).toBe("rust=false\njsc=false");
   });
 }
+
+for (const path of ["web/guest-tests/quickjs.test.ts", "web/guest-tests/browser.test.ts", "web/guest-tests/jsc.test.ts"]) {
+  test.each(["pull_request", "push"])(`${path} selects only its own engine owner through the real %s event CLI`, event => {
+    expect(select(base, commitInput(path), event)).toBe(`rust=true\njsc=${path.endsWith("jsc.test.ts")}`);
+  });
+}

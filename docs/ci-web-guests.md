@@ -25,6 +25,6 @@ The fixture receipts and execution logs are uploaded for review.
 
 `ci-changes.ts` selects the native owner for its existing native inputs and the
 shared Node-host/test contracts. Shared runtime, tool, host and fixture changes
-also select JSC. Engine-specific Rust files keep their own checks. Page, editor,
+also select JSC. Engine-specific Rust and test files keep their own checks. Page, editor,
 sandbox UI and documentation changes do not build engines. New shared host
 imports need a matching selection rule and regression check.

@@ -125,4 +125,9 @@ test("engine-specific changes keep their own native gates", () => {
   expect(needsJsc(["crates/bunwasm-runtime/src/engine_host.rs"])).toBe(false);
   expect(needsRust(["crates/bunwasm-runtime/src/engine_quickjs.rs"])).toBe(true);
   expect(needsJsc(["crates/bunwasm-runtime/src/engine_jsc.rs"])).toBe(true);
+  for (const path of ["web/guest-tests/quickjs.test.ts", "web/guest-tests/browser.test.ts"]) {
+    expect(needsRust([path])).toBe(true);
+    expect(needsJsc([path])).toBe(false);
+  }
+  expect(needsJsc(["web/guest-tests/jsc.test.ts"])).toBe(true);
 });

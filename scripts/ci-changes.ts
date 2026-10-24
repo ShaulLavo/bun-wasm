@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 
-const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/"];
+const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "web/guest-tests/"];
 const nativeFiles = new Set([
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
   "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
@@ -18,7 +18,7 @@ const jscFiles = new Set([
 ]);
 
 const webGuestDirectories = [
-  "web/guest-tests/", "web/src/net/", "tests/fixtures/spawn-executable/", "tests/install/",
+  "web/src/net/", "tests/fixtures/spawn-executable/", "tests/install/",
   "crates/bunwasm-runtime/", "crates/bunwasm-cli/", "crates/bunwasm-tools/", "crates/bunwasm-lint-native/",
   "crates/bunwasm-build/", "crates/bunwasm-transpiler/", "crates/bunwasm-glue/", "crates/bunwasm-posix/",
   "crates/bunwasm-semver/", "crates/bunwasm-crypto-sys/", "patches/", "third_party/", ".cargo/",
@@ -26,7 +26,7 @@ const webGuestDirectories = [
 const webGuestFiles = new Set([
   "scripts/test-web-guests.ts", "scripts/test-web-guests.test.ts", "scripts/guest-build-receipt.ts",
   "scripts/build-bun-tools.sh", "scripts/transpile-runtime.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "web/bun.lock",
-  "tests/fixtures/runtime-proc-spawn-requests.json",
+  "tests/fixtures/runtime-proc-spawn-requests.json", "web/guest-tests/compose.ts", "web/guest-tests/jsc.test.ts",
   "web/tests/subprocess.ts", "web/tests/subprocess.mjs",
   "web/src/fs.ts", "web/src/tool-command.ts", "web/src/engine-host.js", "web/src/engine-host.d.ts",
   "web/src/crypto-host.js", "web/src/crypto-inputs.js", "web/src/promise-reactions.ts",
