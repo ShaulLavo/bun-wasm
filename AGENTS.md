@@ -22,9 +22,14 @@ Bun compiled to WebAssembly: one `wasm32-wasip1` guest that runs `bun run`, `bun
 - Write new code in TypeScript. Do not hand-write JavaScript or check in compiled JavaScript unless a build step forces it (owner, 2026-10-16).
 - Use Rust for native work: fs, sockets, crypto, compression, parsing. Prefer Bun's own `src/js` modules through the builtin loader over writing new ones.
 - Keep engine-specific behavior behind the `Engine` trait (`crates/bunwasm-runtime/src/engine.rs`).
-- Every new or changed upstream patch, copied file, or adapted implementation gets a classified row and a section in `docs/bun-patches.md` in the same PR. This covers Bun, Node, WebKit and other upstreams, including source outside vendor directories. Record the upstream path and revision, the local changes, and the reasons. List original adapters separately.
+- Every new or changed upstream patch, copied file, or adapted implementation gets its own classified Markdown record under `docs/bun-patches/` in the same PR. Update an existing record when it owns that patch or adapter. Do not append rows or sections to the stable `docs/bun-patches.md` entrypoint. This covers Bun, Node, WebKit and other upstreams, including source outside vendor directories. Record the upstream path and revision, the local changes, and the reasons. List original adapters separately.
 - Patch Bun in `vendor/bun` on branch `wasm` as commits, then run `scripts/export-patches.sh`. `vendor/bun` is git-ignored and `scripts/sync-bun.sh` re-creates it. Keep patches minimal: add `target_os = "wasi"` arms, do not rewrite.
 - Open no GitHub issues. The repo is public at github.com/ShaulLavo/bun-wasm. The site deploys from `site/` with `bun run deploy`.
+
+## Landing policy
+
+- Feature PRs do not bump package or Cargo versions or their local lockfile version records. Keep current main's versions. Bump once for a release or a consumer pin that needs one, and use a patch release before launch. Do not open standalone version-churn PRs.
+- Add feature-owned check manifests under `checks/`; do not append test names to workflow, package or shell command lines. Preserve the existing blocking owner and gate. `docs/check-discovery.md` describes the format and proof.
 
 ## Docs
 

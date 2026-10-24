@@ -282,16 +282,19 @@ declare namespace BunWasm {
     epochNanoseconds: bigint;
     toZonedDateTimeISO(offset: string): FormatTemporalValue;
   }
-  interface FormatBlob extends Blob { _bytes(): Uint8Array }
   interface Native {
     /** Serialized tagged graph from bunwasm-transpiler/src/data.rs. */
     parseData(bytes: Uint8Array, format: DataFormat): string;
   }
   interface Internal {
     require(name: "yaml_coercion"): (value: unknown) => unknown;
+    require(name: "formats_limit"): { checkSize(input: { readonly byteLength: number }): void };
     toUint8(value: ArrayBuffer | SharedArrayBuffer | ArrayBufferView): Uint8Array;
   }
 }
+
+// Runtime Blob is installed by web.js, with synchronous access to its stored bytes.
+interface Blob { _bytes(): Uint8Array }
 
 declare var Bun: {
   inspect(value: unknown): string;

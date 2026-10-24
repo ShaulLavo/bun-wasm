@@ -23,11 +23,9 @@ The split gives a rule of thumb for bugs. Syntax, bundling and resolution behave
 
 The runtime talks to a JavaScript engine through the `Engine` trait in `crates/bunwasm-runtime/src/engine.rs`. Three implementations exist, and each builds a separate guest.
 
-| Engine | JS runs on | Guest |
-| --- | --- | --- |
-| `quickjs` | QuickJS-ng compiled into the wasm | `bun.wasm` |
-| `jsc` | JavaScriptCore without JIT, compiled into the wasm | `bun-jsc.wasm` |
-| `browser` | The host's own engine | `bun-browser.wasm` |
+- `quickjs` runs JS on QuickJS-ng compiled into the wasm. Guest: `bun.wasm`.
+- `jsc` runs JS on JavaScriptCore without JIT, compiled into the wasm. Guest: `bun-jsc.wasm`.
+- `browser` runs JS on the host's own engine. Guest: `bun-browser.wasm`.
 
 Bun's engine is JavaScriptCore, so the obvious plan is to run Bun's real runtime on it. Two facts stand in the way. JavaScriptCore cannot JIT inside wasm, so it runs as an interpreter. And Bun's C++ bindings are tied to JavaScriptCore internals and assume a 64-bit machine. A spike found a single-threaded port of the real runtime feasible but large. The runtime started on QuickJS and kept it as the default engine, and JavaScriptCore stays an experiment that shows how far Bun's own engine gets. See [ADR 001](../adr/001-three-engines-behind-one-runtime.md).
 
@@ -37,13 +35,11 @@ The `browser` engine goes the other way. It leaves the engine out of the wasm an
 
 A guest needs three things from its host. It gets each through a different channel, for a different reason.
 
-| Need | Channel | Why this channel |
-| --- | --- | --- |
-| Files, clocks, stdio | WASI preview1 | Every WASI host has it. |
-| Network | `bun_wasm` slots, installed after instantiation | Core wasm has no optional imports, and WASI preview1 has no sockets. |
-| Processes and signals | `runtime_proc` imports | Spawn, pipes and waits need a real process model, so every host must provide them. |
+- Files, clocks and stdio come through WASI preview1, because every WASI host has it.
+- Network comes through `bun_wasm` slots, installed after instantiation, because core wasm has no optional imports and WASI preview1 has no sockets.
+- Processes and signals come through `runtime_proc` imports, because spawn, pipes and waits need a real process model, so every host must provide them.
 
-Slots work like this. The guest exports its function table and a function that returns an address in linear memory. At that address sits the ABI version, a slot count and one table index per host function. The host appends its functions to the table, writes their indices into the slots, and then calls `_start`. A host that fills no slots still runs the program, and network APIs report "not supported". [ADR 002](../adr/002-host-functions-installed-in-the-function-table.md) records why imports lost.
+Slots work like this. The guest exports its function table and a function that returns an address in linear memory. At that address sits the ABI version, a slot count and one table index per host function. The host appends its functions to the table, writes their indices into the slots, and then calls `_start`. A host that fills no slots still runs the program, and network APIs report "not supported". [ADR 002](../adr/002-host-functions-installed-in-the-function-table.md) records why the host functions are not plain imports.
 
 `runtime_proc` is the opposite choice. The guest imports `spawn`, `pipe`, `read`, `write`, `wait`, `kill`, `poll` and `signal`. A plain `wasmtime run dist/bun.wasm` fails to link for that reason, and the native launcher exists to provide them. Processes follow Waffle's generic `ProcessABI`, so a Bun process is an ordinary member of the page's process directory, next to a shell or any other guest ([ADR 003](../adr/003-processes-run-on-the-waffle-process-abi.md)). The [Host ABI](../host-abi.md) page has every signature.
 
@@ -79,18 +75,16 @@ The package borrows the page's Waffle `Runtime` and never creates or disposes it
 
 ## Where things live
 
-| Path | Contents |
-| --- | --- |
-| `crates/bunwasm-cli` | The `bun` binary: argument parsing, wires the transpiler into the runtime |
-| `crates/bunwasm-runtime` | Runtime, `Engine` trait, QuickJS and JSC engines, host-engine glue, installer, JS polyfills |
-| `crates/bunwasm-transpiler`, `bunwasm-build` | Bun's transpiler and bundler behind small APIs |
-| `crates/bunwasm-jsc` | JavaScriptCore build and C API for `engine-jsc` |
-| `crates/bunwasm-host` | Native launcher on Wasmtime (`bun-wasm`) |
-| `crates/bunwasm-tools` | Lint and format guest (`bun-tools.wasm`) |
-| `crates/bunwasm-glue`, `bunwasm-posix` | C and POSIX symbols Bun's crates expect on wasm32 |
-| `src/` | The `bun-wasm` package: adapter installer and guest loader |
-| `web/` | Playground: worker, WASI shim, network bridge, terminal |
-| `sandbox/` | React and vanilla dev-server sandbox |
-| `site/` | Deploys the sandbox and playground to bun.sprockt.dev |
-| `patches/bun/` | The patch series for oven-sh/bun |
-| `tests/` | End-to-end fixtures run on all three engines |
+- `crates/bunwasm-cli`: the `bun` binary: argument parsing, and wires the transpiler into the runtime.
+- `crates/bunwasm-runtime`: runtime, `Engine` trait, QuickJS and JSC engines, host-engine glue, installer, JS polyfills.
+- `crates/bunwasm-transpiler`, `bunwasm-build`: Bun's transpiler and bundler behind small APIs.
+- `crates/bunwasm-jsc`: JavaScriptCore build and C API for `engine-jsc`.
+- `crates/bunwasm-host`: native launcher on Wasmtime (`bun-wasm`).
+- `crates/bunwasm-tools`: lint and format guest (`bun-tools.wasm`).
+- `crates/bunwasm-glue`, `bunwasm-posix`: C and POSIX symbols Bun's crates expect on wasm32.
+- `src/`: the `bun-wasm` package: adapter installer and guest loader.
+- `web/`: the playground: worker, WASI shim, network bridge, terminal.
+- `sandbox/`: React and vanilla dev-server sandbox.
+- `site/`: deploys the sandbox and playground to bun.sprockt.dev.
+- `patches/bun/`: the patch series for oven-sh/bun.
+- `tests/`: end-to-end fixtures run on all three engines.

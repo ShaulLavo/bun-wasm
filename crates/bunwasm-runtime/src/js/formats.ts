@@ -55,14 +55,17 @@
     return native.utf8Encode(fixed);
   }
 
+  const { checkSize } = internal.require("formats_limit");
+
   function parse(input: unknown, format: BunWasm.DataFormat) {
     if (format !== "YAML" && input == null) throw new TypeError("Expected a string to parse");
-    if (format === "JSONC" || format === "JSON") input = textBytes(input, true);
-    else if (input instanceof Blob) input = (input as BunWasm.FormatBlob)._bytes();
-    else if (ArrayBuffer.isView(input) || input instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && input instanceof SharedArrayBuffer)) input = internal.toUint8(input);
-    else input = textBytes(input, false);
-    if ((input as Uint8Array).byteLength > 0x7fffffff) throw new RangeError("input.byteLength must be <= 2147483647");
-    return hydrate(jsonParse(native.parseData(input as Uint8Array, format)) as DataGraph);
+    let bytes: Uint8Array;
+    if (format === "JSONC" || format === "JSON") bytes = textBytes(input, true);
+    else if (input instanceof Blob) bytes = input._bytes();
+    else if (ArrayBuffer.isView(input) || input instanceof ArrayBuffer || (typeof SharedArrayBuffer !== "undefined" && input instanceof SharedArrayBuffer)) bytes = internal.toUint8(input);
+    else bytes = textBytes(input, false);
+    checkSize(bytes);
+    return hydrate(jsonParse(native.parseData(bytes, format)));
   }
 
   function spacing(space: unknown) {

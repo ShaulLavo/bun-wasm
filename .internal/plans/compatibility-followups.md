@@ -46,8 +46,9 @@ Status: Approved
 
 ## YAML stringify: throwing Symbol.toPrimitive on a boxed primitive
 
-Status: Resolved for boxed primitive coercion. The separate browser large-input
-error-code gap remains Approved.
+Status: Resolved for boxed primitive coercion. The input-length error-code fix
+is implemented with bounded source controls, pending independent review and
+parent integration. No current guest validation is claimed.
 
 The YAML coercion adapter now consults `Symbol.toPrimitive` with the string or
 number hint, preserves thrown values and reports invalid object results. It also
@@ -74,7 +75,23 @@ scripts/bun-suite.sh --engine quickjs --network loopback --jobs 1 \
 ```
 
 Start at `yamlStringify` in
-`crates/bunwasm-runtime/src/js/formats.js`. Keep the upstream test unchanged.
+`crates/bunwasm-runtime/src/js/formats.ts`. Keep the upstream test unchanged.
+
+The current `formats.ts` guard now reports `ERR_OUT_OF_RANGE` and Bun's
+complete received-length message before native parsing. The maximum remains
+2,147,483,647 bytes, inclusive. `scripts/formats-input-limit.test.ts` checks zero,
+that exact maximum and its first rejected value using synthetic lengths. Actual
+view controls allocate only 32 bytes and check the original buffer, offset,
+byte count and format. A zero-storage converted-view control proves rejection
+precedes the stubbed native parser. The native declaration still rejects
+size-only records as parser inputs.
+
+This replaces stale PR #137's allocation-heavy regression rather than running
+or copying its 2 GiB fixtures. Historical guest receipts remain historical.
+`runtime-ts-small.test.ts` reverses only the explicit guard delta before checking
+the existing formats AST pin, with missing-guard, changed-conversion and unrelated
+serialization negative controls. Parent owns replacement review, any separately
+authorized artifact validation, integration and old PR closure.
 
 ## Integration with the separate HTTP/WebSocket lane
 
