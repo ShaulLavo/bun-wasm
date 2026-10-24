@@ -130,6 +130,7 @@ declare namespace BunWasm {
       /** Bun's CompressionStreamCoder: (format, decompress, highWaterMark, level). */
       webCodec(format: string, decompress: boolean, highWaterMark: number, level?: number): number;
       webStep(handle: number, data: Uint8Array, finish: boolean): { bytes: Uint8Array; more: boolean };
+      decoder(label: string, fatal: boolean, ignoreBOM: boolean): { id: number; encoding: string };
       push(handle: number, data: Uint8Array, last: boolean): string;
       release(handle: number): void;
     };
@@ -307,3 +308,36 @@ declare var Temporal: {
   PlainTime: { from(value: string): BunWasm.FormatTemporalValue };
   ZonedDateTime: { from(value: string): BunWasm.FormatTemporalValue };
 };
+
+declare namespace BunWasm {
+  type StreamGlobals = Pick<typeof globalThis,
+    "ReadableStream" | "ReadableStreamDefaultReader" | "ReadableStreamBYOBReader" | "ReadableStreamBYOBRequest" |
+    "ReadableByteStreamController" | "ReadableStreamDefaultController" | "WritableStream" | "WritableStreamDefaultWriter" |
+    "WritableStreamDefaultController" | "TransformStream" | "TransformStreamDefaultController" |
+    "ByteLengthQueuingStrategy" | "CountQueuingStrategy" | "TextEncoderStream" | "TextDecoderStream" |
+    "CompressionStream" | "DecompressionStream">;
+  type PortableStreams = Omit<StreamGlobals, "TextEncoderStream" | "TextDecoderStream" | "CompressionStream" | "DecompressionStream">;
+  interface CompressionStreamPair {
+    readonly readable: ReadableStream<Uint8Array>;
+    readonly writable: WritableStream<unknown>;
+  }
+  interface WebCompressionConstructor {
+    new(format: unknown, options?: unknown): CompressionStreamPair;
+    readonly prototype: object;
+  }
+  type CompressionAdapters = {
+    CompressionStream: WebCompressionConstructor;
+    DecompressionStream: WebCompressionConstructor;
+  };
+  interface Internal {
+    require(name: "streams_polyfill"): PortableStreams;
+    require(name: "compression_streams"): {
+      create(Transform: typeof TransformStream, Readable?: typeof ReadableStream, Writable?: typeof WritableStream): CompressionAdapters;
+      decode(body: ReadableStream<Uint8Array>, encoding: string | null | undefined): ReadableStream<Uint8Array>;
+    };
+    /** web.js validates arbitrary input and throws before returning bytes. */
+    toUint8(value: unknown): Uint8Array;
+  }
+}
+
+interface String { toWellFormed(): string }
