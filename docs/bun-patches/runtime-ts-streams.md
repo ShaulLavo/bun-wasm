@@ -25,6 +25,14 @@ unit command. The native fixture smoke selects `runtime-ts-streams` once.
 Evidence and actual emitted-byte accounting are under
 `/work/reports/bun-wasm/ts-streams-20261024/`.
 
+The browser interop harness in `scripts/test-native-stream-interop.mjs` reads
+and erases `streams.ts` explicitly, just like `compression_streams.ts`. Its old
+JavaScript-only discovery silently omitted the renamed wrapper. The pure
+`--dump` regression in `scripts/native-stream-inputs.test.ts` checks required
+modules and parses the erased stream factory without loading Playwright.
+`checks/quality-native-stream-inputs.json` gives this regression one blocking
+quality owner. Browser fixtures and assertions are unchanged.
+
 ## Classification
 
 | Patch or source | Class | Change |
