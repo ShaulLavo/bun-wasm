@@ -11,7 +11,9 @@ The old generic default masked explicit `readableHighWaterMark` and
 `writableHighWaterMark`. The helper supplies separate 65536-byte defaults so
 Duplex can honor each direction. An explicit generic `highWaterMark` still wins
 according to the existing stream implementation. Options are copied rather than
-mutated. Existing stream validation remains responsible for invalid limits.
+mutated. Null or undefined directional limits restore the 65536-byte Socket
+default on that copy, without reading caller getters again. Zero remains explicit.
+Existing stream validation remains responsible for invalid limits.
 
 The only forced existing-JavaScript glue is the constructor's `super` argument
 in `node_net.js`. All new option logic is TypeScript; the socket module is not

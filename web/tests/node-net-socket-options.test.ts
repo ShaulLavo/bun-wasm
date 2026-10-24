@@ -64,6 +64,18 @@ test("Socket constructor honors independent readable and writable watermarks", (
   expect(writableOnly.writableHighWaterMark).toBe(29);
 });
 
+test.each([
+  { readableHighWaterMark: undefined },
+  { readableHighWaterMark: null },
+  { writableHighWaterMark: undefined },
+  { writableHighWaterMark: null },
+])("Socket retains 65536 defaults for nullish directional options %j", options => {
+  const { Socket } = fixture();
+  const socket = new Socket(options);
+  expect(socket.readableHighWaterMark).toBe(65536);
+  expect(socket.writableHighWaterMark).toBe(65536);
+});
+
 test("Socket generic watermark still overrides both directions, including zero", () => {
   const { Socket } = fixture();
   for (const highWaterMark of [0, 31]) {
@@ -88,7 +100,49 @@ test("Socket keeps null/default options, allowHalfOpen and caller option ownersh
 
 test("Socket still rejects invalid directional watermarks through the stream constructor", () => {
   const { Socket } = fixture();
-  for (const options of [{ readableHighWaterMark: -1 }, { writableHighWaterMark: 1.5 }]) {
+  for (const options of [
+    { readableHighWaterMark: -1 }, { writableHighWaterMark: 1.5 },
+    { readableHighWaterMark: "17" }, { writableHighWaterMark: Number.NaN },
+    { readableHighWaterMark: Number.POSITIVE_INFINITY },
+  ]) {
     expect(() => new Socket(options)).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
   }
+});
+
+test("Socket defers nullish generic limits and keeps numeric generic precedence over invalid directions", () => {
+  const { Socket } = fixture();
+  for (const highWaterMark of [undefined, null]) {
+    const socket = new Socket({ highWaterMark, readableHighWaterMark: 17, writableHighWaterMark: 23 });
+    expect(socket.readableHighWaterMark).toBe(17);
+    expect(socket.writableHighWaterMark).toBe(23);
+  }
+  const socket = new Socket({ highWaterMark: 0, readableHighWaterMark: -1, writableHighWaterMark: "invalid" });
+  expect(socket.readableHighWaterMark).toBe(0);
+  expect(socket.writableHighWaterMark).toBe(0);
+});
+
+test("Socket copies nullish option getters once in source order with the original receiver", () => {
+  const { Socket } = fixture();
+  const reads: string[] = [];
+  const receivers: unknown[] = [];
+  const options = Object.defineProperties({}, {
+    readableHighWaterMark: { enumerable: true, get() { reads.push("readable"); receivers.push(this); return null; } },
+    highWaterMark: { enumerable: true, get() { reads.push("generic"); receivers.push(this); return undefined; } },
+    writableHighWaterMark: { enumerable: true, get() { reads.push("writable"); receivers.push(this); return undefined; } },
+    allowHalfOpen: { enumerable: true, get() { reads.push("half"); receivers.push(this); return true; } },
+  });
+  const socket = new Socket(Object.freeze(options));
+  expect(reads).toEqual(["readable", "generic", "writable", "half"]);
+  expect(receivers.every(receiver => receiver === options)).toBe(true);
+  expect(socket.allowHalfOpen).toBe(true);
+});
+
+test("Socket keeps the actual subclass receiver", () => {
+  const { Socket } = fixture();
+  class SubSocket extends Socket {}
+  const socket = new SubSocket({ readableHighWaterMark: 17, writableHighWaterMark: 23 });
+  expect(socket).toBeInstanceOf(SubSocket);
+  expect(socket).toBeInstanceOf(Socket);
+  expect(socket.readableHighWaterMark).toBe(17);
+  expect(socket.writableHighWaterMark).toBe(23);
 });
