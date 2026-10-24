@@ -91,3 +91,19 @@ attempt("method scalar replacement", () => {
   p.set("\udfff", "😀");
   return [found, Array.from(p), p.toString()];
 });
+
+for (const method of ["get", "getAll", "has", "delete", "set"] as const) {
+  attempt(`invalid receiver ${method}`, () => {
+    const args = method === "get" || method === "getAll" ? [value("key", true)] : ["key", value("value", true)];
+    try { Reflect.apply(URLSearchParams.prototype[method], {}, args); }
+    catch (error) { return [typeof error === "object" && error !== null && "name" in error ? error.name : undefined, error === sentinel, log.splice(0)]; }
+    return ["no error", false, log.splice(0)];
+  });
+  attempt(`valid receiver ${method} throw identity`, () => {
+    const p = params("key=old&key=other");
+    const args = method === "get" || method === "getAll" ? [value("key", true)] : [value("key"), value("value", true)];
+    try { Reflect.apply(p[method], p, args); }
+    catch (error) { return [error === sentinel, p.toString(), log.splice(0)]; }
+    return [false, p.toString(), log.splice(0)];
+  });
+}

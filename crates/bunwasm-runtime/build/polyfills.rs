@@ -73,12 +73,16 @@ fn transpile(source: &Path, out: &Path, stem: &str, script: &Path) -> PathBuf {
     let dir = out.join("runtime-js");
     fs::create_dir_all(&dir).expect("create transpiled runtime directory");
     let destination = dir.join(format!("{stem}.js"));
-    let output = Command::new("node")
-        .arg(script)
-        .arg(source)
-        .arg(&destination)
+    let compact = matches!(stem, "stack_trace" | "bun_builtins");
+    let runner = if compact { "bun" } else { "node" };
+    let mut command = Command::new(runner);
+    command.arg(script).arg(source).arg(&destination);
+    if compact {
+        command.arg("--minify-whitespace");
+    }
+    let output = command
         .output()
-        .expect("runtime TypeScript requires Node.js 24+ on PATH");
+        .expect("runtime TypeScript requires Node.js 24+ and Bun on PATH");
     assert!(
         output.status.success(),
         "transpile {}: {}",

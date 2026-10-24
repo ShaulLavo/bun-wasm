@@ -36,3 +36,13 @@ method has symbol throws TypeError undefined Cannot convert a Symbol value to a 
 method delete coercion [null,"key=old&key=other",["key string","value string"]]
 method delete symbol throws TypeError undefined Cannot convert a Symbol value to a string
 method scalar replacement [["�",true],[["�","😀"]],"%EF%BF%BD=%F0%9F%98%80"]
+invalid receiver get ["TypeError",false,[]]
+valid receiver get throw identity [true,"key=old&key=other",["key string"]]
+invalid receiver getAll ["TypeError",false,[]]
+valid receiver getAll throw identity [true,"key=old&key=other",["key string"]]
+invalid receiver has ["TypeError",false,[]]
+valid receiver has throw identity [true,"key=old&key=other",["key string","value string"]]
+invalid receiver delete ["TypeError",false,[]]
+valid receiver delete throw identity [true,"key=old&key=other",["key string","value string"]]
+invalid receiver set ["TypeError",false,[]]
+valid receiver set throw identity [true,"key=old&key=other",["key string","value string"]]

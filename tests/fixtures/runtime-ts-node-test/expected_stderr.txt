@@ -2,13 +2,17 @@
 utilities.test.ts:
 (pass) callback overload
 (pass) options overload
+(pass) unnamed
+(pass) <anonymous>
 (skip) skip option
 (todo) todo option
 (skip) skip method
 (todo) todo method
+(skip) skippedUnnamed
+(todo) deferredUnnamed
 
- 2 pass
- 2 skip
- 2 todo
+ 4 pass
+ 3 skip
+ 3 todo
  0 fail
-Ran 6 tests across 1 file. [TIME]
+Ran 10 tests across 1 file. [TIME]

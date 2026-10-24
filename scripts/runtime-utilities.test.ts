@@ -35,6 +35,10 @@ test("emitted JSONL preserves partial parsing and UTF-8 read offsets", () => {
   expect(invalid.error).toBeInstanceOf(SyntaxError);
   expect(() => parse.parse(null)).toThrow("JSONL.parse requires a string argument");
   expect(parse.parseChunk({ toString: () => "null\n7" }).values).toEqual([null, 7]);
+  for (const text of ['"a\\u00', "1e+", "true [", "true 7", "[1,]", "truX", 'true\n{"bad":}']) {
+    expect(parse.parseChunk(text)).toEqual(Bun.JSONL.parseChunk(text));
+  }
+  expect(parse.parse("invalid")).toEqual(Bun.JSONL.parse("invalid"));
 });
 
 test("emitted node:test adapter preserves registration selection and hook identity", () => {
@@ -68,6 +72,46 @@ test("emitted node:test adapter preserves registration selection and hook identi
   expect(adapter.after).toBe(runner.afterAll);
   expect(adapter.beforeEach).toBe(runner.beforeEach);
   expect(adapter.afterEach).toBe(runner.afterEach);
+});
+
+test("emitted node:test normalizes optional names and preserves callback errors", () => {
+  const calls: { kind: string; name: string; callback: (() => unknown) | undefined; timeout: unknown }[] = [];
+  const register = (kind: string) => (name: string, callback?: () => unknown, timeout?: unknown) => {
+    calls.push({ kind, name, callback, timeout });
+  };
+  const runner = {
+    test: Object.assign(register("test"), { skip: register("skip"), todo: register("todo"), only: register("only") }),
+  };
+  const adapter = factory("node_test")({ require: () => ({ exports: runner }) });
+  function unnamed() { return 1; }
+  adapter(unnamed);
+  adapter({ timeout: 100 }, () => 2);
+  adapter(() => 3);
+  adapter("", unnamed);
+  adapter("explicit", { timeout: 200 }, unnamed);
+  adapter(unnamed, { timeout: 300 });
+  adapter.skip(function skipped() {});
+  adapter.todo({ timeout: 400 }, function deferred() {});
+  adapter.only(function focused() {});
+  adapter({ skip: true, todo: true }, unnamed);
+  adapter.only({ todo: true }, unnamed);
+  expect(calls.map(({ kind, name, timeout }) => ({ kind, name, timeout }))).toEqual([
+    { kind: "test", name: "unnamed", timeout: undefined },
+    { kind: "test", name: "<anonymous>", timeout: 100 },
+    { kind: "test", name: "<anonymous>", timeout: undefined },
+    { kind: "test", name: "", timeout: undefined },
+    { kind: "test", name: "explicit", timeout: 200 },
+    { kind: "test", name: "unnamed", timeout: 300 },
+    { kind: "skip", name: "skipped", timeout: undefined },
+    { kind: "todo", name: "deferred", timeout: 400 },
+    { kind: "only", name: "focused", timeout: undefined },
+    { kind: "skip", name: "unnamed", timeout: undefined },
+    { kind: "todo", name: "unnamed", timeout: undefined },
+  ]);
+  expect(calls.slice(0, 6).map(({ callback }) => callback?.())).toEqual([1, 2, 3, 1, 1, 1]);
+  const failure = new Error("callback failure");
+  adapter(() => { throw failure; });
+  expect(() => calls.at(-1)?.callback?.()).toThrow(failure);
 });
 
 function contracts(text: string) {
