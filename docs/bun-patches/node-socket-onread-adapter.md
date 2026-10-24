@@ -8,11 +8,16 @@ are original **Host feature** adapters. The comparison source is Bun
 Bun pin `9510e74152073d850a18758ca41114d8f214ffa6`. No upstream code is copied.
 
 Socket snapshots `onread` and `signal` separately from Duplex options and rejects
-truthy object-mode options. Socket owns constructor and connect abort listeners.
+truthy object-mode options, including inherited and non-enumerable values. Validation
+reuses copied own-enumerable values and reads only uncopied mode fields from the
+original options, so it never rereads an already observed caller getter.
+Socket owns constructor and connect abort listeners.
 The helper accepts genuine Uint8Array buffers across realms, rejects forged
 prototypes, and retains the previous buffer when a factory returns an invalid
 value. The callback and subsequent allocation share an exception boundary.
 A callback exception skips allocation and reaches the existing uncaught handler.
+The completed callback result lives outside that boundary, so a handled subsequent
+allocation exception preserves a false result and the previous buffer.
 Initial allocation exceptions remain synchronous. Empty buffers report ENOBUFS.
 
 The existing connection adapter passes the current callback buffer capacity to

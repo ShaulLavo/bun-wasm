@@ -26,13 +26,14 @@
       },
       deliver(chunk: Uint8Array): unknown {
         if (buffer !== true) buffer.set(chunk);
+        let result: unknown;
         try {
-          const result: unknown = Reflect.apply(fn, undefined, [chunk.length, buffer]);
+          result = Reflect.apply(fn, undefined, [chunk.length, buffer]);
           buffer = allocate(factory, buffer);
-          return result;
         } catch (error) {
           if (!internal.handleUncaught(error)) internal.native.exit(1);
         }
+        return result;
       },
     };
   };

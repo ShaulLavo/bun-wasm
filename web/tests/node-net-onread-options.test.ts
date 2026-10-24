@@ -150,3 +150,59 @@ test("Socket composes option snapshots with nullish and zero directional default
   expect(socket).toHaveProperty("writableHighWaterMark", 0);
   expect(socket).toHaveProperty("allowHalfOpen", true);
 });
+
+
+test.each(["objectMode", "readableObjectMode", "writableObjectMode"])("Socket rejects nonenumerable %s", name => {
+  const { Socket } = fixture();
+  expect(() => new Socket(Object.defineProperty({}, name, { value: true }))).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
+  expect(() => new Socket(Object.defineProperty({}, name, { value: false }))).not.toThrow();
+});
+
+test.each(["objectMode", "readableObjectMode", "writableObjectMode"])("Socket rejects inherited %s", name => {
+  const { Socket } = fixture();
+  expect(() => new Socket(Object.create({ [name]: true }))).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
+  expect(() => new Socket(Object.create({ [name]: false }))).not.toThrow();
+});
+
+test("Socket snapshots enumerable object-mode getters once in caller order", () => {
+  const { Socket } = fixture();
+  const reads: string[] = [];
+  const receivers: unknown[] = [];
+  const options = Object.defineProperties({}, {
+    writableObjectMode: { enumerable: true, get() { reads.push("writable"); receivers.push(this); return false; } },
+    onread: { enumerable: true, get() { reads.push("onread"); receivers.push(this); return null; } },
+    highWaterMark: { enumerable: true, get() { reads.push("generic"); receivers.push(this); return 0; } },
+    objectMode: { enumerable: true, get() { reads.push("object"); receivers.push(this); return false; } },
+    signal: { enumerable: true, get() { reads.push("signal"); receivers.push(this); return undefined; } },
+    readableObjectMode: { enumerable: true, get() { reads.push("readable"); receivers.push(this); return false; } },
+  });
+  expect(() => new Socket(Object.freeze(options))).not.toThrow();
+  expect(reads).toEqual(["onread", "signal", "writable", "generic", "object", "readable"]);
+  expect(receivers.every(receiver => receiver === options)).toBe(true);
+});
+
+test.each([true, false])("Socket reads uncopied object-mode getters once with original receiver, inherited=%s", inherited => {
+  const { Socket } = fixture();
+  const reads: string[] = [];
+  const receivers: unknown[] = [];
+  const modes = Object.defineProperties({}, {
+    objectMode: { get() { reads.push("object"); receivers.push(this); return false; } },
+    readableObjectMode: { get() { reads.push("readable"); receivers.push(this); return false; } },
+    writableObjectMode: { get() { reads.push("writable"); receivers.push(this); return false; } },
+  });
+  const options = Object.freeze(inherited ? Object.create(modes) : modes);
+  expect(() => new Socket(options)).not.toThrow();
+  expect(reads).toEqual(["object", "readable", "writable"]);
+  expect(receivers.every(receiver => receiver === options)).toBe(true);
+});
+
+test("delivery preserves callback false when the next factory throws", () => {
+  const failure = new Error("next allocation failed");
+  let allocations = 0;
+  const { read, errors, exits } = delivery({ buffer() { if (++allocations > 1) throw failure; return new Uint8Array(2); }, callback() { return false; } });
+  expect(read.deliver(Uint8Array.of(1))).toBe(false);
+  expect(allocations).toBe(2);
+  expect(errors).toEqual([failure]);
+  expect(exits).toEqual([]);
+  expect(read.capacity()).toBe(2);
+});
