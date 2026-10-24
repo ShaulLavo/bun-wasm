@@ -1,0 +1,128 @@
+import { expect, test } from "bun:test";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { needsJsc, needsRust } from "./ci-changes";
+import { prepareWebGuestFixtures, webGuestArtifacts, webGuestEngines } from "./test-web-guests";
+
+const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const rust = workflow.split("\n  rust:\n")[1]!.split("\n  package:\n")[0]!;
+const web = workflow.split("\n  web:\n")[1]!.split("\n  process-bundles:\n")[0]!;
+
+test("guest groups are explicit, nonempty, unique and reject typos", () => {
+  expect(Array.from(webGuestEngines(["quickjs", "browser", "jsc"]), engine => webGuestArtifacts[engine])).toEqual(Object.values(webGuestArtifacts));
+  for (const args of [[], ["all"], ["quickjs", "quickjs"], ["jcs"]]) {
+    expect(() => webGuestEngines(args)).toThrow();
+  }
+});
+
+for (const engine of webGuestEngines(["quickjs", "browser", "jsc"])) {
+  test(`${engine} fixture preparation rejects absent guests, receipts and malformed receipts`, async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bun-wasm-guest-preparation-"));
+    try {
+      mkdirSync(join(directory, "dist"));
+      const path = join(directory, "dist", webGuestArtifacts[engine]);
+      await expect(prepareWebGuestFixtures(directory, engine)).rejects.toThrow(`Missing required Web guest fixture: ${path}`);
+      writeFileSync(path, "not a guest");
+      await expect(prepareWebGuestFixtures(directory, engine)).rejects.toThrow(`Missing required Web guest receipt: ${path}.build.json`);
+      writeFileSync(`${path}.build.json`, "{}");
+      await expect(prepareWebGuestFixtures(directory, engine)).rejects.toThrow("Invalid guest build receipt");
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+}
+
+test("preparation rejects missing tools and mismatched or corrupted receipt bytes", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-guest-receipts-"));
+  try {
+    mkdirSync(join(directory, "dist"));
+    // Parser-only bytes, never passed to the execution runner or used as a tools guest.
+    const bytes = new TextEncoder().encode("receipt validation fixture");
+    const receipt = {
+      bunHead: "a".repeat(40), bunTree: "b".repeat(40), sysrootReceiptSha256: "c".repeat(64),
+      artifactSha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), artifactBytes: bytes.length,
+    };
+    const guest = join(directory, "dist/bun.wasm");
+    writeFileSync(guest, bytes);
+    writeFileSync(`${guest}.build.json`, JSON.stringify(receipt));
+    await expect(prepareWebGuestFixtures(directory, "quickjs")).rejects.toThrow("dist/bun-tools.wasm");
+    const tools = join(directory, "dist/bun-tools.wasm");
+    writeFileSync(tools, bytes);
+    writeFileSync(`${tools}.build.json`, JSON.stringify({ ...receipt, bunTree: "d".repeat(40) }));
+    await expect(prepareWebGuestFixtures(directory, "quickjs")).rejects.toThrow("fixture mismatch: bunTree");
+    writeFileSync(tools, "corrupted receipt fixture");
+    await expect(prepareWebGuestFixtures(directory, "quickjs")).rejects.toThrow("does not match artifact bytes");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("all seven artifact-backed cases leave the fixture-free Web glob", () => {
+  const node = readFileSync(new URL("../web/tests/node-process.test.ts", import.meta.url), "utf8");
+  const net = readFileSync(new URL("../web/tests/net.test.ts", import.meta.url), "utf8");
+  expect(node).not.toContain("skipIf");
+  expect(node).not.toContain("fetch compose");
+  expect(net).not.toContain("installHostSlots fills");
+  const quickjs = readFileSync(new URL("../web/guest-tests/quickjs.test.ts", import.meta.url), "utf8");
+  const browser = readFileSync(new URL("../web/guest-tests/browser.test.ts", import.meta.url), "utf8");
+  const compose = readFileSync(new URL("../web/guest-tests/compose.ts", import.meta.url), "utf8");
+  expect(quickjs.match(/test\(/g)).toHaveLength(2);
+  expect(quickjs).toContain("for (const fallback of [false, true])");
+  expect(browser.match(/test\(/g)).toHaveLength(1);
+  expect(compose).not.toContain("skipIf");
+  expect(compose).toContain("child lint routed");
+  expect(compose).toContain('INSTALL_CASES: "aliases"');
+  expect(web).toContain("test-web-host.sh --unit");
+  expect(web).not.toContain("test-web-guests.ts");
+});
+
+test("the existing native producer owns each guest group once, before cache save", () => {
+  for (const command of ["test-web-guests.ts quickjs browser", "test-web-guests.ts jsc", "bash scripts/build-bun-tools.sh"]) {
+    expect(workflow.split(command)).toHaveLength(2);
+    expect(rust.indexOf(command)).toBeGreaterThan(0);
+    expect(rust.indexOf(command)).toBeLessThan(rust.indexOf("name: Save the complete native build"));
+  }
+  expect(rust).toContain('TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2');
+  expect(rust).toContain('guest-build-receipt.ts write dist/bun.wasm "$inputs"');
+  expect(rust).toContain("ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm");
+  expect(rust).toContain("ln -s source-cache-browser/bun-browser.wasm.build.json dist/bun-browser.wasm.build.json");
+  expect(rust).toContain("name: web-guest-fixture-receipts");
+  expect(rust).toContain("if-no-files-found: error");
+  expect(rust).not.toContain("continue-on-error");
+  expect(rust.indexOf("bun scripts/ci-binaryen.ts")).toBeLessThan(rust.indexOf("bash scripts/build-bun-tools.sh"));
+});
+
+test("guest gate logs retain stderr and cannot hide failure behind tee", () => {
+  const steps = rust.split("      - name: Blocking Web guest ").slice(1);
+  expect(steps).toHaveLength(2);
+  for (const step of steps) {
+    const gate = step.split("      - ")[0]!;
+    expect(gate).toContain("shell: bash"); // Explicit Bash enables GitHub's -eo pipefail.
+    expect(gate).toContain("2>&1 | tee dist/web-guests-");
+  }
+});
+
+for (const path of [
+  "web/scripts/node-spawn.ts", "web/scripts/node-host.mjs", "web/scripts/node-process.ts", "web/src/net/trampoline.ts",
+  "web/src/engine-host.js", "web/src/crypto-inputs.js", "web/bun.lock", "web/guest-tests/compose.ts",
+  "web/tests/subprocess.ts", "tests/fixtures/spawn-executable/index.ts", "tests/install/run.mjs",
+  "crates/bunwasm-runtime/src/host.rs", "crates/bunwasm-runtime/src/js/process.ts", "crates/bunwasm-cli/src/main.rs",
+  "scripts/test-web-guests.ts", "scripts/guest-build-receipt.ts", "scripts/build-bun-tools.sh",
+  "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "tests/fixtures/runtime-proc-spawn-requests.json",
+]) {
+  test(`${path} selects all real guest gates for a shared contract`, () => {
+    expect(needsRust([path])).toBe(true);
+    expect(needsJsc([path])).toBe(true);
+  });
+}
+
+for (const path of ["web/src/main.ts", "web/src/editor.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md"]) {
+  test(`${path} does not compile engines for a UI or documentation change`, () => {
+    expect(needsRust([path])).toBe(false);
+    expect(needsJsc([path])).toBe(false);
+  });
+}
+
+test("engine-specific changes keep their own native gates", () => {
+  expect(needsJsc(["crates/bunwasm-runtime/src/engine_quickjs.rs"])).toBe(false);
+  expect(needsJsc(["crates/bunwasm-runtime/src/engine_host.rs"])).toBe(false);
+  expect(needsRust(["crates/bunwasm-runtime/src/engine_quickjs.rs"])).toBe(true);
+  expect(needsJsc(["crates/bunwasm-runtime/src/engine_jsc.rs"])).toBe(true);
+});

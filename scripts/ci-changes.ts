@@ -17,8 +17,32 @@ const jscFiles = new Set([
   "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/ci-binaryen.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
 ]);
 
+const webGuestDirectories = [
+  "web/guest-tests/", "web/src/net/", "tests/fixtures/spawn-executable/", "tests/install/",
+  "crates/bunwasm-runtime/", "crates/bunwasm-cli/", "crates/bunwasm-tools/", "crates/bunwasm-lint-native/",
+  "crates/bunwasm-build/", "crates/bunwasm-transpiler/", "crates/bunwasm-glue/", "crates/bunwasm-posix/",
+  "crates/bunwasm-semver/", "crates/bunwasm-crypto-sys/", "patches/", "third_party/", ".cargo/",
+];
+const webGuestFiles = new Set([
+  "scripts/test-web-guests.ts", "scripts/test-web-guests.test.ts", "scripts/guest-build-receipt.ts",
+  "scripts/build-bun-tools.sh", "scripts/transpile-runtime.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "web/bun.lock",
+  "tests/fixtures/runtime-proc-spawn-requests.json",
+  "web/tests/subprocess.ts", "web/tests/subprocess.mjs",
+  "web/src/fs.ts", "web/src/tool-command.ts", "web/src/engine-host.js", "web/src/engine-host.d.ts",
+  "web/src/crypto-host.js", "web/src/crypto-inputs.js", "web/src/promise-reactions.ts",
+  "web/src/native-stream-state.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
+]);
+const engineSpecificFiles = new Set([
+  "crates/bunwasm-runtime/src/engine_quickjs.rs", "crates/bunwasm-runtime/src/engine_host.rs",
+]);
+
+function sharedWebGuestInput(path: string): boolean {
+  if (engineSpecificFiles.has(path)) return false;
+  return webGuestFiles.has(path) || path.startsWith("web/scripts/node-") || webGuestDirectories.some(root => path.startsWith(root));
+}
+
 export function needsJsc(paths: readonly string[]): boolean {
-  return paths.some(path => jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
+  return paths.some(path => sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
 }
 
 export function needsRust(paths: readonly string[]): boolean {

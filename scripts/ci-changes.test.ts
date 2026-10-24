@@ -132,6 +132,9 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
 for (const path of [
   "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp", "scripts/jsc-embedding.ts",
   "scripts/build-bun-jsc.sh", "scripts/ci-binaryen.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
+  "web/scripts/node-host.ts", "web/guest-tests/compose.ts", "web/src/net/trampoline.ts", "web/bun.lock",
+  "crates/bunwasm-runtime/src/host.rs", "scripts/test-web-guests.ts",
+  "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "tests/fixtures/runtime-proc-spawn-requests.json",
 ]) {
   test.each(["pull_request", "push"])(`${path} selects actual JSC embedding execution for %s`, event => {
     expect(needsJsc([path])).toBe(true);
@@ -146,3 +149,9 @@ test("unrelated page changes skip JSC; its selected gate builds and executes onc
   expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
   expect(workflow).toContain("bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm");
 });
+
+for (const path of ["web/src/main.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/ci-web-guests.md"]) {
+  test.each(["pull_request", "push"])(`${path} keeps engine builds off through the real %s event CLI`, event => {
+    expect(select(base, commitInput(path), event)).toBe("rust=false\njsc=false");
+  });
+}

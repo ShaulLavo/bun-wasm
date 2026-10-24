@@ -351,7 +351,7 @@ test("preinstalled native tools skip apt and fallback removes the known slow mir
 test("cold and restored JSC setup install Binaryen before sourcing common.sh", () => {
   const setup = rust.match(/      - name: Install pinned Binaryen\n((?:        .*\n|          .*\n)+)/)?.[0] ?? "";
   expect(setup).toContain("bun scripts/ci-binaryen.ts");
-  expect(setup).toContain("needs.quality.outputs.jsc == 'true'");
+  expect(setup).not.toContain("needs.quality.outputs.jsc");
   expect(setup).not.toContain("cache-hit");
   expect(rust.indexOf(setup)).toBeLessThan(rust.indexOf("name: Build or validate the single JSC prebuild"));
 });
