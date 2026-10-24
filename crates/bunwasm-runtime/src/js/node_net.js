@@ -9,7 +9,7 @@
 
     class Socket extends Duplex {
       constructor(options = {}) {
-        super(Object.assign({ allowHalfOpen: false, highWaterMark: 65536 }, options));
+        super(internal.require("node_net_socket_options")(options));
         this._conn = null;
         this._phase = "idle";
         this._referenced = true;
