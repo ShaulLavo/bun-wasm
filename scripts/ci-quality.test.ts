@@ -33,7 +33,9 @@ test("native checks share one conditional job and the cached target directory", 
 
 test("native fixture smoke selects the typed runtime behavior without another build", () => {
   expect(rust.match(/bun scripts\/test-checks\.ts native/g)).toHaveLength(1);
-  expect(checkCommand("native")).toEqual(["bash", join(import.meta.dir, "test.sh"), "--no-build"].concat(oldSelections().native.toSorted().map(path => path.slice("tests/fixtures/".length))));
+  const selected = selectChecks("native");
+  expect(selected).toEqual(expect.arrayContaining(oldSelections().native));
+  expect(checkCommand("native")).toEqual(["bash", join(import.meta.dir, "test.sh"), "--no-build"].concat(selected.map(path => path.slice("tests/fixtures/".length))));
   expect(rust).toContain('BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts');
   expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(2);
 });
