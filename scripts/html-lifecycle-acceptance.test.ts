@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { acceptanceCommands, admit, hash, trackedNativeInputs, parseQualification, upstreamPassed, upstreamTest, type Engine, type Qualification } from "./html-lifecycle-acceptance";
 
 function git(root: string, args: string[]) {
@@ -237,4 +237,27 @@ test("matching payload does not excuse a wrong guest build sidecar", () => {
     writeFileSync(join(dirname(state.receipt), "guest.build.json"), "wrong sidecar");
     expect(() => admitCurrent(state)).toThrow("File identity mismatch");
   });
+});
+
+function selectedTestPaths(script: string) {
+  const root = resolve(import.meta.dir, "..");
+  const source = readFileSync(join(root, script), "utf8");
+  return Array.from(source.matchAll(/^[ \t]*bun test (.+)$/gm)).flatMap(command => {
+    const directory = Array.from(source.slice(0, command.index).matchAll(/^[ \t]*cd "\$root([^"]*)"$/gm)).at(-1)?.[1] ?? "";
+    const cwd = resolve(root, `.${directory}`);
+    return command[1].split(/\s+/).map(selector => {
+      if (!/^(?:"\$root\/scripts\/[^"]+"|\.\.\/scripts\/\S+)$/.test(selector)) throw new Error(`Unsupported literal test selector: ${selector}`);
+      return realpathSync(resolve(cwd, selector.replaceAll('"', "").replace("$root", root)));
+    });
+  });
+}
+
+test("HTML lifecycle acceptance has one blocking owner in the web-host selectors", () => {
+  const target = realpathSync(import.meta.filename);
+  const runtime = selectedTestPaths("scripts/check-runtime.sh");
+  const web = selectedTestPaths("scripts/test-web-host.sh");
+  expect(runtime.length).toBeGreaterThan(0);
+  expect(web.length).toBeGreaterThan(0);
+  expect(runtime.filter(path => path === target)).toEqual([]);
+  expect(web.filter(path => path === target)).toEqual([target]);
 });
