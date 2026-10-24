@@ -36,6 +36,12 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bun scripts/ci-changes.ts "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
+      - name: Feature PRs preserve current package and workspace versions
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'release') && !contains(github.event.pull_request.labels.*.name, 'consumer-pin')
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: bun scripts/feature-versions.ts "$BASE" "$HEAD"
       - uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
@@ -60,7 +66,7 @@ jobs:
       - name: Test CMake cache toolchain preflight
         env:
           TMPDIR: ${{ runner.temp }}
-        run: bun test scripts/cmake-cache.test.ts
+        run: bun scripts/test-checks.ts cmake
 
   rust:
     name: Rust workspace tests (QuickJS host)
@@ -210,7 +216,7 @@ jobs:
           cargo build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli
           mkdir -p dist
           cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm" dist/
-          bash scripts/test.sh --no-build node-misc runtime-ts-url-decoder source-cache runtime-ts-small runtime-ts-sqlite sqlite-basic sqlite-params sqlite-errors sqlite-file cookie-api data-formats yaml-boxed-coercion engine-regexp-json-intl console-format node-console node-console-writable node-console-colors stack-overflow-console runtime-ts-console
+          bun scripts/test-checks.ts native
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts
 
       - name: Configure private JSC build paths
@@ -333,7 +339,7 @@ jobs:
         env:
           TMPDIR: ${{ runner.temp }}
       - name: Test vectored reads and browser dependency resolution
-        run: bun test scripts/node-fs-readv.test.ts scripts/node-fs-runtime-proc.test.ts scripts/browser-build.test.ts
+        run: bun scripts/test-checks.ts package-extra
 
   web:
     name: Web host
