@@ -59,8 +59,8 @@ for (const { suite, owner } of [
     ];
     const owners = routes.flatMap(({ job, cwd, source }) => {
       const commands = Array.from(source.matchAll(/(?:^|\n)[ \t]*bun test\b([^\n]*)/g), match => match[1]!);
-      const arguments_ = commands.flatMap(command => command.trim().replaceAll('"', "").split(/\s+/));
-      expect(arguments_.every(argument => /\.test\.[cm]?[jt]sx?$/.test(argument))).toBe(true);
+      const selectors = commands.flatMap(command => command.trim().replaceAll('"', "").split(/\s+/));
+      expect(selectors.every(argument => /\.test\.[cm]?[jt]sx?$/.test(argument))).toBe(true);
       return commands.filter(command => command.trim().replaceAll('"', "").split(/\s+/).some(argument =>
         new Bun.Glob(resolve(cwd, argument.replaceAll('"', "").replaceAll("$root", root))).match(resolve(root, suite)),
       )).map(() => job);
