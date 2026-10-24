@@ -22,19 +22,24 @@ declare namespace BunWasm.Events {
     prependOnceListener(type: Name, listener: Listener): this;
     removeListener(type: Name, listener: Listener): this;
     off(type: Name, listener: Listener): this;
-    removeAllListeners(type?: Name): this;
+    removeAllListeners(...args: [] | [Name]): this;
     listeners(type: Name): Listener[];
     rawListeners(type: Name): Listener[];
     listenerCount(type: Name, listener?: Listener | null): number;
     eventNames(): Name[];
   }
-  interface Source extends Partial<Pick<Emitter, "on" | "once" | "removeListener" | "listeners" | "getMaxListeners" | "setMaxListeners" | "listenerCount">> {
-    addEventListener?(name: Name, listener: Listener, options: { once?: boolean }): void;
-    removeEventListener?(name: Name, listener: Listener, options: { once?: boolean }): void;
+  type Prototype = Omit<Emitter, "_events"> & { _events?: Table };
+  interface InitialState { _events?: Table; _eventsCount?: number; _maxListeners?: number }
+  type EmitterMethods = Pick<Emitter, "on" | "once" | "removeListener">;
+  interface TargetMethods {
+    addEventListener(name: Name, listener: Listener, options: { once?: boolean; capture?: boolean }): void;
+    removeEventListener(name: Name, listener: Listener, options: { once?: boolean; capture?: boolean }): void;
   }
+  type Source = Partial<Pick<Emitter, "listeners" | "getMaxListeners" | "setMaxListeners" | "listenerCount">>
+    & (EmitterMethods | { on?: undefined; once?: undefined; removeListener?: undefined })
+    & (TargetMethods | { addEventListener?: undefined; removeEventListener?: undefined });
   interface OnceState {
     fired: boolean;
-    wrapFn: Listener | undefined;
     target: Emitter;
     type: Name;
     listener: Listener;
@@ -60,9 +65,9 @@ declare namespace BunWasm.Events {
   }
   interface Constructor {
     new(opts?: Options): Emitter;
-    (this: Emitter, opts?: Options): void;
-    prototype: Emitter;
-    init(this: Emitter, opts?: Options): void;
+    (this: InitialState, opts?: Options): void;
+    prototype: Prototype;
+    init(this: InitialState, opts?: Options): void;
     EventEmitter: Constructor;
     usingDomains: boolean;
     captureRejectionSymbol: symbol;

@@ -116,7 +116,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`vendor/bun/src/runtime/node/path.rs`](#node-path) | Port | Adapt the public path argument traversal and validation order to the JavaScript boundary. |
 | [`crates/bunwasm-runtime/src/js/path.ts`](#node-path) and `src/node_path.rs` | Host feature | Original adapters for JavaScript validation, guest cwd, and lossless UTF-16 transport. |
 | [`crates/bunwasm-runtime/src/js/buffer.js`](#node-buffer-fragments) | Port | Adapt Node Buffer construction and concatenation routines over typed arrays. |
-| [`crates/bunwasm-runtime/src/js/events.ts`](#node-event-emitter) | Port | Adapt Node listener bookkeeping without native async hooks. |
+| [`crates/bunwasm-runtime/src/js/events.ts`](#node-event-emitter) | Port | Adapt Node listener bookkeeping without native async hooks; retain one audited erased constructor bridge. |
 | [`events-types.d.ts`](#node-event-emitter) | Host feature | Original erased contracts for the existing emitter and its internal dependencies. |
 | [`event_emitter_async_resource.ts`](#node-event-emitter) | Port | Adapt Bun's async emitter to the guest AsyncResource context bridge. |
 | [`crates/bunwasm-runtime/src/js/events.ts`, listener publication](#node-event-emitter) | Host feature | Original mutation hook publishes signal dispositions before user listener-removal callbacks. |
@@ -1212,11 +1212,30 @@ Retain recognizable Buffer constructor dispatch, `fromObject` array-like handlin
 
 Retain listener storage conventions, once-wrapper state, listener removal, and remove-all behavior. Replace primordials, internal validators, and native async-resource or EventTarget integration with local validation and runtime scheduling. The module also supplies local promise and async-iterator helpers. These changes provide Node-style listener semantics on the guest event loop without native async hooks.
 
-The TypeScript conversion adds erased listener storage, once-state, iterator and
-internal dependency contracts. It retains the exact JavaScript AST, including its
-strict directive and lazy async-resource export. `events-types.d.ts` is an original
-type adapter, not upstream source. No listener, native-context or async-resource
-behavior changes.
+The TypeScript conversion separates initialized instance storage from optional prototype
+storage and groups event-source registration with its removal methods. `events-types.d.ts`
+is an original type adapter, not upstream source. The sole assertion is the audited erased
+constructor bridge at the factory return. TypeScript cannot give the privately declared
+ordinary function a construct signature in this lexical scope, or infer its
+`Object.defineProperty` statics. This is not an assertion-free conversion. The discovered
+constructor fixture and `scripts/runtime-events.test.ts` check call, new, subclass,
+prototype storage, descriptors, static accessors and the lazy async-resource export.
+
+The correction includes these executable changes, so the whole runtime AST is not identical:
+
+- Bind the prototype alias before its initial count assignment.
+- Assign the listener-array alias only in the branch that proves its shape.
+- Close the bound once callback over its wrapper instead of an initially absent state field.
+- Pass error-monitor arguments as a contextually typed tuple to the same `emit.apply` call.
+- Capture remove-all arguments as an arity-discriminated rest tuple. Restore the function's
+  existing length descriptor to 1. Omitted and explicit undefined arguments retain distinct behavior.
+- Consume one private queue item with splice and iteration instead of asserted shift results.
+- Annotate local Symbol aliases before reading the optional disposal symbol.
+
+The AST regression check pins these audited changes and separately verifies the unchanged
+59 top-level statements against the approved JavaScript, including strictness and the lazy
+async-resource export. Listener identity, ordering, receivers, error propagation, publication
+rollback and native async-context contracts remain covered by native and three-engine fixtures.
 
 The listener-publication hook is a separate **Host feature**, an **original adapter**, not copied
 from Node or Bun. It runs immediately after listener storage mutates and before user removal
