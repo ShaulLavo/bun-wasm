@@ -176,18 +176,19 @@
     return target;
   }
 
+  function onceWrapper(this: BunWasm.Events.OnceState) {
+    if (this.fired) return undefined;
+    this.target.removeListener(this.type, this.wrapFn as Listener);
+    this.fired = true;
+    return this.listener.apply(this.target, arguments);
+  }
+
   function onceWrap(target: Emitter, type: Name, listener: Listener) {
-    const state: BunWasm.Events.OnceState = { fired: false, target, type, listener };
+    const state: BunWasm.Events.OnceState = { fired: false, wrapFn: undefined, target, type, listener };
     const wrapped: Listener = onceWrapper.bind(state);
     wrapped.listener = listener;
+    state.wrapFn = wrapped;
     return wrapped;
-
-    function onceWrapper(this: BunWasm.Events.OnceState) {
-      if (this.fired) return undefined;
-      this.target.removeListener(this.type, wrapped);
-      this.fired = true;
-      return this.listener.apply(this.target, arguments);
-    }
   }
 
   function throwUnhandledError(target: Emitter, args: unknown[]) {
@@ -523,23 +524,16 @@
     let finished = false;
     const removers: (() => void)[] = [];
 
-    function shift<T>(values: T[]): T {
-      const value = values.shift();
-      if (value === undefined) throw new TypeError("Event iterator queue returned no item");
-      return value;
-    }
-
     function settle(result: Item) {
-      if (waiters.length > 0) {
-        shift(waiters).resolve(result);
-      } else queue.push(result);
+      if (waiters.length > 0) (waiters.shift() as BunWasm.Events.Waiter).resolve(result);
+      else queue.push(result);
     }
     function onEvent() {
       settle({ value: Array.prototype.slice.call(arguments), done: false });
     }
     function onError(err: unknown) {
       if (waiters.length > 0) {
-        shift(waiters).reject(err);
+        (waiters.shift() as BunWasm.Events.Waiter).reject(err);
         finish();
         return;
       }
@@ -558,7 +552,7 @@
     for (const name of close) removers.push(listen(emitter, name, () => settleClose(), {}));
     function settleClose() {
       queue.push({ value: undefined, done: true, close: true });
-      if (waiters.length > 0) shift(waiters).resolve(shift(queue));
+      if (waiters.length > 0) (waiters.shift() as BunWasm.Events.Waiter).resolve(queue.shift() as Item);
       finish();
     }
     if (signal) {
@@ -570,7 +564,7 @@
     const iterator: BunWasm.Events.Iterator = {
       next() {
         if (queue.length > 0) {
-          const item = shift(queue);
+          const item = queue.shift() as Item;
           return Promise.resolve<Item>(item.close ? { value: undefined, done: true } : item);
         }
         if (error) {

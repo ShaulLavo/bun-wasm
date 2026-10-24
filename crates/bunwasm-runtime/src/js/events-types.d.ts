@@ -45,6 +45,7 @@ declare namespace BunWasm.Events {
     & (TargetMethods | { addEventListener?: undefined; removeEventListener?: undefined });
   interface OnceState {
     fired: boolean;
+    wrapFn: Listener | undefined;
     target: Emitter;
     type: Name;
     listener: Listener;

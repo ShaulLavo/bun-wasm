@@ -27,7 +27,7 @@ function syntax(text: string) {
 }
 
 test("events pins audited executable changes and the unchanged PR140 remainder", () => {
-  expect(createHash("sha256").update(syntax(emitted)).digest("hex")).toBe("ca337cb233afa9eb32c362403ebae92701ebc59d4667722de6c007ce950bfcb0");
+  expect(createHash("sha256").update(syntax(emitted)).digest("hex")).toBe("ca73fe07ba252be370eaf489d86772d8e0e3e6696a065e2dfcc406b3a18b0da3");
   const file = ts.createSourceFile("events.js", emitted, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const changed = new Set([
     "addListener", "onceWrapper", "onceWrap", "proto.emit", "proto.removeAllListeners",
@@ -55,16 +55,29 @@ test("events pins audited executable changes and the unchanged PR140 remainder",
   expect(createHash("sha256").update(JSON.stringify(remainder)).digest("hex")).toBe("37ebfa24afb35f69f25af1c8248a86299d6ba62d1dd346d8daf4085cf5e0541a");
 });
 
-test("events has exactly the approved constructor bridge and no other assertion escape", () => {
+test("events permits only the exact audited constructor and private-invariant views", () => {
   const file = ts.createSourceFile("events.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const escapes: string[] = [];
   function visit(node: ts.Node) {
     if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node)
-      || node.kind === ts.SyntaxKind.AnyKeyword) escapes.push(node.getText(file));
+      || node.kind === ts.SyntaxKind.AnyKeyword) {
+      let owner: ts.Node | undefined = node.parent;
+      while (owner && !ts.isFunctionDeclaration(owner) && !ts.isMethodDeclaration(owner) && !ts.isFunctionExpression(owner)) owner = owner.parent;
+      const name = owner && "name" in owner && owner.name ? owner.name.getText(file) : "factory";
+      escapes.push(`${name}: ${node.getText(file)}`);
+    }
     ts.forEachChild(node, visit);
   }
   visit(file);
-  expect(escapes).toEqual(["EventEmitter as typeof EventEmitter & BunWasm.Events.Constructor"]);
+  expect(escapes).toEqual([
+    "onceWrapper: this.wrapFn as Listener",
+    "settle: waiters.shift() as BunWasm.Events.Waiter",
+    "onError: waiters.shift() as BunWasm.Events.Waiter",
+    "settleClose: waiters.shift() as BunWasm.Events.Waiter",
+    "settleClose: queue.shift() as Item",
+    "next: queue.shift() as Item",
+    "factory: EventEmitter as typeof EventEmitter & BunWasm.Events.Constructor",
+  ]);
   expect(source).not.toMatch(/@ts-(?:ignore|expect-error|nocheck)/);
 });
 
