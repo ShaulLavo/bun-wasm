@@ -47,6 +47,7 @@
         "src/worker.ts",
         "src/net/helper.ts",
         "tests/*.test.{ts,js}",
+        "guest-tests/*.test.ts",
         "tests/browser-*.{ts,mjs}",
         "scripts/*.{ts,mjs}",
         "src/fs-worker.ts",
@@ -71,7 +72,8 @@
       "project": [
         "src/**/*.{ts,js}",
         "scripts/**/*.{ts,mjs}",
-        "tests/**/*.{ts,mjs,js}"
+        "tests/**/*.{ts,mjs,js}",
+        "guest-tests/**/*.ts"
       ],
       "ignoreDependencies": [
         "benchmark"

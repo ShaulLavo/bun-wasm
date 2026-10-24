@@ -5,7 +5,8 @@
     "scripts",
     "build.ts",
     "serve.ts",
-    "tests/**/*.ts"
+    "tests/**/*.ts",
+    "guest-tests/**/*.ts"
   ],
   "compilerOptions": {
     "allowJs": true,
