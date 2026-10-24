@@ -96,6 +96,48 @@ test("Server snapshots public options and normalizes constructor defaults", () =
   expect(new Server({ keepAliveInitialDelay: NaN }).keepAliveInitialDelay).toBe(0);
 });
 
+test("Server clamps negative keepalive delays before int32 conversion", () => {
+  const { Server } = fixture();
+  const cases: [number, number][] = [
+    [-4294967295, 0],
+    [-4294967297, 0], [-4294967296, 0], [-4294967294, 0],
+    [-2147483649, 0], [-2147483648, 0], [-2147483647, 0],
+    [-1, 0], [-0.5, 0], [-0, 0], [0, 0], [0.5, 0], [1, 1],
+    [2147483647, 2147483647], [2147483648, 0], [2147483649, 0],
+    [4294967295, 0], [4294967296, 0], [4294967297, 1],
+    [-Infinity, 0], [Infinity, 0], [NaN, 0],
+  ];
+  for (const [keepAliveInitialDelay, expected] of cases) {
+    const server = new Server({ keepAliveInitialDelay });
+    expect(server.keepAliveInitialDelay).toBe(expected);
+    expect(server._options.keepAliveInitialDelay).toBe(expected);
+  }
+});
+
+test("Server snapshots getters before defaults and rejects delays without coercion", () => {
+  const { Server, defaultReads } = fixture();
+  const reads: string[] = [];
+  const uncoerced = { valueOf() { throw new Error("Delay must not be coerced"); } };
+  function options(delay: unknown) {
+    return {
+      get keepAliveInitialDelay() { reads.push("delay"); return delay; },
+      get highWaterMark() { reads.push(`mark:${defaultReads()}`); return undefined; },
+      get blockList() { reads.push("list"); return {}; },
+    };
+  }
+  expect(() => new Server(options(uncoerced))).toThrow(expect.objectContaining({
+    code: "ERR_INVALID_ARG_TYPE", message: expect.stringContaining("options.keepAliveInitialDelay"),
+  }));
+  expect(reads).toEqual(["delay", "mark:0", "list"]);
+  expect(defaultReads()).toBe(1);
+  reads.length = 0;
+  expect(() => new Server(options(-4294967295))).toThrow(expect.objectContaining({
+    code: "ERR_INVALID_ARG_TYPE", message: expect.stringContaining("options.blockList"),
+  }));
+  expect(reads).toEqual(["delay", "mark:1", "list"]);
+  expect(defaultReads()).toBe(2);
+});
+
 test("Server rejects primitive options and nonnumeric keepalive delays", () => {
   const { Server } = fixture();
   for (const value of [false, true, 0, 1, "", "text", 1n, Symbol("options")]) {

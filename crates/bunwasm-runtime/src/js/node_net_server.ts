@@ -20,7 +20,7 @@
     return Object.assign(copy, {
       allowHalfOpen: copy.allowHalfOpen === undefined ? false : copy.allowHalfOpen,
       pauseOnConnect: Boolean(copy.pauseOnConnect), keepAlive: Boolean(copy.keepAlive),
-      keepAliveInitialDelay: typeof delay === "number" ? Math.max(0, delay | 0) : 0,
+      keepAliveInitialDelay: typeof delay === "number" ? Math.max(0, (delay < 0 ? 0 : delay) | 0) : 0,
       highWaterMark, noDelay: Boolean(copy.noDelay),
     });
   }
