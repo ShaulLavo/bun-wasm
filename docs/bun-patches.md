@@ -129,6 +129,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/string_decoder.ts`](#node-string-decoder) | Port | Translate Node's chunk-decoder state machine to TypeScript. |
 | [`crates/bunwasm-runtime/src/js/bun_test.js`, diff formatting](#bun-test-diff-formatting) | Port | Translate Bun's colorless diff rendering around a local line differ. |
 | [`crates/bunwasm-runtime/src/js/node_url.ts`, URL natives](#node-url-helpers) | Port / Host feature | Adapt Node URL helpers and reuse Rust URL/IDNA hostname decoding. |
+| [`src/js/url_search_params.ts`, URL input conversion](#urlsearchparams-input-conversion) | Host feature | Original scalar-string, record and sequence adapters for the shared URLSearchParams class. |
 | [`crates/bunwasm-runtime/src/js/builtins.js`, `crates/bunwasm-runtime/src/js/net.js`, HTTP tables](#http-status-tables) | Port | Retain HTTP status data separately from the original networking adapters. |
 | [`crates/bunwasm-runtime/src/js/{builtins,bootstrap}.js`, `web/src/engine-host.js`, caller origin](#caller-source-origin) | Host feature | Read caller origins through the existing engine stack parser. Original adapter. |
 | [`crates/bunwasm-runtime/src/js/temporal.js`](#temporal) | Host feature | Package the unmodified Temporal polyfill for engines without Temporal. |
@@ -1308,6 +1309,14 @@ Translate the buffered/missing-byte state machine into TypeScript using a four-b
 `crates/bunwasm-runtime/src/js/bun_test.js`, pretty-value and diff-formatting helpers. Class **Port**. Upstream `src/runtime/test_runner/pretty_format.rs` and `src/runtime/test_runner/diff/printDiff.rs` at the Bun pin.
 
 Translate the colorless formatting path, sorted keys, expected/received sections, context chunking, line prefixes, and agent-mode thresholds to JavaScript. Replace Bun's tuned Myers line differ with a local common-prefix/suffix trim and LCS implementation for small diffs, with a bounded large-diff path. This reproduces useful test diagnostics without the native test runner. Discovery, scopes, matchers, mock tracking, scheduling, and snapshot storage in the rest of the file are local implementations that follow Bun's observable contract.
+
+### URLSearchParams input conversion
+
+`crates/bunwasm-runtime/src/js/url_search_params.ts` is an original **Host feature** adapter. No upstream implementation is copied. Its behavior is measured against installed Bun 1.4.4, revision `38afee6c8`, rather than inferred from the older 1.4.2 review oracle. The shared `web.js` URLSearchParams class calls it at input boundaries. Lone UTF-16 surrogates become U+FFFD before storage and form encoding. Symbol values throw TypeError. Record keys collapse after scalar-string conversion, while sequence entries retain repeated keys.
+
+The sequence adapter reads the iterator method once, converts values as the iterator yields them, and lets Array.from preserve iterator closing and user-thrown error identity. Pair length validation follows sequence conversion. Primitive pairs report Bun's ERR_INVALID_ARG_TYPE; malformed object pairs report its TypeError. The focused `runtime-urlsearchparams-edges` fixture covers these cases, coercion order, iterator closing and the legacy format caller without changing its query-selection policy.
+
+The adjacent `node_url.ts` file-URL validator calls the intrinsic URL href getter to reject objects that inherit URL.prototype without URL state. This is an original brand-check adapter. It does not call an input's own getters during validation or replace errors thrown later by a real URL's getters. The upstream paths and Bun pin for the existing port remain listed in [Node URL helpers](#node-url-helpers).
 
 ### Node URL helpers
 

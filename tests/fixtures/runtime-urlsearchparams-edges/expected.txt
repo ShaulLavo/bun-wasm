@@ -1,0 +1,38 @@
+record high [[["�","�"]],"%EF%BF%BD=%EF%BF%BD"]
+query high "?a=%EF%BF%BD"
+record low [[["�","�"]],"%EF%BF%BD=%EF%BF%BD"]
+query low "?a=%EF%BF%BD"
+record mixed [[["�A�😀","�A�😀"]],"%EF%BF%BDA%EF%BF%BD%F0%9F%98%80=%EF%BF%BDA%EF%BF%BD%F0%9F%98%80"]
+query mixed "?a=%EF%BF%BDA%EF%BF%BD%F0%9F%98%80"
+record pair [[["😀","😀"]],"%F0%9F%98%80=%F0%9F%98%80"]
+query pair "?a=%F0%9F%98%80"
+record converted key collision [["�","last"]]
+sequence repeated keys [["�","first"],["�","last"]]
+record symbol value throws TypeError undefined Cannot convert a Symbol value to a string
+sequence symbol key throws TypeError undefined Cannot convert a Symbol value to a string
+query symbol value throws TypeError undefined Cannot convert a Symbol value to a string
+query flat array throws TypeError ERR_INVALID_ARG_TYPE Value is not a sequence
+flat array throws TypeError ERR_INVALID_ARG_TYPE Value is not a sequence
+string pair throws TypeError ERR_INVALID_ARG_TYPE Value is not a sequence
+short pair throws TypeError undefined Type error
+long pair throws TypeError undefined Type error
+URL prototype argument throws TypeError ERR_INVALID_ARG_TYPE The "url" argument must be of type string. Received an instance of URL
+record getter order ["a=a&b=b",["get a","a string","get b","b string"]]
+iterator getter once ["a=1",["get iterator","call iterator"]]
+sequence conversion order ["key=value",["outer iterator","outer next 0","pair iterator","pair next 0","key string","pair next 1","value string","pair next 2","outer next 1"]]
+conversion throw identity [true,["outer iterator","outer next 0","pair iterator","pair next 0","key string","pair next 1","value string","pair close","outer close"]]
+getter throw identity true
+bad pair consumes sequence first ["Type error",["outer iterator","outer next 0","pair iterator","pair next 0","a string","pair next 1","b string","pair next 2","c string","pair next 3","outer next 1"]]
+method append coercion [null,"key=old&key=other&key=value",["key string","value string"]]
+method append symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method set coercion [null,"key=value",["key string","value string"]]
+method set symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method get coercion ["old","key=old&key=other",["key string"]]
+method get symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method getAll coercion [["old","other"],"key=old&key=other",["key string"]]
+method getAll symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method has coercion [false,"key=old&key=other",["key string","value string"]]
+method has symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method delete coercion [null,"key=old&key=other",["key string","value string"]]
+method delete symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method scalar replacement [["�",true],[["�","😀"]],"%EF%BF%BD=%F0%9F%98%80"]
