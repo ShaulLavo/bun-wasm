@@ -64,6 +64,12 @@ including original finish-path exceptions. Native and absent disposal-symbol con
 the one actual key and reject missing keys. Listener identity, ordering, receivers, publication
 rollback and native async-context contracts retain native and three-engine coverage.
 
+The erased listener-publication hook uses the same optional function-property declaration as
+the typed process adapter: `(target: object, name?: string | symbol) => void`. This retains
+assignment, optional absence and the exact call domain when ambient declarations merge.
+Compile controls retain the former method/property TS2300 reproduction and cover both
+standalone declaration projects and all six inspector declaration orders.
+
 The listener-publication hook is a separate **Host feature**, an **original adapter**, not copied
 from Node or Bun. It runs immediately after listener storage mutates and before user removal
 observers, publishing this host's signal disposition synchronously. It covers prototype calls,

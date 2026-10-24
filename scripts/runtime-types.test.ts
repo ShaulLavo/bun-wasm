@@ -110,3 +110,78 @@ for (const declarations of [
     expect(result.exitCode).toBe(0);
   });
 }
+
+function checkListenerHook(declarations: readonly string[], source: string) {
+  const hookProbe = join(scratch, "listener-hook-probe.ts");
+  const hookConfig = join(scratch, "listener-hook-tsconfig.json");
+  writeFileSync(hookProbe, source);
+  writeFileSync(hookConfig, JSON.stringify({
+    extends: join(root, "crates/bunwasm-runtime/tsconfig.json"),
+    include: [],
+    files: declarations.map(name => resolve(root, "crates/bunwasm-runtime/src/js", name)).concat([hookProbe]),
+  }));
+  return Bun.spawnSync([join(root, "web/node_modules/.bin/tsc"), "-p", hookConfig], { stdout: "pipe", stderr: "pipe" });
+}
+
+test("reproduces TS2300 for the former listener hook method/property union", async () => {
+  const legacy = join(scratch, "legacy-events-types.d.ts");
+  const current = await Bun.file(join(root, "crates/bunwasm-runtime/src/js/events-types.d.ts")).text();
+  const property = "listenerChanged?: (target: object, name?: string | symbol) => void;";
+  expect(current).toContain(property);
+  writeFileSync(legacy, current.replace(property, "listenerChanged?(target: object, type?: Events.Name): void;"));
+  const result = checkListenerHook(["runtime.d.ts", legacy], "");
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stdout.toString()).toContain("error TS2300: Duplicate identifier 'listenerChanged'");
+});
+
+for (const declarations of [
+  ["runtime.d.ts"],
+  ["runtime.d.ts", "events-types.d.ts"],
+  ["events-types.d.ts", "runtime.d.ts"],
+  ["runtime.d.ts", "console_types.d.ts", "events-types.d.ts"],
+  ["runtime.d.ts", "events-types.d.ts", "console_types.d.ts"],
+  ["console_types.d.ts", "runtime.d.ts", "events-types.d.ts"],
+  ["console_types.d.ts", "events-types.d.ts", "runtime.d.ts"],
+  ["events-types.d.ts", "runtime.d.ts", "console_types.d.ts"],
+  ["events-types.d.ts", "console_types.d.ts", "runtime.d.ts"],
+]) {
+  test(`accepts optional listener hook with ${declarations.join(" before ")}`, () => {
+    const result = checkListenerHook(declarations, `
+      type Hook = Pick<BunWasm.Internal, "listenerChanged">;
+      const absent: Hook = {};
+      const unset: Hook = { listenerChanged: undefined };
+      const installed: Hook = { listenerChanged(target, name) {
+        const objectTarget: object = target;
+        const eventName: string | symbol | undefined = name;
+      } };
+      declare const internal: BunWasm.Internal;
+      internal.listenerChanged = installed.listenerChanged;
+      const callback: ((target: object, name?: string | symbol) => void) | undefined = internal.listenerChanged;
+      internal.listenerChanged?.({});
+      internal.listenerChanged?.({}, "event");
+      internal.listenerChanged?.({}, Symbol("event"));
+      internal.listenerChanged?.({}, undefined);
+      internal.listenerChanged = undefined;
+      delete internal.listenerChanged;
+      absent.listenerChanged?.({});
+      unset.listenerChanged?.({});
+    `);
+    expect(result.stdout.toString()).toBe("");
+    expect(result.exitCode).toBe(0);
+  });
+
+  test(`rejects changes to listener hook domain with ${declarations.join(" before ")}`, () => {
+    const invalidHooks = [
+      "internal.listenerChanged?.(1);",
+      "internal.listenerChanged?.({}, 1);",
+      "internal.listenerChanged = (target: object, name: string) => {};",
+      "internal.listenerChanged = (target: { required: true }, name?: string | symbol) => {};",
+      "internal.listenerChanged({});",
+    ];
+    for (const source of invalidHooks) {
+      const result = checkListenerHook(declarations, "declare const internal: BunWasm.Internal;\n" + source);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout.toString()).toMatch(/error TS(?:2322|2345|2722)/);
+    }
+  });
+}
