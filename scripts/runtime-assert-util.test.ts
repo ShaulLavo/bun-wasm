@@ -17,6 +17,25 @@ const originals = {
   util: "72229e61f5716247725a2c3caf6c861a28e1f659fa3ed509f21e41113e428bcf",
 };
 
+function restoreAssertionDetails(text: string): string {
+  const source = ts.createSourceFile("assert.js", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const helpers: ts.FunctionDeclaration[] = [];
+  function visit(node: ts.Node): void {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "setDetails") helpers.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  if (helpers.length !== 1 || !helpers[0]) throw new Error("Expected exactly one detail helper");
+  const helper = helpers[0];
+  text = text.slice(0, helper.getStart(source)) + text.slice(helper.end);
+  const details = /if \(options\.details\) setDetails\(this, options\.details\);\s*else \{\s*this\.actual = actual;\s*this\.expected = expected;\s*this\.operator = operator;\s*\}/g;
+  if (Array.from(text.matchAll(details)).length !== 1) throw new Error("Expected exactly one detail branch");
+  text = text.replace(details, "this.actual = actual; this.expected = expected; this.operator = operator;");
+  const key = "const known = kReadableOperator[String(operator)];";
+  if (text.split(key).length !== 2) throw new Error("Expected optional operator key bridge");
+  return text.replace(key, "const known = kReadableOperator[operator];");
+}
+
 function checkPositions(source: string, emitted: ts.SourceFile): number {
   const lines = source.split("\n");
   expect(emitted.text.split("\n").length).toBe(lines.length);
@@ -42,13 +61,13 @@ function checkPositions(source: string, emitted: ts.SourceFile): number {
 }
 
 for (const [name, hash] of Object.entries(originals)) {
-  test(`${name} preserves its original AST, strict directive, and runtime token positions`, () => {
+  test(`${name} preserves its original AST, strict directive, and runtime token positions outside approved data changes`, () => {
     const path = join(runtime, `${name}.ts`);
     const output = join(scratch, `${name}.js`);
     const result = Bun.spawnSync(["node", join(root, "scripts/transpile-runtime.ts"), path, output]);
     expect(result.exitCode).toBe(0);
     const emitted = ts.createSourceFile(`${name}.js`, readFileSync(output, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-    expect(astHash(name === "util" ? restoreDestinations(emitted.text) : emitted.text)).toBe(hash);
+    expect(astHash(name === "util" ? restoreDestinations(emitted.text) : restoreAssertionDetails(emitted.text))).toBe(hash);
     expect(checkPositions(readFileSync(path, "utf8"), emitted)).toBeGreaterThan(1000);
   });
 }
@@ -86,6 +105,7 @@ for (const item of result.tokens ?? []) {
   if (typeof item.rawName === "string") item.rawName.toUpperCase();
   if (typeof item.value === "string") item.value.toUpperCase();
 }
+const detailOptions: BunWasm.AssertionOptions = { message: "grouped", details: Object.freeze([{ actual: 0, expected: 1, operator: "calls", stack: new Error() }]) };
 const proc: BunWasm.RuntimeProcess = { cwd: () => "/", argv: ["bun"], nextTick: (fn, ...args) => { fn(...args); } };
 `);
   expect(result.stdout.toString()).toBe("");
@@ -126,6 +146,11 @@ for (const declarations of [
 }
 
 const invalid = [
+  'const options: BunWasm.AssertionOptions = { operator: 1 };',
+  'const options: BunWasm.AssertionOptions = { details: [1] };',
+  'const options: BunWasm.AssertionOptions = { details: {} };',
+  'declare const detail: BunWasm.AssertionDetail; detail.actual.toFixed();',
+
   'internal.require("inspect").nodeInspect({}, { depth: "deep" });',
   'internal.require("inspect").nodeFormatWithOptions({ getters: "all" }, "%s");',
   'internal.require("util").bunDeepEquals(1, 2, "strict");',
