@@ -221,10 +221,10 @@
     return `${base}\n\n${lines.join("\n")}\n`;
   }
 
-  function otherMessage(actual: unknown, expected: unknown, operator: string) {
+  function otherMessage(actual: unknown, expected: unknown, operator: string | undefined) {
     let res = inspectValue(actual);
     let other = inspectValue(expected);
-    const known = kReadableOperator[operator];
+    const known = kReadableOperator[String(operator)];
     if (operator === "notDeepEqual" && res === other) return truncate(`${known}\n\n${res}`, 1024);
     res = truncate(res, 512);
     other = truncate(other, 512);
@@ -234,7 +234,7 @@
     return `${res} ${operator} ${other}`;
   }
 
-  function generateMessage(actual: unknown, expected: unknown, operator: string) {
+  function generateMessage(actual: unknown, expected: unknown, operator: string | undefined) {
     if (operator === "deepStrictEqual" || operator === "strictEqual" || operator === "partialDeepStrictEqual") return createErrDiff(actual, expected, operator);
     if (operator === "notDeepStrictEqual" || operator === "notStrictEqual") return notEqualMessage(actual, operator);
     return otherMessage(actual, expected, operator);
@@ -248,7 +248,8 @@
     declare generatedMessage: boolean;
     declare actual: unknown;
     declare expected: unknown;
-    declare operator: string;
+    declare operator?: string;
+    [key: string]: unknown;
     declare code: string;
     declare diff: string;
     constructor(options: BunWasm.AssertionOptions) {
@@ -266,9 +267,12 @@
       }
       super(text);
       this.generatedMessage = !message;
-      this.actual = actual;
-      this.expected = expected;
-      this.operator = operator;
+      if (options.details) setDetails(this, options.details);
+      else {
+        this.actual = actual;
+        this.expected = expected;
+        this.operator = operator;
+      }
       Object.defineProperty(this, "name", { value: "AssertionError", enumerable: false, writable: true, configurable: true });
       this.code = "ERR_ASSERTION";
       this.diff = "simple";
@@ -277,6 +281,17 @@
 
     toString() {
       return `${this.name} [${this.code}]: ${this.message}`;
+    }
+  }
+
+  function setDetails(error: AssertionError, details: readonly BunWasm.AssertionDetail[]) {
+    for (let index = 0; index < details.length; index++) {
+      const detail = details[index];
+      error["message " + index] = detail.message;
+      error["actual " + index] = detail.actual;
+      error["expected " + index] = detail.expected;
+      error["operator " + index] = detail.operator;
+      error["stack trace " + index] = detail.stack;
     }
   }
 
