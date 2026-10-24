@@ -1,7 +1,10 @@
 declare namespace BunWasm {
   interface UtilityError extends Error { code?: string; reason?: unknown }
+  interface AssertionDetail {
+    message?: unknown; actual?: unknown; expected?: unknown; operator?: unknown; stack?: unknown;
+  }
   interface AssertionOptions {
-    actual?: unknown; expected?: unknown; message?: unknown; operator: string; stackStartFn?: Function;
+    actual?: unknown; expected?: unknown; message?: unknown; operator?: string; stackStartFn?: Function; details?: readonly AssertionDetail[];
   }
   type AssertionDiff = [operation: "nop" | "insert" | "delete", line: string];
   interface UtilityModule {
