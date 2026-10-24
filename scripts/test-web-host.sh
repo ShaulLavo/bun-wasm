@@ -32,6 +32,7 @@ if [[ "$phase" != --unit ]]; then
   test -z "$listeners"
   browser_test bun test ../scripts/run-with-timeout-browser.test.ts
   browser_test bun run test:browser
+  browser_test env PREVIEW_LOADING_PORT="${PREVIEW_LOADING_PORT:-48960}" bun tests/browser-preview-loading.ts chromium webkit
   browser_test env SPLIT_SMOKE_PORT="${SPLIT_SMOKE_PORT:-4180}" bun tests/browser-splitting.mjs
   browser_test env PLAYWRIGHT="$root/web/node_modules/playwright/index.mjs" node ../scripts/test-native-stream-interop.mjs
   browser_test env FS_SMOKE_PORT="${FS_SMOKE_PORT:-4181}" bun tests/browser-filesystem.ts
