@@ -74,7 +74,7 @@ function verifyManifest(value: unknown): asserts value is SourceManifest {
   if (!Array.isArray(value.tools) || !value.tools.every(tool => record(tool) && typeof tool.name === "string" && typeof tool.path === "string" && tool.path.length > 0 && digest(tool.sha256, 64) && typeof tool.version === "string" && tool.version.length > 0)) throw new Error("Invalid guest source manifest tools");
   const tools = value.tools.map(tool => tool.name);
   if (new Set(tools).size !== tools.length || ["rustc", "cargo", "bun", "node", "rust-lld", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja"].some(name => !tools.includes(name))) throw new Error("Missing guest source manifest tool");
-  if (value.build !== "quickjs" && value.build !== "quickjs-minimal" && !tools.includes("wasm-opt")) throw new Error("Missing guest optimizer identity");
+  if (guestBuilds[value.build].optimizer === "required" && !tools.includes("wasm-opt")) throw new Error("Missing guest optimizer identity");
   if (!Array.isArray(value.omissions) || !value.omissions.length || !value.omissions.every(item => typeof item === "string" && item.length > 0)) throw new Error("Missing guest source manifest omissions");
 }
 

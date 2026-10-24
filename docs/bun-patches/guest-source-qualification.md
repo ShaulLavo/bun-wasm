@@ -7,8 +7,8 @@ patch records. This change neither edits nor copies Bun, Node or WebKit source.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| `scripts/guest-source-manifest.ts` | Original adapter | Inventory selected committed source, installed inputs and resolved tools; reject hidden drift and unsupported selections. |
-| `scripts/guest-build-receipt.ts` | Original adapter | Bind matching start/end inventories to the exact artifact hash and byte count. |
+| `scripts/guest-source-manifest.ts` | Original adapter | Inventory selected committed source, installed inputs and resolved tools; declare required, optional or unused optimizer use per build profile; reject hidden drift and unsupported selections. |
+| `scripts/guest-build-receipt.ts` | Original adapter | Bind matching start/end inventories to the exact artifact hash and byte count; require optimizer identity for the optimized browser, JSC and tools profiles. |
 | `scripts/build*.sh`, `.github/workflows/ci.yml` source-cache producer | Original adapters | Use the selected executable environment and temporary snapshot-file contract with the exact existing build tuples. |
 | `scripts/guest-acceptance.ts` | Original adapter | Validate source receipts and artifact/build labels before private publication snapshotting. |
 
@@ -27,3 +27,10 @@ retain the package CI owner's existing glob. `web/tests/shell-consumer-controls.
 retains the Web test-directory owner. Neither needs a duplicate feature manifest.
 See [guest build receipts](../guest-build-receipts.md) for the full contract and the
 separate unoptimized CI source-cache build profile.
+
+The source-cache profile copies Cargo output without optimization. It excludes
+`wasm-opt` from tool resolution and inventory rather than adding Binaryen to the
+native-only CI prerequisites. Full browser, JSC and tools profiles still require
+it; QuickJS profiles retain their optional optimizer behavior. The resolver and
+receipt validator use the same profile policy. Source selections, Cargo tuples
+and every other tool requirement stay unchanged.

@@ -40,7 +40,8 @@ The explicit groups cover these inputs:
   including SDK overlays. The top-level receipt hash must match this inventory.
   Its builder, patch, SDK version, and libc hashes must match the installed bytes.
 - `sdk`. SDK version and Clang resource files. SDK compiler, archiver, linker,
-  Rust compiler/Cargo, Bun, CMake, Ninja, and optimizer identities are recorded.
+  Rust compiler/Cargo, Bun, CMake, and Ninja identities are recorded. Optimizer
+  identity follows the selected profile as described below.
   Rust target-library bytes have their own `rust-target` group.
 - `jsc-prebuild`. JSC and tools builds also inventory the existing input stamp,
   compiler database, copied toolchain/shim inputs, and linked archives. The JSC
@@ -111,6 +112,14 @@ without adding `bun-transpiler`. Its receipt uses the same committed-source,
 selected-tool, symlink and start/end checks. CI selects the tool environment and
 passes a temporary snapshot file to `write`, just like the four shell entry points.
 The existing source/cache metadata and artifact upload remain unchanged.
+
+The profile table declares optimizer use. `browser`, `jsc`, and `tools` require
+`wasm-opt` resolution and receipt identity. Both QuickJS profiles keep their
+existing optional optimization and record the optimizer when available.
+`source-cache-browser` does not use or record `wasm-opt`, even if it is on PATH.
+Its native-only CI path therefore does not need Binaryen. The JSC-only Binaryen
+installation condition stays unchanged. All other tool identities and source
+checks remain required for the source-cache profile.
 
 This CI artifact is copied from Cargo without the browser entry point's optimizer.
 Its hash and byte count identify those actual bytes. They are not a measurement or

@@ -3,12 +3,12 @@ import { lstat, readdir, readFile, readlink, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const guestBuilds = {
-  browser: { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-transpiler", "bun-build"] },
-  "source-cache-browser": { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-build"] },
-  quickjs: { artifact: "bun.wasm", package: "bunwasm-cli", features: ["default"] },
-  "quickjs-minimal": { artifact: "bun.wasm", package: "bunwasm-cli", features: [] },
-  jsc: { artifact: "bun-jsc.wasm", package: "bunwasm-cli", features: ["engine-jsc", "bun-transpiler", "bun-build"] },
-  tools: { artifact: "bun-tools.wasm", package: "bunwasm-tools", features: ["default"] },
+  browser: { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-transpiler", "bun-build"], optimizer: "required" },
+  "source-cache-browser": { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-build"], optimizer: "unused" },
+  quickjs: { artifact: "bun.wasm", package: "bunwasm-cli", features: ["default"], optimizer: "optional" },
+  "quickjs-minimal": { artifact: "bun.wasm", package: "bunwasm-cli", features: [], optimizer: "optional" },
+  jsc: { artifact: "bun-jsc.wasm", package: "bunwasm-cli", features: ["engine-jsc", "bun-transpiler", "bun-build"], optimizer: "required" },
+  tools: { artifact: "bun-tools.wasm", package: "bunwasm-tools", features: ["default"], optimizer: "required" },
 } as const;
 export type GuestBuild = keyof typeof guestBuilds;
 export const hash = (bytes: Uint8Array | string) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
@@ -210,9 +210,11 @@ export function sourceOptions(repository: string, sysroot: string, build: GuestB
   const rust = rustTools(repository);
   const tools: Record<string, string> = { ...rust, node: nodeExecutable(repository), bun: process.execPath };
   for (const name of ["clang", "clang++", "llvm-ar", "wasm-ld"]) tools[name] = join(sdk, "bin", name);
+  const optimizer = guestBuilds[build].optimizer;
   for (const name of ["cmake", "ninja", "wasm-opt"]) {
+    if (name === "wasm-opt" && optimizer === "unused") continue;
     const path = Bun.which(name);
-    if (!path && name === "wasm-opt" && (build === "quickjs" || build === "quickjs-minimal")) continue;
+    if (!path && name === "wasm-opt" && optimizer === "optional") continue;
     if (!path) throw new Error(`Missing guest tool: ${name}`);
     tools[name] = path;
   }
