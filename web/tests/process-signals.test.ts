@@ -6,7 +6,7 @@ import { createContext, runInContext } from "node:vm";
 import { createNodeSignalController } from "../scripts/node-signals.ts";
 
 const eventsSource = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__eventsFactory = ${readFileSync(new URL("../../crates/bunwasm-runtime/src/js/events.ts", import.meta.url), "utf8")}`);
-const processSource = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/process.js", import.meta.url), "utf8");
+const processSource = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__processFactory = ${readFileSync(new URL("../../crates/bunwasm-runtime/src/js/process.ts", import.meta.url), "utf8")}`);
 const processSignalsSource = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__signalFactory = ${readFileSync(new URL("../../crates/bunwasm-runtime/src/js/process_signals.ts", import.meta.url), "utf8")}`);
 
 class GuestExit extends Error {
