@@ -93,6 +93,18 @@ function fixture(source: string, failCapture?: string, failBind?: string) {
     install: () => install(source, internal), reject: () => { reject = true; }, rejectForeign: () => { rejectForeign = true; }, rejectAsync: () => { rejectPromise = true; } };
 }
 
+function customBound(name: Operation, calls: { name: Operation; receiver: unknown; args: unknown[] }[], provider: object) {
+  const method = () => { throw new Error("Unbound method must not run"); };
+  Object.defineProperty(method, "bind", { value(receiver: unknown) {
+    expect(receiver).toBe(provider);
+    return function (this: unknown, ...args: unknown[]) {
+      calls.push({ name, receiver: this, args });
+      return Promise.resolve(name === "verify" ? true : new ArrayBuffer(1));
+    };
+  } });
+  return method;
+}
+
 for (const [label, source] of candidates) {
   test(`${label}: captures every getter before binding, including throwing getters`, () => {
     const f = fixture(source());
@@ -133,17 +145,8 @@ for (const [label, source] of candidates) {
 
   test(`${label}: custom bind results retain their shared host-table receiver`, async () => {
     const calls: { name: Operation; receiver: unknown; args: unknown[] }[] = [];
-    const provider = Object.fromEntries(methods.map(name => {
-      const method = () => { throw new Error("Unbound method must not run"); };
-      Object.defineProperty(method, "bind", { value(receiver: unknown) {
-        expect(receiver).toBe(provider);
-        return function (this: unknown, ...args: unknown[]) {
-          calls.push({ name, receiver: this, args });
-          return Promise.resolve(name === "verify" ? true : new ArrayBuffer(1));
-        };
-      } });
-      return [name, method];
-    }));
+    const provider = {};
+    Object.assign(provider, Object.fromEntries(methods.map(name => [name, customBound(name, calls, provider)])));
     install(source(), { crypto: { isWasmKey: () => false }, native: { subtleCrypto: provider } });
     const key = new FixtureKey(), bytes = Uint8Array.of(1);
     for (const name of ["sign", "verify", "encrypt", "decrypt"] as const) {
