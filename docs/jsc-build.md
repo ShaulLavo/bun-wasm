@@ -149,7 +149,9 @@ then leaves out: wasi-sdk's sysroot as the library search path (rustc's `-lc` re
 its `crt1-command.o`, and `libc++`/`libc++abi` from the sysroot's `noeh` directory.
 wasi-libc's mman/signal/getpid emulation libraries stay out: bunwasm-posix defines those
 functions. The changed `RUSTFLAGS` would invalidate the shared cargo cache, so this build uses its
-own target dir (`$JSC_BUILD_DIR/target`).
+own target dir (`$JSC_BUILD_DIR/target`). CI uses the same private target directory
+so JSC artifacts do not share the QuickJS target cache. The JSC cache key includes
+the Rust source and JSC build inputs that can affect that target.
 
 ### Numbers
 

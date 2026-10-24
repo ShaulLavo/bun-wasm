@@ -76,13 +76,16 @@ restores timestamps only for unchanged files and directories under the owned
 source/build-input roots. Changed, added or renamed inputs get a fresh time.
 This keeps a fresh checkout from rebuilding every embedded runtime or C archive,
 without hiding real edits. Symlinks are fingerprinted without modifying targets.
-Rustup, Bun downloads, pinned
-upstream sources, the fixed WASI SDK and the patched sysroot each have caches. The sysroot cache key
-includes the runner image and builder/dependency inputs; its existing receipt
-still verifies every tool and archive. Rust cache keys include upstream patches,
-third-party inputs, the WASI crypto toolchain, CMake preflight dependencies and
-native gate/build scripts. Cargo explicitly watches the crypto toolchain, and
-the timestamp receipt fingerprints it too. A source hash refreshes the cache
+Rustup, Bun downloads, pinned upstream sources, the fixed WASI SDK and the patched
+sysroot each have caches. The sysroot cache key includes the runner image and
+builder/dependency inputs; its existing receipt still verifies every tool and
+archive. The refined Cargo cache keeps upstream patches, third-party inputs, the
+WASI crypto toolchain, its CMake toolchain and guard, and Rust gate/build inputs.
+Cargo explicitly watches the crypto toolchain and CMake guard, and the timestamp
+receipt fingerprints those source files too. JSC-only CMake checks and Binaryen
+stay in the JSC cache, which
+uses a private Cargo target directory. The old full native key remains as a
+fallback while the refined layer proves reuse. A source hash refreshes each cache
 after crate or compiled process-request fixture edits, with a same-toolchain/input
 restore prefix for reuse.
 Cache logs show restored paths,

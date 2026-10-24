@@ -154,7 +154,19 @@ jobs:
           bash scripts/sync-bun.sh
           bash scripts/sync-crypto.sh
       - uses: actions/cache/restore@v4
+        id: native-cargo-cache
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/bin/cargo-machete
+            ${{ env.CARGO_TARGET_DIR }}
+          key: native-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+          restore-keys: |
+            native-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-
+      - uses: actions/cache/restore@v4
         id: native-cache
+        if: steps.native-cargo-cache.outputs.cache-matched-key == ''
         with:
           path: |
             ${{ env.CARGO_HOME }}/registry
@@ -205,7 +217,7 @@ jobs:
         if: needs.quality.outputs.jsc == 'true'
         run: |
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc" >> "$GITHUB_ENV"
-          echo "JSC_CARGO_TARGET_DIR=$CARGO_TARGET_DIR" >> "$GITHUB_ENV"
+          echo "JSC_CARGO_TARGET_DIR=$RUNNER_TEMP/jsc/target" >> "$GITHUB_ENV"
           echo "JOBS=2" >> "$GITHUB_ENV"
           echo "CAGE=" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
@@ -213,7 +225,7 @@ jobs:
         id: jsc-cache
         with:
           path: ${{ runner.temp }}/jsc
-          key: jsc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts') }}
+          key: jsc-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('jsc/**', 'scripts/build-jsc.sh', 'scripts/build-bun-jsc.sh', 'scripts/build-wasi-sysroot.ts', 'scripts/check-wasi-cmake-cache.sh', 'scripts/check-cmake-cache.cmake', 'scripts/sync-*.sh', 'env.sh', 'bun.lock', 'scripts/ci-binaryen.ts', 'Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
       - name: Build or validate the single JSC prebuild
         if: needs.quality.outputs.jsc == 'true'
         run: |
@@ -257,8 +269,19 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Save the complete native build once per input revision
-        if: steps.native-cache.outputs.cache-hit != 'true'
+      - name: Save the refined native Cargo cache once per input revision
+        if: steps.native-cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_HOME }}/bin/cargo-machete
+            ${{ env.CARGO_TARGET_DIR }}
+          key: native-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}
+
+      - name: Save the complete native fallback once per input revision
+        if: steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
