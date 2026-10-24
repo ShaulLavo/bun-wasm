@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import EventEmitter from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import type * as NodeNet from "node:net";
-import { Duplex } from "node:stream";
+import { Duplex, getDefaultHighWaterMark } from "node:stream";
 import { runInNewContext } from "node:vm";
 import { NetHost } from "../src/net/host";
 import { createRing } from "../src/net/ring";
@@ -27,7 +27,7 @@ export function networkFixture() {
     realTimers: { setImmediate }, concatBytes: (parts: readonly Uint8Array[]) => Buffer.concat(parts),
     ioPending: () => 0, pumpIo: () => false,
     builtin: (name: string) => {
-      if (name === "node:stream") return { Duplex };
+      if (name === "node:stream") return { Duplex, getDefaultHighWaterMark: () => getDefaultHighWaterMark(false) };
       throw new Error(`Unexpected builtin ${name}`);
     },
     require(name: string): unknown {
