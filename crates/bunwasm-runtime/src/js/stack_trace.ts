@@ -5,13 +5,17 @@
   const defaultPrepare = Error.prepareStackTrace;
   const formatted = new WeakMap<object, unknown>();
   let formatting = false;
+  type NullPrototypeDescriptor = PropertyDescriptor & { __proto__: null };
+  function nullPrototypeDescriptor(descriptor: NullPrototypeDescriptor): PropertyDescriptor {
+    return descriptor;
+  }
 
   function store(target: object, value: unknown) {
     formatted.set(target, value);
     if (formatting) return value;
     const own = Object.getOwnPropertyDescriptor(target, "stack");
     if (own ? own.configurable : Object.isExtensible(target)) {
-      Object.defineProperty(target, "stack", { __proto__: null, value, writable: true, configurable: true, enumerable: false });
+      Object.defineProperty(target, "stack", nullPrototypeDescriptor({ __proto__: null, value, writable: true, configurable: true, enumerable: false }));
     }
     return value;
   }
@@ -100,13 +104,13 @@
         capture(target, typeof constructorOpt === "function" ? constructorOpt : captureStackTrace);
         formatted.delete(target);
         const raw = target.stack;
-        Object.defineProperty(target, "stack", {
+        Object.defineProperty(target, "stack", nullPrototypeDescriptor({
           __proto__: null,
           configurable: true,
           enumerable: false,
           get() { return formatStack(this, raw); },
           set(value: unknown) { store(this, value); },
-        });
+        }));
       },
     });
   }

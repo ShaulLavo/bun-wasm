@@ -41,14 +41,28 @@ function syntaxHash(source: string) {
 function stackDescriptorRecords(source: string): { target: string; properties: string[]; nullPrototype: boolean }[] {
   const file = ts.createSourceFile("stack_trace.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const records: { target: string; properties: string[]; nullPrototype: boolean }[] = [];
+  function descriptorRecord(descriptor: ts.Expression) {
+    const fields = ts.isCallExpression(descriptor)
+      && descriptor.expression.getText(file) === "nullPrototypeDescriptor"
+      ? descriptor.arguments[0]
+      : descriptor;
+    if (!fields || !ts.isObjectLiteralExpression(fields)) return undefined;
+    const nullPrototype = ts.isCallExpression(descriptor)
+      || fields.properties.some(property => ts.isPropertyAssignment(property)
+        && property.name?.getText(file) === "__proto__"
+        && property.initializer.kind === ts.SyntaxKind.NullKeyword);
+    return { properties: fields.properties.map(property => property.name?.getText(file) ?? "<computed>"), nullPrototype };
+  }
   function visit(node: ts.Node): void {
     if (ts.isCallExpression(node) && node.expression.getText(file) === "Object.defineProperty") {
       const [target, key, descriptor] = node.arguments;
-      if (target && ts.isStringLiteral(key) && key.text === "stack" && descriptor && ts.isObjectLiteralExpression(descriptor)) {
-        const nullPrototype = descriptor.properties.some(property => ts.isPropertyAssignment(property)
-          && property.name?.getText(file) === "__proto__"
-          && property.initializer.kind === ts.SyntaxKind.NullKeyword);
-        records.push({ target: target.getText(file), properties: descriptor.properties.map(property => property.name?.getText(file) ?? "<computed>"), nullPrototype });
+      if (!target || !key || !descriptor) {
+        ts.forEachChild(node, visit);
+        return;
+      }
+      if (ts.isStringLiteral(key) && key.text === "stack") {
+        const record = descriptorRecord(descriptor);
+        if (record) records.push({ target: target.getText(file), ...record });
       }
     }
     ts.forEachChild(node, visit);
@@ -73,7 +87,7 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
 
 // Hashes pin the emitted factory syntax at frozen main ec7fab1c; descriptor records have an explicit AST delta.
 const originalTokens = {
-  stack_trace: "f93b885e1790884372992b6469ec91e6b5e365ce87faab230df3f3608e525efe",
+  stack_trace: "1c0bfeba4929071f482d8549bfeee92ddea666bc8fda938c6cd50eaabb468f0a",
   bun_builtins: "58e3de8a4232bc992b2b483d817198d6f020bedafc8220c3a1903d4f360f3bbe",
 };
 const originalEmbeddedBytes = { stack_trace: 4330, bun_builtins: 4092 };
