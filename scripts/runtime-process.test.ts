@@ -68,7 +68,8 @@ test("erasure preserves executable token positions, including exit operator brid
 
 async function controls(source: string) {
   const context = createContext({ TextEncoder, TextDecoder, Uint8Array, Error, TypeError });
-  const events = runInContext(readFileSync(join(root, "crates/bunwasm-runtime/src/js/events.js"), "utf8"), context);
+  const eventsSource = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__eventsFactory = ${readFileSync(join(root, "crates/bunwasm-runtime/src/js/events.ts"), "utf8")}`);
+  const events = runInContext(eventsSource, context);
   const factory = runInContext(source, context);
   return JSON.parse(JSON.stringify(await processControls(events, factory, assert)));
 }

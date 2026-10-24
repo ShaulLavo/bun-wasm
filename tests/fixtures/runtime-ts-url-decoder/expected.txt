@@ -49,3 +49,55 @@ domainToASCII ["xn--espaol-zwa.com",""]
 domainToUnicode "example.com"
 urlToHttpOptions {"protocol":"http:","hostname":"::1","hash":"#c","search":"?b","pathname":"/a","path":"/a?b","href":"http://u%20x:p@[::1]:81/a?b#c","port":81,"auth":"u x:p"}
 urlToHttpOptions plain {"protocol":"https:","hostname":"example.com","hash":"","search":"","pathname":"/","path":"/","href":"https://example.com/"}
+--- url parity
+fileURLToPath boundary 7 throws TypeError ERR_INVALID_ARG_TYPE The "url" argument must be of type string. Received type number (7)
+fileURLToPath boundary null throws TypeError ERR_INVALID_ARG_TYPE The "url" argument must be of type string. Received null
+fileURLToPath boundary undefined throws TypeError ERR_INVALID_ARG_TYPE The "url" argument must be of type string. Received undefined
+fileURLToPath boundary true throws TypeError ERR_INVALID_ARG_TYPE The "url" argument must be of type string. Received type boolean (true)
+fileURLToPath boundary [object Object] throws TypeError ERR_INVALID_ARG_TYPE The "url" argument must be of type string. Received an instance of Object
+fileURLToPath boundary [object Object] throws TypeError ERR_INVALID_ARG_TYPE The "url" argument must be of type string. Received an instance of Object
+fileURLToPath invalid URL throws TypeError ERR_INVALID_URL_SCHEME The URL must be of scheme file
+fileURLToPath backslash "/a\\b"
+fileURLToPath unicode "/café"
+format query array "/?a=1&b=2%2C3"
+format query encoding "/?a=a+b%7E%21%28%29%27&empty="
+format query values "/?nil=null&missing=undefined&yes=true&n=NaN&infinite=Infinity&object=%5Bobject+Object%5D"
+format query pairs "/?a=1&a=2"
+format query URLSearchParams "/"
+format query string ignored "/"
+format search wins "/?fixed"
+format empty search "/?a=1%2C2"
+domainToUnicode "xn--espaol-zwa.com" "español.com"
+domainToUnicode "xn--bcher-kva.de" "bücher.de"
+domainToUnicode "xn--fiqs8s" "中国"
+domainToUnicode "español.com" "español.com"
+domainToUnicode "EXAMPLE.COM." "example.com."
+domainToUnicode "xn--iñvalid.com" ""
+domainToUnicode "xn--" ""
+domainToUnicode "a b" ""
+domainToUnicode "a/b" "a"
+domainToUnicode "a?b" "a"
+domainToUnicode "a#b" "a"
+domainToUnicode "a\\b" "a"
+domainToUnicode "a\nb" "ab"
+domainToUnicode "a\tb" "ab"
+domainToUnicode " a " ""
+domainToUnicode "[::ffff:127.0.0.1]" "[::ffff:7f00:1]"
+domainToUnicode "123" "0.0.0.123"
+domainToUnicode "1.2.3.999" ""
+domainToUnicode "xn--a.com" ""
+domainToUnicode "a%00b" ""
+domainToUnicode "user@xn--espaol-zwa.com" ""
+domainToUnicode "foo:81" ""
+domainToUnicode "127.0.0.1" "127.0.0.1"
+domainToUnicode "0x7f.1" "127.0.0.1"
+domainToUnicode "[::1]" "[::1]"
+domainToUnicode "%65xample.com" "example.com"
+domainToUnicode "%E2%98%83.com" "☃.com"
+domainToUnicode "" ""
+domainToUnicode coercion null "null"
+domainToUnicode coercion undefined "undefined"
+domainToUnicode coercion 7 "0.0.0.7"
+domainToUnicode coercion xn--bcher-kva.de "bücher.de"
+domainToUnicode throwing coercion true
+domainToUnicode symbol true
