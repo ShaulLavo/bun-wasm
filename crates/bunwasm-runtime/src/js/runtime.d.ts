@@ -271,13 +271,13 @@ declare namespace BunWasm {
     readonly readable: ReadableStream<Uint8Array>;
     readonly writable: WritableStream<unknown>;
   }
-  interface CompressionConstructor {
+  interface WebCompressionConstructor {
     new(format: unknown, options?: unknown): CompressionStreamPair;
     readonly prototype: object;
   }
   type CompressionAdapters = {
-    CompressionStream: CompressionConstructor;
-    DecompressionStream: CompressionConstructor;
+    CompressionStream: WebCompressionConstructor;
+    DecompressionStream: WebCompressionConstructor;
   };
   interface Internal {
     require(name: "streams_polyfill"): PortableStreams;

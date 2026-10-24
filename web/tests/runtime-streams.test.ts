@@ -95,6 +95,17 @@ const invalid = [
   'new (internal.require("streams_polyfill").TransformStream)<unknown, string>({ transform(_chunk, controller) { controller.enqueue(new Uint8Array()); } });',
   'internal.native.streams.webStep(1, new Uint8Array(), "finish");',
   'internal.require("compression_streams").create(7);',
+  `const streams = internal.require("streams_polyfill");
+const web = internal.require("compression_streams").create(streams.TransformStream, streams.ReadableStream, streams.WritableStream);
+new web.CompressionStream();`,
+  `const streams = internal.require("streams_polyfill");
+const web = internal.require("compression_streams").create(streams.TransformStream, streams.ReadableStream, streams.WritableStream);
+new web.DecompressionStream("gzip").write("x");`,
+  `const streams = internal.require("streams_polyfill");
+const web = internal.require("compression_streams").create(streams.TransformStream, streams.ReadableStream, streams.WritableStream);
+new web.CompressionStream("gzip").destroy();`,
+  'const pair: BunWasm.CompressionStreamPair = new (internal.builtin("node:stream").Transform)("gzip", false);',
+  'new (internal.builtin("node:stream").Transform)("gzip", false).readable;',
 ];
 for (const source of invalid) {
   test(`rejects the invalid stream contract ${source}`, () => {
