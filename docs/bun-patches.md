@@ -55,6 +55,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
 | [Real shell consumer probes](#real-shell-consumer-probes) | Host feature | Original installed-package composition and contract probes adapted from bash-web acceptance commands, without copying a shell implementation. |
 | [Runtime-owned network consumer](#runtime-owned-network-consumer) | Host feature | Original per-process session wiring over Waffle's borrowed runtime network, with physical-stop cleanup and shared preview observation. |
+| [Sandbox editor language loading](#sandbox-editor-language-loading) | Host feature | Original demand-loaded editor extensions over unchanged CodeMirror packages. |
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
 | [Descriptor kinds and storage modes](#descriptor-kinds-and-storage-modes) | Host feature | Original Rust descriptor-kind adapters and page startup handling adopt the pinned Waffle contract without guessing pipe types or changing workspace names. |
 | [Child process JSON IPC](#child-process-json-ipc) | Host feature | Original TypeScript JSON framing and lifecycle adapter over Waffle runtime_proc pipes, including implicit fork channels and process bootstrap. |
@@ -2924,6 +2925,14 @@ at `5e0baa66516f3af00b008cdf1521c681317741e8`. The archives retain their upstrea
 license files. There are no local changes. Keeping these 6,434 bytes lets the
 workspace conflict regression extract and import all three recorded packages
 without contacting a public registry.
+
+## Sandbox editor language loading
+
+`sandbox/src/main.ts` loads HTML and CSS editor extensions when a matching file opens,
+not when the TypeScript starter opens. This is original bun-wasm glue, with no copied
+upstream implementation or upstream revision. It calls the unchanged public APIs in
+`@codemirror/lang-css` 6.3.1 and `@codemirror/lang-html` 6.4.12 from `sandbox/bun.lock`.
+The existing editor-state cache and open revision guard also cover the import wait.
 
 ## Caller-owned Bun package adapters
 

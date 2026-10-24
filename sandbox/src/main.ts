@@ -1,8 +1,6 @@
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 
-import { css } from "@codemirror/lang-css";
-import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
 import { EditorState, type Extension } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -404,9 +402,9 @@ function reportError(error: unknown): void {
 
 // ---------- editor ----------
 
-function language(path: string): Extension {
-  if (/\.css$/.test(path)) return css();
-  if (/\.html?$/.test(path)) return html();
+async function language(path: string): Promise<Extension> {
+  if (/\.css$/.test(path)) return (await import("@codemirror/lang-css")).css();
+  if (/\.html?$/.test(path)) return (await import("@codemirror/lang-html")).html();
   return javascript({ typescript: /\.(m|c)?tsx?$/.test(path), jsx: /x$/.test(path) });
 }
 
@@ -422,11 +420,11 @@ class Editor {
     this.view = new EditorView({ parent });
   }
 
-  private extensions(path: string): Extension[] {
+  private async extensions(path: string): Promise<Extension[]> {
     const readOnly = path.startsWith("node_modules/");
     return [
       basicSetup,
-      language(path),
+      await language(path),
       oneDark,
       EditorView.lineWrapping,
       EditorState.readOnly.of(readOnly),
@@ -441,9 +439,10 @@ class Editor {
     let state = this.states.get(path);
     if (!state) {
       const text = decode(await fs.readFile(abs(path)) ?? new Uint8Array());
+      const extensions = await this.extensions(path);
       state = this.states.get(path);
       if (state) return state;
-      state = EditorState.create({ doc: text, extensions: this.extensions(path) });
+      state = EditorState.create({ doc: text, extensions });
       this.states.set(path, state);
     }
     return state;
