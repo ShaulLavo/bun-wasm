@@ -129,4 +129,3 @@ test("initial factory errors remain synchronous and empty buffers keep ENOBUFS",
   const { read } = delivery({ buffer: new Uint8Array(0), callback() {} });
   expect(() => read.capacity()).toThrow(expect.objectContaining({ code: "ENOBUFS", syscall: "read" }));
 });
-
