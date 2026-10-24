@@ -84,7 +84,7 @@ test("missing, duplicate and linked inputs fail closed", () => {
 test("runner uses argv, no-build fixtures and failure propagation, not a shell command string", () => {
   expect(checkCommand("runtime", ["scripts/example.test.ts"])).toEqual(["bun", "test", join(root, "scripts/example.test.ts")]);
   expect(checkCommand("native", ["tests/fixtures/node-misc"])).toEqual(["bash", join(root, "scripts/test.sh"), "--no-build", "node-misc"]);
-  const result = spawnSync("bun", [join(root, "scripts/test-checks.ts"), "invalid-owner"], { encoding: "utf8" });
+  const result = spawnSync("bun", ["./test-checks.ts", "invalid-owner"], { cwd: import.meta.dir, encoding: "utf8" });
   expect(result.status).not.toBe(0);
   expect(result.stderr).toContain("Unknown check owner");
   const source = readFileSync(join(root, "scripts/test-checks.ts"), "utf8");
