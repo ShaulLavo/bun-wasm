@@ -37,6 +37,61 @@ test("emitted format uses URLSearchParams record and sequence semantics", () => 
   expect(adapter.format({ query: { a: [1, 2] }, search: "?fixed" })).toBe("?fixed");
 });
 
+test("emitted format reads and converts the query before reading search", () => {
+  const events: string[] = [];
+  const sentinel = new RangeError("sentinel");
+  const scalar = (label: string, fail = false) => ({
+    [Symbol.toPrimitive](hint: string) {
+      events.push(`${label} ${hint}`);
+      if (fail) throw sentinel;
+      return label;
+    },
+  });
+  const run = (input: object) => {
+    try {
+      return [adapter.format(input), events.splice(0)];
+    } catch (error) {
+      return [error === sentinel, error instanceof TypeError, events.splice(0)];
+    }
+  };
+  expect(run({
+    get query() { events.push("query"); return { a: scalar("a") }; },
+    get search() { events.push("search"); return "?fixed"; },
+  })).toEqual(["?fixed", ["query", "a string", "search"]]);
+  expect(run({
+    query: { get a() { events.push("get a"); return scalar("a"); }, get b() { events.push("get b"); return scalar("b"); } },
+    get search() { events.push("search"); return "fixed#fragment"; },
+  })).toEqual(["?fixed%23fragment", ["get a", "a string", "get b", "b string", "search"]]);
+  expect(run({
+    get query() { events.push("query"); throw sentinel; },
+    get search() { events.push("search"); return "?fixed"; },
+  })).toEqual([true, false, ["query"]]);
+  expect(run({
+    query: { get a() { events.push("get a"); throw sentinel; } },
+    get search() { events.push("search"); return "?fixed"; },
+  })).toEqual([true, false, ["get a"]]);
+  expect(run({
+    query: { a: scalar("a", true) },
+    get search() { events.push("search"); return "?fixed"; },
+  })).toEqual([true, false, ["a string"]]);
+  expect(run({
+    query: { a: Symbol("x") },
+    get search() { events.push("search"); return "?fixed"; },
+  })).toEqual([false, true, []]);
+  expect(run({
+    get query() { events.push("query"); return { a: scalar("a") }; },
+    get search() { events.push("search"); return ""; },
+  })).toEqual(["?a=a", ["query", "a string", "search"]]);
+  expect(run({
+    query: { get [Symbol.iterator]() { events.push("iterator"); throw sentinel; } },
+    get search() { events.push("search"); return "?fixed"; },
+  })).toEqual(["?fixed", ["search"]]);
+  expect(run({
+    query: { a: scalar("a") },
+    get search() { events.push("search"); throw sentinel; },
+  })).toEqual([true, false, ["a string", "search"]]);
+});
+
 test("emitted domainToUnicode coerces once and calls the authoritative native", () => {
   let coerced = 0;
   expect(adapter.domainToUnicode({ toString() { coerced++; return "xn--bcher-kva.de"; } })).toBe("native result");
