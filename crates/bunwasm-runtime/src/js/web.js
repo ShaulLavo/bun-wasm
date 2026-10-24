@@ -81,6 +81,7 @@
     #encoding;
     #fatal;
     #ignoreBOM;
+    #bomSeen = false;
     #pending = null;
     constructor(label = "utf-8", options = {}) {
       const encoding = DECODER_LABELS[String(label).trim().toLowerCase()];
@@ -111,22 +112,28 @@
         bytes = joined;
         this.#pending = null;
       }
-      if (options.stream && this.#encoding === "utf-8") {
+      const stream = Boolean(options.stream);
+      if (stream && this.#encoding === "utf-8") {
         const tail = incompleteUtf8Tail(bytes);
         if (tail > 0) {
           this.#pending = bytes.slice(bytes.length - tail);
           bytes = bytes.subarray(0, bytes.length - tail);
         }
       }
-      return this.#decodeBytes(bytes);
+      try {
+        return this.#decodeBytes(bytes);
+      } finally {
+        if (!stream) this.#bomSeen = false;
+      }
     }
     #decodeBytes(bytes) {
       if (this.#encoding === "windows-1252") return native.latin1Decode(bytes.slice());
-      let text = this.#encoding === "utf-16le"
+      const text = this.#encoding === "utf-16le"
         ? native.utf16leDecode(bytes.slice())
         : native.utf8Decode(bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice(), this.#fatal);
-      if (!this.#ignoreBOM && text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-      return text;
+      if (this.#bomSeen || text.length === 0) return text;
+      this.#bomSeen = true;
+      return !this.#ignoreBOM && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
     }
   }
 
@@ -705,7 +712,7 @@
       this.#type = type;
     }
     async text() {
-      return native.utf8Decode(this._bytes());
+      return new TextDecoder().decode(this._bytes());
     }
     async json() {
       return JSON.parse(await this.text());
@@ -905,7 +912,7 @@
       return this._body || new Uint8Array(0);
     },
     async text() {
-      return native.utf8Decode(await this._consume());
+      return new TextDecoder().decode(await this._consume());
     },
     async json() {
       return JSON.parse(await this.text());
