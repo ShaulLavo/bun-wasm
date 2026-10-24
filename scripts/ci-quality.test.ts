@@ -35,7 +35,8 @@ test("native fixture smoke selects the typed runtime behavior without another bu
   expect(rust.match(/bun scripts\/test-checks\.ts native/g)).toHaveLength(1);
   expect(checkCommand("native")).toEqual(["bash", join(import.meta.dir, "test.sh"), "--no-build"].concat(oldSelections().native.toSorted().map(path => path.slice("tests/fixtures/".length))));
   expect(rust).toContain('BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts');
-  expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(2);
+  expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
+  expect(rust.match(/"\$GUEST_CARGO" build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
 });
 
 test("every migrated selection retains one blocking owner and the original local runtime set", () => {
