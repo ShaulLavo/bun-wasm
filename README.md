@@ -25,7 +25,7 @@ It is for people building in-browser development tools (playgrounds, tutorials, 
 - **Bun's own toolchain.** The transpiler, bundler, resolver, semver and data parsers are Bun's own Rust crates, built for `wasm32-wasip1` from a pinned oven-sh/bun commit with [13 patches](docs/bun-patches.md).
 - **A Bun and Node runtime on three engines.** QuickJS and JavaScriptCore run inside the wasm, and a third guest runs on the page's own JS engine. One runtime, one test fixture suite for all three.
 - **Server and client in one tab.** `Bun.serve`, `fetch` and `bun:sqlite` work. A service worker routes preview URLs to the guest's server.
-- **Measured, not claimed.** Bun's own test suite: 411 of 2,305 upstream files pass fully on QuickJS (17.8%). Real apps: 9 of 17 projects pass every stage (2026-10-17 snapshot). [Compatibility](docs/compatibility.md) has the method and the failures.
+- **Measured compatibility.** Bun's own test suite: 411 of 2,305 upstream files pass fully on QuickJS (17.8%). Real apps: 9 of 17 projects pass every stage (2026-10-17 snapshot). [Compatibility](docs/compatibility.md) has the method and the failures.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture.dark.svg">
@@ -36,20 +36,7 @@ The guest is one wasm module. The host, a browser tab or a native Wasmtime launc
 
 ## Quick start
 
-Run the playground on your machine. This path uses the published browser guest, so it needs no Rust toolchain. You need git and [Bun](https://bun.sh).
-
-```sh
-git clone https://github.com/ShaulLavo/bun-wasm
-cd bun-wasm
-url=$(bun -e 'import { BUN_WASM_ASSET as a } from "./src/guest-asset.generated.ts"; console.log(a.url)')
-curl -fsSL -o /tmp/bun-browser.wasm "$url"
-cd web
-bun install
-BUN_BROWSER_WASM=/tmp/bun-browser.wasm bun run build
-bun run preview
-```
-
-The last command prints `serving … at http://127.0.0.1:4173/ (cross-origin isolated)`. Open it and press **Run**:
+Open the [playground](https://bun.sprockt.dev/playground/) and press **Run**. The guest loads in the tab, so there is nothing to install:
 
 ```console
 user@bun:~$ bun run 'index.ts'
@@ -59,18 +46,16 @@ Hello, WebAssembly.
 Bun version: 1.4.4
 ```
 
-[Getting started](docs/getting-started.md) walks through the terminal, a server and the sandbox.
+[Getting started](docs/getting-started.md) walks through the terminal, a server and the sandbox, and shows how to run the playground on your machine.
 
 ## What you can do
 
-| Task | Where |
-| --- | --- |
-| Try Bun in a tab | [Getting started](docs/getting-started.md) |
-| Add Bun to your own page | [Embed bun-wasm in a page](docs/guides/embed-in-a-page.md) |
-| Check whether your app runs | [Compatibility](docs/compatibility.md) |
-| Find out what a tab cannot do | [Limits](docs/limits.md) |
-| Fix a failure | [Troubleshooting](docs/troubleshooting.md) |
-| Build the guests and run the tests | [Development](docs/development.md) |
+- Try Bun in a tab: [Getting started](docs/getting-started.md).
+- Add Bun to your own page: [Embed bun-wasm in a page](docs/guides/embed-in-a-page.md).
+- Check whether your app runs: [Compatibility](docs/compatibility.md).
+- Find out what a tab cannot do: [Limits](docs/limits.md).
+- Fix a failure: [Troubleshooting](docs/troubleshooting.md).
+- Build the guests and run the tests: [Development](docs/development.md).
 
 ## How it works
 
@@ -91,11 +76,11 @@ Pre-1.0 and experimental. The package is `bun-wasm` 0.0.60, marked private, and 
 - The `browser` engine runs user code in the host glue's global scope. No engine is a security boundary.
 - Apps: Vite, SvelteKit, Astro, Vitest, Next.js and Prisma fail at least one stage in the 2026-10-17 snapshot. Later fixes touched the Vite family, and a rerun is pending ([details](docs/compatibility.md#real-apps)).
 
-| Platform | State |
-| --- | --- |
-| Chromium, Firefox, WebKit (Playwright) | Covered by the CI browser gates |
-| Safari and iOS Simulator | Manual scripts, not in CI |
-| Native launcher | Builds on Linux x86_64 in CI |
+Platforms:
+
+- Chromium, Firefox and WebKit (through Playwright) are covered by the CI browser gates.
+- Safari and the iOS Simulator have manual scripts that CI does not run.
+- The native launcher builds on Linux x86_64 in CI.
 
 [Limits](docs/limits.md) has the numbers and their sources.
 

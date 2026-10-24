@@ -1,6 +1,6 @@
 # Getting started
 
-In this tutorial we run, test, bundle and serve TypeScript inside a browser tab, then start the same playground on your own machine. You need a modern browser for the first half, and git and [Bun](https://bun.sh) for the second half. We recorded every output below in headless Chromium.
+In this tutorial we run, test, bundle and serve TypeScript inside a browser tab, then start the same playground on your own machine. The first half needs Chromium, Firefox or Safari, the browsers the project is tested in. The second half needs git, to clone the repository, and [Bun](https://bun.sh), because the playground's build and preview scripts run on it. We recorded every output below in headless Chromium.
 
 ## Open the playground
 
