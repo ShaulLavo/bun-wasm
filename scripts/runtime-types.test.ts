@@ -76,3 +76,27 @@ for (const source of ['native.parseData("bytes", "YAML");', 'native.parseData(ne
     expect(result.stdout.toString()).toContain("error TS");
   });
 }
+
+for (const declarations of [
+  ["runtime.d.ts", "console_types.d.ts"],
+  ["console_types.d.ts", "runtime.d.ts"],
+]) {
+  test(`accepts both inspector API families with ${declarations.join(" before ")}`, () => {
+    const inspectorProbe = join(scratch, "inspector-probe.ts");
+    const inspectorConfig = join(scratch, "inspector-tsconfig.json");
+    writeFileSync(inspectorProbe, `
+      declare const internal: BunWasm.Internal;
+      const parsedStackFrames: BunWasm.StackFrame[] = internal.require("inspect").parseStack(undefined);
+      const formatted: string = internal.require("inspect").formatArgs(["value", 1]);
+      const inspected: string = internal.require("inspect").bunInspect({}, { depth: 0, compact: true });
+    `);
+    writeFileSync(inspectorConfig, JSON.stringify({
+      extends: join(root, "crates/bunwasm-runtime/tsconfig.json"),
+      include: [],
+      files: declarations.map(name => join(root, "crates/bunwasm-runtime/src/js", name)).concat([inspectorProbe]),
+    }));
+    const result = Bun.spawnSync([join(root, "web/node_modules/.bin/tsc"), "-p", inspectorConfig], { stdout: "pipe", stderr: "pipe" });
+    expect(result.stdout.toString()).toBe("");
+    expect(result.exitCode).toBe(0);
+  });
+}

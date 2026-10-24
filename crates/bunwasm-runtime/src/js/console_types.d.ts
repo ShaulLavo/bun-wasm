@@ -60,8 +60,3 @@ declare namespace BunWasm {
     toUint8(value: unknown): Uint8Array;
   }
 }
-
-interface ErrorConstructor {
-  captureStackTrace?: (target: object, skip?: BunWasm.ConsoleFunction) => void;
-  prepareStackTrace?: (error: Error, frames: readonly unknown[]) => unknown;
-}

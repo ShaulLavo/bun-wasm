@@ -231,6 +231,7 @@ declare namespace BunWasm {
 declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;
 declare namespace BunWasm {
   interface StackFrame { file: string; name: string; line: number; column: number }
+  interface ConsoleInspector { parseStack(raw: unknown): StackFrame[] }
   interface StackCallSite {
     getFileName(): string;
     getFunctionName(): string | null;
@@ -263,7 +264,7 @@ declare namespace BunWasm {
     defineHidden(target: object, values: object): void;
     mappedCallSites: WeakSet<object>;
     formatCallSite(site: StackCallSite): string;
-    require(name: "inspect"): { parseStack(raw: unknown): StackFrame[] };
+    require(name: "inspect"): ConsoleInspector;
   }
 }
 
