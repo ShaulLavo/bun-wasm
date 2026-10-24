@@ -56,6 +56,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Runtime-owned network consumer](#runtime-owned-network-consumer) | Host feature | Original per-process session wiring over Waffle's borrowed runtime network, with physical-stop cleanup and shared preview observation. |
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
 | [Descriptor kinds and storage modes](#descriptor-kinds-and-storage-modes) | Host feature | Original Rust descriptor-kind adapters and page startup handling adopt the pinned Waffle contract without guessing pipe types or changing workspace names. |
+| [Typed process adapter](#typed-process-adapter) | Original adapter | Strict process/native contracts with staged same-object construction and captured write failure state. |
 | [Child process JSON IPC](#child-process-json-ipc) | Host feature | Original TypeScript JSON framing and lifecycle adapter over Waffle runtime_proc pipes, including implicit fork channels and process bootstrap. |
 | [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, process-aware idle waits, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
 | [Process startup and executable identity](#process-startup-and-executable-identity) | Host feature | Original startup-before-wait observation, admitted executable metadata, lazy-root cancellation and Node child tool routing; no upstream implementation copied. |
@@ -248,7 +249,7 @@ earlier design dispatched them inside engine callbacks; review rejected that
 because QuickJS also polls during native regexp operations, and reentry can break
 native borrowed state or runtime timer invariants. No interpreter-specific
 reentry hook or runtime critical-section suppression is needed. The original
-`crates/bunwasm-runtime/src/js/{process.js,process_signals.ts}` adapter serializes cooperative dispatch,
+`crates/bunwasm-runtime/src/js/{process.ts,process_signals.ts}` adapter serializes cooperative dispatch,
 including recursive broken-pipe handling. Default signals already have an
 immutable host outcome; a fatal checkpoint unwinds Wasm without entering guest
 catch/finally blocks, including while a handled callback is CPU-bound. The
@@ -382,7 +383,7 @@ harnesses are original test programs, not copies of the spike implementations.
 ## Test fake clock
 
 Class **Host feature**, **original adapter** in `crates/bunwasm-runtime/src/js/fake_timers.ts`,
-with routing in `bootstrap.js`, `bun_test.js`, `process.js` and `web.js`.
+with routing in `bootstrap.js`, `bun_test.js`, `process.ts` and `web.js`.
 No upstream implementation is copied. The reference contracts are Bun's
 `src/runtime/test_runner/timers/FakeTimers.rs` and
 `src/jsc/bindings/JSMockFunction.cpp` at `cd95fa7a13b3f13be73e512b38ec111c1c228084`.
@@ -524,7 +525,7 @@ removal by the original callback, and callback receiver on both overloads.
 ## Runtime exit provenance
 
 Class **Host feature**, **original adapter** in `src/js/exit_provenance.ts`, with
-lifecycle hooks in `bootstrap.js` and `process.js`. No upstream implementation is
+lifecycle hooks in `bootstrap.js` and `process.ts`. No upstream implementation is
 copied, so there is no upstream source path or revision.
 
 `BUN_WASM_TRACE_EXIT=1` emits JSON to stderr at explicit exits, fatal errors and
@@ -3410,3 +3411,31 @@ receipt. Blocking CI selects it for JSC embedding, allocation, build and fixture
 inputs. The Rust job reuses its toolchain, sources and dependencies;
 it builds JSC once and executes both fixtures against that linked guest in the
 Node WASI host. QuickJS and host syntax checks are not JSC execution evidence.
+
+## Typed process adapter
+
+`crates/bunwasm-runtime/src/js/process.ts` is our original adapter, not copied Bun or Node code.
+Its reference APIs are Bun's `src/bun.js/bindings/BunProcess.cpp` at
+`d71508d31edf06765c12adf0df137ef531539f68` and Node's `lib/internal/process` APIs.
+The migration pins our JavaScript at `ac43127c85addabed7e0c2a4883247ae074e858c`.
+No upstream implementation was imported or changed.
+
+The three prototype-only emitter allocations keep their original objects and constructor-call
+positions. Typed results of the existing Object.assign calls describe the later fields. A queued
+writer flush captures its exact Failure object. Shared failure stays present during callbacks,
+including reentrant appends, and resets only after normal callback return. A throw still aborts
+reset and leaves subsequent writes attached to the old failure without scheduling another flush.
+
+All other executable AST nodes match the pinned original. The five immediate erased bitwise
+operand bridges keep unknown inputs and the original coercion and exceptions. They neither
+store a narrowed value nor call Number. Two erased map non-null proofs follow the existing
+has/set initialization and traversal of that same map's numeric keys. Environment descriptors
+and Symbol keys retain raw unknown values; the worker hook retains its method-call receiver.
+Only the hook input declaration changes, not worker serialization or worker implementations.
+The held worker-owned GuestProcess view is not broadened into the new process factory's type.
+
+`scripts/runtime-process.test.ts` reverses each approved executable change and checks the
+original AST hash, strict directive and token positions. Its original/converted factory controls
+cover own-key order, descriptors, constructor-call state, reentrancy, thrown callbacks, errors,
+exit coercion, environment hooks and signals. `runtime-ts-process` pins the real guest adapter;
+native reference differences are evidence, not reasons to change the guest's expected output.
