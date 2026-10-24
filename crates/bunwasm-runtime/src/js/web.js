@@ -81,6 +81,7 @@
     #encoding;
     #fatal;
     #ignoreBOM;
+    #bomSeen = false;
     #pending = null;
     constructor(label = "utf-8", options = {}) {
       const encoding = DECODER_LABELS[String(label).trim().toLowerCase()];
@@ -111,21 +112,28 @@
         bytes = joined;
         this.#pending = null;
       }
-      if (options.stream && this.#encoding === "utf-8") {
+      const stream = Boolean(options.stream);
+      if (stream && this.#encoding === "utf-8") {
         const tail = incompleteUtf8Tail(bytes);
         if (tail > 0) {
           this.#pending = bytes.slice(bytes.length - tail);
           bytes = bytes.subarray(0, bytes.length - tail);
         }
       }
-      return this.#decodeBytes(bytes);
+      try {
+        return this.#decodeBytes(bytes);
+      } finally {
+        if (!stream) this.#bomSeen = false;
+      }
     }
     #decodeBytes(bytes) {
-      if (this.#encoding === "utf-16le") return native.utf16leDecode(bytes.slice());
       if (this.#encoding === "windows-1252") return native.latin1Decode(bytes.slice());
-      let text = native.utf8Decode(bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice(), this.#fatal);
-      if (!this.#ignoreBOM && text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-      return text;
+      const text = this.#encoding === "utf-16le"
+        ? native.utf16leDecode(bytes.slice())
+        : native.utf8Decode(bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice(), this.#fatal);
+      if (this.#bomSeen || text.length === 0) return text;
+      this.#bomSeen = true;
+      return !this.#ignoreBOM && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
     }
   }
 
@@ -154,6 +162,8 @@
   }
 
   // --- URLSearchParams / URL --------------------------------------------------
+
+  const { toUSVString, initFromObject, convertMethodArgs } = internal.require("url_search_params");
 
   // application/x-www-form-urlencoded byte serializer.
   function formEncode(str) {
@@ -196,7 +206,7 @@
         this.#list = initFromObject(init);
         return;
       }
-      const str = String(init);
+      const str = toUSVString(init);
       this.#list = parseQuery(str.startsWith("?") ? str.slice(1) : str);
     }
     static _attach(params, url) {
@@ -212,32 +222,34 @@
       return this.#list.length;
     }
     append(name, value) {
-      this.#list.push([String(name), String(value)]);
+      this.#list.push([toUSVString(name), toUSVString(value)]);
       this.#update();
     }
     delete(name, value) {
-      const n = String(name);
-      this.#list = this.#list.filter(([k, v]) => k !== n || (value !== undefined && v !== String(value)));
+      const [n, val] = convertMethodArgs(() => this.#list, name, value);
+      this.#list = this.#list.filter(([k, v]) => k !== n || (val !== undefined && v !== val));
       this.#update();
     }
     get(name) {
-      const hit = this.#list.find(([k]) => k === String(name));
+      const [n] = convertMethodArgs(() => this.#list, name);
+      const hit = this.#list.find(([k]) => k === n);
       return hit ? hit[1] : null;
     }
     getAll(name) {
-      return this.#list.filter(([k]) => k === String(name)).map(([, v]) => v);
+      const [n] = convertMethodArgs(() => this.#list, name);
+      return this.#list.filter(([k]) => k === n).map(([, v]) => v);
     }
     has(name, value) {
-      const n = String(name);
-      return this.#list.some(([k, v]) => k === n && (value === undefined || v === String(value)));
+      const [n, val] = convertMethodArgs(() => this.#list, name, value);
+      return this.#list.some(([k, v]) => k === n && (val === undefined || v === val));
     }
     set(name, value) {
-      const n = String(name);
+      const [n, val] = convertMethodArgs(() => this.#list, name, value, true);
       const i = this.#list.findIndex(([k]) => k === n);
       if (i < 0) {
-        this.#list.push([n, String(value)]);
+        this.#list.push([n, val]);
       } else {
-        this.#list[i][1] = String(value);
+        this.#list[i][1] = val;
         this.#list = this.#list.filter(([k], j) => k !== n || j <= i);
       }
       this.#update();
@@ -268,17 +280,6 @@
     get [Symbol.toStringTag]() {
       return "URLSearchParams";
     }
-  }
-
-  function initFromObject(init) {
-    if (typeof init[Symbol.iterator] === "function") {
-      return Array.from(init, (pair) => {
-        const entry = Array.from(pair);
-        if (entry.length !== 2) throw new TypeError("Each query pair must be an iterable [name, value] tuple");
-        return [String(entry[0]), String(entry[1])];
-      });
-    }
-    return Object.keys(init).map((k) => [k, String(init[k])]);
   }
 
   // Component array, or undefined when the input doesn't parse.
@@ -704,7 +705,7 @@
       this.#type = type;
     }
     async text() {
-      return native.utf8Decode(this._bytes());
+      return new TextDecoder().decode(this._bytes());
     }
     async json() {
       return JSON.parse(await this.text());
@@ -904,7 +905,7 @@
       return this._body || new Uint8Array(0);
     },
     async text() {
-      return native.utf8Decode(await this._consume());
+      return new TextDecoder().decode(await this._consume());
     },
     async json() {
       return JSON.parse(await this.text());

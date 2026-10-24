@@ -55,6 +55,22 @@ The WASI crypto toolchain, its CMake cache preflight dependencies, and the share
 process-request JSON compiled into host tests also select native checks.
 Browser-only and documentation changes install no Rust toolchain or SDK.
 
+After the patched sysroot and input timestamps are ready, the native job restores
+both private JSC caches. One Bash step then starts the selected JSC C/C++ prebuild
+in its own process group. The foreground still runs native quality, host source-cache
+tests, launcher/QuickJS production and native fixtures in that order. Only the JSC
+prebuild overlaps them. It writes the private prebuild directory, not Cargo targets,
+Bun sources or guest outputs. JSC-specific environment changes stay in the child.
+
+The step installs cleanup before starting that child. Either branch failing fails
+the step. Cancellation kills and reaps only the owned JSC process group, including
+its compiler descendants. The prebuild log retains stderr and is included in the
+always-run guest diagnostic upload. Both branches must succeed before JSC Cargo,
+embedding checks, the host/tools producers, guest consumers or the four final cache
+saves can run. No Cargo builds overlap and no prebuild cache is saved early. This
+removes a serial dependency; actual cold completion and contention require hosted
+CI evidence, not a timing claim from the dependency graph.
+
 Host Clippy covers all test/example targets once. Host tests run once, in release
 mode, including integration and documentation tests. Both WASI feature graphs
 remain checked; their features are not interchangeable. All Clippy commands use
@@ -185,7 +201,31 @@ with the current scan when reviewing a baseline edit.
 
 Do not update the baseline to make an unexplained regression pass. If an
 intentional duplicate is necessary, review its source and the baseline change
-in the same PR. The explicit maintenance command is:
+in the same PR.
+
+The assert/util strict TypeScript conversion migrates exactly one existing
+fingerprint, `559db8d4f8200ec1` to `432876565c1cd6b7`, with count 1 unchanged.
+Both identify the same 21-line error-formatting clone in the adapted implementations.
+The original JavaScript has 178 tokens; erased type annotations raise the typed
+scanner count to 196. The migration preserves the original runtime AST and token
+positions instead of extracting shared code. `scripts/runtime-assert-util.test.ts`
+pins that proof, and the typed-adapter copy probe still rejects new duplication.
+This remains a separate one-for-one format migration, not room for a different clone.
+
+Integrating the already-converted events module with typed util also migrates the
+existing 12-line events/util error-formatting clone from `33ad45a23a9c5c95` to
+`f35a9b37be0e8d3c`, with count 1 unchanged. The scanner reports 107 original
+JavaScript tokens and 109 TypeScript tokens, including the typed signature at the
+clone boundary. The entire describeReceived bodies remain byte-identical to
+original source `ac43127c85addabed7e0c2a4883247ae074e858c`; only parameter types
+were added. Each conversion alone separates the pair into different scanner
+formats; their integration restores the same pair in TypeScript. No implementation
+was copied or refactored for this correction. The total remains 21 baseline
+entries with count 1 each. The other 19 entries, scan configuration and
+zero-new-clone limit stay unchanged. Both existing copy-rejection probes remain
+blocking.
+
+The explicit maintenance command is:
 
 ```sh
 bunx --no-install jscpd --config .jscpd.json --baseline .jscpd-baseline.json --update-baseline --fail-on-empty
@@ -233,10 +273,11 @@ feature, profile, and Rust source fingerprints after a compatible prefix restore
 The existing input-time check restores timestamps only for unchanged content.
 
 This namespace change cannot match old `native-cargo-v1` or `native-v4` entries.
-The first eligible run needs a new v2 snapshot unless the unchanged, narrower
-`native-v4` fallback matches. That fallback runs only when v2 restored nothing,
-so it cannot overlay a v2 prefix hit. Saves still follow all selected JSC checks
-and host output production, and exact hits do not save again. Later compatible
+The first eligible run needs a new v2 snapshot unless the narrower `native-v4` fallback matches. Its compatibility prefix is
+unchanged; its primary and save keys now also identify the tools builder and
+workflow producer. That fallback runs only when v2 restored nothing,
+so it cannot overlay a v2 prefix hit. All four final saves follow the tools producer, both blocking Web guest gates,
+selected JSC checks and host output production, and exact hits do not save again. Later compatible
 main-run logs must show the actual restored key and compile counts before any
 savings claim. Historical cold and warm timings do not measure this change.
 

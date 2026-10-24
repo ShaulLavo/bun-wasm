@@ -10,10 +10,18 @@
     return Object.assign(new TypeError(`The "${name}" argument must be ${expected}. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_TYPE" });
   }
 
+  const hrefGetter = Object.getOwnPropertyDescriptor(URL.prototype, "href")?.get;
+
+  function isURL(value: unknown): value is URL {
+    if (!hrefGetter) return false;
+    try { hrefGetter.call(value); return true; }
+    catch { return false; }
+  }
+
   function fileURLToPath(input: unknown) {
-    const url = typeof input === "string" ? new URL(input) : input;
-    if (!(url instanceof URL)) throw invalidArg("path", "of type string or an instance of URL", input);
-    if (url.protocol !== "file:") {
+    if (typeof input !== "string" && !isURL(input)) throw invalidArg("url", "of type string", input);
+    const url = typeof input === "string" ? URL.parse(input) : input;
+    if (!url || url.protocol !== "file:") {
       throw Object.assign(new TypeError("The URL must be of scheme file"), { code: "ERR_INVALID_URL_SCHEME" });
     }
     if (url.hostname !== "" && url.hostname !== "localhost") {
@@ -147,11 +155,9 @@
     auth = "";
     let pathname = obj.pathname || "";
     let search = obj.search || "";
-    if (!search && obj.query && typeof obj.query === "object") {
-      const qs = internal.builtin("node:querystring").stringify(obj.query);
+    if (!search && obj.query && typeof obj.query === "object" && Object.keys(obj.query).length) {
+      const qs = new internal.web.URLSearchParams(obj.query).toString();
       if (qs) search = "?" + qs;
-    } else if (!search && typeof obj.query === "string" && obj.query) {
-      search = "?" + obj.query;
     }
     if (search && !search.startsWith("?")) search = "?" + search;
     let hash = obj.hash || "";
@@ -202,7 +208,7 @@
     resolve,
     resolveObject: (from: string, to: string) => parse(resolve(from, to)),
     domainToASCII: (domain: unknown) => native.domainToASCII(String(domain)),
-    domainToUnicode: (domain: unknown) => String(domain),
+    domainToUnicode: (domain: unknown) => native.domainToUnicode(`${domain}`),
     urlToHttpOptions,
   };
 })
