@@ -33,11 +33,17 @@ modules and parses the erased stream factory without loading Playwright.
 `checks/quality-native-stream-inputs.json` gives this regression one blocking
 quality owner. Browser fixtures and assertions are unchanged.
 
+Integration with the typed assertion and utility modules requires one shared
+ambient contract for `String.toWellFormed`. Their declaration now matches the
+stream declaration's required method; the utility implementation keeps its
+feature detection and fallback. No runtime implementation changed.
+
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/streams.ts`](#strict-handwritten-stream-adapter) | Host feature | Original text-stream wrapper and native codec contracts, with bounded local normalization and descriptor validation. |
+| [`crates/bunwasm-runtime/src/js/assert_util_types.d.ts`](#strict-handwritten-stream-adapter) | Host feature | Integration-only alignment of the existing original utility declaration with the required string method used by both adapters. |
 
 [Parent context](bun-patch-series.md).
 
