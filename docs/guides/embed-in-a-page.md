@@ -4,6 +4,8 @@ Register Bun as a program on a [Waffle](https://github.com/ShaulLavo/waffle) `Ru
 
 bun-wasm is not on npm. You install it as a Git dependency.
 
+> **Early API.** The embedding API and Waffle's public API are still changing, and not every path works yet. The snippets below follow the package's code and its package tests, but this guide has not been run as a complete page, so expect to adjust them. Pin exact commits and re-check this guide when you update either one.
+
 ## Install the package
 
 Pin both repositories to exact commits. The Waffle commit must be the one in bun-wasm's own `peerDependencies`. At this revision that is `b20fad173ebaa225cb87c51776f35edaaafd4a40`.
