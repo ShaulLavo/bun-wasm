@@ -17,6 +17,7 @@ declare namespace BunWasm {
   }
   type AssertionDiff = [operation: "nop" | "insert" | "delete", line: string];
   interface UtilityModule {
+    parseArgs(config?: unknown): ParseArgsResult;
     bunDeepEquals(a: unknown, b: unknown, strict?: boolean): boolean;
     isDeepStrictEqual(a: unknown, b: unknown): boolean;
     types: { isRegExp(value: unknown): value is RegExp; isNativeError(value: unknown): value is Error };
@@ -49,10 +50,11 @@ declare namespace BunWasm {
   type BoxedPrimitive<Value> = object & { valueOf(): Value };
   interface NumericView extends ArrayBufferView, ArrayLike<number | bigint> {}
   interface OptionToken {
-    kind: "option"; name: string; rawName: string; index: number;
-    value: string | undefined; inlineValue: boolean | undefined;
+    kind: "option"; name: unknown; rawName: unknown; index: number;
+    value: unknown; inlineValue: boolean | undefined;
   }
-  type ParseToken = OptionToken | { kind: "positional"; index: number; value: string } | { kind: "option-terminator"; index: number };
+  type ParseToken = OptionToken | { kind: "positional"; index: number; value: unknown } | { kind: "option-terminator"; index: number };
+  interface ParseArgsResult { values: Record<PropertyKey, unknown>; positionals: unknown[]; tokens?: ParseToken[] }
   interface BufferConstructor { isBuffer(value: unknown): boolean }
   interface Internal {
     isPromise?(value: unknown): value is Promise<unknown>;

@@ -590,8 +590,10 @@
     return false;
   }
 
-  const wellKnownConstructors = new Set<unknown>(
-    ([Object, Array, Function, RegExp, Promise, String, Symbol, BigInt, Boolean, Number, Date, Error, Map, Set, WeakMap, WeakSet, ArrayBuffer, DataView] as Function[])
+  const ConstructorSet = Set;
+  const constructors: Function[] = [Object, Array, Function, RegExp, Promise, String, Symbol, BigInt, Boolean, Number, Date, Error, Map, Set, WeakMap, WeakSet, ArrayBuffer, DataView];
+  const wellKnownConstructors = new ConstructorSet<unknown>(
+    constructors
       .concat([Int8Array, Int16Array, Int32Array, Uint8Array, Uint8ClampedArray, Uint16Array, Uint32Array, Float32Array, Float64Array, BigInt64Array, BigUint64Array])
       .concat(typeof Float16Array === "function" ? [Float16Array] : []),
   );
@@ -990,7 +992,8 @@
   }
 
   function ownEnumerableKeys(obj: object): (string | symbol)[] {
-    return (Object.keys(obj) as (string | symbol)[]).concat(enumerableSymbols(obj));
+    const keys: (string | symbol)[] = Object.keys(obj);
+    return keys.concat(enumerableSymbols(obj));
   }
 
   function bunCompareObjects(a: object, b: object, strict: boolean, memo: BunWasm.EqualityMemo): boolean {
@@ -1193,59 +1196,59 @@
     return obj && hasOwn(obj, key) ? (obj as Record<string, unknown>)[key] : undefined;
   }
 
-  function optionsGetOwn(options: Record<string, unknown>, longOption: string, key: string) {
-    return hasOwn(options, longOption) ? objectGetOwn(options[longOption], key) : undefined;
+  function optionsGetOwn(options: Record<PropertyKey, unknown>, longOption: unknown, key: string) {
+    return hasOwn(options, longOption as PropertyKey) ? objectGetOwn(options[longOption as PropertyKey], key) : undefined;
   }
 
-  function findLongOptionForShort(shortOption: string, options: Record<string, unknown>) {
+  function findLongOptionForShort(shortOption: unknown, options: Record<PropertyKey, unknown>) {
     const entry = Object.entries(options).find(([, config]) => objectGetOwn(config, "short") === shortOption);
     return entry ? entry[0] : shortOption;
   }
 
-  const isOptionValue = (value: string | undefined) => value != null;
-  const isOptionLikeValue = (value: string | undefined) => value != null && value.length > 1 && value[0] === "-";
-  const isLoneShortOption = (arg: string) => arg.length === 2 && arg[0] === "-" && arg[1] !== "-";
-  const isLoneLongOption = (arg: string) => arg.length > 2 && arg.startsWith("--") && !arg.includes("=", 3);
-  const isLongOptionAndValue = (arg: string) => arg.length > 2 && arg.startsWith("--") && arg.includes("=", 3);
+  const isOptionValue = (value: unknown) => value != null;
+  const isOptionLikeValue = (value: unknown) => value != null && (value as { length: number }).length > 1 && (value as { [index: number]: unknown })[0] === "-";
+  const isLoneShortOption = (arg: unknown) => (arg as { length: unknown }).length === 2 && (arg as { [index: number]: unknown })[0] === "-" && (arg as { [index: number]: unknown })[1] !== "-";
+  const isLoneLongOption = (arg: unknown) => (arg as { length: number }).length > 2 && (arg as { startsWith(prefix: unknown): unknown }).startsWith("--") && !(arg as { includes(value: unknown, start: unknown): unknown }).includes("=", 3);
+  const isLongOptionAndValue = (arg: unknown) => (arg as { length: number }).length > 2 && (arg as { startsWith(prefix: unknown): unknown }).startsWith("--") && (arg as { includes(value: unknown, start: unknown): unknown }).includes("=", 3);
 
-  function isShortOptionStart(arg: string) {
-    return arg.length > 2 && arg[0] === "-" && arg[1] !== "-";
+  function isShortOptionStart(arg: unknown) {
+    return (arg as { length: number }).length > 2 && (arg as { [index: number]: unknown })[0] === "-" && (arg as { [index: number]: unknown })[1] !== "-";
   }
 
-  function shortTakesValue(arg: string, options: Record<string, unknown>) {
-    return optionsGetOwn(options, findLongOptionForShort(arg[1], options), "type") === "string";
+  function shortTakesValue(arg: unknown, options: Record<PropertyKey, unknown>) {
+    return optionsGetOwn(options, findLongOptionForShort((arg as { [index: number]: unknown })[1], options), "type") === "string";
   }
 
-  function expandShortGroup(arg: string, options: Record<string, unknown>) {
+  function expandShortGroup(arg: unknown, options: Record<PropertyKey, unknown>) {
     const expanded = [];
-    for (let i = 1; i < arg.length; i++) {
-      const shortOption = arg[i];
+    for (let i = 1; i < (arg as { length: number }).length; i++) {
+      const shortOption = (arg as { [index: number]: unknown })[i];
       const longOption = findLongOptionForShort(shortOption, options);
-      if (optionsGetOwn(options, longOption, "type") !== "string" || i === arg.length - 1) {
+      if (optionsGetOwn(options, longOption, "type") !== "string" || i === (arg as { length: number }).length - 1) {
         expanded.push(`-${shortOption}`);
         continue;
       }
       // String option inside a group: the rest of the group is its value.
-      expanded.push(`-${arg.slice(i)}`);
+      expanded.push(`-${(arg as { slice(start: unknown, end?: unknown): unknown }).slice(i)}`);
       break;
     }
     return expanded;
   }
 
-  function optionToken(name: string, rawName: string, index: number, value: string | undefined, inlineValue: boolean | undefined): BunWasm.OptionToken {
+  function optionToken(name: unknown, rawName: unknown, index: number, value: unknown, inlineValue: boolean | undefined): BunWasm.OptionToken {
     return { kind: "option", name, rawName, index, value, inlineValue };
   }
 
   // Tokens expanded from a short-option group ("-abc"); Bun names them without the dash.
   const groupTokens = new WeakSet<BunWasm.OptionToken>();
 
-  function argsToTokens(args: string[], options: Record<string, unknown>) {
+  function argsToTokens(args: unknown[], options: Record<PropertyKey, unknown>) {
     const tokens: BunWasm.ParseToken[] = [];
     let index = -1;
     let groupCount = 0;
     const remaining = args.slice();
     while (remaining.length > 0) {
-      const arg = remaining.shift()!;
+      const arg = remaining.shift();
       const nextArg = remaining[0];
       const inGroup = groupCount > 0;
       if (inGroup) groupCount--;
@@ -1257,7 +1260,7 @@
         break;
       }
       if (isLoneShortOption(arg)) {
-        const longOption = findLongOptionForShort(arg[1], options);
+        const longOption = findLongOptionForShort((arg as { [index: number]: unknown })[1], options);
         const takesValue = optionsGetOwn(options, longOption, "type") === "string" && isOptionValue(nextArg);
         const value = takesValue ? remaining.shift() : undefined;
         const token = optionToken(longOption, arg, index, value, takesValue ? false : undefined);
@@ -1273,12 +1276,12 @@
         continue;
       }
       if (isShortOptionStart(arg)) {
-        const longOption = findLongOptionForShort(arg[1], options);
-        tokens.push(optionToken(longOption, `-${arg[1]}`, index, arg.slice(2), true));
+        const longOption = findLongOptionForShort((arg as { [index: number]: unknown })[1], options);
+        tokens.push(optionToken(longOption, `-${(arg as { [index: number]: unknown })[1]}`, index, (arg as { slice(start: unknown, end?: unknown): unknown }).slice(2), true));
         continue;
       }
       if (isLoneLongOption(arg)) {
-        const longOption = arg.slice(2);
+        const longOption = (arg as { slice(start: unknown, end?: unknown): unknown }).slice(2);
         const takesValue = optionsGetOwn(options, longOption, "type") === "string" && isOptionValue(nextArg);
         const value = takesValue ? remaining.shift() : undefined;
         tokens.push(optionToken(longOption, arg, index, value, takesValue ? false : undefined));
@@ -1286,9 +1289,9 @@
         continue;
       }
       if (isLongOptionAndValue(arg)) {
-        const equalIndex = arg.indexOf("=");
-        const longOption = arg.slice(2, equalIndex);
-        tokens.push(optionToken(longOption, `--${longOption}`, index, arg.slice(equalIndex + 1), true));
+        const equalIndex = (arg as { indexOf(value: unknown): unknown }).indexOf("=");
+        const longOption = (arg as { slice(start: unknown, end?: unknown): unknown }).slice(2, equalIndex);
+        tokens.push(optionToken(longOption, `--${longOption}`, index, (arg as { slice(start: unknown, end?: unknown): unknown }).slice((equalIndex as number) + 1), true));
         continue;
       }
       tokens.push({ kind: "positional", index, value: arg });
@@ -1298,7 +1301,7 @@
 
   function checkOptionLikeValue(token: BunWasm.OptionToken) {
     if (token.inlineValue || !isOptionLikeValue(token.value)) return;
-    const example = token.rawName.startsWith("--")
+    const example = (token.rawName as { startsWith(prefix: unknown): unknown }).startsWith("--")
       ? `'${token.rawName}=-XYZ'`
       : `'--${token.name}=-XYZ' or '${token.rawName}-XYZ'`;
     throw parseArgsError(
@@ -1307,20 +1310,20 @@
     );
   }
 
-  function unknownOption(rawName: string, allowPositionals: boolean) {
+  function unknownOption(rawName: unknown, allowPositionals: boolean) {
     const suggestDashDash = allowPositionals
       ? `. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- ${JSON.stringify(rawName)}`
       : "";
     return parseArgsError("ERR_PARSE_ARGS_UNKNOWN_OPTION", `Unknown option '${rawName}'${suggestDashDash}`);
   }
 
-  function checkOptionUsage(config: { options: Record<string, unknown>; allowNegative: boolean; allowPositionals: boolean }, token: BunWasm.OptionToken) {
+  function checkOptionUsage(config: { options: Record<PropertyKey, unknown>; allowNegative: boolean; allowPositionals: boolean }, token: BunWasm.OptionToken) {
     let name = token.name;
-    if (!hasOwn(config.options, name)) {
-      const negated = config.allowNegative && name.startsWith("no-");
+    if (!hasOwn(config.options, name as PropertyKey)) {
+      const negated = config.allowNegative && (name as { startsWith(prefix: unknown): unknown }).startsWith("no-");
       const shownName = groupTokens.has(token) ? token.name : token.rawName;
       if (!negated) throw unknownOption(shownName, config.allowPositionals);
-      name = name.slice(3);
+      name = (name as { slice(start: unknown, end?: unknown): unknown }).slice(3);
       if (optionsGetOwn(config.options, name, "type") !== "boolean") {
         throw unknownOption(shownName, config.allowPositionals);
       }
@@ -1336,20 +1339,20 @@
     }
   }
 
-  function storeOption(longOption: string, optionValue: string | boolean | undefined, options: Record<string, unknown>, values: Record<string, unknown>, allowNegative: boolean) {
+  function storeOption(longOption: unknown, optionValue: unknown, options: Record<PropertyKey, unknown>, values: Record<PropertyKey, unknown>, allowNegative: boolean) {
     if (longOption === "__proto__") return;
     let name = longOption;
     let value = optionValue === undefined ? true : optionValue;
-    if (allowNegative && name.startsWith("no-") && optionValue === undefined && !hasOwn(options, name)) {
-      name = name.slice(3);
+    if (allowNegative && (name as { startsWith(prefix: unknown): unknown }).startsWith("no-") && optionValue === undefined && !hasOwn(options, name as PropertyKey)) {
+      name = (name as { slice(start: unknown, end?: unknown): unknown }).slice(3);
       value = false;
     }
     if (!optionsGetOwn(options, name, "multiple")) {
-      values[name] = value;
+      values[name as PropertyKey] = value;
       return;
     }
-    if (values[name] === undefined) values[name] = [value];
-    else (values[name] as (string | boolean)[]).push(value);
+    if (values[name as PropertyKey] === undefined) values[name as PropertyKey] = [value];
+    else (values[name as PropertyKey] as { push(value: unknown): unknown }).push(value);
   }
 
   function validateDefault(type: string, multiple: unknown, value: unknown, name: string) {
@@ -1407,12 +1410,12 @@
     for (const [longOption, optionConfig] of Object.entries(options)) validateOptionConfig(longOption, optionConfig);
 
     const tokens = argsToTokens(args, options);
-    const result: { values: Record<string, unknown>; positionals: string[]; tokens?: BunWasm.ParseToken[] } = { values: { __proto__: null }, positionals: [] };
+    const result: BunWasm.ParseArgsResult = { values: { __proto__: null }, positionals: [] };
     if (returnTokens) result.tokens = tokens;
 
-    function storeNegativeOption(token: BunWasm.OptionToken, options: Record<string, unknown>, values: Record<string, unknown>) {
-      if (!token.name.startsWith("no-") || token.value !== undefined || hasOwn(options, token.name)) return false;
-      const positive = token.name.slice(3);
+    function storeNegativeOption(token: BunWasm.OptionToken, options: Record<PropertyKey, unknown>, values: Record<PropertyKey, unknown>) {
+      if (!(token.name as { startsWith(prefix: unknown): unknown }).startsWith("no-") || token.value !== undefined || hasOwn(options, token.name as PropertyKey)) return false;
+      const positive = (token.name as { slice(start: unknown): unknown }).slice(3);
       if (optionsGetOwn(options, positive, "type") !== "boolean") return false;
       token.name = positive;
       storeOption(positive, false, options, values, false);
@@ -1423,7 +1426,7 @@
       if (token.kind === "option") {
         if (allowNegative && storeNegativeOption(token, options, result.values)) continue;
         if (strict) {
-          checkOptionUsage(parseConfig as { options: Record<string, unknown>; allowNegative: boolean; allowPositionals: boolean }, token);
+          checkOptionUsage(parseConfig as { options: Record<PropertyKey, unknown>; allowNegative: boolean; allowPositionals: boolean }, token);
           checkOptionLikeValue(token);
         }
         storeOption(token.name, token.value, options, result.values, allowNegative);
