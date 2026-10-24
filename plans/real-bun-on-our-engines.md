@@ -272,8 +272,10 @@ The host-key group converts only `crypto_host_keys.js` at pinned PR140 source
 `ac43127c85addabed7e0c2a4883247ae074e858c`. The approved bounded restructure
 uses explicit method tables, result-preserving operation adapters and tagged import
 snapshots. Portable crypto and native engines remain unchanged. The script suite
-has one blocking owner in `scripts/test-web-host.sh --unit`; the focused runtime
-fixture belongs to the existing native fixture step. Original and converted
+has one blocking owner in `scripts/test-web-host.sh --unit`. That owner installs
+root test tools from the frozen lock without lifecycle builds, before installing
+the two applications. Package verification still prepares exports normally.
+The focused runtime fixture belongs to the existing native fixture step. Original and converted
 instrumented controls cover getters, receivers, promises, coercion and cache identity.
 Position checks compare emitted JavaScript with the new TypeScript, not the old file.
 Verification records belong to `/work/reports/bun-wasm/ts-host-crypto-keys-20261024/`.

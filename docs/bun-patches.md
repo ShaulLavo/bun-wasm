@@ -3431,3 +3431,8 @@ directive and final receiver-aware wrappers. Type erasure preserves the new sour
 executable token lines and columns; the restructure does not preserve old locations.
 The original snapshot is test data with a pinned SHA-256, not a second runtime.
 No portable key implementation, native engine, or cryptographic algorithm changes.
+
+The host-suite owner installs the root's locked test tools with lifecycle scripts
+skipped before either application's normal install. This makes its AST parser
+available in a fresh Web CI job without building package exports there. Package
+verification retains normal preparation, including the pinned Waffle exports.
