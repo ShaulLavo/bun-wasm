@@ -44,6 +44,33 @@ async function absentShift(site: string, replaceTypeError: boolean) {
   return snapshot;
 }
 
+function installWrapFnAccessor({ state, wrapped, listener, emitter, mode, sentinel, calls }: {
+  state: object;
+  wrapped: object;
+  listener: (this: unknown, value: unknown) => void;
+  emitter: E;
+  mode: string;
+  sentinel: Error;
+  calls: unknown[];
+}) {
+  if (mode === "shape") return;
+  let stored: unknown, reentered = false;
+  Object.defineProperty(state, "wrapFn", {
+    configurable: true,
+    set(value: unknown) {
+      calls.push(["set", value === wrapped, Reflect.get(wrapped, "listener") === listener]);
+      if (mode === "setter") throw sentinel;
+      stored = value;
+    },
+    get() {
+      calls.push("get");
+      if (mode === "getter") throw sentinel;
+      if (!reentered) { reentered = true; emitter.emit("value", "inner"); }
+      return stored;
+    },
+  });
+}
+
 function boundState(method: "once" | "prependOnceListener", mode: string) {
   const emitter = new E();
   const bind = Function.prototype.bind;
@@ -59,21 +86,7 @@ function boundState(method: "once" | "prependOnceListener", mode: string) {
     initialUndefined = Reflect.get(state, "wrapFn") === undefined;
     const wrapped: object = Reflect.apply(bind, this, arguments);
     registeredWrapper = wrapped;
-    let stored: unknown, reentered = false;
-    if (mode !== "shape") Object.defineProperty(state, "wrapFn", {
-      configurable: true,
-      set(value: unknown) {
-        calls.push(["set", value === wrapped, Reflect.get(wrapped, "listener") === listener]);
-        if (mode === "setter") throw sentinel;
-        stored = value;
-      },
-      get() {
-        calls.push("get");
-        if (mode === "getter") throw sentinel;
-        if (!reentered) { reentered = true; emitter.emit("value", "inner"); }
-        return stored;
-      },
-    });
+    installWrapFnAccessor({ state, wrapped, listener, emitter, mode, sentinel, calls });
     return wrapped;
   } });
   try { emitter[method]("value", listener); }
