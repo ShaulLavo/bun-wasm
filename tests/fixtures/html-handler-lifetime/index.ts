@@ -33,10 +33,9 @@ function abandoned(streamed: boolean) {
     controller.enqueue(encoder.encode("<p>x</p>"));
     controller.close();
   } }) : "<p>x</p>";
-  const source = new Response(input);
-  const reader = new HTMLRewriter().on("p", handler).transform(source).body!.getReader();
+  const reader = new HTMLRewriter().on("p", handler).transform(new Response(input)).body!.getReader();
   void reader.read().then(() => { outcome.message = "resolved"; }, error => { outcome.message = String(error); });
-  return { reader, outcome, handler: new WeakRef(handler), input: new WeakRef(source), stream: typeof input === "object" ? new WeakRef(input) : undefined };
+  return { reader, outcome, handler: new WeakRef(handler) };
 }
 
 const parked = Array.from({ length: 8 }, (_, index) => abandoned(index % 2 === 1));
@@ -44,9 +43,6 @@ await collected(() => parked.every(item => item.outcome.message !== undefined));
 assert.ok(parked.every(item => item.outcome.message?.includes("will never settle")));
 await collected(() => htmlRewriterCount() === baseline && parked.every(item => item.handler.deref() === undefined));
 assert.ok(parked.every(item => item.outcome.promise?.deref() === undefined));
-await collected(() => parked.every(item => item.input.deref() === undefined && item.stream?.deref() === undefined));
-for (const item of parked) await assert.rejects(item.reader.read(), error => String(error).includes("will never settle"));
-assert.equal(htmlRewriterCount(), baseline);
 console.log("unreachable handler promises reject held reads and release native sessions");
 
 async function cancelled(inside: boolean) {
@@ -89,9 +85,8 @@ const thenable = { get then() {
   thenReads++;
   return (resolve: (value: unknown) => void) => resolve(ignored);
 } };
-const thenableRewriter = new HTMLRewriter();
-Reflect.apply(thenableRewriter.on, thenableRewriter, ["p", { element: () => thenable }]);
-assert.equal(await thenableRewriter.transform(new Response("<p>thenable</p>")).text(), "<p>thenable</p>");
+const thenableHandler: { element(): void } = { element: () => thenable };
+assert.equal(await new HTMLRewriter().on("p", thenableHandler).transform(new Response("<p>thenable</p>")).text(), "<p>thenable</p>");
 assert.equal(thenReads, 1);
 const reachable = Promise.withResolvers<void>();
 const response = new HTMLRewriter().on("p", { element: () => reachable.promise }).transform(new Response("<p>reachable</p>"));

@@ -1,0 +1,6 @@
+{
+  "owner": "web",
+  "path": "scripts/html-handler-observation.test.ts",
+  "localRuntime": true,
+  "batch": "10-web"
+}

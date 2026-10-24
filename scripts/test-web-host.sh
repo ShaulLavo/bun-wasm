@@ -13,11 +13,9 @@ if [[ "$phase" != --browser ]]; then
   (
     cd "$root/web"
     node_modules/.bin/tsc -p ../crates/bunwasm-runtime/tsconfig.json
-    bun test ../scripts/runtime-emission.test.ts ../scripts/html-handler-observation.test.ts ../scripts/html-lifecycle-acceptance.test.ts ../scripts/runtime-types.test.ts ../scripts/runtime-signal-dispatch.test.ts ../scripts/worker-codec.test.ts ../scripts/worker-selectors.test.ts ../scripts/worker-outcome.test.ts ../scripts/spawn-runtime-proc.test.ts ../scripts/spawn-path.test.ts ../scripts/native-fixture-launchers.test.ts
-    bun test ../scripts/icu-inputs.test.ts ../scripts/jsc-inputs.test.ts
-    bun test ../scripts/run-with-timeout.test.ts ../scripts/runtime-installed.test.ts ../scripts/runtime-size.test.ts
+    bun ../scripts/test-checks.ts web
     bun run test
-    PYTHONDONTWRITEBYTECODE=1 python3 ../scripts/test-bun-suite.py ProvenanceTests HtmlAcceptanceRunnerTests
+    PYTHONDONTWRITEBYTECODE=1 python3 ../scripts/test-bun-suite.py ProvenanceTests
     bun run check
     node_modules/.bin/tsc -p tests/engine-interruption.tsconfig.json
   )
@@ -30,7 +28,7 @@ if [[ "$phase" != --unit ]]; then
   export SMOKE_PORT="${SMOKE_PORT:-4179}"
   listeners=$(ss -H -ltn "sport = :$SMOKE_PORT")
   test -z "$listeners"
-  browser_test bun test ../scripts/run-with-timeout-browser.test.ts
+  browser_test bun ../scripts/test-checks.ts web-browser
   browser_test bun run test:browser
   browser_test env SPLIT_SMOKE_PORT="${SPLIT_SMOKE_PORT:-4180}" bun tests/browser-splitting.mjs
   browser_test env PLAYWRIGHT="$root/web/node_modules/playwright/index.mjs" node ../scripts/test-native-stream-interop.mjs

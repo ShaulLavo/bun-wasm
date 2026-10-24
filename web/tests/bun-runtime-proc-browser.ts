@@ -32,6 +32,9 @@ const procImports = WebAssembly.Module.imports(artifactModule).filter(entry => e
 for (const name of ["spawn", "pipe", "read", "write", "wait", "wait_job", "kill", "kill_job", "poll", "job_of", "signal", "start_status", "access_start", "access_take", "access_cancel", "fd_kind"]) {
   assert.ok(procImports.includes(name), `matching rebuilt guest must directly import runtime_proc.${name}; an older slot-backed artifact does not prove step7b`);
 }
+const sourceCacheFixture = resolve(import.meta.dir, "../../tests/fixtures/source-cache/index.ts");
+const sourceCacheBytes = await Bun.file(sourceCacheFixture).bytes();
+const fixtureReceipt = { path: sourceCacheFixture, sha256: new Bun.CryptoHasher("sha256").update(sourceCacheBytes).digest("hex") };
 const artifactReceipt = { engine, path: artifact, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), procImports };
 if (publishedDefault) {
   assert.equal(BUN_WASM_ASSET!.bytes, artifactReceipt.bytes, "published descriptor matches exact-merge build size");
@@ -49,8 +52,11 @@ if (requestedSite) assert.ok(isAbsolute(requestedSite), "optional production sit
 const site = requestedSite ? await realpath(requestedSite) : undefined;
 if (site) for (const path of ["index.html", "playground/index.html"]) assert.ok(await Bun.file(join(site, path)).exists(), `production site build is missing ${path}`);
 const selected = process.env.BUN_WASM_RUNTIME_PROC_SCENARIO;
-const scenarios = selected ? [selected] : ["generic-control"].concat(bunRuntimeProcScenarios.map(scenario => scenario.name));
-assert.ok(scenarios.every(name => name === "generic-control" || bunRuntimeProcScenarios.some(scenario => scenario.name === name)), "known Bun runtime_proc scenario required");
+const requestedPort = Number(process.env.BUN_WASM_RUNTIME_PROC_PORT ?? "4187");
+assert.ok(Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort <= 65535, "explicit valid loopback port required");
+const availableScenarios = bunRuntimeProcScenarios.filter(scenario => scenario.name !== "source-cache" || engine === "browser");
+const scenarios = selected ? [selected] : ["generic-control"].concat(availableScenarios.map(scenario => scenario.name));
+assert.ok(scenarios.every(name => name === "generic-control" || availableScenarios.some(scenario => scenario.name === name)), "known matching-engine Bun runtime_proc scenario required");
 const originalTmpdir = process.env.TMPDIR;
 let scratch: string | undefined;
 let scratchCreation: Promise<string> | undefined;
@@ -88,17 +94,21 @@ async function runScenario(browser: Browser, name: string, scenario: string) {
   await page.addInitScript(normalizeConsoleErrors);
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
+  const consoleMessages: { type: string; text: string }[] = [];
   const guestRequests: string[] = [];
   page.on("request", request => {
     if (request.url() === BUN_WASM_ASSET?.url || new URL(request.url()).pathname === "/bun-guest.wasm") guestRequests.push(request.url());
   });
   page.on("pageerror", error => pageErrors.push(error.message));
-  page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
+  page.on("console", message => {
+    consoleMessages.push({ type: message.type(), text: message.text() });
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
   try {
     await page.goto(`http://127.0.0.1:${ownedPort}/?engine=${engine}&scenario=${encodeURIComponent(scenario)}${publishedDefault ? "&published-default" : ""}`);
     await page.waitForFunction(() => Reflect.get(globalThis, "bunRuntimeProcResult"), undefined, { timeout: 90_000 });
     const result = await page.evaluate(() => Reflect.get(globalThis, "bunRuntimeProcResult"));
-    console.log(JSON.stringify({ browser: name, version: browser.version(), scenario, artifact: artifactReceipt, publishedDefault, guestRequests, result, pageErrors, consoleErrors }));
+    console.log(JSON.stringify({ browser: name, version: browser.version(), scenario, artifact: artifactReceipt, fixture: scenario === "source-cache" ? fixtureReceipt : undefined, publishedDefault, guestRequests, result, pageErrors, consoleErrors, consoleMessages }));
     if (publishedDefault) {
       // The generic byte fixture and throwing module provider never enter a Bun guest.
       const expectedRequests = scenario === "generic-control" || scenario === "start-failed" ? [] : [BUN_WASM_ASSET!.url];
@@ -111,7 +121,7 @@ async function runScenario(browser: Browser, name: string, scenario: string) {
   } catch (error) {
     failed = true;
     const diagnostics = await page.evaluate(() => Reflect.get(globalThis, "bunRuntimeProcDiagnostics")?.()).catch(error => ({ diagnosticsError: String(error) }));
-    console.error(JSON.stringify({ browser: name, scenario, artifact: artifactReceipt, error: String(error), diagnostics, pageErrors, consoleErrors }));
+    console.error(JSON.stringify({ browser: name, scenario, artifact: artifactReceipt, error: String(error), diagnostics, pageErrors, consoleErrors, consoleMessages }));
   } finally { await page.close(); }
   return failed;
 }
@@ -125,21 +135,21 @@ async function runSiteSmoke(browser: Browser, name: string) {
 
 try {
   const { chromium, firefox, webkit } = await import("playwright");
-  const { buildBrowserEntries } = await import("../../scripts/browser-build");
+  const { processBundle } = await import("../scripts/ci-process-bundles");
   const types = { chromium, firefox, webkit };
   for (const name of names) assert.ok(existsSync(types[name as keyof typeof types].executablePath()), `cached ${name} required; this gate never downloads browsers`);
   const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? originalTmpdir ?? tmpdir();
-  scratch = await (scratchCreation = mkdtemp(join(base, "bun-wasm-bun-runtime-proc-")));
+  scratch = await (scratchCreation = mkdtemp(join(base, "bw-proc-")));
   process.env.TMPDIR = scratch;
   console.log(JSON.stringify({ resources: { existing: { artifact: artifactReceipt, installedPackages: "read only", browserCaches: "read only" },
-    created: { scratch, listener: "ephemeral loopback", browsers: names, downloads: publishedDefault ? { immutableGuest: BUN_WASM_ASSET!.url, storage: "browser memory only" } : "none" } }, siteSmoke: site ? { build: site } : "pending: provide BUN_WASM_RUNTIME_PROC_SITE_DIR for production site/sandbox smoke" }));
-  const root = resolve(import.meta.dir, "../.."), out = join(scratch, "dist");
-  await buildBrowserEntries([join(import.meta.dir, "bun-runtime-proc-main.ts"), join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts")], out, { runtimeWorker: true });
-  await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./bun-runtime-proc-main.js"></script>');
-  server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    created: { scratch, listener: `127.0.0.1:${requestedPort}`, browsers: names, downloads: publishedDefault ? { immutableGuest: BUN_WASM_ASSET!.url, storage: "browser memory only" } : "none" } }, siteSmoke: site ? { build: site } : "pending: provide BUN_WASM_RUNTIME_PROC_SITE_DIR for production site/sandbox smoke" }));
+  const out = join(scratch, "dist");
+  await processBundle("bun-runtime-proc", out);
+  server = Bun.serve({ hostname: "127.0.0.1", port: requestedPort, reusePort: false, async fetch(request) {
     const url = new URL(request.url);
     const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };
     if (url.pathname === "/favicon.ico") return new Response(null, { status: 204, headers });
+    if (url.pathname === "/source-cache-fixture.ts") return new Response(sourceCacheBytes, { headers });
     if (url.pathname === "/bun-guest.wasm") return new Response(Bun.file(artifact), { headers: { ...headers, "Content-Type": "application/wasm" } });
     if (url.pathname === "/bun-browser.wasm.gz" && site) return new Response(Bun.gzipSync(bytes), { headers });
     if (url.pathname.startsWith("/site/") && site) {

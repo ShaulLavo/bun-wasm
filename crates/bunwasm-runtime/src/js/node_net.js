@@ -236,17 +236,11 @@
       }
     }
 
-    class Server extends EventEmitter {
+    const serverContract = internal.require("node_net_server");
+    const Server = serverContract.callable(class Server extends EventEmitter {
       constructor(options = {}, listener) {
         super();
-        if (typeof options === "function") { listener = options; options = {}; }
-        this._options = options || {};
-        this.allowHalfOpen = Boolean(this._options.allowHalfOpen);
-        this.pauseOnConnect = Boolean(this._options.pauseOnConnect);
-        this._referenced = true;
-        this.listening = false;
-        this._connections = new Set();
-        if (listener) this.on("connection", listener);
+        serverContract.initialize(this, options, listener);
       }
       listen(...args) {
         if (this.listening) throw error(Error, "ERR_SERVER_ALREADY_LISTEN", "Listen method has been called more than once without closing");
@@ -303,7 +297,7 @@
       [Symbol.asyncDispose]() { return disposeNodeServer(this, true); }
       ref() { this._referenced = true; if (this._accepting) this._accepting.ref = true; if (this._starting) this._starting.ref = true; return this; }
       unref() { this._referenced = false; if (this._accepting) this._accepting.ref = false; if (this._starting) this._starting.ref = false; return this; }
-    }
+    });
     const connect = (...args) => new Socket().connect(...args);
     return { Socket, Server, Stream: Socket, createServer: (options, listener) => new Server(options, listener), connect, createConnection: connect };
   };

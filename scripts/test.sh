@@ -45,12 +45,10 @@ source "$root/env.sh"
 build=1
 update=0
 engine=quickjs
-wasm_override=""
 names=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-build) build=0 ;;
-    --wasm) wasm_override="$2"; shift ;;
     --update) update=1 ;;
     --engine) engine="$2"; shift ;;
     --engine=*) engine="${1#--engine=}" ;;
@@ -65,11 +63,6 @@ case "$engine" in
   browser) wasm="$root/dist/bun-browser.wasm"; build_script="$root/scripts/build-bun-browser.sh" ;;
   *) echo "unknown engine $engine (quickjs, jsc or browser)"; exit 2 ;;
 esac
-
-if [[ -n "$wasm_override" ]]; then
-  [[ $build == 0 && $update == 0 ]] || { echo "--wasm requires --no-build and cannot update expectations" >&2; exit 2; }
-  wasm="$wasm_override"
-fi
 
 scratch="$(mktemp -d "$TMPDIR/bun-wasm-runtime-test-XXXXXX")"
 server_pid=""
@@ -229,7 +222,7 @@ for name in "${names[@]}"; do
     [[ $is_host == 1 ]] && net_flag=(--net)
     gc_flags=()
     [[ ! -f "$src/expose-gc" ]] || gc_flags=(--expose-gc)
-    (cd "$work" && timeout 60 "${BUN_WASM_NODE:-node}" "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" "${net_flag[@]}" --dir "$work::/" \
+    (cd "$work" && timeout 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" "${net_flag[@]}" --dir "$work::/" \
       --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   else
@@ -238,12 +231,6 @@ for name in "${names[@]}"; do
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   fi
   code=$?
-  if [[ -n "${BUN_WASM_FIXTURE_LOG_DIR:-}" ]]; then
-    mkdir -p "$BUN_WASM_FIXTURE_LOG_DIR/$name"
-    cp "$scratch/out" "$BUN_WASM_FIXTURE_LOG_DIR/$name/stdout.txt"
-    cp "$scratch/err" "$BUN_WASM_FIXTURE_LOG_DIR/$name/stderr.txt"
-    printf '%s\n' "$code" > "$BUN_WASM_FIXTURE_LOG_DIR/$name/exit.txt"
-  fi
   show_files "$work" "$scratch/out"
   normalize <"$scratch/out" >"$scratch/out.n"
   normalize <"$scratch/err" >"$scratch/err.n"

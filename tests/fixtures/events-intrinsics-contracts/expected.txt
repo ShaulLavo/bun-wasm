@@ -1,0 +1,4 @@
+error monitor retains delivery without array iteration
+iterator hooks do not intercept pending events or queued next
+species hooks do not intercept pending events or queued next
+sparse disposal key, detach and already-aborted microtask

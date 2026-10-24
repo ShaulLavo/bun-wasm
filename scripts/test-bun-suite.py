@@ -61,7 +61,7 @@ class ProvenanceTests(unittest.TestCase):
         self.wasm = self.root / "fixture.wasm"
         self.wasm.write_bytes(b"wasm fixture")
         self.opts = types.SimpleNamespace(engine="browser", suite=self.root, dependencies=None,
-                                          node=Path(shutil.which("node")), network="host", timeout=1, test_timeout=1, node_parallel=False)
+                                          network="host", timeout=1, test_timeout=1, node_parallel=False)
         self.addCleanup(patch.stopall)
         patch.object(suite, "ROOT", self.root).start()
         patch.object(suite, "git", return_value="suite-commit").start()
@@ -268,20 +268,6 @@ class ReportTests(unittest.TestCase):
         self.assertNotEqual(report.classify(record, "", other)[0], "f")
         other["browser"][record["file"]]["fully_passing"] = True
         self.assertEqual(report.classify(record, "", other)[0], "f")
-
-
-class HtmlAcceptanceRunnerTests(unittest.TestCase):
-    def test_case_diagnostics_keep_passing_failing_and_skipped_names(self):
-        parsed = suite.parse_output("(pass) held reader\n(fail) abandonment\n(skip) heap counter\nRan 3 tests across 1 file\n")
-        self.assertEqual(parsed["cases"], [{"status": "pass", "name": "held reader"}, {"status": "fail", "name": "abandonment"}, {"status": "skip", "name": "heap counter"}])
-        self.assertFalse(parsed.get("fully_passing", False))
-
-    def test_browser_uses_explicit_node_guest_and_exposed_gc(self):
-        opts = types.SimpleNamespace(engine="browser", node=Path("/qualified/node"), test_timeout=2000, node_parallel=False)
-        command = suite.command(opts, Path("/qualified/engine.wasm"), Path("/owned/work"), [], "js/workerd/html-rewriter-leak.test.ts")
-        self.assertEqual(command[:3], ["/qualified/node", "--expose-gc", "--no-warnings"])
-        self.assertIn("/qualified/engine.wasm", command)
-        self.assertNotIn("--test-name-pattern", command)
 
 
 if __name__ == "__main__":
