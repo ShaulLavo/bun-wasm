@@ -89,7 +89,7 @@ Pre-1.0 and experimental. The package is `bun-wasm` 0.0.60, marked private, and 
 - Network: browsers get `fetch` (with CORS) and servers behind preview URLs. Raw outbound TCP, TLS sockets and Unix sockets do not work.
 - No native addons. Nothing starts a native executable in the browser.
 - The `browser` engine runs user code in the host glue's global scope. No engine is a security boundary.
-- Apps: Vite, SvelteKit, Astro, Vitest, Next.js and Prisma fail at least one stage in the 2026-10-17 snapshot.
+- Apps: Vite, SvelteKit, Astro, Vitest, Next.js and Prisma fail at least one stage in the 2026-10-17 snapshot. Later fixes touched the Vite family, and a rerun is pending ([details](docs/compatibility.md#real-apps)).
 
 | Platform | State |
 | --- | --- |

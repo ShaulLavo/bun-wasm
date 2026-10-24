@@ -75,7 +75,7 @@ Eight projects install but fail at least one later stage:
 | Next.js | 15.5.6 | install passes. `dev` and `build` fail. `start` is blocked by `build`. | `LinkError: Unsupported WebAssembly export table` |
 | Prisma | 6.17.1 | install fails. The three later stages are blocked. | `memory allocation of 16770432 bytes failed` |
 
-"No diagnostic" means the harness saw no error text before the process exited. After this snapshot the cause was traced to a missing `ws` builtin that Vite reaches through `process.versions.bun`, plus a stdin end-of-file that closed Vite's server ([Framework exits and Vite reloads](app-matrix/exit-provenance.md)). The runtime now supplies `ws` ([The ws builtin](ws-builtin.md)). The matrix was not recorded again after those fixes, so the Vite family's current status is unmeasured.
+"No diagnostic" means the harness saw no error text before the process exited. After this snapshot the cause was traced to a missing `ws` builtin that Vite reaches through `process.versions.bun`, plus a stdin end-of-file that closed Vite's server ([Framework exits and Vite reloads](app-matrix/exit-provenance.md)). The runtime now supplies `ws` ([The ws builtin](ws-builtin.md)). The last measurement is the 2026-10-17 snapshot, where the Vite family fails as the table shows. A rerun after those fixes is pending, so whether they changed the result is not yet known.
 
 Prisma's install runs out of memory in the 512 MiB guest, so its later stages never run. On QuickJS and JSC, Next.js stops at a WebAssembly table export that the runtime's `WebAssembly` adapter rejects. The browser engine fails at a different point. The [run log](app-matrix/compatibility.md) has per-engine detail.
 
