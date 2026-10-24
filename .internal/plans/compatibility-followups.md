@@ -535,6 +535,12 @@ exists; that file was replaced by the process broker.
 
 Status: Approved. Follow up in the process, module-loader and tracing tracks.
 
+The pure serialized error-data seam now normalizes marked `BuildError` values before
+encoding and uses the unserializable fallback as the effective error before reading
+its sideband code. `scripts/worker-error-data.test.ts` covers the uncloneable-cause
+fallback and ordinary coded-error identity without starting a Worker or control
+channel. Worker launch, loader, process and tracing contracts remain follow-ups.
+
 The #37 review fixes stop swallowing Worker errors and exceptions from parent
 listeners. The same 120-file census changes from 67 to 64 fully passing files on
 each engine. `test-worker-nested-uncaught.js` and
