@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/run-with-timeout.test.ts",
+  "batch": "12-web"
+}

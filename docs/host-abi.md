@@ -277,8 +277,7 @@ Bun's `Bun.spawn`, `node:child_process` and `worker_threads` run on the generic 
 process ABI, the same imports preview1 programs use, so Bun children are ordinary members of the
 runtime's process directory. Unlike the network slots they are real wasm imports: the guest
 imports exactly these functions, all `i32` parameters and an `i32` result, with Waffle's
-`ProcessABI` semantics (`proc/abi.ts` in the Waffle repository; the table in
-[the runtime plan](../plans/browser-runtime.md#process-abi-for-the-shell-lane) is the summary):
+`ProcessABI` semantics (`proc/abi.ts` in the Waffle repository):
 
 | import | signature |
 |---|---|

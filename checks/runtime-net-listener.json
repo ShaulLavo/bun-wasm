@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/net-listener.test.ts",
+  "localRuntime": true
+}

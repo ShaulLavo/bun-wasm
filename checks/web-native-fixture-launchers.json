@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/native-fixture-launchers.test.ts",
+  "batch": "10-web"
+}
