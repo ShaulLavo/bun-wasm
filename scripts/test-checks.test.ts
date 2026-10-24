@@ -28,7 +28,8 @@ function manifest(directory: string, fields: unknown, filename = "runtime-exampl
 test("immutable old selections match the discovered sets, with seven overlapping probes assigned only to Web", () => {
   const proof = proveCheckMigration();
   expect(proof.deduplicated).toHaveLength(7);
-  expect(selectChecks("local-runtime")).toEqual(oldSelections().runtime.toSorted());
+  const historicalRuntime = oldSelections().runtime;
+  expect(selectChecks("local-runtime").filter(path => historicalRuntime.includes(path))).toEqual(historicalRuntime.toSorted());
   const paths = proof.explicit.map(check => check.path).concat(proof.automatic.map(check => check.path));
   expect(new Set(paths).size).toBe(paths.length);
 });

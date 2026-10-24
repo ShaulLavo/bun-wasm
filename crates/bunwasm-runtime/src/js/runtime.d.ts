@@ -152,7 +152,7 @@ declare namespace BunWasm {
       Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: () => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
     };
   }
-  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void } } }
+  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void }; URLSearchParams: new (init: object) => URLSearchParams } }
   type HTMLHandlerKind = "element" | "comments" | "text" | "doctype" | "end" | "endTag";
   interface HTMLStepEvent { handler: number; kind: HTMLHandlerKind }
   interface HTMLStep { output: Uint8Array; event?: HTMLStepEvent }
@@ -192,6 +192,8 @@ declare namespace BunWasm {
   interface Native {
     /** Host of `http://<domain>/` as the URL crate parses it, or "" when it does not parse. */
     domainToASCII(domain: string): string;
+    /** Validated, normalized hostname with IDNA labels decoded, or "" for invalid input. */
+    domainToUnicode(domain: string): string;
   }
   interface Internal {
     builtin(name: "node:querystring"): { parse(query: string): Record<string, unknown>; stringify(query: object): string };
