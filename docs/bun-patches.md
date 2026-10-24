@@ -176,7 +176,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [`src/js/exit_provenance.ts` and lifecycle hooks](#runtime-exit-provenance) | Host feature | Original opt-in exit diagnostics over the existing event loop and error handlers. |
 | [`scripts/generate-ws.sh` and builtin resolution](#portable-ws-builtin) | Host feature | Original module wrapper supplies Bun's builtin ws import and require on every engine. |
 | [`crates/bunwasm-runtime/src/js/function.ts`](#generated-function-parser-locations) | Host feature | Original generated-function import adapter using parser positions and an intrinsic helper. |
-| [`patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch`](#generated-function-parser-locations) | Port | Bun parser and printer import metadata, reused unchanged from the semantic-import lane. |
+| [`patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch`](#generated-function-parser-locations) | Port | Bun parser and printer import metadata, reused unchanged from the semantic-import patch. |
 | [`crates/bunwasm-runtime/src/engine_quickjs.rs`, data conversion; `host.rs`, native-test import gate](#quickjs-data-conversion) | Host feature | Original adapter checks buffer tags before calling a throwing getter. |
 | [`third_party/rquickjs-sys/quickjs/quickjs.c`, buffer tag predicate](#quickjs-data-conversion) | Host feature | Original nonthrowing class query for ordinary and shared buffers. |
 | [`crates/bunwasm-runtime/src/js/function.ts`](#generated-function-imports) | Host feature | Original generated-function adapter with module-relative dynamic imports. |
@@ -274,9 +274,8 @@ native operation; QuickJS retains its existing native-operation interrupt polls.
 ## Third-party interrupt instrumentation
 
 **Class: Host feature (original adapter).** `waffle/interrupt/rewriter.ts`, `loader.ts` and
-`check.ts` are original TypeScript source, following the binary-format exploration in our
-2026-10-16 spike-5 prototype (`/work/reports/browser-runtime/spikes/5-interrupt-injection/rewriter.js`).
-The production implementation replaces the spike's unconditional function-entry host calls
+`check.ts` are original TypeScript source, following a binary-format prototype.
+The production implementation replaces the prototype's unconditional function-entry host calls
 and per-activation loop sampling with one private module-global countdown shared by function
 entries and loop headers. It adds native pre/post validation, an explicit supported-feature
 allowlist, metadata refusal, a SHA-256 compiled-module cache and fatal-outcome-only host checks.
@@ -1016,7 +1015,7 @@ File `0007-wasm-strings-eql-compares-8-byte-words-on-32-bit-tar.patch`. Class **
 
 This classification is a judgment about the algorithm, not a claim that native Bun 1.4.2 ships a broken 32-bit binary. The same Rust function is incorrect on any 32-bit platform. Extracting the exact unpatched function from the pinned source gives `eql(b"abcd", b"wxyz", true) == true` on wasm32 and `false` on native x86_64. The patched function returns `false` on wasm32. The installed native Bun 1.4.2 is 64-bit and does not reach the faulty width case.
 
-The ready-to-file report and complete standalone Rust reproduction are in the owner's `/work/reports/upstream-bugs/README.md` and `bun-wasm-eql/repro.rs` beside it. No upstream issue has been posted.
+No upstream issue has been posted.
 
 ### 0008 await context hooks
 
@@ -1453,14 +1452,14 @@ This is original glue, with no package implementation copied.
 
 | File | Classification | Upstream and local changes |
 | --- | --- | --- |
-| patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch | Upstream patch | Reused unchanged from the semantic-import lane, Bun wasm commit cd95fa7a13b3f13be73e512b38ec111c1c228084. Exposes parser keyword positions and printer metadata. |
+| patches/bun/0010-wasm-expose-semantic-dynamic-import-locations-to-the.patch | Upstream patch | Reused unchanged from the semantic-import patch, Bun wasm commit cd95fa7a13b3f13be73e512b38ec111c1c228084. Exposes parser keyword positions and printer metadata. |
 | crates/bunwasm-transpiler/src/lib.rs function_imports | Original adapter | Constructs the native function grammar around original argument ranges and translates parser offsets. |
 
 Patch 0010 touches src/js_parser/lib.rs, src/js_parser/parse/parse_import_export.rs
 and src/js_printer/lib.rs at upstream Bun revision
 9510e74152073d850a18758ca41114d8f214ffa6. The parser collector records only real import
 expressions and restores its previous thread-local state on unwind. The printer
-metadata is consumed by the semantic-import lane; this adapter consumes only the
+metadata is consumed by semantic import linking; this adapter consumes only the
 parser collector. The existing shared vendor checkout was read, never edited.
 
 
@@ -1829,7 +1828,7 @@ WebAssembly memory buffers are tracked by the original runtime adapter and
 rejected as transfers.
 No Bun vendor patch is needed for these adapters.
 
-The PR #31 close fixes are retained in the routed adapter. A pending peer-close
+The peer-close fixes are retained in the routed adapter. A pending peer-close
 sequence preserves an unstarted peer's queue until it drains, without polling.
 Local closure suppresses future delivery while selected messages finish, with
 promise continuations between messages. BroadcastChannel receive returns
@@ -1902,7 +1901,7 @@ before protocol bytes are written. A 100 Continue response can precede the
 request body. Server upgrades expose the parsed request body and its EOF before
 handing later bytes to the upgraded socket.
 
-The PR #35 revision checks header coercion and path/method/header validation order
+The HTTP client checks header coercion and path/method/header validation order
 against native Node. Response parsing rejects duplicate lengths, invalid lengths
 and transfer-encoding/length conflicts in wire order. Only a final `chunked`
 transfer coding selects chunk decoding. Lengths must fit a safe JavaScript integer.
@@ -1912,7 +1911,7 @@ and closes sockets on timeout, remote close or Agent destruction. Requests witho
 an Agent advertise close. GET, HEAD, DELETE, OPTIONS, TRACE and CONNECT do not get
 automatic body framing, including when headers flush before `end()`.
 
-Round 2 uses Node's `test/parallel/test-http-extra-response.js` at the same
+The response-remainder handling uses Node's `test/parallel/test-http-extra-response.js` at the same
 upstream revision as a behavioral reference. The decoder returns consumed output
 and unconsumed remainder separately. A remainder retires the connection before
 pool release, preserves the first response body/end, and reports invalid prefixes
@@ -1983,7 +1982,7 @@ copied. The [deadline contract](browser-deadlines.md) describes the controls.
 Browser network teardown uses owned ChildProcess handles, not Linux-only `/proc`
 paths. Test assertions are unchanged.
 The original `env.sh` host-cache adapter exports `PLAYWRIGHT_BROWSERS_PATH` only
-when it is unset and `/work/cache/ms-playwright` exists. It never downloads
+when it is unset and the maintainer's `/work/cache/ms-playwright` exists. It never downloads
 browsers; hosts without that directory retain Playwright's native cache lookup,
 and explicit overrides (including `0` and empty) are preserved. The isolated
 `web/tests/toolchain-env.test.ts` probes cover the default and those overrides.
@@ -2056,15 +2055,15 @@ of blank EOF lines and one mixed space/tab indent.
 
 ### TCP streams after the portable-core merge
 
-Class **Host feature**, original adapters. `node_net.js` retains the TCP transport,
-lookup, address, timeout and server behavior from main PR14. Socket now uses the
+Class **Host feature**, original adapters. `node_net.js` retains the existing TCP transport,
+lookup, address, timeout and server behavior. Socket now uses the
 portable Duplex's actual readable/writable states and `_read`, `_write`, `_final`
 and `_destroy` hooks. Its old public write/end/destroy, byte queues and synthetic
 state records are removed. Connection callbacks drive stream callbacks and
 `push`; the native read waiter pauses when `push` reaches the high-water mark.
 This is original API glue, not copied upstream stream logic.
 
-`net.js` retains PR14's Connection shutdown/ref/write callbacks and complete HTTP
+`net.js` retains the existing Connection shutdown/ref/write callbacks and complete HTTP
 upgrade handling. The Streams byte-body producer and HTTP request hooks are
 applied to that implementation. Socket and upgrade cleanup run from the real
 ClientRequest `_destroy` hook. The host engine releases both native stream
@@ -2824,7 +2823,7 @@ KeyObjects, issuer checks and legacy fields on every engine.
 ### Certificate check-option regression fixtures
 
 `tests/fixtures/crypto-x509-options/{names,email-only}.pem` are original self-signed
-P-256 certificates generated with OpenSSL for PR #41 review. They contain a
+P-256 certificates generated with OpenSSL. They contain a
 fallback common name and either DNS/email SANs or an email-only SAN. No upstream
 source or production certificate is copied. The generation key is disposable;
 only the public certificates are retained. The fixture runs unchanged on Bun and
@@ -3251,7 +3250,7 @@ stdout or stderr. Native inherited fstat preserves the libc mode, including pipe
 On WASI, preview1 has no FIFO tag. After the ordinary fstat capability check, the original
 adapter consults `runtime_proc.fd_kind` and restores FIFO bits only for an explicit pipe kind.
 UNKNOWN remains unknown rather than becoming a pipe. Device, socket and filesystem modes
-and metadata capability errors remain intact. Waffle #34 grants FD_FILESTAT_GET to both pipe endpoints; inherited
+and metadata capability errors remain intact. Waffle grants FD_FILESTAT_GET to both pipe endpoints; inherited
 descriptors keep those exact rights, so the real pipe-fstat controls succeed without bypassing
 metadata capability checks. No upstream implementation or new binding dependency is copied.
 The original `src/js/node_fs.js` Stats predicates test those type bits rather than hard-coding false.
@@ -3274,7 +3273,7 @@ strict successes: all 18 scenarios pass
 without retries in each of Chromium, Firefox and WebKit for browser, QuickJS and JSC artifacts.
 This supersedes the historical expected-failure notes for earlier pins below and above.
 
-Waffle #31 in this pin captures host intrinsics and validates shared-view identities. The measured
+Waffle in this pin captures host intrinsics and validates shared-view identities. The measured
 core closure is 24,744 B minified / 8,073 B gzip; the core gate is now a tight 8,192 B gzip.
 The captured-intrinsics module is classified with eager reservation/control primitives, not the
 lazy process supervisor. Test-only wait, notify and outcome instrumentation uses module injection
@@ -3315,16 +3314,16 @@ exactly-once startup sink and honors its active predicate, so disposal cancels
 delivery before descriptor release. Native stdio `tryWrite` performs one
 immediate write rather than calling the blocking preview1 helper. Tests cover
 partial writes, delayed progress, competing error/exit notices, disposal during a
-blocked diagnostic, writer exceptions and the exported stall deadline. Waffle
-#24's post-entry browser diagnostic delivery is included in this pin.
+blocked diagnostic, writer exceptions and the exported stall deadline. Waffle's
+post-entry browser diagnostic delivery is included in this pin.
 
-This pin includes Waffle #23's transactional inherited-binding rollback, which is
-now enabled in the shared unit/browser control, and #27's exactly-once startup
+This pin includes Waffle's transactional inherited-binding rollback, which is
+now enabled in the shared unit/browser control, and its exactly-once startup
 sink ownership and cancellation. The core allowance changed from 7,168 to
 7,680 B gzip without removing code. The cbb138b5 core measured 7,454 B; a0a0f87
-measures 7,516 B (23,106 B minified). The deliberate upstream additions are #19
-(inherited fd3 support), #22 (startup observation), and #23 (transactional
-rollback); these primitives remain measured. #27's diagnostic service remains
+measures 7,516 B (23,106 B minified). The deliberate upstream additions are
+inherited fd3 support, startup observation and transactional
+rollback; these primitives remain measured. The diagnostic service remains
 lazy. The 0.0.44 follow-up consumes the shared public drain and removes the Node
 adaptation; historical measurements above identify their original pins.
 
@@ -3336,16 +3335,16 @@ same-source gzip-level-9 measurements include all tagged process/startup
 primitives and the upstream post-entry diagnostic additions; no budget was
 raised and the process supervisor remains lazy.
 
-The 0.0.46 consumer follow-up pins every Waffle dependency and lockfile to its
-#33 merge, `0a9fe12bf73cce81047999d0499543dfe0d9e513`. That upstream change fixes
+The 0.0.46 consumer follow-up pins every Waffle dependency and lockfile to
+Waffle commit `0a9fe12bf73cce81047999d0499543dfe0d9e513`. That upstream change fixes
 job-completion collection racing with tagged-cell retirement, including the
 sealed-but-not-retired losing-waiter interval. Tagged retired capabilities still
 report ESRCH; an already collected wait reports ECHILD. Bun's failure-only Wasm
 fixture keeps recording the exact wait return and untouched result bytes, but
 the temporary Firefox nested-child exception is removed: this failure is fatal
 in every browser, with no retry. The real inherited-fd libc controls remain
-explicit expected failures until the separate patched-sysroot follow-up. Waffle
-#32's intrinsic and source-quality changes are also included; no upstream source
+explicit expected failures until the separate patched-sysroot follow-up. Waffle's
+intrinsic and source-quality changes from the preceding release are also included; no upstream source
 is copied into this consumer.
 
 

@@ -94,19 +94,19 @@ which examples pass).
 backends and the editor startup-steal regressions. CI calls its unit and browser phases around
 browser installation. `scripts/test-web.sh` calls the same phases before its WASM integration gates.
 
-Build the playground on the PC, copy `web/dist` to a task directory on the Mac, and serve it with COOP/COEP headers.
-Run `bun web/tests/browser-startup-safari.ts <playground-url>` on the Mac to check fresh startup, three durable reloads, newest-tab ownership, and recovery of the displaced tab.
+Build the playground, copy `web/dist` to a macOS machine, and serve it with COOP/COEP headers.
+Run `bun web/tests/browser-startup-safari.ts <playground-url>` on macOS to check fresh startup, three durable reloads, newest-tab ownership, and recovery of the displaced tab.
 Set `SAFARI_IOS=1` for the iPhone 17 Pro simulator, `SAFARI_OUTPUT=<path>` for the JSON report, and `SAFARI_SCREENSHOT=<path>` for the error screenshot.
 If the simulator is shut down, run `xcrun simctl boot "iPhone 17 Pro"` and `xcrun simctl bootstatus "iPhone 17 Pro" -b` before starting the driver.
 Set `SAFARI_SEED_URL=https://bun.sprockt.dev/playground/` to import a workspace created by the live build before testing the candidate.
-The test uses a task-owned Safari automation session and driver. It preserves normal browser profiles.
+The test uses its own Safari automation session and driver. It preserves normal browser profiles.
 
 The filesystem lifecycle regression uses the actual page adapter and persistence worker without
 guest WASM. `scripts/test-web.sh` runs its Chromium and WebKit cases, plus the storage fencing tests.
 For real Safari, build with `bun web/tests/browser-filesystem-lifecycle.ts --build <directory>`
-through the PC heavy wrapper. Copy the assets and runner to an owned directory under Mac `~/tmp`,
+Copy the assets and runner to a macOS machine,
 then serve them on an unused localhost port with COOP `same-origin` and COEP `require-corp`.
-Under the Mac lock, run `bun browser-filesystem-lifecycle.ts safari <url>` and repeat with
+Run `bun browser-filesystem-lifecycle.ts safari <url>` and repeat with
 `SAFARI_IOS=1` for the booted iPhone 17 Pro simulator. `SAFARI_OUTPUT=<file>` records lifecycle
 and lock observations. Both Safari platforms cover same-tab reopen, Reload, cached-page
 restoration, Reload after Back with no other tab, newest-wins IndexedDB ownership, preserved
@@ -198,14 +198,13 @@ filesystem visibility between processes. The artifact-free
 and real workers, including cooperative CPU-loop signal handling and background jobs.
 Add `--artifact` to use the existing Bun light WASM for orphan-lifetime and capacity checks;
 add `--benchmark` to compare cold and shared-module first output with the frozen pre-process
-baseline `c7f08312e2243d7e6e6c665aff178930b1285b12`. The benchmark checks that both revisions use
+baseline (commit `c7f08312`). The benchmark checks that both revisions use
 identical WASM bytes and owns its browser profiles, servers and scratch cleanup.
 
 ### Spawn measurements
 
-On 2026-10-17, an M1 MacBook Air (8 logical CPUs, AC power; initial load average 2.92) ran five
-starts per mode, browser and revision. Candidate source was `02218afd`; the baseline was
-`c7f08312`. Network transfer is excluded. Cold starts compile fresh bytes with a unique custom
+On 2026-10-17, an M1 MacBook Air ran five
+starts per mode, browser and revision, comparing the process model against commit `c7f08312`. Network transfer is excluded. Cold starts compile fresh bytes with a unique custom
 section; shared starts reuse a compiled module. First output uses the same 1 ms shared-memory
 poll in both revisions. The reused WASM was 12,607,668 bytes, SHA-256
 `db607962302070c6584005d6f43d33dee4296f79657912722bbecb3ee733bbf3`.

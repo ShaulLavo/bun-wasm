@@ -56,7 +56,7 @@ Run from this package checkout with Bun installed. A fresh checkout needs the ro
 
 ```sh
 source env.sh
-export PLAYWRIGHT_BROWSERS_PATH=/work/cache/ms-playwright
+export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
 bun install --frozen-lockfile
 bun install --cwd site --frozen-lockfile
 bun install --cwd web --frozen-lockfile

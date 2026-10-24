@@ -178,14 +178,12 @@ does not resolve those platform branches. It bypasses them by selecting a small
 engine-facing source module with its own manifest. Large modules still need
 both platform work and the missing value operations.
 
-These are the rough work groups for a further port, not measured delivery dates:
+Remaining work groups for a further port, each with its exit check:
 
-| Work group | Expected size | Exit evidence |
-| --- | --- | --- |
-| More string and scalar host modules | Days per small module | Unchanged source, all-engine fixtures, upstream before/after counts |
-| Rooted values, arbitrary objects, host reentrancy | Several weeks | Identity, nested exceptions, GC stress, disposal tests on all engines |
-| Classes, typed arrays, promises, runtime services | Several further weeks | One real async filesystem or Blob path, no value or buffer leaks |
-| Remaining `bun_runtime` | Not estimated by this spike | Reach whole-crate compilation, then inventory unresolved runtime services |
+- More string and scalar host modules: unchanged source, all-engine fixtures, upstream before/after counts.
+- Rooted values, arbitrary objects, host reentrancy: identity, nested exceptions, GC stress and disposal tests on all engines.
+- Classes, typed arrays, promises, runtime services: one real async filesystem or Blob path, no value or buffer leaks.
+- Remaining `bun_runtime`: reach whole-crate compilation, then inventory unresolved runtime services.
 
 ## What cannot preserve JSC semantics elsewhere
 
@@ -219,8 +217,7 @@ Run the focused probe after building all three artifacts:
 
 ```sh
 source env.sh
-bash /work/tmp/wave-heavy/run.sh --class suite "bun_jsc backend" -- \
-  env PATH="$PATH" bash scripts/test-bun-jsc-backend.sh
+bash scripts/test-bun-jsc-backend.sh
 ```
 
 The fixture covers valid and invalid versions, prereleases, build metadata,
@@ -279,8 +276,6 @@ not 345 independent bugs fixed by changing the parser.
 The five remaining cases cover `--lockfile-only`, `bun pm version`, and the
 diagnostic for an invalid range when the package exists. They fail on every
 engine and were open when this was measured.
-The final raw reports are retained at
-`/work/reports/bun-wasm-track2-2026-10-15/{quickjs,jsc,browser}-final.json`.
 
 ## Recommendation
 
@@ -290,7 +285,7 @@ the next real module requires it. The unchanged semver bridge is a useful first
 slice, and its internal intersection function removes a real upstream test blocker.
 
 Do not attempt a wholesale replacement of `bun_jsc` over today's `Engine` trait.
-The next design milestone should be a rooted-value adapter with a host-engine
+The next design step is a rooted-value adapter with a host-engine
 implementation and GC/reentrancy tests. Only after that works should this track
 commit to async `node:fs` or `Bun.file`. Until then, track 1's JavaScript builtins
 and bounded plain-data Rust modules give useful progress without pretending the

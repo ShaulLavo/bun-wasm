@@ -15,7 +15,7 @@ The native build runs on Linux x86_64. The CI job "Rust workspace tests (QuickJS
 | cmake, ninja, nasm, clang, libclang-dev, pkg-config, ruby, gperf, bison | Current distro packages | Native dependency builds |
 | Binaryen | 133 | `wasm-opt`. The JSC guest requires it. The other builds use it when present. |
 
-`env.sh` sets the toolchain environment, and every build script sources it. Its defaults point at a workstation layout under `/work/cache`. Override `RUSTUP_HOME`, `CARGO_HOME`, `WASM_TOOLS`, `WASI_SDK_PATH`, `BUN_WASM_SYSROOT` and `CARGO_TARGET_DIR` before sourcing it to use your own paths. Large builds need several GB of RAM, so lower `-j` on a small machine.
+`env.sh` sets the toolchain environment, and every build script sources it. Its defaults point at the maintainer's workstation layout under `/work/cache`. Override `RUSTUP_HOME`, `CARGO_HOME`, `WASM_TOOLS`, `WASI_SDK_PATH`, `BUN_WASM_SYSROOT` and `CARGO_TARGET_DIR` before sourcing it to use your own paths. Large builds need several GB of RAM, so lower `-j` on a small machine.
 
 ## Build the guests and the launcher
 
