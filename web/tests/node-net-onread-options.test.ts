@@ -30,6 +30,7 @@ function fixture(handled = true) {
       if (name === "net_address") return factory(name)();
       if (name === "node_net_onread") return onread;
       if (name === "node_net_socket_state") return factory(name, "ts")();
+      if (name === "node_net_socket_options") return factory(name, "ts")();
       if (name === "node_net_server") return factory(name, "ts")(internal);
       return held();
     },
@@ -128,4 +129,24 @@ test("initial factory errors remain synchronous and empty buffers keep ENOBUFS",
   expect(errors).toEqual([]);
   const { read } = delivery({ buffer: new Uint8Array(0), callback() {} });
   expect(() => read.capacity()).toThrow(expect.objectContaining({ code: "ENOBUFS", syscall: "read" }));
+});
+
+test("Socket composes option snapshots with nullish and zero directional defaults", () => {
+  const { Socket } = fixture();
+  const reads: string[] = [];
+  const receivers: unknown[] = [];
+  const options = Object.defineProperties({}, {
+    readableHighWaterMark: { enumerable: true, get() { reads.push("readable"); receivers.push(this); return null; } },
+    onread: { enumerable: true, get() { reads.push("onread"); receivers.push(this); return null; } },
+    highWaterMark: { enumerable: true, get() { reads.push("generic"); receivers.push(this); return undefined; } },
+    signal: { enumerable: true, get() { reads.push("signal"); receivers.push(this); return undefined; } },
+    writableHighWaterMark: { enumerable: true, get() { reads.push("writable"); receivers.push(this); return 0; } },
+    allowHalfOpen: { enumerable: true, get() { reads.push("half"); receivers.push(this); return true; } },
+  });
+  const socket = new Socket(Object.freeze(options));
+  expect(reads).toEqual(["onread", "signal", "readable", "generic", "writable", "half"]);
+  expect(receivers.every(receiver => receiver === options)).toBe(true);
+  expect(socket).toHaveProperty("readableHighWaterMark", 65536);
+  expect(socket).toHaveProperty("writableHighWaterMark", 0);
+  expect(socket).toHaveProperty("allowHalfOpen", true);
 });

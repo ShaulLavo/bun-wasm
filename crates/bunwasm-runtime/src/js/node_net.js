@@ -10,7 +10,7 @@
     class Socket extends Duplex {
       constructor(options = {}) {
         const { onread, signal, streamOptions } = internal.require("node_net_socket_state")(options);
-        super(Object.assign({ allowHalfOpen: false, highWaterMark: 65536 }, streamOptions));
+        super(internal.require("node_net_socket_options")(streamOptions));
         this._onread = internal.require("node_net_onread")(onread);
         this._conn = null;
         this._phase = "idle";

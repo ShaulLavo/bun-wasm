@@ -21,8 +21,15 @@ reads without emitting a stream pause event. `read` and `resume` restart reads.
 Reconnect clears the callback stop flag while retaining the stream pause state,
 and retires the old connection. The connection factory forwards constructor
 options. Callback delivery keeps byte counters and bypasses stream data events.
-The generic watermark default is unchanged here; directional defaults belong to
-the separate Socket watermark change.
+Socket snapshots and validates its options before passing the remaining stream
+options to the separate Socket watermark helper. That landed helper retains its
+independent 65536-byte directional defaults, nullish restoration and generic-limit
+precedence. The original caller's stream getters run once during the snapshot,
+in source order and with the original receiver; defaulting reads only the copy.
+`onread` and `signal` are read once before those stream getters and never reach
+Duplex. The constructor-only composition test covers nullish and zero directions
+with both Socket-owned getters present, without allocating a read buffer or
+invoking transport or lifecycle operations.
 
 New option/helper tests run the checked-in Socket and stream implementation with
 transport and lifecycle operations forbidden. The retained synthetic-pipe web
