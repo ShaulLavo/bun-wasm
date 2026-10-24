@@ -48,7 +48,6 @@ declare namespace BunWasm {
     isPromise?(value: unknown): value is Promise<unknown>;
     isError?(value: unknown): value is Error;
     isModuleNamespaceObject?(value: unknown): boolean;
-    crypto: { isKey(value: unknown): boolean };
     nodeCryptoIsKeyObject(value: unknown): boolean;
     builtin(name: "node:crypto"): unknown;
   }
