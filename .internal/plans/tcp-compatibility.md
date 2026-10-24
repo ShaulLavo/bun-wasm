@@ -4,7 +4,7 @@ Status: Approved, queued under track 4 of
 [real Bun on our engines](real-bun-on-our-engines.md).
 
 The TCP transport, HTTP upgrade, published ws exchange, and Node common loading
-checks are implemented. [The measured results](../docs/tcp-results.md) retain
+checks are implemented. [The measured results](../tcp-results.md) retain
 later failures. This queue addresses public compatibility beyond those working
 paths. Keep private-field assertions separate from user-visible failures.
 

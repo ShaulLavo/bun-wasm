@@ -549,8 +549,7 @@ of the expected fresh-connection reply. The native client is unchanged.
 A sized request-body experiment produced the same failure and was reverted.
 The exact command, guest hashes, logs and statuses are retained under the report's `early-upload-control/` directory. The interrupted second census control has
 zero completed files and is excluded. The separate direct diagnostic also
-reproduces the sentinel reply on unchanged main. See the
-[keepalive follow-up](../plans/compatibility-followups.md#early-response-keepalive-control-2026-10-18).
+reproduces the sentinel reply on unchanged main. The early-response keepalive case was open when this was measured.
 
 The source hashes and before/after summaries are committed in
 [`http-results.json`](bun-test-suite/http-results.json). Eight affected API files
@@ -691,8 +690,7 @@ The coordinator lists these as existing main failures; a direct browser control
 produces identical `npm-packages` output on baseline and final guests. The tools
 guest was rebuilt before these gates to remove a stale host-slot ABI mismatch.
 The full web gate encounters a pre-existing missing `runtime_proc.signal` import
-in its standalone CLI shim. See the process-runtime web gate follow-up in
-`plans/compatibility-followups.md`; no process-layer code is changed here.
+in its standalone CLI shim. No process-layer code is changed here.
 
 ## Earlier HTTP upgrade measurements
 
@@ -759,8 +757,7 @@ The earlier web gate stopped at the separately tracked browser memory-growth
 failure after the shared filesystem merge. The HTTP lane reproduced that timeout
 in the full gate, an isolated rerun, and a control using unchanged main guest
 artifacts. PR #36 fixes that failure and is merged into the round-2 branch.
-The full web gate passes without an exemption in this round. The historical
-follow-up is recorded in `plans/compatibility-followups.md`; no HTTP workaround
+The full web gate passes without an exemption in this round. No HTTP workaround
 was applied.
 
 The first PR #35 web run also timed out waiting for an HTML HMR edit. A fresh

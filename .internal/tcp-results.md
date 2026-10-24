@@ -26,7 +26,7 @@ limit. Test processes have private loopback network namespaces. The runner,
 upstream source, and dependency hashes match between controls and results.
 Wasm and host hashes are retained in the raw JSON.
 
-Reproduce the selection with the commands in [TCP support](tcp.md). Raw
+Reproduce the selection with the commands in [TCP support](../docs/tcp.md). Raw
 `before-final-*.json` and `after-rebase-*.json`, JSONL checkpoints, gate
 logs, and commands remain under `/work/reports/bun-wasm-tcp-2026-10-16/`
 until coordinator review is accepted.

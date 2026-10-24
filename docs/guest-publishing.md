@@ -93,8 +93,8 @@ The publisher uses the site's lockfile-pinned Wrangler for the upload. It create
 
 `src/guest-asset.generated.ts` records the last verified publication; update it only after the matching full-build acceptance and public read-back succeed.
 
-The [2026-10-23 publication record](guest-publication-20261023.md) records the
-default browser guest's source inputs and process/network acceptance.
+The current default browser guest is the one named in `src/guest-asset.generated.ts`.
+Its source inputs live in the `.build.json` receipt that `scripts/guest-build-receipt.ts` wrote next to the artifact.
 
 ## Verification and disposable tests
 

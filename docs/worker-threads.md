@@ -134,8 +134,7 @@ The review-fix census corrects the initial result below. Error propagation had
 hidden five failing worker scripts. The same 120-file selection now passes
 64/120 on each engine, compared with the earlier 67/120. Nested uncaught errors
 and unref'd termination add two passing files. The five exposed API and
-diagnostic gaps are recorded in
-[the compatibility follow-ups](../plans/compatibility-followups.md#worker-errors-exposed-by-the-review-fixes).
+diagnostic gaps were open when this was measured.
 Observed assertion counters remain zero for these standalone Node scripts.
 QuickJS/JSC have no timeouts. The browser retains the one known 10,000-round-trip
 timeout at the unchanged fifteen-second deadline.
@@ -266,8 +265,7 @@ Earlier measurements and all repetitions are retained.
 
 The newly reached timeout is `test-async-local-storage-http-agent.js`, which needs
 HTTP request streaming. The browser engine instead fails an earlier async-context
-assertion in that file. ALS default values, `node:test`, and other remaining gaps
-are recorded in [the compatibility follow-ups](../plans/compatibility-followups.md#node-parallel-tests-after-main-thread-worker-imports).
+assertion in that file. ALS default values, `node:test`, and other gaps were open when this was measured.
 
 QuickJS and browser runs use four jobs with a five-second file deadline. JSC runs
 use two jobs with a fifteen-second deadline. Native launcher modules are compiled
@@ -368,8 +366,7 @@ the event-loop fixes in #42, and HTMLRewriter/X509 in #41.
 Remaining failures include the four-child budget, cross-guest SharedArrayBuffer,
 environment-proxy cloning, unsupported execution flags and VM APIs, loader-error
 diagnostics, BroadcastChannel close/inspection behavior, and shared object-URL
-lifetime. [The follow-up plan](../plans/compatibility-followups.md#global-web-worker-census)
-records the reproduction and affected adapters.
+lifetime. These were open when this was measured.
 
 The full fixture gates pass 211/211 on each engine, with no known-main exceptions.
 The full web gate, all six Chromium/WebKit global-Worker combinations, and all

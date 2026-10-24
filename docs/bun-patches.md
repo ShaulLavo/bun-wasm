@@ -2361,7 +2361,7 @@ Node, WebKit or third-party pipe implementation is copied or patched by these mo
 ## Guest process ABI
 
 `waffle/proc/abi.ts` is an original adapter implementing the process ABI specified in
-`plans/browser-runtime.md`, over this project's process, descriptor and filesystem services.
+[host ABI](host-abi.md#process-imports), over this project's process, descriptor and filesystem services.
 It is not copied from Bun, Node, WebKit, SLICC or another WASI host. Its packed subscription,
 event and wait records are the project's own interface; the errno values follow WASI.
 Spawn metadata copies the checked guest span into fixed-owned bytes before native UTF-8

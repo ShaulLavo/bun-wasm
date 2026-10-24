@@ -72,9 +72,7 @@ RESULT.json`. Explicitly selected assertion scripts run with `bun run`; their
 successful exit establishes a passing file, with no invented test count.
 Discovered Bun test files retain the existing test-report criteria.
 
-The [measured comparison](tcp-results.md) includes the remaining first blockers.
-[Queued compatibility work](../plans/tcp-compatibility.md) records the read
-callback, constructor, option, and address-contract gaps. The adapter supports
+Gaps remained in read callbacks, constructors, options and the address contract when this was measured. The adapter supports
 working TCP and WebSocket exchanges; it does not claim complete Node net
 conformance.
 

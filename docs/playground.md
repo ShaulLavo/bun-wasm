@@ -111,8 +111,7 @@ Under the Mac lock, run `bun browser-filesystem-lifecycle.ts safari <url>` and r
 and lock observations. Both Safari platforms cover same-tab reopen, Reload, cached-page
 restoration, Reload after Back with no other tab, newest-wins IndexedDB ownership, preserved
 visible edits and durable saves. OPFS keeps no-steal ownership and checks refusal and recovery
-after the owner closes. [The runtime plan](../plans/browser-runtime.md#safari-workspace-ownership)
-explains the epoch fence and the HTTPS no-store complement.
+after the owner closes.
 
 ## Without a browser
 

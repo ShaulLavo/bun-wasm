@@ -467,8 +467,8 @@ Pause the compatibility wave while the runtime PRs land in order, then resume it
 
 ### Item 9 download measurement, 2026-10-23
 
-Status: Approved, still open. [Measurement and reproduction](../docs/benchmarks/light-startup-2026-10-23.md)
-and [60-sample JSON](../docs/benchmarks/light-startup-2026-10-23.json) compare main `d48dc3d2`,
+Status: Approved, still open. [Measurement and reproduction](../benchmarks/light-startup-2026-10-23.md)
+and [60-sample JSON](../benchmarks/light-startup-2026-10-23.json) compare main `d48dc3d2`,
 pre-review fixed browser inputs `26476bdb`, and pre-Waffle main `04022389` in Chromium 156 on one cloud host.
 Run `bun run bench:light-startup --samples 5 --port 48941 --before <built-main> --baseline
 <built-old-main> --output <result.json>` after building web and sandbox in each checkout.
@@ -652,7 +652,7 @@ until the coordinator resolves PR #62. Earlier rejected lifecycle approaches rem
 
 Status: Approved. Blocked on guest publication qualification, not receipt checks.
 
-[The current descriptor's network check](../docs/network-published-guest-acceptance.md)
+[The current descriptor's network check](../network-published-guest-acceptance.md)
 accepts its matching receipt but fails the unchanged six-scenario browser matrix.
 The published guest rejects child IPC at its original
 `crates/bunwasm-runtime/src/js/spawn.ts:187`; public-adapter streams also fail or

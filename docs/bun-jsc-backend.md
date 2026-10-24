@@ -172,7 +172,7 @@ UTF-16 string containing unpaired surrogates. A general facade needs host value
 IDs and a reentrant host-call protocol, or an actual host `Engine` implementation.
 Changing only the Rust facade cannot provide those operations.
 
-The previous [real-runtime spike](real-runtime-spike.md) found 23 prerequisite
+An earlier spike on compiling Bun's real runtime found 23 prerequisite
 compiler errors before either `bun_jsc` or `bun_runtime` type-checked. This spike
 does not resolve those platform branches. It bypasses them by selecting a small
 engine-facing source module with its own manifest. Large modules still need
@@ -278,8 +278,7 @@ not 345 independent bugs fixed by changing the parser.
 
 The five remaining cases cover `--lockfile-only`, `bun pm version`, and the
 diagnostic for an invalid range when the package exists. They fail on every
-engine and are recorded with commands and source locations in
-[the compatibility follow-up plan](../plans/compatibility-followups.md#package-manager-cases-reached-by-the-portable-semver-bridge).
+engine and were open when this was measured.
 The final raw reports are retained at
 `/work/reports/bun-wasm-track2-2026-10-15/{quickjs,jsc,browser}-final.json`.
 

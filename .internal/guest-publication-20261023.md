@@ -27,7 +27,7 @@ not a guest build input. No receipt was regenerated or inferred.
 
 ## Publication
 
-Use the existing [publication flow](guest-publishing.md), not a mutable site
+Use the existing [publication flow](../docs/guest-publishing.md), not a mutable site
 asset or release attachment. The publisher checks all three matching guest
 builds through its interruption matrix before authenticated storage access.
 It created the browser guest's deterministic gzip object in the existing

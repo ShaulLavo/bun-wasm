@@ -78,8 +78,7 @@ the graph is limited to 10,000 packages and 128 nesting levels.
 ## Workspaces and commands
 
 Native hosts create workspace and package-bin links. The page filesystem does
-not yet support symbolic links, so workspace and local-link installs still need
-the [filesystem prerequisite](../plans/browser-runtime.md#installer-filesystem-link-prerequisite).
+not yet support symbolic links, so workspace and local-link installs fail in the browser until it does.
 For package bins, ENOTSUP or EPERM from link creation produces a warning naming
 the package and bin. Installation continues and writes its lockfile. Other
 errors remain fatal. Node's native WASI also rejects some relative links under

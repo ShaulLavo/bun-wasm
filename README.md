@@ -17,7 +17,6 @@ Use this launcher, not plain `wasmtime run`: it supplies the `runtime_proc` impo
 
 ## Links
 
-- [Project overview and supported tools](docs/overview.md)
 - [Browser package installation, ownership and offline guests](docs/browser-package.md)
 - [Playground](web/README.md) · [React sandbox](sandbox/README.md)
 - [Browser engine](docs/engine-browser.md) · [Host ABI](docs/host-abi.md)

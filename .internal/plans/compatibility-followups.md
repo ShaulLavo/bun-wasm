@@ -7,7 +7,7 @@ Status: Approved.
 The global constructor passes its lifecycle, transfer, preload, dependency-loading,
 and top-level-await fixtures on all engines and in Chromium/WebKit. The eleven
 upstream cause files now pass three files per engine. The
-[measurement](../docs/worker-threads.md#global-constructor-measurement) records exact
+[measurement](../../docs/worker-threads.md#global-constructor-measurement) records exact
 counts and provenance. Reproduce through the suite slot with
 `scripts/measure-web-workers.sh <engine> <fresh-output.json>` after private builds.
 Raw logs are in `/work/reports/bun-wasm-web-worker/final/after-<engine>-logs/`.
@@ -277,7 +277,7 @@ examples covered when landing the WebCrypto build configuration.
 ## Framework blockers reached after esbuild
 
 The approved compatibility campaign now reaches the failures recorded in
-[the esbuild framework measurement](../docs/app-matrix/esbuild-results.md).
+[the esbuild framework measurement](../../docs/app-matrix/esbuild-results.md).
 Replay the exact pinned projects with `scripts/app-matrix.sh`; its command,
 integration revisions, versions, artifact hashes, and log destination are in
 that report. Do not file GitHub issues for these follow-ups.
@@ -306,7 +306,7 @@ investigating each failure.
 Status: Approved
 
 The worker-thread main-thread adapter lets Node's shared helper load. The bounded
-160-file census in [the worker-thread report](../docs/worker-threads.md) now reaches
+160-file census in [the worker-thread report](../../docs/worker-threads.md) now reaches
 existing module gaps. Keep these separate from guest-worker execution.
 
 - `js/node/test/parallel/test-als-defaultvalue-original.js` and
@@ -419,7 +419,7 @@ clean exits on each engine, compared with 21/120 at Step 1 revision `8596b11a`.
 The review fixes below expose five earlier false passes and add two real passes,
 leaving 64/120 on every engine. Repeating the census after Streams and persistence
 integration gives the same result. Observed assertion counters remain zero.
-[The worker report](../docs/worker-threads.md#guest-worker-measurement) contains
+[The worker report](../../docs/worker-threads.md#guest-worker-measurement) contains
 the exact selection and full gate results. Raw records are retained under
 `/work/reports/bun-wasm-worker-execution/` until coordinator acceptance.
 
@@ -688,7 +688,7 @@ Status: Approved. Indexed prototype accessor interception is resolved. Lifetime
 and abandoned-stream checks remain Approved.
 
 The 2026-10-17 HTML/X509 lane adds the parser, handlers, async Response rewriting,
-streaming readers and Node certificates. Its [measurement](../docs/bun-test-suite/htmlrewriter-x509.md)
+streaming readers and Node certificates. Its [measurement](../../docs/bun-test-suite/htmlrewriter-x509.md)
 records 9/10/10 fully passing files in the 21-file QuickJS/JSC/browser selection.
 The lifecycle file remains partial, with 29/12, 19/14 and 24/25 observed pass/fail
 counts respectively. QuickJS and JSC reach the unchanged 15-second file limit.
@@ -801,7 +801,7 @@ Other framework investigations remain Approved.
 The shared `ws` require-dispatch failure and Vite's stdin-triggered shutdown are
 fixed. Vanilla installs, renders, reloads source edits and builds on QuickJS,
 JSC and browser. React and Vue pass all browser-engine stages. The current
-90-second replay records 32/51 passing stages. [The exit report](../docs/app-matrix/exit-provenance.md)
+90-second replay records 32/51 passing stages. [The exit report](../../docs/app-matrix/exit-provenance.md)
 separates current integration outcomes from earlier checkpoints. Preserve the
 passing controls when following up.
 

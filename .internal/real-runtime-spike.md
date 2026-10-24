@@ -119,7 +119,7 @@ uSockets separates polling from socket operations. `packages/bun-usockets/src/in
 
 That is a useful place to add a WASI backend, but replacing epoll alone does not work. `internal/networking/bsd.h:196-252` and `src/bsd.c` directly create, accept, connect, read, and write BSD sockets. They also expose UDP and Unix sockets. Host ABI handles are not operating-system file descriptors.
 
-Our [host ABI](host-abi.md) already supplies nonblocking TCP listen, accept, connect, read, write, addresses, and blocking poll. A first adapter can preserve uSockets/uWS HTTP and WebSocket parsing above those two layers. It must maintain handle ownership and buffered readiness. The ABI's poll does not return a readiness list, so the adapter must scan registered handles and stage operations, or the ABI must grow a readiness result. Writable callbacks need backpressure handling to avoid spinning.
+Our [host ABI](../docs/host-abi.md) already supplies nonblocking TCP listen, accept, connect, read, write, addresses, and blocking poll. A first adapter can preserve uSockets/uWS HTTP and WebSocket parsing above those two layers. It must maintain handle ownership and buffered readiness. The ABI's poll does not return a readiness list, so the adapter must scan registered handles and stage operations, or the ABI must grow a readiness result. Writable callbacks need backpressure handling to avoid spinning.
 
 The current ABI lacks half-close, socket options, UDP, Unix sockets, descriptor passing, dedicated DNS results, and filesystem watch events. Full Bun socket parity needs additional host operations or explicit unsupported results. Plain WASI cannot provide them by adding libc declarations.
 
