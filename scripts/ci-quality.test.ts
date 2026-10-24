@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -120,7 +121,7 @@ test("the full-key native fallback rejects incompatible toolchain and preflight 
 });
 
 test("the refined Cargo cache keeps Cargo inputs and leaves JSC-only inputs to the JSC layer", () => {
-  const cargoKeys = rust.split("\n").filter(line => /native-cargo-v1-/.test(line));
+  const cargoKeys = rust.split("\n").filter(line => /native-cargo-v2-/.test(line));
   expect(cargoKeys).toHaveLength(3);
   for (const key of cargoKeys) {
     expect(key).toContain("scripts/build-wasi-sysroot.ts");
@@ -136,6 +137,102 @@ test("the refined Cargo cache keeps Cargo inputs and leaves JSC-only inputs to t
   expect(rust).toContain("key: jsc-cargo-v1-");
   expect(rust).toContain("'scripts/ci-binaryen.ts'");
   expect(rust).toContain("'crates/**'");
+});
+
+type CacheFiles = Readonly<Record<string, string>>;
+
+function nativeKeyTemplates(namespace: string) {
+  const lines = rust.split("\n").filter(line => line.trim().startsWith(`${namespace}-`) || line.trim().startsWith(`key: ${namespace}-`));
+  const [primary, prefix, save] = lines.map(line => line.trim().replace(/^key: /, ""));
+  if (!primary || !prefix || !save || lines.length !== 3) throw new Error(`Missing cache keys for ${namespace}`);
+  return { primary, prefix, save };
+}
+
+function fixtureHash(expression: string, files: CacheFiles): string {
+  const patterns = Array.from(expression.matchAll(/'([^']+)'/g), match => new Bun.Glob(match[1]!));
+  const paths = Object.keys(files).sort().filter(path => patterns.some(pattern => pattern.match(path)));
+  if (paths.length === 0) return "";
+  const digest = createHash("sha256");
+  for (const path of paths) digest.update(createHash("sha256").update(files[path]!).digest());
+  return digest.digest("hex");
+}
+
+function fixtureCacheKey(template: string, files: CacheFiles, image = "20261012.334.1"): string {
+  return template.replace(/\$\{\{ (.*?) \}\}/g, (_, expression: string) => {
+    if (expression === "runner.os") return "Linux";
+    if (expression === "runner.arch") return "X64";
+    if (expression === "steps.homes.outputs.image") return image;
+    if (!expression.startsWith("hashFiles(")) throw new Error(`Unexpected cache expression: ${expression}`);
+    return fixtureHash(expression, files);
+  });
+}
+
+const nativeCargoNamespace = rust.match(/key: (native-cargo-v\d+)-/)![1]!;
+
+const nativeCacheFiles: CacheFiles = {
+  "Cargo.toml": '[workspace.package]\nversion = "0.0.51"',
+  "Cargo.lock": 'name = "bunwasm-runtime"\nversion = "0.0.51"',
+  "crates/bunwasm-runtime/Cargo.toml": 'version.workspace = true',
+  "crates/bunwasm-runtime/src/engine_jsc.rs": "old Rust source",
+  "crates/bunwasm-runtime/build.rs": "native compiler flags",
+  "crates/bunwasm-crypto-sys/c/rsa.c": "native C source",
+  "crates/bunwasm-jsc/cpp/helpers.cpp": "JSC Cargo C++ helper",
+  ".cargo/config.toml": "SQLite compile flags",
+  "rust-toolchain.toml": "nightly-2026-09-15",
+  ".github/workflows/ci.yml": workflow,
+  "env.sh": "SDK/sysroot environment",
+  "bun.lock": "installed sysroot builder identity",
+  "scripts/build-wasi-sysroot.ts": "sysroot builder",
+  "scripts/sync-crypto.sh": "BoringSSL source pin",
+  "patches/bun/0001.patch": "upstream patch",
+  "third_party/zlib-ng/zlib.h.in": "native header",
+  "jsc/wasi-jsc.cmake": "WASI C++ toolchain",
+  "scripts/check-cmake-cache.cmake": "CMake preflight",
+};
+
+function changedCacheFile(path: string, contents = "changed"): CacheFiles {
+  return { ...nativeCacheFiles, [path]: contents };
+}
+
+test("native Cargo patch releases and Rust edits restore a previously saved compatible primary", () => {
+  const keys = nativeKeyTemplates(nativeCargoNamespace);
+  const saved = fixtureCacheKey(keys.save, nativeCacheFiles);
+  expect(saved).toBe(fixtureCacheKey(keys.primary, nativeCacheFiles));
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles))).toBe(true);
+  for (const path of ["Cargo.toml", "Cargo.lock", "crates/bunwasm-runtime/Cargo.toml", "crates/bunwasm-runtime/src/engine_jsc.rs"]) {
+    const files = changedCacheFile(path, nativeCacheFiles[path]!.replaceAll("0.0.51", "0.0.52") + "\nchanged");
+    expect(fixtureCacheKey(keys.primary, files)).not.toBe(saved);
+    expect(saved.startsWith(fixtureCacheKey(keys.prefix, files))).toBe(true);
+    expect(fixtureCacheKey(keys.save, files)).toBe(fixtureCacheKey(keys.primary, files));
+  }
+  expect(fixtureCacheKey(keys.primary, changedCacheFile(".git/HEAD"))).toBe(saved);
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, changedCacheFile(".git/HEAD")))).toBe(true);
+});
+
+test("native compatibility changes cannot select the prior Cargo cache", () => {
+  const keys = nativeKeyTemplates(nativeCargoNamespace);
+  const saved = fixtureCacheKey(keys.save, nativeCacheFiles);
+  for (const path of Object.keys(nativeCacheFiles).filter(path => !path.includes("Cargo.") && !path.endsWith("engine_jsc.rs"))) {
+    const files = changedCacheFile(path);
+    expect(fixtureCacheKey(keys.primary, files)).not.toBe(saved);
+    expect(saved.startsWith(fixtureCacheKey(keys.prefix, files))).toBe(false);
+  }
+  const sdkChange = changedCacheFile(".github/workflows/ci.yml", workflow.replaceAll("wasi-sdk-34", "wasi-sdk-35"));
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, sdkChange))).toBe(false);
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles, "next-image"))).toBe(false);
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace("Linux-X64", "Linux-ARM64"))).toBe(false);
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace("Linux-X64", "macOS-X64"))).toBe(false);
+});
+
+test("old Cargo-first keys cannot use the new compatibility prefix, and fallback never overlays a match", () => {
+  const old = nativeKeyTemplates("native-v4");
+  const keys = nativeKeyTemplates(nativeCargoNamespace);
+  const oldSaved = fixtureCacheKey(old.save, nativeCacheFiles);
+  expect(oldSaved.startsWith(fixtureCacheKey(old.prefix, changedCacheFile("Cargo.lock")))).toBe(false);
+  expect(oldSaved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles))).toBe(false);
+  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == ''");
+  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-hit != 'true'");
+  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'");
 });
 
 test("JSC prebuild and Cargo caches keep separate authoritative identities", () => {
@@ -188,7 +285,7 @@ test("crypto declares the toolchain and CMake preflight as Cargo build inputs", 
   const build = readFileSync(new URL("../crates/bunwasm-crypto-sys/build.rs", import.meta.url), "utf8");
   expect(build).toContain('println!("cargo:rerun-if-changed=../../jsc/wasi-jsc.cmake")');
   expect(build).toContain('println!("cargo:rerun-if-changed={}", guard.display())');
-  const cargoKey = rust.split("\n").find(line => /native-cargo-v1-/.test(line))!;
+  const cargoKey = rust.split("\n").find(line => /native-cargo-v2-/.test(line))!;
   expect(cargoKey).toContain("jsc/wasi-jsc.cmake");
   expect(cargoKey).toContain("scripts/check-cmake-cache.cmake");
   const times = readFileSync(new URL("./quality-input-times.ts", import.meta.url), "utf8");
@@ -470,7 +567,7 @@ test("Binaryen pin and installer identity participate in tool, fallback and JSC 
   for (const key of keys) {
     expect(key).toContain("'scripts/ci-binaryen.ts'");
   }
-  expect(rust.split("\n").filter(line => /native-cargo-v1-/.test(line)).every(line => !line.includes("scripts/ci-binaryen.ts"))).toBe(true);
+  expect(rust.split("\n").filter(line => /native-cargo-v2-/.test(line)).every(line => !line.includes("scripts/ci-binaryen.ts"))).toBe(true);
 });
 
 test("source cache runs in real browsers using one source-built host guest", () => {

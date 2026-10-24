@@ -226,6 +226,23 @@ cache restore/save are separate; only a cache miss writes a complete snapshot
 after the launcher check passes. Keys identify inputs, never run IDs or attempts.
 Only quality writes the shared Bun download cache. Other jobs restore it.
 
+`native-cargo-v2` puts compatibility inputs before the Cargo and source hash.
+The restore prefix retains the OS, architecture, runner image, Rust toolchain,
+Cargo config, SDK and job configuration, upstream pins and patches, native C/C++
+sources and build scripts, and sysroot inputs. The workflow itself is hashed so
+an SDK pin or compiler-command change cannot select an incompatible v2 target.
+`Cargo.*` stays in the exact-key suffix. Cargo validates manifest, dependency,
+feature, profile, and Rust source fingerprints after a compatible prefix restore.
+The existing input-time check restores timestamps only for unchanged content.
+
+This namespace change cannot match old `native-cargo-v1` or `native-v4` entries.
+The first eligible run needs a new v2 snapshot unless the unchanged, narrower
+`native-v4` fallback matches. That fallback runs only when v2 restored nothing,
+so it cannot overlay a v2 prefix hit. Saves still follow all selected JSC checks
+and host output production, and exact hits do not save again. Later compatible
+main-run logs must show the actual restored key and compile counts before any
+savings claim. Historical cold and warm timings do not measure this change.
+
 To compare completed runs and keep timestamped cache/build evidence:
 
 ```sh
