@@ -670,8 +670,11 @@ and abandoned-stream checks remain Approved.
 The recovered unmerged candidate now rejects abandoned handler waits and settles
 those waits on output cancellation. Recovery also restores observable `then`
 getters, overridden methods and non-callable values on native Promises. Cheap
-adapter checks pass, but final-source guest acceptance remains pending under the
-no-build recovery restriction. See [bounded lifecycle evidence](../docs/bun-test-suite/html-lifecycle.md).
+adapter checks now use the browser's actual prototype-chain Promise hook and
+avoid calling it for handler attachment. Both Proxy regressions pass without
+changing global Promise machinery or the separated waiter. Final-source guest
+acceptance remains pending under the no-build recovery restriction.
+See [bounded lifecycle evidence](../docs/bun-test-suite/html-lifecycle.md).
 
 The 2026-10-17 HTML/X509 lane adds the parser, handlers, async Response rewriting,
 streaming readers and Node certificates. Its [measurement](../docs/bun-test-suite/htmlrewriter-x509.md)

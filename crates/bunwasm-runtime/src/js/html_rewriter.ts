@@ -44,11 +44,11 @@
     return { promise: waiting, fulfilled, rejected, cancel: fulfilled, token };
   }
 
-  function observe(value: unknown): Promise<unknown> | undefined {
+  function observe(value: unknown): object | undefined {
     if ((typeof value !== "object" || value === null) && typeof value !== "function") return;
     const then = Reflect.get(value, "then");
     if (typeof then !== "function") return;
-    if (internal.isPromise(value) && then === promiseThen) return value;
+    if (then === promiseThen) return value;
     return new Promise<void>((resolve, reject) => Reflect.apply(then, value, [() => resolve(undefined), reject]));
   }
 

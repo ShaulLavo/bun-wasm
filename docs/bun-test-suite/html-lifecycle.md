@@ -14,6 +14,13 @@ and an overridden callable were ignored, while a non-callable `then` parked the
 rewrite. The recovery fixes all three contracts without changing global Promise
 machinery. Constructor and species operations retain ordinary `then` behavior.
 
+Independent source review found that the browser engine's `isPromise` hook walks
+the prototype chain. Calling it added a second Proxy prototype query before a
+custom `then`, or replaced the intrinsic incompatible-receiver error with a Proxy
+trap error. The correction selects attachment by the already-read method alone.
+The captured intrinsic validates its receiver, with synchronous cleanup on error.
+No engine hook, global Promise, or lifetime ownership changed.
+
 Run the cheap adapter regression and source-emission checks:
 
 ```sh
@@ -24,11 +31,15 @@ bun test scripts/html-handler-observation.test.ts scripts/runtime-emission.test.
 The adapter tests use the repository's actual TypeScript erasure script, genuine
 host streams and GC, and a small parser-event seam. They verify abandonment with
 held readers, input collection before handler settlement after cancellation,
-exact rejection objects, receiver identity, and ignored fulfillment values.
+exact rejection objects, receiver identity, and ignored fulfillment values. The
+default seam supplies the actual browser hook expression rather than a genuine
+brand check. Both Proxy regressions, species access and errors, falsy failures, and
+reentrant cancellation are covered. A genuine-brand control remains separate.
 They measure calls to `htmlClose`, not native parser memory or guest-engine GC.
 The normal runtime and web-host unit commands include the regression file.
 
-The final recovery check passed 15 tests and 110 assertions. Strict runtime and
+The corrected source check passed 31 tests and 192 assertions. Both Proxy cases
+failed before the correction and pass afterward. Strict runtime and
 test typing, changed-file lint, owned Rust formatting and shell syntax also
 passed. The three focused failure cases first failed against the checkpoint.
 
@@ -42,5 +53,7 @@ JSC, or other guest build was run during recovery.
 
 Exact logs, artifact qualification, dirty-tree preservation and cleanup evidence
 are in `/work/reports/bun-wasm/html-lifecycle-20261024/recovery-20261024`.
+The source-review correction evidence is in
+`/work/reports/bun-wasm/html-lifecycle-20261024/correction-r1`.
 The unchanged upstream lifecycle file and all-engine final-source acceptance
 remain separate from these bounded checks.

@@ -238,3 +238,129 @@ async function collected(check: () => boolean) {
   }
   expect(check()).toBe(true);
 }
+
+test("intrinsic then preserves getter order and the selected species constructor", async () => {
+  const state = adapter();
+  const events: string[] = [];
+  class Species extends Promise<unknown> {
+    constructor(executor: ConstructorParameters<typeof Promise>[0]) { events.push("construct"); super(executor); }
+  }
+  const value = Promise.resolve();
+  const constructor = { get [Symbol.species]() { events.push("species"); return Species; } };
+  Object.defineProperty(value, "then", { get() { events.push("then"); return Promise.prototype.then; } });
+  Object.defineProperty(value, "constructor", { get() { events.push("constructor"); return constructor; } });
+  expect(await state.rewrite(value).text()).toBe("<p>x</p>");
+  expect(events).toEqual(["then", "constructor", "species", "construct"]);
+  expect(state.sessions.size).toBe(0);
+  expect(state.closes()).toBe(1);
+});
+
+test("a species getter failure preserves its exact error after one then lookup", async () => {
+  const state = adapter();
+  const events: string[] = [];
+  const failure = { marker: "species getter" };
+  const constructor = { get [Symbol.species]() { events.push("species"); throw failure; } };
+  const value = Promise.resolve();
+  Object.defineProperty(value, "then", { get() { events.push("then"); return Promise.prototype.then; } });
+  Object.defineProperty(value, "constructor", { get() { events.push("constructor"); return constructor; } });
+  await expect(state.rewrite(value).text()).rejects.toBe(failure);
+  expect(events).toEqual(["then", "constructor", "species"]);
+  expect(state.sessions.size).toBe(0);
+  expect(state.closes()).toBe(1);
+});
+
+test("a species constructor failure preserves its exact error and closes once", async () => {
+  const state = adapter();
+  const failure = { marker: "species constructor" };
+  class Species { constructor() { throw failure; } }
+  const value = Promise.resolve();
+  Object.defineProperty(value, "constructor", { value: { [Symbol.species]: Species } });
+  await expect(state.rewrite(value).text()).rejects.toBe(failure);
+  expect(state.sessions.size).toBe(0);
+  expect(state.closes()).toBe(1);
+});
+
+test("custom then reads once without looking up constructor or assimilating a fulfillment", async () => {
+  const state = adapter();
+  const value = Promise.resolve();
+  const receivers: unknown[] = [];
+  let reads = 0;
+  const ignored = { get then() { throw new Error("must not assimilate"); } };
+  Object.defineProperty(value, "constructor", { get() { throw new Error("must not read constructor"); } });
+  Object.defineProperty(value, "then", { get() {
+    reads++;
+    return function (this: unknown, resolve: (value: unknown) => void, reject: (value: unknown) => void) {
+      receivers.push(this);
+      resolve(ignored);
+      reject("ignored second settlement");
+      throw new Error("ignored after resolution");
+    };
+  } });
+  expect(await state.rewrite(value).text()).toBe("<p>x</p>");
+  expect(reads).toBe(1);
+  expect(receivers).toEqual([value]);
+  expect(state.sessions.size).toBe(0);
+  expect(state.closes()).toBe(1);
+});
+
+test("an already-fulfilled native Promise does not assimilate its fulfillment again", async () => {
+  const state = adapter();
+  const ignored = {};
+  const value = Promise.resolve(ignored);
+  Object.defineProperty(ignored, "then", { get() { throw new Error("must not assimilate fulfillment"); } });
+  expect(await state.rewrite(value).text()).toBe("<p>x</p>");
+  expect(state.closes()).toBe(1);
+});
+
+for (const reason of [undefined, null, false, 0, ""]) {
+  test(`native/custom rejections and then getter throws retain ${String(reason)}`, async () => {
+    const state = adapter();
+    const getter = Promise.resolve();
+    Object.defineProperty(getter, "then", { get() { throw reason; } });
+    await expect(state.rewrite(getter).text()).rejects.toBe(reason);
+    await expect(state.rewrite(Promise.reject(reason)).text()).rejects.toBe(reason);
+    await expect(state.rewrite({ then(_resolve: () => void, reject: (value: unknown) => void) { reject(reason); } }).text()).rejects.toBe(reason);
+    expect(state.sessions.size).toBe(0);
+    expect(state.closes()).toBe(3);
+  });
+}
+
+type CancellationPhase = "then getter" | "species getter" | "custom then";
+const cancellationPhases: CancellationPhase[] = ["then getter", "species getter", "custom then"];
+for (const phase of cancellationPhases) {
+  test(`reentrant cancellation from ${phase} releases input before retained source settlement`, async () => {
+    const retained = await reentrantCancel(phase);
+    await collected(() => retained.input.deref() === undefined);
+    expect(retained.reader).toBeDefined();
+    expect(retained.pending.promise).toBeDefined();
+    retained.pending.resolve();
+    await new Promise(resolve => setTimeout(resolve, 1));
+    expect(retained.state.resumes()).toBe(0);
+    expect(retained.state.closes()).toBe(1);
+  });
+}
+
+async function reentrantCancel(phase: CancellationPhase) {
+  const state = adapter();
+  const pending = Promise.withResolvers<void>();
+  const ready = Promise.withResolvers<ReadableStreamDefaultController<Uint8Array>>();
+  const reasons: unknown[] = [];
+  const reason = { marker: "reentrant cancellation" };
+  const input = new ReadableStream<Uint8Array>({ start: ready.resolve, cancel(value) { reasons.push(value); } });
+  const cancellations: Promise<void>[] = [];
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  const cancel = () => { cancellations.push(reader.cancel(reason)); };
+  const then = phase === "custom then" ? cancel : Promise.prototype.then;
+  Object.defineProperty(pending.promise, "then", { get() { if (phase === "then getter") cancel(); return then; } });
+  Object.defineProperty(pending.promise, "constructor", { value: { get [Symbol.species]() { if (phase === "species getter") cancel(); return Promise; } } });
+  const response = new state.HTMLRewriter().on("p", { element: () => pending.promise }).transform(new Response(input));
+  reader = response.body!.getReader();
+  const read = reader.read();
+  (await ready.promise).enqueue(new TextEncoder().encode("<p>x</p>"));
+  expect((await read).done).toBe(true);
+  await Promise.all(cancellations);
+  expect(reasons).toEqual([reason]);
+  expect(state.sessions.size).toBe(0);
+  expect(state.closes()).toBe(1);
+  return { input: new WeakRef(input), pending, reader, response, state };
+}

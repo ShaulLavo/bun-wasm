@@ -2667,10 +2667,11 @@ waiter with the abandonment error. Cancellation settles that waiter, including
 when the handler cancels before returning its promise. This releases the
 suspended input graph before the handler settles. Thenable fulfillment still
 discards its value, and rejection values pass through unchanged. Promise handlers
-read `then` once before the native brand check. A custom callable keeps its
-original receiver, a throwing getter keeps its exact error, and a non-callable
-`then` does not park the rewrite. Only a native Promise whose method equals the
-captured `Promise.prototype.then` is observed directly. Other thenables keep the
+read `then` once without a native brand or prototype-chain query. A custom callable
+keeps its original receiver, a throwing getter keeps its exact error, and a non-callable
+`then` does not park the rewrite. An object whose selected method equals the
+captured `Promise.prototype.then` is observed directly. That intrinsic validates
+its receiver without a prototype query. Other thenables keep the
 value-discarding wrapper. The captured method attaches the reactions, preserving
 constructor and species access. A synchronous attachment error unregisters and
 settles the waiter before it escapes. These are original adapter changes, not

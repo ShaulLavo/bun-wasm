@@ -31,7 +31,6 @@ declare namespace BunWasm {
   type GlobScanOptions = Parameters<Native["globScan"]> extends [pattern: string, ...options: infer Options] ? Options : never;
 
   interface Internal {
-    isPromise(value: unknown): value is Promise<unknown>;
     defineGlobal(name: string, value: unknown): void;
     require(name: "builtins"): { "bun:jsc": () => { callerSourceOrigin(): string | null } };
     require(name: "node_url"): { fileURLToPath(url: string | URL): string };
