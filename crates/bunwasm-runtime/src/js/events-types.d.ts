@@ -8,13 +8,18 @@ declare namespace BunWasm.Events {
   interface List extends Array<Listener> { warned?: boolean; listener?: Listener }
   type Table = Record<Name, Listener | List | undefined>;
   interface Options { captureRejections?: boolean }
+  interface Emit {
+    (this: Emitter, type: Name, ...args: unknown[]): boolean;
+    apply(receiver: Emitter, args: unknown[]): boolean;
+  }
+  type Disposable = Partial<Record<symbol, () => void>>;
   interface Emitter {
     _events: Table;
     _eventsCount: number;
     _maxListeners?: number;
     setMaxListeners(n: number): this;
     getMaxListeners(): number;
-    emit(type: Name, ...args: unknown[]): boolean;
+    emit: Emit;
     addListener(type: Name, listener: Listener): this;
     on(type: Name, listener: Listener): this;
     prependListener(type: Name, listener: Listener): this;
@@ -83,7 +88,7 @@ declare namespace BunWasm.Events {
     setMaxListeners(n?: number, ...targets: Emitter[]): void;
     once(emitter: Emitter | EventTarget, name: Name, options?: { signal?: AbortSignal }): Promise<unknown[]>;
     on(emitter: Emitter | EventTarget, name: Name, options?: { signal?: AbortSignal; close?: Name[] }): Iterator;
-    addAbortListener(signal: AbortSignal, listener: Listener): Record<symbol, () => void>;
+    addAbortListener(signal: AbortSignal, listener: Listener): Disposable;
   }
 }
 

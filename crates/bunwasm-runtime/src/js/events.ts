@@ -227,7 +227,8 @@
     const args: unknown[] = Array.prototype.slice.call(arguments, 1);
     const events = this._events;
     if (type === "error" && events !== undefined && events[kErrorMonitor] !== undefined) {
-      this.emit.apply(this, [kErrorMonitor, ...args]);
+      const monitorArgs: unknown[] = [kErrorMonitor];
+      this.emit.apply(this, monitorArgs.concat(args));
     }
     const handler = events === undefined ? undefined : events[type];
     if (handler === undefined) {
@@ -522,9 +523,15 @@
     let finished = false;
     const removers: (() => void)[] = [];
 
+    function shift<T>(values: T[]): T {
+      const value = values.shift();
+      if (value === undefined) throw new TypeError("Event iterator queue returned no item");
+      return value;
+    }
+
     function settle(result: Item) {
       if (waiters.length > 0) {
-        for (const waiter of waiters.splice(0, 1)) waiter.resolve(result);
+        shift(waiters).resolve(result);
       } else queue.push(result);
     }
     function onEvent() {
@@ -532,7 +539,7 @@
     }
     function onError(err: unknown) {
       if (waiters.length > 0) {
-        for (const waiter of waiters.splice(0, 1)) waiter.reject(err);
+        shift(waiters).reject(err);
         finish();
         return;
       }
@@ -551,9 +558,7 @@
     for (const name of close) removers.push(listen(emitter, name, () => settleClose(), {}));
     function settleClose() {
       queue.push({ value: undefined, done: true, close: true });
-      for (const waiter of waiters.splice(0, 1)) {
-        for (const item of queue.splice(0, 1)) waiter.resolve(item);
-      }
+      if (waiters.length > 0) shift(waiters).resolve(shift(queue));
       finish();
     }
     if (signal) {
@@ -565,9 +570,8 @@
     const iterator: BunWasm.Events.Iterator = {
       next() {
         if (queue.length > 0) {
-          for (const item of queue.splice(0, 1)) {
-            return Promise.resolve<Item>(item.close ? { value: undefined, done: true } : item);
-          }
+          const item = shift(queue);
+          return Promise.resolve<Item>(item.close ? { value: undefined, done: true } : item);
         }
         if (error) {
           const err = error;
@@ -592,7 +596,7 @@
     return iterator;
   };
 
-  EventEmitter.addAbortListener = function addAbortListener(signal: AbortSignal, listener: Listener) {
+  EventEmitter.addAbortListener = function addAbortListener(signal: AbortSignal, listener: Listener): BunWasm.Events.Disposable {
     validateSignal(signal);
     checkListener(listener);
     if (signal.aborted) {

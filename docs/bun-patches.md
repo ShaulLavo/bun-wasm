@@ -1226,16 +1226,25 @@ The correction includes these executable changes, so the whole runtime AST is no
 - Bind the prototype alias before its initial count assignment.
 - Assign the listener-array alias only in the branch that proves its shape.
 - Close the bound once callback over its wrapper instead of an initially absent state field.
-- Pass error-monitor arguments as a contextually typed tuple to the same `emit.apply` call.
+- Build error-monitor arguments with a typed prefix array and the original concat operation.
+  The apply invocation contract accepts the resulting argument array without a cast.
 - Capture remove-all arguments as an arity-discriminated rest tuple. Restore the function's
   existing length descriptor to 1. Omitted and explicit undefined arguments retain distinct behavior.
-- Consume one private queue item with splice and iteration instead of asserted shift results.
-- Annotate local Symbol aliases before reading the optional disposal symbol.
+- Consume private queue items with the original shift operation and order. A local checked
+  consumer rejects an absent shift result with TypeError instead of asserting it present.
+  This is an explicit executable check, not a claim of byte-identical erasure.
+  The existing finish-path splice and iteration remain unchanged.
+- Annotate local Symbol aliases before reading the optional disposal symbol. Both the public
+  and implementation return types model a sparse symbol record, not a callable at every key.
 
 The AST regression check pins these audited changes and separately verifies the unchanged
 59 top-level statements against the approved JavaScript, including strictness and the lazy
 async-resource export. Listener identity, ordering, receivers, error propagation, publication
 rollback and native async-context contracts remain covered by native and three-engine fixtures.
+The array-intrinsics regression controls exercise throwing iterators and species getters during
+monitor delivery, pending events/errors/close and queued next calls. They retain concat/shift
+hooks and original finish-path exceptions rather than treating ordinary fixture passes as proof.
+Native and absent disposal-symbol controls test the one actual key and reject missing keys.
 
 The listener-publication hook is a separate **Host feature**, an **original adapter**, not copied
 from Node or Bun. It runs immediately after listener storage mutates and before user removal

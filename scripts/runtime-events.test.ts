@@ -27,7 +27,7 @@ function syntax(text: string) {
 }
 
 test("events pins audited executable changes and the unchanged PR140 remainder", () => {
-  expect(createHash("sha256").update(syntax(emitted)).digest("hex")).toBe("8689b1016ae8599af864b2641b038373f8e0b6e7d400a114179bdfb43530d0ae");
+  expect(createHash("sha256").update(syntax(emitted)).digest("hex")).toBe("ca337cb233afa9eb32c362403ebae92701ebc59d4667722de6c007ce950bfcb0");
   const file = ts.createSourceFile("events.js", emitted, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const changed = new Set([
     "addListener", "onceWrapper", "onceWrap", "proto.emit", "proto.removeAllListeners",
@@ -348,6 +348,74 @@ for (const hook of ["iterator", "species"]) {
       });
     });
   }
+}
+
+for (const event of ["value", "error", "close"]) {
+  test(`pending ${event} preserves shift calls, receiver and thrown identity`, async () => {
+    const result = await intrinsicControl(`
+      const emitter = new E(), iterator = E.on(emitter, "value", { close: ["close"] });
+      let observed = "pending", caught = false;
+      iterator.next().then(value => { observed = value; }, error => { observed = error; });
+      const shift = Array.prototype.shift, lengths = [], failure = new Error("shift failed");
+      let receiver;
+      Array.prototype.shift = function () {
+        receiver = this;
+        lengths.push(this.length);
+        throw failure;
+      };
+      try { emitter.emit("${event}", 42); } catch (error) { caught = error === failure; }
+      finally { Array.prototype.shift = shift; }
+      await Promise.resolve();
+      const pending = observed === "pending";
+      const waiter = receiver[0];
+      const waiterRetained = typeof waiter.resolve === "function" && typeof waiter.reject === "function";
+      await iterator.return();
+      return { pending, caught, lengths, waiterRetained, listeners: emitter.eventNames() };
+    `);
+    expect(result).toEqual({ pending: true, caught: true, lengths: [1], waiterRetained: true, listeners: [] });
+  });
+}
+
+test("pending close retains waiter shift, resolve lookup and value shift ordering", async () => {
+  const result = await intrinsicControl(`
+    const emitter = new E(), iterator = E.on(emitter, "value", { close: ["close"] });
+    const first = iterator.next();
+    const shift = Array.prototype.shift, calls = [];
+    Array.prototype.shift = function () {
+      calls.push(this.length);
+      const value = Reflect.apply(shift, this, arguments);
+      if (typeof value.resolve === "function") {
+        const resolve = value.resolve;
+        Object.defineProperty(value, "resolve", { get() { calls.push("resolve"); return resolve; } });
+      }
+      return value;
+    };
+    try { emitter.emit("close"); }
+    finally { Array.prototype.shift = shift; }
+    return { observed: await first, calls };
+  `);
+  expect(result).toEqual({ observed: { value: undefined, done: true, close: true }, calls: [1, "resolve", 1] });
+});
+
+for (const event of ["value", "close"]) {
+  test(`queued ${event} preserves one shift and thrown identity synchronously`, async () => {
+    const result = await intrinsicControl(`
+      const emitter = new E(), iterator = E.on(emitter, "value", { close: ["close"] });
+      emitter.emit("${event}", 42);
+      const shift = Array.prototype.shift, lengths = [], failure = new Error("shift failed");
+      let caught = false;
+      Array.prototype.shift = function () { lengths.push(this.length); throw failure; };
+      try { iterator.next(); } catch (error) { caught = error === failure; }
+      finally { Array.prototype.shift = shift; }
+      const observed = await iterator.next();
+      await iterator.return();
+      return { caught, lengths, observed };
+    `);
+    expect(result).toEqual({
+      caught: true, lengths: [1],
+      observed: event === "value" ? { value: [42], done: false } : { value: undefined, done: true },
+    });
+  });
 }
 
 for (const mode of ["native", "fallback"]) {
