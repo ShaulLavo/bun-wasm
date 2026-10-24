@@ -37,6 +37,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Migration archive fixtures](#migration-archive-fixtures) | Host feature | Unchanged abbrev archives verify the real npm workspace fixture and extraction against its recorded checksums. |
 | [`crates/bunwasm-jsc/cpp/helpers.cpp`, finalizer dispatch](#jsc-finalizer-dispatch) | Host feature | Original adapter for full collection and deferred cleanup in the wasm event loop. |
 | [`scripts/transpile-runtime.ts`, runtime TypeScript](#runtime-typescript) | Host feature | Original build adapter and guest types; preserve runtime factory loading. |
+| [Node test registration adapter](#node-test-registration-adapter) | Host feature | Original optional-name normalization preserves callback names, explicit names, runner selection and timeout forwarding. |
 | [Compression and archive adapters](#compression-and-archive-adapters) | Host feature | Original Web stream driver, Bun function wrappers, archive reader and native handle registry. |
 | [`src/js/zlib.ts`, Node zlib streams](#compression-and-archive-adapters) | Port | Node's `lib/zlib.js` stream, flush, limit and validation logic over the native handle. |
 | [`src/compression.rs`, native codec contexts](#compression-and-archive-adapters) | Port | Bun's native zlib, Brotli and Zstd handle calls and its Web stream coder steps. |
@@ -1687,6 +1688,20 @@ of 9,409 bytes. The converted pair is not counted among those 35 existing module
 `node:test` registration adapter renamed from JavaScript with strict types. Their UTF-8,
 data-format and test-runner contracts live in `src/js/runtime.d.ts`. Neither copies Bun's
 C++ JSONL binding or Bun's `node:test` module.
+
+## Node test registration adapter
+
+Class **Host feature**. `crates/bunwasm-runtime/src/js/node_test.ts` is an
+original adapter over the existing `bun_test` runner. Its optional-name argument
+normalization follows behavior observed in native Bun 1.4.2, revision `744846f84`.
+No implementation is copied from Bun's `src/js/node/test.ts` at the pinned
+`9510e74152073d850a18758ca41114d8f214ffa6`, or from Node.
+
+A function in the first position supplies its own name. An options object before
+the function supplies skip, todo and timeout settings. Missing function names use
+`<anonymous>`; explicit string names, including the empty string, stay unchanged.
+All registration methods use the same normalization. The underlying runner still
+owns callback and hook errors; this change adds no options or TestContext behavior.
 
 ## Standalone crypto linkage
 
