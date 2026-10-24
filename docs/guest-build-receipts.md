@@ -95,3 +95,9 @@ is provided. SDK `wasm-ld` remains recorded separately from Rust's actual linker
 
 Matching start and end snapshots detect persistent drift. They do not detect an
 input changed during compilation and restored before the end snapshot.
+
+Imported Bun symlinks must keep their committed link text and resolve inside the
+imported repository. The consumed-source inventory follows those links and hashes
+the target files. This permits Bun's committed documentation and CLI links without
+accepting hidden retargeting or links to source outside that repository. The main
+repository group continues to reject source symlinks.

@@ -1,5 +1,5 @@
 import { realpathSync } from "node:fs";
-import { lstat, readdir, readFile, realpath } from "node:fs/promises";
+import { lstat, readdir, readFile, readlink, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const guestBuilds = {
@@ -83,18 +83,29 @@ async function group(name: string, root: string, paths: readonly string[], linke
   return { name, files };
 }
 
-async function committedGroup(name: string, repository: string, paths: readonly string[]): Promise<InputGroup> {
+type ImportedLinks = "reject" | "within-repository";
+async function committedInput(repository: string, path: string, mode: string, links: ImportedLinks): Promise<Uint8Array> {
+  const absolute = join(repository, path);
+  const metadata = await lstat(absolute);
+  if (mode !== "120000") {
+    if (!metadata.isFile()) throw new Error(`Repository input must remain a regular file: ${path}`);
+    return readFile(absolute);
+  }
+  if (links === "reject" || !metadata.isSymbolicLink()) throw new Error(`Unsupported symlink in repository inputs: ${path}`);
+  if (!inside(await realpath(repository), await realpath(absolute))) throw new Error(`Source link escapes imported repository: ${path}`);
+  return readlink(absolute, { encoding: "buffer" });
+}
+
+async function committedGroup(name: string, repository: string, paths: readonly string[], links: ImportedLinks = "reject"): Promise<InputGroup> {
   if (git(repository, "status", "--porcelain", "--untracked-files=normal")) throw new Error("Guest repository source must be committed and clean");
   const entries = git(repository, "ls-tree", "-rz", "HEAD", "--", ...paths).split("\0").filter(Boolean);
   const files: InputFile[] = [];
   for (const entry of entries) {
-    const match = /^(100644|100755) blob ([0-9a-f]{40})\t(.+)$/.exec(entry);
+    const match = /^(100644|100755|120000) blob ([0-9a-f]{40})\t(.+)$/.exec(entry);
     if (!match) throw new Error("Guest repository inputs must be regular committed files");
-    const [, , object, path] = match;
-    if (!path) throw new Error("Missing committed input path");
-    const absolute = join(repository, path);
-    if ((await lstat(absolute)).isSymbolicLink()) throw new Error(`Symlink in repository inputs: ${path}`);
-    const bytes = await readFile(absolute);
+    const [, mode, object, path] = match;
+    if (!path || !mode) throw new Error("Missing committed input path or mode");
+    const bytes = await committedInput(repository, path, mode, links);
     const blob = new Bun.CryptoHasher("sha1").update(`blob ${bytes.byteLength}\0`).update(bytes).digest("hex");
     if (blob !== object) throw new Error(`Guest repository input differs from committed source: ${path}`);
     files.push({ path, sha256: hash(bytes), bytes: bytes.byteLength });
@@ -124,7 +135,7 @@ export async function captureSourceManifest(options: SourceOptions): Promise<Sou
   const source = { head: git(repository, "rev-parse", "HEAD"), tree: git(repository, "rev-parse", "HEAD^{tree}") };
   const groups = [await committedGroup("repository", repository, ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "package.json", "bun.lock", "crates", "third_party", "scripts", "patches", "jsc"])];
   const bun = join(repository, "vendor/bun");
-  await committedGroup("bun", bun, ["src", "Cargo.toml", "Cargo.lock"]);
+  await committedGroup("bun", bun, ["src", "Cargo.toml", "Cargo.lock"], "within-repository");
   groups.push(await group("bun", bun, ["src", "Cargo.toml", "Cargo.lock", "build/debug/codegen", "vendor/lolhtml", "vendor/rust-argon2"]));
   groups.push(await group("boringssl", boringssl, ["CMakeLists.txt", "cmake", "include", "crypto", "gen", "third_party", "util", "decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h"]));
   groups.push(await group("waffle-libc", waffle, ["package.json", "scripts/build-wasi-libc.sh", "patches/wasi-libc/preopen-scan.patch"]));
