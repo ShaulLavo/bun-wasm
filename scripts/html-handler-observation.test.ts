@@ -17,13 +17,16 @@ const empty = new Uint8Array();
 type Session = { bytes: Uint8Array };
 type Rewriter = { on(selector: string, handlers: object): Rewriter; transform(input: Response): Response };
 type RewriterConstructor = new () => Rewriter;
-function adapter() {
+const browserPromiseHasInstance: (value: unknown) => boolean = Function.prototype.call.bind(Function.prototype[Symbol.hasInstance], Promise);
+function adapter(isPromise: (value: unknown) => boolean = browserPromiseHasInstance) {
   const sessions = new Map<number, Session>();
   let next = 0;
+  let closes = 0;
+  let resumes = 0;
   const native = {
     htmlValidateSelector() {},
     htmlCreate() { const id = ++next; sessions.set(id, { bytes: empty }); return id; },
-    htmlClose(id: number) { sessions.delete(id); },
+    htmlClose(id: number) { closes++; sessions.delete(id); },
     htmlStep(id: number, action: string, bytes: Uint8Array) {
       const session = sessions.get(id);
       if (!session) throw new Error("HTML session already closed");
@@ -31,6 +34,7 @@ function adapter() {
         session.bytes = bytes;
         return { output: empty, event: { handler: 0, kind: "element" } };
       }
+      if (action === "resume") resumes++;
       return { output: action === "resume" ? session.bytes : empty };
     },
   };
@@ -38,13 +42,70 @@ function adapter() {
   const context = {
     HTMLRewriter: initial, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer,
     Response, Headers, ReadableStream, Promise, FinalizationRegistry, Error, TypeError,
-    internal: { native, isPromise: types.isPromise,
+    internal: { native, isPromise,
       web: { Response: { _setUrl() {} } } },
   };
   runInNewContext(emitted, context);
   const rewrite = (value: unknown) => new context.HTMLRewriter().on("p", { element: () => value }).transform(new Response("<p>x</p>"));
-  return { rewrite, sessions, HTMLRewriter: context.HTMLRewriter };
+  return { rewrite, sessions, HTMLRewriter: context.HTMLRewriter, closes: () => closes, resumes: () => resumes };
 }
+
+test("the browser Promise hook adds no prototype query before calling a custom then", async () => {
+  const state = adapter();
+  const failure = { marker: "unexpected second getPrototypeOf" };
+  let prototypes = 0;
+  let reads = 0;
+  const receivers: unknown[] = [];
+  const value = new Proxy({ get then() {
+    reads++;
+    return function (this: unknown, resolve: () => void) { receivers.push(this); resolve(); };
+  } }, {
+    getPrototypeOf() {
+      prototypes++;
+      if (prototypes > 1) throw failure;
+      return null;
+    },
+  });
+  const result = await state.rewrite(value).text().then(text => ({ text }), error => ({ error }));
+  expect(result).toEqual({ text: "<p>x</p>" });
+  expect(prototypes).toBe(1);
+  expect(reads).toBe(1);
+  expect(receivers).toEqual([value]);
+  expect(state.sessions.size).toBe(0);
+  expect(state.closes()).toBe(1);
+});
+
+test("the browser Promise hook preserves the intrinsic receiver error for a non-Promise with intrinsic then", async () => {
+  const state = adapter();
+  const failure = { marker: "unexpected second getPrototypeOf" };
+  let prototypes = 0;
+  let reads = 0;
+  const value = new Proxy({ get then() { reads++; return Promise.prototype.then; } }, {
+    getPrototypeOf() {
+      prototypes++;
+      if (prototypes > 1) throw failure;
+      return null;
+    },
+  });
+  const error = await state.rewrite(value).text().then(() => undefined, error => error);
+  expect(error).toBeInstanceOf(TypeError);
+  expect(error).not.toBe(failure);
+  expect(prototypes).toBe(1);
+  expect(reads).toBe(1);
+  expect(state.sessions.size).toBe(0);
+  expect(state.closes()).toBe(1);
+});
+
+test("a genuine brand hook control also observes a custom thenable prototype only once", async () => {
+  const state = adapter(types.isPromise);
+  let prototypes = 0;
+  const value = new Proxy({ then(resolve: () => void) { resolve(); } }, {
+    getPrototypeOf() { prototypes++; return null; },
+  });
+  expect(await state.rewrite(value).text()).toBe("<p>x</p>");
+  expect(prototypes).toBe(1);
+  expect(state.closes()).toBe(1);
+});
 
 test("a returned native Promise reads its then getter once and preserves thrown identity", async () => {
   const { rewrite, sessions } = adapter();
