@@ -8,6 +8,8 @@ The tests pin the approved JavaScript AST with only the two explicit utility des
 
 `scripts/runtime-inspector-contracts.test.ts` uses the real strict TypeScript compiler and ambient dependencies to check minimal and full declaration orders, both inspector option domains, callable property reads and assignments, and invalid-call diagnostics. It also reconstructs the former method/property union and requires both actual TS2300 sites. Its feature-owned runtime manifest registers it once.
 
+The duplicate baseline keeps the assert/util 21-line migration separate from the events/util 12-line migration exposed when both converted modules compose. The latter replaces only `33ad45a23a9c5c95:1` with `f35a9b37be0e8d3c:1`. Both describeReceived bodies equal the original JavaScript bodies byte-for-byte; the signatures add erased parameter types. No runtime source changes for this fingerprint correction. The baseline still contains 21 entries with count 1 each, and both copy-rejection probes remain unchanged.
+
 Historical native Bun and three-engine fixture results do not qualify corrected emitted bytes. Normal CI must build and test the integrated source. The retained corrected util emission is 66,311 bytes, 1,570 more than the historical emission; this is not a measured final Wasm delta. Erased parentheses and padding can change the source-expression excerpt in native Bun errors. Null changes from `TypeError: null is not an object (evaluating 'arg.length')` to `TypeError: null is not an object (evaluating '(arg                       ).length')`; undefined has the corresponding difference. No identical-error-text or corrected guest-result claim is made.
 
 ## Classification
@@ -19,6 +21,6 @@ Historical native Bun and three-engine fixture results do not qualify corrected 
 | `scripts/runtime-assert-util.test.ts`, `runtime-util-equivalence.ts`, `runtime-util-controls.ts` | Host feature | Original AST, source-position, boundary and operation-order checks. |
 | `docs/runtime-util-raw-operations.json` | Host feature | Original 47-operation assertion manifest, including the two retained boundaries. |
 | `tests/fixtures/runtime-ts-assert-util/`, `checks/runtime-runtime-assert-util.json`, `checks/native-runtime-ts-assert-util.json` | Host feature | Original assertion/utility fixture and feature-owned blocking test registration. |
-| `scripts/quality-probes.test.ts`, `.jscpd-baseline.json` | Host feature | Preserve the existing clone's typed fingerprint migration and reject another typed adapter copy. |
+| `scripts/quality-probes.test.ts`, `.jscpd-baseline.json` | Host feature | Preserve the separate assert/util and events/util typed fingerprint migrations without increasing clone counts; reject another typed adapter copy. |
 
 [Ledger scope and pinned revisions](scope.md).
