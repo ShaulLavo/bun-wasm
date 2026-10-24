@@ -469,6 +469,7 @@
   });
   internal.isMessagePort = value => value instanceof MessagePort;
   internal.clonePorts = (value, options) => codec.decode(codec.encode(value, transfers(options)));
+  internal.workerErrorData = encodeWorkerError;
 
   class BroadcastChannel extends EventTarget {
     readonly name: string;
@@ -693,6 +694,21 @@
     if (portOps.isClosed(port)) throw Object.assign(new Error("Cannot send data on closed MessagePort"), { code: "ERR_CLOSED_MESSAGE_PORT" });
     throw Object.assign(new Error("VM contexts are not supported in bun-wasm"), { code: "ERR_NOT_SUPPORTED_IN_WASM" });
   }
+  function isBuildError(error: unknown): error is Error {
+    return error instanceof Error && error.name === "BuildError" && "__bunwasmFormatted" in error;
+  }
+  function encodeWorkerError(reported: unknown): BunWasm.WorkerErrorData {
+    let error = isBuildError(reported) ? new SyntaxError(reported.message) : reported;
+    let graph: Graph;
+    try { graph = codec.encode(error); }
+    catch {
+      error = Object.assign(new Error("Cannot serialize worker error"), { code: "ERR_WORKER_UNSERIALIZABLE_ERROR" });
+      graph = codec.encode(error);
+    }
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    return { graph, code };
+  }
+
   function initialize() {
     if (!config || initialized) return;
     initialized = true;
@@ -713,11 +729,8 @@
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "exiting", child: route[route.length - 1], code, messages: parentPort ? portOps.sent(parentPort) : 0 } });
       parentChannel?.drain();
     };
-    internal.workerError = error => {
-      let graph: Graph;
-      try { graph = codec.encode(error); }
-      catch { graph = codec.encode(Object.assign(new Error("Cannot serialize worker error"), { code: "ERR_WORKER_UNSERIALIZABLE_ERROR" })); }
-      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    internal.workerError = reported => {
+      const { graph, code } = encodeWorkerError(reported);
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "error", child: route[route.length - 1], graph, code } });
     };
     if (config.web) {
