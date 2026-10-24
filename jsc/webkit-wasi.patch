@@ -475,3 +475,28 @@ diff --git i/Source/JavaScriptCore/runtime/VMTraps.h w/Source/JavaScriptCore/run
  #if ENABLE(SIGNAL_BASED_VM_TRAPS)
      RefPtr<SignalSender> m_signalSender;
  #endif
+diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+--- a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
++++ b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+@@ -107,6 +107,13 @@
+
+ static RefPtr<BufferMemoryHandle> tryAllocateResizableMemory(VM* vm, size_t sizeInBytes, size_t maxByteLength)
+ {
++#if OS(WASI)
++    // WASI has no virtual reservation/protection for resizable backing stores.
++    UNUSED_PARAM(vm);
++    UNUSED_PARAM(sizeInBytes);
++    UNUSED_PARAM(maxByteLength);
++    return nullptr;
++#else
+     // Make sure malloc actually allocates something, but not too much. We use null to mean that the buffer is detached.
+     size_t initialBytes = roundUpToMultipleOf<PageCount::pageSize>(sizeInBytes);
+     if (!initialBytes)
+@@ -150,6 +157,7 @@
+     constexpr bool writable = false;
+     OSAllocator::protect(slowMemory + initialBytes, maximumBytes - initialBytes, readable, writable);
+     return adoptRef(*new BufferMemoryHandle(slowMemory, initialBytes, maximumBytes, PageCount::fromBytes(initialBytes), PageCount::fromBytes(maximumBytes), MemorySharingMode::Shared, MemoryMode::BoundsChecking));
++#endif
+ }
+
+ ArrayBufferContents::ArrayBufferContents(void* data, size_t sizeInBytes, std::optional<size_t> maxByteLength, ArrayBufferDestructorFunction&& destructor)

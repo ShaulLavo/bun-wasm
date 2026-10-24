@@ -72,13 +72,11 @@ RESULT.json`. Explicitly selected assertion scripts run with `bun run`; their
 successful exit establishes a passing file, with no invented test count.
 Discovered Bun test files retain the existing test-report criteria.
 
-The [measured comparison](tcp-results.md) includes the remaining first blockers.
-[Queued compatibility work](../plans/tcp-compatibility.md) records the read
-callback, constructor, option, and address-contract gaps. The adapter supports
+Gaps remained in read callbacks, constructors, options and the address contract when this was measured. The adapter supports
 working TCP and WebSocket exchanges; it does not claim complete Node net
 conformance.
 
-## TCP review regressions
+## Regression fixtures
 
 `tests/fixtures/net-review` covers pipe backpressure and forwarding-listener
 cleanup, connection-attempt cancellation, write callbacks before connection
@@ -92,5 +90,4 @@ overflow fails once with HPE_HEADER_OVERFLOW. Handshake listeners are removed
 before the socket is handed to the upgrade listener.
 
 Run `scripts/test.sh --no-build --engine ENGINE net-review` and
-`scripts/test-net-ws.sh` against rebuilt artifacts. The regression commit
-precedes the fix, so the same tests can reproduce the reviewed failures.
+`scripts/test-net-ws.sh` against rebuilt artifacts. 

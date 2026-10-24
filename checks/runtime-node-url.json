@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/node-url.test.ts",
+  "localRuntime": true
+}

@@ -15,20 +15,23 @@ type Group = {
   values: Completion[];
   notification?: { owner: Session; id?: Timer } | null;
 };
+type Settlement = { error: unknown; failed: boolean };
 type Completion = {
   stream: WeakRef<object>;
   readable: boolean;
   group?: Group;
-  promise: Promise<void>;
-  fulfill: () => void;
-  fail: (error: unknown) => void;
+  // Node's finished() reads `promise`; most streams never reach it, so it is made on first read.
+  readonly promise: Promise<void>;
+  resolvers?: { promise: Promise<void>; fulfill: () => void; fail: (error: unknown) => void };
+  settled?: Settlement;
   watching: boolean;
   done: boolean;
   queued: boolean;
   handle: WeakRef<object> | null;
   session?: Session;
-  weak: WeakRef<Completion>;
-  observation?: { error: unknown; failed: boolean };
+  readonly weak: WeakRef<Completion>;
+  weakRef?: WeakRef<Completion>;
+  observation?: Settlement;
 };
 type Observer = { value: Completion; observed: false } | {
   value: Completion; observed: true; promise: Promise<void>; ignore: boolean;
@@ -71,15 +74,23 @@ const writerClosed = getter(Native.WritableStreamDefaultWriter.prototype, "close
 const releaseReader = Native.ReadableStreamDefaultReader.prototype.releaseLock;
 const releaseWriter = Native.WritableStreamDefaultWriter.prototype.releaseLock;
 
+function resolvers(value: Completion) {
+  if (value.resolvers) return value.resolvers;
+  let fulfill!: () => void, fail!: (error: unknown) => void;
+  const promise = new NativePromise<void>((a, b) => { fulfill = a; fail = b; });
+  then(promise, undefined, () => {});
+  value.resolvers = { promise, fulfill, fail };
+  if (value.settled?.failed) fail(value.settled.error);
+  else if (value.settled) fulfill();
+  return value.resolvers;
+}
 function record(stream: object, readable: boolean, group?: Group): Completion {
   let value = records.get(stream);
   if (value) { if (group) value.group = group; return value; }
   apply(readable ? readableLocked : writableLocked, stream, []);
-  let fulfill!: () => void, fail!: (error: unknown) => void;
-  const promise = new NativePromise<void>((a, b) => { fulfill = a; fail = b; });
-  then(promise, undefined, () => {});
-  value = { stream: new WeakRef(stream), readable, group, promise, fulfill, fail, watching: false, done: false, queued: false, handle: null, session, get weak(): WeakRef<Completion> { return weak; } };
-  const weak: WeakRef<Completion> = new WeakRef(value);
+  value = { stream: new WeakRef(stream), readable, group, watching: false, done: false, queued: false, handle: null, session,
+    get promise() { return resolvers(this).promise; },
+    get weak() { return this.weakRef ??= new WeakRef(this); } };
   records.set(stream, value);
   return value;
 }
@@ -97,9 +108,10 @@ function settle(value: Completion, error?: unknown, failed = false) {
     return;
   }
   value.done = true;
-  pending.delete(value.weak);
-  if (failed) value.fail(error);
-  else value.fulfill();
+  if (value.weakRef) pending.delete(value.weakRef);
+  value.settled = { error, failed };
+  if (failed) value.resolvers?.fail(error);
+  else value.resolvers?.fulfill();
   for (const peer of value.group?.values ?? []) if (peer !== value) request(peer);
 }
 function poll(value: Completion) {

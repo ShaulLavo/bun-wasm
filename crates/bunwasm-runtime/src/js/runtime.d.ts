@@ -1,5 +1,10 @@
 declare namespace BunWasm {
+  type FunctionKind = "normal" | "async" | "generator" | "async-generator";
   interface Native {
+    functionImports(args: readonly string[], kind: FunctionKind): number[][];
+    resolve(specifier: string, referrer: string, require: boolean): string;
+    importModule(path: string): Promise<unknown>;
+    utf8Encode(value: string): Uint8Array<ArrayBuffer>;
     nodePath: {
       resolveWindows(cwd: Uint8Array, paths: Uint8Array[]): Uint8Array;
       lexical(windows: boolean, operation: "isAbsolute", path: Uint8Array): boolean;
@@ -8,6 +13,8 @@ declare namespace BunWasm {
       join(windows: boolean, paths: Uint8Array[]): Uint8Array;
       relative(windows: boolean, from: Uint8Array, to: Uint8Array): Uint8Array;
     };
+    hostLocalAddr(handle: number): string | number;
+    hostClose(handle: number): number;
     registerObjectModule(name: string): string;
     clearObjectModules(): void;
     readonly engine: "quickjs" | "jsc" | "host";
@@ -24,6 +31,9 @@ declare namespace BunWasm {
   type GlobScanOptions = Parameters<Native["globScan"]> extends [pattern: string, ...options: infer Options] ? Options : never;
 
   interface Internal {
+    defineGlobal(name: string, value: unknown): void;
+    require(name: "builtins"): { "bun:jsc": () => { callerSourceOrigin(): string | null } };
+    require(name: "node_url"): { fileURLToPath(url: string | URL): string };
     readonly native: Native;
     readonly builtinFactories: Record<string, () => object>;
     readonly realTimers: {
@@ -71,7 +81,27 @@ declare namespace BunWasm {
   }
 }
 
-declare const process: { cwd(): string };
+declare namespace BunWasm {
+  interface ColorStream { hasColors?(): boolean; isTTY?: boolean }
+  interface RuntimeProcess {
+    cwd(): string;
+    nextTick?(callback: (this: unknown, ...args: unknown[]) => unknown, ...args: unknown[]): void;
+    emitWarning?(warning: Error): void;
+    emitWarning?(message: string, kind?: string, code?: string): void;
+    noDeprecation?: boolean;
+    throwDeprecation?: boolean;
+    pid?: number;
+    env?: Record<string, string | undefined>;
+    stdout?: ColorStream;
+    stderr?: WorkerWritable;
+    argv?: string[];
+  }
+}
+
+declare var process: BunWasm.RuntimeProcess & {
+  stdout: BunWasm.WorkerWritable;
+  stderr: BunWasm.WorkerWritable;
+};
 declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
 
@@ -134,7 +164,7 @@ declare namespace BunWasm {
     describe(value: unknown): string;
     nextTick(callback: (...args: unknown[]) => void, ...args: unknown[]): void;
     toUint8(value: ArrayBuffer | ArrayBufferView): Uint8Array;
-    concatBytes(chunks: Uint8Array[]): Uint8Array;
+    concatBytes(chunks: readonly Uint8Array[]): Uint8Array<ArrayBuffer>;
     require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
     require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
     builtin(name: "node:stream"): {
@@ -143,7 +173,7 @@ declare namespace BunWasm {
       Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: () => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
     };
   }
-  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void } } }
+  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void }; URLSearchParams: new (init: object) => URLSearchParams } }
   type HTMLHandlerKind = "element" | "comments" | "text" | "doctype" | "end" | "endTag";
   interface HTMLStepEvent { handler: number; kind: HTMLHandlerKind }
   interface HTMLStep { output: Uint8Array; event?: HTMLStepEvent }
@@ -161,6 +191,33 @@ declare namespace BunWasm {
     htmlStep(id: number, action: "write" | "end" | "resume", bytes: Uint8Array): HTMLStep;
     htmlToken<K extends keyof HTMLTokenValues>(id: number, action: K, value: string, html: boolean, extra?: string | number): HTMLTokenValues[K];
     htmlClose(id: number): void;
+  }
+}
+
+declare namespace BunWasm {
+  type DataFormat = "JSON" | "JSONC" | "JSON5" | "TOML" | "YAML";
+  type TestCallback = () => unknown;
+  type TestRegistrar = (name: string, callback?: TestCallback, timeout?: number) => unknown;
+  type TestHook = (callback: TestCallback, timeout?: number) => unknown;
+  interface Native {
+    /** `fatal` throws on invalid UTF-8 instead of substituting U+FFFD. */
+    utf8Decode(bytes: Uint8Array, fatal?: boolean): string;
+  }
+  interface Internal {
+    require(name: "formats"): { parse(input: unknown, format: DataFormat): unknown };
+    require(name: "bun_test"): { exports: {
+      test: TestRegistrar & Record<"skip" | "todo" | "only", TestRegistrar>;
+      describe(name: string, callback: () => unknown): unknown;
+    } & Record<"beforeAll" | "afterAll" | "beforeEach" | "afterEach", TestHook> };
+  }
+  interface Native {
+    /** Host of `http://<domain>/` as the URL crate parses it, or "" when it does not parse. */
+    domainToASCII(domain: string): string;
+    /** Validated, normalized hostname with IDNA labels decoded, or "" for invalid input. */
+    domainToUnicode(domain: string): string;
+  }
+  interface Internal {
+    builtin(name: "node:querystring"): { parse(query: string): Record<string, unknown>; stringify(query: object): string };
   }
 }
 
@@ -191,5 +248,146 @@ declare namespace BunWasm {
     x509(op: "publicKey", data: Uint8Array): Uint8Array;
     x509(op: "checkHost" | "checkEmail" | "checkIP", data: Uint8Array, name: string, flags: number): string | undefined;
     x509(op: "checkIssued" | "verify", data: Uint8Array, other: Uint8Array): boolean;
+  }
+}
+
+declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;
+declare namespace BunWasm {
+  interface StackFrame { file: string; name: string; line: number; column: number }
+  interface InspectOptions {
+    showHidden?: boolean; depth?: number | null; colors?: boolean; customInspect?: boolean;
+    showProxy?: boolean; maxArrayLength?: number | null; maxStringLength?: number | null;
+    breakLength?: number; compact?: boolean | number; sorted?: boolean | ((a: string, b: string) => number);
+    getters?: boolean | "get" | "set"; numericSeparator?: boolean;
+  }
+  interface InspectFunction {
+    (value: unknown, options?: InspectOptions): string;
+    defaultOptions?: InspectOptions;
+    colors?: Record<string, number[]>;
+    styles?: Record<string, string>;
+  }
+  interface ConsoleInspector {
+    nodeInspect: InspectFunction;
+    parseStack(raw: unknown): StackFrame[];
+  }
+  interface StackCallSite {
+    getFileName(): string;
+    getFunctionName(): string | null;
+    getFunction(): unknown;
+    getLineNumber(): number;
+    getColumnNumber(): number;
+    isNative(): boolean;
+    isConstructor(): boolean;
+    isToplevel(): boolean;
+  }
+  interface Native {
+    bunBuiltinNames(): string[];
+    bunBuiltinSource(id: number): string | undefined;
+    bunBuiltinHookName(id: number): string;
+    bunBuiltinErrorCode(id: number): string;
+    evalScript(source: string, filename: string): (intrinsics: Record<string, unknown>) => unknown;
+    isPromise(value: unknown): boolean;
+    isProxy(value: unknown): boolean;
+    isError(value: unknown): boolean;
+  }
+  interface Internal {
+    bunBuiltinGlobals: Record<string, unknown> & {
+      Array: ArrayConstructor; Error: ErrorConstructor; Function: FunctionConstructor;
+      Map: MapConstructor; Object: ObjectConstructor; Proxy: ProxyConstructor;
+      RangeError: RangeErrorConstructor; Reflect: typeof Reflect; Set: SetConstructor;
+      String: StringConstructor; Symbol: SymbolConstructor; TypeError: TypeErrorConstructor;
+      URIError: URIErrorConstructor;
+    };
+    builtin(name: string): unknown;
+    defineHidden(target: object, values: object): void;
+    mappedCallSites: WeakSet<object>;
+    formatCallSite(site: StackCallSite): string;
+    require(name: "inspect"): ConsoleInspector;
+  }
+}
+
+interface ErrorConstructor {
+  captureStackTrace(target: object, constructorOpt?: Function): void;
+  prepareStackTrace: ((target: object, raw: unknown) => unknown) | undefined;
+}
+
+declare namespace BunWasm {
+  interface FormatTemporalValue {
+    toString(options: { calendarName: string; timeZoneName: string }): string;
+  }
+  interface FormatInstant extends FormatTemporalValue {
+    epochNanoseconds: bigint;
+    toZonedDateTimeISO(offset: string): FormatTemporalValue;
+  }
+  interface Native {
+    /** Serialized tagged graph from bunwasm-transpiler/src/data.rs. */
+    parseData(bytes: Uint8Array, format: DataFormat): string;
+  }
+  interface Internal {
+    require(name: "yaml_coercion"): (value: unknown) => unknown;
+    require(name: "formats_limit"): { checkSize(input: { readonly byteLength: number }): void };
+    toUint8(value: ArrayBuffer | SharedArrayBuffer | ArrayBufferView): Uint8Array;
+  }
+}
+
+// Runtime Blob is installed by web.js, with synchronous access to its stored bytes.
+interface Blob { _bytes(): Uint8Array }
+
+declare var Bun: {
+  inspect(value: unknown): string;
+  stringWidth(value: string, options?: { ambiguousIsNarrow?: boolean; countAnsiEscapeCodes?: boolean }): number;
+};
+declare var Temporal: {
+  Instant: { from(value: string): BunWasm.FormatInstant };
+  PlainDate: { from(value: string): BunWasm.FormatTemporalValue };
+  PlainDateTime: { from(value: string): BunWasm.FormatTemporalValue };
+  PlainTime: { from(value: string): BunWasm.FormatTemporalValue };
+  ZonedDateTime: { from(value: string): BunWasm.FormatTemporalValue };
+};
+
+declare namespace BunWasm {
+  /** Exactly the values admitted by typeof callback === "function", with no argument validation. */
+  type ProcessWriteCallback = Function;
+  interface ProcessWriter extends NodeEmitter {
+    fd: number; writable: boolean; destroyed: boolean; isTTY: boolean; columns: number; rows: number;
+    write(chunk: unknown, encoding?: unknown, callback?: unknown): boolean;
+    end(chunk?: unknown, encoding?: unknown, callback?: unknown): ProcessWriter;
+    cork(): void; uncork(): void; setDefaultEncoding(): ProcessWriter;
+    getColorDepth(): number; hasColors(): boolean; getWindowSize(): number[];
+    _writableState: { ended: boolean };
+  }
+  interface ProcessReader extends NodeEmitter {
+    fd: number; isTTY: boolean; readable: boolean;
+    setEncoding(encoding: unknown): ProcessReader;
+    resume(): ProcessReader; pause(): ProcessReader; setRawMode(): ProcessReader;
+    ref(): ProcessReader; unref(): ProcessReader; read(): null;
+    [Symbol.asyncIterator](): AsyncGenerator<string | BufferBytes>;
+  }
+  interface ProcessWarningOptions { type?: unknown; code?: unknown }
+  interface Native {
+    readonly platformInfo: { version: string; revision: string; arch: string };
+    /** Starts as strings; the process Proxy permits raw Symbol values and accessor results. */
+    env(): Record<PropertyKey, unknown>;
+    argv(): string[];
+    execPath(): string;
+    chdir(path: string): void;
+    nanoseconds(): number;
+    isatty(fd: number): boolean;
+    writeStdout(bytes: string | Uint8Array, flush?: boolean): void;
+    writeStderr(bytes: string | Uint8Array, flush?: boolean): void;
+    readStdin(): Uint8Array;
+    memoryUsage(): { rss: number; heapTotal: number; heapUsed: number; external: number; arrayBuffers: number };
+  }
+  interface Internal {
+    nextTick(callback: Function, ...args: unknown[]): void;
+    fakeTimers?: { elapsedNanoseconds: number };
+    emitExit(code: number): void;
+    traceExit(reason: string, code: number): void;
+    getMainModule(): unknown;
+    listenerChanged?: (target: object, name?: string | symbol) => void;
+    require(name: "process_signals"): (process: NodeEmitter, names: ReadonlyMap<number, readonly string[]>) => () => boolean;
+    pumpSignals?: () => boolean;
+    /** The byte helper accepts arbitrary input and throws for unsupported shapes. */
+    toUint8(value: unknown): Uint8Array;
   }
 }

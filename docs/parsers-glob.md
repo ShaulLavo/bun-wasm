@@ -48,8 +48,7 @@ identical bytes.
 The comparison uses the unchanged suite runner, launcher, dependencies, test
 selection, and per-test timeout. The primary before and after runs use the
 original 15-second file limit. A separate 60-second run lets the JSONL stress
-file finish. Detailed results and artifact hashes are retained at
-`/work/tmp/bun-wasm-parsers-glob-evidence/`.
+file finish.
 
 | Matched 15-second runs | Before | After |
 |---|---:|---:|
@@ -89,14 +88,14 @@ materialization also limits depth to 4,096. A deep input throws a catchable
 `RangeError` instead of trapping the instance. Ordinary JSONL parsing and
 stream progress remain iterative in JS.
 
-Run the original selection from this worktree:
+Run the selection:
 
 ```sh
 source env.sh
 scripts/bun-suite.sh --jobs 2 --timeout 15 \
-  --launcher /work/tmp/bun-wasm-target/release/bun-wasm \
-  --dependencies /work/projects/bun-wasm/docs/bun-test-suite/dependencies/node_modules \
-  --output /work/tmp/bun-wasm-parsers-glob-recheck.json \
+  --launcher /path/to/bun-wasm \
+  --dependencies docs/bun-test-suite/dependencies/node_modules \
+  --output parsers-glob-recheck.json \
   'js/bun/glob' 'js/node/fs/glob.test.ts' 'js/bun/toml' 'js/bun/yaml' \
   'js/bun/json5' 'js/bun/jsonc' 'js/bun/jsonl' 'js/bun/resolve/toml' \
   'js/bun/resolve/yaml' 'js/bun/resolve/json5' 'js/bun/resolve/jsonc.test.ts' \
@@ -138,14 +137,12 @@ scripts/test-web.sh
   then compares the engine's ordinary `JSON.parse` error wording. QuickJS
   does not use native Bun's `JSON Parse error` prefix.
 
-## Cleanup ownership
+## Cleanup
 
-The task removes its three private Cargo target directories, temporary npm
+The verification removes its three private Cargo target directories, temporary npm
 installation, generated `web/dist`, and temporary dependency symlink after
 verification. Test and browser servers exit through the existing scripts'
 cleanup paths. The suite runner removes its execution copies and process
 groups. Shared caches, the existing native launcher, and owner services remain.
 
-The coordinator owns the retained worktree, its rebuilt `dist/*.wasm`, and the
-small evidence directory until review and integration finish, then removes
-them. The `vendor/bun` symlink points to the existing pinned checkout.
+The `vendor/bun` symlink points to the existing pinned checkout.

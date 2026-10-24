@@ -24,6 +24,11 @@ export interface EngineHostOptions {
     caps: Record<string, boolean>;
     onNews(cb: () => void): void;
   };
+  /**
+   * The process wake word that pipe and child changes publish on (Waffle's worker process state).
+   * While the program waits on I/O, the event loop wakes on it instead of only rescanning.
+   */
+  processWake?: Int32Array;
   /** Called exactly once when the program ends (process.exit, uncaught error, empty event loop). */
   onExit(code: number): void;
 }

@@ -8,15 +8,14 @@
   class CompileError extends Error { constructor(message) { super(message); this.name = 'CompileError'; } }
   class LinkError extends Error { constructor(message) { super(message); this.name = 'LinkError'; } }
   class RuntimeError extends Error { constructor(message) { super(message); this.name = 'RuntimeError'; } }
-  function snapshot(source) {
-    // JSC pins buffers passed through its C API. Native calls must own their snapshots.
-    if (source instanceof ArrayBuffer) return new Uint8Array(source).slice();
-    if (ArrayBuffer.isView(source)) return new Uint8Array(source.buffer, source.byteOffset, source.byteLength).slice();
+  function byteView(source) {
+    if (source instanceof ArrayBuffer) return new Uint8Array(source);
+    if (ArrayBuffer.isView(source)) return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
     throw new TypeError('Expected a WebAssembly BufferSource');
   }
   class Module {
     constructor(source) {
-      const input = snapshot(source);
+      const input = byteView(source);
       try { modules.set(this, native.compile(input)); }
       catch (error) { throw new CompileError(error.message); }
     }
@@ -50,7 +49,7 @@
     valueOf() { return this.value; }
   }
   function flush(state) {
-    for (const memory of state.memories) native.write(state.id, memory.name, snapshot(memory.buffer));
+    for (const memory of state.memories) native.write(state.id, memory.name, byteView(memory.buffer));
   }
   function refresh(state) {
     for (const memory of state.memories) {
@@ -152,7 +151,7 @@
     const module = new Module(source);
     return { module, instance: new Instance(module, imports) };
   }
-  function validate(source) { return native.validate(snapshot(source)); }
+  function validate(source) { return native.validate(byteView(source)); }
   return { Module, Instance, Memory, Global, CompileError, LinkError, RuntimeError, compile, instantiate, validate,
     compileStreaming: async response => compile(await (await response).arrayBuffer()),
     instantiateStreaming: async (response, imports) => instantiate(await (await response).arrayBuffer(), imports),

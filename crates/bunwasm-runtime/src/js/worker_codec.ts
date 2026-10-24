@@ -53,8 +53,7 @@
             received: snapshot.received, pending: snapshot.pending, closing: snapshot.closing, closed: snapshot.closed }, queue];
         }
         if (internal.isProxy?.(object)) throw cloneError();
-        // JSC's bytes C API pins its input. Encode a copy so the sender remains detachable.
-        if (object instanceof ArrayBuffer) return ["buffer", internal.native.base64Encode(new Uint8Array(object).slice(), false), object.resizable ? object.maxByteLength : 0];
+        if (object instanceof ArrayBuffer) return ["buffer", internal.native.base64Encode(new Uint8Array(object), false), object.resizable ? object.maxByteLength : 0];
         if (ArrayBuffer.isView(object)) return ["view", tag(object), visit(object.buffer, implicit), object.byteOffset, object.byteLength];
         if (object instanceof Date) return ["date", String(object.getTime())];
         if (object instanceof RegExp) return ["regexp", object.source, object.flags];
