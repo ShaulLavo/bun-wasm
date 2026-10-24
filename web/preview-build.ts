@@ -8,9 +8,10 @@ export async function previewWebsocketScript(): Promise<string> {
     plugins: [{
       name: "runtime-websocket-factory",
       setup(build) {
-        build.onLoad({ filter: /bunwasm-runtime\/src\/js\/websocket\.js$/ }, async ({ path }) => ({
+        build.onResolve({ filter: /^bun-wasm:websocket$/ }, () => ({ path: join(import.meta.dir, "../crates/bunwasm-runtime/src/js/websocket.ts") }));
+        build.onLoad({ filter: /bunwasm-runtime\/src\/js\/websocket\.ts$/ }, async ({ path }) => ({
           contents: `export default ${await Bun.file(path).text()}`,
-          loader: "js",
+          loader: "ts",
         }));
       },
     }],

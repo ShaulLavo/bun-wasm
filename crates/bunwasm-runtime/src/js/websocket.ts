@@ -1,6 +1,6 @@
 // RFC 6455 over the host's existing TCP byte streams. Both ends use the same
 // parser; only clients mask outgoing frames and only servers require masks.
-(function (internal) {
+(function (internal: BunWasm.WebSocketInternal) {
   "use strict";
   const { Buffer } = internal.require("buffer");
   const encoder = new TextEncoder();
@@ -8,20 +8,20 @@
   const MAX_PAYLOAD = 16 * 1024 * 1024;
   const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-  function acceptKey(key) {
+  function acceptKey(key: string) {
     return internal.builtin("node:crypto").createHash("sha1").update(key + GUID).digest("base64");
   }
 
-  function payload(data) {
+  function payload(data: BunWasm.WebSocketData) {
     if (typeof data === "string") return encoder.encode(data);
     return internal.toUint8(data);
   }
 
-  function validCode(code) {
+  function validCode(code: number) {
     return (code >= 1000 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006) || (code >= 3000 && code <= 4999);
   }
 
-  function closePayload(code, reason = "") {
+  function closePayload(code: number, reason: unknown = "") {
     if (!validCode(code)) throw new RangeError("Invalid WebSocket close code");
     const text = encoder.encode(String(reason));
     if (text.length > 123) throw new RangeError("WebSocket close reason exceeds 123 bytes");
@@ -32,7 +32,7 @@
     return out;
   }
 
-  function frame(opcode, bytes, masked) {
+  function frame(opcode: number, bytes: Uint8Array, masked: boolean) {
     const size = bytes.length;
     const extra = size < 126 ? 0 : size < 65536 ? 2 : 8;
     const offset = 2 + extra + (masked ? 4 : 0);
@@ -49,7 +49,7 @@
     return out;
   }
 
-  function readFrame(buffer, masked, maxPayload) {
+  function readFrame(buffer: Uint8Array, masked: boolean, maxPayload: number) {
     if (buffer.length < 2) return null;
     const first = buffer[0];
     const opcode = first & 15;
@@ -81,7 +81,19 @@
   }
 
   class Peer {
-    constructor(conn, client, hooks, maxPayload = MAX_PAYLOAD) {
+    declare conn: BunWasm.WebSocketConnection;
+    declare client: boolean;
+    declare hooks: BunWasm.WebSocketHooks;
+    declare maxPayload: number;
+    declare state: BunWasm.WebSocketReadyState;
+    declare buffer: Uint8Array;
+    declare fragments: Uint8Array[];
+    declare fragmentSize: number;
+    declare fragmentOpcode: number;
+    declare closeTimer: ReturnType<typeof setTimeout> | null;
+    declare closeInfo: BunWasm.WebSocketCloseInfo | null;
+    declare finished: boolean;
+    constructor(conn: BunWasm.WebSocketConnection, client: boolean, hooks: BunWasm.WebSocketHooks, maxPayload = MAX_PAYLOAD) {
       this.conn = conn;
       this.client = client;
       this.hooks = hooks;
@@ -102,12 +114,12 @@
       this.conn.onClose = () => this.finish();
       this.feed(initial);
     }
-    feed(bytes) {
+    feed(bytes: Uint8Array) {
       this.buffer = this.buffer.length ? internal.concatBytes([this.buffer, bytes]) : bytes;
       try {
         this.drainFrames();
       } catch (err) {
-        this.closeInfo = { code: err.code || 1002, reason: "", clean: false };
+        this.closeInfo = { code: (err as { code?: number }).code || 1002, reason: "", clean: false };
         this.sendFrame(8, closePayload(this.closeInfo.code));
         this.conn.end();
       }
@@ -120,7 +132,7 @@
         this.receive(parsed);
       }
     }
-    receive({ fin, opcode, bytes }) {
+    receive({ fin, opcode, bytes }: BunWasm.WebSocketFrame) {
       if (opcode === 8) return this.receiveClose(bytes);
       if (opcode === 9) {
         this.sendFrame(10, bytes);
@@ -141,14 +153,14 @@
       this.fragments = [];
       this.fragmentSize = 0;
       this.fragmentOpcode = 0;
-      let value = Buffer.from(message);
+      let value: string | Uint8Array = Buffer.from(message);
       if (type === 1) {
         try { value = decoder.decode(message); }
         catch { throw Object.assign(new Error("Invalid WebSocket UTF-8"), { code: 1007 }); }
       }
       this.hooks.message?.(value);
     }
-    receiveClose(bytes) {
+    receiveClose(bytes: Uint8Array) {
       if (bytes.length === 1) throw new Error("Invalid WebSocket close frame");
       const code = bytes.length ? bytes[0] * 256 + bytes[1] : 1005;
       if (bytes.length && !validCode(code)) throw new Error("Invalid WebSocket close code");
@@ -160,12 +172,12 @@
       this.state = 2;
       this.conn.end();
     }
-    sendFrame(opcode, bytes) {
+    sendFrame(opcode: number, bytes: Uint8Array) {
       if (this.conn.closed) return 0;
       this.conn.write(frame(opcode, bytes, this.client));
       return this.bufferedAmount > 0 ? -1 : bytes.length;
     }
-    send(data, opcode = typeof data === "string" ? 1 : 2) {
+    send(data: BunWasm.WebSocketData, opcode = typeof data === "string" ? 1 : 2) {
       if (this.state !== 1) return 0;
       return this.sendFrame(opcode, payload(data));
     }
@@ -183,7 +195,7 @@
       if (this.finished) return;
       this.finished = true;
       this.state = 3;
-      clearTimeout(this.closeTimer);
+      clearTimeout(this.closeTimer as ReturnType<typeof setTimeout>);
       this.buffer = new Uint8Array(0);
       this.fragments = [];
       const info = this.closeInfo || { code: 1006, reason: "", clean: false };
@@ -194,16 +206,16 @@
     }
   }
 
-  function serverSocket(conn, handlers, options, remove, publish) {
-    const topics = new Set();
-    const invoke = (name, ...args) => {
+  function serverSocket(conn: BunWasm.WebSocketServerConnection, handlers: () => BunWasm.WebSocketHandlers, options: { data?: unknown }, remove: (socket: BunWasm.WebSocketServerSocket) => void, publish: BunWasm.WebSocketPublish) {
+    const topics = new Set<string>();
+    const invoke = <K extends keyof BunWasm.WebSocketHandlerArgs>(name: K, ...args: BunWasm.WebSocketHandlerArgs[K]) => {
       try {
-        const result = handlers()[name]?.(socket, ...args);
+        const result = (handlers()[name] as BunWasm.WebSocketHandler<K> | undefined)?.(socket, ...args);
         if (result && typeof result.then === "function") result.catch((err) => invokeError(err));
       } catch (err) { invokeError(err); }
     };
-    const invokeError = (err) => {
-      if (handlers().error) handlers().error(socket, err);
+    const invokeError = (err: unknown) => {
+      if (handlers().error) (handlers().error as NonNullable<BunWasm.WebSocketHandlers["error"]>)(socket, err);
       else internal.printError(err);
     };
     const peer = new Peer(conn, false, {
@@ -214,12 +226,12 @@
       close: ({ code, reason }) => { topics.clear(); remove(socket); invoke("close", code, reason); },
     }, handlers().maxPayloadLength ?? MAX_PAYLOAD);
     conn.onDrain = () => invoke("drain");
-    const control = (opcode, data = "") => {
+    const control = (opcode: number, data: BunWasm.WebSocketData = "") => {
       const bytes = payload(data);
       if (bytes.length > 125) throw new RangeError("WebSocket control payload exceeds 125 bytes");
       return peer.sendFrame(opcode, bytes);
     };
-    const socket = {
+    const socket: BunWasm.WebSocketServerSocket = {
       data: options.data,
       binaryType: "nodebuffer",
       remoteAddress: conn.peer().address,
@@ -251,12 +263,12 @@
     conn.onClose = () => peer.finish();
     return {
       socket,
-      activate(bytes) { peer.attach(); invoke("open"); if (!conn.closed) peer.feed(bytes); },
+      activate(bytes: Uint8Array) { peer.attach(); invoke("open"); if (!conn.closed) peer.feed(bytes); },
     };
   }
 
-  function clientClass(Connection) {
-    function event(target, type, props = {}) {
+  function clientClass(Connection: new(handle: number) => BunWasm.WebSocketConnection) {
+    function event(target: EventTarget, type: string, props: MessageEventInit | ErrorEventInit | CloseEventInit = {}) {
       const Ctor = type === "message" || type === "ping" || type === "pong" ? MessageEvent : type === "error" ? ErrorEvent : type === "close" ? CloseEvent : Event;
       const ev = new Ctor(type, props);
       target.dispatchEvent(ev);
@@ -264,16 +276,27 @@
     return class WebSocket extends EventTarget {
       static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
       CONNECTING = 0; OPEN = 1; CLOSING = 2; CLOSED = 3;
-      onopen = null; onmessage = null; onerror = null; onclose = null;
-      binaryType = "blob";
+      onopen: ((event: Event) => unknown) | null = null; onmessage: ((event: MessageEvent) => unknown) | null = null; onerror: ((event: Event) => unknown) | null = null; onclose: ((event: CloseEvent) => unknown) | null = null;
+      binaryType: BunWasm.WebSocketBinaryType = "blob";
       extensions = "";
       protocol = "";
-      constructor(input, protocols = []) {
+      declare url: string;
+      declare _state: BunWasm.WebSocketReadyState;
+      declare _peer: Peer | null;
+      declare _protocols: string[];
+      declare _discardedBytes: number;
+      declare _sendQueue: BunWasm.WebSocketSendItem[];
+      declare _sending: boolean;
+      declare _pendingBytes: number;
+      declare _conn: BunWasm.WebSocketConnection | undefined;
+      declare _key: string | undefined;
+      declare _head: Uint8Array | null;
+      constructor(input: unknown, protocols: string | string[] | BunWasm.WebSocketClientOptions = []) {
         super();
         const url = new URL(String(input));
         if (url.protocol === "http:") url.protocol = "ws:";
         if (url.protocol !== "ws:" || url.hash || url.username || url.password) throw new SyntaxError("WebSocket requires a ws:// URL without credentials or a fragment");
-        let options = {};
+        let options: BunWasm.WebSocketClientOptions = {};
         if (protocols && typeof protocols === "object" && !Array.isArray(protocols)) {
           options = protocols;
           protocols = options.protocols || [];
@@ -299,7 +322,7 @@
         this._key = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64");
         this._head = new Uint8Array(0);
         this._conn.onData = (bytes) => this._handshake(bytes);
-        this._conn.onEnd = () => this._conn.destroy();
+        this._conn.onEnd = () => (this._conn as BunWasm.WebSocketConnection).destroy();
         this._conn.onClose = () => this._fail(new Error("WebSocket handshake failed"));
         this._conn.onError = (err) => this._fail(err);
         headers.set("host", url.host);
@@ -313,15 +336,15 @@
         this._conn.write(encoder.encode(lines.concat(["", ""]).join("\r\n")));
         this._conn.startReading();
       }
-      _fail(err, code = 1006) {
+      _fail(err: unknown, code = 1006) {
         if (this._state === 3) return;
         this._state = 3;
         this._conn?.destroy();
-        event(this, "error", { error: err, message: err.message });
+        event(this, "error", { error: err, message: (err as { message?: string }).message });
         event(this, "close", { code, reason: "", wasClean: false });
       }
-      _handshake(bytes) {
-        this._head = internal.concatBytes([this._head, bytes]);
+      _handshake(bytes: Uint8Array) {
+        this._head = internal.concatBytes([this._head as Uint8Array, bytes]);
         const text = Buffer.from(this._head).toString("latin1");
         const end = text.indexOf("\r\n\r\n");
         if (end < 0 && this._head.length < 16384) return;
@@ -333,13 +356,13 @@
         }
         const protocol = headers.get("sec-websocket-protocol");
         const validProtocol = protocol === null ? this._protocols.length === 0 : this._protocols.includes(protocol);
-        if (end < 0 || end > 16384 || !/^HTTP\/1\.1 101(?: |$)/.test(lines[0]) || headers.get("upgrade")?.toLowerCase() !== "websocket" || !headers.get("connection")?.toLowerCase().split(/\s*,\s*/).includes("upgrade") || headers.get("sec-websocket-accept") !== acceptKey(this._key) || headers.has("sec-websocket-extensions") || !validProtocol) return this._fail(new Error("Invalid WebSocket handshake"), 1002);
+        if (end < 0 || end > 16384 || !/^HTTP\/1\.1 101(?: |$)/.test(lines[0]) || headers.get("upgrade")?.toLowerCase() !== "websocket" || !headers.get("connection")?.toLowerCase().split(/\s*,\s*/).includes("upgrade") || headers.get("sec-websocket-accept") !== acceptKey(this._key as string) || headers.has("sec-websocket-extensions") || !validProtocol) return this._fail(new Error("Invalid WebSocket handshake"), 1002);
         this.protocol = protocol || "";
         const initial = this._head.slice(end + 4);
         this._head = null;
-        this._peer = new Peer(this._conn, true, {
+        this._peer = new Peer(this._conn as BunWasm.WebSocketConnection, true, {
           message: (data) => event(this, "message", { data: this._binary(data), origin: new URL(this.url).origin }),
-          error: (err) => event(this, "error", { error: err, message: err.message }),
+          error: (err) => event(this, "error", { error: err, message: (err as { message?: string }).message }),
           ping: (data) => event(this, "ping", { data: this._binary(data) }),
           pong: (data) => event(this, "pong", { data: this._binary(data) }),
           close: ({ code, reason, clean }) => {
@@ -352,7 +375,7 @@
         event(this, "open");
         this._peer.feed(initial);
       }
-      _binary(data) {
+      _binary(data: BunWasm.WebSocketMessage) {
         if (typeof data === "string" || this.binaryType === "nodebuffer") return data;
         const bytes = new Uint8Array(data);
         if (this.binaryType === "arraybuffer") return bytes.buffer;
@@ -361,16 +384,16 @@
       }
       get readyState() { return this._state; }
       get bufferedAmount() { return (this._peer?.bufferedAmount || 0) + this._discardedBytes + this._pendingBytes; }
-      send(data) { this._enqueue(data, typeof data === "string" ? 1 : 2); }
-      ping(data = "") { this._enqueue(data, 9); }
-      pong(data = "") { this._enqueue(data, 10); }
-      _enqueue(data, opcode) {
+      send(data: BunWasm.WebSocketData | Blob) { this._enqueue(data, typeof data === "string" ? 1 : 2); }
+      ping(data: BunWasm.WebSocketData | Blob = "") { this._enqueue(data, 9); }
+      pong(data: BunWasm.WebSocketData | Blob = "") { this._enqueue(data, 10); }
+      _enqueue(data: BunWasm.WebSocketData | Blob, opcode: number) {
         if (this.readyState === 0) throw new DOMException("WebSocket is connecting", "InvalidStateError");
         const bytes = data instanceof Blob ? data : payload(data);
         const size = bytes instanceof Blob ? bytes.size : bytes.length;
         if (opcode >= 8 && size > 125) throw new RangeError("WebSocket control payload exceeds 125 bytes");
         if (this.readyState >= 2) { this._discardedBytes += size; return; }
-        if (!this._sending && !(bytes instanceof Blob)) { this._peer.sendFrame(opcode, bytes); return; }
+        if (!this._sending && !(bytes instanceof Blob)) { (this._peer as Peer).sendFrame(opcode, bytes); return; }
         this._pendingBytes += size;
         this._sendQueue.push({ bytes: bytes instanceof Blob ? bytes : bytes.slice(), size, opcode });
         if (!this._sending) void this._flushSends();
@@ -379,10 +402,10 @@
         this._sending = true;
         try {
           while (this._sendQueue.length) {
-            const item = this._sendQueue.shift();
+            const item = this._sendQueue.shift() as BunWasm.WebSocketSendItem;
             const bytes = item.bytes instanceof Blob ? new Uint8Array(await item.bytes.arrayBuffer()) : item.bytes;
             this._pendingBytes -= item.size;
-            if (this.readyState === 1) this._peer.sendFrame(item.opcode, bytes);
+            if (this.readyState === 1) (this._peer as Peer).sendFrame(item.opcode, bytes);
           }
         } catch (err) { this._fail(err); }
         finally { this._sending = false; }
@@ -390,7 +413,7 @@
       _abort() {
         if (this._state >= 2) return;
         this._state = 2;
-        if (this._peer) { setTimeout(() => this._peer.terminate(), 0); return; }
+        if (this._peer) { setTimeout(() => (this._peer as Peer).terminate(), 0); return; }
         if (this._conn) { this._conn.onClose = null; this._conn.destroy(); }
         setTimeout(() => this._fail(new Error("WebSocket closed before connecting")), 0);
       }
