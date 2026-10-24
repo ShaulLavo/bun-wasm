@@ -270,7 +270,17 @@ preserved. Independent evidence is in
 `/work/reports/wave-20261022/bun-wasm/review136-r3/`. This closes only this adapter
 group; the overall TypeScript follow-up remains in progress.
 
-Remaining files, reconciled with main `e0c85f29` and the stack/builtin adapter group:
+The cookie/data-format/Intl group converts exactly `cookie.js`, `formats.js` and
+`intl.js` to strict TypeScript against main `e0c85f29`. It preserves the original
+runtime syntax and strict directives. Native data parsing and existing engine Intl
+authority stay unchanged. Additive declarations describe the tagged data graph,
+Temporal operations, byte conversion and YAML coercion. The CI-discovered
+`runtime-ts-small` fixture joins the existing cookie, data-format, YAML coercion
+and Intl fixtures without adding a native build. Verification records are under
+`/work/reports/bun-wasm/ts-small-20261024/`.
+
+
+Remaining files after the stack/builtin and cookie/data-format/Intl conversions:
 
 - `crates/bunwasm-runtime/src/js/assert.js`
 - `crates/bunwasm-runtime/src/js/bootstrap.js`
@@ -283,15 +293,12 @@ Remaining files, reconciled with main `e0c85f29` and the stack/builtin adapter g
 - `crates/bunwasm-runtime/src/js/bun_test.js`
 - `crates/bunwasm-runtime/src/js/console_constructor.js`
 - `crates/bunwasm-runtime/src/js/console.js`
-- `crates/bunwasm-runtime/src/js/cookie.js`
 - `crates/bunwasm-runtime/src/js/crypto_host_keys.js`
 - `crates/bunwasm-runtime/src/js/crypto.js`
 - `crates/bunwasm-runtime/src/js/crypto_keys.js`
 - `crates/bunwasm-runtime/src/js/events.js`
-- `crates/bunwasm-runtime/src/js/formats.js`
 - `crates/bunwasm-runtime/src/js/html_server.js`
 - `crates/bunwasm-runtime/src/js/inspect.js`
-- `crates/bunwasm-runtime/src/js/intl.js`
 - `crates/bunwasm-runtime/src/js/net_address.js`
 - `crates/bunwasm-runtime/src/js/net.js`
 - `crates/bunwasm-runtime/src/js/node_fs.js`

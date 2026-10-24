@@ -2,9 +2,24 @@
 // enough for libraries that feature-detect or format simple values
 // (string-width's Intl.Segmenter, toLocaleString-style number grouping,
 // Collator-based sorting). Not a locale database.
-(function (internal) {
+(function (internal: BunWasm.Internal) {
   "use strict";
   void internal;
+
+  type Locales = string | readonly string[];
+  type Part = { type: string; value: string };
+  type Segment = { segment: string; index: number; input: string; isWordLike?: boolean };
+  type NumberOptions = {
+    style?: string; currency?: string; unit?: string; minimumIntegerDigits?: number;
+    minimumFractionDigits?: number; maximumFractionDigits?: number; useGrouping?: boolean;
+    notation?: string; signDisplay?: string;
+  };
+  type DateOptions = {
+    weekday?: string; year?: string; month?: string; day?: string; hour?: string;
+    minute?: string; second?: string; era?: string; dateStyle?: string; timeStyle?: string;
+    timeZone?: string; hour12?: boolean; hourCycle?: string;
+  };
+  type DateInput = string | number | Date;
 
   const LOCALE = "en-US";
 
@@ -15,7 +30,7 @@
   // --- Segmenter ----------------------------------------------------------------
 
   // Code points that attach to the previous one in a grapheme cluster.
-  function isExtending(cp) {
+  function isExtending(cp: number) {
     return (
       (cp >= 0x300 && cp <= 0x36f) || (cp >= 0x1ab0 && cp <= 0x1aff) || (cp >= 0x1dc0 && cp <= 0x1dff) ||
       (cp >= 0x20d0 && cp <= 0x20ff) || (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0xfe20 && cp <= 0xfe2f) ||
@@ -24,16 +39,16 @@
     );
   }
 
-  const isRegional = (cp) => cp >= 0x1f1e6 && cp <= 0x1f1ff;
-  const isWordChar = (ch) => /[\p{L}\p{N}_]/u.test(ch);
+  const isRegional = (cp: number) => cp >= 0x1f1e6 && cp <= 0x1f1ff;
+  const isWordChar = (ch: string) => /[\p{L}\p{N}_]/u.test(ch);
 
-  function graphemes(str) {
+  function graphemes(str: string) {
     const out = [];
     let current = "";
     let prevZwj = false;
     let regionalRun = 0;
     for (const ch of str) {
-      const cp = ch.codePointAt(0);
+      const cp = ch.codePointAt(0)!;
       const joins = current !== "" && (isExtending(cp) || prevZwj || (isRegional(cp) && regionalRun % 2 === 1) || (ch === "\n" && current === "\r"));
       if (joins) {
         current += ch;
@@ -49,7 +64,7 @@
     return out;
   }
 
-  function words(str) {
+  function words(str: string) {
     const out = [];
     const re = /[\p{L}\p{N}_'’]+|\s+|[^\p{L}\p{N}_\s]/gu;
     let m;
@@ -57,7 +72,7 @@
     return out;
   }
 
-  function sentences(str) {
+  function sentences(str: string) {
     const out = [];
     const re = /[^.!?]+(?:[.!?]+["')\]]*\s*|$)/g;
     let m;
@@ -67,20 +82,20 @@
 
   class Segmenter {
     #granularity;
-    constructor(locales, options = {}) {
+    constructor(locales?: Locales, options: { granularity?: string } = {}) {
       this.#granularity = options.granularity || "grapheme";
       if (!["grapheme", "word", "sentence"].includes(this.#granularity)) {
         throw new RangeError(`Value ${this.#granularity} out of range for Intl.Segmenter options property granularity`);
       }
     }
-    segment(input) {
+    segment(input: unknown) {
       const str = String(input);
       const granularity = this.#granularity;
       const pieces = granularity === "word" ? words(str) : granularity === "sentence" ? sentences(str) : graphemes(str);
-      const segments = [];
+      const segments: Segment[] = [];
       let index = 0;
       for (const segment of pieces) {
-        const entry = { segment, index, input: str };
+        const entry: Segment = { segment, index, input: str };
         if (granularity === "word") entry.isWordLike = isWordChar(segment[0]);
         segments.push(entry);
         index += segment.length;
@@ -102,15 +117,15 @@
 
   // --- NumberFormat -------------------------------------------------------------
 
-  function groupDigits(intPart, separator) {
+  function groupDigits(intPart: string, separator: string) {
     return intPart.replace(/\B(?=(\d{3})+(?!\d))/g, separator);
   }
 
-  const CURRENCY_SYMBOLS = { USD: "$", EUR: "€", GBP: "£", JPY: "¥", INR: "₹", CNY: "CN¥", KRW: "₩", ILS: "₪" };
+  const CURRENCY_SYMBOLS: Record<string, string> = { USD: "$", EUR: "€", GBP: "£", JPY: "¥", INR: "₹", CNY: "CN¥", KRW: "₩", ILS: "₪" };
 
   class NumberFormat {
     #options;
-    constructor(locales, options = {}) {
+    constructor(locales?: Locales, options: NumberOptions = {}) {
       const style = options.style || "decimal";
       const currencyDigits = style === "currency" ? (options.currency === "JPY" ? 0 : 2) : 0;
       const minFD = options.minimumFractionDigits ?? (style === "currency" ? currencyDigits : 0);
@@ -129,7 +144,7 @@
         signDisplay: options.signDisplay || "auto",
       };
     }
-    format(value) {
+    format(value: unknown) {
       const o = this.#options;
       let n = typeof value === "bigint" ? Number(value) : Number(value);
       if (Number.isNaN(n)) return "NaN";
@@ -148,14 +163,14 @@
       if (o.useGrouping) intPart = groupDigits(intPart, ",");
       let body = frac ? `${intPart}.${frac}` : intPart;
       if (o.style === "percent") body += "%";
-      if (o.style === "currency") body = (CURRENCY_SYMBOLS[o.currency] || `${o.currency} `) + body;
+      if (o.style === "currency") body = (CURRENCY_SYMBOLS[o.currency!] || `${o.currency} `) + body;
       if (o.style === "unit" && o.unit) body += ` ${o.unit}`;
       const showMinus = negative && Math.abs(n) !== 0;
       if (showMinus) return `-${body}`;
       if (o.signDisplay === "always" || (o.signDisplay === "exceptZero" && n !== 0)) return `+${body}`;
       return body;
     }
-    formatToParts(value) {
+    formatToParts(value: unknown) {
       return [{ type: "literal", value: this.format(value) }];
     }
     resolvedOptions() {
@@ -166,9 +181,9 @@
     }
   }
 
-  function compact(n) {
+  function compact(n: number) {
     const abs = Math.abs(n);
-    const units = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
+    const units: [number, string][] = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
     for (const [size, suffix] of units) {
       if (abs >= size) {
         const v = n / size;
@@ -185,21 +200,21 @@
 
   class DateTimeFormat {
     #options;
-    constructor(locales, options = {}) {
-      const hasField = ["weekday", "year", "month", "day", "hour", "minute", "second"].some((k) => options[k] !== undefined);
+    constructor(locales?: Locales, options: DateOptions = {}) {
+      const hasField = ["weekday", "year", "month", "day", "hour", "minute", "second"].some((k) => options[k as keyof DateOptions] !== undefined);
       const base = hasField || options.dateStyle || options.timeStyle ? {} : { year: "numeric", month: "numeric", day: "numeric" };
       this.#options = Object.assign({ locale: LOCALE, calendar: "gregory", numberingSystem: "latn", timeZone: options.timeZone || "UTC" }, base, options);
     }
-    format(date = Date.now()) {
+    format(date: DateInput = Date.now()) {
       const d = new Date(date);
       if (Number.isNaN(d.getTime())) throw new RangeError("Invalid time value");
       return this.formatToParts(d).map((p) => p.value).join("");
     }
-    formatToParts(date = Date.now()) {
+    formatToParts(date: DateInput = Date.now()) {
       const d = new Date(date);
       const o = this.#options;
       const utc = o.timeZone === "UTC";
-      const get = (local, u) => (utc ? u.call(d) : local.call(d));
+      const get = (local: (this: Date) => number, u: (this: Date) => number) => (utc ? u.call(d) : local.call(d));
       const year = get(d.getFullYear, d.getUTCFullYear);
       const month = get(d.getMonth, d.getUTCMonth);
       const day = get(d.getDate, d.getUTCDate);
@@ -207,9 +222,9 @@
       const hour = get(d.getHours, d.getUTCHours);
       const minute = get(d.getMinutes, d.getUTCMinutes);
       const second = get(d.getSeconds, d.getUTCSeconds);
-      const parts = [];
-      const push = (type, value) => parts.push({ type, value: String(value) });
-      const lit = (value) => parts.push({ type: "literal", value });
+      const parts: Part[] = [];
+      const push = (type: string, value: string | number) => parts.push({ type, value: String(value) });
+      const lit = (value: string) => parts.push({ type: "literal", value });
       const appendTimeParts = () => {
         if (o.era) {
           const part = parts.find((p) => p.type === "year");
@@ -264,7 +279,7 @@
       appendTimeParts();
       return parts;
     }
-    formatRange(a, b) {
+    formatRange(a: DateInput, b: DateInput) {
       return `${this.format(a)} – ${this.format(b)}`;
     }
     resolvedOptions() {
@@ -279,11 +294,11 @@
 
   class Collator {
     #options;
-    constructor(locales, options = {}) {
+    constructor(locales?: Locales, options: { usage?: string; sensitivity?: string; numeric?: unknown } = {}) {
       this.#options = { locale: LOCALE, usage: options.usage || "sort", sensitivity: options.sensitivity || "variant", numeric: Boolean(options.numeric), caseFirst: "false", ignorePunctuation: false, collation: "default" };
       this.compare = this.compare.bind(this);
     }
-    compare(a, b) {
+    compare(a: unknown, b: unknown) {
       let x = String(a);
       let y = String(b);
       if (this.#options.sensitivity === "base" || this.#options.sensitivity === "accent") {
@@ -310,10 +325,10 @@
 
   class PluralRules {
     #type;
-    constructor(locales, options = {}) {
+    constructor(locales?: Locales, options: { type?: string } = {}) {
       this.#type = options.type || "cardinal";
     }
-    select(n) {
+    select(n: unknown) {
       const v = Number(n);
       if (this.#type === "ordinal") {
         const ten = v % 10;
@@ -335,10 +350,10 @@
 
   class ListFormat {
     #type;
-    constructor(locales, options = {}) {
+    constructor(locales?: Locales, options: { type?: string } = {}) {
       this.#type = options.type || "conjunction";
     }
-    format(list) {
+    format(list: Iterable<unknown>) {
       const items = Array.from(list, String);
       const word = this.#type === "disjunction" ? "or" : "and";
       if (items.length <= 1) return items.join("");
@@ -349,10 +364,10 @@
 
   class RelativeTimeFormat {
     #numeric;
-    constructor(locales, options = {}) {
+    constructor(locales?: Locales, options: { numeric?: string } = {}) {
       this.#numeric = options.numeric || "always";
     }
-    format(value, unit) {
+    format(value: unknown, unit: unknown) {
       const v = Number(value);
       const u = String(unit).replace(/s$/, "");
       if (this.#numeric === "auto" && u === "day" && Math.abs(v) <= 1) return v === 0 ? "today" : v > 0 ? "tomorrow" : "yesterday";
@@ -363,7 +378,10 @@
   }
 
   class Locale {
-    constructor(tag) {
+    declare baseName: string;
+    declare language: string;
+    declare region: string | undefined;
+    constructor(tag: unknown) {
       this.baseName = String(tag);
       const [language, region] = this.baseName.split("-");
       this.language = language;
@@ -389,7 +407,7 @@
     ListFormat,
     RelativeTimeFormat,
     Locale,
-    getCanonicalLocales: (locales) => (locales === undefined ? [] : Array.isArray(locales) ? locales.map(String) : [String(locales)]),
+    getCanonicalLocales: (locales?: unknown) => (locales === undefined ? [] : Array.isArray(locales) ? locales.map(String) : [String(locales)]),
     supportedValuesOf: () => [],
   };
   Object.defineProperty(Intl, Symbol.toStringTag, { value: "Intl", configurable: true });

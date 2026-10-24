@@ -126,7 +126,9 @@ Each row has one class. A file with independent changes has separate rows.
 | [`crates/bunwasm-runtime/src/js/array_buffer_sink.ts`](#bun-array-buffer-sink) | Port | Adapt Bun's byte sink lifecycle and option parsing to engine-owned typed arrays. |
 | [`crates/bunwasm-runtime/src/engine_quickjs.rs`, string boundary](#quickjs-string-boundary) | Host feature | Decode lone UTF-16 surrogates as replacement characters at the native boundary. Original adapter. |
 | [`web/src/engine-host.js`, GC hook](#host-gc-hook) | Host feature | Capture host GC before guest code replaces globals. Original adapter. |
-| [`crates/bunwasm-runtime/src/js/cookie.js`](#bun-cookies) | Port | Translate Bun's cookie parsing, validation, and binding behavior. |
+| [`crates/bunwasm-runtime/src/js/cookie.ts`](#bun-cookies) | Port | Translate Bun's cookie parsing, validation, and binding behavior. |
+| [`crates/bunwasm-runtime/src/js/formats.ts`](#data-format-adapter) | Host feature | Original tagged-graph and serialization adapter over Bun's Rust data parsers. |
+| [`crates/bunwasm-runtime/src/js/intl.ts`](#intl-fallback-adapter) | Host feature | Original en-US fallback for engines without the corresponding native Intl constructors. |
 | [`crates/bunwasm-runtime/src/js/string_decoder.ts`](#node-string-decoder) | Port | Translate Node's chunk-decoder state machine to TypeScript. |
 | [`crates/bunwasm-runtime/src/js/bun_test.js`, diff formatting](#bun-test-diff-formatting) | Port | Translate Bun's colorless diff rendering around a local line differ. |
 | [`crates/bunwasm-runtime/src/js/node_url.ts`](#node-url-helpers) | Port | Adapt Node URL helpers around the local URL implementation. |
@@ -1296,9 +1298,17 @@ still cannot force collection. No upstream implementation is copied.
 
 ### Bun cookies
 
-`crates/bunwasm-runtime/src/js/cookie.js`. Class **Port**. Upstream `src/jsc/bindings/{Cookie,CookieMap}.{cpp,h}` and `src/jsc/bindings/webcore/{JSCookie,JSCookieMap}.cpp` at the Bun pin.
+`crates/bunwasm-runtime/src/js/cookie.ts`. Class **Port**. Upstream `src/jsc/bindings/{Cookie,CookieMap}.{cpp,h}` and `src/jsc/bindings/webcore/{JSCookie,JSCookieMap}.cpp` at the Bun pin.
 
-Translate cookie parsing, attribute validation, serialization, CookieMap behavior, and binding coercions into JavaScript. Replace native objects with WeakMap-backed state, use local string/date operations, and route inspection through Bun.inspect. These changes preserve the API without JSC host classes. This is a translated port even though it shares little literal source text with C++.
+Translate cookie parsing, attribute validation, serialization, CookieMap behavior, and binding coercions into JavaScript. Replace native objects with WeakMap-backed state, use local string/date operations, and route inspection through Bun.inspect. These changes preserve the API without JSC host classes. This is a translated port even though it shares little literal source text with C++. The strict TypeScript conversion adds WeakMap state, cookie option and iterator contracts without changing the emitted runtime syntax. Its comparison revision is `9510e74152073d850a18758ca41114d8f214ffa6`.
+
+### Data format adapter
+
+`crates/bunwasm-runtime/src/js/formats.ts`. Class **Host feature**, an **original adapter**. Comparison source is Bun `src/runtime/api/{JSON5Object,TOMLObject,YAMLObject}.rs` at `9510e74152073d850a18758ca41114d8f214ffa6`, not copied implementation. Parsing remains in Bun's Rust crates through `bunwasm-transpiler/src/data.rs`. The adapter hydrates that tagged graph, preserves shared references and exposes JavaScript serialization behavior. Strict TypeScript models the existing graph tags, key/value pairs, YAML aliases and Temporal operations. The native parse, byte-buffer and YAML coercion contracts are additive declarations in `runtime.d.ts`. No parser or emitter behavior changes.
+
+### Intl fallback adapter
+
+`crates/bunwasm-runtime/src/js/intl.ts`. Class **Host feature**, an **original adapter**, not a copied Bun or WebKit implementation. Comparison sources are Bun's pinned WebKit `Source/JavaScriptCore/runtime/Intl*.cpp` at `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`. The existing fallback supplies en-US formatting, segmentation and locale behavior only where bootstrap does not select authoritative engine Intl constructors. The strict TypeScript conversion adds option, part and segment contracts. Locale fields use type-only declarations, so construction and property assignment order remain unchanged.
 
 ### Node string decoder
 
@@ -3365,7 +3375,7 @@ asset-download fetch. Preview1 receives no network session.
 
 ## YAML boxed coercion
 
-`crates/bunwasm-runtime/src/js/yaml_coercion.ts` and its calls from `formats.js`
+`crates/bunwasm-runtime/src/js/yaml_coercion.ts` and its calls from `formats.ts`
 are **Host feature**, an **original adapter**. Comparison source is Bun
 `src/runtime/api/YAMLObject.rs` at pin
 `9510e74152073d850a18758ca41114d8f214ffa6`, not copied implementation. The
