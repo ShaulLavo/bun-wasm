@@ -40,7 +40,7 @@ synchronously inside those promises; native provider scheduling stays with the h
 
 RustCrypto implements AES, GHASH, HMAC, the SHA digests, PBKDF2, HKDF, P-256, P-384,
 Ed25519 and X25519. RustCrypto's PKCS#8 and SPKI parsers decode the outer key envelopes.
-The GCM adapter and its upstream license are recorded in [the source ledger](bun-patches.md#webcrypto-backend).
+The GCM adapter and its upstream license are recorded in [the source ledger](bun-patches/webcrypto-backend.md#webcrypto-backend).
 
 Bun's BoringSSL pin `41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f` owns RSA generation,
 component validation, PKCS#1 parsing, signing, verification and OAEP operations. Its native
@@ -61,9 +61,9 @@ already built archive for that target.
 
 ## Verification
 
-[webcrypto-keys](../tests/fixtures/webcrypto-keys/) exercises the algorithm families, key
+[webcrypto-keys](../tests/fixtures/webcrypto-keys) exercises the algorithm families, key
 formats, usage checks, tamper rejection and key wrapping.
-[crypto-vectors](../tests/fixtures/crypto-vectors/) checks 45 native Node vectors, including
+[crypto-vectors](../tests/fixtures/crypto-vectors) checks 45 native Node vectors, including
 all GCM tag sizes, AES-192, non-96-bit GCM IVs, CTR field wrap and binary OAEP labels.
 `scripts/generate-crypto-vectors.mjs` regenerates those vectors with native Node.
 `scripts/check-crypto-review.sh <report-dir>` replays the SHA-1 JWK, P-384/SHA-1 and
