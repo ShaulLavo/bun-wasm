@@ -716,7 +716,7 @@ for (const { id, saveName, condition, workflowCompatible } of [
 
 function assertProducerMutation(contract: ReturnType<typeof nativeCacheContract>, inputs: ReadonlyMap<string, Buffer>, saved: string, path: string, compatible: boolean) {
   const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-  const before = path.endsWith(".sh") ? source.replace("cargo build --locked", "cargo build") :
+  const before = path.endsWith(".sh") ? source.replace(/(?:cargo|"\$GUEST_CARGO") build --locked/, match => match.replace(" --locked", "")) :
     source.replace(/      - name: Build the single tools fixture[^]*?(?=      - name: Blocking Web guest cases)/, "");
   expect(before).not.toBe(source);
   const changed = new Map(inputs);
