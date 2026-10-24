@@ -440,3 +440,122 @@ for (const mode of ["native", "fallback"]) {
     expect(count).toBe(1);
   });
 }
+
+const absentShiftSites = ["settle waiter", "onError waiter", "settleClose waiter", "settleClose queue", "next queue"];
+for (const site of absentShiftSites) {
+  for (const replaceTypeError of [false, true]) {
+    test(`${site} preserves absent shift results without a global TypeError read (${replaceTypeError})`, async () => {
+      const result = await intrinsicControl(`
+        const emitter = new E(), controller = new AbortController();
+        const iterator = E.on(emitter, "value", { close: ["close"], signal: controller.signal });
+        const observed = ["pending", "pending"], calls = [];
+        const remove = controller.signal.removeEventListener;
+        let abortRemovals = 0;
+        controller.signal.removeEventListener = function () { abortRemovals++; return Reflect.apply(remove, this, arguments); };
+        if (${JSON.stringify(site)} === "next queue") emitter.emit("value", 42);
+        else {
+          iterator.next().then(value => { observed[0] = value; }, error => { observed[0] = error; });
+          iterator.next().then(value => { observed[1] = value; }, error => { observed[1] = error; });
+        }
+        const shift = Array.prototype.shift, OriginalTypeError = TypeError;
+        const descriptor = Object.getOwnPropertyDescriptor(globalThis, "TypeError");
+        const sentinel = new Error("global TypeError getter");
+        let caught = "none", waiterReceiver, queueReceiver;
+        Array.prototype.shift = function () {
+          const value = Reflect.apply(shift, this, arguments);
+          const waiter = value && Object.hasOwn(value, "resolve");
+          calls.push(waiter ? "shift waiter" : "shift queue");
+          if (waiter) waiterReceiver = this;
+          else queueReceiver = this;
+          if (${JSON.stringify(site)} === "settleClose queue" && waiter) {
+            const resolve = value.resolve;
+            Object.defineProperty(value, "resolve", { get() { calls.push("get resolve"); return resolve; } });
+            return value;
+          }
+          return undefined;
+        };
+        if (${replaceTypeError}) Object.defineProperty(globalThis, "TypeError", {
+          configurable: true, get() { calls.push("get TypeError"); throw sentinel; },
+        });
+        try {
+          if (${JSON.stringify(site)} === "next queue") iterator.next();
+          else emitter.emit(${JSON.stringify(site === "onError waiter" ? "error" : site.startsWith("settleClose") ? "close" : "value")}, 42);
+        } catch (error) { caught = error === sentinel ? "sentinel" : error instanceof OriginalTypeError ? "TypeError" : "other"; }
+        finally {
+          Array.prototype.shift = shift;
+          Object.defineProperty(globalThis, "TypeError", descriptor);
+        }
+        await Promise.resolve();
+        const beforeReturn = { observed, calls, caught, listeners: emitter.eventNames(), abortRemovals,
+          waiterLength: waiterReceiver?.length, queueLength: queueReceiver?.length };
+        const snapshot = { ...beforeReturn, observed: observed.slice() };
+        await iterator.return();
+        return { ...snapshot, cleanupListeners: emitter.eventNames(), cleanupAbortRemovals: abortRemovals };
+      `);
+      const closes = site === "settleClose queue";
+      expect(result).toEqual({
+        observed: closes ? [undefined, { value: undefined, done: true }] : ["pending", "pending"],
+        calls: closes ? ["shift waiter", "get resolve", "shift queue"] : [site === "next queue" ? "shift queue" : "shift waiter"],
+        caught: closes ? "none" : "TypeError", listeners: closes ? [] : ["value", "error", "close"],
+        abortRemovals: closes ? 1 : 0, waiterLength: site === "next queue" ? undefined : closes ? 0 : 1,
+        queueLength: site === "next queue" || closes ? 0 : undefined,
+        cleanupListeners: [], cleanupAbortRemovals: 1,
+      });
+    });
+  }
+}
+
+for (const method of ["once", "prependOnceListener"]) {
+  for (const mode of ["shape", "setter", "getter", "reentrant"]) {
+    test(`${method} preserves forwarding bind state and ${mode} ordering`, async () => {
+      const result = await intrinsicControl(`
+        const emitter = new E(), calls = [], keys = [];
+        const bind = Function.prototype.bind, sentinel = new Error("wrapFn accessor");
+        let initialOwn = false, initialUndefined = false, caught = false, registeredWrapper;
+        function listener(value) { calls.push(["listener", value, this === emitter]); }
+        emitter.on("removeListener", type => { if (type === "value") calls.push("remove"); });
+        Function.prototype.bind = function (state) {
+          keys.push(Object.keys(state));
+          initialOwn = Object.hasOwn(state, "wrapFn");
+          initialUndefined = state.wrapFn === undefined;
+          const wrapped = Reflect.apply(bind, this, arguments);
+          registeredWrapper = wrapped;
+          let stored, reentered = false;
+          if (${JSON.stringify(mode)} !== "shape") Object.defineProperty(state, "wrapFn", {
+            configurable: true,
+            set(value) {
+              calls.push(["set", value === wrapped, wrapped.listener === listener]);
+              if (${JSON.stringify(mode)} === "setter") throw sentinel;
+              stored = value;
+            },
+            get() {
+              calls.push("get");
+              if (${JSON.stringify(mode)} === "getter") throw sentinel;
+              if (!reentered) { reentered = true; emitter.emit("value", "inner"); }
+              return stored;
+            },
+          });
+          return wrapped;
+        };
+        try { emitter[${JSON.stringify(method)}]("value", listener); }
+        catch (error) { caught = error === sentinel; }
+        finally { Function.prototype.bind = bind; }
+        const registered = emitter.rawListeners("value")[0] === registeredWrapper;
+        try { emitter.emit("value", "outer"); emitter.emit("value", "again"); }
+        catch (error) { caught = error === sentinel; }
+        const listeners = emitter.listenerCount("value"), trace = calls.slice();
+        emitter.removeAllListeners();
+        return { keys, initialOwn, initialUndefined, caught, registered, listeners, calls: trace };
+      `);
+      const calls = mode === "shape" ? ["remove", ["listener", "outer", true]]
+        : mode === "setter" ? [["set", true, true]]
+        : mode === "getter" ? [["set", true, true], "get"]
+        : [["set", true, true], "get", "get", "remove", ["listener", "inner", true], ["listener", "outer", true]];
+      expect(result).toEqual({
+        keys: [["fired", "wrapFn", "target", "type", "listener"]], initialOwn: true, initialUndefined: true,
+        caught: mode === "setter" || mode === "getter", registered: mode !== "setter",
+        listeners: mode === "getter" ? 1 : 0, calls,
+      });
+    });
+  }
+}
