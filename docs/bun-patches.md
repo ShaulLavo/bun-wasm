@@ -2436,10 +2436,18 @@ that the portable installer rejects. The fixture labels that distinction.
 
 Lock metadata keeps flat strings and version-selected `{".": "replacement"}`
 entries. The resolver preserves original dependency declarations, invalidates
-pins only for changed rule names, and compares override metadata even for
+pins only for changed logical edge names, and compares override metadata even for
 production frozen installs. Nested object rules are explicitly unsupported.
 `tests/install/root-overrides.ts` uses only a local fixture registry and owns
 its child processes, listener and scratch directory.
+
+Explicit `alias@npm:target@range` selectors match the alias target identity and
+use the same range intersection, including scoped target names. Plain rules
+continue to exclude declared aliases. Root-relative `file:` and `link:`
+replacements retain the root origin; parent-local declarations are still rebased
+under their declaring package. Alias recursion carries the logical edge's lock
+lookup decision without invalidating a pin by its physical target name.
+Native Bun controls and resolver regressions cover these review corrections.
 
 ## Portable installer and package commands
 

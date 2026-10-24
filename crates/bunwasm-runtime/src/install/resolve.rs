@@ -304,19 +304,11 @@ impl Resolver {
             self.production,
             parent.local.as_ref().is_some_and(|p| p.workspace),
         ) {
-            let range = self.overrides.target(&name, &range).to_owned();
-            let range = if let Some(local) = &parent.local {
-                if let Some(path) = range
-                    .strip_prefix("link:")
-                    .or_else(|| range.strip_prefix("file:"))
-                {
-                    format!("link:{}", local.path.join(path).display())
-                } else {
-                    range
-                }
-            } else {
-                range
-            };
+            let range = self
+                .overrides
+                .replacement(&name, &range)
+                .map(str::to_owned)
+                .unwrap_or_else(|| declared_local_target(parent, range));
             let Some(target) = self.target(parent, &name, &range, optional || parent.optional)?
             else {
                 continue;
@@ -639,9 +631,6 @@ impl Resolver {
         chain: &[String],
         optional: bool,
     ) -> Option<Package> {
-        if self.overrides.changed.contains(name) {
-            return None;
-        }
         let row = &self.locked["packages"][chain.join("/")];
         if let Some(package) = self.locked_row(row, name, range, chain, optional) {
             return Some(package);
@@ -707,6 +696,19 @@ impl Resolver {
             optional,
         })
     }
+}
+
+fn declared_local_target(parent: &Package, range: String) -> String {
+    let Some(local) = &parent.local else {
+        return range;
+    };
+    let Some(path) = range
+        .strip_prefix("link:")
+        .or_else(|| range.strip_prefix("file:"))
+    else {
+        return range;
+    };
+    format!("link:{}", local.path.join(path).display())
 }
 
 fn platform_package<'a>(name: &'a str, version: &str) -> &'a str {

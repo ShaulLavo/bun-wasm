@@ -14,8 +14,38 @@ pub(super) struct Overrides {
 
 struct Rule {
     name: String,
-    selector: Option<String>,
+    selector: Option<Selector>,
     replacement: String,
+}
+
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
+enum Selector {
+    Range(String),
+    Alias { name: String, range: String },
+}
+
+impl Selector {
+    fn new(range: String) -> Option<Self> {
+        if let Some(alias) = range.strip_prefix("npm:") {
+            let (name, range) = resolve::spec(alias).ok()?;
+            parsed(&range)?;
+            return Some(Self::Alias { name, range });
+        }
+        parsed(&range)?;
+        Some(Self::Range(range))
+    }
+
+    fn matches(&self, declared: &str) -> bool {
+        match self {
+            Self::Range(range) => !declared.starts_with("npm:") && intersects(range, declared),
+            Self::Alias { name, range } => declared
+                .strip_prefix("npm:")
+                .and_then(|alias| resolve::spec(alias).ok())
+                .is_some_and(|(target, requested)| {
+                    *name == target && intersects(range, &requested)
+                }),
+        }
+    }
 }
 
 impl Overrides {
@@ -47,14 +77,15 @@ impl Overrides {
             eprintln!("warn: Missing root override value");
             return Ok(());
         }
-        let selector = key[name.len()..].starts_with('@').then_some(range);
-        if selector
-            .as_deref()
-            .is_some_and(|range| parsed(range).is_none())
-        {
-            eprintln!("warn: Invalid root override selector");
-            return Ok(());
-        }
+        let selector = if key[name.len()..].starts_with('@') {
+            let Some(selector) = Selector::new(range) else {
+                eprintln!("warn: Invalid root override selector");
+                return Ok(());
+            };
+            Some(selector)
+        } else {
+            None
+        };
         self.metadata[key] = if selector.is_some() {
             json!({".": replacement})
         } else {
@@ -69,23 +100,24 @@ impl Overrides {
     }
 
     pub fn target<'a>(&'a self, name: &str, range: &'a str) -> &'a str {
-        if range.starts_with("npm:") {
-            return range;
-        }
+        self.replacement(name, range).unwrap_or(range)
+    }
+
+    pub fn replacement(&self, name: &str, range: &str) -> Option<&str> {
         self.rules
             .iter()
             .filter(|rule| rule.name == name)
             .find(|rule| {
                 rule.selector
-                    .as_deref()
-                    .is_some_and(|selector| intersects(selector, range))
+                    .as_ref()
+                    .is_some_and(|selector| selector.matches(range))
             })
             .or_else(|| {
-                self.rules
-                    .iter()
-                    .find(|rule| rule.name == name && rule.selector.is_none())
+                self.rules.iter().find(|rule| {
+                    rule.name == name && rule.selector.is_none() && !range.starts_with("npm:")
+                })
             })
-            .map_or(range, |rule| rule.replacement.as_str())
+            .map(|rule| rule.replacement.as_str())
     }
 }
 
@@ -185,5 +217,46 @@ mod tests {
     fn unsupported_nested_objects_are_explicit() {
         let result = Overrides::new(&json!({"overrides": {"a": {"b": "1.0.0"}}}), &json!({}));
         assert!(result.err().unwrap().contains("Only root string overrides"));
+    }
+}
+
+#[cfg(test)]
+mod alias_tests {
+    use super::*;
+
+    #[test]
+    fn alias_selectors_require_the_declared_target_and_a_valid_intersection() {
+        let overrides = Overrides::new(
+            &json!({"overrides": {
+                "alias": "2.0.0",
+                "alias@npm:@fixture/selected@^1": "0.5.0",
+                "alias@npm:@fixture/selected@>=1": "0.6.0"
+            }}),
+            &json!({}),
+        )
+        .unwrap();
+        assert_eq!(
+            overrides.target("alias", "npm:@fixture/selected@<2"),
+            "0.6.0"
+        );
+        assert_eq!(overrides.target("alias", "npm:other@^1"), "npm:other@^1");
+        assert_eq!(
+            overrides.target("alias", "npm:@fixture/selected@^2"),
+            "0.6.0"
+        );
+        assert_eq!(overrides.target("alias", "^1"), "2.0.0");
+        for range in ["latest", "^99999999999999999999", "^1 && <2", "1.2.3.4"] {
+            let declared = format!("npm:@fixture/selected@{range}");
+            assert_eq!(overrides.target("alias", &declared), declared);
+            let invalid = Overrides::new(
+                &json!({"overrides": {format!("alias@npm:@fixture/selected@{range}"): "0.5.0"}}),
+                &json!({}),
+            )
+            .unwrap();
+            assert_eq!(
+                invalid.target("alias", "npm:@fixture/selected@<2"),
+                "npm:@fixture/selected@<2"
+            );
+        }
     }
 }

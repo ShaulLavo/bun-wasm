@@ -255,16 +255,20 @@ async function rootLocalTargets() {
 }
 
 async function aliasSelectors() {
-  const dependencies = { alias: "npm:versioned@<2", scoped: "npm:@fixture/selected@^1", other: "npm:versioned@1.0.0", "uses-alias": "1.0.0" };
-  const overrides = { "alias@npm:versioned@^1": "npm:selector-fits@0.5.0", "scoped@npm:@fixture/selected@^1": "npm:selector-fits@0.5.0", "other@npm:@fixture/selected@^1": "0.5.0", versioned: "2.0.0" };
+  const dependencies = { alias: "npm:versioned@<2", "@fixture/alias": "npm:@fixture/selected@^1", other: "npm:versioned@1.0.0", "uses-alias": "1.0.0", "uses-alias-range": "1.0.0" };
+  const overrides = { "alias@npm:versioned@^1": "npm:selector-fits@0.5.0", "@fixture/alias@npm:@fixture/selected@^1": "npm:selector-fits@0.5.0", "other@npm:@fixture/selected@^1": "0.5.0", "selected@npm:versioned@^1": "npm:selector-fits@0.5.0", versioned: "2.0.0" };
   const directory = project("alias-selectors", { dependencies, overrides });
   await run(directory, ["install"]);
   assert.equal(installed(directory, "alias"), "0.5.0");
-  assert.equal(installed(directory, "scoped"), "0.5.0");
+  assert.equal(installed(directory, "@fixture/alias"), "0.5.0");
   assert.equal(installed(directory, "other"), "1.0.0");
+  assert.equal(installed(directory, "selected"), "0.5.0");
   const parsed = Bun.JSONC.parse(contents(directory));
-  assert.deepEqual(parsed.overrides["alias@npm:versioned@^1"], { ".": "npm:selector-fits@0.5.0" });
-  assert.deepEqual(parsed.overrides["scoped@npm:@fixture/selected@^1"], { ".": "npm:selector-fits@0.5.0" });
+  assert.ok(parsed && typeof parsed === "object" && "overrides" in parsed);
+  const stored = parsed.overrides;
+  assert.ok(stored && typeof stored === "object" && "alias@npm:versioned@^1" in stored && "@fixture/alias@npm:@fixture/selected@^1" in stored);
+  assert.deepEqual(stored["alias@npm:versioned@^1"], { ".": "npm:selector-fits@0.5.0" });
+  assert.deepEqual(stored["@fixture/alias@npm:@fixture/selected@^1"], { ".": "npm:selector-fits@0.5.0" });
   const lock = contents(directory);
   await run(directory, ["install", "--frozen-lockfile"]);
   assert.equal(contents(directory), lock);
@@ -294,7 +298,7 @@ async function invalidAliasSelectors() {
 
 try {
   const packages = ["selector-fits", "selector-misses", "@fixture/selected"].flatMap(name => ["0.5.0", "1.0.0", "2.0.0"].map(version => packageFixture(name, version)));
-  registry = await createRegistry(packages.concat([packageFixture("uses-scoped", "1.0.0", { dependencies: { "@fixture/selected": "^1" } }), packageFixture("uses-alias", "1.0.0", { dependencies: { alias: "npm:versioned@latest" } })]));
+  registry = await createRegistry(packages.concat([packageFixture("uses-scoped", "1.0.0", { dependencies: { "@fixture/selected": "^1" } }), packageFixture("uses-alias", "1.0.0", { dependencies: { alias: "npm:versioned@latest" } }), packageFixture("uses-alias-range", "1.0.0", { dependencies: { selected: "npm:versioned@<2" } })]));
   for (const test of [selectors, invalidSelectors, skippedSelectors, transitive, changed, unaffectedPins, targets, unaffectedAliasPins, rootLocalTargets, aliasSelectors, invalidAliasSelectors]) {
     if (process.env.INSTALL_CASE && process.env.INSTALL_CASE !== test.name) continue;
     if (process.env.INSTALL_NATIVE_BUN === "1" && test === skippedSelectors) {

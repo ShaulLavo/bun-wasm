@@ -131,7 +131,11 @@ placement. Bun's parser and range intersection select versioned rules, including
 scoped names. Lock metadata persists the rules and changed names invalidate
 pins. Production frozen comparison includes the same metadata. The local
 registry fixture covers initial, repeated and changed frozen installs, tags,
-aliases, transitive selection and unaffected pins. Nested object rules remain
+aliases, transitive selection and unaffected pins. PR149 review corrections
+keep unrelated alias target pins, anchor local replacements at the root, and
+match explicit npm alias selectors with scoped targets. Local and workspace
+controls retain declared-path rebasing and changed frozen-lock nonmutation.
+Fresh independent review is required before the parent lands PR149. Nested object rules remain
 outside this bounded adapter. Evidence is under
 `/work/reports/bun-wasm/root-overrides-20261024/`.
 
