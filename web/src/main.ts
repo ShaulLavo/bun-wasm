@@ -15,7 +15,8 @@ import { createRuntime } from "waffle";
 import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
 import type { BunNetworkOptions } from "./net/helper";
 import { Previews } from "./preview";
-import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
+import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope } from "./engine-loader";
+import type { Run } from "./runner";
 import { type Output, Shell } from "./shell";
 import { enableTerminalCopy } from "./terminal-copy";
 import { linkLocalUrls } from "./terminal-links";
@@ -146,7 +147,7 @@ const moduleScope: Promise<boolean> = registerModuleScope();
 let current: Run | null = null;
 
 async function runBun(args: string[], cwd: string, io: Output): Promise<number> {
-  await wasmReady;
+  const [{ startRun }] = await Promise.all([import("./runner"), wasmReady, runtime.processes()]);
   if (!wasm || "error" in wasm) {
     io.err(`\x1b[31m${wasm?.error ?? "bun.wasm unavailable"}\x1b[0m\r\n`);
     return 127;

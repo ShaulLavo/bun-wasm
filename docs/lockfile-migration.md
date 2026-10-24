@@ -1,10 +1,5 @@
 # Foreign lockfile migration
 
-Status: Approved.
-
-This change depends on PR #68's workspace/local dependency graph and lock metadata.
-It is a separate PR so the command and workspace gains can land first.
-
 The installer imports `package-lock.json`, `yarn.lock` or `pnpm-lock.yaml` when
 `bun.lock` is absent. `bun pm migrate` converts without extracting packages.
 Imported and newly resolved locks use the same text writer. A migrated project
@@ -22,7 +17,7 @@ with the lock's existing checksum taking priority.
 Git and direct URL/tarball dependency protocols are currently rejected without
 writing a converted lock. Their identities are not rewritten as registry
 packages. A registry package's explicit HTTP tarball transport remains intact.
-Local workspace references use the workspace graph from PR #68.
+Local workspace references use the installer workspace graph.
 
 ## Native reference checks
 
@@ -83,7 +78,7 @@ and diagnostics. `MIGRATION_CASES` selects comma-separated fixture names.
 replay listener and scratch copy is owned by the test and removed at teardown.
 
 
-## Review regressions
+## Edge-case checks
 
 `tests/install/migration-review.ts` checks workspace-nested npm pins, finite nested
 cycles in pnpm and Berry, transparent workspace selection, dangling links, custom
@@ -124,7 +119,7 @@ also rejects. Bun reserves that root location for the workspace, so publishing t
 registry record there would lose the source selection.
 
 
-## Request and integrity regressions
+## Request and integrity checks
 
 `tests/install/security.ts` captures local request URLs and headers for fresh
 installs, failed and timed-out metadata/tarball responses, and frozen installs from

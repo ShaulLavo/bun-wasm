@@ -960,9 +960,19 @@ mod tests {
         let out = hooked("async () => eval(await s) + eval?.(x) + (0, eval)(y) + eval()");
         assert_eq!(
             out,
-            format!(
-                "async () => eval({EVAL}{OPEN}await s))) + eval?.(x) + (0, eval)(y) + eval({EVAL}))"
-            )
+            format!("async () => eval({EVAL}{OPEN}await s))) + eval?.(x) + (0, eval)(y) + eval()")
+        );
+        for source in ["eval()", "eval( )", "eval(/* await */)", "eval(\n)"] {
+            assert_eq!(eval_await_edits(source), None, "{source}");
+        }
+        assert_eq!(hooked("eval(eval())"), format!("eval({EVAL}eval()))"));
+        assert_eq!(
+            hooked("async () => await eval()"),
+            format!("async () => {OPEN}await eval())")
+        );
+        assert_eq!(
+            hooked("\"é😀\"; eval(); eval(x)"),
+            format!("\"é😀\"; eval(); eval({EVAL}x))")
         );
         assert_eq!(
             hooked("eval(eval(a), b)"),

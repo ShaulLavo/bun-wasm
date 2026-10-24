@@ -1,11 +1,12 @@
-From 99d3e3d4136fe55909d065aca604819c51fa5842 Mon Sep 17 00:00:00 2001
+From eed9fa64ebdfa73c0d8ddf3b6dcbfefcf0ef413a Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
-Date: Fri, 23 Oct 2026 08:58:49 +0300
-Subject: [PATCH 14/14] wasm: record await spans for run-time AsyncLocalStorage hooks
+Date: Sun, 25 Oct 2026 00:08:57 +0300
+Subject: [PATCH 14/14] wasm: record await spans for run-time AsyncLocalStorage
+ hooks
 
 A scoped parser collector records each `await` expression's keyword start
 and operand end, each `for await` loop's start (its outermost label) and
-body span, and the argument span of each call to the bare identifier
+body span, and the argument span of each nonempty call to the bare identifier
 `eval`, using the end of the previous token the lexer now keeps. 0010's
 collector shares its restore guard. With BUNWASM_AWAIT_HOOKS on, the
 printer passes a direct eval's argument through `__bunwasm_evalSource`,
@@ -19,9 +20,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  src/js_parser/parse/mod.rs          |   1 +
  src/js_parser/parse/parse_prefix.rs |   1 +
  src/js_parser/parse/parse_stmt.rs   |   5 ++
- src/js_parser/parse/parse_suffix.rs |  13 +++
+ src/js_parser/parse/parse_suffix.rs |  14 ++++
  src/js_printer/lib.rs               |   9 +++
- 7 files changed, 143 insertions(+), 12 deletions(-)
+ 7 files changed, 144 insertions(+), 12 deletions(-)
 
 diff --git a/src/js_parser/lexer.rs b/src/js_parser/lexer.rs
 index 063d2206..5695cdc7 100644
@@ -262,7 +263,7 @@ index 5298b27d..6919891e 100644
      }
  
 diff --git a/src/js_parser/parse/parse_suffix.rs b/src/js_parser/parse/parse_suffix.rs
-index 76c1603f..260f2d2b 100644
+index 76c1603f..8f4e2f58 100644
 --- a/src/js_parser/parse/parse_suffix.rs
 +++ b/src/js_parser/parse/parse_suffix.rs
 @@ -373,6 +373,15 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
@@ -281,13 +282,14 @@ index 76c1603f..260f2d2b 100644
      fn sfx_t_open_paren(
          p: &mut Self,
          level: Level,
-@@ -384,7 +393,11 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -384,7 +393,12 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
              return Ok(Continuation::Done);
          }
  
 +        let open_paren = p.lexer.loc();
          let list_loc = p.parse_call_args()?;
-+        if old_optional_chain.is_none() && p.bunwasm_is_eval(left) {
++        // Match the printer: an empty argument list has no source to hook.
++        if !list_loc.list.is_empty() && old_optional_chain.is_none() && p.bunwasm_is_eval(left) {
 +            crate::bunwasm_direct_eval(left.loc, open_paren, list_loc.loc);
 +        }
          let loc = left.loc;

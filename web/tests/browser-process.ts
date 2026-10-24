@@ -9,6 +9,7 @@ import { createServer } from "node:net";
 import { availableParallelism, loadavg } from "node:os";
 import { chromium, firefox, webkit, type Browser } from "playwright";
 import { buildBrowserEntries } from "../../scripts/browser-build";
+import { processBundle } from "../scripts/ci-process-bundles";
 import { prepareBaselineSource } from "./process-baseline-source";
 
 const args = process.argv.slice(2);
@@ -61,8 +62,7 @@ try {
   process.env.TMPDIR = scratch;
   console.log(JSON.stringify({ resources: { port, scratch, browsers: names, wasm: artifact ? join(dist!, "bun.wasm") : null }, host: { platform: process.platform, arch: process.arch, logicalCpus: availableParallelism(), loadAverage: loadavg(), bun: Bun.version }, pool: "disabled; no pool implementation is shipped" }));
   const out = join(scratch, "current");
-  await buildBrowserEntries([join(import.meta.dir, "process-browser-main.ts"), join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts")], out, { runtimeWorker: true });
-  await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./process-browser-main.js"></script>');
+  await processBundle("supervisor", out);
   let baselineRevision: string | undefined;
   if (benchmark) {
     // A remote runner may receive the exact source-and-harness archive below instead

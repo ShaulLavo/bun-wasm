@@ -95,7 +95,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       if (slots === "imports") wasi.hostCall = installHostSlotsViaImport(instance, impls);
       else installHostSlots(instance, impls);
     },
-    run({ instance, checkActive, finish }, exited) {
+    run({ instance, checkActive, finish, runtimeState }, exited) {
       const ready = instance.exports.bunwasm_ready as (() => number) | undefined;
       if (exited !== null || req.adapter === "preview1" || req.engine !== "browser" || ready?.() !== 1) return exited ?? 0;
       const net = slots !== "off" ? netHost?.engineNet() : undefined;
@@ -104,7 +104,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
         instance, moduleUrls: "blob",
         modules: req.moduleCache ? moduleStore(req.moduleCache, host.location) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
-        net, onExit: code => finish({ code }),
+        net, processWake: runtimeState?.wake, onExit: code => finish({ code }),
       });
     },
   };

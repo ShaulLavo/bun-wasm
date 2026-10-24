@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm",
-  "version": "0.0.36",
+  "version": "0.0.61",
   "private": true,
   "type": "module",
   "exports": {
@@ -64,9 +64,11 @@
     "quality:types": "tsc -p tsconfig.scripts.json && tsc -p web/tsconfig.quality.json && tsc -p sandbox/tsconfig.quality.json",
     "quality:unused": "knip --no-progress",
     "quality:duplicates": "jscpd --config .jscpd.json --baseline .jscpd-baseline.json --fail-on-new-clones 0 --fail-on-empty",
-    "quality:probes": "bun test scripts/quality-probes.test.ts scripts/ci-changes.test.ts scripts/ci-quality.test.ts scripts/quality-input-times.test.ts scripts/next-framework-nesting.test.ts",
+    "quality:probes": "bun scripts/test-checks.ts quality",
     "quality:rust": "bun scripts/quality-rust.ts",
-    "quality:wasi": "bun scripts/quality-wasi.ts"
+    "quality:wasi": "bun scripts/quality-wasi.ts",
+    "test:browser:shell-consumer": "bun web/tests/browser-shell-consumer.ts chromium firefox",
+    "bench:light-startup": "bun scripts/measure-light-startup.ts"
   },
   "peerDependencies": {
     "waffle": "git+https://github.com/ShaulLavo/waffle.git#b20fad173ebaa225cb87c51776f35edaaafd4a40"
@@ -80,7 +82,8 @@
     "jscpd": "5.4.1",
     "knip": "6.41.0",
     "oxlint": "1.88.0",
-    "wrangler": "4.151.0"
+    "wrangler": "4.151.0",
+    "playwright": "1.64.1"
   },
   "trustedDependencies": [
     "waffle"

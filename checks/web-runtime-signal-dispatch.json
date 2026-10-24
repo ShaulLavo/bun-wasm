@@ -1,0 +1,6 @@
+{
+  "owner": "web",
+  "path": "scripts/runtime-signal-dispatch.test.ts",
+  "localRuntime": true,
+  "batch": "10-web"
+}

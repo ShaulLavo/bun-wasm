@@ -8,7 +8,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
-import { buildBrowserEntries } from "../../scripts/browser-build";
+import { processBundle } from "../scripts/ci-process-bundles";
 import { runtimeProcChecks, runtimeProcJobWaitChecks } from "./runtime-proc-fixtures";
 import { runtimeProcFailure } from "./runtime-proc-browser-diagnostics";
 
@@ -64,12 +64,9 @@ try {
   // A captured pre-wiring bundle can run after implementation changes without checking out or
   // modifying shared source. External bundles are caller-owned and are never removed by this gate.
   const captured = process.env.BUN_WASM_RUNTIME_PROC_BUNDLE;
-  const out = captured ? resolve(captured) : join(scratch, "dist"), root = resolve(import.meta.dir, "../..");
+  const out = captured ? resolve(captured) : join(scratch, "dist");
   if (captured) assert.ok(await Bun.file(join(out, "index.html")).exists(), "captured bundle needs index.html");
-  else {
-    await buildBrowserEntries([join(import.meta.dir, "runtime-proc-browser-main.ts"), join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts")], out, { runtimeWorker: true });
-    await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./runtime-proc-browser-main.js"></script>');
-  }
+  else await processBundle("runtime-proc", out);
   server = Bun.serve({ hostname: "127.0.0.1", port: 0,
     async fetch(request) {
       const url = new URL(request.url);

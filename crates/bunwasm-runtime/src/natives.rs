@@ -44,7 +44,6 @@ impl Table {
     }
 }
 
-/// Node's (code, negative Linux errno, description) for an I/O error.
 fn flat_edits(edits: Vec<(usize, &'static str)>) -> Val {
     let flat = edits
         .into_iter()
@@ -52,6 +51,7 @@ fn flat_edits(edits: Vec<(usize, &'static str)>) -> Val {
     Val::Array(flat.collect())
 }
 
+/// Node's (code, negative Linux errno, description) for an I/O error.
 fn errno_info(err: &io::Error) -> (&'static str, i32, &'static str) {
     use io::ErrorKind as K;
     if err.raw_os_error() == Some(libc::EBADF) {
@@ -1224,6 +1224,18 @@ fn install_url(t: &mut Table) {
             .and_then(|u| u.host_str().map(str::to_owned))
             .unwrap_or_default();
         Ok(host.into())
+    });
+    t.add("domainToUnicode", |a| {
+        let mut url = url::Url::parse("http://domain.invalid/").expect("valid base URL");
+        if url::quirks::set_hostname(&mut url, a.str(0)?).is_err() {
+            return Ok("".into());
+        }
+        let domain = match url.host() {
+            Some(url::Host::Domain(domain)) => url::quirks::domain_to_unicode(domain),
+            Some(host) => host.to_string(),
+            None => String::new(),
+        };
+        Ok(domain.into())
     });
 }
 

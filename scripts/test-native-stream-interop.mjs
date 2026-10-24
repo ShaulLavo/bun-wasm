@@ -6,13 +6,15 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const argument = name => { const at = process.argv.indexOf(name); return at < 0 ? undefined : process.argv[at + 1]; };
 function inputs() {
   const sourceRoot = join(root, "crates/bunwasm-runtime/src/js");
-  const names = ["buffer", "events", "streams", "node_stream_core", "node_stream_web", "node_stream_bindings", "native_stream_state"];
+  const names = ["buffer", "streams", "node_stream_core", "node_stream_web", "node_stream_bindings", "native_stream_state"];
   const sources = Object.fromEntries(names.filter(name => existsSync(join(sourceRoot, name + ".js"))).map(name => [name, readFileSync(join(sourceRoot, name + ".js"), "utf8")]));
+  sources.events = stripTypeScriptTypes(readFileSync(join(sourceRoot, "events.ts"), "utf8"));
   sources.compression_streams = stripTypeScriptTypes(readFileSync(join(sourceRoot, "compression_streams.ts"), "utf8"));
   const builtins = readFileSync(join(sourceRoot, "builtins.js"), "utf8");
   sources.asyncHooks = builtins.slice(builtins.indexOf("  function asyncHooksModule()"), builtins.indexOf("  function diagnosticsChannelModule()"));
   sources.hostBridge = stripTypeScriptTypes(readFileSync(join(root, "web/src/native-stream-state.ts"), "utf8"));
   sources.fromControls = stripTypeScriptTypes(readFileSync(new URL("../web/tests/native-readable-from-controls.ts", import.meta.url), "utf8"));
+  sources.completionControls = stripTypeScriptTypes(readFileSync(new URL("../web/tests/native-stream-completion-controls.ts", import.meta.url), "utf8"));
   sources.fixture = readFileSync(join(root, "tests/fixtures/node-native-web-streams/index.js"), "utf8");
   return sources;
 }
@@ -31,14 +33,21 @@ for (const name of ["chromium", "webkit"]) {
     page.on("pageerror", error => pageErrors.push(String(error)));
     const result = await page.evaluate(async sources => {
       const native = { ReadableStream, WritableStream, TransformStream };
+      // Median of seven runs after three warm-up runs; still noisy on a busy host.
       async function constructionTime(Ctor) {
         const count = 10000;
-        const start = performance.now();
-        for (let i = 0; i < count; i++) {
-          const stream = new Ctor({ start(controller) { controller.close(); } });
-          await stream.cancel();
+        async function run() {
+          const start = performance.now();
+          for (let i = 0; i < count; i++) {
+            const stream = new Ctor({ start(controller) { controller.close(); } });
+            await stream.cancel();
+          }
+          return performance.now() - start;
         }
-        return { count, milliseconds: performance.now() - start };
+        for (let i = 0; i < 3; i++) await run();
+        const runs = [];
+        for (let i = 0; i < 7; i++) runs.push(await run());
+        return { count, milliseconds: runs.toSorted((a, b) => a - b)[3], runs };
       }
       const nativeConstruction = sources.benchmark ? await constructionTime(native.ReadableStream) : undefined;
       const dispose = sources.hostBridge ? new Function(sources.hostBridge.replace("export function installNativeStreamState", "function installNativeStreamState") + ";return installNativeStreamState();")() : () => {};
@@ -81,6 +90,9 @@ for (const name of ["chromium", "webkit"]) {
         const rows = await checkFrom(native.ReadableStream);
         globalThis.__nativeStreamResults = globalThis.__nativeStreamResults.concat(rows);
       } catch (failure) { error = String(failure); }
+      const checkCompletion = new Function(sources.completionControls.replace("export async function checkNativeStreamCompletion", "async function checkNativeStreamCompletion") + ";return checkNativeStreamCompletion;")();
+      const completionRows = await checkCompletion();
+      globalThis.__nativeStreamResults = globalThis.__nativeStreamResults.concat(completionRows);
       const brands = Object.fromEntries(Object.entries(native).map(([name, Ctor]) => [name, {
         sameConstructor: globalThis[name] === Ctor,
         samePrototype: globalThis[name].prototype === Ctor.prototype,

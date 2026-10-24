@@ -1,0 +1,7 @@
+settle waiter retains raw absent-result behavior without global TypeError access
+onError waiter retains raw absent-result behavior without global TypeError access
+settleClose waiter retains raw absent-result behavior without global TypeError access
+settleClose queue retains raw absent-result behavior without global TypeError access
+next queue retains raw absent-result behavior without global TypeError access
+once retains bind state, wrapFn accessors and reentrant order
+prependOnceListener retains bind state, wrapFn accessors and reentrant order

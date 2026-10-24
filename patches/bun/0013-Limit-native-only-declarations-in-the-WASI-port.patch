@@ -1,7 +1,7 @@
 From e3b6344d0ce9cde2d2f4a50c0de06fcdbb4e7376 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sun, 18 Oct 2026 16:16:51 +0300
-Subject: [PATCH 13/14] Limit native-only declarations in the WASI port
+Subject: [PATCH 13/13] Limit native-only declarations in the WASI port
 
 ---
  src/bun_core/Global.rs      |  4 +++-

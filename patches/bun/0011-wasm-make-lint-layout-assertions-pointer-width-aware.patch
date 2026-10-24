@@ -1,7 +1,7 @@
 From df2acb35d9bb9c3433ce9acd180ffbf12b5d480b Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Sat, 17 Oct 2026 08:13:07 +0300
-Subject: [PATCH 11/14] wasm: make lint layout assertions pointer-width aware
+Subject: [PATCH 11/13] wasm: make lint layout assertions pointer-width aware
 
 ---
  src/lint/rule.rs  | 2 +-
