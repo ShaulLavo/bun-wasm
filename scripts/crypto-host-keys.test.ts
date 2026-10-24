@@ -154,7 +154,7 @@ for (const [label, source] of candidates) {
     }
     const receiver = calls[0]?.receiver;
     expect(receiver).not.toBe(provider);
-    expect(Object.keys(Object(receiver))).toEqual(methods);
+    expect(Object.keys(Object(receiver))).toEqual(Array.from(methods));
     expect(calls.map(call => call.name)).toEqual(["sign", "verify", "encrypt", "decrypt"]);
     for (const call of calls) {
       expect(call.receiver).toBe(receiver);
