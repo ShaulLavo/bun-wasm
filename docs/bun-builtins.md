@@ -118,5 +118,5 @@ scripts/bun-suite.sh --engine <engine> --network loopback --jobs 1 --launcher "$
 `createConsoleConstructor` from Bun's `src/js/builtins/ConsoleObject.ts`.
 Bun's node:console factory only returns the global console. Its constructor is
 not in the module registry, so the runtime's lazy polyfill loader embeds that
-function separately. The [provenance ledger](bun-patches.md#bun-console-constructor)
+function separately. The [provenance ledger](bun-patches/bun-console-constructor.md#bun-console-constructor)
 records the lowering and original adapter. All engines share this code.
