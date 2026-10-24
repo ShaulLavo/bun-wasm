@@ -3202,7 +3202,8 @@ its final cursor check and owns all opened descriptors.
 ## Patched sysroot and native descriptor bridge
 
 Class **Port**, with an original local build wrapper and native runtime adapter. The libc input is
-not copied into this repository: Waffle 0.0.53 at `f6017d12f59c81dae75eece5a6cb62c0470d166e`
+not copied into this repository: Waffle 0.0.67 at `b20fad173ebaa225cb87c51776f35edaaafd4a40`
+(the commit `package.json` pins; the wasi-libc revision below is unchanged since 0.0.53 at `f6017d12`)
 builds wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13` from the installed
 `waffle/scripts/build-wasi-libc.sh`. Its `preopen-scan.patch` skips occupied inherited descriptors
 only when `fd_fdstat_get` succeeds and stops on the first real BADF. `scripts/build-wasi-sysroot.ts`
@@ -3366,9 +3367,9 @@ Class **Port**. Upstream remains Bun
 ## Descriptor kinds and storage modes
 
 Class **Host feature**. These are original adapters, not copied or translated upstream code.
-The matching contract is Waffle main `f6017d12f59c81dae75eece5a6cb62c0470d166e`, specifically
+The matching contract was written against Waffle main `f6017d12f59c81dae75eece5a6cb62c0470d166e`, specifically
 `proc/abi.ts`, `core/descriptors.ts`, `fs/vfs.ts` and `browser/shared-fs.ts`. The root package,
-web page and sandbox pin that exact revision together, including their lockfiles.
+web page and sandbox now pin Waffle `b20fad173ebaa225cb87c51776f35edaaafd4a40` together, including their lockfiles.
 
 `crates/bunwasm-runtime/src/host.rs` imports `runtime_proc.fd_kind`. The original descriptor
 metadata adapter in `natives.rs` retains libc fstat and its rights checks before restoring the
@@ -3396,7 +3397,7 @@ request shapes, version detection or compatibility fallback are added. See
 Class **Host feature**, original adapter. No upstream source is copied or adapted.
 `crates/bunwasm-runtime/src/js/child_ipc.ts`, `spawn.ts` and `bootstrap.js`
 implement the documented Node child-process JSON messaging contract over the
-existing Waffle descriptor ABI, pinned at `f6017d12f59c81dae75eece5a6cb62c0470d166e`.
+existing Waffle descriptor ABI, as pinned at `f6017d12f59c81dae75eece5a6cb62c0470d166e` when written.
 Two explicit pipe bindings carry newline-delimited UTF-8 JSON in each direction.
 The child learns its read/write descriptors from a consumed environment entry.
 There is no new host broker, Bun-specific transport or implicit descriptor inheritance.
