@@ -246,9 +246,9 @@ async function rootLocalTargets() {
     save(join(directory, "replacement"), { name: "selector-fits", version: "0.5.0" });
     await run(directory, ["install"]);
     const lock = contents(directory);
-    assert.match(lock, /selector-fits@file:replacement/);
-    assert.doesNotMatch(lock, /selector-fits@file:parent\/replacement/);
-    assert.match(lock, /declared@file:parent\/declared/);
+    assert.match(lock, /selector-fits@(?:file|link):(?:\.\/)?replacement/);
+    assert.doesNotMatch(lock, /selector-fits@(?:file|link):(?:\.\/)?parent\/replacement/);
+    assert.match(lock, /declared@(?:file|link):(?:\.\/)?parent\/declared/);
     await run(directory, ["install", "--frozen-lockfile"]);
     assert.equal(contents(directory), lock);
   }
