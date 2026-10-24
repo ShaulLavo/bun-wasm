@@ -23,4 +23,16 @@ sequence conversion order ["key=value",["outer iterator","outer next 0","pair it
 conversion throw identity [true,["outer iterator","outer next 0","pair iterator","pair next 0","key string","pair next 1","value string","pair close","outer close"]]
 getter throw identity true
 bad pair consumes sequence first ["Type error",["outer iterator","outer next 0","pair iterator","pair next 0","a string","pair next 1","b string","pair next 2","c string","pair next 3","outer next 1"]]
-search bypasses query throws RangeError undefined sentinel
+method append coercion [null,"key=old&key=other&key=value",["key string","value string"]]
+method append symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method set coercion [null,"key=value",["key string","value string"]]
+method set symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method get coercion ["old","key=old&key=other",["key string"]]
+method get symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method getAll coercion [["old","other"],"key=old&key=other",["key string"]]
+method getAll symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method has coercion [false,"key=old&key=other",["key string","value string"]]
+method has symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method delete coercion [null,"key=old&key=other",["key string","value string"]]
+method delete symbol throws TypeError undefined Cannot convert a Symbol value to a string
+method scalar replacement [["�",true],[["�","😀"]],"%EF%BF%BD=%F0%9F%98%80"]

@@ -76,4 +76,18 @@ attempt("bad pair consumes sequence first", () => {
   catch (error) { if (typeof error !== "object" || error === null || !("name" in error) || !("message" in error)) throw error; message = error.message; }
   return [message, log.splice(0)];
 });
-attempt("search bypasses query", () => url.format({ search: "?fixed", query: { get a() { throw sentinel; } } }));
+for (const method of ["append", "set", "get", "getAll", "has", "delete"] as const) {
+  attempt(`method ${method} coercion`, () => {
+    const p = params("key=old&key=other");
+    const result = Reflect.apply(p[method], p, [value("key"), value("value")]);
+    return [result, p.toString(), log.splice(0)];
+  });
+  attempt(`method ${method} symbol`, () => Reflect.apply(params("a=1" )[method], params("a=1"), [Symbol("x"), "1"]));
+}
+attempt("method scalar replacement", () => {
+  const p = params("");
+  p.append("\ud800", "\udfff");
+  const found = [p.get("\udfff"), p.has("\udfff", "\ud800")];
+  p.set("\udfff", "😀");
+  return [found, Array.from(p), p.toString()];
+});

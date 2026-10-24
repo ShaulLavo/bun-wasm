@@ -10,8 +10,16 @@
     return Object.assign(new TypeError(`The "${name}" argument must be ${expected}. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_TYPE" });
   }
 
+  const hrefGetter = Object.getOwnPropertyDescriptor(URL.prototype, "href")?.get;
+
+  function isURL(value: unknown): value is URL {
+    if (!hrefGetter) return false;
+    try { hrefGetter.call(value); return true; }
+    catch { return false; }
+  }
+
   function fileURLToPath(input: unknown) {
-    if (typeof input !== "string" && !(input instanceof URL)) throw invalidArg("url", "of type string", input);
+    if (typeof input !== "string" && !isURL(input)) throw invalidArg("url", "of type string", input);
     const url = typeof input === "string" ? URL.parse(input) : input;
     if (!url || url.protocol !== "file:") {
       throw Object.assign(new TypeError("The URL must be of scheme file"), { code: "ERR_INVALID_URL_SCHEME" });
