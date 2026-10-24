@@ -249,7 +249,7 @@
         if (options.path) throw error(Error, "ENOTSUP", "Unix sockets are not supported in bun-wasm");
         const targetPort = port(options.port);
         if (callback) this.once("listening", callback);
-        try { this._listener = listenOrThrow(options.host || "0.0.0.0", targetPort); }
+        try { this._listener = listenOrThrow(options.host || "::", targetPort); }
         catch (err) { internal.nextTick(() => this.emit("error", err)); return this; }
         this.listening = true;
         this._closing = false;

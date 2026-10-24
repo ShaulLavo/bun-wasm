@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/node-net-default-bind.test.ts",
+  "localRuntime": true
+}

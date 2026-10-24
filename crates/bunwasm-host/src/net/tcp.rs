@@ -16,6 +16,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use socket2::{Domain, Protocol, Socket, Type};
+
 use super::error::{ErrorInfo, socket_error};
 use super::{AGAIN, ByteQueue, ERROR, Notify, READ_HIGH_WATER};
 
@@ -41,8 +43,23 @@ fn bind_addrs(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     match host {
         "" => Ok(vec![SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port)]),
         "localhost" => Ok(vec![SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port)]),
+        host if host.parse::<Ipv6Addr>().is_ok_and(|ip| ip.is_unspecified()) => Ok(vec![
+            SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port),
+            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port),
+        ]),
         _ => Ok((host, port).to_socket_addrs()?.collect()),
     }
+}
+
+fn bind_listener(addr: SocketAddr) -> io::Result<TcpListener> {
+    if addr.ip() != IpAddr::V6(Ipv6Addr::UNSPECIFIED) {
+        return TcpListener::bind(addr);
+    }
+    let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_only_v6(false)?;
+    socket.bind(&addr.into())?;
+    socket.listen(128)?;
+    Ok(socket.into())
 }
 
 pub fn addr_json(addr: SocketAddr) -> Vec<u8> {
@@ -79,7 +96,7 @@ impl Listener {
         let mut last_error = io::Error::new(io::ErrorKind::AddrNotAvailable, "no addresses");
         let mut bound = None;
         for addr in addrs {
-            match TcpListener::bind(addr) {
+            match bind_listener(addr) {
                 Ok(listener) => {
                     bound = Some(listener);
                     break;
@@ -505,6 +522,96 @@ fn write_loop(shared: &ConnShared, mut stream: TcpStream) {
 #[cfg(test)]
 mod close_tests {
     use super::*;
+
+    #[test]
+    fn unspecified_listener_accepts_ipv4() {
+        let listener = Listener::bind("::", 0, Notify::new()).unwrap();
+        let address = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), listener.port());
+        let connected = TcpStream::connect_timeout(&address, Duration::from_secs(2));
+        listener.close();
+        assert!(connected.is_ok(), "IPv4 connection failed: {connected:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    fn deny_ipv6_socket() -> io::Result<()> {
+        let mut filter = [
+            libc::sock_filter {
+                code: 0x20,
+                jt: 0,
+                jf: 0,
+                k: 0,
+            },
+            libc::sock_filter {
+                code: 0x15,
+                jt: 0,
+                jf: 3,
+                k: libc::SYS_socket as u32,
+            },
+            libc::sock_filter {
+                code: 0x20,
+                jt: 0,
+                jf: 0,
+                k: 16,
+            },
+            libc::sock_filter {
+                code: 0x15,
+                jt: 0,
+                jf: 1,
+                k: libc::AF_INET6 as u32,
+            },
+            libc::sock_filter {
+                code: 0x06,
+                jt: 0,
+                jf: 0,
+                k: 0x0005_0000 | libc::EAFNOSUPPORT as u32,
+            },
+            libc::sock_filter {
+                code: 0x06,
+                jt: 0,
+                jf: 0,
+                k: 0x7fff_0000,
+            },
+        ];
+        let program = libc::sock_fprog {
+            len: filter.len() as u16,
+            filter: filter.as_mut_ptr(),
+        };
+        // Deny AF_INET6 only in the disposable child; never change host sysctls.
+        unsafe {
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &program) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unspecified_listener_falls_back_without_ipv6() {
+        use std::os::unix::process::CommandExt;
+        if std::env::var_os("BUNWASM_TEST_NO_IPV6").is_some() {
+            assert_eq!(
+                TcpListener::bind(("::", 0)).unwrap_err().raw_os_error(),
+                Some(libc::EAFNOSUPPORT)
+            );
+            unspecified_listener_accepts_ipv4();
+            return;
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
+            .args([
+                "--exact",
+                "net::tcp::close_tests::unspecified_listener_falls_back_without_ipv6",
+            ])
+            .env("BUNWASM_TEST_NO_IPV6", "1");
+        unsafe {
+            child.pre_exec(deny_ipv6_socket);
+        }
+        assert!(child.status().unwrap().success());
+    }
 
     #[test]
     fn accept_during_listener_close_drains_before_fin() {
