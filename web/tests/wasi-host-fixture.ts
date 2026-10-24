@@ -95,4 +95,3 @@ export function host(preopens: Record<string, string> = { "/allowed": "/allowed"
   }
   return { fs, calls, view, path, open };
 }
-
