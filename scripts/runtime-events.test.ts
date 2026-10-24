@@ -195,6 +195,9 @@ const initializedStorage: BunWasm.Events.Table = emitter._events;
 const emitterSource: BunWasm.Events.Source = emitter;
 const targetSource: BunWasm.Events.Source = new EventTarget();
 const values: Promise<unknown[]> = EventEmitter.once(emitter, key);
+const disposable = EventEmitter.addAbortListener(new AbortController().signal, listener);
+const dispose = disposable[Symbol("optional")];
+if (dispose !== undefined) dispose();
 const iterator: BunWasm.Events.Iterator = EventEmitter.on(emitter, key, { close: ["done"] });
 EventEmitter.once(new EventTarget(), "value");
 EventEmitter.getEventListeners(new EventTarget(), "value");
@@ -210,6 +213,7 @@ const id: number = asyncEmitter.asyncResource.asyncId();
 
 const invalid: [string, string][] = [
   ["listener value", 'emitter.on("event", 7);'],
+  ["absent disposal key", 'EventEmitter.addAbortListener(new AbortController().signal, () => {})[Symbol("never")]();'],
   ["prototype storage", 'EventEmitter.prototype._events["never"];'],
   ["prototype as initialized emitter", 'const value: BunWasm.Events.Emitter = EventEmitter.prototype;'],
   ["incomplete emitter source", 'const value: BunWasm.Events.Source = { on() { return emitter; } };'],
@@ -230,5 +234,141 @@ for (const [label, body] of invalid) {
     const result = check(body);
     expect(result.exitCode).not.toBe(0);
     expect(result.stdout.toString()).toContain("error TS");
+  });
+}
+
+function intrinsicControl(body: string): Promise<unknown> {
+  const factory = emitted.trim().replace(/;$/, "");
+  return runInNewContext(`const E = (${factory})({}); (async () => { ${body} })()`, {
+    AbortController, queueMicrotask,
+  });
+}
+
+test("error monitor preserves concat and does not consume the mutable array iterator", async () => {
+  const result = await intrinsicControl(`
+    const emitter = new E(), calls = [];
+    emitter.on(E.errorMonitor, value => calls.push(["monitor", value]));
+    emitter.on("error", value => calls.push(["error", value]));
+    const iterator = Object.getOwnPropertyDescriptor(Array.prototype, Symbol.iterator);
+    const concat = Array.prototype.concat;
+    const failure = new Error("iterator read");
+    let concats = 0, caught = false;
+    Array.prototype.concat = function () { concats++; return Reflect.apply(concat, this, arguments); };
+    Object.defineProperty(Array.prototype, Symbol.iterator, { configurable: true, get() { throw failure; } });
+    try { emitter.emit("error", 42); } catch (error) { caught = error === failure; }
+    finally {
+      Object.defineProperty(Array.prototype, Symbol.iterator, iterator);
+      Array.prototype.concat = concat;
+    }
+    return { calls, concats, caught };
+  `);
+  expect(result).toEqual({ calls: [["monitor", 42], ["error", 42]], concats: 1, caught: false });
+});
+
+test("error monitor retains concat species errors before listener delivery", async () => {
+  const result = await intrinsicControl(`
+    const emitter = new E(), calls = [];
+    emitter.on(E.errorMonitor, value => calls.push(["monitor", value]));
+    emitter.on("error", value => calls.push(["error", value]));
+    const species = Object.getOwnPropertyDescriptor(Array, Symbol.species);
+    const failure = new Error("species read");
+    let caught = false;
+    Object.defineProperty(Array, Symbol.species, { configurable: true, get() { throw failure; } });
+    try { emitter.emit("error", 42); } catch (error) { caught = error === failure; }
+    finally { Object.defineProperty(Array, Symbol.species, species); }
+    return { calls, caught };
+  `);
+  expect(result).toEqual({ calls: [], caught: true });
+});
+
+for (const hook of ["iterator", "species"]) {
+  test(`pending event retains shift delivery with a throwing ${hook}`, async () => {
+    const result = await intrinsicControl(`
+      const emitter = new E(), iterator = E.on(emitter, "value");
+      let observed = "pending", caught = false;
+      iterator.next().then(value => { observed = value; });
+      const target = ${hook === "iterator" ? "Array.prototype" : "Array"};
+      const key = Symbol.${hook};
+      const descriptor = Object.getOwnPropertyDescriptor(target, key);
+      const failure = new Error("hook read");
+      Object.defineProperty(target, key, { configurable: true, get() { throw failure; } });
+      try { emitter.emit("value", 42); } catch (error) { caught = error === failure; }
+      finally { Object.defineProperty(target, key, descriptor); }
+      await Promise.resolve();
+      await iterator.return();
+      return { observed, caught, listeners: emitter.eventNames() };
+    `);
+    expect(result).toEqual({ observed: { value: [42], done: false }, caught: false, listeners: [] });
+  });
+
+  for (const event of ["error", "close"]) {
+    test(`pending ${event} delivers before the original finish ${hook} hook`, async () => {
+      const result = await intrinsicControl(`
+        const emitter = new E(), iterator = E.on(emitter, "value", { close: ["close"] });
+        const rejection = new Error("event error"), failure = new Error("hook read");
+        let observed = "pending", caught = false;
+        iterator.next().then(value => { observed = value; }, error => { observed = error === rejection; });
+        const target = ${hook === "iterator" ? "Array.prototype" : "Array"};
+        const key = Symbol.${hook};
+        const descriptor = Object.getOwnPropertyDescriptor(target, key);
+        Object.defineProperty(target, key, { configurable: true, get() { throw failure; } });
+        try { emitter.emit("${event}", rejection); } catch (error) { caught = error === failure; }
+        finally { Object.defineProperty(target, key, descriptor); }
+        await Promise.resolve();
+        await iterator.return();
+        return { observed, caught };
+      `);
+      expect(result).toEqual({
+        observed: event === "error" ? true : { value: undefined, done: true, close: true },
+        caught: true,
+      });
+    });
+  }
+
+  for (const event of ["value", "close"]) {
+    test(`queued ${event} next retains shift without ${hook} access or a synchronous throw`, async () => {
+      const result = await intrinsicControl(`
+        const emitter = new E(), iterator = E.on(emitter, "value", { close: ["close"] });
+        emitter.emit("${event}", 42);
+        const target = ${hook === "iterator" ? "Array.prototype" : "Array"};
+        const key = Symbol.${hook};
+        const descriptor = Object.getOwnPropertyDescriptor(target, key);
+        const failure = new Error("hook read");
+        let pending, caught = false;
+        Object.defineProperty(target, key, { configurable: true, get() { throw failure; } });
+        try { pending = iterator.next(); } catch (error) { caught = error === failure; }
+        finally { Object.defineProperty(target, key, descriptor); }
+        const observed = await pending;
+        await iterator.return();
+        return { observed, caught };
+      `);
+      expect(result).toEqual({
+        observed: event === "value" ? { value: [42], done: false } : { value: undefined, done: true },
+        caught: false,
+      });
+    });
+  }
+}
+
+for (const mode of ["native", "fallback"]) {
+  test(`disposal has only its actual key and preserves cleanup in ${mode} symbol mode`, async () => {
+    const symbol = mode === "native" ? Symbol : Object.assign(
+      (description?: string) => Symbol(description),
+      { for: Symbol.for, asyncIterator: Symbol.asyncIterator },
+    );
+    const EventEmitter = runInNewContext(emitted, { Symbol: symbol, queueMicrotask })({});
+    const key = mode === "native" ? Symbol.dispose : Symbol.for("Symbol.dispose");
+    const controller = new AbortController();
+    let count = 0;
+    const handle = EventEmitter.addAbortListener(controller.signal, () => { count++; });
+    expect(Reflect.ownKeys(handle)).toEqual([key]);
+    expect(() => handle[Symbol("never")]()).toThrow(TypeError);
+    handle[key]();
+    controller.abort();
+    expect(count).toBe(0);
+    const already = EventEmitter.addAbortListener(controller.signal, () => { count++; });
+    already[key]();
+    await Promise.resolve();
+    expect(count).toBe(1);
   });
 }
