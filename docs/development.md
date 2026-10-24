@@ -61,7 +61,7 @@ printf 'console.log("hello from bun-wasm");\n' > index.ts
 
 1. Commit the change on the `wasm` branch inside `vendor/bun`. Keep it small: add `target_os = "wasi"` arms and host hooks.
 2. Run `scripts/export-patches.sh` to rewrite `patches/bun/*.patch`.
-3. Add a classified row and a section to [`docs/bun-patches.md`](bun-patches.md) in the same change. Record the upstream path and revision, what changed, and why.
+3. Add or update your own classified record under [`docs/bun-patches/`](bun-patches/) in the same change. Record the upstream path and revision, what changed, and why.
 
 [ADR 005](adr/005-patch-bun-minimally-and-keep-a-ledger.md) explains the policy.
 

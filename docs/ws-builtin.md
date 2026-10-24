@@ -30,7 +30,7 @@ commands through the machine's admission wrapper.
 
 Bun's own ws wrapper depends on private native WebSocket and HTTP server hooks.
 The portable published implementation can already use our shared Node APIs.
-Its [provenance](bun-patches.md#portable-ws-builtin) is separate from those
+Its [provenance](bun-patches/portable-ws-builtin.md#portable-ws-builtin) is separate from those
 original host adapters.
 
 ## Verify

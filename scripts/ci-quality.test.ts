@@ -3,10 +3,9 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import manifest from "../package.json";
-import webManifest from "../web/package.json";
+import { join } from "node:path";
+import { discoverChecks, automaticChecks, checkCommand, selectChecks } from "./test-checks";
+import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { qualityGates } from "./quality";
 import { inBatches, missingPackages, parseArchives, planArchives, prefetchArchive } from "../web/scripts/ci-browser-deps";
 
@@ -33,42 +32,23 @@ test("native checks share one conditional job and the cached target directory", 
 });
 
 test("native fixture smoke selects the typed runtime behavior without another build", () => {
-  const commands = Array.from(rust.matchAll(/^\s+bash scripts\/test\.sh (.+)$/gm), match => match[1]!.trim().split(/\s+/));
-  expect(commands).toEqual([["--no-build", "node-misc", "runtime-ts-url-decoder", "source-cache", "runtime-ts-small", "runtime-ts-sqlite", "sqlite-basic", "sqlite-params", "sqlite-errors", "sqlite-file", "cookie-api", "data-formats", "yaml-boxed-coercion", "engine-regexp-json-intl", "console-format", "node-console", "node-console-writable", "node-console-colors", "stack-overflow-console", "runtime-ts-console"]]);
+  expect(rust.match(/bun scripts\/test-checks\.ts native/g)).toHaveLength(1);
+  expect(checkCommand("native")).toEqual(["bash", join(import.meta.dir, "test.sh"), "--no-build"].concat(oldSelections().native.toSorted().map(path => path.slice("tests/fixtures/".length))));
   expect(rust).toContain('BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts');
   expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(2);
 });
 
-for (const { suite, owner } of [
-  { suite: "scripts/runtime-ts-small.test.ts", owner: "Code quality" },
-  { suite: "scripts/runtime-sqlite.test.ts", owner: "Web host" },
-]) {
-  test(`${suite} is discovered by exactly one blocking CI owner`, () => {
-    const root = fileURLToPath(new URL("../", import.meta.url));
-    const runtime = readFileSync(new URL("./check-runtime.sh", import.meta.url), "utf8");
-    const fixture = readFileSync(new URL("./test.sh", import.meta.url), "utf8");
-    const web = readFileSync(new URL("./test-web-host.sh", import.meta.url), "utf8");
-    expect(quality.match(/run: bun run quality --javascript/g)).toHaveLength(1);
-    expect(rust.match(/bash scripts\/test\.sh --no-build/g)).toHaveLength(1);
-    expect(fixture.match(/"\$root\/scripts\/check-runtime\.sh"/g)).toHaveLength(1);
-    expect(workflow.match(/run: bash \.\.\/scripts\/test-web-host\.sh --unit/g)).toHaveLength(1);
-    const routes = [
-      { job: "Code quality", cwd: root, source: manifest.scripts["quality:probes"] },
-      { job: "Rust workspace", cwd: root, source: runtime },
-      { job: "Web host", cwd: join(root, "web"), source: web + "\n" + webManifest.scripts.test },
-      { job: "Browser adapter package", cwd: root, source: manifest.scripts.test },
-    ];
-    const owners = routes.flatMap(({ job, cwd, source }) => {
-      const commands = Array.from(source.matchAll(/(?:^|\n)[ \t]*bun test\b([^\n]*)/g), match => match[1]!);
-      const selectors = commands.flatMap(command => command.trim().replaceAll('"', "").split(/\s+/));
-      expect(selectors.every(argument => /\.test\.[cm]?[jt]sx?$/.test(argument))).toBe(true);
-      return commands.filter(command => command.trim().replaceAll('"', "").split(/\s+/).some(argument =>
-        new Bun.Glob(resolve(cwd, argument.replaceAll('"', "").replaceAll("$root", root))).match(resolve(root, suite)),
-      )).map(() => job);
-    });
-    expect(owners).toEqual([owner]);
-  });
-}
+test("every migrated selection retains one blocking owner and the original local runtime set", () => {
+  expect(proveCheckMigration().deduplicated).toHaveLength(7);
+  expect(selectChecks("cmake")).toEqual(["scripts/cmake-cache.test.ts"]);
+  const checks = discoverChecks().map(check => check.path).concat(automaticChecks().map(check => check.path));
+  expect(new Set(checks).size).toBe(checks.length);
+  expect(selectChecks("quality")).toContain("scripts/runtime-ts-small.test.ts");
+  expect(selectChecks("web")).toContain("scripts/runtime-sqlite.test.ts");
+  expect(selectChecks("runtime")).not.toContain("scripts/runtime-emission.test.ts");
+  expect(workflow.match(/run: bash \.\.\/scripts\/test-web-host\.sh --unit/g)).toHaveLength(1);
+  expect(quality.match(/run: bun run quality --javascript/g)).toHaveLength(1);
+});
 
 test("Rust tests are compiled and run once, with Clippy covering test targets", () => {
   const script = readFileSync(new URL("./quality-rust.ts", import.meta.url), "utf8");
@@ -294,16 +274,16 @@ test("crypto declares the toolchain and CMake preflight as Cargo build inputs", 
 });
 
 test("merged main keeps its CMake and package identity checks with one owner each", () => {
-  expect(workflow.match(/bun test scripts\/cmake-cache.test.ts/g)).toHaveLength(1);
-  expect(workflow.match(/bun test scripts\/node-fs-readv.test.ts scripts\/node-fs-runtime-proc.test.ts scripts\/browser-build.test.ts/g)).toHaveLength(1);
+  expect(workflow.match(/bun scripts\/test-checks\.ts cmake/g)).toHaveLength(1);
+  expect(workflow.match(/bun scripts\/test-checks\.ts package-extra/g)).toHaveLength(1);
   expect(workflow.match(/^  rust:$/gm)).toHaveLength(1);
   expect(workflow).not.toContain("continue-on-error");
 });
 
 test("CMake preflight has one always-on lightweight owner, independent of native selection", () => {
-  expect(quality).toContain("run: bun test scripts/cmake-cache.test.ts");
+  expect(quality).toContain("run: bun scripts/test-checks.ts cmake");
   expect(quality).toContain("sudo apt-get install -y cmake ninja-build g++");
-  expect(quality).not.toMatch(/^\s+(?:if|needs):/m);
+  expect(quality).not.toMatch(/^ {4}(?:if|needs):/m);
   expect(rust).not.toContain("scripts/cmake-cache.test.ts");
 });
 
