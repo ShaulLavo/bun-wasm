@@ -41,10 +41,7 @@ compiler identification or ABI probes. Both the initial detection and each
 reconfiguration retain the 15-second process-tree deadline. Failed configures
 print stdout as well as stderr, so compiler-probe progress is not lost.
 
-This removes redundant compiler probes from the cache-guard tests. Main run
-`39443166670` timed out in a static C ABI archive probe, with `ar` in state D.
-The same suite passed locally with both deadline-wrapper versions, so the hosted
-stall's underlying cause is not established and is not attributed to the wrapper.
+This removes redundant compiler probes from the cache-guard tests. A hosted run once timed out in a static C ABI archive probe, with `ar` in state D. The cause of that stall is not established.
 The initial real compiler detection remains subject to host failures.
 
 The existing Rust job runs `bun run quality --native` only when native inputs
@@ -76,19 +73,24 @@ restores timestamps only for unchanged files and directories under the owned
 source/build-input roots. Changed, added or renamed inputs get a fresh time.
 This keeps a fresh checkout from rebuilding every embedded runtime or C archive,
 without hiding real edits. Symlinks are fingerprinted without modifying targets.
-Rustup, Bun downloads, pinned
-upstream sources, the fixed WASI SDK and the patched sysroot each have caches. The sysroot cache key
-includes the runner image and builder/dependency inputs; its existing receipt
-still verifies every tool and archive. Rust cache keys include upstream patches,
-third-party inputs, the WASI crypto toolchain, CMake preflight dependencies and
-native gate/build scripts. Cargo explicitly watches the crypto toolchain, and
-the timestamp receipt fingerprints it too. A source hash refreshes the cache
+Rustup, Bun downloads, pinned upstream sources, the fixed WASI SDK and the patched
+sysroot each have caches. The sysroot cache key includes the runner image and
+builder/dependency inputs; its existing receipt still verifies every tool and
+archive. The refined Cargo cache keeps upstream patches, third-party inputs, the
+WASI crypto toolchain, its CMake toolchain and guard, and Rust gate/build inputs.
+Cargo explicitly watches the crypto toolchain and CMake guard, and the timestamp
+receipt fingerprints those source files too. JSC-only CMake checks and Binaryen
+stay in a separate JSC prebuild cache. Its private Cargo target has its own cache
+identity, with the same C++/sysroot/toolchain inputs plus the Rust and Cargo inputs
+that can affect that target. A Rust-only edit therefore keeps the validated prebuild
+candidate while rebuilding the affected Cargo artifacts. The old full native key
+remains as a fallback while the refined layer proves reuse. A source hash refreshes each cache
 after crate or compiled process-request fixture edits, with a same-toolchain/input
 restore prefix for reuse.
 Cache logs show restored paths,
 keys, sizes and hits. A hit alone is not proof that Cargo reused build output.
 
-Moving native work to the PC or UpCloud requires an owner-approved runner or
+Moving native work to an external machine requires an approved runner or
 an authenticated dispatcher. CI does not silently skip those checks when no
 private executor is configured.
 
@@ -221,6 +223,23 @@ cache restore/save are separate; only a cache miss writes a complete snapshot
 after the launcher check passes. Keys identify inputs, never run IDs or attempts.
 Only quality writes the shared Bun download cache. Other jobs restore it.
 
+`native-cargo-v2` puts compatibility inputs before the Cargo and source hash.
+The restore prefix retains the OS, architecture, runner image, Rust toolchain,
+Cargo config, SDK and job configuration, upstream pins and patches, native C/C++
+sources and build scripts, and sysroot inputs. The workflow itself is hashed so
+an SDK pin or compiler-command change cannot select an incompatible v2 target.
+`Cargo.*` stays in the exact-key suffix. Cargo validates manifest, dependency,
+feature, profile, and Rust source fingerprints after a compatible prefix restore.
+The existing input-time check restores timestamps only for unchanged content.
+
+This namespace change cannot match old `native-cargo-v1` or `native-v4` entries.
+The first eligible run needs a new v2 snapshot unless the unchanged, narrower
+`native-v4` fallback matches. That fallback runs only when v2 restored nothing,
+so it cannot overlay a v2 prefix hit. Saves still follow all selected JSC checks
+and host output production, and exact hits do not save again. Later compatible
+main-run logs must show the actual restored key and compile counts before any
+savings claim. Historical cold and warm timings do not measure this change.
+
 To compare completed runs and keep timestamped cache/build evidence:
 
 ```sh
@@ -233,5 +252,5 @@ job start through its last job finish, excluding queue time and pauses between a
 Inspect `gh api --paginate repos/ShaulLavo/bun-wasm/actions/caches` before
 changing cache policy. Closed PR caches are isolated from later PRs but still
 consume the shared quota. Remove only identified obsolete entries, not live
-lanes or the main-branch toolchain/build caches. Process bundles are short-lived
+branches or the main-branch toolchain/build caches. Process bundles are short-lived
 run artifacts, not more entries in the repository's cache quota.

@@ -1,18 +1,25 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { runInNewContext } from "node:vm";
 
 function yaml() {
   const context = { Number, String, Boolean };
-  const internal = {
-    native: {},
-    require(name: string) {
-      const source = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url), "utf8");
-      return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`), context)(internal);
-    },
-  };
-  const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/formats.js", import.meta.url), "utf8");
-  return runInNewContext(source, context)(internal).YAML;
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-yaml-"));
+  function factory(name: string) {
+    const destination = join(directory, `${name}.js`);
+    const result = Bun.spawnSync(["node", new URL("./transpile-runtime.ts", import.meta.url).pathname,
+      new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url).pathname, destination]);
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+    return runInNewContext(readFileSync(destination, "utf8"), context);
+  }
+  try {
+    const internal = { native: {}, require: (name: string) => factory(name)(internal) };
+    return factory("formats")(internal).YAML;
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 function throwingPrimitive(sentinel: Error) {

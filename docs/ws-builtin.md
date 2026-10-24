@@ -24,13 +24,13 @@ scripts/generate-ws.sh
 ```
 
 The generator checks the package version and includes its MIT license. An
-optional output path lets a reviewer regenerate into scratch and compare with
+optional output path lets you regenerate into scratch and compare with
 `cmp`, without changing the checked-in file. Run generation and other heavy
 commands through the machine's admission wrapper.
 
 Bun's own ws wrapper depends on private native WebSocket and HTTP server hooks.
 The portable published implementation can already use our shared Node APIs.
-Its [provenance](bun-patches.md#portable-ws-builtin) is separate from those
+Its [provenance](bun-patches/portable-ws-builtin.md#portable-ws-builtin) is separate from those
 original host adapters.
 
 ## Verify
@@ -46,5 +46,5 @@ control. Standard browser and sandbox HMR gates exercise the existing preview
 WebSocket bridge too.
 
 The framework rows that previously stopped on the missing ws import are
-recorded after an offline matrix replay. The replay needs the Rollup wasm
-support from PR #8; the builtin does not supply that separate dependency.
+recorded after an offline matrix replay. The replay also needs the Rollup wasm
+support, which the builtin does not supply.

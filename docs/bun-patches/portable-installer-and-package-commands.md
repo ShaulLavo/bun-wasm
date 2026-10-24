@@ -1,0 +1,123 @@
+## Portable installer and package commands
+
+Class **Host feature**. Original adapters in `crates/bunwasm-runtime/src/install/`,
+`src/js/package_scripts.ts`, and `crates/bunwasm-cli/src/main.rs`. No upstream
+source is copied or changed by these adapters, apart from the version adaptation
+listed above. They use Bun's `src/glob/` walker,
+`src/semver/` parser, and the existing transpiler data parser from revision
+`9510e74152073d850a18758ca41114d8f214ffa6`.
+
+The installer checks `Group::has_skipped()` from Bun's
+`src/semver/SemverQuery.rs` before matching a registry range. The parser reports
+allocation errors through its result and records unrecognised tokens separately.
+A dist tag such as `latest` must reach tag resolution instead of matching a locked
+version as a wildcard.
+
+The manifest Accept value follows Bun's registry request contract, also checked
+by `test/cli/install/dummy.registry.ts` at that revision. Cache refresh uses the
+Cache-Control header, so it does not change content negotiation.
+
+Workspace discovery reads declared member manifests, resolves local dependencies
+relative to their declaring package, and creates filesystem links. The native
+installer retains its hoisted graph and tarball validation. Foreign lockfile
+migration is kept in a separate follow-up PR using this workspace graph.
+
+`bun update` resolves selected dependencies again, within their declared ranges
+unless `--latest` is supplied. Selected member updates clear their nested
+resolution pins before resolving the workspace graph. `bun x` prefers a local binary and otherwise
+installs into an atomically published cache directory. Concurrent cold installs
+have separate staging directories. Download cache writes also use unique temporary
+files and publish complete bytes through an atomic rename. Installed binaries use relative links so a
+published cache directory remains movable. Only ENOTSUP and EPERM from bin-link
+creation degrade to a warning; preparation failures and other errno values
+remain fatal. Required workspace links retain their original failure behavior.
+When a bin link is absent, the command adapters select the real installed entry
+through its package manifest, including scoped packages. These are original
+adapter changes, with no additional upstream source or patch. The playground
+shell dispatches its `bunx` alias through the same `bun x` command path.
+
+Default bunx bin-map selection follows Bun's first-valid-entry behavior in
+`src/runtime/cli/bunx_command.rs`, `get_bin_name_from_subpath`, at the Bun pin.
+Explicit bin names require an exact match. The host-engine import-meta hook
+reads the resolved main path after script expansion, matching the embedded engines. The local adapter preserves published
+cache use under `--no-install`. Member updates invalidate only the member's
+selected lock entries, leaving unrelated root pins intact.
+
+The package-script PATH adapter keeps the caller's explicit PATH, including an
+empty value. Only a missing PATH receives `/bin:/usr/bin`, matching the runtime's
+existing executable-search default. Ancestor package bins still precede it.
+This is an original adapter change. Native Bun controls preserve the explicit
+suffix but additionally inject a temporary Node proxy. The portable adapter does
+not inject that proxy and keeps deliberately restricted guest paths restricted.
+This repairs the immediate Node ENOENT branch measured in the Vite worker. It
+does not establish successful Vite dependency optimization; the explicit-PATH
+control still exceeded the unchanged 90-second deadline.
+
+The TypeScript package-script dispatcher runs JavaScript and TypeScript binaries
+inside the selected engine. It handles quoted arguments and environment
+assignments. Runtime entries preserve source-file precedence. Bare executables
+expanded from package scripts use installed bins and PATH; explicit relative
+paths address the file directly. Manifest bin fallback applies the installer's
+target validation and silently skips malformed entries before continuing to
+other packages. Host native Bun controls and rebuilt engine/page regressions
+cover command collisions and malformed declarations. These are original adapter
+changes rather than a copied shell implementation.
+Shell pipelines, redirections, command substitution, and native
+executables remain outside this adapter. Install lifecycle scripts and security
+scanner execution retain their existing limitations.
+
+`tests/fixtures/installer-gaps/` uses an in-process fixture registry and synthetic
+tarballs. It checks the header, workspace imports, a frozen reinstall, binary
+links, script argument forwarding, update ranges and `bun x`
+without public-registry access.
+
+The original `node-misc` fixture checks current process-provider failure paths.
+It requires a structured `ENOENT` or `ERR_NOT_SUPPORTED_IN_WASM` error when
+admission fails, or status 127 with the missing-program diagnostic when the host
+completes an unregistered program. Both asynchronous completion and synchronous
+failure are checked. Its source is TypeScript. The spawn-facade unit harness loads
+the real TypeScript command dispatcher with an explicitly empty filesystem.
+
+
+## Root string overrides
+
+Class **Host feature**, original adapters in
+`crates/bunwasm-runtime/src/install/overrides.rs`, `resolve.rs` and `mod.rs`.
+Comparison sources are Bun `src/install/lockfile/OverrideMap.rs`,
+`src/install/lockfile/override_selector.rs` and `src/semver/intersects.rs` at
+`9510e74152073d850a18758ca41114d8f214ffa6`, with local patched source at
+`d71508d31edf06765c12adf0df137ef531539f68`. No upstream implementation is copied
+or patched by this change.
+
+The adapter applies root string rules to root and transitive dependency edges.
+Version selectors use Bun's parser and `Group::intersects`, including scoped
+names. `Group::has_skipped` retains the portable installer's existing rejection
+of unrecognised tokens. Numeric overflow follows the existing parser's null set.
+There is no additional wildcard or numeric parser. Native Bun 1.4.4 controls
+cover disjoint selectors, replacement aliases and tags, stable pins, and frozen
+lock rejection after changes. Native Bun accepts some skipped-token selectors
+that the portable installer rejects. The fixture labels that distinction.
+
+Lock metadata keeps flat strings and version-selected `{".": "replacement"}`
+entries. The resolver preserves original dependency declarations, invalidates
+pins only for changed logical edge names, and compares override metadata even for
+production frozen installs. Nested object rules are explicitly unsupported.
+`tests/install/root-overrides.ts` uses only a local fixture registry and owns
+its child processes, listener and scratch directory.
+
+Explicit `alias@npm:target@range` selectors match the alias target identity and
+use the same range intersection, including scoped target names. Plain rules
+continue to exclude declared aliases. Root-relative `file:` and `link:`
+replacements retain the root origin; parent-local declarations are still rebased
+under their declaring package. Alias recursion carries the logical edge's lock
+lookup decision without invalidating a pin by its physical target name.
+Native Bun controls and resolver regressions cover these review corrections.
+
+
+## Classification
+
+| Patch or source | Class | Change |
+| --- | --- | --- |
+| [Portable installer and package command adapters](#portable-installer-and-package-commands) | Host feature | Original filesystem, lockfile and command adapters over Bun's matcher, parsers and semver. |
+
+[Ledger scope and pinned revisions](scope.md).

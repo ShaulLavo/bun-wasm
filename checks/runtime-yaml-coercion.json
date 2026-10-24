@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/yaml-coercion.test.ts",
+  "localRuntime": true
+}
