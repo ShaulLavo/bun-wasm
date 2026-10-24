@@ -3432,12 +3432,14 @@ response finish, then removes both listeners before invoking the callback. This
 completes callbacks when a Writable closes before finish, preserves ordinary
 finish ordering and avoids retaining the unused listener. TypeScript captures
 the narrowed callback in a local constant. Already-ended streams and repeated
-end calls retain their existing native branches. Shorthand callbacks forward the
-invocation receiver instead of capturing it, so already-ended streams receive the
-response while ordinary paired completion stays receiverless. This corrects a
-receiver mismatch introduced by this port, not a pre-existing main behavior. The
-fixture covers all three end overloads, both finish orders, already-ended callback
-receivers, listener cleanup and stream error identity.
+end calls retain their existing native branches. Shorthand callbacks are used
+directly, as upstream does, through a type guard that narrows the callable. The
+already-ended stream therefore receives the response and the caller's own function,
+so it can remove that function by identity, while ordinary paired completion stays
+receiverless. This corrects receiver and identity mismatches introduced by this
+port, not pre-existing main behavior. The fixture covers all three end overloads,
+both finish orders, already-ended callback receivers and removal by identity,
+listener cleanup and stream error identity.
 No transport implementation or dependency revision changes with this refinement.
 
 The `node:http2` factory registration in `builtins.js` is an **original host

@@ -114,6 +114,7 @@
     if (typeof value !== "string" && !Array.isArray(value)) throw invalid();
     return values.join(", ");
   }
+  function isCallback(value: unknown): value is (...args: unknown[]) => void { return typeof value === "function"; }
   function onStreamDrain(this: Http2Stream): void { responses.get(this)?.emit("drain"); }
   function onStreamTrailersReady(this: Http2Stream): void {
     const response = responses.get(this);
@@ -275,8 +276,8 @@
       return this.#stream.write(chunk, encoding, callback);
     }
     end(chunk?: unknown, encoding?: unknown, callback?: (...args: unknown[]) => void): this {
-      if (typeof chunk === "function") { const done = chunk; callback = function (this: unknown, ...args: unknown[]) { Reflect.apply(done, this, args); }; chunk = null; }
-      else if (typeof encoding === "function") { const done = encoding; callback = function (this: unknown, ...args: unknown[]) { Reflect.apply(done, this, args); }; encoding = "utf8"; }
+      if (isCallback(chunk)) { callback = chunk; chunk = null; }
+      else if (isCallback(encoding)) { callback = encoding; encoding = "utf8"; }
       const stream = this.#stream;
       if ((this.#state.closed || this.#state.ending) && this.#state.headRequest === stream.headRequest) {
         if (typeof callback === "function") process.nextTick(callback);

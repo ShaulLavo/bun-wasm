@@ -216,8 +216,28 @@ async function verifyAlreadyEnded(overload: EndOverload) {
   await closed;
   assert.equal(callbacks, 1);
 }
+async function verifyAlreadyEndedRemovable(overload: EndOverload) {
+  const stream = new ResponseStream({ autoDestroy: false });
+  const finished = new Promise<void>(resolve => stream.once("finish", resolve));
+  stream.end();
+  await finished;
+  const response = new Http2ServerResponse(stream);
+  const closed = new Promise<void>(resolve => response.once("close", resolve));
+  let callbacks = 0;
+  const done = () => { callbacks++; };
+  if (overload === "callback") response.end(done);
+  if (overload === "chunk-callback") response.end(null, done);
+  if (overload === "chunk-encoding-callback") response.end(null, "utf8", done);
+  assert.deepEqual(response.listeners("finish"), [done]);
+  assert.equal(response.removeListener("finish", done), response);
+  assert.equal(response.listenerCount("finish"), 0);
+  stream.destroy();
+  await closed;
+  assert.equal(callbacks, 0);
+}
 for (const overload of ["callback", "chunk-callback", "chunk-encoding-callback"] satisfies EndOverload[]) {
   await verifyAlreadyEnded(overload);
+  await verifyAlreadyEndedRemovable(overload);
 }
 console.log("http2 repeated end and already-ended stream lifecycle");
 
