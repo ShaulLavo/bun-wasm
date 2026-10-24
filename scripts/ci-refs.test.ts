@@ -35,7 +35,7 @@ function commit(message: string): string {
 
 beforeAll(() => {
   fixture = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-ci-refs-"));
-  git(["init", "-q"]);
+  git(["init", "-q", "-b", "main"]);
   writeVersion("0.0.39");
   writeFileSync(join(fixture, "README.fixture"), "old main\n");
   const eventBase = commit("old main");
