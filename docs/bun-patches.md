@@ -54,6 +54,7 @@ Each row has one class. A file with independent changes has separate rows.
 | [Missing executable errors](#missing-executable-errors) | Host feature | Original Bun/Node and native adapters consume eight-byte typed process/job completions, map seven portable startup errnos, and preserve failed Node streams. |
 | [Process-owned pipe adapters](#process-owned-pipe-adapters) | Host feature | SharedPipe-derived ring copying with original per-process publication, admission-validated EOF, reader relay and descriptor-transfer adapters. |
 | [Real shell consumer probes](#real-shell-consumer-probes) | Host feature | Original installed-package composition and contract probes adapted from bash-web acceptance commands, without copying a shell implementation. |
+| [On-demand preview registration](#on-demand-preview-registration) | Host feature | Original page adapter registers its independent preview service-worker scope only when readiness is requested. |
 | [Runtime-owned network consumer](#runtime-owned-network-consumer) | Host feature | Original per-process session wiring over Waffle's borrowed runtime network, with physical-stop cleanup and shared preview observation. |
 | [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
 | [Descriptor kinds and storage modes](#descriptor-kinds-and-storage-modes) | Host feature | Original Rust descriptor-kind adapters and page startup handling adopt the pinned Waffle contract without guessing pipe types or changing workspace names. |
@@ -3417,3 +3418,18 @@ receipt. Blocking CI selects it for JSC embedding, allocation, build and fixture
 inputs. The Rust job reuses its toolchain, sources and dependencies;
 it builds JSC once and executes both fixtures against that linked guest in the
 Node WASI host. QuickJS and host syntax checks are not JSC execution evidence.
+
+## On-demand preview registration
+
+`web/src/preview.ts` is an original bun-wasm adapter over the public
+`waffle/browser/preview` and `waffle/browser/service-worker` APIs at the unchanged
+Waffle pin `b20fad173ebaa225cb87c51776f35edaaafd4a40`. No upstream implementation
+was copied or changed. Its constructor no longer registers the preview scope.
+The first `ready` read registers that scope and caches the promise, including a
+failed or unsupported outcome. Existing callers await it before opening a preview.
+Module loading still registers its separate scope during page startup.
+
+`web/tests/browser-preview-loading{,-main}.ts` are original request regressions
+using the actual built service worker on Chromium and WebKit, at root and nested
+mounts. They reject a preview registration or second service-worker download
+before preview use and retain shared readiness and both eventual registrations.

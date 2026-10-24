@@ -509,6 +509,35 @@ Following item 9, the core cap is now 9,984 bytes gzip, leaving 335 bytes of mar
 gzip remains a whole-output measurement. The process and interrupt-rewriter lazy-load
 gates remain blocking and unchanged.
 
+## Initial preview download reduction
+
+Status: Approved. Consumer implementation on `initial-graph-next-20261024` is
+unmerged for independent parent review. Milestone 9 remains open.
+
+The demos now register their preview service-worker scope on the first `ready`
+request, rather than in the preview router constructor. The module-worker scope
+still registers during startup. Editor setup, Waffle ownership and pins, worker
+identities, and process-service activation are unchanged. This is disjoint from
+PR #141's HTML/CSS language-loading change; neither its page nor editor test was
+edited here.
+
+Fresh-process production HTTP checks on October 24, 2026, with one frozen
+qualified guest, reduce initial minified/gzip JS response bodies by
+21,675/8,005 bytes in web and 21,675/7,999 bytes in sandbox. Both fetch `sw.js`
+once rather than twice before the first command. A first preview fetches the
+second worker script later. Including that preview, eventual totals increase by
+35 minified bytes and 12 gzip bytes in web, and 35/14 bytes in sandbox. This is
+initial-download deferral, not an overall download or startup-speed claim.
+
+Root/nested Chromium and WebKit request regressions, actual guest preview/stop,
+editor durability/startup, split-worker, persistence and host checks pass. No
+native or guest build/download, timing window, publication or deployment ran.
+The unchanged initial filesystem worker alone remains 146,933 minified bytes and
+40,346 gzip bytes in web, above the runtime guide. Waffle owns that implementation;
+this change neither works around it nor closes the budget/startup acceptance.
+Evidence and reproducible request accounting are retained at
+`/work/reports/bun-wasm/initial-graph-next-20261024/`.
+
 ## References
 
 - `/work/reports/browser-shell-research/browser-runtime.md`: prior art, browser support, coupling
