@@ -3,6 +3,7 @@ mod io;
 mod local;
 mod migration;
 mod resolve;
+mod version;
 
 use std::{collections::BTreeSet, fs, path::Path, time::Instant};
 
@@ -74,6 +75,9 @@ fn execute(
     parser: &dyn Transpiler,
     registry_override: Option<io::Registry>,
 ) -> Result<()> {
+    if command == "pm" && args.first().map(String::as_str) == Some("version") {
+        return version::run(args.into_iter().skip(1), parser);
+    }
     let start = Instant::now();
     let mut opts = options(args)?;
     let member = local::root(parser)?;

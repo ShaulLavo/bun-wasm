@@ -63,6 +63,11 @@ try {
   await runtime.filesystem.mkdirp("/home/user");
   await runtime.filesystem.writeFile("/home/user/preopen-data", "ROOT_PREOPEN_OK");
   if (scenario?.fileCursor) await runtime.filesystem.writeFile("/home/user/inherited-cursor", "xxcursor!");
+  for (const [path, url] of Object.entries(scenario?.fileURLs ?? {})) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Fixture fetch failed: ${url} ${response.status}`);
+    await runtime.filesystem.writeFile(path, await response.text());
+  }
   await runtime.filesystem.flush();
   const service: ProcessService = await runtime.processes();
   const supervisor = await service.ready();

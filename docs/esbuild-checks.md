@@ -2,7 +2,7 @@
 
 These checks run the published `esbuild-wasm@0.25.12` package unchanged. Install
 `web` dependencies, build all three wasm artifacts and the native launcher, and
-build the playground before running them through the machine's heavy wrapper.
+build the playground before running them.
 
 ```sh
 MATRIX_CACHE=/path/to/offline-mirror bun tests/esbuild/run.mjs
@@ -33,11 +33,7 @@ contain these two records, in addition to any existing esbuild metadata:
 - `/esbuild-wasm`
 - `/esbuild-wasm/-/esbuild-wasm-0.25.12.tgz`
 
-An older shared mirror may lack them. The PR review-fix evidence retains the
-two official records and their content-addressed objects in
-`/work/reports/bun-wasm-esbuild-reviewfix-2026-10-16/offline-esbuild/`.
-Copy the shared mirror to private scratch, merge the additional `index.json`
+An older shared mirror may lack them. Record them from `https://registry.npmjs.org`
+(object names are SHA-256 digests). Copy the shared mirror to private scratch, merge the additional `index.json`
 entries, and copy their `objects/` files there. Set `MATRIX_CACHE` to that private
 copy. Do not overwrite the shared mirror or run the checks in recording mode.
-The recording came from `https://registry.npmjs.org` on 2026-10-16; object names
-are SHA-256 digests. The coordinator removes that evidence after review.
