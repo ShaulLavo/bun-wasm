@@ -170,8 +170,7 @@ Ignored signals do nothing; handled signals queue for the guest and preserve its
 Node/Bun listener registration and removal publish synchronously; removing the final handler
 restores default. Ordinary `process.exit(143)` remains an ordinary exit, not a SIGTERM result.
 SIGKILL always records 137 and revokes; it cannot be caught or ignored. Cooperative event-loop
-turns deliver registered handlers now; CPU-bound engine checkpoints are step 7a, not a dependency
-of unhandled default actions. A second Run/Ctrl+C stop request sends SIGKILL; no timer escalates.
+turns deliver registered handlers; unhandled default actions do not depend on CPU-bound engine checkpoints. A second Run/Ctrl+C stop request sends SIGKILL; no timer escalates.
 Jobs and pids have separate namespaces; foreground job termination leaves other background jobs
 alive, and ordinary parent exit does not kill children. The generic service imposes no
 four-active-child limit. Each wasm instance retains the module's 512 MiB memory limit, and Node
@@ -197,25 +196,9 @@ filesystem visibility between processes. The artifact-free
 `bun web/tests/browser-process.ts chromium|firefox|webkit` gate exercises the generic supervisor
 and real workers, including cooperative CPU-loop signal handling and background jobs.
 Add `--artifact` to use the existing Bun light WASM for orphan-lifetime and capacity checks;
-add `--benchmark` to compare cold and shared-module first output with the frozen pre-process
-baseline (commit `c7f08312`). The benchmark checks that both revisions use
-identical WASM bytes and owns its browser profiles, servers and scratch cleanup.
-
-### Spawn measurements
-
-On 2026-10-17, an M1 MacBook Air ran five
-starts per mode, browser and revision, comparing the process model against commit `c7f08312`. Network transfer is excluded. Cold starts compile fresh bytes with a unique custom
-section; shared starts reuse a compiled module. First output uses the same 1 ms shared-memory
-poll in both revisions. The reused WASM was 12,607,668 bytes, SHA-256
-`db607962302070c6584005d6f43d33dee4296f79657912722bbecb3ee733bbf3`.
-
-| Browser | Cold median, candidate / baseline (ms) | Shared-module median, candidate / baseline (ms) |
-| --- | ---: | ---: |
-| Chromium 156 | 67.320 / 69.570 | 32.630 / 32.555 |
-| Firefox 157 | 184.440 / 183.720 | 48.340 / 48.780 |
-| WebKit 27.2 | 90.560 / 89.160 | 39.640 / 40.680 |
-
-Startup is roughly unchanged in this bounded comparison; these are not cross-machine results
-or a speedup claim. No worker pool is implemented or enabled, so there is no pool timing.
-Each browser also passed 15 process checks, including eight orphan-survival cycles that recover
-all child slots and supervisor records, with zero active process workers after cleanup.
+add `--benchmark` to compare cold and shared-module first output between two revisions.
+The benchmark checks that both revisions use identical WASM bytes and owns its browser
+profiles, servers and scratch cleanup. Network transfer is excluded; no worker pool exists,
+so there is no pool timing. Each browser also passes 15 process checks, including eight
+orphan-survival cycles that recover all child slots and supervisor records, with zero
+active process workers after cleanup.

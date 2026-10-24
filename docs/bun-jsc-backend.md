@@ -2,32 +2,12 @@
 
 The first slice compiles Bun's 126-line [SemverObject.rs](https://github.com/oven-sh/bun/blob/9510e74152073d850a18758ca41114d8f214ffa6/src/semver_jsc/SemverObject.rs) unchanged against a small
 `bun_jsc` facade. Its public `Bun.semver.order` and `Bun.semver.satisfies` functions
-replace our duplicate bridge. The same upstream module also supplies
+come from that module. The same module also supplies
 `bun:internal-for-testing.semverIntersects`.
 
 This is a source-compatible subset for one module. It is not a drop-in replacement
 for the whole `bun_jsc` crate. In particular, it does not expose an engine heap or
 claim to run `bun_runtime` as a complete crate.
-
-## Why semver is the first slice
-
-Bun's Rust runtime depends on `bun_semver_jsc` alongside `bun_sys_jsc`,
-`bun_http_jsc`, and the other engine-facing crates. Its semver module makes a small,
-useful first test of the host-function boundary. It reads a call frame, converts
-strings, raises errors, returns values, and builds a function table. It needs no
-sockets, native threads, async callbacks, or platform-specific filesystem state.
-The upstream semver suite also has a seeded differential comparison with node-semver.
-
-The alternatives are much larger than their names suggest. `node_fs.rs` has 10,116
-lines, its binding module has another 527, and it depends on `VirtualMachine`,
-async filesystem tasks, argument parsers, and return-value adapters. `Blob.rs` has
-6,820 lines and owns streams, stores, generated classes, and ref-counted lifetimes.
-Even the 207-line HTTP header adapter depends on JSC's `FetchHeaders` class.
-Starting with these would test several unported systems at once.
-
-Our old semver bridge already called Bun's real parser. This change additionally
-uses Bun's real argument checks, parsing branches, error formatting, and result
-selection. It does not newly port the semver algorithm.
 
 ## Facade design
 
@@ -172,11 +152,9 @@ UTF-16 string containing unpaired surrogates. A general facade needs host value
 IDs and a reentrant host-call protocol, or an actual host `Engine` implementation.
 Changing only the Rust facade cannot provide those operations.
 
-An earlier spike on compiling Bun's real runtime found 23 prerequisite
-compiler errors before either `bun_jsc` or `bun_runtime` type-checked. This spike
-does not resolve those platform branches. It bypasses them by selecting a small
-engine-facing source module with its own manifest. Large modules still need
-both platform work and the missing value operations.
+This source selection bypasses the platform branches that stop `bun_jsc` and
+`bun_runtime` from type-checking. Large modules still need both platform work and
+the missing value operations.
 
 Remaining work groups for a further port, each with its exit check:
 
@@ -204,15 +182,6 @@ platform limitations regardless of which JavaScript engine supplies values.
 
 ## Verification and size
 
-When this work was verified, the shared vendor checkout was missing already
-committed Bun patch `0009`. All three initial full builds failed at
-`dev_server/mod.rs:275` because `BundleV2::finish_wasi_dev_server` was absent.
-Verification therefore used a private vendor worktree at the same pinned HEAD with
-the existing patch applied. The semver source, tests, generated code, and
-dependency inputs are unchanged, and no new vendor patch is introduced. The shared
-checkout has since received patch `0009` (2026-10-16), so rebuilds from it need no
-workaround.
-
 Run the focused probe after building all three artifacts:
 
 ```sh
@@ -224,69 +193,25 @@ The fixture covers valid and invalid versions, prereleases, build metadata,
 Unicode, intersections, argument counts, coercion order, thrown-object identity,
 and 500 consecutive calls. A separate fixture replaces global `gc` with a user
 wrapper and verifies that `Bun.gc` still calls the captured host capability.
-All three engine fixture gates pass with 89 passed
-and 0 failed per engine, including this new fixture.
+`scripts/test.sh`, `scripts/test.sh --engine jsc` and `scripts/test.sh --engine browser`
+each pass 89 fixtures with 0 failures.
 
-The optimized artifact sizes are:
-
-| Artifact | Captured baseline bytes | Rebuilt bytes | Change |
-| --- | ---: | ---: | ---: |
-| `bun.wasm`, QuickJS | 10,859,284 | 10,867,162 | +7,878 |
-| `bun-jsc.wasm` | 46,219,559 | 46,232,098 | +12,539 |
-| `bun-browser.wasm` | 10,138,476 | 10,144,959 | +6,483 |
-
-These are whole-artifact deltas against the captured pre-change binaries. They
-include the facade, the intersection hook, the patch version bump, and resulting
-link layout changes. The retained comparison results record the SHA256 of each
-artifact. They do not isolate the size of each individual function.
+The optimized artifacts are `bun.wasm` (QuickJS) at 10,867,162 bytes,
+`bun-jsc.wasm` at 46,232,098 bytes, and `bun-browser.wasm` at 10,144,959 bytes.
 No speed claim is made. Measure the string copies before using this design for
 large buffers.
 
-All required gates pass on this branch:
-
-| Command | Result |
-| --- | --- |
-| `scripts/test.sh` | 89 passed, 0 failed |
-| `scripts/test.sh --engine jsc` | 89 passed, 0 failed |
-| `scripts/test.sh --engine browser` | 89 passed, 0 failed |
-| `bash scripts/test-bun-jsc-backend.sh` | Two focused fixtures pass on every engine; inventory matches |
-| `scripts/test-web.sh` | Type check, 16 unit tests, CLI networking, Chromium and WebKit checks pass |
-| `cd site && bun install --frozen-lockfile && bun run build` | Pass |
-| `node sandbox/tests/hmr-check.mjs <local site URL>` | All six browser/engine runs pass |
-
 The targeted upstream selection is `cli/install/semver.test.ts` and
 `regression/issue/08040.test.ts`, run through `scripts/bun-suite.sh` with
-`--network loopback --jobs 1` and the pinned supplemental dependencies.
-The suite revision, runner, dependency hashes, and 15-second file and 2-second
-test limits match before and after.
+`--network loopback --jobs 1` and the pinned supplemental dependencies. QuickJS,
+JSC and the browser host each pass 346 tests, fail 5, and time out on none. The five
+failures are package-manager cases: `--lockfile-only`, `bun pm version`, and the
+diagnostic for an invalid range when the package exists.
 
-| Engine | Before passing tests | After passing tests | After failing tests | Timeouts |
-| --- | ---: | ---: | ---: | ---: |
-| QuickJS | 1 | 346 | 5 | 0 |
-| JSC | 1 | 346 | 5 | 0 |
-| Browser host | 1 | 346 | 5 | 0 |
-
-Before, the semver file fails to load because `semverIntersects` is missing.
-The runner records that as one failure and one error, with no tests registered
-from that file. After, it records 345 passing tests and five package-manager
-failures there. The separate regression still contributes one passing test.
-Fully passing files remain one of two. These are newly reachable passing cases,
-not 345 independent bugs fixed by changing the parser.
-
-The five remaining cases cover `--lockfile-only`, `bun pm version`, and the
-diagnostic for an invalid range when the package exists. They fail on every
-engine and were open when this was measured.
-
-## Recommendation
+## Next step
 
 Proceed module by module for host functions whose inputs and outputs are plain
-data. Keep the source unchanged where possible and extend the facade only when
-the next real module requires it. The unchanged semver bridge is a useful first
-slice, and its internal intersection function removes a real upstream test blocker.
+data, keeping the source unchanged where possible. Wholesale replacement of
+`bun_jsc` over today's `Engine` trait is out of scope: the next design step is a
+rooted-value adapter with a host-engine implementation and GC and reentrancy tests.
 
-Do not attempt a wholesale replacement of `bun_jsc` over today's `Engine` trait.
-The next design step is a rooted-value adapter with a host-engine
-implementation and GC/reentrancy tests. Only after that works should this track
-commit to async `node:fs` or `Bun.file`. Until then, track 1's JavaScript builtins
-and bounded plain-data Rust modules give useful progress without pretending the
-JSC memory model is portable.

@@ -247,10 +247,10 @@ installs its public `JS_SetInterruptHandler` through rquickjs's interrupt API,
 without changing upstream QuickJS, amortizing host calls across eight ordinary
 engine polls (about 80,000 backedges/calls). Neither engine callback enters JS.
 
-Handled signals wait for the next ordinary event-loop turn, matching Node. An
-earlier design dispatched them inside engine callbacks; review rejected that
-because QuickJS also polls during native regexp operations, and reentry can break
-native borrowed state or runtime timer invariants. No interpreter-specific
+Handled signals wait for the next ordinary event-loop turn, matching Node. Dispatching
+them inside engine callbacks is not possible because QuickJS also polls during
+native regexp operations, and reentry can break native borrowed state or runtime
+timer invariants. No interpreter-specific
 reentry hook or runtime critical-section suppression is needed. The original
 `crates/bunwasm-runtime/src/js/{process.js,process_signals.ts}` adapter serializes cooperative dispatch,
 including recursive broken-pipe handling. Default signals already have an
@@ -289,9 +289,9 @@ and Filecoin's `fvm-wasm-instrument` use internal mutable globals to avoid expen
 host calls. Our countdown counts cancellation checkpoints rather than instruction gas, does
 not meter blocks, and traps only after the supervisor has selected signal death.
 
-`waffle/tests/fixtures/interrupt-browser-loops.ts` adapts our own spike-5 `loops.wat` into a
+`waffle/tests/fixtures/interrupt-browser-loops.ts` adapts our own `loops.wat` into a
 readable TypeScript binary generator, preserving its independent teardown-only rescue word.
-`interrupt-browser-workload.ts` freezes our own spike-5 `workload.c`/`workload.wasm` (2026-10-16),
+`interrupt-browser-workload.ts` freezes our own `workload.c`/`workload.wasm`,
 not third-party source. Source SHA-256:
 `d3eebbef9920faf0d12f3d2220e0425b80a9fc71f1919206103b3277724ec74c`; binary SHA-256:
 `08c117f62e1323401b32ad116c85eab45765a6cffedd68970547bbad462406c8`. It was compiled with wasi-sdk
@@ -564,7 +564,7 @@ See [the ws builtin](ws-builtin.md) for generation and verification.
 
 ## TCP and IP helpers
 
-The 2026-10-18 empty-EOF correction in `node_net.js` is an original **Host
+The empty-EOF handling in `node_net.js` is an original **Host
 feature** adapter. An accepted socket with no buffered bytes must process its
 readable EOF before its writable side has finished. Waiting for both sides
 creates a cycle with Duplex's automatic write-side completion. The adapter now
@@ -795,7 +795,7 @@ All other retained upstream files are unchanged.
 
 ## App compatibility fixtures
 
-`scripts/app-matrix/apps.mjs` contains original minimal projects that use published framework APIs. The dependency versions in that file identify the npm upstream revisions. No template source or upstream implementation is copied or adapted. The runner, registry recorder, network namespace wrapper, shared assertions/classifier, and browser driver are original bun-wasm host adapters. The namespace wrapper uses Linux user/network namespaces without changing any upstream source. Retained diagnostic fixtures under `scripts/app-matrix/review-evidence/` are unmodified logs from the pinned packages in the 2026-10-15 census, including Next 15.5.6, Prisma 6.17.1, Vite 7.1.12 and Rollup 4.64.7; they are regression inputs, not adapted implementations.
+`scripts/app-matrix/apps.mjs` contains original minimal projects that use published framework APIs. The dependency versions in that file identify the npm upstream revisions. No template source or upstream implementation is copied or adapted. The runner, registry recorder, network namespace wrapper, shared assertions/classifier, and browser driver are original bun-wasm host adapters. The namespace wrapper uses Linux user/network namespaces without changing any upstream source. Retained diagnostic fixtures under `scripts/app-matrix/review-evidence/` are unmodified logs from the pinned packages, including Next 15.5.6, Prisma 6.17.1, Vite 7.1.12 and Rollup 4.64.7; they are regression inputs, not adapted implementations.
 
 `classify.ts` is the original classifier, converted from `classify.mjs` at bun-wasm
 revision `9a39a9ad5d5ca191e2020f68ea6fbff4af9837b9`. Class **Host feature**, an
@@ -1532,7 +1532,7 @@ Bootstrap captures its default stack formatter identity for this adapter.
 An installed user formatter stays authoritative; the runtime's own default
 frame-only formatter still receives the Console Trace header.
 
-### WebCrypto review corrections
+### WebCrypto adapter
 
 The original host adapter captures SubtleCrypto and its key constructors before bootstrap
 replaces globals. The browser engine exposes that same provider; QuickJS and wasm JSC use
@@ -1542,7 +1542,7 @@ before allocating key material. The ECDSA adapter left-pads short P-384 prehashe
 preserving the integer defined by ECDSA while meeting ecdsa 0.16.9's prehash input bound.
 No upstream source was copied or changed for these corrections.
 
-### Node key review corrections
+### Node key adapter
 
 Class **Host feature**. The original `crypto_host_keys.js` adapter retains the browser's
 native provider and connects its asynchronous keys to synchronous Node key records. It
@@ -1926,13 +1926,13 @@ hooks. The original TCP adapter defers socket-destroy completion to the check
 phase so the completed request stream closes before its socket, as in Node.
 `net-http-close-order` compares this order unchanged on Node and all engines.
 
-The 2026-10-18 server refinement uses original typed adapters for Bun response
+The server streaming code is original typed adapters for Bun response
 streaming and fetch-body abort cleanup. Bun Response streams send headers and
 body chunks without waiting for EOF. Each socket write finishes before another
 chunk is read. Fixed byte bodies retain their existing Content-Length path.
 These adapters use Bun's unchanged tests at
 `5e0baa66516f3af00b008cdf1521c681317741e8` as behavioral references.
-The review refinement uses native Bun 1.4.2 as a behavioral reference. Unknown-
+The response adapters use native Bun 1.4.2 as a behavioral reference. Unknown-
 length Bun response streams ignore a supplied Content-Length and use chunked
 framing. The response reader owns its EOF and close callbacks, which cancel it
 with native Bun's undefined disconnect reason and leave externally locked
@@ -1982,7 +1982,7 @@ copied. The [deadline contract](browser-deadlines.md) describes the controls.
 Browser network teardown uses owned ChildProcess handles, not Linux-only `/proc`
 paths. Test assertions are unchanged.
 The original `env.sh` host-cache adapter exports `PLAYWRIGHT_BROWSERS_PATH` only
-when it is unset and the maintainer's `/work/cache/ms-playwright` exists. It never downloads
+when it is unset and the cache directory named in `env.sh` exists. It never downloads
 browsers; hosts without that directory retain Playwright's native cache lookup,
 and explicit overrides (including `0` and empty) are preserved. The isolated
 `web/tests/toolchain-env.test.ts` probes cover the default and those overrides.
@@ -2625,8 +2625,7 @@ races instead of reporting false EOF; output flushes non-newline writes without 
 accepted bytes. These are host-composition adapters, not
 Wasmtime patches or copied Wasm modules. WASI record layouts and constants are interface
 definitions, not copied wasi-libc code. No Bun, wasi-libc or
-Wasmtime implementation is copied or patched by these new modules; the previously documented
-Wasmtime `proc_exit` behavior and upstream revision remain in [Browser process service](#browser-process-service).
+Wasmtime implementation is copied or patched by these new modules; the Wasmtime `proc_exit` behavior and upstream revision remain in [Browser process service](#browser-process-service).
 
 ## Module preparation benchmark host
 
