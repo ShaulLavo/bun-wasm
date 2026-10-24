@@ -29,7 +29,7 @@ test("native checks share one conditional job and the cached target directory", 
 
 test("native fixture smoke selects the typed runtime behavior without another build", () => {
   const commands = Array.from(rust.matchAll(/^\s+bash scripts\/test\.sh (.+)$/gm), match => match[1]!.trim().split(/\s+/));
-  expect(commands).toEqual([["--no-build", "node-misc", "runtime-ts-url-decoder", "runtime-ts-small", "cookie-api", "data-formats", "yaml-boxed-coercion", "engine-regexp-json-intl"]]);
+  expect(commands).toEqual([["--no-build", "node-misc", "runtime-ts-url-decoder", "runtime-ts-small", "runtime-ts-host-crypto-keys", "cookie-api", "data-formats", "yaml-boxed-coercion", "engine-regexp-json-intl"]]);
   expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
 });
 
@@ -360,4 +360,14 @@ test("Binaryen pin and installer identity participate in tool, native and JSC ca
   expect(keys).toHaveLength(5);
   expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz");
   for (const key of keys) expect(key).toContain("'scripts/ci-binaryen.ts'");
+});
+
+
+test("host-key controls have exactly one normal blocking discovery owner", () => {
+  const web = readFileSync(new URL("./test-web-host.sh", import.meta.url), "utf8");
+  const preflight = readFileSync(new URL("./check-runtime.sh", import.meta.url), "utf8");
+  const manifest = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+  expect(web.match(/crypto-host-keys\.test\.ts/g)).toHaveLength(1);
+  expect(preflight).not.toContain("crypto-host-keys.test.ts");
+  expect(manifest).not.toContain("crypto-host-keys.test.ts");
 });
