@@ -76,8 +76,87 @@ async function controls(source: string) {
   return JSON.parse(JSON.stringify(await processControls(events, factory, assert)));
 }
 
+type ProcessSnapshot = Awaited<ReturnType<typeof processControls>>;
+
+function setupSnapshot(source: string): ProcessSnapshot {
+  const emitterCalls: string[][] = [];
+  function EventEmitter(this: object) { emitterCalls.push(Reflect.ownKeys(this).map(String)); }
+  const internal = {
+    native: {
+      platformInfo: { version: "test", revision: "test", arch: "wasm32" },
+      env: () => ({}), argv: () => ["bun", "fixture.ts"], execPath: () => "/bin/bun",
+      hostSignal(number: number, mode: number) { assert.deepEqual([number, mode], [13, 1]); return 0; },
+    },
+    nextTick() { throw new Error("setup must not schedule lifecycle work"); },
+    require(name: string) {
+      if (name === "events") return EventEmitter;
+      if (name === "process_signals") return () => () => false;
+      throw new Error("setup must not load " + name);
+    },
+  };
+  const factory: unknown = runInContext(source, createContext({ Error, TypeError }));
+  assert.ok(typeof factory === "function");
+  const guest: unknown = Reflect.apply(factory, undefined, [internal]);
+  assert.ok(guest !== null && typeof guest === "object");
+  const keys = Reflect.ownKeys(guest);
+  const descriptors = Object.fromEntries(keys.map(key => {
+    const descriptor = Object.getOwnPropertyDescriptor(guest, key)!;
+    return [String(key), { enumerable: descriptor.enumerable, configurable: descriptor.configurable,
+      writable: descriptor.writable, getter: typeof descriptor.get, setter: typeof descriptor.set, value: typeof descriptor.value }];
+  }));
+  assert.deepEqual(emitterCalls, [[]]);
+  return { controls: [], shapes: { process: keys.map(String) }, coercions: [], descriptors, emitterCalls };
+}
+
+function expectProcessSnapshot(converted: ProcessSnapshot, baseline: ProcessSnapshot) {
+  const keys = baseline.shapes.process!;
+  expect(keys).not.toContain("execve");
+  expect(Object.hasOwn(baseline.descriptors, "execve")).toBe(false);
+  const kill = keys.indexOf("kill");
+  expect(kill).toBeGreaterThan(0);
+  expect(keys[kill - 1]).toBe("abort");
+  const expectedKeys = keys.slice(0, kill).concat(["execve"], keys.slice(kill));
+  const execve = { configurable: true, enumerable: true, writable: true,
+    getter: "undefined", setter: "undefined", value: "function" } satisfies ProcessSnapshot["descriptors"][string];
+  expect(converted.descriptors.execve).toEqual(execve);
+  expect(converted.shapes.process).toEqual(expectedKeys);
+  expect(converted).toEqual({
+    ...baseline,
+    shapes: { ...baseline.shapes, process: expectedKeys },
+    descriptors: { ...baseline.descriptors, execve },
+  });
+}
+
+test("isolated process setup preserves snapshots apart from the authorized execve shape", () => {
+  expectProcessSnapshot(setupSnapshot(emitted), setupSnapshot(original));
+});
+
+const snapshotMutations: readonly [string, (snapshot: ProcessSnapshot) => void][] = [
+  ["missing execve descriptor", snapshot => { delete snapshot.descriptors.execve; }],
+  ["changed execve descriptor", snapshot => { snapshot.descriptors.execve!.enumerable = false; }],
+  ["changed execve key order", snapshot => {
+    const keys = snapshot.shapes.process!;
+    const index = keys.indexOf("execve");
+    keys.splice(index, 1);
+    keys.splice(index + 1, 0, "execve");
+  }],
+  ["unapproved own key", snapshot => { snapshot.shapes.process!.push("unapproved"); }],
+  ["unrelated descriptor", snapshot => { snapshot.descriptors.title!.writable = false; }],
+  ["lifecycle result", snapshot => { snapshot.controls.push("unapproved"); }],
+  ["coercion result", snapshot => { snapshot.coercions.push("unapproved"); }],
+  ["emitter identity result", snapshot => { snapshot.emitterCalls.push([]); }],
+];
+for (const [name, mutate] of snapshotMutations) {
+  test(`snapshot adaptation rejects ${name}`, () => {
+    const baseline = setupSnapshot(original);
+    const converted = setupSnapshot(emitted);
+    mutate(converted);
+    assert.throws(() => expectProcessSnapshot(converted, baseline));
+  });
+}
+
 test("original and converted factories preserve lifecycle, identity, descriptors and coercions", async () => {
-  expect(await controls(emitted)).toEqual(await controls(original));
+  expectProcessSnapshot(await controls(emitted), await controls(original));
 });
 
 const mutations: readonly [string, string, string][] = [
