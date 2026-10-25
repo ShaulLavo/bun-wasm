@@ -3,4 +3,13 @@ name = "bunwasm-hermes"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The Hermes VM (wasm32-wasip1, hermes/build.sh) behind bun-wasm's C shim (cpp/shim.cpp); bunwasm-runtime's engine-hermes builds on it"
+description = "The Hermes VM (wasm32-wasip1, hermes/build.sh) behind bun-wasm's C shim (cpp/shim.cpp)"
+
+[features]
+# Link wasi-libc's mmap, signal and getpid emulation, for binaries without bunwasm-posix
+# (examples/smoke.rs).
+standalone = []
+
+[[example]]
+name = "smoke"
+required-features = ["standalone"]

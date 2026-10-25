@@ -20,11 +20,11 @@ const jscFiles = new Set([
   "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/ci-binaryen.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
 ]);
 
-// The opt-in Hermes variant builds only when its own inputs or the toolchain pins change.
+// The opt-in Hermes library builds only when its own inputs or the toolchain pins change.
 const hermesDirectories = ["hermes/", "crates/bunwasm-hermes/"];
 const hermesFiles = new Set([
-  "crates/bunwasm-runtime/src/engine_hermes.rs", "scripts/build-hermes.sh", "scripts/build-bun-hermes.sh",
-  "scripts/ci-changes.ts", "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/ci-binaryen.ts", "rust-toolchain.toml",
+  "scripts/build-hermes.sh", "scripts/ci-changes.ts", "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/ci-binaryen.ts",
+  "rust-toolchain.toml",
 ]);
 
 const webGuestDirectories = [
@@ -44,7 +44,6 @@ const webGuestFiles = new Set([
 ]);
 const engineSpecificFiles = new Set([
   "crates/bunwasm-runtime/src/engine_quickjs.rs", "crates/bunwasm-runtime/src/engine_host.rs",
-  "crates/bunwasm-runtime/src/engine_hermes.rs",
 ]);
 
 function sharedWebGuestInput(path: string): boolean {

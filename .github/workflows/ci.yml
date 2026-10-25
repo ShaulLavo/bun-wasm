@@ -579,7 +579,7 @@ jobs:
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}
 
   hermes:
-    name: Hermes engine (opt-in)
+    name: Hermes library (opt-in)
     needs: quality
     if: needs.quality.outputs.hermes == 'true'
     runs-on: ubuntu-latest
@@ -692,16 +692,21 @@ jobs:
           key: hermes-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('hermes/**', 'Cargo.*', 'crates/**', 'patches/**', 'third_party/**', 'rust-toolchain.toml', 'env.sh') }}
           restore-keys: |
             hermes-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-
-      - name: Lint the Hermes engine for wasm32-wasip1
+      - name: Lint the Hermes crate for wasm32-wasip1
         run: |
           source env.sh
-          export WASI_SDK="$WASI_SDK_PATH" CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-self-contained=no -L native=$BUN_WASM_SYSROOT/lib/wasm32-wasip1"
-          cargo clippy --locked --release -j "$JOBS" --target wasm32-wasip1 -p bunwasm-runtime -p bunwasm-hermes \
-            --no-default-features --features bunwasm-runtime/engine-hermes --no-deps -- -D warnings
-      - name: Build dist/bun-hermes.wasm and the native launcher
+          export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-self-contained=no -L native=$BUN_WASM_SYSROOT/lib/wasm32-wasip1"
+          cargo clippy --locked --release -j "$JOBS" --target wasm32-wasip1 -p bunwasm-hermes --features standalone \
+            --examples --no-deps -- -D warnings
+      - name: Install pinned Wasmtime
         run: |
-          bash scripts/build-bun-hermes.sh
-          source env.sh
-          cargo build --release --locked -j "$JOBS" -p bunwasm-host
-      - name: Hermes smoke tests
-        run: bash scripts/test-hermes.sh
+          archive="$RUNNER_TEMP/wasmtime.tar.xz"
+          trap 'rm -f "$archive"' EXIT
+          curl --fail --location --silent --show-error \
+            https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/wasmtime-v49.0.3-x86_64-linux.tar.xz \
+            -o "$archive"
+          echo "4001225413f208345b980525f31c4080e1873808b38d0ddc7918497340667fbb  $archive" | sha256sum --check
+          mkdir -p "$WASM_TOOLS/wasmtime"
+          tar -xJf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasmtime"
+      - name: Hermes library smoke test under wasmtime
+        run: bash hermes/smoke.sh

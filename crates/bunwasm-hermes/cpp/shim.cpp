@@ -1,6 +1,6 @@
-// bun-wasm's C interface to the Hermes VM (hermes::vm::Runtime), shaped like
-// bunwasm-runtime's Engine trait (src/engine_hermes.rs). One runtime per
-// process, single-threaded.
+// bun-wasm's C interface to the Hermes VM (hermes::vm::Runtime), covering the
+// operations of bunwasm-runtime's Engine trait (docs/hermes-engine.md). One
+// runtime per process, single-threaded.
 //
 // Values cross as `bh_value` handles: indices into a slot table whose entries
 // are GC roots (a custom roots function, as API/hermes_abi/hermes_vtable.cpp
@@ -38,7 +38,7 @@ namespace hbc = hermes::hbc;
 
 typedef uint32_t bh_value;
 
-// Implemented in Rust (src/engine_hermes.rs).
+// Implemented by the embedder (examples/smoke.rs).
 extern "C" bool bunhermes_host_call(
     uint32_t id,
     bh_value self,

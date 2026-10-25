@@ -1,6 +1,6 @@
 ### Hermes for WASI
 
-File `hermes/hermes-wasi.patch`, applied by `hermes/fetch-hermes.sh` to facebook/hermes at `c36356f416ee19bb0d54c2e7ecb3c5fb0538a065` (2026-10-23, "Move isCachedUsingEpoch to HiddenClass (#1939)"). It starts from the direct wasi-sdk port proven in the Hermes spike (`/work/reports/bun-wasm-hermes-spike/direct-wasi.patch`, SHA-256 `a81910c0…`), without the spike's CLI-only changes (`tools/hermes`, `spike_syscalls.cpp`), plus the bun-wasm hunks marked below. Only the opt-in Hermes variant (`scripts/build-bun-hermes.sh`) builds it.
+File `hermes/hermes-wasi.patch`, applied by `hermes/fetch-hermes.sh` to facebook/hermes at `c36356f416ee19bb0d54c2e7ecb3c5fb0538a065` (2026-10-23, "Move isCachedUsingEpoch to HiddenClass (#1939)"). It starts from the direct wasi-sdk port proven in the Hermes spike (`/work/reports/bun-wasm-hermes-spike/direct-wasi.patch`, SHA-256 `a81910c0…`), without the spike's CLI-only changes (`tools/hermes`, `spike_syscalls.cpp`), plus the bun-wasm hunks marked below. Only the opt-in Hermes build (`scripts/build-hermes.sh`) applies it; default builds never fetch Hermes.
 
 | Hermes file | Class | Change | What breaks without it |
 | --- | --- | --- | --- |

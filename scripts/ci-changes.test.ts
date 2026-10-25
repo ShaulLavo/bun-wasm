@@ -24,7 +24,7 @@ test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src
   expect(needsRust([path])).toBe(false);
 });
 
-test.each(["hermes/hermes-wasi.patch", "hermes/build.sh", "crates/bunwasm-hermes/cpp/shim.cpp", "crates/bunwasm-runtime/src/engine_hermes.rs", "scripts/build-bun-hermes.sh"])("Hermes input %s selects the Hermes job", path => {
+test.each(["hermes/hermes-wasi.patch", "hermes/build.sh", "hermes/smoke.sh", "crates/bunwasm-hermes/cpp/shim.cpp", "crates/bunwasm-hermes/examples/smoke.rs", "scripts/build-hermes.sh"])("Hermes input %s selects the Hermes job", path => {
   expect(needsHermes([path])).toBe(true);
 });
 
@@ -32,8 +32,8 @@ test.each(["crates/bunwasm-runtime/src/lib.rs", "crates/bunwasm-runtime/src/engi
   expect(needsHermes([path])).toBe(false);
 });
 
-test("the Hermes engine file alone needs no JSC or web-guest build", () => {
-  expect(needsJsc(["crates/bunwasm-runtime/src/engine_hermes.rs"])).toBe(false);
+test("Hermes library inputs need no JSC or web-guest build", () => {
+  expect(needsJsc(["hermes/build.sh", "crates/bunwasm-hermes/cpp/shim.cpp"])).toBe(false);
 });
 
 test("the complete change list includes native inputs after any number of JavaScript paths", () => {

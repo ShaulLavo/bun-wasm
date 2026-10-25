@@ -4,8 +4,7 @@
 //! (files, clocks, randomness, hashing, URL parsing, networking). The public
 //! Bun/Node/Web APIs are JS polyfills in `src/js/`, built on the `native`
 //! object from [`natives`]. The JavaScript engine sits behind the [`Engine`]
-//! trait: QuickJS-ng by default, JavaScriptCore with the `engine-jsc` feature, Hermes with
-//! `engine-hermes`.
+//! trait: QuickJS-ng by default, JavaScriptCore with the `engine-jsc` feature.
 
 #![cfg_attr(target_os = "wasi", feature(wasi_ext))]
 #![feature(io_error_more)]
@@ -24,11 +23,7 @@ mod encoding;
 pub mod engine;
 #[cfg(feature = "engine-host")]
 pub mod engine_host;
-#[cfg(any(
-    feature = "engine-quickjs",
-    feature = "engine-jsc",
-    feature = "engine-hermes"
-))]
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 mod engine_natives;
 mod glob;
 pub mod host;
@@ -47,11 +42,6 @@ mod wasm;
 mod x509;
 mod zlib_ffi;
 
-#[cfg(all(
-    feature = "engine-hermes",
-    not(any(feature = "engine-quickjs", feature = "engine-jsc"))
-))]
-mod engine_hermes;
 #[cfg(all(feature = "engine-jsc", not(feature = "engine-quickjs")))]
 mod engine_jsc;
 #[cfg(feature = "engine-quickjs")]
@@ -59,11 +49,10 @@ mod engine_quickjs;
 #[cfg(not(any(
     feature = "engine-quickjs",
     feature = "engine-jsc",
-    feature = "engine-hermes",
     feature = "engine-host"
 )))]
 compile_error!(
-    "bunwasm-runtime needs an engine: feature engine-quickjs, engine-jsc, engine-hermes or engine-host"
+    "bunwasm-runtime needs an engine: feature engine-quickjs, engine-jsc or engine-host"
 );
 
 pub use engine::{Engine, ModuleHost, NativeError, PromiseState, Val};
@@ -77,11 +66,6 @@ pub use transpiler::{
 pub type ActiveEngine = engine_quickjs::QuickJs;
 #[cfg(all(feature = "engine-jsc", not(feature = "engine-quickjs")))]
 pub type ActiveEngine = engine_jsc::Jsc;
-#[cfg(all(
-    feature = "engine-hermes",
-    not(any(feature = "engine-quickjs", feature = "engine-jsc"))
-))]
-pub type ActiveEngine = engine_hermes::Hermes;
 
 /// Bun version this runtime reports (from vendor/bun/package.json).
 pub const BUN_VERSION: &str = env!("BUNWASM_BUN_VERSION");
@@ -231,18 +215,10 @@ impl State {
     }
 }
 
-#[cfg(any(
-    feature = "engine-quickjs",
-    feature = "engine-jsc",
-    feature = "engine-hermes"
-))]
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 type ModuleHandoffs<V> = RefCell<HashMap<String, (V, V)>>;
 
-#[cfg(any(
-    feature = "engine-quickjs",
-    feature = "engine-jsc",
-    feature = "engine-hermes"
-))]
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 /// The runtime's engine-facing half: the `internal` object the bootstrap
 /// returned, pending wrapper-module handoffs, and the module host.
 pub(crate) struct Core<E: Engine> {
@@ -252,11 +228,7 @@ pub(crate) struct Core<E: Engine> {
     handoffs: ModuleHandoffs<E::Value>,
 }
 
-#[cfg(any(
-    feature = "engine-quickjs",
-    feature = "engine-jsc",
-    feature = "engine-hermes"
-))]
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 impl<E: Engine> Core<E> {
     pub(crate) fn internal(&self, e: &E) -> E::Value {
         self.internal
@@ -337,11 +309,7 @@ impl<E: Engine> Core<E> {
     }
 }
 
-#[cfg(any(
-    feature = "engine-quickjs",
-    feature = "engine-jsc",
-    feature = "engine-hermes"
-))]
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 impl<E: Engine> ModuleHost<E> for Core<E> {
     fn has_interrupt_handler(&self) -> bool {
         host::PROCESS_ABI
@@ -441,22 +409,14 @@ impl<E: Engine> ModuleHost<E> for Core<E> {
 /// Run a program to completion; returns the process exit code. With the
 /// host engine (`engine-host`) this only sets the program up: the host runs
 /// it after `_start` returns (see [`host_engine_ready`]).
-#[cfg(any(
-    feature = "engine-quickjs",
-    feature = "engine-jsc",
-    feature = "engine-hermes"
-))]
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 pub fn run(options: Options) -> i32 {
     run_with::<ActiveEngine>(options)
 }
 
 #[cfg(all(
     feature = "engine-host",
-    not(any(
-        feature = "engine-quickjs",
-        feature = "engine-jsc",
-        feature = "engine-hermes"
-    ))
+    not(any(feature = "engine-quickjs", feature = "engine-jsc"))
 ))]
 pub fn run(options: Options) -> i32 {
     let Options {
@@ -513,11 +473,7 @@ fn new_state(
     (state, main_path)
 }
 
-#[cfg(any(
-    feature = "engine-quickjs",
-    feature = "engine-jsc",
-    feature = "engine-hermes"
-))]
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 fn run_with<E: Engine>(options: Options) -> i32 {
     let Options {
         entry,
@@ -545,11 +501,7 @@ fn run_with<E: Engine>(options: Options) -> i32 {
     code
 }
 
-#[cfg(any(
-    feature = "engine-quickjs",
-    feature = "engine-jsc",
-    feature = "engine-hermes"
-))]
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 fn run_in_engine<E: Engine>(e: &E, core: &Rc<Core<E>>, entry: &Entry, main_path: &str) -> i32 {
     match engine_natives::bootstrap(e, core) {
         Ok(internal) => *core.internal.borrow_mut() = Some(internal),
@@ -586,11 +538,7 @@ fn run_in_engine<E: Engine>(e: &E, core: &Rc<Core<E>>, entry: &Entry, main_path:
     }
 }
 
-#[cfg(any(
-    feature = "engine-quickjs",
-    feature = "engine-jsc",
-    feature = "engine-hermes"
-))]
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 /// The event loop: microtasks and ticks, then one due timer at a time;
 /// sleeps (WASI `poll_oneoff`, or the host's poll while sockets are open)
 /// until the next timer when idle.
@@ -681,11 +629,7 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
     }
 }
 
-#[cfg(any(
-    feature = "engine-quickjs",
-    feature = "engine-jsc",
-    feature = "engine-hermes"
-))]
+#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
 /// Surface a rejected entry module; keep pending ones around.
 fn check_main_promise<E: Engine>(e: &E, core: &Core<E>, promise: E::Value) -> Option<E::Value> {
     match e.promise_state(&promise) {

@@ -15,8 +15,6 @@ default = ["engine-quickjs", "bun-transpiler", "bun-build"]
 # scripts/build-bun-jsc.sh). Pick exactly one.
 engine-quickjs = ["bunwasm-runtime/engine-quickjs"]
 engine-jsc = ["bunwasm-runtime/engine-jsc"]
-# Hermes (bun-hermes.wasm, scripts/build-bun-hermes.sh).
-engine-hermes = ["bunwasm-runtime/engine-hermes"]
 # The host's JS engine (bun-browser.wasm, scripts/build-bun-browser.sh).
 engine-host = ["bunwasm-runtime/engine-host", "bun-transpiler"]
 # Bun's real transpiler (crates/bunwasm-transpiler) for .ts/.tsx/.jsx/.toml.

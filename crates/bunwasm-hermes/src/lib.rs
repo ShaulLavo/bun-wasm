@@ -1,11 +1,11 @@
 //! The Hermes VM, compiled to wasm32-wasip1 (hermes/build.sh), behind bun-wasm's C shim
-//! (cpp/shim.cpp). bunwasm-runtime's Hermes engine (src/engine_hermes.rs) is its only user.
+//! (cpp/shim.cpp). `examples/smoke.rs` exercises it; see docs/hermes-engine.md.
 //!
 //! Values are [`Handle`]s: indices into the shim's slot table, which the VM scans as GC roots.
 //! A handle owns one reference (`bh_dup` adds one, `bh_release` drops one). Calls that can
 //! throw return `false` and store the thrown value's handle in their out-parameter.
 //!
-//! The runtime implements three callbacks the shim calls: `bunhermes_host_call` (every native
+//! The embedder implements three callbacks the shim calls: `bunhermes_host_call` (every native
 //! function), `bunhermes_host_drop` (a native function was collected) and
 //! `bunhermes_host_interrupt` (cancellation poll at async-break checkpoints).
 use core::ffi::{c_char, c_void};

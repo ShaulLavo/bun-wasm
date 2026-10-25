@@ -1,70 +1,35 @@
-# Hermes engine (opt-in)
+# Hermes VM library (opt-in)
 
-`dist/bun-hermes.wasm` is bun-wasm with Meta's Hermes VM as its JavaScript engine, next to QuickJS (default), JavaScriptCore (`engine-jsc`) and the host engine (`engine-host`). It is experimental. Default builds and default CI never compile Hermes.
+Meta's Hermes VM built for `wasm32-wasip1` as a static library, with a small C interface for embedding it. It is a candidate fourth engine next to QuickJS, JavaScriptCore and the host engine. Nothing in bun.wasm links it yet, and default builds and default CI never compile it.
 
-## Build
+## Build and smoke test
 
 ```sh
-scripts/build-hermes.sh       # Hermes VM -> ${HERMES_BUILD_DIR:-/work/tmp/bun-wasm-hermes}/wasi/lib/libhermesvm_bunwasm.a
-scripts/build-bun-hermes.sh   # dist/bun-hermes.wasm (cargo feature engine-hermes)
-target/release/bun-wasm --wasm dist/bun-hermes.wasm --dir .::/ --env PWD=/ -- -e 'console.log(1 + 1)'
+scripts/build-hermes.sh   # ${HERMES_BUILD_DIR:-/work/tmp/bun-wasm-hermes}/wasi/lib/libhermesvm_bunwasm.a
+hermes/smoke.sh           # crates/bunwasm-hermes/examples/smoke.rs under wasmtime
 ```
 
-`hermes/build.sh` builds a host `hermesc` first (the wasm build compiles Hermes's internal JavaScript with it), then the VM for `wasm32-wasip1` with wasi-sdk and Waffle's patched sysroot. The source is facebook/hermes pinned in `hermes/common.sh`, patched by `hermes/hermes-wasi.patch` ([provenance](bun-patches/hermes-wasi.md)).
+`hermes/build.sh` builds a host `hermesc` first (the wasm build compiles Hermes's internal JavaScript with it), then the VM with wasi-sdk and Waffle's patched sysroot. The source is facebook/hermes pinned in `hermes/common.sh`, patched by `hermes/hermes-wasi.patch` ([provenance](bun-patches/hermes-wasi.md)). The smoke test creates a runtime, evaluates scripts and reads back numbers and strings, calls a native function, drains promise jobs, catches thrown and syntax errors, and keeps a value alive across a forced GC.
 
-## How it embeds
+## Layout
 
 ```
-crates/bunwasm-runtime/src/engine_hermes.rs   Engine trait over the shim (Rust)
-crates/bunwasm-hermes/src/lib.rs              the shim's C declarations
-crates/bunwasm-hermes/cpp/shim.cpp            C interface over hermes::vm::Runtime, compiled into the VM library
-hermes/                                       fetch, patch, toolchain and build of the VM
+hermes/                              fetch, patch, toolchain, build and smoke scripts
+crates/bunwasm-hermes/cpp/shim.cpp   C interface over hermes::vm::Runtime, compiled into the library
+crates/bunwasm-hermes/src/lib.rs     the shim's declarations for Rust
+crates/bunwasm-hermes/examples/      the smoke test
 ```
+
+## Embedding API
 
 The shim is our own C interface over the VM, not Hermes's JSI or its C ABI (`API/hermes_abi`):
 
-- JSI reports errors by throwing C++ exceptions and needs RTTI. bun.wasm links one libc++, the no-exceptions build in the patched sysroot. The VM itself builds with `-fno-exceptions -fno-rtti`, so the patch adds `hermesvm_bunwasm`, the VM library without the JSI API.
-- `hermes_abi` is exception-free but shaped like JSI: it has nothing for promise state, proxies, ArrayBuffer detaching, error checks or rejection tracking. bun-wasm would need a second layer over the VM for those anyway.
+- JSI reports errors by throwing C++ exceptions and needs RTTI. bun.wasm links one libc++, the no-exceptions build in the patched sysroot. The VM itself builds with `-fno-exceptions -fno-rtti`, so the patch adds `hermesvm_bunwasm`, the VM library without the JSI API, plus the shim.
+- `hermes_abi` is exception-free but shaped like JSI: it has nothing for promise state, proxies, ArrayBuffer detaching, error checks or rejection tracking, so it would need a second layer over the VM anyway.
 
-Values cross as `u32` handles into a slot table the VM scans as GC roots (the `addCustomRootsFunction` pattern `hermes_vtable.cpp` uses). `HVal` owns one reference: `Clone` adds one, `Drop` releases it. Native functions are `FinalizableNativeFunction`s whose context is an id into the runtime's closure table; a collected function's closure is dropped at the next job drain, outside the GC.
-
-Hermes's `Promise` is its JavaScript implementation (`lib/InternalJavaScript/01-Promise.js`). The engine reads its state fields (`_y`, `_z`) for `promise_state`/`promise_result`, and installs the static hooks it calls on rejection and on attaching a handler (`Promise._C`, `Promise._B`) to track unhandled rejections.
-
-## ES modules
-
-Hermes runs classic scripts only: no `import`/`export`, top-level `await`, `import()` or `import.meta`. ES modules go through a module loader written for the runtime (the Hermes ESM loader) that runs each module as a script. The engine's side of that contract:
-
-- The loader is an object at the non-enumerable global `__bunwasmEsmLoader` with `importModule(specifier, referrer)` and `evalModule(name, source)`, both returning promises. `Engine::import_module` and `Engine::eval_module` call them.
-- The loader uses `eval_script`, plain generators and the job queue, all of which work as on the other engines.
-- Until a loader is installed, `eval_module` runs module-free code (`bun -e 'console.log(1)'`) as a script and `import_module` throws.
-
-## Engine mapping
-
-| Engine method | Hermes |
-| --- | --- |
-| values, objects, properties, `keys`, `error_value` | Done. `keys` calls `Object.keys`; non-enumerable `name` uses `Object.defineProperty`. |
-| `new_function`, `call` | Done (`FinalizableNativeFunction`, `ScopedNativeCallFrame`). |
-| `eval_script` | Done. Hermes has no line offset: header lines before line 1 (the CommonJS wrapper) are folded onto line 1. |
-| `import_module`, `eval_module` | Seam for the ESM loader (above). |
-| `run_jobs` | Done: `Runtime::drainJobs`, WeakRef kept-objects and FinalizationRegistry cleanup. |
-| `promise_state`, `promise_result`, `promise_then`, `is_promise` | Done over the JS Promise's fields and the original `Promise.prototype.then`. |
-| `take_unhandled_rejections` | Done (`Promise._C`/`_B`). |
-| `is_proxy`, `proxy_target`, `is_error`, `is_detachable_buffer`, `detach_buffer`, `same_value` | Done (VM type checks). |
-| `iterator_entries`, `own_keys_in_order` | Not provided (optional). |
-| `async_context`, `set_async_context` | Stored, but not carried across `await`: AsyncLocalStorage loses its value after an await. |
-| `gc`, `memory_usage` | Done (`Runtime::collect`, GC heap info). |
-| `ModuleHost::interrupt` | Polled every 10,000 async-break checks when the host has an interrupt handler (compiled-in checks; uncatchable timeout error). |
-
-## Compilation
-
-Scripts compile from source at load time. User code gets Hermes's full optimizer and the runtime's polyfills (`bun-wasm:*`) compile lazily without it (`BUN_WASM_HERMES_OPT=none|user|all`, default `user`). Optimizing the polyfills too adds about 500 ms to startup; optimized user code runs loops about 11x faster than unoptimized.
-
-Startup is slower than QuickJS (hello about 320 ms vs 190 ms on the native launcher, warm module cache): about 95 ms compiles the 580 KB of polyfill source and most of the rest runs it unoptimized. Precompiling the polyfills to Hermes bytecode at build time (host `hermesc`, same revision) is the next step.
+Values cross as `u32` handles into a slot table the VM scans as GC roots (the `addCustomRootsFunction` pattern of `hermes_vtable.cpp`); each handle owns one reference (`bh_dup`, `bh_release`). Native functions are `FinalizableNativeFunction`s whose context is an embedder id; the shim calls the embedder's `bunhermes_host_call`, `bunhermes_host_drop` (function collected) and `bunhermes_host_interrupt` (cancellation poll at async-break checks).
 
 ## Limits
 
-- No `Intl` (built with `HERMES_ENABLE_INTL=OFF`); no lexical direct `eval`.
-- `error.stack` has frames but no `Error: message` line: Hermes uses `Error.prepareStackTrace`'s result as the whole stack, and the bootstrap's formatter returns only frames (QuickJS adds the header itself).
-- `Object.keys(promise)` and `JSON.stringify(promise)` show the JS Promise's fields (`_x`, `_y`, `_z`, `_A`); console output hides them.
-- `process.versions` still reports `quickjs`.
-- GC heap capped at 256 MiB (`BUN_WASM_HERMES_HEAP_MIB`, at most 448), under bun.wasm's 512 MiB linear memory.
+- No `Intl` (`HERMES_ENABLE_INTL=OFF`), no lexical direct `eval`, no ES modules or top-level `await` in the VM.
+- The GC heap cap is the embedder's choice (`bh_init`); bun.wasm's linear memory stays under 512 MiB.
