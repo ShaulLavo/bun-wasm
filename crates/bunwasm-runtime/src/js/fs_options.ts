@@ -60,6 +60,7 @@
         native.copyFile(src, dest, options.force === false ? 1 : 0);
       } catch (error) {
         if (options.force !== false || !isCode(error, "EEXIST")) throw error;
+        if ((native.stat(dest, false).mode & 0o170000) === 0o040000) throw copyError("ERR_FS_CP_NON_DIR_TO_DIR", from, to);
         if (options.errorOnExist) throw copyError("ERR_FS_CP_EEXIST", from, to);
       }
       return false;

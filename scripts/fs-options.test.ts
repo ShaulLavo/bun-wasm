@@ -3,7 +3,7 @@ import * as host from "node:fs";
 import * as path from "node:path";
 import { Buffer } from "node:buffer";
 import { runInNewContext } from "node:vm";
-import { checkFsOptions, checkBigintStats, checkCopyOptions } from "../tests/fixtures/fs-options/index";
+import { checkFsOptions, checkBigintStats, checkCopyOptions, checkCopyTypeErrors } from "../tests/fixtures/fs-options/index";
 
 const source = host.readFileSync(new URL("../crates/bunwasm-runtime/src/js/node_fs.js", import.meta.url), "utf8");
 const roots: string[] = [];
@@ -29,6 +29,7 @@ function fixture() {
     },
     close(fd: number) { host.closeSync(fd); descriptors.delete(fd); },
     write(fd: number, bytes: string | Uint8Array) { return host.writeSync(fd, Buffer.from(bytes)); },
+    writev(fd: number, buffers: Uint8Array[], position: number) { return host.writevSync(fd, buffers, position < 0 ? undefined : position); },
     writeFile(file: string, bytes: string | Uint8Array, append: boolean) { host.writeFileSync(file, bytes, { flag: append ? "a" : "w" }); },
     writeFileFlags(file: string, bytes: string | Uint8Array, flags: number, mode: number) { const fd = host.openSync(file, flags, mode); try { host.writeFileSync(fd, bytes); } finally { host.closeSync(fd); } },
     readFile: host.readFileSync,
@@ -46,6 +47,7 @@ function fixture() {
   const fsOptionsPath = new URL("../crates/bunwasm-runtime/src/js/fs_options.ts", import.meta.url);
   const helpers = host.existsSync(fsOptionsPath) ? runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${host.readFileSync(fsOptionsPath, "utf8")}`), { Date })({}) : null;
   const { fs } = factory({ native, describe: String,
+    toUint8: (view: ArrayBufferView) => new Uint8Array(view.buffer, view.byteOffset, view.byteLength),
     require(name: string) {
       if (name === "buffer") return { Buffer };
       if (name === "path") return path;
@@ -88,4 +90,35 @@ test("bigint timestamps preserve negative nanoseconds", () => {
   expect(result.mtimeNs).toBe(-1000001n);
   expect(result.mtimeMs).toBe(-1n);
   expect(result.mtime.getTime()).toBe(-1);
+});
+
+test("no-overwrite copies still reject file-to-directory conflicts", async () => {
+  const { fs, root } = fixture();
+  await checkCopyTypeErrors(fs, root);
+});
+
+test("creation defaults are 0666 before umask while explicit modes survive", async () => {
+  const { fs, root } = fixture();
+  const previous = process.umask(0);
+  try {
+    fs.writeFileSync(path.join(root, "write-default"), "x");
+    fs.closeSync(fs.openSync(path.join(root, "open-default"), "w"));
+    await fs.promises.writeFile(path.join(root, "promise-default"), "x");
+    await new Promise<void>((resolve, reject) => fs.writeFile(path.join(root, "callback-default"), "x",
+      (error: NodeJS.ErrnoException | null) => error ? reject(error) : resolve()));
+    const handle = await fs.promises.open(path.join(root, "handle-default"), "w");
+    await handle.close();
+    for (const name of ["write-default", "open-default", "promise-default", "callback-default", "handle-default"]) {
+      expect(host.statSync(path.join(root, name)).mode & 0o777).toBe(0o666);
+    }
+    fs.writeFileSync(path.join(root, "write-explicit"), "x", { mode: 0o600 });
+    fs.closeSync(fs.openSync(path.join(root, "open-explicit"), "w", 0o640));
+    expect(host.statSync(path.join(root, "write-explicit")).mode & 0o777).toBe(0o600);
+    expect(host.statSync(path.join(root, "open-explicit")).mode & 0o777).toBe(0o640);
+    process.umask(0o027);
+    fs.writeFileSync(path.join(root, "write-masked"), "x");
+    expect(host.statSync(path.join(root, "write-masked")).mode & 0o777).toBe(0o640);
+  } finally {
+    process.umask(previous);
+  }
 });

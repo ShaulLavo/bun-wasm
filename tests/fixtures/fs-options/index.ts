@@ -14,7 +14,7 @@ export async function checkFsOptions(api: Fs, root: string) {
   const missing = join(root, "missing");
   const reset = () => api.writeFileSync(existing, "original");
   const contents = () => api.readFileSync(existing, "utf8");
-  const { O_WRONLY, O_RDWR, O_CREAT, O_EXCL, O_TRUNC, O_APPEND } = api.constants;
+  const { O_WRONLY, O_RDWR, O_CREAT, O_EXCL, O_TRUNC, O_APPEND, O_DSYNC } = api.constants;
   reset();
   api.closeSync(api.openSync(existing, O_WRONLY));
   assert.equal(contents(), "original");
@@ -51,6 +51,17 @@ export async function checkFsOptions(api: Fs, root: string) {
     api.closeSync(api.openSync(existing, flag));
     assert.equal(contents(), "original");
   }
+  api.writeFileSync(existing, "!", { flag: "as" });
+  assert.equal(contents(), "original!");
+  fd = api.openSync(existing, "as");
+  api.writeSync(fd, "?");
+  api.closeSync(fd);
+  assert.equal(contents(), "original!?");
+  fd = api.openSync(existing, O_WRONLY | O_APPEND | O_DSYNC);
+  api.writevSync(fd, [new Uint8Array([46])]);
+  api.closeSync(fd);
+  assert.equal(contents(), "original!?.");
+  reset();
   for (const flag of ["wx", "wx+", "ax", "ax+"]) {
     assert.throws(() => api.openSync(existing, flag), { code: "EEXIST" });
     assert.equal(contents(), "original");
@@ -138,6 +149,29 @@ export async function checkCopyOptions(api: Fs, root: string) {
   assert.equal(api.readFileSync(dst, "utf8"), "keep");
 }
 
+export async function checkCopyTypeErrors(api: Fs, root: string) {
+  const source = join(root, "type-source"), destination = join(root, "type-destination");
+  api.writeFileSync(source, "source");
+  api.mkdirSync(destination);
+  const options = { force: false };
+  assert.throws(() => api.cpSync(source, destination, options), { code: "ERR_FS_CP_NON_DIR_TO_DIR" });
+  await assert.rejects(api.promises.cp(source, destination, options), { code: "ERR_FS_CP_NON_DIR_TO_DIR" });
+  await assert.rejects(new Promise<void>((resolve, reject) => api.cp(source, destination, options,
+    error => error ? reject(error) : resolve())), { code: "ERR_FS_CP_NON_DIR_TO_DIR" });
+  const tree = join(root, "type-tree"), target = join(root, "type-target");
+  api.mkdirSync(tree);
+  api.writeFileSync(join(tree, "child"), "child");
+  api.mkdirSync(join(target, "child"), { recursive: true });
+  const recursive = { recursive: true, force: false };
+  assert.throws(() => api.cpSync(tree, target, recursive), { code: "ERR_FS_CP_NON_DIR_TO_DIR" });
+  await assert.rejects(api.promises.cp(tree, target, recursive), { code: "ERR_FS_CP_NON_DIR_TO_DIR" });
+  await assert.rejects(new Promise<void>((resolve, reject) => api.cp(tree, target, recursive,
+    error => error ? reject(error) : resolve())), { code: "ERR_FS_CP_NON_DIR_TO_DIR" });
+  assert.equal(api.readFileSync(source, "utf8"), "source");
+  assert.equal(api.statSync(destination).isDirectory(), true);
+  assert.equal(api.statSync(join(target, "child")).isDirectory(), true);
+}
+
 if (import.meta.main) {
   const root = "fs-options-work";
   try {
@@ -145,6 +179,7 @@ if (import.meta.main) {
     await checkFsOptions(fs, root);
     await checkBigintStats(fs, root);
     await checkCopyOptions(fs, root);
+    await checkCopyTypeErrors(fs, root);
     console.log("filesystem options ok");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

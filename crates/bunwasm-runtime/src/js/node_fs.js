@@ -302,7 +302,7 @@
       native.write(path, bytes, -1);
       return;
     }
-    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), options && options.mode !== undefined ? options.mode : 0o644));
+    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), options && options.mode !== undefined ? options.mode : 0o666));
   }
 
   function appendFileSync(path, data, options) {
@@ -414,7 +414,7 @@
     }
   }
 
-  function openSync(path, flags, mode = 0o644) {
+  function openSync(path, flags, mode = 0o666) {
     return withPath(path, (abs) => native.open(abs, flagsNumber(flags), mode));
   }
 
