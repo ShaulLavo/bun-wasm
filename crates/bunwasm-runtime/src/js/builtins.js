@@ -713,7 +713,10 @@
     "node:https": () => httpModule("https"),
     "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {} }),
     "node:zlib": zlibModule,
-    "node:inspector": () => unsupportedModule("inspector", "no debugger", ["open", "close", "url", "waitForDebugger", "Session"], { console: globalThis.console }),
+    "node:inspector": () => Object.assign(
+      unsupportedModule("inspector", "no debugger", ["open", "waitForDebugger", "Session"], { console: globalThis.console }),
+      { close() {}, url() { return undefined; } },
+    ),
     "node:repl": () => unsupportedModule("repl", "no interactive terminal", ["start", "REPLServer"]),
     "node:v8": () => ({
       getHeapStatistics: () => ({ total_heap_size: native.memoryUsage().heapTotal, used_heap_size: native.memoryUsage().heapUsed, heap_size_limit: 4294967296 }),
