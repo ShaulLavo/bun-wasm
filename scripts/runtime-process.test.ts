@@ -20,6 +20,8 @@ const emitted = readFileSync(output, "utf8");
 // Invert only the approved executable deltas. The pinned original AST hash guards the remainder.
 function originalSyntax(text: string): string {
   const replacements: [RegExp, string, number][] = [
+    [/\n  let execveWarned = false;\n/g, "\n", 1],
+    [/\n    execve\(\) \{[\s\S]*?\n    \},/g, "", 1],
     [/const processBase\s*=/g, "const process =", 1],
     [/\bprocessBase\b/g, "process", 5],
     [/const streamBase\s*=/g, "const stream =", 2],
@@ -74,8 +76,87 @@ async function controls(source: string) {
   return JSON.parse(JSON.stringify(await processControls(events, factory, assert)));
 }
 
+type ProcessSnapshot = Awaited<ReturnType<typeof processControls>>;
+
+function setupSnapshot(source: string): ProcessSnapshot {
+  const emitterCalls: string[][] = [];
+  function EventEmitter(this: object) { emitterCalls.push(Reflect.ownKeys(this).map(String)); }
+  const internal = {
+    native: {
+      platformInfo: { version: "test", revision: "test", arch: "wasm32" },
+      env: () => ({}), argv: () => ["bun", "fixture.ts"], execPath: () => "/bin/bun",
+      hostSignal(number: number, mode: number) { assert.deepEqual([number, mode], [13, 1]); return 0; },
+    },
+    nextTick() { throw new Error("setup must not schedule lifecycle work"); },
+    require(name: string) {
+      if (name === "events") return EventEmitter;
+      if (name === "process_signals") return () => () => false;
+      throw new Error("setup must not load " + name);
+    },
+  };
+  const factory: unknown = runInContext(source, createContext({ Error, TypeError }));
+  assert.ok(typeof factory === "function");
+  const guest: unknown = Reflect.apply(factory, undefined, [internal]);
+  assert.ok(guest !== null && typeof guest === "object");
+  const keys = Reflect.ownKeys(guest);
+  const descriptors = Object.fromEntries(keys.map(key => {
+    const descriptor = Object.getOwnPropertyDescriptor(guest, key)!;
+    return [String(key), { enumerable: descriptor.enumerable, configurable: descriptor.configurable,
+      writable: descriptor.writable, getter: typeof descriptor.get, setter: typeof descriptor.set, value: typeof descriptor.value }];
+  }));
+  assert.deepEqual(emitterCalls, [[]]);
+  return { controls: [], shapes: { process: keys.map(String) }, coercions: [], descriptors, emitterCalls };
+}
+
+function expectProcessSnapshot(converted: ProcessSnapshot, baseline: ProcessSnapshot) {
+  const keys = baseline.shapes.process!;
+  expect(keys).not.toContain("execve");
+  expect(Object.hasOwn(baseline.descriptors, "execve")).toBe(false);
+  const kill = keys.indexOf("kill");
+  expect(kill).toBeGreaterThan(0);
+  expect(keys[kill - 1]).toBe("abort");
+  const expectedKeys = keys.slice(0, kill).concat(["execve"], keys.slice(kill));
+  const execve = { configurable: true, enumerable: true, writable: true,
+    getter: "undefined", setter: "undefined", value: "function" } satisfies ProcessSnapshot["descriptors"][string];
+  expect(converted.descriptors.execve).toEqual(execve);
+  expect(converted.shapes.process).toEqual(expectedKeys);
+  expect(converted).toEqual({
+    ...baseline,
+    shapes: { ...baseline.shapes, process: expectedKeys },
+    descriptors: { ...baseline.descriptors, execve },
+  });
+}
+
+test("isolated process setup preserves snapshots apart from the authorized execve shape", () => {
+  expectProcessSnapshot(setupSnapshot(emitted), setupSnapshot(original));
+});
+
+const snapshotMutations: readonly [string, (snapshot: ProcessSnapshot) => void][] = [
+  ["missing execve descriptor", snapshot => { delete snapshot.descriptors.execve; }],
+  ["changed execve descriptor", snapshot => { snapshot.descriptors.execve!.enumerable = false; }],
+  ["changed execve key order", snapshot => {
+    const keys = snapshot.shapes.process!;
+    const index = keys.indexOf("execve");
+    keys.splice(index, 1);
+    keys.splice(index + 1, 0, "execve");
+  }],
+  ["unapproved own key", snapshot => { snapshot.shapes.process!.push("unapproved"); }],
+  ["unrelated descriptor", snapshot => { snapshot.descriptors.title!.writable = false; }],
+  ["lifecycle result", snapshot => { snapshot.controls.push("unapproved"); }],
+  ["coercion result", snapshot => { snapshot.coercions.push("unapproved"); }],
+  ["emitter identity result", snapshot => { snapshot.emitterCalls.push([]); }],
+];
+for (const [name, mutate] of snapshotMutations) {
+  test(`snapshot adaptation rejects ${name}`, () => {
+    const baseline = setupSnapshot(original);
+    const converted = setupSnapshot(emitted);
+    mutate(converted);
+    assert.throws(() => expectProcessSnapshot(converted, baseline));
+  });
+}
+
 test("original and converted factories preserve lifecycle, identity, descriptors and coercions", async () => {
-  expect(await controls(emitted)).toEqual(await controls(original));
+  expectProcessSnapshot(await controls(emitted), await controls(original));
 });
 
 const mutations: readonly [string, string, string][] = [
@@ -103,13 +184,14 @@ function contract(source: string) {
 test("accepts raw environment/hooks and the real process native shapes", () => {
   const result = contract(`declare const n: BunWasm.Native; declare const i: BunWasm.Internal;
 const raw: unknown = n.env()[Symbol()]; i.workerEnvChange?.("accessor", raw);
+const main: boolean = i.require("worker_threads").isMainThread;
 n.writeStdout("x", true); n.writeStderr(new Uint8Array()); n.chdir("/");
 const rss: number = n.memoryUsage().rss; const bytes: Uint8Array = n.readStdin();
 i.require("process_signals")(i.require("events").prototype, new Map());`);
   expect(result.stdout.toString()).toBe("");
   expect(result.exitCode).toBe(0);
 });
-for (const call of ["n.writeStdout(1)", "n.chdir(false)", "n.isatty('fd')", "const s: string = n.env().RAW", "const x: string = n.memoryUsage().rss", "i.nextTick(7)", "i.workerEnvChange(7, 'x')"]) {
+for (const call of ['const x: string = i.require("worker_threads").isMainThread', "n.writeStdout(1)", "n.chdir(false)", "n.isatty('fd')", "const s: string = n.env().RAW", "const x: string = n.memoryUsage().rss", "i.nextTick(7)", "i.workerEnvChange(7, 'x')"]) {
   test(`rejects false process contract: ${call}`, () => {
     const result = contract(`declare const n: BunWasm.Native; declare const i: BunWasm.Internal; ${call};`);
     expect(result.exitCode).not.toBe(0);
@@ -117,6 +199,17 @@ for (const call of ["n.writeStdout(1)", "n.chdir(false)", "n.isatty('fd')", "con
   });
 }
 
+
+test("the factory retains the existing warning method for the unsupported execve path", () => {
+  const result = contract(`declare const i: BunWasm.Internal;
+const factory = ${readFileSync(sourcePath, "utf8")};
+const guest = factory(i);
+guest.emitWarning(new Error("source-only"));
+guest.emitWarning("source-only", { type: Symbol("raw"), code: {} });
+guest.emitWarning("source-only", "ExperimentalWarning", Symbol("raw"));`);
+  expect(result.stdout.toString()).toBe("");
+  expect(result.exitCode).toBe(0);
+});
 
 test("the factory keeps stored exitCode unknown rather than claiming a number", () => {
   const result = contract(`declare const i: BunWasm.Internal;
