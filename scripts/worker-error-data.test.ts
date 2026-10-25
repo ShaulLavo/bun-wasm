@@ -5,7 +5,7 @@ import { runInNewContext } from "node:vm";
 import type { WorkerCodec, WorkerCodecHooks, WorkerErrorData } from "./worker-error-data-types";
 
 const context = {
-  ArrayBuffer, BigInt64Array, BigUint64Array, Boolean, Buffer, DataView, Date, DOMException,
+  ArrayBuffer, BigInt64Array, BigUint64Array, Blob, Boolean, Buffer, DataView, Date, DOMException,
   Error, Event, EventTarget, Float32Array, Float64Array, Int16Array, Int32Array, Map,
   MessageEvent, Number, RangeError, RegExp, Set, String, SyntaxError, TypeError, URL,
   Uint8Array, Uint8ClampedArray, Uint16Array, Uint32Array, WebAssembly, structuredClone,

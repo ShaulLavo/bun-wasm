@@ -24,7 +24,7 @@ test("host crypto errors retain the DOMException brand", async () => {
     const streams = compile("streams");
     const compression = compile("compression_streams")({ native });
     const webBrand = compile("web_brand")();
-    const bodyStreams = compile("body_streams")();
+    const bodyStreams = compile("body_streams")({ native });
     const modules = new Map<string, () => unknown>([
       ["compression_streams", () => compression],
       ["web_brand", () => webBrand],

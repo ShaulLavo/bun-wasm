@@ -1,0 +1,1 @@
+package resolution: 112 import/require checks

@@ -94,7 +94,7 @@ for (const cancel of ["kill", "dispose"] as const) test(`${cancel} during networ
     await activating.promise;
     const disposal = cancel === "dispose" ? state.runtime.dispose() : undefined;
     if (cancel === "kill") run.kill(9);
-    activation.resolve({ createHelper(options) { allocations++; return capability.createHelper(options); } });
+    activation.resolve({ lookup: capability.lookup.bind(capability), createHelper(options) { allocations++; return capability.createHelper(options); } });
     state.gate.resolve();
     await disposal;
     expect((await run.done).code).toBe(137);
