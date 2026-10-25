@@ -75,30 +75,28 @@
   }
   memoryUsage.rss = () => native.memoryUsage().rss;
 
-  type CursorCallback = (error?: unknown) => void;
-
-  function validateCursorCallback(callback: unknown): asserts callback is CursorCallback | undefined {
+  function validateCursorCallback(callback: unknown): void {
     if (callback === undefined || typeof callback === "function") return;
-    throw Object.assign(new TypeError('The "callback" argument must be of type function'), { code: "ERR_INVALID_ARG_TYPE" });
+    throw Object.assign(new TypeError(`The "callback" argument must be of type function. Received ${internal.describe(callback)}`), { code: "ERR_INVALID_ARG_TYPE" });
   }
 
-  function clearLine(this: BunWasm.ProcessWriter, direction: number, callback?: CursorCallback): boolean {
+  function clearLine(this: BunWasm.ProcessWriter, direction: number, callback?: BunWasm.ProcessCursorCallback): boolean {
     validateCursorCallback(callback);
     const mode = direction < 0 ? 1 : direction > 0 ? 0 : 2;
     return this.write(`\x1b[${mode}K`, callback);
   }
 
-  function clearScreenDown(this: BunWasm.ProcessWriter, callback?: CursorCallback): boolean {
+  function clearScreenDown(this: BunWasm.ProcessWriter, callback?: BunWasm.ProcessCursorCallback): boolean {
     validateCursorCallback(callback);
     return this.write("\x1b[0J", callback);
   }
 
-  function cursorTo(this: BunWasm.ProcessWriter, x?: number, y?: number | CursorCallback, callback?: CursorCallback): boolean {
+  function cursorTo(this: BunWasm.ProcessWriter, x?: number, y?: number | BunWasm.ProcessCursorCallback, callback?: BunWasm.ProcessCursorCallback): boolean {
+    validateCursorCallback(callback);
     if (typeof y === "function") {
       callback = y;
       y = undefined;
     }
-    validateCursorCallback(callback);
     if (Number.isNaN(x) || Number.isNaN(y)) {
       const name = Number.isNaN(x) ? "x" : "y";
       throw Object.assign(new TypeError(`The argument '${name}' is invalid. Received NaN`), { code: "ERR_INVALID_ARG_VALUE" });
@@ -114,7 +112,7 @@
     return this.write(sequence, callback);
   }
 
-  function moveCursor(this: BunWasm.ProcessWriter, dx: number, dy: number, callback?: CursorCallback): boolean {
+  function moveCursor(this: BunWasm.ProcessWriter, dx: number, dy: number, callback?: BunWasm.ProcessCursorCallback): boolean {
     validateCursorCallback(callback);
     if (!dx && !dy) {
       if (callback) internal.nextTick(callback, null);
@@ -122,9 +120,9 @@
     }
     let sequence = "";
     if (dx < 0) sequence += `\x1b[${-dx}D`;
-    if (dx > 0) sequence += `\x1b[${dx}C`;
+    else if (dx > 0) sequence += `\x1b[${dx}C`;
     if (dy < 0) sequence += `\x1b[${-dy}A`;
-    if (dy > 0) sequence += `\x1b[${dy}B`;
+    else if (dy > 0) sequence += `\x1b[${dy}B`;
     return this.write(sequence, callback);
   }
 

@@ -732,7 +732,10 @@
     "node:trace_events": () => {
       throw Object.assign(new Error("Trace events are unavailable"), { code: "ERR_TRACE_EVENTS_UNAVAILABLE" });
     },
-    "node:inspector": () => unsupportedModule("inspector", "no debugger", ["open", "close", "url", "waitForDebugger", "Session"], { console: globalThis.console }),
+    "node:inspector": () => Object.assign(
+      unsupportedModule("inspector", "no debugger", ["open", "waitForDebugger", "Session"], { console: globalThis.console }),
+      { close() {}, url() { return undefined; } },
+    ),
     "node:repl": () => unsupportedModule("repl", "no interactive terminal", ["start", "REPLServer"]),
     "node:v8": () => ({
       getHeapStatistics: () => ({ total_heap_size: native.memoryUsage().heapTotal, used_heap_size: native.memoryUsage().heapUsed, heap_size_limit: 4294967296 }),

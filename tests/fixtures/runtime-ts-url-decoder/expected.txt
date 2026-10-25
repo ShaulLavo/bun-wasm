@@ -67,6 +67,15 @@ format query URLSearchParams "/"
 format query string ignored "/"
 format search wins "/?fixed"
 format empty search "/?a=1%2C2"
+format query order accessor before search ["?fixed",["query","a string","search"]]
+format query order record getter and coercion before search ["?fixed%23fragment",["get a","a string","get b","b string","search"]]
+format query order throwing accessor [true,false,["query"]]
+format query order throwing record getter [true,false,["get a"]]
+format query order throwing record coercion [true,false,["a string"]]
+format query order symbol conversion with explicit search [false,true,[]]
+format query order empty search uses converted query ["?a=a",["query","a string","search"]]
+format query order empty record skips iterator ["?fixed",["search"]]
+format query order conversion precedes throwing search [true,false,["a string","search"]]
 domainToUnicode "xn--espaol-zwa.com" "español.com"
 domainToUnicode "xn--bcher-kva.de" "bücher.de"
 domainToUnicode "xn--fiqs8s" "中国"

@@ -667,7 +667,8 @@
   internal.importNonEsm = function importNonEsm(path, format) {
     const exports = loadModule(path, format).exports;
     if (format === "cjs" && exports !== null && typeof exports === "object" && exports.__esModule) {
-      return [exports, exports.default];
+      const hasDefault = Object.prototype.hasOwnProperty.call(exports, "default");
+      return [exports, hasDefault ? exports.default : exports];
     }
     return [exports, exports];
   };
