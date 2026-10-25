@@ -11,7 +11,7 @@ const nativeFiles = new Set([
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "scripts/check-runtime.sh", "tests/servers/http.ts", "scripts/node-fs-streams.test.ts", "scripts/node-vm-context.test.ts",
   "scripts/node-http-headers.test.ts", "scripts/node-http-response-fixture.ts", "scripts/node-request-body.test.ts", "scripts/node-request-body-fixture.ts",
-  "scripts/node-stack-position.test.ts", "scripts/node-stack-position-fixture.ts",
+  "scripts/node-stack-position.test.ts", "scripts/node-stack-position-native.ts", "scripts/node-stack-position-fixture.ts",
   "scripts/ci-changes.ts", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
 ]);
 const nativeCheckDirectories = discoverChecks().filter(check => check.owner === "native").map(check => `${check.path}/`);

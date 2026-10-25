@@ -59,6 +59,7 @@ test("Rust tests are compiled and run once, with Clippy covering test targets", 
   expect(script.match(/"cargo", "test"/g)).toHaveLength(1);
   expect(script).toContain('"--all-targets", "--release", "--no-deps"');
   expect(script).toContain('"test", "--locked", "--workspace", "--release"');
+  expect(script).toContain('run(["bun", "test", "scripts/node-stack-position-native.ts"]);');
 });
 
 test("local quality retains all gates and rejects invalid selections", () => {

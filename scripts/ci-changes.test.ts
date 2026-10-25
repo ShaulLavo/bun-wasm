@@ -173,7 +173,7 @@ test.each([
   "tests/fixtures/module-compile/index.ts", "tests/fixtures/net-http-implicit-headers/contract.ts",
   "tests/fixtures/stack-source-position/native-probe.rs", "tests/fixtures/stack-source-position/contract.ts",
   "tests/fixtures/stack-source-position/quickjs-column-probe.c", "tests/fixtures/stack-source-position/quickjs-lexer-stubs.h",
-  "scripts/node-stack-position.test.ts", "scripts/node-stack-position-fixture.ts",
+  "scripts/node-stack-position.test.ts", "scripts/node-stack-position-native.ts", "scripts/node-stack-position-fixture.ts",
   "tests/fixtures/request-body-streams/contract.ts", "scripts/node-request-body.test.ts", "scripts/node-request-body-fixture.ts",
 ])("new native fixture input %s selects the existing native job", path => {
   expect(needsRust([path])).toBe(true);
@@ -188,7 +188,7 @@ test.each([
 });
 
 
-for (const path of ["scripts/node-fs-streams.test.ts", "tests/fixtures/vm-context/contract.ts", "scripts/node-http-response-fixture.ts", "scripts/node-stack-position-fixture.ts"]) {
+for (const path of ["scripts/node-fs-streams.test.ts", "tests/fixtures/vm-context/contract.ts", "scripts/node-http-response-fixture.ts", "scripts/node-stack-position-native.ts", "scripts/node-stack-position-fixture.ts"]) {
   test.each(["pull_request", "push"])(`${path} selects native gates through the real %s event CLI`, event => {
     expect(select(base, commitInput(path), event)).toBe(`rust=${needsRust([path])}\njsc=${needsJsc([path])}`);
   });

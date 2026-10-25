@@ -3,6 +3,8 @@
 (function (internal) {
   "use strict";
   const native = internal.native;
+  const PlatformRequest = native.engine === "host" ? globalThis.Request : null;
+  const requestBodyObservers = new WeakMap();
 
   // --- DOMException -----------------------------------------------------------
 
@@ -1025,6 +1027,47 @@
     }
   }
 
+  function requestBodyChunk(chunk) {
+    if (typeof chunk === "string") return native.utf8Encode(chunk);
+    if (!(chunk instanceof Uint8Array)) throw new TypeError("Expected a string or Uint8Array body chunk");
+    return chunk;
+  }
+
+  function requestBodyChunks(body) {
+    const iterator = body[Symbol.asyncIterator]();
+    if (iterator === null || (typeof iterator !== "object" && typeof iterator !== "function")) throw new TypeError("Expected an async iterator object");
+    const next = iterator.next;
+    return {
+      async next() {
+        const result = await next.call(iterator);
+        if (result.done) return result;
+        return { done: false, value: requestBodyChunk(result.value) };
+      },
+      return() {
+        const close = iterator.return;
+        return close == null ? Promise.resolve({ done: true }) : close.call(iterator);
+      },
+      [Symbol.asyncIterator]() { return this; },
+    };
+  }
+
+  function requestBody(body) {
+    if (body == null || body instanceof ReadableStream || typeof body[Symbol.asyncIterator] !== "function") return body;
+    return ReadableStream.from(requestBodyChunks(body));
+  }
+
+  function observeRequestBody(stream) {
+    if (!PlatformRequest || !stream || requestBodyObservers.has(stream)) return stream;
+    const observer = new PlatformRequest("http://localhost/", { method: "POST", body: stream, duplex: "half" });
+    requestBodyObservers.set(stream, observer);
+    return stream;
+  }
+
+  function requestBodyUsed(target) {
+    const observer = target._stream && requestBodyObservers.get(target._stream);
+    return target._bodyUsed || (observer ? observer.bodyUsed : Boolean(target._stream && target._stream._disturbed));
+  }
+
   class Request {
     #url;
     #method;
@@ -1045,7 +1088,8 @@
       if (body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
         throw new TypeError("Request with a GET or HEAD method cannot have a body.");
       }
-      initBody(this, body, this.#headers);
+      initBody(this, requestBody(body), this.#headers);
+      observeRequestBody(this._stream);
     }
     get url() {
       return this.#url;
@@ -1063,16 +1107,17 @@
       return this.#redirect;
     }
     get bodyUsed() {
-      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
+      return requestBodyUsed(this);
     }
     get body() {
       if (this._stream) return this._stream;
       if (this._body === null) return null;
-      this._stream = internal.makeByteStream(this._body);
+      this._stream = observeRequestBody(internal.makeByteStream(this._body));
       return this._stream;
     }
     clone() {
       const body = bodyStreams.clone(this);
+      observeRequestBody(this._stream);
       return new Request(this, { body });
     }
     get [Symbol.toStringTag]() {

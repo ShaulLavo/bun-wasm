@@ -30,6 +30,7 @@ export function requestBodyFixture(engine: "host" | "portable" = "portable") {
   const modules = new Map<string, unknown>([
     ["streams_polyfill", factory("streams_polyfill.js")()],
     ["body_streams", factory("body_streams.ts")()],
+    ["url_search_params", factory("url_search_params.ts")()],
     ["web_brand", factory("web_brand.ts")()],
   ]);
   const encoder = new TextEncoder();
