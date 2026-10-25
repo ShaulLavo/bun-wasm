@@ -37,7 +37,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
     await page.waitForTimeout(100);
   }
   const preview = await context.newPage();
-  const traffic = observeProductTraffic(preview);
+  const traffic = await observeProductTraffic(preview);
   const errors = [];
   preview.on("pageerror", error => errors.push(String(error)));
   let checked;
@@ -64,8 +64,8 @@ export async function serverCommand({ page, context, command, app, engine, optio
     const error = checked?.status === "pass" && command.check.framework ? await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`)) : undefined;
     if (error) checked = { status: "fail", ...failure(error, command.name) };
     if (checked?.status === "pass" && command.check.framework) checked.assertion += "; guest stop removes preview listener (502)";
-    traffic.close();
-    await preview.close();
+    try { await traffic.close(); }
+    finally { await preview.close(); }
   }
   return checked;
 }

@@ -2,11 +2,15 @@ import { createContext, runInContext, type Context } from "node:vm";
 import { expect, test } from "bun:test";
 import { completeObservations, observeProductTraffic, productObservations, type ProductPage } from "./product-browser";
 import type { ProductCheck } from "./product-types";
+import type { Page } from "../../web/node_modules/playwright";
 
 interface FixtureOptions {
   updateMessage: string | null;
   domFailure?: boolean;
   replaceDocumentOnUpdate?: boolean;
+  initFailure?: boolean;
+  bindingDelay?: number;
+  initialVisible?: string;
 }
 
 interface Fixture {
@@ -87,7 +91,7 @@ function evaluate(context: Context, source: string): void {
 
 function fixture(options: FixtureOptions): Fixture {
   let context = createPreviewContext();
-  let visible = "original";
+  let visible = options.initialVisible ?? "original";
   let source = "original";
   let documentReplacements = 0;
   const initScripts: Array<() => void> = [];
@@ -97,15 +101,19 @@ function fixture(options: FixtureOptions): Fixture {
   const locator = (wanted = "") => ({
     filter: ({ hasText }: { hasText: string }) => locator(hasText),
     async waitFor() {
-      if (options.domFailure || !visible.includes(wanted)) throw new Error("DOM did not update");
+      if ((options.domFailure && wanted === "changed") || !visible.includes(wanted)) throw new Error("DOM did not update");
     },
     async click() { visible = "action-result"; },
+    async count() { return visible.includes(wanted) ? 1 : 0; },
   });
   const installBindings = () => {
     for (const [name, callback] of bindings) {
       Object.defineProperty(context, name, {
         configurable: true,
-        value: (...args: unknown[]) => callback({}, args[0]),
+        value: async (...args: unknown[]) => {
+          if (options.bindingDelay) await new Promise(resolve => setTimeout(resolve, options.bindingDelay));
+          callback({}, args[0]);
+        },
       });
     }
     for (const script of initScripts) runInContext(`(${script.toString()})()`, context);
@@ -120,26 +128,28 @@ function fixture(options: FixtureOptions): Fixture {
   };
   const page: ProductPage = {
     async addInitScript(script) {
+      if (options.initFailure) throw new Error("init failed");
       initScripts.push(script);
       runInContext(`(${script.toString()})()`, context);
+      return { async dispose() { initScripts.splice(initScripts.indexOf(script), 1); } };
     },
     async exposeBinding(name, callback) {
       bindings.set(name, callback);
       Object.defineProperty(context, name, {
         configurable: true,
-        value: (...args: unknown[]) => callback({}, args[0]),
+        value: async (...args: unknown[]) => {
+          if (options.bindingDelay) await new Promise(resolve => setTimeout(resolve, options.bindingDelay));
+          callback({}, args[0]);
+        },
       });
-    },
-    async removeExposedBinding(name) {
-      bindings.delete(name);
-      delete context[name];
+      return { async dispose() { bindings.delete(name); delete context[name]; } };
     },
     async evaluate<T>(pageFunction: () => T) { return runInContext(`(${pageFunction.toString()})()`, context); },
     locator,
     async goto(url) {
       visits.push(url);
       const path = new URL(url).pathname;
-      visible = path.endsWith("/__preview/3137/") ? "original" : "route-result";
+      visible = path.endsWith("/__preview/3137/") ? options.initialVisible ?? "original" : "route-result";
       setupPreviewSocket();
       return { ok: () => true, status: () => 200, text: async () => visible, headers: () => ({ "x-matrix": "verified" }) };
     },
@@ -175,7 +185,7 @@ function hmrCheck() {
 }
 
 test("observes preview WebSocket messages over MessagePort after the edit boundary", async () => {
-  const run = fixture({ updateMessage: JSON.stringify({ type: "update", updates: [] }) });
+  const run = fixture({ updateMessage: JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/src/App.tsx" }] }) });
   const traffic = await observeProductTraffic(run.page);
   await run.open();
   run.emit(JSON.stringify({ type: "connected" }));
@@ -236,24 +246,26 @@ test("restores the guest source when the DOM assertion fails", async () => {
 });
 
 test("preserves message arrival ordering, receiver behavior, exceptions, and cleanup", async () => {
-  const run = fixture({ updateMessage: JSON.stringify({ type: "update", updates: [] }) });
+  const run = fixture({ updateMessage: JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/src/App.tsx" }] }) });
   const traffic = await observeProductTraffic(run.page);
   await run.open();
+  await traffic.beginEdit();
   run.emit(JSON.stringify({ type: "ping" }));
   evaluate(run.context, `globalThis.__nativeSocket = new globalThis.NativeWebSocket(); globalThis.__nativeSocket.dispatchEvent(new globalThis.MessageEvent('message', { data: JSON.stringify({ type: 'update' }) }));`);
   run.emit(JSON.stringify({ type: "full-reload" }));
   expect(await traffic.count()).toBe(1);
   const evidence = await traffic.evidenceSince(0);
   expect(evidence.map(event => event.event)).toEqual(["full-reload"]);
+  expect(() => evaluate(run.context, `globalThis.__plainTarget = new globalThis.EventTarget(); globalThis.__calls = 0; globalThis.__plainTarget.addEventListener('message', () => { globalThis.__calls++; throw new Error('receiver failure'); }); globalThis.__plainTarget.dispatchEvent(new globalThis.Event('message'));`)).toThrow("receiver failure");
+  expect(run.context.__calls).toBe(1);
   await traffic.close();
-  run.emit(JSON.stringify({ type: "update", updates: [] }));
+  run.emit(JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/src/App.tsx" }] }));
   expect(await traffic.count()).toBe(1);
-  expect(() => evaluate(run.context, `globalThis.__plainTarget = new globalThis.EventTarget(); globalThis.__plainTarget.addEventListener('message', () => { throw new Error('receiver failure'); }); globalThis.__plainTarget.dispatchEvent(new globalThis.Event('message'));`)).toThrow("receiver failure");
 });
 
 test("feature requests retain the service-worker preview prefix and assert actual responses", async () => {
   const run = fixture({ updateMessage: null });
-  const traffic = { count: async () => 0, evidenceSince: async () => [] };
+  const traffic = { beginEdit: async () => {}, count: async () => 0, evidenceSince: async () => [] };
   const check = { kind: "page", selector: "h1", text: "original", probes: [
     { kind: "route", id: "ssr", path: "/server", selector: "h1", text: "route-result" },
     { kind: "action", id: "action", path: "/action", button: "button", selector: "output", text: "action-result" },
@@ -276,4 +288,72 @@ test("unrun hot-edit and feature stages stay blocked rather than disappearing or
     { stage: "hmr", status: "blocked", blocker: "HTTP 500" },
     { stage: "ssr", status: "blocked", blocker: "HTTP 500" },
   ]);
+});
+
+
+test("observer contract matches the pinned Playwright Page API", () => {
+  const conforms: Page extends ProductPage ? true : false = true;
+  expect(conforms).toBe(true);
+});
+
+test("setup failure releases the exposed binding", async () => {
+  const run = fixture({ updateMessage: null, initFailure: true });
+  await expect(observeProductTraffic(run.page)).rejects.toThrow("init failed");
+  expect(run.context.__bunWasmProductTrafficReport).toBeUndefined();
+});
+
+test("closing removes both the binding and the init script before later navigation", async () => {
+  const run = fixture({ updateMessage: JSON.stringify({ type: "update" }), replaceDocumentOnUpdate: true });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  await traffic.close();
+  await traffic.close();
+  await run.source.write("page.tsx", "changed");
+  expect(run.context.__bunWasmProductTrafficReport).toBeUndefined();
+  expect(run.context.__bunWasmProductTraffic).toBeUndefined();
+  expect(await traffic.count()).toBe(0);
+});
+
+
+test("delayed pre-edit messages cannot qualify an edit", async () => {
+  const run = fixture({ updateMessage: null, bindingDelay: 5 });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  run.emit(JSON.stringify({ type: "full-reload" }));
+  const rows = await productObservations(run.page, "http://local/", hmrCheck(), run.source, traffic, 30);
+  expect(rows[0]?.status).toBe("fail");
+  expect(await traffic.count()).toBe(0);
+  await traffic.close();
+});
+
+test("waits for post-edit binding delivery even across document replacement", async () => {
+  const run = fixture({ updateMessage: JSON.stringify({ type: "full-reload" }), bindingDelay: 5, replaceDocumentOnUpdate: true });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  const rows = await productObservations(run.page, "http://local/", hmrCheck(), run.source, traffic, 100);
+  expect(rows[0]?.status).toBe("pass");
+  expect(run.documentReplacements).toBe(1);
+  await traffic.close();
+});
+
+test("requires a DOM transition rather than preexisting replacement text", async () => {
+  const run = fixture({ updateMessage: JSON.stringify({ type: "full-reload" }), initialVisible: "original changed" });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  const rows = await productObservations(run.page, "http://local/", hmrCheck(), run.source, traffic, 100);
+  expect(rows[0]?.status).toBe("fail");
+  expect(rows[0]?.blocker).toContain("already visible");
+  expect(run.writes).toEqual([]);
+  await traffic.close();
+});
+
+test("empty update and generic Next envelopes do not qualify HMR", async () => {
+  for (const payload of [{ type: "update", updates: [] }, { action: "turbopack-message", data: [] }, { action: "built" }]) {
+    const run = fixture({ updateMessage: JSON.stringify(payload) });
+    const traffic = await observeProductTraffic(run.page);
+    await run.open();
+    const rows = await productObservations(run.page, "http://local/", hmrCheck(), run.source, traffic, 20);
+    expect(rows[0]?.status).toBe("fail");
+    await traffic.close();
+  }
 });
