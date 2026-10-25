@@ -9,6 +9,7 @@ import { observeHmr } from "./hmr.ts";
 import { observeProductTraffic, productObservations } from "./product-browser.ts";
 import { failure, stageOutput } from "./classify.ts";
 import { BlockedBrowserNetworkError } from "./product-campaign.ts";
+import { browserCommand, browserLauncher, registryReplayUrl } from "./browser-environment.ts";
 
 export function earlyServerExit(command, stage) {
   const classified = failure(command.output, stage);
@@ -24,7 +25,7 @@ function guestSource(page) {
 }
 
 export async function serverCommand({ page, context, command, app, engine, options, terminalText }) {
-  const text = ["bun"].concat(command.args.map(arg => arg.replaceAll("{port}", "3137"))).join(" ");
+  const text = browserCommand(command.args.map(arg => arg.replaceAll("{port}", "3137"))).join(" ");
   await page.evaluate(text => {
     globalThis.__matrixDone = false;
     globalThis.__matrixCommand = globalThis.playground.shell.submit(text).finally(() => { globalThis.__matrixDone = true; });
@@ -123,7 +124,7 @@ export async function browserHost({ root, options, launch, stop }) {
 
   async function commandResult(page, context, app, engine, command) {
     if (["http", "page"].includes(command.check.kind)) return serverCommand({ page, context, command, app, engine, options, terminalText });
-    const runResult = await run(page, ["bun"].concat(command.args).join(" "), options.timeout);
+    const runResult = await run(page, browserCommand(command.args).join(" "), options.timeout);
     return checkCommand(command, runResult, path => readGuest(page, path));
   }
 
@@ -132,9 +133,14 @@ export async function browserHost({ root, options, launch, stop }) {
     const page = await context.newPage();
     const external = [];
     const outcomes = new Map();
-    await context.route("**/*", route => {
+    await context.route("**/*", async route => {
       const url = new URL(route.request().url());
       if (["127.0.0.1", "localhost"].includes(url.hostname) || ["data:", "blob:"].includes(url.protocol)) return route.continue();
+      const replay = registryReplayUrl(url.href, registry);
+      if (replay && route.request().method() === "GET") {
+        const response = await route.fetch({ url: replay, maxRedirects: 0 });
+        if (response.ok()) return route.fulfill({ response });
+      }
       external.push(url.href);
       return route.abort();
     });
@@ -142,6 +148,7 @@ export async function browserHost({ root, options, launch, stop }) {
       await page.goto(`${await serve()}?engine=${engine}`);
       if (!(await ready(page)).includes("ready")) throw new Error(`Playground engine ${engine} failed to load`);
       for (const [path, contents] of Object.entries(projectFiles(app, registry))) await writeFile(page, `/home/user/${path}`, contents);
+      await writeFile(page, "/home/user/.matrix-command.ts", browserLauncher);
       const installed = await run(page, "bun install", options.timeout);
       const install = record(app, engine, "playground", "install", ["bun", "install"], await checkInstall(app, installed, path => readGuest(page, path)));
       for (const command of app.commands) {
