@@ -20,6 +20,8 @@ const emitted = readFileSync(output, "utf8");
 // Invert only the approved executable deltas. The pinned original AST hash guards the remainder.
 function originalSyntax(text: string): string {
   const replacements: [RegExp, string, number][] = [
+    [/  function validateCursorCallback[\s\S]*?(?=  \/\/ stdout\/stderr:)/g, "", 1],
+    [/      clearLine,\n      clearScreenDown,\n      cursorTo,\n      moveCursor,\n/g, "", 1],
     [/\n  let execveWarned = false;\n/g, "\n", 1],
     [/\n    execve\(\) \{[\s\S]*?\n    \},/g, "", 1],
     [/const processBase\s*=/g, "const process =", 1],
@@ -50,7 +52,7 @@ function syntax(text: string): string {
 }
 const original = originalSyntax(emitted);
 
-test("only approved staging and captured-failure changes affect the pinned process AST", () => {
+test("only approved staging, captured-failure, execve and cursor changes affect the pinned process AST", () => {
   expect(createHash("sha256").update(syntax(original)).digest("hex")).toBe("392f346ac5d0efd2ad0b59a01bd8c8e34cb3e58a09f1d9fd2f53fbb4f37352d9");
   expect(emitted).toContain('"use strict";');
   expect(emitted).not.toContain("finally");
@@ -155,8 +157,23 @@ for (const [name, mutate] of snapshotMutations) {
   });
 }
 
-test("original and converted factories preserve lifecycle, identity, descriptors and coercions", async () => {
-  expectProcessSnapshot(await controls(emitted), await controls(original));
+test("process controls change only execve and the four cursor own keys", async () => {
+  const previous = await controls(original);
+  for (const name of ["stdout", "stderr"]) {
+    const keys: string[] = previous.shapes[name];
+    const position = keys.indexOf("getColorDepth");
+    assert.ok(position >= 0);
+    keys.splice(position, 0, "clearLine", "clearScreenDown", "cursorTo", "moveCursor");
+  }
+  expectProcessSnapshot(await controls(emitted), previous);
+});
+
+test("stdout fixture pins the complete emitter capture-state key list", async () => {
+  const stdout = (await controls(emitted)).shapes.stdout;
+  assert.ok(stdout);
+  const expected = readFileSync(join(root, "tests/fixtures/runtime-ts-process/expected.txt"), "utf8")
+    .split("\n").find(line => line.startsWith("stdout keys "));
+  expect(expected).toBe(`stdout keys ${stdout.join(",")}`);
 });
 
 const mutations: readonly [string, string, string][] = [

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeGuest, prepareGuest, verifyGuest, type GuestArtifact, type GuestDescriptor } from "./guest-artifact.ts";
+import { guestBuilds } from "./guest-source-manifest.ts";
 import { verifyGuestBuildReceipt, type GuestBuildReceipt } from "./guest-build-receipt.ts";
 
 const artifacts = ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"] as const;
@@ -50,7 +51,9 @@ export async function verifyPublicationInputs(dist: string, descriptor: GuestDes
   let matched = false;
   for (const name of artifacts) {
     const candidate = await readFile(join(dist, name));
-    verifyGuestBuildReceipt(candidate, JSON.parse(await readFile(`${join(dist, name)}.build.json`, "utf8")));
+    const receipt: unknown = JSON.parse(await readFile(`${join(dist, name)}.build.json`, "utf8"));
+    verifyGuestBuildReceipt(candidate, receipt);
+    if (guestBuilds[receipt.sourceManifest.build].artifact !== name) throw new Error(`Guest publication engine mismatch: ${name}`);
     const described = describeGuest(candidate);
     if (described.sha256 === descriptor.sha256 && described.bytes === descriptor.bytes) matched = true;
   }
@@ -67,6 +70,7 @@ export async function snapshotPublicationInputs(dist: string, descriptor: GuestD
     const bytes = await readFile(path);
     const receipt = JSON.parse(await readFile(`${path}.build.json`, "utf8"));
     verifyGuestBuildReceipt(bytes, receipt);
+    if (guestBuilds[receipt.sourceManifest.build].artifact !== name) throw new Error(`Guest publication engine mismatch: ${name}`);
     const candidate = describeGuest(bytes);
     await writeFile(join(directory, name), bytes, { flag: "wx", mode: 0o400 });
     await writeFile(join(directory, `${name}.build.json`), JSON.stringify(receipt, null, 2) + "\n", { flag: "wx", mode: 0o400 });

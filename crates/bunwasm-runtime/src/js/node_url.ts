@@ -154,11 +154,13 @@
     else if (obj.hostname) host = auth + obj.hostname + (obj.port ? ":" + obj.port : "");
     auth = "";
     let pathname = obj.pathname || "";
+    // Bun converts the query, including its accessors and value coercion, before it reads an explicit search.
+    const query = obj.query;
+    const queryString = query && typeof query === "object" && Object.keys(query).length
+      ? new internal.web.URLSearchParams(query).toString()
+      : "";
     let search = obj.search || "";
-    if (!search && obj.query && typeof obj.query === "object" && Object.keys(obj.query).length) {
-      const qs = new internal.web.URLSearchParams(obj.query).toString();
-      if (qs) search = "?" + qs;
-    }
+    if (!search && queryString) search = "?" + queryString;
     if (search && !search.startsWith("?")) search = "?" + search;
     let hash = obj.hash || "";
     if (hash && !hash.startsWith("#")) hash = "#" + hash;

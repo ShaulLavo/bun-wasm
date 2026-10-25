@@ -1,6 +1,6 @@
 ### Node event emitter
 
-`crates/bunwasm-runtime/src/js/events.ts`. Class **Port**. Comparison sources are Node `lib/events.ts` at the Node comparison revision and Bun `src/js/node/events.ts` at the Bun pin. The Node comparison revision is `caa20e28dc1f21a97f7b2a7134973fd6435b65f0`; the Bun pin is `9510e74152073d850a18758ca41114d8f214ffa6`. The direct Node import revision is not recorded.
+`crates/bunwasm-runtime/src/js/events.ts`. Class **Port**. Comparison sources are Node `lib/events.js` at the Node comparison revision and Bun `src/js/node/events.ts` at the Bun pin. The Node comparison revision is `caa20e28dc1f21a97f7b2a7134973fd6435b65f0`; the Bun pin is `9510e74152073d850a18758ca41114d8f214ffa6`. The direct Node import revision is not recorded.
 
 Retain listener storage conventions, once-wrapper state, listener removal, and remove-all behavior. Replace primordials, internal validators, and native async-resource or EventTarget integration with local validation and runtime scheduling. The module also supplies local promise and async-iterator helpers. These changes provide Node-style listener semantics on the guest event loop without native async hooks.
 
@@ -51,7 +51,10 @@ The R3 correction restores the complete original executable AST of `onceWrapper`
 and `EventEmitter.on` against immutable approved source `ac43127c85addabed7e0c2a4883247ae074e858c`.
 That comparison covers the original finish-path splice and iteration and every failure path in
 those regions. The full AST regression check pins the remaining audited changes and separately
-verifies exactly 59 unchanged top-level statements, including strictness and the lazy export.
+verifies exactly 57 unchanged top-level statements, including strictness and the lazy export.
+The rejection-capture fix separately owns the initialization and listener-invocation
+statements previously counted in that remainder. Its private symbol and two
+helpers are excluded explicitly, with the full changed AST pinned by the same fence.
 It does not claim blanket AST or emitted-byte identity.
 
 The private-intrinsics fixture and actual-factory controls cover absent results at each shift
@@ -90,14 +93,41 @@ allocation in the existing bridge.
 
 The shared inspector declarations are original erased host contracts. All three `require("inspect")` overloads return the same `ConsoleInspector`, which retains `parseStack`, `formatArgs` and `bunInspect` and adds `nodeInspect`. The process declaration retains `cwd`, `stdout`, `stderr` and its `var` declaration, adding only optional `emitWarning`. No inspector or process implementation changes. Six declaration-order compile cases cover these contracts.
 
+### Listener rejection capture
+
+The capture path adapts Node `lib/events.js`, `addCatch` and
+`emitUnhandledRejectionOrErr`, at Node v24.22.1 commit
+`ce7aaf1cee78b8cf0ce17364260535c418d3ed26`. Each constructor saves the
+current capture default under a private symbol. As in Node and native Bun,
+a false constructor option inherits the static default; it does not override
+an enabled default. Existing option validation remains unchanged.
+
+Listener calls retain their synchronous throw and snapshot behavior. Enabled
+capture reads a returned value's `then` once and invokes it with its original
+receiver. A rejection schedules delivery with the existing `internal.nextTick`,
+outside the promise reaction, to the capture symbol handler or the error event.
+Error delivery temporarily disables capture and restores it in `finally`.
+This prevents a rejected error handler from feeding back into error delivery.
+Throwing `then` getters or methods use the synchronous error-event route.
+No process, async-context or worker implementation changes are required.
+
+The capture symbol's unique-symbol type and optional instance handler are
+original erased contracts in `events-types.d.ts`. The factory controls run
+Node and Bun references and observe expected unhandled rejections only inside
+a bounded child, removing that observer in `finally`. The supported guest
+fixture covers capture, static snapshots, listener results and thenables.
+Native Bun 1.4.4 only observes real promises here, so thenable expectations
+come from Node; the fixture's manual marker preserves that attribution.
+
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/events.ts`](#node-event-emitter) | Port | Adapt Node listener bookkeeping without native async hooks; audit the erased constructor bridge and six private-invariant views. |
-| [`events-types.d.ts`](#node-event-emitter) | Host feature | Original erased contracts for the existing emitter and its internal dependencies. |
+| [`events-types.d.ts`](#node-event-emitter) | Host feature | Original erased contracts for the emitter, its capture symbol handler and internal dependencies. |
 | `console_types.d.ts` and `runtime.d.ts`, events integration | Host feature | Original erased shared inspector and optional process warning contracts; retain existing console, stack and process members. |
 | [`event_emitter_async_resource.ts`](#node-event-emitter) | Port | Adapt Bun's async emitter to the guest AsyncResource context bridge. |
+| [`crates/bunwasm-runtime/src/js/events.ts`, rejection capture](#listener-rejection-capture) | Port | Adapt Node v24.22.1 thenable observation and rejection dispatch to the existing guest tick scheduler. |
 | [`crates/bunwasm-runtime/src/js/events.ts`, listener publication](#node-event-emitter) | Host feature | Original mutation hook publishes signal dispositions before user listener-removal callbacks. |
 
 [Parent context](bun-patch-series.md).

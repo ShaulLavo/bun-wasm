@@ -169,8 +169,8 @@ declare namespace BunWasm {
     require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
     builtin(name: "node:stream"): {
       Transform: CompressionConstructor;
-      Readable: new(options: { read(): void }) => WorkerReadable;
-      Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: () => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
+      Readable: new(options: { read(): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerReadable;
+      Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: (error?: unknown) => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
     };
   }
   interface Internal { web: { Response: { _setUrl(response: Response, url: string): void }; URLSearchParams: new (init: object) => URLSearchParams } }
@@ -348,11 +348,16 @@ declare var Temporal: {
 declare namespace BunWasm {
   /** Exactly the values admitted by typeof callback === "function", with no argument validation. */
   type ProcessWriteCallback = Function;
+  type ProcessCursorCallback = (error?: unknown) => void;
   interface ProcessWriter extends NodeEmitter {
     fd: number; writable: boolean; destroyed: boolean; isTTY: boolean; columns: number; rows: number;
     write(chunk: unknown, encoding?: unknown, callback?: unknown): boolean;
     end(chunk?: unknown, encoding?: unknown, callback?: unknown): ProcessWriter;
     cork(): void; uncork(): void; setDefaultEncoding(): ProcessWriter;
+    clearLine(direction: number, callback?: ProcessCursorCallback): boolean;
+    clearScreenDown(callback?: ProcessCursorCallback): boolean;
+    cursorTo(x?: number, y?: number | ProcessCursorCallback, callback?: ProcessCursorCallback): boolean;
+    moveCursor(dx: number, dy: number, callback?: ProcessCursorCallback): boolean;
     getColorDepth(): number; hasColors(): boolean; getWindowSize(): number[];
     _writableState: { ended: boolean };
   }
