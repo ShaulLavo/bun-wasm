@@ -877,9 +877,18 @@ evidence.
   `engine_jsc.rs:302`; no cause is proved. Historical browser dev exits on an
   unhandled esbuild `The service was stopped` rejection with live handles.
   Do not assume these engine outcomes have one cause.
-- **Astro module loading.** The original QuickJS circular `Fragment` binding and
-  JSC/browser missing `Http2ServerResponse` export are reached again after fixing
-  builtin dispatch. Their plain-message errors are now retained by classification.
+- **Astro builtin and module loading.** The 2026-10-24 frozen Astro 5.14.1
+  replay passes its static build on native Bun 1.4.4. The real
+  `Http2ServerResponse` compatibility class now passes the same response fixture
+  on QuickJS, JSC and the browser engine under Node. JSC and browser pass the
+  missing-export blocker, then fail in `tslib/modules/index.js` while
+  destructuring `__extends` from an undefined default import. QuickJS still fails
+  on the circular `Fragment` binding. A small cyclic re-export reproduces that
+  QuickJS failure independently of Astro. No shared loader changes belong to
+  this builtin fix. The frozen lock, exact errors, build receipts and minimal
+  repro are in `/work/reports/bun-wasm/astro-builtins-20261024`. HTTP/2 transport
+  remains unsupported; the response fixture does not prove complete Astro
+  compatibility or browser-page execution.
 - **Vitest events adapter.** Both configured pools stop at the missing
   `EventEmitterAsyncResource` export on every engine, before a worker pool starts.
   The async emitter adapter now exports it and runs listeners in the resource's

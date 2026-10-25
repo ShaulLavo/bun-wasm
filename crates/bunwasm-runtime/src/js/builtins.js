@@ -679,7 +679,7 @@
     "node:dns/promises": () => unsupportedModule("dns.promises", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "reverse", "Resolver"]),
     "node:http": () => httpModule("http"),
     "node:https": () => httpModule("https"),
-    "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {} }),
+    "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {}, Http2ServerResponse: internal.require("http2_response") }),
     "node:zlib": zlibModule,
     // Node's contract when built without tracing. Bun and Node also reject it in workers.
     "node:trace_events": () => {
