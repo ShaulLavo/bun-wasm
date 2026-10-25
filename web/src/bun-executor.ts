@@ -9,7 +9,7 @@ import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
 import { createLookupClient, type LookupClient } from "./net/lookup.js";
 
-export type Engine = "quickjs" | "jsc" | "browser";
+export type Engine = "quickjs" | "jsc" | "browser" | "hermes";
 
 export interface RunRequest extends RuntimeWorkerRequest {
   engine: Engine;

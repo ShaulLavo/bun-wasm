@@ -132,7 +132,9 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   // PATH selecting its engine; explicit absolute paths are never rewritten.
   let programs = registeredPrograms.get(options.runtime);
   if (!programs) registeredPrograms.set(options.runtime, programs = new Set());
-  for (const engine of ["quickjs", "jsc", "browser"] as const) {
+  // Hermes is opt-in: its executables exist only in runtimes whose root runs Hermes.
+  const engines: Engine[] = ["quickjs", "jsc", "browser"];
+  for (const engine of engines.concat(options.engine === "hermes" ? ["hermes"] : [])) {
     const name = `${ENGINE_BIN[engine]}/bun`;
     if (programs.has(name)) continue;
     let loading: Promise<WebAssembly.Module> | undefined;
