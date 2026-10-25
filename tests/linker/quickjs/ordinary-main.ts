@@ -29,22 +29,21 @@ let rootPid: number | undefined;
 const descriptors = new DescriptorTable();
 let disposal: Promise<unknown> | undefined;
 function check(value: unknown, label: string): asserts value { if (!value) throw new Error(label); }
-function cleanup() {
-  return disposal ??= (async () => {
-    try {
-      if (rootPid !== undefined) await service?.rootExit(rootPid, 0);
-      installation?.dispose();
-      await runtime?.dispose();
-      check(workers.size === 0, `production teardown left ${workers.size} workers`);
-    } finally {
-      descriptors.dispose();
-      for (const worker of Array.from(workers)) worker.terminate();
-      globalThis.Worker = NativeWorker;
-    }
-    check(workers.size === 0 && runtime?.disposed, "owned runtime and workers released");
-    return { workers: workers.size, runtimeDisposed: runtime.disposed, workerConstructorRestored: globalThis.Worker === NativeWorker };
-  })();
+async function dispose() {
+  try {
+    if (rootPid !== undefined) await service?.rootExit(rootPid, 0);
+    installation?.dispose();
+    await runtime?.dispose();
+    check(workers.size === 0, `production teardown left ${workers.size} workers`);
+  } finally {
+    descriptors.dispose();
+    for (const worker of Array.from(workers)) worker.terminate();
+    globalThis.Worker = NativeWorker;
+  }
+  check(workers.size === 0 && runtime?.disposed, "owned runtime and workers released");
+  return { workers: workers.size, runtimeDisposed: runtime.disposed, workerConstructorRestored: globalThis.Worker === NativeWorker };
 }
+function cleanup() { return disposal ??= dispose(); }
 addEventListener("pagehide", () => { void cleanup(); }, { once: true });
 
 async function run() {

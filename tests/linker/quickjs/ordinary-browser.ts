@@ -22,12 +22,11 @@ let server: ReturnType<typeof Bun.serve> | undefined;
 let browser: Browser | undefined;
 let launch: Promise<Browser> | undefined;
 let disposal: Promise<void> | undefined;
-function cleanup() {
-  return disposal ??= (async () => {
-    try { await (browser ?? await launch?.catch(() => undefined))?.close(); }
-    finally { server?.stop(true); if (scratch) await rm(scratch, { recursive: true, force: true }); }
-  })();
+async function dispose() {
+  try { await (browser ?? await launch?.catch(() => undefined))?.close(); }
+  finally { server?.stop(true); if (scratch) await rm(scratch, { recursive: true, force: true }); }
 }
+function cleanup() { return disposal ??= dispose(); }
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
 const deadline = setTimeout(() => { console.error("ordinary consumer deadline"); void cleanup().finally(() => process.exit(1)); }, 120_000);
 try {
