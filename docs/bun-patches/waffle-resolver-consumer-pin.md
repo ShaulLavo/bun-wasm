@@ -39,3 +39,32 @@ claim fresh guest, native, browser or product acceptance.
 | Waffle resolver consumer pin | Host feature | Consume one parent-selected runtime revision while preserving Bun adapter ownership. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+## Browser network asset publication
+
+The same selected revision owns `browser/net/module.ts`, its lazy
+`new URL("./network.wasm", import.meta.url)` loader, `tooling/build-network.ts`
+and `docs/adr/005-lazy-rust-wasm-network.md`. The original consumer build adapter
+in `scripts/browser-build.ts` now publishes the prepared artifact beside each
+emitted JavaScript file that contains that loader. It also mirrors the sidecar
+with worker code and chunks under `__bunwasm`. Both the web page and sandbox use
+this builder. Direct browser builds use the same publication hook; in-memory
+analysis does not write assets. The package build keeps Waffle external, so its
+embedding app still owns final browser asset delivery.
+
+The adapter verifies the installed artifact against its producer checksum and
+fails if either file is missing or the bytes disagree. Waffle's preparation owns
+source-input receipt verification and compilation. Bun neither copies the
+network implementation nor recompiles it. For this exact selection the artifact
+is 85,060 bytes, SHA-256
+`4a9796d33ca4f6eac937e6dff96da6f7807af9917782f9691d567e17195a75e6`,
+with input receipt
+`cb201e792bb4b70fea3e3b332174458939c9791fe60450d368ccc53a7df4ff4b`.
+
+The browser-build regression derives the relative asset URL from emitted code,
+fetches only generated distribution files, verifies bytes and `application/wasm`,
+and compiles the HTTP response. It covers unsplit and split/scoped layouts, a
+removed distribution asset, and missing or corrupt installed artifacts. This is
+bundle and static-delivery proof, not browser runtime or guest acceptance. The
+shared builder and this asset integration need a new parent review beyond the
+pin and fixture review.
