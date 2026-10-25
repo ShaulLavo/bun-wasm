@@ -31,6 +31,7 @@ export interface Observation {
   status: "pass" | "fail" | "blocked";
   assertion?: string;
   blocker?: string;
+  durationMs?: number;
 }
 interface TrafficEvidence {
   sequence: number;
@@ -218,8 +219,10 @@ async function featureProbe(page: ProductPage, base: string, probe: FeatureProbe
 }
 
 async function observe(stage: string, operation: () => Promise<string>): Promise<Observation> {
-  try { return { stage, status: "pass", assertion: await operation() }; }
-  catch (error) { return { stage, status: "fail", blocker: String(error) }; }
+  const started = performance.now();
+  const durationMs = () => Math.round(performance.now() - started);
+  try { return { stage, status: "pass", assertion: await operation(), durationMs: durationMs() }; }
+  catch (error) { return { stage, status: "fail", blocker: String(error), durationMs: durationMs() }; }
 }
 
 export async function productObservations(page: ProductPage, base: string, check: ProductCheck, source: GuestSource, traffic: EditTraffic, timeout: number): Promise<Observation[]> {

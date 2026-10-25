@@ -11,6 +11,8 @@ export const ENGINES: Record<Engine, { name: string; wasm: string; script: strin
   quickjs: { name: "QuickJS", wasm: "bun.wasm", script: "scripts/build.sh" },
   jsc: { name: "JavaScriptCore", wasm: "bun-jsc.wasm", script: "scripts/build-bun-jsc.sh" },
   browser: { name: "Browser (native)", wasm: "bun-browser.wasm", script: "scripts/build-bun-browser.sh" },
+  // Opt-in: no default build makes bun-hermes.wasm, and the engine menu leaves it out.
+  hermes: { name: "Hermes", wasm: "bun-hermes.wasm", script: "scripts/build-bun-hermes.sh" },
 };
 
 export function isEngine(name: string | null): name is Engine {

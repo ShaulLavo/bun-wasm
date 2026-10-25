@@ -13,6 +13,7 @@ import { completeObservations } from "./product-browser.ts";
 import { productScoreboard, unlockCandidates } from "./product-report.ts";
 import { networkGuardStage, runProductBrowserCase } from "./product-campaign.ts";
 import { guestProvenance, verifyPlaygroundBuilds } from "./product-provenance.ts";
+import { memorySampler } from "./memory.ts";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
 if (interfaces.some(line => line.split(":")[0].trim() !== "lo")) throw new Error("Use scripts/app-matrix.sh in its loopback-only network namespace");
@@ -25,7 +26,7 @@ for (const arg of process.argv.slice(2)) {
   flags.set(key.slice(2), value);
 }
 if (flags.has("help")) {
-  console.log("scripts/app-matrix.sh [--product] [--record] [--reference] [--strict] --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-app-matrix/run [--apps=hono,drizzle] [--engines=quickjs,jsc,browser] [--hosts=native,playground] [--timeout=90] [--launcher=PATH]\nDefault is offline replay. --record permits missing npm records to be downloaded. App failures are census results unless --strict is set; missing cache records or host artifacts exit nonzero.");
+  console.log("scripts/app-matrix.sh [--product] [--record] [--reference] [--strict] --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-app-matrix/run [--apps=hono,drizzle] [--engines=quickjs,jsc,browser,hermes] [--hosts=native,playground] [--timeout=90] [--launcher=PATH]\nDefault is offline replay. --record permits missing npm records to be downloaded. App failures are census results unless --strict is set; missing cache records or host artifacts exit nonzero.");
   process.exit(0);
 }
 const apps = flags.has("product") ? (await import("./product.ts")).productApps : legacyApps;
@@ -40,12 +41,12 @@ const options = {
   strict: flags.has("strict"), product: flags.has("product"), record: flags.has("record"), reference: flags.has("reference"),
 };
 if (!Number.isFinite(options.timeout) || options.timeout < 1000) throw new Error("--timeout must be at least one second");
-for (const engine of options.engines) if (!["quickjs", "jsc", "browser"].includes(engine)) throw new Error(`Unknown engine ${engine}`);
+for (const engine of options.engines) if (!["quickjs", "jsc", "browser", "hermes"].includes(engine)) throw new Error(`Unknown engine ${engine}`);
 for (const host of options.hosts) if (!["native", "playground"].includes(host)) throw new Error(`Unknown host ${host}`);
 const requested = flags.has("apps") ? flags.get("apps").split(",") : apps.map(app => app.id);
 for (const id of requested) if (!apps.some(app => app.id === id)) throw new Error(`Unknown app ${id}`);
 const selected = apps.filter(app => requested.includes(app.id));
-const wasmName = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm" };
+const wasmName = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm", hermes: "bun-hermes.wasm" };
 for (const engine of options.engines) if (!existsSync(join(root, "dist", wasmName[engine]))) throw new Error(`Build dist/${wasmName[engine]} first`);
 if (options.hosts.includes("native") && options.engines.some(engine => engine !== "browser") && !existsSync(options.launcher)) throw new Error(`Build launcher ${options.launcher} first`);
 if (options.hosts.includes("playground") && !existsSync(join(root, "web/dist/index.html"))) throw new Error("Build web/ first");
@@ -68,6 +69,7 @@ const children = new Set();
 let results = [];
 let mirror;
 let browserSession;
+const memory = memorySampler(process.pid);
 let cleaned = false;
 
 function stop(child) {
@@ -78,6 +80,7 @@ function stop(child) {
 async function cleanup() {
   if (cleaned) return;
   cleaned = true;
+  memory.stop();
   await Promise.allSettled([browserSession?.close(), mirror?.close()]);
   const exited = Array.from(children, child => child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise(resolve => child.once("close", resolve)));
   for (const child of children) stop(child);
@@ -127,7 +130,7 @@ function guestCommand(engine, project, args, port) {
 }
 
 function record(app, engine, host, stage, command, result) {
-  const row = { app: app.id, versions: app.dependencies, engine, host, stage, command: command.join(" "), ...result };
+  const row = { app: app.id, versions: app.dependencies, engine, host, stage, command: command.join(" "), ...result, ...(host === "playground" ? { peakBrowserPssBytes: memory.take() } : {}) };
   results.push(row);
   writeFileSync(join(options.output, "results.jsonl"), JSON.stringify(row) + "\n", { flag: "a" });
   console.log(`${row.status.padEnd(7)} ${app.id}/${engine}/${host}/${stage}${row.blocker ? ` ${row.blocker}` : ""}`);
@@ -268,7 +271,7 @@ try {
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
   if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.map(engine => [wasmName[engine], artifacts[engine].sha256])));
   mirror = await registry({ directory: options.cache, record: options.record });
