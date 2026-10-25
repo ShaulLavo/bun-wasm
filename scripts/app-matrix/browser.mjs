@@ -6,6 +6,7 @@ import { checkCommand, checkInstall } from "./checks.mjs";
 import { browserDiagnostics } from "./browser-diagnostics.ts";
 import { verifyBrowserServer, stoppedPreviewError } from "./server-browser.ts";
 import { observeHmr } from "./hmr.ts";
+import { observeProductTraffic, productObservations } from "./product-browser.ts";
 import { failure, stageOutput } from "./classify.ts";
 
 export function earlyServerExit(command, stage) {
@@ -29,6 +30,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
     await page.waitForTimeout(100);
   }
   const preview = await context.newPage();
+  const traffic = observeProductTraffic(preview);
   const errors = [];
   preview.on("pageerror", error => errors.push(String(error)));
   let checked;
@@ -44,7 +46,11 @@ export async function serverCommand({ page, context, command, app, engine, optio
     if (errors.length) throw new Error(errors.join("\n"));
     if (await page.evaluate(() => globalThis.__matrixDone)) return earlyServerExit({ code: await page.evaluate(() => globalThis.playground.shell.lastExit), output: await output() }, command.name);
     await preview.screenshot({ path: join(options.output, `${app.id}-${engine}-playground-${command.name}.png`) });
-    checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}` };
+    const observations = await productObservations(preview, url, check, {
+      read: path => readGuest(page, path),
+      write: (path, contents) => page.evaluate(([path, contents]) => globalThis.playground.fs.writeFile(`/home/user/${path}`, contents), [path, contents]),
+    }, traffic, options.timeout);
+    checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations };
   } catch (error) {
     checked = { status: "fail", ...failure(`${String(error)}\n${await output()}`, command.name) };
   } finally {
@@ -52,6 +58,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
     const error = checked?.status === "pass" && command.check.framework ? await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`)) : undefined;
     if (error) checked = { status: "fail", ...failure(error, command.name) };
     if (checked?.status === "pass" && command.check.framework) checked.assertion += "; guest stop removes preview listener (502)";
+    traffic.close();
     await preview.close();
   }
   return checked;
