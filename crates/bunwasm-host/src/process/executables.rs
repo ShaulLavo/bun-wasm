@@ -9,13 +9,24 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{ACCES, IO, NOENT, NOTDIR};
 
-pub const DEFAULT_PATHS: [&str; 2] = ["/bin/bun", "/bin/node"];
-pub const ENGINE_PATHS: [(&str, [&str; 2]); 2] = [
+pub const DEFAULT_PATHS: [&str; 3] = ["/bin/bun", "/bin/node", "/bin/nodejs"];
+pub const ENGINE_PATHS: [(&str, [&str; 3]); 2] = [
     (
         "quickjs",
-        ["/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node"],
+        [
+            "/opt/bun/quickjs/bin/bun",
+            "/opt/bun/quickjs/bin/node",
+            "/opt/bun/quickjs/bin/nodejs",
+        ],
     ),
-    ("jsc", ["/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node"]),
+    (
+        "jsc",
+        [
+            "/opt/bun/jsc/bin/bun",
+            "/opt/bun/jsc/bin/node",
+            "/opt/bun/jsc/bin/nodejs",
+        ],
+    ),
 ];
 
 /// A launcher-owned filesystem root containing real engine capability files.

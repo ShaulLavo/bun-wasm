@@ -31,7 +31,7 @@
 
     function open() {
       if (typeof target === "number") fd = target;
-      else { fd = native.open(target, "r"); owned = true; }
+      else { fd = native.open(target, 0); owned = true; }
       const stat = native.fstat(fd);
       const regular = (stat.mode & 0o170000) === 0o100000;
       const sharedCursor = regular && typeof target === "number" && !streaming;

@@ -117,7 +117,7 @@ test("preview1 roots keep their explicit module and Bun executable paths launch 
       return { data: { filesystem: createFilesystemIdentity(), pipeRegistry }, cancel: () => registry.collectProcess(pid) };
     },
       });
-      for (const alias of ["/bin/bun", "/bin/node"]) {
+      for (const alias of ["/bin/bun", "/bin/node", "/bin/nodejs"]) {
         const pid = client.spawn(1, { executable: alias, argv: [alias], env: {}, cwd: "/", job: 1, fds: [] });
         await waitForChild(state, pid);
         const child = state.requests.find(request => request.runtimeProcess && workerProcessState(request.runtimeProcess).pid === pid);

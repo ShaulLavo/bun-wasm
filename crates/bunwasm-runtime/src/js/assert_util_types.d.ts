@@ -55,5 +55,5 @@ declare namespace BunWasm {
     builtin(name: "node:crypto"): unknown;
   }
 }
-interface String { toWellFormed?(): string }
+interface String { toWellFormed(): string }
 declare const Float16Array: Function;
