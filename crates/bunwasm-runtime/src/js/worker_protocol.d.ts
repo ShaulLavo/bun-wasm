@@ -111,7 +111,7 @@ declare namespace BunWasm {
     require(name: "process"): GuestProcess;
     require(name: "worker_codec"): { create(hooks: WorkerCodecHooks): WorkerCodec };
     require(name: "worker_channel"): { open(input: number, output: number): WorkerChannel };
-    require(name: "worker_threads"): { initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
+    require(name: "worker_threads"): { isMainThread: boolean; initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
     require(name: "net"): unknown;
     require(name: "node_url"): { fileURLToPath(url: URL): string };
     addIoWaiter<W extends IoWaiter>(waiter: W): W;
