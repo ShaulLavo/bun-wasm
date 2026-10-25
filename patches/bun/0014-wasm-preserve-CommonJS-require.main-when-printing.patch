@@ -1,0 +1,42 @@
+From 2c7a5e6823e94e1ec92be4c4b49480964230b225 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Sun, 25 Oct 2026 17:06:30 +0200
+Subject: [PATCH 14/14] wasm: preserve CommonJS require.main when printing
+
+Co-Authored-By: Kimi Code <noreply@moonshot.cn>
+---
+ src/bundler/transpiler.rs | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/bundler/transpiler.rs b/src/bundler/transpiler.rs
+index 3821fc09..cabba997 100644
+--- a/src/bundler/transpiler.rs
++++ b/src/bundler/transpiler.rs
+@@ -2275,6 +2275,7 @@ impl<'a> Transpiler<'a> {
+                 symbols,
+                 source,
+                 source_map_context,
++                exports_kind,
+                 runtime_transpiler_cache,
+             ),
+ 
+@@ -2325,6 +2326,7 @@ impl<'a> Transpiler<'a> {
+         symbols: bun_ast::symbol::Map,
+         source: &bun_ast::Source,
+         source_map_context: Option<js_printer::SourceMapHandler<'_>>,
++        exports_kind: bun_ast::ExportsKind,
+         runtime_transpiler_cache: Option<core::ptr::NonNull<RuntimeTranspilerCache>>,
+     ) -> crate::Result<usize> {
+         let opts = js_printer::Options {
+@@ -2334,6 +2336,11 @@ impl<'a> Transpiler<'a> {
+             minify_whitespace: self.options.minify_whitespace,
+             minify_syntax: self.options.minify_syntax,
+             minify_identifiers: self.options.minify_identifiers,
++            module_type: if exports_kind == bun_ast::ExportsKind::Cjs {
++                options::Format::Cjs
++            } else {
++                options::Format::Esm
++            },
+             import_meta_ref: ast.import_meta_ref,
+             print_dce_annotations: self.options.emit_dce_annotations,
+             runtime_transpiler_cache,

@@ -255,7 +255,7 @@ pub fn function_imports(args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, 
 }
 
 /// Transpile one module to ESM JavaScript. `path` is used for error messages
-/// and the JSX/TS pragma lookups; it is not read from disk.
+/// and project decorator settings; the supplied source is not read from disk.
 pub fn transpile(source: &str, path: &str, loader: Loader) -> Result<String, String> {
     with_state(|state| run(state, source, path, loader, None, false)).map(|out| out.code)
 }
@@ -478,6 +478,24 @@ fn run(
     )
 }
 
+fn runtime_decorator_config(
+    state: &mut State,
+    path: &str,
+    loader: Loader,
+) -> Option<&'static bun_resolver::tsconfig_json::TSConfigJSON> {
+    if state.public_api || !matches!(loader, Loader::Ts | Loader::Tsx) {
+        return None;
+    }
+    let path = std::path::absolute(path).ok()?;
+    path.parent()?.ancestors().find_map(|directory| {
+        state
+            .transpiler
+            .resolver
+            .read_dir_info_ignore_error(directory.as_os_str().as_encoded_bytes())
+            .and_then(|directory| directory.tsconfig_json())
+    })
+}
+
 fn run_with_scan(
     state: &mut State,
     source: &str,
@@ -506,6 +524,8 @@ fn run_with_scan(
     let code: &'static [u8] = arena_ref.alloc_slice_copy(source.as_bytes());
     let src: &'static bun_ast::Source =
         arena_ref.alloc(bun_ast::Source::init_path_string(path_static, code));
+    let decorator_config = runtime_decorator_config(state, path, loader);
+    let decorator_config = state.tsconfig.as_deref().or(decorator_config);
     let parse_options = ParseOptions {
         arena: arena_ref,
         macro_remappings: Default::default(),
@@ -520,14 +540,8 @@ fn run_with_scan(
         virtual_source: Some(src),
         replace_exports: Default::default(),
         macro_js_ctx: bun_bundler::transpiler::default_macro_js_value(),
-        experimental_decorators: state
-            .tsconfig
-            .as_deref()
-            .is_some_and(|ts| ts.experimental_decorators),
-        emit_decorator_metadata: state
-            .tsconfig
-            .as_deref()
-            .is_some_and(|ts| ts.emit_decorator_metadata),
+        experimental_decorators: decorator_config.is_some_and(|ts| ts.experimental_decorators),
+        emit_decorator_metadata: decorator_config.is_some_and(|ts| ts.emit_decorator_metadata),
         use_define_for_class_fields: state
             .tsconfig
             .as_deref()
