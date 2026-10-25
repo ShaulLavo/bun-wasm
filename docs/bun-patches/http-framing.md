@@ -70,10 +70,24 @@ stay outside the promise executor, within three nesting levels. Fetch body and
 header waits preserve the exact AbortSignal reason, including null and other
 falsy values. These are original adapter corrections; no native Bun or Node
 source is copied. The shared body-stream helper owns clone validation and tee
-metadata for Request and Response. The
+metadata for Request and Response. Request construction also transfers an inherited
+body through a reader-backed stream instead of copying cached bytes or teeing it.
+The source stays locked and used, while cancellation and producer errors reach the
+new owner. Host engines validate the existing stream with the captured native
+Request constructor before acquiring its reader. This rejects native disturbed
+streams without adding a body-use observer or modifying the separate observer
+adapter. Explicit replacement bodies leave the source alone. Request redirect
+mode is inherited when only headers change. These original corrections use Node
+26.12.1 and Bun 1.4.4 as behavioral controls, not copied implementations. Node is
+the reference for post-transfer disturbance: Bun 1.4.4 leaves the source's
+`bodyUsed` false. `tests/fixtures/runtime-request-copy` checks the constructor and
+actual fetch path; `scripts/request-copy.test.ts` executes the Web factory and
+unchanged fetch adapter with shipped and native streams. The
 strictly typed stream generator produces byte-identical output for its pinned
 input.
 Node request dispatch retains its existing complete-upload behavior.
+
+Node HTTP responses preserve stream demand across the adapter boundaries. Raw responses pause their socket when `IncomingMessage.push()` is full and retain decoded output until `_read()` resumes it. Fetch-backed HTTPS responses use one body reader, stop after a full push, and cancel that reader on request or response destruction instead of awaiting `arrayBuffer()`. Server writes report backpressure, complete callbacks after their framed bytes are accepted, emit one drain after queued writes settle, and propagate cancellation to write and end callbacks once. `ClientRequest.setTimeout()` updates and disables inactivity timers before or after connection establishment; raw requests use the socket timer, while fetch-backed requests reset their own timer on response activity and clear it on completion or destruction. Raw socket attachment clears the provisional request timer and installs one timeout forwarder per exchange. Duration updates do not add forwarders; terminal cleanup removes the forwarder even after disabling the timer. These are original adapter changes with native Bun 1.4.4 and Node 26.12.1 behavioral controls, not copied upstream implementations.
 
 HTTPS requests continue to use the host's TLS fetch transport. The raw socket
 ABI has no TLS capability, so HTTPS upgrades without a caller-supplied connection
@@ -87,6 +101,7 @@ The caller-supplied connection path retains caller ownership of TLS setup.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming bodies, response cancellation independent of transport disposal before and during writer ownership, Agent pool and upgrade response adapters shared by all engines. |
+| Request body copying in `web.js` and `body_streams.ts` | Host feature | Original reader-backed ownership transfer and inherited redirect state. |
+| [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming bodies, response cancellation independent of transport disposal before and during writer ownership, Agent pool, client inactivity timer ownership and upgrade response adapters shared by all engines. |
 
 [Ledger scope and pinned revisions](scope.md).

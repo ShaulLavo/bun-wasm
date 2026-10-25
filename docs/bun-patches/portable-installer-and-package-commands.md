@@ -19,8 +19,12 @@ Cache-Control header, so it does not change content negotiation.
 
 Workspace discovery reads declared member manifests, resolves local dependencies
 relative to their declaring package, and creates filesystem links. The native
-installer retains its hoisted graph and tarball validation. Foreign lockfile
-migration is kept in a separate follow-up PR using this workspace graph.
+installer retains its hoisted graph and tarball validation. After platform
+selection, the resolver releases full registry packuments before archive
+installation. Selected and skipped packages keep their own metadata for lockfile
+writing and downloads. Registry cache validation still runs before parsing and
+resolution. Foreign lockfile migration is kept in a separate follow-up PR using
+this workspace graph.
 
 `bun update` resolves selected dependencies again, within their declared ranges
 unless `--latest` is supplied. Selected member updates clear their nested
@@ -79,6 +83,41 @@ failure are checked. Its source is TypeScript. The spawn-facade unit harness loa
 the real TypeScript command dispatcher with an explicitly empty filesystem.
 
 
+## Root string overrides
+
+Class **Host feature**, original adapters in
+`crates/bunwasm-runtime/src/install/overrides.rs`, `resolve.rs` and `mod.rs`.
+Comparison sources are Bun `src/install/lockfile/OverrideMap.rs`,
+`src/install/lockfile/override_selector.rs` and `src/semver/intersects.rs` at
+`9510e74152073d850a18758ca41114d8f214ffa6`, with local patched source at
+`d71508d31edf06765c12adf0df137ef531539f68`. No upstream implementation is copied
+or patched by this change.
+
+The adapter applies root string rules to root and transitive dependency edges.
+Version selectors use Bun's parser and `Group::intersects`, including scoped
+names. `Group::has_skipped` retains the portable installer's existing rejection
+of unrecognised tokens. Numeric overflow follows the existing parser's null set.
+There is no additional wildcard or numeric parser. Native Bun 1.4.4 controls
+cover disjoint selectors, replacement aliases and tags, stable pins, and frozen
+lock rejection after changes. Native Bun accepts some skipped-token selectors
+that the portable installer rejects. The fixture labels that distinction.
+
+Lock metadata keeps flat strings and version-selected `{".": "replacement"}`
+entries. The resolver preserves original dependency declarations, invalidates
+pins only for changed logical edge names, and compares override metadata even for
+production frozen installs. Nested object rules are explicitly unsupported.
+`tests/install/root-overrides.ts` uses only a local fixture registry and owns
+its child processes, listener and scratch directory.
+
+Explicit `alias@npm:target@range` selectors match the alias target identity and
+use the same range intersection, including scoped target names. Plain rules
+continue to exclude declared aliases. Root-relative `file:` and `link:`
+replacements retain the root origin; parent-local declarations are still rebased
+under their declaring package. Alias recursion carries the logical edge's lock
+lookup decision without invalidating a pin by its physical target name.
+Native Bun controls and resolver regressions cover these review corrections.
+
+
 ## Classification
 
 | Patch or source | Class | Change |
@@ -86,3 +125,38 @@ the real TypeScript command dispatcher with an explicitly empty filesystem.
 | [Portable installer and package command adapters](#portable-installer-and-package-commands) | Host feature | Original filesystem, lockfile and command adapters over Bun's matcher, parsers and semver. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+Package scripts retain runtime executable arguments instead of treating CLI
+subcommands and flag operands as module names. The original package-script
+adapter delegates these invocations through the existing `spawn` module and
+`runtime_proc` descriptors to the selected executable's CLI. It inherits stdio,
+cwd and the script environment and reports the child exit status. Only actual
+Bun script aliases expand locally; visited names detect alias cycles without
+limiting acyclic chains. Reserved CLI names remain commands unless preceded by
+`bun run`. The existing host registries include nodejs alongside node, with matching
+engine-specific files and no argv rewrite or PATH fallback. Node and nodejs CLI entrypoints treat bare operands as file paths,
+not Bun subcommands or package scripts. Bun direct-file operands keep file
+precedence, while explicit `bun run` still selects same-named scripts. This
+changes no process implementation
+and copies no additional upstream source. The reference remains Bun revision
+`9510e74152073d850a18758ca41114d8f214ffa6`.
+
+`scripts/package-scripts-dispatch.test.ts` exercises the emitted adapter and
+runMain dispatch with real temporary files and native Bun/Node references. The
+native nodejs control uses a fixture-local symlink to the real Node executable.
+`scripts/package-script-admission.test.ts` runs the actual runMain, package-script
+and spawn factories through executable admission, stopping at the procSpawn ABI.
+Node registry tests exercise its marker files and live module admission; browser
+runner source tests verify registrations without launching a browser.
+`scripts/package-script-cli.test.ts` compiles the actual CLI parser in isolation.
+`tests/fixtures/package-script-dispatch/` is the compiled-guest regression for
+runtime commands, flags, argument forwarding, environment, file precedence and
+exit status. Source controls are not evidence of rebuilt guest acceptance.
+
+The package-options integration fixture reaches its PATH probe through an explicit
+runtime executable as well as a direct file. This keeps the empty/restricted PATH
+assertions active after runtime commands began using real executable admission.
+The original bare `bun` script remains covered: it runs when PATH admits Bun and
+must fail with ENOENT before the probe when the portable PATH excludes it. Native
+Bun's temporary Node proxy remains a reference difference, not a portable PATH
+fallback. Source controls exercise both branches through production admission.

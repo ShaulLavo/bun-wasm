@@ -133,7 +133,7 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
 
 for (const path of [
   "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp", "scripts/jsc-embedding.ts",
-  "scripts/build-bun-jsc.sh", "scripts/ci-binaryen.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
+  "scripts/build-bun-jsc.sh", "scripts/bench-jsc.sh", "scripts/ci-binaryen.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
   "web/scripts/node-host.ts", "web/guest-tests/compose.ts", "web/src/net/trampoline.ts", "web/bun.lock",
   "crates/bunwasm-runtime/src/host.rs", "scripts/test-web-guests.ts",
   "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "tests/fixtures/runtime-proc-spawn-requests.json",
@@ -163,3 +163,9 @@ for (const path of ["web/guest-tests/quickjs.test.ts", "web/guest-tests/browser.
     expect(select(base, commitInput(path), event)).toBe(`rust=true\njsc=${path.endsWith("jsc.test.ts")}`);
   });
 }
+
+test("the Astro response fixture selects the existing native and JSC gates", () => {
+  const paths = ["tests/fixtures/astro-http2-response/index.ts"];
+  expect(needsRust(paths)).toBe(true);
+  expect(needsJsc(paths)).toBe(true);
+});

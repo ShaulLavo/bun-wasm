@@ -142,28 +142,29 @@ is absent. This addresses the Vite worker's immediate Node ENOENT/504 branch,
 not its separate optimization delay. The explicit-PATH Vite control still
 exceeded the unchanged 90-second deadline. No Vite app pass is established.
 
-Two unchanged upstream failures need separate work:
+Root string overrides are implemented in the stacked root-overrides lane.
+`Resolver::resolve` and `children` transform edges before lock lookup and
+placement. Bun's parser and range intersection select versioned rules, including
+scoped names. Lock metadata persists the rules and changed names invalidate
+pins. Production frozen comparison includes the same metadata. The local
+registry fixture covers initial, repeated and changed frozen installs, tags,
+aliases, transitive selection and unaffected pins. PR149 review corrections
+keep unrelated alias target pins, anchor local replacements at the root, and
+match explicit npm alias selectors with scoped targets. Local and workspace
+controls retain declared-path rebasing and changed frozen-lock nonmutation.
+Fresh independent review is required before the parent lands PR149. Nested object rules remain
+outside this bounded adapter. Evidence is under
+`/work/reports/bun-wasm/root-overrides-20261024/`.
 
-- The resolver does not implement root overrides. At upstream lines 1673-1710,
-  `selector-fits` declares `<2.0.0` and the matching override
-  `selector-fits@^1.0.0` requests `0.5.0`. The resolver installs `1.0.0`.
-  Invalid selector rows pass only because overrides are ignored. Follow
-  `Resolver::resolve`, `children` and `target` in
-  `crates/bunwasm-runtime/src/install/resolve.rs`. Add selector intersection
-  using Bun's parser, reject selectors with skipped/overflow tokens, and apply
-  overrides to root and transitive edges. Persist override metadata and
-  invalidate affected pins so changed overrides cannot bypass frozen-lock
-  checks. `install/mod.rs::lockfile`, `write_lock` and production `same_lock`
-  currently omit that metadata. Keep upstream tests frozen and add local
-  registry controls for initial, repeated and changed frozen installs.
-- The seeded range differential still accepts overflowing numeric components
-  after wildcards. Seed `1936026998` includes
-  `Bun.semver.satisfies("2.0.0", ">=2.*.18446744073709551616+2") === true`
-  while node-semver returns false. This is inside the patched upstream semver
-  parser, outside the install adapters. The full failures and additional
-  examples are in `before-upstream-quickjs-logs/cli/install/semver.test.ts.log`
-  under the report directory. Do not restore a collection failure or relax the
-  differential assertion to hide it.
+The seeded range differential remains separate and held. Seed `1936026998`
+includes `Bun.semver.satisfies("2.0.0", ">=2.*.18446744073709551616+2") === true`.
+The cached node-semver **7.8.5** rejects that comparator, while native Bun 1.4.4
+and node-semver 7.7.4 accept it. Even 7.8.5 accepts the hyphen range
+`1.0.0 - 2.*.18446744073709551616`. Do not apply unconditional wildcard-overflow
+rejection. Any parser follow-up needs explicit dependency-version and range-domain
+controls that preserve hyphen wildcard normalization. That lane is held after a
+provider refusal, with no retry, reroute or takeover. This override adapter does
+not modify the parser or the unchanged upstream differential assertion.
 
 Reproduce on each engine with current artifacts and the canonical shared queue:
 
@@ -876,9 +877,18 @@ evidence.
   `engine_jsc.rs:302`; no cause is proved. Historical browser dev exits on an
   unhandled esbuild `The service was stopped` rejection with live handles.
   Do not assume these engine outcomes have one cause.
-- **Astro module loading.** The original QuickJS circular `Fragment` binding and
-  JSC/browser missing `Http2ServerResponse` export are reached again after fixing
-  builtin dispatch. Their plain-message errors are now retained by classification.
+- **Astro builtin and module loading.** The 2026-10-24 frozen Astro 5.14.1
+  replay passes its static build on native Bun 1.4.4. The real
+  `Http2ServerResponse` compatibility class now passes the same response fixture
+  on QuickJS, JSC and the browser engine under Node. JSC and browser pass the
+  missing-export blocker, then fail in `tslib/modules/index.js` while
+  destructuring `__extends` from an undefined default import. QuickJS still fails
+  on the circular `Fragment` binding. A small cyclic re-export reproduces that
+  QuickJS failure independently of Astro. No shared loader changes belong to
+  this builtin fix. The frozen lock, exact errors, build receipts and minimal
+  repro are in `/work/reports/bun-wasm/astro-builtins-20261024`. HTTP/2 transport
+  remains unsupported; the response fixture does not prove complete Astro
+  compatibility or browser-page execution.
 - **Vitest events adapter.** Both configured pools stop at the missing
   `EventEmitterAsyncResource` export on every engine, before a worker pool starts.
   The async emitter adapter now exports it and runs listeners in the resource's

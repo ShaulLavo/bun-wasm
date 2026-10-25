@@ -23,5 +23,24 @@ This does not implement Bun's macro callbacks or worker-pool scheduling.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [Bun public transpiler adapter](#public-transpiler-adapter) | Port | Adapt the real Rust parse/print and scan paths to the engine-independent native boundary. |
+| [Runtime project decorator config](#runtime-project-decorator-config) | Host feature | Original adapter passes Bun's project decorator flags into runtime TypeScript parsing. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+## Runtime project decorator config
+
+The runtime path in `crates/bunwasm-transpiler/src/lib.rs` is an original
+adapter. For TypeScript modules, it walks source-directory ancestors and reads
+each directory's config through Bun's `Resolver::read_dir_info_ignore_error` and
+`DirInfo::tsconfig_json` before constructing `ParseOptions`. Bun's resolver
+parses and merges the configuration. Its implementation is
+`src/resolver/resolver.rs` at Bun revision
+`9510e74152073d850a18758ca41114d8f214ffa6`, with the checked-in WASI patches.
+No upstream implementation is copied or changed here.
+
+Previously, only public `Bun.Transpiler` requests supplied decorator options.
+Runtime TypeScript ignored the project's `experimentalDecorators` and
+`emitDecoratorMetadata`, so NestJS received standard decorator arguments
+instead of the legacy method descriptor. Project flags now reach the same
+Bun parser. Public requests retain their explicit configuration, and plain
+JavaScript does not run this lookup.

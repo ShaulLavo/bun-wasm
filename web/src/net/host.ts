@@ -60,7 +60,7 @@ export class NetHost {
   }
 
   /** Browser-engine native names are Bun policy, not generic network-service names. */
-  engineNet(): EngineNet {
+  engineNet(lookup?: (hostname: string, family: 0 | 4 | 6, hints: number) => Promise<{ address: string; family: 4 | 6 }[]>): EngineNet {
     const text = (result: Uint8Array | number) => result instanceof Uint8Array ? decoder.decode(result) : result;
     return {
       natives: {
@@ -78,6 +78,7 @@ export class NetHost {
         hostPeerAddr: (handle: number) => this.host.peerAddr(handle),
         hostShutdown: (handle: number) => this.host.shutdown(handle),
         hostLocalAddr: (handle: number) => this.host.localAddr(handle),
+        ...(lookup ? { hostLookup: lookup } : {}),
       },
       caps: Object.fromEntries(SLOT_NAMES.map((name) => [name, name !== "poll"])),
       onNews: (cb) => this.host.onNews(cb),

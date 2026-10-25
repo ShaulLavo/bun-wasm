@@ -20,4 +20,43 @@ console.log("indexOf/includes:", b.indexOf("world"), b.includes("lo w"), b.index
 console.log("JSON:", JSON.stringify(Buffer.from([1, 2, 3])));
 console.log("instanceof Uint8Array:", b instanceof Uint8Array, typeof Buffer.poolSize);
 console.log("global Buffer:", globalThis.Buffer === Buffer);
+const { Blob: BufferBlob, File: BufferFile } = require("buffer");
+class DerivedBlob extends BufferBlob {
+  constructor(parts) {
+    super(parts);
+    this.kind = "derived-blob";
+  }
+}
+class DerivedFile extends BufferFile {
+  constructor(parts) {
+    super(parts, "fixture.txt");
+    this.kind = "derived-file";
+  }
+}
+const derivedBlob = new DerivedBlob(["hello"]);
+const derivedFile = new DerivedFile(["world"]);
+console.log("buffer web constructors:", typeof BufferBlob, typeof BufferFile, derivedBlob instanceof BufferBlob, derivedFile instanceof BufferFile, derivedBlob.size, derivedFile.name, derivedFile.size);
 console.log("bigint:", Buffer.from([0, 0, 0, 0, 0, 0, 1, 0]).readBigUInt64BE());
+const copySource = Uint16Array.of(0x0201, 0x0403);
+console.log("copyBytesFrom view:", Buffer.copyBytesFrom(copySource, 1, 1).toString("hex"));
+for (const [offset, length] of [[-1, undefined], [1.5, undefined], [1, -1], [1, 1.5]]) {
+  try {
+    Buffer.copyBytesFrom(copySource, offset, length);
+    console.log("copyBytesFrom invalid: accepted");
+  } catch (error) {
+    console.log("copyBytesFrom invalid:", error.code);
+  }
+}
+for (const [name, view, offset, length] of [
+  ["empty view with negative offset", new Uint16Array(0), -1, undefined],
+  ["empty view with fractional offset", new Uint16Array(0), 1.5, undefined],
+  ["empty view with invalid length", new Uint16Array(0), undefined, -1],
+  ["empty view with both ranges invalid", new Uint16Array(0), -1, 1.5],
+  ["offset at end with negative length", copySource, 2, -1],
+  ["offset at end with fractional length", copySource, 2, 1.5],
+  ["offset past end with negative length", copySource, 3, -1],
+  ["offset past end with fractional length", copySource, 3, 1.5],
+]) {
+  const copied = Buffer.copyBytesFrom(view, offset, length);
+  console.log(`copyBytesFrom ${name}:`, Buffer.isBuffer(copied), copied.length);
+}

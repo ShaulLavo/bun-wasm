@@ -1395,6 +1395,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-engine-quickjs"
+version = "0.0.53"
+dependencies = [
+ "rquickjs",
+]
+
+[[package]]
 name = "bunwasm-glue"
 version = "0.0.53"
 dependencies = [
@@ -2467,10 +2474,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
 dependencies = [
  "futures-core",
- "futures-io",
  "futures-sink",
  "futures-task",
- "memchr",
  "pin-project-lite",
  "slab",
 ]
@@ -3574,9 +3579,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "futures-channel",
  "futures-core",
- "futures-util",
  "http",
  "http-body",
  "http-body-util",

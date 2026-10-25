@@ -18,6 +18,15 @@ export function versionRecords(path: string, source: string): string[] {
   return [];
 }
 
+// A crate added to or removed from the workspace is not a version bump: compare the crates both
+// locks share.
+function comparable(path: string, records: readonly string[], other: readonly string[]): readonly string[] {
+  if (!path.endsWith("Cargo.lock")) return records;
+  const crate = (record: string) => record.split("\n")[0];
+  const names = new Set(other.map(crate));
+  return records.filter(record => names.has(crate(record)));
+}
+
 function files(ref: string, cwd: string): string[] {
   return execFileSync("git", ["ls-tree", "-r", "--name-only", ref], { cwd, encoding: "utf8" }).trim().split("\n")
     .filter(path => !/^(?:third_party|vendor|tests)\//.test(path) && /(?:^|\/)(?:package\.json|Cargo\.(?:toml|lock)|bun\.lock)$/.test(path));
@@ -28,8 +37,8 @@ export function verifyFeatureVersions(base: string, head: string, cwd = root): s
   const previous = new Set(files(base, cwd));
   const paths = files(head, cwd).filter(path => previous.has(path));
   for (const path of paths) {
-    const snapshots = [base, head].map(ref => versionRecords(path, execFileSync("git", ["show", `${ref}:${path}`], { cwd, encoding: "utf8" })));
-    if (JSON.stringify(snapshots[0]) !== JSON.stringify(snapshots[1])) throw new Error(`Feature PR changes version records in ${path}. Keep main's versions; a release or required consumer pin owns its patch bump.`);
+    const [before, after] = [base, head].map(ref => versionRecords(path, execFileSync("git", ["show", `${ref}:${path}`], { cwd, encoding: "utf8" })));
+    if (JSON.stringify(comparable(path, before!, after!)) !== JSON.stringify(comparable(path, after!, before!))) throw new Error(`Feature PR changes version records in ${path}. Keep main's versions; a release or required consumer pin owns its patch bump.`);
   }
   return paths;
 }

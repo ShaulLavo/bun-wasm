@@ -12,4 +12,18 @@ indexOf/includes: 6 true 4
 JSON: {"type":"Buffer","data":[1,2,3]}
 instanceof Uint8Array: true number
 global Buffer: true
+buffer web constructors: function function true true 5 fixture.txt 5
 bigint: 256n
+copyBytesFrom view: 0304
+copyBytesFrom invalid: ERR_OUT_OF_RANGE
+copyBytesFrom invalid: ERR_OUT_OF_RANGE
+copyBytesFrom invalid: ERR_OUT_OF_RANGE
+copyBytesFrom invalid: ERR_OUT_OF_RANGE
+copyBytesFrom empty view with negative offset: true 0
+copyBytesFrom empty view with fractional offset: true 0
+copyBytesFrom empty view with invalid length: true 0
+copyBytesFrom empty view with both ranges invalid: true 0
+copyBytesFrom offset at end with negative length: true 0
+copyBytesFrom offset at end with fractional length: true 0
+copyBytesFrom offset past end with negative length: true 0
+copyBytesFrom offset past end with fractional length: true 0

@@ -32,6 +32,8 @@
     return Object.assign(new Error(`${syscall} ${code}`), { code, errno, syscall });
   }
 
+  let execveWarned = false;
+
   // Like Node, assigned values become strings (`process.env.N = 1` -> "1").
   const env = new Proxy(native.env(), {
     set(target, key, value) {
@@ -72,6 +74,57 @@
     return native.memoryUsage();
   }
   memoryUsage.rss = () => native.memoryUsage().rss;
+
+  function validateCursorCallback(callback: unknown): void {
+    if (callback === undefined || typeof callback === "function") return;
+    throw Object.assign(new TypeError(`The "callback" argument must be of type function. Received ${internal.describe(callback)}`), { code: "ERR_INVALID_ARG_TYPE" });
+  }
+
+  function clearLine(this: BunWasm.ProcessWriter, direction: number, callback?: BunWasm.ProcessCursorCallback): boolean {
+    validateCursorCallback(callback);
+    const mode = direction < 0 ? 1 : direction > 0 ? 0 : 2;
+    return this.write(`\x1b[${mode}K`, callback);
+  }
+
+  function clearScreenDown(this: BunWasm.ProcessWriter, callback?: BunWasm.ProcessCursorCallback): boolean {
+    validateCursorCallback(callback);
+    return this.write("\x1b[0J", callback);
+  }
+
+  function cursorTo(this: BunWasm.ProcessWriter, x?: number, y?: number | BunWasm.ProcessCursorCallback, callback?: BunWasm.ProcessCursorCallback): boolean {
+    validateCursorCallback(callback);
+    if (typeof y === "function") {
+      callback = y;
+      y = undefined;
+    }
+    if (Number.isNaN(x) || Number.isNaN(y)) {
+      const name = Number.isNaN(x) ? "x" : "y";
+      throw Object.assign(new TypeError(`The argument '${name}' is invalid. Received NaN`), { code: "ERR_INVALID_ARG_VALUE" });
+    }
+    if (typeof x !== "number" && typeof y !== "number") {
+      if (callback) internal.nextTick(callback, null);
+      return true;
+    }
+    if (typeof x !== "number") {
+      throw Object.assign(new TypeError("Cannot set cursor row without setting its column"), { code: "ERR_INVALID_CURSOR_POS" });
+    }
+    const sequence = typeof y === "number" ? `\x1b[${y + 1};${x + 1}H` : `\x1b[${x + 1}G`;
+    return this.write(sequence, callback);
+  }
+
+  function moveCursor(this: BunWasm.ProcessWriter, dx: number, dy: number, callback?: BunWasm.ProcessCursorCallback): boolean {
+    validateCursorCallback(callback);
+    if (!dx && !dy) {
+      if (callback) internal.nextTick(callback, null);
+      return true;
+    }
+    let sequence = "";
+    if (dx < 0) sequence += `\x1b[${-dx}D`;
+    else if (dx > 0) sequence += `\x1b[${dx}C`;
+    if (dy < 0) sequence += `\x1b[${-dy}A`;
+    else if (dy > 0) sequence += `\x1b[${dy}B`;
+    return this.write(sequence, callback);
+  }
 
   // stdout/stderr: synchronous writers with the bits of the stream API that
   // CLI programs actually touch.
@@ -128,6 +181,10 @@
       setDefaultEncoding() {
         return stream;
       },
+      clearLine,
+      clearScreenDown,
+      cursorTo,
+      moveCursor,
       getColorDepth: () => (stream.isTTY ? 8 : 1),
       hasColors: () => stream.isTTY,
       getWindowSize: () => [stream.columns, stream.rows],
@@ -136,52 +193,8 @@
     return stream;
   }
 
-  // stdin: reads everything on first use (WASI stdin is a blocking pipe or
-  // file; there is no async notification).
   function makeReader() {
-    const streamBase: BunWasm.NodeEmitter = Object.create(EventEmitter.prototype);
-    EventEmitter.call(streamBase);
-    let started = false;
-    let encoding: unknown = null;
-    function start() {
-      if (started) return;
-      started = true;
-      internal.realTimers.setImmediate(() => {
-        const bytes = native.readStdin();
-        if (bytes.length > 0) stream.emit("data", encoding ? native.utf8Decode(bytes) : internal.require("buffer").Buffer.from(bytes));
-        stream.emit("end");
-        stream.emit("close");
-      });
-    }
-    streamBase.on("newListener", (event) => {
-      if (event === "data" || event === "readable") start();
-    });
-    const stream: BunWasm.ProcessReader = Object.assign(streamBase, {
-      fd: 0,
-      isTTY: native.isatty(0),
-      readable: true,
-      setEncoding(enc: unknown) {
-        encoding = enc;
-        return stream;
-      },
-      resume() {
-        start();
-        return stream;
-      },
-      pause: () => stream,
-      setRawMode: () => stream,
-      ref: () => stream,
-      unref: () => stream,
-      read() {
-        return null;
-      },
-      async *[Symbol.asyncIterator]() {
-        started = true;
-        const bytes = native.readStdin();
-        if (bytes.length > 0) yield encoding ? native.utf8Decode(bytes) : internal.require("buffer").Buffer.from(bytes);
-      },
-    });
-    return stream;
+    return internal.require("process_stdin")();
   }
 
   let stdout: BunWasm.ProcessWriter | undefined;
@@ -270,6 +283,16 @@
     },
     reallyExit: (code: unknown) => { internal.traceExit("process.reallyExit", (code as number) | 0); native.exit((code as number) | 0); },
     abort: () => { internal.traceExit("process.abort", 134); native.exit(134); },
+    // Bun's contract where the process image cannot be replaced (its Windows build):
+    // workers are rejected first, then the main thread warns once and throws.
+    execve() {
+      if (!internal.require("worker_threads").isMainThread) {
+        throw Object.assign(new TypeError("Calling process.execve is not supported in workers"), { code: "ERR_WORKER_UNSUPPORTED_OPERATION" });
+      }
+      if (!execveWarned) process.emitWarning("process.execve is an experimental feature and might change at any time", "ExperimentalWarning");
+      execveWarned = true;
+      throw Object.assign(new TypeError("The feature process.execve is unavailable on the current platform, which is being used to run Node.js"), { code: "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM" });
+    },
     kill(pid: unknown, signal: unknown = "SIGTERM") {
       const number = typeof signal === "number" ? signal : signals[String(signal).toUpperCase()];
       if (!Number.isInteger(number) || number < 0 || number > 64) throw new TypeError(`Unknown signal: ${signal}`);
@@ -324,7 +347,7 @@
     report: { getReport: () => ({ header: {} }) },
     stdin: undefined,
   };
-  const process: BunWasm.NodeEmitter & { exitCode: unknown; pid: number; stdin?: unknown } = Object.assign(processBase, props);
+  const process: BunWasm.NodeEmitter & { exitCode: unknown; pid: number; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
   delete process.stdin;
 
   Object.defineProperties(process, {

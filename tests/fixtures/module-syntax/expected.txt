@@ -1,2 +1,3 @@
 nested await import.meta is just text
+require main false
 top-level await

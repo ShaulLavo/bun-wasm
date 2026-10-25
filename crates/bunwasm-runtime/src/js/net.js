@@ -92,29 +92,18 @@
 
   // --- fetch ----------------------------------------------------------------
 
-  async function requestBody(req) {
-    if (req.method === "GET" || req.method === "HEAD") return new Uint8Array(0);
-    if (req._body === null && !req._stream) return new Uint8Array(0);
-    return new Uint8Array(await req.arrayBuffer());
+  function requestBody(req, signal) {
+    return internal.require("fetch_lifetime").requestBody(req, signal);
   }
 
   // Promise of the response head JSON for a fetch handle.
-  function waitHead(handle) {
-    return new Promise((resolve, reject) => {
-      addWaiter({
-        step() {
-          const head = native.hostFetchHead(handle);
-          if (head === AGAIN) return false;
-          if (typeof head === "number") {
-            reject(hostError(handle, "fetch failed"));
-            native.hostClose(handle);
-            return true;
-          }
-          resolve(JSON.parse(head));
-          return true;
-        },
-        fail: reject,
-      });
+  function waitHead(handle, signal, close) {
+    return internal.require("fetch_lifetime").waitHead({
+      signal, close,
+      read: () => native.hostFetchHead(handle),
+      error: () => hostError(handle, "fetch failed"),
+      add: addWaiter,
+      remove: (waiter) => waiters.delete(waiter),
     });
   }
 
@@ -138,7 +127,9 @@
       headers,
       redirect: init.redirect || req.redirect || "follow",
     });
-    const handle = native.hostFetch(meta, await requestBody(req));
+    const bytes = await requestBody(req, signal);
+    if (signal && signal.aborted) throw signal.reason;
+    const handle = native.hostFetch(meta, bytes);
     if (handle < 0) throw hostError(0, "fetch failed");
     let closed = false;
     let onAbort;
@@ -147,17 +138,10 @@
       closed = true;
       if (signal && onAbort) signal.removeEventListener("abort", onAbort);
     };
-    // The signal may have fired while the request body was being read.
-    const aborted = new Promise((resolve, reject) => {
-      if (!signal) return;
-      onAbort = () => {
-        closeHandle();
-        reject(signal.reason);
-      };
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-    });
-    const head = await Promise.race([waitHead(handle), aborted]);
+    onAbort = closeHandle;
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    const head = await waitHead(handle, signal, closeHandle);
+    if (signal && signal.aborted) throw signal.reason;
     const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 304;
     const body = nullBody ? null : internal.require("compression_streams").decode(handleStream(handle, closeHandle, signal), head.bodyEncoding);
     if (nullBody) closeHandle();
@@ -318,7 +302,7 @@
       let progressed = false;
       for (;;) {
         if (this.canRead && !this.canRead()) return progressed ? "progress" : false;
-        const chunk = native.hostRead(this.handle);
+        const chunk = native.hostRead(this.handle, this.readCapacity?.());
         if (chunk === AGAIN) return progressed ? "progress" : false;
         if (typeof chunk === "number") return this.finishRead(chunk);
         progressed = true;
@@ -677,7 +661,15 @@
       const host = header(request.headers, "host") || `${displayHost}:${port}`;
       const url = `http://${host}${request.target.startsWith("/") ? request.target : "/" + request.target}`;
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
-      const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined });
+      const result = await internal.require("serve_request_lifetime").run(conn, (signal) => {
+        const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined, signal });
+        return respondToRequest(request, conn, keepAlive, req, url);
+      });
+      return result === UPGRADED ? result : result && !stopped;
+    }
+
+    async function respondToRequest(request, conn, keepAlive, req, url) {
+      if (req.signal.aborted) return false;
       let cookies;
       Object.defineProperty(req, "cookies", {
         get() { return cookies || (cookies = new (internal.require("cookie").CookieMap)(req.headers.get("cookie"))); },
@@ -792,7 +784,7 @@
     const { Buffer } = internal.require("buffer");
 
     class IncomingMessage extends Readable {
-      _read() {}
+      _read() { this._onRead?.(); }
       constructor() {
         super();
         this.headers = {};
@@ -856,9 +848,14 @@
         this.writableFinished = false;
         this.closed = false;
         this.destroyed = false;
+        this._writableLength = 0;
+        this._pendingWrites = 0;
+        this._needDrain = false;
+        this.writableHighWaterMark = 16384;
         this.sendDate = true;
         this.req = req;
       }
+      get writableLength() { return this._writableLength; }
       setHeader(name, value) {
         if (this.headersSent) {
           const error = new Error("Cannot set headers after they are sent to the client");
@@ -957,12 +954,12 @@
           return false;
         }
         this._flushHeaders(true);
+        let bytes = new Uint8Array(0);
         if (!this._bodyless && chunk !== undefined && chunk !== null) {
-          const bytes = typeof chunk === "string" ? Buffer.from(chunk, typeof encoding === "string" ? encoding : "utf8") : internal.toUint8(chunk);
-          this._writeBody(bytes);
+          bytes = typeof chunk === "string" ? Buffer.from(chunk, typeof encoding === "string" ? encoding : "utf8") : internal.toUint8(chunk);
         }
-        if (typeof callback === "function") internal.nextTick(callback);
-        return true;
+        this._writeBody(bytes, callback);
+        return this._trackWriteDemand();
       }
       end(chunk, encoding, callback) {
         if (typeof chunk === "function") {
@@ -981,14 +978,20 @@
         }
         this.writableEnded = true;
         this.finished = true;
-        this._finishBody(() => {
-          if (this.socket) this.socket.removeListener("close", this._socketClosed);
-          this.writableFinished = true;
-          if (typeof callback === "function") callback();
-          this.emit("finish");
-          this._emitClose();
-        });
+        this._finishBody(error => this._completeEnd(callback, error));
         return this;
+      }
+      _completeEnd(callback, error) {
+        if (this.socket) this.socket.removeListener("close", this._socketClosed);
+        if (error) {
+          if (typeof callback === "function") callback(error);
+          this._emitClose();
+          return;
+        }
+        this.writableFinished = true;
+        if (typeof callback === "function") callback();
+        this.emit("finish");
+        this._emitClose();
       }
       _emitClose() {
         if (this.closed) return;
@@ -1051,15 +1054,31 @@
         this._headBytes = serializeHead(this.statusCode, this.statusMessage, pairs);
         if (send) { this._conn.write(this._headBytes); this._headersFlushed = true; }
       }
-      _writeBody(bytes) {
+      _writeBody(bytes, callback) {
+        this._writableLength += bytes.length;
+        this._pendingWrites++;
+        const done = error => this._writeDone(bytes.length, callback, error);
+        if (!bytes.length) { this._conn.write(bytes, done); return; }
         if (this._chunked) {
-          if (!bytes.length) return;
           this._conn.write(encoder.encode(`${bytes.length.toString(16)}\r\n`));
           this._conn.write(bytes);
-          this._conn.write(encoder.encode("\r\n"));
-        } else if (bytes.length) {
-          this._conn.write(bytes);
+          this._conn.write(encoder.encode("\r\n"), done);
+        } else {
+          this._conn.write(bytes, done);
         }
+      }
+      _trackWriteDemand() {
+        if (this._conn.bufferedAmount >= this.writableHighWaterMark) this._needDrain = true;
+        return !this._needDrain;
+      }
+      _writeDone(length, callback, error) {
+        this._writableLength -= length;
+        this._pendingWrites--;
+        if (typeof callback === "function") callback(error);
+        if (this._pendingWrites !== 0) return;
+        const drain = this._needDrain && !error;
+        this._needDrain = false;
+        if (drain) this.emit("drain");
       }
       _finishBody(callback) {
         if (this._completed) return;
@@ -1072,7 +1091,7 @@
         const connection = (this._framingHeaders || this._headers).get("connection")?.[1];
         const connectionText = Array.isArray(connection) ? connection.join(",") : String(connection || "");
         this._conn.write(new Uint8Array(0), error => {
-          if (error) { this._emitClose(); return; }
+          if (error) { callback(error); this._emitClose(); return; }
           callback();
           this._done(this._keepAlive && !connectionText.toLowerCase().includes("close"));
         });
@@ -1204,6 +1223,10 @@
         super({ autoDestroy: false });
         this._options = options;
         this._abortController = new AbortController();
+        this._requestTimeout = options.timeout ?? 0;
+        this._timeoutTimer = null;
+        this._fetchState = null;
+        this._socketTimeout = () => this.emit("timeout");
         this._chunks = [];
         this._headers = Object.create(null);
         this._trailers = [];
@@ -1285,13 +1308,41 @@
       abort() { this.destroy(); }
       _destroy(error, callback) {
         this._aborted = true;
+        this._clearTimeout();
         this._abortController.abort(error);
+        this._cancelFetchResponse(error);
         if (this._httpState) this._cancelHttp();
         if (this.socket) this.socket.destroy();
         callback(error);
       }
-      setTimeout() {
+      setTimeout(ms, callback) {
+        if (!Number.isFinite(ms) || ms < 0) throw Object.assign(new RangeError("Invalid timeout"), { code: "ERR_OUT_OF_RANGE" });
+        if (callback && ms > 0) this.once("timeout", callback);
+        else if (callback) this.removeListener("timeout", callback);
+        this._requestTimeout = ms;
+        this._clearTimeout();
+        if (this.socket) this.socket.setTimeout(ms);
+        else this._touchTimeout();
         return this;
+      }
+      _clearTimeout() {
+        if (this._timeoutTimer !== null) clearTimeout(this._timeoutTimer);
+        this._timeoutTimer = null;
+      }
+      _touchTimeout() {
+        this._clearTimeout();
+        if (this.socket || !this._requestTimeout || this.destroyed) return;
+        this._timeoutTimer = setTimeout(() => {
+          this._timeoutTimer = null;
+          this.emit("timeout");
+        }, this._requestTimeout);
+      }
+      _cancelFetchResponse(error) {
+        const state = this._fetchState;
+        if (!state) return;
+        this._fetchState = null;
+        state.done = true;
+        state.reader.cancel(error).catch(() => {});
       }
       setNoDelay() {}
       setSocketKeepAlive() {}
@@ -1338,6 +1389,7 @@
           exchange.state = "aborted";
           exchange.cleanup();
         };
+        msg._onRead = () => this._resumeHttpResponse();
         setHeaderPairs(msg, lines.map(line => {
           const colon = line.indexOf(":");
           return [line.slice(0, colon), line.slice(colon + 1).trim()];
@@ -1386,14 +1438,31 @@
         if (error) this.emit("error", error);
       }
       _deliverResponse(output) {
-        const msg = this._httpState.message;
-        for (const item of output) {
-          if (item.kind === "data") msg.push(Buffer.from(item.bytes));
-          else if (item.kind === "trailers") {
+        const exchange = this._httpState;
+        const pending = exchange.pendingOutput ? exchange.pendingOutput.concat(output) : output;
+        exchange.pendingOutput = pending;
+        const msg = exchange.message;
+        while (pending.length) {
+          const item = pending.shift();
+          if (item.kind === "trailers") {
             const target = { headers: msg.trailers, rawHeaders: msg.rawTrailers, headersDistinct: msg.trailersDistinct };
             setHeaderPairs(target, item.pairs);
-          } else this._finishResponse();
+            continue;
+          }
+          if (item.kind === "end") { this._finishResponse(); continue; }
+          if (msg.push(Buffer.from(item.bytes))) continue;
+          exchange.paused = true;
+          this.socket.pause();
+          return;
         }
+      }
+      _resumeHttpResponse() {
+        const exchange = this._httpState;
+        if (!exchange || exchange.state !== "response") return;
+        exchange.paused = false;
+        try { this._deliverResponse([]); }
+        catch (error) { this._failHttp(error); return; }
+        if (exchange.state === "response" && !exchange.paused) this.socket.resume();
       }
       _finishResponse() {
         const exchange = this._httpState;
@@ -1435,6 +1504,7 @@
         this.reusedSocket = Boolean(reused);
         if (this.agent && !reused) this.agent._pool.track(key, socket);
         this.socket = this.connection = socket;
+        this._clearTimeout();
         const receive = chunk => this._receiveHttp(chunk);
         const fail = err => this._failHttp(err);
         const eof = () => {
@@ -1442,20 +1512,23 @@
           try { this._deliverResponse(this._httpState.decoder.end()); }
           catch (error) { fail(error); }
         };
-        const timeout = () => this.emit("timeout");
+        const timeout = this._socketTimeout;
         this._httpState = { state: "pending", buffer: new Uint8Array(0), limit, cleanup: () => {
           socket.removeListener("data", receive);
           socket.removeListener("error", fail);
           socket.removeListener("end", eof);
           socket.removeListener("close", eof);
-          if (options.timeout) socket.setTimeout(0, timeout);
+          this._clearTimeout();
+          socket.removeListener("timeout", timeout);
+          if (this._requestTimeout) socket.setTimeout(0);
           this._httpState.buffer = null;
         } };
         socket.on("error", fail);
         socket.on("end", eof);
         socket.on("close", eof);
         socket.on("data", receive);
-        if (options.timeout) socket.setTimeout(options.timeout, timeout);
+        socket.once("timeout", timeout);
+        if (this._requestTimeout) socket.setTimeout(this._requestTimeout);
         this.emit("socket", socket);
         if (this._httpState.state !== "pending") return;
         const headers = Object.assign(Object.create(null), this._headers);
@@ -1489,6 +1562,40 @@
         for (const [name, value] of this._trailers) tail += `${name}: ${value}\r\n`;
         this.socket.write(Buffer.from(tail + "\r\n", "latin1"));
       }
+      async _pumpFetchResponse(state) {
+        if (state.done || state.reading || state.waiting) return;
+        state.reading = true;
+        try { await this._readFetchResponse(state); }
+        catch (error) {
+          if (state.done || this._aborted) return;
+          state.done = true;
+          this._fetchState = null;
+          this._clearTimeout();
+          this.destroy(error);
+        } finally {
+          state.reading = false;
+        }
+      }
+      async _readFetchResponse(state) {
+        for (;;) {
+          const { done, value } = await state.reader.read();
+          if (state.done || this._aborted || state.message.destroyed) return;
+          this._touchTimeout();
+          if (done) { this._finishFetchResponse(state); return; }
+          if (!value?.byteLength) continue;
+          if (state.message.push(Buffer.from(value))) continue;
+          state.waiting = true;
+          return;
+        }
+      }
+      _finishFetchResponse(state) {
+        if (state.done) return;
+        state.done = true;
+        if (this._fetchState === state) this._fetchState = null;
+        this._clearTimeout();
+        state.message.complete = true;
+        state.message.push(null);
+      }
       async _send() {
         if ((this._options.protocol || protocol) === "http:" || this.hasHeader("upgrade")) return this._sendHttp();
         if (this._sent) return;
@@ -1497,17 +1604,35 @@
         const o = this._options;
         const url = o.href || `${o.protocol || protocol}//${o.hostname || o.host || "localhost"}${o.port ? ":" + o.port : ""}${this.path}`;
         const body = this._chunks.length ? internal.concatBytes(this._chunks) : undefined;
+        this._touchTimeout();
         const res = await fetch(url, { method: this.method, headers: this._headers, body: this.method === "GET" || this.method === "HEAD" ? undefined : body, redirect: "manual", signal: this._abortController.signal });
         if (this._aborted) return;
         const msg = new IncomingMessage();
         msg.statusCode = res.status;
         msg.statusMessage = res.statusText || STATUS_TEXT[res.status] || "";
         setHeaderPairs(msg, Array.from(res.headers));
+        if (!res.body) {
+          this.emit("response", msg);
+          msg.complete = true;
+          msg.push(null);
+          this._clearTimeout();
+          return;
+        }
+        const state = { reader: res.body.getReader(), message: msg, reading: false, waiting: false, done: false };
+        this._fetchState = state;
+        msg._onRead = () => {
+          if (state.done) return;
+          state.waiting = false;
+          internal.nextTick(() => this._pumpFetchResponse(state));
+        };
+        msg._onDestroy = () => {
+          this._clearTimeout();
+          this._cancelFetchResponse();
+        };
         this.emit("response", msg);
-        const bytes = new Uint8Array(await res.arrayBuffer());
-        if (bytes.length) msg.push(Buffer.from(bytes));
-        msg.push(null);
-        msg.complete = true;
+        if (this._aborted || state.done) return;
+        this._touchTimeout();
+        await this._pumpFetchResponse(state);
       }
     }
 

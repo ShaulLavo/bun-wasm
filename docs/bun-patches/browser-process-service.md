@@ -18,9 +18,12 @@ The browser launcher selects an executable's guest adapter instead of inheriting
 spawning process's engine. A small reservation/activation bridge is separate from the
 lazily loaded supervisor. All Bun process I/O uses the same process-owned descriptors and
 pipe endpoints as other guests; no Bun-only pipe implementation remains.
-The shared guest keeps executable names intact; native and Node host registries explicitly
-recognize `bun`, `/bun`, `node`, `/node`, `/usr/local/bin/bun` and `/usr/local/bin/node`
-instead of silently running Bun for an arbitrary executable.
+The shared guest keeps executable names intact. `web/scripts/node-spawn.ts` and
+`web/src/runner.ts` register `bun`, `node` and its `nodejs` CLI spelling at each
+host's existing executable directories. Node creates matching marker files. The
+alias selects the same engine module without rewriting argv, bypassing PATH or
+admitting arbitrary executables. These are original adapter registrations over
+the Waffle revision pinned in the package manifests, not a new process runtime.
 
 Each process has per-signal default, ignored or handled dispositions. An unhandled SIGINT,
 SIGTERM or SIGPIPE immediately selects its typed default outcome and revokes; only handled
@@ -84,6 +87,6 @@ harnesses are original test programs, not copies of the spike implementations.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`waffle/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry, jobs, registered signal dispositions including Node/Bun's ignored SIGPIPE default, immutable final-kind query and byte-sized exit statuses. |
+| [`waffle/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry including nodejs, jobs, registered signal dispositions including Node/Bun's ignored SIGPIPE default, immutable final-kind query and byte-sized exit statuses. |
 
 [Ledger scope and pinned revisions](scope.md).

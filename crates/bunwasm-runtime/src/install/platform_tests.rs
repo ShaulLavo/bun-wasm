@@ -75,6 +75,37 @@ fn unlocked_optional_platform_graph() {
 }
 
 #[test]
+fn releases_full_packuments_after_platform_selection() {
+    for locked in [false, true] {
+        let (mut expected, manifest) = fixture(locked, false);
+        expected.resolve(&manifest, false).unwrap();
+        let expected_lock = lockfile(&manifest, &expected).unwrap();
+        let (mut actual, manifest) = fixture(locked, false);
+        for packument in actual.packuments.values_mut() {
+            packument["versions"]["0.0.1"] =
+                json!({"version": "0.0.1", "unused": "x".repeat(1024)});
+        }
+        actual.resolve(&manifest, false).unwrap();
+        assert_eq!(
+            actual.packages.keys().collect::<Vec<_>>(),
+            expected.packages.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            actual.skipped.keys().collect::<Vec<_>>(),
+            expected.skipped.keys().collect::<Vec<_>>()
+        );
+        for (key, package) in &actual.packages {
+            assert_eq!(package.meta, expected.packages[key].meta);
+        }
+        assert_eq!(lockfile(&manifest, &actual).unwrap(), expected_lock);
+        assert!(
+            actual.packuments.is_empty(),
+            "full packuments retained after platform selection"
+        );
+    }
+}
+
+#[test]
 fn required_platform_mismatch_errors() {
     for locked in [false, true] {
         let (mut resolver, manifest) = fixture(locked, true);

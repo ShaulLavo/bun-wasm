@@ -6,6 +6,7 @@ import type { Engine, RunRequest } from "./bun-executor.js";
 import type { BunNetworkOptions } from "./net/helper.js";
 import { readOutcome } from "waffle/proc/outcome";
 import { isToolCommand } from "./tool-command.js";
+import { installLookupServer } from "./net/lookup.js";
 
 export interface BunLauncherOptions {
   /** The module worker URL that runs createBunExecutor (worker.ts). */
@@ -38,6 +39,8 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   let revoked = false;
   let helper: RuntimeNetworkHelper | undefined;
   let moduleCache: string | null = null;
+  let lookupChannel: BroadcastChannel | undefined;
+  let disposeLookup: (() => void) | undefined;
   let released = false;
   const unregister = context.registerRevocation(() => { revoked = true; });
   const active = () => !released && !revoked && !options.runtime.disposed && !readOutcome(context.outcome);
@@ -46,7 +49,11 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     released = true;
     unregister();
     try { helper?.dispose(); }
-    finally { if (moduleCache) void caches.delete(moduleCache); }
+    finally {
+      disposeLookup?.();
+      lookupChannel = undefined;
+      if (moduleCache) void caches.delete(moduleCache);
+    }
   };
   const onMessage = (message: unknown) => {
     try { if (active()) dispatch?.(message); }
@@ -64,6 +71,10 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     if (!active()) throw new Error("Bun process launch was revoked");
     const ring = createRing();
     helper = createBunNetworkHelper(network, ring, options.network);
+    if (engine === "browser" && typeof BroadcastChannel === "function") {
+      lookupChannel = new BroadcastChannel(`bun-wasm-dns-${crypto.randomUUID()}`);
+      disposeLookup = installLookupServer(lookupChannel, network);
+    }
     if (!active()) throw new Error("Bun process launch was revoked");
     const session = helper;
     dispatch = message => dispatchBunNetwork(session, message);
@@ -73,7 +84,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
       request: {
         engine, adapter: "bun", module, interruptible: context.interruptible,
         args: context.request.argv, env: { ...context.request.env, PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
-        trace: false, net: ring, moduleCache,
+        trace: false, net: ring, moduleCache, lookupChannel: lookupChannel?.name,
       },
       cleanup,
       onMessage,
