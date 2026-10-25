@@ -1829,11 +1829,12 @@ mod builtin_tests {
             own_fd
         );
         call(&natives, "close", &[Val::Num(own_fd)]).unwrap();
+        assert!(!state.fds.borrow().files.contains_key(&(own_fd as i32)));
         assert!(!state.fds.borrow().sync_modes.contains_key(&(own_fd as i32)));
         let error = call(
             &natives,
             "read",
-            &[Val::Num(own_fd), Val::Num(1.0), Val::Num(-1.0)],
+            &[Val::Num(-1.0), Val::Num(1.0), Val::Num(-1.0)],
         )
         .unwrap_err();
         assert!(error.props.contains(&("code".into(), Val::from("EBADF"))));
