@@ -817,3 +817,7 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "ops/quickjs_tests.rs"]
+mod data_ops_tests;
