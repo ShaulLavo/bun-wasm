@@ -21,7 +21,7 @@ const codecSource = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalTh
   new URL("../crates/bunwasm-runtime/src/js/worker_codec.ts", import.meta.url), "utf8")}`);
 
 type CodecRuntime = { create(hooks: WorkerCodecHooks): WorkerCodec };
-type CodecFactory = (internal: { native: typeof native }) => CodecRuntime;
+type CodecFactory = (internal: { native: typeof native; require: (name: string) => unknown }) => CodecRuntime;
 type WorkerInternal = {
   native: typeof native;
   realTimers: { setImmediate(): void };
@@ -53,7 +53,7 @@ function workerErrorData() {
     structured_clone: { structuredClone },
     worker_codec: {
       create(hooks: WorkerCodecHooks) {
-        const codecRuntime = codecFactoryValue({ native });
+        const codecRuntime = codecFactoryValue({ native, require: internal.require });
         if (!isCodecRuntime(codecRuntime)) throw new Error("Codec runtime was not created");
         implementation = codecRuntime.create(hooks);
         return implementation;
@@ -98,6 +98,26 @@ test("serializable worker error preserves its ordinary code sideband", () => {
   expect(decoded).toBeInstanceOf(TypeError);
   if (!(decoded instanceof Error)) throw new Error("Expected an Error graph");
   expect(decoded.message).toBe("ordinary");
+});
+
+
+test("non-string and throwing error codes are omitted from the sideband", () => {
+  const { encode } = workerErrorData();
+  const numeric = Object.assign(new Error("numeric"), { code: 1n });
+  expect(encode(numeric).code).toBeUndefined();
+  const throwing = new Error("throwing");
+  Object.defineProperty(throwing, "code", { configurable: true, get() { throw new Error("code getter"); } });
+  expect(() => encode(throwing)).not.toThrow();
+  expect(encode(throwing).code).toBeUndefined();
+});
+
+test("malformed error fields use the unserializable worker fallback", () => {
+  const { encode, codec } = workerErrorData();
+  const original = new Error("malformed");
+  Object.defineProperty(original, "message", { configurable: true, value: 42 });
+  const frame = encode(original);
+  expect(frame.code).toBe("ERR_WORKER_UNSERIALIZABLE_ERROR");
+  expect(codec.decode(frame.graph)).toBeInstanceOf(Error);
 });
 
 test("formatted BuildError is sent as a SyntaxError", () => {

@@ -48,6 +48,7 @@ declare namespace BunWasm {
     execArgv: string[];
     execPath: string;
     exitCode?: number;
+    noDeprecation?: boolean;
     cwd(): string;
     exit(code?: number): never;
     on(event: string, callback: EventListener): unknown;

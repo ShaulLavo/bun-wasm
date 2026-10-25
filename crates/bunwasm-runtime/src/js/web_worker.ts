@@ -55,23 +55,33 @@
     if (!Array.isArray(list) || !list.every(path => typeof path === "string")) throw new TypeError("preload must be a string or an array of strings");
     return list.map(filePath);
   }
+  function entryFailure(message: string) {
+    return { filename: `throw new Error(${JSON.stringify(`BuildMessage: ${message}`)});`, eval: true };
+  }
+  function resolveEntry(path: string): string | null {
+    try { return internal.native.resolve(path, process.cwd() + "/", false); }
+    catch {
+      const file = internal.require("path").resolve(process.cwd(), path);
+      try { internal.native.stat(file, false); return file; }
+      catch { return null; }
+    }
+  }
   function target(value: unknown) {
     if (!(value instanceof URL) && typeof value !== "string") throw new TypeError("Worker requires a URL or path");
     const specifier = String(value);
     if (specifier.startsWith("data:")) return { filename: new URL(specifier), eval: false };
     if (specifier.startsWith("blob:")) {
       const blob = blobs.get(specifier);
-      if (!blob) return { filename: `throw new Error(${JSON.stringify(`BuildMessage: ModuleNotFound resolving "${specifier}" (entry point)`)});`, eval: true };
+      if (!blob) return entryFailure(`ModuleNotFound resolving "${specifier}" (entry point)`);
       const path = blob instanceof File ? blob.name : /typescript/.test(blob.type) ? "worker.ts" : "worker.js";
       try { return { filename: internal.native.workerSource(new TextDecoder().decode(blob._bytes()), path), eval: true }; }
       catch (error) { return { filename: `throw new SyntaxError(${JSON.stringify(error instanceof Error ? error.message : String(error))});`, eval: true }; }
     }
     const path = filePath(specifier);
-    let resolved = path;
-    try { resolved = internal.native.resolve(path, process.cwd() + "/", false); }
-    catch { resolved = internal.require("path").resolve(process.cwd(), path); }
+    const resolved = resolveEntry(path);
+    if (resolved === null) return entryFailure(`ModuleNotFound resolving "${specifier}" (entry point)`);
     if (resolved.startsWith("node:") || resolved === "bun" || resolved.startsWith("bun:")) {
-      return { filename: `throw new Error(${JSON.stringify(`BuildMessage: Cannot use "${specifier}" as an entry point: it resolves to a builtin module`)});`, eval: true };
+      return entryFailure(`Cannot use "${specifier}" as an entry point: it resolves to a builtin module`);
     }
     return { filename: resolved, eval: false };
   }

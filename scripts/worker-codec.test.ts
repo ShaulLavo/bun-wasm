@@ -13,22 +13,64 @@ const source = readFileSync(`${scratch}/codec.js`, "utf8");
 
 function codec() {
   let restored = 0;
+  const processEnv = new Proxy({ CENSUS_VALUE: "kept" }, {});
+  const ordinaryProxy = new Proxy({ value: "rejected" }, {});
+  const proxies = new Set<object>([processEnv, ordinaryProxy]);
   const factory = runInNewContext(source, {
     ArrayBuffer, Uint8Array, Map, Set, Date, RegExp, DataView, Error, TypeError, RangeError,
-    Number, String, Boolean, DOMException, EventTarget, Blob,
+    Number, String, Boolean, DOMException, EventTarget, Blob, Promise, Symbol, Proxy,
   });
-  const implementation = factory({ native: {
-    base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
-    base64Decode: (value: string) => new Uint8Array(Buffer.from(value, "base64")),
-    transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
-  } }).create({
+  const implementation = factory({
+    native: {
+      base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
+      base64Decode: (value: string) => new Uint8Array(Buffer.from(value, "base64")),
+      transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
+    },
+    require(name: string) {
+      if (name === "process") return { env: processEnv };
+      throw new Error(`Unexpected module ${name}`);
+    },
+    isProxy(value: unknown) { return typeof value === "object" && value !== null && proxies.has(value); },
+  }).create({
     isPort: () => false,
     prepare() { throw new Error("Unexpected transfer"); },
     restore(value: unknown) { restored++; return value; },
     activate() {},
   });
-  return { implementation, restored: () => restored };
+  return { implementation, restored: () => restored, processEnv, ordinaryProxy };
 }
+
+
+test("process.env keeps object cloning when its tag says Promise, Error, or BigInt", () => {
+  const { implementation, processEnv } = codec();
+  for (const value of ["Promise", "Error", "BigInt"]) {
+    Object.defineProperty(processEnv, Symbol.toStringTag, { configurable: true, value });
+    const output = implementation.decode(implementation.encode(processEnv));
+    expect(output).toEqual({ CENSUS_VALUE: "kept" });
+  }
+});
+
+test("ordinary proxies remain uncloneable", () => {
+  const { implementation, ordinaryProxy } = codec();
+  expect(() => implementation.encode(ordinaryProxy)).toThrow("The object cannot be cloned");
+});
+
+test("error fields must remain strings before graph serialization", () => {
+  const { implementation } = codec();
+  for (const [key, value] of [["name", 7], ["message", null], ["stack", 1n]] as const) {
+    const error = new Error("message");
+    Object.defineProperty(error, key, { configurable: true, value });
+    expect(() => implementation.encode(error)).toThrow("The object cannot be cloned");
+  }
+});
+
+test("custom error names survive graph reconstruction", () => {
+  const { implementation } = codec();
+  const graph = { root: 0, nodes: [["error", "CustomError", "message", "stack", 1], ["undefined"]] };
+  const output = implementation.decode(graph);
+  expect(output).toBeInstanceOf(Error);
+  expect((output as Error).name).toBe("CustomError");
+});
 
 test("worker graph preserves cycles, map keys and shared typed-array buffers", () => {
   const { implementation } = codec();
