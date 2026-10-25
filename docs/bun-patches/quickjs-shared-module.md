@@ -30,12 +30,16 @@ path is used. `tests/linker/quickjs/path-repro.sh` checks byte-identical fixture
 archives from two checkout paths and verifies the actionable missing-source
 failure.
 
-The build uses `--locked --offline` and PIC `-Zbuild-std=std,panic_abort`.
-Stock target std contains non-PIC relocations and does not pass this gate.
-No custom compiler or libc rebuild is needed. Populate the pinned toolchain's
-build-std dependencies beforehand if they are not already cached. Use the host's
-shared build queue. This script never changes workspace manifests or lockfiles.
-The workspace's normal vendor dependency metadata must already be available.
+The build first fetches the selected compiler's standard-library dependencies
+with its own `library/Cargo.lock`, `--locked` and target `wasm32-wasip1`.
+This includes std-only crates such as `wasip1` that a workspace fetch does not
+prepare. Preparation failure stops the producer before compilation.
+The PIC build then uses unchanged `--locked --offline` and
+`-Zbuild-std=std,panic_abort`. Stock target std contains non-PIC relocations and
+does not pass this gate. No custom compiler or libc rebuild is needed.
+Use the host's shared build queue. This script never changes workspace or
+standard-library manifests or lockfiles. The workspace's normal vendor dependency
+metadata must already be available.
 
 The dedicated fixture links real core libc and includes the reusable data/ops
 modules by path. Its echo native proves frame transport, not production stdout.

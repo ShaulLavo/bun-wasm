@@ -12,6 +12,8 @@ export CARGO_TARGET_DIR="$out/target"
 export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS='-C relocation-model=pic -C panic=abort -C link-self-contained=no'
 export CFLAGS_wasm32_wasip1="--sysroot=$BUN_WASM_SYSROOT -fPIC"
 export RQUICKJS_SYS_NO_WASI_SDK=1
+sysroot=$("${RUSTC:-rustc}" --print sysroot)
+cargo fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
 cargo build --locked --offline -Zbuild-std=std,panic_abort --release --target wasm32-wasip1 \
   -j "${CARGO_BUILD_JOBS:-4}" -p bunwasm-engine-quickjs
 clang --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC -O2 -fno-builtin-malloc -fno-builtin-free -c \
