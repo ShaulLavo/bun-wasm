@@ -314,7 +314,7 @@ fn run_module_instance(
         wasi.preopened_dir(host, guest, DirPerms::all(), FilePerms::all())
             .with_context(|| format!("preopening {}", host.display()))?;
     }
-    let net = net::Net::new();
+    let net = net::Net::new(&runtime.engine).context("creating the Waffle network owner")?;
     let memory_limit = stdio.memory_limit;
     let processes = process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
     let host = Host {
@@ -368,7 +368,8 @@ fn run_module_instance(
         store
             .data_mut()
             .net
-            .flush_closed(std::time::Duration::from_secs(2));
+            .flush_closed(std::time::Duration::from_secs(2))
+            .context("flushing admitted network output")?;
     }
     Ok(outcome)
 }
@@ -712,7 +713,7 @@ mod tests {
         let mut parent = process::Processes::new(
             runtime.clone(),
             process::Stdio::inherited(),
-            net::Net::new().notify(),
+            net::Net::for_tests().notify(),
             Arc::default(),
         );
         struct Cleanup(Arc<process::Runtime>);

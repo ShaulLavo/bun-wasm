@@ -24,7 +24,7 @@ impl Fixture {
         let module = Module::new(&engine,b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\x03\x02\x01\0\x07\x0a\x01\x06_start\0\0\x0a\x04\x01\x02\0\x0b").unwrap();
         let runtime =
             Runtime::new(engine.clone(), module, vec![(directory.into(), "/".into())]).unwrap();
-        let net = crate::net::Net::new();
+        let net = crate::net::Net::new(&engine).unwrap();
         let cancel = Arc::new(Cancellation::default());
         let stdio = Stdio::inherited();
         let mut wasi = wasmtime_wasi::WasiCtxBuilder::new();
@@ -1030,4 +1030,149 @@ fn fd_kind_tracks_pipes_files_remaps_and_closed_descriptors_without_consuming() 
     assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", read), 0);
     assert_eq!(f.call("runtime_proc", "fd_kind", read), process::BADF);
     assert_eq!(f.call("runtime_proc", "fd_kind", duplicate), 1);
+}
+
+fn network_call<P: WasmParams>(f: &mut Fixture, slots: &[Func], slot: usize, args: P) -> i32 {
+    slots[slot]
+        .typed::<P, i32>(&f.store)
+        .unwrap()
+        .call(&mut f.store, args)
+        .unwrap()
+}
+
+#[test]
+fn native_network_slots_keep_numeric_errors_context_and_writer_completion() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+    let mut f = Fixture::new();
+    let slots = functions(&mut f.store);
+    f.write(0, b"127.0.0.1");
+    let listener = network_call(&mut f, &slots, 6, (0, 9, 0));
+    assert!(listener > 0);
+    let port = network_call(&mut f, &slots, 7, listener);
+    assert_eq!(
+        network_call(&mut f, &slots, 6, (0, 9, port)),
+        crate::net::ERROR
+    );
+    let count = network_call(&mut f, &slots, 10, (0, 1024, 1024));
+    let error: serde_json::Value = serde_json::from_slice(f.bytes(1024, count as usize)).unwrap();
+    assert_eq!(error["code"], "EADDRINUSE");
+    assert_eq!(error["syscall"], "listen");
+    assert_eq!(network_call(&mut f, &slots, 8, listener), crate::net::AGAIN);
+    let mut peer = TcpStream::connect(("127.0.0.1", port as u16)).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let accepted = loop {
+        let result = network_call(&mut f, &slots, 8, listener);
+        if result != crate::net::AGAIN {
+            break result;
+        }
+        assert!(Instant::now() < deadline);
+        network_call(&mut f, &slots, 0, 25);
+    };
+    assert!(accepted > 0);
+    assert_eq!(
+        network_call(&mut f, &slots, 3, (accepted, 256, 32)),
+        crate::net::AGAIN
+    );
+    assert_eq!(
+        network_call(&mut f, &slots, 3, (-42, 256, 32)),
+        crate::net::BADF
+    );
+    peer.write_all(b"unread input").unwrap();
+    f.write(256, b"response");
+    assert_eq!(network_call(&mut f, &slots, 4, (accepted, 256, 8)), 8);
+    assert_eq!(network_call(&mut f, &slots, 5, accepted), 0);
+    f.store
+        .data_mut()
+        .net
+        .flush_closed(Duration::from_secs(2))
+        .unwrap();
+    let mut response = Vec::new();
+    peer.read_to_end(&mut response).unwrap();
+    assert_eq!(response, b"response");
+    assert_eq!(network_call(&mut f, &slots, 5, listener), 0);
+}
+
+#[test]
+fn cancelled_network_poll_unwinds_then_disposes_and_joins_the_actor() {
+    use std::io::Read;
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+    let mut f = Fixture::new();
+    let listener = f.store.data_mut().net.listen("127.0.0.1", 0);
+    let port = f.store.data_mut().net.local_port(listener) as u16;
+    let mut peer = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while f.store.data_mut().net.accept(listener) == crate::net::AGAIN {
+        assert!(Instant::now() < deadline);
+        f.store.data_mut().net.poll(25);
+    }
+    let notify = f.store.data().net.notify();
+    let slots = functions(&mut f.store);
+    assert!(f.store.data().cancel.kill(9));
+    assert!(
+        slots[0]
+            .typed::<i32, i32>(&f.store)
+            .unwrap()
+            .call(&mut f.store, -1)
+            .is_err()
+    );
+    drop(f);
+    assert_eq!(
+        Arc::strong_count(&notify),
+        1,
+        "cancelled actor must join before owner replacement"
+    );
+    assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+    TcpListener::bind(("127.0.0.1", port)).unwrap();
+}
+
+#[test]
+fn native_connect_allows_cancellation_while_lookup_is_pending() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let (owner, state) = mpsc::channel();
+    let (entered, pending) = mpsc::channel();
+    let (release, resolver) = mpsc::channel();
+    let (done, completed) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let mut f = Fixture::new();
+        let slots = functions(&mut f.store);
+        f.write(0, b"pending-lookup.invalid");
+        owner
+            .send((f.store.data().cancel.clone(), f.store.data().net.notify()))
+            .unwrap();
+        crate::net::lookup_fixture::install(move || {
+            entered.send(()).unwrap();
+            resolver.recv_timeout(Duration::from_secs(2)).unwrap();
+            Ok(vec![("127.0.0.1:9").parse().unwrap()])
+        });
+        let connection = network_call(&mut f, &slots, 9, (0, 22, 9));
+        let cancelled = slots[0]
+            .typed::<i32, i32>(&f.store)
+            .unwrap()
+            .call(&mut f.store, -1)
+            .is_err();
+        drop(f);
+        done.send((connection, cancelled)).unwrap();
+    });
+    let (cancel, notify) = state.recv_timeout(Duration::from_secs(2)).unwrap();
+    pending.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(cancel.kill(9));
+    notify.bump();
+    let before_release = completed.recv_timeout(Duration::from_millis(250));
+    let _ = release.send(());
+    worker.join().unwrap();
+    assert!(
+        before_release.is_ok(),
+        "pending hostname lookup blocks the guest connect call and prevents cancellation unwind"
+    );
+    let (connection, cancelled) = before_release.unwrap();
+    assert!(connection > 0);
+    assert!(cancelled);
+    assert_eq!(Arc::strong_count(&notify), 1);
 }

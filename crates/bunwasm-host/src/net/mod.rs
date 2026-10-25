@@ -1,14 +1,16 @@
 //! The host side of the `bun_wasm` ABI (docs/host-abi.md): a table of fetch
 //! requests, listeners and TCP connections.
 //!
-//! Threading model: every guest-facing call runs on the guest's thread and
-//! never blocks (except `poll`). Blocking network work runs on background
-//! threads that update the handle's shared state and then call
-//! [`Notify::bump`], which increments a generation counter and wakes `poll`.
+//! One Waffle actor owns TCP sockets and module state. Fetch keeps its async
+//! transport. Both publish through the same notification generation.
 
 mod error;
 mod fetch;
-mod tcp;
+mod tcp_provider;
+mod waffle_native;
+use tcp_provider as tcp;
+#[cfg(test)]
+pub(crate) use tcp_provider::lookup_fixture;
 #[cfg(test)]
 mod tests;
 
@@ -100,7 +102,7 @@ pub const READ_HIGH_WATER: usize = 1 << 20;
 enum Handle {
     Fetch(fetch::Fetch),
     Listener(tcp::Listener),
-    Conn(tcp::Conn),
+    Conn(Box<tcp::Conn>),
 }
 
 pub struct Net {
@@ -112,8 +114,7 @@ pub struct Net {
     /// The last error that has no handle (`error(0, …)`).
     last_error: Option<ErrorInfo>,
     clients: Arc<fetch::Clients>,
-    /// Closed connections still flushing writes; waited for at exit.
-    flushing: Vec<tcp::Conn>,
+    actor: Arc<waffle_native::Actor>,
 }
 
 /// Result of a call that produces bytes for the guest: written with the
@@ -124,16 +125,30 @@ pub enum Output {
 }
 
 impl Net {
-    pub fn new() -> Self {
-        Net {
-            notify: Notify::new(),
+    pub fn new(engine: &wasmtime::Engine) -> anyhow::Result<Self> {
+        let notify = Notify::new();
+        let module =
+            wasmtime::Module::new(engine, include_bytes!(env!("BUN_WAFFLE_NETWORK_MODULE")))?;
+        let events = notify.clone();
+        let actor = Arc::new(waffle_native::Actor::new(
+            &module,
+            Arc::new(move || events.bump()),
+        )?);
+        Ok(Net {
+            notify,
             seen: 0,
             next_handle: 1,
             handles: HashMap::new(),
             last_error: None,
             clients: Arc::default(),
-            flushing: Vec::new(),
-        }
+            actor,
+        })
+    }
+
+    #[cfg(test)]
+    pub fn for_tests() -> Self {
+        static ENGINE: std::sync::OnceLock<wasmtime::Engine> = std::sync::OnceLock::new();
+        Self::new(ENGINE.get_or_init(wasmtime::Engine::default)).unwrap()
     }
 
     pub fn notify(&self) -> Arc<Notify> {
@@ -225,11 +240,15 @@ impl Net {
     pub fn close(&mut self, handle: i32) -> i32 {
         match self.handles.remove(&handle) {
             Some(Handle::Fetch(request)) => request.abort(),
-            Some(Handle::Listener(listener)) => listener.close(),
+            Some(Handle::Listener(listener)) => {
+                if let Err(error) = listener.close() {
+                    return self.fail(error::socket_error("close", &error, "listener"));
+                }
+            }
             Some(Handle::Conn(conn)) => {
-                conn.close();
-                self.flushing.retain(|c| c.is_flushing());
-                self.flushing.push(conn);
+                if let Err(error) = conn.close() {
+                    return self.fail(error::socket_error("close", &error, "connection"));
+                }
             }
             None => return BADF,
         }
@@ -240,7 +259,7 @@ impl Net {
         if let Err(error) = self.require_handle() {
             return self.fail(error);
         }
-        match tcp::Listener::bind(host, port, self.notify.clone()) {
+        match tcp::Listener::bind(host, port, self.actor.clone()) {
             Ok(listener) => self.insert(Handle::Listener(listener)),
             Err(error) => self.fail(error),
         }
@@ -249,7 +268,7 @@ impl Net {
     pub fn local_port(&mut self, handle: i32) -> i32 {
         match self.handles.get(&handle) {
             Some(Handle::Listener(listener)) => listener.port() as i32,
-            Some(Handle::Conn(conn)) => conn.local_port().map_or(AGAIN, i32::from),
+            Some(Handle::Conn(conn)) => conn.local_port().map_or_else(|code| code, i32::from),
             _ => BADF,
         }
     }
@@ -263,17 +282,15 @@ impl Net {
             return self.fail(error);
         }
         match listener.accept() {
-            Some(conn) => self.insert(Handle::Conn(conn)),
-            None => AGAIN,
+            Ok(conn) => self.insert(Handle::Conn(Box::new(conn))),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => AGAIN,
+            Err(error) => self.fail(error::socket_error("accept", &error, "listener")),
         }
     }
 
     pub fn shutdown(&mut self, handle: i32) -> i32 {
         match self.handles.get(&handle) {
-            Some(Handle::Conn(conn)) => {
-                conn.shutdown();
-                0
-            }
+            Some(Handle::Conn(conn)) => conn.shutdown(),
             _ => BADF,
         }
     }
@@ -281,12 +298,10 @@ impl Net {
     pub fn local_addr(&mut self, handle: i32) -> Output {
         let address = match self.handles.get(&handle) {
             Some(Handle::Conn(conn)) => conn.local_addr(),
-            Some(Handle::Listener(listener)) => Some(listener.local_addr()),
+            Some(Handle::Listener(listener)) => Ok(listener.local_addr()),
             _ => return Output::Code(BADF),
         };
-        address.map_or(Output::Code(AGAIN), |addr| {
-            Output::Bytes(tcp::addr_json(addr))
-        })
+        address.map_or_else(Output::Code, |addr| Output::Bytes(tcp::addr_json(addr)))
     }
 
     pub fn connect(&mut self, host: &str, port: i32) -> i32 {
@@ -300,8 +315,10 @@ impl Net {
         if let Err(error) = self.require_handle() {
             return self.fail(error);
         }
-        let conn = tcp::Conn::connect(host.to_string(), port as u16, self.notify.clone());
-        self.insert(Handle::Conn(conn))
+        let conn = tcp::Conn::connect(host, port as u16, self.actor.clone());
+        let handle = self.insert(Handle::Conn(Box::new(conn)));
+        self.notify.bump();
+        handle
     }
 
     pub fn error(&mut self, handle: i32) -> Output {
@@ -325,8 +342,8 @@ impl Net {
     pub fn peer_addr(&mut self, handle: i32) -> Output {
         match self.handles.get(&handle) {
             Some(Handle::Conn(conn)) => match conn.peer_addr() {
-                Some(addr) => Output::Bytes(tcp::addr_json(addr)),
-                None => Output::Code(AGAIN),
+                Ok(addr) => Output::Bytes(tcp::addr_json(addr)),
+                Err(code) => Output::Code(code),
             },
             _ => Output::Code(BADF),
         }
@@ -334,22 +351,18 @@ impl Net {
 
     /// At exit: give closed connections a moment to send what the guest
     /// already wrote (e.g. a response followed by `process.exit()`).
-    pub fn flush_closed(&mut self, limit: Duration) {
-        let deadline = Instant::now() + limit;
-        for conn in self.flushing.drain(..) {
-            conn.wait_flushed(deadline);
-        }
+    pub fn flush_closed(&mut self, limit: Duration) -> std::io::Result<()> {
+        self.actor.flush_closed(limit)
     }
 }
 
 impl Drop for Net {
     fn drop(&mut self) {
         for (_, handle) in self.handles.drain() {
-            match handle {
-                Handle::Fetch(request) => request.abort(),
-                Handle::Listener(listener) => listener.close(),
-                Handle::Conn(conn) => conn.close(),
+            if let Handle::Fetch(request) = handle {
+                request.abort();
             }
         }
+        // Dropping the last actor owner sends Stop, wakes its OS wait and joins.
     }
 }

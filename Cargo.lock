@@ -1425,8 +1425,10 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2",
  "socket2",
  "tokio",
+ "waffle-tcp",
  "wasmtime",
  "wasmtime-wasi",
  "zstd",
@@ -4380,6 +4382,15 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "waffle-tcp"
+version = "0.0.1"
+source = "git+https://github.com/ShaulLavo/waffle.git?rev=38bcaf09a995ddbb716bfaa741ff868ea3da2de9#38bcaf09a995ddbb716bfaa741ff868ea3da2de9"
+dependencies = [
+ "libc",
+ "socket2",
+]
 
 [[package]]
 name = "want"

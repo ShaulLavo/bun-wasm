@@ -40,7 +40,7 @@ fn read_all(net: &mut Net, handle: i32) -> Vec<u8> {
 
 #[test]
 fn handle_capacity_stops_at_the_process_namespace() {
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     net.next_handle = crate::process::FIRST_HANDLE - 1;
     assert!(net.require_handle().is_ok());
     net.next_handle += 1;
@@ -54,7 +54,7 @@ fn handle_capacity_stops_at_the_process_namespace() {
 
 #[test]
 fn exhausted_network_operations_report_error_without_starting_io() {
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     net.next_handle = crate::process::FIRST_HANDLE;
     for operation in 0..3 {
         let result = match operation {
@@ -76,7 +76,7 @@ fn exhausted_network_operations_report_error_without_starting_io() {
 
 #[test]
 fn last_network_handle_remains_below_process_handles_and_is_not_reused() {
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     net.next_handle = crate::process::FIRST_HANDLE - 1;
     let listener = net.listen("127.0.0.1", 0);
     assert_eq!(listener, crate::process::FIRST_HANDLE - 1);
@@ -92,18 +92,11 @@ fn last_network_handle_remains_below_process_handles_and_is_not_reused() {
 #[test]
 fn exhausted_accept_preserves_the_pending_connection() {
     // Net owns every listener/connection and closes them during unwind too.
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     let listener = net.listen("127.0.0.1", 0);
     assert!(listener > 0);
     let mut client = TcpStream::connect(("127.0.0.1", net.local_port(listener) as u16)).unwrap();
-    // Before sending data there are exactly two notifications: connection
-    // readiness and accept publication. Both prove the socket is queued,
-    // without assuming how many TCP reads will receive the message below.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while *net.notify.generation.lock().unwrap() < 2 {
-        assert!(Instant::now() < deadline, "connection was not queued");
-        net.poll(1000);
-    }
+    assert_eq!(net.poll(1000), 1, "listener did not become ready");
     net.next_handle = crate::process::FIRST_HANDLE;
     assert_eq!(net.accept(listener), ERROR);
     assert_eq!(json(net.error(0))["code"], "EAGAIN");
@@ -116,14 +109,14 @@ fn exhausted_accept_preserves_the_pending_connection() {
     assert_eq!(read_all(&mut net, conn), b"ping");
     assert_eq!(net.close(conn), 0);
     drop(client);
-    net.flush_closed(Duration::from_secs(1));
+    net.flush_closed(Duration::from_secs(1)).unwrap();
     assert_eq!(net.close(listener), 0);
     assert!(net.handles.is_empty());
 }
 
 #[test]
 fn poll_times_out_and_reports_new_events_once() {
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     assert_eq!(net.poll(0), 0);
     assert_eq!(net.poll(20), 0);
     net.notify.bump();
@@ -133,7 +126,7 @@ fn poll_times_out_and_reports_new_events_once() {
 
 #[test]
 fn listen_accept_echo_and_close() {
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     let listener = net.listen("127.0.0.1", 0);
     assert!(listener > 0);
     let port = net.local_port(listener) as u16;
@@ -165,7 +158,7 @@ fn listen_accept_echo_and_close() {
 
 #[test]
 fn listen_reports_address_in_use() {
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     let first = net.listen("127.0.0.1", 0);
     let port = net.local_port(first);
     assert_eq!(net.listen("127.0.0.1", port), ERROR);
@@ -179,7 +172,7 @@ fn listen_reports_address_in_use() {
 
 #[test]
 fn connect_write_backpressure_and_refused() {
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     let listener = net.listen("localhost", 0);
     let port = net.local_port(listener);
     let conn = net.connect("127.0.0.1", port);
@@ -236,7 +229,7 @@ fn fetch_reports_reason_phrase_and_decodes_gzip() {
     response.extend_from_slice(&body);
     let port = http_server(Box::leak(response.into_boxed_slice()));
 
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     let meta =
         format!(r#"{{"method":"GET","url":"http://127.0.0.1:{port}/x","headers":[["x-a","1"]]}}"#);
     let handle = net.fetch(meta.as_bytes(), b"");
@@ -285,7 +278,7 @@ fn waiting_fetch(net: &mut Net) -> (i32, i32, i32) {
 /// Keep the peer open without a complete response, then close only the fetch
 /// handle. The peer must observe EOF before it sends any more response bytes.
 fn assert_fetch_abort_disconnects(after_headers: bool) {
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     let (fetch, listener, peer) = waiting_fetch(&mut net);
     let mut buf = [0u8; 4096];
     if after_headers {
@@ -298,7 +291,7 @@ fn assert_fetch_abort_disconnects(after_headers: bool) {
     assert_eq!(net.close(fetch), BADF);
     assert_eq!(net.close(peer), 0);
     assert_eq!(net.close(listener), 0);
-    net.flush_closed(Duration::from_secs(1));
+    net.flush_closed(Duration::from_secs(1)).unwrap();
     assert!(net.handles.is_empty());
 }
 
@@ -314,7 +307,7 @@ fn fetch_abort_disconnects_during_response_body_read() {
 
 #[test]
 fn fetch_abort_does_not_cancel_another_pending_request() {
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     let (cancelled, first_listener, first_peer) = waiting_fetch(&mut net);
     let (active, second_listener, second_peer) = waiting_fetch(&mut net);
     let mut buf = [0u8; 4096];
@@ -335,13 +328,13 @@ fn fetch_abort_does_not_cancel_another_pending_request() {
     ] {
         assert_eq!(net.close(handle), 0);
     }
-    net.flush_closed(Duration::from_secs(1));
+    net.flush_closed(Duration::from_secs(1)).unwrap();
     assert!(net.handles.is_empty());
 }
 
 #[test]
 fn fetch_errors() {
-    let mut net = Net::new();
+    let mut net = Net::for_tests();
     let handle = net.fetch(br#"{"url":"http://127.0.0.1:9/"}"#, b"");
     assert!(handle > 0);
     let result = loop {
@@ -385,4 +378,217 @@ fn notify_wait_past_ends_on_a_bump_made_before_or_during_the_wait() {
     let started = Instant::now();
     notify.wait_past(notify.generation(), Duration::from_millis(20));
     assert!(started.elapsed() >= Duration::from_millis(20));
+}
+
+#[test]
+fn disposal_releases_idle_stream_and_joins_network_owner() {
+    let mut net = Net::for_tests();
+    let listener = net.listen("127.0.0.1", 0);
+    assert!(listener > 0);
+    let mut peer = TcpStream::connect(("127.0.0.1", net.local_port(listener) as u16)).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let connection = wait(&mut net, |net| net.accept(listener));
+    assert!(connection > 0);
+    let notify = net.notify();
+    drop(net);
+    assert_eq!(
+        Arc::strong_count(&notify),
+        1,
+        "network owner survived Net disposal"
+    );
+    assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
+fn native_default_listener_accepts_ipv4() {
+    let mut net = Net::for_tests();
+    let listener = net.listen("::", 0);
+    assert!(listener > 0, "{}", json(net.error(0)));
+    let mut peer = TcpStream::connect(("127.0.0.1", net.local_port(listener) as u16)).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let accepted = wait(&mut net, |net| net.accept(listener));
+    assert!(accepted > 0);
+    assert_eq!(net.close(accepted), 0);
+    net.flush_closed(Duration::from_secs(2)).unwrap();
+    assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+}
+
+#[cfg(target_os = "linux")]
+fn deny_ipv6_socket() -> std::io::Result<()> {
+    let mut filter = [
+        libc::sock_filter {
+            code: 0x20,
+            jt: 0,
+            jf: 0,
+            k: 0,
+        },
+        libc::sock_filter {
+            code: 0x15,
+            jt: 0,
+            jf: 3,
+            k: libc::SYS_socket as u32,
+        },
+        libc::sock_filter {
+            code: 0x20,
+            jt: 0,
+            jf: 0,
+            k: 16,
+        },
+        libc::sock_filter {
+            code: 0x15,
+            jt: 0,
+            jf: 1,
+            k: libc::AF_INET6 as u32,
+        },
+        libc::sock_filter {
+            code: 0x06,
+            jt: 0,
+            jf: 0,
+            k: 0x0005_0000 | libc::EAFNOSUPPORT as u32,
+        },
+        libc::sock_filter {
+            code: 0x06,
+            jt: 0,
+            jf: 0,
+            k: 0x7fff_0000,
+        },
+    ];
+    let program = libc::sock_fprog {
+        len: filter.len() as u16,
+        filter: filter.as_mut_ptr(),
+    };
+    // Deny AF_INET6 only in the disposable child; never change host sysctls.
+    unsafe {
+        if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &program) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_default_listener_falls_back_without_ipv6() {
+    use std::os::unix::process::CommandExt;
+    if std::env::var_os("BUNWASM_TEST_NO_IPV6").is_some() {
+        assert_eq!(
+            std::net::TcpListener::bind(("::", 0))
+                .unwrap_err()
+                .raw_os_error(),
+            Some(libc::EAFNOSUPPORT)
+        );
+        native_default_listener_accepts_ipv4();
+        return;
+    }
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child
+        .args([
+            "--exact",
+            "net::tests::native_default_listener_falls_back_without_ipv6",
+        ])
+        .env("BUNWASM_TEST_NO_IPV6", "1");
+    unsafe {
+        child.pre_exec(deny_ipv6_socket);
+    }
+    assert!(child.status().unwrap().success());
+}
+
+#[test]
+fn native_ready_b_progresses_behind_idle_a() {
+    let mut net = Net::for_tests();
+    let listener = net.listen("127.0.0.1", 0);
+    let port = net.local_port(listener) as u16;
+    let _idle = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let a = wait(&mut net, |net| net.accept(listener));
+    let mut ready = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let b = wait(&mut net, |net| net.accept(listener));
+    assert!(a < b);
+    let _ = net.poll(0);
+    assert_eq!(net.poll(10), 0, "pending listener must not spin");
+    ready.write_all(b"B").unwrap();
+    let mut bytes = [0];
+    assert_eq!(wait(&mut net, |net| net.read(b, &mut bytes)), 1);
+    assert_eq!(&bytes, b"B");
+    assert_eq!(net.read(a, &mut bytes), AGAIN);
+}
+
+#[test]
+fn native_close_drains_one_write_before_peer_eof_and_relisten() {
+    let mut net = Net::for_tests();
+    let listener = net.listen("127.0.0.1", 0);
+    let port = net.local_port(listener);
+    let mut peer = TcpStream::connect(("127.0.0.1", port as u16)).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let accepted = wait(&mut net, |net| net.accept(listener));
+    peer.write_all(b"unread body").unwrap();
+    let response = b"one admitted native response";
+    assert_eq!(net.write(accepted, response), response.len() as i32);
+    assert_eq!(net.close(accepted), 0);
+    assert_eq!(net.read(accepted, &mut [0]), BADF);
+    net.flush_closed(Duration::from_secs(2)).unwrap();
+    let mut received = Vec::new();
+    peer.read_to_end(&mut received).unwrap();
+    assert_eq!(received, response);
+    // The peer has not sent EOF. Writer completion alone releases the exit waiter.
+    assert_eq!(net.close(listener), 0);
+    let replacement = net.listen("127.0.0.1", port);
+    assert!(replacement > 0, "{}", json(net.error(0)));
+}
+
+#[test]
+fn native_listener_close_drains_pending_peer_with_strict_eof() {
+    let mut net = Net::for_tests();
+    let listener = net.listen("127.0.0.1", 0);
+    let port = net.local_port(listener);
+    let mut pending = TcpStream::connect(("127.0.0.1", port as u16)).unwrap();
+    pending
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    pending.write_all(b"queued unread request").unwrap();
+    assert_eq!(net.close(listener), 0);
+    net.flush_closed(Duration::from_secs(2)).unwrap();
+    assert_eq!(pending.read(&mut [0]).unwrap(), 0);
+    assert!(net.listen("127.0.0.1", port) > 0);
+}
+
+#[test]
+fn native_failed_address_reports_error_not_badf_or_again() {
+    let mut net = Net::for_tests();
+    let held = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = held.local_addr().unwrap().port();
+    drop(held);
+    let failed = net.connect("127.0.0.1", i32::from(port));
+    assert_eq!(wait(&mut net, |net| net.write(failed, b"x")), ERROR);
+    assert!(matches!(net.peer_addr(failed), Output::Code(ERROR)));
+    assert!(matches!(net.local_addr(failed), Output::Code(ERROR)));
+    assert_eq!(net.local_port(failed), ERROR);
+    let error = json(net.error(failed));
+    assert_eq!(error["code"], "ECONNREFUSED");
+    assert_eq!(error["syscall"], "connect");
+}
+
+#[test]
+fn native_connect_preserves_candidate_failover_policy() {
+    let working = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = working.local_addr().unwrap();
+    let refused = std::net::SocketAddr::new("127.0.0.2".parse().unwrap(), address.port());
+    lookup_fixture::install(move || Ok(vec![refused, address]));
+    let mut net = Net::for_tests();
+    let connection = net.connect("controlled-candidates.invalid", i32::from(address.port()));
+    assert!(connection > 0);
+    let written = wait(&mut net, |net| net.write(connection, b"second candidate"));
+    assert_eq!(
+        written,
+        16,
+        "a failed first candidate must not discard a working second candidate: {}",
+        json(net.error(connection))
+    );
+    let (mut peer, _) = working.accept().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut bytes = [0; 16];
+    peer.read_exact(&mut bytes).unwrap();
+    assert_eq!(&bytes, b"second candidate");
 }

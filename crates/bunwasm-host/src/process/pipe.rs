@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn closed_pipe_keeps_wasi_epipe() {
-        let mut pipe = Pipe::new(crate::net::Net::new().notify());
+        let mut pipe = Pipe::new(crate::net::Net::for_tests().notify());
         pipe.close_reader();
         let mut context = Context::from_waker(Waker::noop());
         let Poll::Ready(Err(error)) = Pin::new(&mut pipe).poll_write(&mut context, b"output")

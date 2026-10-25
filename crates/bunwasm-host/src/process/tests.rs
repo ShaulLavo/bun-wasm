@@ -36,7 +36,7 @@ fn processes() -> Fixture {
     Fixture(Processes::new(
         runtime,
         Stdio::inherited(),
-        crate::net::Net::new().notify(),
+        crate::net::Net::for_tests().notify(),
         Arc::default(),
     ))
 }
@@ -179,7 +179,7 @@ fn arbitrary_bindings_are_retained_and_not_implicitly_inherited() {
             pid: 7,
             memory_limit: 512 << 20,
         },
-        crate::net::Net::new().notify(),
+        crate::net::Net::for_tests().notify(),
         Arc::default(),
     );
     parent.close(read);
@@ -195,7 +195,7 @@ fn arbitrary_bindings_are_retained_and_not_implicitly_inherited() {
             pid: 8,
             memory_limit: 512 << 20,
         },
-        crate::net::Net::new().notify(),
+        crate::net::Net::for_tests().notify(),
         Arc::default(),
     );
     assert_eq!(grandchild.read(9, &mut bytes), BADF);
@@ -388,7 +388,7 @@ fn owner_chain_authority_survives_reaping_intermediate_jobs() {
             pid: 9,
             memory_limit: 512 << 20,
         },
-        crate::net::Net::new().notify(),
+        crate::net::Net::for_tests().notify(),
         Arc::default(),
     );
     assert_eq!(outsider.wait_job(2, 1), Err(PERM));
@@ -534,7 +534,7 @@ fn executable_access_is_live_consuming_and_process_owned() {
             pid: 7,
             memory_limit: 512 << 20,
         },
-        crate::net::Net::new().notify(),
+        crate::net::Net::for_tests().notify(),
         Arc::default(),
     );
     let id = p.access_start("/bin/bun", "/", 1);
@@ -633,7 +633,7 @@ fn process_drop_retires_pending_access_requests_and_teardown_removes_files() {
                 pid: 7,
                 memory_limit: 512 << 20,
             },
-            crate::net::Net::new().notify(),
+            crate::net::Net::for_tests().notify(),
             Arc::default(),
         ),
     );

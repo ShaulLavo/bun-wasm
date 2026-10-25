@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn concurrent_shared_readers_never_report_eof_while_writer_is_open() {
-        let notify = crate::net::Net::new().notify();
+        let notify = crate::net::Net::for_tests().notify();
         let [reader, writer] = Endpoint::pair(notify.clone());
         const COUNT: usize = 50_000;
         assert_eq!(writer.write(&vec![b'x'; COUNT], &notify), COUNT as i32);
