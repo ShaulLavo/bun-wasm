@@ -33,10 +33,13 @@ resolver slot, so the compiled blocking fixture covers the Bun-owned literal/ove
 facade; hostname-backed Vitest/SolidStart startup remains a browser-runtime acceptance
 after a new guest build. `scripts/dns-lookup.test.ts` also runs a prepared Waffle
 export control under native Bun with a real Worker; plain Node is not used as the full
-runtime host.
+runtime host. The module-preparation benchmark rewrites the helper import to its
+real file URL, and the isolated Node host fixture copies `net/lookup.ts` with its
+other host assets. Its Waffle import is type-only and erased by Node. These controls
+verify host module linking without claiming native hostname resolution.
 
 | Paths | Class | Provenance |
 | --- | --- | --- |
 | `crates/bunwasm-runtime/src/js/dns.ts` plus minimal registration in `builtins.js` and `bun.js` | Host feature | Original Bun/Node public facade and Waffle adapter; no copied resolver implementation. |
 | `web/src/net/lookup.ts`, `web/src/{bun-executor,bun-launcher,runner}.ts`, minimal `engine-host.js` registration | Host feature | Original browser worker bridge over Waffle `runtime.network().lookup`; TCP transport unchanged. |
-| `tests/fixtures/dns-lookup/`, `scripts/dns-lookup.test.ts`, `web/tests/dns-lookup-bridge.test.ts`, `web/tests/dns-lookup-lifecycle.test.ts` | Host feature | Blocking facade, prepared-export, bridge, real engine lifetime and structured-error controls. |
+| `tests/fixtures/dns-lookup/`, `scripts/dns-lookup.test.ts`, `web/tests/dns-lookup-bridge.test.ts`, `web/tests/dns-lookup-lifecycle.test.ts`, `web/tests/core-node.test.ts`, `scripts/bench-module-preparation.ts` | Host feature | Blocking facade, prepared-export, bridge, real engine lifetime and structured-error controls. |
