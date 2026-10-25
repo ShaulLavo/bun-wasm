@@ -1,75 +1,218 @@
+import { createContext, runInContext, type Context } from "node:vm";
 import { expect, test } from "bun:test";
 import { completeObservations, observeProductTraffic, productObservations, type ProductPage } from "./product-browser";
 import type { ProductCheck } from "./product-types";
 
-function socketObserver(assign: (callback: () => void) => void) {
-  return { on(_name: "framereceived", callback: (event: { payload: unknown }) => void) {
-    assign(() => callback({ payload: "update" }));
-  } };
+interface FixtureOptions {
+  updateMessage: string | null;
+  domFailure?: boolean;
 }
 
-function fixture() {
+interface Fixture {
+  context: Context;
+  page: ProductPage;
+  source: { read(path: string): Promise<string | null>; write(path: string, contents: string): Promise<void> };
+  writes: string[];
+  visits: string[];
+  current(): string;
+  emit(payload: string): void;
+  open(): Promise<void>;
+}
+
+function createPreviewContext(): Context {
+  const context = createContext({ TextDecoder, TextEncoder, ArrayBuffer, Uint8Array, JSON, Reflect, Set });
+  runInContext(`
+    class EventTarget {
+      constructor() { this.listeners = new Map(); }
+      addEventListener(type, listener) {
+        const listeners = this.listeners.get(type) || [];
+        listeners.push(listener);
+        this.listeners.set(type, listeners);
+      }
+      dispatchEvent(event) {
+        event.target = this;
+        for (const listener of this.listeners.get(event.type) || []) listener.call(this, event);
+        const handler = this['on' + event.type];
+        if (typeof handler === 'function') handler.call(this, event);
+        return true;
+      }
+    }
+    class Event {
+      constructor(type, init = {}) { this.type = type; Object.assign(this, init); }
+    }
+    class MessageEvent extends Event {}
+    class MessagePort extends EventTarget {
+      postMessage(data) { this.peer?.dispatchEvent(new MessageEvent('message', { data })); }
+      close() { this.closed = true; }
+    }
+    class MessageChannel {
+      constructor() {
+        this.port1 = new MessagePort();
+        this.port2 = new MessagePort();
+        this.port1.peer = this.port2;
+        this.port2.peer = this.port1;
+      }
+    }
+    class NativeWebSocket extends EventTarget {}
+    class RuntimeWebSocket extends EventTarget {}
+    class PreviewWebSocket extends RuntimeWebSocket {
+      constructor() {
+        super();
+        const channel = new MessageChannel();
+        this.port = channel.port1;
+        globalThis.__previewControllerPort = channel.port2;
+        this.port.onmessage = event => {
+          if (event.data.kind === 'message') this.dispatchEvent(new MessageEvent('message', { data: event.data.payload }));
+          if (event.data.kind === 'ping') this.dispatchEvent(new Event('ping'));
+        };
+      }
+    }
+    globalThis.EventTarget = EventTarget;
+    globalThis.Event = Event;
+    globalThis.MessageEvent = MessageEvent;
+    globalThis.MessagePort = MessagePort;
+    globalThis.MessageChannel = MessageChannel;
+    globalThis.WebSocket = NativeWebSocket;
+    globalThis.NativeWebSocket = NativeWebSocket;
+    globalThis.PreviewWebSocket = PreviewWebSocket;
+  `, context);
+  return context;
+}
+
+function evaluate(context: Context, source: string): void {
+  runInContext(source, context);
+}
+
+function fixture(options: FixtureOptions): Fixture {
+  const context = createPreviewContext();
   let visible = "original";
   let source = "original";
-  let frame: (() => void) | undefined;
-  const visits: string[] = [];
   const writes: string[] = [];
+  const visits: string[] = [];
   const locator = (wanted = "") => ({
     filter: ({ hasText }: { hasText: string }) => locator(hasText),
-    async waitFor() { if (!visible.includes(wanted)) throw new Error("DOM did not update"); },
+    async waitFor() {
+      if (options.domFailure || !visible.includes(wanted)) throw new Error("DOM did not update");
+    },
     async click() { visible = "action-result"; },
   });
   const page: ProductPage = {
+    async addInitScript(script) { runInContext(`(${script.toString()})()`, context); },
+    async evaluate<T>(pageFunction: () => T) { return runInContext(`(${pageFunction.toString()})()`, context); },
     locator,
     async goto(url) {
       visits.push(url);
-      visible = "route-result";
+      const path = new URL(url).pathname;
+      visible = path.endsWith("/__preview/3137/") ? "original" : "route-result";
+      evaluate(context, "globalThis.WebSocket = globalThis.PreviewWebSocket; globalThis.__previewSocket = new globalThis.PreviewWebSocket();");
       return { ok: () => true, status: () => 200, text: async () => visible, headers: () => ({ "x-matrix": "verified" }) };
     },
-    on(_event, listener) { listener(socketObserver(callback => { frame = callback; })); },
-    off() { frame = undefined; },
+  };
+  const emit = (payload: string) => evaluate(context, `globalThis.__previewControllerPort?.postMessage({ kind: 'message', payload: ${JSON.stringify(payload)} });`);
+  const sourceAdapter = {
+    async read() { return source; },
+    async write(_path: string, contents: string) {
+      writes.push(contents);
+      source = contents;
+      visible = contents;
+      if (contents === "changed") {
+        if (options.updateMessage) emit(options.updateMessage);
+        else evaluate(context, "globalThis.__previewControllerPort?.postMessage({ kind: 'ping' });");
+      }
+    },
   };
   return {
-    page, visits, writes,
-    source: {
-      read: async () => source,
-      async write(_path: string, contents: string) { writes.push(contents); source = contents; visible = contents; frame?.(); },
-    },
+    context,
+    page,
+    source: sourceAdapter,
+    writes,
+    visits,
     current: () => source,
+    emit,
+    async open() { await page.goto("http://local/__preview/3137/", { timeout: 1000 }); },
   };
 }
 
-test("guest HMR edits restore source and observe a development update without navigation", async () => {
-  const run = fixture();
-  const traffic = observeProductTraffic(run.page);
-  const check = { kind: "page", selector: "h1", text: "original", hmr: { path: "page.tsx", search: "original", replacement: "changed" } } satisfies ProductCheck;
-  const rows = await productObservations(run.page, "http://local/__preview/3137/", check, run.source, traffic, 1000);
+function hmrCheck() {
+  return { kind: "page", selector: "h1", text: "original", hmr: { path: "page.tsx", search: "original", replacement: "changed" } } satisfies ProductCheck;
+}
+
+test("observes preview WebSocket messages over MessagePort after the edit boundary", async () => {
+  const run = fixture({ updateMessage: JSON.stringify({ type: "update", updates: [] }) });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  run.emit(JSON.stringify({ type: "connected" }));
+  const rows = await productObservations(run.page, "http://local/__preview/3137/", hmrCheck(), run.source, traffic, 1000);
   expect(rows.map(row => row.status)).toEqual(["pass"]);
+  expect(rows[0]?.assertion).toContain("vite:update");
   expect(run.writes).toEqual(["changed", "original"]);
   expect(run.current()).toBe("original");
-  expect(run.visits).toEqual([]);
-  traffic.close();
+  await traffic.close();
 });
 
-test("a DOM change without HMR traffic cannot pass the hot-edit gate", async () => {
-  const run = fixture();
-  const check = { kind: "page", selector: "h1", text: "original", hmr: { path: "page.tsx", search: "original", replacement: "changed" } } satisfies ProductCheck;
-  const rows = await productObservations(run.page, "http://local/", check, run.source, { count: () => 0 }, 1000);
+test("recognizes Next named HMR actions instead of requiring Vite's type field", async () => {
+  const run = fixture({ updateMessage: JSON.stringify({ action: "serverComponentChanges", hash: "next-hash" }) });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  const rows = await productObservations(run.page, "http://local/__preview/3137/", hmrCheck(), run.source, traffic, 1000);
+  expect(rows[0]?.status).toBe("pass");
+  expect(rows[0]?.assertion).toContain("next:serverComponentChanges");
+  await traffic.close();
+});
+
+test("rejects unrelated ping traffic even when the edited DOM changes", async () => {
+  const run = fixture({ updateMessage: null });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  const rows = await productObservations(run.page, "http://local/", hmrCheck(), run.source, traffic, 1000);
   expect(rows[0]?.status).toBe("fail");
-  expect(rows[0]?.blocker).toContain("without a development WebSocket");
+  expect(rows[0]?.blocker).toContain("recognized Vite or Next HMR message");
   expect(run.current()).toBe("original");
+  await traffic.close();
+});
+
+test("restores the guest source when the DOM assertion fails", async () => {
+  const run = fixture({ updateMessage: JSON.stringify({ type: "full-reload" }), domFailure: true });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  const rows = await productObservations(run.page, "http://local/", hmrCheck(), run.source, traffic, 1000);
+  expect(rows[0]?.status).toBe("fail");
+  expect(run.writes).toEqual(["changed", "original"]);
+  expect(run.current()).toBe("original");
+  await traffic.close();
+});
+
+test("preserves message arrival ordering, receiver behavior, exceptions, and cleanup", async () => {
+  const run = fixture({ updateMessage: JSON.stringify({ type: "update", updates: [] }) });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  run.emit(JSON.stringify({ type: "ping" }));
+  evaluate(run.context, `globalThis.__nativeSocket = new globalThis.NativeWebSocket(); globalThis.__nativeSocket.dispatchEvent(new globalThis.MessageEvent('message', { data: JSON.stringify({ type: 'update' }) }));`);
+  run.emit(JSON.stringify({ type: "full-reload" }));
+  expect(await traffic.count()).toBe(1);
+  const evidence = await traffic.evidenceSince(0);
+  expect(evidence.map(event => event.event)).toEqual(["full-reload"]);
+  await traffic.close();
+  run.emit(JSON.stringify({ type: "update", updates: [] }));
+  expect(await traffic.count()).toBe(0);
+  expect(() => evaluate(run.context, `globalThis.__plainTarget = new globalThis.EventTarget(); globalThis.__plainTarget.addEventListener('message', () => { throw new Error('receiver failure'); }); globalThis.__plainTarget.dispatchEvent(new globalThis.Event('message'));`)).toThrow("receiver failure");
 });
 
 test("feature requests retain the service-worker preview prefix and assert actual responses", async () => {
-  const run = fixture();
+  const run = fixture({ updateMessage: null });
+  const traffic = { count: async () => 0, evidenceSince: async () => [] };
   const check = { kind: "page", selector: "h1", text: "original", probes: [
     { kind: "route", id: "ssr", path: "/server", selector: "h1", text: "route-result" },
     { kind: "action", id: "action", path: "/action", button: "button", selector: "output", text: "action-result" },
     { kind: "response", id: "middleware", path: "/api", status: 200, header: { name: "X-Matrix", value: "verified" } },
   ] } satisfies ProductCheck;
-  const rows = await productObservations(run.page, "http://local/__preview/3137/", check, run.source, { count: () => 0 }, 1000);
+  const rows = await productObservations(run.page, "http://local/__preview/3137/", check, run.source, traffic, 1000);
   expect(rows.map(row => row.status)).toEqual(["pass", "pass", "pass"]);
-  expect(run.visits).toEqual(["http://local/__preview/3137/server", "http://local/__preview/3137/action", "http://local/__preview/3137/api"]);
+  expect(run.visits).toEqual([
+    "http://local/__preview/3137/server",
+    "http://local/__preview/3137/action",
+    "http://local/__preview/3137/api",
+  ]);
 });
 
 test("unrun hot-edit and feature stages stay blocked rather than disappearing or passing", () => {

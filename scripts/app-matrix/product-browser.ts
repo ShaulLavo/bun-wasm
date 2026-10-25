@@ -11,14 +11,11 @@ interface Response {
   text(): Promise<string>;
   headers(): Record<string, string>;
 }
-interface Socket {
-  on(event: "framereceived", listener: (event: { payload: unknown }) => void): unknown;
-}
 export interface ProductPage {
+  addInitScript(script: () => void): Promise<void>;
+  evaluate<T>(pageFunction: () => T): Promise<T>;
   locator(selector: string): Locator;
   goto(url: string, options: { timeout: number }): Promise<Response | null>;
-  on(event: "websocket", listener: (socket: Socket) => void): unknown;
-  off(event: "websocket", listener: (socket: Socket) => void): unknown;
 }
 export interface GuestSource {
   read(path: string): Promise<string | null>;
@@ -30,24 +27,133 @@ export interface Observation {
   assertion?: string;
   blocker?: string;
 }
-
-export function observeProductTraffic(page: ProductPage) {
-  let frames = 0;
-  const listener = (socket: Socket) => socket.on("framereceived", () => { frames++; });
-  page.on("websocket", listener);
-  return { count: () => frames, close: () => { page.off("websocket", listener); } };
+export interface TrafficEvidence {
+  sequence: number;
+  framework: "next" | "vite";
+  event: string;
+  payload: string;
+}
+export interface ProductTraffic {
+  count(): Promise<number>;
+  evidenceSince(sequence: number): Promise<readonly TrafficEvidence[]>;
+  close(): Promise<void>;
 }
 
-async function hotEdit(page: ProductPage, source: GuestSource, selector: string, edit: SourceEdit, traffic: { count(): number }, timeout: number): Promise<string> {
+declare global {
+  var __bunWasmProductTraffic: {
+    events: TrafficEvidence[];
+    close(): void;
+  } | undefined;
+}
+
+function installPreviewTrafficObserver() {
+  const existing = globalThis.__bunWasmProductTraffic;
+  if (existing) return;
+
+  const nativeWebSocket = globalThis.WebSocket;
+  const eventTarget = globalThis.EventTarget;
+  const descriptor = Object.getOwnPropertyDescriptor(eventTarget.prototype, "dispatchEvent");
+  if (!descriptor || typeof descriptor.value !== "function") return;
+
+  const events: TrafficEvidence[] = [];
+  const originalDispatch = descriptor.value;
+  const nextActions = new Set([
+    "built", "sync", "reloadPage", "serverComponentChanges", "clientChanges",
+    "serverOnlyChanges", "middlewareChanges", "addedPage", "removedPage", "turbopack-message",
+  ]);
+  const nextEvents = new Set(["clientChanges", "serverOnlyChanges", "middlewareChanges"]);
+  const viteEvents = new Set(["update", "full-reload"]);
+
+  function textPayload(data: unknown): string | null {
+    if (typeof data === "string") return data;
+    if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
+    if (ArrayBuffer.isView(data)) return new TextDecoder().decode(data);
+    return null;
+  }
+
+  function stringProperty(value: object, key: string): string | null {
+    const candidate = Reflect.get(value, key);
+    return typeof candidate === "string" ? candidate : null;
+  }
+
+  function frameworkEvent(target: EventTarget, event: Event): { framework: "next" | "vite"; event: string; payload: string } | null {
+    if (event.type !== "message") return null;
+    if (typeof globalThis.WebSocket !== "function" || !(target instanceof globalThis.WebSocket)) return null;
+    if (typeof nativeWebSocket === "function" && target instanceof nativeWebSocket) return null;
+    if (!("data" in event)) return null;
+    const payload = textPayload(event.data);
+    if (payload === null) return null;
+
+    let message: unknown;
+    try { message = JSON.parse(payload); }
+    catch { return null; }
+    if (!message || typeof message !== "object") return null;
+
+    const type = stringProperty(message, "type");
+    if (type && viteEvents.has(type)) return { framework: "vite", event: type, payload };
+    const action = stringProperty(message, "action");
+    if (action && nextActions.has(action)) return { framework: "next", event: action, payload };
+    const eventName = stringProperty(message, "event");
+    if (eventName && nextEvents.has(eventName)) return { framework: "next", event: eventName, payload };
+    return null;
+  }
+
+  const wrappedDispatch = function (this: EventTarget, event: Event): boolean {
+    try {
+      const observed = frameworkEvent(this, event);
+      if (observed) events.push({ sequence: events.length + 1, ...observed });
+    } catch { }
+    return Reflect.apply(originalDispatch, this, [event]);
+  };
+
+  Object.defineProperty(eventTarget.prototype, "dispatchEvent", { ...descriptor, value: wrappedDispatch });
+  const state = {
+    events,
+    close() {
+      Object.defineProperty(eventTarget.prototype, "dispatchEvent", descriptor);
+      delete globalThis.__bunWasmProductTraffic;
+    },
+  };
+  Object.defineProperty(globalThis, "__bunWasmProductTraffic", { configurable: true, value: state });
+}
+
+function trafficCount(): number {
+  return globalThis.__bunWasmProductTraffic?.events.length ?? 0;
+}
+
+function trafficEvidence(): TrafficEvidence[] {
+  return globalThis.__bunWasmProductTraffic?.events.map(event => ({ ...event })) ?? [];
+}
+
+function closePreviewTrafficObserver(): void {
+  globalThis.__bunWasmProductTraffic?.close();
+}
+
+export async function observeProductTraffic(page: ProductPage): Promise<ProductTraffic> {
+  await page.addInitScript(installPreviewTrafficObserver);
+  let closed = false;
+  return {
+    count: () => page.evaluate(trafficCount),
+    evidenceSince: async sequence => (await page.evaluate(trafficEvidence)).slice(sequence),
+    close: async () => {
+      if (closed) return;
+      await page.evaluate(closePreviewTrafficObserver);
+      closed = true;
+    },
+  };
+}
+
+async function hotEdit(page: ProductPage, source: GuestSource, selector: string, edit: SourceEdit, traffic: Pick<ProductTraffic, "count" | "evidenceSince">, timeout: number): Promise<string> {
   const original = await source.read(edit.path);
   if (original === null || !original.includes(edit.search)) throw new Error(`HMR source marker missing in ${edit.path}`);
   if (!edit.search || edit.search === edit.replacement) throw new Error("HMR edit must change a nonempty source marker");
-  const before = traffic.count();
+  const before = await traffic.count();
   try {
     await source.write(edit.path, original.replace(edit.search, edit.replacement));
     await page.locator(selector).filter({ hasText: edit.replacement }).waitFor({ timeout });
-    if (traffic.count() <= before) throw new Error("Edited content appeared without a development WebSocket update");
-    return `Guest source edit rendered ${JSON.stringify(edit.replacement)} without a manual page reload`;
+    const evidence = await traffic.evidenceSince(before);
+    if (!evidence.length) throw new Error("Edited content appeared without a development WebSocket update (recognized Vite or Next HMR message)");
+    return `Guest source edit rendered ${JSON.stringify(edit.replacement)} without a manual page reload after ${evidence.map(item => `${item.framework}:${item.event}`).join(", ")}`;
   } finally { await source.write(edit.path, original); }
 }
 
@@ -71,7 +177,7 @@ async function observe(stage: string, operation: () => Promise<string>): Promise
   catch (error) { return { stage, status: "fail", blocker: String(error) }; }
 }
 
-export async function productObservations(page: ProductPage, base: string, check: ProductCheck, source: GuestSource, traffic: { count(): number }, timeout: number): Promise<Observation[]> {
+export async function productObservations(page: ProductPage, base: string, check: ProductCheck, source: GuestSource, traffic: Pick<ProductTraffic, "count" | "evidenceSince">, timeout: number): Promise<Observation[]> {
   if (check.kind !== "page" && check.kind !== "http") return [];
   const results: Observation[] = [];
   if (check.kind === "page" && check.hmr) {
