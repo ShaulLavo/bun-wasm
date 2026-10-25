@@ -33,6 +33,13 @@ for (const invalid of [-1, 1.5, NaN, Infinity, 2147483648]) {
 }
 console.log("descriptor writes and errors");
 
+writeFileSync(path, "abcdef");
+for (const [start, end, expected] of [[1, 3, "bc"], [1.5, 3, "bc"], [NaN, 3, "abc"], [1, 3.5, "bc"], [1, NaN, ""]] satisfies [number, number | undefined, string][]) {
+  assert.equal(await Bun.file(path).slice(start, end).text(), expected);
+  assert.equal(await Bun.readableStreamToText(Bun.file(path).slice(start, end).stream()), expected);
+}
+console.log("slice indexes normalize before reads");
+
 const text = "0123456789".repeat(30_000);
 writeFileSync(path, text);
 fd = openSync(path, "r");

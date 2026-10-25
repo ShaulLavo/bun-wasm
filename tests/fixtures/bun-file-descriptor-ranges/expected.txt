@@ -1,5 +1,6 @@
 descriptor reads and stat
 descriptor writes and errors
+slice indexes normalize before reads
 bounded streams preserve descriptor position
 path ranges, cancellation and missing-file errors
 numeric stdout

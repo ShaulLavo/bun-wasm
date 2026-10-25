@@ -11,6 +11,8 @@
   }
 
   function reader(target: Target, start: number, end: number | undefined, streaming: boolean) {
+    start = Math.trunc(start) || 0;
+    if (end !== undefined) end = Math.trunc(end) || 0;
     let fd: number | undefined;
     let owned = false;
     let finished = false;

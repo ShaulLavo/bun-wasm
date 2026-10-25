@@ -11,7 +11,9 @@ previous implementation is recorded at bun-wasm
 reference, not an implementation source. No upstream patch or revision changes.
 
 The adapter opens pathname streams on first demand, requests at most 64 KiB per
-pull and reads explicit ranges without first loading the backing file. EOF,
+pull and reads explicit ranges without first loading the backing file. Slice
+indexes truncate toward zero and NaN becomes zero before deriving read bounds,
+preserving the previous typed-array range coercion. EOF,
 cancellation and read errors close only descriptors the adapter opened. Borrowed
 regular-file streams and ranges use pread, leaving the caller's offset intact.
 Unsliced descriptor text/byte reads consume the caller's current offset. Numeric

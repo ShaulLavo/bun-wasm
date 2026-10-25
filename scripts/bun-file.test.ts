@@ -40,8 +40,8 @@ function adapter(Stream = ReadableStream) {
     open(path: string) { const fd = open(path); opens.push(fd); return fd; },
     close(fd: number) { closes.push(fd); owned.delete(fd); closeSync(fd); },
     read(fd: number, length: number, position = -1) {
-      const bytes = new Uint8Array(length);
-      const count = readSync(fd, bytes, 0, length, position < 0 ? null : position);
+      const bytes = new Uint8Array(Math.trunc(length));
+      const count = readSync(fd, bytes, 0, bytes.length, position < 0 ? null : Math.trunc(position));
       reads.push({ fd, length, position, bytes: count });
       return bytes.subarray(0, count);
     },
@@ -102,6 +102,39 @@ test("small slices read only their exact backing range and close owned descripto
   expect(reads.map(r => [r.length, r.position, r.bytes])).toEqual([[4096, 123, 4096]]);
   expect(opens).toEqual(closes);
 });
+
+const rangeCases = [
+  { label: "integer control", start: 1, end: 3, text: "bc", position: 1, length: 2 },
+  { label: "fractional start", start: 1.5, end: 3, text: "bc", position: 1, length: 2 },
+  { label: "NaN start", start: NaN, end: 3, text: "abc", position: 0, length: 3 },
+  { label: "fractional end", start: 1, end: 3.5, text: "bc", position: 1, length: 2 },
+  { label: "NaN end", start: 1, end: NaN, text: "", position: 1, length: 0 },
+];
+
+async function streamText(stream: ReadableStream<Uint8Array>) {
+  const reader = stream.getReader();
+  let text = "";
+  try {
+    for (let result = await reader.read(); !result.done; result = await reader.read()) {
+      text += new TextDecoder().decode(result.value);
+    }
+  } finally { await reader.cancel(); }
+  return text;
+}
+
+for (const { engine, consumer } of ["host", "polyfill"].flatMap(engine => ["text", "stream"].map(consumer => ({ engine, consumer })))) {
+  test.each(rangeCases)(`${engine} ${consumer} normalizes $label before I/O`, async (range) => {
+    const path = fixture();
+    const { api, reads, wholeReads, opens, closes } = adapter(engine === "host" ? ReadableStream : polyfillStream());
+    const file = api.file(path).slice(range.start, range.end);
+    const text = consumer === "text" ? await file.text() : await streamText(file.stream());
+    expect(text).toBe(range.text);
+    const expected = range.length ? [[range.length, range.position, range.length]] : [];
+    expect(reads.map(r => [r.length, r.position, r.bytes])).toEqual(expected);
+    expect(wholeReads).toEqual([]);
+    expect(opens).toEqual(closes);
+  });
+}
 
 test("stream demand and cancellation never read the remainder or close borrowed descriptors", async () => {
   const path = fixture("x".repeat(2 * 1024 * 1024));
