@@ -44,6 +44,13 @@ impl Table {
     }
 }
 
+fn flat_edits(edits: Vec<(usize, &'static str)>) -> Val {
+    let flat = edits
+        .into_iter()
+        .flat_map(|(at, text)| [Val::Num(at as f64), Val::Str(text.to_owned())]);
+    Val::Array(flat.collect())
+}
+
 /// Node's (code, negative Linux errno, description) for an I/O error.
 fn errno_info(err: &io::Error) -> (&'static str, i32, &'static str) {
     use io::ErrorKind as K;
@@ -835,16 +842,7 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
     });
     let st = state.clone();
     t.add("functionImports", move |a| {
-        let args = a
-            .array(0)
-            .ok_or_else(|| NativeError::type_error("expected function arguments"))?;
-        let strings = args
-            .iter()
-            .map(|value| match value {
-                Val::Str(s) => Ok(s.clone()),
-                _ => Err(NativeError::type_error("expected source string")),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let strings = a.sources(0)?;
         let offsets = st
             .transpiler
             .function_imports(&strings, a.str(1)?)
@@ -855,6 +853,16 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
                 .map(|items| Val::Array(items.into_iter().map(|i| (i as u32).into()).collect()))
                 .collect(),
         ))
+    });
+    let st = state.clone();
+    // Per source, `[offset, text, …]` in UTF-16 units: the host splices them
+    // into its own string (engine-host.js `awaitHooked`).
+    t.add("awaitHookEdits", move |a| {
+        let sources = a.sources(0)?;
+        let Some(edits) = st.transpiler.await_hook_edits(&sources, a.str(1)?) else {
+            return Ok(Val::Null);
+        };
+        Ok(Val::Array(edits.into_iter().map(flat_edits).collect()))
     });
     let st = state.clone();
     t.add("registerObjectModule", move |a| {

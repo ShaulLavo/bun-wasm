@@ -31,6 +31,8 @@ const invalid: [string, string][] = [
   ["non-string UTF-8 encoding", 'native.utf8Encode(7);'],
   ["non-byte concatenation", 'declare const internal: BunWasm.Internal; internal.concatBytes(["text"]);'],
   ["unknown generated-function kind", 'native.functionImports([], "constructor");'],
+  ["unknown await-hook kind", 'native.awaitHooked([], "constructor");'],
+  ["non-string await-hook source", 'native.awaitHooked([7], "script");'],
   ["non-string module specifier", 'native.resolve(7, "/index.ts", false);'],
   ["builtin index text", 'native.bunBuiltinSource("module");'],
   ["builtin hook object", 'native.bunBuiltinHookName({});'],
@@ -51,7 +53,7 @@ test("accepts native byte-sink encoding and concatenation contracts", () => {
 });
 
 test("accepts generated-function parser and module-loader contracts", () => {
-  const result = check('native.functionImports(["return 1"], "normal");\nnative.importModule(native.resolve("./x", "/index.ts", false));');
+  const result = check('native.functionImports(["return 1"], "normal");\nconst edited: string[] | null = native.awaitHooked(["eval()"], "script");\nnative.awaitHooked(["return 1"], "normal");\nnative.importModule(native.resolve("./x", "/index.ts", false));');
   expect(result.stdout.toString()).toBe("");
   expect(result.exitCode).toBe(0);
 });

@@ -278,7 +278,9 @@
     // Not a real separate realm: globals resolve through the context object
     // first (`with`), then fall back to this realm's globals.
     function runWith(code, context, filename) {
-      const runner = native.evalScript(`(function (__ctx, __code) { with (__ctx) { return eval(__code); } })`, filename);
+      // The host engine's direct eval gets its await hooks (engine-host.js).
+      const source = native.engine === "host" ? "__bunwasm_evalSource(__code)" : "__code";
+      const runner = native.evalScript(`(function (__ctx, __code) { with (__ctx) { return eval(${source}); } })`, filename);
       return runner(context, String(code));
     }
     return {

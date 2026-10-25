@@ -13,6 +13,12 @@
     },
   });
 
+  // The host engine has no AsyncContext: give `await` the transpiler's hooks.
+  function withAwaitHooks(strings: string[], kind: BunWasm.FunctionKind): string[] {
+    if (native.engine !== "host") return strings;
+    return native.awaitHooked(strings, kind) || strings;
+  }
+
   function replaceImports(source: string, offsets: number[], replacement: string): string {
     for (const offset of offsets.sort((a, b) => b - a)) {
       source = source.slice(0, offset) + replacement + source.slice(offset + 6);
@@ -27,7 +33,7 @@
     // Keep the engine's parameter/body validation and SyntaxError behavior.
     Reflect.apply(Native, undefined, strings);
     const origin = callerSourceOrigin();
-    if (origin === null) return strings;
+    if (origin === null) return withAwaitHooks(strings, kind);
     const path = origin.startsWith("file:") ? internal.require("node_url").fileURLToPath(origin) : origin;
     let result = strings;
     if (hasImports) {
@@ -35,6 +41,7 @@
       const replacement = `(function(){})[${JSON.stringify(helper)}](${JSON.stringify(path)})`;
       result = strings.map((source, argument) => replaceImports(source, offsets[argument], replacement));
     }
+    result = withAwaitHooks(result, kind);
     if (native.engine === "host" && result.length > 0) result[result.length - 1] += `\n//# sourceURL=${path}`;
     return result;
   }

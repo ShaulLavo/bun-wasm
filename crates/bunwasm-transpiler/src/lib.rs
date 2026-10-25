@@ -212,9 +212,9 @@ fn configure_public(
     Ok(())
 }
 
-/// Locate import keywords in original generated-function arguments. The full
-/// function grammar distinguishes import expressions from property names.
-pub fn function_imports(args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, String> {
+/// The function a `Function` constructor builds from `args` (parameters, then
+/// the body), with each argument's byte range in it.
+fn function_source(args: &[String], kind: &str) -> (String, Vec<std::ops::Range<usize>>) {
     let prefix = match kind {
         "async" => "async function",
         "generator" => "function*",
@@ -234,6 +234,13 @@ pub fn function_imports(args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, 
         ranges.push(start..source.len());
     }
     source.push_str("\n})");
+    (source, ranges)
+}
+
+/// Locate import keywords in original generated-function arguments. The full
+/// function grammar distinguishes import expressions from property names.
+pub fn function_imports(args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, String> {
+    let (source, ranges) = function_source(args, kind);
     let (_, mut offsets) = with_state(|state| {
         let (result, offsets) = bun_js_parser::with_bunwasm_dynamic_imports(|| {
             run(state, &source, "<Function>", Loader::Js, None, false)
@@ -281,6 +288,29 @@ pub fn module_imports(source: &str, path: &str) -> Result<Vec<ModuleImport>, Str
 }
 
 fn scan_imports(state: &State, source: &str, path: &str) -> Result<Vec<ModuleImport>, String> {
+    let (result, dynamic) = bun_js_parser::with_bunwasm_dynamic_imports(|| {
+        scan(state, source, path, |scanned| {
+            static_imports(&scanned.import_records)
+        })
+    });
+    let mut imports = result?;
+    imports.extend(dynamic.into_iter().map(|start| ModuleImport {
+        start,
+        end: start + 6,
+        specifier: None,
+    }));
+    imports.sort_by_key(|import| import.start);
+    imports.dedup_by_key(|import| import.start);
+    Ok(imports)
+}
+
+/// Parse JavaScript with Bun's scan pass (no binding, transforming or printing).
+fn scan<T>(
+    state: &State,
+    source: &str,
+    path: &str,
+    f: impl FnOnce(&bun_js_parser::ScanPassResult) -> T,
+) -> Result<T, String> {
     // Match the runtime's same-length replacement so spans still address the input.
     let source = match source.strip_prefix("#!") {
         Some(rest) => Cow::Owned(format!("//{rest}")),
@@ -292,35 +322,192 @@ fn scan_imports(state: &State, source: &str, path: &str) -> Result<Vec<ModuleImp
     let src = bun_ast::Source::init_path_string(path.as_bytes(), source.as_bytes());
     let mut log = bun_ast::Log::init();
     let mut scanned = bun_js_parser::ScanPassResult::init();
-    let (result, dynamic) = bun_js_parser::with_bunwasm_dynamic_imports(|| {
-        let mut options =
-            bun_js_parser::ParserOptions::init(state.transpiler.options.jsx.clone(), BunLoader::Js);
-        options.features.commonjs_at_runtime = true;
-        let mut parser = bun_js_parser::Parser::init(
-            options,
-            &mut log,
-            &src,
-            &state.transpiler.options.define,
-            &arena,
-        )
-        .map_err(|e| format!("failed to scan {path}: {e:?}"))?;
-        parser
-            .scan_imports(&mut scanned)
-            .map_err(|e| format!("failed to scan {path}: {e:?}"))
-    });
-    result?;
+    let mut options =
+        bun_js_parser::ParserOptions::init(state.transpiler.options.jsx.clone(), BunLoader::Js);
+    options.features.commonjs_at_runtime = true;
+    bun_js_parser::Parser::init(
+        options,
+        &mut log,
+        &src,
+        &state.transpiler.options.define,
+        &arena,
+    )
+    .and_then(|mut parser| parser.scan_imports(&mut scanned))
+    .map_err(|e| format!("failed to scan {path}: {e:?}"))?;
     if log.errors > 0 {
         return Err(format_log(&log, path));
     }
-    let mut imports = static_imports(&scanned.import_records);
-    imports.extend(dynamic.into_iter().map(|start| ModuleImport {
-        start,
-        end: start + 6,
-        specifier: None,
-    }));
-    imports.sort_by_key(|import| import.start);
-    imports.dedup_by_key(|import| import.start);
-    Ok(imports)
+    Ok(f(&scanned))
+}
+
+/// Text spliced in at one source offset by [`await_hook_edits`].
+struct Edit {
+    at: usize,
+    /// Closes something opened earlier: goes before openings at the same offset.
+    closes: bool,
+    /// Where the `await`, loop or `eval` call the text belongs to starts. At
+    /// one offset, inner constructs close first and outer ones open first.
+    owner: usize,
+    text: &'static str,
+}
+
+/// A hook for source compiled at run time: the UTF-16 offset in the original
+/// JavaScript string, and the text inserted there.
+pub type HookEdit = (usize, &'static str);
+
+/// The browser engine's AsyncLocalStorage hooks (see [`with_await_hooks`])
+/// for source that Bun's printer never sees, as edits at the spans Bun's
+/// parser recorded: `await x` gets the printer's
+/// `__bunwasm_resume(__bunwasm_capture(), await x)`, a `for await` loop
+/// its `{ const ctx = capture(); for await (…) { resume(ctx); body } resume(ctx); }`,
+/// and a direct `eval(x)` the printer's `eval(__bunwasm_evalSource(x))`.
+/// Every other byte stays, so lines, comments and `//# sourceURL` survive.
+/// Text inserted outside parentheses starts with an identifier or `{`, which
+/// never continues the expression before it, so automatic semicolons fall
+/// where they did.
+fn await_hook_edits(state: &State, source: &str) -> Result<Vec<Edit>, String> {
+    let (result, spans) =
+        bun_js_parser::with_bunwasm_await_spans(|| scan(state, source, "<eval>", |_| ()));
+    result?;
+    let mut edits = Vec::new();
+    for (start, end) in spans.awaits {
+        edits.push(Edit {
+            at: start,
+            closes: false,
+            owner: start,
+            text: "__bunwasm_resume(__bunwasm_capture(), ",
+        });
+        edits.push(Edit {
+            at: end,
+            closes: true,
+            owner: start,
+            text: ")",
+        });
+    }
+    for (call, open, close) in spans.evals {
+        edits.push(Edit {
+            at: open,
+            closes: false,
+            owner: call,
+            text: "__bunwasm_evalSource(",
+        });
+        edits.push(Edit {
+            at: close,
+            closes: true,
+            owner: call,
+            text: ")",
+        });
+    }
+    for each in spans.for_awaits {
+        let owner = each.start;
+        edits.push(Edit {
+            at: owner,
+            closes: false,
+            owner,
+            text: "{ const __bunwasm_ctx = __bunwasm_capture(); ",
+        });
+        if each.body_is_block {
+            edits.push(Edit {
+                at: each.body_start + 1,
+                closes: false,
+                owner,
+                text: " __bunwasm_resume(__bunwasm_ctx);",
+            });
+            edits.push(Edit {
+                at: each.body_end,
+                closes: true,
+                owner,
+                text: " __bunwasm_resume(__bunwasm_ctx); }",
+            });
+        } else {
+            edits.push(Edit {
+                at: each.body_start,
+                closes: false,
+                owner,
+                text: "{ __bunwasm_resume(__bunwasm_ctx); ",
+            });
+            edits.push(Edit {
+                at: each.body_end,
+                closes: true,
+                owner,
+                text: " } __bunwasm_resume(__bunwasm_ctx); }",
+            });
+        }
+    }
+    edits.sort_by(|a, b| {
+        let nesting = if a.closes {
+            b.owner.cmp(&a.owner)
+        } else {
+            a.owner.cmp(&b.owner)
+        };
+        a.at.cmp(&b.at).then(b.closes.cmp(&a.closes)).then(nesting)
+    });
+    edits.dedup_by(|a, b| a.at == b.at && a.owner == b.owner && a.text == b.text);
+    Ok(edits)
+}
+
+/// `edits` (sorted byte offsets into `source`) at UTF-16 offsets. The host
+/// splices them into its own string: JavaScript strings may hold lone
+/// surrogates, which reach us as U+FFFD, also one UTF-16 unit.
+fn utf16_edits(source: &str, edits: &[Edit]) -> Vec<HookEdit> {
+    let mut at = 0;
+    let mut units = 0;
+    edits
+        .iter()
+        .map(|edit| {
+            units += source[at..edit.at].encode_utf16().count();
+            at = edit.at;
+            (units, edit.text)
+        })
+        .collect()
+}
+
+/// Whether run-time source may need a hook: an `await`, or a direct `eval`
+/// whose own source might have one.
+fn may_need_hooks(source: &str) -> bool {
+    source.contains("await") || source.contains("eval")
+}
+
+/// The hooks for a direct `eval`'s source, or `None` when it needs none or
+/// doesn't parse (the engine then reports its own SyntaxError).
+pub fn eval_await_edits(source: &str) -> Option<Vec<HookEdit>> {
+    if !may_need_hooks(source) {
+        return None;
+    }
+    let edits = with_state(|state| await_hook_edits(state, source)).ok()?;
+    (!edits.is_empty()).then(|| utf16_edits(source, &edits))
+}
+
+/// [`eval_await_edits`] for `Function` constructor arguments, parsed as the
+/// function the engine builds from them: one list per argument.
+pub fn function_await_edits(args: &[String], kind: &str) -> Option<Vec<Vec<HookEdit>>> {
+    if args.is_empty() || !args.iter().any(|arg| may_need_hooks(arg)) {
+        return None;
+    }
+    let (source, ranges) = function_source(args, kind);
+    let edits = with_state(|state| await_hook_edits(state, &source)).ok()?;
+    if edits.is_empty() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(args.len());
+    let mut rest = edits.as_slice();
+    for (arg, range) in args.iter().zip(&ranges) {
+        let count = rest.iter().take_while(|edit| edit.at <= range.end).count();
+        let (mine, after) = rest.split_at(count);
+        if mine.iter().any(|edit| edit.at < range.start) {
+            return None;
+        }
+        let local: Vec<Edit> = mine
+            .iter()
+            .map(|edit| Edit {
+                at: edit.at - range.start,
+                ..*edit
+            })
+            .collect();
+        out.push(utf16_edits(arg, &local));
+        rest = after;
+    }
+    rest.is_empty().then_some(out)
 }
 
 fn static_imports(records: &[bun_ast::ImportRecord]) -> Vec<ModuleImport> {
@@ -687,4 +874,142 @@ fn format_log(log: &bun_ast::Log, path: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HookEdit, eval_await_edits, function_await_edits};
+
+    const OPEN: &str = "__bunwasm_resume(__bunwasm_capture(), ";
+    const LOOP: &str = "{ const __bunwasm_ctx = __bunwasm_capture(); ";
+    const RESUME: &str = "__bunwasm_resume(__bunwasm_ctx);";
+    const EVAL: &str = "__bunwasm_evalSource(";
+
+    /// What the host does with the edits: splice them into its UTF-16 string.
+    fn apply(source: &str, edits: &[HookEdit]) -> String {
+        let units: Vec<u16> = source.encode_utf16().collect();
+        let mut out = Vec::new();
+        let mut at = 0;
+        for (offset, text) in edits {
+            out.extend_from_slice(&units[at..*offset]);
+            out.extend(text.encode_utf16());
+            at = *offset;
+        }
+        out.extend_from_slice(&units[at..]);
+        String::from_utf16(&out).unwrap()
+    }
+
+    fn hooked(source: &str) -> String {
+        apply(source, &eval_await_edits(source).expect("source has hooks"))
+    }
+
+    /// Bun's transpiler state is per thread and the runtime has one thread.
+    /// Every check runs on this test's thread.
+    #[test]
+    fn run_time_source_hooks() {
+        await_keeps_lines_comments_and_automatic_semicolons();
+        nested_and_compound_operands_close_after_their_last_token();
+        for_await_restores_in_its_body_and_after_it();
+        direct_eval_arguments_pass_through_the_host();
+        offsets_are_utf16_and_unhookable_source_is_left_alone();
+        function_arguments_are_hooked_one_by_one();
+    }
+
+    fn await_keeps_lines_comments_and_automatic_semicolons() {
+        let source = "\"use strict\";\nconst f = async function () {\n  const a = b\n  await c // done\n  return a\n};\n//# sourceURL=webpack-internal:///./a.js\n";
+        let out = hooked(source);
+        assert_eq!(
+            out,
+            format!(
+                "\"use strict\";\nconst f = async function () {{\n  const a = b\n  {OPEN}await c) // done\n  return a\n}};\n//# sourceURL=webpack-internal:///./a.js\n"
+            )
+        );
+        assert_eq!(out.lines().count(), source.lines().count());
+    }
+
+    fn nested_and_compound_operands_close_after_their_last_token() {
+        let out = hooked("async () => `${await (await a)}` + await b.c(d)?.e + await /x/.test(y)");
+        assert_eq!(
+            out,
+            format!(
+                "async () => `${{{OPEN}await ({OPEN}await a)))}}` + {OPEN}await b.c(d)?.e) + {OPEN}await /x/.test(y))"
+            )
+        );
+    }
+
+    fn for_await_restores_in_its_body_and_after_it() {
+        let out =
+            hooked("async () => { outer: for await (const n of g()) { if (n) continue outer; } }");
+        assert_eq!(
+            out,
+            format!(
+                "async () => {{ {LOOP}outer: for await (const n of g()) {{ {RESUME} if (n) continue outer; }} {RESUME} }} }}"
+            )
+        );
+        let out =
+            hooked("async () => { for await (const a of x) for await (const b of y) await f(); }");
+        assert_eq!(
+            out,
+            format!(
+                "async () => {{ {LOOP}for await (const a of x) {{ {RESUME} {LOOP}for await (const b of y) {{ {RESUME} {OPEN}await f()); }} {RESUME} }} }} {RESUME} }} }}"
+            )
+        );
+    }
+
+    fn direct_eval_arguments_pass_through_the_host() {
+        let out = hooked("async () => eval(await s) + eval?.(x) + (0, eval)(y) + eval()");
+        assert_eq!(
+            out,
+            format!("async () => eval({EVAL}{OPEN}await s))) + eval?.(x) + (0, eval)(y) + eval()")
+        );
+        for source in ["eval()", "eval( )", "eval(/* await */)", "eval(\n)"] {
+            assert_eq!(eval_await_edits(source), None, "{source}");
+        }
+        assert_eq!(hooked("eval(eval())"), format!("eval({EVAL}eval()))"));
+        assert_eq!(
+            hooked("async () => await eval()"),
+            format!("async () => {OPEN}await eval())")
+        );
+        assert_eq!(
+            hooked("\"é😀\"; eval(); eval(x)"),
+            format!("\"é😀\"; eval(); eval({EVAL}x))")
+        );
+        assert_eq!(
+            hooked("eval(eval(a), b)"),
+            format!("eval({EVAL}eval({EVAL}a)), b))")
+        );
+    }
+
+    fn offsets_are_utf16_and_unhookable_source_is_left_alone() {
+        assert_eq!(
+            hooked("\"é😀\"; async () => await x"),
+            format!("\"é😀\"; async () => {OPEN}await x)")
+        );
+        assert_eq!(eval_await_edits("const s = 'await';"), None);
+        assert_eq!(eval_await_edits("async () => { await }"), None);
+        assert_eq!(eval_await_edits("no hooks here"), None);
+    }
+
+    fn function_arguments_are_hooked_one_by_one() {
+        let args = [
+            "a".to_owned(),
+            "b = 1".to_owned(),
+            "await a;\nreturn b".to_owned(),
+        ];
+        let edits = function_await_edits(&args, "async").expect("body has hooks");
+        let out: Vec<String> = args
+            .iter()
+            .zip(&edits)
+            .map(|(arg, edits)| apply(arg, edits))
+            .collect();
+        assert_eq!(
+            out,
+            [
+                "a".to_owned(),
+                "b = 1".to_owned(),
+                format!("{OPEN}await a);\nreturn b")
+            ]
+        );
+        assert_eq!(function_await_edits(&args[..1], "async"), None);
+    }
 }

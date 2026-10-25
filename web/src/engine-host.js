@@ -228,6 +228,23 @@ class Reader {
 
 // --- calling the wasm --------------------------------------------------------------------
 
+// An `await`, or a direct eval whose source may have one.
+function mayNeedHooks(source) {
+  return source.includes("await") || source.includes("eval");
+}
+
+// `edits` is `[offset, text, …]` in UTF-16 units, so the string keeps every
+// code unit it had, lone surrogates included.
+function spliceEdits(source, edits) {
+  let out = "";
+  let at = 0;
+  for (let i = 0; i < edits.length; i += 2) {
+    out += source.slice(at, edits[i]) + edits[i + 1];
+    at = edits[i];
+  }
+  return out + source.slice(at);
+}
+
 function wasmCaller(exports) {
   const memory = memoryViews(exports.memory);
   const result = () => {
@@ -430,6 +447,13 @@ class EngineHost {
   valueNatives() {
     const host = this;
     return {
+      // Source compiled at run time with the AsyncLocalStorage hooks the
+      // transpiler gives files, or null when none is needed.
+      awaitHooked(sources, kind) {
+        if (!sources.some(mayNeedHooks)) return null;
+        const edits = host.native.awaitHookEdits(sources, kind);
+        return edits && sources.map((source, i) => spliceEdits(source, edits[i]));
+      },
       exit(code) {
         const status = (code | 0) & 0xff;
         host.exit(status);
@@ -461,7 +485,7 @@ class EngineHost {
         return host.importKey(spec);
       },
       evalScript(code, filename) {
-        return host.evalAt(NativeString(code), filename || "evalmachine.<anonymous>");
+        return host.evalAt(host.awaitHooked(NativeString(code)), filename || "evalmachine.<anonymous>");
       },
       loadPolyfill(name) {
         return host.evalPolyfill(name);
@@ -501,6 +525,12 @@ class EngineHost {
 
   indexOf(name) {
     return this.wasm.describe().natives.indexOf(name);
+  }
+
+  // A script compiled at run time (vm, Module#_compile, a direct eval).
+  awaitHooked(source) {
+    const hooked = this.native.awaitHooked([source], "script");
+    return hooked ? hooked[0] : source;
   }
 
   // Indirect eval: global scope, sloppy unless the code says otherwise; the
@@ -648,6 +678,9 @@ class EngineHost {
       }
       return value;
     });
+    // Code a direct eval compiles skips the transpiler, so the printer passes
+    // its source through this (webpack's dev `eval-source-map` modules, say).
+    hidden("__bunwasm_evalSource", (source) => (typeof source === "string" ? host.awaitHooked(source) : source));
     // Without a networking host, user code gets the host's own fetch.
     if (this.o.fetch && !this.native.hostCaps.fetch) this.installFetch(this.o.fetch);
   }

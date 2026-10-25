@@ -1,0 +1,318 @@
+From eed9fa64ebdfa73c0d8ddf3b6dcbfefcf0ef413a Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Sun, 25 Oct 2026 00:08:57 +0300
+Subject: [PATCH 14/14] wasm: record await spans for run-time AsyncLocalStorage
+ hooks
+
+A scoped parser collector records each `await` expression's keyword start
+and operand end, each `for await` loop's start (its outermost label) and
+body span, and the argument span of each nonempty call to the bare identifier
+`eval`, using the end of the previous token the lexer now keeps. 0010's
+collector shares its restore guard. With BUNWASM_AWAIT_HOOKS on, the
+printer passes a direct eval's argument through `__bunwasm_evalSource`,
+so the browser engine can splice its AsyncLocalStorage hooks into source
+compiled at run time while the call stays a direct eval.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/js_parser/lexer.rs              |   8 ++
+ src/js_parser/lib.rs                | 118 +++++++++++++++++++++++++---
+ src/js_parser/parse/mod.rs          |   1 +
+ src/js_parser/parse/parse_prefix.rs |   1 +
+ src/js_parser/parse/parse_stmt.rs   |   5 ++
+ src/js_parser/parse/parse_suffix.rs |  14 ++++
+ src/js_printer/lib.rs               |   9 +++
+ 7 files changed, 144 insertions(+), 12 deletions(-)
+
+diff --git a/src/js_parser/lexer.rs b/src/js_parser/lexer.rs
+index 063d2206..5695cdc7 100644
+--- a/src/js_parser/lexer.rs
++++ b/src/js_parser/lexer.rs
+@@ -162,6 +162,7 @@ pub struct LexerSnapshot<'a> {
+     pub(crate) rescan_close_brace_as_template_token: bool,
+     pub(crate) prev_error_loc: Loc,
+     pub(crate) prev_token_was_await_keyword: bool,
++    pub(crate) prev_token_end: usize,
+     pub(crate) fn_or_arrow_start_loc: Loc,
+     pub(crate) regex_flags_start: Option<u16>,
+     pub(crate) string_literal_raw_content: &'a [u8],
+@@ -232,6 +233,9 @@ pub struct Lexer<'a> {
+     pub(crate) rescan_close_brace_as_template_token: bool,
+     pub(crate) prev_error_loc: Loc,
+     pub(crate) prev_token_was_await_keyword: bool,
++    /// bun-wasm: where the token before the current one ended, for hosts that
++    /// splice hooks around the expressions the parser recorded.
++    pub(crate) prev_token_end: usize,
+     pub(crate) fn_or_arrow_start_loc: Loc,
+     pub(crate) regex_flags_start: Option<u16>,
+     pub(crate) arena: &'a Arena,
+@@ -349,6 +353,7 @@ impl<'a> Lexer<'a> {
+             rescan_close_brace_as_template_token: self.rescan_close_brace_as_template_token,
+             prev_error_loc: self.prev_error_loc,
+             prev_token_was_await_keyword: self.prev_token_was_await_keyword,
++            prev_token_end: self.prev_token_end,
+             fn_or_arrow_start_loc: self.fn_or_arrow_start_loc,
+             regex_flags_start: self.regex_flags_start,
+             string_literal_raw_content: self.string_literal_raw_content,
+@@ -387,6 +392,7 @@ impl<'a> Lexer<'a> {
+         self.rescan_close_brace_as_template_token = original.rescan_close_brace_as_template_token;
+         self.prev_error_loc = original.prev_error_loc;
+         self.prev_token_was_await_keyword = original.prev_token_was_await_keyword;
++        self.prev_token_end = original.prev_token_end;
+         self.fn_or_arrow_start_loc = original.fn_or_arrow_start_loc;
+         self.regex_flags_start = original.regex_flags_start;
+         self.string_literal_raw_content = original.string_literal_raw_content;
+@@ -1258,6 +1264,7 @@ impl<'a> Lexer<'a> {
+     /// `parse_string_literal::<QUOTE>`) stay `#[inline]`/`#[inline(always)]` so
+     /// they merge *into* this body.
+     pub fn next(&mut self) -> Result<(), Error> {
++        self.prev_token_end = self.end;
+         self.has_newline_before = self.end == 0;
+         self.has_pure_comment_before = false;
+         self.prev_token_was_await_keyword = false;
+@@ -2277,6 +2284,7 @@ impl<'a> Lexer<'a> {
+             rescan_close_brace_as_template_token: false,
+             prev_error_loc: Loc::EMPTY,
+             prev_token_was_await_keyword: false,
++            prev_token_end: 0,
+             fn_or_arrow_start_loc: Loc::EMPTY,
+             regex_flags_start: None,
+             arena,
+diff --git a/src/js_parser/lib.rs b/src/js_parser/lib.rs
+index 045bf990..5e67c14b 100644
+--- a/src/js_parser/lib.rs
++++ b/src/js_parser/lib.rs
+@@ -771,21 +771,36 @@ pub mod renamer {
+     // — they live in `bun_js_printer`.
+ }
+ 
++/// bun-wasm: puts a parse collector's previous value back, also on unwind.
++struct BunwasmRestore<T: 'static> {
++    slot: &'static std::thread::LocalKey<core::cell::RefCell<Option<T>>>,
++    previous: Option<T>,
++}
++
++impl<T: 'static> Drop for BunwasmRestore<T> {
++    fn drop(&mut self) {
++        let previous = self.previous.take();
++        self.slot.with(|slot| slot.replace(previous));
++    }
++}
++
++/// Run `f` with a fresh collector in `slot`, then return what it collected.
++fn bunwasm_collect<C: Default + 'static, T>(
++    slot: &'static std::thread::LocalKey<core::cell::RefCell<Option<C>>>,
++    f: impl FnOnce() -> T,
++) -> (T, C) {
++    let previous = slot.with(|slot| slot.replace(Some(C::default())));
++    let _restore = BunwasmRestore { slot, previous };
++    let result = f();
++    let collected = slot.with(|slot| slot.take().unwrap_or_default());
++    (result, collected)
++}
++
+ /// bun-wasm: collect dynamic-import keyword locations during a semantic parse.
+ /// Property names, literals, and import.meta never enter parse_import_expr's
+-/// dynamic-import branch. The guard restores the outer collector on unwind.
++/// dynamic-import branch.
+ pub fn with_bunwasm_dynamic_imports<T>(f: impl FnOnce() -> T) -> (T, Vec<usize>) {
+-    struct Restore(Option<Vec<usize>>);
+-    impl Drop for Restore {
+-        fn drop(&mut self) {
+-            BUNWASM_DYNAMIC_IMPORTS.with(|slot| { slot.replace(self.0.take()); });
+-        }
+-    }
+-    let previous = BUNWASM_DYNAMIC_IMPORTS.with(|slot| slot.replace(Some(Vec::new())));
+-    let _restore = Restore(previous);
+-    let result = f();
+-    let imports = BUNWASM_DYNAMIC_IMPORTS.with(|slot| slot.take().unwrap_or_default());
+-    (result, imports)
++    bunwasm_collect(&BUNWASM_DYNAMIC_IMPORTS, f)
+ }
+ 
+ thread_local! {
+@@ -799,3 +814,82 @@ fn bunwasm_dynamic_import(loc: bun_ast::Loc) {
+         }
+     });
+ }
++
++/// bun-wasm: `await` expressions, `for await` loops and direct `eval` calls
++/// seen by a parse, as UTF-8 byte offsets, so a host engine without
++/// AsyncContext can splice its AsyncLocalStorage hooks into source it
++/// compiles at run time (eval).
++#[derive(Default, Debug)]
++pub struct BunwasmAwaitSpans {
++    /// The `await` keyword's start and the end of its operand.
++    pub awaits: Vec<(usize, usize)>,
++    pub for_awaits: Vec<BunwasmForAwait>,
++    /// A direct `eval(...)` call's start, and the span between its parentheses.
++    pub evals: Vec<(usize, usize, usize)>,
++}
++
++#[derive(Debug)]
++pub struct BunwasmForAwait {
++    /// The loop's outermost label, or `for`.
++    pub start: usize,
++    pub body_start: usize,
++    pub body_end: usize,
++    pub body_is_block: bool,
++}
++
++/// Collect [`BunwasmAwaitSpans`] while `f` parses.
++pub fn with_bunwasm_await_spans<T>(f: impl FnOnce() -> T) -> (T, BunwasmAwaitSpans) {
++    bunwasm_collect(&BUNWASM_AWAIT_SPANS, f)
++}
++
++thread_local! {
++    static BUNWASM_AWAIT_SPANS: core::cell::RefCell<Option<BunwasmAwaitSpans>> = const { core::cell::RefCell::new(None) };
++}
++
++fn bunwasm_spans(record: impl FnOnce(&mut BunwasmAwaitSpans)) {
++    BUNWASM_AWAIT_SPANS.with_borrow_mut(|slot| {
++        if let Some(spans) = slot {
++            record(spans);
++        }
++    });
++}
++
++fn bunwasm_await(loc: bun_ast::Loc, end: usize) {
++    bunwasm_spans(|spans| spans.awaits.push((loc.start as usize, end)));
++}
++
++fn bunwasm_for_await(loc: bun_ast::Loc, body_start: bun_ast::Loc, body_is_block: bool, body_end: usize) {
++    bunwasm_spans(|spans| {
++        spans.for_awaits.push(BunwasmForAwait {
++            start: loc.start as usize,
++            body_start: body_start.start as usize,
++            body_end,
++            body_is_block,
++        });
++    });
++}
++
++/// A call whose target is the bare identifier `eval`: `open` and `close` are
++/// its parentheses.
++fn bunwasm_direct_eval(call: bun_ast::Loc, open: bun_ast::Loc, close: bun_ast::Loc) {
++    bunwasm_spans(|spans| {
++        spans.evals.push((call.start as usize, open.start as usize + 1, close.start as usize));
++    });
++}
++
++fn bunwasm_collecting_spans() -> bool {
++    BUNWASM_AWAIT_SPANS.with_borrow(Option::is_some)
++}
++
++/// A label's body was the `for await` that starts at `body`: the hooks' block
++/// goes around the label, so `continue label` still names the loop.
++fn bunwasm_label_for_await(body: bun_ast::Loc, label: bun_ast::Loc) {
++    bunwasm_spans(|spans| {
++        let Some(last) = spans.for_awaits.last_mut() else {
++            return;
++        };
++        if last.start == body.start as usize {
++            last.start = label.start as usize;
++        }
++    });
++}
+diff --git a/src/js_parser/parse/mod.rs b/src/js_parser/parse/mod.rs
+index 8e3392db..5cffca59 100644
+--- a/src/js_parser/parse/mod.rs
++++ b/src/js_parser/parse/mod.rs
+@@ -966,6 +966,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                 p.lexer.unexpected()?;
+             }
+             p.parse_suffix(&mut value, Level::Prefix, None, EFlags::None)?;
++            crate::bunwasm_await(token_range.loc, p.lexer.prev_token_end);
+             let mut expr = p.new_expr(E::Await { value }, token_range.loc);
+             p.parse_suffix(&mut expr, Level::Lowest, None, EFlags::None)?;
+             return Ok(ExprOrLetStmt {
+diff --git a/src/js_parser/parse/parse_prefix.rs b/src/js_parser/parse/parse_prefix.rs
+index 0b0a3204..9df6a1c8 100644
+--- a/src/js_parser/parse/parse_prefix.rs
++++ b/src/js_parser/parse/parse_prefix.rs
+@@ -183,6 +183,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                             p.lexer.unexpected()?;
+                             return Err(crate::Error::SyntaxError);
+                         }
++                        crate::bunwasm_await(loc, p.lexer.prev_token_end);
+ 
+                         return Ok(p.new_expr(E::Await { value }, loc));
+                     }
+diff --git a/src/js_parser/parse/parse_stmt.rs b/src/js_parser/parse/parse_stmt.rs
+index 5298b27d..6919891e 100644
+--- a/src/js_parser/parse/parse_stmt.rs
++++ b/src/js_parser/parse/parse_stmt.rs
+@@ -658,7 +658,11 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                 let value = p.parse_expr(Level::Comma)?;
+                 p.lexer.expect(T::TCloseParen)?;
+                 let mut stmt_opts = ParseStatementOptions::default();
++                let (body_start, body_is_block) = (p.lexer.loc(), p.lexer.token == T::TOpenBrace);
+                 let body = p.parse_stmt(&mut stmt_opts)?;
++                if is_for_await {
++                    crate::bunwasm_for_await(loc, body_start, body_is_block, p.lexer.prev_token_end);
++                }
+                 return Ok(p.s(
+                     S::ForOf {
+                         is_await: is_for_await,
+@@ -1701,6 +1705,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         let stmt_result = p.parse_stmt(&mut nested_opts);
+         p.pop_scope();
+         let stmt = stmt_result?;
++        crate::bunwasm_label_for_await(stmt.loc, loc);
+         Ok(p.s(S::Label { name: _name, stmt }, loc))
+     }
+ 
+diff --git a/src/js_parser/parse/parse_suffix.rs b/src/js_parser/parse/parse_suffix.rs
+index 76c1603f..8f4e2f58 100644
+--- a/src/js_parser/parse/parse_suffix.rs
++++ b/src/js_parser/parse/parse_suffix.rs
+@@ -373,6 +373,15 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         Ok(Continuation::Next)
+     }
+ 
++    /// bun-wasm: the bare identifier `eval` (the visit pass marks such a call
++    /// as a direct eval), while await spans are being collected.
++    fn bunwasm_is_eval(&self, target: &Expr) -> bool {
++        let ExprData::EIdentifier(ident) = &target.data else {
++            return false;
++        };
++        crate::bunwasm_collecting_spans() && self.load_name_from_ref(ident.ref_) == b"eval"
++    }
++
+     fn sfx_t_open_paren(
+         p: &mut Self,
+         level: Level,
+@@ -384,7 +393,12 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             return Ok(Continuation::Done);
+         }
+ 
++        let open_paren = p.lexer.loc();
+         let list_loc = p.parse_call_args()?;
++        // Match the printer: an empty argument list has no source to hook.
++        if !list_loc.list.is_empty() && old_optional_chain.is_none() && p.bunwasm_is_eval(left) {
++            crate::bunwasm_direct_eval(left.loc, open_paren, list_loc.loc);
++        }
+         let loc = left.loc;
+         let target = *left;
+         *left = p.new_expr(
+diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
+index 015fbba1..b6964eaf 100644
+--- a/src/js_printer/lib.rs
++++ b/src/js_printer/lib.rs
+@@ -3540,7 +3540,16 @@ pub(crate) mod __gated_printer {
+                     let args = e.args.slice();
+ 
+                     if !args.is_empty() {
++                        // bun-wasm: a direct eval stays direct (the callee is still
++                        // `eval`); the host gives its source the same await hooks.
++                        let hook_eval = e.is_direct_eval && bunwasm_await_hooks();
++                        if hook_eval {
++                            self.print(b"__bunwasm_evalSource(");
++                        }
+                         self.print_expr(args[0], Level::Comma, ExprFlag::none());
++                        if hook_eval {
++                            self.print(b")");
++                        }
+                         for arg in &args[1..] {
+                             self.print(b",");
+                             self.print_space();
