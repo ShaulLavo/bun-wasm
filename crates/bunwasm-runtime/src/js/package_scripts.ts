@@ -129,51 +129,88 @@
     throw Object.assign(new Error(`Command not found: ${name}`), { code: "ENOENT" });
   }
 
-  function resolve(requested: string): string {
+  // These are CLI commands, never implicit script aliases. The CLI still owns their parsing.
+  const commands = new Set([
+    "help", "lint", "fmt", "test", "build", "bun", "install", "i", "ci", "add", "a", "remove", "rm", "r", "uninstall", "pm", "update", "up", "x", "bunx",
+    "create", "c", "init", "upgrade", "link", "unlink", "outdated", "publish", "patch", "patch-commit", "repl", "info", "why", "audit", "completions", "getcompletes", "discord", "exec", "dedupe", "prune", "check", "deploy", "cloud", "config", "use", "auth", "login", "logout",
+  ]);
+  const noOpFlags = new Set(["--bun", "--smol", "--silent", "--no-install"]);
+
+  function aliasArguments(argv: readonly string[], cwd: string): string[] | undefined {
+    if (path.basename(argv[0]) !== "bun") return;
+    let offset = 1;
+    while (noOpFlags.has(argv[offset])) offset++;
+    if (argv[offset] === "run") {
+      offset++;
+      while (noOpFlags.has(argv[offset])) offset++;
+      if (argv[offset] === "--") offset++;
+      return argv.slice(offset);
+    }
+    if (argv[offset] === "--") return argv.slice(offset + 1);
+    if (commands.has(argv[offset]) || argv[offset]?.startsWith("-") || sourceFile(cwd, argv[offset])) return;
+    return argv.slice(offset);
+  }
+
+  function scriptArguments(command: string, name: string): string[] {
+    const argv = words(command);
+    while (argv.length && /^[A-Za-z_][\w]*=/.test(argv[0])) {
+      const entry = argv.shift();
+      if (entry === undefined) break;
+      const equals = entry.indexOf("=");
+      process.env[entry.slice(0, equals)] = entry.slice(equals + 1);
+    }
+    if (!argv[0]) throw new Error(`Package script ${name} has no executable`);
+    process.env.npm_lifecycle_event = name;
+    process.env.npm_lifecycle_script = command;
+    process.env.npm_execpath = process.execPath;
+    return argv;
+  }
+
+  function resolve(requested: string): string | BunWasm.ScriptRuntimeCommand {
     const cwd = process.cwd();
     let name = native.mainArg();
     let args = process.argv.slice(2);
     let file = requested;
-    let kind: "entry" | "command" = "entry";
+    const visited = new Set<string>();
     const bins: string[] = [];
     for (let directory = cwd;; directory = path.dirname(directory)) {
       bins.push(path.resolve(directory, "node_modules", ".bin"));
       if (path.dirname(directory) === directory) break;
     }
     process.env.PATH = bins.concat(process.env.PATH ?? "/bin:/usr/bin").join(":");
-    for (let depth = 0; depth < 32; depth++) {
-      if (kind === "command") { file = commandFile(cwd, name); break; }
+    for (;;) {
       const command = name && !name.includes("/") ? script(cwd, name) : undefined;
-      if (command === undefined) { file = sourceFile(cwd, name || requested) || binary(cwd, name) || path.resolve(cwd, name || requested); break; }
-      const argv = words(command);
-      while (argv.length && /^[A-Za-z_][\w]*=/.test(argv[0])) {
-        const entry = argv.shift();
-        if (entry === undefined) break;
-        const equals = entry.indexOf("=");
-        process.env[entry.slice(0, equals)] = entry.slice(equals + 1);
+      if (command === undefined) {
+        file = sourceFile(cwd, name || requested) || binary(cwd, name) || path.resolve(cwd, name || requested);
+        break;
       }
-      let executable = argv.shift();
-      if (!executable) throw new Error(`Package script ${name} has no executable`);
-      process.env.npm_lifecycle_event = name;
-      process.env.npm_lifecycle_script = command;
-      process.env.npm_execpath = process.execPath;
-      kind = "command";
-      if (["bun", "node", "nodejs"].includes(path.basename(executable))) {
-        kind = "entry";
-        while (["--bun", "--smol", "--silent"].includes(argv[0])) argv.shift();
-        if (argv[0] === "run") argv.shift();
-        executable = argv.shift();
-        if (!executable) throw new Error(`Package script ${name} needs a file`);
+      if (visited.has(name)) throw new Error(`Package script alias cycle: ${Array.from(visited).concat(name).join(" -> ")}`);
+      visited.add(name);
+      const argv = scriptArguments(command, name);
+      const alias = aliasArguments(argv, cwd);
+      const target = alias?.[0];
+      if (alias && target && !target.includes("/") && script(cwd, target) !== undefined) {
+        name = target;
+        args = alias.slice(1).concat(args);
+        continue;
       }
-      args = argv.concat(args);
-      name = executable;
-      if (depth === 31) throw new Error("Package script recursion limit exceeded");
+      if (["bun", "node", "nodejs"].includes(path.basename(argv[0]))) return { kind: "runtime", argv: argv.concat(args) };
+      file = commandFile(cwd, argv[0]);
+      args = argv.slice(1).concat(args);
+      break;
     }
     file = dereference(file);
     process.argv.splice(1, process.argv.length - 1, file, ...args);
     native.setMainPath(file);
     internal.mainPath = file;
     return file;
+  }
+
+  async function run(command: BunWasm.ScriptRuntimeCommand): Promise<void> {
+    const child = internal.require("spawn").spawn(command.argv, {
+      cwd: process.cwd(), env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit",
+    });
+    process.exitCode = await child.exited;
   }
   function spawnArguments(argv: string[], directory: unknown): string[] {
     if (["bunx", "/bunx"].includes(argv[0])) return ["bun", "x"].concat(argv.slice(1));
@@ -182,5 +219,5 @@
     if (!executable) return argv;
     return ["bun", dereference(executable)].concat(argv.slice(1));
   }
-  return { resolve, spawnArguments };
+  return { resolve, run, spawnArguments };
 })
