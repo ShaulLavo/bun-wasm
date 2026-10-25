@@ -26,10 +26,28 @@ also exercises the production stream polyfill. The native fixture covers the
 public API on supported guests; it does not measure Waffle's persistent-backend
 I/O. Waffle owns cold-read hydration and descriptor mechanics.
 
-Native Bun has additional descriptor slice-text cursor behavior, including seeking
-on nonzero slice starts. This adapter deliberately uses the available positional
-read operation for bounded borrowed-descriptor ranges. It does not add a private
-seek implementation or claim complete BunFile slice compatibility.
+## Issue 195 remains open
+
+A bounded follow-up on native Bun 1.4.4 confirmed these differences after a
+caller reads two bytes from a descriptor for `abcdef`:
+
+| Operation | Native text / next two descriptor bytes | Adapter text / next two descriptor bytes |
+| --- | --- | --- |
+| Unsliced text | `cdef` / empty | `cdef` / empty |
+| Slice 1..3 text | `bc` / `de` | `bc` / `cd` |
+| Slice 1..3 stream | `bc` / `cd` | `bc` / `cd` |
+| Slice 0..3 text | `cde` / `f` | `abc` / `cd` |
+
+The sliced-text source control checks the adapter's positional-read policy, not
+native cursor parity. The public fixture does not assert these known divergent
+text cases. Numeric routing is repaired, but #195 cannot close on this evidence.
+
+The native bridge exposes sequential read and pread, but no seek operation.
+Finishing native parity needs a coordinated shared seek binding plus the Bun
+text-slice rules for zero and nonzero starts. Reading and discarding bytes,
+reopening a borrowed descriptor, or maintaining a Bun-local cursor table would
+not preserve descriptor identity and lifetime. None is added here. Waffle's
+cold-read hydration work is independent of this gap.
 
 [Ledger scope and pinned revisions](scope.md).
 

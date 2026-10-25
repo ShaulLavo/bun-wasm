@@ -71,7 +71,7 @@ function adapter(Stream = ReadableStream) {
   return { api, reads, opens, closes, wholeReads };
 }
 
-test("numeric Bun.file reads from the caller cursor, stat works, and slices preserve the cursor", async () => {
+test("numeric Bun.file reads and stat work; sliced text uses positional policy, not native cursor parity", async () => {
   const path = fixture(), fd = open(path);
   readSync(fd, new Uint8Array(2));
   const { api } = adapter(), file = api.file(fd);
