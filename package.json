@@ -71,14 +71,14 @@
     "bench:light-startup": "bun scripts/measure-light-startup.ts"
   },
   "peerDependencies": {
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#b20fad173ebaa225cb87c51776f35edaaafd4a40"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#c1cb67c300439af24335d0b2ec481bfb52f79a01"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#b20fad173ebaa225cb87c51776f35edaaafd4a40",
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#c1cb67c300439af24335d0b2ec481bfb52f79a01",
     "jscpd": "5.4.1",
     "knip": "6.41.0",
     "oxlint": "1.88.0",

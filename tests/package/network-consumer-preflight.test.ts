@@ -3,17 +3,15 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { GuestBuildInputs, GuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
+import type { GuestBuildInputs } from "../../scripts/guest-build-receipt.ts";
+import { fixtureReceipt } from "./guest-receipt-fixture.ts";
 
 const gate = fileURLToPath(new URL("../../web/tests/browser-network-consumer.ts", import.meta.url));
 const guest = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+const receipt = fixtureReceipt(guest, "browser");
 const inputs: GuestBuildInputs = {
-  bunHead: "a".repeat(40), bunTree: "b".repeat(40), sysrootReceiptSha256: "c".repeat(64),
-};
-const receipt: GuestBuildReceipt = {
-  ...inputs,
-  artifactSha256: new Bun.CryptoHasher("sha256").update(guest).digest("hex"),
-  artifactBytes: guest.byteLength,
+  bunHead: receipt.bunHead, bunTree: receipt.bunTree, sysrootReceiptSha256: receipt.sysrootReceiptSha256,
+  sourceManifest: receipt.sourceManifest, sourceManifestSha256: receipt.sourceManifestSha256,
 };
 
 async function fixture(check: (root: string, artifact: string) => Promise<void>) {

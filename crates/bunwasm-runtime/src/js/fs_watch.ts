@@ -35,9 +35,15 @@
     return error !== null && typeof error === "object" && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
   }
 
+  function filenameEncoding(value: unknown): string | undefined {
+    if (value == null || value === "") return undefined;
+    if (typeof value === "string" && (value === "buffer" || Buffer.isEncoding(value))) return value;
+    throw Object.assign(new TypeError("Unknown filename encoding"), { code: "ERR_INVALID_ARG_VALUE" });
+  }
+
   function options(value: unknown): Options {
     if (value == null) return {};
-    if (typeof value === "string") return { encoding: value };
+    if (typeof value === "string") return { encoding: filenameEncoding(value) };
     if (typeof value !== "object") throw new TypeError('The "options" argument must be an object or string');
     const result: Options = {};
     if ("recursive" in value && value.recursive !== undefined) {
@@ -48,10 +54,7 @@
       if (typeof value.persistent !== "boolean") throw new TypeError('The "options.persistent" argument must be a boolean');
       result.persistent = value.persistent;
     }
-    if ("encoding" in value && value.encoding !== undefined) {
-      if (typeof value.encoding !== "string" || value.encoding !== "buffer" && !Buffer.isEncoding(value.encoding)) throw new TypeError("Unknown filename encoding");
-      result.encoding = value.encoding;
-    }
+    if ("encoding" in value) result.encoding = filenameEncoding(value.encoding);
     if ("signal" in value && value.signal !== undefined) {
       if (!(value.signal instanceof AbortSignal)) throw new TypeError('The "options.signal" argument must be an AbortSignal');
       result.signal = value.signal;
