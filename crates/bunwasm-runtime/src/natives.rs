@@ -929,6 +929,13 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("close", move |a| close_descriptor(&st, a));
     t.add("read", read_descriptor);
+    t.add("seek", |a| {
+        let result = unsafe { libc::lseek(a.i32(0)?, a.num(1)? as libc::off_t, libc::SEEK_SET) };
+        if result < 0 {
+            return Err(io_error(io::Error::last_os_error(), "seek", None));
+        }
+        ok()
+    });
     let st = state.clone();
     t.add("write", move |a| write_descriptor(&st, a));
     let st = state.clone();
@@ -1795,6 +1802,18 @@ mod builtin_tests {
             ],
         )
         .unwrap();
+        call(&natives, "seek", &[fd.clone(), Val::Num(8.0)]).unwrap();
+        assert_eq!(inherited.stream_position().unwrap(), 8);
+        assert_eq!(
+            call(
+                &natives,
+                "read",
+                &[fd.clone(), Val::Num(1.0), Val::Num(-1.0)]
+            )
+            .unwrap(),
+            Val::Bytes(b"?".to_vec())
+        );
+        assert_eq!(inherited.stream_position().unwrap(), 9);
         let own = call(
             &natives,
             "open",
