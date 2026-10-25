@@ -61,3 +61,80 @@ test("browser realms tree-shake shared modules independently", async () => {
     expect(output!.imports).toEqual([]);
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
+
+async function verifyNetworkAssets(outdir: string, expected: Uint8Array<ArrayBuffer>, scoped: boolean) {
+  const server = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch(request) {
+      const file = Bun.file(join(outdir, new URL(request.url).pathname));
+      return await file.exists() ? new Response(file) : new Response("not found", { status: 404 });
+    },
+  });
+  try {
+    const references: string[] = [];
+    for await (const path of new Bun.Glob("**/*.js").scan(outdir)) {
+      const code = await Bun.file(join(outdir, path)).text();
+      if (!/new URL\(["']\.\/network\.wasm["'],\s*import\.meta\.url\)/.test(code)) continue;
+      references.push(new URL("./network.wasm", new URL(path, server.url)).href);
+    }
+    expect(references.length).toBeGreaterThan(0);
+    if (scoped) {
+      expect(references.some(url => url.includes("/__bunwasm/chunks/"))).toBe(true);
+      expect(references.some(url => url.includes("/chunks/") && !url.includes("/__bunwasm/"))).toBe(true);
+    }
+    for (const url of references) {
+      const response = await fetch(url);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("application/wasm");
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      expect(bytes).toEqual(expected);
+      const module = await WebAssembly.compileStreaming(fetch(url));
+      expect(WebAssembly.Module.exports(module).some(item => item.name === "tcp_dispose")).toBe(true);
+    }
+    const missing = references[0]!;
+    await rm(join(outdir, new URL(missing).pathname));
+    expect((await fetch(missing)).status).toBe(404);
+    await expect(WebAssembly.compileStreaming(fetch(missing))).rejects.toThrow();
+  } finally { await server.stop(true); }
+}
+
+for (const split of [false, true]) test(`browser network asset is served beside ${split ? "split and scoped" : "unsplit"} emitted code`, async () => {
+  const scratch = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-network-asset-"));
+  try {
+    const installed = resolveRuntimePackage(import.meta.filename);
+    await mkdir(join(scratch, "node_modules"));
+    await symlink(installed.physical, join(scratch, "node_modules/waffle"));
+    const asset = join(dirname(installed.source("waffle/network")), "network.wasm");
+    const expected = new Uint8Array(await Bun.file(asset).arrayBuffer());
+    const checksum = await Bun.file(join(dirname(asset), "network.sha256")).text();
+    expect(new Bun.CryptoHasher("sha256").update(expected).digest("hex")).toBe(checksum);
+    const main = join(scratch, "main.ts"), worker = join(scratch, "worker.ts");
+    await writeFile(main, 'export { loadNetworkModule } from "waffle/network";');
+    await writeFile(worker, 'self.onmessage = async () => postMessage(await (await import("waffle/network")).loadNetworkModule());');
+    const outdir = join(scratch, "dist");
+    const result = split
+      ? await buildBrowserEntries([main, worker], outdir)
+      : await Bun.build(browserBuildConfig([main], outdir, { splitting: false }));
+    expect(result.success).toBe(true);
+    await verifyNetworkAssets(outdir, expected, split);
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
+for (const failure of ["missing", "corrupt"]) test(`browser build rejects a ${failure} installed network artifact`, async () => {
+  const scratch = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-network-receipt-"));
+  try {
+    const installed = resolveRuntimePackage(import.meta.filename);
+    const loader = installed.source("waffle/network");
+    const dependency = join(scratch, "node_modules/waffle");
+    await mkdir(join(dependency, "browser/net"), { recursive: true });
+    await writeFile(join(dependency, "package.json"), JSON.stringify({ name: "waffle", type: "module", exports: { "./network": "./browser/net/module.ts" } }));
+    await Bun.write(join(dependency, "browser/net/module.ts"), Bun.file(loader));
+    await Bun.write(join(dependency, "browser/net/network.sha256"), Bun.file(join(dirname(loader), "network.sha256")));
+    if (failure === "corrupt") await writeFile(join(dependency, "browser/net/network.wasm"), "not the selected asset");
+    const main = join(scratch, "main.ts");
+    await writeFile(main, 'export { loadNetworkModule } from "waffle/network";');
+    const config = browserBuildConfig([main], join(scratch, "dist"));
+    await expect(Bun.build(config)).rejects.toThrow(failure === "corrupt" ? "checksum mismatch" : "ENOENT");
+    expect(await Bun.file(join(scratch, "dist/network.wasm")).exists()).toBe(false);
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});
