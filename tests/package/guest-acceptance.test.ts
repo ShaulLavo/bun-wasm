@@ -5,18 +5,15 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { acceptGuestPublication, acceptedPublicationArtifact, snapshotPublicationInputs, verifyPublicationInputs, verifyPublicationReport, type PublicationSnapshot } from "../../scripts/guest-acceptance.ts";
 import { decodeGuest, describeGuest } from "../../scripts/guest-artifact.ts";
+import { fixtureReceipt } from "./guest-receipt-fixture.ts";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const descriptor = describeGuest(wasm);
 const names = ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"];
 
 async function writeReceipts(dist: string, bytes = wasm): Promise<void> {
-  const described = describeGuest(bytes);
   for (const name of names) {
-    await writeFile(join(dist, `${name}.build.json`), JSON.stringify({
-      bunHead: "a".repeat(40), bunTree: "b".repeat(40), sysrootReceiptSha256: "c".repeat(64),
-      artifactSha256: described.sha256, artifactBytes: described.bytes,
-    }) + "\n");
+    await writeFile(join(dist, `${name}.build.json`), JSON.stringify(fixtureReceipt(bytes, name === "bun.wasm" ? "quickjs" : name === "bun-jsc.wasm" ? "jsc" : "browser")) + "\n");
   }
 }
 
@@ -188,7 +185,7 @@ test("real CLI resolves its default dist inside a checkout path containing space
   await fixture(async directory => {
     const root = join(directory, "checkout with spaces # encoded"), dist = join(root, "dist");
     await mkdir(join(root, "scripts"), { recursive: true }); await mkdir(dist);
-    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts", "guest-build-receipt.ts"]) {
+    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts", "guest-build-receipt.ts", "guest-source-manifest.ts"]) {
       await copyFile(fileURLToPath(new URL(`../../scripts/${name}`, import.meta.url)), join(root, "scripts", name));
     }
     const input = join(dist, "bun.wasm"); await writeFile(input, wasm);
@@ -202,5 +199,27 @@ test("real CLI resolves its default dist inside a checkout path containing space
       expect(stderr).toContain(join(dist, "bun-jsc.wasm"));
       expect(stderr).toContain(join(dist, "bun-browser.wasm"));
     } finally { child.kill(); await child.exited; }
+  });
+});
+
+
+test("publication refuses engine relabeling and hash-only historical receipts before acceptance", async () => {
+  await fixture(async dist => {
+    for (const name of names) await writeFile(join(dist, name), wasm);
+    await writeReceipts(dist);
+    await writeFile(join(dist, "bun-browser.wasm.build.json"), JSON.stringify(fixtureReceipt(wasm, "quickjs")));
+    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("engine mismatch");
+    const { sourceManifest: _, sourceManifestSha256: __, ...historical } = fixtureReceipt(wasm, "browser");
+    await writeFile(join(dist, "bun-browser.wasm.build.json"), JSON.stringify(historical));
+    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("sourceManifestSha256");
+  });
+});
+
+test("publication snapshots retain the exact source manifest and its checksum", async () => {
+  await withSnapshot(async (_dist, snapshot) => {
+    const selected = snapshot.selected;
+    const receipt = JSON.parse(await readFile(join(snapshot.directory, `${selected.name}.build.json`), "utf8"));
+    expect(receipt.sourceManifest).toEqual(selected.receipt.sourceManifest);
+    expect(receipt.sourceManifestSha256).toBe(selected.receipt.sourceManifestSha256);
   });
 });
