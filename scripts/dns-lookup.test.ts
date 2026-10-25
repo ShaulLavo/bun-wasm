@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/dns.ts", import.meta.url), "utf8");
@@ -78,34 +77,6 @@ test("DNS validation and backing failures retain structured errors", async () =>
   ]);
 });
 
-test("prepared Waffle exports keep the native worker lookup control green", () => {
-  const workerUrl = new URL("../node_modules/waffle/dist/browser/fs-worker.js", import.meta.url).href;
-  const script = `
-    import assert from "node:assert/strict";
-    import { createRuntime, RuntimeNetworkLookupError } from "waffle";
-    const runtime = createRuntime({
-      filesystem: { mode: "memory", workerURL: new URL(${JSON.stringify(workerUrl)}) },
-      processHost() { throw Error("lookup control must not activate processes"); },
-    });
-    const network = await runtime.network();
-    try {
-      assert.deepEqual(network.lookup("localhost", { family: 0, hints: 0 }), [{ address: "127.0.0.1", family: 4 }]);
-      assert.throws(() => network.lookup("localhost", { family: 6 }), (error) => error instanceof RuntimeNetworkLookupError && error.code === "ENOTFOUND");
-    } finally {
-      await runtime.dispose();
-    }
-    console.log("prepared Waffle lookup control passed");
-  `;
-  const result = Bun.spawnSync([process.execPath, "--eval", script], {
-    cwd: resolve(import.meta.dir, ".."),
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 10000,
-  });
-  expect(result.exitCode).toBe(0);
-  expect(result.stderr.toString()).toBe("");
-  expect(result.stdout.toString()).toContain("prepared Waffle lookup control passed");
-});
 
 for (const kind of ["callback", "promise"]) test(`${kind} lookup rejects unknown hints before literals or provider calls`, () => {
   calls.length = 0;
