@@ -258,6 +258,7 @@ jobs:
             guest_inputs=
             bun scripts/test-checks.ts native
             BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts
+            BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/root-overrides.ts
           }
           jsc_pid=
           jsc_log="$RUNNER_TEMP/jsc-prebuild.log"

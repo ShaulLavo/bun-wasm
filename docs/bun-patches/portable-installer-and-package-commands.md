@@ -79,6 +79,41 @@ failure are checked. Its source is TypeScript. The spawn-facade unit harness loa
 the real TypeScript command dispatcher with an explicitly empty filesystem.
 
 
+## Root string overrides
+
+Class **Host feature**, original adapters in
+`crates/bunwasm-runtime/src/install/overrides.rs`, `resolve.rs` and `mod.rs`.
+Comparison sources are Bun `src/install/lockfile/OverrideMap.rs`,
+`src/install/lockfile/override_selector.rs` and `src/semver/intersects.rs` at
+`9510e74152073d850a18758ca41114d8f214ffa6`, with local patched source at
+`d71508d31edf06765c12adf0df137ef531539f68`. No upstream implementation is copied
+or patched by this change.
+
+The adapter applies root string rules to root and transitive dependency edges.
+Version selectors use Bun's parser and `Group::intersects`, including scoped
+names. `Group::has_skipped` retains the portable installer's existing rejection
+of unrecognised tokens. Numeric overflow follows the existing parser's null set.
+There is no additional wildcard or numeric parser. Native Bun 1.4.4 controls
+cover disjoint selectors, replacement aliases and tags, stable pins, and frozen
+lock rejection after changes. Native Bun accepts some skipped-token selectors
+that the portable installer rejects. The fixture labels that distinction.
+
+Lock metadata keeps flat strings and version-selected `{".": "replacement"}`
+entries. The resolver preserves original dependency declarations, invalidates
+pins only for changed logical edge names, and compares override metadata even for
+production frozen installs. Nested object rules are explicitly unsupported.
+`tests/install/root-overrides.ts` uses only a local fixture registry and owns
+its child processes, listener and scratch directory.
+
+Explicit `alias@npm:target@range` selectors match the alias target identity and
+use the same range intersection, including scoped target names. Plain rules
+continue to exclude declared aliases. Root-relative `file:` and `link:`
+replacements retain the root origin; parent-local declarations are still rebased
+under their declaring package. Alias recursion carries the logical edge's lock
+lookup decision without invalidating a pin by its physical target name.
+Native Bun controls and resolver regressions cover these review corrections.
+
+
 ## Classification
 
 | Patch or source | Class | Change |
