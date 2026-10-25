@@ -79,6 +79,7 @@
       }
       connect(...args) {
         const [options, callback] = _normalizeArgs(args);
+        if (options.host && typeof options.host !== "string") throw error(TypeError, "ERR_INVALID_ARG_TYPE", 'The "options.host" property must be of type string');
         if (!native.hostCaps.connect) throw error(Error, "ENOTSUP", "net.connect is not supported in bun-wasm without a networking host");
         if (this.connecting) {
           internal.nextTick(() => this.destroy(error(Error, "EALREADY", "Socket is already connecting")));
@@ -116,7 +117,9 @@
         if (!this.destroyed) this._dial(Object.assign({}, options, { host: address }), targetPort);
       }
       _dial(options, targetPort) {
-        const target = options.host || "localhost";
+        let target;
+        try { target = internal.require("net_hostname")(options.host || "localhost"); }
+        catch (err) { internal.nextTick(() => this.destroy(err)); return; }
         const family = internal.require("net_address").isIP(target);
         // The host ABI resolves names only after opening a connection. Deny names when a
         // BlockList is present so DNS cannot bypass the address check.
