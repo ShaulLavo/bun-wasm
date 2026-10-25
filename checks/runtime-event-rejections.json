@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/event-rejections.test.ts",
+  "localRuntime": true
+}
