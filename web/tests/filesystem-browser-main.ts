@@ -24,7 +24,9 @@ try {
   equal(first.detached, "after!", "open unlinked file");
   equal(decoder.decode(await fs.readFile("/shared")), "replacement", "page sees guest write before process teardown");
   await Promise.all(Array.from({ length: 2 }, () => guest(fs.fork(), "writers")));
-  const entries = (await fs.lookup("/"))!.children;
+  const root = await fs.lookup("/");
+  if (root?.kind !== "dir") throw new Error("filesystem root is not a directory");
+  const entries = root.children;
   equal(new Set(Array.from(entries.values(), entry => entry.ino)).size, entries.size, "worker-owned inode allocator");
   const large = new Uint8Array(9 * 1024 * 1024).fill(37);
   await fs.writeFile("/larger-than-old-snapshot", large);

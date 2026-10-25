@@ -29,7 +29,6 @@ function urlParse(input: string, base?: string) {
 export function requestBodyFixture(engine: "host" | "portable" = "portable") {
   const modules = new Map<string, unknown>([
     ["streams_polyfill", factory("streams_polyfill.js")()],
-    ["body_streams", factory("body_streams.ts")()],
     ["url_search_params", factory("url_search_params.ts")()],
     ["web_brand", factory("web_brand.ts")()],
   ]);
@@ -50,6 +49,7 @@ export function requestBodyFixture(engine: "host" | "portable" = "portable") {
       throw new Error(`Unexpected web factory dependency ${name}`);
     },
   };
+  modules.set("body_streams", factory("body_streams.ts")(internal));
   modules.set("compression_streams", factory("compression_streams.ts")(internal));
   const streams = factory("streams.js")(internal);
   modules.set("streams", streams);

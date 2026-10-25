@@ -76,16 +76,26 @@ test("fresh Runtime installs canonical files and executes through the generic la
   });
 });
 
+function blockParentDuringInstall(backend: MemoryBackend): MemoryBackend {
+  const execute = backend.execute.bind(backend);
+  backend.execute = (operation, args, data) => {
+    if (operation === "mkdirp" && args[0] === "/blocked") {
+      execute("writeFile", ["/blocked", false, false], new TextEncoder().encode("caller-owned parent file"));
+    }
+    return execute(operation, args, data);
+  };
+  return backend;
+}
+
 test("real Runtime rolls back markers after a later filesystem mutation fails", async () => {
   await withRuntime(async runtime => {
-    await runtime.filesystem.writeFile("/blocked", "caller-owned parent file");
     const error = await installBunAdapters(runtime, { executables: ["/bin/bun", "/blocked/bun"] }).catch(error => error);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("filesystem errno");
     expect(await runtime.filesystem.readFile("/bin/bun")).toBeUndefined();
     expect(new TextDecoder().decode(await runtime.filesystem.readFile("/blocked"))).toBe("caller-owned parent file");
     (await installBunAdapters(runtime)).dispose();
-  });
+  }, blockParentDuringInstall(new MemoryBackend()));
 });
 
 test("real Runtime installation never replaces a different existing executable file", async () => {
@@ -147,8 +157,8 @@ test("real Runtime shares a concurrent identical marker without a queued exclusi
 
 test("real Runtime rollback preserves a concurrent identical marker when a later path fails", async () => {
   const race = racingBackend("marker");
+  blockParentDuringInstall(race.backend);
   await withRuntime(async runtime => {
-    await runtime.filesystem.writeFile("/blocked", "caller-owned parent file");
     const error = await installBunAdapters(runtime, { executables: ["/owned/bun", "/bin/bun", "/blocked/bun"] }).catch(error => error);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("filesystem errno");
@@ -179,7 +189,7 @@ for (const order of ["before", "after"] as const) {
         expect(race.raced()).toBe(true);
         expect(unrelated).toBeDefined();
         const failure = await unrelated;
-        expect(failure).toMatchObject({ errno: 29 });
+        expect(failure).toMatchObject({ errno: 54 });
         // The caller, not the installer, owns consumption of this page-queue failure.
         await expect(runtime.filesystem.drain()).rejects.toBe(failure);
         await runtime.filesystem.drain();

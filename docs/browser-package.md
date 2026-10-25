@@ -98,10 +98,13 @@ review and artifact selection, omit `NETWORK_CONSUMER_PREFLIGHT_ONLY` and set
 The installer also supplies networking to Bun launched by an external shell. A shell-launched
 Bun server and nested Bun processes use the page's existing network service, not a private network.
 
-`bun run test:browser:shell-consumer` installs a packed Bun package and bash-web at
-`c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5`, sharing Waffle 0.0.67 at
-`b20fad173ebaa225cb87c51776f35edaaafd4a40`. It builds the installed shell's workers, runtime-backed
-shell guest and utility guests explicitly. Git `prepare` alone does not build that shell guest.
+`bun run test:browser:shell-consumer` is configured to install a packed Bun package and
+bash-web at `c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5` with Waffle 0.0.90 at
+`c1cb67c300439af24335d0b2ec481bfb52f79a01`. The selected shell still declares the previous
+Waffle peer, so the exact-peer check currently rejects this combination. A separately reviewed
+shell pin with the matching peer is required before this command can establish acceptance.
+The command builds the installed shell's workers, runtime-backed shell guest and utility guests
+explicitly. Git `prepare` alone does not build that shell guest.
 The test imports `bun-wasm`, `bun-wasm/worker` and bash-web's public exports, not checkout workers
 or a shell substitute. Rust, the `wasm32-wasip1` target, wasi-sdk 34 and cached Playwright 1.64.1
 browsers are prerequisites. Source `env.sh` on this workstation and use its heavy-job queue.

@@ -14,7 +14,7 @@
         "@xterm/addon-fit": "^0.11.0",
         "@xterm/xterm": "^6.0.0",
         "codemirror": "^6.0.2",
-        "waffle": "git+https://github.com/ShaulLavo/waffle.git#b20fad173ebaa225cb87c51776f35edaaafd4a40",
+        "waffle": "git+https://github.com/ShaulLavo/waffle.git#c1cb67c300439af24335d0b2ec481bfb52f79a01",
       },
       "devDependencies": {
         "@types/bun": "^1.4.3",
@@ -131,7 +131,7 @@
 
     "w3c-keyname": ["w3c-keyname@2.2.8", "", {}, "sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ=="],
 
-    "waffle": ["waffle@github:ShaulLavo/waffle#b20fad1", {}, "ShaulLavo-waffle-b20fad1", "sha512-jKzcaRe3CgW6WlXDZTC7jq3+6vCmaxXoNR1iJrPkCv4iJUze0Quv/prFZcn76inz3gF4X8bFElQfZxTaaV4nwg=="],
+    "waffle": ["waffle@github:ShaulLavo/waffle#c1cb67c", { "hasInstallScript": true }, "ShaulLavo-waffle-c1cb67c", "sha512-Znkl1caXhac9dkIN+KXxY8HMQeP9cFnlFEWlunH90fiuHfWX7UuWYJvZ/d3+Xe7nJmD7BEnHFUleTYZSKO/utQ=="],
 
     "@types/node/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
   }
