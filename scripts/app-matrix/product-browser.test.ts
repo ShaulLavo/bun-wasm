@@ -209,7 +209,8 @@ function hydrationGate(buttonDisabled = true) {
 
 function svelteDevCheck() {
   const app = fullstackApps.find(app => app.id === "fullstack-sveltekit");
-  const check = app?.commands.find(command => command.name === "dev")?.check;
+  if (!app) throw new Error("Missing SvelteKit fixture");
+  const check = app.commands.find(command => command.name === "dev")?.check;
   if (check?.kind !== "page") throw new Error("Missing SvelteKit dev page check");
   return { app, check };
 }
@@ -234,7 +235,7 @@ test("SvelteKit delays the first edit until its declared hydrated selector is re
 
 test("SvelteKit awaits a disabled button's click actionability after a fresh navigation", async () => {
   const { app, check } = svelteDevCheck();
-  const hydration = hydrationGate(app?.files["src/routes/+page.svelte"]?.includes('id="increment" disabled={!hydrated}'));
+  const hydration = hydrationGate(app.files["src/routes/+page.svelte"]?.includes('id="increment" disabled={!hydrated}'));
   const run = fixture({ hydration, updateMessage: null });
   const pending = productObservations(run.page, "http://local/", { ...check, hmr: undefined, probes: [
     { kind: "action", id: "client-interaction", path: "/", button: "#increment", selector: "#count", text: "action-result" },

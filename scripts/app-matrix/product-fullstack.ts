@@ -15,6 +15,7 @@ const probes: readonly FeatureProbe[] = [
 
 interface Lifecycle {
   source: string;
+  selector?: string;
   dev: readonly string[];
   build: readonly string[];
   output: readonly string[];
@@ -27,14 +28,14 @@ function lifecycle(options: Lifecycle): ProductCommand[] {
       name: "dev",
       args: ["run"].concat(options.dev),
       check: {
-        kind: "page", selector: markerSelector, text: productMarker, probes,
+        kind: "page", selector: options.selector ?? markerSelector, text: productMarker, probes,
         hmr: { path: options.source, search: productMarker, replacement: `${productMarker} updated` },
       },
     },
     { name: "build", args: ["run"].concat(options.build), check: { kind: "files", paths: options.output, text: "" } },
     {
       name: "start", after: "build", args: ["run"].concat(options.start),
-      check: { kind: "page", selector: markerSelector, text: productMarker, probes },
+      check: { kind: "page", selector: options.selector ?? markerSelector, text: productMarker, probes },
     },
   ];
 }
@@ -80,18 +81,22 @@ export default defineConfig({ plugins: [sveltekit()] });
 }
 `,
       "src/routes/+page.svelte": `<script lang="ts">
+  import { onMount } from "svelte";
+  let hydrated = $state(false);
+  onMount(() => { hydrated = true; });
   let { data } = $props();
   let count = $state(0);
 </script>
-<h1 id="product-marker">${productMarker}</h1>
+<h1 id="product-marker" data-hydrated={hydrated}>${productMarker}</h1>
 <p id="server-value">{data.value}</p>
-<button id="increment" onclick={() => count++}>Increment</button>
+<button id="increment" disabled={!hydrated} onclick={() => count++}>Increment</button>
 <output id="count">{count}</output>
 `,
       "start.ts": productionLauncher("./build/index.js"),
     },
     commands: lifecycle({
       source: "src/routes/+page.svelte",
+      selector: '#product-marker[data-hydrated="true"]',
       dev: [viteBin, "--host", "127.0.0.1", "--port", "{port}", "--strictPort"],
       build: [viteBin, "build"], output: ["build/index.js", "build/handler.js", "build/server/index.js"],
       start: ["start.ts", "{port}"],
