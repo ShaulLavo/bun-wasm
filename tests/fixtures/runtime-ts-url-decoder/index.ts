@@ -86,6 +86,62 @@ attempt("format query URLSearchParams", () => url.format({ pathname: "/", query:
 attempt("format query string ignored", () => url.format({ pathname: "/", query: "a=1" }));
 attempt("format search wins", () => url.format({ pathname: "/", search: "?fixed", query: { a: ["1", "2"] } }));
 attempt("format empty search", () => url.format({ pathname: "/", search: "", query: { a: ["1", "2"] } }));
+const queryEvents: string[] = [];
+const querySentinel = new RangeError("sentinel");
+function scalar(label: string, fail = false) {
+  return {
+    [Symbol.toPrimitive](hint: string) {
+      queryEvents.push(`${label} ${hint}`);
+      if (fail) throw querySentinel;
+      return label;
+    },
+  };
+}
+function formatOrder(label: string, input: object) {
+  attempt("format query order " + label, () => {
+    try {
+      return [url.format(input), queryEvents.splice(0)];
+    } catch (error) {
+      return [error === querySentinel, error instanceof TypeError, queryEvents.splice(0)];
+    }
+  });
+}
+formatOrder("accessor before search", {
+  get query() { queryEvents.push("query"); return { a: scalar("a") }; },
+  get search() { queryEvents.push("search"); return "?fixed"; },
+});
+formatOrder("record getter and coercion before search", {
+  query: { get a() { queryEvents.push("get a"); return scalar("a"); }, get b() { queryEvents.push("get b"); return scalar("b"); } },
+  get search() { queryEvents.push("search"); return "fixed#fragment"; },
+});
+formatOrder("throwing accessor", {
+  get query() { queryEvents.push("query"); throw querySentinel; },
+  get search() { queryEvents.push("search"); return "?fixed"; },
+});
+formatOrder("throwing record getter", {
+  query: { get a() { queryEvents.push("get a"); throw querySentinel; } },
+  get search() { queryEvents.push("search"); return "?fixed"; },
+});
+formatOrder("throwing record coercion", {
+  query: { a: scalar("a", true) },
+  get search() { queryEvents.push("search"); return "?fixed"; },
+});
+formatOrder("symbol conversion with explicit search", {
+  query: { a: Symbol("x") },
+  get search() { queryEvents.push("search"); return "?fixed"; },
+});
+formatOrder("empty search uses converted query", {
+  get query() { queryEvents.push("query"); return { a: scalar("a") }; },
+  get search() { queryEvents.push("search"); return ""; },
+});
+formatOrder("empty record skips iterator", {
+  query: { get [Symbol.iterator]() { queryEvents.push("iterator"); throw querySentinel; } },
+  get search() { queryEvents.push("search"); return "?fixed"; },
+});
+formatOrder("conversion precedes throwing search", {
+  query: { a: scalar("a") },
+  get search() { queryEvents.push("search"); throw querySentinel; },
+});
 const domains = ["xn--espaol-zwa.com", "xn--bcher-kva.de", "xn--fiqs8s", "español.com", "EXAMPLE.COM.", "xn--iñvalid.com", "xn--", "a b", "a/b", "a?b", "a#b", "a\\b", "a\nb", "a\tb", " a ", "[::ffff:127.0.0.1]", "123", "1.2.3.999", "xn--a.com", "a%00b", "user@xn--espaol-zwa.com", "foo:81", "127.0.0.1", "0x7f.1", "[::1]", "%65xample.com", "%E2%98%83.com", ""];
 for (const domain of domains) {
   attempt("domainToUnicode " + JSON.stringify(domain), () => url.domainToUnicode(domain));
