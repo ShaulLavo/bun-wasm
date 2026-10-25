@@ -1,4 +1,5 @@
 declare namespace BunWasm.Events {
+  const captureRejectionSymbol: unique symbol;
   type Name = string | symbol;
   interface Listener {
     (this: unknown, ...args: unknown[]): unknown;
@@ -14,6 +15,7 @@ declare namespace BunWasm.Events {
   }
   type Disposable = Partial<Record<symbol, () => void>>;
   interface Emitter {
+    [captureRejectionSymbol]?: (error: unknown, event: Name, ...args: unknown[]) => unknown;
     _events: Table;
     _eventsCount: number;
     _maxListeners?: number;
@@ -76,7 +78,7 @@ declare namespace BunWasm.Events {
     init(this: InitialState, opts?: Options): void;
     EventEmitter: Constructor;
     usingDomains: boolean;
-    captureRejectionSymbol: symbol;
+    captureRejectionSymbol: typeof captureRejectionSymbol;
     errorMonitor: symbol;
     kMaxEventTargetListeners: symbol;
     kMaxEventTargetListenersWarned: symbol;

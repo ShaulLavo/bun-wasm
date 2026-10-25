@@ -2,6 +2,7 @@
 mod io;
 mod local;
 mod migration;
+mod overrides;
 mod resolve;
 mod version;
 
@@ -512,7 +513,9 @@ fn same_lock(
                 .is_some_and(|locked| locked.values().any(|old| old == row))
         })
     });
-    Ok(locked["workspaces"] == planned["workspaces"] && packages_match)
+    Ok(locked["workspaces"] == planned["workspaces"]
+        && locked["overrides"] == planned["overrides"]
+        && packages_match)
 }
 
 fn lockfile(manifest: &Value, resolver: &Resolver) -> Result<String> {
@@ -564,10 +567,16 @@ fn lockfile(manifest: &Value, resolver: &Resolver) -> Result<String> {
         };
         packages.insert(key.clone(), row);
     }
-    write_lock(
-        &json!({"configVersion": resolver.locked["configVersion"].as_u64().unwrap_or(1), "workspaces": workspaces, "packages": packages}),
-        &resolver.registry,
-    )
+    let mut lock = json!({"configVersion": resolver.locked["configVersion"].as_u64().unwrap_or(1), "workspaces": workspaces, "packages": packages});
+    if resolver
+        .overrides
+        .metadata
+        .as_object()
+        .is_some_and(|rules| !rules.is_empty())
+    {
+        lock["overrides"] = resolver.overrides.metadata.clone();
+    }
+    write_lock(&lock, &resolver.registry)
 }
 
 fn write_lock(lock: &Value, registry: &io::Registry) -> Result<String> {
@@ -588,14 +597,20 @@ fn write_lock(lock: &Value, registry: &io::Registry) -> Result<String> {
             out.push_str(",\n");
         }
     }
+    out.push_str("  },\n");
+    if let Some(overrides) = lock.get("overrides") {
+        out.push_str("  \"overrides\": ");
+        pretty(overrides, 1, &mut out);
+        out.push_str(",\n");
+    }
     if lock["packages"]
         .as_object()
         .is_none_or(|packages| packages.is_empty())
     {
-        out.push_str("  },\n  \"packages\": {}\n}\n");
+        out.push_str("  \"packages\": {}\n}\n");
         return Ok(out);
     }
-    out.push_str("  },\n  \"packages\": {\n");
+    out.push_str("  \"packages\": {\n");
     if let Some(packages) = lock["packages"].as_object() {
         write_package_rows(packages, &mut out);
     }

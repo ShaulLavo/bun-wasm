@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/fetch-lifetime.test.ts",
+  "localRuntime": true
+}

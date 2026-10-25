@@ -1,0 +1,4 @@
+open uploads preserve abort reasons
+already aborted upload rejects
+finite upload preserves bytes
+cancelled uploads never dispatch

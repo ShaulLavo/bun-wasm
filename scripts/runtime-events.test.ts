@@ -30,6 +30,7 @@ function excludesAuditedStatement(statement: ts.Statement, file: ts.SourceFile, 
   if (ts.isFunctionDeclaration(statement) && changed.has(statement.name?.text ?? "")) return true;
   if (ts.isExpressionStatement(statement) && ts.isBinaryExpression(statement.expression)
     && changed.has(statement.expression.left.getText(file))) return true;
+  if (ts.isVariableStatement(statement) && statement.declarationList.declarations.some(declaration => changed.has(declaration.name.getText(file)))) return true;
   const text = statement.getText(file);
   return text.startsWith("const proto") || text.startsWith("EventEmitter.prototype._eventsCount")
     || text.startsWith("proto._eventsCount")
@@ -54,16 +55,17 @@ function enclosingFunction(node: ts.Node) {
 }
 
 test("events pins audited executable changes and the unchanged PR140 remainder", () => {
-  expect(createHash("sha256").update(syntax(emitted)).digest("hex")).toBe("ca73fe07ba252be370eaf489d86772d8e0e3e6696a065e2dfcc406b3a18b0da3");
+  expect(createHash("sha256").update(syntax(emitted)).digest("hex")).toBe("7a42d9f48e3ef454ed1a74fa20f3a95e240d067f80abbf1fd344dc54b997c816");
   const file = ts.createSourceFile("events.js", emitted, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const changed = new Set([
     "addListener", "onceWrapper", "onceWrap", "proto.emit", "proto.removeAllListeners",
     "EventEmitter.on", "EventEmitter.addAbortListener",
+    "kCapture", "EventEmitter.init", "emitRejection", "captureResult", "callListeners",
   ]);
   const remainder: string[] = [];
   collectRemainder(file, file, changed, remainder);
-  expect(remainder.length).toBe(59);
-  expect(createHash("sha256").update(JSON.stringify(remainder)).digest("hex")).toBe("37ebfa24afb35f69f25af1c8248a86299d6ba62d1dd346d8daf4085cf5e0541a");
+  expect(remainder.length).toBe(57);
+  expect(createHash("sha256").update(JSON.stringify(remainder)).digest("hex")).toBe("0a44fa4e1b8aa3adb31ed07471fdb4ff38ef891624af0a8f2e4fbf20462cdf1f");
 });
 
 test("events permits only the exact audited constructor and private-invariant views", () => {
@@ -206,6 +208,9 @@ function check(body: string) {
 
 test("accepts emitter, once, iterator and precise internal dependency contracts", () => {
   const result = check(`
+EventEmitter.captureRejections = true;
+const captured = new EventEmitter({ captureRejections: true });
+captured[EventEmitter.captureRejectionSymbol] = (error: unknown, event: BunWasm.Events.Name, ...args: unknown[]) => { return [error, event].concat(args); };
 const key = Symbol("event");
 const listener = function(this: unknown, ...args: unknown[]) { return args.length; };
 emitter.on(key, listener).once(key, listener).prependOnceListener(key, listener).off(key, listener);
@@ -245,6 +250,9 @@ const invalid: [string, string][] = [
   ["incomplete target source", 'const value: BunWasm.Events.Source = { addEventListener() {} };'],
   ["prototype listener", 'EventEmitter.prototype.on("event", 7);'],
   ["event name", 'emitter.emit({}, 1);'],
+  ["capture static", 'EventEmitter.captureRejections = "yes";'],
+  ["capture handler", 'emitter[EventEmitter.captureRejectionSymbol] = 42;'],
+  ["capture handler event", 'emitter[EventEmitter.captureRejectionSymbol] = (error: unknown, event: number) => {};'],
   ["capture option", 'new EventEmitter({ captureRejections: "yes" });'],
   ["listener limit", 'emitter.setMaxListeners("ten");'],
   ["once signal", 'EventEmitter.once(emitter, "event", { signal: {} });'],

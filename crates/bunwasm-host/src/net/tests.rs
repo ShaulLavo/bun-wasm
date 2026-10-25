@@ -256,6 +256,89 @@ fn fetch_reports_reason_phrase_and_decodes_gzip() {
     assert_eq!(net.close(handle), 0);
 }
 
+fn fetch_head_ready(net: &mut Net, fetch: i32) -> i32 {
+    match net.fetch_head(fetch) {
+        Output::Code(code) => code,
+        Output::Bytes(_) => 0,
+    }
+}
+
+fn waiting_fetch(net: &mut Net) -> (i32, i32, i32) {
+    let listener = net.listen("127.0.0.1", 0);
+    assert!(listener > 0);
+    let port = net.local_port(listener);
+    let meta = format!(r#"{{"url":"http://127.0.0.1:{port}/"}}"#);
+    let fetch = net.fetch(meta.as_bytes(), b"");
+    assert!(fetch > 0);
+    let peer = wait(net, |net| net.accept(listener));
+    assert!(peer > 0);
+    let mut request = Vec::new();
+    let mut buf = [0u8; 4096];
+    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+        let count = wait(net, |net| net.read(peer, &mut buf));
+        assert!(count > 0);
+        request.extend_from_slice(&buf[..count as usize]);
+    }
+    (fetch, listener, peer)
+}
+
+/// Keep the peer open without a complete response, then close only the fetch
+/// handle. The peer must observe EOF before it sends any more response bytes.
+fn assert_fetch_abort_disconnects(after_headers: bool) {
+    let mut net = Net::new();
+    let (fetch, listener, peer) = waiting_fetch(&mut net);
+    let mut buf = [0u8; 4096];
+    if after_headers {
+        let headers = b"HTTP/1.1 200 OK\r\nContent-Length: 1024\r\n\r\n";
+        assert_eq!(net.write(peer, headers), headers.len() as i32);
+        assert_eq!(wait(&mut net, |net| fetch_head_ready(net, fetch)), 0);
+    }
+    assert_eq!(net.close(fetch), 0);
+    assert_eq!(wait(&mut net, |net| net.read(peer, &mut buf)), 0);
+    assert_eq!(net.close(fetch), BADF);
+    assert_eq!(net.close(peer), 0);
+    assert_eq!(net.close(listener), 0);
+    net.flush_closed(Duration::from_secs(1));
+    assert!(net.handles.is_empty());
+}
+
+#[test]
+fn fetch_abort_disconnects_before_response_headers() {
+    assert_fetch_abort_disconnects(false);
+}
+
+#[test]
+fn fetch_abort_disconnects_during_response_body_read() {
+    assert_fetch_abort_disconnects(true);
+}
+
+#[test]
+fn fetch_abort_does_not_cancel_another_pending_request() {
+    let mut net = Net::new();
+    let (cancelled, first_listener, first_peer) = waiting_fetch(&mut net);
+    let (active, second_listener, second_peer) = waiting_fetch(&mut net);
+    let mut buf = [0u8; 4096];
+    assert_eq!(net.close(cancelled), 0);
+    assert_eq!(wait(&mut net, |net| net.read(first_peer, &mut buf)), 0);
+    assert!(matches!(net.fetch_head(active), Output::Code(AGAIN)));
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+    assert_eq!(net.write(second_peer, response), response.len() as i32);
+    assert_eq!(wait(&mut net, |net| fetch_head_ready(net, active)), 0);
+    assert_eq!(json(net.fetch_head(active))["status"], 200);
+    assert_eq!(read_all(&mut net, active), b"ok");
+    for handle in [
+        active,
+        first_peer,
+        second_peer,
+        first_listener,
+        second_listener,
+    ] {
+        assert_eq!(net.close(handle), 0);
+    }
+    net.flush_closed(Duration::from_secs(1));
+    assert!(net.handles.is_empty());
+}
+
 #[test]
 fn fetch_errors() {
     let mut net = Net::new();

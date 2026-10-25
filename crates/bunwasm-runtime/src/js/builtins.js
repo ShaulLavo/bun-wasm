@@ -213,39 +213,7 @@
   // --- timers ---------------------------------------------------------------
 
   function timersPromises() {
-    const t = internal.timers;
-    const abortError = (signal) => Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR", cause: signal.reason });
-    function delayed(schedule) {
-      return (value, options = {}) =>
-        new Promise((resolve, reject) => {
-          const { signal } = options;
-          if (signal && signal.aborted) {
-            reject(abortError(signal));
-            return;
-          }
-          const handle = schedule(() => resolve(value));
-          if (options.ref === false && handle.unref) handle.unref();
-          if (signal) signal.addEventListener("abort", () => {
-            t.clearTimeout(handle);
-            t.clearImmediate(handle);
-            reject(abortError(signal));
-          });
-        });
-    }
-    const setTimeoutP = (ms, value, options) => delayed((cb) => t.setTimeout(cb, ms))(value, options);
-    const setImmediateP = (value, options) => delayed((cb) => t.setImmediate(cb))(value, options);
-    async function* setIntervalP(ms, value) {
-      for (;;) {
-        await setTimeoutP(ms);
-        yield value;
-      }
-    }
-    return {
-      setTimeout: setTimeoutP,
-      setImmediate: setImmediateP,
-      setInterval: setIntervalP,
-      scheduler: { wait: (ms, options) => setTimeoutP(ms, undefined, options), yield: () => setImmediateP() },
-    };
+    return internal.require("timer_promises");
   }
 
   function timersModule() {
