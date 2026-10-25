@@ -136,7 +136,7 @@
   ]);
   const noOpFlags = new Set(["--bun", "--smol", "--silent", "--no-install"]);
 
-  function aliasArguments(argv: string[]): string[] | undefined {
+  function aliasArguments(argv: readonly string[], cwd: string): string[] | undefined {
     if (path.basename(argv[0]) !== "bun") return;
     let offset = 1;
     while (noOpFlags.has(argv[offset])) offset++;
@@ -146,7 +146,8 @@
       if (argv[offset] === "--") offset++;
       return argv.slice(offset);
     }
-    if (commands.has(argv[offset]) || argv[offset]?.startsWith("-")) return;
+    if (argv[offset] === "--") return argv.slice(offset + 1);
+    if (commands.has(argv[offset]) || argv[offset]?.startsWith("-") || sourceFile(cwd, argv[offset])) return;
     return argv.slice(offset);
   }
 
@@ -186,7 +187,7 @@
       if (visited.has(name)) throw new Error(`Package script alias cycle: ${Array.from(visited).concat(name).join(" -> ")}`);
       visited.add(name);
       const argv = scriptArguments(command, name);
-      const alias = aliasArguments(argv);
+      const alias = aliasArguments(argv, cwd);
       const target = alias?.[0];
       if (alias && target && !target.includes("/") && script(cwd, target) !== undefined) {
         name = target;

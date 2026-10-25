@@ -5,7 +5,7 @@ function run(name: string, args: string[] = []) {
   return Bun.spawnSync([process.execPath, "run", name].concat(args), { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
 }
 
-for (const [name, output] of [["evaluate", "42"], ["print", "42"], ["cli-flags", "42"], ["ok", "direct file"], ["node-file", "node filename tail"], ["node-alias-file", "node alias filename tail"]]) {
+for (const [name, output] of [["evaluate", "42"], ["print", "42"], ["cli-flags", "42"], ["ok", "direct file"], ["bun-file", "direct file"], ["bun-alias", "42"], ["node-file", "node filename tail"], ["node-alias-file", "node alias filename tail"]]) {
   const child = run(name);
   assert.equal(child.exitCode, 0, child.stderr.toString());
   assert.equal(child.stdout.toString().trim(), output, name);

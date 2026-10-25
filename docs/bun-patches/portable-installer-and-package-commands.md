@@ -95,7 +95,9 @@ cwd and the script environment and reports the child exit status. Only actual
 Bun script aliases expand locally; visited names detect alias cycles without
 limiting acyclic chains. Reserved CLI names remain commands unless preceded by
 `bun run`. Node and nodejs CLI entrypoints treat bare operands as file paths,
-not Bun subcommands or package scripts. This changes no process implementation
+not Bun subcommands or package scripts. Bun direct-file operands keep file
+precedence, while explicit `bun run` still selects same-named scripts. This
+changes no process implementation
 and copies no additional upstream source. The reference remains Bun revision
 `9510e74152073d850a18758ca41114d8f214ffa6`.
 

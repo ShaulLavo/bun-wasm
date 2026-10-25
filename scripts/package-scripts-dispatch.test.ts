@@ -59,7 +59,8 @@ test("explicit aliases keep argument ordering and lifecycle environment", () => 
   expect(f.process.env).toMatchObject({ MODE: "outer", MARK: "inner", npm_lifecycle_event: "inner", npm_lifecycle_script: "MARK=inner node ./app.js second", npm_execpath: "/bin/bun" });
 });
 
-for (const scripts of [{ a: "bun run a" }, { a: "bun run b", b: "bun run a" }, { a: "bun beta", beta: "bun alpha", alpha: "bun beta" }]) test(`genuine alias cycle ${JSON.stringify(scripts)}`, () => {
+const cycles: Record<string, string>[] = [{ a: "bun run a" }, { a: "bun -- a" }, { a: "bun run b", b: "bun run a" }, { a: "bun beta", beta: "bun alpha", alpha: "bun beta" }];
+for (const scripts of cycles) test(`genuine alias cycle ${JSON.stringify(scripts)}`, () => {
   expect(() => fixture(scripts, "a").resolve()).toThrow("Package script alias cycle");
 });
 
@@ -120,4 +121,22 @@ test("native Bun and Node references run conventional test, eval, print and dire
     expect(child.exitCode).toBe(0);
     expect(child.stdout.toString().trim().split("\n").filter(line => !line.startsWith("bun test v")).join("\n")).toBe(output);
   }
+});
+
+
+test("native Bun distinguishes direct files from explicit run aliases", () => {
+  const f = fixture({ "app.js": 'node -e "console.log(42)"' }, "app.js");
+  for (const [args, output] of [[["app.js"], "file"], [["run", "app.js"], "42"]] satisfies Array<[string[], string]>) {
+    const child = Bun.spawnSync([process.execPath].concat(args), { cwd: f.cwd, stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    expect(child.stdout.toString().trim()).toBe(output);
+  }
+});
+
+
+test("Bun direct files win over implicit aliases, but explicit run selects a script", () => {
+  const f = fixture({ start: "bun app.js", "app.js": 'node -e "console.log(42)"' }, "start");
+  expect(f.resolve()).toEqual({ kind: "runtime", argv: ["bun", "app.js"] });
+  const explicit = fixture({ start: "bun run app.js", "app.js": 'node -e "console.log(42)"' }, "start");
+  expect(explicit.resolve()).toEqual({ kind: "runtime", argv: ["node", "-e", "console.log(42)"] });
 });

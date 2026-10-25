@@ -489,6 +489,18 @@ fn node_command(args: Vec<String>) -> Command {
     }
 }
 
+fn direct_file(file: &str) -> String {
+    let path = std::path::Path::new(file);
+    if !path.is_file() {
+        return file.to_owned();
+    }
+    std::env::current_dir()
+        .unwrap_or_default()
+        .join(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn parse_command(args: Vec<String>, run_file: bool) -> Command {
     let mut rest = args.into_iter();
     while let Some(arg) = rest.next() {
@@ -545,7 +557,7 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
             // Flags native Bun accepts that change nothing here.
             "--bun" | "--silent" | "--smol" | "--no-install" => continue,
             flag if flag.starts_with('-') => return usage_error(&format!("unknown flag {flag}")),
-            file => return Command::Run(Entry::File(file.to_owned()), rest.collect()),
+            file => return Command::Run(Entry::File(direct_file(file)), rest.collect()),
         }
     }
     if run_file {

@@ -25,6 +25,8 @@ test("CLI dispatch distinguishes Node files, Bun commands, run aliases and eval 
         for name in ["test", "build", "run", "help", "alias", "app.js"] {
           assert!(matches!(parse(args(&[name, "tail"]), "/bin/node"), Command::Run(Entry::File(file), values) if std::path::Path::new(&file).is_absolute() && file.ends_with(name) && values == args(&["tail"])));
         }
+        assert!(matches!(parse(args(&["app.js"]), "bun"), Command::Run(Entry::File(file), _) if std::path::Path::new(&file).is_absolute()));
+        assert!(matches!(parse(args(&["run", "app.js"]), "bun"), Command::Run(Entry::File(file), _) if file == "app.js"));
         assert!(matches!(parse(args(&["run", "test"]), "bun"), Command::Run(Entry::File(file), _) if file == "test"));
         assert!(matches!(parse(args(&["build", "app.js", "--outdir", "out"]), "bun"), Command::Build(values) if values == args(&["app.js", "--outdir", "out"])));
         assert!(matches!(parse(args(&["install", "--frozen-lockfile"]), "bun"), Command::Install(command, values) if command == "install" && values == args(&["--frozen-lockfile"])));
@@ -39,7 +41,8 @@ test("CLI dispatch distinguishes Node files, Bun commands, run aliases and eval 
     const compiled = Bun.spawnSync(["rustc", "--edition=2024", "--cap-lints=allow", input, "-o", executable], { stdout: "pipe", stderr: "pipe" });
     expect(compiled.exitCode).toBe(0);
     if (compiled.exitCode !== 0) throw new Error(compiled.stderr.toString());
-    const result = Bun.spawnSync([executable], { stdout: "pipe", stderr: "pipe" });
+    writeFileSync(join(scratch, "app.js"), "");
+    const result = Bun.spawnSync([executable], { cwd: scratch, stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode).toBe(0);
     if (result.exitCode !== 0) throw new Error(result.stderr.toString());
   } finally {
