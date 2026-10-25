@@ -9,7 +9,8 @@ import { observeHmr } from "./hmr.ts";
 import { observeProductTraffic, productObservations } from "./product-browser.ts";
 import { failure, stageOutput } from "./classify.ts";
 import { BlockedBrowserNetworkError } from "./product-campaign.ts";
-import { browserCommand, browserLauncher, registryReplayUrl } from "./browser-environment.ts";
+import { registryReplayUrl } from "./registry-request.ts";
+import { browserCommand, browserLauncher } from "./browser-environment.ts";
 
 export function earlyServerExit(command, stage) {
   const classified = failure(command.output, stage);

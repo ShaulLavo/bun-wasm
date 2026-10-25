@@ -9,8 +9,3 @@ export function browserCommand(args: readonly string[]): string[] {
   if (!args[1]) throw new Error("Expected a real package or fixture entrypoint");
   return ["bun", "run", ".matrix-command.ts"].concat(args.slice(1));
 }
-
-export function registryReplayUrl(url: string, registry: string): string | null {
-  if (url !== "https://registry.npmjs.org/-/package/next/dist-tags") return null;
-  return `${registry}/-/package/next/dist-tags`;
-}

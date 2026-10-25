@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { browserCommand, browserLauncher, registryReplayUrl } from "./browser-environment";
+import { browserCommand, browserLauncher } from "./browser-environment";
+import { registryAccept, registryReplayUrl } from "./registry-request";
 import { nextApps } from "./product-next";
 import { fullstackApps } from "./product-fullstack";
 
@@ -32,4 +33,11 @@ test("the browser runner installs and uses the environment launcher and registry
   expect(source).toContain("browserCommand(command.args)");
   expect(source).toContain("registryReplayUrl(url.href, registry)");
   expect(source).toContain("return route.abort()");
+});
+
+test("the recorder asks for ordinary JSON only for Next dist-tags", () => {
+  expect(registryAccept("/-/package/next/dist-tags")).toBe("application/json");
+  for (const path of ["/next", "/next/-/next-15.5.6.tgz", "/-/package/next/dist-tags?x=1"]) {
+    expect(registryAccept(path)).toBe("application/vnd.npm.install-v1+json");
+  }
 });
