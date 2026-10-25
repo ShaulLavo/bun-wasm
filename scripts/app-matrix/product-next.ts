@@ -52,22 +52,11 @@ function pagesPage(text: string): string {
 }
 
 function requestBoundary(text: string, major: string): Record<string, string> {
-  if (major === "16") return {
-    "proxy.ts": `import { NextResponse } from "next/server";
-
-export function proxy(_request: Request) {
-  const response = NextResponse.next();
-  response.headers.set("x-product-middleware", "${text}");
-  return response;
-}
-
-export const config = { matcher: ["/api/middleware/:path*"] };
-`,
-  };
+  const name = major === "16" ? "proxy" : "middleware";
   return {
-    "middleware.ts": `import { NextResponse } from "next/server";
+    [`${name}.ts`]: `import { NextResponse } from "next/server";
 
-export function middleware(_request: Request) {
+export function ${name}(_request: Request) {
   const response = NextResponse.next();
   response.headers.set("x-product-middleware", "${text}");
   return response;
@@ -95,55 +84,15 @@ function appDynamicFiles(text: string, major: string, withActions: boolean, cach
     ...requestBoundary(text, major),
   };
   if (withActions && major === "14") {
-    Object.assign(files, appActionFilesReact18(text));
+    Object.assign(files, appActionFiles(text, true));
     return files;
   }
   if (withActions) Object.assign(files, appActionFiles(text));
   return files;
 }
 
-function appActionFiles(text: string): Record<string, string> {
-  return {
-    "app/action/actions.ts": `"use server";
-
-export async function submitValue(previous: string, formData: FormData) {
-  const value = String(formData.get("value") ?? "missing");
-  return previous + "${text} server-action:" + value;
-}
-`,
-    "app/action/action-form.tsx": `"use client";
-
-import { useActionState } from "react";
-import { submitValue } from "./actions";
-
-export default function ActionForm() {
-  const [result, formAction, pending] = useActionState(submitValue, "");
-  return <form action={formAction}>
-    <input name="value" defaultValue="submitted" />
-    <button type="submit" disabled={pending}>Invoke server action</button>
-    <output data-action-result>{result}</output>
-  </form>;
-}
-`,
-    "app/action/page.tsx": `import ActionForm from "./action-form";
-
-export default function ActionPage() {
-  return <main><h1>${text} action</h1><ActionForm /></main>;
-}
-`,
-  };
-}
-
-function appActionFilesReact18(text: string): Record<string, string> {
-  return {
-    "app/action/actions.ts": `"use server";
-
-export async function submitValue(previous: string, formData: FormData) {
-  const value = String(formData.get("value") ?? "missing");
-  return previous + "${text} server-action:" + value;
-}
-`,
-    "app/action/action-form.tsx": `"use client";
+function appActionFiles(text: string, react18 = false): Record<string, string> {
+  const form = react18 ? `"use client";
 
 import { useFormState, useFormStatus } from "react-dom";
 import { submitValue } from "./actions";
@@ -161,7 +110,29 @@ export default function ActionForm() {
     <output data-action-result>{result}</output>
   </form>;
 }
+` : `"use client";
+
+import { useActionState } from "react";
+import { submitValue } from "./actions";
+
+export default function ActionForm() {
+  const [result, formAction, pending] = useActionState(submitValue, "");
+  return <form action={formAction}>
+    <input name="value" defaultValue="submitted" />
+    <button type="submit" disabled={pending}>Invoke server action</button>
+    <output data-action-result>{result}</output>
+  </form>;
+}
+`;
+  return {
+    "app/action/actions.ts": `"use server";
+
+export async function submitValue(previous: string, formData: FormData) {
+  const value = String(formData.get("value") ?? "missing");
+  return previous + "${text} server-action:" + value;
+}
 `,
+    "app/action/action-form.tsx": form,
     "app/action/page.tsx": `import ActionForm from "./action-form";
 
 export default function ActionPage() {

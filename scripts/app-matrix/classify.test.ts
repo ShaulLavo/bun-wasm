@@ -118,7 +118,7 @@ test("classifier callers and runner source hashes resolve the renamed source", (
     expect(source).not.toContain('from "./classify.mjs"');
   }
   const runner = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
-  const inventory = runner.match(/runnerSources = Object\.fromEntries\((\[[^\n]+\])\.map/)?.[1];
+  const inventory = runner.match(/runnerSources = Object\.fromEntries\(([^\n]+)\.map\(path =>/)?.[1];
   expect(inventory).toContain('"classify.ts"');
   expect(inventory).not.toContain('"classify.mjs"');
   for (const match of inventory?.matchAll(/"([^"]+)"/g) ?? []) {

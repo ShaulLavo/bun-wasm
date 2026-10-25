@@ -32,7 +32,7 @@ export interface Observation {
   assertion?: string;
   blocker?: string;
 }
-export interface TrafficEvidence {
+interface TrafficEvidence {
   sequence: number;
   framework: "next" | "vite";
   event: string;
@@ -233,7 +233,7 @@ export async function productObservations(page: ProductPage, base: string, check
   return results;
 }
 
-export function expectedObservations(check: ProductCheck): string[] {
+function expectedObservations(check: ProductCheck): string[] {
   if (check.kind !== "page" && check.kind !== "http") return [];
   const hmr = check.kind === "page" && check.hmr ? ["hmr"] : [];
   return hmr.concat(Array.from(check.probes ?? [], probe => probe.id));
