@@ -12,7 +12,7 @@ test("playground server exit zero before HTTP assertion fails", async () => {
     if (text) return;
     return fn.toString().includes("serving:") ? { done: true, serving: false } : 0;
   } };
-  const result = await serverCommand({ page, context: { newPage() { throw new Error("Must not assert preview after exit"); } }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run server.ts\nuser@bun:~$" });
+  const result = await serverCommand({ page, context: { newPage() { throw new Error("Must not assert preview after exit"); } }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run .matrix-command.ts server.ts\nuser@bun:~$" });
   expect(result).toMatchObject({ status: "fail", exit: 0 });
 });
 
@@ -91,7 +91,7 @@ test("playground server exiting during the page assertion also fails", async () 
     return source.includes("shell.lastExit") ? 0 : true;
   } };
   const preview = { on() {}, exposeBinding: async () => ({ dispose: async () => {} }), addInitScript: async () => ({ dispose: async () => {} }), evaluate: async () => {}, goto: async () => ({ ok: () => true, fromServiceWorker: () => true }), locator: () => ({ filter: () => ({ waitFor: async () => {} }) }), close: async () => {} };
-  const result = await serverCommand({ page, context: { newPage: async () => preview }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run server.ts\nuser@bun:~$" });
+  const result = await serverCommand({ page, context: { newPage: async () => preview }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run .matrix-command.ts server.ts\nuser@bun:~$" });
   expect(result).toMatchObject({ status: "fail", exit: 0 });
 });
 

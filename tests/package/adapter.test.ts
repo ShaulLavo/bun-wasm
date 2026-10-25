@@ -6,8 +6,12 @@ import { FilesystemClient } from "waffle/fs/client";
 import { MemoryBackend } from "waffle/fs/backend";
 import { FilesystemService } from "waffle/fs/service";
 import { createFilesystemConnection, FilesystemError } from "waffle/fs/protocol";
-import { installBunAdapters as installReal, type BunAdapterOptions, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
+import { installBunAdapters as installReal, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
+import type { BunAdapterOptions } from "../../src/index.js";
 const workerUrl = "https://example.test/worker.js";
+// @ts-expect-error Hermes is a playground-only engine, not a package adapter engine.
+const packageHermesOptions: BunAdapterOptions = { workerUrl, engine: "hermes" };
+void packageHermesOptions;
 const installBunAdapters = (runtime: Runtime, options: Omit<BunAdapterOptions, "workerUrl"> & { workerUrl?: string | URL } = {}) => installReal(runtime, { workerUrl, ...options });
 
 

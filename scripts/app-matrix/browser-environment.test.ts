@@ -12,6 +12,7 @@ import { browserCommand, browserLauncher, resetBrowserProject } from "./browser-
 import { browserRegistryRoute, registryAccept, registryBrokerResponse, registryReplayUrl } from "./registry-request";
 import { nextApps } from "./product-next";
 import { fullstackApps } from "./product-fullstack";
+import { serverCommand } from "./browser.mjs";
 
 test("browser commands retain real CLI arguments and disable optional telemetry before import", () => {
   for (const app of nextApps.concat(fullstackApps)) {
@@ -40,8 +41,41 @@ test("the browser runner installs and uses the environment launcher and registry
   expect(source).toContain('writeFile(page, "/home/user/.matrix-command.ts", browserLauncher)');
   expect(source).toContain("browserCommand(command.args)");
   expect(source).toContain("browserRegistryRoute(route, registry, external)");
+  expect(source).toContain("timings.readyMs = since(started)");
+  expect(source).toContain("timings.pageLoadMs = since(loading)");
+  expect(source).toContain("const timings = { commandMs: since(started) }");
+  expect(source).toContain("const engineReadyMs = since(loading)");
+  expect(source).toContain("const timings = { engineReadyMs, commandMs: since(installing) }");
   const isolate = readFileSync(new URL("./isolate.mjs", import.meta.url), "utf8");
   expect(isolate).toContain("fetch: registryBrokerResponse");
+});
+
+test("server rows record elapsed ready and page-load times", async () => {
+  const page = { evaluate: async (fn: { toString(): string }, text?: string) => {
+    if (text) return;
+    const source = fn.toString();
+    if (source.includes("serving:")) return { done: false, serving: true };
+    if (source.includes("previews.ready")) return "ready";
+    if (source.includes("previews.url")) return "http://127.0.0.1/preview";
+    return false;
+  } };
+  const disposable = async () => ({ dispose: async () => {} });
+  const preview = {
+    on() {}, exposeBinding: disposable, addInitScript: disposable, evaluate: async () => {},
+    goto: async () => ({ ok: () => true, fromServiceWorker: () => true }),
+    locator: () => ({ filter: () => ({ waitFor: async () => {} }) }),
+    screenshot: async () => {}, close: async () => {},
+  };
+  let clock = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock += 100);
+  try {
+    const result = await serverCommand({
+      page, context: { newPage: async () => preview }, app: { id: "timing-fixture" }, engine: "hermes",
+      command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } },
+      options: { timeout: 1000, output: tmpdir() }, terminalText: async () => "",
+    });
+    expect(result).toMatchObject({ status: "pass", timings: { readyMs: 100, pageLoadMs: 100 } });
+  } finally { now.mockRestore(); }
 });
 
 test("the recorder asks for ordinary JSON only for Next dist-tags", () => {
