@@ -6,6 +6,7 @@
     "evaluate": "node -e \"console.log(42)\"",
     "print": "node -p \"21 * 2\"",
     "ok": "node ./app.ts",
+    "bin-script": "tool baked",
     "alias": "MODE=outer bun --smol run inspect first",
     "inspect": "MARK=inner node ./inspect.ts second",
     "exit": "node -e \"process.exit(17)\"",

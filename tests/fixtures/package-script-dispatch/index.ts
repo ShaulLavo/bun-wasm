@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 
 function run(name: string, args: string[] = []) {
   return Bun.spawnSync([process.execPath, "run", name].concat(args), { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
@@ -22,5 +23,19 @@ for (const name of ["cycle-a", "implicit-a"]) {
 }
 const inspected = run("alias", ["tail"]);
 assert.equal(inspected.exitCode, 0, inspected.stderr.toString());
-assert.equal(inspected.stdout.toString().trim(), "inner second|first|tail outer inner true");
+assert.equal(inspected.stdout.toString().trim(), "inspect second|first|tail outer inner true");
+mkdirSync("node_modules/.bin", { recursive: true });
+try {
+  writeFileSync("node_modules/.bin/tool", 'console.log("installed", process.argv.slice(2).join("|"));');
+  writeFileSync("tool", 'console.log("local");');
+  const binary = run("bin-script", ["tail"]);
+  assert.equal(binary.exitCode, 0, binary.stderr.toString());
+  assert.equal(binary.stdout.toString().trim(), "installed baked|tail");
+  const entry = run("tool");
+  assert.equal(entry.exitCode, 0, entry.stderr.toString());
+  assert.equal(entry.stdout.toString().trim(), "local");
+} finally {
+  rmSync("node_modules", { recursive: true, force: true });
+  rmSync("tool", { force: true });
+}
 console.log("package scripts preserve runtime commands, argv, environment, PATH and exit status");
