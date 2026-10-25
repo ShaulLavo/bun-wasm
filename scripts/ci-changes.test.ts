@@ -163,3 +163,9 @@ for (const path of ["web/guest-tests/quickjs.test.ts", "web/guest-tests/browser.
     expect(select(base, commitInput(path), event)).toBe(`rust=true\njsc=${path.endsWith("jsc.test.ts")}`);
   });
 }
+
+test("the Astro response fixture selects the existing native and JSC gates", () => {
+  const paths = ["tests/fixtures/astro-http2-response/index.ts"];
+  expect(needsRust(paths)).toBe(true);
+  expect(needsJsc(paths)).toBe(true);
+});
