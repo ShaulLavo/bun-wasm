@@ -127,12 +127,27 @@ fn deep_nested_request_cleanup_does_not_overflow() {
     );
 }
 
-fn dispatch_deep_request() {
-    let mut encoded = vec![7, 1, 0, 0, 0];
+fn deep_value() -> Vec<u8> {
+    let mut encoded = Vec::new();
     for _ in 0..100_000 {
         encoded.extend_from_slice(&[7, 1, 0, 0, 0]);
     }
     encoded.push(0);
+    encoded
+}
+
+fn deep_object() -> Vec<u8> {
+    let mut encoded = Vec::new();
+    for _ in 0..100_000 {
+        encoded.extend_from_slice(&[8, 1, 0, 0, 0, 0, 0, 0, 0]);
+    }
+    encoded.push(0);
+    encoded
+}
+
+fn dispatch_deep_request() {
+    let mut encoded = vec![7, 1, 0, 0, 0];
+    encoded.extend(deep_value());
     let calls = Rc::new(Cell::new(0));
     let observed = calls.clone();
     let dispatch = dispatcher(move |args| {
@@ -143,6 +158,24 @@ fn dispatch_deep_request() {
     let reply = dispatch.dispatch(dispatch.op(), 1, encoded);
     assert_eq!(reply.status, Status::Ok);
     assert_eq!(calls.get(), 1);
+
+    let rejected = dispatch.dispatch(dispatch.op(), 1, deep_object());
+    assert_eq!(rejected.status, Status::BadCall);
+    assert_eq!(calls.get(), 1);
+
+    let mut trailing = deep_value();
+    trailing.push(0);
+    assert!(matches!(
+        codec::decode(&trailing),
+        Err(CodecError::Invalid("trailing bytes"))
+    ));
+
+    let mut partial = deep_value();
+    partial.pop();
+    assert!(matches!(
+        codec::decode(&partial),
+        Err(CodecError::Invalid("impossible item count"))
+    ));
 }
 
 #[test]
