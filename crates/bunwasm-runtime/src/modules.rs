@@ -7,6 +7,9 @@
 //! importers through a tiny generated wrapper module that re-exports the keys
 //! of an object handed over through the wrapper's `import.meta.m`.
 
+#[path = "next_swc.rs"]
+mod next_swc;
+
 use std::rc::Rc;
 
 use crate::State;
@@ -342,9 +345,10 @@ impl State {
                 (source, Format::Cjs)
             }
             _ => {
+                let adapted = next_swc::adapt(&raw, path);
                 let out = self
                     .transpiler
-                    .transpile_with_map(&raw, path, loader)
+                    .transpile_with_map(&adapted, path, loader)
                     .map_err(|msg| build_error(&msg, &raw))?;
                 let format = self.detect_format(path, &out.code, out.module_kind);
                 #[cfg(feature = "engine-host")]
