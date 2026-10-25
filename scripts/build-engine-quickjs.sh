@@ -26,7 +26,7 @@ fi
 args=()
 for name in "${exports[@]}"; do args+=("--export=$name"); done
 wasm-ld --shared --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
-  --import-memory=env,memory --import-table --allow-undefined "${args[@]}" \
+  --import-memory=env,memory --export-memory --import-table --allow-undefined "${args[@]}" \
   -o "$out/engine.implicit.wasm" "$out/engine-init.o" "$CARGO_TARGET_DIR/wasm32-wasip1/release/libbunwasm_engine_quickjs.a"
 node tests/linker/quickjs/explicit-init.ts "$out/engine.implicit.wasm" "$out/engine.wasm"
 wasm-tools validate "$out/engine.wasm"

@@ -132,3 +132,8 @@ Core constructors run once before side initialization. The existing process host
 still owns cancellation, child admission, host slots, WASI and final cleanup.
 The association retains the compiled core image and its side, so admitted child
 Module clones use the same pair. JSC and tools keep their single-module CRT.
+
+The side module re-exports its imported memory. WASI preview1 host functions
+resolve memory from their calling instance, including when Rust's standard
+library requests random bytes. This is the same core-owned memory, not another
+allocation or memory instance.
