@@ -124,29 +124,16 @@ fn wrapper(args: Args<'_>) -> NativeResult {
     let keys = args
         .array(0)
         .ok_or_else(|| NativeError::type_error("expected wrapper keys"))?;
-    let mut source =
-        String::from("const m = import.meta.m.value; export default import.meta.m.default;\n");
-    let mut exports = Vec::new();
-    for (index, key) in keys.iter().enumerate() {
-        let Val::Str(key) = key else {
-            return Err(NativeError::type_error("expected wrapper key"));
-        };
-        if key == "default"
-            || key == "__esModule"
-            || key.is_empty()
-            || !key
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-        {
-            continue;
-        }
-        source.push_str(&format!("const e{index} = m[{key:?}];\n"));
-        exports.push(format!("e{index} as {key:?}"));
-    }
-    if !exports.is_empty() {
-        source.push_str(&format!("export {{ {} }};\n", exports.join(", ")));
-    }
-    Ok(source.into())
+    let keys = keys
+        .iter()
+        .map(|key| {
+            let Val::Str(key) = key else {
+                return Err(NativeError::type_error("expected wrapper key"));
+            };
+            Ok(key.clone())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(modules::wrapper_source(&keys).into())
 }
 
 fn dispatcher(state: &Rc<State>, entry: &Entry, main_path: &str) -> Rc<ops::Dispatcher> {

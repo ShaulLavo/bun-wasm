@@ -548,7 +548,7 @@ pub fn polyfill_source(name: &str) -> Option<&'static str> {
     POLYFILLS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
 }
 
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(any(feature = "engine-split", feature = "engine-jsc"))]
 fn is_plain_identifier(key: &str) -> bool {
     !key.is_empty()
         && key
@@ -556,7 +556,7 @@ fn is_plain_identifier(key: &str) -> bool {
             .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(any(feature = "engine-split", feature = "engine-jsc"))]
 /// Wrapper ESM source re-exporting `import.meta.m` (default) and its keys.
 pub fn wrapper_source(keys: &[String]) -> String {
     let mut src =

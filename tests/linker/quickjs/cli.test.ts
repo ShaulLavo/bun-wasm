@@ -48,7 +48,8 @@ async function runCLI(args: string[], files: Readonly<Record<string, Uint8Array 
     assert(!messages.some((message) => isError(message)), JSON.stringify(messages));
     const exit = messages.find(isExit);
     assert(exit, JSON.stringify(messages));
-    return { stdout: output(messages, "stdout"), stderr: output(messages, "stderr"), code: exit.code,
+    return { stdout: output(messages, "stdout").toString(), stdoutBytes: output(messages, "stdout"),
+      stderr: output(messages, "stderr").toString(), code: exit.code,
       artifacts: [core, engine].map((bytes) => ({ bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") })) };
   } finally {
     await worker.terminate();
@@ -97,6 +98,13 @@ test("split loader keeps CommonJS, builtin wrappers and structured native errors
   assert.equal(result.stdout, "42\n");
   assert.equal(result.stderr, "");
   assert.equal(result.code, 0);
+  const binary = await runCLI(["bun", "-e", `
+    process.stdout.write("héllo\\0世界");
+    process.stdout.write(new Uint8Array([9, 0, 255, 128, 8]).subarray(1, 4));
+  `], {});
+  assert.deepEqual(binary.stdoutBytes, Buffer.concat([Buffer.from("héllo\0世界"), Buffer.from([0, 255, 128])]));
+  assert.equal(binary.stderr, "");
+  assert.equal(binary.code, 0);
 }, 30_000);
 
 test("split driver reports a rejected main once and drops unresolved top-level await", async () => {
@@ -122,19 +130,25 @@ function isError(value: unknown): boolean {
   return typeof value === "object" && value !== null && "type" in value && value.type === "error";
 }
 
-function output(messages: readonly unknown[], type: "stdout" | "stderr"): string {
+function output(messages: readonly unknown[], type: "stdout" | "stderr"): Buffer {
   const bytes = messages.flatMap((message) => {
     if (typeof message !== "object" || message === null || !("type" in message) || message.type !== type) return [];
     if (!("data" in message) || !(message.data instanceof Uint8Array)) return [];
     return [message.data];
   });
-  return Buffer.concat(bytes).toString();
+  return Buffer.concat(bytes);
 }
 
-function collectMessages(worker: Worker, messages: unknown[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    worker.on("message", (message: unknown) => messages.push(message));
-    worker.once("error", reject);
-    worker.once("exit", (code) => code === 0 ? resolve() : reject(Error(`worker exit ${code}`)));
-  });
+async function collectMessages(worker: Worker, messages: unknown[]): Promise<void> {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      deadline = setTimeout(() => reject(Error("production CLI exceeded 20s")), 20_000);
+      worker.on("message", (message: unknown) => messages.push(message));
+      worker.once("error", reject);
+      worker.once("exit", (code) => code === 0 ? resolve() : reject(Error(`worker exit ${code}`)));
+    });
+  } finally {
+    clearTimeout(deadline);
+  }
 }

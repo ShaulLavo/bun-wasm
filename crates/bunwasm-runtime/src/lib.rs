@@ -33,6 +33,11 @@ pub mod install;
 mod modules;
 mod natives;
 mod node_path;
+#[cfg(any(
+    feature = "engine-split",
+    feature = "engine-jsc",
+    not(feature = "engine-host")
+))]
 pub(crate) mod ops;
 mod resolve;
 mod semver;
