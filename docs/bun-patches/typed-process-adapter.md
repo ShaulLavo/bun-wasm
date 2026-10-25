@@ -12,8 +12,9 @@ writer flush captures its exact Failure object. Shared failure stays present dur
 including reentrant appends, and resets only after normal callback return. A throw still aborts
 reset and leaves subsequent writes attached to the old failure without scheduling another flush.
 
-Except for the separately recorded [nonblocking stdin adapter](process-stdin-identity.md), other executable AST nodes match the pinned original. The five immediate erased bitwise
-operand bridges keep unknown inputs and the original coercion and exceptions. They neither
+Except for the separately recorded [nonblocking stdin adapter](process-stdin-identity.md)
+and [cursor additions](stdio-cursor.md), other executable AST nodes match the pinned original.
+The five immediate erased bitwise operand bridges keep unknown inputs and the original coercion and exceptions. They neither
 store a narrowed value nor call Number. Two erased map non-null proofs follow the existing
 has/set initialization and traversal of that same map's numeric keys. Environment descriptors
 and Symbol keys retain raw unknown values; the worker hook retains its method-call receiver.
