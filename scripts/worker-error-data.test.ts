@@ -111,13 +111,21 @@ test("non-string and throwing error codes are omitted from the sideband", () => 
   expect(encode(throwing).code).toBeUndefined();
 });
 
-test("malformed error fields use the unserializable worker fallback", () => {
+test("stackless and numeric-message worker errors retain their diagnostic and code", () => {
   const { encode, codec } = workerErrorData();
-  const original = new Error("malformed");
-  Object.defineProperty(original, "message", { configurable: true, value: 42 });
-  const frame = encode(original);
-  expect(frame.code).toBe("ERR_WORKER_UNSERIALIZABLE_ERROR");
-  expect(codec.decode(frame.graph)).toBeInstanceOf(Error);
+  const fields: [string, unknown][] = [["stack", undefined], ["stack", 1n], ["message", 42]];
+  for (const [key, value] of fields) {
+    const original = Object.assign(new Error("diagnostic"), { code: "ERR_ORIGINAL" });
+    Object.defineProperty(original, key, { configurable: true, value });
+    const expected = structuredClone(original);
+    const frame = encode(original);
+    expect(frame.code).toBe("ERR_ORIGINAL");
+    const output = codec.decode(JSON.parse(JSON.stringify(frame.graph)));
+    expect(output).toBeInstanceOf(Error);
+    if (!(output instanceof Error)) throw new Error("Expected an Error graph");
+    expect(output.message).toBe(expected.message);
+    expect(output.stack).toBe(expected.stack);
+  }
 });
 
 test("formatted BuildError is sent as a SyntaxError", () => {

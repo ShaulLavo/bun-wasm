@@ -17,7 +17,7 @@ function codec() {
   const ordinaryProxy = new Proxy({ value: "rejected" }, {});
   const proxies = new Set<object>([processEnv, ordinaryProxy]);
   const factory = runInNewContext(source, {
-    ArrayBuffer, Uint8Array, Map, Set, Date, RegExp, DataView, Error, TypeError, RangeError,
+    ArrayBuffer, Uint8Array, Map, Set, Date, RegExp, DataView, Error, TypeError, RangeError, SyntaxError, ReferenceError, URIError, EvalError,
     Number, String, Boolean, DOMException, EventTarget, Blob, Promise, Symbol, Proxy,
   });
   const implementation = factory({
@@ -55,21 +55,50 @@ test("ordinary proxies remain uncloneable", () => {
   expect(() => implementation.encode(ordinaryProxy)).toThrow("The object cannot be cloned");
 });
 
-test("error fields must remain strings before graph serialization", () => {
+test("error fields match Bun structuredClone after JSON graph serialization", () => {
   const { implementation } = codec();
-  for (const [key, value] of [["name", 7], ["message", null], ["stack", 1n]] as const) {
-    const error = new Error("message");
+  const fields: [string, unknown][] = [["name", undefined], ["name", 7], ["message", undefined],
+    ["message", null], ["message", 42], ["stack", undefined], ["stack", null], ["stack", 1n], ["stack", ""]];
+  for (const [key, value] of fields) {
+    const error = new Error("diagnostic");
     Object.defineProperty(error, key, { configurable: true, value });
-    expect(() => implementation.encode(error)).toThrow("The object cannot be cloned");
+    const expected = structuredClone(error);
+    const output = implementation.decode(JSON.parse(JSON.stringify(implementation.encode(error))));
+    expect(output).toBeInstanceOf(Error);
+    if (!(output instanceof Error)) throw new Error("Expected a cloned Error");
+    expect(output.name).toBe(expected.name);
+    expect(output.message).toBe(expected.message);
+    expect(output.stack).toBe(expected.stack);
   }
 });
 
-test("custom error names survive graph reconstruction", () => {
+test("error names use Bun's standard constructors and fallback for custom or inherited names", () => {
   const { implementation } = codec();
-  const graph = { root: 0, nodes: [["error", "CustomError", "message", "stack", 1], ["undefined"]] };
-  const output = implementation.decode(graph);
-  expect(output).toBeInstanceOf(Error);
-  expect((output as Error).name).toBe("CustomError");
+  for (const name of ["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "URIError", "EvalError",
+    "CustomError", "constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    const error = Object.assign(new Error("payload"), { name });
+    const expected = structuredClone(error);
+    const output = implementation.decode(implementation.encode(error));
+    expect(output).toBeInstanceOf(Error);
+    if (!(output instanceof Error)) throw new Error("Expected a cloned Error");
+    expect(Object.getPrototypeOf(output)).toBe(Object.getPrototypeOf(expected));
+    expect(output.name).toBe(expected.name);
+    expect(output.message).toBe(expected.message);
+    expect(output.stack).toBe(expected.stack);
+  }
+});
+
+test("incoming error graphs reject non-normalized fields before restoring ports", () => {
+  const { implementation, restored } = codec();
+  const fields: [number, unknown][] = [[1, 7], [2, null], [3, 1n], [4, 99]];
+  for (const [index, value] of fields) {
+    const node: unknown[] = ["error", "Error", "diagnostic", "stack", 3];
+    node[index] = value;
+    const snapshot = { id: "a", peer: "b", version: 1, sent: 0, received: 0, pending: [], closing: null, closed: false };
+    const graph = { root: 0, nodes: [["array", 2, [["0", 1], ["1", 2]]], ["port", snapshot, 4], node, ["undefined"], ["array", 0, []]] };
+    expect(() => implementation.decode(graph)).toThrow("Invalid worker message graph");
+  }
+  expect(restored()).toBe(0);
 });
 
 test("worker graph preserves cycles, map keys and shared typed-array buffers", () => {

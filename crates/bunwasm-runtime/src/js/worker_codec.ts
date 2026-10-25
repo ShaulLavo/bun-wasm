@@ -64,10 +64,10 @@
         if (object instanceof Set) return ["set", Array.from(object, value => visit(value, implicit))];
         if (object instanceof Error) {
           const name = object.name;
-          const message = object.message;
+          const message = `${object.message}`;
           const stack = object.stack;
-          if (typeof name !== "string" || typeof message !== "string" || typeof stack !== "string") throw cloneError();
-          return ["error", name, message, stack, visit("cause" in object ? object.cause : undefined, implicit)];
+          return ["error", typeof name === "string" ? name : "Error", message, typeof stack === "string" ? stack : null,
+            visit("cause" in object ? object.cause : undefined, implicit)];
         }
         if (Array.isArray(object)) return ["array", object.length, entries(object, implicit)];
         if (object instanceof Number || object instanceof String || object instanceof Boolean || tag(object) === "BigInt") return ["boxed", visit(object.valueOf(), implicit)];
@@ -144,10 +144,9 @@
           case "map": { const map = new Map(); memory.set(index, map); for (const [key, val] of node[1]) map.set(read(key), read(val)); return map; }
           case "set": { const set = new Set(); memory.set(index, set); for (const ref of node[1]) set.add(read(ref)); return set; }
           case "error": {
-            const ErrorConstructor = errors[node[1]] || Error;
+            const ErrorConstructor = Object.hasOwn(errors, node[1]) ? errors[node[1]] : Error;
             const error = new ErrorConstructor(node[2]); memory.set(index, error);
-            if (!errors[node[1]]) Object.defineProperty(error, "name", { value: node[1], writable: true, configurable: true });
-            if (node[3]) Object.defineProperty(error, "stack", { value: node[3], writable: true, configurable: true });
+            Object.defineProperty(error, "stack", { value: node[3] === null ? undefined : node[3], writable: true, configurable: true });
             const cause = read(node[4]); if (cause !== undefined) Object.defineProperty(error, "cause", { value: cause, writable: true, configurable: true });
             return error;
           }
@@ -196,7 +195,7 @@
         case "blob": case "regexp": return strings(node.slice(1)) && node.length === 3;
         case "buffer": return typeof node[1] === "string" && Number.isSafeInteger(node[2]) && node[2] >= 0;
         case "view": return typeof node[1] === "string" && ref(node[2]) && Number.isInteger(node[3]) && Number.isInteger(node[4]) && node[3] >= 0 && node[4] >= 0;
-        case "error": return strings(node.slice(1, 4)) && ref(node[4]);
+        case "error": return strings(node.slice(1, 3)) && (node[3] === null || typeof node[3] === "string") && ref(node[4]);
         case "boxed": return ref(node[1]);
         case "port": return validPort(node[1], depth) && ref(node[2]);
         default: return false;
