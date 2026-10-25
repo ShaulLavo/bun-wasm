@@ -1,6 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { createRuntime } from "../../node_modules/waffle/runtime";
 import { examples } from "../../web/src/examples";
@@ -146,8 +147,9 @@ test("the isolate broker sends JSON only for the exact path and retains package 
 });
 
 test("executing the launcher retains direct Bun normalized argv and sets telemetry before the CLI", () => {
-  const directory = mkdtempSync("/work/tmp/bwm1602-argv-");
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-argv-"));
   try {
+    expect(dirname(directory)).toBe(tmpdir());
     mkdirSync(join(directory, "nested"));
     writeFileSync(join(directory, "nested/cli.ts"), 'console.log(JSON.stringify({ argv: process.argv, next: process.env.NEXT_TELEMETRY_DISABLED, astro: process.env.ASTRO_TELEMETRY_DISABLED }));');
     writeFileSync(join(directory, ".matrix-command.ts"), browserLauncher);
@@ -161,6 +163,18 @@ test("executing the launcher retains direct Bun normalized argv and sets telemet
     expect(actual.argv).toEqual(original.argv);
     expect(actual.next).toBe("1");
     expect(actual.astro).toBe("1");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("the launcher fixture honors a TMPDIR override and removes its files", () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-argv-env-"));
+  try {
+    const result = Bun.spawnSync([process.execPath, "test", import.meta.filename, "--test-name-pattern", "^executing the launcher retains direct Bun normalized argv"], {
+      env: { ...process.env, CI: "true", TMPDIR: directory, TMP: directory, TEMP: directory },
+    });
+    expect(result.stderr.toString()).toContain("(pass) executing the launcher retains direct Bun normalized argv and sets telemetry before the CLI");
+    expect(result.exitCode).toBe(0);
+    expect(readdirSync(directory)).toEqual([]);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
