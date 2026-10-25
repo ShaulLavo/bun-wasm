@@ -6,7 +6,7 @@
     not(feature = "engine-host")
 ))]
 
-use super::Val;
+use super::{Val, drop_tree};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CodecError {
@@ -183,18 +183,37 @@ impl Container {
     }
 
     fn add(&mut self, value: Val) -> Result<()> {
+        let reservation = match &mut self.items {
+            Items::Array(items) => items.try_reserve(1),
+            Items::Object(fields) => fields.try_reserve(1),
+        };
+        if reservation.is_err() {
+            drop_tree(value);
+            return Err(CodecError::Allocation);
+        }
         match &mut self.items {
-            Items::Array(items) => push(items, value)?,
-            Items::Object(fields) => push(fields, (self.key.take().unwrap(), value))?,
+            Items::Array(items) => items.push(value),
+            Items::Object(fields) => fields.push((self.key.take().unwrap(), value)),
         }
         self.remaining -= 1;
         Ok(())
     }
 
-    fn finish(self) -> Val {
-        match self.items {
-            Items::Array(items) => Val::Array(items),
-            Items::Object(fields) => Val::Object(fields),
+    fn finish(mut self) -> Val {
+        match &mut self.items {
+            Items::Array(items) => Val::Array(std::mem::take(items)),
+            Items::Object(fields) => Val::Object(std::mem::take(fields)),
+        }
+    }
+}
+
+impl Drop for Container {
+    fn drop(&mut self) {
+        match &mut self.items {
+            Items::Array(items) if items.is_empty() => {}
+            Items::Object(fields) if fields.is_empty() => {}
+            Items::Array(items) => drop_tree(Val::Array(std::mem::take(items))),
+            Items::Object(fields) => drop_tree(Val::Object(std::mem::take(fields))),
         }
     }
 }
@@ -211,6 +230,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Val> {
             continue;
         };
         if reader.pos != bytes.len() {
+            drop_tree(value);
             return Err(CodecError::Invalid("trailing bytes"));
         }
         return Ok(value);

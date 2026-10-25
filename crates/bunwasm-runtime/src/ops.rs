@@ -153,7 +153,10 @@ impl Dispatcher {
         }
         let args = match codec::decode(&request) {
             Ok(Val::Array(args)) => args,
-            Ok(_) => return Reply::failed(Status::BadCall),
+            Ok(value) => {
+                drop_tree(value);
+                return Reply::failed(Status::BadCall);
+            }
             Err(error) => return Reply::failed(error_status(error)),
         };
         drop(request);
