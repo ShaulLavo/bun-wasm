@@ -1,10 +1,13 @@
 import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { Buffer } from "node:buffer";
-import { Duplex, Readable, Writable } from "node:stream";
+import type { Duplex } from "node:stream";
 import type { ClientRequest, IncomingMessage, ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { createRequire } from "node:module";
+
+const hostRequire = createRequire(import.meta.url);
 
 interface Connection {
   bufferedAmount: number;
@@ -42,8 +45,9 @@ function fixture() {
   let blocked = false;
   let reads = 0;
   let net: Networking;
+  let core: typeof import("node:stream");
   const context = {
-    TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, URL, AbortController, ReadableStream,
+    TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, URL, AbortController, AbortSignal, ReadableStream,
     setTimeout(callback: () => void, ms: number) {
       const handle = { ref() { return this; }, unref() { return this; } };
       timers.set(handle, { at: now + ms, callback });
@@ -51,6 +55,7 @@ function fixture() {
     },
     clearTimeout(id: object) { timers.delete(id); },
   };
+  Reflect.set(context, "self", context);
   function load(name: string, extension = "ts") {
     const source = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url), "utf8");
     return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`), context);
@@ -79,15 +84,18 @@ function fixture() {
     native, web: { Request, Response: class extends Response { static _setNetwork() {} }, Headers }, builtinFactories: {}, realTimers: { setImmediate: (fn: () => void) => ticks.push(fn) },
     require(name: string): unknown { if (!(name in modules)) throw new Error(`Unexpected module ${name}`); return modules[name]; },
     builtin(name: string): unknown {
+      if (name === "node:process") return { env: {}, versions: process.versions, nextTick: (fn: (...args: unknown[]) => void, ...args: unknown[]) => ticks.push(() => fn(...args)), stderr: { write() {} }, emitWarning() {} };
+      if (name === "node:stream") return core;
       if (name === "node:net") return net.nodeNet();
       if (name === "node:http") return { STATUS_CODES: { 200: "OK" }, maxHeaderSize: 16384 };
-      return { Readable, Writable, Duplex, maxHeaderSize: 16384, getDefaultHighWaterMark: () => 16384 };
+      return hostRequire(name);
     },
     nextTick(callback: () => void) { ticks.push(callback); },
     toUint8: (value: Uint8Array) => value,
     concatBytes: (parts: Uint8Array[]) => Buffer.concat(parts),
     pumpIo: () => false,
   };
+  core = load("node_stream_core", "js")(internal).Stream;
   const socketFactory = load("node_net", "js")(internal);
   modules.node_net_server = load("node_net_server")(internal);
   modules.node_net = (args: object) => Object.assign(socketFactory(args), { Connection: Reflect.get(args, "Connection") });
@@ -282,3 +290,93 @@ test("setTimeout updates, disables and resets on HTTPS activity without aborting
     expect(state.timers.size).toBe(0);
   } finally { req.destroy(); await state.pump(); }
 });
+
+test("raw HTTP completion clears a timeout configured before send", async () => {
+  const state = fixture();
+  let response: IncomingMessage | undefined;
+  const req = state.http.request({ hostname: "localhost", agent: false }, msg => { response = msg; msg.resume(); });
+  let timeouts = 0;
+  req.on("timeout", () => timeouts++);
+  req.on("error", () => {});
+  req.setTimeout(20);
+  req.end();
+  state.packets.push(Buffer.from("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+  try {
+    await state.pump();
+    expect(response?.complete).toBe(true);
+    expect(state.timers.size).toBe(0);
+    state.advance(30);
+    expect(timeouts).toBe(0);
+    expect(req.socket?.listenerCount("timeout")).toBe(0);
+  } finally { req.destroy(); await state.pump(); }
+});
+
+test("raw HTTP hands a pre-send timeout to the socket activity timer", async () => {
+  const state = fixture();
+  const req = state.http.request({ hostname: "localhost", agent: false }, msg => msg.resume());
+  let timeouts = 0;
+  req.on("timeout", () => timeouts++);
+  req.on("error", () => {});
+  req.setTimeout(20);
+  req.end();
+  state.packets.push(Buffer.from("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n"));
+  try {
+    await state.pump();
+    expect(state.timers.size).toBe(1);
+    state.advance(15);
+    state.packets.push(Buffer.from("a"));
+    await state.pump();
+    state.advance(15);
+    expect(timeouts).toBe(0);
+    state.advance(5);
+    expect(timeouts).toBe(1);
+    expect(req.destroyed).toBe(false);
+  } finally { req.destroy(); await state.pump(); }
+  expect(state.timers.size).toBe(0);
+});
+
+test("raw HTTP duration updates forward one timeout event", async () => {
+  const state = fixture();
+  const req = state.http.request({ hostname: "localhost", agent: false });
+  let timeouts = 0;
+  let callbacks = 0;
+  req.on("timeout", () => timeouts++);
+  req.on("error", () => {});
+  req.end();
+  req.setTimeout(20, () => callbacks++);
+  req.setTimeout(10, () => callbacks++);
+  try {
+    await state.pump();
+    expect(req.socket?.listenerCount("timeout")).toBe(1);
+    state.advance(10);
+    expect(timeouts).toBe(1);
+    expect(callbacks).toBe(2);
+    expect(req.destroyed).toBe(false);
+  } finally { req.destroy(); await state.pump(); }
+  expect(state.timers.size).toBe(0);
+});
+
+for (const terminal of ["complete", "destroy"] as const) {
+  test(`raw HTTP ${terminal} removes timeout forwarding after disabling`, async () => {
+    const state = fixture();
+    const req = state.http.request({ hostname: "localhost", agent: false }, msg => msg.resume());
+    let timeouts = 0;
+    req.on("timeout", () => timeouts++);
+    req.on("error", () => {});
+    req.end();
+    req.setTimeout(20);
+    req.setTimeout(10);
+    req.setTimeout(0);
+    const socket = req.socket;
+    try {
+      if (terminal === "complete") state.packets.push(Buffer.from("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
+      else req.destroy();
+      await state.pump();
+      expect(socket?.listenerCount("timeout")).toBe(0);
+      socket?.emit("timeout");
+      state.advance(30);
+      expect(timeouts).toBe(0);
+      expect(state.timers.size).toBe(0);
+    } finally { req.destroy(); await state.pump(); }
+  });
+}

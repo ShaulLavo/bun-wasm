@@ -70,6 +70,10 @@ function serveRaw(socket: net.Socket, sockets: Set<net.Socket>, expected: Buffer
   socket.on("error", () => {});
   socket.once("data", data => {
     const path = data.toString().split(" ")[1];
+    if (path === "/complete") {
+      socket.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+      return;
+    }
     if (path === "/timeout") {
       socket.write("HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\n");
       return;
@@ -120,6 +124,13 @@ async function checkFetchBackedHttps() {
   }
 }
 
+function responseEnd(request: http.ClientRequest) {
+  return new Promise<void>(resolve => request.once("response", incoming => {
+    incoming.on("end", resolve);
+    incoming.resume();
+  }));
+}
+
 async function checkRawHttp() {
   const expected = Buffer.concat(Array.from({ length: 32 }, (_, index) => Buffer.alloc(4096, index)));
   const sockets = new Set<net.Socket>();
@@ -142,11 +153,27 @@ async function checkRawHttp() {
     assert.equal(response.complete, true);
     console.log("raw HTTP preserves unread body and completion");
 
+    let completedTimeouts = 0;
+    request = http.request({ ...options, path: "/complete" });
+    request.on("error", error => { throw error; });
+    request.on("timeout", () => completedTimeouts++);
+    request.setTimeout(100);
+    const completed = responseEnd(request);
+    request.end();
+    await deadline(completed, "raw HTTP empty response");
+    await delay(120);
+    assert.equal(completedTimeouts, 0);
+    console.log("ClientRequest clears pre-send timeout on completion");
+
     let timeouts = 0;
     request = http.request({ ...options, path: "/timeout" });
     request.on("error", error => { throw error; });
-    request.setTimeout(20, () => timeouts++);
+    request.on("timeout", () => timeouts++);
+    request.setTimeout(100);
     request.end();
+    await deadline(new Promise<void>(resolve => request!.once("response", () => resolve())), "raw HTTP stalled response");
+    request.setTimeout(40);
+    request.setTimeout(20);
     await deadline(new Promise<void>(resolve => request!.once("timeout", resolve)), "raw HTTP timeout");
     assert.equal(timeouts, 1);
     assert.equal(request.destroyed, false);

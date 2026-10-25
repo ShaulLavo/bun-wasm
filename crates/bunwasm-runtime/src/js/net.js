@@ -1329,7 +1329,7 @@
         else if (callback) this.removeListener("timeout", callback);
         this._requestTimeout = ms;
         this._clearTimeout();
-        if (this.socket) this.socket.setTimeout(ms, this._socketTimeout);
+        if (this.socket) this.socket.setTimeout(ms);
         else this._touchTimeout();
         return this;
       }
@@ -1512,6 +1512,7 @@
         this.reusedSocket = Boolean(reused);
         if (this.agent && !reused) this.agent._pool.track(key, socket);
         this.socket = this.connection = socket;
+        this._clearTimeout();
         const receive = chunk => this._receiveHttp(chunk);
         const fail = err => this._failHttp(err);
         const eof = () => {
@@ -1525,14 +1526,17 @@
           socket.removeListener("error", fail);
           socket.removeListener("end", eof);
           socket.removeListener("close", eof);
-          if (this._requestTimeout) socket.setTimeout(0, timeout);
+          this._clearTimeout();
+          socket.removeListener("timeout", timeout);
+          if (this._requestTimeout) socket.setTimeout(0);
           this._httpState.buffer = null;
         } };
         socket.on("error", fail);
         socket.on("end", eof);
         socket.on("close", eof);
         socket.on("data", receive);
-        if (this._requestTimeout) socket.setTimeout(this._requestTimeout, timeout);
+        socket.once("timeout", timeout);
+        if (this._requestTimeout) socket.setTimeout(this._requestTimeout);
         this.emit("socket", socket);
         if (this._httpState.state !== "pending") return;
         const headers = Object.assign(Object.create(null), this._headers);
