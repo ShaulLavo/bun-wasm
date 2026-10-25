@@ -94,7 +94,8 @@ adapter delegates these invocations through the existing `spawn` module and
 cwd and the script environment and reports the child exit status. Only actual
 Bun script aliases expand locally; visited names detect alias cycles without
 limiting acyclic chains. Reserved CLI names remain commands unless preceded by
-`bun run`. Node and nodejs CLI entrypoints treat bare operands as file paths,
+`bun run`. The existing host registries include nodejs alongside node, with matching
+engine-specific files and no argv rewrite or PATH fallback. Node and nodejs CLI entrypoints treat bare operands as file paths,
 not Bun subcommands or package scripts. Bun direct-file operands keep file
 precedence, while explicit `bun run` still selects same-named scripts. This
 changes no process implementation
@@ -102,7 +103,12 @@ and copies no additional upstream source. The reference remains Bun revision
 `9510e74152073d850a18758ca41114d8f214ffa6`.
 
 `scripts/package-scripts-dispatch.test.ts` exercises the emitted adapter and
-runMain dispatch with real temporary files and native Bun/Node references.
+runMain dispatch with real temporary files and native Bun/Node references. The
+native nodejs control uses a fixture-local symlink to the real Node executable.
+`scripts/package-script-admission.test.ts` runs the actual runMain, package-script
+and spawn factories through executable admission, stopping at the procSpawn ABI.
+Node registry tests exercise its marker files and live module admission; browser
+runner source tests verify registrations without launching a browser.
 `scripts/package-script-cli.test.ts` compiles the actual CLI parser in isolation.
 `tests/fixtures/package-script-dispatch/` is the compiled-guest regression for
 runtime commands, flags, argument forwarding, environment, file precedence and

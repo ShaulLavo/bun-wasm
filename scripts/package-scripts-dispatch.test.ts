@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { runInNewContext } from "node:vm";
@@ -106,7 +106,7 @@ test("runMain forwards a runtime invocation without loading it as a module", asy
 test("implicit aliases reserve every CLI command, including unsupported commands", () => {
   const cli = readFileSync(new URL("../crates/bunwasm-cli/src/main.rs", import.meta.url), "utf8");
   const parser = cli.slice(cli.indexOf("fn parse_command("), cli.indexOf("// Referenced so the linker"));
-  const commands = Array.from(parser.matchAll(/"([a-z][a-z-]*)"/g), match => match[1]).filter(name => name !== "run");
+  const commands = Array.from(parser.matchAll(/"([a-z][a-z-]*)"/g), match => match[0].slice(1, -1)).filter(name => name !== "run");
   for (const name of new Set(commands)) {
     const f = fixture({ start: `bun ${name}`, [name]: "bun run start" }, "start");
     expect(f.resolve()).toEqual({ kind: "runtime", argv: ["bun", name] });
@@ -114,10 +114,15 @@ test("implicit aliases reserve every CLI command, including unsupported commands
 });
 
 test("native Bun and Node references run conventional test, eval, print and direct-file scripts", () => {
-  const f = fixture({ test: "bun test ./sample.test.ts", evaluate: 'node -e "console.log(42)"', print: 'node -p "21 * 2"', ok: "node ./app.js" }, "test");
+  const f = fixture({ test: "bun test ./sample.test.ts", evaluate: 'node -e "console.log(42)"', print: 'node -p "21 * 2"', ok: "node ./app.js", "nodejs-file": "nodejs ./app.js", "nodejs-eval": 'nodejs -e "console.log(42)"' }, "test");
+  const node = Bun.which("node");
+  if (!node) throw new Error("Native Node reference executable is required");
+  const bin = path.join(f.cwd, "reference-bin");
+  mkdirSync(bin);
+  symlinkSync(node, path.join(bin, "nodejs"));
   writeFileSync(path.join(f.cwd, "sample.test.ts"), 'import { test, expect } from "bun:test"; test("conventional", () => { expect(1).toBe(1); console.log("test ran once"); });');
-  for (const [name, output] of [["test", "test ran once"], ["evaluate", "42"], ["print", "42"], ["ok", "file"]]) {
-    const child = Bun.spawnSync([process.execPath, "run", name], { cwd: f.cwd, stdout: "pipe", stderr: "pipe" });
+  for (const [name, output] of [["test", "test ran once"], ["evaluate", "42"], ["print", "42"], ["ok", "file"], ["nodejs-file", "file"], ["nodejs-eval", "42"]] satisfies Array<[string, string]>) {
+    const child = Bun.spawnSync([process.execPath, "run", name], { cwd: f.cwd, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, stdout: "pipe", stderr: "pipe" });
     expect(child.exitCode).toBe(0);
     expect(child.stdout.toString().trim().split("\n").filter(line => !line.startsWith("bun test v")).join("\n")).toBe(output);
   }

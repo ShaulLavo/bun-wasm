@@ -5,7 +5,7 @@ function run(name: string, args: string[] = []) {
   return Bun.spawnSync([process.execPath, "run", name].concat(args), { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
 }
 
-for (const [name, output] of [["evaluate", "42"], ["print", "42"], ["cli-flags", "42"], ["ok", "direct file"], ["bun-file", "direct file"], ["bun-alias", "42"], ["node-file", "node filename tail"], ["node-alias-file", "node alias filename tail"]]) {
+for (const [name, output] of [["evaluate", "42"], ["print", "42"], ["cli-flags", "42"], ["ok", "direct file"], ["nodejs-file", "direct file"], ["nodejs-eval", "42"], ["nodejs-named-file", "node filename tail"], ["bun-file", "direct file"], ["bun-alias", "42"], ["node-file", "node filename tail"], ["node-alias-file", "node alias filename tail"]]) {
   const child = run(name);
   assert.equal(child.exitCode, 0, child.stderr.toString());
   assert.equal(child.stdout.toString().trim(), output, name);
@@ -16,6 +16,7 @@ assert.equal(passed.stdout.toString().trim().split("\n").filter(line => line ===
 const failed = run("failed-test");
 assert.equal(failed.exitCode, 1, failed.stderr.toString());
 assert.equal(run("exit").exitCode, 17);
+assert.equal(run("nodejs-exit").exitCode, 17);
 for (const name of ["cycle-a", "implicit-a"]) {
   const cycle = run(name);
   assert.equal(cycle.exitCode, 1);
