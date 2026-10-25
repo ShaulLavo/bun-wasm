@@ -9,7 +9,8 @@ The public contract is guided by Bun's `src/js/node/dns.ts` and
 `src/js/node/dns.promises.ts` at upstream revision
 `9510e74152073d850a18758ca41114d8f214ffa6`. `crates/bunwasm-runtime/src/js/dns.ts`
 owns the shared `node:dns`, `node:dns/promises` and `dns.promises` facade: overload
-validation, IP-literal fast paths, callbacks, promises, `all`, ordering and default
+validation including the allowed hint mask, IP-literal fast paths, callbacks with the
+empty-host null sentinel, promises, `all`, ordering and default
 order state and the Bun-facing adapter. Minimal registration in
 `crates/bunwasm-runtime/src/js/builtins.js` and `bun.js` maps Bun's resolver flags to
 Waffle's `hints` option.
@@ -23,7 +24,10 @@ fresh ordered records. Waffle owns virtual localhost policy and structured
 process activation.
 
 The browser runner bridges that capability through `web/src/net/lookup.ts` using a
-root `MessageChannel` or per-launch `BroadcastChannel`. The existing TCP ring and
+root `MessageChannel` or per-launch `BroadcastChannel`. Minimal registration in
+`web/src/engine-host.js` wraps lookup with the TypeScript `trackLookup` helper, using
+the existing engine pending-work accounting and completion wake for success and
+rejection. No polling timer or deadline is added. The existing TCP ring and
 `node:process` descriptor ownership remain unchanged. The Rust native launcher has no
 resolver slot, so the compiled blocking fixture covers the Bun-owned literal/overload
 facade; hostname-backed Vitest/SolidStart startup remains a browser-runtime acceptance
@@ -34,5 +38,5 @@ runtime host.
 | Paths | Class | Provenance |
 | --- | --- | --- |
 | `crates/bunwasm-runtime/src/js/dns.ts` plus minimal registration in `builtins.js` and `bun.js` | Host feature | Original Bun/Node public facade and Waffle adapter; no copied resolver implementation. |
-| `web/src/net/lookup.ts`, `web/src/{bun-executor,bun-launcher,runner}.ts` | Host feature | Original browser worker bridge over Waffle `runtime.network().lookup`; TCP transport unchanged. |
-| `tests/fixtures/dns-lookup/`, `scripts/dns-lookup.test.ts`, `web/tests/dns-lookup-bridge.test.ts` | Host feature | Blocking facade, prepared-export, bridge and structured-error controls. |
+| `web/src/net/lookup.ts`, `web/src/{bun-executor,bun-launcher,runner}.ts`, minimal `engine-host.js` registration | Host feature | Original browser worker bridge over Waffle `runtime.network().lookup`; TCP transport unchanged. |
+| `tests/fixtures/dns-lookup/`, `scripts/dns-lookup.test.ts`, `web/tests/dns-lookup-bridge.test.ts`, `web/tests/dns-lookup-lifecycle.test.ts` | Host feature | Blocking facade, prepared-export, bridge, real engine lifetime and structured-error controls. |

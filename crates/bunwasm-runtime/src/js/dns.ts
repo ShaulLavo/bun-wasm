@@ -9,7 +9,7 @@
   type LookupValue = LookupResult | { address: null; family: 4 };
   type LookupOptions = { family: Family; hints: number; all: boolean; order: ResultOrder };
   type ResultOrder = "ipv4first" | "ipv6first" | "verbatim";
-  type LookupCallback = (error: unknown, address?: string | LookupResult[], family?: AddressFamily | undefined) => void;
+  type LookupCallback = (error: unknown, address?: string | null | LookupResult[], family?: AddressFamily | undefined) => void;
 
   const NO_NETWORK = "WASI has no network access";
   const DNS_ALL = 16;
@@ -70,6 +70,7 @@
     validateFamily(family);
     const hints = Reflect.get(normalized, "hints") ?? 0;
     if (typeof hints !== "number" || !Number.isFinite(hints)) throw invalidArgType("options.hints", "number", hints);
+    if ((hints & (DNS_ALL | DNS_ADDRCONFIG | DNS_V4MAPPED)) !== hints) throw invalidArgValue("hints", hints, "is invalid");
     const all = Reflect.get(normalized, "all") ?? false;
     if (typeof all !== "boolean") throw invalidArgType("options.all", "boolean", all);
     const verbatim = Reflect.get(normalized, "verbatim");
@@ -144,7 +145,7 @@
       internal.nextTick(() => {
         if (options.all) return callback(null, Array.isArray(result) ? result : []);
         if (Array.isArray(result)) return callback(null, result[0]?.address, result[0]?.family);
-        if (result === null || result.address === null) return callback(null, undefined, 4);
+        if (result === null || result.address === null) return callback(null, null, 4);
         callback(null, result.address, result.family);
       });
     }, error => internal.nextTick(callback, error, undefined, undefined));

@@ -1,6 +1,6 @@
 import type { RuntimeNetwork, RuntimeNetworkLookupError } from "waffle";
 
-export interface LookupRequest {
+interface LookupRequest {
   readonly type: "bun-dns-lookup";
   readonly id: number;
   readonly hostname: string;
@@ -8,7 +8,7 @@ export interface LookupRequest {
   readonly hints: number;
 }
 
-export interface LookupResponse {
+interface LookupResponse {
   readonly type: "bun-dns-lookup-result";
   readonly id: number;
   readonly result?: { address: string; family: 4 | 6 }[];
@@ -48,7 +48,13 @@ export function installLookupServer(port: LookupEndpoint, network: Pick<RuntimeN
   };
 }
 
-export type LookupClient = ((hostname: string, family: 0 | 4 | 6, hints: number) => Promise<{ address: string; family: 4 | 6 }[]>) & {
+type LookupOperation = (hostname: string, family: 0 | 4 | 6, hints: number) => Promise<{ address: string; family: 4 | 6 }[]>;
+
+export function trackLookup(lookup: LookupOperation, track: (promise: ReturnType<LookupOperation>) => ReturnType<LookupOperation>): LookupOperation {
+  return (...args) => track(Promise.resolve().then(() => lookup(...args))).then(results => results);
+}
+
+export type LookupClient = LookupOperation & {
   close(): void;
 };
 

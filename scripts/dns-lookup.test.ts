@@ -69,7 +69,7 @@ test("DNS validation and backing failures retain structured errors", async () =>
   expect(() => promises.lookup({}, 4)).toThrow(/hostname/);
   expect(() => promises.lookup("localhost", { all: "yes" })).toThrow(/options.all/);
   expect(await promises.lookup("", { family: null as never })).toEqual({ address: null, family: 4 });
-  await expect(promises.lookup("localhost", { hints: 1 })).rejects.toMatchObject({ code: "ENOTSUP", syscall: "getaddrinfo", hostname: "localhost" });
+  await expect(promises.lookup("localhost", { hints: dns.ADDRCONFIG })).rejects.toMatchObject({ code: "ENOTSUP", syscall: "getaddrinfo", hostname: "localhost" });
   await expect(promises.lookup("localhost", { family: 4 })).rejects.toMatchObject({ code: "ENOTFOUND", syscall: "getaddrinfo", hostname: "localhost" });
   await expect(new Promise(resolve => dns.lookup("missing.example", (...result: unknown[]) => resolve(result)))).resolves.toEqual([
     expect.objectContaining({ code: "ENOTSUP", syscall: "getaddrinfo", hostname: "missing.example" }),
@@ -105,4 +105,29 @@ test("prepared Waffle exports keep the native worker lookup control green", () =
   expect(result.exitCode).toBe(0);
   expect(result.stderr.toString()).toBe("");
   expect(result.stdout.toString()).toContain("prepared Waffle lookup control passed");
+});
+
+for (const kind of ["callback", "promise"]) test(`${kind} lookup rejects unknown hints before literals or provider calls`, () => {
+  calls.length = 0;
+  for (const hostname of ["127.0.0.1", "localhost"]) {
+    const lookup = kind === "callback"
+      ? () => dns.lookup(hostname, { hints: 1 }, () => {})
+      : () => promises.lookup(hostname, { hints: 1 });
+    expect(lookup).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
+  }
+  expect(calls).toEqual([]);
+});
+
+test.each(["", null, undefined, false, 0])("falsy host %p preserves asynchronous callback null and all results", async hostname => {
+  calls.length = 0;
+  let synchronous = true;
+  const pending = new Promise(resolve => dns.lookup(hostname, (...result: unknown[]) => {
+    expect(synchronous).toBe(false);
+    resolve(result);
+  }));
+  synchronous = false;
+  expect(await pending).toEqual([null, null, 4]);
+  expect(await callbackLookup(hostname, { all: true })).toEqual([null, []]);
+  expect(await promises.lookup(hostname)).toEqual({ address: null, family: 4 });
+  expect(calls).toEqual([]);
 });
