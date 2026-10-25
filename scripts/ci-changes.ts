@@ -20,6 +20,13 @@ const jscFiles = new Set([
   "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/ci-binaryen.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
 ]);
 
+// The opt-in Hermes variant builds only when its own inputs or the toolchain pins change.
+const hermesDirectories = ["hermes/", "crates/bunwasm-hermes/"];
+const hermesFiles = new Set([
+  "crates/bunwasm-runtime/src/engine_hermes.rs", "scripts/build-hermes.sh", "scripts/build-bun-hermes.sh",
+  "scripts/ci-changes.ts", "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/ci-binaryen.ts", "rust-toolchain.toml",
+]);
+
 const webGuestDirectories = [
   "web/src/net/", "tests/fixtures/spawn-executable/", "tests/install/",
   "crates/bunwasm-runtime/", "crates/bunwasm-cli/", "crates/bunwasm-tools/", "crates/bunwasm-lint-native/",
@@ -37,6 +44,7 @@ const webGuestFiles = new Set([
 ]);
 const engineSpecificFiles = new Set([
   "crates/bunwasm-runtime/src/engine_quickjs.rs", "crates/bunwasm-runtime/src/engine_host.rs",
+  "crates/bunwasm-runtime/src/engine_hermes.rs",
 ]);
 
 function sharedWebGuestInput(path: string): boolean {
@@ -46,6 +54,10 @@ function sharedWebGuestInput(path: string): boolean {
 
 export function needsJsc(paths: readonly string[]): boolean {
   return paths.some(path => sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
+}
+
+export function needsHermes(paths: readonly string[]): boolean {
+  return paths.some(path => hermesFiles.has(path) || hermesDirectories.some(root => path.startsWith(root)));
 }
 
 export function needsRust(paths: readonly string[]): boolean {
@@ -80,5 +92,5 @@ if (import.meta.main) {
   const paths = changedPaths(base, head, process.env.GITHUB_EVENT_NAME === "pull_request");
   const native = nativeChanges(paths, base, head);
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
-  console.log(`rust=${needsRust(native)}\njsc=${needsJsc(paths)}`);
+  console.log(`rust=${needsRust(native)}\njsc=${needsJsc(paths)}\nhermes=${needsHermes(paths)}`);
 }

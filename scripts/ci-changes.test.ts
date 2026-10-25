@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { changedPaths, needsJsc, needsRust } from "./ci-changes";
+import { changedPaths, needsHermes, needsJsc, needsRust } from "./ci-changes";
 
 test.each([
   "checks/native-console.json", "checks/runtime-leaf.json", "scripts/test-checks.ts", "tests/fixtures/console-format/index.js",
@@ -22,6 +22,18 @@ test.each([
 
 test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
   expect(needsRust([path])).toBe(false);
+});
+
+test.each(["hermes/hermes-wasi.patch", "hermes/build.sh", "crates/bunwasm-hermes/cpp/shim.cpp", "crates/bunwasm-runtime/src/engine_hermes.rs", "scripts/build-bun-hermes.sh"])("Hermes input %s selects the Hermes job", path => {
+  expect(needsHermes([path])).toBe(true);
+});
+
+test.each(["crates/bunwasm-runtime/src/lib.rs", "crates/bunwasm-runtime/src/engine_quickjs.rs", "jsc/webkit-wasi.patch", "web/src/worker.ts", "Cargo.lock"])("non-Hermes input %s leaves the Hermes job off", path => {
+  expect(needsHermes([path])).toBe(false);
+});
+
+test("the Hermes engine file alone needs no JSC or web-guest build", () => {
+  expect(needsJsc(["crates/bunwasm-runtime/src/engine_hermes.rs"])).toBe(false);
 });
 
 test("the complete change list includes native inputs after any number of JavaScript paths", () => {
@@ -68,7 +80,7 @@ beforeAll(() => {
 function select(start: string, end: string, event = "pull_request"): string {
   return execFileSync("bun", [join(import.meta.dir, "ci-changes.ts"), start, end], {
     cwd: fixture, encoding: "utf8", env: { ...process.env, GITHUB_EVENT_NAME: event }, stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  }).trim().split("\n").filter(line => !line.startsWith("hermes=")).join("\n");
 }
 
 test("real PR diff catches a native file renamed into JavaScript", () => {

@@ -25,7 +25,11 @@ fn main() {
     let sysroot = PathBuf::from(env::var("BUN_WASM_SYSROOT").expect("source env.sh"));
     let obj = hermes.join("wasi");
     let lib = obj.join("lib/libhermesvm_bunwasm.a");
-    assert!(lib.exists(), "{} missing: run scripts/build-hermes.sh", lib.display());
+    assert!(
+        lib.exists(),
+        "{} missing: run scripts/build-hermes.sh",
+        lib.display()
+    );
     println!("cargo:rerun-if-changed={}", lib.display());
 
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -34,8 +38,14 @@ fn main() {
 
     let libdir = sysroot.join("lib/wasm32-wasip1");
     println!("cargo:rustc-link-search=native={}", out.display());
-    println!("cargo:rustc-link-search=native={}", obj.join("lib").display());
-    println!("cargo:rustc-link-search=native={}", libdir.join("noeh").display());
+    println!(
+        "cargo:rustc-link-search=native={}",
+        obj.join("lib").display()
+    );
+    println!(
+        "cargo:rustc-link-search=native={}",
+        libdir.join("noeh").display()
+    );
     println!("cargo:rustc-link-search=native={}", libdir.display());
     for lib in ["bunhermes_shim", "hermesvm_bunwasm"] {
         println!("cargo:rustc-link-lib=static={lib}");

@@ -18,7 +18,9 @@ use std::rc::Rc;
 
 use bunwasm_hermes::{self as sys, Handle, kind};
 
-use crate::engine::{Engine, ErrorKind, ModuleHost, NativeError, PromiseState, Record, Val, ValueFn};
+use crate::engine::{
+    Engine, ErrorKind, ModuleHost, NativeError, PromiseState, Record, Val, ValueFn,
+};
 
 thread_local! {
     static NATIVES: RefCell<HashMap<u32, ValueFn<Hermes>>> = RefCell::new(HashMap::new());
@@ -39,6 +41,7 @@ struct Intrinsics {
     promise_reject: HVal,
     object_keys: HVal,
     define_property: HVal,
+    reflect_own_keys: HVal,
 }
 
 fn intrinsic(f: impl FnOnce(&Intrinsics) -> HVal) -> HVal {
@@ -107,7 +110,14 @@ fn global() -> HVal {
 fn get(obj: &HVal, key: &str) -> Result<HVal, HVal> {
     let mut out = 0;
     // SAFETY: valid handle and key buffer.
-    let ok = unsafe { sys::bh_get(obj.raw(), key.as_ptr().cast::<c_char>(), key.len(), &mut out) };
+    let ok = unsafe {
+        sys::bh_get(
+            obj.raw(),
+            key.as_ptr().cast::<c_char>(),
+            key.len(),
+            &mut out,
+        )
+    };
     checked(ok, out)
 }
 
@@ -218,7 +228,11 @@ fn to_val(v: &HVal) -> Val {
         kind::BIGINT => {
             let mut n = 0;
             let lossless = unsafe { sys::bh_get_bigint(v.raw(), &mut n) };
-            if lossless { Val::BigInt(n) } else { Val::Undefined }
+            if lossless {
+                Val::BigInt(n)
+            } else {
+                Val::Undefined
+            }
         }
         kind::UINT8ARRAY | kind::ARRAYBUFFER => Val::Bytes(bytes(v)),
         kind::ARRAY => Val::Array(array_items(v).iter().map(to_val).collect()),
@@ -275,7 +289,11 @@ fn define_hidden(obj: &HVal, key: &str, value: HVal) {
     ]));
     let _ = set(&descriptor, "value", &value);
     let define = intrinsic(|i| i.define_property.clone());
-    let _ = call(&define, &undefined(), &[obj.clone(), string(key), descriptor]);
+    let _ = call(
+        &define,
+        &undefined(),
+        &[obj.clone(), string(key), descriptor],
+    );
 }
 
 /// Every native function: the shim passes owned handles for `this` and the arguments and
@@ -397,14 +415,38 @@ fn capture_intrinsics() -> Intrinsics {
     let lookup = |obj: &HVal, key: &str| get(obj, key).unwrap_or_else(|_| undefined());
     let promise = lookup(&g, "Promise");
     let object = lookup(&g, "Object");
+    let reflect = lookup(&g, "Reflect");
     Intrinsics {
         promise_then: lookup(&lookup(&promise, "prototype"), "then"),
         promise_resolve: lookup(&promise, "resolve"),
         promise_reject: lookup(&promise, "reject"),
         object_keys: lookup(&object, "keys"),
         define_property: lookup(&object, "defineProperty"),
+        reflect_own_keys: lookup(&reflect, "ownKeys"),
         promise,
     }
+}
+
+/// Fields of Hermes's JS Promise implementation, hidden from console output.
+const PROMISE_FIELDS: [&str; 5] = ["_x", "_y", "_z", "_A", "_E"];
+
+/// `Reflect.ownKeys(promise)` without the implementation's fields.
+fn promise_public_keys(promise: &HVal) -> HVal {
+    let own_keys = intrinsic(|i| i.reflect_own_keys.clone());
+    let all = call(&own_keys, &undefined(), std::slice::from_ref(promise))
+        .map(|keys| array_items(&keys))
+        .unwrap_or_default();
+    let public: Vec<HVal> = all
+        .into_iter()
+        .filter(|k| k.kind() != kind::STRING || !PROMISE_FIELDS.contains(&to_string(k).as_str()))
+        .collect();
+    // SAFETY: plain constructor; setting an index of a fresh array cannot throw.
+    let arr = HVal(unsafe { sys::bh_array(public.len() as u32) });
+    for (i, key) in public.iter().enumerate() {
+        let mut out = 0;
+        unsafe { sys::bh_set_index(arr.raw(), i as u32, key.raw(), &mut out) };
+    }
+    arr
 }
 
 /// The loader the runtime's Hermes module loader installs, if any.
@@ -594,8 +636,8 @@ impl Engine for Hermes {
     fn promise_state(&self, v: &HVal) -> Option<PromiseState> {
         let core = promise_core(v)?;
         Some(match get(&core, "_y").map(|s| to_val(&s)) {
-            Ok(Val::Num(n)) if n == 1.0 => PromiseState::Fulfilled,
-            Ok(Val::Num(n)) if n == 2.0 => PromiseState::Rejected,
+            Ok(Val::Num(1.0)) => PromiseState::Fulfilled,
+            Ok(Val::Num(2.0)) => PromiseState::Rejected,
             _ => PromiseState::Pending,
         })
     }
@@ -607,7 +649,12 @@ impl Engine for Hermes {
         get(&core, "_z").unwrap_or_else(|_| undefined())
     }
 
-    fn promise_then(&self, promise: &HVal, fulfilled: &HVal, rejected: &HVal) -> Result<HVal, HVal> {
+    fn promise_then(
+        &self,
+        promise: &HVal,
+        fulfilled: &HVal,
+        rejected: &HVal,
+    ) -> Result<HVal, HVal> {
         let then = intrinsic(|i| i.promise_then.clone());
         call(&then, promise, &[fulfilled.clone(), rejected.clone()])
     }
@@ -654,8 +701,9 @@ impl Engine for Hermes {
         None
     }
 
-    fn own_keys_in_order(&self, _: &HVal) -> Option<HVal> {
-        None
+    fn own_keys_in_order(&self, v: &HVal) -> Option<HVal> {
+        promise_core(v)?;
+        Some(promise_public_keys(v))
     }
 
     fn async_context(&self) -> HVal {
