@@ -16,7 +16,7 @@ const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
   "crates/bunwasm-runtime/src/engine_jsc.rs", "scripts/build-bun-jsc.sh", "scripts/build-jsc.sh",
-  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "scripts/ci-changes.ts", ".github/workflows/ci.yml",
+  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "scripts/bench-jsc.sh", "scripts/ci-changes.ts", ".github/workflows/ci.yml",
   "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/ci-binaryen.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
 ]);
 
