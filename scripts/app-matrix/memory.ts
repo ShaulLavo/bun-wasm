@@ -27,7 +27,7 @@ function proportionalBytes(pid: number): number {
 }
 
 /** PSS of the Chromium processes descended from `root`: shared pages count once across them. */
-export function browserMemory(root: number): number {
+function browserMemory(root: number): number {
   const table = children();
   const pending = [root];
   let bytes = 0;
