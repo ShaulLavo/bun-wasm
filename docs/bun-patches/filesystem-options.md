@@ -2,7 +2,7 @@
 
 Class **Host feature**. These are original Bun/Node API adapters. No upstream implementation is copied or adapted.
 
-`crates/bunwasm-runtime/src/js/fs_options.ts` implements the public string-to-numeric open flag mapping, numeric and bigint Stats objects, and synchronous/asynchronous copy filtering. `node_fs.js` forwards flags, stat options and FileHandle options to the native bindings. Copy traversal lives beside the JavaScript filter because filters can be asynchronous. It delegates metadata, directories and byte copying to the existing native filesystem operations.
+`crates/bunwasm-runtime/src/js/fs_options.ts` implements the public string-to-numeric open flag mapping, numeric and bigint Stats objects, and synchronous/asynchronous copy filtering. `node_fs.js` forwards flags, stat options and FileHandle options to the native bindings. The options module follows bootstrap's factory contract: initialization returns the helper factory, and `node_fs.js` supplies its native bindings and path resolver to that helper. Copy traversal lives beside the JavaScript filter because filters can be asynchronous. It delegates metadata, directories and byte copying to the existing native filesystem operations.
 
 The filesystem regions of `crates/bunwasm-runtime/src/natives.rs` translate public Node flag bits to the target libc constants without adding create or truncate. The existing `writeFile` convenience binding remains for BunFile's append boolean; Node's `writeFileFlags` binding carries the full caller flags. Both call the same write helper. Exclusive copies open destinations with `create_new`, so checking and creating cannot race.
 

@@ -44,7 +44,7 @@ function fixture() {
   };
   const factory = runInNewContext(source, { Uint8Array, ArrayBuffer, URL, Date, FinalizationRegistry });
   const fsOptionsPath = new URL("../crates/bunwasm-runtime/src/js/fs_options.ts", import.meta.url);
-  const helpers = host.existsSync(fsOptionsPath) ? runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${host.readFileSync(fsOptionsPath, "utf8")}`), { Date }) : null;
+  const helpers = host.existsSync(fsOptionsPath) ? runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${host.readFileSync(fsOptionsPath, "utf8")}`), { Date })({}) : null;
   const { fs } = factory({ native, describe: String,
     require(name: string) {
       if (name === "buffer") return { Buffer };
