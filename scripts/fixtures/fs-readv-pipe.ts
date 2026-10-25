@@ -18,6 +18,7 @@ const { fs } = factory({
     },
   },
   require(name: string) {
+    if (name === "fs_options") return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${readFileSync(new URL("../../crates/bunwasm-runtime/src/js/fs_options.ts", import.meta.url), "utf8")}`));
     if (name === "buffer") return { Buffer };
     if (name === "fs_watch") return () => ({});
     throw new Error(`Unexpected pipe-fixture module ${name}`);
