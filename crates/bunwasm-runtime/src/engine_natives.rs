@@ -8,12 +8,27 @@ use crate::engine::{Args, DataFn, Engine, NativeError, PromiseState, Val, ValueF
 use crate::{Core, modules, natives};
 
 /// Adapt a data native: convert the arguments to [`Val`] and back.
-fn data_fn<E: Engine>(f: DataFn) -> ValueFn<E> {
+pub(crate) fn data_fn<E: Engine>(name: &str, native_id: u32, f: DataFn) -> ValueFn<E> {
+    if name == "writeStdout" {
+        return stdout_fn::<E>(native_id, f);
+    }
     Rc::new(move |e: &E, args: &[E::Value]| {
         let vals: Vec<Val> = args.iter().map(|a| e.to_val(a)).collect();
         match f(Args(&vals)) {
             Ok(v) => Ok(e.value_from(v)),
             Err(err) => Err(e.error_value(&err)),
+        }
+    })
+}
+
+pub(crate) fn stdout_fn<E: Engine>(native_id: u32, f: DataFn) -> ValueFn<E> {
+    let dispatcher = crate::ops::Dispatcher::new(std::num::NonZeroU32::MIN, native_id, f)
+        .expect("data native ID fits operation range");
+    Rc::new(move |e: &E, args: &[E::Value]| {
+        let values = args.iter().map(|value| e.to_val(value)).collect();
+        match dispatcher.call(values) {
+            Ok(value) => Ok(e.value_from(value)),
+            Err(error) => Err(e.error_value(&error)),
         }
     })
 }
@@ -36,9 +51,14 @@ pub fn bootstrap<E: Engine>(e: &E, core: &Rc<Core<E>>) -> Result<E::Value, E::Va
     let table = natives::table(&core.state);
     // `group.name` entries go on a nested object (`native.sqlite.open`).
     let mut groups: Vec<(&str, E::Value)> = Vec::new();
-    for (name, f) in table.functions {
+    for (id, (name, f)) in table.functions.into_iter().enumerate() {
+        let id = u32::try_from(id).expect("data native ID fits u32");
         let Some((group, short)) = name.split_once('.') else {
-            e.set(&native, name, e.new_function(name, data_fn::<E>(f)))?;
+            e.set(
+                &native,
+                name,
+                e.new_function(name, data_fn::<E>(name, id, f)),
+            )?;
             continue;
         };
         if !groups.iter().any(|(g, _)| *g == group) {
@@ -49,7 +69,11 @@ pub fn bootstrap<E: Engine>(e: &E, core: &Rc<Core<E>>) -> Result<E::Value, E::Va
             .find(|(g, _)| *g == group)
             .expect("group added above")
             .1;
-        e.set(target, short, e.new_function(short, data_fn::<E>(f)))?;
+        e.set(
+            target,
+            short,
+            e.new_function(short, data_fn::<E>(name, id, f)),
+        )?;
     }
     for (group, obj) in groups {
         e.set(&native, group, obj)?;
