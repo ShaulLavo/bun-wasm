@@ -113,3 +113,11 @@ runner source tests verify registrations without launching a browser.
 `tests/fixtures/package-script-dispatch/` is the compiled-guest regression for
 runtime commands, flags, argument forwarding, environment, file precedence and
 exit status. Source controls are not evidence of rebuilt guest acceptance.
+
+The package-options integration fixture reaches its PATH probe through an explicit
+runtime executable as well as a direct file. This keeps the empty/restricted PATH
+assertions active after runtime commands began using real executable admission.
+The original bare `bun` script remains covered: it runs when PATH admits Bun and
+must fail with ENOENT before the probe when the portable PATH excludes it. Native
+Bun's temporary Node proxy remains a reference difference, not a portable PATH
+fallback. Source controls exercise both branches through production admission.

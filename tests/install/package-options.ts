@@ -145,6 +145,12 @@ async function validVersion() {
 }
 
 async function scriptPathCase(directory: string, entry: string, path: string | undefined) {
+  if (entry === "probe" && (path === "" || path === "/restricted") && process.env.INSTALL_NATIVE_BUN !== "1") {
+    const result = await run(directory, ["run", entry], 1, path);
+    assert.equal(result.stdout, "", "a missing runtime must not reach the PATH probe");
+    assert.match(result.stderr, /spawn bun ENOENT/);
+    return;
+  }
   const result = await run(directory, ["run", entry], 0, path);
   const value = JSON.parse(result.stdout);
   if (path === undefined || path === "/bin:/usr/bin") {
@@ -166,13 +172,14 @@ async function scriptPathCase(directory: string, entry: string, path: string | u
 }
 
 async function scriptPath() {
-  const directory = project("script-path", { scripts: { probe: "bun probe.ts" } });
+  const runtime = process.env.INSTALL_NATIVE_BUN === "1" ? process.execPath : "/bin/bun";
+  const directory = project("script-path", { scripts: { probe: "bun probe.ts", explicit: `${JSON.stringify(runtime)} probe.ts` } });
   writeFileSync(join(directory, "probe.ts"), `
     const result = { path: process.env.PATH, node: Bun.which("node"), output: "" };
     try { result.output = new TextDecoder().decode(Bun.spawnSync(["node", "-e", "console.log('path-child')"]).stdout).trim(); } catch {}
     console.log(JSON.stringify(result));
   `);
-  for (const entry of ["probe.ts", "probe"]) {
+  for (const entry of ["probe.ts", "probe", "explicit"]) {
     for (const path of [undefined, "", "/restricted", "/bin:/usr/bin"]) {
       await scriptPathCase(directory, entry, path);
     }

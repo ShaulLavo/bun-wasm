@@ -48,7 +48,7 @@ function fixture(command: string, admitted: ReadonlySet<string> = registered) {
     throw new Error(`Unexpected dependency: ${name}`);
   }
   runInNewContext(bootstrap.slice(start, end), { internal, native });
-  return { cwd, attempts, launches, marker, run: () => internal.runMain(path.join(cwd, "start")) };
+  return { cwd, attempts, launches, marker, process: guestProcess, run: () => internal.runMain(path.join(cwd, "start")) };
 }
 
 for (const directory of ["/bin", "/opt/bun/quickjs/bin", "/opt/bun/jsc/bin"]) {
@@ -110,5 +110,28 @@ for (const directory of ["/bin", "/opt/bun/quickjs/bin", "/opt/bun/jsc/bin"]) {
     expect(f.launches).toHaveLength(1);
     expect(f.launches[0]).toMatchObject({ executable, argv: [executable, "./app.js", "tail"] });
     expect(f.attempts).toEqual([executable]);
+  });
+}
+
+for (const PATH of ["", "/restricted"]) {
+  test(`an explicit runtime reaches the PATH probe without repairing PATH=${JSON.stringify(PATH)}`, async () => {
+    const bare = fixture("bun ./app.js");
+    bare.process.env.PATH = PATH;
+    await expect(bare.run()).rejects.toMatchObject({ code: "ENOENT", path: "bun" });
+    expect(bare.launches).toEqual([]);
+    expect(bare.attempts).not.toContain("/bin/bun");
+
+    const explicit = fixture("/bin/bun ./app.js");
+    explicit.process.env.PATH = PATH;
+    await expect(explicit.run()).rejects.toBe(explicit.marker);
+    const bins: string[] = [];
+    for (let directory = explicit.cwd;; directory = path.dirname(directory)) {
+      bins.push(path.join(directory, "node_modules/.bin"));
+      if (path.dirname(directory) === directory) break;
+    }
+    expect(explicit.process.env.PATH).toBe(bins.concat(PATH).join(":"));
+    expect(explicit.launches).toHaveLength(1);
+    expect(explicit.launches[0]).toMatchObject({ executable: "/bin/bun", argv: ["/bin/bun", "./app.js", "tail"], env: { PATH: explicit.process.env.PATH } });
+    expect(explicit.attempts).toEqual(["/bin/bun"]);
   });
 }
