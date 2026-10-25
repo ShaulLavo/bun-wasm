@@ -199,7 +199,9 @@ impl Resolver {
             let package = self.packages[&key].clone();
             self.children(&package)?;
         }
-        self.select_platform(manifest)
+        self.select_platform(manifest)?;
+        self.packuments.clear();
+        Ok(())
     }
 
     fn select_platform(&mut self, manifest: &Value) -> Result<()> {
