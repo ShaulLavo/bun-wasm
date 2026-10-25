@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/runtime-fs-watch-options.test.ts",
+  "localRuntime": true
+}

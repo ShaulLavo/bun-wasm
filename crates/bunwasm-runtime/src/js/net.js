@@ -302,7 +302,7 @@
       let progressed = false;
       for (;;) {
         if (this.canRead && !this.canRead()) return progressed ? "progress" : false;
-        const chunk = native.hostRead(this.handle);
+        const chunk = native.hostRead(this.handle, this.readCapacity?.());
         if (chunk === AGAIN) return progressed ? "progress" : false;
         if (typeof chunk === "number") return this.finishRead(chunk);
         progressed = true;

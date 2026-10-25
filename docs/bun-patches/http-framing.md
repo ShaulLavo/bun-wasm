@@ -70,7 +70,19 @@ stay outside the promise executor, within three nesting levels. Fetch body and
 header waits preserve the exact AbortSignal reason, including null and other
 falsy values. These are original adapter corrections; no native Bun or Node
 source is copied. The shared body-stream helper owns clone validation and tee
-metadata for Request and Response. The
+metadata for Request and Response. Request construction also transfers an inherited
+body through a reader-backed stream instead of copying cached bytes or teeing it.
+The source stays locked and used, while cancellation and producer errors reach the
+new owner. Host engines validate the existing stream with the captured native
+Request constructor before acquiring its reader. This rejects native disturbed
+streams without adding a body-use observer or modifying the separate observer
+adapter. Explicit replacement bodies leave the source alone. Request redirect
+mode is inherited when only headers change. These original corrections use Node
+26.12.1 and Bun 1.4.4 as behavioral controls, not copied implementations. Node is
+the reference for post-transfer disturbance: Bun 1.4.4 leaves the source's
+`bodyUsed` false. `tests/fixtures/runtime-request-copy` checks the constructor and
+actual fetch path; `scripts/request-copy.test.ts` executes the Web factory and
+unchanged fetch adapter with shipped and native streams. The
 strictly typed stream generator produces byte-identical output for its pinned
 input.
 Node request dispatch retains its existing complete-upload behavior.
@@ -87,6 +99,7 @@ The caller-supplied connection path retains caller ownership of TLS setup.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| Request body copying in `web.js` and `body_streams.ts` | Host feature | Original reader-backed ownership transfer and inherited redirect state. |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming bodies, response cancellation independent of transport disposal before and during writer ownership, Agent pool and upgrade response adapters shared by all engines. |
 
 [Ledger scope and pinned revisions](scope.md).
