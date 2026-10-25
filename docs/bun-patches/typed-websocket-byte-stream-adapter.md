@@ -48,3 +48,17 @@ state validation change, not an annotation-only or whole-program parity claim.
 No final guest/native/browser acceptance is claimed, and historical guests are
 not build evidence for this checkpoint. OS transport stays in Waffle; this change
 only adapts the JavaScript WebSocket API to the existing byte connection.
+
+The bounded follow-up adds five synthetic boundary tests without changing the
+runtime. They pin both error-handler lookups and the second provider receiver,
+including a throwing second getter and a missing second callback. Caught code
+values retain string acceptance and four coercions of an object-valued code.
+Nullish code reads and getter failures escape before sending a close frame.
+Client failure sets closed state and destroys the connection before reading the
+message; a throwing getter prevents both events. Primitive message getters keep
+the primitive receiver, and truthy non-string messages reach the event
+constructor unchanged. These controls explain why numeric/string normalization
+or caching the first callback would change behavior, not resolve its proof.
+The source inverse remains unchanged and still explicitly reverses the earlier
+state validation changes. The three assertions and strict withholding gate stay
+held pending an explicit contract decision.
