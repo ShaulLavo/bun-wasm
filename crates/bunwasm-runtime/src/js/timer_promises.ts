@@ -58,10 +58,22 @@
       } finally { close(); }
     }
     const iterator = ticks();
+    const next = iterator.next.bind(iterator);
     const finish = iterator.return.bind(iterator);
     const fail = iterator.throw.bind(iterator);
-    iterator.return = value => { close(); return finish(value); };
-    iterator.throw = error => { close(); return fail(error); };
+    type Result = IteratorResult<T | undefined, unknown>;
+    let pending: Promise<Result> | undefined;
+    // QuickJS can strand requests queued behind a completed generator.
+    function enqueue(action: () => Promise<Result>) {
+      const result = pending ? pending.then(action, action) : action();
+      pending = result;
+      const release = () => { if (pending === result) pending = undefined; };
+      void result.then(release, release);
+      return result.then(value => value);
+    }
+    iterator.next = (...args) => enqueue(() => next(...args));
+    iterator.return = value => { close(); return enqueue(() => finish(value)); };
+    iterator.throw = error => { close(); return enqueue(() => fail(error)); };
     return iterator;
   }
 

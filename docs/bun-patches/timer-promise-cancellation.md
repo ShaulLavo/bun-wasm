@@ -11,8 +11,11 @@ owns its handle and named abort listener, and removes both on settlement.
 Interval waits pass through `signal` and `ref`. Closing an iterator resolves
 its private wait without yielding another value, so `return`, `throw`, and
 `for await` break cannot retain a delay or abort listener. Queued `next` calls
-remain serialized by the async generator. Scheduling remains with the existing
-runtime timers; event-loop behavior and `Timeout.refresh` are unchanged.
+are serialized before entering the generator. QuickJS-ng bundled with
+rquickjs-sys 0.13.0 can leave requests pending behind a completed generator,
+so only one request enters it at a time. The timer is still cancelled
+synchronously when closing, including with multiple queued reads. Scheduling
+remains with the existing runtime timers; event-loop behavior and `Timeout.refresh` are unchanged.
 
 Unlike native async generators, an explicit `return` or `throw` during a pending
 wait cancels that wait immediately instead of waiting for one last timer value.

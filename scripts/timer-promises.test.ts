@@ -139,6 +139,19 @@ test("return cancels a pending delay without yielding or leaving a queued tick",
   expect(await returned).toEqual({ value: "closed", done: true });
 });
 
+test("closing drains every queued read before accepting later iterator requests", async () => {
+  const state = controlled(), abort = controller();
+  const iterator = state.promises.setInterval(10000, "tick", { signal: abort.signal });
+  const reads = Array.from({ length: 5 }, () => iterator.next());
+  const returned = iterator.return("closed");
+  const later = iterator.next();
+  expect(state.active.size).toBe(0);
+  expect(getEventListeners(abort.signal, "abort")).toHaveLength(0);
+  for (const read of reads) expect((await read).done).toBe(true);
+  expect(await returned).toEqual({ value: "closed", done: true });
+  expect((await later).done).toBe(true);
+});
+
 test("throw cancels a pending delay and rejects the explicit throw", async () => {
   const state = controlled(), abort = controller();
   const iterator = state.promises.setInterval(10000, "tick", { signal: abort.signal });

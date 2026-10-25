@@ -6,14 +6,18 @@ const iterator = setInterval(50, "unexpected tick", { signal: controller.signal 
 try {
   const first = iterator.next();
   const queued = iterator.next();
+  const additional = Array.from({ length: 3 }, () => iterator.next());
   const close = iterator.return;
   assert.ok(close);
   const returned = close.call(iterator);
+  const later = iterator.next();
   assert.equal((await first).done, true);
   assert.equal((await queued).done, true);
+  for (const read of additional) assert.equal((await read).done, true);
   const result = await returned;
   assert.equal(result.value, undefined);
   assert.equal(result.done, true);
+  assert.equal((await later).done, true);
   assert.equal((await iterator.next()).done, true);
 } finally { controller.abort(); await iterator.return?.(); }
 console.log("return cancels pending and queued interval reads without another tick");
