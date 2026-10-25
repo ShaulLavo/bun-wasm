@@ -75,6 +75,8 @@ strictly typed stream generator produces byte-identical output for its pinned
 input.
 Node request dispatch retains its existing complete-upload behavior.
 
+Node HTTP responses preserve stream demand across the adapter boundaries. Raw responses pause their socket when `IncomingMessage.push()` is full and retain decoded output until `_read()` resumes it. Fetch-backed HTTPS responses use one body reader, stop after a full push, and cancel that reader on request or response destruction instead of awaiting `arrayBuffer()`. Server writes report backpressure, complete callbacks after their framed bytes are accepted, emit one drain after queued writes settle, and propagate cancellation to write and end callbacks once. `ClientRequest.setTimeout()` updates and disables inactivity timers before or after connection establishment; raw requests use the socket timer, while fetch-backed requests reset their own timer on response activity and clear it on completion or destruction. These are original adapter changes with native Bun and Node behavioral controls, not copied upstream implementations.
+
 HTTPS requests continue to use the host's TLS fetch transport. The raw socket
 ABI has no TLS capability, so HTTPS upgrades without a caller-supplied connection
 fail with `ERR_TLS_NOT_SUPPORTED` instead of opening a plaintext connection.
