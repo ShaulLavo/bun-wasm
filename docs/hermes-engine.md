@@ -17,7 +17,7 @@ target/release/bun-wasm --wasm dist/bun-hermes.wasm --dir .::/ --env PWD=/ -- -e
 ```
 crates/bunwasm-runtime/src/engine_hermes.rs   Engine trait over the shim (Rust)
 crates/bunwasm-hermes/src/lib.rs              the shim's C declarations
-crates/bunwasm-hermes/cpp/shim.cpp            C interface over hermes::vm::Runtime
+crates/bunwasm-hermes/cpp/shim.cpp            C interface over hermes::vm::Runtime, compiled into the VM library
 hermes/                                       fetch, patch, toolchain and build of the VM
 ```
 
