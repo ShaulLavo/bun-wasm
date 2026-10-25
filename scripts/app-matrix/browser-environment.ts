@@ -12,3 +12,5 @@ export function browserCommand(args: readonly string[]): string[] {
   if (!args[1]) throw new Error("Expected a real package or fixture entrypoint");
   return ["bun", "run", ".matrix-command.ts"].concat(args.slice(1));
 }
+
+export async function resetBrowserProject(): Promise<void> {}

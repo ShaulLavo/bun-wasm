@@ -1,9 +1,13 @@
 import { expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
+import { createRuntime } from "../../node_modules/waffle/runtime";
+import { examples } from "../../web/src/examples";
+import { projectFiles } from "./apps.mjs";
 import { request, type Route } from "playwright";
 import { BlockedBrowserNetworkError, runProductBrowserCase } from "./product-campaign";
-import { browserCommand, browserLauncher } from "./browser-environment";
+import { browserCommand, browserLauncher, resetBrowserProject } from "./browser-environment";
 import { browserRegistryRoute, registryAccept, registryBrokerResponse, registryReplayUrl } from "./registry-request";
 import { nextApps } from "./product-next";
 import { fullstackApps } from "./product-fullstack";
@@ -158,4 +162,42 @@ test("executing the launcher retains direct Bun normalized argv and sets telemet
     expect(actual.next).toBe("1");
     expect(actual.astro).toBe("1");
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+
+test("fixture admission removes all seeded and stale project files, not runtime files", async () => {
+  const runtime = createRuntime({ filesystem: { mode: "memory", workerURL: new URL("../../node_modules/waffle/browser/fs-worker.ts", import.meta.url) } });
+  const fs = runtime.filesystem;
+  try {
+    await fs.mkdirp("/home/user/stale/nested");
+    for (const [path, contents] of Object.entries(examples)) await fs.writeFile(`/home/user/${path}`, contents);
+    await fs.writeFile("/home/user/stale/nested/unrelated.ts", "export const stale = true;");
+    await fs.writeFile("/home/user/.matrix-command.ts", "stale launcher");
+    await fs.mkdirp("/usr/local/lib");
+    await fs.writeFile("/usr/local/lib/runtime.ts", "preserved runtime");
+    expect(await fs.readFile("/home/user/db.ts")).not.toBeNull();
+    await runInNewContext(`(${resetBrowserProject.toString()})()`, { globalThis: { playground: { fs } } });
+    expect(await fs.listFiles("/home/user")).toEqual([]);
+    const app = nextApps.find(app => app.id === "next-15-pages");
+    if (!app) throw new Error("Missing Next pages fixture");
+    const files = projectFiles(app, "http://127.0.0.1:12345");
+    for (const [path, contents] of Object.entries(files)) await fs.writeFile(`/home/user/${path}`, contents);
+    expect((await fs.listFiles("/home/user")).sort()).toEqual(Object.keys(files).map(path => `/home/user/${path}`).sort());
+    for (const [path, contents] of Object.entries(files)) expect(new TextDecoder().decode(await fs.readFile(`/home/user/${path}`))).toBe(contents);
+    expect(new TextDecoder().decode(await fs.readFile("/usr/local/lib/runtime.ts"))).toBe("preserved runtime");
+    await runInNewContext(`(${resetBrowserProject.toString()})()`, { globalThis: { playground: { fs } } });
+    expect(await fs.listFiles("/home/user")).toEqual([]);
+  } finally { await runtime.dispose(); }
+});
+
+test("the browser clears fixture sources after readiness and before project overlay or install", () => {
+  const source = readFileSync(new URL("./browser.mjs", import.meta.url), "utf8");
+  const ready = source.indexOf("if (!(await ready(page)).includes");
+  const reset = source.indexOf("await page.evaluate(resetBrowserProject)", ready);
+  const write = source.indexOf("Object.entries(projectFiles(app, registry))", ready);
+  const install = source.indexOf('await run(page, "bun install"', ready);
+  expect(ready).toBeGreaterThanOrEqual(0);
+  expect(reset).toBeGreaterThan(ready);
+  expect(write).toBeGreaterThan(reset);
+  expect(install).toBeGreaterThan(write);
 });

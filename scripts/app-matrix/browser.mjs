@@ -10,7 +10,7 @@ import { observeProductTraffic, productObservations } from "./product-browser.ts
 import { failure, stageOutput } from "./classify.ts";
 import { BlockedBrowserNetworkError } from "./product-campaign.ts";
 import { browserRegistryRoute } from "./registry-request.ts";
-import { browserCommand, browserLauncher } from "./browser-environment.ts";
+import { browserCommand, browserLauncher, resetBrowserProject } from "./browser-environment.ts";
 
 export function earlyServerExit(command, stage) {
   const classified = failure(command.output, stage);
@@ -138,6 +138,7 @@ export async function browserHost({ root, options, launch, stop }) {
     try {
       await page.goto(`${await serve()}?engine=${engine}`);
       if (!(await ready(page)).includes("ready")) throw new Error(`Playground engine ${engine} failed to load`);
+      await page.evaluate(resetBrowserProject);
       for (const [path, contents] of Object.entries(projectFiles(app, registry))) await writeFile(page, `/home/user/${path}`, contents);
       await writeFile(page, "/home/user/.matrix-command.ts", browserLauncher);
       const installed = await run(page, "bun install", options.timeout);
