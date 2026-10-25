@@ -124,28 +124,6 @@ export async function processControls(eventsFactory: (internal: object) => Funct
   assert.equal(consumed.ticks.length, 0);
   controls.push("unhandled error event retains identity after reset; supplied callback consumes it without extra ticks");
 
-  const reader = fixture();
-  const stdin = reader.guest.stdin;
-  const seen: unknown[] = [];
-  stdin.on("data", data => seen.push(data));
-  stdin.on("end", () => seen.push("end"));
-  stdin.on("close", () => seen.push("close"));
-  assert.equal(reader.state.reads, 0);
-  assert.equal(reader.immediates.length, 1);
-  assert.equal(stdin.setEncoding("utf8"), stdin);
-  assert.equal(stdin.resume(), stdin);
-  assert.equal(stdin.pause(), stdin);
-  reader.drain(reader.immediates);
-  assert.deepEqual(seen, ["input", "end", "close"]);
-  assert.equal(reader.state.reads, 1);
-  assert.equal(stdin.readable, true);
-  const first = stdin[Symbol.asyncIterator]();
-  const second = stdin[Symbol.asyncIterator]();
-  const iteratorResults = [await first.next(), await second.next()];
-  assert.equal(iteratorResults.length, 2);
-  assert.equal(reader.state.reads, 3);
-  controls.push("reader delayed one-shot event read, delivery-time encoding, pause identity, and repeated iterator reads");
-
   const env = fixture();
   const raw = { identity: true };
   Object.defineProperty(env.guest.env, "ACCESSOR", { configurable: true, enumerable: true, get: () => raw });
@@ -243,7 +221,7 @@ export async function processControls(eventsFactory: (internal: object) => Funct
 
   const shape = fixture();
   const shapes: Record<string, string[]> = {};
-  for (const name of ["stdout", "stderr", "stdin"] as const) {
+  for (const name of ["stdout", "stderr"] as const) {
     const descriptor = Object.getOwnPropertyDescriptor(shape.guest, name);
     assert.equal(typeof descriptor!.get, "function");
     assert.equal(descriptor!.set, undefined);
@@ -260,7 +238,7 @@ export async function processControls(eventsFactory: (internal: object) => Funct
   });
   controls.push("lazy stdio getter descriptors, memoized stream identity, emitter prototypes, and own-key order");
   shapes.process = Reflect.ownKeys(shape.guest).map(String);
-  assert.deepEqual(shape.emitterCalls, [[], [], [], []]);
+  assert.deepEqual(shape.emitterCalls, [[], [], []]);
   const descriptors = Object.fromEntries(Reflect.ownKeys(shape.guest).map(key => {
     const descriptor = Object.getOwnPropertyDescriptor(shape.guest, key)!;
     return [String(key), { enumerable: descriptor.enumerable, configurable: descriptor.configurable,

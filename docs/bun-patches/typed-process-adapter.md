@@ -6,14 +6,15 @@ Its reference APIs are Bun's `src/bun.js/bindings/BunProcess.cpp` at
 The migration pins our JavaScript at `ac43127c85addabed7e0c2a4883247ae074e858c`.
 No upstream implementation was imported or changed.
 
-The three prototype-only emitter allocations keep their original objects and constructor-call
+The process and writer prototype-only emitter allocations keep their original objects and constructor-call
 positions. Typed results of the existing Object.assign calls describe the later fields. A queued
 writer flush captures its exact Failure object. Shared failure stays present during callbacks,
 including reentrant appends, and resets only after normal callback return. A throw still aborts
 reset and leaves subsequent writes attached to the old failure without scheduling another flush.
 
-Outside the separately recorded [cursor additions](stdio-cursor.md), all other executable
-AST nodes match the pinned original. The five immediate erased bitwise operand bridges keep unknown inputs and the original coercion and exceptions. They neither
+Except for the separately recorded [nonblocking stdin adapter](process-stdin-identity.md)
+and [cursor additions](stdio-cursor.md), other executable AST nodes match the pinned original.
+The five immediate erased bitwise operand bridges keep unknown inputs and the original coercion and exceptions. They neither
 store a narrowed value nor call Number. Two erased map non-null proofs follow the existing
 has/set initialization and traversal of that same map's numeric keys. Environment descriptors
 and Symbol keys retain raw unknown values; the worker hook retains its method-call receiver.
@@ -21,10 +22,10 @@ Only the hook input declaration changes, not worker serialization or worker impl
 The held worker-owned GuestProcess view is not broadened into the new process factory's type.
 
 `scripts/runtime-process.test.ts` reverses each approved executable change and checks the
-original AST hash, strict directive and token positions. Its original/converted factory controls
+original AST hash, strict directive and token positions. The frozen pre-change reader is restored only for this guard; its obsolete one-shot-read behavior is replaced by dedicated stdin controls. Its original/converted factory controls
 cover own-key order, descriptors, constructor-call state, reentrancy, thrown callbacks, errors,
 exit coercion, environment hooks and signals. `runtime-ts-process` pins the real guest adapter;
-native reference differences are evidence, not reasons to change the guest's expected output.
+native reference differences remain evidence. The stdin fixture now resumes after its pause check and expects unreadable state at EOF.
 
 Recovery keeps the same runtime source and emitted bytes. Additional controls reject callback
 snapshots, reset-on-throw, callback receiver changes, and Symbol value coercion. They exercise

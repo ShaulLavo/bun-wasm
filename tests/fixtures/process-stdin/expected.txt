@@ -1,0 +1,1 @@
+PASS process stdin events and iterator before EOF
