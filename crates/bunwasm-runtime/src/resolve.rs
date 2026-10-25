@@ -71,6 +71,7 @@ pub const NODE_BUILTINS: &[&str] = &[
     "timers",
     "timers/promises",
     "tls",
+    "trace_events",
     "tty",
     "url",
     "util",
