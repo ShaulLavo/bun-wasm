@@ -13,6 +13,7 @@
         "tests/package/fixtures/vite-main.ts",
         "scripts/**/*.test.ts",
         "scripts/fixtures/crypto-host-native-control.ts",
+        "scripts/fixtures/event-rejections-control.ts",
         "scripts/fixtures/runtime-js-child.ts",
         "scripts/migrations/*.ts",
         "scripts/bench-module-preparation.ts",

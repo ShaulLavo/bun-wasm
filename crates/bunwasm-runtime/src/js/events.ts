@@ -3,7 +3,8 @@
 (function (internal: BunWasm.Internal): BunWasm.Events.Constructor {
   "use strict";
 
-  type Emitter = BunWasm.Events.Emitter;
+  type CaptureState = { [kCapture]?: boolean };
+  type Emitter = BunWasm.Events.Emitter & CaptureState;
   type Name = BunWasm.Events.Name;
   type Listener = BunWasm.Events.Listener;
   type List = BunWasm.Events.List;
@@ -12,6 +13,7 @@
   type Item = BunWasm.Events.Item;
 
 
+  const kCapture = Symbol("kCapture");
   const kErrorMonitor = Symbol("events.errorMonitor");
   const kCaptureRejection = Symbol.for("nodejs.rejection");
   let defaultMaxListeners = 10;
@@ -94,7 +96,7 @@
   const proto: BunWasm.Events.Prototype = EventEmitter.prototype;
   proto._eventsCount = 0;
 
-  EventEmitter.init = function init(this: BunWasm.Events.InitialState, opts?: Options) {
+  EventEmitter.init = function init(this: BunWasm.Events.InitialState & CaptureState, opts?: Options) {
     if (this._events === undefined || this._events === Object.getPrototypeOf(this)._events) {
       this._events = Object.create(null);
       this._eventsCount = 0;
@@ -105,6 +107,7 @@
         throw invalidArgType("options.captureRejections", "of type boolean", opts.captureRejections);
       }
     }
+    this[kCapture] = opts?.captureRejections || captureRejectionsDefault;
   };
 
   function ensureEvents(target: Emitter) {
@@ -200,14 +203,44 @@
     throw err;
   }
 
-  function callListeners(target: Emitter, handler: Listener | List, args: unknown[]) {
+  function emitRejection(target: Emitter, error: unknown, type: Name, args: unknown[]) {
+    const handler = Reflect.get(target, kCaptureRejection);
     if (typeof handler === "function") {
-      handler.apply(target, args);
+      const rejectionArgs: unknown[] = [error, type];
+      Reflect.apply(handler, target, rejectionArgs.concat(args));
+      return;
+    }
+    const previous = target[kCapture];
+    try {
+      target[kCapture] = false;
+      target.emit("error", error);
+    } finally {
+      target[kCapture] = previous;
+    }
+  }
+
+  function captureResult(target: Emitter, result: unknown, type: Name, args: unknown[]) {
+    if (!target[kCapture] || result === undefined || result === null) return;
+    try {
+      const then = Reflect.get(Object(result), "then");
+      if (typeof then !== "function") return;
+      const reject = (error: unknown) => internal.nextTick(() => emitRejection(target, error, type, args));
+      Reflect.apply(then, result, [undefined, reject]);
+    } catch (error) {
+      target.emit("error", error);
+    }
+  }
+
+  function callListeners(target: Emitter, handler: Listener | List, type: Name, args: unknown[]) {
+    if (typeof handler === "function") {
+      captureResult(target, handler.apply(target, args), type, args);
       return;
     }
     // Copy so listeners added or removed during emit don't affect this round.
     const listeners = handler.slice();
-    for (let i = 0; i < listeners.length; i++) listeners[i].apply(target, args);
+    for (let i = 0; i < listeners.length; i++) {
+      captureResult(target, listeners[i].apply(target, args), type, args);
+    }
   }
 
   function unwrapListeners(list: List) {
@@ -236,7 +269,7 @@
       if (type === "error") throwUnhandledError(this, args);
       return false;
     }
-    callListeners(this, handler, args);
+    callListeners(this, handler, type, args);
     return true;
   };
 
