@@ -11,6 +11,7 @@ import { isToolCommand } from "./tool-command";
 import { ENGINE_BIN, engineEnvironment } from "../../src/executable-paths.js";
 import { claimOutcome, readOutcome, type OutcomeWord } from "waffle/proc/outcome";
 import { waitStatus } from "waffle/proc/wait-status";
+import { installLookupServer } from "./net/lookup.js";
 import type { Engine, RunRequest, WorkerMessage } from "./bun-executor";
 
 let toolsModule: Promise<WebAssembly.Module> | undefined;
@@ -67,7 +68,9 @@ const registeredPrograms = new WeakMap<Runtime, Set<string>>();
 /** Starts `bun <args>` in a fresh worker, rooting a process tree in the page's runtime. */
 export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const ring = options.adapter !== "preview1" && globalThis.crossOriginIsolated === true ? createRing() : null;
+  const lookupChannel = options.engine === "browser" && options.adapter !== "preview1" ? new MessageChannel() : null;
   let helper: RuntimeNetworkHelper | undefined;
+  let disposeLookup: (() => void) | undefined;
   const moduleCache = options.moduleScope ? `bunwasm-m-${crypto.randomUUID()}` : null;
   // The runtime exists only on an isolated page, so every run roots a process tree. The root
   // worker, its children and the shell all spawn through the same service; its transport and
@@ -85,6 +88,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     trace: options.trace ?? false,
     net: ring,
     moduleCache,
+    lookupPort: lookupChannel?.port2,
     slots: slotsMode(),
   };
   let rootOutcome: OutcomeWord | null = null;
@@ -104,6 +108,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (workerStopped) return;
     workerStopped = true;
     request.filesystem.port.close();
+    request.lookupPort?.close();
+    disposeLookup?.();
     worker?.terminate();
     try { helper?.dispose(); }
     finally { if (moduleCache) void caches.delete(moduleCache); }
@@ -264,15 +270,20 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (preparationStopped()) return;
     if (options.adapter !== "preview1" && isToolCommand(options.args)) request.module = await loadTools();
     if (preparationStopped()) return;
-    if (ring) {
-      const network = await options.runtime.network();
+    let network;
+    if (ring || lookupChannel) {
+      network = await options.runtime.network();
       if (preparationStopped()) return;
-      helper = createBunNetworkHelper(network, ring, options.network);
-      if (workerStopped) return helper.dispose();
+      if (lookupChannel) disposeLookup = installLookupServer(lookupChannel.port1, network);
+      if (ring) {
+        helper = createBunNetworkHelper(network, ring, options.network);
+        if (workerStopped) return helper.dispose();
+      }
       if (preparationStopped()) return;
     }
     if (!preparationStopped() && worker) {
-      worker.postMessage(request, [request.filesystem.port]);
+      const transfers = [request.filesystem.port].concat(request.lookupPort ? [request.lookupPort] : []);
+      worker.postMessage(request, transfers);
       watchOutcome();
     }
   })().catch(error => finish({ code: 126, error: String(error) }));

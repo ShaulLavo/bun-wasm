@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/dns-lookup.test.ts",
+  "localRuntime": true
+}
