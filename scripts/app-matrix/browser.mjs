@@ -8,6 +8,7 @@ import { verifyBrowserServer, stoppedPreviewError } from "./server-browser.ts";
 import { observeHmr } from "./hmr.ts";
 import { observeProductTraffic, productObservations } from "./product-browser.ts";
 import { failure, stageOutput } from "./classify.ts";
+import { BlockedBrowserNetworkError } from "./product-campaign.ts";
 
 export function earlyServerExit(command, stage) {
   const classified = failure(command.output, stage);
@@ -150,7 +151,7 @@ export async function browserHost({ root, options, launch, stop }) {
         record(app, engine, "playground", command.name, ["bun"].concat(command.args), checked);
       }
       writeFileSync(join(options.output, `${app.id}-${engine}-playground.log`), await terminalText(page));
-      if (external.length) throw new Error(`Browser attempted external network: ${external.join(", ")}`);
+      if (external.length) throw new BlockedBrowserNetworkError(external);
     } finally { await context.close(); }
   }
 

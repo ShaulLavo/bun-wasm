@@ -11,6 +11,7 @@ import { exitProvenance } from "./exit-provenance.ts";
 import { earlyServerExit } from "./browser.mjs";
 import { completeObservations } from "./product-browser.ts";
 import { productScoreboard, unlockCandidates } from "./product-report.ts";
+import { networkGuardStage, runProductBrowserCase } from "./product-campaign.ts";
 import { guestProvenance, verifyPlaygroundBuilds } from "./product-provenance.ts";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
@@ -235,6 +236,17 @@ function report(provenance) {
   }
 }
 
+const measurementErrors = [];
+
+async function browserApp(app, engine) {
+  const run = () => browserSession.runApp({ app, engine, registry: mirror.base, record });
+  if (!options.product) return run();
+  const result = await runProductBrowserCase(run);
+  if (result.kind === "complete") return;
+  measurementErrors.push({ app: app.id, engine, urls: result.urls, message: result.message });
+  record(app, engine, "playground", networkGuardStage, [], { status: "fail", blocker: result.message });
+}
+
 let infrastructureError;
 let revision;
 try {
@@ -256,7 +268,7 @@ try {
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-types.ts", "product-report.ts", "product-provenance.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
   if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.map(engine => [wasmName[engine], artifacts[engine].sha256])));
   mirror = await registry({ directory: options.cache, record: options.record });
@@ -267,7 +279,7 @@ try {
     if (options.reference || (options.record && !options.product)) await nativeApp(app, "reference", true);
     if (options.hosts.includes("native")) for (const engine of options.engines) await nativeApp(app, engine);
     if (options.hosts.includes("playground") && (options.product || browserSubset.includes(app.id))) {
-      for (const engine of options.engines) await browserSession.runApp({ app, engine, registry: mirror.base, record });
+      for (const engine of options.engines) await browserApp(app, engine);
     }
 
     };
@@ -286,9 +298,9 @@ try {
       runner_sources: runnerSources,
       playground_builds: playgroundBuilds,
       launcher_sha256: launcherDigest,
-      registry: mirror?.snapshot(), infrastructureError });
+      registry: mirror?.snapshot(), infrastructureError, blocked_external_network: measurementErrors });
   } finally { await cleanup(); }
 }
 const counts = Object.fromEntries(["pass", "fail", "blocked"].map(status => [status, results.filter(row => row.status === status).length]));
 console.log(JSON.stringify({ counts, output: options.output, cleanup: !existsSync(scratch), registry: mirror?.snapshot() }));
-process.exitCode = infrastructureError || mirror?.misses.length || mirror?.errors.length || (options.strict && results.some(row => row.status !== "pass")) ? 1 : 0;
+process.exitCode = infrastructureError || measurementErrors.length || mirror?.misses.length || mirror?.errors.length || (options.strict && results.some(row => row.status !== "pass")) ? 1 : 0;

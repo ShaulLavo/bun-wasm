@@ -1,3 +1,5 @@
+import { networkGuardStage } from "./product-campaign";
+
 export interface ProductResultRow {
   app: string;
   engine: string;
@@ -26,9 +28,10 @@ export function observedSignature(message: string): Signature {
 }
 
 export function unlockCandidates(rows: readonly ProductResultRow[]) {
+  const invalid = new Set(rows.filter(row => row.stage === networkGuardStage && row.engine === "browser" && row.host === "playground").map(row => row.app));
   const groups = new Map<string, { signature: Signature; projects: Set<string>; stages: Set<string> }>();
   for (const row of rows) {
-    if (row.engine !== "browser" || row.host !== "playground" || row.status !== "fail") continue;
+    if (row.engine !== "browser" || row.host !== "playground" || row.status !== "fail" || invalid.has(row.app)) continue;
     const signature = observedSignature(row.blocker ?? "");
     const group = groups.get(signature.id) ?? { signature, projects: new Set<string>(), stages: new Set<string>() };
     group.projects.add(row.app);
@@ -55,12 +58,13 @@ export function productScoreboard(rows: readonly ProductResultRow[], projects: r
   const lines = ["| Project | Install | Dev/page | Hot edit | Build/tool | Start/preview |", "| --- | --- | --- | --- | --- | --- |"];
   for (const project of projects) {
     const app = measured.filter(row => row.app === project.id);
+    const invalid = app.some(row => row.stage === networkGuardStage);
     const commands = project.commands.map(command => command.name);
     const development = commands.filter(name => name === "dev");
     const hot = project.commands.filter(command => command.name === "dev" && command.check.hmr).map(command => `${command.name}:hmr`);
     const build = commands.filter(name => !["dev", "start", "preview"].includes(name));
     const serve = commands.filter(name => name === "start" || name === "preview");
-    const cells = [["install"], development, hot, build, serve].map(stages => stages.length ? cell(app, stages) : "Not applicable");
+    const cells = [["install"], development, hot, build, serve].map(stages => stages.length ? invalid ? "Measurement error" : cell(app, stages) : "Not applicable");
     lines.push(`| ${project.id} | ${cells.join(" | ")} |`);
   }
   return lines.join("\n") + "\n";
