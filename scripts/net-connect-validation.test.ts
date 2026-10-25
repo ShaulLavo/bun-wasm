@@ -52,7 +52,7 @@ function fixture(connect = true) {
       if (name === "events") return EventEmitter;
       if (name === "buffer") return { Buffer };
       if (name === "net_address") return address;
-      if (name === "net_hostname" || name === "node_net_server") return factory(name, "ts")(internal);
+      if (name === "net_hostname" || name === "node_net_server" || name === "node_net_socket_options") return factory(name, "ts")(internal);
       return held();
     },
   };
