@@ -48,10 +48,16 @@ the Bun JSON and pipe metadata surface (`Bun.spawn`, `Bun.spawnSync`, `node:chil
 wrappers, readable stream helpers, `maxBuffer`, `timeout`, `killSignal`) and now builds every
 child from descriptor bindings and classifies outcomes only from typed `wait` results.
 Caller-controlled stdin conversion and streaming validation run before descriptors or children
-are allocated. A synchronous child that closes stdin early discards further input on EPIPE,
-while stdout/stderr and the actual typed result continue to drain; Node Writable destruction
-closes the underlying process writer so children observe EOF. These input/lifetime rules and
-their fake-host and real-guest regressions are original adapters, not copied Bun/Node stream code.
+are allocated. Sink writes retain partial pipe data until the bounded writer drains, so Node
+Writable write and final callbacks cannot report success before the child has received all queued
+input; early EPIPE, explicit destruction and child failure settle those callbacks with an error.
+A synchronous child that closes stdin early discards further input on EPIPE, while stdout/stderr
+and the actual typed result continue to drain; Node Writable destruction closes the underlying
+process writer so children observe EOF. Async Web streams and Node readable adapters only pull
+when downstream demand exists and stop when `push()` returns false, while explicit
+`text`/`bytes`/`arrayBuffer`/`json` capture helpers retain their own `maxBuffer` policy instead
+of applying a lifetime limit to consumed streams. These input/lifetime and demand rules and their
+fake-host and real-guest regressions are original adapters, not copied Bun/Node stream code.
 Ordinary children join the caller's job from `job_of(0)`; lookup failure is a spawn error,
 not a fallback to a separate job. Detached children request their own job, which the parent
 can reap with `wait_job` or stop with `kill_job`. Before allocating any descriptor or child,

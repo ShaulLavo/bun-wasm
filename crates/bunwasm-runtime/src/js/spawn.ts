@@ -78,11 +78,12 @@
     worker: { input: number; output: number } | null;
     ipc: BunWasm.IpcDescriptors | null;
   }
+  type SinkCallback = (error?: unknown) => void;
   interface Sink {
-    write(chunk: unknown): number;
+    write(chunk: unknown, callback?: SinkCallback): number;
     flush(): boolean;
-    destroy(): void;
-    end(chunk?: unknown): void;
+    destroy(error?: unknown): void;
+    end(chunk?: unknown, callback?: SinkCallback): void;
     watch(): Uint8Array;
     readonly closed: boolean;
     ref(): Sink;
@@ -90,8 +91,8 @@
   }
   interface OutputState {
     fd: number;
-    size: number;
     discard: boolean;
+    ready(): boolean;
     end(): void;
     error(error: unknown): void;
     consume(chunk: Uint8Array): void;
@@ -121,7 +122,6 @@
   }
   const web = internal.web as unknown as {
     ReadableStream: new(source: UnderlyingDefaultSource<Uint8Array>) => ReadableStream<Uint8Array>;
-    Response: new(body: ReadableStream<Uint8Array>) => Response;
   };
 
   function unsupported(message: string) {
@@ -388,7 +388,7 @@
 
   // Bounded steps let the synchronous path drain all pipes while stdin is written.
   function readPipe(state: OutputState, consume: (chunk: Uint8Array) => void): boolean {
-    if (state.fd < 0) return false;
+    if (state.fd < 0 || !state.ready()) return false;
     const chunk = native.procRead(state.fd, 65536);
     if (chunk === AGAIN) return false;
     if (typeof chunk !== "number") {
@@ -404,41 +404,81 @@
   }
 
   function writer(fd: number): Sink {
-    const queue: Uint8Array[] = [];
+    const queue: { data: Uint8Array; callback?: SinkCallback }[] = [];
     let closing = false;
+    let endCallback: SinkCallback | undefined;
     let closed = fd < 0;
+    function complete(callback: SinkCallback | undefined, error?: unknown) {
+      if (callback) callback(error);
+    }
+    function fail(error: unknown) {
+      const pending = queue.splice(0);
+      for (const item of pending) complete(item.callback, error);
+      const callback = endCallback;
+      endCallback = undefined;
+      complete(callback, error);
+    }
+    function close() {
+      if (closed) return;
+      native.procClose(fd);
+      closed = true;
+    }
     function flush() {
       if (closed) return true;
-      if (queue.length) {
-        const chunk = queue[0];
-        const count = native.procWrite(fd, chunk);
+      while (queue.length) {
+        const item = queue[0]!;
+        const count = native.procWrite(fd, item.data);
         if (count === AGAIN || count === 0) return false;
         if (count < 0) {
           // A write to a pipe nobody reads fails like Node's stream write.
-          if (-count === 64) throw Object.assign(new Error("write EPIPE"), { code: "EPIPE", errno: -32, syscall: "write" });
-          throw processError(count, "write");
+          const error = -count === 64
+            ? Object.assign(new Error("write EPIPE"), { code: "EPIPE", errno: -32, syscall: "write" })
+            : processError(count, "write");
+          fail(error);
+          close();
+          throw error;
         }
-        if (count === chunk.length) queue.shift();
-        else queue[0] = chunk.subarray(count);
+        if (count === item.data.length) {
+          queue.shift();
+          complete(item.callback);
+        } else {
+          item.data = item.data.subarray(count);
+          return false;
+        }
       }
-      if (!queue.length && closing) {
-        native.procClose(fd);
-        closed = true;
+      if (closing) {
+        close();
+        const callback = endCallback;
+        endCallback = undefined;
+        complete(callback);
       }
       return closed || !queue.length;
     }
     const sink: Sink = {
-      write(chunk) {
-        if (closed || closing) throw Object.assign(new Error("write after end"), { code: "EPIPE", errno: -32, syscall: "write" });
+      write(chunk, callback) {
+        if (closed || closing) {
+          const error = Object.assign(new Error("write after end"), { code: "EPIPE", errno: -32, syscall: "write" });
+          complete(callback, error);
+          throw error;
+        }
         const data = bytes(chunk);
-        if (data.length) queue.push(data.slice());
+        if (data.length) queue.push({ data: data.slice(), callback });
+        else complete(callback);
         flush();
         return data.length;
       },
       flush,
-      destroy() { if (!closed) native.procClose(fd); closed = true; queue.length = 0; },
-      end(chunk?: unknown) {
-        if (chunk !== undefined) sink.write(chunk);
+      destroy(error) {
+        if (closed) return;
+        close();
+        fail(error);
+      },
+      end(chunk, callback) {
+        if (chunk !== undefined) {
+          try { sink.write(chunk); }
+          catch (error) { complete(callback, error); throw error; }
+        }
+        if (callback) endCallback = callback;
         closing = true;
         flush();
       },
@@ -486,36 +526,67 @@
     const sink = writer(spec.stdinFd);
     const outputs: (Pipe | null)[] = [];
     const maxBuffer = spec.options.maxBuffer === undefined ? DEFAULT_MAX_BUFFER : Number(spec.options.maxBuffer);
+    async function capture(stream: Pipe): Promise<Uint8Array> {
+      const reader = stream.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      for (;;) {
+        const result = await reader.read();
+        if (result.done) break;
+        const chunk = result.value;
+        chunks.push(chunk);
+        size += chunk.length;
+        if (size <= maxBuffer) continue;
+        child.exitedDueToMaxBuffer = true;
+        child.kill(spec.options.killSignal);
+        await reader.cancel();
+        break;
+      }
+      return internal.concatBytes(chunks);
+    }
     const states = spec.outputFds.map((fd, index): OutputState => {
-      const state: OutputState = { fd, size: 0, discard: spec.discard[index], end() {}, error() {}, consume() {} };
+      const discard = spec.discard[index];
+      let requested = fd >= 0 && !discard;
+      const state: OutputState = { fd, discard, ready: () => !cancelled && requested, end() {}, error() {}, consume() {} };
       let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
       let wake: (() => void) | null = null;
       let cancelled = false;
       let ended = false;
       const notify = () => { if (wake) wake(); wake = null; };
-      const stream = fd >= 0 && !state.discard ? new web.ReadableStream({
+      const wakeIo = () => {
+        const host = native as unknown as { wake?: (timeout: number) => void };
+        host.wake?.(0);
+      };
+      const stream = fd >= 0 && !discard ? new web.ReadableStream({
         start(c) { controller = c; },
-        pull() { if (state.fd >= 0) return new Promise<void>((resolve) => { wake = resolve; }); },
-        cancel() { cancelled = true; if (state.fd >= 0) native.procClose(state.fd); state.fd = -1; notify(); },
+        pull() {
+          requested = true;
+          wakeIo();
+          if (state.fd >= 0) return new Promise<void>((resolve) => { wake = resolve; });
+        },
+        cancel() {
+          cancelled = true;
+          requested = false;
+          if (state.fd >= 0) native.procClose(state.fd);
+          state.fd = -1;
+          notify();
+          wakeIo();
+        },
       }) : null;
-      state.end = () => { if (controller && !cancelled && !ended) controller.close(); ended = true; notify(); };
-      state.error = (error) => { if (controller && !cancelled && !ended) controller.error(error); ended = true; notify(); };
+      state.ready = () => !cancelled && (discard || requested);
+      state.end = () => { requested = false; if (controller && !cancelled && !ended) controller.close(); ended = true; notify(); };
+      state.error = (error) => { requested = false; if (controller && !cancelled && !ended) controller.error(error); ended = true; notify(); };
       state.consume = (chunk) => {
-        if (!cancelled) controller!.enqueue(chunk);
+        if (cancelled) return;
+        if (!discard) requested = false;
+        controller?.enqueue(chunk);
         notify();
-        state.size += chunk.length;
-        if (state.size <= maxBuffer) return;
-        child.exitedDueToMaxBuffer = true;
-        child.kill(spec.options.killSignal);
-        native.procClose(state.fd);
-        state.fd = -1;
-        state.end();
       };
       outputs.push(stream && Object.assign(stream, {
-        text: () => new web.Response(stream).text(),
-        bytes: () => (globalThis as unknown as { Bun: { readableStreamToBytes(stream: unknown): Promise<Uint8Array> } }).Bun.readableStreamToBytes(stream),
-        arrayBuffer: () => new web.Response(stream).arrayBuffer(),
-        json: () => new web.Response(stream).json(),
+        text: () => capture(stream).then((data) => new TextDecoder().decode(data)),
+        bytes: () => capture(stream),
+        arrayBuffer: () => capture(stream).then((data) => data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)),
+        json: () => capture(stream).then((data) => JSON.parse(new TextDecoder().decode(data))),
       }));
       return state;
     });
@@ -599,6 +670,9 @@
       }
       return waitChild(spec);
     }
+    function refreshRef() {
+      waiter.ref = !settled || states.some((state) => state.ready());
+    }
     function step() {
       if (closed) return true;
       if (!settled) {
@@ -609,7 +683,10 @@
           pendingSpawn = false;
           (spec.options._onSpawn as () => void)();
         }
-        if (status) { sink.destroy(); finish(status); }
+        if (status) {
+          sink.destroy(Object.assign(new Error("stdin closed before drain"), { code: "EPIPE", errno: -32, syscall: "write" }));
+          finish(status);
+        }
       }
       if (!settled) {
         try { sink.flush(); } catch (error) {
@@ -627,12 +704,13 @@
         if (!spec.options._worker) close();
         return true;
       }
+      refreshRef();
       return progress ? "progress" : false;
     }
     // What the idle event loop sleeps on: output, a blocked stdin write, and the exit itself.
     function subscriptions() {
       const list: Uint8Array[] = [];
-      for (const state of states) if (state.fd >= 0) list.push(subscription(READABLE, state.fd));
+      for (const state of states) if (state.fd >= 0 && state.ready()) list.push(subscription(READABLE, state.fd));
       if (!settled) {
         list.push(subscription(CHILD_EXIT, spec.pid));
         if (observingStart) list.push(subscription(CHILD_START, spec.pid));
@@ -652,6 +730,7 @@
         state.fd = -1;
         state.error(error);
       }
+      sink.destroy(error);
       close();
       rejectExit(error);
     }
@@ -683,7 +762,7 @@
     validateCommandLength(cmd);
     const spec = start(cmd, options, true);
     const chunks: Uint8Array[][] = [[], []];
-    const states = spec.outputFds.map((fd, index): OutputState => ({ fd, size: 0, discard: spec.discard[index], end() {}, error() {}, consume() {} }));
+    const states = spec.outputFds.map((fd, index): OutputState => ({ fd, discard: spec.discard[index], ready: () => true, end() {}, error() {}, consume() {} }));
     const sink = writer(spec.stdinFd);
     const started = native.now();
     const maxBuffer = spec.options.maxBuffer === undefined ? DEFAULT_MAX_BUFFER : Number(spec.options.maxBuffer);
@@ -794,15 +873,35 @@
 
     function nodeReadable(stream: Loose) {
       if (!stream) return null;
-      const readable = new Readable({ read() {} });
-      (readable as Loose)._childDrained = (async () => {
-        const reader = stream.getReader();
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) { readable.push(null); return; }
-          readable.push(Buffer.from(value));
+      const readable = new Readable({ read() { void pump(); } });
+      const reader = stream.getReader();
+      let pumping = false;
+      let ended = false;
+      let resolveDrained!: () => void;
+      const drained = new Promise<void>((resolve) => { resolveDrained = resolve; });
+      async function pump() {
+        if (pumping || ended) return;
+        pumping = true;
+        try {
+          while (!ended) {
+            const { value, done } = await reader.read();
+            if (done) {
+              ended = true;
+              readable.push(null);
+              resolveDrained();
+              return;
+            }
+            if (!readable.push(Buffer.from(value))) return;
+          }
+        } catch (error) {
+          ended = true;
+          readable.destroy(error);
+          resolveDrained();
+        } finally {
+          pumping = false;
         }
-      })().catch((error) => readable.destroy(error));
+      }
+      (readable as Loose)._childDrained = drained;
       return readable;
     }
 
@@ -810,11 +909,20 @@
       if (!sink) return null;
       return new Writable({
         write(chunk, encoding, callback) {
-          try { sink.write(typeof chunk === "string" ? Buffer.from(chunk, encoding) : chunk); callback(); }
+          let completed = false;
+          const complete = (error?: unknown) => {
+            if (completed) return;
+            completed = true;
+            callback(error);
+          };
+          try { sink.write(typeof chunk === "string" ? Buffer.from(chunk, encoding) : chunk, complete); }
+          catch (error) { complete(error); }
+        },
+        final(callback) {
+          try { sink.end(undefined, callback); }
           catch (error) { callback(error); }
         },
-        final(callback) { sink.end(); callback(); },
-        destroy(error, callback) { sink.destroy(); callback(error); },
+        destroy(error, callback) { sink.destroy(error); callback(error); },
       });
     }
 

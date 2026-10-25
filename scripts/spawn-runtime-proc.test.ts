@@ -24,13 +24,14 @@ test("pipes bind to child descriptors and the parent drops its child ends", asyn
   child.stdin.write("ping");
   expect(fake.childRead(record, 0)).toBe("ping");
   child.stdin.end();
+  const output = child.stdout.text();
   fake.childWrite(record, 1, "pong");
   fake.exit(record, 3);
   await pump();
   expect(await child.exited).toBe(3);
   expect(child.exitCode).toBe(3);
   expect(child.signalCode).toBeNull();
-  expect(await child.stdout.text()).toBe("pong");
+  expect(await output).toBe("pong");
   expect(record.reaped).toBe(false); // the caller's job is not ours to reap
   expect(fake.pipes.size).toBe(0);
 });
@@ -112,8 +113,8 @@ test("the idle loop sleeps on exactly the descriptors and child the waiter watch
   fake.childWrite(record, 1, "tail");
   fake.exit(record, 0);
   waiters[0].step();
-  // Exited and reaped, but output is still being drained: only the pipe remains.
-  expect(kinds().map(([kind]) => kind)).toEqual([0]);
+  // Exited with no downstream demand: keep the pipe open without reading ahead.
+  expect(kinds()).toEqual([]);
   waiters[0].step();
   expect(kinds()).toEqual([]);
 });
@@ -311,12 +312,13 @@ test("queued stdin EPIPE drops input without abandoning the still-running child"
   expect(child.stdin.closed).toBe(true);
   expect(waiters).toHaveLength(1);
   expect(fake.calls.filter((call) => call.startsWith("kill"))).toEqual([]);
+  const output = child.stdout.text();
   fake.childWrite(record, 1, "still running");
   fake.exit(record, 23);
   await pump();
   expect(await child.exited).toBe(23);
   expect(child.exitCode).toBe(23);
-  expect(await child.stdout.text()).toBe("still running");
+  expect(await output).toBe("still running");
   expect(fake.open()).toBe(0);
   expect(waiters).toHaveLength(0);
 });
@@ -701,3 +703,119 @@ for (const outcome of [[0, 0], [2, 44]] satisfies Array<[0, number] | [2, number
     expect(fake.pipes.size).toBe(0);
   });
 }
+
+test("Node stdin completion waits for bounded pipe drain", async () => {
+  const fake = service({ pipeCapacity: 8 });
+  const { module, pump, pumpTurn } = load(fake);
+  const child = module.nodeChildProcess().spawn("bun", ["drain-input"]);
+  const record = fake.children.get(child.pid)!;
+  const events: string[] = [];
+  child.stdin.on("finish", () => events.push("finish"));
+  child.stdin.on("error", (error: any) => events.push(`error:${error.code}`));
+  child.stdin.write(Buffer.from("01234567"), (error: any) => events.push(error ? `write1-error:${error.code}` : "write1"));
+  child.stdin.write(Buffer.from("89abcdef"), (error: any) => events.push(error ? `write2-error:${error.code}` : "write2"));
+  child.stdin.end((error: any) => events.push(error ? `end-error:${error.code}` : "end"));
+  await Promise.resolve();
+  expect(events).toEqual(["write1"]);
+  expect(fake.childRead(record, 0)).toBe("01234567");
+  for (let turn = 0; turn < 3 && events.length < 4; turn++) {
+    pumpTurn();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  expect(events).toEqual(["write1", "write2", "end", "finish"]);
+  expect(fake.childRead(record, 0)).toBe("89abcdef");
+  expect(fake.childRead(record, 0)).toBeNull();
+  fake.exit(record, 0);
+  await pump();
+  expect(fake.open()).toBe(0);
+});
+
+test("Node stdin destroy settles a queued write with an error", async () => {
+  const fake = service({ pipeCapacity: 4 });
+  const { module, pump, pumpTurn } = load(fake);
+  const child = module.nodeChildProcess().spawn("bun", ["cancel-input"]);
+  const record = fake.children.get(child.pid)!;
+  let writeError: any;
+  child.stdin.on("error", () => {});
+  child.stdin.write(Buffer.from("queued"), (error: any) => { writeError = error; });
+  child.stdin.destroy(Object.assign(new Error("cancelled"), { code: "ECANCELED" }));
+  await Promise.resolve();
+  expect(writeError).toMatchObject({ code: "ECANCELED" });
+  expect(child.stdin.destroyed).toBe(true);
+  fake.exit(record, 0);
+  pumpTurn();
+  await pump();
+  expect(fake.open()).toBe(0);
+});
+
+test("consumed async output is not limited by its lifetime total", async () => {
+  const fake = service();
+  const { module, pump, pumpTurn } = load(fake);
+  const child = module.spawn(["bun", "large-output"], { stdout: "pipe" });
+  const record = fake.children.get(child.pid)!;
+  const reader = child.stdout.getReader();
+  const chunk = new Uint8Array(65536);
+  let total = 0;
+  for (let index = 0; index < 1025; index++) {
+    const pending = reader.read();
+    await Promise.resolve();
+    fake.childWriteBytes(record, 1, chunk);
+    pumpTurn();
+    const result = await pending;
+    expect(result.done).toBe(false);
+    total += result.value.length;
+  }
+  expect(total).toBe(1025 * 65536);
+  fake.exit(record, 0);
+  const end = reader.read();
+  await Promise.resolve();
+  pumpTurn();
+  expect(await end).toEqual({ value: undefined, done: true });
+  await pump();
+  expect(await child.exited).toBe(0);
+  expect(child.exitedDueToMaxBuffer).toBe(false);
+  expect(fake.calls.filter((call) => call.startsWith("kill"))).toEqual([]);
+  expect(fake.open()).toBe(0);
+});
+
+test("captured async output keeps its explicit maxBuffer policy", async () => {
+  const fake = service();
+  const { module, pump, pumpTurn } = load(fake);
+  const child = module.spawn(["bun", "captured-output"], { stdout: "pipe", maxBuffer: 4 });
+  const record = fake.children.get(child.pid)!;
+  const output = child.stdout.text();
+  fake.childWrite(record, 1, "12345");
+  await Promise.resolve();
+  pumpTurn();
+  expect(await output).toBe("12345");
+  expect(child.exitedDueToMaxBuffer).toBe(true);
+  expect(fake.calls.filter((call) => call.startsWith("kill"))).toEqual(["kill:15"]);
+  await pump();
+  expect(fake.open()).toBe(0);
+});
+
+test("Node readable stops at push backpressure until resumed", async () => {
+  const fake = service();
+  const { module, pump, pumpTurn } = load(fake);
+  const child = module.nodeChildProcess().spawn("bun", ["paused-output"]);
+  const record = fake.children.get(child.pid)!;
+  const payload = new Uint8Array(1024 * 1024);
+  for (let offset = 0; offset < payload.length; offset += 65536) fake.childWriteBytes(record, 1, payload.subarray(offset, offset + 65536));
+  fake.exit(record, 0);
+  await Promise.resolve();
+  pumpTurn();
+  await Promise.resolve();
+  pumpTurn();
+  expect(child.stdout.readableLength).toBeLessThanOrEqual(65536);
+  const outputEntry = Array.from(fake.pipes.values()).find((entry) => !entry.write)!;
+  expect(outputEntry.pipe.queuedBytes).toBeGreaterThan(0);
+  let received = 0;
+  child.stdout.on("data", (data: Uint8Array) => { received += data.length; });
+  for (let turn = 0; turn < 32 && received < payload.length; turn++) {
+    await new Promise((resolve) => setImmediate(resolve));
+    pumpTurn();
+  }
+  expect(received).toBe(payload.length);
+  expect(await child._child.exited).toBe(0);
+  expect(fake.open()).toBe(0);
+});
