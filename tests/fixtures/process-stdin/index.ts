@@ -47,6 +47,23 @@ async function check(source: string) {
     await child.exited;
   }
 }
+async function checkPauseExit() {
+  const source = 'process.stdin.on("data", () => {}); setTimeout(() => { process.stdin.pause(); process.stdin.ref(); console.log("PAUSED"); }, 20);';
+  const child = Bun.spawn([process.execPath, "-e", source], { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+  let expired = false;
+  const deadline = setTimeout(() => { expired = true; child.kill(); }, 5000);
+  try {
+    assert.equal(await child.exited, 0);
+    assert.equal(expired, false, "paused child must exit without EOF");
+    assert.equal(await new Response(child.stdout).text(), "PAUSED\n");
+  } finally {
+    clearTimeout(deadline);
+    child.kill();
+    await child.stdin.end();
+    await child.exited;
+  }
+}
+await checkPauseExit();
 await check(eventSource);
 await check(iteratorSource);
 console.log("PASS process stdin events and iterator before EOF");
