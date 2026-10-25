@@ -242,6 +242,7 @@ function report(provenance) {
 const measurementErrors = [];
 
 async function browserApp(app, engine) {
+  memory.take();
   const run = () => browserSession.runApp({ app, engine, registry: mirror.base, record });
   if (!options.product) return run();
   const result = await runProductBrowserCase(run);
