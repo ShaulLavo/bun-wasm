@@ -492,7 +492,7 @@ test("WebSocket boundary caught message reads after closed state and destroy bef
     expect(observed.trace).toEqual([["destroy", 3]]);
     expect(observed.events).toEqual([]);
   }
-  boundaryEvidence.message = { rawValueForwarded: true, trace: object.trace, getterThrowTrace: getter.trace, nullish: "closed/destroy then TypeError; no events" };
+  boundaryEvidence.message = { nativeMessageConversion: true, trace: object.trace, getterThrowTrace: getter.trace, nullish: "closed/destroy then TypeError; no events" };
 });
 
 test("WebSocket boundary primitive message getter keeps its original primitive receiver", () => {
