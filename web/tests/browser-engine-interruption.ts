@@ -278,7 +278,7 @@ async function main(): Promise<boolean> {
         if (names.includes("safari")) assert.equal(process.platform, "darwin", "actual Safari runs on the Mac fleet host");
         assert.ok(!baselineDist || benchmark, "baseline artifacts are used only with --benchmark");
         assert.ok(Number.isInteger(requestedDriverPort) && (requestedDriverPort === 0 || requestedDriverPort > 1023 && requestedDriverPort < 65536), "invalid Safari driver port");
-        const inputs = ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"].map(name => ({ name, path: join(dist, name), route: `/${name}` }))
+        const inputs = ["bun.wasm", "quickjs.wasm", "bun-jsc.wasm", "bun-browser.wasm"].map(name => ({ name, path: join(dist, name), route: `/${name}` }))
           .concat(baselineDist ? ["bun.wasm", "bun-jsc.wasm"].map(name => ({ name, path: resolve(baselineDist, name), route: `/baseline/${name}` })) : []);
         for (const input of inputs) {
           const info = await stat(input.path);

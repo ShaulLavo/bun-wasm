@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MessagePort, Worker } from "node:worker_threads";
 import { FilesystemService, MemoryBackend, createFilesystemConnection } from "waffle/fs";
-import { prepareLinkPlan } from "waffle/link";
+import { prepareQuickjsProgram, programLinkPlan } from "../../../src/assets.ts";
 import { createWorkerProcessTransport } from "waffle/proc";
 
 async function runCLI(args: string[], files: Readonly<Record<string, Uint8Array | string>>) {
@@ -13,19 +13,9 @@ async function runCLI(args: string[], files: Readonly<Record<string, Uint8Array 
   assert(directory, "BUN_CORE_BUILD_DIR must name matching newly built production artifacts");
   const core = new Uint8Array(await readFile(join(directory, "bun-core.wasm")));
   const engine = new Uint8Array(await readFile(join(directory, "quickjs.wasm")));
-  const plan = await prepareLinkPlan({
-    core: {
-      id: "bun-core", source: core, cooperative: true,
-      checkpoint: { module: "runtime_proc", name: "signal" },
-      initialize: ["__wasm_call_ctors"],
-    },
-    libraries: [{
-      id: "quickjs", source: engine, cooperative: true,
-      checkpoint: { module: "env", name: "core_checkpoint" },
-      initialize: ["quickjs_initialize_memory", "quickjs_apply_data_relocs", "quickjs_call_ctors", "quickjs_register"],
-    }],
-    reserve: "bun_core_alloc",
-  });
+  const module = await prepareQuickjsProgram(core, engine);
+  const linkPlan = programLinkPlan(module);
+  assert(linkPlan);
   const backend = new MemoryBackend();
   for (const [name, source] of Object.entries(files)) backend.fs.writeFile(name, source);
   const service = new FilesystemService(backend);
@@ -35,7 +25,7 @@ async function runCLI(args: string[], files: Readonly<Record<string, Uint8Array 
   assert(filesystemPort instanceof MessagePort);
   const worker = new Worker(new URL("./checkpoint-worker.ts", import.meta.url), {
     workerData: {
-      module: plan.entryModule, linkPlan: plan.toSource(),
+      module, linkPlan,
       args, env: {}, filesystem: connection.client,
       runtimeProcess: createWorkerProcessTransport(),
     },

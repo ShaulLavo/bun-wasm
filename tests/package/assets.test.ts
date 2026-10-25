@@ -1,5 +1,6 @@
+import { quickjsPair } from "./quickjs-plan-fixture";
 import { expect, test } from "bun:test";
-import { BunWasmAssetError, loadBunWasm, type BunWasmAsset } from "../../src/assets.js";
+import { BunWasmAssetError, loadBunWasm, programLinkPlan, type BunWasmAsset } from "../../src/assets.js";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const hash = new Bun.CryptoHasher("sha256").update(wasm).digest("hex");
@@ -107,4 +108,34 @@ test("URL override keeps integrity checks", async () => {
   let requested: string | undefined;
   await loadBunWasm({ asset, wasmUrl: "https://offline.test/bun.wasm", fetch: async input => { requested = input; return new Response(wasm); } });
   expect(requested).toBe("https://offline.test/bun.wasm");
+});
+
+test("checks the paired side before preparing a QuickJS program", async () => {
+  const paired = { ...asset, quickjs: { ...asset, url: "https://example.test/immutable/quickjs.wasm", sha256: "0".repeat(64) } };
+  const requested: string[] = [];
+  await expect(loadBunWasm({ asset: paired, fetch: async url => {
+    requested.push(url);
+    return new Response(wasm);
+  } })).rejects.toThrow("SHA-256 mismatch");
+  expect(requested).toEqual([asset.url, paired.quickjs.url]);
+});
+
+test("snapshots paired metadata before the core fetch callback", async () => {
+  const paired = { ...asset, quickjs: { ...asset, url: "https://example.test/immutable/quickjs.wasm", sha256: "0".repeat(64) } };
+  await expect(loadBunWasm({ asset: paired, fetch: async () => {
+    paired.quickjs.sha256 = hash;
+    return new Response(wasm);
+  } })).rejects.toThrow("SHA-256 mismatch");
+});
+
+test("prepares the verified pair and rejects its naked core override", async () => {
+  const { core, side } = quickjsPair();
+  const describe = (url: string, bytes: Uint8Array) => ({ url, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex") });
+  const paired = { ...describe("https://example.test/bun.wasm", core), quickjs: describe("https://example.test/quickjs.wasm", side) };
+  const module = await loadBunWasm({ asset: paired, fetch: async url => new Response(url === paired.url ? core : side) });
+  const plan = programLinkPlan(module);
+  expect(plan?.core.source).toEqual(core);
+  expect(plan?.libraries[0]?.source).toEqual(side);
+  expect(await loadBunWasm({ module })).toBe(module);
+  await expect(loadBunWasm({ module: new WebAssembly.Module(core) })).rejects.toThrow("matching prepared side module");
 });

@@ -1,3 +1,4 @@
+import { prepareLinkPlan, type LinkPlanSource } from "waffle/link";
 import { BUN_WASM_ASSET } from "./guest-asset.generated.js";
 export { BUN_WASM_ASSET } from "./guest-asset.generated.js";
 
@@ -155,21 +156,58 @@ async function readLimited(stream: ReadableStream<Uint8Array<ArrayBuffer>>, limi
   return bytes;
 }
 
-/** Verify before compilation so a changed CDN response can never execute as the expected guest. */
+const programs = new WeakMap<WebAssembly.Module, LinkPlanSource>();
+
+export async function prepareQuickjsProgram(core: Uint8Array, quickjs: Uint8Array): Promise<WebAssembly.Module> {
+  const plan = await prepareLinkPlan({
+    core: {
+      id: "bun-core", source: core, cooperative: true,
+      checkpoint: { module: "runtime_proc", name: "signal" },
+      initialize: ["__wasm_call_ctors"],
+    },
+    libraries: [{
+      id: "quickjs", source: quickjs, cooperative: true,
+      checkpoint: { module: "env", name: "core_checkpoint" },
+      initialize: ["quickjs_initialize_memory", "quickjs_apply_data_relocs", "quickjs_call_ctors", "quickjs_register"],
+    }],
+    reserve: "bun_core_alloc",
+  });
+  programs.set(plan.entryModule, plan.toSource());
+  return plan.entryModule;
+}
+
+export function programLinkPlan(module: WebAssembly.Module): LinkPlanSource | undefined {
+  const plan = programs.get(module);
+  if (!plan && WebAssembly.Module.exports(module).some(entry => entry.name === "bun_core_bind_engine")) {
+    throw new BunWasmAssetError("QuickJS core requires its matching prepared side module");
+  }
+  return plan;
+}
+
 export async function loadBunWasm(options: LoadBunWasmOptions = {}): Promise<WebAssembly.Module> {
-  if (options.module) return options.module;
+  if (options.module) {
+    programLinkPlan(options.module);
+    return options.module;
+  }
   const asset = options.asset ?? BUN_WASM_ASSET;
   if (!asset) throw new BunWasmAssetError("No matching Bun guest has been published; provide asset or module");
-  // Snapshot caller-provided metadata before invoking any awaitable callback. An asset object is
-  // caller-owned, so rereading it after fetch would allow a concurrent mutation to change the
-  // integrity contract midway through loading.
-  const expectedHash = asset.sha256;
-  const expectedBytes = asset.bytes;
-  const url = options.wasmUrl?.toString() ?? asset.url;
+  const core = { url: options.wasmUrl?.toString() ?? asset.url, sha256: asset.sha256, bytes: asset.bytes };
+  const side = asset.quickjs ? { ...asset.quickjs } : undefined;
+  const fetch = options.fetch ?? globalThis.fetch;
+  const bytes = await loadFile(core, fetch);
+  if (side) return prepareQuickjsProgram(bytes, await loadFile(side, fetch));
+  const module = await WebAssembly.compile(bytes);
+  programLinkPlan(module);
+  return module;
+}
+
+/** Verify before compilation so a changed CDN response cannot execute as the expected guest. */
+async function loadFile(asset: BunWasmFile, fetch: (url: string) => Promise<Response>): Promise<Uint8Array<ArrayBuffer>> {
+  const { url, sha256: expectedHash, bytes: expectedBytes } = asset;
   if (!/^[a-f0-9]{64}$/.test(expectedHash) || !Number.isSafeInteger(expectedBytes) || expectedBytes < 8) {
     throw new BunWasmAssetError("Guest descriptor requires a SHA-256 hash and a valid byte count");
   }
-  const response = await (options.fetch ?? globalThis.fetch)(url);
+  const response = await fetch(url);
   if (!response.ok) throw new BunWasmAssetError(`${url}: HTTP ${response.status}`);
   const limited = await openLimitedBody(response, expectedBytes + COMPRESSED_SIZE_MARGIN);
   const body = limited.prefix[0] === 0x1f && limited.prefix[1] === 0x8b
@@ -180,5 +218,5 @@ export async function loadBunWasm(options: LoadBunWasmOptions = {}): Promise<Web
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
   if (hash !== expectedHash) throw new BunWasmAssetError(`Guest SHA-256 mismatch: expected ${expectedHash}, received ${hash}`);
-  return WebAssembly.compile(bytes);
+  return bytes;
 }

@@ -166,13 +166,21 @@ for (const engine of engines) {
   });
 
   test(`${engine} roots retain explicit engine overrides and cache each guest module`, async () => {
+    const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+    const { programLinkPlan } = await import("../../src/assets");
+    const { core, side } = quickjsPair();
+    const pair = new Map([["bun.wasm", core], ["quickjs.wasm", side]]);
+    const builds = Object.fromEntries(Array.from(pair, ([name, bytes]) => [name, new Bun.CryptoHasher("sha256").update(bytes).digest("hex")]));
+    const originalBuilds = Object.getOwnPropertyDescriptor(globalThis, "__bunwasmBuilds");
+    Object.defineProperty(globalThis, "__bunwasmBuilds", { configurable: true, value: builds });
     const register = spyOn(SubprocessBroker.prototype, "register");
     const urls: string[] = [];
     const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) => {
       const url = String(input);
       urls.push(url);
-      if (url.endsWith(".gz")) return new Response(null, { status: 404 });
-      return new Response(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]), { headers: { "content-type": "application/wasm" } });
+      const name = new URL(url).pathname.slice(1);
+      if (name.endsWith(".gz")) return new Response(null, { status: 404 });
+      return new Response(pair.get(name) ?? new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]), { headers: { "content-type": "application/wasm" } });
     }, { preconnect: globalThis.fetch.preconnect }));
     const state = isolatedRoot(false, engine);
     try {
@@ -191,15 +199,20 @@ for (const engine of engines) {
         expect(again).toBe(module);
         if (selected === engine) expect(module).toBe(state.request.module);
         else expect(module).not.toBe(state.request.module);
+        if (selected === "quickjs" && selected !== engine) expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(side);
         loaded.add(module);
       }
       expect(loaded.size).toBe(3);
-      expect(urls).toEqual(engines.filter(selected => selected !== engine).flatMap(selected => [
-        `http://localhost/${ENGINES[selected].wasm}.gz`, `http://localhost/${ENGINES[selected].wasm}`,
-      ]));
+      expect(urls).toEqual(engines.filter(selected => selected !== engine).flatMap(selected => selected === "quickjs"
+        ? ["bun.wasm", "quickjs.wasm"].flatMap(name => [`http://localhost/${name}.gz?v=${builds[name]}`, `http://localhost/${name}`])
+        : [`http://localhost/${ENGINES[selected].wasm}.gz`, `http://localhost/${ENGINES[selected].wasm}`]));
     } finally {
       try { await state.dispose(); }
-      finally { register.mockRestore(); fetch.mockRestore(); }
+      finally {
+        register.mockRestore(); fetch.mockRestore();
+        if (originalBuilds) Object.defineProperty(globalThis, "__bunwasmBuilds", originalBuilds);
+        else Reflect.deleteProperty(globalThis, "__bunwasmBuilds");
+      }
     }
   });
 }

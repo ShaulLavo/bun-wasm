@@ -1,3 +1,4 @@
+import { linkedWorkerHooks, type LinkPlanSource } from "waffle/link";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
 import { startEngineHost } from "./engine-host.js";
@@ -12,6 +13,7 @@ export type Engine = "quickjs" | "jsc" | "browser";
 
 export interface RunRequest extends RuntimeWorkerRequest {
   engine: Engine;
+  linkPlan?: LinkPlanSource;
   adapter?: "bun" | "preview1";
   trace: boolean;
   /** The networking ring (net/ring.ts); null when the page is not cross-origin isolated. */
@@ -88,7 +90,9 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       ? createLookupClient(new BroadcastChannel(req.lookupChannel))
       : undefined;
   const lookup = lookupClient;
+  const linked = linkedExecutor(req);
   return {
+    ...linked,
     hostCallFd: HOST_CALL_FD,
     env: () => env,
     // Bun's own fatal-unwind type, which the engine interruption probes recognize.
@@ -107,8 +111,8 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       else installHostSlots(instance, impls);
     },
     beforeFinish() {
-      lookupClient?.close();
-      req.lookupPort?.close();
+      try { linked.beforeFinish?.(); }
+      finally { lookupClient?.close(); req.lookupPort?.close(); }
     },
     run({ instance, checkActive, finish, runtimeState }, exited) {
       const ready = instance.exports.bunwasm_ready as (() => number) | undefined;
@@ -126,5 +130,19 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
         net, processWake: runtimeState?.wake, onExit: code => finish({ code }),
       });
     },
+  };
+}
+
+function linkedExecutor(req: RunRequest): Pick<WorkerExecutor<RunRequest>, "instantiate" | "initialize" | "beforeFinish"> {
+  if (!req.linkPlan) return {};
+  const request = { ...req, linkPlan: req.linkPlan };
+  const hooks = linkedWorkerHooks();
+  return {
+    instantiate(imports, context) {
+      if (!hooks.instantiate) throw new Error("linked worker instantiate hook is missing");
+      return hooks.instantiate(imports, { ...context, request });
+    },
+    initialize(context) { hooks.initialize?.({ ...context, request }); },
+    beforeFinish: hooks.beforeFinish,
   };
 }

@@ -450,3 +450,46 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
     } finally { observeWait = undefined; connection.client.port.close(); connection.server.port.close(); }
   });
 }
+
+test("paired executor initializes the shared side once and releases its table range", async () => {
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareQuickjsProgram, programLinkPlan } = await import("../../src/assets");
+  const { core, side } = quickjsPair();
+  const module = await prepareQuickjsProgram(core, side);
+  const connection = createFilesystemConnection();
+  const messages: WorkerMessage[] = [];
+  const request: RunRequest = { engine: "quickjs", module: structuredClone(module), linkPlan: programLinkPlan(module),
+    args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, moduleCache: null, slots: "off" };
+  const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message) { messages.push(message); }, async fetch() { throw new Error("unexpected fetch"); } };
+  const { prepareLinkPlan } = await import("waffle/link");
+  if (!request.linkPlan) throw new Error("fixture link plan missing");
+  const local = await prepareLinkPlan(request.linkPlan);
+  const executor = createBunExecutor(request, host);
+  let instance: WebAssembly.Instance | undefined;
+  const NativeInstance = WebAssembly.Instance;
+  const instantiatedModules: WebAssembly.Module[] = [];
+  try {
+    WebAssembly.Instance = new Proxy(NativeInstance, { construct(Target, args: ConstructorParameters<typeof WebAssembly.Instance>) {
+      instantiatedModules.push(args[0]);
+      return new Target(...args);
+    } });
+    await bootstrap(request, { ...executor,
+      setup(context) { context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {}; },
+      async instantiated(context) { instance = context.instance; await executor.instantiated?.(context); },
+    }, host);
+    if (!instance) throw new Error("linked core did not instantiate");
+    const { value, ctors, __indirect_function_table: table } = instance.exports;
+    if (typeof value !== "function" || !(ctors instanceof WebAssembly.Global) || !(table instanceof WebAssembly.Table)) throw new Error("fixture exports missing");
+    expect(instantiatedModules).toHaveLength(2);
+    expect(instantiatedModules[0]).toBe(local.entryModule);
+    expect(instantiatedModules[0]).not.toBe(request.module);
+    expect(WebAssembly.Module.exports(instantiatedModules[1]!).some(entry => entry.name === "quickjs_run")).toBe(true);
+    expect(value()).toBe(42);
+    expect(ctors.value).toBe(1);
+    expect(table.length).toBe(2);
+    expect(table.get(1)).toBeNull();
+    expect(messages.some(message => message.type === "exit" && message.code === 0)).toBe(true);
+    expect(messages.some(message => message.type === "error")).toBe(false);
+  } finally { WebAssembly.Instance = NativeInstance; connection.client.port.close(); connection.server.port.close(); }
+});
