@@ -114,3 +114,21 @@ the linked QuickJS records above. No second monolithic QuickJS path remains.
 | `tests/linker/quickjs/**` | Port | Original raw linked-VM fixtures, section-preserving initializer conversion, and real core-libc checks. Data/ops source stays owned by its existing modules and is included by path. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+## Standard native paired startup
+
+The standard QuickJS build emits `dist/bun.wasm` and `dist/quickjs.wasm` together.
+The core build receipt records both byte identities under the same source snapshot.
+The native launcher loads the sibling side whenever a core exports
+`bun_core_bind_engine`. A missing side is an admission error, not a monolith fallback.
+
+`crates/bunwasm-host/src/linked.rs` is an original native adapter for the WASM
+`dylink.0` memory/table profile used by Waffle at
+`1fa934ed99f95a744af2448fc6fb14bb984c37d4`, `link/group.ts` and `link/metadata.ts`.
+It uses Wasmparser's existing locked parser, not copied parser code. It reserves side
+storage with the core allocator, shares the core table and mutable stack global,
+binds GOT addresses, then initializes and registers the actual QuickJS driver.
+Core constructors run once before side initialization. The existing process host
+still owns cancellation, child admission, host slots, WASI and final cleanup.
+The association retains the compiled core image and its side, so admitted child
+Module clones use the same pair. JSC and tools keep their single-module CRT.

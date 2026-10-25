@@ -204,16 +204,10 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
             core.wait_io(e, next);
             continue;
         }
+        if next < 0.0 && !resume_idle(e, core, &mut main) {
+            break;
+        }
         if next < 0.0 {
-            if core.drain_jobs(e) {
-                continue;
-            }
-            // A top-level await with no remaining work exits quietly.
-            core.check_main(e, &mut main);
-            // `beforeExit` listeners may schedule more work.
-            if core.call_internal_num(e, "emitBeforeExit").unwrap_or(0.0) == 0.0 {
-                break;
-            }
             continue;
         }
         core.flush();
@@ -222,6 +216,16 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
         // signal or interrupt wakes; the network host poll only knows about network events.
         core.idle((next.ceil() as i32).clamp(1, 25));
     }
+}
+
+fn resume_idle<E: Engine>(e: &E, core: &Core<E>, main: &mut Option<E::Value>) -> bool {
+    if core.drain_jobs(e) {
+        return true;
+    }
+    // A top-level await with no remaining work exits quietly.
+    core.check_main(e, main);
+    // `beforeExit` listeners may schedule more work.
+    core.call_internal_num(e, "emitBeforeExit").unwrap_or(0.0) != 0.0
 }
 
 /// Surface a rejected entry module; keep pending ones around.

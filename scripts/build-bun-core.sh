@@ -8,7 +8,9 @@ mkdir -p "$out"
 out=$(cd "$out" && pwd)
 export CARGO_TARGET_DIR="$out/core-target"
 export WASI_SDK="$WASI_SDK_PATH"
-features=(--no-default-features --features engine-quickjs,bun-transpiler,bun-build)
+selected=engine-quickjs,bun-transpiler,bun-build
+if [[ "${1:-}" == --no-bun-transpiler ]]; then selected=engine-quickjs; fi
+features=(--no-default-features --features "$selected")
 cargo tree --locked --offline -p bunwasm-cli --target wasm32-wasip1 "${features[@]}" > "$out/core-dependencies.txt"
 if grep -q rquickjs "$out/core-dependencies.txt"; then
   echo 'core dependency graph contains rquickjs' >&2
