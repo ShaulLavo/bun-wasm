@@ -1,7 +1,7 @@
 {
  "modules": {
   "/main.mjs": "({r:[\"./mod.mjs\"],i:[],x:[],s:[],a:true,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;var ns=__bunwasm_m.n[0];yield;console.log(Object.prototype.toString.call(ns), Object.getPrototypeOf(ns) === null);\nconsole.log(Object.isExtensible(ns), Object.keys(ns).join(\",\"));\nconsole.log(typeof ns.default, ns.default(), ns.b, \"zeta\" in ns);\nconst self = (yield __bunwasm_m.import(\"./mod.mjs\"));\nconsole.log(\"same namespace\", self === ns);\n\n}})",
-  "/mod.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"b\":()=>b,\"a\":()=>a,\"zeta\":()=>zeta,\"default\":()=>__bunwasm_default});yield;yield;const b = \"b\", a = \"a\";\nlet zeta;\nfunction __bunwasm_default() {\n  return \"anonymous default\";\n}\n\n}})"
+  "/mod.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"b\":()=>b,\"a\":()=>a,\"zeta\":()=>zeta,\"default\":()=>mod_default});yield;yield;const b = \"b\", a = \"a\";\nlet zeta;\nfunction mod_default() {\n  return \"anonymous default\";\n}\n\n}})"
  },
  "cjs": {}
 }

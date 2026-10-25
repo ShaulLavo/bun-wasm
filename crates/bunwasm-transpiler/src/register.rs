@@ -40,6 +40,9 @@ pub struct Module {
     /// Header bindings of dependency namespaces: (printed name, request).
     namespaces: Vec<(String, u32)>,
     has_tla: bool,
+    /// `import * as ns` bindings and their import records, so `export { ns }`
+    /// re-exports the namespace.
+    star_imports: Vec<(Ref, u32)>,
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -88,6 +91,12 @@ impl Module {
     }
 
     fn export_local(&mut self, ast: &js_ast::Ast<'_>, alias: &str, r: Ref) {
+        if let Some(&(_, record)) = self.star_imports.iter().find(|(star, _)| *star == r) {
+            let request = self.request(ast, record);
+            self.indirect
+                .push((alias.to_owned(), request, "*".to_owned()));
+            return;
+        }
         let Some(import) = ast.named_imports.get(&r) else {
             self.locals.push((alias.to_owned(), Self::name_of(ast, r)));
             return;
@@ -128,6 +137,18 @@ pub fn prepare(ast: &mut js_ast::Ast<'_>, arena: &Arena) -> Module {
         has_tla: ast.top_level_await_keyword.len > 0,
         ..Module::default()
     };
+    for part in ast.parts.iter() {
+        for stmt in part.stmts.slice() {
+            let StmtData::SImport(st) = stmt.data else {
+                continue;
+            };
+            if !st.star_name_loc.is_empty() {
+                module
+                    .star_imports
+                    .push((st.namespace_ref, st.import_record_index));
+            }
+        }
+    }
     for part in 0..ast.parts.len() {
         let stmts = ast.parts[part].stmts.slice_mut();
         for stmt in stmts.iter_mut() {
@@ -239,19 +260,15 @@ fn export_default(
                 StmtData::SFunction(mut func) => func.func.name.get_or_insert(default).ref_,
                 _ => default.ref_,
             };
-            if name == default.ref_ {
-                rename(ast, arena, name, "__bunwasm_default");
-            }
             module
                 .locals
                 .push(("default".to_owned(), Module::name_of(ast, name)));
             inner
         }
         StmtOrExpr::Expr(value) => {
-            rename(ast, arena, default.ref_, "__bunwasm_default");
             module
                 .locals
-                .push(("default".to_owned(), "__bunwasm_default".to_owned()));
+                .push(("default".to_owned(), Module::name_of(ast, default.ref_)));
             let mut decls = bun_alloc::AstAlloc::vec();
             decls.push(js_ast::G::Decl {
                 binding: Binding::alloc(
@@ -324,17 +341,25 @@ pub fn assemble(module: &Module, body: &str) -> String {
 mod tests {
     use crate::{Loader, register};
 
+    /// Bun's parser keeps process-wide state; one transpile at a time.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn register_one(source: &str, path: &str) -> String {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        register(source, path, Loader::Js).unwrap()
+    }
+
     #[test]
     fn records_carry_imports_exports_and_await() {
         let source = "import d, { a as b } from './x.js';\nexport * from './y.js';\nexport { b as c };\nexport let n = await d();\nexport default function () { return b(); }\n";
-        let record = register(source, "/m.js", Loader::Js).unwrap();
+        let record = register_one(source, "/m.js");
         assert!(
             record.starts_with(
                 r#"({r:["./x.js","./y.js"],i:[[0,"default"],[0,"a"]],x:[["c",0,"a"]],s:[1],a:true,"#
             ),
             "{record}"
         );
-        assert!(record.contains(r#"__bunwasm_m.l({"n":()=>n,"default":()=>__bunwasm_default});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0];yield;"#), "{record}");
+        assert!(record.contains(r#"__bunwasm_m.l({"n":()=>n,"default":()=>m_default});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0];yield;"#), "{record}");
         assert!(
             record.contains("(yield (0, __bunwasm_ns0_0.default)())"),
             "{record}"
@@ -348,7 +373,7 @@ mod tests {
     #[test]
     fn nested_await_meta_and_dynamic_import() {
         let source = "async function f() { await import('./z.js'); return import.meta.url; }\n";
-        let record = register(source, "/m.js", Loader::Js).unwrap();
+        let record = register_one(source, "/m.js");
         assert!(record.contains("a:false,"), "{record}");
         assert!(
             record.contains("await __bunwasm_m.import(\"./z.js\")"),
@@ -374,7 +399,7 @@ mod tests {
                     continue;
                 }
                 let source = std::fs::read_to_string(&file).unwrap();
-                let fresh = register(&source, file.to_str().unwrap(), Loader::Js).unwrap();
+                let fresh = register_one(&source, file.to_str().unwrap());
                 assert_eq!(
                     code.as_str().unwrap(),
                     fresh,

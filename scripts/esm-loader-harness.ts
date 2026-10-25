@@ -19,7 +19,7 @@ export function fixtureCases(): string[] {
     .sort();
 }
 
-export function readRecords(name: string): Records {
+function readRecords(name: string): Records {
   return JSON.parse(readFileSync(join(fixturesDir, name, "records.json"), "utf8"));
 }
 

@@ -424,8 +424,8 @@
     mod.error = { value: error };
     mod.status = "evaluated";
     mod.asyncOrder = "done";
-    for (const parent of mod.asyncParents) asyncRejected(parent, error);
     mod.capability?.reject(error);
+    for (const parent of mod.asyncParents) asyncRejected(parent, error);
   }
 
   // --- entry points --------------------------------------------------------
