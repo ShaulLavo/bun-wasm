@@ -1265,6 +1265,8 @@
   return {
     Buffer,
     SlowBuffer,
+    Blob: internal.web && internal.web.Blob,
+    File: internal.web && internal.web.File,
     INSPECT_MAX_BYTES,
     kMaxLength,
     kStringMaxLength,
