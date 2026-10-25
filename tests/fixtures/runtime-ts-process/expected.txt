@@ -1,6 +1,6 @@
 env 17 raw raw
 stdout getter function true true
-stdout keys _events,_eventsCount,_maxListeners,fd,writable,destroyed,isTTY,columns,rows,write,end,cork,uncork,setDefaultEncoding,clearLine,clearScreenDown,cursorTo,moveCursor,getColorDepth,hasColors,getWindowSize,_writableState
+stdout keys _events,_eventsCount,_maxListeners,fd,writable,destroyed,isTTY,columns,rows,write,end,cork,uncork,setDefaultEncoding,clearLine,clearScreenDown,cursorTo,moveCursor,getColorDepth,hasColors,getWindowSize,_writableState,Symbol(kCapture)
 stdout states true false false
 window [80,24] 1 false
 write control
