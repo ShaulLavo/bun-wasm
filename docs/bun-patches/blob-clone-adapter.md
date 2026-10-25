@@ -11,7 +11,9 @@ The runtime's public Blob keeps its bytes and MIME type in private fields.
 Enumerable-property cloning therefore loses them. Structured clone now constructs
 a fresh public Blob from those bytes and its type. The worker graph records
 base64 bytes and the MIME type, validates the tuple, and reconstructs a public
-Blob on decode. Existing graph memory preserves repeated references. The Blob
+Blob on decode. The native base64 decoder declaration now describes its owned
+ArrayBuffer, matching the native byte-return conversion without an extra copy.
+Existing graph memory preserves repeated references. The Blob
 constructor copies bytes, so a clone does not share mutable byte storage.
 
 Blob remains cloneable, not transferable. Existing unsupported-value checks and
@@ -23,8 +25,8 @@ serialization factories. Only native encoding, streams and transfer hooks use
 host controls. It verifies nested values, cycles, bytes, type, Blob methods,
 malformed tags and failed-transfer atomicity. This is not compiled guest delivery
 acceptance. `tests/fixtures/worker-blob-clone/` supplies the blocking guest check
-for MessageChannel delivery before close, workerData and Worker round trips before
-natural exit. The parent integration run owns its three-engine guest results.
+for MessageChannel delivery before close, workerData, Node Worker and Web Worker round trips before
+natural exit or close. The parent integration run owns its three-engine guest results.
 
 ## Classification
 

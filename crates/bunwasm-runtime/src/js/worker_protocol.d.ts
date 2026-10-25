@@ -85,7 +85,7 @@ declare namespace BunWasm {
     /** 16-byte subscriptions in, 16-byte events out. */
     procPoll(subscriptions: Uint8Array, timeoutMs: number): Uint8Array | number;
     base64Encode(bytes: Uint8Array, url: boolean): string;
-    base64Decode(value: string): Uint8Array;
+    base64Decode(value: string): Uint8Array<ArrayBuffer>;
     transferArrayBuffers(buffers: ArrayBuffer[]): void;
     isWasmMemoryBuffer?(value: unknown): boolean;
     hostPoll(timeout: number): number;

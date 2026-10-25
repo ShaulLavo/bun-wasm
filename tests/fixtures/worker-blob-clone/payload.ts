@@ -6,7 +6,7 @@ export const expectedText = "Aé😀\0Z";
 export function payload(BlobClass: typeof Blob = Blob) {
   const bytes = new Uint8Array(expectedBytes);
   const blob = new BlobClass([bytes], { type: "Application/Octet-Stream" });
-  const text = new BlobClass([expectedText], { type: "Text/Plain" });
+  const text = new BlobClass([expectedText], { type: "Text/Plain;Charset=UTF-8" });
   const value = {
     blob, bytes, list: [blob, { text }], empty: new BlobClass(),
     slice: blob.slice(1, -1, "application/x-slice"), text,
@@ -21,7 +21,9 @@ export async function checkPayload(value: ReturnType<typeof payload>, BlobClass:
   assert.equal(Object.getPrototypeOf(value.blob), BlobClass.prototype);
   assert.equal(value.self, value);
   assert.equal(value.list[0], value.blob);
-  assert.equal(Reflect.get(value.list[1], "text"), value.text);
+  const nested = value.list[1];
+  assert.ok(nested && "text" in nested);
+  assert.equal(nested.text, value.text);
   assert.equal(value.map.get(value.blob), value.text);
   assert.ok(value.set.has(value.blob));
   assert.equal(value.blob.size, expectedBytes.length);
