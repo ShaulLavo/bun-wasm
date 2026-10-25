@@ -82,9 +82,9 @@ pub extern "C" fn quickjs_stack_reenter(depth: u32) -> i32 {
 }
 
 /// # Safety
-/// `bytes` and `align` must satisfy `Layout::from_size_align`. A non-null
-/// returned pointer is valid for `bytes` bytes until it is freed or reallocated
-/// with the same layout.
+/// `bytes` must be nonzero and, with `align`, satisfy
+/// `Layout::from_size_align`. A non-null returned pointer is valid for `bytes`
+/// bytes until it is freed or reallocated with the same layout.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn quickjs_rust_alloc(bytes: usize, align: usize) -> *mut u8 {
     let Ok(layout) = Layout::from_size_align(bytes, align) else {
