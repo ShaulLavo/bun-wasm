@@ -37,6 +37,13 @@ to the existing runtime-fetch-lifetime check manifest. Native fixtures separatel
 exercise open-upload aborts and client-disconnect/server-stop cancellation.
 The fixtures are also registered for supported-engine guest CI.
 
+The Request-copy source fixture registers the real `fetch_lifetime` factory
+against the same internal object initialized by `web.js`. This supplies the real
+body conversion and concatenation helpers when copied requests reach fetch. Both
+native-stream and polyfill-stream controls retain their original assertions and
+single runtime-request-copy manifest owner. The fixture adds no replacement
+cancellation implementation or VM globals.
+
 The native launcher previously marked a closed fetch handle as aborted without
 interrupting reqwest's blocking send. A client waiting for response headers kept
 its socket open, so the unchanged compiled server-disconnect fixture could not
