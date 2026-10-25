@@ -50,6 +50,7 @@ function fixture() {
 test("flowing stdin delivers before EOF and yields while input remains open", async () => {
   const f = fixture();
   const seen: string[] = [];
+  expect(f.guest.stdin).toBe(f.stdin);
   f.stdin.setEncoding("utf8");
   f.stdin.on("data", chunk => seen.push(chunk));
   await tick();
@@ -164,4 +165,3 @@ test("async iteration delivers a chunk without waiting for EOF", async () => {
   expect((await last).done).toBe(true);
   expect(f.waiters.size).toBe(0);
 });
-

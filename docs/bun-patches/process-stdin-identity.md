@@ -31,5 +31,6 @@ or native Bun control is not a substitute for those gates.
 | --- | --- | --- |
 | `process_stdin.ts`, process reader delegation and declarations | Host feature | Original nonblocking Node stdin adapter over Waffle descriptors. |
 | Source controls and `process-stdin` fixture | Host feature | Original bounded flow, cancellation and cross-process protocol checks. |
+| `scripts/fixtures/process-reader-before.txt` | Host feature | Frozen bun-wasm reader from `114b84c3` used only to preserve the AST guard for unrelated behavior. |
 
 [Ledger scope and pinned revisions](scope.md).
