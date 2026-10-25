@@ -10,6 +10,7 @@
   const native = internal.native;
   const EventEmitter = internal.require("events");
   const info = native.platformInfo;
+  const [pid, ppid] = native.procIdentity();
 
   const NODE_VERSION = "26.3.0";
 
@@ -207,8 +208,8 @@
     execArgv: [],
     execPath: native.execPath(),
     env,
-    pid: 1,
-    ppid: 0,
+    pid,
+    ppid,
     exitCode: undefined,
     isBun: true,
     browser: false,

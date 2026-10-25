@@ -22,6 +22,7 @@ export async function processControls(eventsFactory: (internal: object) => Funct
     const internal = {
       native: {
         platformInfo: { version: "test", revision: "test", arch: "wasm32" },
+        procIdentity: () => [71, 0],
         env: () => ({}), argv: () => ["bun", "fixture.ts"], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
         hostSignal(number: number, mode: number) { if (mode !== 3) dispositions.set(number, mode); return 0; },
         writeStdout(...args: unknown[]) { writes.push(args); if (state.writeFailure) throw state.writeFailure.error; },

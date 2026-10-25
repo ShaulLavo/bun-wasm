@@ -66,6 +66,8 @@ declare namespace BunWasm {
     /** runtime_proc process ABI. Results are >= 0 or a negative WASI errno (-6 EAGAIN). */
     /** Live executable-access query; the native bridge consumes/cancels its request. */
     procAccess(path: string, cwd: string): number;
+    /** Host-assigned PID and immutable creation-parent PID, root parent 0. */
+    procIdentity(): [pid: number, parentPid: number];
     procSpawn(request: string): number;
     procJobOf(pid: number): number;
     procPipe(): [read: number, write: number] | number;

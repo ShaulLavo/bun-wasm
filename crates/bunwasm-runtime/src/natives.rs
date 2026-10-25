@@ -1256,6 +1256,11 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     t.add("procAccess", |a| {
         Ok(host::proc_access(a.str(0)?, a.str(1)?).into())
     });
+    t.add("procIdentity", |_| {
+        let (pid, parent) = host::proc_identity()
+            .map_err(|code| NativeError::error(format!("process identity unavailable: {code}")))?;
+        Ok(Val::Array(vec![pid.into(), parent.into()]))
+    });
     t.add("procSpawn", |a| Ok(host::proc_spawn(a.bytes(0)?).into()));
     t.add("procJobOf", |a| Ok(host::proc_job_of(a.i32(0)?).into()));
     t.add("procPipe", |_| {

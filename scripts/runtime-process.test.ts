@@ -20,6 +20,8 @@ const emitted = readFileSync(output, "utf8");
 // Invert only the approved executable deltas. The pinned original AST hash guards the remainder.
 function originalSyntax(text: string): string {
   const replacements: [RegExp, string, number][] = [
+    [/\n  const \[pid, ppid\] = native\.procIdentity\(\);/g, "", 1],
+    [/    pid,\n    ppid,/g, "    pid: 1,\n    ppid: 0,", 1],
     [/  function makeReader\(\) \{\n    return internal\.require\("process_stdin"\)\(\);\n  \}\n/g, readFileSync(join(root, "scripts/fixtures/process-reader-before.txt"), "utf8"), 1],
     [/\n  let execveWarned = false;\n/g, "\n", 1],
     [/\n    execve\(\) \{[\s\S]*?\n    \},/g, "", 1],
@@ -85,6 +87,7 @@ function setupSnapshot(source: string): ProcessSnapshot {
   const internal = {
     native: {
       platformInfo: { version: "test", revision: "test", arch: "wasm32" },
+      procIdentity: () => [71, 0],
       env: () => ({}), argv: () => ["bun", "fixture.ts"], execPath: () => "/bin/bun",
       hostSignal(number: number, mode: number) { assert.deepEqual([number, mode], [13, 1]); return 0; },
     },

@@ -260,6 +260,35 @@ pub fn connect(host: &str, port: i32) -> i32 {
     .unwrap_or(UNSUPPORTED)
 }
 
+/// Bun's executor binds this selector to the admitted Waffle process before guest startup.
+#[cfg(target_arch = "wasm32")]
+mod bun_identity {
+    #[link(wasm_import_module = "bun_identity")]
+    unsafe extern "C" {
+        pub fn get(field: i32) -> i32;
+    }
+}
+
+/// Immutable creation ancestry, not POSIX reparenting. Never substitute host OS IDs.
+#[cfg(target_arch = "wasm32")]
+pub fn proc_identity() -> Result<(i32, i32), i32> {
+    // SAFETY: the executor provides a scalar i32 -> i32 import; no guest pointers cross it.
+    let pid = unsafe { bun_identity::get(0) };
+    let parent = unsafe { bun_identity::get(1) };
+    if pid < 0 {
+        return Err(pid);
+    }
+    if parent < 0 {
+        return Err(parent);
+    }
+    Ok((pid, parent))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn proc_identity() -> Result<(i32, i32), i32> {
+    Err(UNSUPPORTED)
+}
+
 /// The `runtime_proc` process ABI (docs/host-abi.md, "Process imports"). These are real wasm
 /// imports, not optional slots: a host that runs the guest provides the namespace. Results are
 /// `>= 0` or a negative WASI errno.
