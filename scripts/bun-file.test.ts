@@ -1,4 +1,5 @@
 import { afterAll, afterEach, expect, test } from "bun:test";
+import { dlopen, FFIType } from "bun:ffi";
 import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +8,12 @@ import { runInNewContext } from "node:vm";
 type FileApi = Blob & { fd: number | null; stat(): Promise<{ size: number; isFile(): boolean }>; exists(): Promise<boolean> };
 type Api = { file(target: string | number): FileApi; write(target: string | number | FileApi, data: string): Promise<number> };
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-file-controls-"));
+const libc = dlopen(process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6", {
+  lseek: { args: [FFIType.i32, FFIType.i64, FFIType.i32], returns: FFIType.i64 },
+});
 const owned = new Set<number>();
 afterEach(() => { for (const fd of owned) closeSync(fd); owned.clear(); });
-afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+afterAll(() => { libc.close(); rmSync(scratch, { recursive: true, force: true }); });
 let sequence = 0;
 function fixture(text = "abcdef") {
   const path = join(scratch, `file-${sequence++}`);
@@ -32,6 +36,7 @@ function emitHelper(path: string, output: string) {
 }
 function adapter(Stream = ReadableStream) {
   const reads: { fd: number; length: number; position: number; bytes: number }[] = [];
+  const seeks: { fd: number; position: number }[] = [];
   const opens: number[] = [], closes: number[] = [], wholeReads: string[] = [];
   const native = {
     cwd: () => scratch,
@@ -45,6 +50,11 @@ function adapter(Stream = ReadableStream) {
       const count = readSync(fd, bytes, 0, bytes.length, position < 0 ? null : Math.trunc(position));
       reads.push({ fd, length, position, bytes: count });
       return bytes.subarray(0, count);
+    },
+    seek(fd: number, position: number) {
+      seeks.push({ fd, position });
+      const result = libc.symbols.lseek(fd, BigInt(position), 0);
+      if (result === -1n) throw new Error(`lseek failed for descriptor ${fd}`);
     },
     write(fd: number, bytes: Uint8Array) { return writeSync(fd, bytes); },
     writeFile(path: string, bytes: Uint8Array) { writeFileSync(path, bytes); return bytes.length; },
@@ -69,20 +79,39 @@ function adapter(Stream = ReadableStream) {
   const code = section(web, "  function concatBytes(chunks)", "  const streamWeb =")
     + section(bun, "  function toPath(target)", "  function sleep(ms)") + "\n({ file, write })";
   const api: Api = runInNewContext(code, { ...globals, internal, native });
-  return { api, reads, opens, closes, wholeReads };
+  return { api, reads, seeks, opens, closes, wholeReads };
 }
 
-test("numeric Bun.file reads and stat work; sliced text uses positional policy, not native cursor parity", async () => {
+test("numeric Bun.file reads and stat work and preserve descriptor ownership", async () => {
   const path = fixture(), fd = open(path);
   readSync(fd, new Uint8Array(2));
   const { api } = adapter(), file = api.file(fd);
   expect(file.size).toBe(6);
   expect((await file.stat()).isFile()).toBe(true);
   expect(await file.exists()).toBe(true);
-  expect(await file.slice(1, 3).text()).toBe("bc");
   expect(await file.text()).toBe("cdef");
   expect(await file.text()).toBe("");
   expect(fstatSync(fd).size).toBe(6);
+});
+
+const cursorCases = [
+  { label: "nonzero text", start: 1, end: 3, streaming: false, output: "bc", next: "de", seeks: [1], reads: [[2, -1, 2]] },
+  { label: "nonzero stream", start: 1, end: 3, streaming: true, output: "bc", next: "cd", seeks: [], reads: [[2, 1, 2]] },
+  { label: "zero text", start: 0, end: 3, streaming: false, output: "cde", next: "f", seeks: [], reads: [[3, -1, 3]] },
+];
+
+test.each(cursorCases)("sliced descriptor $label matches native cursor behavior", async ({ start, end, streaming, output, next, seeks: expectedSeeks, reads: expectedReads }) => {
+  const path = fixture(), fd = open(path);
+  readSync(fd, new Uint8Array(2));
+  const { api, reads, seeks, closes } = adapter();
+  const file = api.file(fd).slice(start, end);
+  expect(streaming ? await streamText(file.stream()) : await file.text()).toBe(output);
+  const bytes = new Uint8Array(2);
+  const count = readSync(fd, bytes);
+  expect(new TextDecoder().decode(bytes.subarray(0, count))).toBe(next);
+  expect(seeks.map(seek => seek.position)).toEqual(expectedSeeks);
+  expect(reads.map(read => [read.length, read.position, read.bytes])).toEqual(expectedReads);
+  expect(closes).not.toContain(fd);
 });
 
 test("numeric writes use the caller descriptor, position and lifetime, never a numeric pathname", async () => {
