@@ -55,6 +55,7 @@
         if (internal.isProxy?.(object)) throw cloneError();
         if (object instanceof Blob) return ["blob", internal.native.base64Encode(object._bytes(), false), object.type];
         if (object instanceof ArrayBuffer) return ["buffer", internal.native.base64Encode(new Uint8Array(object), false), object.resizable ? object.maxByteLength : 0];
+        if (ArrayBuffer.isView(object) && hooks.buffer?.isBuffer(object)) return ["node-buffer", internal.native.base64Encode(new Uint8Array(object.buffer, object.byteOffset, object.byteLength), false)];
         if (ArrayBuffer.isView(object)) return ["view", tag(object), visit(object.buffer, implicit), object.byteOffset, object.byteLength];
         if (object instanceof Date) return ["date", String(object.getTime())];
         if (object instanceof RegExp) return ["regexp", object.source, object.flags];
@@ -101,7 +102,7 @@
     }
 
     function decode(value: unknown) {
-      const graph = validateGraph(value);
+      const graph = validateGraph(value, 0, Boolean(hooks.buffer));
       const memory = new Map<number, unknown>();
       const restored: unknown[] = [];
       function properties(target: object, entries: [string, number][]) {
@@ -125,6 +126,12 @@
             const bytes = internal.native.base64Decode(node[1]);
             const buffer = node[2] ? new ArrayBuffer(bytes.length, { maxByteLength: node[2] }) : new ArrayBuffer(bytes.length);
             new Uint8Array(buffer).set(bytes); result = buffer; break;
+          }
+          case "node-buffer": {
+            if (!hooks.buffer) throw cloneError("Node Buffer decoding is unavailable");
+            const bytes = internal.native.base64Decode(node[1]);
+            if (internal.native.base64Encode(bytes, false) !== node[1]) throw cloneError("Invalid Node Buffer bytes");
+            result = hooks.buffer.from(bytes); break;
           }
           case "view": {
             const buffer = read(node[2]);
@@ -166,7 +173,7 @@
     return { encode, decode, prepare };
   }
 
-  function validateGraph(value: unknown, depth = 0): Graph {
+  function validateGraph(value: unknown, depth = 0, nodeBuffer = false): Graph {
     if (depth > 256) throw cloneError("Worker port nesting exceeds 256 levels");
     if (!value || typeof value !== "object" || !("root" in value) || !("nodes" in value) || !Array.isArray(value.nodes)) throw cloneError("Invalid worker message");
     const nodes: unknown[] = value.nodes;
@@ -185,28 +192,29 @@
         case "set": return Array.isArray(node[1]) && node[1].every(ref);
         case "blob": case "regexp": return strings(node.slice(1)) && node.length === 3;
         case "buffer": return typeof node[1] === "string" && Number.isSafeInteger(node[2]) && node[2] >= 0;
+        case "node-buffer": return nodeBuffer && node.length === 2 && typeof node[1] === "string" && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$/.test(node[1]);
         case "view": return typeof node[1] === "string" && ref(node[2]) && Number.isInteger(node[3]) && Number.isInteger(node[4]) && node[3] >= 0 && node[4] >= 0;
         case "error": return strings(node.slice(1, 4)) && ref(node[4]);
         case "boxed": return ref(node[1]);
-        case "port": return validPort(node[1], depth) && ref(node[2]);
+        case "port": return validPort(node[1], depth, nodeBuffer) && ref(node[2]);
         default: return false;
       }
     }
     if (!ref(value.root) || !nodes.every(valid)) throw cloneError("Invalid worker message graph");
     return value as Graph;
   }
-  function validPort(value: unknown, depth: number) {
+  function validPort(value: unknown, depth: number, nodeBuffer: boolean) {
     if (!value || typeof value !== "object") return false;
     return "id" in value && typeof value.id === "string" && "peer" in value && (value.peer === null || typeof value.peer === "string")
       && "version" in value && counter(value.version) && "sent" in value && counter(value.sent)
-      && "received" in value && counter(value.received) && "pending" in value && Array.isArray(value.pending) && value.pending.every(packet => validPending(packet, depth))
+      && "received" in value && counter(value.received) && "pending" in value && Array.isArray(value.pending) && value.pending.every(packet => validPending(packet, depth, nodeBuffer))
       && "closing" in value && (value.closing === null || counter(value.closing))
       && "closed" in value && typeof value.closed === "boolean";
   }
   function counter(value: unknown) { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
-  function validPending(value: unknown, depth: number) {
+  function validPending(value: unknown, depth: number, nodeBuffer: boolean) {
     if (!Array.isArray(value) || value.length !== 2 || !counter(value[0])) return false;
-    validateGraph(value[1], depth + 1);
+    validateGraph(value[1], depth + 1, nodeBuffer);
     return true;
   }
   return { create };
