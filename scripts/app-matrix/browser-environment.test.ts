@@ -103,7 +103,8 @@ test("unsuccessful replays and all other external requests remain invalid", asyn
   const failed = await replayControl(nextTags, "GET", 503);
   expect(failed.measurement).toMatchObject({ kind: "blocked-network", urls: [nextTags] });
   expect(failed.aborted).toBe(true);
-  for (const [url, method] of [[nextTags, "POST"], [`${nextTags}?x=1`, "GET"], ["https://telemetry.nextjs.org/api/v1/record", "GET"], ["https://telemetry.astro.build/api/v1/record", "GET"]]) {
+  const rejected: [string, string][] = [[nextTags, "POST"], [`${nextTags}?x=1`, "GET"], ["https://telemetry.nextjs.org/api/v1/record", "GET"], ["https://telemetry.astro.build/api/v1/record", "GET"]];
+  for (const [url, method] of rejected) {
     const control = await replayControl(url, method);
     expect(control.measurement).toMatchObject({ kind: "blocked-network", urls: [url] });
     expect(control.requests).toEqual([]);
@@ -114,10 +115,11 @@ test("unsuccessful replays and all other external requests remain invalid", asyn
 
 test("the isolate broker rejects query variants instead of silently recording exact dist-tags", async () => {
   const upstream: string[] = [];
-  const fetch = spyOn(globalThis, "fetch").mockImplementation(async input => {
+  const fixture = Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) => {
     upstream.push(String(input));
     return Response.json({ latest: "fixture" });
-  });
+  }, { preconnect: globalThis.fetch.preconnect });
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(fixture);
   try {
     const response = await registryBrokerResponse(new Request("http://recorder/-/package/next/dist-tags?x=1"));
     expect(response.status).toBe(502);
@@ -128,10 +130,11 @@ test("the isolate broker rejects query variants instead of silently recording ex
 
 test("the isolate broker sends JSON only for the exact path and retains package Accept", async () => {
   const headers: (HeadersInit | undefined)[] = [];
-  const fetch = spyOn(globalThis, "fetch").mockImplementation(async (_input, options) => {
+  const fixture = Object.assign(async (_input: Parameters<typeof globalThis.fetch>[0], options?: Parameters<typeof globalThis.fetch>[1]) => {
     headers.push(options?.headers);
     return Response.json({ latest: "fixture" });
-  });
+  }, { preconnect: globalThis.fetch.preconnect });
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(fixture);
   try {
     for (const path of ["/-/package/next/dist-tags", "/next"]) expect((await registryBrokerResponse(new Request(`http://recorder${path}`))).ok).toBe(true);
     expect(headers.map(value => new Headers(value).get("accept"))).toEqual(["application/json", "application/vnd.npm.install-v1+json"]);

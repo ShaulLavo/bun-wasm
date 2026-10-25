@@ -1,6 +1,6 @@
 import type { Route } from "playwright";
 import { recorderErrorHeader } from "./registry.mjs";
-import { decodedResponse } from "./decoded-response";
+import { decodedResponse } from "./decoded-response.ts";
 
 export function registryAccept(path: string): string {
   return path === "/-/package/next/dist-tags" ? "application/json" : "application/vnd.npm.install-v1+json";
@@ -19,17 +19,26 @@ export async function browserRegistryRoute(route: BrowserRegistryRoute, registry
   const url = new URL(route.request().url());
   if (["127.0.0.1", "localhost"].includes(url.hostname) || ["data:", "blob:"].includes(url.protocol)) return route.continue();
   const replay = registryReplayUrl(url.href, registry);
-  if (replay && route.request().method() === "GET") {
-    const response = await route.fetch({ url: replay, maxRedirects: 0 });
-    if (response.ok()) return route.fulfill({ response });
-  }
+  if (replay && route.request().method() === "GET" && await fulfillRegistryReplay(route, replay)) return;
   external.push(url.href);
   return route.abort();
 }
 
+async function fulfillRegistryReplay(route: BrowserRegistryRoute, url: string): Promise<boolean> {
+  try {
+    const headers = { ...route.request().headers(), accept: "application/json" };
+    const response = await route.fetch({ url, method: "GET", headers, maxRedirects: 0 });
+    if (!response.ok()) return false;
+    await route.fulfill({ response });
+    return true;
+  } catch { return false; }
+}
+
 export async function registryBrokerResponse(request: Request): Promise<Response> {
   try {
-    const path = new URL(request.url).pathname;
+    const requested = new URL(request.url);
+    if (requested.search) throw new Error("Recorder query strings are unsupported");
+    const path = requested.pathname;
     const url = new URL(path, "https://registry.npmjs.org");
     if (url.origin !== "https://registry.npmjs.org") throw new Error("Invalid recorder origin");
     const upstream = await fetch(url, { headers: { accept: registryAccept(path) }, redirect: "error", signal: AbortSignal.timeout(60000) });
