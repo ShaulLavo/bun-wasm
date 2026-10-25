@@ -1,11 +1,12 @@
 import { afterAll, afterEach, expect, test } from "bun:test";
 import { closeSync, existsSync, fstatSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 
 type FileApi = Blob & { fd: number | null; stat(): Promise<{ size: number; isFile(): boolean }>; exists(): Promise<boolean> };
 type Api = { file(target: string | number): FileApi; write(target: string | number | FileApi, data: string): Promise<number> };
-const scratch = mkdtempSync("/work/tmp/bun-wasm-file-controls-");
+const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-file-controls-"));
 const owned = new Set<number>();
 afterEach(() => { for (const fd of owned) closeSync(fd); owned.clear(); });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
