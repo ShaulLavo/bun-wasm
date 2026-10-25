@@ -24,7 +24,7 @@ mod encoding;
 pub mod engine;
 #[cfg(feature = "engine-host")]
 pub mod engine_host;
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(feature = "engine-jsc")]
 mod engine_natives;
 mod glob;
 pub mod host;
@@ -44,18 +44,16 @@ mod wasm;
 mod x509;
 mod zlib_ffi;
 
-#[cfg(all(feature = "engine-jsc", not(feature = "engine-quickjs")))]
+#[cfg(feature = "engine-jsc")]
 mod engine_jsc;
-#[cfg(feature = "engine-quickjs")]
-mod engine_quickjs;
+#[cfg(feature = "engine-split")]
+mod split;
 #[cfg(not(any(
-    feature = "engine-quickjs",
+    feature = "engine-split",
     feature = "engine-jsc",
     feature = "engine-host"
 )))]
-compile_error!(
-    "bunwasm-runtime needs an engine: feature engine-quickjs, engine-jsc or engine-host"
-);
+compile_error!("bunwasm-runtime needs an engine: feature engine-split, engine-jsc or engine-host");
 
 pub use engine::{Engine, ModuleHost, NativeError, PromiseState, Val};
 pub use transpiler::{
@@ -64,9 +62,7 @@ pub use transpiler::{
 };
 
 /// The engine this build uses.
-#[cfg(feature = "engine-quickjs")]
-pub type ActiveEngine = engine_quickjs::QuickJs;
-#[cfg(all(feature = "engine-jsc", not(feature = "engine-quickjs")))]
+#[cfg(feature = "engine-jsc")]
 pub type ActiveEngine = engine_jsc::Jsc;
 
 /// Bun version this runtime reports (from vendor/bun/package.json).
@@ -217,10 +213,10 @@ impl State {
     }
 }
 
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(feature = "engine-jsc")]
 type ModuleHandoffs<V> = RefCell<HashMap<String, (V, V)>>;
 
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(feature = "engine-jsc")]
 /// The runtime's engine-facing half: the `internal` object the bootstrap
 /// returned, pending wrapper-module handoffs, and the module host.
 pub(crate) struct Core<E: Engine> {
@@ -230,7 +226,7 @@ pub(crate) struct Core<E: Engine> {
     handoffs: ModuleHandoffs<E::Value>,
 }
 
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(feature = "engine-jsc")]
 impl<E: Engine> Core<E> {
     pub(crate) fn internal(&self, e: &E) -> E::Value {
         self.internal
@@ -311,7 +307,7 @@ impl<E: Engine> Core<E> {
     }
 }
 
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(feature = "engine-jsc")]
 impl<E: Engine> ModuleHost<E> for Core<E> {
     fn has_interrupt_handler(&self) -> bool {
         host::PROCESS_ABI
@@ -411,14 +407,14 @@ impl<E: Engine> ModuleHost<E> for Core<E> {
 /// Run a program to completion; returns the process exit code. With the
 /// host engine (`engine-host`) this only sets the program up: the host runs
 /// it after `_start` returns (see [`host_engine_ready`]).
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(feature = "engine-jsc")]
 pub fn run(options: Options) -> i32 {
     run_with::<ActiveEngine>(options)
 }
 
 #[cfg(all(
     feature = "engine-host",
-    not(any(feature = "engine-quickjs", feature = "engine-jsc"))
+    not(any(feature = "engine-split", feature = "engine-jsc"))
 ))]
 pub fn run(options: Options) -> i32 {
     let Options {
@@ -428,6 +424,11 @@ pub fn run(options: Options) -> i32 {
     } = options;
     let (state, main_path) = new_state(&entry, &args, transpiler);
     engine_host::init(entry, state, main_path)
+}
+
+#[cfg(feature = "engine-split")]
+pub fn run(options: Options) -> i32 {
+    split::run(options)
 }
 
 /// True when `run` handed the program to the host engine (the binary must
@@ -475,7 +476,7 @@ fn new_state(
     (state, main_path)
 }
 
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(feature = "engine-jsc")]
 fn run_with<E: Engine>(options: Options) -> i32 {
     let Options {
         entry,
@@ -503,7 +504,7 @@ fn run_with<E: Engine>(options: Options) -> i32 {
     code
 }
 
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(feature = "engine-jsc")]
 fn run_in_engine<E: Engine>(e: &E, core: &Rc<Core<E>>, entry: &Entry, main_path: &str) -> i32 {
     match engine_natives::bootstrap(e, core) {
         Ok(internal) => *core.internal.borrow_mut() = Some(internal),
@@ -540,7 +541,7 @@ fn run_in_engine<E: Engine>(e: &E, core: &Rc<Core<E>>, entry: &Entry, main_path:
     }
 }
 
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(feature = "engine-jsc")]
 /// The event loop: microtasks and ticks, then one due timer at a time;
 /// sleeps (WASI `poll_oneoff`, or the host's poll while sockets are open)
 /// until the next timer when idle.
@@ -631,7 +632,7 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
     }
 }
 
-#[cfg(any(feature = "engine-quickjs", feature = "engine-jsc"))]
+#[cfg(feature = "engine-jsc")]
 /// Surface a rejected entry module; keep pending ones around.
 fn check_main_promise<E: Engine>(e: &E, core: &Core<E>, promise: E::Value) -> Option<E::Value> {
     match e.promise_state(&promise) {

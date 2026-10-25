@@ -1,7 +1,8 @@
-## QuickJS shared-module dependency gate
+## QuickJS shared-module split
 
-The new `bunwasm-engine-quickjs` crate is a build and allocator gate, not the
-production engine split. It builds locked rquickjs 0.13.0 with std and the existing
+The `bunwasm-engine-quickjs` crate started as a build and allocator gate.
+The unmerged production-entry checkpoint now links it to the actual CLI/runtime
+core. Its RUN body evaluates literal 42, not the application driver. It builds locked rquickjs 0.13.0 with std and the existing
 patched QuickJS-ng 0.16.2 C sources. No upstream code was copied into this adapter.
 The existing patches remain documented in [QuickJS](quickjs.md),
 [data conversion](quickjs-data-conversion.md), and [stack guards](wasm-stack-guards.md).
@@ -15,7 +16,7 @@ Run from the workspace with the pinned nightly and existing patched sysroot:
 
 ```sh
 export QUICKJS_BUILD_DIR=/work/tmp/bun-wasm-quickjs-gate
-scripts/build-engine-quickjs.sh
+QUICKJS_SMOKE_EXPORTS=1 scripts/build-engine-quickjs.sh
 tests/linker/quickjs/run.sh
 ```
 
@@ -55,11 +56,41 @@ nesting, owned ops echo, cross-boundary allocation, real core growth, and the
 build directory. That directory belongs to the caller and can be removed once
 artifact consumers have stopped. No browser loader or product engine trait moves.
 
+## Production-entry checkpoint
+
+Original adapters in `crates/bunwasm-runtime/src/split.rs` and
+`crates/bunwasm-engine-quickjs/src/client.rs` connect the existing plain-data
+Dispatcher/Transport to one registered RUN function. No VM value crosses that
+boundary. The core dependency graph excludes rquickjs. The side imports core
+libc for Rust and QuickJS allocations, plus the shared memory, table and stack.
+
+`crates/bunwasm-cli/entry-split.c` is an original command-entry shim, not copied
+CRT source. Waffle initializes core constructors before side memory,
+relocations, constructors and registration. `_start` calls the real CLI without
+repeating constructors. Volatile counters check the schedule. The original
+8 MiB stack and 512 MiB memory maximum remain unchanged.
+
+Build fresh matching bytes with `BUN_CORE_BUILD_DIR` pointing to a private
+output directory, then run the ordinary-worker CLI fixture:
+
+```sh
+scripts/build-bun-core.sh
+bun test tests/linker/quickjs/cli.test.ts
+```
+
+The fixture uses accepted Waffle revision
+`1fa934ed99f95a744af2448fc6fb14bb984c37d4`. It requires exact `42\n` stdout,
+empty stderr, exit 0 and one cleanup. Initialization is requested twice to test
+idempotence. This does not accept application imports, promise jobs, timers or
+the final split. Replace the literal RUN before merging.
+
 ## Classification
 
 | Source | Class | Change |
 | --- | --- | --- |
 | `crates/bunwasm-engine-quickjs/**` | Port | Original rquickjs gate and core-backed Rust allocator. Manual FFI declarations name the existing six local QuickJS helpers; no upstream implementation copied. |
+| `crates/bunwasm-runtime/src/split.rs`, `crates/bunwasm-cli/entry-split.c` | Port | Original process-state, registration, transport and command-entry adapters. No upstream implementation copied. |
+| `scripts/build-bun-core.sh`, `scripts/quickjs-core-exports.txt` | Port | Original VM-free production-core producer and explicit libc/GOT export list. |
 | `scripts/build-engine-quickjs.sh` | Port | Original PIC Rust/C shared-library build with no engine libc or heap-growth owner. |
 | `tests/linker/quickjs/**` | Port | Original raw linked-VM fixtures, section-preserving initializer conversion, and real core-libc checks. Data/ops source stays owned by its existing modules and is included by path. |
 

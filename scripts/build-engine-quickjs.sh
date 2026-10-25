@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Real rquickjs + PIC std dependency gate, not the production engine split.
+# Actual rquickjs shared module. The RUN entry is an unmerged production checkpoint.
 # Contract and provenance: docs/bun-patches/quickjs-shared-module.md.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -16,8 +16,11 @@ cargo build --locked --offline -Zbuild-std=std,panic_abort --release --target wa
   -j "${CARGO_BUILD_JOBS:-4}" -p bunwasm-engine-quickjs
 clang --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC -O2 -fno-builtin-malloc -fno-builtin-free -c \
   tests/linker/quickjs/engine-init.c -o "$out/engine-init.o"
-exports=(quickjs_helpers_smoke quickjs_ctor_value quickjs_link_smoke quickjs_rust_alloc quickjs_rust_free quickjs_rust_realloc
-  __stack_pointer quickjs_stack_reenter quickjs_interrupt_smoke quickjs_stack_guard_smoke __wasm_call_ctors)
+exports=(quickjs_register quickjs_run quickjs_ctor_value __stack_pointer __wasm_call_ctors)
+if [[ "${QUICKJS_SMOKE_EXPORTS:-0}" == 1 ]]; then
+  exports+=(quickjs_helpers_smoke quickjs_link_smoke quickjs_rust_alloc quickjs_rust_free quickjs_rust_realloc
+    quickjs_stack_reenter quickjs_interrupt_smoke quickjs_stack_guard_smoke)
+fi
 args=()
 for name in "${exports[@]}"; do args+=("--export=$name"); done
 wasm-ld --shared --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
