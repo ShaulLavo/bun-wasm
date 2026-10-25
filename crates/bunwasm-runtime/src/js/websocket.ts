@@ -124,6 +124,7 @@
       try {
         this.drainFrames();
       } catch (err) {
+        // Keep the raw code and JavaScript coercions, including BigInt failures.
         this.closeInfo = { code: (err as { code?: number }).code || 1002, reason: "", clean: false };
         this.sendFrame(8, closePayload(this.closeInfo.code));
         this.conn.end();
@@ -234,6 +235,7 @@
       } catch (err) { invokeError(err); }
     };
     const invokeError = (err: unknown) => {
+      // The second lookup can disappear or throw. Do not cache or silently skip it.
       if (handlers().error) (handlers().error as NonNullable<BunWasm.WebSocketHandlers["error"]>)(socket, err);
       else internal.printError(err);
     };
@@ -359,7 +361,9 @@
         if (this._state === 3) return;
         this._state = 3;
         this._conn?.destroy();
-        event(this, "error", { error: err, message: (err as { message?: string }).message });
+        const message = (err as { message?: unknown }).message;
+        // Defer coercion until the constructor reads message. String() would accept Symbols.
+        event(this, "error", { error: err, get message() { return message === undefined ? "" : `${message}`; } });
         event(this, "close", { code, reason: "", wasClean: false });
       }
       _handshake(bytes: Uint8Array) {

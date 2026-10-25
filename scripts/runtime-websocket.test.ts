@@ -132,11 +132,32 @@ function originalStateSyntax(text: string) {
   return text;
 }
 
+const failureMessage = `_fail(err, code = 1006) {
+  if (this._state === 3) return;
+  this._state = 3;
+  this._conn?.destroy();
+  const message = (err).message;
+  event(this, "error", { error: err, get message() { return message === undefined ? "" : \`\${message}\`; } });
+  event(this, "close", { code, reason: "", wasClean: false });
+}`;
+const originalFailureMessage = `_fail(err, code = 1006) {
+  if (this._state === 3) return;
+  this._state = 3;
+  this._conn?.destroy();
+  event(this, "error", { error: err, message: (err).message });
+  event(this, "close", { code, reason: "", wasClean: false });
+}`;
+
 function originalSyntax(text: string) {
   text = originalStateSyntax(text);
   const parsed = ts.createSourceFile("factory.js", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const edits: { start: number; end: number; replacement: string }[] = [];
   function visit(node: ts.Node) {
+    if (ts.isMethodDeclaration(node) && node.name.getText(parsed) === "_fail") {
+      expect(runtimeSyntax(node.getText(parsed))).toBe(runtimeSyntax(failureMessage));
+      edits.push({ start: node.getStart(parsed), end: node.end, replacement: originalFailureMessage });
+      return;
+    }
     if (ts.isVariableStatement(node)) inspectDeclaration(node);
     ts.forEachChild(node, visit);
   }
@@ -147,21 +168,22 @@ function originalSyntax(text: string) {
     edits.push({ start: node.getStart(parsed), end: node.end, replacement: name === "callHandler" ? "" : originalInvoke });
   }
   visit(parsed);
-  expect(edits).toHaveLength(2);
+  expect(edits).toHaveLength(3);
   edits.sort((left, right) => right.start - left.start);
   for (const edit of edits) text = text.slice(0, edit.start) + edit.replacement + text.slice(edit.end);
   return createHash("sha256").update(runtimeSyntax(text)).digest("hex");
 }
 
-test("WebSocket syntax differs only by checked dispatch and explicit state checks", () => {
+test("WebSocket syntax differs only by checked dispatch, state checks and native message conversion", () => {
   expect(originalSyntax(emittedSource())).toBe(originalHash);
 });
 
 test("WebSocket syntax proof rejects a wrong handler or reordered failure", () => {
   const emitted = emittedSource();
   expect(() => originalSyntax(emitted.replace('current.pong?.(socket, invocation[1])', 'current.ping?.(socket, invocation[1])'))).toThrow();
-  expect(originalSyntax(emitted.replace('this._state = 3;', 'this._state = 2;'))).not.toBe(originalHash);
+  expect(() => originalSyntax(emitted.replace('this._state = 3;', 'this._state = 2;'))).toThrow();
   expect(() => originalSyntax(emitted.replace('value === null || value === undefined', 'value === null'))).toThrow();
+  expect(() => originalSyntax(emitted.replace('message === undefined ? "" : `${message}`', 'String(message)'))).toThrow();
 });
 
 function field(value: unknown, key: PropertyKey): unknown {
@@ -220,7 +242,6 @@ async function dispatchTrace(source: string) {
 
 test("WebSocket synthetic dispatch preserves provider reads, receiver, arguments and failures", async () => {
   const before = readFileSync(join(root, "crates/bunwasm-runtime/src/js/websocket.ts"), "utf8");
-  // The pinned inverse restricts runtime changes to the checked dispatcher and explicit state checks.
   const emitted = emittedSource();
   expect(originalSyntax(emitted)).toBe(originalHash);
   const original = originalStateSyntax(emitted).replace(/const callHandler = [\s\S]*?(?=    const invokeError)/, originalInvoke + "\n");
@@ -319,7 +340,7 @@ test("WebSocket state checks reject missing peer and handshake input rather than
   expect(() => call(socket, "_handshake", [new Uint8Array([1])])).toThrow(TypeError);
 });
 
-test("WebSocket state correction retains exactly the disclosed unresolved assertions", () => {
+test("WebSocket retains only the three explicit dynamic-boundary assertion exceptions", () => {
   const source = readFileSync(sourcePath, "utf8");
   const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
   const remaining: string[] = [];
@@ -331,7 +352,7 @@ test("WebSocket state correction retains exactly the disclosed unresolved assert
   expect(remaining).toEqual([
     "err as { code?: number }",
     'handlers().error as NonNullable<BunWasm.WebSocketHandlers["error"]>',
-    "err as { message?: string }",
+    "err as { message?: unknown }",
   ]);
 });
 
@@ -449,13 +470,14 @@ function clientFailure(source: string, makeError: (trace: unknown[], socket: unk
   return { trace, events, result, error, socket };
 }
 
-test("WebSocket boundary caught message reads after closed state and destroy without normalization", () => {
+test("WebSocket boundary caught message reads after closed state and destroy before native conversion", () => {
   const source = emittedSource();
   const rawMessage = { custom: "truthy non-string message" };
   const object = clientFailure(source, (trace, socket) => ({ get message() { trace.push(["get message", field(socket, "_state")]); return rawMessage; } }));
   expect(object.result.kind).toBe("returned");
   expect(object.trace).toEqual([["destroy", 3], ["get message", 3], ["event", "error"], ["event", "close"]]);
-  expect(field(object.events[0], "message")).toBe(rawMessage);
+  const expected: unknown = Reflect.construct(ErrorEvent, ["error", { message: rawMessage }]);
+  expect(field(object.events[0], "message")).toBe(field(expected, "message"));
   expect(field(object.events[0], "error")).toBe(object.error);
   const sentinel = new Error("message getter threw");
   const getter = clientFailure(source, trace => ({ get message() { trace.push("get message"); throw sentinel; } }));

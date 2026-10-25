@@ -37,28 +37,44 @@ bookkeeping uses a synchronous helper without introducing another await. The
 absent close timer is passed to clearTimeout as undefined rather than null.
 Tests pin these exact changes and compare queued sends against the old source.
 
-This remains a held source checkpoint, not an assertion-free conversion. Three
-pre-existing assertions remain: caught error code and message reads, and a second
-lookup of an optional error handler. Erasing their type syntax still fails strict
-compilation. Their coercion, getter and arbitrary-thrown-value behavior needs a
-separate correction or scope decision. No new error policy is assumed. Missing
-internal state now fails at the explicit check, so invalid partial handshakes can
-fail earlier and null-dereference error messages change. This is a deliberate
-state validation change, not an annotation-only or whole-program parity claim.
-No final guest/native/browser acceptance is claimed, and historical guests are
-not build evidence for this checkpoint. OS transport stays in Waffle; this change
-only adapts the JavaScript WebSocket API to the existing byte connection.
+Three dynamic-boundary assertion exceptions remain intentionally visible. A caught
+code keeps its raw value so each comparison and bitwise operation performs its
+own JavaScript coercion, and the same value reaches the close callback. The
+second optional error-handler lookup remains an ordinary member call. It can
+throw or disappear after the first lookup, and its provider is the receiver.
+Validating or caching either value would change these observable behaviors.
+The caught message assertion permits property access with the original receiver,
+including primitive getters and nullish access failures. Its value is `unknown`,
+not an assumed string. None of these assertions proves an arbitrary caught value
+has the declared shape. Their exact expressions are inventoried in the test.
+Numeric public callback declarations are unchanged.
 
-The bounded follow-up adds five synthetic boundary tests without changing the
-runtime. They pin both error-handler lookups and the second provider receiver,
-including a throwing second getter and a missing second callback. Caught code
-values retain string acceptance and four coercions of an object-valued code.
-Nullish code reads and getter failures escape before sending a close frame.
-Client failure sets closed state and destroys the connection before reading the
-message; a throwing getter prevents both events. Primitive message getters keep
-the primitive receiver, and truthy non-string messages reach the event
-constructor unchanged. These controls explain why numeric/string normalization
-or caching the first callback would change behavior, not resolve its proof.
-The source inverse remains unchanged and still explicitly reverses the earlier
-state validation changes. The three assertions and strict withholding gate stay
-held pending an explicit contract decision.
+The owner selected real Bun behavior on 2026-10-26 and allowed these narrowly
+tested exceptions. Native Bun 1.4.4, revision `38afee6c8`, is the message-constructor
+oracle. Its executable SHA256 is
+`10702245766b225e70bbf6235fd6b47214fd94b4760d00ffaed8ab0df57ac235`.
+`ErrorEvent` converts a defined message to a string, defaults undefined to an
+empty string, preserves the original error value, and throws on a Symbol.
+The adapter now reads the message once after closing state and destroying the
+connection. An init accessor defers conversion until the constructor reads the
+message, after the global constructor lookup. Template interpolation preserves the
+native string hint and Symbol failure; `String(message)` would accept Symbols.
+This corrects the local web shim's raw-message forwarding without changing the
+shared shim. A coercion failure prevents both error and close events.
+
+CI-discovered pure controls compare against the installed native Bun
+`ErrorEvent` constructor. They also run the canonical stripped adapter in Bun
+with synthetic byte connections to pin both handler lookups, the second receiver,
+getter failures, one code lookup, four independently varying coercions, BigInt
+bitwise failures, raw close-code identity, and falsy getter/coercion throws.
+The latter are adapter JavaScript controls, not claims that Bun's native socket
+API exposes the same internal hooks. The syntax inverse explicitly reverses the
+message conversion as well as the earlier dispatcher and state checks; it still
+pins the original source hash and rejects mutations to those changes.
+
+Missing internal state fails at the explicit check, so invalid partial handshakes
+can fail earlier and null-dereference error messages change. This is a deliberate
+state validation change, not an annotation-only or whole-program parity claim.
+No final guest/native-socket/browser acceptance is claimed. Historical guests are
+not build evidence for this source. OS transport stays in Waffle; this change
+only adapts the JavaScript WebSocket API to the existing byte connection.
