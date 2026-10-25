@@ -5,7 +5,7 @@ The Blob branches in `crates/bunwasm-runtime/src/js/structured_clone.js` and
 host adapters. No upstream implementation was copied. The comparison contract is
 Bun's `src/js/node/worker_threads.ts` at revision
 `9510e74152073d850a18758ca41114d8f214ffa6` and the HTML structured clone behavior
-exposed by native Bun 1.4.4 and Node 24.22.1.
+exposed by native Bun 1.4.4 and Node 26.12.1.
 
 The runtime's public Blob keeps its bytes and MIME type in private fields.
 Enumerable-property cloning therefore loses them. Structured clone now constructs
