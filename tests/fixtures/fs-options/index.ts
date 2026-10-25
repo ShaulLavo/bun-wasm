@@ -43,6 +43,8 @@ export async function checkFsOptions(api: Fs, root: string) {
   await assert.rejects(api.promises.open(existing, "wx"), { code: "EEXIST" });
   api.appendFileSync(existing, "!", { flag: "r+" });
   assert.equal(contents(), "!Kiginal");
+  api.appendFileSync(existing, "!", { flag: undefined });
+  assert.equal(contents(), "!Kiginal!");
   assert.throws(() => api.openSync(existing, "not-a-flag"), { code: "ERR_INVALID_ARG_VALUE" });
   for (const flag of ["r", "r+", "rs", "rs+", "a", "a+", "as", "as+"]) {
     reset();

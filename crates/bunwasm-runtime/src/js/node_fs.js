@@ -307,7 +307,7 @@
 
   function appendFileSync(path, data, options) {
     const config = typeof options === "string" ? { encoding: options } : options || {};
-    return writeFileSync(path, data, Object.assign({ flag: "a" }, config));
+    return writeFileSync(path, data, Object.assign({}, config, { flag: config.flag === undefined ? "a" : config.flag }));
   }
 
   function existsSync(path) {
