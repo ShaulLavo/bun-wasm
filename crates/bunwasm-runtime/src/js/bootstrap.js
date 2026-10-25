@@ -700,6 +700,8 @@
   internal.runMain = function runMain(requested) {
     const path = internal.require("package_scripts").resolve(requested);
     if (!native.exists(path)) {
+      // A worker's missing entry reaches its parent as Node's require error, as in Bun.
+      if (internal.workerError) throw Object.assign(new Error(`Cannot find module '${path}'`), { code: "MODULE_NOT_FOUND" });
       const err = new Error(`Module not found "${native.mainArg() || path}"`);
       err.code = "ERR_MODULE_NOT_FOUND";
       err.__bunwasmPlain = true;

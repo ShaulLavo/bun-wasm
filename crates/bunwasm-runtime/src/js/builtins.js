@@ -728,6 +728,10 @@
     "node:https": () => httpModule("https"),
     "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {} }),
     "node:zlib": zlibModule,
+    // Node's contract when built without tracing. Bun and Node also reject it in workers.
+    "node:trace_events": () => {
+      throw Object.assign(new Error("Trace events are unavailable"), { code: "ERR_TRACE_EVENTS_UNAVAILABLE" });
+    },
     "node:inspector": () => unsupportedModule("inspector", "no debugger", ["open", "close", "url", "waitForDebugger", "Session"], { console: globalThis.console }),
     "node:repl": () => unsupportedModule("repl", "no interactive terminal", ["start", "REPLServer"]),
     "node:v8": () => ({
