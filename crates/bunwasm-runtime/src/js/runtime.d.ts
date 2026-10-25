@@ -169,7 +169,7 @@ declare namespace BunWasm {
     require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
     builtin(name: "node:stream"): {
       Transform: CompressionConstructor;
-      Readable: new(options: { read(): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerReadable;
+      Readable: new(options: { read(): void; highWaterMark?: number; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => NodeReadable;
       Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: (error?: unknown) => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
     };
   }
@@ -361,11 +361,20 @@ declare namespace BunWasm {
     getColorDepth(): number; hasColors(): boolean; getWindowSize(): number[];
     _writableState: { ended: boolean };
   }
-  interface ProcessReader extends NodeEmitter {
+  interface NodeReadable extends WorkerReadable {
+    readonly destroyed: boolean;
+    readonly readableLength: number;
+    readonly readableEnded: boolean;
+    readable: boolean;
+    setEncoding(encoding: unknown): this;
+    resume(): this; pause(): this;
+    read(size?: number): string | BufferBytes | null;
+    [Symbol.asyncIterator](): AsyncGenerator<string | BufferBytes>;
+  }
+  interface ProcessReader extends NodeReadable {
     fd: number; isTTY: boolean; readable: boolean;
-    setEncoding(encoding: unknown): ProcessReader;
-    resume(): ProcessReader; pause(): ProcessReader; setRawMode(): ProcessReader;
-    ref(): ProcessReader; unref(): ProcessReader; read(): null;
+    setRawMode(): ProcessReader;
+    ref(): ProcessReader; unref(): ProcessReader;
     [Symbol.asyncIterator](): AsyncGenerator<string | BufferBytes>;
   }
   interface ProcessWarningOptions { type?: unknown; code?: unknown }
@@ -390,6 +399,7 @@ declare namespace BunWasm {
     traceExit(reason: string, code: number): void;
     getMainModule(): unknown;
     listenerChanged?: (target: object, name?: string | symbol) => void;
+    require(name: "process_stdin"): () => ProcessReader;
     require(name: "process_signals"): (process: NodeEmitter, names: ReadonlyMap<number, readonly string[]>) => () => boolean;
     pumpSignals?: () => boolean;
     /** The byte helper accepts arbitrary input and throws for unsupported shapes. */

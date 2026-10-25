@@ -34,11 +34,13 @@
       else { fd = native.open(target, "r"); owned = true; }
       const stat = native.fstat(fd);
       const regular = (stat.mode & 0o170000) === 0o100000;
-      positional = regular && (streaming || typeof target === "string" || start !== 0 || end !== undefined);
+      const sharedCursor = regular && typeof target === "number" && !streaming;
+      positional = regular && !sharedCursor;
       const total = regular ? stat.size : Infinity;
       position = start < 0 ? Math.max(total + start, 0) : Math.min(start, total);
       limit = end === undefined ? total : end < 0 ? Math.max(total + end, 0) : Math.min(end, total);
-      if (!positional) skip = position;
+      if (sharedCursor && start !== 0) native.seek(fd, position);
+      if (!positional && !sharedCursor) skip = position;
     }
 
     function next(): Uint8Array<ArrayBuffer> | undefined {

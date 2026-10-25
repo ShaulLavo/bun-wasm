@@ -69,10 +69,12 @@ test("install provisions /bin/bun and owns registrations without reserving a Run
   const f = fixture();
   const install = await installBunAdapters(f.runtime);
   expect(Array.from(f.adapters.keys())).toEqual(["bun:quickjs", "bun:jsc", "bun:browser"]);
-  expect(Array.from(f.programs.keys())).toEqual(["/bin/bun", "/bin/node"]);
+  expect(Array.from(f.programs.keys())).toEqual(["/bin/bun", "/bin/node", "/bin/nodejs"]);
   expect(f.programs.get("/bin/bun")?.adapter).toBe("bun:browser");
   expect(f.directories.has("/bin")).toBe(true);
   expect(f.files.has("/bin/bun")).toBe(true);
+  expect(f.files.has("/bin/nodejs")).toBe(true);
+  expect(f.programs.get("/bin/nodejs")?.adapter).toBe("bun:browser");
   install.dispose();
   expect(f.adapters.size).toBe(0);
   expect(f.programs.size).toBe(0);
@@ -86,7 +88,7 @@ test("concurrent and duplicate installs reject; disposal unregisters once and pe
   const first = await pending;
   await expect(installBunAdapters(f.runtime)).rejects.toThrow("already installed");
   first.dispose(); first.dispose();
-  expect(f.removed.length).toBe(5);
+  expect(f.removed.length).toBe(6);
   const second = await installBunAdapters(f.runtime);
   first.dispose();
   expect(f.adapters.size).toBe(3);
@@ -207,3 +209,16 @@ for (const conflict of [false, true]) {
     } finally { dispose.mockRestore(); }
   });
 }
+
+for (const engine of ["quickjs", "jsc", "browser"] as const) test(`default ${engine} nodejs registration uses its selected module`, async () => {
+  const f = fixture();
+  const installed = await installBunAdapters(f.runtime, { engine, module });
+  try {
+    const bin = engine === "browser" ? "/bin" : `/opt/bun/${engine}/bin`;
+    const program = f.programs.get(`${bin}/nodejs`);
+    expect(program?.adapter).toBe(`bun:${engine}`);
+    expect(f.files.has(`${bin}/nodejs`)).toBe(true);
+    if (typeof program?.module !== "function") throw new Error("Expected lazy module registration");
+    expect(await program.module()).toBe(module);
+  } finally { installed.dispose(); }
+});

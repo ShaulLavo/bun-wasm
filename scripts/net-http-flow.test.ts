@@ -97,6 +97,7 @@ function fixture() {
     concatBytes: (parts: Uint8Array[]) => Buffer.concat(parts),
     pumpIo: () => false,
   };
+  modules.fetch_lifetime = load("fetch_lifetime")(internal);
   modules.node_net_onread = load("node_net_onread")(internal);
   core = load("node_stream_core", "js")(internal).Stream;
   const socketFactory = load("node_net", "js")(internal);

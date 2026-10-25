@@ -680,7 +680,9 @@
   };
 
   internal.runMain = function runMain(requested) {
-    const path = internal.require("package_scripts").resolve(requested);
+    const scripts = internal.require("package_scripts");
+    const path = scripts.resolve(requested);
+    if (typeof path !== "string") return scripts.run(path);
     if (!native.exists(path)) {
       // A worker's missing entry reaches its parent as Node's require error, as in Bun.
       if (internal.workerError) throw Object.assign(new Error(`Cannot find module '${path}'`), { code: "MODULE_NOT_FOUND" });

@@ -1,15 +1,17 @@
 //! Outgoing HTTP(S) for the `fetch` / `fetch_head` / `read` slots.
 //!
 //! Each request runs on its own thread: it sends the request with reqwest
-//! (blocking; hyper keeps the server's reason phrase, which ureq drops),
+//! (hyper keeps the server's reason phrase, which ureq drops),
 //! publishes the response head, then streams the (decoded) body into the
 //! handle's queue, pausing while the guest has a lot unread.
 
+use std::future::{Future, poll_fn};
 use std::io::{self, BufRead, BufReader, Read};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::task::{Poll, Waker};
 use std::thread;
 
-use reqwest::blocking::Client;
+use reqwest::Client;
 use reqwest::header::{self as http_header, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Method, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -22,22 +24,82 @@ const MAX_REDIRECTS: usize = 20;
 
 #[derive(Default)]
 pub struct Clients {
-    manual: OnceLock<Client>,
+    manual: OnceLock<Arc<Transport>>,
 }
 
 impl Clients {
-    fn get(&self) -> Result<Client, reqwest::Error> {
+    fn get(&self) -> Result<Arc<Transport>, SendError> {
         let cell = &self.manual;
         if let Some(client) = cell.get() {
             return Ok(client.clone());
         }
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .map_err(|error| SendError::Policy(invalid(error.to_string(), "EAGAIN")))?;
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            // Like Bun: no overall deadline; the guest aborts if it wants one.
-            .timeout(None::<std::time::Duration>)
+            // Async reqwest defaults to no deadline; the guest owns cancellation.
             .user_agent(concat!("bun-wasm/", env!("CARGO_PKG_VERSION")))
-            .build()?;
-        Ok(cell.get_or_init(|| client).clone())
+            .build()
+            .map_err(SendError::Network)?;
+        let transport = Arc::new(Transport { client, runtime });
+        Ok(cell.get_or_init(|| transport).clone())
+    }
+}
+
+/// Keep the shared pool's I/O running while body workers wait on backpressure.
+struct Transport {
+    client: Client,
+    runtime: tokio::runtime::Runtime,
+}
+
+impl Transport {
+    fn wait<T>(
+        &self,
+        shared: &Shared,
+        future: impl Future<Output = Result<T, reqwest::Error>>,
+    ) -> Result<T, SendError> {
+        let mut future = std::pin::pin!(future);
+        let result = self.runtime.block_on(poll_fn(|cx| {
+            let mut state = shared.state.lock().unwrap();
+            if state.aborted {
+                return Poll::Ready(Err(SendError::Aborted));
+            }
+            state.waker = Some(cx.waker().clone());
+            drop(state);
+            future.as_mut().poll(cx).map_err(SendError::Network)
+        }));
+        shared.state.lock().unwrap().waker = None;
+        result
+    }
+}
+
+/// Preserve the synchronous decoder interface, but make every network read
+/// interruptible, including a read waiting for the next response chunk.
+struct ResponseReader {
+    response: reqwest::Response,
+    transport: Arc<Transport>,
+    shared: Arc<Shared>,
+    chunk: bytes::Bytes,
+}
+
+impl Read for ResponseReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        while self.chunk.is_empty() {
+            let next = self.transport.wait(&self.shared, self.response.chunk());
+            let Some(chunk) = next.map_err(SendError::into_io)? else {
+                return Ok(0);
+            };
+            self.chunk = chunk;
+        }
+        let count = buf.len().min(self.chunk.len());
+        buf[..count].copy_from_slice(&self.chunk.split_to(count));
+        Ok(count)
     }
 }
 
@@ -85,6 +147,7 @@ struct State {
     eof: bool,
     body_error: Option<ErrorInfo>,
     aborted: bool,
+    waker: Option<Waker>,
 }
 
 struct Shared {
@@ -240,10 +303,16 @@ impl Fetch {
         }
     }
 
-    /// Stops the request: the thread drops the connection at its next step.
+    /// Wake pending network I/O as well as workers paused on body backpressure.
     pub fn abort(self) {
-        self.shared.state.lock().unwrap().aborted = true;
+        let mut state = self.shared.state.lock().unwrap();
+        state.aborted = true;
+        let waker = state.waker.take();
+        drop(state);
         self.shared.drained.notify_all();
+        if let Some(waker) = waker {
+            waker.wake();
+        }
     }
 }
 
@@ -267,19 +336,25 @@ impl Job {
         let url = request.url.to_string();
         let host = request.url.host_str().unwrap_or_default().to_string();
         let is_head = request.method == Method::HEAD;
-        let result = self.send(
-            request.method,
-            request.url.clone(),
-            request.headers,
-            request.body,
-        );
-        let response = match result {
+        let result = self.clients.get().and_then(|transport| {
+            self.send(
+                &transport,
+                request.method,
+                request.url.clone(),
+                request.headers,
+                request.body,
+            )
+            .map(|response| (response, transport))
+        });
+        let (response, transport) = match result {
             Ok(response) => response,
-            Err(error) => {
-                self.finish_head(Err(match error {
-                    SendError::Network(error) => fetch_error(&error, &url, &host),
-                    SendError::Policy(error) => error,
-                }));
+            Err(SendError::Aborted) => return,
+            Err(SendError::Network(error)) => {
+                self.finish_head(Err(fetch_error(&error, &url, &host)));
+                return;
+            }
+            Err(SendError::Policy(error)) => {
+                self.finish_head(Err(error));
                 return;
             }
         };
@@ -333,7 +408,13 @@ impl Job {
         if no_body {
             return self.finish_body(None);
         }
-        match decoder(encoding.as_deref(), response) {
+        let reader = ResponseReader {
+            response,
+            transport,
+            shared: self.shared.clone(),
+            chunk: bytes::Bytes::new(),
+        };
+        match decoder(encoding.as_deref(), reader) {
             Ok(reader) => self.pump(reader),
             Err(error) => self.finish_body(Some(body_error(&error))),
         }
@@ -341,20 +422,21 @@ impl Job {
 
     fn send(
         &self,
+        transport: &Transport,
         mut method: Method,
         mut url: Url,
         mut headers: HeaderMap,
         mut body: Option<Vec<u8>>,
-    ) -> Result<reqwest::blocking::Response, SendError> {
-        let client = self.clients.get().map_err(SendError::Network)?;
+    ) -> Result<reqwest::Response, SendError> {
         for redirects in 0..=MAX_REDIRECTS {
-            let mut builder = client
+            let mut builder = transport
+                .client
                 .request(method.clone(), url.clone())
                 .headers(headers.clone());
             if let Some(body) = &body {
                 builder = builder.body(body.clone());
             }
-            let response = builder.send().map_err(SendError::Network)?;
+            let response = transport.wait(&self.shared, builder.send())?;
             let status = response.status();
             let Some(location) = response.headers().get(http_header::LOCATION) else {
                 return Ok(response);
@@ -444,8 +526,19 @@ impl Job {
 }
 
 enum SendError {
+    Aborted,
     Network(reqwest::Error),
     Policy(ErrorInfo),
+}
+
+impl SendError {
+    fn into_io(self) -> io::Error {
+        match self {
+            Self::Network(error) => io::Error::other(error),
+            Self::Aborted => io::Error::from(io::ErrorKind::ConnectionAborted),
+            Self::Policy(error) => io::Error::other(error.message),
+        }
+    }
 }
 
 fn redirect_headers(headers: &mut HeaderMap, current: &Url, next: &Url) {
