@@ -11,6 +11,7 @@ import { exitProvenance } from "./exit-provenance.ts";
 import { earlyServerExit } from "./browser.mjs";
 import { completeObservations } from "./product-browser.ts";
 import { productScoreboard, unlockCandidates } from "./product-report.ts";
+import { guestProvenance } from "./product-provenance.ts";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
 if (interfaces.some(line => line.split(":")[0].trim() !== "lo")) throw new Error("Use scripts/app-matrix.sh in its loopback-only network namespace");
@@ -19,7 +20,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const flags = new Map();
 for (const arg of process.argv.slice(2)) {
   const [key, value = "true"] = arg.split(/=(.*)/s);
-  if (!/^--(apps|engines|hosts|cache|output|launcher|timeout|record|reference|strict|product|help)$/.test(key)) throw new Error(`Unknown option ${key}; use --help`);
+  if (!/^--(apps|engines|hosts|cache|output|launcher|timeout|record|reference|strict|product|guest-receipt|help)$/.test(key)) throw new Error(`Unknown option ${key}; use --help`);
   flags.set(key.slice(2), value);
 }
 if (flags.has("help")) {
@@ -34,6 +35,7 @@ const options = {
   engines: (flags.get("engines") ?? (flags.has("product") ? "browser" : "quickjs,jsc,browser")).split(","),
   hosts: (flags.get("hosts") ?? (flags.has("product") ? "playground" : "native,playground")).split(","),
   timeout: Number(flags.get("timeout") ?? 90) * 1000,
+  guestReceipt: flags.get("guest-receipt"),
   strict: flags.has("strict"), product: flags.has("product"), record: flags.has("record"), reference: flags.has("reference"),
 };
 if (!Number.isFinite(options.timeout) || options.timeout < 1000) throw new Error("--timeout must be at least one second");
@@ -56,6 +58,7 @@ process.on("exit", () => {
 });
 
 let artifacts = {};
+let runtimeSource;
 let launcher;
 let launcherDigest;
 let runnerSources = {};
@@ -241,12 +244,19 @@ try {
   artifacts = Object.fromEntries(options.engines.map(engine => {
     const path = join(scratch, wasmName[engine]);
     copyFileSync(join(root, "dist", wasmName[engine]), path);
-    return [engine, { path, sha256: sha256(readFileSync(path)) }];
+    const bytes = readFileSync(path);
+    return [engine, { path, bytes: bytes.byteLength, sha256: sha256(bytes) }];
   }));
+  if (options.guestReceipt) {
+    if (!artifacts.browser) throw new Error("--guest-receipt requires the browser engine");
+    runtimeSource = guestProvenance(readFileSync(options.guestReceipt, "utf8"), artifacts.browser);
+    const tree = await capture(["git", "rev-parse", `${runtimeSource.source_commit}^{tree}`], root, join(options.output, "guest-source-tree.log"));
+    if (tree.code !== 0 || tree.output.trim() !== runtimeSource.source_tree) throw new Error("Guest receipt source tree differs from Git");
+  }
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-types.ts", "product-report.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-types.ts", "product-report.ts", "product-provenance.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
   mirror = await registry({ directory: options.cache, record: options.record });
   const { browserHost } = await import("./browser.mjs");
@@ -268,7 +278,9 @@ try {
 } finally {
   try {
     report({ date: new Date().toISOString(), revision, nativeBun: Bun.version, options,
-      fixtures_sha256: runnerSources["apps.mjs"],
+      fixtures_sha256: options.product ? sha256(JSON.stringify(selected)) : runnerSources["apps.mjs"],
+      runtime_source: runtimeSource,
+      catalog: options.product ? selected.map(app => ({ id: app.id, family: app.family, features: app.features, stages: app.commands.map(command => command.name) })) : undefined,
       artifacts: Object.fromEntries(Object.entries(artifacts).map(([engine, artifact]) => [engine, artifact.sha256])),
       runner_sources: runnerSources,
       playground_builds: playgroundBuilds,

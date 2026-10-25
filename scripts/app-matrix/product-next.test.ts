@@ -36,10 +36,10 @@ test("Next catalog exports stable current and older major coverage", () => {
 });
 
 test("every Next major uses the registry-verified React pairing", () => {
-  for (const major of versioned.keys()) {
+  for (const [major, expected] of versioned) {
     const apps = nextApps.filter(app => app.id.startsWith(`next-${major}-`));
     expect(apps.length).toBe(major === "14" ? 4 : 5);
-    for (const app of apps) expect(app.dependencies).toEqual(versioned.get(major));
+    for (const app of apps) expect(app.dependencies).toEqual(expected);
   }
 });
 
@@ -82,7 +82,8 @@ test("pages fixtures retain ISR source without claiming an unimplemented cache o
   for (const app of nextApps.filter(candidate => /-pages$/.test(candidate.id))) {
     expect(app.files["pages/isr.tsx"]).toContain("revalidate: 1");
     expect(feature(app, "isr:")).toBe("isr:pending-cache-sequence-probe");
-    const probes = command(app, "dev").check.kind === "page" ? command(app, "dev").check.probes ?? [] : [];
+    const check = command(app, "dev").check;
+    const probes = check.kind === "page" ? check.probes ?? [] : [];
     expect(probes.some(probe => probe.id.includes("isr"))).toBe(false);
   }
 });

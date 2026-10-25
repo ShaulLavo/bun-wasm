@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { firstError } from "./classify";
 import { observedSignature, productScoreboard, unlockCandidates, type ProductResultRow } from "./product-report";
 
 test("baseline cannot count native/reference results as browser product passes", () => {
@@ -37,4 +38,8 @@ test("native reference failures do not enter the browser unlock ranking", () => 
 test("OS-shaped diagnostics are observations, not proven ownership", () => {
   expect(observedSignature("EACCES loading app-only file").owner).toBe("Unconfirmed");
   expect(observedSignature("ENOSYS socket operation").owner).toBe("Unconfirmed");
+});
+
+test("the real unsupported API error is retained before a later browser navigation timeout", () => {
+  expect(firstError("Unhandled Rejection: Error: inspector.url is not supported in bun-wasm: no debugger\nTimeoutError: goto exceeded")).toBe("Error: inspector.url is not supported in bun-wasm: no debugger");
 });

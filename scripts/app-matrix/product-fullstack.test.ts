@@ -89,7 +89,8 @@ function checkPageProbes(fixture: ProductApp, name: string) {
   if (stage.check.kind !== "page") throw new Error(`Missing ${name} page check`);
   const probes = stage.check.probes ?? [];
   expect(stage.check.text).toBe(productMarker);
-  expect(probes.map(probe => probe.id)).toEqual(fixture.features ?? []);
+  const ids: readonly string[] = probes.map(probe => probe.id);
+  expect(ids).toEqual(fixture.features ?? []);
   const response = probes.find(probe => probe.kind === "response");
   if (!response || response.kind !== "response" || !response.text) throw new Error("Missing SSR response check");
   expect(response.status).toBe(200);

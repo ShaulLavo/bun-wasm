@@ -43,11 +43,13 @@ export async function serverCommand({ page, context, command, app, engine, optio
   let checked;
   let url;
   try {
+    const previewState = await page.evaluate(() => globalThis.playground.previews.ready);
+    if (previewState !== "ready") throw new Error(`Preview service worker is ${previewState}`);
     url = await page.evaluate(() => globalThis.playground.previews.url(3137));
     const response = await preview.goto(url, { timeout: options.timeout });
     if (!response?.ok()) throw new Error(`Preview HTTP ${response?.status()}`);
     const check = command.check;
-    if (check.framework && !response.fromServiceWorker()) throw new Error("Preview response bypassed the service worker");
+    if (!response.fromServiceWorker()) throw new Error("Preview response bypassed the service worker");
     await preview.locator(check.kind === "http" ? "body" : check.selector).filter({ hasText: check.text }).waitFor({ timeout: options.timeout });
     const contract = check.framework ? await verifyBrowserServer(preview, url, check.framework, options.timeout, join(options.output, `${app.id}-${engine}-requests.json`)) : "";
     if (errors.length) throw new Error(errors.join("\n"));
@@ -56,7 +58,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
     const observations = await productObservations(preview, url, check, guestSource(page), traffic, options.timeout);
     checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations };
   } catch (error) {
-    checked = { status: "fail", ...failure(`${String(error)}\n${await output()}`, command.name) };
+    checked = { status: "fail", ...failure(`${await output()}\n${String(error)}`, command.name) };
   } finally {
     await page.evaluate(async () => { globalThis.playground.shell.input("\x03"); await globalThis.__matrixCommand; });
     const error = checked?.status === "pass" && command.check.framework ? await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`)) : undefined;
