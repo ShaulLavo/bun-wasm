@@ -2,7 +2,33 @@ use serde_json::Value;
 
 const BACKEND: &str = "@next/swc-wasm-nodejs";
 
-pub(super) fn adapt(_meta: &mut Value) {}
+pub(super) fn adapt(meta: &mut Value) {
+    if meta["name"] != "next" {
+        return;
+    }
+    let Some(version) = meta["version"].as_str().filter(|v| v.starts_with("15.")) else {
+        return;
+    };
+    if meta["dependencies"].get(BACKEND).is_some()
+        || meta["optionalDependencies"].get(BACKEND).is_some()
+    {
+        return;
+    }
+    let Some(optional) = meta["optionalDependencies"].as_object() else {
+        return;
+    };
+    let mut native = optional
+        .iter()
+        .filter(|(name, _)| name.starts_with("@next/swc-") && !name.starts_with("@next/swc-wasm-"))
+        .peekable();
+    if native.peek().is_none() || !native.all(|(_, value)| value.as_str() == Some(version)) {
+        return;
+    }
+    let version = Value::String(version.into());
+    if let Some(dependencies) = meta["dependencies"].as_object_mut() {
+        dependencies.insert(BACKEND.into(), version);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -25,7 +51,10 @@ mod tests {
         let original = meta.clone();
         adapt(&mut meta);
         assert_eq!(meta["dependencies"][BACKEND], "15.5.6");
-        meta["dependencies"].as_object_mut().unwrap().remove(BACKEND);
+        meta["dependencies"]
+            .as_object_mut()
+            .unwrap()
+            .remove(BACKEND);
         assert_eq!(meta, original);
     }
 
@@ -50,7 +79,10 @@ mod tests {
     #[test]
     fn requires_matching_native_backend_metadata() {
         let mut missing = next("15.5.6");
-        missing.as_object_mut().unwrap().remove("optionalDependencies");
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("optionalDependencies");
         let mut mismatched = next("15.5.6");
         mismatched["optionalDependencies"]["@next/swc-linux-x64-gnu"] = "14.2.33".into();
         for mut meta in [missing, mismatched, json!({"name":"next"})] {

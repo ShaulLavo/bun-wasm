@@ -546,7 +546,8 @@ impl Resolver {
             let version = version.clone();
             return self.package(replacement, &version, chain, optional, lookup);
         }
-        let meta = versions[version].clone();
+        let mut meta = versions[version].clone();
+        next_swc::adapt(&mut meta);
         let tarball = io::source_url(
             meta["dist"]["tarball"]
                 .as_str()
@@ -688,6 +689,7 @@ impl Resolver {
         let mut meta = row[2].clone();
         meta["name"] = resolved_name.into();
         meta["version"] = version.into();
+        next_swc::adapt(&mut meta);
         Some(Package {
             name: resolved_name.into(),
             version: version.into(),
@@ -876,3 +878,6 @@ mod platform_tests;
 
 #[cfg(test)]
 mod override_tests;
+
+#[cfg(test)]
+mod next_swc_tests;
