@@ -28,7 +28,7 @@ function guestSource(page) {
 }
 
 export async function serverCommand({ page, context, command, app, engine, options, terminalText }) {
-const text = browserCommand(command.args.map(arg => arg.replaceAll("{port}", "3137"))).join(" ");
+  const text = browserCommand(command.args.map(arg => arg.replaceAll("{port}", "3137"))).join(" ");
   const started = performance.now();
   const timings = {};
   await page.evaluate(text => {
@@ -131,7 +131,7 @@ export async function browserHost({ root, options, launch, stop }) {
 
   async function commandResult(page, context, app, engine, command) {
     if (["http", "page"].includes(command.check.kind)) return serverCommand({ page, context, command, app, engine, options, terminalText });
-const started = performance.now();
+    const started = performance.now();
     const runResult = await run(page, browserCommand(command.args).join(" "), options.timeout);
     const timings = { commandMs: since(started) };
     return { ...await checkCommand(command, runResult, path => readGuest(page, path)), timings };
@@ -148,7 +148,7 @@ const started = performance.now();
       const loading = performance.now();
       await page.goto(`${base}?engine=${engine}`);
       if (!(await ready(page)).includes("ready")) throw new Error(`Playground engine ${engine} failed to load`);
-const engineReadyMs = since(loading);
+      const engineReadyMs = since(loading);
       await page.evaluate(resetBrowserProject);
       for (const [path, contents] of Object.entries(projectFiles(app, registry))) await writeFile(page, `/home/user/${path}`, contents);
       await writeFile(page, "/home/user/.matrix-command.ts", browserLauncher);
