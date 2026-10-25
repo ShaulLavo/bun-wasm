@@ -71,6 +71,7 @@ unsafe extern "C" {
         len: usize,
         url: *const c_char,
         url_len: usize,
+        optimize: bool,
         out: *mut Handle,
     ) -> bool;
 

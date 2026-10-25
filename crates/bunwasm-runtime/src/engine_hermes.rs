@@ -456,6 +456,20 @@ fn esm_loader() -> Option<HVal> {
         .filter(HVal::is_object)
 }
 
+/// Whether a script gets Hermes's optimizer (`BUN_WASM_HERMES_OPT`: `none`, `user`, `all`).
+/// The default, `user`, skips the runtime's own polyfills (`bun-wasm:*`): optimizing them
+/// costs about 500 ms at startup, while user code runs up to 11x faster optimized.
+fn optimize(filename: &str) -> bool {
+    thread_local! {
+        static MODE: String = std::env::var("BUN_WASM_HERMES_OPT").unwrap_or_else(|_| "user".into());
+    }
+    MODE.with(|mode| match mode.as_str() {
+        "all" => true,
+        "user" => !filename.starts_with("bun-wasm:"),
+        _ => false,
+    })
+}
+
 /// Hermes's heap cap. Linear memory stays under 512 MiB (crates/bunwasm-cli/build.rs).
 fn max_heap_mib() -> u32 {
     std::env::var("BUN_WASM_HERMES_HEAP_MIB")
@@ -583,6 +597,7 @@ impl Engine for Hermes {
                 source.len(),
                 filename.as_ptr().cast::<c_char>(),
                 filename.len(),
+                optimize(filename),
                 &mut out,
             )
         };

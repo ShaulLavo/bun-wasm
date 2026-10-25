@@ -530,11 +530,14 @@ bool bh_construct(bh_value f, const bh_value *args, size_t count, bh_value *out)
   return true;
 }
 
+// `optimize` runs Hermes's full optimization pipeline, which also turns off
+// lazy compilation: faster code, slower compile.
 bool bh_eval(
     const char *source,
     size_t len,
     const char *url,
     size_t urlLen,
+    bool optimize,
     bh_value *out) {
   vm::GCScope scope(rt());
   llvh::StringRef name(url, urlLen);
@@ -542,7 +545,12 @@ bool bh_eval(
       std::make_unique<hermes::StdStringBuffer>(std::string(source, len)),
       name,
       {},
-      state->flags);
+      state->flags,
+      "global",
+      {},
+      nullptr,
+      optimize ? hbc::fullOptimizationPipeline
+               : std::function<void(hermes::Module &)>{});
   if (!provider.first) {
     (void)rt().raiseSyntaxError(vm::TwineChar16(provider.second.c_str()));
     return thrown(out);

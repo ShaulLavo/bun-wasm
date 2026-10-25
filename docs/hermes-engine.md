@@ -55,7 +55,16 @@ Hermes runs classic scripts only: no `import`/`export`, top-level `await`, `impo
 | `gc`, `memory_usage` | Done (`Runtime::collect`, GC heap info). |
 | `ModuleHost::interrupt` | Polled every 10,000 async-break checks when the host has an interrupt handler (compiled-in checks; uncatchable timeout error). |
 
+## Compilation
+
+Scripts compile from source at load time. User code gets Hermes's full optimizer and the runtime's polyfills (`bun-wasm:*`) compile lazily without it (`BUN_WASM_HERMES_OPT=none|user|all`, default `user`). Optimizing the polyfills too adds about 500 ms to startup; optimized user code runs loops about 11x faster than unoptimized.
+
+Startup is slower than QuickJS (hello about 320 ms vs 190 ms on the native launcher, warm module cache): about 95 ms compiles the 580 KB of polyfill source and most of the rest runs it unoptimized. Precompiling the polyfills to Hermes bytecode at build time (host `hermesc`, same revision) is the next step.
+
 ## Limits
 
 - No `Intl` (built with `HERMES_ENABLE_INTL=OFF`); no lexical direct `eval`.
+- `error.stack` has frames but no `Error: message` line: Hermes uses `Error.prepareStackTrace`'s result as the whole stack, and the bootstrap's formatter returns only frames (QuickJS adds the header itself).
+- `Object.keys(promise)` and `JSON.stringify(promise)` show the JS Promise's fields (`_x`, `_y`, `_z`, `_A`); console output hides them.
+- `process.versions` still reports `quickjs`.
 - GC heap capped at 256 MiB (`BUN_WASM_HERMES_HEAP_MIB`, at most 448), under bun.wasm's 512 MiB linear memory.
