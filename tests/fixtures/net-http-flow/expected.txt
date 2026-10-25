@@ -1,0 +1,4 @@
+fetch-backed HTTPS streams before EOF
+raw HTTP preserves unread body and completion
+ClientRequest clears pre-send timeout on completion
+ClientRequest timeout fires and disables

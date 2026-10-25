@@ -12,13 +12,11 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::mem::{ManuallyDrop, MaybeUninit};
+#[cfg(unix)]
+use std::mem::ManuallyDrop;
+use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
-#[cfg(unix)]
-use std::os::unix::fs::FileTypeExt;
-#[cfg(target_os = "wasi")]
-use std::os::wasi::fs::FileTypeExt;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -98,95 +96,203 @@ fn millis(time: io::Result<SystemTime>) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn stat_record(meta: &fs::Metadata, descriptor_mode: Option<libc::mode_t>) -> Val {
-    let ft = meta.file_type();
-    let (kind_bits, perm) = if ft.is_dir() {
-        (0o040000, 0o755)
-    } else if ft.is_symlink() {
-        (0o120000, 0o777)
+#[cfg(any(unix, test))]
+fn nanos(time: io::Result<SystemTime>) -> i128 {
+    match time {
+        Ok(time) => match time.duration_since(UNIX_EPOCH) {
+            Ok(duration) => duration.as_nanos() as i128,
+            Err(error) => -(error.duration().as_nanos() as i128),
+        },
+        Err(_) => 0,
+    }
+}
+
+fn metadata_integer(value: u64, bigint: bool) -> Val {
+    if bigint {
+        Val::BigUint(value)
     } else {
-        (special_file_bits(ft), 0o644)
-    };
-    let (dev, ino, nlink) = inode_info(meta);
-    let mtime = millis(meta.modified());
-    Record::new()
-        .set("dev", dev)
-        .set("ino", ino)
-        .set(
-            "mode",
-            descriptor_mode
-                .map(f64::from)
-                .unwrap_or(f64::from(kind_bits | perm)),
-        )
-        .set("nlink", nlink)
-        .set("uid", 0)
-        .set("gid", 0)
-        .set("rdev", 0)
-        .set("size", meta.len() as f64)
-        .set("blksize", 4096)
-        .set("blocks", meta.len().div_ceil(512) as f64)
-        .set("atimeMs", millis(meta.accessed()))
-        .set("mtimeMs", mtime)
-        .set("ctimeMs", mtime)
-        .set("birthtimeMs", millis(meta.created()))
-        .into()
-}
-
-#[cfg(any(unix, target_os = "wasi"))]
-fn special_file_bits(kind: fs::FileType) -> u32 {
-    #[cfg(unix)]
-    if kind.is_fifo() {
-        return 0o010000;
+        Val::Num(value as f64)
     }
-    if kind.is_char_device() {
-        return 0o020000;
-    }
-    if kind.is_block_device() {
-        return 0o060000;
-    }
-    if kind.is_socket() {
-        return 0o140000;
-    }
-    if kind.is_file() {
-        return 0o100000;
-    }
-    0
-}
-
-#[cfg(not(any(unix, target_os = "wasi")))]
-fn special_file_bits(kind: fs::FileType) -> u32 {
-    if kind.is_file() { 0o100000 } else { 0 }
-}
-
-#[cfg(target_os = "wasi")]
-fn inode_info(meta: &fs::Metadata) -> (f64, f64, f64) {
-    use std::os::wasi::fs::MetadataExt;
-    (meta.dev() as f64, meta.ino() as f64, meta.nlink() as f64)
 }
 
 #[cfg(unix)]
-fn inode_info(meta: &fs::Metadata) -> (f64, f64, f64) {
-    use std::os::unix::fs::MetadataExt;
-    (meta.dev() as f64, meta.ino() as f64, meta.nlink() as f64)
-}
+type StatMetadata = fs::Metadata;
+#[cfg(target_os = "wasi")]
+type StatMetadata = libc::stat;
 
-#[cfg(not(any(unix, target_os = "wasi")))]
-fn inode_info(_: &fs::Metadata) -> (f64, f64, f64) {
-    (0.0, 0.0, 1.0)
-}
-
-fn copy_dir_all(from: &str, to: &str) -> io::Result<()> {
-    fs::create_dir_all(to)?;
-    for entry in fs::read_dir(from)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let (src, dst) = (format!("{from}/{name}"), format!("{to}/{name}"));
-        if entry.file_type()?.is_dir() {
-            copy_dir_all(&src, &dst)?;
-        } else {
-            fs::copy(&src, &dst)?;
-        }
+fn metadata_record(
+    integers: [(&str, u64); 8],
+    signed: [(&str, i64); 2],
+    times: [(&str, i128); 4],
+    bigint: bool,
+) -> Val {
+    let mut record = Record::new();
+    for (name, value) in integers {
+        record.push(name, metadata_integer(value, bigint));
     }
+    for (name, value) in signed {
+        record.push(
+            name,
+            if bigint {
+                Val::BigInt(value)
+            } else {
+                Val::Num(value as f64)
+            },
+        );
+    }
+    for (name, value) in times {
+        if bigint {
+            record.push(&format!("{name}Ms"), (value / 1_000_000).to_string());
+            record.push(&format!("{name}Ns"), value.to_string());
+            continue;
+        }
+        record.push(&format!("{name}Ms"), value as f64 / 1_000_000.0);
+    }
+    record.into()
+}
+
+#[cfg(unix)]
+fn stat_record(meta: &StatMetadata, bigint: bool) -> Val {
+    use std::os::unix::fs::MetadataExt;
+    metadata_record(
+        [
+            ("dev", meta.dev()),
+            ("ino", meta.ino()),
+            ("mode", u64::from(meta.mode())),
+            ("nlink", meta.nlink()),
+            ("uid", u64::from(meta.uid())),
+            ("gid", u64::from(meta.gid())),
+            ("rdev", meta.rdev()),
+            ("size", meta.len()),
+        ],
+        [
+            ("blksize", meta.blksize() as i64),
+            ("blocks", meta.blocks() as i64),
+        ],
+        [
+            ("atime", nanos(meta.accessed())),
+            ("mtime", nanos(meta.modified())),
+            (
+                "ctime",
+                i128::from(meta.ctime()) * 1_000_000_000 + i128::from(meta.ctime_nsec()),
+            ),
+            ("birthtime", nanos(meta.created())),
+        ],
+        bigint,
+    )
+}
+
+#[cfg(target_os = "wasi")]
+fn stat_record(stat: &StatMetadata, bigint: bool) -> Val {
+    let timestamp =
+        |time: &libc::timespec| i128::from(time.tv_sec) * 1_000_000_000 + i128::from(time.tv_nsec);
+    metadata_record(
+        [
+            ("dev", stat.st_dev),
+            ("ino", stat.st_ino),
+            ("mode", u64::from(stat.st_mode)),
+            ("nlink", stat.st_nlink),
+            ("uid", u64::from(stat.st_uid)),
+            ("gid", u64::from(stat.st_gid)),
+            ("rdev", stat.st_rdev),
+            ("size", stat.st_size as u64),
+        ],
+        [
+            ("blksize", i64::from(stat.st_blksize)),
+            ("blocks", stat.st_blocks),
+        ],
+        [
+            ("atime", timestamp(&stat.st_atim)),
+            ("mtime", timestamp(&stat.st_mtim)),
+            ("ctime", timestamp(&stat.st_ctim)),
+            ("birthtime", 0),
+        ],
+        bigint,
+    )
+}
+
+#[cfg(unix)]
+fn path_metadata(path: &str, lstat: bool) -> io::Result<StatMetadata> {
+    if lstat {
+        fs::symlink_metadata(path)
+    } else {
+        fs::metadata(path)
+    }
+}
+
+#[cfg(target_os = "wasi")]
+fn path_metadata(path: &str, lstat: bool) -> io::Result<StatMetadata> {
+    let path = std::ffi::CString::new(path).map_err(|_| io::ErrorKind::InvalidInput)?;
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
+    let status = if lstat {
+        unsafe { libc::lstat(path.as_ptr(), stat.as_mut_ptr()) }
+    } else {
+        unsafe { libc::stat(path.as_ptr(), stat.as_mut_ptr()) }
+    };
+    if status < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { stat.assume_init() })
+}
+
+fn copy_file(from: &str, to: &str, flags: i32) -> io::Result<()> {
+    if flags & !3 != 0 {
+        return Err(io::ErrorKind::Unsupported.into());
+    }
+    if flags & 1 == 0 {
+        fs::copy(from, to)?;
+        return Ok(());
+    }
+    let mut source = File::open(from)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    let permissions = {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let permissions = source.metadata()?.permissions();
+        options.mode(permissions.mode());
+        permissions
+    };
+    let mut destination = options.open(to)?;
+    io::copy(&mut source, &mut destination)?;
+    #[cfg(unix)]
+    destination.set_permissions(permissions)?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Default)]
+enum SyncMode {
+    #[default]
+    None,
+    Data,
+    All,
+}
+
+fn sync_mode(flags: i32) -> SyncMode {
+    if flags & 1052672 == 1052672 {
+        return SyncMode::All;
+    }
+    if flags & 4096 != 0 {
+        return SyncMode::Data;
+    }
+    SyncMode::None
+}
+
+#[cfg(target_os = "wasi")]
+fn sync_fd(fd: i32, mode: SyncMode) -> io::Result<()> {
+    let status = match mode {
+        SyncMode::None => return Ok(()),
+        SyncMode::Data => unsafe { libc::fdatasync(fd) },
+        SyncMode::All => unsafe { libc::fsync(fd) },
+    };
+    if status < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "wasi"))]
+fn sync_fd(_fd: i32, _mode: SyncMode) -> io::Result<()> {
     Ok(())
 }
 
@@ -195,25 +301,44 @@ fn copy_dir_all(from: &str, to: &str) -> io::Result<()> {
 #[derive(Default)]
 pub struct FdTable {
     files: HashMap<i32, File>,
+    sync_modes: HashMap<i32, SyncMode>,
 }
 
-fn descriptor_metadata(fd: i32) -> io::Result<(fs::Metadata, libc::mode_t)> {
+fn synchronize_descriptor(state: &State, fd: i32, written: usize) -> io::Result<()> {
+    if written == 0 {
+        return Ok(());
+    }
+    let mode = state
+        .fds
+        .borrow()
+        .sync_modes
+        .get(&fd)
+        .copied()
+        .unwrap_or_default();
+    sync_fd(fd, mode)
+}
+
+fn descriptor_metadata(fd: i32) -> io::Result<StatMetadata> {
     let mut stat = MaybeUninit::<libc::stat>::uninit();
     // Validate the descriptor before borrowing it. Guest native calls are synchronous;
     // no JS can close or reuse it between this check and metadata().
     if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } < 0 {
         return Err(io::Error::last_os_error());
     }
-    // This view never acquires lifetime ownership: ManuallyDrop prevents close on
-    // return (including errors). Owned opens remain in FdTable; inherited fds remain
-    // owned by their host until an explicit close or process exit.
-    let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd as _) });
-    let mode = unsafe { stat.assume_init() }.st_mode;
-    // Preview1 UNKNOWN is not a pipe tag. Preserve fstat's capability check and
-    // consult the process resource only to restore FIFO's missing POSIX bits.
+    #[cfg(unix)]
+    {
+        // Borrow inherited descriptors without taking ownership of their lifetime.
+        let file = ManuallyDrop::new(unsafe { File::from_raw_fd(fd as _) });
+        file.metadata()
+    }
     #[cfg(target_os = "wasi")]
-    let mode = descriptor_mode(mode, crate::host::proc_fd_kind(fd))?;
-    Ok((file.metadata()?, mode))
+    {
+        let mut stat = unsafe { stat.assume_init() };
+        // Preview1 UNKNOWN is not a pipe tag. Preserve fstat's capability check and
+        // consult the process resource only to restore FIFO's missing POSIX bits.
+        stat.st_mode = descriptor_mode(stat.st_mode, crate::host::proc_fd_kind(fd))?;
+        Ok(stat)
+    }
 }
 
 #[cfg(any(target_os = "wasi", test))]
@@ -228,23 +353,58 @@ fn descriptor_mode(mode: libc::mode_t, kind: i32) -> io::Result<libc::mode_t> {
     })
 }
 
-fn descriptor_stat(fd: i32) -> io::Result<Val> {
-    let (meta, mode) = descriptor_metadata(fd)?;
-    Ok(stat_record(&meta, Some(mode)))
+fn descriptor_stat(fd: i32, bigint: bool) -> io::Result<Val> {
+    Ok(stat_record(&descriptor_metadata(fd)?, bigint))
 }
 
-fn open_options(flags: &str) -> OpenOptions {
-    let mut opts = OpenOptions::new();
-    let plus = flags.contains('+');
-    match flags.chars().next().unwrap_or('r') {
-        'w' => opts.write(true).create(true).truncate(true).read(plus),
-        'a' => opts.append(true).create(true).read(plus),
-        _ => opts.read(true).write(plus),
-    };
-    if flags.contains('x') {
-        opts.create_new(true);
+// Public Node constants use Linux bit values, independent of the libc target.
+fn open_file(path: &str, flags: i32, mode: u32) -> io::Result<File> {
+    let supported = 3 | 64 | 128 | 512 | 1024 | 65536 | 131072 | 1052672;
+    if flags & !supported != 0 {
+        return Err(io::ErrorKind::Unsupported.into());
     }
-    opts
+    let mut host_flags = match flags & 3 {
+        0 => libc::O_RDONLY,
+        1 => libc::O_WRONLY,
+        2 => libc::O_RDWR,
+        _ => return Err(io::ErrorKind::InvalidInput.into()),
+    };
+    for (public, host) in [
+        (64, libc::O_CREAT),
+        (128, libc::O_EXCL),
+        (512, libc::O_TRUNC),
+        (1024, libc::O_APPEND),
+        (65536, libc::O_DIRECTORY),
+        (131072, libc::O_NOFOLLOW),
+        (4096, libc::O_DSYNC),
+        (1052672, libc::O_SYNC),
+    ] {
+        if flags & public == public {
+            host_flags |= host;
+        }
+    }
+    #[cfg(target_os = "wasi")]
+    {
+        // Preview1 hosts can reject sync open flags. Owned descriptors retain the
+        // mode and their write paths issue the corresponding explicit barrier.
+        host_flags &= !(libc::O_SYNC | libc::O_DSYNC);
+    }
+    host_flags |= libc::O_CLOEXEC;
+    let path = std::ffi::CString::new(path).map_err(|_| io::ErrorKind::InvalidInput)?;
+    let fd = unsafe { libc::open(path.as_ptr(), host_flags, mode as libc::mode_t) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // open() transferred ownership of this fresh descriptor to us.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+fn write_file(path: &str, bytes: &[u8], flags: i32, mode: u32) -> NativeResult {
+    let mut file = open_file(path, flags, mode).map_err(|e| io_error(e, "open", Some(path)))?;
+    file.write_all(bytes)
+        .map_err(|e| io_error(e, "write", Some(path)))?;
+    sync_fd(file.as_raw_fd(), sync_mode(flags)).map_err(|e| io_error(e, "write", Some(path)))?;
+    Ok(Val::Num(bytes.len() as f64))
 }
 
 /// Every data native.
@@ -401,15 +561,20 @@ fn install_fs(t: &mut Table) {
             .into())
     });
     t.add("writeFile", |a| {
-        let path = a.str(0)?;
-        let bytes = a.bytes(1)?;
-        let opts = open_options(if a.bool(2) { "a" } else { "w" });
-        let mut file = opts
-            .open(path)
-            .map_err(|e| io_error(e, "open", Some(path)))?;
-        file.write_all(bytes)
-            .map_err(|e| io_error(e, "write", Some(path)))?;
-        Ok(Val::Num(bytes.len() as f64))
+        write_file(
+            a.str(0)?,
+            a.bytes(1)?,
+            if a.bool(2) { 1089 } else { 577 },
+            0o666,
+        )
+    });
+    t.add("writeFileFlags", |a| {
+        write_file(
+            a.str(0)?,
+            a.bytes(1)?,
+            a.i32(2)?,
+            a.opt_num(3).unwrap_or(438.0) as u32,
+        )
     });
     t.add("exists", |a| {
         Ok(fs::symlink_metadata(a.str(0)?).is_ok().into())
@@ -417,14 +582,9 @@ fn install_fs(t: &mut Table) {
     t.add("stat", |a| {
         let path = a.str(0)?;
         let lstat = a.bool(1);
-        let meta = if lstat {
-            fs::symlink_metadata(path)
-        } else {
-            fs::metadata(path)
-        };
-        let meta =
-            meta.map_err(|e| io_error(e, if lstat { "lstat" } else { "stat" }, Some(path)))?;
-        Ok(stat_record(&meta, None))
+        let stat = path_metadata(path, lstat)
+            .map_err(|e| io_error(e, if lstat { "lstat" } else { "stat" }, Some(path)))?;
+        Ok(stat_record(&stat, a.bool(2)))
     });
     t.add("mkdir", |a| {
         let path = a.str(0)?;
@@ -500,12 +660,8 @@ fn install_fs(t: &mut Table) {
     });
     t.add("copyFile", |a| {
         let (from, to) = (a.str(0)?, a.str(1)?);
-        fs::copy(from, to).map_err(|e| io_error(e, "copyfile", Some(from)))?;
-        ok()
-    });
-    t.add("copyDir", |a| {
-        let (from, to) = (a.str(0)?, a.str(1)?);
-        copy_dir_all(from, to).map_err(|e| io_error(e, "cp", Some(from)))?;
+        copy_file(from, to, a.opt_num(2).unwrap_or(0.0) as i32)
+            .map_err(|e| io_error(e, "copyfile", Some(from)))?;
         ok()
     });
     t.add("realpath", |a| {
@@ -626,6 +782,7 @@ fn writev(state: &State, args: Args<'_>) -> NativeResult {
             break;
         }
     }
+    synchronize_descriptor(state, descriptor, written).map_err(|e| io_error(e, "writev", None))?;
     Ok(Val::Num(written as f64))
 }
 
@@ -715,11 +872,12 @@ fn write_descriptor(state: &State, args: Args<'_>) -> NativeResult {
         .opt_num(2)
         .filter(|p| *p >= 0.0)
         .map(|p| p as libc::off_t);
-    write_chunks_with(bytes, position, |bytes, offset| {
+    let written = write_chunks_with(bytes, position, |bytes, offset| {
         write_chunk(fd, bytes, offset)
     })
-    .map(|n| Val::Num(n as f64))
-    .map_err(|e| io_error(e, "write", None))
+    .map_err(|e| io_error(e, "write", None))?;
+    synchronize_descriptor(state, fd, written).map_err(|e| io_error(e, "write", None))?;
+    Ok(Val::Num(written as f64))
 }
 
 fn close_descriptor(state: &State, args: Args<'_>) -> NativeResult {
@@ -727,9 +885,12 @@ fn close_descriptor(state: &State, args: Args<'_>) -> NativeResult {
     if (0..=2).contains(&fd) {
         return ok();
     }
-    if state.fds.borrow_mut().files.remove(&fd).is_some() {
+    let mut fds = state.fds.borrow_mut();
+    fds.sync_modes.remove(&fd);
+    if fds.files.remove(&fd).is_some() {
         return ok();
     }
+    drop(fds);
     if unsafe { libc::close(fd) } < 0 {
         return Err(io_error(io::Error::last_os_error(), "close", None));
     }
@@ -763,12 +924,13 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("open", move |a| {
         let path = a.str(0)?;
-        let flags = a.opt_str(1).unwrap_or("r");
-        let file = open_options(flags)
-            .open(path)
+        let flags = a.i32(1)?;
+        let file = open_file(path, flags, a.opt_num(2).unwrap_or(438.0) as u32)
             .map_err(|e| io_error(e, "open", Some(path)))?;
         let fd = file.as_raw_fd();
-        st.fds.borrow_mut().files.insert(fd, file);
+        let mut fds = st.fds.borrow_mut();
+        fds.files.insert(fd, file);
+        fds.sync_modes.insert(fd, sync_mode(flags));
         Ok(fd.into())
     });
     let st = state.clone();
@@ -786,7 +948,7 @@ fn install_fds(t: &mut Table, state: &Rc<State>) {
     let st = state.clone();
     t.add("writev", move |a| writev(&st, a));
     t.add("fstat", |a| {
-        descriptor_stat(a.i32(0)?).map_err(|e| io_error(e, "fstat", None))
+        descriptor_stat(a.i32(0)?, a.bool(1)).map_err(|e| io_error(e, "fstat", None))
     });
     t.add("ftruncate", |a| {
         let result =
@@ -1395,6 +1557,191 @@ mod builtin_tests {
     }
 
     #[test]
+    fn filesystem_integer_serialization_preserves_unsafe_numbers() {
+        let value = 9_007_199_254_740_993;
+        assert_eq!(metadata_integer(value, true), Val::BigUint(value));
+        assert_eq!(metadata_integer(value, false), Val::Num(value as f64));
+        assert_eq!(metadata_integer(u64::MAX, true), Val::BigUint(u64::MAX));
+        assert_eq!(nanos(Ok(UNIX_EPOCH - Duration::new(1, 1))), -1_000_000_001);
+    }
+
+    #[test]
+    fn filesystem_sync_flags_select_full_or_data_barriers() {
+        assert!(matches!(sync_mode(1052672), SyncMode::All));
+        assert!(matches!(sync_mode(1052674), SyncMode::All));
+        assert!(matches!(sync_mode(4097), SyncMode::Data));
+        assert!(matches!(sync_mode(577), SyncMode::None));
+    }
+
+    #[test]
+    fn filesystem_open_and_copy_flags_preserve_existing_data() {
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let fixture = Fixture(std::env::temp_dir().join(format!(
+            "bun-wasm-fs-options-{}-{}", std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        )));
+        fs::create_dir(&fixture.0).unwrap();
+        let existing = fixture.0.join("existing");
+        let missing = fixture.0.join("missing");
+        fs::write(&existing, b"original").unwrap();
+        let existing = existing.to_str().unwrap();
+        let missing = missing.to_str().unwrap();
+        drop(open_file(existing, 1, 0o644).unwrap());
+        assert_eq!(fs::read(existing).unwrap(), b"original");
+        assert_eq!(
+            open_file(missing, 1, 0o644).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            open_file(existing, 705, 0o644).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(
+            copy_file(existing, existing, 1).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(existing).unwrap(), b"original");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(existing, fs::Permissions::from_mode(0o751)).unwrap();
+            copy_file(existing, missing, 1).unwrap();
+            assert_eq!(
+                fs::metadata(missing).unwrap().permissions().mode() & 0o777,
+                0o751
+            );
+            fs::remove_file(missing).unwrap();
+        }
+        // Read-only creation cannot be expressed by std::fs::OpenOptions.
+        drop(open_file(missing, 64, 0o600).unwrap());
+        assert!(fs::metadata(missing).unwrap().is_file());
+        open_file(existing, 1025, 0o644)
+            .unwrap()
+            .write_all(b"!")
+            .unwrap();
+        assert_eq!(fs::read(existing).unwrap(), b"original!");
+        let Val::Object(fields) = stat_record(&path_metadata(existing, false).unwrap(), true)
+        else {
+            panic!("stat record");
+        };
+        assert!(fields.contains(&("size".into(), Val::BigUint(9))));
+        assert!(
+            fields
+                .iter()
+                .any(|(name, value)| name == "mtimeNs" && matches!(value, Val::Str(_)))
+        );
+        assert_eq!(
+            open_file(existing, 2048, 0o644).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
+        drop(open_file(existing, 513, 0o644).unwrap());
+        assert!(fs::read(existing).unwrap().is_empty());
+    }
+
+    struct FilesystemFixture(std::path::PathBuf);
+
+    impl FilesystemFixture {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "bun-wasm-fs-options-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+        fn path(&self, name: &str) -> String {
+            self.0.join(name).to_str().unwrap().to_owned()
+        }
+    }
+
+    impl Drop for FilesystemFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_write_bindings_retain_default_and_explicit_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = FilesystemFixture::new();
+        let reference = fixture.path("reference");
+        fs::write(&reference, b"x").unwrap();
+        let expected = fs::metadata(&reference).unwrap().permissions().mode() & 0o777;
+        let mut natives = Table::default();
+        install_fs(&mut natives);
+        let bun_file = fixture.path("bun-file");
+        call(
+            &natives,
+            "writeFile",
+            &[bun_file.clone().into(), "x".into(), false.into()],
+        )
+        .unwrap();
+        let node_file = fixture.path("node-file");
+        call(
+            &natives,
+            "writeFileFlags",
+            &[node_file.clone().into(), "x".into(), 577.into()],
+        )
+        .unwrap();
+        for path in [&bun_file, &node_file] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                expected
+            );
+        }
+        let explicit = fixture.path("explicit");
+        call(
+            &natives,
+            "writeFileFlags",
+            &[
+                explicit.clone().into(),
+                "x".into(),
+                577.into(),
+                0o600.into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            fs::metadata(explicit).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_stat_serializes_one_snapshot_after_path_replacement() {
+        use std::os::unix::fs::MetadataExt;
+        let fixture = FilesystemFixture::new();
+        let path = fixture.path("path");
+        let replacement = fixture.path("replacement");
+        fs::write(&path, b"old").unwrap();
+        fs::write(&replacement, b"replacement").unwrap();
+        let original = fs::metadata(&path).unwrap();
+        let snapshot = path_metadata(&path, false).unwrap();
+        fs::rename(&replacement, &path).unwrap();
+        let Val::Object(fields) = stat_record(&snapshot, true) else {
+            panic!("stat record");
+        };
+        assert!(fields.contains(&("ino".into(), Val::BigUint(original.ino()))));
+        assert!(fields.contains(&("size".into(), Val::BigUint(3))));
+        let Val::Object(current) = stat_record(&path_metadata(&path, false).unwrap(), true) else {
+            panic!("stat record");
+        };
+        assert!(current.contains(&("size".into(), Val::BigUint(11))));
+        assert!(!current.contains(&("ino".into(), Val::BigUint(original.ino()))));
+    }
+
+    #[test]
     fn real_descriptors_accept_inherited_files_without_stealing_their_lifetime() {
         use std::io::{Read, Seek, SeekFrom};
         struct Fixture(std::path::PathBuf);
@@ -1478,7 +1825,7 @@ mod builtin_tests {
         let own = call(
             &natives,
             "open",
-            &[Val::from(fixture.0.to_str().unwrap()), Val::from("r")],
+            &[Val::from(fixture.0.to_str().unwrap()), Val::Num(0.0)],
         )
         .unwrap();
         let Val::Num(own_fd) = own else {
@@ -1490,6 +1837,7 @@ mod builtin_tests {
             own_fd
         );
         call(&natives, "close", &[Val::Num(own_fd)]).unwrap();
+        assert!(!state.fds.borrow().sync_modes.contains_key(&(own_fd as i32)));
         let error = call(
             &natives,
             "read",

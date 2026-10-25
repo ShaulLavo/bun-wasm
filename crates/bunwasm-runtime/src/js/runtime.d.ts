@@ -15,6 +15,7 @@ declare namespace BunWasm {
       relative(windows: boolean, from: Uint8Array, to: Uint8Array): Uint8Array;
     };
     hostLocalAddr(handle: number): string | number;
+    hostLookup?: (hostname: string, family: 0 | 4 | 6, hints: number) => Promise<Array<{ address: string; family: 4 | 6 }>>;
     hostClose(handle: number): number;
     registerObjectModule(name: string): string;
     clearObjectModules(): void;
@@ -43,7 +44,7 @@ declare namespace BunWasm {
       setImmediate(callback: () => void): unknown;
       clearImmediate(handle: unknown): void;
     };
-    require(name: "net_address"): { isIPv6(value: string): boolean };
+    require(name: "net_address"): { isIP(value: string): 0 | 4 | 6; isIPv6(value: string): boolean };
     require(name: "path"): { resolve(...paths: string[]): string; dirname(path: string): string; basename(path: string): string };
     runInContext(context: unknown, callback: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]): unknown;
     handleUncaught(error: unknown): boolean;
@@ -151,6 +152,7 @@ declare namespace BunWasm {
       /** Bun's CompressionStreamCoder: (format, decompress, highWaterMark, level). */
       webCodec(format: string, decompress: boolean, highWaterMark: number, level?: number): number;
       webStep(handle: number, data: Uint8Array, finish: boolean): { bytes: Uint8Array; more: boolean };
+      decoder(label: string, fatal: boolean, ignoreBOM: boolean): { id: number; encoding: string };
       push(handle: number, data: Uint8Array, last: boolean): string;
       release(handle: number): void;
     };
@@ -407,3 +409,36 @@ declare namespace BunWasm {
     toUint8(value: unknown): Uint8Array;
   }
 }
+
+declare namespace BunWasm {
+  type StreamGlobals = Pick<typeof globalThis,
+    "ReadableStream" | "ReadableStreamDefaultReader" | "ReadableStreamBYOBReader" | "ReadableStreamBYOBRequest" |
+    "ReadableByteStreamController" | "ReadableStreamDefaultController" | "WritableStream" | "WritableStreamDefaultWriter" |
+    "WritableStreamDefaultController" | "TransformStream" | "TransformStreamDefaultController" |
+    "ByteLengthQueuingStrategy" | "CountQueuingStrategy" | "TextEncoderStream" | "TextDecoderStream" |
+    "CompressionStream" | "DecompressionStream">;
+  type PortableStreams = Omit<StreamGlobals, "TextEncoderStream" | "TextDecoderStream" | "CompressionStream" | "DecompressionStream">;
+  interface CompressionStreamPair {
+    readonly readable: ReadableStream<Uint8Array>;
+    readonly writable: WritableStream<unknown>;
+  }
+  interface WebCompressionConstructor {
+    new(format: unknown, options?: unknown): CompressionStreamPair;
+    readonly prototype: object;
+  }
+  type CompressionAdapters = {
+    CompressionStream: WebCompressionConstructor;
+    DecompressionStream: WebCompressionConstructor;
+  };
+  interface Internal {
+    require(name: "streams_polyfill"): PortableStreams;
+    require(name: "compression_streams"): {
+      create(Transform: typeof TransformStream, Readable?: typeof ReadableStream, Writable?: typeof WritableStream): CompressionAdapters;
+      decode(body: ReadableStream<Uint8Array>, encoding: string | null | undefined): ReadableStream<Uint8Array>;
+    };
+    /** web.js validates arbitrary input and throws before returning bytes. */
+    toUint8(value: unknown): Uint8Array;
+  }
+}
+
+interface String { toWellFormed(): string }

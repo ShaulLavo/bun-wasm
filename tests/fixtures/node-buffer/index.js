@@ -20,6 +20,22 @@ console.log("indexOf/includes:", b.indexOf("world"), b.includes("lo w"), b.index
 console.log("JSON:", JSON.stringify(Buffer.from([1, 2, 3])));
 console.log("instanceof Uint8Array:", b instanceof Uint8Array, typeof Buffer.poolSize);
 console.log("global Buffer:", globalThis.Buffer === Buffer);
+const { Blob: BufferBlob, File: BufferFile } = require("buffer");
+class DerivedBlob extends BufferBlob {
+  constructor(parts) {
+    super(parts);
+    this.kind = "derived-blob";
+  }
+}
+class DerivedFile extends BufferFile {
+  constructor(parts) {
+    super(parts, "fixture.txt");
+    this.kind = "derived-file";
+  }
+}
+const derivedBlob = new DerivedBlob(["hello"]);
+const derivedFile = new DerivedFile(["world"]);
+console.log("buffer web constructors:", typeof BufferBlob, typeof BufferFile, derivedBlob instanceof BufferBlob, derivedFile instanceof BufferFile, derivedBlob.size, derivedFile.name, derivedFile.size);
 console.log("bigint:", Buffer.from([0, 0, 0, 0, 0, 0, 1, 0]).readBigUInt64BE());
 const copySource = Uint16Array.of(0x0201, 0x0403);
 console.log("copyBytesFrom view:", Buffer.copyBytesFrom(copySource, 1, 1).toString("hex"));

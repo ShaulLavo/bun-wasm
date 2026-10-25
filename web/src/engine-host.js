@@ -6,6 +6,7 @@ import { memoryViews } from "waffle/core/memory-views";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "./buffer-transfer.ts";
 import { ContentModules } from "./content-modules.ts";
 import { SLOT_NAMES } from "./net/trampoline.ts";
+import { trackLookup } from "./net/lookup.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -414,6 +415,7 @@ class EngineHost {
     native.hostCaps = Object.fromEntries(Object.entries(native.hostCaps || {}).map(([k, v]) => [k, NETWORK_CAPS.has(k) ? Boolean(net && net.caps[k]) : v]));
     if (net) {
       Object.assign(native, net.natives);
+      if (native.hostLookup) native.hostLookup = trackLookup(native.hostLookup, promise => this.track(promise));
       net.onNews(() => this.schedule(0));
     }
     native.engine = "host";

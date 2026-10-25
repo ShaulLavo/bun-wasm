@@ -8,8 +8,6 @@ import { webcrypto } from "node:crypto";
 test("host crypto errors retain the DOMException brand", async () => {
   const source = (name: string) => readFileSync(new URL(`../../crates/bunwasm-runtime/src/js/${name}`, import.meta.url), "utf8");
   const native = { engine: "host", DOMException, timeOrigin: () => 0, platformInfo: { version: "test", arch: "wasm" } };
-  // oxlint-disable-next-line no-eval -- execute the actual classic-script polyfill factory
-  const streams = (0, eval)(source("streams.js"));
   const root = process.env.BUN_WASM_TEST_TMP ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
   const scratch = mkdtempSync(join(root, "bun-wasm-crypto-brand-"));
   try {
@@ -23,6 +21,7 @@ test("host crypto errors retain the DOMException brand", async () => {
       // oxlint-disable-next-line no-eval -- execute the actual classic-script polyfill factory
       return (0, eval)(readFileSync(output, "utf8"));
     };
+    const streams = compile("streams");
     const compression = compile("compression_streams")({ native });
     const webBrand = compile("web_brand")();
     const bodyStreams = compile("body_streams")({ native });

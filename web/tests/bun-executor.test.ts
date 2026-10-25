@@ -5,8 +5,10 @@ import { WasiExit } from "waffle/core";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { bootstrap, type RuntimeWorkerHost } from "waffle/browser/worker";
+import { createRing } from "waffle/browser/net/ring";
 import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
+import { installLookupServer } from "../src/net/lookup";
 
 // The Bun executor is Waffle's bootstrap plus Bun policy. These tests run the real bootstrap with
 // an injected host and a hand-assembled guest; only the browser engine host is replaced.
@@ -135,6 +137,49 @@ test("the engine host gets the page's networking surface only when slots are on"
   await run();
   // No networking ring was supplied, so there is no host to advertise.
   expect(startEngineHost.mock.calls[0]![0]!.net).toBeUndefined();
+});
+
+test("the browser engine host receives the runtime-owned DNS provider", async () => {
+  startEngineHost.mockClear();
+  const channel = new MessageChannel();
+  let serverCalls = 0;
+  const disposeLookup = installLookupServer(channel.port1, {
+    lookup(hostname, options) {
+      serverCalls++;
+      expect(hostname).toBe("localhost");
+      expect(options).toEqual({ family: 0, hints: 0 });
+      return [{ address: "127.0.0.1", family: 4 }];
+    },
+  });
+  const connection = createFilesystemConnection();
+  const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
+  const messages: WorkerMessage[] = [];
+  const host: BunExecutorHost & RuntimeWorkerHost = {
+    crossOriginIsolated: true,
+    location: { href: "https://example.test/worker.js" },
+    postMessage(message: WorkerMessage) { messages.push(message); },
+    async fetch() { return new Response("ok"); },
+  };
+  const request: RunRequest = {
+    engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
+    runtimeProcess, trace: false, net: createRing(), moduleCache: null, slots: "imports", lookupPort: channel.port2,
+  };
+  startEngineHost.mockImplementationOnce(async options => {
+    const network = options.net as { natives: { hostLookup(hostname: string, family: 0 | 4 | 6, hints: number): Promise<unknown[]> } };
+    expect(network).toBeDefined();
+    expect(await network.natives.hostLookup("localhost", 0, 0)).toEqual([{ address: "127.0.0.1", family: 4 }]);
+    (options.onExit as (code: number) => void)(0);
+    return 0;
+  });
+  try {
+    await bootstrapBun(request, host);
+  } finally {
+    disposeLookup();
+    connection.client.port.close();
+    connection.server.port.close();
+  }
+  expect(serverCalls).toBe(1);
+  expect(exits(messages)).toEqual([{ type: "exit", code: 0, signal: undefined, sleep: "atomics" }]);
 });
 
 for (const kind of ["exited", "signaled"] as const) test(`engine host fetch preserves its native receiver and stops after an authoritative ${kind} outcome`, async () => {

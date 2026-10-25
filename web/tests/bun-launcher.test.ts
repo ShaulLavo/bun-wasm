@@ -6,8 +6,9 @@ import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
 
 // Only the launch request is under test; the real service and ABI are covered elsewhere.
 interface Launch { workerUrl: string; request: Record<string, any>; cleanup?(): void; executableName?(name: string): string }
+const activeCleanups: Array<() => void> = [];
 function service(launches: Launch[]): ProcessService {
-  return { launchWorker(_context: unknown, options: Launch) { launches.push(options); return { terminate() {} }; } } as unknown as ProcessService;
+  return { launchWorker(_context: unknown, options: Launch) { launches.push(options); if (options.cleanup) activeCleanups.push(options.cleanup); return { terminate() {} }; } } as unknown as ProcessService;
 }
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
 const runtime = processRuntimeFixture({});
@@ -22,6 +23,7 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "caches", { configurable: true, value: { delete: async (name: string) => { deleted.push(name); return true; } } });
 });
 afterEach(() => {
+  for (const cleanup of activeCleanups.splice(0)) cleanup();
   for (const [name, descriptor] of [["location", location], ["caches", caches]] as const) {
     if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name);
   }
@@ -61,6 +63,13 @@ for (const workerUrl of ["/__bunwasm/worker.js", "./__bunwasm/worker.js", "https
 test("each scoped browser launch gets its own cache", async () => {
   const first = await launch("browser", "/__bunwasm/worker.js"), second = await launch("browser", "/__bunwasm/worker.js");
   expect(first.request.moduleCache).not.toBe(second.request.moduleCache);
+});
+
+test("browser adapter launches carry a runtime-owned DNS channel", async () => {
+  const browser = await launch("browser", "./worker.js");
+  expect(browser.request.lookupChannel).toMatch(/^bun-wasm-dns-[0-9a-f-]{36}$/);
+  expect((await launch("quickjs", "./worker.js")).request.lookupChannel).toBeUndefined();
+  expect((await launch("jsc", "./worker.js")).request.lookupChannel).toBeUndefined();
 });
 
 for (const [workerUrl, expected] of [

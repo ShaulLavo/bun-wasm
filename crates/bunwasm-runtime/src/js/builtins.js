@@ -31,6 +31,8 @@
   const NO_PROCESSES = "WASI has no processes";
   const NO_NETWORK = "WASI has no network access";
 
+  const dns = internal.require("dns");
+
   // --- os -------------------------------------------------------------------
 
   function osModule() {
@@ -677,11 +679,11 @@
     "node:net": () => Object.assign(internal.require("net").nodeNet(), internal.require("net_address")),
     "node:tls": () => unsupportedModule("tls", NO_NETWORK, ["connect", "createServer", "createSecureContext", "TLSSocket", "Server", "checkServerIdentity"], { rootCertificates: [], DEFAULT_MIN_VERSION: "TLSv1.2", DEFAULT_MAX_VERSION: "TLSv1.3", DEFAULT_ECDH_CURVE: "auto" }),
     "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
-    "node:dns": () => unsupportedModule("dns", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "resolveMx", "resolveTxt", "resolveSrv", "resolveNs", "resolveCname", "reverse", "lookupService", "Resolver"], { promises: internal.builtin("node:dns/promises"), getServers: () => [], setServers() {}, setDefaultResultOrder() {} }),
-    "node:dns/promises": () => unsupportedModule("dns.promises", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "reverse", "Resolver"]),
+    "node:dns": () => dns.module(),
+    "node:dns/promises": () => dns.promises(),
     "node:http": () => httpModule("http"),
     "node:https": () => httpModule("https"),
-    "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {} }),
+    "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {}, Http2ServerResponse: internal.require("http2_response") }),
     "node:zlib": zlibModule,
     // Node's contract when built without tracing. Bun and Node also reject it in workers.
     "node:trace_events": () => {

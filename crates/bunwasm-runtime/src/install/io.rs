@@ -491,3 +491,33 @@ fn extract_entry<R: Read>(entry: &mut tar::Entry<'_, R>, destination: &Path) -> 
     std::io::copy(entry, &mut out).map_err(|e| e.to_string())?;
     out.flush().map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_cache_validation_rejects_malformed_and_credential_data() {
+        let registry = Registry::configured(&json!({
+            "url": "https://registry.invalid",
+            "token": "synthetic-secret"
+        }))
+        .unwrap();
+        let safe = json!({"versions": {"1.0.0": {"dist": {
+            "tarball": "https://registry.invalid/package/-/package-1.0.0.tgz"
+        }}}});
+        assert!(cacheable(
+            &serde_json::to_vec(&safe).unwrap(),
+            false,
+            &registry
+        ));
+        for unsafe_metadata in [
+            json!({"tarball": "https://user:password@registry.invalid/package.tgz"}),
+            json!({"description": "synthetic-secret"}),
+        ] {
+            let bytes = serde_json::to_vec(&unsafe_metadata).unwrap();
+            assert!(!cacheable(&bytes, false, &registry));
+        }
+        assert!(!cacheable(b"{", false, &registry));
+    }
+}
