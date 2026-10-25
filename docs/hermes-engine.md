@@ -64,7 +64,6 @@ Startup is slower than QuickJS (hello about 320 ms vs 190 ms on the native launc
 ## Limits
 
 - No `Intl` (built with `HERMES_ENABLE_INTL=OFF`); no lexical direct `eval`.
-- `error.stack` has frames but no `Error: message` line: Hermes uses `Error.prepareStackTrace`'s result as the whole stack, and the bootstrap's formatter returns only frames (QuickJS adds the header itself).
 - `Object.keys(promise)` and `JSON.stringify(promise)` show the JS Promise's fields (`_x`, `_y`, `_z`, `_A`); console output hides them.
 - `process.versions` still reports `quickjs`.
 - GC heap capped at 256 MiB (`BUN_WASM_HERMES_HEAP_MIB`, at most 448), under bun.wasm's 512 MiB linear memory.

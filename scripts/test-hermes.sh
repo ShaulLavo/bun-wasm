@@ -23,5 +23,6 @@ expect() {
 }
 expect "2" -e 'console.log(1 + 1)'
 expect "object" -e 'console.log(typeof HermesInternal)'
+expect "TypeError: boom" -e 'console.log(new TypeError("boom").stack.split("\n")[0])'
 expect "hello 2" run /hello.ts
 expect "200 hello from /hermes" run /serve.ts

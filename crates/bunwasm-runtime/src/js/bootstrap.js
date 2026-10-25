@@ -118,10 +118,21 @@
     return Function.prototype.toString.call(fn).startsWith("function () {\n    [native code]");
   }
 
+  // Hermes, like V8, uses the result as the whole stack; QuickJS adds the
+  // "Error: message" line itself.
+  function stackHeader(error) {
+    if (native.engine !== "hermes") return "";
+    try {
+      return `${Error.prototype.toString.call(error)}\n`;
+    } catch {
+      return "";
+    }
+  }
+
   Error.prepareStackTrace = function prepareStackTrace(error, callsites) {
     let start = 0;
     while (start < callsites.length - 1 && isErrorConstructorFrame(callsites[start])) start++;
-    let out = "";
+    let out = stackHeader(error);
     for (let i = start; i < callsites.length; i++) out += `    at ${formatCallSite(callsites[i])}\n`;
     return out;
   };
