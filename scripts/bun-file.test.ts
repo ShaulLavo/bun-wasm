@@ -43,7 +43,7 @@ function adapter(Stream = ReadableStream) {
     utf8Encode: (text: string) => new TextEncoder().encode(text),
     stat: statSync, fstat: fstatSync, exists: existsSync,
     readFile(path: string) { wholeReads.push(path); return readFileSync(path); },
-    open(path: string) { const fd = open(path); opens.push(fd); return fd; },
+    open(path: string, flags: number) { expect(flags).toBe(0); const fd = open(path); opens.push(fd); return fd; },
     close(fd: number) { closes.push(fd); owned.delete(fd); closeSync(fd); },
     read(fd: number, length: number, position = -1) {
       const bytes = new Uint8Array(Math.trunc(length));

@@ -81,36 +81,7 @@
 
   // --- Stats / Dirent ---------------------------------------------------------
 
-  class Stats {
-    constructor(raw) {
-      Object.assign(this, raw);
-      this.atime = new Date(raw.atimeMs);
-      this.mtime = new Date(raw.mtimeMs);
-      this.ctime = new Date(raw.ctimeMs);
-      this.birthtime = new Date(raw.birthtimeMs);
-    }
-    isFile() {
-      return (this.mode & constants.S_IFMT) === constants.S_IFREG;
-    }
-    isDirectory() {
-      return (this.mode & constants.S_IFMT) === constants.S_IFDIR;
-    }
-    isSymbolicLink() {
-      return (this.mode & constants.S_IFMT) === constants.S_IFLNK;
-    }
-    isBlockDevice() {
-      return (this.mode & constants.S_IFMT) === constants.S_IFBLK;
-    }
-    isCharacterDevice() {
-      return (this.mode & constants.S_IFMT) === constants.S_IFCHR;
-    }
-    isFIFO() {
-      return (this.mode & constants.S_IFMT) === constants.S_IFIFO;
-    }
-    isSocket() {
-      return (this.mode & constants.S_IFMT) === constants.S_IFSOCK;
-    }
-  }
+  const { Stats, flagsNumber, cpSync: copySync, cp: copyAsync } = internal.require("fs_options")(native, absolute);
 
   class Dirent {
     constructor(name, kind, parentPath) {
@@ -325,22 +296,18 @@
 
   function writeFileSync(path, data, options) {
     const encoding = encodingOf(options);
-    const flag = (options && typeof options === "object" && options.flag) || "w";
+    const flag = options && typeof options === "object" && options.flag !== undefined ? options.flag : "w";
     const bytes = toBytes(data, encoding);
     if (typeof path === "number") {
       native.write(path, bytes, -1);
       return;
     }
-    withPath(path, (abs) => native.writeFile(abs, bytes, flag.startsWith("a")));
+    withPath(path, (abs) => native.writeFileFlags(abs, bytes, flagsNumber(flag), options && options.mode !== undefined ? options.mode : 0o666));
   }
 
   function appendFileSync(path, data, options) {
-    const bytes = toBytes(data, encodingOf(options));
-    if (typeof path === "number") {
-      native.write(path, bytes, -1);
-      return;
-    }
-    withPath(path, (abs) => native.writeFile(abs, bytes, true));
+    const config = typeof options === "string" ? { encoding: options } : options || {};
+    return writeFileSync(path, data, Object.assign({}, config, { flag: config.flag === undefined ? "a" : config.flag }));
   }
 
   function existsSync(path) {
@@ -353,7 +320,7 @@
 
   function statSync(path, options) {
     try {
-      return new Stats(withPath(path, (abs) => native.stat(abs, false)));
+      return new Stats(withPath(path, (abs) => native.stat(abs, false, Boolean(options && options.bigint))), Boolean(options && options.bigint));
     } catch (err) {
       if (options && options.throwIfNoEntry === false && err.code === "ENOENT") return undefined;
       throw err;
@@ -362,7 +329,7 @@
 
   function lstatSync(path, options) {
     try {
-      return new Stats(withPath(path, (abs) => native.stat(abs, true)));
+      return new Stats(withPath(path, (abs) => native.stat(abs, true, Boolean(options && options.bigint))), Boolean(options && options.bigint));
     } catch (err) {
       if (options && options.throwIfNoEntry === false && err.code === "ENOENT") return undefined;
       throw err;
@@ -411,30 +378,18 @@
     withPath(from, (abs) => native.rename(abs, absolute(toPath(to, "newPath"))));
   }
 
-  function copyFileSync(from, to, mode) {
-    const dest = absolute(toPath(to, "dest"));
-    if (mode & constants.COPYFILE_EXCL && native.exists(dest)) {
-      const err = new Error(`EEXIST: file already exists, copyfile '${toPath(from)}' -> '${toPath(to)}'`);
-      Object.assign(err, { code: "EEXIST", errno: -17, syscall: "copyfile", path: toPath(from) });
-      throw err;
-    }
-    withPath(from, (abs) => native.copyFile(abs, dest));
+  function copyFileSync(from, to, mode = 0) {
+    withPath(from, (abs) => native.copyFile(abs, absolute(toPath(to, "dest")), mode));
   }
 
   function cpSync(from, to, options = {}) {
-    const src = absolute(toPath(from, "src"));
-    const dest = absolute(toPath(to, "dest"));
-    const st = native.stat(src, false);
-    if ((st.mode & constants.S_IFMT) === constants.S_IFDIR) {
-      if (!options.recursive) {
-        const err = new Error(`Recursive option is required to copy a directory: ${toPath(from)}`);
-        err.code = "ERR_FS_EISDIR";
-        throw err;
-      }
-      native.copyDir(src, dest);
-      return;
-    }
-    native.copyFile(src, dest);
+    return copySync(toPath(from, "src"), toPath(to, "dest"), options);
+  }
+
+  function cp(from, to, options, callback) {
+    if (typeof options === "function") { callback = options; options = undefined; }
+    if (typeof callback !== "function") throw invalidArg("callback", "of type function", callback);
+    promises.cp(from, to, options).then(() => later(() => callback(null)), error => later(() => callback(error)));
   }
 
   function realpathSync(path) {
@@ -459,19 +414,8 @@
     }
   }
 
-  function flagsString(flags) {
-    if (flags === undefined || flags === null) return "r";
-    if (typeof flags === "string") return flags;
-    const { O_WRONLY, O_RDWR, O_CREAT, O_TRUNC, O_APPEND, O_EXCL } = constants;
-    const plus = flags & O_RDWR ? "+" : "";
-    const excl = flags & O_EXCL ? "x" : "";
-    if (flags & O_APPEND) return "a" + excl + plus;
-    if (flags & (O_CREAT | O_TRUNC) || flags & O_WRONLY) return "w" + excl + plus;
-    return "r" + plus;
-  }
-
-  function openSync(path, flags) {
-    return withPath(path, (abs) => native.open(abs, flagsString(flags)));
+  function openSync(path, flags, mode = 0o666) {
+    return withPath(path, (abs) => native.open(abs, flagsNumber(flags), mode));
   }
 
   function closeSync(fd) {
@@ -723,7 +667,7 @@
     readFileSync, writeFileSync, appendFileSync, existsSync, statSync, lstatSync, mkdirSync, readdirSync,
     rmSync, rmdirSync, unlinkSync, renameSync, copyFileSync, cpSync, realpathSync, accessSync, mkdtempSync,
     openSync, closeSync, readSync, readvSync, writeSync, writevSync, globSync, opendirSync,
-    fstatSync: (fd) => new Stats(native.fstat(fd)),
+    fstatSync: (fd, options) => new Stats(native.fstat(fd, Boolean(options && options.bigint)), Boolean(options && options.bigint)),
     ftruncateSync: (fd, len) => native.ftruncate(fd, len || 0),
     truncateSync: (path, len) => withPath(path, (abs) => native.truncate(abs, len || 0)),
     readlinkSync: (path) => withPath(path, (abs) => native.readlink(abs)),
@@ -773,6 +717,7 @@
     const result = existsSync(path);
     later(() => callback(result));
   };
+  callbackApi.cp = cp;
   callbackApi.glob = glob;
   callbackApi.opendir = opendir;
   callbackApi.writev = writev;
@@ -861,8 +806,8 @@
     async writev(buffers, position) {
       return { bytesWritten: writevSync(this.fd, buffers, position), buffers };
     }
-    async stat() {
-      return new Stats(native.fstat(this.fd));
+    async stat(options) {
+      return sync.fstatSync(this.fd, options);
     }
     async truncate(len) {
       native.ftruncate(this.fd, len || 0);
@@ -884,7 +829,8 @@
     promises[name.slice(0, -4)] = promisifySync(sync[name]);
   }
   promises.glob = async function* glob(pattern, options) { yield* globSync(pattern, options); };
-  promises.open = async (path, flags) => new FileHandle(openSync(path, flags));
+  promises.open = async (path, flags, mode) => new FileHandle(openSync(path, flags, mode));
+  promises.cp = async (from, to, options) => copyAsync(toPath(from, "src"), toPath(to, "dest"), options);
   promises.constants = constants;
   delete promises.close;
   delete promises.readv;

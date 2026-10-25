@@ -14,6 +14,16 @@ function emit(path: string) {
   return readFileSync(output, "utf8");
 }
 
+test("filesystem options module exports the helper factory expected by node:fs", () => {
+  const generated = emit(join(root, "crates/bunwasm-runtime/src/js/fs_options.ts"));
+  // oxlint-disable-next-line no-eval -- Initialize the emitted module as bootstrap's internal.require does.
+  const createOptions = (0, eval)(generated)({ native: {} });
+  expect(typeof createOptions).toBe("function");
+  const { Stats, flagsNumber } = createOptions({}, (path: string) => path);
+  expect(flagsNumber("wx")).toBe(705);
+  expect(new Stats({ mode: 0o100640 }).isFile()).toBe(true);
+});
+
 test("erases types without printing constructors or moving source positions", () => {
   const text = '(function (value: string) { "use strict"; throw new TypeError(value); })\n';
   writeFileSync(join(source, "position.ts"), text);

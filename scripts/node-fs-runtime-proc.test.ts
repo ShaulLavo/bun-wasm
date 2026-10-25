@@ -58,6 +58,7 @@ function fixture(results: (Uint8Array | number)[], processAbi = true, networking
       callback.apply(receiver, args);
     },
     require(name: string): unknown {
+      if (name === "fs_options") return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${readFileSync(new URL("../crates/bunwasm-runtime/src/js/fs_options.ts", import.meta.url), "utf8")}`))({});
       if (name === "buffer") return { Buffer };
       if (name === "fs_watch") return () => ({});
       if (name === "http_common") return {};
