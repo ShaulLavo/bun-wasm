@@ -459,6 +459,8 @@
     ? forceColor !== "0"
     : globalThis.process.env.NO_COLOR === undefined && native.isatty(2);
 
+  const dns = internal.require("dns");
+
   const Bun = {
     ArrayBufferSink,
     Archive: internal.require("archive").Archive,
@@ -537,7 +539,7 @@
     listen: (options) => internal.require("net").bunTcp().listen(options),
     connect: (options) => internal.require("net").bunTcp().connect(options),
     udpSocket: unsupported("Bun.udpSocket", noNetwork),
-    dns: { lookup: unsupported("Bun.dns.lookup", noNetwork) },
+    dns: dns.bun(),
     openInEditor: unsupported("Bun.openInEditor", noProcesses),
   };
   internal.BunFile = BunFile;

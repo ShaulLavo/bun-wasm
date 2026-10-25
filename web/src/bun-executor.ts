@@ -6,6 +6,7 @@ import { NetHost } from "./net/host.js";
 import { DefaultSignal } from "./default-signal.js";
 import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
+import { createLookupClient, type LookupClient } from "./net/lookup.js";
 
 export type Engine = "quickjs" | "jsc" | "browser";
 
@@ -20,6 +21,10 @@ export interface RunRequest extends RuntimeWorkerRequest {
    * under ./m/. Acyclic modules use blob URLs. Null disables import cycles.
    */
   moduleCache: string | null;
+  /** Bun-owned DNS lookup requests are served by the page runtime. */
+  lookupPort?: MessagePort;
+  /** Browser-engine DNS lookup channel name used by adapter-launched workers. */
+  lookupChannel?: string;
   /**
    * How the wasm engines get the host functions (`?slots=`): "imports" (default) has the guest
    * call them through a WASI import; "table" appends them to the guest's function table as
@@ -77,6 +82,12 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
   const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
   const stackKib = smallStackKib()?.[req.engine];
   const env = stackKib && !("BUN_WASM_STACK_KIB" in req.env) ? { ...req.env, BUN_WASM_STACK_KIB: stackKib } : req.env;
+  const lookupClient: LookupClient | undefined = req.lookupPort
+    ? createLookupClient(req.lookupPort)
+    : req.lookupChannel && typeof BroadcastChannel === "function"
+      ? createLookupClient(new BroadcastChannel(req.lookupChannel))
+      : undefined;
+  const lookup = lookupClient;
   return {
     hostCallFd: HOST_CALL_FD,
     env: () => env,
@@ -95,10 +106,18 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       if (slots === "imports") wasi.hostCall = installHostSlotsViaImport(instance, impls);
       else installHostSlots(instance, impls);
     },
+    beforeFinish() {
+      lookupClient?.close();
+      req.lookupPort?.close();
+    },
     run({ instance, checkActive, finish, runtimeState }, exited) {
       const ready = instance.exports.bunwasm_ready as (() => number) | undefined;
       if (exited !== null || req.adapter === "preview1" || req.engine !== "browser" || ready?.() !== 1) return exited ?? 0;
-      const net = slots !== "off" ? netHost?.engineNet() : undefined;
+      const net = slots !== "off" ? netHost?.engineNet(lookup) ?? (lookup ? {
+        natives: { hostLookup: lookup },
+        caps: {},
+        onNews() {},
+      } : undefined) : undefined;
       const nativeFetch = host.fetch.bind(host);
       return startEngineHost({
         instance, moduleUrls: "blob",

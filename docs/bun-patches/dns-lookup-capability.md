@@ -1,30 +1,38 @@
 # DNS lookup capability boundary
 
-Class **Host feature**, original bun-wasm adapter boundary. This record documents
-an implementation blocker; it adds no runtime adapter, copied implementation or
-upstream patch.
+Class **Host feature**, original bun-wasm adapter over Waffle's delivered runtime-owned
+lookup capability. The public facade is original glue; it copies no Bun resolver
+implementation and does not add an OS resolver, socket probe, Wasmtime import or
+consumer-local address table.
 
-The fallback `node:dns` and `node:dns/promises` factories in
-`crates/bunwasm-runtime/src/js/builtins.js` currently throw unsupported-operation
-errors for lookup. `Bun.dns.lookup` in the same directory's `bun.js` is also a
-stub. Working HTTP requests and loopback sockets do not provide standalone
-address lookup.
+The public contract is guided by Bun's `src/js/node/dns.ts` and
+`src/js/node/dns.promises.ts` at upstream revision
+`9510e74152073d850a18758ca41114d8f214ffa6`. `crates/bunwasm-runtime/src/js/dns.ts`
+owns the shared `node:dns`, `node:dns/promises` and `dns.promises` facade: overload
+validation, IP-literal fast paths, callbacks, promises, `all`, ordering and default
+order state and the Bun-facing adapter. Minimal registration in
+`crates/bunwasm-runtime/src/js/builtins.js` and `bun.js` maps Bun's resolver flags to
+Waffle's `hints` option.
 
-Public-contract references are Bun `src/js/node/dns.ts` and
-`src/js/node/dns.promises.ts` at upstream
-`9510e74152073d850a18758ca41114d8f214ffa6`. The main module uses `Bun.dns` with
-the system backend for hostname lookup. The promise module aliases the main
-module's promise object. Its existing validation, IP-literal paths, ordering
-and result mapping are candidates for reuse once the backing capability exists;
-no part of that implementation was copied or adapted in this change.
+The backing capability is the prepared Waffle package at the pinned revision
+`c1cb67c300439af24335d0b2ec481bfb52f79a01`, specifically
+`browser/net/runtime.ts` and `browser/net/address.ts`. After `await runtime.network()`,
+`network.lookup(name, { family, hints })` is synchronous, side-effect free and returns
+fresh ordered records. Waffle owns virtual localhost policy and structured
+`ENOTSUP`/`ENOTFOUND` lookup errors; it does not perform OS DNS, fetch, sockets or
+process activation.
 
-At Waffle pin `b20fad173ebaa225cb87c51776f35edaaafd4a40`,
-`browser/net/host.ts` and `browser/net/protocol.ts` expose no side-effect-free
-lookup operation. Bun's 14-slot network ABI likewise has none. Waffle must own
-namespace address lookup and its browser localhost policy. Opening a connection
-and reading its peer address is not a substitute.
+The browser runner bridges that capability through `web/src/net/lookup.ts` using a
+root `MessageChannel` or per-launch `BroadcastChannel`. The existing TCP ring and
+`node:process` descriptor ownership remain unchanged. The Rust native launcher has no
+resolver slot, so the compiled blocking fixture covers the Bun-owned literal/overload
+facade; hostname-backed Vitest/SolidStart startup remains a browser-runtime acceptance
+after a new guest build. `scripts/dns-lookup.test.ts` also runs a prepared Waffle
+export control under native Bun with a real Worker; plain Node is not used as the full
+runtime host.
 
-The pending consumer is Vite 7.1.12 startup under Vitest 3.2.4. It calls both
-`dns.promises.lookup("localhost")` and the `{ verbatim: true }` overload before
-starting its server. Those calls still fail. This change claims diagnosis only,
-not working DNS, Vitest or browser compatibility.
+| Paths | Class | Provenance |
+| --- | --- | --- |
+| `crates/bunwasm-runtime/src/js/dns.ts` plus minimal registration in `builtins.js` and `bun.js` | Host feature | Original Bun/Node public facade and Waffle adapter; no copied resolver implementation. |
+| `web/src/net/lookup.ts`, `web/src/{bun-executor,bun-launcher,runner}.ts` | Host feature | Original browser worker bridge over Waffle `runtime.network().lookup`; TCP transport unchanged. |
+| `tests/fixtures/dns-lookup/`, `scripts/dns-lookup.test.ts`, `web/tests/dns-lookup-bridge.test.ts` | Host feature | Blocking facade, prepared-export, bridge and structured-error controls. |
