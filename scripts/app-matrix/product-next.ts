@@ -78,13 +78,12 @@ export const config = { matcher: ["/api/middleware/:path*"] };
   };
 }
 
-function appDynamicFiles(text: string, major: string, withActions: boolean): Record<string, string> {
+function appDynamicFiles(text: string, major: string, withActions: boolean, cacheComponents = false): Record<string, string> {
   const files: Record<string, string> = {
     "app/layout.tsx": appLayout(text),
     "app/page.tsx": appPage(text),
-    "app/api/ssr/route.ts": `export const dynamic = "force-dynamic";
+    "app/api/ssr/route.ts": `${cacheComponents ? "" : 'export const dynamic = "force-dynamic";\n\n'}export function GET(request: Request) {
 
-export function GET(request: Request) {
   const value = new URL(request.url).searchParams.get("value") ?? "missing";
   return Response.json({ marker: "${text}", value }, { headers: { "cache-control": "no-store" } });
 }
@@ -96,7 +95,7 @@ export function GET(request: Request) {
     ...requestBoundary(text, major),
   };
   if (withActions && major === "14") {
-    Object.assign(files, nextConfigFile(major, "{ experimental: { serverActions: true } }"), appActionFilesReact18(text));
+    Object.assign(files, appActionFilesReact18(text));
     return files;
   }
   if (withActions) Object.assign(files, appActionFiles(text));
@@ -227,8 +226,10 @@ function pprFiles(text: string, major: string): Record<string, string> {
   return {
     ...nextConfigFile(major, config),
     "app/ppr/page.tsx": `import { Suspense } from "react";
+import { connection } from "next/server";
 
 async function DelayedServerData() {
+  await connection();
   await new Promise(resolve => setTimeout(resolve, 100));
   return <p data-ppr-deferred>${text} ppr deferred</p>;
 }
@@ -312,10 +313,16 @@ function pagesProbes(text: string): readonly FeatureProbe[] {
 }
 
 function dynamicCommands(text: string, check: Extract<ProductCheck, { kind: "page" }>): readonly ProductCommand[] {
+  const productionCheck: Extract<ProductCheck, { kind: "page" }> = {
+    kind: "page",
+    selector: check.selector,
+    text: check.text,
+    ...(check.probes ? { probes: check.probes } : {}),
+  };
   return [
     { name: "dev", args: ["run", "node_modules/next/dist/bin/next", "dev", "--hostname", "127.0.0.1", "--port", "{port}"], check },
     { name: "build", args: ["run", "node_modules/next/dist/bin/next", "build"], check: { kind: "files", paths: [".next/BUILD_ID"], text: "" }, },
-    { name: "start", after: "build", args: ["run", "node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "{port}"], check: { ...check, hmr: undefined } },
+    { name: "start", after: "build", args: ["run", "node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "{port}"], check: productionCheck },
   ];
 }
 
@@ -358,10 +365,10 @@ function dynamicPprApp(version: "15" | "16", dependencies: Record<string, string
     family: "next",
     dependencies,
     files: {
-      ...appDynamicFiles(text, version, false),
+      ...appDynamicFiles(text, version, false, version === "16"),
       ...pprFiles(pprText, version),
     },
-    commands: dynamicCommands(text, pageCheck(text)),
+    commands: dynamicCommands(text, pageCheck(text, true, appProbes(text, false))),
     features: [
       "router:app",
       "mode:dev-hmr",

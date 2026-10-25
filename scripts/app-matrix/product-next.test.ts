@@ -55,6 +55,11 @@ test("dynamic routers have real dev HMR, build, production and feature probes", 
     expect(production.check.kind).toBe("page");
     expect(feature(app, "ssr:")).not.toContain("n/a");
     expect(feature(app, "middleware:")).not.toContain("n/a");
+    const probes = dev.check.kind === "page" ? dev.check.probes ?? [] : [];
+    if (app.id.includes("-app")) {
+      expect(probes.some(probe => probe.id === "app-ssr-response")).toBe(true);
+    }
+    expect(probes.some(probe => probe.id === "middleware-response")).toBe(true);
   }
 });
 
@@ -113,12 +118,15 @@ test("PPR fixtures use real delayed Suspense data with version-specific config",
   for (const app of pprApps) {
     const fixture = app.files["app/ppr/page.tsx"];
     expect(fixture).toContain("Suspense");
+    expect(fixture).toContain('import { connection } from "next/server"');
+    expect(fixture).toContain("await connection()");
     expect(fixture).toContain("setTimeout(resolve, 100)");
     expect(fixture).toContain("data-ppr-shell");
     expect(fixture).toContain("data-ppr-deferred");
     expect(feature(app, "ppr:")).toContain("pending");
     if (app.id.startsWith("next-16-")) {
       expect(app.files["next.config.ts"]).toContain("cacheComponents: true");
+      expect(app.files["app/api/ssr/route.ts"]).not.toContain('export const dynamic = "force-dynamic"');
       expect(fixture).not.toContain("experimental_ppr");
       continue;
     }
@@ -135,6 +143,16 @@ test("ISR fixture exposes a generation value for a real cache-window sequence", 
     expect(fixture).toContain("revalidate: 1");
     expect(feature(app, "isr:")).toBe("isr:pending-cache-sequence-probe");
   }
+});
+
+test("Next 14 server actions rely on default support, not an obsolete config flag", () => {
+  const app = nextApps.find(candidate => candidate.id === "next-14-app");
+  if (!app) throw new Error("next-14-app is missing");
+  expect(app.files["next.config.mjs"]).toBeUndefined();
+  expect(app.files["next.config.ts"]).toBeUndefined();
+  expect(app.files["app/action/action-form.tsx"]).toContain("useFormState");
+  expect(app.files["app/action/action-form.tsx"]).toContain("useFormStatus");
+  expect(app.files["app/action/action-form.tsx"]).not.toContain("experimental.serverActions");
 });
 
 test("ISR and PPR metadata stays explicit about pending or N/A verification", () => {
