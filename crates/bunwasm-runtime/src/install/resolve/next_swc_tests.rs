@@ -71,7 +71,7 @@ fn optional_next_keeps_the_backend_optional() {
 fn a_different_root_backend_does_not_satisfy_next() {
     let (mut resolver, mut manifest) = fixture(false, false);
     manifest["dependencies"][BACKEND] = "15.5.7".into();
-    resolver.packuments[BACKEND]["versions"]["15.5.7"] = json!({
+    resolver.packuments.get_mut(BACKEND).unwrap()["versions"]["15.5.7"] = json!({
         "name": BACKEND, "version": "15.5.7",
         "dist": {"tarball": "http://registry.invalid/swc-15.5.7.tgz"}
     });
