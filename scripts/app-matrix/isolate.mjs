@@ -1,9 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { recorderErrorHeader } from "./registry.mjs";
-import { registryAccept } from "./registry-request.ts";
-import { decodedResponse } from "./decoded-response.ts";
+import { registryBrokerResponse } from "./registry-request.ts";
 
 const scratch = mkdtempSync("/work/tmp/bun-wasm-app-matrix-isolate-");
 let child;
@@ -16,15 +14,7 @@ try {
   if (process.argv.slice(2).some(arg => arg.split("=")[0] === "--record")) {
     broker = Bun.serve({
       unix: socket,
-      async fetch(request) {
-        try {
-          const path = new URL(request.url).pathname;
-          const url = new URL(path, "https://registry.npmjs.org");
-          if (url.origin !== "https://registry.npmjs.org") throw new Error("Invalid recorder origin");
-          const upstream = await fetch(url, { headers: { accept: registryAccept(path) }, redirect: "error", signal: AbortSignal.timeout(60000) });
-          return await decodedResponse(upstream);
-        } catch (error) { return new Response(String(error), { status: 502, headers: { [recorderErrorHeader]: "1" } }); }
-      },
+      fetch: registryBrokerResponse,
     });
   }
   const runner = join(import.meta.dir, "run.mjs");

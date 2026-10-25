@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { expect, spyOn, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { request, type Route } from "playwright";
+import { BlockedBrowserNetworkError, runProductBrowserCase } from "./product-campaign";
 import { browserCommand, browserLauncher } from "./browser-environment";
-import { registryAccept, registryReplayUrl } from "./registry-request";
+import { browserRegistryRoute, registryAccept, registryBrokerResponse, registryReplayUrl } from "./registry-request";
 import { nextApps } from "./product-next";
 import { fullstackApps } from "./product-fullstack";
 
@@ -31,8 +34,9 @@ test("the browser runner installs and uses the environment launcher and registry
   const source = readFileSync(new URL("./browser.mjs", import.meta.url), "utf8");
   expect(source).toContain('writeFile(page, "/home/user/.matrix-command.ts", browserLauncher)');
   expect(source).toContain("browserCommand(command.args)");
-  expect(source).toContain("registryReplayUrl(url.href, registry)");
-  expect(source).toContain("return route.abort()");
+  expect(source).toContain("browserRegistryRoute(route, registry, external)");
+  const isolate = readFileSync(new URL("./isolate.mjs", import.meta.url), "utf8");
+  expect(isolate).toContain("fetch: registryBrokerResponse");
 });
 
 test("the recorder asks for ordinary JSON only for Next dist-tags", () => {
@@ -40,4 +44,115 @@ test("the recorder asks for ordinary JSON only for Next dist-tags", () => {
   for (const path of ["/next", "/next/-/next-15.5.6.tgz", "/-/package/next/dist-tags?x=1"]) {
     expect(registryAccept(path)).toBe("application/vnd.npm.install-v1+json");
   }
+});
+
+async function replayControl(url: string, method = "GET", status = 200, reject = false) {
+  const requests: { url: string; method: string; accept: string | null; retained: string | null }[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(incoming) {
+    requests.push({ url: incoming.url, method: incoming.method, accept: incoming.headers.get("accept"), retained: incoming.headers.get("x-matrix-control") });
+    return new Response("recorded", { status });
+  } });
+  let client;
+  try {
+    client = await request.newContext();
+    const api = client;
+    const external: string[] = [];
+    let aborted = false;
+    let fulfilled = false;
+    let continued = false;
+    const route = {
+      request: () => ({ url: () => url, method: () => method, headers: () => ({ accept: "application/vnd.npm.install-v1+json", "x-matrix-control": "retained" }) }),
+      fetch: async (options: Parameters<Route["fetch"]>[0] = {}) => {
+        if (reject) throw new Error("loopback registry unavailable");
+        if (!options.url) throw new Error("Missing replay URL");
+        return api.fetch(options.url, { ...options, headers: options.headers ?? route.request().headers() });
+      },
+      fulfill: async () => { fulfilled = true; },
+      abort: async () => { aborted = true; },
+      continue: async () => { continued = true; },
+    };
+    const measurement = await runProductBrowserCase(async () => {
+      await browserRegistryRoute(route, `http://127.0.0.1:${server.port}`, external);
+      if (external.length) throw new BlockedBrowserNetworkError(external);
+    });
+    return { measurement, requests, aborted, fulfilled, continued, base: `http://127.0.0.1:${server.port}` };
+  } finally {
+    await client?.dispose();
+    await server.stop(true);
+  }
+}
+
+const nextTags = "https://registry.npmjs.org/-/package/next/dist-tags";
+
+test("the actual replay route forces JSON and retains other request headers", async () => {
+  const control = await replayControl(nextTags);
+  expect(control.requests).toEqual([{ url: `${control.base}/-/package/next/dist-tags`, method: "GET", accept: "application/json", retained: "retained" }]);
+  expect(control.measurement).toEqual({ kind: "complete" });
+  expect(control.fulfilled).toBe(true);
+  expect(control.aborted).toBe(false);
+});
+
+test("a rejected loopback replay aborts and retains the raw URL as a network measurement error", async () => {
+  const control = await replayControl(nextTags, "GET", 200, true);
+  expect(control.measurement).toMatchObject({ kind: "blocked-network", urls: [nextTags] });
+  expect(control.aborted).toBe(true);
+  expect(control.fulfilled).toBe(false);
+});
+
+test("unsuccessful replays and all other external requests remain invalid", async () => {
+  const failed = await replayControl(nextTags, "GET", 503);
+  expect(failed.measurement).toMatchObject({ kind: "blocked-network", urls: [nextTags] });
+  expect(failed.aborted).toBe(true);
+  for (const [url, method] of [[nextTags, "POST"], [`${nextTags}?x=1`, "GET"], ["https://telemetry.nextjs.org/api/v1/record", "GET"], ["https://telemetry.astro.build/api/v1/record", "GET"]]) {
+    const control = await replayControl(url, method);
+    expect(control.measurement).toMatchObject({ kind: "blocked-network", urls: [url] });
+    expect(control.requests).toEqual([]);
+    expect(control.aborted).toBe(true);
+  }
+  expect((await replayControl("http://127.0.0.1:12345/local")).continued).toBe(true);
+});
+
+test("the isolate broker rejects query variants instead of silently recording exact dist-tags", async () => {
+  const upstream: string[] = [];
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(async input => {
+    upstream.push(String(input));
+    return Response.json({ latest: "fixture" });
+  });
+  try {
+    const response = await registryBrokerResponse(new Request("http://recorder/-/package/next/dist-tags?x=1"));
+    expect(response.status).toBe(502);
+    expect(response.headers.get("x-bun-wasm-recorder-error")).toBe("1");
+    expect(upstream).toEqual([]);
+  } finally { fetch.mockRestore(); }
+});
+
+test("the isolate broker sends JSON only for the exact path and retains package Accept", async () => {
+  const headers: (HeadersInit | undefined)[] = [];
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(async (_input, options) => {
+    headers.push(options?.headers);
+    return Response.json({ latest: "fixture" });
+  });
+  try {
+    for (const path of ["/-/package/next/dist-tags", "/next"]) expect((await registryBrokerResponse(new Request(`http://recorder${path}`))).ok).toBe(true);
+    expect(headers.map(value => new Headers(value).get("accept"))).toEqual(["application/json", "application/vnd.npm.install-v1+json"]);
+  } finally { fetch.mockRestore(); }
+});
+
+test("executing the launcher retains direct Bun normalized argv and sets telemetry before the CLI", () => {
+  const directory = mkdtempSync("/work/tmp/bwm1602-argv-");
+  try {
+    mkdirSync(join(directory, "nested"));
+    writeFileSync(join(directory, "nested/cli.ts"), 'console.log(JSON.stringify({ argv: process.argv, next: process.env.NEXT_TELEMETRY_DISABLED, astro: process.env.ASTRO_TELEMETRY_DISABLED }));');
+    writeFileSync(join(directory, ".matrix-command.ts"), browserLauncher);
+    const args = ["run", "nested/cli.ts", "dev", "--hostname", "127.0.0.1", "--port", "3137"];
+    const direct = Bun.spawnSync([process.execPath].concat(args), { cwd: directory });
+    const wrapped = Bun.spawnSync([process.execPath].concat(browserCommand(args).slice(1)), { cwd: directory, env: { ...process.env, NEXT_TELEMETRY_DISABLED: "0", ASTRO_TELEMETRY_DISABLED: "0" } });
+    expect(direct.exitCode).toBe(0);
+    expect(wrapped.exitCode).toBe(0);
+    const original = JSON.parse(direct.stdout.toString());
+    const actual = JSON.parse(wrapped.stdout.toString());
+    expect(actual.argv).toEqual(original.argv);
+    expect(actual.next).toBe("1");
+    expect(actual.astro).toBe("1");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

@@ -9,7 +9,7 @@ import { observeHmr } from "./hmr.ts";
 import { observeProductTraffic, productObservations } from "./product-browser.ts";
 import { failure, stageOutput } from "./classify.ts";
 import { BlockedBrowserNetworkError } from "./product-campaign.ts";
-import { registryReplayUrl } from "./registry-request.ts";
+import { browserRegistryRoute } from "./registry-request.ts";
 import { browserCommand, browserLauncher } from "./browser-environment.ts";
 
 export function earlyServerExit(command, stage) {
@@ -134,17 +134,7 @@ export async function browserHost({ root, options, launch, stop }) {
     const page = await context.newPage();
     const external = [];
     const outcomes = new Map();
-    await context.route("**/*", async route => {
-      const url = new URL(route.request().url());
-      if (["127.0.0.1", "localhost"].includes(url.hostname) || ["data:", "blob:"].includes(url.protocol)) return route.continue();
-      const replay = registryReplayUrl(url.href, registry);
-      if (replay && route.request().method() === "GET") {
-        const response = await route.fetch({ url: replay, maxRedirects: 0 });
-        if (response.ok()) return route.fulfill({ response });
-      }
-      external.push(url.href);
-      return route.abort();
-    });
+    await context.route("**/*", route => browserRegistryRoute(route, registry, external));
     try {
       await page.goto(`${await serve()}?engine=${engine}`);
       if (!(await ready(page)).includes("ready")) throw new Error(`Playground engine ${engine} failed to load`);

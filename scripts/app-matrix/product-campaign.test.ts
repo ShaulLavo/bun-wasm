@@ -45,6 +45,8 @@ test("runner keeps the network guard blocking at final exit and keeps request ab
   const browser = readFileSync(new URL("./browser.mjs", import.meta.url), "utf8");
   expect(runner).toContain("process.exitCode = infrastructureError || measurementErrors.length");
   expect(runner).toContain("blocked_external_network: measurementErrors");
-  expect(browser).toContain("return route.abort()");
+  expect(browser).toContain("browserRegistryRoute(route, registry, external)");
+  const route = readFileSync(new URL("./registry-request.ts", import.meta.url), "utf8");
+  expect(route).toContain("return route.abort()");
   expect(browser).toContain("throw new BlockedBrowserNetworkError(external)");
 });
