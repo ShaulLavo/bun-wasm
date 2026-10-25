@@ -2,6 +2,12 @@ import { expect, test } from "bun:test";
 import { completeObservations, observeProductTraffic, productObservations, type ProductPage } from "./product-browser";
 import type { ProductCheck } from "./product-types";
 
+function socketObserver(assign: (callback: () => void) => void) {
+  return { on(_name: "framereceived", callback: (event: { payload: unknown }) => void) {
+    assign(() => callback({ payload: "update" }));
+  } };
+}
+
 function fixture() {
   let visible = "original";
   let source = "original";
@@ -20,7 +26,7 @@ function fixture() {
       visible = "route-result";
       return { ok: () => true, status: () => 200, text: async () => visible, headers: () => ({ "x-matrix": "verified" }) };
     },
-    on(_event, listener) { listener({ on(_name, callback) { frame = () => callback({ payload: "update" }); } }); },
+    on(_event, listener) { listener(socketObserver(callback => { frame = callback; })); },
     off() { frame = undefined; },
   };
   return {

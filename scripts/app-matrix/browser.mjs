@@ -15,6 +15,13 @@ export function earlyServerExit(command, stage) {
   return { status: "fail", exit: command.code, ...classified };
 }
 
+function guestSource(page) {
+  return {
+    read: path => readGuest(page, path),
+    write: (path, contents) => page.evaluate(([path, contents]) => globalThis.playground.fs.writeFile(`/home/user/${path}`, contents), [path, contents]),
+  };
+}
+
 export async function serverCommand({ page, context, command, app, engine, options, terminalText }) {
   const text = ["bun"].concat(command.args.map(arg => arg.replaceAll("{port}", "3137"))).join(" ");
   await page.evaluate(text => {
@@ -46,10 +53,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
     if (errors.length) throw new Error(errors.join("\n"));
     if (await page.evaluate(() => globalThis.__matrixDone)) return earlyServerExit({ code: await page.evaluate(() => globalThis.playground.shell.lastExit), output: await output() }, command.name);
     await preview.screenshot({ path: join(options.output, `${app.id}-${engine}-playground-${command.name}.png`) });
-    const observations = await productObservations(preview, url, check, {
-      read: path => readGuest(page, path),
-      write: (path, contents) => page.evaluate(([path, contents]) => globalThis.playground.fs.writeFile(`/home/user/${path}`, contents), [path, contents]),
-    }, traffic, options.timeout);
+    const observations = await productObservations(preview, url, check, guestSource(page), traffic, options.timeout);
     checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations };
   } catch (error) {
     checked = { status: "fail", ...failure(`${String(error)}\n${await output()}`, command.name) };
