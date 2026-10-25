@@ -133,6 +133,22 @@ function fixture() {
   };
 }
 
+async function expectResumableBody(state: ReturnType<typeof fixture>, currentResponse: () => IncomingMessage | undefined) {
+  await state.pump();
+  const response = currentResponse();
+  expect(response).toBeDefined();
+  expect(response!.readableLength).toBeLessThanOrEqual(response!.readableHighWaterMark + 4096);
+  expect(response!.complete).toBe(false);
+  const chunks: Buffer[] = [];
+  for (let round = 0; round < 8 && !response!.complete; round++) {
+    drain(response!, chunks);
+    await state.pump();
+  }
+  drain(response!, chunks);
+  expect(Buffer.concat(chunks).equals(Buffer.concat(Array.from({ length: 32 }, (_, i) => Buffer.alloc(4096, i))))).toBe(true);
+  expect(response!.complete).toBe(true);
+}
+
 test("HTTPS exposes its first chunk before EOF and releases the reader on destroy", async () => {
   const state = fixture();
   let response: IncomingMessage | undefined;
@@ -154,18 +170,7 @@ test("HTTPS unread body stops pulling and resumes in order", async () => {
   for (let i = 0; i < 32; i++) state.packets.push(Buffer.alloc(4096, i));
   state.packets.push(0);
   try {
-    await state.pump();
-    expect(response).toBeDefined();
-    expect(response!.readableLength).toBeLessThanOrEqual(response!.readableHighWaterMark + 4096);
-    expect(response!.complete).toBe(false);
-    const chunks: Buffer[] = [];
-    for (let round = 0; round < 8 && !response!.complete; round++) {
-      drain(response!, chunks);
-      await state.pump();
-    }
-    drain(response!, chunks);
-    expect(Buffer.concat(chunks).equals(Buffer.concat(Array.from({ length: 32 }, (_, i) => Buffer.alloc(4096, i))))).toBe(true);
-    expect(response!.complete).toBe(true);
+    await expectResumableBody(state, () => response);
     expect(state.closed).toEqual([7]);
   } finally { req.destroy(); await state.pump(); }
 });
@@ -182,18 +187,7 @@ test("raw HTTP unread body pauses the socket and resumes in order", async () => 
   }
   state.packets.push(Buffer.from("0\r\nX-Flow: done\r\n\r\n"), 0);
   try {
-    await state.pump();
-    expect(response).toBeDefined();
-    expect(response!.readableLength).toBeLessThanOrEqual(response!.readableHighWaterMark + 4096);
-    expect(response!.complete).toBe(false);
-    const chunks: Buffer[] = [];
-    for (let round = 0; round < 8 && !response!.complete; round++) {
-      drain(response!, chunks);
-      await state.pump();
-    }
-    drain(response!, chunks);
-    expect(Buffer.concat(chunks).equals(Buffer.concat(Array.from({ length: 32 }, (_, i) => Buffer.alloc(4096, i))))).toBe(true);
-    expect(response!.complete).toBe(true);
+    await expectResumableBody(state, () => response);
     expect(response!.trailers["x-flow"]).toBe("done");
   } finally { req.destroy(); await state.pump(); }
 });
