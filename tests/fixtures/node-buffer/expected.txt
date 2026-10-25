@@ -12,6 +12,7 @@ indexOf/includes: 6 true 4
 JSON: {"type":"Buffer","data":[1,2,3]}
 instanceof Uint8Array: true number
 global Buffer: true
+buffer web constructors: function function true true 5 fixture.txt 5
 bigint: 256n
 copyBytesFrom view: 0304
 copyBytesFrom invalid: ERR_OUT_OF_RANGE
