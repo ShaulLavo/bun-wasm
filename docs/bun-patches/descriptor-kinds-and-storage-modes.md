@@ -3,7 +3,7 @@
 Class **Host feature**. These are original adapters, not copied or translated upstream code.
 The matching contract was written against Waffle main `f6017d12f59c81dae75eece5a6cb62c0470d166e`, specifically
 `proc/abi.ts`, `core/descriptors.ts`, `fs/vfs.ts` and `browser/shared-fs.ts`. The root package,
-web page and sandbox now pin Waffle `c2cc1d318af6791f6b2e3d207cc56df9d7bf542a` together, including their lockfiles.
+web page and sandbox now pin Waffle `c1cb67c300439af24335d0b2ec481bfb52f79a01` together, including their lockfiles.
 
 The 2026-10-24 consumer refresh also updates original launcher fixtures for the required
 `RuntimeProcessContext.identity`, delegates identity reservation and bounded payload methods

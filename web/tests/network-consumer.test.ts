@@ -100,7 +100,7 @@ test("child launch revocation during activation allocates no session", async () 
   const gate = Promise.withResolvers<typeof capability>();
   let allocations = 0, revoke = () => {};
   runtime.network = () => gate.promise;
-  const network = { createHelper(options: Parameters<typeof capability.createHelper>[0]) { allocations++; return capability.createHelper(options); } };
+  const network = { lookup: capability.lookup.bind(capability), createHelper(options: Parameters<typeof capability.createHelper>[0]) { allocations++; return capability.createHelper(options); } };
   const context = { identity: { pid: 1, parentPid: 0, host: null }, module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), outcome: outcomeWord(), registerRevocation(hook: () => void) { revoke = hook; return () => {}; }, request: { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
   const service = { launchWorker() { throw new Error("must not launch"); } } as unknown as ProcessService;
   try {

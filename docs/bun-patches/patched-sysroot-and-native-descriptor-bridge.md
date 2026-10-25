@@ -1,7 +1,7 @@
 ## Patched sysroot and native descriptor bridge
 
 Class **Port**, with an original local build wrapper and native runtime adapter. The libc input is
-not copied into this repository: Waffle 0.0.90 at `c2cc1d318af6791f6b2e3d207cc56df9d7bf542a`
+not copied into this repository: Waffle 0.0.90 at `c1cb67c300439af24335d0b2ec481bfb52f79a01`
 (the commit `package.json` pins; the wasi-libc revision below is unchanged since 0.0.53 at `f6017d12`)
 builds wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13` from the installed
 `waffle/scripts/build-wasi-libc.sh`. Its `preopen-scan.patch` skips occupied inherited descriptors

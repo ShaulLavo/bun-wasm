@@ -41,7 +41,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
   let disposal: Promise<void> | undefined;
   const namespace = new NetNamespace();
   const helpers = new Set<NetHelper>();
-  const network: RuntimeNetwork = { createHelper({ ring, fetch, hooks }) {
+  const network: RuntimeNetwork = { lookup() { throw new Error("Unexpected network lookup in process-only fixture"); }, createHelper({ ring, fetch, hooks }) {
     if (disposed) throw new Error("Runtime is disposed");
     const helper = new NetHelper(ring, fetch, hooks, namespace);
     helpers.add(helper);

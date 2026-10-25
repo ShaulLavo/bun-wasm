@@ -100,7 +100,7 @@ Bun server and nested Bun processes use the page's existing network service, not
 
 `bun run test:browser:shell-consumer` is configured to install a packed Bun package and
 bash-web at `c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5` with Waffle 0.0.90 at
-`c2cc1d318af6791f6b2e3d207cc56df9d7bf542a`. The selected shell still declares the previous
+`c1cb67c300439af24335d0b2ec481bfb52f79a01`. The selected shell still declares the previous
 Waffle peer, so the exact-peer check currently rejects this combination. A separately reviewed
 shell pin with the matching peer is required before this command can establish acceptance.
 The command builds the installed shell's workers, runtime-backed shell guest and utility guests

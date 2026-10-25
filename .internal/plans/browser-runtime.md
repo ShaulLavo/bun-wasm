@@ -166,6 +166,26 @@ Use the existing natural CI guest producer rather than relabeling an old binary 
 rebuilding its native prerequisites in another lane. Independent review and the PR's
 required native, JSC and browser CI gates remain pending at the implementation handoff.
 
+
+### Authorized Waffle resolver consumer integration, 2026-10-25
+
+Status: Approved, parent owns independent consumer review, CI and serial landing.
+
+The parent selected exact consumer-ready Waffle main
+`c1cb67c300439af24335d0b2ec481bfb52f79a01` after PR120 and its six-job merged-main
+PUSH run `40173593945` passed. Root, web, sandbox and the optional shell fixture move
+from the preceding `c2cc1d318af6791f6b2e3d207cc56df9d7bf542a` selection together.
+Package versions, prior consumer fixes, Bun main source, socket ownership and CI stay intact.
+This is the one authorized daily integration, not permission to chase later Waffle heads.
+
+Waffle owns synchronous `lookup("localhost", { family: 0, hints: 0 })` on the capability
+returned by `await runtime.network()`. It returns fresh mutable IPv4 records. Bun's DNS
+facade is a separate later lane. This integration does not change the reserved descriptor
+or worker-threads adapters, migrate PR116 sockets, or incorporate unmerged PR110.
+The earlier PR169 review and browser acceptance cover their earlier dependency pin,
+not this dependency delta. The parent must review and accept the new pin independently.
+The installed-shell peer mismatch described above remains unaccepted; its assertion stays strict.
+
 ## Layers
 
 | Layer | Contents | Loaded by |

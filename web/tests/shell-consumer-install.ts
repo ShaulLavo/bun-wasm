@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { buildBrowserEntries, buildClassicWorker, resolveRuntimePackage } from "../../scripts/browser-build";
 
 const shellCommit = "c92bd41da9ccc3fdc48b4d11a20288ce9969e2d5";
-const waffleCommit = "c2cc1d318af6791f6b2e3d207cc56df9d7bf542a";
+const waffleCommit = "c1cb67c300439af24335d0b2ec481bfb52f79a01";
 const waffle = `git+https://github.com/ShaulLavo/waffle.git#${waffleCommit}`;
 export type Execute = (command: string[], cwd: string, env?: NodeJS.ProcessEnv) => Promise<void>;
 async function manifest(directory: string) {
