@@ -103,6 +103,49 @@ fn codec_nesting_is_structural_not_a_draft_policy_cap() {
 }
 
 #[test]
+fn deep_nested_request_cleanup_does_not_overflow() {
+    const CHILD: &str = "BUN_DATA_OPS_DEEP_CLEANUP_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        dispatch_deep_request();
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "ops::tests::deep_nested_request_cleanup_does_not_overflow",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "child status: {}\nstdout: {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn dispatch_deep_request() {
+    let mut encoded = vec![7, 1, 0, 0, 0];
+    for _ in 0..100_000 {
+        encoded.extend_from_slice(&[7, 1, 0, 0, 0]);
+    }
+    encoded.push(0);
+    let calls = Rc::new(Cell::new(0));
+    let observed = calls.clone();
+    let dispatch = dispatcher(move |args| {
+        assert!(matches!(args.get(0), Val::Array(_)));
+        observed.set(observed.get() + 1);
+        Ok(Val::Undefined)
+    });
+    let reply = dispatch.dispatch(dispatch.op(), 1, encoded);
+    assert_eq!(reply.status, Status::Ok);
+    assert_eq!(calls.get(), 1);
+}
+
+#[test]
 fn invalid_calls_cannot_invoke_the_native() {
     let calls = Rc::new(Cell::new(0));
     let observed = calls.clone();
