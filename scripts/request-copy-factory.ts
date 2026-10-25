@@ -48,6 +48,7 @@ export function requestCopyFactory(kind: "polyfill" | "native" = "polyfill") {
     },
   };
   factory("web", "js")(internal);
+  modules.set("fetch_lifetime", factory("fetch_lifetime")(internal));
   const net: { fetch: typeof fetch } = factory("net", "js")(internal);
   return { web: { Request: internal.web.Request, ReadableStream: streams.ReadableStream }, net, internal, sent, closed };
 }
