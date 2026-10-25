@@ -588,6 +588,10 @@ jobs:
       CARGO_INCREMENTAL: "0"
       JOBS: "4"
       CAGE: ""
+      GIT_AUTHOR_NAME: bun-wasm CI
+      GIT_AUTHOR_EMAIL: ci@localhost
+      GIT_COMMITTER_NAME: bun-wasm CI
+      GIT_COMMITTER_EMAIL: ci@localhost
     steps:
       - uses: actions/checkout@v4
       - name: Configure toolchain and build homes
