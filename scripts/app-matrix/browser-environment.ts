@@ -1,3 +1,9 @@
+import type { RuntimeFilesystem } from "waffle";
+
+declare global {
+  var playground: { fs: Pick<RuntimeFilesystem, "remove" | "mkdirp"> };
+}
+
 export const browserLauncher = `import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 process.env.NEXT_TELEMETRY_DISABLED = "1";
@@ -13,4 +19,7 @@ export function browserCommand(args: readonly string[]): string[] {
   return ["bun", "run", ".matrix-command.ts"].concat(args.slice(1));
 }
 
-export async function resetBrowserProject(): Promise<void> {}
+export async function resetBrowserProject(): Promise<void> {
+  await globalThis.playground.fs.remove("/home/user");
+  await globalThis.playground.fs.mkdirp("/home/user");
+}

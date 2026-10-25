@@ -164,7 +164,6 @@ test("executing the launcher retains direct Bun normalized argv and sets telemet
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-
 test("fixture admission removes all seeded and stale project files, not runtime files", async () => {
   const runtime = createRuntime({ filesystem: { mode: "memory", workerURL: new URL("../../node_modules/waffle/browser/fs-worker.ts", import.meta.url) } });
   const fs = runtime.filesystem;
@@ -175,12 +174,12 @@ test("fixture admission removes all seeded and stale project files, not runtime 
     await fs.writeFile("/home/user/.matrix-command.ts", "stale launcher");
     await fs.mkdirp("/usr/local/lib");
     await fs.writeFile("/usr/local/lib/runtime.ts", "preserved runtime");
-    expect(await fs.readFile("/home/user/db.ts")).not.toBeNull();
+    expect(await fs.readFile("/home/user/db.ts")).toBeDefined();
     await runInNewContext(`(${resetBrowserProject.toString()})()`, { globalThis: { playground: { fs } } });
     expect(await fs.listFiles("/home/user")).toEqual([]);
     const app = nextApps.find(app => app.id === "next-15-pages");
     if (!app) throw new Error("Missing Next pages fixture");
-    const files = projectFiles(app, "http://127.0.0.1:12345");
+    const files: Record<string, string> = projectFiles(app, "http://127.0.0.1:12345");
     for (const [path, contents] of Object.entries(files)) await fs.writeFile(`/home/user/${path}`, contents);
     expect((await fs.listFiles("/home/user")).sort()).toEqual(Object.keys(files).map(path => `/home/user/${path}`).sort());
     for (const [path, contents] of Object.entries(files)) expect(new TextDecoder().decode(await fs.readFile(`/home/user/${path}`))).toBe(contents);
