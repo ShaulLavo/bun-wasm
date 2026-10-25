@@ -1,0 +1,3 @@
+request copy contract
+request copy fetch
+request copy redirect
