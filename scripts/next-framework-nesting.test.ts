@@ -7,7 +7,7 @@ function deepBlocks(file: string, scope?: string, text = readFileSync(file, "utf
   const failures: string[] = [];
   let found = scope === undefined;
   function visit(node: ts.Node, depth: number, selected: boolean) {
-    const named = ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node);
+    const named = ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node);
     const match = named && node.name !== undefined && ts.isIdentifier(node.name) && node.name.text === scope;
     const withinScope = selected || match;
     if (match) found = true;
@@ -43,7 +43,15 @@ test("Request async-body adapter and contracts stay within three block levels", 
   const files = ["node-request-body.test.ts", "node-request-body-fixture.ts", "../tests/fixtures/request-body-streams/index.ts", "../tests/fixtures/request-body-streams/contract.ts"];
   const path = new URL("../crates/bunwasm-runtime/src/js/web.js", import.meta.url).pathname;
   const failures = files.flatMap(file => deepBlocks(new URL(file, import.meta.url).pathname));
-  expect(failures.concat(deepBlocks(path, "requestBody"), deepBlocks(path, "requestBodyChunks"), deepBlocks(path, "requestBodyChunk"), deepBlocks(path, "observeRequestBody"), deepBlocks(path, "requestBodyUsed"))).toEqual([]);
+  expect(failures.concat(
+    deepBlocks(path, "extractBody"),
+    deepBlocks(path, "streamBytes"),
+    deepBlocks(path, "initBody"),
+    deepBlocks(path, "_consume"),
+    deepBlocks(path, "bodyUsed"),
+    deepBlocks(path, "body"),
+    deepBlocks(path, "clone"),
+  )).toEqual([]);
 });
 
 test("stack-column boundary and source contracts stay within three block levels", () => {

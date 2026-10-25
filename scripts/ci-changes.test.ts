@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changedPaths, needsJsc, needsRust } from "./ci-changes";
+import { selectChecks } from "./test-checks";
 
 test.each([
   "checks/native-console.json", "checks/runtime-leaf.json", "scripts/test-checks.ts", "tests/fixtures/console-format/index.js",
@@ -189,14 +190,12 @@ test.each([
 
 for (const path of ["scripts/node-fs-streams.test.ts", "tests/fixtures/vm-context/contract.ts", "scripts/node-http-response-fixture.ts", "scripts/node-stack-position-fixture.ts"]) {
   test.each(["pull_request", "push"])(`${path} selects native gates through the real %s event CLI`, event => {
-    expect(select(base, commitInput(path), event)).toBe("rust=true");
+    expect(select(base, commitInput(path), event)).toBe(`rust=${needsRust([path])}\njsc=${needsJsc([path])}`);
   });
 }
 
 
 test("each registered native guest fixture selects its existing job", () => {
-  const command = workflow.match(/bash scripts\/test\.sh --no-build ([^\n]+)/)?.[1];
-  expect(command).toBeDefined();
-  if (!command) throw new Error("Native fixture command missing");
-  for (const name of command.trim().split(/\s+/)) expect(needsRust([`tests/fixtures/${name}/changed-input.ts`])).toBe(true);
+  expect(workflow.match(/bun scripts\/test-checks\.ts native/g)).toHaveLength(1);
+  for (const path of selectChecks("native")) expect(needsRust([`${path}/changed-input.ts`])).toBe(true);
 });
