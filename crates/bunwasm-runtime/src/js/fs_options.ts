@@ -56,6 +56,7 @@
       if (src === dest || (directory && dest.startsWith(src.endsWith("/") ? src : `${src}/`))) throw copyError("ERR_FS_CP_EINVAL", from, to);
       if (directory && !options.recursive) throw copyError("ERR_FS_EISDIR", from, to);
       if (directory) { native.mkdir(dest, true); return true; }
+      native.mkdir(dest.replace(/\/+$/, "").replace(/\/[^/]*$/, "") || "/", true);
       try {
         native.copyFile(src, dest, options.force === false ? 1 : 0);
       } catch (error) {
