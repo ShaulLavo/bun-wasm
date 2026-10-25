@@ -661,10 +661,11 @@
       const host = header(request.headers, "host") || `${displayHost}:${port}`;
       const url = `http://${host}${request.target.startsWith("/") ? request.target : "/" + request.target}`;
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
-      return internal.require("serve_request_lifetime").run(conn, (signal) => {
+      const result = await internal.require("serve_request_lifetime").run(conn, (signal) => {
         const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined, signal });
         return respondToRequest(request, conn, keepAlive, req, url);
       });
+      return result === UPGRADED ? result : result && !stopped;
     }
 
     async function respondToRequest(request, conn, keepAlive, req, url) {

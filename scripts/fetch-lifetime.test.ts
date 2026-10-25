@@ -24,6 +24,7 @@ function fixture() {
   const closed: number[] = [];
   const uploads: Uint8Array[] = [];
   let accept = false;
+  let writeBudget = Infinity;
   let head: string | number = -2;
   let headReads = 0;
   let responseRead: Uint8Array | number = 0;
@@ -51,7 +52,13 @@ function fixture() {
     hostListen: () => 10, hostLocalPort: () => 1234,
     hostPeerAddr: () => JSON.stringify({ address: "127.0.0.1", port: 1235, family: "IPv4" }),
     hostAccept() { if (!accept) return -2; accept = false; return 20; },
-    hostWrite(_handle: number, bytes: Uint8Array) { writes.push(bytes); return bytes.length; },
+    hostWrite(_handle: number, bytes: Uint8Array) {
+      if (writeBudget === 0) return -2;
+      const accepted = Math.min(writeBudget, bytes.length);
+      writes.push(bytes.slice(0, accepted));
+      writeBudget -= accepted;
+      return accepted;
+    },
   };
   const internal = {
     native, web: { Request, Response, Headers, AbortController, DOMException },
@@ -71,6 +78,7 @@ function fixture() {
   cleanups.push(() => { reads.length = 0; });
   return {
     net, web: internal.web, closed, uploads, writes, errors, pump, pending: () => internal.ioPending(),
+    writeBudget(bytes = Infinity) { writeBudget = bytes; },
     get headReads() { return headReads; },
     head(value: string | number) { head = value; },
     responseRead(value: Uint8Array | number) { responseRead = value; },
@@ -246,11 +254,9 @@ test("abort after headers preserves the response reader reason and closes once",
 test("a disconnected handler's returned stream is cancelled without waiting for producer cleanup", async () => {
   const state = fixture();
   const cancellations: unknown[] = [];
-  const server = state.net.serve({ port: 0, fetch(req) {
-    return new Promise<Response>(resolve => req.signal.addEventListener("abort", () => resolve(new state.web.Response(new ReadableStream({
-      cancel(reason) { cancellations.push(reason); return new Promise<void>(() => {}); },
-    })))));
-  } });
+  const server = state.net.serve({ port: 0,
+    fetch: req => respondOnAbort(req, () => responseWithHangingCleanup(state.web, cancellations)),
+  });
   cleanups.push(() => { void server.stop(true); });
   state.connect();
   await state.pump();
@@ -296,4 +302,162 @@ test("graceful stop leaves the busy handler's signal alone", async () => {
   expect(server.pendingRequests).toBe(0);
   expect(signal?.aborted).toBe(false);
   expect(state.closed).toEqual([10, 20]);
+});
+
+function respondOnAbort(req: Request, response: () => Response): Promise<Response> {
+  return new Promise(resolve => req.signal.addEventListener("abort", () => resolve(response())));
+}
+
+function responseWithHangingCleanup(web: Pick<typeof globalThis, "Response">, cancellations: unknown[]): Response {
+  const body = new ReadableStream({
+    cancel(reason) { cancellations.push(reason); return new Promise<void>(() => {}); },
+  });
+  return new web.Response(body);
+}
+
+for (const mode of ["reset", "eof", "stop"] as const) {
+  test(`blocked finite response ${mode} aborts its request once`, async () => {
+    const state = fixture();
+    state.writeBudget(0);
+    let signal: AbortSignal | undefined;
+    let events = 0;
+    const aborted = () => { events++; };
+    const server = state.net.serve({ port: 0, fetch(req) {
+      signal = req.signal;
+      signal.addEventListener("abort", aborted);
+      return new state.web.Response("finite response");
+    } });
+    try {
+      state.connect();
+      await state.pump();
+      expect(state.errors).toEqual([]);
+      expect(state.writes).toHaveLength(0);
+      expect(state.closed).toEqual([]);
+      expect(state.pending()).toBeGreaterThan(1);
+      if (mode === "stop") await server.stop(true);
+      else state.disconnect(mode === "eof" ? 0 : -1);
+      await state.pump();
+      expect(signal?.aborted).toBe(true);
+      expect(signal?.reason.name).toBe("AbortError");
+      expect(events).toBe(1);
+      expect(server.pendingRequests).toBe(0);
+      expect(state.closed.filter(handle => handle === 20)).toEqual([20]);
+    } finally {
+      await server.stop(true);
+      await state.pump();
+      expect(state.pending()).toBe(0);
+    }
+    expect(events).toBe(1);
+  });
+}
+
+test("partly written finite response remains cancellable", async () => {
+  const state = fixture();
+  state.writeBudget(1);
+  let signal: AbortSignal | undefined;
+  const server = state.net.serve({ port: 0, fetch(req) {
+    signal = req.signal;
+    return new state.web.Response("finite response");
+  } });
+  try {
+    state.connect();
+    await state.pump();
+    expect(Buffer.concat(state.writes).toString()).toBe("H");
+    expect(signal?.aborted).toBe(false);
+    state.disconnect();
+    await state.pump();
+    expect(signal?.aborted).toBe(true);
+    expect(state.closed).toEqual([20]);
+  } finally {
+    await server.stop(true);
+    await state.pump();
+    expect(state.pending()).toBe(0);
+  }
+});
+
+test("finite response drain releases the next keep-alive request without cross-request abort", async () => {
+  const state = fixture();
+  state.writeBudget(0);
+  const signals: AbortSignal[] = [];
+  const server = state.net.serve({ port: 0, fetch(req) {
+    signals.push(req.signal);
+    if (signals.length === 1) return new state.web.Response("first");
+    return respondOnAbort(req, () => new state.web.Response("second"));
+  } });
+  try {
+    state.connect();
+    await state.pump();
+    state.request();
+    await state.pump();
+    expect(signals).toHaveLength(1);
+    state.writeBudget();
+    await state.pump();
+    expect(signals).toHaveLength(2);
+    expect(Buffer.concat(state.writes).toString()).toEndWith("first");
+    expect(server.pendingRequests).toBe(1);
+    state.disconnect();
+    await state.pump();
+    expect(signals.map(signal => signal.aborted)).toEqual([false, true]);
+    expect(state.closed).toEqual([20]);
+    expect(server.pendingRequests).toBe(0);
+  } finally {
+    await server.stop(true);
+    await state.pump();
+    expect(state.pending()).toBe(0);
+  }
+});
+
+test("reset during blocked streamed response retains request cancellation and reader cleanup", async () => {
+  const state = fixture();
+  state.writeBudget(0);
+  let signal: AbortSignal | undefined;
+  let cancellations = 0;
+  const body = new ReadableStream({ cancel() { cancellations++; } });
+  const server = state.net.serve({ port: 0, fetch(req) {
+    signal = req.signal;
+    return new state.web.Response(body);
+  } });
+  try {
+    state.connect();
+    await state.pump();
+    expect(state.errors).toEqual([]);
+    expect(state.writes).toHaveLength(0);
+    state.disconnect();
+    await state.pump();
+    expect(signal?.aborted).toBe(true);
+    expect(cancellations).toBe(1);
+    expect(body.locked).toBe(false);
+    expect(state.closed).toEqual([20]);
+  } finally {
+    await server.stop(true);
+    await state.pump();
+    expect(state.pending()).toBe(0);
+  }
+});
+
+test("graceful stop waits for blocked finite output without aborting its request", async () => {
+  const state = fixture();
+  state.writeBudget(0);
+  let signal: AbortSignal | undefined;
+  const server = state.net.serve({ port: 0, fetch(req) {
+    signal = req.signal;
+    return new state.web.Response("finite response");
+  } });
+  try {
+    state.connect();
+    await state.pump();
+    await server.stop();
+    await state.pump();
+    expect(signal?.aborted).toBe(false);
+    expect(state.closed).toEqual([10]);
+    state.writeBudget();
+    await state.pump();
+    expect(Buffer.concat(state.writes).toString()).toEndWith("finite response");
+    expect(signal?.aborted).toBe(false);
+    expect(state.closed).toEqual([10, 20]);
+  } finally {
+    await server.stop(true);
+    await state.pump();
+    expect(state.pending()).toBe(0);
+  }
 });

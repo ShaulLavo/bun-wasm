@@ -18,12 +18,21 @@ This adds no streaming-upload API or transport behavior.
 Each dispatched server request owns a controller linked to the existing
 connection close and EOF callbacks. Connection errors and forced server shutdown
 therefore abort the active Request with AbortError. The callback bindings last
-through response writing and are removed when that request finishes. A later
-keep-alive request cannot abort a completed request. This adapter does not change
-the HTTP flow classes or Waffle's networking protocol.
+through response writing, including finite bytes still queued after the handler
+returns. The adapter waits for the existing Connection `onDrain` callback when
+`bufferedAmount` is nonzero, or releases that wait on request cancellation.
+It restores the drain and cancellation callbacks on exit. A later keep-alive
+request cannot abort a completed request, and an upgrade hands ownership to the
+WebSocket immediately. Graceful stop rechecks keep-alive after queued output
+finishes instead of dropping an apparently idle response or retaining the stopped
+connection. This adapter does not change the HTTP flow classes or Waffle's
+networking protocol.
 
 The factory regression uses the real Request, fetch, serve, connection and waiter
-implementations with an in-memory host boundary. Native fixtures separately
+implementations with an in-memory host boundary. It covers blocked and partial
+finite writes, disconnect/EOF/forced stop before drain, streamed cancellation,
+keep-alive isolation after drain and graceful stop with queued output. All belong
+to the existing runtime-fetch-lifetime check manifest. Native fixtures separately
 exercise open-upload aborts and client-disconnect/server-stop cancellation.
 The fixtures are also registered for supported-engine guest CI.
 
