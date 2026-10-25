@@ -54,7 +54,9 @@ for (const linked of [true, false]) test(`script command kinds preserve native p
   if (!linked) rmSync(join(cwd, "node_modules/.bin"), { recursive: true });
   expect(dispatched(cwd, "bare")).toBe(join(cwd, "node_modules/pkg/cli.ts"));
   expect(dispatched(cwd, "path")).toBe(join(cwd, "tools/tool"));
-  for (const name of ["explicit", "runtime", "node", "tool"]) expect(dispatched(cwd, name)).toBe(join(cwd, "tool"));
+  for (const name of ["explicit", "tool"]) expect(dispatched(cwd, name)).toBe(join(cwd, "tool"));
+  expect(dispatched(cwd, "runtime")).toEqual({ kind: "runtime", argv: ["bun", "tool"] });
+  expect(dispatched(cwd, "node")).toEqual({ kind: "runtime", argv: ["node", "tool"] });
 }));
 
 for (const target of [42, "", "../outside.ts", "/outside.ts"]) test(`invalid bin target ${JSON.stringify(target)} cannot mask a valid package`, () => fixture(cwd => {

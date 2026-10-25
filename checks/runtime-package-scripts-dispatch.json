@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/package-scripts-dispatch.test.ts",
+  "localRuntime": true
+}

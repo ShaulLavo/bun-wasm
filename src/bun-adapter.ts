@@ -23,7 +23,7 @@ export interface BunAdapterOptions extends LoadBunWasmOptions {
   readonly workerUrl: string | URL;
   /** Engine for the registered executable; defaults to browser. */
   readonly engine?: Engine;
-  /** Absolute canonical executable paths; defaults to bun and node in the selected engine bin directory. */
+  /** Absolute canonical executable paths; defaults to bun, node and nodejs in the selected engine bin directory. */
   readonly executables?: readonly string[];
 }
 
@@ -72,7 +72,7 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
   if (engine !== "browser" && !options.module && !options.asset) {
     throw new TypeError(`${engine} requires its matching guest module or asset descriptor`);
   }
-  const names = Array.from(options.executables ?? [`${ENGINE_BIN[engine]}/bun`, `${ENGINE_BIN[engine]}/node`]);
+  const names = Array.from(options.executables ?? [`${ENGINE_BIN[engine]}/bun`, `${ENGINE_BIN[engine]}/node`, `${ENGINE_BIN[engine]}/nodejs`]);
   for (const name of names) {
     if (!name.startsWith("/") || name === "/" || name.includes("\0")
       || name.slice(1).split("/").some(part => !part || part === "." || part === "..")) {
