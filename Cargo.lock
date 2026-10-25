@@ -1395,6 +1395,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-engine-quickjs"
+version = "0.0.53"
+dependencies = [
+ "rquickjs",
+]
+
+[[package]]
 name = "bunwasm-glue"
 version = "0.0.53"
 dependencies = [
