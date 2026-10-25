@@ -8,7 +8,10 @@ Retain recognizable Buffer constructor dispatch, `fromObject` array-like handlin
 `buffer_fill_args.ts` is an original adapter, not copied upstream code. It selects
 Buffer.fill's encoding overload before the existing Buffer adapter validates the
 numeric range. A string third argument after a numeric start is the encoding,
-not the end offset. Non-string fill values retain numeric end validation. The
+not the end offset. That selected encoding is validated before an empty-range
+return, without encoding the fill value. An undefined start takes the default
+UTF-8 whole-buffer path and ignores later arguments. Non-string fill values
+retain numeric end validation. The
 small TypeScript factory is discovered by the existing polyfill build; the
 legacy JavaScript factory delegates only argument selection to it.
 

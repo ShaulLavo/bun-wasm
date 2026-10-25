@@ -5,3 +5,9 @@ hex whole 6162616261
 hex bounded 2e61622e2e
 latin1 bounded 2ee9e9e92e
 unknown encoding TypeError ERR_UNKNOWN_ENCODING
+invalid encoding at end TypeError ERR_UNKNOWN_ENCODING 2e2e2e2e2e
+invalid encoding past end TypeError ERR_UNKNOWN_ENCODING 2e2e2e2e2e
+valid encoding at end true 2e2e2e2e2e
+valid encoding past end true 2e2e2e2e2e
+undefined start latin1 ignored true c3a9c3a9c3
+undefined start invalid encoding ignored true c3a9c3a9c3

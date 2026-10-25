@@ -14,3 +14,21 @@ try {
   if (!(error instanceof Error) || !("code" in error)) throw error;
   console.log("unknown encoding", error.name, error.code);
 }
+
+function fillControl(label: string, ...args: unknown[]) {
+  const buffer = Buffer.alloc(5, ".");
+  try {
+    const result = Reflect.apply(buffer.fill, buffer, args);
+    console.log(label, result === buffer, buffer.toString("hex"));
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error)) throw error;
+    console.log(label, error.name, error.code, buffer.toString("hex"));
+  }
+}
+
+fillControl("invalid encoding at end", "x", 5, "not-an-encoding");
+fillControl("invalid encoding past end", "x", 6, "not-an-encoding");
+fillControl("valid encoding at end", "é", 5, "latin1");
+fillControl("valid encoding past end", "é", 6, "latin1");
+fillControl("undefined start latin1 ignored", "é", undefined, "latin1");
+fillControl("undefined start invalid encoding ignored", "é", undefined, "not-an-encoding");
