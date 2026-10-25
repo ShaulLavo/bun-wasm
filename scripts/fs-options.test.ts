@@ -122,3 +122,80 @@ test("creation defaults are 0666 before umask while explicit modes survive", asy
     process.umask(previous);
   }
 });
+
+type CopyMode = {
+  name: string;
+  copy(api: typeof host, from: string, to: string, options?: host.CopySyncOptions): Promise<void>;
+};
+const copyModes: readonly CopyMode[] = [
+  { name: "sync", copy: async (api, from, to, options) => { api.cpSync(from, to, options); } },
+  { name: "promise", copy: (api, from, to, options) => api.promises.cp(from, to, options) },
+  { name: "callback", copy: (api, from, to, options) => new Promise<void>((resolve, reject) => {
+    api.cp(from, to, options ?? {}, error => error ? reject(error) : resolve());
+  }) },
+];
+
+for (const mode of copyModes) {
+  test(`${mode.name} copy creates missing nested destination parents`, async () => {
+    const { fs, root } = fixture();
+    const from = path.join(root, "source");
+    const to = path.join(root, "missing/nested/asset");
+    host.writeFileSync(from, "asset");
+    await mode.copy(fs, from, to);
+    expect(host.readFileSync(to, "utf8")).toBe("asset");
+  });
+
+  test(`${mode.name} false copy filter leaves destination parents absent`, async () => {
+    const { fs, root } = fixture();
+    const from = path.join(root, "source");
+    host.writeFileSync(from, "asset");
+    await mode.copy(fs, from, path.join(root, "missing/nested/asset"), { filter: () => false });
+    expect(host.existsSync(path.join(root, "missing"))).toBe(false);
+  });
+}
+
+function callbackCopy(api: typeof host, from: string, to: string, options: host.CopyOptions): Promise<void> {
+  return new Promise((resolve, reject) => api.cp(from, to, options, error => error ? reject(error) : resolve()));
+}
+
+test("async false and rejected copy filters leave destination parents absent", async () => {
+  const { fs, root } = fixture();
+  const from = path.join(root, "source");
+  const to = path.join(root, "missing/nested/asset");
+  host.writeFileSync(from, "asset");
+  await fs.promises.cp(from, to, { filter: async () => false });
+  await callbackCopy(fs, from, to, { filter: async () => false });
+  const error = new Error("filter rejected");
+  const filter = async () => { throw error; };
+  await expect(fs.promises.cp(from, to, { filter })).rejects.toBe(error);
+  await expect(callbackCopy(fs, from, to, { filter })).rejects.toBe(error);
+  expect(() => fs.cpSync(from, to, { filter: () => { throw error; } })).toThrow(error);
+  expect(host.existsSync(path.join(root, "missing"))).toBe(false);
+});
+
+test("file copies retain source and destination symlink behavior", async () => {
+  const { fs, root } = fixture();
+  const from = path.join(root, "source");
+  const sourceLink = path.join(root, "source-link");
+  const target = path.join(root, "target");
+  const destinationLink = path.join(root, "destination-link");
+  host.writeFileSync(from, "asset");
+  host.symlinkSync(from, sourceLink);
+  host.writeFileSync(target, "old");
+  host.symlinkSync(target, destinationLink);
+  fs.cpSync(sourceLink, path.join(root, "copied-link"));
+  expect(host.lstatSync(path.join(root, "copied-link")).isSymbolicLink()).toBe(false);
+  expect(host.readFileSync(path.join(root, "copied-link"), "utf8")).toBe("asset");
+  await fs.promises.cp(from, destinationLink);
+  expect(host.lstatSync(destinationLink).isSymbolicLink()).toBe(true);
+  expect(host.readFileSync(target, "utf8")).toBe("asset");
+});
+
+test("a trailing destination slash does not create the file path as a directory", async () => {
+  const { fs, root } = fixture();
+  const from = path.join(root, "source");
+  const to = path.join(root, "destination");
+  host.writeFileSync(from, "asset");
+  await expect(fs.promises.cp(from, to + "/")).rejects.toThrow();
+  expect(host.existsSync(to)).toBe(false);
+});
