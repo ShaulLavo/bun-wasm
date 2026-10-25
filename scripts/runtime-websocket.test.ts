@@ -243,11 +243,11 @@ class SyntheticEvent extends Event {
   }
 }
 
-function client(source: string, timers?: (() => void)[], observeRealm?: (realm: unknown) => void) {
-  const realm: unknown = runInNewContext(`({ factory: ${source}, numberPrototype: Number.prototype })`, {
+function client(source: string, timers?: (() => void)[], observeRealm?: (realm: unknown) => void, errorEvent: unknown = SyntheticEvent) {
+  const realm: unknown = runInNewContext(`({ factory: ${source}, numberPrototype: Number.prototype, globals: globalThis })`, {
     TextEncoder, TextDecoder, EventTarget, Event, URL, Headers, Blob, crypto, TypeError, clearTimeout,
     setTimeout: timers ? (callback: () => void) => { timers.push(callback); return 0; } : setTimeout,
-    MessageEvent: SyntheticEvent, ErrorEvent: SyntheticEvent, CloseEvent: SyntheticEvent,
+    MessageEvent: SyntheticEvent, ErrorEvent: errorEvent, CloseEvent: SyntheticEvent,
   });
   observeRealm?.(realm);
   const factory = field(realm, "factory");
@@ -438,8 +438,8 @@ test("WebSocket boundary caught code propagates nullish and getter errors withou
   boundaryEvidence.codeFailures = { nullishThrowBeforeWrites: true, exactGetterErrorPreserved: true, primitivesWithoutCode: 1002 };
 });
 
-function clientFailure(source: string, makeError: (trace: unknown[], socket: unknown) => unknown, observeRealm?: (realm: unknown) => void) {
-  const socket = client(source, undefined, observeRealm);
+function clientFailure(source: string, makeError: (trace: unknown[], socket: unknown) => unknown, observeRealm?: (realm: unknown) => void, errorEvent: unknown = SyntheticEvent) {
+  const socket = client(source, undefined, observeRealm, errorEvent);
   const trace: unknown[] = [];
   const events: unknown[] = [];
   setField(socket, "_conn", { destroy() { trace.push(["destroy", field(socket, "_state")]); } });
@@ -488,4 +488,140 @@ test("WebSocket boundary primitive message getter keeps its original primitive r
   expect(thrownValue(observed.result)).toBe(sentinel);
   expect(observed.events).toEqual([]);
   boundaryEvidence.primitiveMessage = { receivers, trace: observed.trace, exactGetterErrorPreserved: observed.result.kind === "thrown" && observed.result.value === sentinel };
+});
+
+function runtimeErrorEvent(): unknown {
+  const path = join(root, "crates/bunwasm-runtime/src/js/web.js");
+  const parsed = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  let source: string | undefined;
+  function visit(node: ts.Node) {
+    if (ts.isClassDeclaration(node) && node.name?.text === "ErrorEvent") source = node.getText(parsed);
+    ts.forEachChild(node, visit);
+  }
+  visit(parsed);
+  if (source === undefined) throw new Error("Missing runtime ErrorEvent implementation");
+  return runInNewContext(`(${source})`, { Event });
+}
+
+test("WebSocket failure matches native Bun ErrorEvent message conversion", () => {
+  const source = emittedSource();
+  const RuntimeErrorEvent = runtimeErrorEvent();
+  for (const message of [undefined, null, false, 0, "", 1009n, { toString() { return "converted message"; } }]) {
+    const expected: unknown = Reflect.construct(ErrorEvent, ["error", { message }]);
+    const observed = clientFailure(source, trace => ({ get message() { trace.push("message"); return message; } }), undefined, RuntimeErrorEvent);
+    expect(observed.result.kind).toBe("returned");
+    expect(field(observed.events[0], "message")).toBe(field(expected, "message"));
+    expect(field(observed.events[0], "error")).toBe(observed.error);
+    expect(observed.trace).toEqual([["destroy", 3], "message", ["event", "error"], ["event", "close"]]);
+  }
+  const message = Symbol("message");
+  const expected = boundaryOutcome(() => Reflect.construct(ErrorEvent, ["error", { message }]));
+  const observed = clientFailure(source, () => ({ message }), undefined, RuntimeErrorEvent);
+  expect(field(thrownValue(observed.result), "name")).toBe(field(thrownValue(expected), "name"));
+  expect(observed.trace).toEqual([["destroy", 3]]);
+  expect(observed.events).toEqual([]);
+});
+
+test("WebSocket boundary falsy getter throws escape by identity at all three boundaries", () => {
+  const source = emittedSource();
+  for (const sentinel of [0, false, "", null, undefined, 0n]) checkFalsyBoundary(source, sentinel);
+});
+
+function checkFalsyBoundary(source: string, sentinel: unknown) {
+  const callback = handlerBoundary(source, () => () => {}, () => { throw sentinel; });
+  expect(thrownValue(callback.result)).toBe(sentinel);
+  expect(callback.trace).toEqual(["provider", "first.error", "provider", "second.error"]);
+  const code = frameFailure(source, { get code() { throw sentinel; } });
+  expect(thrownValue(code.result)).toBe(sentinel);
+  expect(code.trace).toEqual([]);
+  const message = clientFailure(source, trace => ({ get message() { trace.push("message"); throw sentinel; } }));
+  expect(thrownValue(message.result)).toBe(sentinel);
+  expect(message.trace).toEqual([["destroy", 3], "message"]);
+  expect(message.events).toEqual([]);
+}
+
+test("WebSocket boundary code lookup is once but each numeric operation coerces separately", () => {
+  const trace: string[] = [];
+  const values = [1009, 1009, 1024, 255];
+  const code = { [Symbol.toPrimitive](hint: string) { trace.push(hint); return values.shift(); } };
+  const observed = frameFailure(emittedSource(), { get code() { trace.push("code"); return code; } });
+  expect(observed.result.kind).toBe("returned");
+  expect(trace).toEqual(["code", "number", "number", "number", "number"]);
+  expect(observed.writes).toEqual([[0x88, 2, 4, 255]]);
+  expect(observed.trace).toEqual(["write", "end"]);
+});
+
+test("WebSocket boundary BigInt code passes comparisons then fails mixed bitwise conversion", () => {
+  const source = emittedSource();
+  for (const code of [1009n, { [Symbol.toPrimitive]() { return 1009n; } }]) {
+    const observed = frameFailure(source, { code });
+    expect(field(thrownValue(observed.result), "name")).toBe("TypeError");
+    expect(observed.trace).toEqual([]);
+    expect(observed.writes).toEqual([]);
+  }
+});
+
+test("WebSocket boundary raw caught code is forwarded unchanged to the close callback", () => {
+  const trace: unknown[] = [];
+  const rawCode = { valueOf() { trace.push("coerce"); return 1009; } };
+  const failure = { get code() { trace.push("code"); return rawCode; } };
+  const connection = new Connection();
+  connection.write = () => { trace.push("write"); };
+  connection.end = () => { trace.push("end"); };
+  const active = server(emittedSource(), connection, () => ({
+    message() { throw failure; },
+    close(_socket: unknown, code: unknown) { trace.push("close"); expect(code).toBe(rawCode); },
+  }));
+  call(active, "activate", [new Uint8Array([0x81, 0x81, 0, 0, 0, 0, 120])]);
+  connection.onClose?.();
+  expect(trace).toEqual(["code", "coerce", "coerce", "coerce", "coerce", "write", "end", "close"]);
+});
+
+function coercingMessage(trace: unknown[]) {
+  return { [Symbol.toPrimitive](hint: string) { trace.push(hint); return "converted"; } };
+}
+
+test("WebSocket message coercion runs once with Bun's string hint after the getter", () => {
+  const nativeTrace: string[] = [];
+  const nativeMessage = coercingMessage(nativeTrace);
+  const expected: unknown = Reflect.construct(ErrorEvent, ["error", { message: nativeMessage }]);
+  expect(nativeTrace).toEqual(["string"]);
+  const observed = clientFailure(emittedSource(), trace => ({
+    get message() {
+      trace.push("message");
+      return coercingMessage(trace);
+    },
+  }), undefined, runtimeErrorEvent());
+  expect(observed.result.kind).toBe("returned");
+  expect(field(observed.events[0], "message")).toBe(field(expected, "message"));
+  expect(observed.trace).toEqual([["destroy", 3], "message", "string", ["event", "error"], ["event", "close"]]);
+});
+
+function checkMessageCoercionThrow(source: string, sentinel: unknown) {
+  const message = { [Symbol.toPrimitive]() { throw sentinel; } };
+  const expected = boundaryOutcome(() => Reflect.construct(ErrorEvent, ["error", { message }]));
+  const observed = clientFailure(source, trace => ({ get message() { trace.push("message"); return message; } }), undefined, runtimeErrorEvent());
+  expect(thrownValue(expected)).toBe(sentinel);
+  expect(thrownValue(observed.result)).toBe(sentinel);
+  expect(observed.trace).toEqual([["destroy", 3], "message"]);
+  expect(observed.events).toEqual([]);
+}
+
+test("WebSocket message coercion preserves Bun's falsy thrown-value identity", () => {
+  const source = emittedSource();
+  for (const sentinel of [0, false, "", null, undefined, 0n]) checkMessageCoercionThrow(source, sentinel);
+});
+
+test("WebSocket message coercion follows the ErrorEvent constructor lookup", () => {
+  const order: string[] = [];
+  const RuntimeErrorEvent = runtimeErrorEvent();
+  const observed = clientFailure(emittedSource(), () => ({
+    get message() { order.push("message"); return coercingMessage(order); },
+  }), realm => {
+    const globals = field(realm, "globals");
+    if (globals === null || typeof globals !== "object") throw new TypeError("Expected the VM globals");
+    Object.defineProperty(globals, "ErrorEvent", { get() { order.push("constructor"); return RuntimeErrorEvent; } });
+  }, RuntimeErrorEvent);
+  expect(observed.result.kind).toBe("returned");
+  expect(order).toEqual(["message", "constructor", "string"]);
 });
