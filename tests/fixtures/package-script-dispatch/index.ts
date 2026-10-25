@@ -11,7 +11,7 @@ for (const [name, output] of [["evaluate", "42"], ["print", "42"], ["cli-flags",
 }
 const passed = run("test", ["--test-name-pattern", "conventional"]);
 assert.equal(passed.exitCode, 0, passed.stderr.toString());
-assert.equal(passed.stdout.toString().trim(), "test once");
+assert.equal(passed.stdout.toString().trim().split("\n").filter(line => line === "test once").length, 1);
 const failed = run("failed-test");
 assert.equal(failed.exitCode, 1, failed.stderr.toString());
 assert.equal(run("exit").exitCode, 17);

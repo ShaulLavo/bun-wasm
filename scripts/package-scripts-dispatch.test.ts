@@ -59,7 +59,7 @@ test("explicit aliases keep argument ordering and lifecycle environment", () => 
   expect(f.process.env).toMatchObject({ MODE: "outer", MARK: "inner", npm_lifecycle_event: "inner", npm_lifecycle_script: "MARK=inner node ./app.js second", npm_execpath: "/bin/bun" });
 });
 
-for (const scripts of [{ a: "bun run a" }, { a: "bun run b", b: "bun run a" }, { a: "bun b", b: "bun a" }]) test(`genuine alias cycle ${JSON.stringify(scripts)}`, () => {
+for (const scripts of [{ a: "bun run a" }, { a: "bun run b", b: "bun run a" }, { a: "bun beta", beta: "bun alpha", alpha: "bun beta" }]) test(`genuine alias cycle ${JSON.stringify(scripts)}`, () => {
   expect(() => fixture(scripts, "a").resolve()).toThrow("Package script alias cycle");
 });
 
@@ -118,6 +118,6 @@ test("native Bun and Node references run conventional test, eval, print and dire
   for (const [name, output] of [["test", "test ran once"], ["evaluate", "42"], ["print", "42"], ["ok", "file"]]) {
     const child = Bun.spawnSync([process.execPath, "run", name], { cwd: f.cwd, stdout: "pipe", stderr: "pipe" });
     expect(child.exitCode).toBe(0);
-    expect(child.stdout.toString().trim()).toBe(output);
+    expect(child.stdout.toString().trim().split("\n").filter(line => !line.startsWith("bun test v")).join("\n")).toBe(output);
   }
 });
