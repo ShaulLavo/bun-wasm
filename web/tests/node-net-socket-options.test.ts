@@ -38,6 +38,8 @@ function fixture() {
       if (name === "buffer") return { Buffer };
       if (name === "net_address") return address;
       if (name === "node_net_socket_options") return factory(name, "ts")();
+      if (name === "node_net_socket_state") return factory(name, "ts")();
+      if (name === "node_net_onread") return factory(name, "ts")(internal);
       if (name === "node_net_server") return factory(name, "ts")(internal);
       return held();
     },

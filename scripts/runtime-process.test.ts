@@ -20,6 +20,7 @@ const emitted = readFileSync(output, "utf8");
 // Invert only the approved executable deltas. The pinned original AST hash guards the remainder.
 function originalSyntax(text: string): string {
   const replacements: [RegExp, string, number][] = [
+    [/  function makeReader\(\) \{\n    return internal\.require\("process_stdin"\)\(\);\n  \}\n/g, readFileSync(join(root, "scripts/fixtures/process-reader-before.txt"), "utf8"), 1],
     [/  function validateCursorCallback[\s\S]*?(?=  \/\/ stdout\/stderr:)/g, "", 1],
     [/      clearLine,\n      clearScreenDown,\n      cursorTo,\n      moveCursor,\n/g, "", 1],
     [/\n  let execveWarned = false;\n/g, "\n", 1],
@@ -166,6 +167,14 @@ test("process controls change only execve and the four cursor own keys", async (
     keys.splice(position, 0, "clearLine", "clearScreenDown", "cursorTo", "moveCursor");
   }
   expectProcessSnapshot(await controls(emitted), previous);
+});
+
+test("stdout fixture pins the complete emitter capture-state key list", async () => {
+  const stdout = (await controls(emitted)).shapes.stdout;
+  assert.ok(stdout);
+  const expected = readFileSync(join(root, "tests/fixtures/runtime-ts-process/expected.txt"), "utf8")
+    .split("\n").find(line => line.startsWith("stdout keys "));
+  expect(expected).toBe(`stdout keys ${stdout.join(",")}`);
 });
 
 const mutations: readonly [string, string, string][] = [
