@@ -9,7 +9,7 @@ const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSy
 const projects: string[] = [];
 afterEach(() => { for (const project of projects.splice(0)) rmSync(project, { recursive: true, force: true }); });
 
-function fixture(scripts: Record<string, string>, name: string, args: string[] = []) {
+function fixture(scripts: Record<string, string>, name: string, args: string[] = [], exitCode = 0) {
   const cwd = mkdtempSync(path.join(tmpdir(), "bun-wasm-scripts-"));
   projects.push(cwd);
   writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ scripts }));
@@ -21,8 +21,14 @@ function fixture(scripts: Record<string, string>, name: string, args: string[] =
     readdir: (directory: string) => readdirSync(directory, { withFileTypes: true }).map(entry => [entry.name, entry.isDirectory() ? "dir" : "file"]),
     resolve: (file: string) => file, setMainPath() {},
   };
-  const packages = factory({ native, require: (name: string) => name === "process" ? process : path });
-  return { packages, process, cwd, resolve: () => packages.resolve(path.join(cwd, name)) };
+  const launches: Array<{ argv: string[]; options: Record<string, unknown> }> = [];
+  function require(name: string) {
+    if (name === "process") return process;
+    if (name !== "spawn") return path;
+    return { spawn(argv: string[], options: Record<string, unknown>) { launches.push({ argv, options }); return { exited: Promise.resolve(exitCode) }; } };
+  }
+  const packages = factory({ native, require });
+  return { packages, process, cwd, launches, resolve: () => packages.resolve(path.join(cwd, name)) };
 }
 
 test("conventional bun test reaches the runtime dispatcher once", () => {
@@ -79,4 +85,39 @@ test("PATH command precedence and direct entry precedence remain distinct", () =
   expect(f.process.env.PATH.startsWith(`${bin}:`)).toBe(true);
   const direct = fixture({}, "app.js");
   expect(direct.resolve()).toBe(path.join(direct.cwd, "app.js"));
+});
+
+
+test("runMain forwards a runtime invocation without loading it as a module", async () => {
+  const f = fixture({ evaluate: "VALUE=kept node -e 'console.log(42)'" }, "evaluate", ["tail"], 17);
+  const bootstrap = readFileSync(new URL("../crates/bunwasm-runtime/src/js/bootstrap.js", import.meta.url), "utf8");
+  const start = bootstrap.indexOf("  internal.runMain =");
+  const end = bootstrap.indexOf("  internal.getMainModule", start);
+  const internal = { require: () => f.packages, runMain: (_requested: string): Promise<void> => Promise.resolve() };
+  runInNewContext(bootstrap.slice(start, end), { internal, native: { exists() { throw new Error("runtime command reached the module loader"); } } });
+  await internal.runMain(path.join(f.cwd, "evaluate"));
+  expect(f.launches).toEqual([{ argv: ["node", "-e", "console.log(42)", "tail"], options: {
+    cwd: f.cwd, env: f.process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit",
+  } }]);
+  expect(f.process).toMatchObject({ exitCode: 17 });
+});
+
+test("implicit aliases reserve every CLI command, including unsupported commands", () => {
+  const cli = readFileSync(new URL("../crates/bunwasm-cli/src/main.rs", import.meta.url), "utf8");
+  const parser = cli.slice(cli.indexOf("fn parse_command("), cli.indexOf("// Referenced so the linker"));
+  const commands = Array.from(parser.matchAll(/"([a-z][a-z-]*)"/g), match => match[1]).filter(name => name !== "run");
+  for (const name of new Set(commands)) {
+    const f = fixture({ start: `bun ${name}`, [name]: "bun run start" }, "start");
+    expect(f.resolve()).toEqual({ kind: "runtime", argv: ["bun", name] });
+  }
+});
+
+test("native Bun and Node references run conventional test, eval, print and direct-file scripts", () => {
+  const f = fixture({ test: "bun test ./sample.test.ts", evaluate: 'node -e "console.log(42)"', print: 'node -p "21 * 2"', ok: "node ./app.js" }, "test");
+  writeFileSync(path.join(f.cwd, "sample.test.ts"), 'import { test, expect } from "bun:test"; test("conventional", () => { expect(1).toBe(1); console.log("test ran once"); });');
+  for (const [name, output] of [["test", "test ran once"], ["evaluate", "42"], ["print", "42"], ["ok", "file"]]) {
+    const child = Bun.spawnSync([process.execPath, "run", name], { cwd: f.cwd, stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    expect(child.stdout.toString().trim()).toBe(output);
+  }
 });

@@ -86,3 +86,22 @@ the real TypeScript command dispatcher with an explicitly empty filesystem.
 | [Portable installer and package command adapters](#portable-installer-and-package-commands) | Host feature | Original filesystem, lockfile and command adapters over Bun's matcher, parsers and semver. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+Package scripts retain runtime executable arguments instead of treating CLI
+subcommands and flag operands as module names. The original package-script
+adapter delegates these invocations through the existing `spawn` module and
+`runtime_proc` descriptors to the selected executable's CLI. It inherits stdio,
+cwd and the script environment and reports the child exit status. Only actual
+Bun script aliases expand locally; visited names detect alias cycles without
+limiting acyclic chains. Reserved CLI names remain commands unless preceded by
+`bun run`. Node and nodejs CLI entrypoints treat bare operands as file paths,
+not Bun subcommands or package scripts. This changes no process implementation
+and copies no additional upstream source. The reference remains Bun revision
+`9510e74152073d850a18758ca41114d8f214ffa6`.
+
+`scripts/package-scripts-dispatch.test.ts` exercises the emitted adapter and
+runMain dispatch with real temporary files and native Bun/Node references.
+`scripts/package-script-cli.test.ts` compiles the actual CLI parser in isolation.
+`tests/fixtures/package-script-dispatch/` is the compiled-guest regression for
+runtime commands, flags, argument forwarding, environment, file precedence and
+exit status. Source controls are not evidence of rebuilt guest acceptance.
