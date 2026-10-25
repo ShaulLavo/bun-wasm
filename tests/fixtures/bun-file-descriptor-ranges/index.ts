@@ -16,6 +16,24 @@ try {
 } finally { closeSync(fd); }
 console.log("descriptor reads and stat");
 
+for (const [start, end, streaming, expected, next] of [
+  [1, 3, false, "bc", "de"],
+  [1, 3, true, "bc", "cd"],
+  [0, 3, false, "cde", "f"],
+] satisfies [number, number, boolean, string, string][]) {
+  fd = openSync(path, "r");
+  try {
+    readSync(fd, new Uint8Array(2));
+    const file = Bun.file(fd).slice(start, end);
+    const output = streaming ? await Bun.readableStreamToText(file.stream()) : await file.text();
+    assert.equal(output, expected);
+    const bytes = new Uint8Array(2);
+    const count = readSync(fd, bytes);
+    assert.equal(new TextDecoder().decode(bytes.subarray(0, count)), next);
+  } finally { closeSync(fd); }
+}
+console.log("sliced descriptor reads match native cursor positions");
+
 fd = openSync(path, "r+");
 try {
   assert.equal(await Bun.write(fd, "new"), 3);
