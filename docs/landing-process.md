@@ -19,9 +19,10 @@ source env.sh
 bun scripts/migrations/split-bun-patches.ts --check
 ```
 
-`--write` reproduces the migration and rewrites tracked Markdown crosslinks.
-It is a historical migration command, not a generator to run after later feature
-edits. The committed map records every former heading and explicit alias.
+Both `--check` and `--write` reproduce the historical migration. Neither is a
+current-state gate or generator after later feature edits. Later features run
+`bun test scripts/migrations/split-bun-patches.test.ts`; quality discovery owns
+that durable check. The committed map records every former heading and explicit alias.
 Classification rows move to the record their anchors identify. Nested records
 link to their parent context. Relative links move with the prose. The old
 ArrayBufferSink overview pointed to a nonexistent anchor; its new record owns

@@ -434,7 +434,7 @@ export class Shell {
         continue;
       }
       if (targets.length > 1) io.out(`${t}:\r\n`);
-      if (node.kind === "file") {
+      if (node.kind !== "dir") {
         io.out(`${t}\r\n`);
         continue;
       }
