@@ -1,7 +1,10 @@
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
-include!(concat!(env!("QUICKJS_OPS_INCLUDE"), "/modules.rs"));
+#[path = "../../../crates/bunwasm-runtime/src/data.rs"]
+mod data;
+#[path = "../../../crates/bunwasm-runtime/src/ops.rs"]
+mod ops;
 
 thread_local! {
     static TRANSPORT: ops::abi::Transport = ops::abi::Transport::default();

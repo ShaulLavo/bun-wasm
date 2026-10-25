@@ -4,13 +4,8 @@ root=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$root"
 source env.sh
 out=${QUICKJS_BUILD_DIR:?Set QUICKJS_BUILD_DIR to a lane-private build directory}
+tests/linker/quickjs/build-ops.sh
 out=$(cd "$out" && pwd)
-ops=${QUICKJS_OPS_SOURCE:-$root/crates/bunwasm-runtime/src}
-ops=$(cd "$ops" && pwd)
-# Read the reusable VM-free modules in place. Do not copy their implementation.
-printf '#[path="%s/data.rs"] mod data;\n#[path="%s/ops.rs"] mod ops;\n' "$ops" "$ops" > "$out/modules.rs"
-QUICKJS_OPS_INCLUDE="$out" rustc --target wasm32-wasip1 --edition 2024 -C opt-level=s \
-  -C panic=abort --crate-type=staticlib --cap-lints=allow tests/linker/quickjs/ops-core.rs -o "$out/ops-core.a"
 node --input-type=module - "$out" <<'JS'
 import {readFileSync,writeFileSync} from 'node:fs';
 const out=process.argv[2];

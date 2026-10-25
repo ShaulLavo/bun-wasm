@@ -16,10 +16,17 @@ Run from the workspace with the pinned nightly and existing patched sysroot:
 ```sh
 export QUICKJS_BUILD_DIR=/work/tmp/bun-wasm-quickjs-gate
 scripts/build-engine-quickjs.sh
-# Until the data lane merges, point this at its runtime/src directory.
-export QUICKJS_OPS_SOURCE=/path/to/runtime/src
 tests/linker/quickjs/run.sh
 ```
+
+The fixture requires the committed runtime data/ops modules from PR235 or a
+descendant. It validates their presence and committed state, then reads them
+through repository-relative module declarations with a stable compiler path
+remap. It writes HEAD and all four source blob IDs to `source-revision.txt` in
+the build directory. No external worktree override or generated absolute module
+path is used. `tests/linker/quickjs/path-repro.sh` checks byte-identical fixture
+archives from two checkout paths and verifies the actionable missing-source
+failure.
 
 The build uses `--locked --offline` and PIC `-Zbuild-std=std,panic_abort`.
 Stock target std contains non-PIC relocations and does not pass this gate.
