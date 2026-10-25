@@ -1,4 +1,5 @@
 descriptor reads and stat
+sliced descriptor reads match native cursor positions
 descriptor writes and errors
 slice indexes normalize before reads
 bounded streams preserve descriptor position
