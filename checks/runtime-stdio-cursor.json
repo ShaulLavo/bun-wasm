@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/stdio-cursor.test.ts",
+  "localRuntime": true
+}

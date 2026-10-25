@@ -59,6 +59,23 @@ export function resolveRuntimePackage(consumerEntry: string) {
 
 export type RuntimePackage = ReturnType<typeof resolveRuntimePackage>;
 
+async function publishNetworkAsset(result: Bun.BuildOutput, runtime: RuntimePackage, outdir: string): Promise<void> {
+  if (!result.success || !result.metafile) return;
+  const directories = new Set<string>();
+  for (const [path, output] of Object.entries(result.metafile.outputs)) {
+    if (!path.endsWith(".js")) continue;
+    const hasLoader = Object.entries(output.inputs).some(([input, contribution]) => contribution.bytesInOutput > 0 && runtime.relativeInput(input) === "browser/net/module.ts");
+    if (hasLoader) directories.add(dirname(resolve(outdir, path)));
+  }
+  if (!directories.size) return;
+  // Waffle prepare owns source-input verification. Keep its URL and artifact intact.
+  const directory = dirname(runtime.source("waffle/network"));
+  const bytes = await Bun.file(join(directory, "network.wasm")).arrayBuffer();
+  const checksum = await Bun.file(join(directory, "network.sha256")).text();
+  if (new Bun.CryptoHasher("sha256").update(bytes).digest("hex") !== checksum) throw new Error("Installed Waffle network artifact checksum mismatch");
+  for (const destination of directories) await Bun.write(join(destination, "network.wasm"), bytes);
+}
+
 /** Shared page/worker build settings. The consuming app's main entry must be first. */
 export function browserBuildConfig(entrypoints: string[], outdir: string, options: { splitting?: boolean; runtimeWorker?: boolean } = {}): Parameters<typeof Bun.build>[0] {
   const main = entrypoints[0];
@@ -87,6 +104,7 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
           const resolved = runtimePackage.relativeSource(path, importer);
           if (resolved) return { path: resolved };
         });
+        build.onEnd(result => runtimePackage && build.config.outdir ? publishNetworkAsset(result, runtimePackage, build.config.outdir) : undefined);
       },
     }],
   };
@@ -160,9 +178,10 @@ export async function buildBrowserEntries(entrypoints: string[], outdir: string,
   // chunk (including dynamic chunks and their maps), not just today's static closure.
   for (const output of result.outputs) {
     const path = relative(outdir, output.path);
-    if (path === "worker.js" || path === "worker.js.map" || path === "fs-worker.js" || path === "fs-worker.js.map" || path === "preview1-worker.js" || path === "preview1-worker.js.map" || path.startsWith("chunks/")) {
-      await Bun.write(join(outdir, "__bunwasm", path), output);
-    }
+    if (!(path === "worker.js" || path === "worker.js.map" || path === "fs-worker.js" || path === "fs-worker.js.map" || path === "preview1-worker.js" || path === "preview1-worker.js.map" || path.startsWith("chunks/"))) continue;
+    await Bun.write(join(outdir, "__bunwasm", path), output);
+    const network = Bun.file(join(dirname(output.path), "network.wasm"));
+    if (path.endsWith(".js") && await network.exists()) await Bun.write(join(outdir, "__bunwasm", dirname(path), "network.wasm"), network);
   }
   return result;
 }

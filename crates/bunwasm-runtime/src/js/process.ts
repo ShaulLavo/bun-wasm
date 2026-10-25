@@ -75,6 +75,57 @@
   }
   memoryUsage.rss = () => native.memoryUsage().rss;
 
+  function validateCursorCallback(callback: unknown): void {
+    if (callback === undefined || typeof callback === "function") return;
+    throw Object.assign(new TypeError(`The "callback" argument must be of type function. Received ${internal.describe(callback)}`), { code: "ERR_INVALID_ARG_TYPE" });
+  }
+
+  function clearLine(this: BunWasm.ProcessWriter, direction: number, callback?: BunWasm.ProcessCursorCallback): boolean {
+    validateCursorCallback(callback);
+    const mode = direction < 0 ? 1 : direction > 0 ? 0 : 2;
+    return this.write(`\x1b[${mode}K`, callback);
+  }
+
+  function clearScreenDown(this: BunWasm.ProcessWriter, callback?: BunWasm.ProcessCursorCallback): boolean {
+    validateCursorCallback(callback);
+    return this.write("\x1b[0J", callback);
+  }
+
+  function cursorTo(this: BunWasm.ProcessWriter, x?: number, y?: number | BunWasm.ProcessCursorCallback, callback?: BunWasm.ProcessCursorCallback): boolean {
+    validateCursorCallback(callback);
+    if (typeof y === "function") {
+      callback = y;
+      y = undefined;
+    }
+    if (Number.isNaN(x) || Number.isNaN(y)) {
+      const name = Number.isNaN(x) ? "x" : "y";
+      throw Object.assign(new TypeError(`The argument '${name}' is invalid. Received NaN`), { code: "ERR_INVALID_ARG_VALUE" });
+    }
+    if (typeof x !== "number" && typeof y !== "number") {
+      if (callback) internal.nextTick(callback, null);
+      return true;
+    }
+    if (typeof x !== "number") {
+      throw Object.assign(new TypeError("Cannot set cursor row without setting its column"), { code: "ERR_INVALID_CURSOR_POS" });
+    }
+    const sequence = typeof y === "number" ? `\x1b[${y + 1};${x + 1}H` : `\x1b[${x + 1}G`;
+    return this.write(sequence, callback);
+  }
+
+  function moveCursor(this: BunWasm.ProcessWriter, dx: number, dy: number, callback?: BunWasm.ProcessCursorCallback): boolean {
+    validateCursorCallback(callback);
+    if (!dx && !dy) {
+      if (callback) internal.nextTick(callback, null);
+      return true;
+    }
+    let sequence = "";
+    if (dx < 0) sequence += `\x1b[${-dx}D`;
+    else if (dx > 0) sequence += `\x1b[${dx}C`;
+    if (dy < 0) sequence += `\x1b[${-dy}A`;
+    else if (dy > 0) sequence += `\x1b[${dy}B`;
+    return this.write(sequence, callback);
+  }
+
   // stdout/stderr: synchronous writers with the bits of the stream API that
   // CLI programs actually touch.
   function makeWriter(fd: number) {
@@ -130,6 +181,10 @@
       setDefaultEncoding() {
         return stream;
       },
+      clearLine,
+      clearScreenDown,
+      cursorTo,
+      moveCursor,
       getColorDepth: () => (stream.isTTY ? 8 : 1),
       hasColors: () => stream.isTTY,
       getWindowSize: () => [stream.columns, stream.rows],

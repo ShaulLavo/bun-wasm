@@ -1,7 +1,7 @@
 ## Patched sysroot and native descriptor bridge
 
 Class **Port**, with an original local build wrapper and native runtime adapter. The libc input is
-not copied into this repository: Waffle 0.0.67 at `b20fad173ebaa225cb87c51776f35edaaafd4a40`
+not copied into this repository: Waffle 0.0.90 at `c1cb67c300439af24335d0b2ec481bfb52f79a01`
 (the commit `package.json` pins; the wasi-libc revision below is unchanged since 0.0.53 at `f6017d12`)
 builds wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13` from the installed
 `waffle/scripts/build-wasi-libc.sh`. Its `preopen-scan.patch` skips occupied inherited descriptors
@@ -56,11 +56,11 @@ exclusive-create EEXIST, and is disposed after success or failure. The page-side
 primitive makes earlier undrained writes visible without consuming the caller-owned sticky failure.
 A matching concurrent marker is shared; unrelated page failures remain available to the caller's
 explicit drain in either request ordering. The formerly expected-failing libc controls are now
-strict successes: all 18 scenarios pass
+strict successes in that earlier descriptor-bridge validation: all 18 scenarios passed
 without retries in each of Chromium, Firefox and WebKit for browser, QuickJS and JSC artifacts.
 This supersedes the historical expected-failure notes for earlier pins below and above.
 
-Waffle in this pin captures host intrinsics and validates shared-view identities. The measured
+The earlier descriptor-bridge validation captured host intrinsics and shared-view identities. Its measured
 core closure is 24,744 B minified / 8,073 B gzip; the core gate is now a tight 8,192 B gzip.
 The captured-intrinsics module is classified with eager reservation/control primitives, not the
 lazy process supervisor. Test-only wait, notify and outcome instrumentation uses module injection

@@ -16,7 +16,21 @@ original callback directly, matching Node v22.14.0 `lib/fs.js` `watch()` and
 `lib/internal/fs/watchers.js` EventEmitter dispatch. No Node source is copied.
 The fixture checks raw listener identity, single registration, `once`, `off`,
 removal by the original callback, and callback receiver on both overloads.
-`watchFile` and the promise-based watcher remain unsupported.
+`watchFile` and the promise-based watcher remain unsupported. `watchFile` has a
+separate stat-sampling contract; a future event-driven `watch` backend must not
+change that contract.
+
+The original adapter validates filename encodings before reading the filesystem
+or allocating its timer. Both string and object options reject unknown encodings
+with `ERR_INVALID_ARG_VALUE`. Null and empty object encodings select UTF-8, as in
+Bun 1.4.4 and Node 26.12.1. The `fs-watch-options` compiled-guest fixture covers
+registration errors and supported defaults. The source-factory controls also
+check that invalid encodings allocate no timer and perform no filesystem reads.
+These are public-option checks, not acceptance of event-driven notifications.
+
+Replacing snapshot polling remains tracked by bun-wasm #176 and depends on
+Waffle #106. The current backend still polls. It does not yet provide Waffle
+subscription readiness, cross-writer notification or overflow handling.
 
 
 ## Classification

@@ -1039,13 +1039,14 @@
       this.#method = String(init.method || (source && source.method) || "GET").toUpperCase();
       this.#headers = new Headers(init.headers || (source && source.headers));
       this.#signal = init.signal || (source && source.signal) || new AbortController().signal;
-      this.#redirect = init.redirect || "follow";
+      this.#redirect = init.redirect || (source && source.redirect) || "follow";
       defineInternalBody(this);
-      const body = init.body !== undefined ? init.body : source ? source._body : null;
+      const replacementBody = init.body;
+      const body = replacementBody !== undefined ? replacementBody : source ? source._stream || source._body : null;
       if (body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
         throw new TypeError("Request with a GET or HEAD method cannot have a body.");
       }
-      initBody(this, body, this.#headers);
+      initBody(this, source && replacementBody === undefined ? bodyStreams.transfer(source) : body, this.#headers);
     }
     get url() {
       return this.#url;
