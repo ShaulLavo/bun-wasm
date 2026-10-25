@@ -1,9 +1,33 @@
 import type { FeatureProbe, ProductApp, ProductCheck, ProductCommand } from "./product-types";
 import { productMarker } from "./product-types";
 
-const next16 = { next: "16.4.3", react: "19.2.0", "react-dom": "19.2.0" } as const;
-const next15 = { next: "15.5.6", react: "19.2.0", "react-dom": "19.2.0" } as const;
-const next14 = { next: "14.2.33", react: "18.3.1", "react-dom": "18.3.1" } as const;
+const next16 = {
+  next: "16.4.3",
+  react: "19.2.0",
+  "react-dom": "19.2.0",
+  typescript: "5.9.3",
+  "@types/node": "22.18.10",
+  "@types/react": "19.2.2",
+  "@types/react-dom": "19.2.2",
+} as const;
+const next15 = {
+  next: "15.5.6",
+  react: "19.2.0",
+  "react-dom": "19.2.0",
+  typescript: "5.9.3",
+  "@types/node": "22.18.10",
+  "@types/react": "19.2.2",
+  "@types/react-dom": "19.2.2",
+} as const;
+const next14 = {
+  next: "14.2.33",
+  react: "18.3.1",
+  "react-dom": "18.3.1",
+  typescript: "5.9.3",
+  "@types/node": "22.18.10",
+  "@types/react": "18.3.12",
+  "@types/react-dom": "18.3.1",
+} as const;
 
 const marker = (version: string, router: "app" | "pages", mode: "server" | "static") =>
   `${productMarker} next-${version}-${router}-${mode}`;
@@ -71,6 +95,10 @@ export function GET(request: Request) {
 `,
     ...requestBoundary(text, major),
   };
+  if (withActions && major === "14") {
+    Object.assign(files, nextConfigFile(major, "{ experimental: { serverActions: true } }"), appActionFilesReact18(text));
+    return files;
+  }
   if (withActions) Object.assign(files, appActionFiles(text));
   return files;
 }
@@ -107,6 +135,43 @@ export default function ActionPage() {
   };
 }
 
+function appActionFilesReact18(text: string): Record<string, string> {
+  return {
+    "app/action/actions.ts": `"use server";
+
+export async function submitValue(previous: string, formData: FormData) {
+  const value = String(formData.get("value") ?? "missing");
+  return previous + "${text} server-action:" + value;
+}
+`,
+    "app/action/action-form.tsx": `"use client";
+
+import { useFormState, useFormStatus } from "react-dom";
+import { submitValue } from "./actions";
+
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return <button type="submit" disabled={pending}>Invoke server action</button>;
+}
+
+export default function ActionForm() {
+  const [result, formAction] = useFormState(submitValue, "");
+  return <form action={formAction}>
+    <input name="value" defaultValue="submitted" />
+    <SubmitButton />
+    <output data-action-result>{result}</output>
+  </form>;
+}
+`,
+    "app/action/page.tsx": `import ActionForm from "./action-form";
+
+export default function ActionPage() {
+  return <main><h1>${text} action</h1><ActionForm /></main>;
+}
+`,
+  };
+}
+
 function pagesDynamicFiles(text: string, major: string): Record<string, string> {
   return {
     "pages/index.tsx": pagesPage(text),
@@ -123,12 +188,12 @@ export default function ServerPage({ value }: { value: string }) {
     "pages/isr.tsx": `import type { GetStaticProps } from "next";
 
 export const getStaticProps: GetStaticProps = async () => ({
-  props: { generated: "${text} isr" },
+  props: { generated: "${text} isr generation:" + Date.now().toString() },
   revalidate: 1,
 });
 
 export default function IsrPage({ generated }: { generated: string }) {
-  return <main><h1>{generated}</h1></main>;
+  return <main data-isr-generation={generated}><h1>{generated}</h1></main>;
 }
 `,
     "pages/api/middleware.ts": `import type { NextApiRequest, NextApiResponse } from "next";
@@ -141,13 +206,49 @@ export default function handler(_request: NextApiRequest, response: NextApiRespo
   };
 }
 
-function staticFiles(text: string, router: "app" | "pages"): Record<string, string> {
-  const files: Record<string, string> = {
-    "next.config.ts": `import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = { output: "export" };
+function nextConfigFile(major: string, expression: string): Record<string, string> {
+  if (major === "14") return {
+    "next.config.mjs": `const nextConfig = ${expression};
 export default nextConfig;
 `,
+  };
+  return {
+    "next.config.ts": `import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = ${expression};
+export default nextConfig;
+`,
+  };
+}
+
+function pprFiles(text: string, major: string): Record<string, string> {
+  const config = major === "16" ? "{ cacheComponents: true }" : "{ experimental: { ppr: true } }";
+  const routeConfig = major === "15" ? "export const experimental_ppr = true;\n\n" : "";
+  return {
+    ...nextConfigFile(major, config),
+    "app/ppr/page.tsx": `import { Suspense } from "react";
+
+async function DelayedServerData() {
+  await new Promise(resolve => setTimeout(resolve, 100));
+  return <p data-ppr-deferred>${text} ppr deferred</p>;
+}
+
+${routeConfig}
+export default function PprPage() {
+  return <main>
+    <p data-ppr-shell>${text} ppr early-shell</p>
+    <Suspense fallback={<p data-ppr-fallback>${text} ppr fallback</p>}>
+      <DelayedServerData />
+    </Suspense>
+  </main>;
+}
+`,
+  };
+}
+
+function staticFiles(text: string, router: "app" | "pages", major: string): Record<string, string> {
+  const files: Record<string, string> = {
+    ...nextConfigFile(major, '{ output: "export" }'),
     "preview.ts": `import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 
@@ -174,7 +275,7 @@ console.log("${text} static preview listening", server.port);
   return files;
 }
 
-function pageCheck(text: string, hmr = true, probes: readonly FeatureProbe[] = []): ProductCheck {
+function pageCheck(text: string, hmr = true, probes: readonly FeatureProbe[] = []): Extract<ProductCheck, { kind: "page" }> {
   return {
     kind: "page",
     selector: "h1",
@@ -184,7 +285,7 @@ function pageCheck(text: string, hmr = true, probes: readonly FeatureProbe[] = [
   };
 }
 
-function pagesCheck(text: string, hmr = true, probes: readonly FeatureProbe[] = []): ProductCheck {
+function pagesCheck(text: string, hmr = true, probes: readonly FeatureProbe[] = []): Extract<ProductCheck, { kind: "page" }> {
   return {
     kind: "page",
     selector: "h1",
@@ -210,7 +311,7 @@ function pagesProbes(text: string): readonly FeatureProbe[] {
   ];
 }
 
-function dynamicCommands(text: string, check: ProductCheck): readonly ProductCommand[] {
+function dynamicCommands(text: string, check: Extract<ProductCheck, { kind: "page" }>): readonly ProductCommand[] {
   return [
     { name: "dev", args: ["run", "node_modules/next/dist/bin/next", "dev", "--hostname", "127.0.0.1", "--port", "{port}"], check },
     { name: "build", args: ["run", "node_modules/next/dist/bin/next", "build"], check: { kind: "files", paths: [".next/BUILD_ID"], text: "" }, },
@@ -244,7 +345,32 @@ function dynamicApp(version: string, dependencies: Record<string, string>, withA
       version === "16" ? "middleware:proxy-response-probe" : "middleware:response-probe",
       withActions ? "server-actions:action-probe" : "server-actions:n/a-react-18-catalog",
       "isr:n/a-app-router-sequence-probe-pending",
-      version === "16" ? "ppr:pending-cache-components-stream-probe" : "ppr:n/a-stable-release-no-ppr-contract",
+      version === "15" ? "ppr:experimental-available-separate-case" : "ppr:n/a-standard-app-case",
+    ],
+  };
+}
+
+function dynamicPprApp(version: "15" | "16", dependencies: Record<string, string>): ProductApp {
+  const text = marker(version, "app", "server");
+  const pprText = `${text} ppr`;
+  return {
+    id: version === "15" ? "next-15-app-ppr-experimental" : "next-16-app-ppr",
+    family: "next",
+    dependencies,
+    files: {
+      ...appDynamicFiles(text, version, false),
+      ...pprFiles(pprText, version),
+    },
+    commands: dynamicCommands(text, pageCheck(text)),
+    features: [
+      "router:app",
+      "mode:dev-hmr",
+      "mode:production-start",
+      "ssr:response-probe",
+      version === "16" ? "middleware:proxy-response-probe" : "middleware:response-probe",
+      "server-actions:n/a-ppr-fixture",
+      "isr:n/a-ppr-fixture",
+      version === "16" ? "ppr:pending-cache-components-stream-probe" : "ppr:experimental-pending-stream-probe",
     ],
   };
 }
@@ -276,7 +402,7 @@ function staticApp(version: string, dependencies: Record<string, string>, router
     id: `next-${version}-${router}-static`,
     family: "next",
     dependencies,
-    files: staticFiles(text, router),
+    files: staticFiles(text, router, version),
     commands: staticCommands(text, router),
     features: [
       `router:${router}`,
@@ -294,14 +420,16 @@ function staticApp(version: string, dependencies: Record<string, string>, router
 
 export const nextApps: ProductApp[] = [
   dynamicApp("16", next16, true),
+  dynamicPprApp("16", next16),
   dynamicPages("16", next16),
   staticApp("16", next16, "app"),
   staticApp("16", next16, "pages"),
   dynamicApp("15", next15, true),
+  dynamicPprApp("15", next15),
   dynamicPages("15", next15),
   staticApp("15", next15, "app"),
   staticApp("15", next15, "pages"),
-  dynamicApp("14", next14, false),
+  dynamicApp("14", next14, true),
   dynamicPages("14", next14),
   staticApp("14", next14, "app"),
   staticApp("14", next14, "pages"),

@@ -4,9 +4,9 @@ import { productMarker } from "./product-types";
 
 const exactVersion = /^\d+\.\d+\.\d+$/;
 const versioned = new Map([
-  ["16", { next: "16.4.3", react: "19.2.0", "react-dom": "19.2.0" }],
-  ["15", { next: "15.5.6", react: "19.2.0", "react-dom": "19.2.0" }],
-  ["14", { next: "14.2.33", react: "18.3.1", "react-dom": "18.3.1" }],
+  ["16", { next: "16.4.3", react: "19.2.0", "react-dom": "19.2.0", typescript: "5.9.3", "@types/node": "22.18.10", "@types/react": "19.2.2", "@types/react-dom": "19.2.2" }],
+  ["15", { next: "15.5.6", react: "19.2.0", "react-dom": "19.2.0", typescript: "5.9.3", "@types/node": "22.18.10", "@types/react": "19.2.2", "@types/react-dom": "19.2.2" }],
+  ["14", { next: "14.2.33", react: "18.3.1", "react-dom": "18.3.1", typescript: "5.9.3", "@types/node": "22.18.10", "@types/react": "18.3.12", "@types/react-dom": "18.3.1" }],
 ]);
 
 function command(app: (typeof nextApps)[number], name: string) {
@@ -22,10 +22,10 @@ function feature(app: (typeof nextApps)[number], prefix: string): string {
 }
 
 test("Next catalog exports stable current and older major coverage", () => {
-  expect(nextApps).toHaveLength(12);
+  expect(nextApps).toHaveLength(14);
   expect(new Set(nextApps.map(app => app.id)).size).toBe(nextApps.length);
   for (const app of nextApps) {
-    expect(app.id).toMatch(/^next-(14|15|16)-(app|pages)(-static)?$/);
+    expect(app.id).toMatch(/^next-(14|15|16)-(app|pages)(-static|-ppr(-experimental)?)?$/);
     expect(app.family).toBe("next");
     expect(Object.values(app.dependencies).every(value => exactVersion.test(value))).toBe(true);
     expect(Object.values(app.files).some(value => value.includes(productMarker))).toBe(true);
@@ -38,7 +38,7 @@ test("Next catalog exports stable current and older major coverage", () => {
 test("every Next major uses the registry-verified React pairing", () => {
   for (const major of versioned.keys()) {
     const apps = nextApps.filter(app => app.id.startsWith(`next-${major}-`));
-    expect(apps.length).toBe(4);
+    expect(apps.length).toBe(major === "14" ? 4 : 5);
     for (const app of apps) expect(app.dependencies).toEqual(versioned.get(major));
   }
 });
@@ -67,17 +67,14 @@ test("Next 16 uses the current proxy entrypoint while older majors keep middlewa
   }
 });
 
-test("app router action probes are only advertised where React 19 is pinned", () => {
+test("app router action probes use the matching React action API", () => {
   for (const app of nextApps.filter(candidate => candidate.id.endsWith("-app"))) {
     const action = feature(app, "server-actions:");
     const hasProbe = app.commands.some(commandSpec => commandSpec.check.kind === "page" && commandSpec.check.probes?.some(probe => probe.kind === "action"));
-    if (app.id.startsWith("next-14-")) {
-      expect(action).toContain("n/a");
-      expect(hasProbe).toBe(false);
-      continue;
-    }
-    expect(action).toBe("server-actions:action-probe");
+    expect(action).toContain("action-probe");
     expect(hasProbe).toBe(true);
+    if (app.id.startsWith("next-14-")) expect(app.files["app/action/action-form.tsx"]).toContain("useFormState");
+    if (!app.id.startsWith("next-14-")) expect(app.files["app/action/action-form.tsx"]).toContain("useActionState");
   }
 });
 
@@ -99,12 +96,49 @@ test("static export fixtures build out/ and preview the generated artifact", () 
     expect(preview.check.kind).toBe("page");
     expect(feature(app, "mode:static-export")).toBe("mode:static-export");
     expect(feature(app, "mode:static-preview")).toBe("mode:static-preview");
+    if (app.id.startsWith("next-14-")) {
+      expect(app.files["next.config.mjs"]).toContain('output: "export"');
+      expect(app.files["next.config.ts"]).toBeUndefined();
+      continue;
+    }
+    expect(app.files["next.config.ts"]).toContain('output: "export"');
+    expect(app.files["next.config.mjs"]).toBeUndefined();
+  }
+});
+
+test("PPR fixtures use real delayed Suspense data with version-specific config", () => {
+  const pprApps = nextApps.filter(app => app.id.includes("-app-ppr"));
+  expect(pprApps).toHaveLength(2);
+  for (const app of pprApps) {
+    const fixture = app.files["app/ppr/page.tsx"];
+    expect(fixture).toContain("Suspense");
+    expect(fixture).toContain("setTimeout(resolve, 100)");
+    expect(fixture).toContain("data-ppr-shell");
+    expect(fixture).toContain("data-ppr-deferred");
+    expect(feature(app, "ppr:")).toContain("pending");
+    if (app.id.startsWith("next-16-")) {
+      expect(app.files["next.config.ts"]).toContain("cacheComponents: true");
+      expect(fixture).not.toContain("experimental_ppr");
+      continue;
+    }
+    expect(app.files["next.config.ts"]).toContain("experimental: { ppr: true }");
+    expect(fixture).toContain("experimental_ppr = true");
+  }
+});
+
+test("ISR fixture exposes a generation value for a real cache-window sequence", () => {
+  for (const app of nextApps.filter(candidate => candidate.id.endsWith("-pages"))) {
+    const fixture = app.files["pages/isr.tsx"];
+    expect(fixture).toContain("Date.now().toString()");
+    expect(fixture).toContain("data-isr-generation");
+    expect(fixture).toContain("revalidate: 1");
+    expect(feature(app, "isr:")).toBe("isr:pending-cache-sequence-probe");
   }
 });
 
 test("ISR and PPR metadata stays explicit about pending or N/A verification", () => {
   for (const app of nextApps) {
     expect(feature(app, "isr:")).toMatch(/(pending|n\/a)/);
-    expect(feature(app, "ppr:")).toMatch(/(pending|n\/a)/);
+    expect(feature(app, "ppr:")).toMatch(/(pending|n\/a|experimental-available)/);
   }
 });

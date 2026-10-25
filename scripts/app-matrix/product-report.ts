@@ -15,8 +15,8 @@ interface Signature {
 }
 
 export function observedSignature(message: string): Signature {
-  if (/symlink|EACCES|EPERM|permission denied/i.test(message)) return { id: "filesystem capability", owner: "Waffle", evidence: message };
-  if (/ENOSYS|not implemented.*(?:socket|descriptor|signal|pipe)|(?:socket|descriptor|signal|pipe).*not (?:implemented|supported)/i.test(message)) return { id: "runtime capability", owner: "Waffle", evidence: message };
+  if (/symlink|EACCES|EPERM|permission denied/i.test(message)) return { id: "filesystem error", owner: "Unconfirmed", evidence: message };
+  if (/ENOSYS|not implemented.*(?:socket|descriptor|signal|pipe)|(?:socket|descriptor|signal|pipe).*not (?:implemented|supported)/i.test(message)) return { id: "unsupported operation", owner: "Unconfirmed", evidence: message };
   if (/HTTP 500|Preview HTTP 500/.test(message)) return { id: "dev server HTTP 500", owner: "Unconfirmed", evidence: message };
   if (/E696/.test(message)) return { id: "E696", owner: "Unconfirmed", evidence: message };
   if (/\.node\b|dlopen|unsupported.*(?:architecture|platform)/i.test(message)) return { id: "native package dependency", owner: "Unconfirmed", evidence: message };
@@ -28,7 +28,7 @@ export function observedSignature(message: string): Signature {
 export function unlockCandidates(rows: readonly ProductResultRow[]) {
   const groups = new Map<string, { signature: Signature; projects: Set<string>; stages: Set<string> }>();
   for (const row of rows) {
-    if (row.status !== "fail") continue;
+    if (row.engine !== "browser" || row.host !== "playground" || row.status !== "fail") continue;
     const signature = observedSignature(row.blocker ?? "");
     const group = groups.get(signature.id) ?? { signature, projects: new Set<string>(), stages: new Set<string>() };
     group.projects.add(row.app);
@@ -46,6 +46,7 @@ function cell(rows: readonly ProductResultRow[], stages: readonly string[]): str
   if (!selected.length) return "Not run";
   if (selected.some(row => row.status === "fail")) return "Fail";
   if (selected.some(row => row.status === "blocked")) return "Blocked";
+  if (stages.some(stage => !selected.some(row => row.stage === stage))) return "Not run";
   return "Pass";
 }
 
