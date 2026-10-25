@@ -79,6 +79,14 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
   const env = stackKib && !("BUN_WASM_STACK_KIB" in req.env) ? { ...req.env, BUN_WASM_STACK_KIB: stackKib } : req.env;
   return {
     hostCallFd: HOST_CALL_FD,
+    namespaces({ identity }) {
+      if (!identity) throw new Error("Bun requires an admitted Waffle process");
+      return {
+        bun_identity: {
+          get: (field: number) => field === 0 ? identity.pid : field === 1 ? identity.parentPid : -28,
+        },
+      };
+    },
     env: () => env,
     // Bun's own fatal-unwind type, which the engine interruption probes recognize.
     signalError(signal): never { throw new DefaultSignal(signal); },
