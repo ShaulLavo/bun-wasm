@@ -109,6 +109,18 @@ function checkSource(path: string, source: string) {
   expect(() => parser.transformSync(source)).not.toThrow();
 }
 
+test("React Router supplies a Bun-compatible server entry instead of the Node-only auto-install default", () => {
+  const fixture = app("fullstack-react-router");
+  const entry = fixture.files["app/entry.server.tsx"];
+  expect(entry).toBeString();
+  expect(entry).toContain("renderToReadableStream");
+  expect(entry).not.toContain("renderToPipeableStream");
+  expect(entry).toContain("ServerRouter");
+  expect(entry).toContain("signal: request.signal");
+  expect(entry).toContain("await body.allReady");
+  expect(entry).toContain("new Response(body");
+});
+
 test("SvelteKit uses the node adapter and a server-only loader, never static prerender", () => {
   const fixture = app("fullstack-sveltekit");
   expect(fixture.dependencies["@sveltejs/adapter-node"]).toBe("5.3.2");
