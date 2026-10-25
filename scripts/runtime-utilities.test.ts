@@ -29,6 +29,26 @@ test("Buffer.copyBytesFrom validates offsets and lengths before slicing a view",
   }
 });
 
+test.each([
+  ["empty view with negative offset", new Uint16Array(0), -1, undefined],
+  ["empty view with fractional offset", new Uint16Array(0), 1.5, undefined],
+  ["empty view with invalid length", new Uint16Array(0), undefined, -1],
+  ["empty view with both ranges invalid", new Uint16Array(0), -1, 1.5],
+  ["offset at end with negative length", Uint16Array.of(1, 2), 2, -1],
+  ["offset at end with fractional length", Uint16Array.of(1, 2), 2, 1.5],
+  ["offset past end with negative length", Uint16Array.of(1, 2), 3, -1],
+  ["offset past end with fractional length", Uint16Array.of(1, 2), 3, 1.5],
+] as const)("Buffer.copyBytesFrom preserves %s", (_name, input, offset, length) => {
+  const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/buffer.js"), "utf8");
+  const adapter = runInNewContext(source, { TextEncoder, TextDecoder });
+  const { Buffer: RuntimeBuffer } = adapter({ describe: String, require: () => { throw new Error("unexpected inspect"); } });
+  const native = Buffer.copyBytesFrom(input, offset, length);
+  expect(native.length).toBe(0);
+  const copied = RuntimeBuffer.copyBytesFrom(input, offset, length);
+  expect(RuntimeBuffer.isBuffer(copied)).toBe(true);
+  expect(Array.from(copied)).toEqual(Array.from(native));
+});
+
 test("emitted JSONL preserves partial parsing and UTF-8 read offsets", () => {
   const parse = factory("jsonl")({
     native: {
