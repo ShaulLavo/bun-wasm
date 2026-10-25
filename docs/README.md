@@ -11,6 +11,7 @@ Start with [Getting started](getting-started.md). Everything else is one click f
 - [Embed bun-wasm in a page](guides/embed-in-a-page.md): register Bun on a Waffle `Runtime` that your page owns.
 - [Troubleshooting](troubleshooting.md): symptom, cause and fix for the common failures.
 - [Development](development.md): build the guests, run the tests, change Bun's source.
+- [Compare engine builds](benchmarks/README.md): alternating startup, CPU, bundle-load and memory measurements.
 
 ## Understand
 
