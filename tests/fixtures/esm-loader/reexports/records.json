@@ -1,0 +1,9 @@
+{
+ "modules": {
+  "/hub.mjs": "({r:[\"./x.mjs\",\"./y.mjs\"],i:[],x:[[\"renamed\",0,\"original\"],[\"nsX\",0,\"*\"],[\"def\",1,\"default\"]],s:[0,1],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"shared\":()=>shared});yield;yield;const shared = \"hub shared\";\n\n}})",
+  "/main.mjs": "({r:[\"./hub.mjs\"],i:[[0,\"renamed\"],[0,\"shared\"],[0,\"onlyX\"],[0,\"onlyY\"],[0,\"nsX\"],[0,\"def\"]],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0],hub=__bunwasm_m.n[0];yield;console.log(__bunwasm_ns0_0.renamed, __bunwasm_ns0_0.onlyX, __bunwasm_ns0_0.onlyY, __bunwasm_ns0_0.nsX.onlyX, (0, __bunwasm_ns0_0.def)(), __bunwasm_ns0_0.shared);\nconsole.log(Object.keys(hub).join(\",\"));\nconsole.log(\"ambiguous hidden\", \"clash\" in hub, \"default\" in hub);\n\n}})",
+  "/x.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"original\":()=>original,\"onlyX\":()=>onlyX,\"clash\":()=>clash,\"shared\":()=>shared,\"default\":()=>__bunwasm_default});yield;yield;const original = \"x original\", onlyX = \"only x\", clash = \"x clash\", shared = \"x shared\";\nconst __bunwasm_default = \"x default\";\n\n}})",
+  "/y.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"onlyY\":()=>onlyY,\"clash\":()=>clash,\"default\":()=>__bunwasm_default});yield;yield;const onlyY = \"only y\", clash = \"y clash\";\nfunction __bunwasm_default() {\n  return \"y default\";\n}\n\n}})"
+ },
+ "cjs": {}
+}

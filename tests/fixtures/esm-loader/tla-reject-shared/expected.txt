@@ -1,0 +1,2 @@
+rejected:bad module rejected:bad module
+same error object true
