@@ -186,3 +186,29 @@ test("interrupted uploads settle only after Wrangler stops using the upload file
     await rm(scratch, { recursive: true, force: true });
   }
 });
+
+test("paired publication verifies and publishes the exact side before returning the core descriptor", async () => {
+  const sideBytes = new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120]));
+  const pair = prepareGuest(wasm, GUEST_ORIGIN, sideBytes);
+  if (!pair.quickjs) throw new Error("Missing pair");
+  const uploads: GuestArtifact[] = [];
+  const reads: string[] = [];
+  const store: GuestPublisher = {
+    async read(key) { reads.push(key); return null; },
+    async upload(value) { uploads.push(value); },
+    async fetch(url) {
+      const body = url === pair.descriptor.quickjs?.url ? sideBytes : wasm;
+      return new Response(body, { headers: publicHeaders });
+    },
+  };
+  expect(await publishGuest(pair, store)).toEqual(pair.descriptor);
+  expect(reads).toEqual([pair.quickjs.key, pair.key]);
+  expect(uploads.map(upload => upload.key)).toEqual(reads);
+  expect(pair.quickjs && new Uint8Array(gunzipSync(pair.quickjs.gzip))).toEqual(sideBytes);
+  await expect(publishGuest({ ...pair, quickjs: undefined }, store)).rejects.toThrow("paired QuickJS identity");
+  const corrupted = prepareGuest(wasm, GUEST_ORIGIN, sideBytes);
+  if (!corrupted.quickjs) throw new Error("Missing pair");
+  corrupted.quickjs.gzip.fill(0);
+  await expect(publishGuest(corrupted, store)).rejects.toThrow();
+  expect(reads).toHaveLength(2);
+});

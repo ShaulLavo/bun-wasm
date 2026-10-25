@@ -217,6 +217,13 @@ fi
 printf 'fixture tool 1\n'
 `);
     await chmod(join(fixture.root, "fake-tool"), 0o700);
+    await executable(join(fixture.root, "scripts/build-bun-core.sh"), `
+mkdir -p "$BUN_CORE_BUILD_DIR"
+printf '\\000asm\\001\\000\\000\\000' > "$BUN_CORE_BUILD_DIR/bun-core.wasm"
+printf '\\000asm\\001\\000\\000\\000' > "$BUN_CORE_BUILD_DIR/quickjs.wasm"
+`);
+    fixtureGit(fixture.root, "add", "scripts/build-bun-core.sh");
+    fixtureGit(fixture.root, "commit", "-m", "synthetic matched pair producer, no compilation");
     const finished = Bun.spawnSync(["bash", "-eu", "-o", "pipefail", "-c", quickjsNativeReceiptFragment()], { cwd: fixture.root, env: fixture.env });
     expect(finished.stderr.toString()).toBe("");
     expect(finished.exitCode).toBe(0);
@@ -224,6 +231,7 @@ printf 'fixture tool 1\n'
     const receipt = await Bun.file(`${artifact}.build.json`).json();
     verifyGuestBuildReceipt(await readFile(artifact), receipt);
     expect(receipt.sourceManifest.build).toBe("quickjs");
+    expect(receipt.quickjs).toEqual({ artifactSha256: hash(await readFile(join(fixture.root, "dist/quickjs.wasm"))), artifactBytes: 8 });
     expect((await readdir(fixture.root)).filter(name => name.startsWith("bun-wasm-guest-inputs-")).length).toBe(0);
   });
 });

@@ -5,7 +5,7 @@ import { guestBuilds, hash, type GuestBuild, type SourceOptions } from "../../sc
 import type { GuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 
 export const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
-export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild): GuestBuildReceipt {
+export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild, quickjs = wasm): GuestBuildReceipt {
   const groupNames = ["repository", "bun", "waffle-libc", "sysroot", "sdk", "rust-target", "boringssl", "jsc-prebuild"];
   const sourceManifest = {
     schema: 1, build, source: { head: "d".repeat(40), tree: "e".repeat(40) },
@@ -13,7 +13,7 @@ export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild): GuestBuild
     tools: ["rustc", "cargo", "bun", "node", "rust-lld", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"].map(name => ({ name, path: `/fixture/${name}`, sha256: hash(name), version: "fixture only" })),
     omissions: ["Synthetic receipt for tiny utility tests, not build or publication evidence."],
   } satisfies GuestBuildReceipt["sourceManifest"];
-  return { bunHead: "a".repeat(40), bunTree: "b".repeat(40), sysrootReceiptSha256: hash("fixture"), sourceManifest, sourceManifestSha256: hash(JSON.stringify(sourceManifest)), artifactSha256: hash(bytes), artifactBytes: bytes.byteLength };
+  return { bunHead: "a".repeat(40), bunTree: "b".repeat(40), sysrootReceiptSha256: hash("fixture"), sourceManifest, sourceManifestSha256: hash(JSON.stringify(sourceManifest)), artifactSha256: hash(bytes), artifactBytes: bytes.byteLength, ...(build === "quickjs" || build === "quickjs-minimal" ? { quickjs: { artifactSha256: hash(quickjs), artifactBytes: quickjs.byteLength } } : {}) };
 }
 
 export function fixtureGit(root: string, ...args: string[]): string {
@@ -63,6 +63,7 @@ export async function withReceiptFixture(run: (options: SourceOptions, artifact:
     const artifact = join(root, "dist", guestBuilds.browser.artifact);
     await put(root, "dist/bun-browser.wasm", "");
     await writeFile(artifact, wasm);
+    await writeFile(join(root, "dist/quickjs.wasm"), wasm);
     const tools = Object.fromEntries(["rustc", "cargo", "bun", "node", "rust-lld", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"].map(name => [name, join(root, "fake-tool")]));
     await run({ repository: root, sysroot: join(root, "sysroot"), sdk: join(root, "sdk"), waffle: join(root, "waffle"), boringssl: join(root, "vendor/boringssl"), rustTargetLib: join(root, "rustlib"), tools, build: "browser", jscBuild: join(root, "jsc-build") }, artifact);
   } finally {

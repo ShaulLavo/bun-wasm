@@ -9,17 +9,26 @@ export const GUEST_ORIGIN = "https://bun-artifacts.shaulavo.dev";
 export const GUEST_BUCKET = "bun-wasm-guests";
 export const GUEST_CACHE_CONTROL = "public, max-age=31536000, immutable, no-transform";
 
-export interface GuestDescriptor {
+export interface GuestFileDescriptor {
   readonly url: string;
   /** Both integrity fields cover decompressed WASM, never its gzip representation. */
   readonly sha256: string;
   readonly bytes: number;
 }
 
-export interface GuestArtifact {
-  readonly descriptor: GuestDescriptor;
+export interface GuestDescriptor extends GuestFileDescriptor {
+  readonly quickjs?: GuestFileDescriptor;
+}
+
+export interface GuestFile {
+  readonly descriptor: GuestFileDescriptor;
   readonly key: string;
   readonly gzip: Uint8Array;
+}
+
+export interface GuestArtifact extends GuestFile {
+  readonly descriptor: GuestDescriptor;
+  readonly quickjs?: GuestFile;
 }
 
 export function decodeGuest(input: Uint8Array): Uint8Array {
@@ -31,20 +40,27 @@ export function decodeGuest(input: Uint8Array): Uint8Array {
   return bytes;
 }
 
-export function describeGuest(input: Uint8Array, origin = GUEST_ORIGIN): GuestDescriptor {
+export function describeGuest(input: Uint8Array, origin = GUEST_ORIGIN, name = "bun.wasm"): GuestFileDescriptor {
   const base = new URL(origin);
   if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash || base.pathname !== "/") {
     throw new Error("Guest origin must be a plain HTTPS origin");
   }
   const bytes = decodeGuest(input);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
-  return { url: `${base.origin}/${sha256}/bun.wasm.gz`, sha256, bytes: bytes.byteLength };
+  return { url: `${base.origin}/${sha256}/${name}.gz`, sha256, bytes: bytes.byteLength };
 }
 
-export function prepareGuest(input: Uint8Array, origin = GUEST_ORIGIN): GuestArtifact {
+function prepareFile(input: Uint8Array, origin: string, name: string): GuestFile {
   const bytes = decodeGuest(input);
-  const descriptor = describeGuest(bytes, origin);
-  return { descriptor, key: `${descriptor.sha256}/bun.wasm.gz`, gzip: gzipSync(bytes, { level: 9 }) };
+  const descriptor = describeGuest(bytes, origin, name);
+  return { descriptor, key: `${descriptor.sha256}/${name}.gz`, gzip: gzipSync(bytes, { level: 9 }) };
+}
+
+export function prepareGuest(input: Uint8Array, origin = GUEST_ORIGIN, side?: Uint8Array): GuestArtifact {
+  const core = prepareFile(input, origin, "bun.wasm");
+  if (!side) return core;
+  const quickjs = prepareFile(side, origin, "quickjs.wasm");
+  return { ...core, descriptor: { ...core.descriptor, quickjs: quickjs.descriptor }, quickjs };
 }
 
 export function verifyGuest(input: Uint8Array, expected: GuestDescriptor): void {

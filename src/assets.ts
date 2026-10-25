@@ -2,10 +2,14 @@ import { BUN_WASM_ASSET } from "./guest-asset.generated.js";
 export { BUN_WASM_ASSET } from "./guest-asset.generated.js";
 
 /** Immutable guest metadata. The SHA-256 and byte count cover decompressed Wasm bytes. */
-export interface BunWasmAsset {
+export interface BunWasmFile {
   readonly url: string;
   readonly sha256: string;
   readonly bytes: number;
+}
+
+export interface BunWasmAsset extends BunWasmFile {
+  readonly quickjs?: BunWasmFile;
 }
 
 export class BunWasmAssetError extends Error {
