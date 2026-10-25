@@ -23,6 +23,23 @@ for (const [output, expected] of diagnostics) {
   test(`first diagnostic: ${expected}`, () => expect(firstError(output)).toBe(expected));
 }
 
+test("first diagnostic extracts ESLint JSON from mixed terminal output", () => {
+  const result = '[{"filePath":"/home/user/index.ts","messages":[{"ruleId":null,"nodeType":null,"fatal":true,"severity":2,"message":"Parsing error: Unexpected token :","line":1,"column":21}],"suppressedMessages":[],"errorCount":1,"fatalErrorCount":1,"warningCount":0,"fixableErrorCount":0,"fixableWarningCount":0,"source":"export const message: number = 1;\\n","usedDeprecatedRules":[]}]';
+  const output = `user@bun:~$ bun install\n117 packages installed [14929ms]\nuser@bun:~$ bun run node_modules/eslint/bin/eslint.js --format json --no-cache index.ts\n${result}\n[1] user@bun:~$`;
+  expect(firstError(output)).toBe("Parsing error: Unexpected token :");
+  expect(failure(output, "lint")).toEqual({ category: "d", blocker: "lint: Parsing error: Unexpected token :" });
+});
+
+test("first diagnostic rejects unrelated JSON objects and incomplete lint messages", () => {
+  const outputs = [
+    '{"filePath":"/home/user/index.ts","messages":[{"severity":2,"message":"Error: not an array"}]}',
+    '[{"filePath":"/home/user/index.ts","messages":[{"message":"Error: missing severity"}]}]',
+    '[{"filePath":"/home/user/index.ts","messages":[{"severity":2,"message":7}]}]',
+    '["Error: unrelated JSON array"]',
+  ];
+  for (const output of outputs) expect(firstError(output)).toBe("No diagnostic before exit or deadline");
+});
+
 test("runtime exit fallback uses the last complete exit but never overrides a diagnostic", () => {
   const first = '[bun-wasm:exit] {"reason":"process.exit","code":7,"stack":null,"loop":null}';
   const last = '[bun-wasm:exit] {"reason":"event-loop-drained","code":0,"stack":null,"loop":null}';
