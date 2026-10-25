@@ -6,12 +6,21 @@ import { checkCommand, checkInstall } from "./checks.mjs";
 import { browserDiagnostics } from "./browser-diagnostics.ts";
 import { verifyBrowserServer, stoppedPreviewError } from "./server-browser.ts";
 import { observeHmr } from "./hmr.ts";
+import { observeProductTraffic, productObservations } from "./product-browser.ts";
 import { failure, stageOutput } from "./classify.ts";
+import { BlockedBrowserNetworkError } from "./product-campaign.ts";
 
 export function earlyServerExit(command, stage) {
   const classified = failure(command.output, stage);
   if (!command.output.trim()) classified.blocker = `Server exited ${command.code} before HTTP/DOM assertion`;
   return { status: "fail", exit: command.code, ...classified };
+}
+
+function guestSource(page) {
+  return {
+    read: path => readGuest(page, path),
+    write: (path, contents) => page.evaluate(([path, contents]) => globalThis.playground.fs.writeFile(`/home/user/${path}`, contents), [path, contents]),
+  };
 }
 
 export async function serverCommand({ page, context, command, app, engine, options, terminalText }) {
@@ -29,30 +38,35 @@ export async function serverCommand({ page, context, command, app, engine, optio
     await page.waitForTimeout(100);
   }
   const preview = await context.newPage();
+  const traffic = await observeProductTraffic(preview);
   const errors = [];
   preview.on("pageerror", error => errors.push(String(error)));
   let checked;
   let url;
   try {
+    const previewState = await page.evaluate(() => globalThis.playground.previews.ready);
+    if (previewState !== "ready") throw new Error(`Preview service worker is ${previewState}`);
     url = await page.evaluate(() => globalThis.playground.previews.url(3137));
     const response = await preview.goto(url, { timeout: options.timeout });
     if (!response?.ok()) throw new Error(`Preview HTTP ${response?.status()}`);
     const check = command.check;
-    if (check.framework && !response.fromServiceWorker()) throw new Error("Preview response bypassed the service worker");
+    if (!response.fromServiceWorker()) throw new Error("Preview response bypassed the service worker");
     await preview.locator(check.kind === "http" ? "body" : check.selector).filter({ hasText: check.text }).waitFor({ timeout: options.timeout });
     const contract = check.framework ? await verifyBrowserServer(preview, url, check.framework, options.timeout, join(options.output, `${app.id}-${engine}-requests.json`)) : "";
     if (errors.length) throw new Error(errors.join("\n"));
     if (await page.evaluate(() => globalThis.__matrixDone)) return earlyServerExit({ code: await page.evaluate(() => globalThis.playground.shell.lastExit), output: await output() }, command.name);
     await preview.screenshot({ path: join(options.output, `${app.id}-${engine}-playground-${command.name}.png`) });
-    checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}` };
+    const observations = await productObservations(preview, url, check, guestSource(page), traffic, options.timeout);
+    checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations };
   } catch (error) {
-    checked = { status: "fail", ...failure(`${String(error)}\n${await output()}`, command.name) };
+    checked = { status: "fail", ...failure(`${await output()}\n${String(error)}`, command.name) };
   } finally {
     await page.evaluate(async () => { globalThis.playground.shell.input("\x03"); await globalThis.__matrixCommand; });
     const error = checked?.status === "pass" && command.check.framework ? await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`)) : undefined;
     if (error) checked = { status: "fail", ...failure(error, command.name) };
     if (checked?.status === "pass" && command.check.framework) checked.assertion += "; guest stop removes preview listener (502)";
-    await preview.close();
+    try { await traffic.close(); }
+    finally { await preview.close(); }
   }
   return checked;
 }
@@ -137,7 +151,7 @@ export async function browserHost({ root, options, launch, stop }) {
         record(app, engine, "playground", command.name, ["bun"].concat(command.args), checked);
       }
       writeFileSync(join(options.output, `${app.id}-${engine}-playground.log`), await terminalText(page));
-      if (external.length) throw new Error(`Browser attempted external network: ${external.join(", ")}`);
+      if (external.length) throw new BlockedBrowserNetworkError(external);
     } finally { await context.close(); }
   }
 
