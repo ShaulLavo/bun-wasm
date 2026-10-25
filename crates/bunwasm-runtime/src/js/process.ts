@@ -75,7 +75,7 @@
 
   function validateCursorCallback(callback: unknown): void {
     if (callback === undefined || typeof callback === "function") return;
-    throw Object.assign(new TypeError('The "callback" argument must be of type function'), { code: "ERR_INVALID_ARG_TYPE" });
+    throw Object.assign(new TypeError(`The "callback" argument must be of type function. Received ${internal.describe(callback)}`), { code: "ERR_INVALID_ARG_TYPE" });
   }
 
   function clearLine(this: BunWasm.ProcessWriter, direction: number, callback?: BunWasm.ProcessCursorCallback): boolean {
@@ -118,9 +118,9 @@
     }
     let sequence = "";
     if (dx < 0) sequence += `\x1b[${-dx}D`;
-    if (dx > 0) sequence += `\x1b[${dx}C`;
+    else if (dx > 0) sequence += `\x1b[${dx}C`;
     if (dy < 0) sequence += `\x1b[${-dy}A`;
-    if (dy > 0) sequence += `\x1b[${dy}B`;
+    else if (dy > 0) sequence += `\x1b[${dy}B`;
     return this.write(sequence, callback);
   }
 

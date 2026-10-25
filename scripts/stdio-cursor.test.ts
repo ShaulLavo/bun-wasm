@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
-import { cursorBytes, cursorCases, verifyDelegation, verifyNoop, verifyValidation } from "./fixtures/stdio-cursor-contract";
+import { cursorBytes, cursorCases, verifyDelegation, verifyNoop, verifyValidation, verifyCoercion } from "./fixtures/stdio-cursor-contract";
 import type { Callback, CursorWriter } from "./fixtures/stdio-cursor-contract";
 
 type Writer = CursorWriter & EventEmitter & { fd: number; writable: boolean; isTTY: boolean };
@@ -33,6 +33,7 @@ function runtime(tty: boolean) {
       writeStderr: (chunk: string | Uint8Array, flush?: boolean) => write(2, chunk, flush),
     },
     nextTick: process.nextTick,
+    describe(value: unknown) { assert.equal(value, null); return "null"; },
     require(name: string) {
       if (name === "events") return EventEmitter;
       if (name === "process_signals") return () => () => false;
@@ -133,6 +134,12 @@ for (const fd of [1, 2]) {
     expect(output).toEqual([[fd, "recovered", true]]);
   });
 }
+
+test("relative cursor coercion takes only the first matching axis branch", () => {
+  const { guest } = runtime(true);
+  verifyCoercion(guest.stdout);
+  verifyCoercion(guest.stderr);
+});
 
 test("cursor argument errors occur before writes, including the overloaded callback", () => {
   const { guest, output } = runtime(true);

@@ -18,6 +18,9 @@ including false. Writes keep their callback identity and existing deferred succe
 or failure timing. Zero movement schedules a callback with `internal.nextTick`
 without writing. The callback is validated before resolving `cursorTo`'s second
 argument overload, so an invalid third argument is not silently ignored.
+Invalid callbacks use the existing `internal.describe` received-value message.
+Relative movement takes only the first matching branch on each axis, preserving
+reference coercion order for JavaScript callers.
 Writer construction, lazy stdio getters, input reads, headers and TTY flags are
 unchanged. These methods are available on both existing writers, including pipes;
 this does not claim that native Bun exposes them on redirected stdout.
@@ -26,8 +29,9 @@ this does not claim that native Bun exposes them on redirected stdout.
 TypeScript-erasure script and uses fake native writers. It covers bytes on both
 file descriptors, true/false TTY flags, borrowed receivers, boolean return values,
 callback identity, deferred callbacks, write failures, zero movement, argument
-errors and declarations. The shared narrow contract also runs against Node's real
-`tty.WriteStream`. `checks/runtime-stdio-cursor.json` assigns this test to the
+errors and declarations. The shared narrow contract covers coercion order and
+invalid-callback messages, and runs against Node's real `tty.WriteStream` and
+Bun's terminal writers. `checks/runtime-stdio-cursor.json` assigns this test to the
 existing blocking runtime owner and local-runtime selection. The existing process
 AST guard removes only the added cursor declarations and properties before checking
 the unchanged original hash; its behavioral comparison permits only those four

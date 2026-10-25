@@ -71,8 +71,31 @@ export function verifyValidation(stream: CursorWriter) {
     [stream.moveCursor, [0, 0, null]],
   ];
   for (const [method, args] of invalid) {
-    assert.throws(() => Reflect.apply(method, stream, args), { code: "ERR_INVALID_ARG_TYPE" });
+    assert.throws(() => Reflect.apply(method, stream, args), {
+      code: "ERR_INVALID_ARG_TYPE",
+      message: 'The "callback" argument must be of type function. Received null',
+    });
   }
+}
+
+function verifyAxisCoercion(stream: CursorWriter, axis: "x" | "y") {
+  let conversions = 0;
+  const distance = { valueOf() { return ++conversions === 1 ? -1 : 1; } };
+  const callback: Callback = () => { throw new Error("write owns callback"); };
+  const writes: [string, Callback | undefined][] = [];
+  stream.write = (chunk, cb) => { writes.push([chunk, cb]); return false; };
+  const args = axis === "x" ? [distance, 0, callback] : [0, distance, callback];
+  assert.equal(Reflect.apply(stream.moveCursor, stream, args), false);
+  assert.deepEqual(writes, [[axis === "x" ? "\x1b[-1D" : "\x1b[-1A", callback]]);
+  assert.equal(conversions, 2);
+}
+
+export function verifyCoercion(stream: CursorWriter) {
+  const write = stream.write;
+  try {
+    verifyAxisCoercion(stream, "x");
+    verifyAxisCoercion(stream, "y");
+  } finally { stream.write = write; }
 }
 
 if (import.meta.main) {
@@ -80,6 +103,7 @@ if (import.meta.main) {
   const streams = process.versions.bun ? [process.stdout, process.stderr] : [new WriteStream(1), new WriteStream(2)];
   for (const stream of streams) {
     verifyDelegation(stream);
+    verifyCoercion(stream);
     await verifyNoop(stream);
     verifyValidation(stream);
   }
