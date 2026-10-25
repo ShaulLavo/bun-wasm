@@ -17,6 +17,10 @@
     const subscription = new Uint8Array(16); // READABLE = 0, fd = 0, userdata = 0.
     let waiter: BunWasm.IoWaiter | undefined;
     let referenced = true;
+    let paused = false;
+    function updateReference() {
+      if (waiter) waiter.ref = referenced && !paused;
+    }
     function step(): boolean {
       if (stream.destroyed) return true;
       const chunk = native.procRead(0, 65536);
@@ -30,7 +34,7 @@
     function read() {
       if (waiter || stream.destroyed) return;
       internal.require("net");
-      waiter = internal.addIoWaiter({ step, ref: referenced, subscriptions: () => subscription, fail });
+      waiter = internal.addIoWaiter({ step, ref: referenced && !paused, subscriptions: () => subscription, fail });
     }
     function fail(error: unknown) {
       waiter = undefined;
@@ -46,9 +50,11 @@
       fd: 0,
       isTTY: native.isatty(0),
       setRawMode() { return stream; },
-      ref() { referenced = true; if (waiter) waiter.ref = true; return stream; },
-      unref() { referenced = false; if (waiter) waiter.ref = false; return stream; },
+      ref() { referenced = true; updateReference(); return stream; },
+      unref() { referenced = false; updateReference(); return stream; },
     });
+    stream.on("pause", () => { paused = true; updateReference(); });
+    stream.on("resume", () => { paused = false; updateReference(); });
     return stream;
   };
 })
