@@ -147,6 +147,7 @@ test("public decoder model retains replacement versus fatal UTF-8 errors", () =>
   }
 });
 
+const requestEnvironment = sourceSection(web, "  const PlatformRequest = ", "  // --- DOMException");
 const blobSource = sourceSection(web, "  function concatBytes(chunks)", "  const streamWeb =");
 const bodySource = sourceSection(web, "  function normalizeHeaderName(name)", "  // No sockets under WASI.");
 const bun = readFileSync(new URL("../crates/bunwasm-runtime/src/js/bun.js", import.meta.url), "utf8");
@@ -155,7 +156,7 @@ const streamSource = sourceSection(bun, "  async function readableStreamToBytes(
 const streamMethods = sourceSection(bun, "    readableStreamToBytes,", "    readableStreamToBlob:");
 // The consumers and codecs are production source. Only native file reads and the
 // Rust decoders are modeled; streams here are in-memory, not network or guest IO.
-const consumerCodecs = evaluate(`${publicSource}\n${blobSource}\n${bodySource}\n${fileSource}\n${streamSource}\n({
+const consumerCodecs = evaluate(`${requestEnvironment}\n${publicSource}\n${blobSource}\n${bodySource}\n${fileSource}\n${streamSource}\n({
   blobText(bytes) { return new Blob([bytes]).text(); },
   blobJson(bytes) { return new Blob([bytes]).json(); },
   responseText(bytes) { return new Response(bytes).text(); },
@@ -170,9 +171,9 @@ const consumerCodecs = evaluate(`${publicSource}\n${blobSource}\n${bodySource}\n
     return calls.map(call => decoder.decode(call.bytes, { stream: call.stream }));
   },
 })`, {
-  ...globals, JSON, URL, URLSearchParams, AbortController, ReadableStream,
+  ...globals, JSON, URL, URLSearchParams, AbortController, ReadableStream, Request,
   internal: { mimeType: () => "", toUint8: (bytes: Uint8Array) => bytes },
-  native: { utf8Encode: (text: string) => new TextEncoder().encode(text), utf8Decode: rustUtf8DecodeModel, utf16leDecode: rustUtf16leDecodeModel },
+  native: { engine: "host", utf8Encode: (text: string) => new TextEncoder().encode(text), utf8Decode: rustUtf8DecodeModel, utf16leDecode: rustUtf16leDecodeModel },
 });
 
 function consumerInput(name: string, bytes: Uint8Array): Uint8Array | ReadableStream<Uint8Array> {
