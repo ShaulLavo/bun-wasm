@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use std::ops::Range;
 
 use crate::data::codec::{self, CodecError};
-use crate::data::{Args, DataFn, ErrorKind, NativeError, NativeResult, Record, Val};
+use crate::data::{Args, DataFn, ErrorKind, NativeError, NativeResult, Record, Val, drop_tree};
 
 pub(crate) const DATA_NATIVE: u32 = 65_536;
 
@@ -93,11 +93,13 @@ pub(crate) struct Reply {
 }
 
 impl Reply {
-    fn encoded(status: Status, value: &Val) -> Self {
-        match codec::encode(value) {
+    fn encoded(status: Status, value: Val) -> Self {
+        let reply = match codec::encode(&value) {
             Ok(bytes) => Self { status, bytes },
             Err(error) => Self::failed(error_status(error)),
-        }
+        };
+        drop_tree(value);
+        reply
     }
 
     fn failed(status: Status) -> Self {
@@ -150,9 +152,11 @@ impl Dispatcher {
         };
         drop(request);
         let function = self.function.clone();
-        match function(Args(&args)) {
-            Ok(value) => Reply::encoded(Status::Ok, &value),
-            Err(error) => Reply::encoded(Status::NativeError, &error_value(error)),
+        let result = function(Args(&args));
+        drop_tree(Val::Array(args));
+        match result {
+            Ok(value) => Reply::encoded(Status::Ok, value),
+            Err(error) => Reply::encoded(Status::NativeError, error_value(error)),
         }
     }
 

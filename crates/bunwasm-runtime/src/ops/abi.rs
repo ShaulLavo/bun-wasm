@@ -191,7 +191,10 @@ pub(super) fn call(
 ) -> crate::data::NativeResult {
     use crate::data::{NativeError, Val};
     let transport = Transport::default();
-    let request = super::codec::encode(&Val::Array(args)).map_err(super::transport_error)?;
+    let args = Val::Array(args);
+    let request = super::codec::encode(&args);
+    crate::data::drop_tree(args);
+    let request = request.map_err(super::transport_error)?;
     let request_len = u32::try_from(request.len())
         .map_err(|_| NativeError::error("core data request too large"))?;
     let request_ptr = transport.alloc(request_len, Frame::ALIGN);

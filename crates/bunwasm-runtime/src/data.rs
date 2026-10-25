@@ -19,6 +19,20 @@ pub enum Val {
     Object(Vec<(String, Val)>),
 }
 
+/// Releases an owned tree without recursing through its descendants' drop glue.
+pub(crate) fn drop_tree(value: Val) {
+    let mut pending = vec![value];
+    while let Some(value) = pending.pop() {
+        match value {
+            Val::Array(items) => pending.extend(items),
+            Val::Object(fields) => {
+                pending.extend(fields.into_iter().map(|(_, value)| value));
+            }
+            _ => {}
+        }
+    }
+}
+
 impl From<()> for Val {
     fn from(_: ()) -> Val {
         Val::Undefined
