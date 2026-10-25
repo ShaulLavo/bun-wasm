@@ -796,7 +796,7 @@ test("captured async output keeps its explicit maxBuffer policy", async () => {
 
 test("Node readable stops at push backpressure until resumed", async () => {
   const fake = service();
-  const { module, pump, pumpTurn } = load(fake);
+  const { module, pumpTurn } = load(fake);
   const child = module.nodeChildProcess().spawn("bun", ["paused-output"]);
   const record = fake.children.get(child.pid)!;
   const payload = new Uint8Array(1024 * 1024);
@@ -817,5 +817,125 @@ test("Node readable stops at push backpressure until resumed", async () => {
   }
   expect(received).toBe(payload.length);
   expect(await child._child.exited).toBe(0);
+  expect(fake.open()).toBe(0);
+});
+
+for (const startupFailure of [false, true]) test(`unread empty Node outputs close once after ${startupFailure ? "startup failure" : "exit"}`, async () => {
+  const fake = service();
+  const { module, pump } = load(fake);
+  const child = module.nodeChildProcess().spawn("bun", ["empty-output"]);
+  const record = fake.children.get(child.pid)!;
+  const events: string[] = [];
+  for (const event of ["error", "exit", "close"]) child.on(event, () => events.push(event));
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  fake.select(record, startupFailure ? [2, 44] : [0, 0]);
+  fake.publish(record);
+  await pump();
+  await closed;
+  expect(events).toEqual([startupFailure ? "error" : "exit", "close"]);
+  expect(fake.open()).toBe(0);
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(events.filter((event) => event === "close")).toHaveLength(1);
+});
+
+for (const consumeStdout of [false, true]) test(`Node close drains unread ${consumeStdout ? "stderr" : "outputs"} after exit`, async () => {
+  const fake = service();
+  const { module, pump } = load(fake);
+  const child = module.nodeChildProcess().spawn("bun", ["unread-output"]);
+  const record = fake.children.get(child.pid)!;
+  const events: string[] = [];
+  let received = 0;
+  if (consumeStdout) child.stdout.on("data", (data: Uint8Array) => { received += data.length; });
+  child.on("exit", () => events.push("exit"));
+  child.on("close", () => events.push("close"));
+  const payload = new Uint8Array(65536);
+  for (let index = 0; index < 3; index++) {
+    fake.childWriteBytes(record, 1, payload);
+    fake.childWriteBytes(record, 2, payload);
+  }
+  fake.exit(record, 0);
+  for (let turn = 0; turn < 8 && !events.includes("close"); turn++) {
+    await pump();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  expect(events).toEqual(["exit", "close"]);
+  if (consumeStdout) expect(received).toBe(3 * payload.length);
+  expect(fake.open()).toBe(0);
+});
+
+for (const [paused, afterExit] of [[false, false], [true, false], [true, true]] as const) test(`destroying Node output cancels its ${paused ? "paused" : "pending"} Web reader, exited ${afterExit}`, async () => {
+  const fake = service();
+  const { module, pump, pumpTurn } = load(fake);
+  const child = module.nodeChildProcess().spawn("bun", ["destroy-output"]);
+  const record = fake.children.get(child.pid)!;
+  const output = record.held.get(1)!;
+  for (let index = 0; paused && index < 4; index++) fake.childWriteBytes(record, 1, new Uint8Array(65536));
+  await Promise.resolve();
+  pumpTurn();
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(child.stdout.readableLength > 0).toBe(paused);
+  let closes = 0;
+  child.stdout.on("close", () => closes++);
+  if (afterExit) fake.exit(record, 0);
+  child.stdout.destroy();
+  child.stdout.destroy();
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(output.pipe.readers).toBe(0);
+  await child.stdout._childDrained;
+  fake.exit(record, 0);
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  await pump();
+  await closed;
+  expect(closes).toBe(1);
+  expect(fake.open()).toBe(0);
+});
+
+test("explicit spawn unref survives I/O turns and ref restores it", async () => {
+  const fake = service();
+  const { module, waiters, pumpTurn, pump } = load(fake);
+  const child = module.spawn(["bun", "unref-turns"], { stdout: "pipe", stderr: "ignore" });
+  const record = fake.children.get(child.pid)!;
+  const waiter = waiters[0];
+  child.unref();
+  expect(waiter.ref).toBe(false);
+  fake.childWrite(record, 1, "output");
+  pumpTurn();
+  expect(waiter.ref).toBe(false);
+  child.ref();
+  expect(waiter.ref).toBe(true);
+  pumpTurn();
+  expect(waiter.ref).toBe(true);
+  child.unref();
+  const output = child.stdout.text();
+  fake.exit(record, 0);
+  await pump();
+  expect(await output).toBe("output");
+  expect(waiter.ref).toBe(false);
+  expect(fake.open()).toBe(0);
+});
+
+test("new Web output demand references a dormant settled waiter", async () => {
+  const fake = service();
+  const { module, waiters, pump } = load(fake);
+  const child = module.spawn(["bun", "late-reader"], { stdout: "pipe", stderr: "ignore" });
+  const record = fake.children.get(child.pid)!;
+  const waiter = waiters[0];
+  fake.childWrite(record, 1, "first");
+  fake.childWrite(record, 1, "second");
+  fake.exit(record, 0);
+  await pump();
+  expect(waiter.ref).toBe(false);
+  expect(fake.open()).toBe(1);
+  let captured: string | undefined;
+  const output = child.stdout.text().then((value: string) => { captured = value; });
+  await Promise.resolve();
+  expect(waiter.ref).toBe(true);
+  for (let turn = 0; turn < 8 && captured === undefined; turn++) {
+    await pump();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  expect(captured).toBe("firstsecond");
+  await output;
+  expect(waiters).toHaveLength(0);
   expect(fake.open()).toBe(0);
 });

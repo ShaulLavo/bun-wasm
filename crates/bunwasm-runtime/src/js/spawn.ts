@@ -526,7 +526,7 @@
     const sink = writer(spec.stdinFd);
     const outputs: (Pipe | null)[] = [];
     const maxBuffer = spec.options.maxBuffer === undefined ? DEFAULT_MAX_BUFFER : Number(spec.options.maxBuffer);
-    async function capture(stream: Pipe): Promise<Uint8Array> {
+    async function capture(stream: ReadableStream<Uint8Array>): Promise<Uint8Array<ArrayBuffer>> {
       const reader = stream.getReader();
       const chunks: Uint8Array[] = [];
       let size = 0;
@@ -554,6 +554,7 @@
       let ended = false;
       const notify = () => { if (wake) wake(); wake = null; };
       const wakeIo = () => {
+        refreshRef();
         const host = native as unknown as { wake?: (timeout: number) => void };
         host.wake?.(0);
       };
@@ -596,6 +597,7 @@
     let abort: (() => void) | undefined;
     let closed = false;
     let settled = false;
+    let referenced = true;
     let reaped = false;
     const exited = new Promise<number>((resolve, reject) => { resolveExit = resolve; rejectExit = reject; });
     const child: Child = {
@@ -616,8 +618,8 @@
         child.killed = true;
         // Requests do not classify completion; even SIGKILL may lose to an already selected exit.
       },
-      ref() { waiter.ref = true; return child; },
-      unref() { waiter.ref = false; return child; },
+      ref() { referenced = true; refreshRef(); return child; },
+      unref() { referenced = false; refreshRef(); return child; },
       resourceUsage() { return undefined; },
       async [Symbol.asyncDispose]() { if (!settled) child.kill(); await exited; },
     };
@@ -671,7 +673,7 @@
       return waitChild(spec);
     }
     function refreshRef() {
-      waiter.ref = !settled || states.some((state) => state.ready());
+      waiter.ref = referenced && (!settled || states.some((state) => state.fd >= 0 && state.ready()));
     }
     function step() {
       if (closed) return true;
@@ -873,35 +875,47 @@
 
     function nodeReadable(stream: Loose) {
       if (!stream) return null;
-      const readable = new Readable({ read() { void pump(); } });
       const reader = stream.getReader();
       let pumping = false;
       let ended = false;
-      let resolveDrained!: () => void;
+      let resolveDrained: (() => void) | undefined;
       const drained = new Promise<void>((resolve) => { resolveDrained = resolve; });
+      const complete = () => {
+        ended = true;
+        resolveDrained?.();
+        resolveDrained = undefined;
+      };
+      const readable = new Readable({
+        read() { void pump(); },
+        destroy(error, callback) {
+          ended = true;
+          reader.cancel().then(
+            () => { complete(); callback(error); },
+            (failure: unknown) => { complete(); callback(error ?? failure); },
+          );
+        },
+      });
+      async function readChunk() {
+        const { value, done } = await reader.read();
+        if (ended) return false;
+        if (!done) return readable.push(Buffer.from(value));
+        complete();
+        readable.push(null);
+        return false;
+      }
       async function pump() {
         if (pumping || ended) return;
         pumping = true;
         try {
-          while (!ended) {
-            const { value, done } = await reader.read();
-            if (done) {
-              ended = true;
-              readable.push(null);
-              resolveDrained();
-              return;
-            }
-            if (!readable.push(Buffer.from(value))) return;
-          }
+          while (!ended && await readChunk()) { /* Stop at downstream backpressure. */ }
         } catch (error) {
-          ended = true;
           readable.destroy(error);
-          resolveDrained();
         } finally {
           pumping = false;
         }
       }
       (readable as Loose)._childDrained = drained;
+      void pump();
       return readable;
     }
 
@@ -957,13 +971,18 @@
       }
     }
 
+    function drainNodeOutputs(child: Loose) {
+      for (const stream of [child.stdout, child.stderr]) stream?.resume();
+      return Promise.all(child._drains);
+    }
+
     function reportExit(child: Loose, code: number) {
       child.signalCode = child._child.signalCode;
       child.exitCode = child.signalCode === null ? code : null;
       child.emit("exit", child.exitCode, child.signalCode);
       // Web stream completion schedules Node stream end callbacks as immediates.
       // Give those callbacks a turn before close, including unread output pipes.
-      Promise.all(child._drains).then(() => internal.realTimers.setImmediate(() => child.emit("close", child.exitCode, child.signalCode)));
+      drainNodeOutputs(child).then(() => internal.realTimers.setImmediate(() => child.emit("close", child.exitCode, child.signalCode)));
     }
 
     function nodeSpawnError(error: Loose, command: string, args: string[], sync: boolean) {
@@ -1017,7 +1036,7 @@
         child.emit("error", failure);
         child.stdin?.destroy();
         // Startup errors still drain/close their existing descriptors, just like successful exits.
-        Promise.all(child._drains).then(() => internal.realTimers.setImmediate(() => child.emit("close", child.exitCode, null)));
+        drainNodeOutputs(child).then(() => internal.realTimers.setImmediate(() => child.emit("close", child.exitCode, null)));
       });
       return child;
     }

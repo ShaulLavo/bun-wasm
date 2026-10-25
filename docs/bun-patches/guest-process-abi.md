@@ -56,8 +56,16 @@ and the actual typed result continue to drain; Node Writable destruction closes 
 process writer so children observe EOF. Async Web streams and Node readable adapters only pull
 when downstream demand exists and stop when `push()` returns false, while explicit
 `text`/`bytes`/`arrayBuffer`/`json` capture helpers retain their own `maxBuffer` policy instead
-of applying a lifetime limit to consumed streams. These input/lifetime and demand rules and their
-fake-host and real-guest regressions are original adapters, not copied Bun/Node stream code.
+of applying a lifetime limit to consumed streams. The capture helper accepts the undecorated Web
+stream and returns the fixed-owned bytes from `concatBytes`; the local `runtime.d.ts` Writable
+final callback declaration includes the optional error passed by the Node stream contract.
+The Node adapter starts one demand-limited pump immediately, so unread empty streams observe
+EOF without an application reader. After exit or startup failure, it resumes unread stdio to
+complete the Node close contract. Destroy cancels the owned Web reader and settles its drain,
+including an outstanding read. Caller ref/unref intent is kept separately from pipe demand;
+new output demand can reference a dormant waiter without undoing an explicit unref.
+These input/lifetime and demand rules and their fake-host and real-guest regressions are original
+adapters, not copied Bun/Node stream code.
 Ordinary children join the caller's job from `job_of(0)`; lookup failure is a spawn error,
 not a fallback to a separate job. Detached children request their own job, which the parent
 can reap with `wait_job` or stop with `kill_job`. Before allocating any descriptor or child,
