@@ -276,3 +276,30 @@ fn fetch_errors() {
     assert_eq!(net.fetch(br#"{"url":"ftp://x/"}"#, b""), ERROR);
     assert_eq!(json(net.error(0))["code"], "ERR_INVALID_ARG_VALUE");
 }
+
+#[test]
+fn notify_wait_past_ends_on_a_bump_made_before_or_during_the_wait() {
+    let notify = Notify::new();
+    let seen = notify.generation();
+    let bumper = notify.clone();
+    let thread = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        bumper.bump();
+    });
+    let started = Instant::now();
+    notify.wait_past(seen, Duration::from_secs(10));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    thread.join().unwrap();
+
+    // A change between reading the generation and waiting is not lost.
+    let seen = notify.generation();
+    notify.bump();
+    let started = Instant::now();
+    notify.wait_past(seen, Duration::from_secs(10));
+    assert!(started.elapsed() < Duration::from_secs(5));
+
+    // Without a change the wait ends at its timeout.
+    let started = Instant::now();
+    notify.wait_past(notify.generation(), Duration::from_millis(20));
+    assert!(started.elapsed() >= Duration::from_millis(20));
+}

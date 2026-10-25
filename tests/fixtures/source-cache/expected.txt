@@ -1,0 +1,4 @@
+source cache: evaluated CommonJS identity and same-length reload pass
+source cache: changed dynamic-import spans and separate paths pass
+source cache: JSON identity and reload pass
+source cache: ESM import identity stays cached

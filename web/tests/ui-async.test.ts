@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EditorState } from "@codemirror/state";
 import { Shell } from "../src/shell";
 import { SharedFilesystem } from "waffle/browser/shared-fs";
+import { FilesystemClient, FilesystemError, FilesystemService, MemoryBackend, createFilesystemConnection } from "waffle/fs";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -431,57 +432,117 @@ test("shell discards filesystem completion after the line was submitted", async 
   expect(ui.line).toBe("cat f");
 });
 
-async function filesystemFixture() {
-  const fs = Object.create(SharedFilesystem.prototype);
-  fs.writes = Promise.resolve();
-  return fs;
+class ControlledFilesystemBackend extends MemoryBackend {
+  readonly writeEntered = deferred<void>();
+  readonly flushEntered = deferred<void>();
+  write: Promise<void> | undefined;
+  checkpoint = Promise.resolve();
+  prepare(operation: string): Promise<void> | undefined {
+    if (operation !== "writeFile" || !this.write) return;
+    const pending = this.write;
+    this.write = undefined;
+    this.writeEntered.resolve();
+    return pending;
+  }
+  flush(): Promise<void> {
+    this.flushEntered.resolve();
+    return this.checkpoint;
+  }
+}
+
+const filesystemCleanups: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const cleanup of filesystemCleanups.splice(0)) await cleanup();
+});
+
+function filesystemFixture() {
+  const connection = createFilesystemConnection();
+  const backend = new ControlledFilesystemBackend();
+  const service = new FilesystemService(backend);
+  const client = new FilesystemClient(connection.client);
+  const operations: string[] = [];
+  const asyncCall = client.asyncCall.bind(client);
+  const requests = spyOn(client, "asyncCall").mockImplementation((...args) => {
+    operations.push(args[0]);
+    return asyncCall(...args);
+  });
+  const fs: SharedFilesystem = Object.assign(Object.create(SharedFilesystem.prototype), {
+    client, writes: Promise.resolve(),
+  });
+  filesystemCleanups.push(async () => {
+    requests.mockRestore();
+    try { await service.drainForOwner(); }
+    finally {
+      client.dispose();
+      service.dispose();
+      connection.server.port.close();
+    }
+  });
+  service.connect(connection.server);
+  return { fs, backend, operations };
 }
 
 test("shared filesystem reads drain writes without requesting storage checkpoints", async () => {
-  const fs = await filesystemFixture();
+  const { fs, backend, operations } = filesystemFixture();
   const write = deferred<void>();
-  const operations: string[] = [];
-  fs.client = { asyncCall: (operation: string) => { operations.push(operation); return operation === "writeFile" ? write.promise : Promise.resolve(); } };
+  backend.write = write.promise;
   const writing = fs.writeFile("/file", "memory-first");
   const reading = fs.readFile("/file");
   const lookup = fs.lookup("/file");
   const listing = fs.listFiles();
-  await Bun.sleep(0);
-  expect(operations).toEqual(["writeFile"]);
-  write.resolve();
-  await Promise.all([writing, reading, lookup, listing]);
-  expect(operations).toEqual(["writeFile", "readFile", "lookup", "listFiles"]);
+  try {
+    await backend.writeEntered.promise;
+    expect(operations).toEqual(["writeFile"]);
+    write.resolve();
+    const [, contents, entry, files] = await Promise.all([writing, reading, lookup, listing]);
+    expect(operations).toEqual(["writeFile", "readFile", "lookup", "listFiles"]);
+    expect(decoder.decode(contents)).toBe("memory-first");
+    expect(entry?.kind).toBe("file");
+    expect(files).toContain("/file");
+  } finally { write.resolve(); }
 });
 
 test("shared filesystem flush waits for pending writes and a durable service checkpoint", async () => {
-  const fs = await filesystemFixture();
+  const { fs, backend, operations } = filesystemFixture();
   const write = deferred<void>();
   const checkpoint = deferred<void>();
-  const operations: string[] = [];
-  fs.client = { asyncCall: (operation: string) => { operations.push(operation); return operation === "writeFile" ? write.promise : checkpoint.promise; } };
+  backend.write = write.promise;
+  backend.checkpoint = checkpoint.promise;
   const writing = fs.writeFile("/file", "durable");
   let completed = false;
   const saving = fs.flush().then(() => { completed = true; });
-  await Bun.sleep(0);
-  expect(operations).toEqual(["writeFile"]);
-  write.resolve();
-  await writing;
-  await Bun.sleep(0);
-  expect(operations).toEqual(["writeFile", "flush"]);
-  expect(completed).toBe(false);
-  checkpoint.resolve();
-  await saving;
+  try {
+    await backend.writeEntered.promise;
+    expect(operations).toEqual(["writeFile"]);
+    write.resolve();
+    await writing;
+    await backend.flushEntered.promise;
+    expect(operations).toEqual(["writeFile", "flush"]);
+    expect(completed).toBe(false);
+    checkpoint.resolve();
+    await saving;
+    expect(completed).toBe(true);
+    expect(decoder.decode(await fs.readFile("/file"))).toBe("durable");
+  } finally { write.resolve(); checkpoint.resolve(); }
 });
 
 test("shared filesystem flush reports failed writes and permits later writes", async () => {
-  const fs = await filesystemFixture();
-  const failure = new Error("failed editor save");
-  fs.client = { asyncCall: async () => { throw failure; } };
-  await expect(fs.writeFile("/file", "first")).rejects.toBe(failure);
+  const { fs, backend, operations } = filesystemFixture();
+  const write = deferred<void>();
+  backend.write = write.promise;
+  const writing = fs.writeFile("/file", "first");
+  await backend.writeEntered.promise;
+  write.reject(new FilesystemError(51, "failed editor save"));
+  // The service transports errors, so the page owns the decoded error, not the backend object.
+  const failure = await writing.catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(FilesystemError);
+  expect(failure).toHaveProperty("errno", 51);
   await expect(fs.flush()).rejects.toBe(failure);
-  fs.client = { asyncCall: async () => {} };
+  expect(operations).toEqual(["writeFile"]);
   await fs.writeFile("/file", "second");
   await fs.flush();
+  expect(operations).toEqual(["writeFile", "writeFile", "flush"]);
+  expect(decoder.decode(await fs.readFile("/file"))).toBe("second");
 });
 
 test("sandbox Restart is available while the initial dev server is still running", async () => {

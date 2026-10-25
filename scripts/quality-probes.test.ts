@@ -42,6 +42,9 @@ test("Knip rejects a new unreferenced source file", () => {
 test("fixed clone baseline rejects a new exact source copy", () => {
   withProbe("src/quality-clone-probe.ts", readFileSync(resolve(root, "src/bun-adapter.ts"), "utf8"), () => rejectsGate("duplicates", "new clone"));
 });
+test("assert/util baseline migration rejects another typed adapter copy", () => {
+  withProbe("crates/bunwasm-runtime/src/js/quality_assert_clone_probe.ts", readFileSync(resolve(root, "crates/bunwasm-runtime/src/js/assert.ts"), "utf8"), () => rejectsGate("duplicates", "new clone"));
+});
 // Different names/literals and an extra statement avoid an exact token clone.
 function rustFunction(name: string, value: string, factor: number, extra: string): string {
   return `fn ${name}(${value}: i32) -> i32 {

@@ -41,6 +41,22 @@ impl Notify {
         *self.generation.lock().unwrap() += 1;
         self.changed.notify_all();
     }
+
+    /// The change counter. Read it before checking readiness, so a change made during the
+    /// check still ends the following [`Notify::wait_past`].
+    pub fn generation(&self) -> u64 {
+        *self.generation.lock().unwrap()
+    }
+
+    /// Waits until something bumps the counter past `seen`, or `timeout` passes.
+    pub fn wait_past(&self, seen: u64, timeout: Duration) {
+        let generation = self.generation.lock().unwrap();
+        drop(
+            self.changed
+                .wait_timeout_while(generation, timeout, |now| *now == seen)
+                .unwrap(),
+        );
+    }
 }
 
 impl std::task::Wake for Notify {

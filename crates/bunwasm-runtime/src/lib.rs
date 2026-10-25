@@ -100,6 +100,8 @@ pub(crate) struct State {
     main_arg: RefCell<String>,
     /// Transpiled sources by path, with their module format.
     sources: RefCell<HashMap<String, (Rc<str>, modules::Format)>>,
+    /// Content digest of each file the caches above and below were built from.
+    source_digests: RefCell<HashMap<String, u64>>,
     #[cfg(feature = "engine-host")]
     source_imports: RefCell<HashMap<String, Rc<[transpiler::ModuleImport]>>>,
     #[cfg(feature = "engine-host")]
@@ -126,6 +128,7 @@ impl State {
             main: RefCell::new(String::new()),
             main_arg: RefCell::new(String::new()),
             sources: RefCell::new(HashMap::new()),
+            source_digests: RefCell::new(HashMap::new()),
             #[cfg(feature = "engine-host")]
             source_imports: RefCell::new(HashMap::new()),
             #[cfg(feature = "engine-host")]

@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/spawn-path.test.ts",
+  "batch": "10-web"
+}

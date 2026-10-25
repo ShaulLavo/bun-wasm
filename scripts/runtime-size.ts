@@ -27,7 +27,8 @@ export function initialJavaScript(outputs: OutputGraph, roots: readonly string[]
   return Array.from(seen).sort();
 }
 
-const CORE_BUDGET_KIB = 8.5;
+// Waffle 0.0.67 adds descriptor reopening and publication checks: ~9,650 B gzip plus 334 B margin.
+const CORE_BUDGET_KIB = 9.75;
 export function checkCoreBudget(gzipBytes: number): void {
   const budget = CORE_BUDGET_KIB * 1024;
   if (gzipBytes > budget) throw new Error(`core exceeds ${budget} B gzip budget by ${gzipBytes - budget} B; inspect runtime/core imports and the layer report`);
@@ -73,13 +74,31 @@ async function build(config: Parameters<typeof Bun.build>[0]) {
   return result;
 }
 
+/** Bun attributes minified bytes per input; gzip is measured only for complete outputs. */
+export function moduleContributions(
+  outputs: Record<string, { inputs: Record<string, { bytesInOutput: number }> }>,
+  runtime: RuntimePackage,
+): { path: string; minified: number }[] {
+  const contributions = new Map<string, number>();
+  for (const [path, output] of Object.entries(outputs)) {
+    if (!path.endsWith(".js")) continue;
+    for (const [input, { bytesInOutput }] of Object.entries(output.inputs)) {
+      const name = runtime.relativeInput(input) ?? input;
+      contributions.set(name, (contributions.get(name) ?? 0) + bytesInOutput);
+    }
+  }
+  return Array.from(contributions, ([path, minified]) => ({ path, minified }))
+    .sort((a, b) => b.minified - a.minified || a.path.localeCompare(b.path));
+}
+
 async function layer(name: string, entries: readonly string[], guideKiB: number) {
   const outdir = resolve(root, ".runtime-size", name);
   const runtime = resolveRuntimePackage(resolve(root, "web/src/main.ts"));
   const result = await build(browserBuildConfig(entries.map(path => path.startsWith("waffle") ? runtime.source(path) : resolve(root, path)), outdir));
   const files = await Promise.all(result.outputs.filter((output) => output.path.endsWith(".js")).map(async (output) => ({ path: posix.normalize(output.path), ...await bytes(output) })));
   const sizes = totals(files);
-  return { name, entries, ...sizes, guideGzip: guideKiB * 1024, files };
+  const inputs = moduleContributions(result.metafile!.outputs, runtime);
+  return { name, entries, ...sizes, guideGzip: guideKiB * 1024, files, inputs };
 }
 
 async function application(name: "web" | "sandbox", splitting: boolean, serviceWorker: { minified: number; gzip: number }) {
@@ -170,6 +189,8 @@ if (import.meta.main) {
   else {
     console.log(report.method);
     console.table(report.layers.map(({ name, minified, gzip, guideGzip }) => ({ layer: name, minified, gzip, guideGzip })));
+    console.log("Core inputs, minified bytes only. Gzip contributions are not additive:");
+    console.table(report.layers.find((layer) => layer.name === "core")!.inputs);
     for (const [name, scenarios] of Object.entries(report.applications)) {
 const printApplicationSizes = () => {
       console.log(`\n${name}:`);

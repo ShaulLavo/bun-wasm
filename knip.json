@@ -11,7 +11,9 @@
         "scripts/app-matrix/isolate.mjs",
         "scripts/bench/error-construction.js",
         "tests/package/fixtures/vite-main.ts",
-        "scripts/*.test.ts",
+        "scripts/**/*.test.ts",
+        "scripts/fixtures/crypto-host-native-control.ts",
+        "scripts/migrations/*.ts",
         "scripts/bench-module-preparation.ts",
         "scripts/bun-suite-small-causes.ts",
         "scripts/check-await-observer.ts",
@@ -27,12 +29,17 @@
         "scripts/vendor-node-streams.mjs",
         "scripts/wasm-size-breakdown.ts",
         "scripts/stream-polyfill-node-hooks.ts",
-        "scripts/http-suite-report.ts"
+        "scripts/http-suite-report.ts",
+        "scripts/ci-report.ts",
+        "tests/shell-consumer/{main,worker,fs-worker,sw}.ts"
       ],
       "project": [
         "src/**/*.ts",
         "scripts/**/*.{ts,mts,mjs,js}",
         "tests/package/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "^bash-web(?:/.*)?$"
       ]
     },
     "web": {
@@ -41,6 +48,7 @@
         "src/worker.ts",
         "src/net/helper.ts",
         "tests/*.test.{ts,js}",
+        "guest-tests/*.test.ts",
         "tests/browser-*.{ts,mjs}",
         "scripts/*.{ts,mjs}",
         "src/fs-worker.ts",
@@ -58,6 +66,7 @@
         "tests/runtime-proc-browser-main.ts",
         "tests/fixtures/{filesystem-lifecycle,safari-driver-listener,startup-filesystem}.ts",
         "tests/bun-runtime-proc-main.ts",
+        "tests/safari-{observers,open-descriptor-worker}.ts",
         "tests/worker-bootstrap-browser.ts",
         "tests/worker-bootstrap-browser-main.ts",
         "tests/preview-policy-fixture.ts",
@@ -67,7 +76,8 @@
       "project": [
         "src/**/*.{ts,js}",
         "scripts/**/*.{ts,mjs}",
-        "tests/**/*.{ts,mjs,js}"
+        "tests/**/*.{ts,mjs,js}",
+        "guest-tests/**/*.ts"
       ],
       "ignoreDependencies": [
         "benchmark"

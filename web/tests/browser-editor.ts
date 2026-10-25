@@ -5,13 +5,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { chromium, firefox, webkit } from "playwright";
+import { chromium, firefox, webkit, type Page } from "playwright";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const engine = process.argv[2] ?? "chromium";
 const browserType = engine === "chromium" ? chromium : engine === "firefox" ? firefox : engine === "webkit" ? webkit : undefined;
 if (!browserType) throw new Error(`Unknown browser ${engine}`);
 const assets = new Map<string, Blob>();
+const languageAssets = new Set<string>();
+const requests: string[] = [];
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 let browserLaunch: ReturnType<typeof chromium.launch> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
@@ -33,6 +35,33 @@ const timeout = setTimeout(() => {
   console.error("Editor browser gate exceeded 90 seconds");
   void cleanup().finally(() => process.exit(1));
 }, 90_000);
+
+async function filesystemInfoCheck(base: string, mode: "memory" | "fast" | null): Promise<void> {
+  const context = await browser!.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(`${base}/playground/${mode ? `?mode=${mode}` : ""}`);
+    await page.waitForFunction(() => !!window.playground);
+    assert.deepEqual(await page.evaluate(() => {
+      const fs = window.playground!.fs;
+      return { mode: fs.vfs.mode, persistent: fs.vfs.persistent };
+    }), { mode: mode ?? "fast", persistent: mode !== "memory" });
+    const input = page.locator(".xterm-helper-textarea");
+    await input.pressSequentially("help > /tmp/filesystem-info.txt");
+    await input.press("Enter");
+    await page.waitForFunction(async () => {
+      const fs = window.playground?.fs;
+      if (!fs || !await fs.lookup("/tmp/filesystem-info.txt")) return false;
+      return new TextDecoder().decode(await fs.readFile("/tmp/filesystem-info.txt")).includes("filesystem:");
+    });
+    const output = await page.evaluate(async () => new TextDecoder().decode(await window.playground!.fs.readFile("/tmp/filesystem-info.txt")));
+    const storage = mode === "memory" ? "memory-only browser storage" : "persistent browser storage";
+    const durability = mode === "memory" ? "do not survive" : "survive";
+    assert.ok(output.includes(`filesystem: ${storage}, preopened at /, cwd /home/user; editor saves ${durability} reload`), output);
+    if (mode === "memory") assert.doesNotMatch(output, /persistent browser storage|editor saves survive reload/);
+    console.log(`ok ${engine} playground: ${mode ?? "default fast"} shell help reports ${storage}; editor saves ${durability} reload`);
+  } finally { await context.close(); }
+}
 
 async function fastWaitCheck(base: string) {
   // The test-owned filesystem requests Waffle's supported waiting policy, not a
@@ -158,6 +187,46 @@ async function startupSteal(base: string, app: string, rejectPending: boolean) {
   } finally { await context.close(); }
 }
 
+function addEditorAssets(build: Awaited<ReturnType<typeof Bun.build>>, prefix: string, outdir: string): void {
+  for (const output of build.outputs) assets.set(`${prefix}/${output.path.slice(outdir.length + 1)}`, output);
+  if (!build.metafile) throw new Error("Missing editor fixture graph");
+  for (const [path, output] of Object.entries(build.metafile.outputs)) {
+    if (!Object.keys(output.inputs).some(input => /node_modules\/@codemirror\/lang-(?:css|html)\//.test(input))) continue;
+    languageAssets.add(`${prefix}/${path.replace(/^\.\//, "")}`);
+  }
+}
+
+async function openEditorFile(page: Page, path: string): Promise<void> {
+  await page.locator("#file-select").selectOption(path);
+  await page.waitForFunction(path => document.querySelector("#file-name")?.textContent === path, path);
+  assert.ok(await page.locator(".cm-content span[class]").count() > 0, `${path}: syntax highlighting`);
+}
+
+async function languageChecks(base: string, languageAssets: ReadonlySet<string>, requests: readonly string[]): Promise<void> {
+  const context = await browser!.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  try {
+    const start = requests.length;
+    await page.goto(`${base}/sandbox/`);
+    await page.waitForFunction(() => document.querySelector("#file-name")?.textContent === "src/App.tsx");
+    assert.deepEqual(requests.slice(start).filter(path => languageAssets.has(path)), []);
+    await openEditorFile(page, "src/App.css");
+    await page.locator(".cm-content").fill("h1 { color: red; }");
+    await page.locator(".cm-content").press("ControlOrMeta+s");
+    await page.waitForFunction(() => document.querySelector("#save-state")?.textContent === "saved");
+    await openEditorFile(page, "index.html");
+    await openEditorFile(page, "src/App.tsx");
+    await openEditorFile(page, "src/App.css");
+    assert.equal(await page.locator(".cm-content").innerText(), "h1 { color: red; }");
+    assert.ok(requests.slice(start).some(path => languageAssets.has(path)));
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector("#file-name")?.textContent === "src/App.tsx");
+    await openEditorFile(page, "src/App.css");
+    assert.equal(await page.locator(".cm-content").innerText(), "h1 { color: red; }");
+    console.log(`ok ${engine} sandbox: lazy CSS/HTML highlighting, TypeScript switch-back, saved edit and reload`);
+  } finally { await context.close(); }
+}
+
 try {
   scratch = await mkdtemp(join(process.env.EDITOR_SCRATCH_ROOT ?? tmpdir(), "bw-editor-"));
   process.env.TMPDIR = scratch;
@@ -168,7 +237,7 @@ try {
     const build = await Bun.build({
       outdir,
       entrypoints: [join(root, app, "src/main.ts"), join(root, "web/src/fs-worker.ts")],
-      target: "browser", format: "esm", splitting: true,
+      target: "browser", format: "esm", splitting: true, metafile: true,
       naming: { entry: "[name].[ext]", chunk: "chunks/[name]-[hash].[ext]", asset: "[name]-[hash].[ext]" },
       plugins: [{
         name: "artifact-free-editor-host",
@@ -180,13 +249,15 @@ try {
             return { path: join(root, "web/tests/fixtures/startup-filesystem.ts") };
           });
           // Only the engine and preview host are replaced; editor/startup/save code ships unchanged.
-          build.onLoad({ filter: /\/web\/src\/runner\.ts$/ }, () => ({ loader: "ts", contents: `
+          build.onLoad({ filter: /\/web\/src\/engine-loader\.ts$/ }, () => ({ loader: "ts", contents: `
             export const ENGINES = Object.fromEntries(["browser", "quickjs", "jsc"].map(key => [key, { name: key, wasm: "not-built.wasm" }]));
             export class WasmMissing extends Error {}
             export const isEngine = (key) => Object.hasOwn(ENGINES, key);
             export async function loadWasm() { throw new WasmMissing("Artifact-free editor test"); }
             export async function registerModuleScope() { return false; }
             export const mb = (size) => String(size);
+          ` }));
+          build.onLoad({ filter: /\/web\/src\/runner\.ts$/ }, () => ({ loader: "ts", contents: `
             export function startRun() { throw new Error("This test must not start a guest"); }
           ` }));
           build.onLoad({ filter: /\/web\/src\/preview\.ts$/ }, () => ({ loader: "ts", contents: `
@@ -197,12 +268,13 @@ try {
     });
     assert.equal(build.success, true, build.logs.map(String).join("\n"));
     assert.equal(filesystemOwners, 1, `${app}: startup gate must instrument the runtime-owned filesystem`);
-    for (const output of build.outputs) assets.set(`${prefix}/${output.path.slice(outdir.length + 1)}`, output);
+    addEditorAssets(build, prefix, outdir);
     assets.set(`${prefix}/`, Bun.file(join(root, app, "index.html")));
   }
   assets.set("/sandbox/template.json", new Blob([JSON.stringify({ files: {
     "index.html": "<!doctype html><h1>Editor persistence test</h1>",
     "src/App.tsx": "export default 'original template';",
+    "src/App.css": "h1 { color: blue; }",
     "deleted.ts": "delete me",
     "package.json": "{}",
   } })], { type: "application/json" }));
@@ -210,6 +282,7 @@ try {
     hostname: "127.0.0.1", port: Number(process.env.EDITOR_PORT ?? 0),
     fetch(request) {
       const path = new URL(request.url).pathname;
+      requests.push(path);
       const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" };
       if (path === "/favicon.ico") return new Response(null, { status: 204, headers });
       const asset = assets.get(path);
@@ -218,6 +291,7 @@ try {
   });
   browserLaunch = browserType.launch({ headless: true, downloadsPath: join(scratch, "downloads"), tracesDir: join(scratch, "traces") });
   browser = await browserLaunch;
+  await languageChecks(`http://127.0.0.1:${server.port}`, languageAssets, requests);
   const context = await browser.newContext();
   const page = await context.newPage();
   page.setDefaultTimeout(15_000);
@@ -226,6 +300,7 @@ try {
   page.on("response", response => { if (response.status() >= 400) console.error(`HTTP ${response.status()}: ${response.url()}`); });
   const base = `http://127.0.0.1:${server.port}`;
 
+  for (const mode of ["memory", "fast", null] as const) await filesystemInfoCheck(base, mode);
   await unsupportedModeChecks(base);
   await startupFailureCheck(base);
   await startupStealChecks(base);

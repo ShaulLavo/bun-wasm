@@ -3,8 +3,6 @@
 (function (internal) {
   "use strict";
   const native = internal.native;
-  const PlatformRequest = native.engine === "host" ? globalThis.Request : null;
-  const requestBodyObservers = new WeakMap();
 
   // --- DOMException -----------------------------------------------------------
 
@@ -83,6 +81,7 @@
     #encoding;
     #fatal;
     #ignoreBOM;
+    #bomSeen = false;
     #pending = null;
     constructor(label = "utf-8", options = {}) {
       const encoding = DECODER_LABELS[String(label).trim().toLowerCase()];
@@ -113,22 +112,28 @@
         bytes = joined;
         this.#pending = null;
       }
-      if (options.stream && this.#encoding === "utf-8") {
+      const stream = Boolean(options.stream);
+      if (stream && this.#encoding === "utf-8") {
         const tail = incompleteUtf8Tail(bytes);
         if (tail > 0) {
           this.#pending = bytes.slice(bytes.length - tail);
           bytes = bytes.subarray(0, bytes.length - tail);
         }
       }
-      return this.#decodeBytes(bytes);
+      try {
+        return this.#decodeBytes(bytes);
+      } finally {
+        if (!stream) this.#bomSeen = false;
+      }
     }
     #decodeBytes(bytes) {
       if (this.#encoding === "windows-1252") return native.latin1Decode(bytes.slice());
-      let text = this.#encoding === "utf-16le"
+      const text = this.#encoding === "utf-16le"
         ? native.utf16leDecode(bytes.slice())
         : native.utf8Decode(bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice(), this.#fatal);
-      if (!this.#ignoreBOM && text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-      return text;
+      if (this.#bomSeen || text.length === 0) return text;
+      this.#bomSeen = true;
+      return !this.#ignoreBOM && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
     }
   }
 
@@ -157,6 +162,8 @@
   }
 
   // --- URLSearchParams / URL --------------------------------------------------
+
+  const { toUSVString, initFromObject, convertMethodArgs } = internal.require("url_search_params");
 
   // application/x-www-form-urlencoded byte serializer.
   function formEncode(str) {
@@ -199,7 +206,7 @@
         this.#list = initFromObject(init);
         return;
       }
-      const str = String(init);
+      const str = toUSVString(init);
       this.#list = parseQuery(str.startsWith("?") ? str.slice(1) : str);
     }
     static _attach(params, url) {
@@ -215,32 +222,34 @@
       return this.#list.length;
     }
     append(name, value) {
-      this.#list.push([String(name), String(value)]);
+      this.#list.push([toUSVString(name), toUSVString(value)]);
       this.#update();
     }
     delete(name, value) {
-      const n = String(name);
-      this.#list = this.#list.filter(([k, v]) => k !== n || (value !== undefined && v !== String(value)));
+      const [n, val] = convertMethodArgs(() => this.#list, name, value);
+      this.#list = this.#list.filter(([k, v]) => k !== n || (val !== undefined && v !== val));
       this.#update();
     }
     get(name) {
-      const hit = this.#list.find(([k]) => k === String(name));
+      const [n] = convertMethodArgs(() => this.#list, name);
+      const hit = this.#list.find(([k]) => k === n);
       return hit ? hit[1] : null;
     }
     getAll(name) {
-      return this.#list.filter(([k]) => k === String(name)).map(([, v]) => v);
+      const [n] = convertMethodArgs(() => this.#list, name);
+      return this.#list.filter(([k]) => k === n).map(([, v]) => v);
     }
     has(name, value) {
-      const n = String(name);
-      return this.#list.some(([k, v]) => k === n && (value === undefined || v === String(value)));
+      const [n, val] = convertMethodArgs(() => this.#list, name, value);
+      return this.#list.some(([k, v]) => k === n && (val === undefined || v === val));
     }
     set(name, value) {
-      const n = String(name);
+      const [n, val] = convertMethodArgs(() => this.#list, name, value, true);
       const i = this.#list.findIndex(([k]) => k === n);
       if (i < 0) {
-        this.#list.push([n, String(value)]);
+        this.#list.push([n, val]);
       } else {
-        this.#list[i][1] = String(value);
+        this.#list[i][1] = val;
         this.#list = this.#list.filter(([k], j) => k !== n || j <= i);
       }
       this.#update();
@@ -271,17 +280,6 @@
     get [Symbol.toStringTag]() {
       return "URLSearchParams";
     }
-  }
-
-  function initFromObject(init) {
-    if (typeof init[Symbol.iterator] === "function") {
-      return Array.from(init, (pair) => {
-        const entry = Array.from(pair);
-        if (entry.length !== 2) throw new TypeError("Each query pair must be an iterable [name, value] tuple");
-        return [String(entry[0]), String(entry[1])];
-      });
-    }
-    return Object.keys(init).map((k) => [k, String(init[k])]);
   }
 
   // Component array, or undefined when the input doesn't parse.
@@ -707,7 +705,7 @@
       this.#type = type;
     }
     async text() {
-      return native.utf8Decode(this._bytes());
+      return new TextDecoder().decode(this._bytes());
     }
     async json() {
       return JSON.parse(await this.text());
@@ -907,7 +905,7 @@
       return this._body || new Uint8Array(0);
     },
     async text() {
-      return native.utf8Decode(await this._consume());
+      return new TextDecoder().decode(await this._consume());
     },
     async json() {
       return JSON.parse(await this.text());
@@ -1027,47 +1025,6 @@
     }
   }
 
-  function requestBodyChunk(chunk) {
-    if (typeof chunk === "string") return native.utf8Encode(chunk);
-    if (!(chunk instanceof Uint8Array)) throw new TypeError("Expected a string or Uint8Array body chunk");
-    return chunk;
-  }
-
-  function requestBodyChunks(body) {
-    const iterator = body[Symbol.asyncIterator]();
-    if (iterator === null || (typeof iterator !== "object" && typeof iterator !== "function")) throw new TypeError("Expected an async iterator object");
-    const next = iterator.next;
-    return {
-      async next() {
-        const result = await next.call(iterator);
-        if (result.done) return result;
-        return { done: false, value: requestBodyChunk(result.value) };
-      },
-      return() {
-        const close = iterator.return;
-        return close == null ? Promise.resolve({ done: true }) : close.call(iterator);
-      },
-      [Symbol.asyncIterator]() { return this; },
-    };
-  }
-
-  function requestBody(body) {
-    if (body == null || body instanceof ReadableStream || typeof body[Symbol.asyncIterator] !== "function") return body;
-    return ReadableStream.from(requestBodyChunks(body));
-  }
-
-  function observeRequestBody(stream) {
-    if (!PlatformRequest || !stream || requestBodyObservers.has(stream)) return stream;
-    const observer = new PlatformRequest("http://localhost/", { method: "POST", body: stream, duplex: "half" });
-    requestBodyObservers.set(stream, observer);
-    return stream;
-  }
-
-  function requestBodyUsed(target) {
-    const observer = target._stream && requestBodyObservers.get(target._stream);
-    return target._bodyUsed || (observer ? observer.bodyUsed : Boolean(target._stream && target._stream._disturbed));
-  }
-
   class Request {
     #url;
     #method;
@@ -1088,8 +1045,7 @@
       if (body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
         throw new TypeError("Request with a GET or HEAD method cannot have a body.");
       }
-      initBody(this, requestBody(body), this.#headers);
-      observeRequestBody(this._stream);
+      initBody(this, body, this.#headers);
     }
     get url() {
       return this.#url;
@@ -1107,17 +1063,16 @@
       return this.#redirect;
     }
     get bodyUsed() {
-      return requestBodyUsed(this);
+      return this._bodyUsed || Boolean(this._stream && this._stream._disturbed);
     }
     get body() {
       if (this._stream) return this._stream;
       if (this._body === null) return null;
-      this._stream = observeRequestBody(internal.makeByteStream(this._body));
+      this._stream = internal.makeByteStream(this._body);
       return this._stream;
     }
     clone() {
       const body = bodyStreams.clone(this);
-      observeRequestBody(this._stream);
       return new Request(this, { body });
     }
     get [Symbol.toStringTag]() {

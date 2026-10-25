@@ -1,22 +1,60 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { discoverChecks } from "./test-checks";
 
-const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/"].concat(
-  ["node-misc", "module-compile", "fs-stream-constructors", "stdio-cursor", "vm-context", "net-http-implicit-headers", "request-body-streams", "stack-source-position"].map(name => `tests/fixtures/${name}/`),
+const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/install/", "web/guest-tests/"].concat(
+  ["module-compile", "fs-stream-constructors", "stdio-cursor", "vm-context", "net-http-implicit-headers", "request-body-streams", "stack-source-position"].map(name => `tests/fixtures/${name}/`),
 );
 const nativeFiles = new Set([
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
   "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
-  "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json",
+  "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/test.sh",
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
-  "scripts/test.sh", "scripts/check-runtime.sh", "tests/servers/http.ts", "scripts/node-fs-streams.test.ts", "scripts/node-vm-context.test.ts",
+  "scripts/check-runtime.sh", "tests/servers/http.ts", "scripts/node-fs-streams.test.ts", "scripts/node-vm-context.test.ts",
   "scripts/node-http-headers.test.ts", "scripts/node-http-response-fixture.ts", "scripts/node-request-body.test.ts", "scripts/node-request-body-fixture.ts",
   "scripts/node-stack-position.test.ts", "scripts/node-stack-position-fixture.ts",
   "scripts/ci-changes.ts", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
 ]);
+const nativeCheckDirectories = discoverChecks().filter(check => check.owner === "native").map(check => `${check.path}/`);
+const nativeCheckManifests = /^checks\/(?:native|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 
+const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "tests/fixtures/shared-array-buffer/", "tests/jsc-embedding/"];
+const jscFiles = new Set([
+  "crates/bunwasm-runtime/src/engine_jsc.rs", "scripts/build-bun-jsc.sh", "scripts/build-jsc.sh",
+  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "scripts/ci-changes.ts", ".github/workflows/ci.yml",
+  "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/ci-binaryen.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
+]);
+
+const webGuestDirectories = [
+  "web/src/net/", "tests/fixtures/spawn-executable/", "tests/install/",
+  "crates/bunwasm-runtime/", "crates/bunwasm-cli/", "crates/bunwasm-tools/", "crates/bunwasm-lint-native/",
+  "crates/bunwasm-build/", "crates/bunwasm-transpiler/", "crates/bunwasm-glue/", "crates/bunwasm-posix/",
+  "crates/bunwasm-semver/", "crates/bunwasm-crypto-sys/", "patches/", "third_party/", ".cargo/",
+];
+const webGuestFiles = new Set([
+  "scripts/test-web-guests.ts", "scripts/test-web-guests.test.ts", "scripts/guest-build-receipt.ts",
+  "scripts/build-bun-tools.sh", "scripts/transpile-runtime.ts", "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "web/bun.lock",
+  "tests/fixtures/runtime-proc-spawn-requests.json", "web/guest-tests/compose.ts", "web/guest-tests/jsc.test.ts",
+  "web/tests/subprocess.ts", "web/tests/subprocess.mjs",
+  "web/src/fs.ts", "web/src/tool-command.ts", "web/src/engine-host.js", "web/src/engine-host.d.ts",
+  "web/src/crypto-host.js", "web/src/crypto-inputs.js", "web/src/promise-reactions.ts",
+  "web/src/native-stream-state.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
+]);
+const engineSpecificFiles = new Set([
+  "crates/bunwasm-runtime/src/engine_quickjs.rs", "crates/bunwasm-runtime/src/engine_host.rs",
+]);
+
+function sharedWebGuestInput(path: string): boolean {
+  if (engineSpecificFiles.has(path)) return false;
+  return webGuestFiles.has(path) || path.startsWith("web/scripts/node-") || webGuestDirectories.some(root => path.startsWith(root));
+}
+
+export function needsJsc(paths: readonly string[]): boolean {
+  return paths.some(path => sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
+}
+
 export function needsRust(paths: readonly string[]): boolean {
-  return paths.some(path => nativeFiles.has(path) || nativeScripts.test(path) || nativeDirectories.some(root => path.startsWith(root)));
+  return needsJsc(paths) || paths.some(path => path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || nativeCheckDirectories.some(root => path.startsWith(root)) || path.startsWith("web/tests/bun-runtime-proc-") || nativeFiles.has(path) || nativeScripts.test(path) || nativeDirectories.some(root => path.startsWith(root)));
 }
 
 export function changedPaths(base: string, head: string, pullRequest: boolean): string[] {
@@ -26,10 +64,26 @@ export function changedPaths(base: string, head: string, pullRequest: boolean): 
   return execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", range], { encoding: "utf8" }).split("\0").filter(Boolean);
 }
 
+function manifestInputs(ref: string): string | undefined {
+  const result = spawnSync("git", ["show", `${ref}:package.json`], { encoding: "utf8" });
+  if (result.status !== 0) return undefined;
+  const manifest: unknown = JSON.parse(result.stdout);
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("Invalid root package manifest");
+  return JSON.stringify(Object.entries(manifest).filter(([key]) => key !== "version"));
+}
+
+function nativeChanges(paths: readonly string[], base: string, head: string): string[] {
+  if (!paths.includes("package.json")) return paths.filter(path => needsRust([path]));
+  const before = manifestInputs(base);
+  const after = manifestInputs(head);
+  return paths.filter(path => needsRust([path]) && (path !== "package.json" || before === undefined || after === undefined || before !== after));
+}
+
 if (import.meta.main) {
   const [base, head] = process.argv.slice(2);
   if (!base || !head) throw new Error("Usage: ci-changes.ts <base-sha> <head-sha>");
   const paths = changedPaths(base, head, process.env.GITHUB_EVENT_NAME === "pull_request");
-  console.error(`Native inputs changed: ${paths.filter(path => needsRust([path])).join(", ") || "none"}`);
-  console.log(`rust=${needsRust(paths)}`);
+  const native = nativeChanges(paths, base, head);
+  console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
+  console.log(`rust=${needsRust(native)}\njsc=${needsJsc(paths)}`);
 }

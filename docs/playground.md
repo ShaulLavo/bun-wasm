@@ -96,25 +96,24 @@ which examples pass).
 backends and the editor startup-steal regressions. CI calls its unit and browser phases around
 browser installation. `scripts/test-web.sh` calls the same phases before its WASM integration gates.
 
-Build the playground on the PC, copy `web/dist` to a task directory on the Mac, and serve it with COOP/COEP headers.
-Run `bun web/tests/browser-startup-safari.ts <playground-url>` on the Mac to check fresh startup, three durable reloads, newest-tab ownership, and recovery of the displaced tab.
+Build the playground, copy `web/dist` to a macOS machine, and serve it with COOP/COEP headers.
+Run `bun web/tests/browser-startup-safari.ts <playground-url>` on macOS to check fresh startup, three durable reloads, newest-tab ownership, and recovery of the displaced tab.
 Set `SAFARI_IOS=1` for the iPhone 17 Pro simulator, `SAFARI_OUTPUT=<path>` for the JSON report, and `SAFARI_SCREENSHOT=<path>` for the error screenshot.
 If the simulator is shut down, run `xcrun simctl boot "iPhone 17 Pro"` and `xcrun simctl bootstatus "iPhone 17 Pro" -b` before starting the driver.
 Set `SAFARI_SEED_URL=https://bun.sprockt.dev/playground/` to import a workspace created by the live build before testing the candidate.
-The test uses a task-owned Safari automation session and driver. It preserves normal browser profiles.
+The test uses its own Safari automation session and driver. It preserves normal browser profiles.
 
 The filesystem lifecycle regression uses the actual page adapter and persistence worker without
 guest WASM. `scripts/test-web.sh` runs its Chromium and WebKit cases, plus the storage fencing tests.
 For real Safari, build with `bun web/tests/browser-filesystem-lifecycle.ts --build <directory>`
-through the PC heavy wrapper. Copy the assets and runner to an owned directory under Mac `~/tmp`,
+Copy the assets and runner to a macOS machine,
 then serve them on an unused localhost port with COOP `same-origin` and COEP `require-corp`.
-Under the Mac lock, run `bun browser-filesystem-lifecycle.ts safari <url>` and repeat with
+Run `bun browser-filesystem-lifecycle.ts safari <url>` and repeat with
 `SAFARI_IOS=1` for the booted iPhone 17 Pro simulator. `SAFARI_OUTPUT=<file>` records lifecycle
 and lock observations. Both Safari platforms cover same-tab reopen, Reload, cached-page
 restoration, Reload after Back with no other tab, newest-wins IndexedDB ownership, preserved
 visible edits and durable saves. OPFS keeps no-steal ownership and checks refusal and recovery
-after the owner closes. [The runtime plan](../plans/browser-runtime.md#safari-workspace-ownership)
-explains the epoch fence and the HTTPS no-store complement.
+after the owner closes.
 
 ## Without a browser
 
@@ -173,8 +172,7 @@ Ignored signals do nothing; handled signals queue for the guest and preserve its
 Node/Bun listener registration and removal publish synchronously; removing the final handler
 restores default. Ordinary `process.exit(143)` remains an ordinary exit, not a SIGTERM result.
 SIGKILL always records 137 and revokes; it cannot be caught or ignored. Cooperative event-loop
-turns deliver registered handlers now; CPU-bound engine checkpoints are step 7a, not a dependency
-of unhandled default actions. A second Run/Ctrl+C stop request sends SIGKILL; no timer escalates.
+turns deliver registered handlers; unhandled default actions do not depend on CPU-bound engine checkpoints. A second Run/Ctrl+C stop request sends SIGKILL; no timer escalates.
 Jobs and pids have separate namespaces; foreground job termination leaves other background jobs
 alive, and ordinary parent exit does not kill children. The generic service imposes no
 four-active-child limit. Each wasm instance retains the module's 512 MiB memory limit, and Node
@@ -200,26 +198,9 @@ filesystem visibility between processes. The artifact-free
 `bun web/tests/browser-process.ts chromium|firefox|webkit` gate exercises the generic supervisor
 and real workers, including cooperative CPU-loop signal handling and background jobs.
 Add `--artifact` to use the existing Bun light WASM for orphan-lifetime and capacity checks;
-add `--benchmark` to compare cold and shared-module first output with the frozen pre-process
-baseline `c7f08312e2243d7e6e6c665aff178930b1285b12`. The benchmark checks that both revisions use
-identical WASM bytes and owns its browser profiles, servers and scratch cleanup.
-
-### Spawn measurements
-
-On 2026-10-17, an M1 MacBook Air (8 logical CPUs, AC power; initial load average 2.92) ran five
-starts per mode, browser and revision. Candidate source was `02218afd`; the baseline was
-`c7f08312`. Network transfer is excluded. Cold starts compile fresh bytes with a unique custom
-section; shared starts reuse a compiled module. First output uses the same 1 ms shared-memory
-poll in both revisions. The reused WASM was 12,607,668 bytes, SHA-256
-`db607962302070c6584005d6f43d33dee4296f79657912722bbecb3ee733bbf3`.
-
-| Browser | Cold median, candidate / baseline (ms) | Shared-module median, candidate / baseline (ms) |
-| --- | ---: | ---: |
-| Chromium 156 | 67.320 / 69.570 | 32.630 / 32.555 |
-| Firefox 157 | 184.440 / 183.720 | 48.340 / 48.780 |
-| WebKit 27.2 | 90.560 / 89.160 | 39.640 / 40.680 |
-
-Startup is roughly unchanged in this bounded comparison; these are not cross-machine results
-or a speedup claim. No worker pool is implemented or enabled, so there is no pool timing.
-Each browser also passed 15 process checks, including eight orphan-survival cycles that recover
-all child slots and supervisor records, with zero active process workers after cleanup.
+add `--benchmark` to compare cold and shared-module first output between two revisions.
+The benchmark checks that both revisions use identical WASM bytes and owns its browser
+profiles, servers and scratch cleanup. Network transfer is excluded; no worker pool exists,
+so there is no pool timing. Each browser also passes 15 process checks, including eight
+orphan-survival cycles that recover all child slots and supervisor records, with zero
+active process workers after cleanup.

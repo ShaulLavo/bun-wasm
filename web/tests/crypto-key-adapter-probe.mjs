@@ -1,4 +1,5 @@
 import {readFileSync} from "node:fs";
+import {stripTypeScriptTypes} from "node:module";
 import {fileURLToPath} from "node:url";
 import {webcrypto, randomBytes, timingSafeEqual, generateKeyPairSync} from "node:crypto";
 import * as stream from "node:stream";
@@ -8,7 +9,7 @@ const provider = webcrypto.subtle;
 const signMetadata = {name:provider.sign.name, length:provider.sign.length};
 const beforeSign = provider.sign.bind(provider), beforeVerify = provider.verify.bind(provider);
 // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
-const load = path => (0, eval)(readFileSync(path, "utf8"));
+const load = path => (0, eval)(path.endsWith(".ts") ? stripTypeScriptTypes(readFileSync(path, "utf8"), {mode:"strip"}) : readFileSync(path, "utf8"));
 const internal = {
  native:{subtleCrypto:provider, CryptoKey:globalThis.CryptoKey, SubtleCrypto:globalThis.SubtleCrypto,
   randomBytes:n=>new Uint8Array(randomBytes(n)),
@@ -18,7 +19,7 @@ const internal = {
  },
  builtin:()=>stream,
  toUint8:a=>ArrayBuffer.isView(a)?new Uint8Array(a.buffer,a.byteOffset,a.byteLength):new Uint8Array(a),
- require:name=>load(root+name+".js")(internal),
+ require:name=>load(root+name+(name==="crypto_host_keys"?".ts":".js"))(internal),
 };
 load(root+"crypto.js")(internal);
 const c = internal.crypto;
