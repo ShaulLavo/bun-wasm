@@ -11,7 +11,7 @@ import { exitProvenance } from "./exit-provenance.ts";
 import { earlyServerExit } from "./browser.mjs";
 import { completeObservations } from "./product-browser.ts";
 import { productScoreboard, unlockCandidates } from "./product-report.ts";
-import { guestProvenance } from "./product-provenance.ts";
+import { guestProvenance, verifyPlaygroundBuilds } from "./product-provenance.ts";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
 if (interfaces.some(line => line.split(":")[0].trim() !== "lo")) throw new Error("Use scripts/app-matrix.sh in its loopback-only network namespace");
@@ -258,6 +258,7 @@ try {
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
   runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-types.ts", "product-report.ts", "product-provenance.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
+  if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.map(engine => [wasmName[engine], artifacts[engine].sha256])));
   mirror = await registry({ directory: options.cache, record: options.record });
   const { browserHost } = await import("./browser.mjs");
   browserSession = await browserHost({ root, scratch, options, launch, stop });

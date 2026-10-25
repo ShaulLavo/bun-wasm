@@ -24,3 +24,11 @@ export function guestProvenance(receipt: string, artifact: { sha256: string; byt
     source_state_at_build: fields.get("guest_source_state") ?? "not recorded",
   };
 }
+
+export function verifyPlaygroundBuilds(manifest: unknown, expected: Record<string, string>): void {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("Playground build manifest is missing or invalid");
+  for (const [name, digest] of Object.entries(expected)) {
+    const observed: unknown = Reflect.get(manifest, name);
+    if (!Object.hasOwn(manifest, name) || observed !== digest) throw new Error(`Playground artifact differs from the recorded guest: ${name}`);
+  }
+}
