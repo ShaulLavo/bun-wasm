@@ -1,0 +1,4 @@
+constructor, listeners, once and custom rejection arguments
+static default snapshots and disabled capture
+synchronous throws and capture suppression during error delivery
+thenable receiver, single getter read, deferred rejection and throwing then

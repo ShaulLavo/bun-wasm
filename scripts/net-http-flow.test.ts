@@ -81,6 +81,7 @@ function fixture() {
     fetch_body: load("fetch_body")(), compression_streams: { decode: (body: ReadableStream) => body },
   };
   modules.net_hostname = load("net_hostname")({ require: (name: string) => modules[name] });
+  modules.node_net_socket_state = load("node_net_socket_state")();
   const internal = {
     native, web: { Request, Response: class extends Response { static _setNetwork() {} }, Headers }, builtinFactories: {}, realTimers: { setImmediate: (fn: () => void) => ticks.push(fn) },
     require(name: string): unknown { if (!(name in modules)) throw new Error(`Unexpected module ${name}`); return modules[name]; },
@@ -96,6 +97,7 @@ function fixture() {
     concatBytes: (parts: Uint8Array[]) => Buffer.concat(parts),
     pumpIo: () => false,
   };
+  modules.node_net_onread = load("node_net_onread")(internal);
   core = load("node_stream_core", "js")(internal).Stream;
   const socketFactory = load("node_net", "js")(internal);
   modules.node_net_server = load("node_net_server")(internal);
