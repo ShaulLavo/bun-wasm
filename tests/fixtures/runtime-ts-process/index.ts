@@ -53,6 +53,7 @@ process.stdin.on("data", chunk => input.push(String(chunk)));
 process.stdin.setEncoding("utf8");
 assert.equal(process.stdin.resume(), process.stdin);
 assert.equal(process.stdin.pause(), process.stdin);
+assert.equal(process.stdin.resume(), process.stdin);
 process.stdin.on("close", async () => {
   console.log("reader", input.join(""), process.stdin.readable, process.stdin.read());
   const after: unknown[] = [];

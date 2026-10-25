@@ -5,6 +5,6 @@ stdout states true false false
 window [80,24] 1 false
 write control
 signals 0 0
-reader fixture input true null
+reader fixture input false null
 iterator after EOF 0
 callback order write,tick 1

@@ -138,52 +138,8 @@
     return stream;
   }
 
-  // stdin: reads everything on first use (WASI stdin is a blocking pipe or
-  // file; there is no async notification).
   function makeReader() {
-    const streamBase: BunWasm.NodeEmitter = Object.create(EventEmitter.prototype);
-    EventEmitter.call(streamBase);
-    let started = false;
-    let encoding: unknown = null;
-    function start() {
-      if (started) return;
-      started = true;
-      internal.realTimers.setImmediate(() => {
-        const bytes = native.readStdin();
-        if (bytes.length > 0) stream.emit("data", encoding ? native.utf8Decode(bytes) : internal.require("buffer").Buffer.from(bytes));
-        stream.emit("end");
-        stream.emit("close");
-      });
-    }
-    streamBase.on("newListener", (event) => {
-      if (event === "data" || event === "readable") start();
-    });
-    const stream: BunWasm.ProcessReader = Object.assign(streamBase, {
-      fd: 0,
-      isTTY: native.isatty(0),
-      readable: true,
-      setEncoding(enc: unknown) {
-        encoding = enc;
-        return stream;
-      },
-      resume() {
-        start();
-        return stream;
-      },
-      pause: () => stream,
-      setRawMode: () => stream,
-      ref: () => stream,
-      unref: () => stream,
-      read() {
-        return null;
-      },
-      async *[Symbol.asyncIterator]() {
-        started = true;
-        const bytes = native.readStdin();
-        if (bytes.length > 0) yield encoding ? native.utf8Decode(bytes) : internal.require("buffer").Buffer.from(bytes);
-      },
-    });
-    return stream;
+    return internal.require("process_stdin")();
   }
 
   let stdout: BunWasm.ProcessWriter | undefined;

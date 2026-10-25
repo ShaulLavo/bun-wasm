@@ -20,6 +20,7 @@ const emitted = readFileSync(output, "utf8");
 // Invert only the approved executable deltas. The pinned original AST hash guards the remainder.
 function originalSyntax(text: string): string {
   const replacements: [RegExp, string, number][] = [
+    [/  function makeReader\(\) \{\n    return internal\.require\("process_stdin"\)\(\);\n  \}\n/g, readFileSync(join(root, "scripts/fixtures/process-reader-before.txt"), "utf8"), 1],
     [/\n  let execveWarned = false;\n/g, "\n", 1],
     [/\n    execve\(\) \{[\s\S]*?\n    \},/g, "", 1],
     [/const processBase\s*=/g, "const process =", 1],
