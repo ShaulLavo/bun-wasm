@@ -15,7 +15,7 @@ declare namespace BunWasm {
     | ["undefined"] | ["null"] | ["string", string] | ["number", string] | ["boolean", boolean] | ["bigint", string]
     | ["object", [string, number][]] | ["array", number, [string, number][]]
     | ["map", [number, number][]] | ["set", number[]] | ["date", string] | ["regexp", string, string]
-    | ["buffer", string, number] | ["view", string, number, number, number]
+    | ["blob", string, string] | ["buffer", string, number] | ["view", string, number, number, number]
     | ["error", string, string, string, number] | ["boxed", number]
     | ["port", Omit<PortSnapshot, "queue">, number];
   interface WorkerGraph { root: number; nodes: WorkerNode[]; }
@@ -35,6 +35,7 @@ declare namespace BunWasm {
     encode(value: unknown, transfer?: unknown, forbidden?: readonly string[]): WorkerGraph;
     decode(value: unknown): unknown;
   }
+  interface WorkerErrorData { graph: WorkerGraph; code: unknown; }
   interface WorkerLimits {
     maxOldGenerationSizeMb?: number;
     maxYoungGenerationSizeMb?: number;
@@ -84,7 +85,7 @@ declare namespace BunWasm {
     /** 16-byte subscriptions in, 16-byte events out. */
     procPoll(subscriptions: Uint8Array, timeoutMs: number): Uint8Array | number;
     base64Encode(bytes: Uint8Array, url: boolean): string;
-    base64Decode(value: string): Uint8Array;
+    base64Decode(value: string): Uint8Array<ArrayBuffer>;
     transferArrayBuffers(buffers: ArrayBuffer[]): void;
     isWasmMemoryBuffer?(value: unknown): boolean;
     hostPoll(timeout: number): number;
@@ -110,12 +111,13 @@ declare namespace BunWasm {
     require(name: "process"): GuestProcess;
     require(name: "worker_codec"): { create(hooks: WorkerCodecHooks): WorkerCodec };
     require(name: "worker_channel"): { open(input: number, output: number): WorkerChannel };
-    require(name: "worker_threads"): { initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
+    require(name: "worker_threads"): { isMainThread: boolean; initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
     require(name: "net"): unknown;
     require(name: "node_url"): { fileURLToPath(url: URL): string };
     addIoWaiter<W extends IoWaiter>(waiter: W): W;
     workerPump?: () => boolean;
     workerError?: (error: unknown) => void;
+    workerErrorData?: (error: unknown) => WorkerErrorData;
     workerExit?: (code: number) => void;
     workerEnvChange?: (key: string, value: unknown) => void;
     clonePorts?: (value: unknown, options: unknown) => unknown;

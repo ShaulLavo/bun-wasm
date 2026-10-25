@@ -92,29 +92,18 @@
 
   // --- fetch ----------------------------------------------------------------
 
-  async function requestBody(req) {
-    if (req.method === "GET" || req.method === "HEAD") return new Uint8Array(0);
-    if (req._body === null && !req._stream) return new Uint8Array(0);
-    return new Uint8Array(await req.arrayBuffer());
+  function requestBody(req, signal) {
+    return internal.require("fetch_lifetime").requestBody(req, signal);
   }
 
   // Promise of the response head JSON for a fetch handle.
-  function waitHead(handle) {
-    return new Promise((resolve, reject) => {
-      addWaiter({
-        step() {
-          const head = native.hostFetchHead(handle);
-          if (head === AGAIN) return false;
-          if (typeof head === "number") {
-            reject(hostError(handle, "fetch failed"));
-            native.hostClose(handle);
-            return true;
-          }
-          resolve(JSON.parse(head));
-          return true;
-        },
-        fail: reject,
-      });
+  function waitHead(handle, signal, close) {
+    return internal.require("fetch_lifetime").waitHead({
+      signal, close,
+      read: () => native.hostFetchHead(handle),
+      error: () => hostError(handle, "fetch failed"),
+      add: addWaiter,
+      remove: (waiter) => waiters.delete(waiter),
     });
   }
 
@@ -138,7 +127,9 @@
       headers,
       redirect: init.redirect || req.redirect || "follow",
     });
-    const handle = native.hostFetch(meta, await requestBody(req));
+    const bytes = await requestBody(req, signal);
+    if (signal && signal.aborted) throw signal.reason;
+    const handle = native.hostFetch(meta, bytes);
     if (handle < 0) throw hostError(0, "fetch failed");
     let closed = false;
     let onAbort;
@@ -147,17 +138,10 @@
       closed = true;
       if (signal && onAbort) signal.removeEventListener("abort", onAbort);
     };
-    // The signal may have fired while the request body was being read.
-    const aborted = new Promise((resolve, reject) => {
-      if (!signal) return;
-      onAbort = () => {
-        closeHandle();
-        reject(signal.reason);
-      };
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-    });
-    const head = await Promise.race([waitHead(handle), aborted]);
+    onAbort = closeHandle;
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    const head = await waitHead(handle, signal, closeHandle);
+    if (signal && signal.aborted) throw signal.reason;
     const nullBody = req.method === "HEAD" || head.status === 204 || head.status === 304;
     const body = nullBody ? null : internal.require("compression_streams").decode(handleStream(handle, closeHandle, signal), head.bodyEncoding);
     if (nullBody) closeHandle();
@@ -318,7 +302,7 @@
       let progressed = false;
       for (;;) {
         if (this.canRead && !this.canRead()) return progressed ? "progress" : false;
-        const chunk = native.hostRead(this.handle);
+        const chunk = native.hostRead(this.handle, this.readCapacity?.());
         if (chunk === AGAIN) return progressed ? "progress" : false;
         if (typeof chunk === "number") return this.finishRead(chunk);
         progressed = true;
@@ -677,7 +661,15 @@
       const host = header(request.headers, "host") || `${displayHost}:${port}`;
       const url = `http://${host}${request.target.startsWith("/") ? request.target : "/" + request.target}`;
       const hasBody = request.method !== "GET" && request.method !== "HEAD";
-      const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined });
+      const result = await internal.require("serve_request_lifetime").run(conn, (signal) => {
+        const req = new Request(url, { method: request.method, headers: request.headers, body: hasBody ? request.body : undefined, signal });
+        return respondToRequest(request, conn, keepAlive, req, url);
+      });
+      return result === UPGRADED ? result : result && !stopped;
+    }
+
+    async function respondToRequest(request, conn, keepAlive, req, url) {
+      if (req.signal.aborted) return false;
       let cookies;
       Object.defineProperty(req, "cookies", {
         get() { return cookies || (cookies = new (internal.require("cookie").CookieMap)(req.headers.get("cookie"))); },

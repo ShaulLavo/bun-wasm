@@ -648,7 +648,8 @@
   internal.importNonEsm = function importNonEsm(path, format) {
     const exports = loadModule(path, format).exports;
     if (format === "cjs" && exports !== null && typeof exports === "object" && exports.__esModule) {
-      return [exports, exports.default];
+      const hasDefault = Object.prototype.hasOwnProperty.call(exports, "default");
+      return [exports, hasDefault ? exports.default : exports];
     }
     return [exports, exports];
   };
@@ -679,8 +680,12 @@
   };
 
   internal.runMain = function runMain(requested) {
-    const path = internal.require("package_scripts").resolve(requested);
+    const scripts = internal.require("package_scripts");
+    const path = scripts.resolve(requested);
+    if (typeof path !== "string") return scripts.run(path);
     if (!native.exists(path)) {
+      // A worker's missing entry reaches its parent as Node's require error, as in Bun.
+      if (internal.workerError) throw Object.assign(new Error(`Cannot find module '${path}'`), { code: "MODULE_NOT_FOUND" });
       const err = new Error(`Module not found "${native.mainArg() || path}"`);
       err.code = "ERR_MODULE_NOT_FOUND";
       err.__bunwasmPlain = true;

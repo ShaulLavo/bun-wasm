@@ -12,6 +12,9 @@
         "scripts/bench/error-construction.js",
         "tests/package/fixtures/vite-main.ts",
         "scripts/**/*.test.ts",
+        "scripts/fixtures/crypto-host-native-control.ts",
+        "scripts/fixtures/event-rejections-control.ts",
+        "scripts/fixtures/runtime-js-child.ts",
         "scripts/migrations/*.ts",
         "scripts/bench-module-preparation.ts",
         "scripts/bun-suite-small-causes.ts",
@@ -47,6 +50,7 @@
         "src/worker.ts",
         "src/net/helper.ts",
         "tests/*.test.{ts,js}",
+        "guest-tests/*.test.ts",
         "tests/browser-*.{ts,mjs}",
         "scripts/*.{ts,mjs}",
         "src/fs-worker.ts",
@@ -71,7 +75,8 @@
       "project": [
         "src/**/*.{ts,js}",
         "scripts/**/*.{ts,mjs}",
-        "tests/**/*.{ts,mjs,js}"
+        "tests/**/*.{ts,mjs,js}",
+        "guest-tests/**/*.ts"
       ],
       "ignoreDependencies": [
         "benchmark"

@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/runtime-js-controls.test.ts",
+  "localRuntime": true
+}

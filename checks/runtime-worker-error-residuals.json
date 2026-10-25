@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/runtime-worker-error-residuals.test.ts",
+  "localRuntime": true
+}

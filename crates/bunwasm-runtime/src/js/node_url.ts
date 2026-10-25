@@ -10,8 +10,16 @@
     return Object.assign(new TypeError(`The "${name}" argument must be ${expected}. Received ${internal.describe(value)}`), { code: "ERR_INVALID_ARG_TYPE" });
   }
 
+  const hrefGetter = Object.getOwnPropertyDescriptor(URL.prototype, "href")?.get;
+
+  function isURL(value: unknown): value is URL {
+    if (!hrefGetter) return false;
+    try { hrefGetter.call(value); return true; }
+    catch { return false; }
+  }
+
   function fileURLToPath(input: unknown) {
-    if (typeof input !== "string" && !(input instanceof URL)) throw invalidArg("url", "of type string", input);
+    if (typeof input !== "string" && !isURL(input)) throw invalidArg("url", "of type string", input);
     const url = typeof input === "string" ? URL.parse(input) : input;
     if (!url || url.protocol !== "file:") {
       throw Object.assign(new TypeError("The URL must be of scheme file"), { code: "ERR_INVALID_URL_SCHEME" });
@@ -146,11 +154,13 @@
     else if (obj.hostname) host = auth + obj.hostname + (obj.port ? ":" + obj.port : "");
     auth = "";
     let pathname = obj.pathname || "";
+    // Bun converts the query, including its accessors and value coercion, before it reads an explicit search.
+    const query = obj.query;
+    const queryString = query && typeof query === "object" && Object.keys(query).length
+      ? new internal.web.URLSearchParams(query).toString()
+      : "";
     let search = obj.search || "";
-    if (!search && obj.query && typeof obj.query === "object" && Object.keys(obj.query).length) {
-      const qs = new internal.web.URLSearchParams(obj.query).toString();
-      if (qs) search = "?" + qs;
-    }
+    if (!search && queryString) search = "?" + queryString;
     if (search && !search.startsWith("?")) search = "?" + search;
     let hash = obj.hash || "";
     if (hash && !hash.startsWith("#")) hash = "#" + hash;

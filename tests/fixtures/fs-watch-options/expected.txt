@@ -1,0 +1,2 @@
+invalid filename encodings fail at watch registration
+default and supported filename encodings register and close

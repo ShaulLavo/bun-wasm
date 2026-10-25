@@ -1,0 +1,2 @@
+return cancels pending and queued interval reads without another tick
+throw cancels a pending interval read without another tick

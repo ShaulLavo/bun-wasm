@@ -130,7 +130,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     let loading: Promise<WebAssembly.Module> | undefined;
     const module = engine === options.engine && options.adapter !== "preview1" ? options.module
       : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
-    for (const command of ["bun", "node"]) {
+    for (const command of ["bun", "node", "nodejs"]) {
       const path = `${ENGINE_BIN[engine]}/${command}`;
       subprocess.register(path, { module, adapter: "bun", engine });
       programs.add(path);

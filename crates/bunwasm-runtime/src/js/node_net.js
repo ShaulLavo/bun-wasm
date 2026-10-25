@@ -9,17 +9,21 @@
 
     class Socket extends Duplex {
       constructor(options = {}) {
-        super(Object.assign({ allowHalfOpen: false, highWaterMark: 65536 }, options));
+        const { onread, signal, streamOptions } = internal.require("node_net_socket_state")(options);
+        super(internal.require("node_net_socket_options")(streamOptions));
+        this._onread = internal.require("node_net_onread")(onread);
         this._conn = null;
         this._phase = "idle";
         this._referenced = true;
         this._readReady = true;
+        this._onreadStopped = false;
         this._pendingWrite = null;
         this._pendingFinal = null;
         this._ended = false;
         this.bytesRead = 0;
         this.bytesWritten = 0;
         this.once("finish", () => this._drainEmptyEof());
+        if (signal) this._useSignal(signal);
       }
       emit(event, ...args) {
         if (event === "close" && args.length === 0) return super.emit(event, Boolean(this._closeHadError));
@@ -48,7 +52,8 @@
         this._conn = conn;
         this._phase = "open";
         this._updatePeer();
-        conn.canRead = () => this.readable && this._readReady;
+        conn.canRead = () => this.readable && this._readReady && (!this._onread || (!this._onreadStopped && !this.isPaused()));
+        if (this._onread) conn.readCapacity = () => this._onread.capacity();
         conn.onData = chunk => this._receive(chunk);
         conn.onEnd = () => this._receiveEnd();
         conn.onError = err => this.destroy(err);
@@ -74,6 +79,7 @@
       }
       connect(...args) {
         const [options, callback] = _normalizeArgs(args);
+        if (options.host && typeof options.host !== "string") throw error(TypeError, "ERR_INVALID_ARG_TYPE", 'The "options.host" property must be of type string');
         if (!native.hostCaps.connect) throw error(Error, "ENOTSUP", "net.connect is not supported in bun-wasm without a networking host");
         if (this.connecting) {
           internal.nextTick(() => this.destroy(error(Error, "EALREADY", "Socket is already connecting")));
@@ -86,6 +92,7 @@
         if (callback) this.once("connect", callback);
         if (this.destroyed) this._undestroy();
         this._readReady = true;
+        this._onreadStopped = false;
         this._ended = false;
         if (options.allowHalfOpen !== undefined) this.allowHalfOpen = Boolean(options.allowHalfOpen);
         if (options.signal) this._useSignal(options.signal);
@@ -110,7 +117,9 @@
         if (!this.destroyed) this._dial(Object.assign({}, options, { host: address }), targetPort);
       }
       _dial(options, targetPort) {
-        const target = options.host || "localhost";
+        let target;
+        try { target = internal.require("net_hostname")(options.host || "localhost"); }
+        catch (err) { internal.nextTick(() => this.destroy(err)); return; }
         const family = internal.require("net_address").isIP(target);
         // The host ABI resolves names only after opening a connection. Deny names when a
         // BlockList is present so DNS cannot bypass the address check.
@@ -161,11 +170,24 @@
       _receive(chunk) {
         this.bytesRead += chunk.length;
         this._touch();
+        if (this._onread) {
+          if (this._onread.deliver(chunk) === false) this._onreadStopped = true;
+          return;
+        }
         this._readReady = this.push(Buffer.from(chunk));
       }
       _read() {
         this._readReady = true;
+        this._onreadStopped = false;
         if (native.wake) native.wake(0);
+      }
+      read(size) {
+        if (this._onread) this._read();
+        return super.read(size);
+      }
+      resume() {
+        if (this._onread) this._read();
+        return super.resume();
       }
       _write(chunk, encoding, callback) {
         const bytes = Buffer.from(chunk);
@@ -298,7 +320,10 @@
       ref() { this._referenced = true; if (this._accepting) this._accepting.ref = true; if (this._starting) this._starting.ref = true; return this; }
       unref() { this._referenced = false; if (this._accepting) this._accepting.ref = false; if (this._starting) this._starting.ref = false; return this; }
     });
-    const connect = (...args) => new Socket().connect(...args);
+    const connect = (...args) => {
+      const [options] = _normalizeArgs(args);
+      return new Socket(options).connect(...args);
+    };
     return { Socket, Server, Stream: Socket, createServer: (options, listener) => new Server(options, listener), connect, createConnection: connect };
   };
 })

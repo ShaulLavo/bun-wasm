@@ -40,7 +40,7 @@ for (const engines of [{}, { quickjs }, { jsc }, { quickjs, jsc }]) test(`Node m
   const f = fixture(engines);
   try {
     expect(Object.keys(f.broker.preopens).slice(0, 3)).toEqual(["/", "/bin", "/opt/bun"]);
-    for (const name of ["bun", "node"]) {
+    for (const name of ["bun", "node", "nodejs"]) {
       expect(readFileSync(join(f.broker.preopens["/bin"]!, name))).toEqual(Buffer.alloc(0));
       expect(await f.query(`/bin/${name}`)).toBe(0);
       expect((await f.spawn(`/bin/${name}`)).status).toBe(3);

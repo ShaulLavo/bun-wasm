@@ -329,7 +329,7 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
       worker.exit();
       expect(await run.done).toEqual({ code: 0 });
     }
-    expect(registered).toEqual(["/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node", "/bin/bun", "/bin/node"]);
+    expect(registered).toEqual(["/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/quickjs/bin/nodejs", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node", "/opt/bun/jsc/bin/nodejs", "/bin/bun", "/bin/node", "/bin/nodejs"]);
     for (const path of registered) expect(await runtime.filesystem.lookup(path)).toMatchObject({ kind: "file" });
     // Page-launched modules never become executable files or retain a per-launch registry key.
     expect(await runtime.filesystem.lookup("/bin/preview1-root-1")).toBeUndefined();

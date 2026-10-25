@@ -468,11 +468,37 @@ fn usage_error(message: &str) -> Command {
     Command::Exit(1)
 }
 
-fn parse(args: Vec<String>) -> Command {
+fn parse(args: Vec<String>, executable: &str) -> Command {
+    if matches!(executable.rsplit('/').next(), Some("node" | "nodejs")) {
+        return node_command(args);
+    }
     if tool_args::before_command(&args).is_some() {
         return Command::Lint;
     }
     parse_command(args, false)
+}
+
+fn node_command(args: Vec<String>) -> Command {
+    match parse_command(args, true) {
+        Command::Run(Entry::File(file), args) => {
+            // Node operands are files even when their names match Bun commands or package scripts.
+            let path = std::env::current_dir().unwrap_or_default().join(file);
+            Command::Run(Entry::File(path.to_string_lossy().into_owned()), args)
+        }
+        command => command,
+    }
+}
+
+fn direct_file(file: &str) -> String {
+    let path = std::path::Path::new(file);
+    if !path.is_file() {
+        return file.to_owned();
+    }
+    std::env::current_dir()
+        .unwrap_or_default()
+        .join(path)
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn parse_command(args: Vec<String>, run_file: bool) -> Command {
@@ -531,7 +557,7 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
             // Flags native Bun accepts that change nothing here.
             "--bun" | "--silent" | "--smol" | "--no-install" => continue,
             flag if flag.starts_with('-') => return usage_error(&format!("unknown flag {flag}")),
-            file => return Command::Run(Entry::File(file.to_owned()), rest.collect()),
+            file => return Command::Run(Entry::File(direct_file(file)), rest.collect()),
         }
     }
     if run_file {
@@ -594,7 +620,7 @@ fn main() {
     } else {
         argv.collect()
     };
-    let command = parse(args);
+    let command = parse(args, &executable);
     let (entry, args) = match command {
         Command::Exit(code) => std::process::exit(code),
         Command::Lint => {

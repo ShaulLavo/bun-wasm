@@ -15,7 +15,7 @@ import { nodeStdioCodec } from "./node-process.ts";
 import { drainDiagnostic } from "waffle/browser/diagnostic";
 import { ProcessErrno, ProcessError } from "waffle/proc/types";
 
-export const nodeExecutables = ["/bin/bun", "/bin/node"] as const;
+export const nodeExecutables = ["/bin/bun", "/bin/node", "/bin/nodejs"] as const;
 export type NodeEngineModules = Partial<Record<"quickjs" | "jsc", WebAssembly.Module>>;
 
 /** Resolve guest path components before normalization: file/.. must remain ENOTDIR.
@@ -62,7 +62,7 @@ export function createNodeExecutableRegistry(module: WebAssembly.Module, preopen
   for (const name of nodeExecutables) registry.register(name, { module, adapter: "bun" });
   for (const engine of ["quickjs", "jsc"] as const) {
     const module = engines[engine];
-    if (module) for (const name of ["bun", "node"]) registry.register(`/opt/bun/${engine}/bin/${name}`, { module, adapter: "bun" });
+    if (module) for (const name of ["bun", "node", "nodejs"]) registry.register(`/opt/bun/${engine}/bin/${name}`, { module, adapter: "bun" });
   }
   return registry;
 }
@@ -75,11 +75,11 @@ function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngi
   const root = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-node-executables-"));
   try {
     mkdirSync(join(root, "bin")); mkdirSync(join(root, "opt/bun"), { recursive: true });
-    for (const name of ["bun", "node"]) writeFileSync(join(root, "bin", name), new Uint8Array());
+    for (const name of ["bun", "node", "nodejs"]) writeFileSync(join(root, "bin", name), new Uint8Array());
     for (const engine of ["quickjs", "jsc"] as const) {
       if (!engines[engine]) continue;
       const bin = join(root, "opt/bun", engine, "bin"); mkdirSync(bin, { recursive: true });
-      for (const name of ["bun", "node"]) writeFileSync(join(bin, name), new Uint8Array());
+      for (const name of ["bun", "node", "nodejs"]) writeFileSync(join(bin, name), new Uint8Array());
     }
     const mounted: Record<string, string> = { "/": preopens["/"] ?? root, "/bin": join(root, "bin"), "/opt/bun": join(root, "opt/bun") };
     for (const [guest, host] of Object.entries(preopens)) if (guest !== "/") mounted[guest] = host;

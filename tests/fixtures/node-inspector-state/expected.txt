@@ -1,0 +1,5 @@
+url undefined
+close undefined
+open ERR_NOT_SUPPORTED_IN_WASM inspector.open is not supported in bun-wasm: no debugger
+waitForDebugger ERR_NOT_SUPPORTED_IN_WASM inspector.waitForDebugger is not supported in bun-wasm: no debugger
+Session ERR_NOT_SUPPORTED_IN_WASM inspector.Session is not supported in bun-wasm: no debugger

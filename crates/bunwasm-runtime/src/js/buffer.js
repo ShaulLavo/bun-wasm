@@ -514,8 +514,11 @@
     if (!ArrayBuffer.isView(view) || view instanceof DataView) {
       throw invalidArgType("view", ["TypedArray"], view);
     }
-    const start = offset === undefined ? 0 : offset;
-    const end = length === undefined ? view.length : start + length;
+    if (view.length === 0) return new FastBuffer(0);
+    const start = rangeArg(offset, "offset", 0, Number.MAX_SAFE_INTEGER, " &&");
+    if (start >= view.length) return new FastBuffer(0);
+    const count = rangeArg(length, "length", view.length, Number.MAX_SAFE_INTEGER, " &&");
+    const end = start + count;
     const slice = view.subarray(Math.min(start, view.length), Math.min(end, view.length));
     const bytes = new Uint8Array(slice.buffer, slice.byteOffset, slice.byteLength);
     return wrapBytes(bytes.slice());
@@ -740,14 +743,7 @@
   }
 
   function fillImpl(buf, value, offset, end, encoding) {
-    let enc = encoding;
-    let start = offset;
-    let stop = end;
-    if (typeof offset === "string") {
-      enc = offset;
-      start = 0;
-      stop = buf.length;
-    }
+    let { start, stop, encoding: enc } = internal.require("buffer_fill_args")(getEncoding, value, buf.length, offset, end, encoding);
     start = start === undefined ? 0 : rangeArg(start, "offset", 0, kMaxLength, " &&");
     stop = stop === undefined ? buf.length : rangeArg(stop, "end", buf.length, buf.length, " &&");
     if (stop <= start) return buf;

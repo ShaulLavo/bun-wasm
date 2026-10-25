@@ -27,7 +27,7 @@ export function networkFixture() {
     realTimers: { setImmediate }, concatBytes: (parts: readonly Uint8Array[]) => Buffer.concat(parts),
     ioPending: () => 0, pumpIo: () => false,
     builtin: (name: string) => {
-      if (name === "node:stream") return { Duplex, getDefaultHighWaterMark };
+      if (name === "node:stream") return { Duplex, getDefaultHighWaterMark: () => getDefaultHighWaterMark(false) };
       throw new Error(`Unexpected builtin ${name}`);
     },
     require(name: string): unknown {

@@ -17,6 +17,11 @@ only the worker URL, asserts exactly one public guest request without a local
 fallback, and executes the real Bun process scenarios. QuickJS/JSC remain
 explicit module/asset opt-ins; neither was published by this follow-up.
 
+Default executable registrations include `bun`, `node` and `nodejs` in the
+selected engine directory. The nodejs spelling uses the same engine module and
+ordinary live admission without an argv rewrite. Explicit caller executable lists
+remain authoritative.
+
 Waffle is consumed unchanged as a pinned Git peer/development dependency; the package
 does not embed its implementation or create a second runtime. Existing worker and net
 imports use explicit extensions for strict module resolution. No upstream patch or
@@ -27,6 +32,6 @@ copied implementation was introduced by this packaging work.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary, verified asset loader, package build and immutable guest publication tooling. |
+| [Caller-owned Bun package adapters](#caller-owned-bun-package-adapters) | Host feature | Original Waffle registration boundary including nodejs, verified asset loader, package build and immutable guest publication tooling. |
 
 [Ledger scope and pinned revisions](scope.md).
