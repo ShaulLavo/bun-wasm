@@ -15,6 +15,20 @@ function factory(name: string) {
   return runInNewContext(readFileSync(output, "utf8"), { ArrayBuffer, Uint8Array, DataView, SyntaxError, TypeError });
 }
 
+test("Buffer.copyBytesFrom validates offsets and lengths before slicing a view", () => {
+  const source = readFileSync(join(root, "crates/bunwasm-runtime/src/js/buffer.js"), "utf8");
+  const adapter = runInNewContext(source, { TextEncoder, TextDecoder });
+  const { Buffer: RuntimeBuffer } = adapter({ describe: String, require: () => { throw new Error("unexpected inspect"); } });
+  const input = Uint16Array.of(0x0201, 0x0403);
+  expect(Array.from(RuntimeBuffer.copyBytesFrom(input, 1, 1))).toEqual(Array.from(Buffer.copyBytesFrom(input, 1, 1)));
+  for (const [offset, length] of [[-1, undefined], [1.5, undefined], [1, -1], [1, 1.5]] as const) {
+    let nativeCode: unknown;
+    try { Buffer.copyBytesFrom(input, offset, length); } catch (error) { nativeCode = (error as { code?: unknown }).code; }
+    expect(nativeCode).toBe("ERR_OUT_OF_RANGE");
+    expect(() => RuntimeBuffer.copyBytesFrom(input, offset, length)).toThrow(expect.objectContaining({ code: nativeCode }));
+  }
+});
+
 test("emitted JSONL preserves partial parsing and UTF-8 read offsets", () => {
   const parse = factory("jsonl")({
     native: {

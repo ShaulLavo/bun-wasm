@@ -13,3 +13,8 @@ JSON: {"type":"Buffer","data":[1,2,3]}
 instanceof Uint8Array: true number
 global Buffer: true
 bigint: 256n
+copyBytesFrom view: 0304
+copyBytesFrom invalid: ERR_OUT_OF_RANGE
+copyBytesFrom invalid: ERR_OUT_OF_RANGE
+copyBytesFrom invalid: ERR_OUT_OF_RANGE
+copyBytesFrom invalid: ERR_OUT_OF_RANGE

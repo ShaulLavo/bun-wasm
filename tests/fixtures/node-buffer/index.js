@@ -21,3 +21,13 @@ console.log("JSON:", JSON.stringify(Buffer.from([1, 2, 3])));
 console.log("instanceof Uint8Array:", b instanceof Uint8Array, typeof Buffer.poolSize);
 console.log("global Buffer:", globalThis.Buffer === Buffer);
 console.log("bigint:", Buffer.from([0, 0, 0, 0, 0, 0, 1, 0]).readBigUInt64BE());
+const copySource = Uint16Array.of(0x0201, 0x0403);
+console.log("copyBytesFrom view:", Buffer.copyBytesFrom(copySource, 1, 1).toString("hex"));
+for (const [offset, length] of [[-1, undefined], [1.5, undefined], [1, -1], [1, 1.5]]) {
+  try {
+    Buffer.copyBytesFrom(copySource, offset, length);
+    console.log("copyBytesFrom invalid: accepted");
+  } catch (error) {
+    console.log("copyBytesFrom invalid:", error.code);
+  }
+}
