@@ -60,7 +60,7 @@ function fixture(explicit = true, deferNetwork = false) {
     activating.resolve();
     if (deferNetwork) await activation.promise;
     const capability = await network();
-    return { createHelper(options) {
+    return { lookup: capability.lookup.bind(capability), createHelper(options) {
       allocations++;
       const helper = capability.createHelper(options);
       onAllocate();

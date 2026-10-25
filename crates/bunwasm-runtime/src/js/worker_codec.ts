@@ -53,6 +53,7 @@
             received: snapshot.received, pending: snapshot.pending, closing: snapshot.closing, closed: snapshot.closed }, queue];
         }
         if (internal.isProxy?.(object)) throw cloneError();
+        if (object instanceof Blob) return ["blob", internal.native.base64Encode(object._bytes(), false), object.type];
         if (object instanceof ArrayBuffer) return ["buffer", internal.native.base64Encode(new Uint8Array(object), false), object.resizable ? object.maxByteLength : 0];
         if (ArrayBuffer.isView(object)) return ["view", tag(object), visit(object.buffer, implicit), object.byteOffset, object.byteLength];
         if (object instanceof Date) return ["date", String(object.getTime())];
@@ -117,6 +118,7 @@
           case "string": case "boolean": return node[1];
           case "number": return Number(node[1]);
           case "bigint": return BigInt(node[1]);
+          case "blob": result = new Blob([internal.native.base64Decode(node[1])], { type: node[2] }); break;
           case "date": result = new Date(Number(node[1])); break;
           case "regexp": result = new RegExp(node[1], node[2]); break;
           case "buffer": {
@@ -181,7 +183,7 @@
         case "array": return Number.isSafeInteger(node[1]) && node[1] >= 0 && node[1] <= 0xffffffff && pairs(node[2], true);
         case "map": return pairs(node[1], false);
         case "set": return Array.isArray(node[1]) && node[1].every(ref);
-        case "regexp": return strings(node.slice(1)) && node.length === 3;
+        case "blob": case "regexp": return strings(node.slice(1)) && node.length === 3;
         case "buffer": return typeof node[1] === "string" && Number.isSafeInteger(node[2]) && node[2] >= 0;
         case "view": return typeof node[1] === "string" && ref(node[2]) && Number.isInteger(node[3]) && Number.isInteger(node[4]) && node[3] >= 0 && node[4] >= 0;
         case "error": return strings(node.slice(1, 4)) && ref(node[4]);

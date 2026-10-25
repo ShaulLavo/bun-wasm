@@ -1,0 +1,1 @@
+unreferenced promise timers do not keep the process alive

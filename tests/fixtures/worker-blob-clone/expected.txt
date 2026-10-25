@@ -1,0 +1,4 @@
+structuredClone Blob bytes, type, methods and nested identity
+MessageChannel Blob delivered before sender close
+Worker Blob workerData and round trip drain before natural exit
+Web Worker Blob round trip drains before natural close

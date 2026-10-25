@@ -15,7 +15,7 @@ function codec() {
   let restored = 0;
   const factory = runInNewContext(source, {
     ArrayBuffer, Uint8Array, Map, Set, Date, RegExp, DataView, Error, TypeError, RangeError,
-    Number, String, Boolean, DOMException, EventTarget,
+    Number, String, Boolean, DOMException, EventTarget, Blob,
   });
   const implementation = factory({ native: {
     base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
