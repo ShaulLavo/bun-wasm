@@ -71,7 +71,64 @@ const originalInvoke = `const invoke = (name, ...args) => {
   } catch (err) { invokeError(err); }
 };`;
 
+const presentState = `function present(value) {
+  if (value === null || value === undefined) throw new TypeError("Missing WebSocket state");
+  return value;
+}`;
+const sendQueued = `_sendQueued(item, bytes) {
+  this._pendingBytes -= item.size;
+  if (this.readyState === 1) present(this._peer).sendFrame(item.opcode, bytes);
+}`;
+
+function originalStateSyntax(text: string) {
+  const parsed = ts.createSourceFile("factory.js", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const edits: { start: number; end: number; replacement: string }[] = [];
+  const calls: string[] = [];
+  function replace(node: ts.Node, replacement: string) {
+    edits.push({ start: node.getStart(parsed), end: node.end, replacement });
+  }
+  function visit(node: ts.Node) {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "present") {
+      expect(runtimeSyntax(node.getText(parsed))).toBe(runtimeSyntax(presentState));
+      replace(node, "");
+      return;
+    }
+    if (ts.isMethodDeclaration(node) && node.name.getText(parsed) === "_sendQueued") {
+      expect(runtimeSyntax(node.getText(parsed))).toBe(runtimeSyntax(sendQueued));
+      replace(node, "");
+      return;
+    }
+    if (ts.isCallExpression(node)) inspectCall(node);
+    ts.forEachChild(node, visit);
+  }
+  function argument(node: ts.CallExpression) {
+    const value = node.arguments[0];
+    if (!value || node.arguments.length !== 1) throw new Error("Expected one state argument");
+    return value.getText(parsed);
+  }
+  function inspectCall(node: ts.CallExpression) {
+    const name = node.expression.getText(parsed);
+    if (name === "present") {
+      const value = argument(node);
+      calls.push(value);
+      replace(node, `(${value})`);
+    }
+    if (name === "clearTimeout") {
+      expect(runtimeSyntax(argument(node))).toBe(runtimeSyntax("this.closeTimer ?? undefined"));
+      replace(node, "clearTimeout(this.closeTimer)");
+    }
+    if (name === "this._sendQueued") replace(node, "this._pendingBytes -= item.size; if (this.readyState === 1) (this._peer).sendFrame(item.opcode, bytes)");
+  }
+  visit(parsed);
+  expect(calls).toEqual(["this._conn", "this._head", "this._key", "this._conn", "this._peer", "this._sendQueue.shift()", "this._peer"]);
+  expect(edits).toHaveLength(11);
+  edits.sort((left, right) => right.start - left.start);
+  for (const edit of edits) text = text.slice(0, edit.start) + edit.replacement + text.slice(edit.end);
+  return text;
+}
+
 function originalSyntax(text: string) {
+  text = originalStateSyntax(text);
   const parsed = ts.createSourceFile("factory.js", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const edits: { start: number; end: number; replacement: string }[] = [];
   function visit(node: ts.Node) {
@@ -91,7 +148,7 @@ function originalSyntax(text: string) {
   return createHash("sha256").update(runtimeSyntax(text)).digest("hex");
 }
 
-test("WebSocket syntax differs only by checked dispatch, not other runtime operations", () => {
+test("WebSocket syntax differs only by checked dispatch and explicit state checks", () => {
   expect(originalSyntax(emittedSource())).toBe(originalHash);
 });
 
@@ -99,6 +156,7 @@ test("WebSocket syntax proof rejects a wrong handler or reordered failure", () =
   const emitted = emittedSource();
   expect(() => originalSyntax(emitted.replace('current.pong?.(socket, invocation[1])', 'current.ping?.(socket, invocation[1])'))).toThrow();
   expect(originalSyntax(emitted.replace('this._state = 3;', 'this._state = 2;'))).not.toBe(originalHash);
+  expect(() => originalSyntax(emitted.replace('value === null || value === undefined', 'value === null'))).toThrow();
 });
 
 function field(value: unknown, key: PropertyKey): unknown {
@@ -157,13 +215,115 @@ async function dispatchTrace(source: string) {
 
 test("WebSocket synthetic dispatch preserves provider reads, receiver, arguments and failures", async () => {
   const before = readFileSync(join(root, "crates/bunwasm-runtime/src/js/websocket.ts"), "utf8");
-  // The pinned inverse proves this source is the original JS except for the dispatch implementation.
+  // The pinned inverse restricts runtime changes to the checked dispatcher and explicit state checks.
   const emitted = emittedSource();
   expect(originalSyntax(emitted)).toBe(originalHash);
-  const original = emitted.replace(/const callHandler = [\s\S]*?(?=    const invokeError)/, originalInvoke + "\n");
+  const original = originalStateSyntax(emitted).replace(/const callHandler = [\s\S]*?(?=    const invokeError)/, originalInvoke + "\n");
   const expected = await dispatchTrace(original);
   expect(await dispatchTrace(emitted)).toEqual(expected);
   expect(expected).toContainEqual(["message", true, "x"]);
   expect(expected).toContainEqual(["error", true, true]);
   expect(before).toContain("const unhandled: never = invocation");
+});
+
+function setField(receiver: unknown, key: PropertyKey, value: unknown) {
+  if (receiver === null || typeof receiver !== "object") throw new TypeError("Expected an object");
+  Reflect.set(receiver, key, value);
+}
+
+class SyntheticEvent extends Event {
+  constructor(type: string, props: object = {}) {
+    super(type);
+    Object.assign(this, props);
+  }
+}
+
+function client(source: string, timers?: (() => void)[]) {
+  const factory: unknown = runInNewContext(source, {
+    TextEncoder, TextDecoder, EventTarget, Event, URL, Headers, Blob, crypto, TypeError, clearTimeout,
+    setTimeout: timers ? (callback: () => void) => { timers.push(callback); return 0; } : setTimeout,
+    MessageEvent: SyntheticEvent, ErrorEvent: SyntheticEvent, CloseEvent: SyntheticEvent,
+  });
+  if (typeof factory !== "function") throw new TypeError("Expected the factory");
+  const api: unknown = Reflect.apply(factory, undefined, [{
+    require: () => ({ Buffer }),
+    builtin: () => ({ createHash }),
+    native: { hostConnect: () => 1 },
+    concatBytes: (chunks: readonly Uint8Array[]) => Buffer.concat(chunks),
+    toUint8: (data: Uint8Array) => data,
+  }]);
+  const Socket = call(api, "clientClass", [Connection]);
+  if (typeof Socket !== "function") throw new TypeError("Expected the client class");
+  const socket: unknown = Reflect.construct(Socket, ["ws://127.0.0.1/"]);
+  return socket;
+}
+
+async function queuedTrace(source: string) {
+  const socket = client(source);
+  const trace: unknown[] = [];
+  const deferred = Promise.withResolvers<ArrayBuffer>();
+  class PendingBlob extends Blob {
+    arrayBuffer() { return deferred.promise; }
+  }
+  setField(socket, "_state", 1);
+  setField(socket, "_peer", { sendFrame() { trace.push("old peer"); } });
+  setField(socket, "_pendingBytes", 2);
+  setField(socket, "_sendQueue", [
+    { bytes: new PendingBlob(["a"]), size: 1, opcode: 2 },
+    { bytes: new Uint8Array([98]), size: 1, opcode: 2 },
+  ]);
+  const flushing = call(socket, "_flushSends");
+  setField(socket, "_peer", { sendFrame(opcode: number, bytes: Uint8Array) { trace.push([opcode, Array.from(bytes)]); } });
+  deferred.resolve(new Uint8Array([97]).buffer);
+  await flushing;
+  trace.push(field(socket, "_pendingBytes"), field(socket, "_sending"));
+  return trace;
+}
+
+test("WebSocket queue keeps byte order and reads the current peer after Blob await", async () => {
+  const source = emittedSource();
+  expect(await queuedTrace(source)).toEqual(await queuedTrace(originalStateSyntax(source)));
+  expect(await queuedTrace(source)).toEqual([[2, [97]], [2, [98]], 0, false]);
+});
+
+test("WebSocket deferred callbacks read current connection and peer rather than cached state", () => {
+  const timers: (() => void)[] = [];
+  const socket = client(emittedSource(), timers);
+  const connection = field(socket, "_conn");
+  const trace: string[] = [];
+  setField(socket, "_conn", { destroy() { trace.push("current connection"); } });
+  call(connection, "onEnd");
+  expect(trace).toEqual(["current connection"]);
+  setField(socket, "_conn", undefined);
+  expect(() => call(connection, "onEnd")).toThrow(TypeError);
+  setField(socket, "_peer", { terminate() { trace.push("old peer"); } });
+  call(socket, "_abort");
+  setField(socket, "_peer", { terminate() { trace.push("current peer"); } });
+  expect(timers).toHaveLength(1);
+  timers[0]?.();
+  expect(trace).toEqual(["current connection", "current peer"]);
+});
+
+test("WebSocket state checks reject missing peer and handshake input rather than dropping work", () => {
+  const socket = client(emittedSource());
+  setField(socket, "_state", 1);
+  expect(() => call(socket, "send", [new Uint8Array([1])])).toThrow(TypeError);
+  setField(socket, "_head", null);
+  expect(() => call(socket, "_handshake", [new Uint8Array([1])])).toThrow(TypeError);
+});
+
+test("WebSocket state correction retains exactly the disclosed unresolved assertions", () => {
+  const source = readFileSync(sourcePath, "utf8");
+  const parsed = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
+  const remaining: string[] = [];
+  function visit(node: ts.Node) {
+    if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node)) remaining.push(node.getText(parsed));
+    ts.forEachChild(node, visit);
+  }
+  visit(parsed);
+  expect(remaining).toEqual([
+    "err as { code?: number }",
+    'handlers().error as NonNullable<BunWasm.WebSocketHandlers["error"]>',
+    "err as { message?: string }",
+  ]);
 });

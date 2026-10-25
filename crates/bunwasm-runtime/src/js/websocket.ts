@@ -8,6 +8,11 @@
   const MAX_PAYLOAD = 16 * 1024 * 1024;
   const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
+  function present<T>(value: T | null | undefined): T {
+    if (value === null || value === undefined) throw new TypeError("Missing WebSocket state");
+    return value;
+  }
+
   function acceptKey(key: string) {
     return internal.builtin("node:crypto").createHash("sha1").update(key + GUID).digest("base64");
   }
@@ -195,7 +200,7 @@
       if (this.finished) return;
       this.finished = true;
       this.state = 3;
-      clearTimeout(this.closeTimer as ReturnType<typeof setTimeout>);
+      clearTimeout(this.closeTimer ?? undefined);
       this.buffer = new Uint8Array(0);
       this.fragments = [];
       const info = this.closeInfo || { code: 1006, reason: "", clean: false };
@@ -336,7 +341,7 @@
         this._key = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64");
         this._head = new Uint8Array(0);
         this._conn.onData = (bytes) => this._handshake(bytes);
-        this._conn.onEnd = () => (this._conn as BunWasm.WebSocketConnection).destroy();
+        this._conn.onEnd = () => present(this._conn).destroy();
         this._conn.onClose = () => this._fail(new Error("WebSocket handshake failed"));
         this._conn.onError = (err) => this._fail(err);
         headers.set("host", url.host);
@@ -358,7 +363,7 @@
         event(this, "close", { code, reason: "", wasClean: false });
       }
       _handshake(bytes: Uint8Array) {
-        this._head = internal.concatBytes([this._head as Uint8Array, bytes]);
+        this._head = internal.concatBytes([present(this._head), bytes]);
         const text = Buffer.from(this._head).toString("latin1");
         const end = text.indexOf("\r\n\r\n");
         if (end < 0 && this._head.length < 16384) return;
@@ -370,11 +375,11 @@
         }
         const protocol = headers.get("sec-websocket-protocol");
         const validProtocol = protocol === null ? this._protocols.length === 0 : this._protocols.includes(protocol);
-        if (end < 0 || end > 16384 || !/^HTTP\/1\.1 101(?: |$)/.test(lines[0]) || headers.get("upgrade")?.toLowerCase() !== "websocket" || !headers.get("connection")?.toLowerCase().split(/\s*,\s*/).includes("upgrade") || headers.get("sec-websocket-accept") !== acceptKey(this._key as string) || headers.has("sec-websocket-extensions") || !validProtocol) return this._fail(new Error("Invalid WebSocket handshake"), 1002);
+        if (end < 0 || end > 16384 || !/^HTTP\/1\.1 101(?: |$)/.test(lines[0]) || headers.get("upgrade")?.toLowerCase() !== "websocket" || !headers.get("connection")?.toLowerCase().split(/\s*,\s*/).includes("upgrade") || headers.get("sec-websocket-accept") !== acceptKey(present(this._key)) || headers.has("sec-websocket-extensions") || !validProtocol) return this._fail(new Error("Invalid WebSocket handshake"), 1002);
         this.protocol = protocol || "";
         const initial = this._head.slice(end + 4);
         this._head = null;
-        this._peer = new Peer(this._conn as BunWasm.WebSocketConnection, true, {
+        this._peer = new Peer(present(this._conn), true, {
           message: (data) => event(this, "message", { data: this._binary(data), origin: new URL(this.url).origin }),
           error: (err) => event(this, "error", { error: err, message: err.message }),
           ping: (data) => event(this, "ping", { data: this._binary(data) }),
@@ -407,19 +412,22 @@
         const size = bytes instanceof Blob ? bytes.size : bytes.length;
         if (opcode >= 8 && size > 125) throw new RangeError("WebSocket control payload exceeds 125 bytes");
         if (this.readyState >= 2) { this._discardedBytes += size; return; }
-        if (!this._sending && !(bytes instanceof Blob)) { (this._peer as Peer).sendFrame(opcode, bytes); return; }
+        if (!this._sending && !(bytes instanceof Blob)) { present(this._peer).sendFrame(opcode, bytes); return; }
         this._pendingBytes += size;
         this._sendQueue.push({ bytes: bytes instanceof Blob ? bytes : bytes.slice(), size, opcode });
         if (!this._sending) void this._flushSends();
+      }
+      _sendQueued(item: BunWasm.WebSocketSendItem, bytes: Uint8Array) {
+        this._pendingBytes -= item.size;
+        if (this.readyState === 1) present(this._peer).sendFrame(item.opcode, bytes);
       }
       async _flushSends() {
         this._sending = true;
         try {
           while (this._sendQueue.length) {
-            const item = this._sendQueue.shift() as BunWasm.WebSocketSendItem;
+            const item = present(this._sendQueue.shift());
             const bytes = item.bytes instanceof Blob ? new Uint8Array(await item.bytes.arrayBuffer()) : item.bytes;
-            this._pendingBytes -= item.size;
-            if (this.readyState === 1) (this._peer as Peer).sendFrame(item.opcode, bytes);
+            this._sendQueued(item, bytes);
           }
         } catch (err) { this._fail(err); }
         finally { this._sending = false; }
@@ -427,7 +435,7 @@
       _abort() {
         if (this._state >= 2) return;
         this._state = 2;
-        if (this._peer) { setTimeout(() => (this._peer as Peer).terminate(), 0); return; }
+        if (this._peer) { setTimeout(() => present(this._peer).terminate(), 0); return; }
         if (this._conn) { this._conn.onClose = null; this._conn.destroy(); }
         setTimeout(() => this._fail(new Error("WebSocket closed before connecting")), 0);
       }
