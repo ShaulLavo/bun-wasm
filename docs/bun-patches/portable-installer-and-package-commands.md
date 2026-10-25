@@ -19,12 +19,14 @@ Cache-Control header, so it does not change content negotiation.
 
 Workspace discovery reads declared member manifests, resolves local dependencies
 relative to their declaring package, and creates filesystem links. The native
-installer retains its hoisted graph and tarball validation. After platform
-selection, the resolver releases full registry packuments before archive
-installation. Selected and skipped packages keep their own metadata for lockfile
-writing and downloads. Registry cache validation still runs before parsing and
-resolution. Foreign lockfile migration is kept in a separate follow-up PR using
-this workspace graph.
+installer retains its hoisted graph and tarball validation. During resolution,
+the resolver caches registry response bytes and parses each packument only for
+the current lookup instead of retaining every parsed document. After platform
+selection, it releases the cached responses before archive installation.
+Selected and skipped packages keep their own metadata for lockfile writing and
+downloads. Registry cache validation still runs before parsing and resolution.
+Foreign lockfile migration is kept in a separate follow-up PR using this
+workspace graph.
 
 `bun update` resolves selected dependencies again, within their declared ranges
 unless `--latest` is supplied. Selected member updates clear their nested
