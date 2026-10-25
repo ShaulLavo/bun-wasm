@@ -1,5 +1,11 @@
 //! Per-call data transport. VM values and exceptions stay with the caller.
 
+#![cfg(any(
+    feature = "engine-quickjs",
+    feature = "engine-jsc",
+    not(feature = "engine-host")
+))]
+
 use std::num::NonZeroU32;
 use std::ops::Range;
 

@@ -20,6 +20,11 @@ pub enum Val {
 }
 
 /// Releases an owned tree without recursing through its descendants' drop glue.
+#[cfg(any(
+    feature = "engine-quickjs",
+    feature = "engine-jsc",
+    not(feature = "engine-host")
+))]
 pub(crate) fn drop_tree(value: Val) {
     let mut pending = vec![value];
     while let Some(value) = pending.pop() {
