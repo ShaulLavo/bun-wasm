@@ -216,9 +216,10 @@ fn descriptor_metadata(fd: i32) -> io::Result<(fs::Metadata, libc::stat)> {
     // Preview1 UNKNOWN is not a pipe tag. Preserve fstat's capability check and
     // consult the process resource only to restore FIFO's missing POSIX bits.
     #[cfg(target_os = "wasi")]
-    let stat = libc::stat {
-        st_mode: descriptor_mode(stat.st_mode, crate::host::proc_fd_kind(fd))?,
-        ..stat
+    let stat = {
+        let mut stat = stat;
+        stat.st_mode = descriptor_mode(stat.st_mode, crate::host::proc_fd_kind(fd))?;
+        stat
     };
     Ok((file.metadata()?, stat))
 }
