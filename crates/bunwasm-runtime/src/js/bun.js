@@ -2,7 +2,7 @@
 (function (internal) {
   "use strict";
   const native = internal.native;
-  const { Blob, Response } = internal.web;
+  const { Blob, Response, TextDecoder } = internal.web;
   const info = native.platformInfo;
 
   function unsupported(name, why) {
@@ -77,9 +77,6 @@
     }
     async exists() {
       return this.#path !== null && native.exists(absolute(this.#path));
-    }
-    async text() {
-      return native.utf8Decode(this._bytes());
     }
     async stat() {
       return internal.builtin("node:fs").statSync(absolute(this.#path));
@@ -515,8 +512,8 @@
     zstdDecompress: (data) => new Promise(resolve => resolve(internal.require("zlib").bunDecompress(data))),
     readableStreamToBytes,
     readableStreamToArrayBuffer: async (s) => (await readableStreamToBytes(s)).buffer,
-    readableStreamToText: async (s) => native.utf8Decode(await readableStreamToBytes(s)),
-    readableStreamToJSON: async (s) => JSON.parse(native.utf8Decode(await readableStreamToBytes(s))),
+    readableStreamToText: async (s) => new TextDecoder().decode(await readableStreamToBytes(s)),
+    readableStreamToJSON: async (s) => JSON.parse(new TextDecoder().decode(await readableStreamToBytes(s))),
     readableStreamToBlob: async (s) => new Blob([await readableStreamToBytes(s)]),
     isMainThread: true,
     enableANSIColors,
