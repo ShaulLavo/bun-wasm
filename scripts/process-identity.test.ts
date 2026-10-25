@@ -29,7 +29,7 @@ test("root identity comes from the native before factory boot completes, not env
   expect(root.reads()).toBe(1);
 });
 
-test("supplied child handles agree, siblings differ and creation ancestry stays fixed", () => {
+test("supplied child handles agree and siblings differ", () => {
   const firstHandle = { pid: 72 };
   const secondHandle = { pid: 73 };
   const first = create([firstHandle.pid, 71]);
@@ -38,10 +38,6 @@ test("supplied child handles agree, siblings differ and creation ancestry stays 
   expect(second.guest.pid).toBe(secondHandle.pid);
   expect(first.guest.pid).not.toBe(second.guest.pid);
   expect([first.guest.ppid, second.guest.ppid]).toEqual([71, 71]);
-  // Factory contract only: removing the parent object cannot rewrite creation ancestry.
-  let parent: ReturnType<typeof create> | undefined = create([71, 0]);
-  parent = undefined;
-  expect(parent).toBeUndefined();
   expect(first.guest.ppid).toBe(71);
   expect(first.reads()).toBe(1);
 });

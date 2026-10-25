@@ -12,6 +12,8 @@ import { HOST_CALL_FD, installHostSlotsViaImport, type SlotImpls } from "../src/
 import { writeStdio } from "./node-stdio.ts";
 import { createNodeSignalController } from "./node-signals.ts";
 import type { EngineNet } from "../src/net/host.ts";
+import { createProcessIdentity } from "waffle/browser/process-context";
+import { workerProcessState } from "waffle/proc/worker-client";
 
 type HostCall = (slot: number, a: number, b: number, c: number, d: number) => number;
 export interface NodeWasiImports {
@@ -103,6 +105,7 @@ export interface NodeProcessOptions {
 export function createNodeProcess(options: NodeProcessOptions) {
   const preopenCount = options.preopenCount ?? 0;
   const { transport, env } = childControls(options.transport, options.env ?? {}, preopenCount);
+  const identity = createProcessIdentity(workerProcessState(transport));
   const descriptors = new DescriptorTable();
   const pipes = new WorkerPipeHost({ transport, registry: options.registry, postMessage: options.postMessage, fallback: nodeStdioCodec });
   const client = new WorkerProcessClient({
@@ -144,6 +147,9 @@ export function createNodeProcess(options: NodeProcessOptions) {
   return {
     client, descriptors, env, registry: pipes.registry.handle(),
     install(imports: NodeWasiImports, instance: () => WebAssembly.Instance, fetchCall?: HostCall) {
+      imports.bun_identity = {
+        get: (field: number) => field === 0 ? identity.pid : field === 1 ? identity.parentPid : -28,
+      };
       const memory = () => {
         const memory = instance().exports.memory;
         if (!(memory instanceof WebAssembly.Memory)) throw new Error("Missing guest memory");
