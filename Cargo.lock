@@ -1411,6 +1411,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-hermes"
+version = "0.0.53"
+
+[[package]]
 name = "bunwasm-host"
 version = "0.0.53"
 dependencies = [
@@ -1467,6 +1471,7 @@ dependencies = [
  "bun_zstd",
  "bunwasm-crypto-sys",
  "bunwasm-glue",
+ "bunwasm-hermes",
  "bunwasm-jsc",
  "bunwasm-posix",
  "bunwasm-semver",

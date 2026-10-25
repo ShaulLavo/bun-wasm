@@ -3,13 +3,15 @@ name = "bunwasm-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Bun-compatible JS runtime for wasm32-wasip1, on QuickJS-ng or JavaScriptCore behind an Engine trait"
+description = "Bun-compatible JS runtime for wasm32-wasip1, on QuickJS-ng, JavaScriptCore or Hermes behind an Engine trait"
 
 [features]
 default = ["engine-quickjs"]
 # The JS engine (exactly one): QuickJS-ng, or Bun's JavaScriptCore.
 engine-quickjs = ["dep:rquickjs"]
 engine-jsc = ["dep:bunwasm-jsc"]
+# Hermes (opt-in, docs/hermes-engine.md): needs scripts/build-hermes.sh first.
+engine-hermes = ["dep:bunwasm-hermes"]
 # The host's own JS engine (browser/Node): see docs/engine-browser.md.
 engine-host = []
 
@@ -24,6 +26,7 @@ bytemuck = "1"
 bun_core = { path = "../../vendor/bun/src/bun_core" }
 bun_paths = { path = "../../vendor/bun/src/paths" }
 bunwasm-jsc = { path = "../bunwasm-jsc", optional = true }
+bunwasm-hermes = { path = "../bunwasm-hermes", optional = true }
 rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"], optional = true }
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
 bun_zstd = { path = "../../vendor/bun/src/zstd" }

@@ -1,0 +1,913 @@
+diff --git c/CMakeLists.txt i/CMakeLists.txt
+index a11d0b5..d5cb7af 100644
+--- c/CMakeLists.txt
++++ i/CMakeLists.txt
+@@ -358,9 +358,9 @@ if (HERMESVM_INTERNAL_JAVASCRIPT_NATIVE)
+ endif()
+ 
+ if (HERMES_SANDBOX_WASM)
+-  if (NOT EMSCRIPTEN OR HERMESVM_INTERNAL_JAVASCRIPT_NATIVE OR
+-      NOT HERMESVM_ALLOW_JIT EQUAL 0)
+-    message(FATAL_ERROR "HERMES_SANDBOX_WASM requires Emscripten, "
++  if ((NOT EMSCRIPTEN AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI") OR
++      HERMESVM_INTERNAL_JAVASCRIPT_NATIVE OR NOT HERMESVM_ALLOW_JIT EQUAL 0)
++    message(FATAL_ERROR "HERMES_SANDBOX_WASM requires WebAssembly, "
+       "HERMESVM_INTERNAL_JAVASCRIPT_NATIVE=OFF and HERMESVM_ALLOW_JIT=0")
+   endif()
+   add_definitions(-DHERMES_SANDBOX_WASM)
+diff --git c/external/llvh/cmake/config-ix.cmake i/external/llvh/cmake/config-ix.cmake
+index efefa21..bc84f0a 100644
+--- c/external/llvh/cmake/config-ix.cmake
++++ i/external/llvh/cmake/config-ix.cmake
+@@ -478,7 +478,7 @@ if( LLVM_ENABLE_THREADS )
+   # Check if threading primitives aren't supported on this platform
+   # Disable threads on emscripten because it doesn't have a full implementation
+   # including support for pthread_sigmask
+-  if( (NOT HAVE_PTHREAD_H AND NOT WIN32) OR EMSCRIPTEN )
++  if( (NOT HAVE_PTHREAD_H AND NOT WIN32) OR EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "WASI" )
+     set(LLVM_ENABLE_THREADS 0)
+   endif()
+ endif()
+diff --git c/external/llvh/include/llvh/Demangle/Utility.h i/external/llvh/include/llvh/Demangle/Utility.h
+index da4a0c0..99b5613 100644
+--- c/external/llvh/include/llvh/Demangle/Utility.h
++++ i/external/llvh/include/llvh/Demangle/Utility.h
+@@ -17,8 +17,10 @@
+ #include <cstdint>
+ #include <cstdlib>
+ #include <cstring>
++#include <exception>
+ #include <iterator>
+ #include <limits>
++#include <type_traits>
+ 
+ // Stream that AST nodes write their string representation into after the AST
+ // has been parsed.
+diff --git c/external/llvh/lib/Support/Signals.cpp i/external/llvh/lib/Support/Signals.cpp
+index 483d0c9..8fbae25 100644
+--- c/external/llvh/lib/Support/Signals.cpp
++++ i/external/llvh/lib/Support/Signals.cpp
+@@ -240,7 +240,9 @@ static bool printSymbolizedStackTrace(StringRef Argv0, void **StackTrace,
+ }
+ 
+ // Include the platform-specific parts of this class.
+-#ifdef LLVM_ON_UNIX
++#if defined(__wasi__)
++#include "Wasi/Signals.inc"
++#elif defined(LLVM_ON_UNIX)
+ #include "Unix/Signals.inc"
+ #endif
+ #ifdef _WIN32
+diff --git c/external/llvh/lib/Support/Unix/Host.inc i/external/llvh/lib/Support/Unix/Host.inc
+index 4cc81d7..2fed603 100644
+--- c/external/llvh/lib/Support/Unix/Host.inc
++++ i/external/llvh/lib/Support/Unix/Host.inc
+@@ -21,17 +21,23 @@
+ #include "llvh/Config/config.h"
+ #include <cctype>
+ #include <string>
++#ifndef __wasi__
+ #include <sys/utsname.h>
++#endif
+ 
+ using namespace llvh;
+ 
+ static std::string getOSVersion() {
++#ifdef __wasi__
++  return "";
++#else
+   struct utsname info;
+ 
+   if (uname(&info))
+     return "";
+ 
+   return info.release;
++#endif
+ }
+ 
+ static std::string updateTripleOSVersion(std::string TargetTripleString) {
+diff --git c/external/llvh/lib/Support/Unix/Path.inc i/external/llvh/lib/Support/Unix/Path.inc
+index dd55605..19cf5e1 100644
+--- c/external/llvh/lib/Support/Unix/Path.inc
++++ i/external/llvh/lib/Support/Unix/Path.inc
+@@ -33,7 +33,9 @@
+ #endif
+ 
+ #include <dirent.h>
++#ifndef __wasi__
+ #include <pwd.h>
++#endif
+ 
+ #ifdef __APPLE__
+ #include <mach-o/dyld.h>
+@@ -52,6 +54,7 @@
+ #endif
+ 
+ #include <sys/types.h>
++#ifndef __wasi__
+ #if !defined(__APPLE__) && !defined(__OpenBSD__) && !defined(__FreeBSD__) &&   \
+     !defined(__linux__)
+ #include <sys/statvfs.h>
+@@ -87,6 +90,7 @@
+ #else
+ #define STATVFS_F_FLAG(vfs) (vfs).f_flags
+ #endif
++#endif // __wasi__
+ 
+ using namespace llvh;
+ 
+@@ -187,6 +191,10 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
+       if (getprogpath(exe_path, argv0))
+         return exe_path;
+   }
++#elif defined(__wasi__)
++  // WASI has no /proc/self/exe or dladdr. argv0 is the command name supplied
++  // by the WASI host and is the best available executable identity.
++  return argv0 ? std::string(argv0) : std::string();
+ #elif defined(HAVE_DLFCN_H) && defined(HAVE_DLADDR)
+   // Use dladdr to get executable path if available.
+   Dl_info DLInfo;
+@@ -222,6 +230,9 @@ uint32_t file_status::getLinkCount() const {
+ }
+ 
+ ErrorOr<space_info> disk_space(const Twine &Path) {
++#ifdef __wasi__
++  return std::make_error_code(std::errc::operation_not_supported);
++#else
+   struct STATVFS Vfs;
+   if (::STATVFS(Path.str().c_str(), &Vfs))
+     return std::error_code(errno, std::generic_category());
+@@ -231,6 +242,7 @@ ErrorOr<space_info> disk_space(const Twine &Path) {
+   SpaceInfo.free = static_cast<uint64_t>(Vfs.f_bfree) * FrSize;
+   SpaceInfo.available = static_cast<uint64_t>(Vfs.f_bavail) * FrSize;
+   return SpaceInfo;
++#endif
+ }
+ 
+ std::error_code current_path(SmallVectorImpl<char> &result) {
+@@ -346,6 +358,7 @@ std::error_code remove(const Twine &path, bool IgnoreNonExisting) {
+   return std::error_code();
+ }
+ 
++#ifndef __wasi__
+ static bool is_local_impl(struct STATVFS &Vfs) {
+ #if defined(__linux__)
+ #ifndef NFS_SUPER_MAGIC
+@@ -403,6 +416,17 @@ std::error_code is_local(int FD, bool &Result) {
+   Result = is_local_impl(Vfs);
+   return std::error_code();
+ }
++#else
++std::error_code is_local(const Twine &Path, bool &Result) {
++  Result = true;
++  return std::error_code();
++}
++
++std::error_code is_local(int FD, bool &Result) {
++  Result = true;
++  return std::error_code();
++}
++#endif // __wasi__
+ 
+ std::error_code rename(const Twine &from, const Twine &to) {
+   // Get arguments.
+@@ -509,7 +533,10 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
+   }
+ 
+   // This is a string of the form ~username/, look up this user's entry in the
+-  // password database.
++  // password database. WASI has no user or password database.
++#ifdef __wasi__
++  return;
++#else
+   struct passwd *Entry = nullptr;
+   std::string User = Expr.str();
+   Entry = ::getpwnam(User.c_str());
+@@ -523,6 +550,7 @@ static void expandTildeExpr(SmallVectorImpl<char> &Path) {
+   Path.clear();
+   Path.append(Entry->pw_dir, Entry->pw_dir + strlen(Entry->pw_dir));
+   llvh::sys::path::append(Path, Storage);
++#endif
+ }
+ 
+ static file_type typeForMode(mode_t Mode) {
+@@ -934,11 +962,13 @@ namespace path {
+ 
+ bool home_directory(SmallVectorImpl<char> &result) {
+   char *RequestedDir = getenv("HOME");
++#ifndef __wasi__
+   if (!RequestedDir) {
+     struct passwd *pw = getpwuid(getuid());
+     if (pw && pw->pw_dir)
+       RequestedDir = pw->pw_dir;
+   }
++#endif
+   if (!RequestedDir)
+     return false;
+ 
+diff --git c/external/llvh/lib/Support/Unix/Process.inc i/external/llvh/lib/Support/Unix/Process.inc
+index 90981b5..b79f770 100644
+--- c/external/llvh/lib/Support/Unix/Process.inc
++++ i/external/llvh/lib/Support/Unix/Process.inc
+@@ -230,6 +230,11 @@ std::error_code Process::FixupStandardFileDescriptors() {
+ }
+ 
+ std::error_code Process::SafelyCloseFileDescriptor(int FD) {
++#ifdef __wasi__
++  if (::close(FD) < 0)
++    return std::error_code(errno, std::generic_category());
++  return std::error_code();
++#else
+   // Create a signal set filled with *all* signals.
+   sigset_t FullSet;
+   if (sigfillset(&FullSet) < 0)
+@@ -262,6 +267,7 @@ std::error_code Process::SafelyCloseFileDescriptor(int FD) {
+   if (ErrnoFromClose)
+     return std::error_code(ErrnoFromClose, std::generic_category());
+   return std::error_code(EC, std::generic_category());
++#endif
+ }
+ 
+ bool Process::StandardInIsUserInput() {
+diff --git c/external/llvh/lib/Support/Unix/Program.inc i/external/llvh/lib/Support/Unix/Program.inc
+index 3fde3ea..8aad080 100644
+--- c/external/llvh/lib/Support/Unix/Program.inc
++++ i/external/llvh/lib/Support/Unix/Program.inc
+@@ -177,9 +177,8 @@ static bool Execute(ProcessInfo &PI, StringRef Program,
+                     ArrayRef<StringRef> Args, Optional<ArrayRef<StringRef>> Env,
+                     ArrayRef<Optional<StringRef>> Redirects,
+                     unsigned MemoryLimit, std::string *ErrMsg) {
+- // fork, exec and posix_spawn are all unavailable on tvOS, so just report an
+- // error.
+-#if defined(TARGET_OS_TV) && TARGET_OS_TV
++ // fork, exec and posix_spawn are unavailable on tvOS and WASI preview 1.
++#if (defined(TARGET_OS_TV) && TARGET_OS_TV) || defined(__wasi__)
+   if (ErrMsg)
+     *ErrMsg = "Executing another program is unsupported on this platform";
+   return false;
+@@ -338,6 +337,13 @@ namespace llvh {
+ 
+ ProcessInfo sys::Wait(const ProcessInfo &PI, unsigned SecondsToWait,
+                       bool WaitUntilTerminates, std::string *ErrMsg) {
++#ifdef __wasi__
++  if (ErrMsg)
++    *ErrMsg = "Waiting for another program is unsupported on WASI preview 1";
++  ProcessInfo WaitResult;
++  WaitResult.ReturnCode = -1;
++  return WaitResult;
++#else
+   struct sigaction Act, Old;
+   assert(PI.Pid && "invalid pid to wait on, process not started?");
+ 
+@@ -432,6 +438,7 @@ ProcessInfo sys::Wait(const ProcessInfo &PI, unsigned SecondsToWait,
+     WaitResult.ReturnCode = -2;
+   }
+   return WaitResult;
++#endif
+ }
+ 
+ std::error_code sys::ChangeStdinToBinary() {
+diff --git c/external/llvh/lib/Support/Unix/Unix.h i/external/llvh/lib/Support/Unix/Unix.h
+index b1735fd..b7c5d1a 100644
+--- c/external/llvh/lib/Support/Unix/Unix.h
++++ i/external/llvh/lib/Support/Unix/Unix.h
+@@ -30,7 +30,9 @@
+ #include <cstring>
+ #include <string>
+ #include <sys/types.h>
++#ifndef __wasi__
+ #include <sys/wait.h>
++#endif
+ 
+ #ifdef HAVE_UNISTD_H
+ #include <unistd.h>
+diff --git c/external/llvh/lib/Support/Unix/Watchdog.inc i/external/llvh/lib/Support/Unix/Watchdog.inc
+index 36d3000..aa7dc50 100644
+--- c/external/llvh/lib/Support/Unix/Watchdog.inc
++++ i/external/llvh/lib/Support/Unix/Watchdog.inc
+@@ -13,20 +13,20 @@
+ 
+ #include "llvh/Config/config.h"
+ 
+-#ifdef HAVE_UNISTD_H
++#if defined(HAVE_UNISTD_H) && !defined(__wasi__)
+ #include <unistd.h>
+ #endif
+ 
+ namespace llvh {
+   namespace sys {
+     Watchdog::Watchdog(unsigned int seconds) {
+-#ifdef HAVE_UNISTD_H
++#if defined(HAVE_UNISTD_H) && !defined(__wasi__)
+       alarm(seconds);
+ #endif
+     }
+ 
+     Watchdog::~Watchdog() {
+-#ifdef HAVE_UNISTD_H
++#if defined(HAVE_UNISTD_H) && !defined(__wasi__)
+       alarm(0);
+ #endif
+     }
+diff --git c/external/llvh/lib/Support/Wasi/Signals.inc i/external/llvh/lib/Support/Wasi/Signals.inc
+new file mode 100644
+index 0000000..45fa052
+--- /dev/null
++++ i/external/llvh/lib/Support/Wasi/Signals.inc
+@@ -0,0 +1,38 @@
++//===- Wasi/Signals.inc - WASI preview 1 signal support ---------*- C++ -*-===//
++//
++// WASI preview 1 has no signal delivery or process interrupts. Keep explicit
++// callback execution from ErrorHandling working, but do not emulate OS signals.
++//
++//===----------------------------------------------------------------------===//
++
++void llvh::sys::RunInterruptHandlers() {}
++
++void llvh::sys::SetInterruptFunction(void (*IF)()) {}
++
++bool llvh::sys::RemoveFileOnSignal(StringRef Filename, std::string *ErrMsg) {
++  return false;
++}
++
++void llvh::sys::DontRemoveFileOnSignal(StringRef Filename) {}
++
++void llvh::sys::AddSignalHandler(
++    sys::SignalHandlerCallback FnPtr, void *Cookie) {
++  insertSignalHandler(FnPtr, Cookie);
++}
++
++void llvh::sys::PrintStackTrace(raw_ostream &OS) {}
++
++void llvh::sys::DisableSystemDialogsOnCrash() {}
++
++void llvh::sys::PrintStackTraceOnErrorSignal(
++    StringRef Argv0, bool DisableCrashReporting) {}
++
++static bool findModulesAndOffsets(
++    void **StackTrace,
++    int Depth,
++    const char **Modules,
++    intptr_t *Offsets,
++    const char *MainExecutableName,
++    StringSaver &StrPool) {
++  return false;
++}
+diff --git c/include/hermes/Support/SerialExecutor.h i/include/hermes/Support/SerialExecutor.h
+index 26e65e3..55c89eb 100644
+--- c/include/hermes/Support/SerialExecutor.h
++++ i/include/hermes/Support/SerialExecutor.h
+@@ -25,6 +25,32 @@
+ 
+ namespace hermes {
+ 
++#if defined(__wasm__) && !defined(__EMSCRIPTEN_THREADS__)
++// Spike: WASI and single-threaded Emscripten cannot create finalizer threads.
++class SerialExecutor {
++  std::deque<llvh::unique_function<void()>> tasks_;
++  bool draining_ = false;
++
++ public:
++  static constexpr std::chrono::nanoseconds kDefaultTimeout =
++      std::chrono::hours(24);
++  SerialExecutor(size_t = 0,
++      std::chrono::nanoseconds = kDefaultTimeout,
++      std::function<void(std::function<void()>)> = {}) {}
++
++  void add(llvh::unique_function<void()> task) {
++    tasks_.push_back(std::move(task));
++    if (draining_) return;
++    draining_ = true;
++    while (!tasks_.empty()) {
++      auto next = std::move(tasks_.front());
++      tasks_.pop_front();
++      next();
++    }
++    draining_ = false;
++  }
++};
++#else
+ /// Simple executor that guarantees serial execution of tasks.
+ class SerialExecutor {
+  private:
+@@ -134,6 +160,7 @@ class SerialExecutor {
+   /// task enqueued from another thread at that point may never run at all.
+   void add(llvh::unique_function<void()> task);
+ };
++#endif
+ } // namespace hermes
+ 
+ #endif // HERMES_SERIALEXECUTOR_SERIALEXECUTOR_H
+diff --git c/include/hermes/VM/JSLib/DateCache.h i/include/hermes/VM/JSLib/DateCache.h
+index 404b6ab..3fed7e6 100644
+--- c/include/hermes/VM/JSLib/DateCache.h
++++ i/include/hermes/VM/JSLib/DateCache.h
+@@ -93,7 +93,9 @@ class LocalTimeOffsetCache {
+ 
+   /// Reset the standard local time offset and the DST cache.
+   void reset() {
++#ifndef __wasi__
+     ::tzset();
++#endif
+     ltza_ = localTZA();
+     caches_.fill(DSTCacheEntry{});
+     candidate_ = caches_.data();
+diff --git c/include/hermes/VM/Profiler/SamplingProfilerDefs.h i/include/hermes/VM/Profiler/SamplingProfilerDefs.h
+index 9d9fe9f..3469207 100644
+--- c/include/hermes/VM/Profiler/SamplingProfilerDefs.h
++++ i/include/hermes/VM/Profiler/SamplingProfilerDefs.h
+@@ -8,9 +8,9 @@
+ #ifndef HERMES_VM_PROFILER_SAMPLINGPROFILERDEFS_H
+ #define HERMES_VM_PROFILER_SAMPLINGPROFILERDEFS_H
+ 
+-#if defined(__EMSCRIPTEN__)
++#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+ #define HERMESVM_SAMPLING_PROFILER_AVAILABLE 0
+-#else // !defined(__EMSCRIPTEN__)
++#else // !defined(__EMSCRIPTEN__) && !defined(__wasi__)
+ 
+ #define HERMESVM_SAMPLING_PROFILER_AVAILABLE 1
+ 
+diff --git c/include/hermes/VM/Runtime.h i/include/hermes/VM/Runtime.h
+index bfcce9c..9b1d6d4 100644
+--- c/include/hermes/VM/Runtime.h
++++ i/include/hermes/VM/Runtime.h
+@@ -58,7 +58,7 @@ typedef struct SHJmpBuf SHJmpBuf;
+ typedef struct SHLocals SHLocals;
+ typedef struct SHUnit SHUnit;
+ 
+-#ifdef __EMSCRIPTEN__
++#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+ /// In Emscripten builds, allow the integrator to provide a callback to
+ /// synchronously notify the VM that a timeout has occurred. This should be
+ /// checked whenever we check for timeouts.
+@@ -506,6 +506,12 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
+   /// exception" (https://html.spec.whatwg.org/C#microtask-queuing).
+   ExecutionStatus drainJobs();
+ 
++  /// bun-wasm: whether drainJobs() has work (the embedder reports whether
++  /// a drain ran anything).
++  bool hasPendingJobs() const {
++    return !jobQueue_.empty();
++  }
++
+   /// ES2025 9.11 "When the abstract operation AddToKeptObjects is called with a
+   /// target object or symbol, it adds the target to a list that will point
+   /// strongly at the target until ClearKeptObjects is called."
+@@ -1530,7 +1536,7 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
+   /// \return whether any async break is requested or not.
+   bool hasAsyncBreak() const {
+     return asyncBreakRequestFlag_.load(std::memory_order_relaxed) != 0
+-#ifdef __EMSCRIPTEN__
++#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+         || test_wasm_host_timeout()
+ #endif
+         ;
+@@ -1558,7 +1564,7 @@ class Runtime : public RuntimeBase, public HandleRootOwner {
+   /// timeout request bit afterward.
+   bool testAndClearTimeoutAsyncBreakRequest() {
+     return testAndClearAsyncBreakRequest((uint8_t)AsyncBreakReasonBits::Timeout)
+-#ifdef __EMSCRIPTEN__
++#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+         // Avoid the short-circuiting logic to make sure we clear both.
+         | test_and_clear_wasm_host_timeout()
+ #endif
+diff --git c/include/hermes/VM/sh_runtime.h i/include/hermes/VM/sh_runtime.h
+index 1da30e2..74d5e9c 100644
+--- c/include/hermes/VM/sh_runtime.h
++++ i/include/hermes/VM/sh_runtime.h
+@@ -14,7 +14,14 @@
+ #include "libhermesvm-config.h"
+ 
+ #include <assert.h>
++#if defined(HERMES_SANDBOX_WASM) && defined(__wasi__) && \
++    !defined(__wasm_exception_handling__)
++/* bun-wasm: WASI without wasm exceptions has no setjmp.h; the sandbox build
++   never calls setjmp or longjmp (see _sh_setjmp in static_h.h). */
++typedef long jmp_buf[1];
++#else
+ #include <setjmp.h>
++#endif
+ #include <stdint.h>
+ 
+ #ifdef __cplusplus
+diff --git c/include/hermes/VM/static_h.h i/include/hermes/VM/static_h.h
+index 09f4506..44586f2 100644
+--- c/include/hermes/VM/static_h.h
++++ i/include/hermes/VM/static_h.h
+@@ -17,7 +17,6 @@
+ #include "hermes/VMLayouts/sh_stack_frame_layout.h"
+ 
+ #include <math.h>
+-#include <setjmp.h>
+ #include <stdbool.h>
+ #include <stddef.h>
+ #include <string.h>
+diff --git c/lib/CMakeLists.txt i/lib/CMakeLists.txt
+index d832414..d764685 100644
+--- c/lib/CMakeLists.txt
++++ i/lib/CMakeLists.txt
+@@ -171,6 +171,38 @@ target_link_libraries(hermesvm_a PUBLIC
+   zip_obj
+   )
+ 
++# bun-wasm: the VM and compiler without the JSI API (hermesapi_obj), which
++# needs C++ exceptions. bun-wasm embeds the VM through its own C shim.
++add_library(hermesvm_bunwasm STATIC)
++target_include_directories(hermesvm_bunwasm PUBLIC ${HERMESVM_PUBLIC_INCLUDE_DIRS})
++target_link_libraries(hermesvm_bunwasm PUBLIC
++  LLVHSupport_obj
++  dtoa_obj
++  hermesADT_obj
++  hermesAST2JS_obj
++  hermesAST_obj
++  hermesBackend_obj
++  hermesFrontEndDefs_obj
++  hermesFrontend_obj
++  hermesHBCBackend_obj
++  hermesInst_obj
++  hermesInstrumentation_obj
++  hermesInternalJavaScript_obj
++  hermesOptimizer_obj
++  hermesParser_obj
++  hermesPlatformUnicode_obj
++  hermesPlatform_obj
++  hermesPublic_obj
++  hermesRegex_obj
++  hermesSema_obj
++  hermesSHBackend_obj
++  hermesSourceMap_obj
++  hermesSupport_obj
++  hermesTypedLib_obj
++  hermesVMRuntime_obj
++  zip_obj
++  )
++
+ add_library(hermesvmlean_a STATIC)
+ target_include_directories(hermesvmlean_a PUBLIC ${HERMESVM_PUBLIC_INCLUDE_DIRS})
+ target_link_libraries(hermesvmlean_a PUBLIC
+diff --git c/lib/Support/CMakeLists.txt i/lib/Support/CMakeLists.txt
+index ea2f227..dcf2153 100644
+--- c/lib/Support/CMakeLists.txt
++++ i/lib/Support/CMakeLists.txt
+@@ -34,6 +34,7 @@ add_hermes_library(hermesSupport
+         OSCompatCommon.cpp
+         OSCompatEmscripten.cpp
+         OSCompatPosix.cpp
++        OSCompatWasi.cpp
+         OSCompatWindows.cpp
+         PageAccessTrackerPosix.cpp
+         PerfSection.cpp
+diff --git c/lib/Support/OSCompatPosix.cpp i/lib/Support/OSCompatPosix.cpp
+index e9b6692..5063a64 100644
+--- c/lib/Support/OSCompatPosix.cpp
++++ i/lib/Support/OSCompatPosix.cpp
+@@ -5,7 +5,7 @@
+  * LICENSE file in the root directory of this source tree.
+  */
+ 
+-#if !defined(_WINDOWS) && !defined(__EMSCRIPTEN__)
++#if !defined(_WINDOWS) && !defined(__EMSCRIPTEN__) && !defined(__wasi__)
+ 
+ #include "hermes/Support/Compiler.h"
+ #include "hermes/Support/ErrorHandling.h"
+diff --git c/lib/Support/OSCompatWasi.cpp i/lib/Support/OSCompatWasi.cpp
+new file mode 100644
+index 0000000..0dbdddb
+--- /dev/null
++++ i/lib/Support/OSCompatWasi.cpp
+@@ -0,0 +1,290 @@
++/*
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE file in the root directory of this source tree.
++ */
++
++#ifdef __wasi__
++
++#include "hermes/Support/ErrorHandling.h"
++#include "hermes/Support/OSCompat.h"
++
++#include <cassert>
++#include <cstdlib>
++#include <cstring>
++#include <vector>
++
++#include <sys/mman.h>
++#include <sys/types.h>
++#include <time.h>
++#include <unistd.h>
++
++#include "llvh/Support/raw_ostream.h"
++
++namespace hermes {
++namespace oscompat {
++
++#ifndef NDEBUG
++static size_t testPgSz = 0;
++
++void set_test_page_size(size_t pageSz) {
++  testPgSz = pageSz;
++}
++
++void reset_test_page_size() {
++  testPgSz = 0;
++}
++#endif
++
++static inline size_t page_size_real() {
++  return getpagesize();
++}
++
++size_t page_size() {
++#ifndef NDEBUG
++  if (testPgSz != 0) {
++    return testPgSz;
++  }
++#endif
++  return page_size_real();
++}
++
++#ifndef NDEBUG
++static constexpr size_t unsetVMAllocLimit = std::numeric_limits<size_t>::max();
++static size_t totalVMAllocLimit = unsetVMAllocLimit;
++
++void set_test_vm_allocate_limit(size_t totSz) {
++  totalVMAllocLimit = totSz;
++}
++
++void unset_test_vm_allocate_limit() {
++  totalVMAllocLimit = unsetVMAllocLimit;
++}
++#endif // !NDEBUG
++
++static llvh::ErrorOr<void *> vm_allocate_impl(size_t sz) {
++#ifndef NDEBUG
++  if (LLVM_UNLIKELY(sz > totalVMAllocLimit)) {
++    return make_error_code(OOMError::TestVMLimitReached);
++  } else if (LLVM_UNLIKELY(totalVMAllocLimit != unsetVMAllocLimit)) {
++    totalVMAllocLimit -= sz;
++  }
++#endif // !NDEBUG
++
++  void *result = mmap(
++      nullptr, sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++  if (result == MAP_FAILED) {
++    // Since mmap is a POSIX API, even on MacOS, errno should use the POSIX
++    // generic_category.
++    return std::error_code(errno, std::generic_category());
++  }
++  return result;
++}
++
++llvh::ErrorOr<void *> vm_allocate(size_t sz, void * /* hint */) {
++  assert(sz % page_size() == 0);
++#ifndef NDEBUG
++  if (testPgSz != 0 && testPgSz > static_cast<size_t>(page_size_real())) {
++    return vm_allocate_aligned(sz, testPgSz);
++  }
++#endif // !NDEBUG
++  return vm_allocate_impl(sz);
++}
++
++llvh::ErrorOr<void *>
++vm_allocate_aligned(size_t sz, size_t alignment, void * /* hint */) {
++  assert(sz > 0 && sz % page_size() == 0);
++  assert(alignment > 0 && alignment % page_size() == 0);
++  // Ensure the alignment is a power of two as this is required by
++  // aligned_alloc.
++  assert(llvh::isPowerOf2_64(alignment));
++
++  // WASI's mmap emulation cannot unmap subranges reliably, so obtain aligned
++  // linear memory from the allocator and zero it to meet the VM contract.
++  auto *p = aligned_alloc(alignment, sz);
++  if (!p)
++    return std::error_code(errno, std::generic_category());
++  memset(p, 0, sz);
++  return p;
++}
++
++void vm_free(void *p, size_t sz) {
++  auto ret = munmap(p, sz);
++
++  assert(!ret && "Failed to free memory region.");
++  (void)ret;
++
++#ifndef NDEBUG
++  if (LLVM_UNLIKELY(totalVMAllocLimit != unsetVMAllocLimit) && p) {
++    totalVMAllocLimit += sz;
++  }
++#endif
++}
++
++void vm_free_aligned(void *p, size_t sz) {
++  free(p);
++}
++
++/// Define a no-op implementation of the reserve/commit APIs that just call
++/// through to regular allocations.
++llvh::ErrorOr<void *>
++vm_reserve_aligned(size_t sz, size_t alignment, void *hint) {
++  return vm_allocate_aligned(sz, alignment, hint);
++}
++void vm_release_aligned(void *p, size_t sz) {
++  vm_free_aligned(p, sz);
++}
++llvh::ErrorOr<void *> vm_commit(void *p, size_t sz) {
++  return p;
++}
++void vm_uncommit(void *p, size_t sz) {}
++
++void vm_hugepage(void *p, size_t sz) {
++  assert(
++      reinterpret_cast<uintptr_t>(p) % page_size() == 0 &&
++      "Precondition: pointer is page-aligned.");
++}
++
++void vm_unused(void *p, size_t sz) {
++#ifndef NDEBUG
++  const size_t PS = page_size();
++  assert(
++      reinterpret_cast<intptr_t>(p) % PS == 0 &&
++      "Precondition: pointer is page-aligned.");
++#endif
++}
++
++void vm_prefetch(void *p, size_t sz) {
++  assert(
++      reinterpret_cast<intptr_t>(p) % page_size() == 0 &&
++      "Precondition: pointer is page-aligned.");
++}
++
++void vm_name(void *p, size_t sz, const char *name) {}
++
++bool vm_protect(void *p, size_t sz, ProtectMode mode) {
++  auto prot = PROT_NONE;
++  if (mode == ProtectMode::ReadWrite) {
++    prot = PROT_WRITE | PROT_READ;
++  }
++  int err = mprotect(p, sz, prot);
++  return err != -1;
++}
++
++bool vm_madvise(void *p, size_t sz, MAdvice advice) {
++#ifndef NDEBUG
++  const size_t PS = page_size();
++  assert(
++      reinterpret_cast<intptr_t>(p) % PS == 0 &&
++      "Precondition: pointer is page-aligned.");
++#endif
++  return true;
++}
++
++llvh::ErrorOr<size_t> vm_footprint(char *start, char *end) {
++  return std::make_error_code(std::errc::operation_not_supported);
++}
++
++int pages_in_ram(const void *p, size_t sz, llvh::SmallVectorImpl<int> *runs) {
++  return -1;
++}
++
++uint64_t peak_rss() {
++  return 0;
++}
++
++uint64_t current_rss() {
++  return 0;
++}
++
++uint64_t current_private_dirty() {
++  return 0;
++}
++
++std::vector<std::string> get_vm_protect_modes(const void *p, size_t sz) {
++  return std::vector<std::string>{};
++}
++
++bool num_context_switches(long &voluntary, long &involuntary) {
++  voluntary = involuntary = -1;
++  return false;
++}
++
++uint64_t process_id() {
++  return getpid();
++}
++
++uint64_t global_thread_id() {
++  return 0;
++}
++
++namespace detail {
++
++// wasm-ld supplies these weak symbols for the WASI command's linear stack.
++extern "C" const uint8_t __stack_high[];
++extern "C" const uint8_t __stack_low[];
++
++std::pair<const void *, size_t> thread_stack_bounds_impl() {
++  return {__stack_high, static_cast<size_t>(__stack_high - __stack_low)};
++}
++
++} // namespace detail
++
++void set_thread_name(const char *name) {
++  // Intentionally does nothing
++}
++
++// Platform-specific implementations of thread_cpu_time
++
++std::chrono::microseconds thread_cpu_time() {
++  using namespace std::chrono;
++
++  // WASI preview 1 has no per-thread clock. Its process-clock emulation uses
++  // CLOCK_MONOTONIC, which is also the only thread in this build.
++  clock_t ticks = clock();
++  if (ticks == static_cast<clock_t>(-1)) {
++    return microseconds::max();
++  }
++  return microseconds((ticks * 1000000) / CLOCKS_PER_SEC);
++}
++
++// Platform-specific implementations of thread_page_fault_count
++
++bool thread_page_fault_count(int64_t *outMinorFaults, int64_t *outMajorFaults) {
++  return false;
++}
++
++std::string thread_name() {
++  return "";
++}
++
++std::vector<bool> sched_getaffinity() {
++  // Not yet supported.
++  return std::vector<bool>();
++}
++
++int sched_getcpu() {
++  // Not yet supported.
++  return -1;
++}
++
++bool set_env(const char *name, const char *value) {
++  // Enforce the contract of this function that value must not be empty
++  assert(*value != '\0' && "value cannot be empty string");
++  return setenv(name, value, 1) == 0;
++}
++
++bool unset_env(const char *name) {
++  return unsetenv(name) == 0;
++}
++
++/*static*/
++void *SigAltStackLeakSuppressor::stackRoot_{nullptr};
++
++SigAltStackLeakSuppressor::~SigAltStackLeakSuppressor() {}
++
++} // namespace oscompat
++} // namespace hermes
++
++#endif // __wasi__
+diff --git c/lib/Support/SerialExecutor.cpp i/lib/Support/SerialExecutor.cpp
+index 5132823..791cdbe 100644
+--- c/lib/Support/SerialExecutor.cpp
++++ i/lib/Support/SerialExecutor.cpp
+@@ -10,6 +10,7 @@
+ 
+ #include "hermes/Support/SerialExecutor.h"
+ 
++#if !defined(__wasm__) || defined(__EMSCRIPTEN_THREADS__)
+ namespace hermes {
+ 
+ SerialExecutor::~SerialExecutor() {
+@@ -145,3 +146,5 @@ void *SerialExecutor::threadMain(void *p) {
+ }
+ 
+ } // namespace hermes
++
++#endif
+diff --git c/lib/VM/Instrumentation/ProcessStats.cpp i/lib/VM/Instrumentation/ProcessStats.cpp
+index eef6b8c..49e2d92 100644
+--- c/lib/VM/Instrumentation/ProcessStats.cpp
++++ i/lib/VM/Instrumentation/ProcessStats.cpp
+@@ -69,7 +69,7 @@ ProcessStats::Info getProcessStatSnapshot() {
+   const size_t PS = getpagesize();
+   rss *= PS / 1024;
+   va *= PS / 1024;
+-#elif defined(__EMSCRIPTEN__)
++#elif defined(__EMSCRIPTEN__) || defined(__wasi__)
+   rss = va = 0;
+ #else
+ #error "Unsupported platform"
+diff --git c/lib/VM/Runtime.cpp i/lib/VM/Runtime.cpp
+index 68515c5..b8ae498 100644
+--- c/lib/VM/Runtime.cpp
++++ i/lib/VM/Runtime.cpp
+@@ -64,7 +64,7 @@
+ #include <cstring>
+ #include <future>
+ 
+-#ifdef __EMSCRIPTEN__
++#if defined(__EMSCRIPTEN__) || defined(__wasi__)
+ /// Provide implementations with weak linkage that can serve as the default in a
+ /// wasm build, while allowing them to be overridden depending on the target.
+ /// Since Emscripten will effectively LTO, these should be inlined.
