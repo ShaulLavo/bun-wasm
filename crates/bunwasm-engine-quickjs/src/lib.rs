@@ -81,6 +81,10 @@ pub extern "C" fn quickjs_stack_reenter(depth: u32) -> i32 {
     result + 1
 }
 
+/// # Safety
+/// `bytes` and `align` must satisfy `Layout::from_size_align`. A non-null
+/// returned pointer is valid for `bytes` bytes until it is freed or reallocated
+/// with the same layout.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn quickjs_rust_alloc(bytes: usize, align: usize) -> *mut u8 {
     let Ok(layout) = Layout::from_size_align(bytes, align) else {
@@ -89,12 +93,22 @@ pub unsafe extern "C" fn quickjs_rust_alloc(bytes: usize, align: usize) -> *mut 
     unsafe { std::alloc::alloc(layout) }
 }
 
+/// # Safety
+/// `ptr` must be a live allocation from this module's Rust global allocator,
+/// and `bytes` and `align` must be its original layout. It must not be used
+/// after this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn quickjs_rust_free(ptr: *mut u8, bytes: usize, align: usize) {
     let layout = Layout::from_size_align(bytes, align).expect("original layout");
     unsafe { std::alloc::dealloc(ptr, layout) };
 }
 
+/// # Safety
+/// `ptr` must be a live allocation from this module's Rust global allocator,
+/// and `bytes` and `align` must be its original layout. `next` must be nonzero
+/// and valid for a layout with the same alignment. On success, the old pointer
+/// is invalid and the returned pointer is valid for `next` bytes. On failure,
+/// the original allocation remains owned by the caller.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn quickjs_rust_realloc(
     ptr: *mut u8,
