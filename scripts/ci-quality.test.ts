@@ -39,8 +39,8 @@ test("native fixture smoke selects the typed runtime behavior without another bu
   const baseline = oldSelections().native.toSorted().map(path => path.slice("tests/fixtures/".length));
   expect(command.slice(3).filter(name => baseline.includes(name))).toEqual(baseline);
   expect(rust).toContain('BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts');
-  expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
-  expect(rust.match(/"\$GUEST_CARGO" build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
+  expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g) ?? []).toHaveLength(0);
+  expect(rust.match(/"\$GUEST_CARGO" build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(2);
 });
 
 test("every migrated selection retains one blocking owner and the original local runtime set", () => {
@@ -763,10 +763,16 @@ test("only the disjoint prebuild overlaps the unchanged sequential native gates"
     expect(before).toContain(prerequisite);
   }
   const native = script.match(/^run_native_checks\(\) \{\n([^]*?)^\}/m)?.[1] ?? "";
-  const commands = ["bun run quality --native", "cargo test --locked", "bun scripts/quality-input-times.ts", "cargo build --release --locked -j 2 -p bunwasm-host", "guest-build-receipt.ts inputs", "cargo build --release --locked -j 2 --target wasm32-wasip1", "guest-build-receipt.ts write dist/bun.wasm", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts"];
+  const commands = ["bun run quality --native", "cargo test --locked", "bun scripts/quality-input-times.ts", "cargo build --release --locked -j 2 -p bunwasm-host", "guest-build-receipt.ts inputs quickjs", "\"$GUEST_CARGO\" build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli", "guest-build-receipt.ts write dist/bun.wasm", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts"];
   const positions = commands.map(command => native.indexOf(command));
   expect(positions).toEqual(positions.toSorted((a, b) => a - b));
   for (const command of commands) expect(native).toContain(command);
+  expect(native).toContain('guest_environment=$(bun scripts/guest-build-receipt.ts environment)\n  eval "$guest_environment"');
+  expect(native).toContain('guest_inputs=$(mktemp "${TMPDIR}/bun-wasm-guest-inputs-XXXXXX")\n  bun scripts/guest-build-receipt.ts inputs quickjs > "$guest_inputs"');
+  expect(native).toContain('"$GUEST_CARGO" build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli');
+  expect(native).toContain('bun scripts/guest-build-receipt.ts write dist/bun.wasm "$guest_inputs"\n  rm -f -- "$guest_inputs"\n  guest_inputs=');
+  expect(native).not.toContain('inputs=$(bun scripts/guest-build-receipt.ts inputs)');
+  expect(script).toContain('if [[ -n "$guest_inputs" ]]; then rm -f -- "$guest_inputs" || true; fi');
   const prebuild = script.match(/^run_jsc_prebuild\(\) \{\n([^]*?)^\}/m)?.[1] ?? "";
   expect(prebuild).toContain('export JOBS=2 CAGE=');
   expect(prebuild).toContain('if [[ "$CI_JSC_PREBUILD_HIT" == \'true\' ]]; then');
