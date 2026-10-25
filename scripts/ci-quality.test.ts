@@ -59,7 +59,25 @@ test("Rust tests are compiled and run once, with Clippy covering test targets", 
   expect(script.match(/"cargo", "test"/g)).toHaveLength(1);
   expect(script).toContain('"--all-targets", "--release", "--no-deps"');
   expect(script).toContain('"test", "--locked", "--workspace", "--release"');
-  expect(script).toContain('run(["bun", "test", "scripts/node-stack-position-native.ts"]);');
+  expect(script).toContain('run(["bun", "test", "./scripts/node-stack-position-native.ts"]);');
+});
+
+test("native stack owner passes an explicit file path to Bun's test CLI", () => {
+  const script = readFileSync(new URL("./quality-rust.ts", import.meta.url), "utf8");
+  const path = script.match(/run\(\["bun", "test", "([^"]*node-stack-position-native\.ts)"\]\);/)?.[1];
+  if (!path) throw new Error("Missing blocking native stack probe command");
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-native-owner-"));
+  try {
+    mkdirSync(join(root, "scripts"));
+    writeFileSync(join(root, "scripts/node-stack-position-native.ts"), 'import { test } from "bun:test";\ntest("native owner CLI discovery control", () => {});\n');
+    const result = spawnSync("bun", ["test", path], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("native owner CLI discovery control");
+    expect(result.stderr).toContain("1 pass");
+    expect(path).toBe("./scripts/node-stack-position-native.ts");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("local quality retains all gates and rejects invalid selections", () => {

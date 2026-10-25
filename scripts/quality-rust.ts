@@ -8,7 +8,7 @@ const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclud
 if (!files.length) throw new Error("No authored Rust files found");
 run(["rustfmt", "--edition", "2024", "--config", "skip_children=true"].concat(process.argv.includes("--write") ? [] : ["--check"], files));
 if (process.argv.includes("--write")) process.exit(0);
-run(["bun", "test", "scripts/node-stack-position-native.ts"]);
+run(["bun", "test", "./scripts/node-stack-position-native.ts"]);
 const version = execFileSync("cargo", ["machete", "--version"], { encoding: "utf8" }).trim();
 if (version !== "0.9.2") throw new Error(`Expected cargo-machete 0.9.2, got ${version}`);
 const env = { ...process.env };
