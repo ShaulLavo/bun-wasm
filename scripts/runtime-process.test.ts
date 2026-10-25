@@ -168,6 +168,14 @@ test("process controls change only execve and the four cursor own keys", async (
   expectProcessSnapshot(await controls(emitted), previous);
 });
 
+test("stdout fixture pins the complete emitter capture-state key list", async () => {
+  const stdout = (await controls(emitted)).shapes.stdout;
+  assert.ok(stdout);
+  const expected = readFileSync(join(root, "tests/fixtures/runtime-ts-process/expected.txt"), "utf8")
+    .split("\n").find(line => line.startsWith("stdout keys "));
+  expect(expected).toBe(`stdout keys ${stdout.join(",")}`);
+});
+
 const mutations: readonly [string, string, string][] = [
   ["callback snapshots lose reentrant appends", "for (const callback of callbacks)", "for (const callback of callbacks.slice())"],
   ["callback throws must prevent reset", "for (const callback of callbacks) callback(error);", "try { for (const callback of callbacks) callback(error); } finally { failure = null; stream.writable = true; }"],

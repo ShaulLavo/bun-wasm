@@ -231,3 +231,21 @@ fn production_preserves_existing_lock_bytes() {
         assert_preserved();
     });
 }
+
+#[test]
+fn override_metadata_survives_empty_locks_and_production_comparison() {
+    let registry = io::Registry::new("http://registry.invalid").unwrap();
+    let locked = json!({
+        "lockfileVersion": 2, "configVersion": 1,
+        "workspaces": {"": {}}, "packages": {},
+        "overrides": {"tool@^1": {".": "0.5.0"}}
+    });
+    let text = write_lock(&locked, &registry).unwrap();
+    assert_eq!(parse_json(text.as_bytes()).unwrap(), locked);
+    assert!(same_lock(&locked, &text, &JsonParser, true).unwrap());
+    let mut changed = locked.clone();
+    changed["overrides"]["tool@^1"]["."] = "0.6.0".into();
+    let text = write_lock(&changed, &registry).unwrap();
+    assert!(!same_lock(&locked, &text, &JsonParser, false).unwrap());
+    assert!(!same_lock(&locked, &text, &JsonParser, true).unwrap());
+}

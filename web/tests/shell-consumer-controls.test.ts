@@ -2,16 +2,21 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fixtureReceipt } from "../../tests/package/guest-receipt-fixture.ts";
 
 const entry = resolve(import.meta.dir, "browser-shell-consumer.ts");
-const inputs = { bunHead: "1".repeat(40), bunTree: "2".repeat(40), sysrootReceiptSha256: "3".repeat(64) };
 const guest = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+const receipt = fixtureReceipt(guest, "browser");
+const inputs = {
+  bunHead: receipt.bunHead, bunTree: receipt.bunTree, sysrootReceiptSha256: receipt.sysrootReceiptSha256,
+  sourceManifest: receipt.sourceManifest, sourceManifestSha256: receipt.sourceManifestSha256,
+};
 async function fixture(action: (directory: string, artifact: string) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), "bun-wasm-shell-controls-"));
   const artifact = join(directory, "bun.wasm");
   try {
     await Bun.write(artifact, guest);
-    await Bun.write(`${artifact}.build.json`, JSON.stringify({ ...inputs, artifactSha256: new Bun.CryptoHasher("sha256").update(guest).digest("hex"), artifactBytes: guest.length }));
+    await Bun.write(`${artifact}.build.json`, JSON.stringify(receipt));
     await Bun.write(join(directory, "accepted.json"), JSON.stringify(inputs));
     await action(directory, artifact);
   } finally { await rm(directory, { recursive: true, force: true }); }
