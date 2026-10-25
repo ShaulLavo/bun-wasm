@@ -740,14 +740,7 @@
   }
 
   function fillImpl(buf, value, offset, end, encoding) {
-    let enc = encoding;
-    let start = offset;
-    let stop = end;
-    if (typeof offset === "string") {
-      enc = offset;
-      start = 0;
-      stop = buf.length;
-    }
+    let { start, stop, encoding: enc } = internal.require("buffer_fill_args")(value, buf.length, offset, end, encoding);
     start = start === undefined ? 0 : rangeArg(start, "offset", 0, kMaxLength, " &&");
     stop = stop === undefined ? buf.length : rangeArg(stop, "end", buf.length, buf.length, " &&");
     if (stop <= start) return buf;
