@@ -504,10 +504,10 @@ index 09f4506..44586f2 100644
  #include <stddef.h>
  #include <string.h>
 diff --git c/lib/CMakeLists.txt i/lib/CMakeLists.txt
-index d832414..d764685 100644
+index d832414..ac5b4bf 100644
 --- c/lib/CMakeLists.txt
 +++ i/lib/CMakeLists.txt
-@@ -171,6 +171,38 @@ target_link_libraries(hermesvm_a PUBLIC
+@@ -171,6 +171,44 @@ target_link_libraries(hermesvm_a PUBLIC
    zip_obj
    )
  
@@ -542,6 +542,12 @@ index d832414..d764685 100644
 +  hermesVMRuntime_obj
 +  zip_obj
 +  )
++# bun-wasm's C shim over the VM (crates/bunwasm-hermes/cpp/shim.cpp), built
++# with the VM's own flags.
++if(BUNWASM_SHIM)
++  target_sources(hermesvm_bunwasm PRIVATE ${BUNWASM_SHIM})
++  hermes_update_cxx_flags(hermesvm_bunwasm)
++endif()
 +
  add_library(hermesvmlean_a STATIC)
  target_include_directories(hermesvmlean_a PUBLIC ${HERMESVM_PUBLIC_INCLUDE_DIRS})

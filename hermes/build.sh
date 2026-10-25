@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the Hermes VM for wasm32-wasip1 as one static library, $HERMES_LIB (hermesvm_bunwasm:
-# VM, compiler and support code, without the C++ JSI API). A host hermesc build comes first: the
+# VM, compiler and support code, without the C++ JSI API, plus crates/bunwasm-hermes/cpp/shim.cpp). A host hermesc build comes first: the
 # wasm build compiles Hermes's internal JavaScript with it. Incremental. See docs/hermes-engine.md.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 "$HERMES_SRC/fetch-hermes.sh"
@@ -37,8 +37,9 @@ $CAGE cmake -S "$HERMES_DIR" -B "$HERMES_OBJ" -G Ninja \
   -DHERMESVM_ALLOW_INLINE_ASM=OFF \
   -DHERMES_CHECK_NATIVE_STACK=OFF \
   -DHERMESVM_INDIRECT_THREADING=OFF \
+  -DBUNWASM_SHIM="$REPO/crates/bunwasm-hermes/cpp/shim.cpp" \
   -DCMAKE_C_FLAGS="$defines" \
   -DCMAKE_CXX_FLAGS="$defines" \
   -DCMAKE_EXE_LINKER_FLAGS="$ldflags" > "$HERMES_BUILD_DIR/configure-wasi.log"
-$CAGE cmake --build "$HERMES_OBJ" --target hermesvm_bunwasm --parallel "$JOBS"
+build_hermes_lib
 ls -l "$HERMES_LIB"

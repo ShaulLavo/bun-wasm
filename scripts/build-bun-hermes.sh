@@ -14,6 +14,7 @@ bun "$root/scripts/build-wasi-sysroot.ts"
   echo "error: $HERMES_LIB missing; run HERMES_BUILD_DIR=$HERMES_BUILD_DIR scripts/build-hermes.sh." >&2
   exit 1
 }
+build_hermes_lib
 export HERMES_BUILD_DIR
 export CARGO_TARGET_DIR="${HERMES_CARGO_TARGET_DIR:-$HERMES_BUILD_DIR/target}"
 # sqlite's cc build uses the same wasi-sdk.

@@ -401,130 +401,6 @@ jobs:
             ${{ env.CARGO_TARGET_DIR }}
           key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', '.github/workflows/ci.yml') }}
 
-  hermes:
-    name: Hermes engine (opt-in)
-    needs: quality
-    if: needs.quality.outputs.hermes == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      CARGO_INCREMENTAL: "0"
-      JOBS: "4"
-      CAGE: ""
-    steps:
-      - uses: actions/checkout@v4
-      - name: Configure toolchain and build homes
-        id: homes
-        run: |
-          echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
-          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
-          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-          echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
-          echo "HERMES_BUILD_DIR=$RUNNER_TEMP/hermes" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/hermes-target" >> "$GITHUB_ENV"
-          echo "image=$ImageVersion" >> "$GITHUB_OUTPUT"
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - uses: actions/cache@v4
-        with:
-          path: ${{ env.RUSTUP_HOME }}
-          key: rust-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          toolchain: nightly-2026-09-15
-          components: rustfmt, clippy
-          targets: wasm32-wasip1
-      - name: Install native build tools
-        run: |
-          if command -v cmake && command -v ninja && command -v clang; then exit 0; fi
-          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
-          test -s /etc/apt/apt-mirrors.txt
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build clang
-      - uses: actions/cache@v4
-        id: sdk
-        with:
-          path: ${{ env.WASM_TOOLS }}/wasi-sdk
-          key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
-      - name: Install pinned WASI SDK
-        if: steps.sdk.outputs.cache-hit != 'true'
-        run: |
-          archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
-          trap 'rm -f "$archive"' EXIT
-          curl --fail --location --silent --show-error \
-            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz \
-            -o "$archive"
-          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
-          mkdir -p "$WASM_TOOLS/wasi-sdk"
-          tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
-      - uses: actions/cache@v4
-        with:
-          path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
-          key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
-      - name: Install pinned Binaryen
-        run: bun scripts/ci-binaryen.ts
-      - uses: actions/cache/restore@v4
-        with:
-          path: ~/.bun/install/cache
-          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-      - run: bun install --frozen-lockfile --ignore-scripts
-      - uses: actions/cache@v4
-        with:
-          path: |
-            vendor/bun
-            vendor/boringssl
-          key: native-sources-${{ runner.os }}-${{ hashFiles('scripts/sync-*.sh', 'patches/**') }}
-      - name: Prepare pinned upstream sources
-        run: |
-          source env.sh
-          bash scripts/sync-bun.sh
-          bash scripts/sync-crypto.sh
-      - uses: actions/cache@v4
-        with:
-          path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
-          key: wasi-sysroot-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'bun.lock', 'env.sh') }}
-      - name: Build patched WASI sysroot
-        run: |
-          source env.sh
-          bun scripts/build-wasi-sysroot.ts
-      - uses: actions/cache@v4
-        id: hermes-prebuild
-        with:
-          path: |
-            ${{ env.HERMES_BUILD_DIR }}/hermes
-            ${{ env.HERMES_BUILD_DIR }}/host
-            ${{ env.HERMES_BUILD_DIR }}/wasi
-          key: hermes-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('hermes/**', 'scripts/build-hermes.sh', 'scripts/build-wasi-sysroot.ts', 'env.sh', 'bun.lock') }}
-      - name: Build the Hermes VM
-        if: steps.hermes-prebuild.outputs.cache-hit != 'true'
-        run: bash scripts/build-hermes.sh
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.CARGO_HOME }}/registry
-            ${{ env.CARGO_HOME }}/git
-            ${{ env.CARGO_TARGET_DIR }}
-          key: hermes-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('hermes/**', 'Cargo.*', 'crates/**', 'patches/**', 'third_party/**', 'rust-toolchain.toml', 'env.sh') }}
-          restore-keys: |
-            hermes-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-
-      - name: Lint the Hermes engine for wasm32-wasip1
-        run: |
-          source env.sh
-          export WASI_SDK="$WASI_SDK_PATH" CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-self-contained=no -L native=$BUN_WASM_SYSROOT/lib/wasm32-wasip1"
-          cargo clippy --locked --release -j "$JOBS" --target wasm32-wasip1 -p bunwasm-runtime -p bunwasm-hermes \
-            --no-default-features --features bunwasm-runtime/engine-hermes --no-deps -- -D warnings
-      - name: Build dist/bun-hermes.wasm and the native launcher
-        run: |
-          bash scripts/build-bun-hermes.sh
-          source env.sh
-          cargo build --release --locked -j "$JOBS" -p bunwasm-host
-      - name: Hermes smoke tests
-        run: bash scripts/test-hermes.sh
-
   package:
     name: Browser adapter package
     runs-on: ubuntu-latest
@@ -701,3 +577,127 @@ jobs:
           BUN_WASM_RUNTIME_PROC_PORT: "4187"
           TMPDIR: ${{ runner.temp }}
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}
+
+  hermes:
+    name: Hermes engine (opt-in)
+    needs: quality
+    if: needs.quality.outputs.hermes == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      JOBS: "4"
+      CAGE: ""
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure toolchain and build homes
+        id: homes
+        run: |
+          echo "CARGO_HOME=$RUNNER_TEMP/cargo" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUNNER_TEMP/rustup" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
+          echo "HERMES_BUILD_DIR=$RUNNER_TEMP/hermes" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/hermes-target" >> "$GITHUB_ENV"
+          echo "image=$ImageVersion" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.RUSTUP_HOME }}
+          key: rust-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-09-15
+          components: rustfmt, clippy
+          targets: wasm32-wasip1
+      - name: Install native build tools
+        run: |
+          if command -v cmake && command -v ninja && command -v clang; then exit 0; fi
+          sudo sed -i '\|^http://azure\.archive\.ubuntu\.com/ubuntu/|d' /etc/apt/apt-mirrors.txt
+          test -s /etc/apt/apt-mirrors.txt
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang
+      - uses: actions/cache@v4
+        id: sdk
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasi-sdk
+          key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
+      - name: Install pinned WASI SDK
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
+          trap 'rm -f "$archive"' EXIT
+          curl --fail --location --silent --show-error \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz \
+            -o "$archive"
+          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
+          mkdir -p "$WASM_TOOLS/wasi-sdk"
+          tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
+          key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
+      - name: Install pinned Binaryen
+        run: bun scripts/ci-binaryen.ts
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - uses: actions/cache@v4
+        with:
+          path: |
+            vendor/bun
+            vendor/boringssl
+          key: native-sources-${{ runner.os }}-${{ hashFiles('scripts/sync-*.sh', 'patches/**') }}
+      - name: Prepare pinned upstream sources
+        run: |
+          source env.sh
+          bash scripts/sync-bun.sh
+          bash scripts/sync-crypto.sh
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched
+          key: wasi-sysroot-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'bun.lock', 'env.sh') }}
+      - name: Build patched WASI sysroot
+        run: |
+          source env.sh
+          bun scripts/build-wasi-sysroot.ts
+      - uses: actions/cache@v4
+        id: hermes-prebuild
+        with:
+          path: |
+            ${{ env.HERMES_BUILD_DIR }}/hermes
+            ${{ env.HERMES_BUILD_DIR }}/host
+            ${{ env.HERMES_BUILD_DIR }}/wasi
+          key: hermes-prebuild-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('hermes/**', 'scripts/build-hermes.sh', 'scripts/build-wasi-sysroot.ts', 'env.sh', 'bun.lock') }}
+      - name: Build the Hermes VM
+        if: steps.hermes-prebuild.outputs.cache-hit != 'true'
+        run: bash scripts/build-hermes.sh
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
+            ${{ env.CARGO_TARGET_DIR }}
+          key: hermes-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('hermes/**', 'Cargo.*', 'crates/**', 'patches/**', 'third_party/**', 'rust-toolchain.toml', 'env.sh') }}
+          restore-keys: |
+            hermes-cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-
+      - name: Lint the Hermes engine for wasm32-wasip1
+        run: |
+          source env.sh
+          export WASI_SDK="$WASI_SDK_PATH" CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-self-contained=no -L native=$BUN_WASM_SYSROOT/lib/wasm32-wasip1"
+          cargo clippy --locked --release -j "$JOBS" --target wasm32-wasip1 -p bunwasm-runtime -p bunwasm-hermes \
+            --no-default-features --features bunwasm-runtime/engine-hermes --no-deps -- -D warnings
+      - name: Build dist/bun-hermes.wasm and the native launcher
+        run: |
+          bash scripts/build-bun-hermes.sh
+          source env.sh
+          cargo build --release --locked -j "$JOBS" -p bunwasm-host
+      - name: Hermes smoke tests
+        run: bash scripts/test-hermes.sh

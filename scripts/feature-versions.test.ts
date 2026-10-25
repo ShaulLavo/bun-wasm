@@ -37,6 +37,22 @@ test("real Git comparison permits command edits but rejects a feature's standalo
   expect(() => verifyFeatureVersions("HEAD", base, cwd)).toThrow("full base and head");
 });
 
+test("a new workspace crate in Cargo.lock is not version churn, a changed one is", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "bun-wasm-version-policy-"));
+  scratch.push(cwd);
+  git(cwd, "init", "-q");
+  const lock = (records: string) => writeFileSync(join(cwd, "Cargo.lock"), records);
+  lock('[[package]]\nname = "bunwasm-runtime"\nversion = "0.0.61"\n');
+  git(cwd, "add", "."); git(cwd, "commit", "-qm", "base");
+  const base = git(cwd, "rev-parse", "HEAD");
+  lock('[[package]]\nname = "bunwasm-hermes"\nversion = "0.0.61"\n[[package]]\nname = "bunwasm-runtime"\nversion = "0.0.61"\n');
+  git(cwd, "commit", "-qam", "new crate");
+  expect(verifyFeatureVersions(base, git(cwd, "rev-parse", "HEAD"), cwd)).toEqual(["Cargo.lock"]);
+  lock('[[package]]\nname = "bunwasm-hermes"\nversion = "0.0.62"\n[[package]]\nname = "bunwasm-runtime"\nversion = "0.0.62"\n');
+  git(cwd, "commit", "-qam", "bump");
+  expect(() => verifyFeatureVersions(base, git(cwd, "rev-parse", "HEAD"), cwd)).toThrow("Feature PR changes version records");
+});
+
 test("normal feature CI runs the version guard, with deliberate release and consumer-pin exceptions", () => {
   const workflow = Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url));
   return workflow.text().then(source => {
