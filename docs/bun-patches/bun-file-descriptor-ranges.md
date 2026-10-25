@@ -11,7 +11,8 @@ previous implementation is recorded at bun-wasm
 reference, not an implementation source. No upstream patch or revision changes.
 
 The adapter opens pathname streams on first demand, requests at most 64 KiB per
-pull and reads explicit ranges without first loading the backing file. Slice
+pull and reads explicit ranges without first loading the backing file. Path opens
+use the shared native binding's numeric read-only flag, matching `node:fs`. Slice
 indexes truncate toward zero and NaN becomes zero before deriving read bounds,
 preserving the previous typed-array range coercion. EOF,
 cancellation and read errors close only descriptors the adapter opened. Borrowed

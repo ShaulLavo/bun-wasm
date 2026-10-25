@@ -1,6 +1,6 @@
 declare namespace BunWasm {
   interface Native {
-    open(path: string, flags: string): number;
+    open(path: string, flags: number): number;
     close(fd: number): void;
     read(fd: number, length: number, position: number): Uint8Array<ArrayBuffer>;
     fstat(fd: number): { size: number; mode: number; mtimeMs: number };
