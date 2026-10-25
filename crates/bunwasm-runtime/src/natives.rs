@@ -89,6 +89,7 @@ fn millis(time: io::Result<SystemTime>) -> f64 {
         .unwrap_or(0.0)
 }
 
+#[cfg(any(unix, test))]
 fn nanos(time: io::Result<SystemTime>) -> i128 {
     match time {
         Ok(time) => match time.duration_since(UNIX_EPOCH) {
