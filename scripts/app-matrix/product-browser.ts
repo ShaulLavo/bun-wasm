@@ -13,6 +13,8 @@ interface Response {
 }
 export interface ProductPage {
   addInitScript(script: () => void): Promise<void>;
+  exposeBinding(name: string, callback: (source: unknown, value: unknown) => void): Promise<void>;
+  removeExposedBinding(name: string): Promise<void>;
   evaluate<T>(pageFunction: () => T): Promise<T>;
   locator(selector: string): Locator;
   goto(url: string, options: { timeout: number }): Promise<Response | null>;
@@ -39,11 +41,11 @@ export interface ProductTraffic {
   close(): Promise<void>;
 }
 
+const trafficBindingName = "__bunWasmProductTrafficReport";
+
 declare global {
-  var __bunWasmProductTraffic: {
-    events: TrafficEvidence[];
-    close(): void;
-  } | undefined;
+  var __bunWasmProductTraffic: { close(): void } | undefined;
+  var __bunWasmProductTrafficReport: ((event: unknown) => unknown) | undefined;
 }
 
 function installPreviewTrafficObserver() {
@@ -55,7 +57,6 @@ function installPreviewTrafficObserver() {
   const descriptor = Object.getOwnPropertyDescriptor(eventTarget.prototype, "dispatchEvent");
   if (!descriptor || typeof descriptor.value !== "function") return;
 
-  const events: TrafficEvidence[] = [];
   const originalDispatch = descriptor.value;
   const nextActions = new Set([
     "built", "sync", "reloadPage", "serverComponentChanges", "clientChanges",
@@ -101,14 +102,15 @@ function installPreviewTrafficObserver() {
   const wrappedDispatch = function (this: EventTarget, event: Event): boolean {
     try {
       const observed = frameworkEvent(this, event);
-      if (observed) events.push({ sequence: events.length + 1, ...observed });
+      if (!observed) return Reflect.apply(originalDispatch, this, [event]);
+      try { void globalThis.__bunWasmProductTrafficReport?.(observed); }
+      catch { }
     } catch { }
     return Reflect.apply(originalDispatch, this, [event]);
   };
 
   Object.defineProperty(eventTarget.prototype, "dispatchEvent", { ...descriptor, value: wrappedDispatch });
   const state = {
-    events,
     close() {
       Object.defineProperty(eventTarget.prototype, "dispatchEvent", descriptor);
       delete globalThis.__bunWasmProductTraffic;
@@ -117,28 +119,38 @@ function installPreviewTrafficObserver() {
   Object.defineProperty(globalThis, "__bunWasmProductTraffic", { configurable: true, value: state });
 }
 
-function trafficCount(): number {
-  return globalThis.__bunWasmProductTraffic?.events.length ?? 0;
-}
-
-function trafficEvidence(): TrafficEvidence[] {
-  return globalThis.__bunWasmProductTraffic?.events.map(event => ({ ...event })) ?? [];
-}
-
 function closePreviewTrafficObserver(): void {
   globalThis.__bunWasmProductTraffic?.close();
 }
 
+function isTrafficEvidence(value: unknown): value is Omit<TrafficEvidence, "sequence"> {
+  if (!value || typeof value !== "object") return false;
+  if (!("framework" in value) || !("event" in value) || !("payload" in value)) return false;
+  return (value.framework === "next" || value.framework === "vite")
+    && typeof value.event === "string"
+    && typeof value.payload === "string";
+}
+
 export async function observeProductTraffic(page: ProductPage): Promise<ProductTraffic> {
+  const events: TrafficEvidence[] = [];
+  let nextSequence = 1;
+  const receive = (_source: unknown, value: unknown): void => {
+    if (!isTrafficEvidence(value)) return;
+    events.push({ sequence: nextSequence++, ...value });
+  };
+  await page.exposeBinding(trafficBindingName, receive);
   await page.addInitScript(installPreviewTrafficObserver);
   let closed = false;
   return {
-    count: () => page.evaluate(trafficCount),
-    evidenceSince: async sequence => (await page.evaluate(trafficEvidence)).slice(sequence),
+    count: async () => events.length,
+    evidenceSince: async sequence => events.slice(sequence).map(event => ({ ...event })),
     close: async () => {
       if (closed) return;
-      await page.evaluate(closePreviewTrafficObserver);
-      closed = true;
+      try { await page.evaluate(closePreviewTrafficObserver); }
+      finally {
+        closed = true;
+        await page.removeExposedBinding(trafficBindingName);
+      }
     },
   };
 }

@@ -6,6 +6,7 @@ import type { ProductCheck } from "./product-types";
 interface FixtureOptions {
   updateMessage: string | null;
   domFailure?: boolean;
+  replaceDocumentOnUpdate?: boolean;
 }
 
 interface Fixture {
@@ -14,6 +15,7 @@ interface Fixture {
   source: { read(path: string): Promise<string | null>; write(path: string, contents: string): Promise<void> };
   writes: string[];
   visits: string[];
+  documentReplacements: number;
   current(): string;
   emit(payload: string): void;
   open(): Promise<void>;
@@ -84,9 +86,12 @@ function evaluate(context: Context, source: string): void {
 }
 
 function fixture(options: FixtureOptions): Fixture {
-  const context = createPreviewContext();
+  let context = createPreviewContext();
   let visible = "original";
   let source = "original";
+  let documentReplacements = 0;
+  const initScripts: Array<() => void> = [];
+  const bindings = new Map<string, (source: unknown, value: unknown) => void>();
   const writes: string[] = [];
   const visits: string[] = [];
   const locator = (wanted = "") => ({
@@ -96,15 +101,46 @@ function fixture(options: FixtureOptions): Fixture {
     },
     async click() { visible = "action-result"; },
   });
+  const installBindings = () => {
+    for (const [name, callback] of bindings) {
+      Object.defineProperty(context, name, {
+        configurable: true,
+        value: (...args: unknown[]) => callback({}, args[0]),
+      });
+    }
+    for (const script of initScripts) runInContext(`(${script.toString()})()`, context);
+  };
+  const setupPreviewSocket = () => evaluate(context, "globalThis.WebSocket = globalThis.PreviewWebSocket; globalThis.__previewSocket = new globalThis.PreviewWebSocket();");
+  const replaceDocument = () => {
+    context = createPreviewContext();
+    documentReplacements++;
+    visible = source;
+    installBindings();
+    setupPreviewSocket();
+  };
   const page: ProductPage = {
-    async addInitScript(script) { runInContext(`(${script.toString()})()`, context); },
+    async addInitScript(script) {
+      initScripts.push(script);
+      runInContext(`(${script.toString()})()`, context);
+    },
+    async exposeBinding(name, callback) {
+      bindings.set(name, callback);
+      Object.defineProperty(context, name, {
+        configurable: true,
+        value: (...args: unknown[]) => callback({}, args[0]),
+      });
+    },
+    async removeExposedBinding(name) {
+      bindings.delete(name);
+      delete context[name];
+    },
     async evaluate<T>(pageFunction: () => T) { return runInContext(`(${pageFunction.toString()})()`, context); },
     locator,
     async goto(url) {
       visits.push(url);
       const path = new URL(url).pathname;
       visible = path.endsWith("/__preview/3137/") ? "original" : "route-result";
-      evaluate(context, "globalThis.WebSocket = globalThis.PreviewWebSocket; globalThis.__previewSocket = new globalThis.PreviewWebSocket();");
+      setupPreviewSocket();
       return { ok: () => true, status: () => 200, text: async () => visible, headers: () => ({ "x-matrix": "verified" }) };
     },
   };
@@ -115,18 +151,19 @@ function fixture(options: FixtureOptions): Fixture {
       writes.push(contents);
       source = contents;
       visible = contents;
-      if (contents === "changed") {
-        if (options.updateMessage) emit(options.updateMessage);
-        else evaluate(context, "globalThis.__previewControllerPort?.postMessage({ kind: 'ping' });");
-      }
+      if (contents !== "changed") return;
+      if (options.updateMessage) emit(options.updateMessage);
+      else evaluate(context, "globalThis.__previewControllerPort?.postMessage({ kind: 'ping' });");
+      if (options.replaceDocumentOnUpdate) replaceDocument();
     },
   };
   return {
-    context,
+    get context() { return context; },
     page,
     source: sourceAdapter,
     writes,
     visits,
+    get documentReplacements() { return documentReplacements; },
     current: () => source,
     emit,
     async open() { await page.goto("http://local/__preview/3137/", { timeout: 1000 }); },
@@ -145,6 +182,22 @@ test("observes preview WebSocket messages over MessagePort after the edit bounda
   const rows = await productObservations(run.page, "http://local/__preview/3137/", hmrCheck(), run.source, traffic, 1000);
   expect(rows.map(row => row.status)).toEqual(["pass"]);
   expect(rows[0]?.assertion).toContain("vite:update");
+  expect(run.writes).toEqual(["changed", "original"]);
+  expect(run.current()).toBe("original");
+  await traffic.close();
+});
+
+test("retains full-reload evidence when HMR replaces the document", async () => {
+  const run = fixture({
+    updateMessage: JSON.stringify({ type: "full-reload", path: "/src/App.tsx" }),
+    replaceDocumentOnUpdate: true,
+  });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  const rows = await productObservations(run.page, "http://local/__preview/3137/", hmrCheck(), run.source, traffic, 1000);
+  expect(rows[0]?.status).toBe("pass");
+  expect(rows[0]?.assertion).toContain("vite:full-reload");
+  expect(run.documentReplacements).toBe(1);
   expect(run.writes).toEqual(["changed", "original"]);
   expect(run.current()).toBe("original");
   await traffic.close();
@@ -194,7 +247,7 @@ test("preserves message arrival ordering, receiver behavior, exceptions, and cle
   expect(evidence.map(event => event.event)).toEqual(["full-reload"]);
   await traffic.close();
   run.emit(JSON.stringify({ type: "update", updates: [] }));
-  expect(await traffic.count()).toBe(0);
+  expect(await traffic.count()).toBe(1);
   expect(() => evaluate(run.context, `globalThis.__plainTarget = new globalThis.EventTarget(); globalThis.__plainTarget.addEventListener('message', () => { throw new Error('receiver failure'); }); globalThis.__plainTarget.dispatchEvent(new globalThis.Event('message'));`)).toThrow("receiver failure");
 });
 
