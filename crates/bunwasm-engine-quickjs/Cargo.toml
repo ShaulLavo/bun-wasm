@@ -1,0 +1,12 @@
+[package]
+name = "bunwasm-engine-quickjs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "QuickJS shared-module dependency and allocator gate"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"] }
