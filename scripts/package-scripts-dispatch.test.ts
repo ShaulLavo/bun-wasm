@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { runInNewContext } from "node:vm";
 
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/package_scripts.ts", import.meta.url), "utf8");
-const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(source));
+const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.packageFactory = ${source}`));
 const projects: string[] = [];
 afterEach(() => { for (const project of projects.splice(0)) rmSync(project, { recursive: true, force: true }); });
 
