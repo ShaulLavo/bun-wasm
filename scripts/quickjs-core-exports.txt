@@ -68,3 +68,6 @@ __stack_high
 __heap_base
 __wasm_call_ctors
 bun_core_ctor_count
+bun_core_idle
+bun_core_poll
+bun_core_exit

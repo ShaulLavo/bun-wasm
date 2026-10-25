@@ -1,7 +1,7 @@
 //! Per-call data transport. VM values and exceptions stay with the caller.
 
 #![cfg(any(
-    feature = "engine-quickjs",
+    feature = "engine-split",
     feature = "engine-jsc",
     not(feature = "engine-host")
 ))]
@@ -125,11 +125,11 @@ impl Reply {
     }
 }
 
-/// This unit registers one migrated native, not an engine-method opcode table.
+/// Process-local plain-data operations. No engine methods or VM handles.
 pub(crate) struct Dispatcher {
     session: NonZeroU32,
     op: u32,
-    function: DataFn,
+    functions: std::collections::HashMap<u32, DataFn>,
 }
 
 impl Dispatcher {
@@ -138,7 +138,21 @@ impl Dispatcher {
         Some(Self {
             session,
             op,
-            function,
+            functions: std::collections::HashMap::from([(op, function)]),
+        })
+    }
+
+    pub fn registry(session: NonZeroU32, entries: Vec<(u32, DataFn)>) -> Option<Self> {
+        let op = entries.first()?.0;
+        let count = entries.len();
+        let functions: std::collections::HashMap<_, _> = entries.into_iter().collect();
+        if functions.len() != count {
+            return None;
+        }
+        Some(Self {
+            session,
+            op,
+            functions,
         })
     }
 
@@ -148,9 +162,12 @@ impl Dispatcher {
     }
 
     pub fn dispatch(&self, op: u32, session: u32, request: Vec<u8>) -> Reply {
-        if op != self.op || session != self.session.get() {
+        if session != self.session.get() {
             return Reply::failed(Status::BadCall);
         }
+        let Some(function) = self.functions.get(&op).cloned() else {
+            return Reply::failed(Status::BadCall);
+        };
         let args = match codec::decode(&request) {
             Ok(Val::Array(args)) => args,
             Ok(value) => {
@@ -160,7 +177,6 @@ impl Dispatcher {
             Err(error) => return Reply::failed(error_status(error)),
         };
         drop(request);
-        let function = self.function.clone();
         let result = function(Args(&args));
         drop_tree(Val::Array(args));
         match result {
@@ -283,3 +299,37 @@ mod tests;
 
 #[path = "ops/abi.rs"]
 pub(crate) mod abi;
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use std::rc::Rc;
+
+    #[test]
+    fn registry_routes_multiple_natives_and_source_ops() {
+        let entries: Vec<(u32, DataFn)> = vec![
+            (1, Rc::new(|_| Ok("description".into()))),
+            (DATA_NATIVE + 2, Rc::new(|args| Ok(args.str(0)?.into()))),
+        ];
+        let dispatcher = Dispatcher::registry(NonZeroU32::MIN, entries).unwrap();
+        assert_eq!(
+            abi::call(&dispatcher, 1, 1, vec![]).unwrap(),
+            "description".into()
+        );
+        assert_eq!(
+            abi::call(&dispatcher, DATA_NATIVE + 2, 1, vec!["second".into()]).unwrap(),
+            "second".into()
+        );
+        assert!(abi::call(&dispatcher, DATA_NATIVE + 1, 1, vec![]).is_err());
+        assert!(abi::call(&dispatcher, 1, 2, vec![]).is_err());
+    }
+
+    #[test]
+    fn registry_rejects_duplicate_operations() {
+        let entries: Vec<(u32, DataFn)> = vec![
+            (1, Rc::new(|_| Ok(Val::Undefined))),
+            (1, Rc::new(|_| Ok(Val::Undefined))),
+        ];
+        assert!(Dispatcher::registry(NonZeroU32::MIN, entries).is_none());
+    }
+}

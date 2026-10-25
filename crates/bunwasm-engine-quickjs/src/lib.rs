@@ -253,6 +253,24 @@ pub extern "C" fn quickjs_helpers_smoke() -> i32 {
 }
 
 mod client;
+#[allow(dead_code, unexpected_cfgs)]
+#[path = "../../bunwasm-runtime/src/data.rs"]
+mod data;
+mod driver;
+use driver::{Core, Entry};
+#[allow(unused_imports, dead_code)]
+#[path = "../../bunwasm-runtime/src/engine.rs"]
+mod engine;
+mod loader;
+mod natives;
+#[allow(dead_code, unexpected_cfgs)]
+#[path = "../../bunwasm-runtime/src/ops.rs"]
+mod ops;
+mod program;
+#[path = "../../bunwasm-runtime/src/split_api.rs"]
+mod split_api;
+mod value_natives;
+mod vm;
 
 unsafe extern "C" {
     fn bun_core_bind_engine(run: extern "C" fn(u32) -> i32);
@@ -269,7 +287,6 @@ pub extern "C" fn quickjs_register() {
     unsafe { bun_core_bind_engine(quickjs_run) };
 }
 
-// Unmerged entry checkpoint. Replace this body with the existing driver before landing.
 #[unsafe(no_mangle)]
 pub extern "C" fn quickjs_run(session: u32) -> i32 {
     assert_eq!(
@@ -277,11 +294,5 @@ pub extern "C" fn quickjs_run(session: u32) -> i32 {
         42,
         "side constructors once"
     );
-    let runtime = rquickjs::Runtime::new().expect("QuickJS runtime");
-    runtime.set_max_stack_size(32 * 1024);
-    runtime.set_interrupt_handler(Some(Box::new(|| unsafe { core_checkpoint() != 0 })));
-    let context = rquickjs::Context::full(&runtime).expect("QuickJS context");
-    let value = context.with(|ctx| ctx.eval::<i32, _>("42").expect("evaluate checkpoint"));
-    client::write_stdout(session, value);
-    0
+    driver::run(session)
 }

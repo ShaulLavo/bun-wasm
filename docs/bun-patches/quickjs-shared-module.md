@@ -1,8 +1,9 @@
 ## QuickJS shared-module split
 
 The `bunwasm-engine-quickjs` crate started as a build and allocator gate.
-The unmerged production-entry checkpoint now links it to the actual CLI/runtime
-core. Its RUN body evaluates literal 42, not the application driver. It builds locked rquickjs 0.13.0 with std and the existing
+The production split links it to the actual CLI/runtime core. Its single RUN
+entry owns the moved QuickJS VM, bootstrap, module loader and event driver.
+It builds locked rquickjs 0.13.0 with std and the existing
 patched QuickJS-ng 0.16.2 C sources. No upstream code was copied into this adapter.
 The existing patches remain documented in [QuickJS](quickjs.md),
 [data conversion](quickjs-data-conversion.md), and [stack guards](wasm-stack-guards.md).
@@ -54,7 +55,7 @@ The smoke tests a real VM, patched helpers, pending jobs, interrupts, shared-sta
 nesting, owned ops echo, cross-boundary allocation, real core growth, and the
 512 MiB ceiling. The result and exact module hashes are written to the selected
 build directory. That directory belongs to the caller and can be removed once
-artifact consumers have stopped. No browser loader or product engine trait moves.
+artifact consumers have stopped. The raw smoke is separate from the production CLI acceptance below.
 
 ## Production-entry checkpoint
 
@@ -81,8 +82,26 @@ bun test tests/linker/quickjs/cli.test.ts
 The fixture uses accepted Waffle revision
 `1fa934ed99f95a744af2448fc6fb14bb984c37d4`. It requires exact `42\n` stdout,
 empty stderr, exit 0 and one cleanup. Initialization is requested twice to test
-idempotence. This does not accept application imports, promise jobs, timers or
-the final split. Replace the literal RUN before merging.
+idempotence. The entry imports another TypeScript module, completes a promise
+job and a timer, then prints 42. Further cases cover CommonJS and builtin
+wrappers, native error properties, nextTick order, beforeExit work, exit codes,
+a rejected main reported once, and unresolved top-level await. Side memory,
+table and stack identities match core, and disposal clears side table entries.
+This is ordinary-worker evidence, not site, matrix, size or speed acceptance.
+
+The VM implementation moved from `bunwasm-runtime/src/engine_quickjs.rs` at
+`8ca7c96de16ed61a122e845c444f8c0d914ddd98` to the engine's `vm.rs`. It retains
+rquickjs rooting, the six patched helper declarations, pending jobs, stack
+budgets and interruption policy. `program.rs`, `loader.rs` and
+`value_natives.rs` hold the existing generic VM-local algorithms. JSC compiles
+those same sources with its direct State adapter, preventing two event-loop
+implementations. The split adapter uses plain source, metadata and data-native
+operations. No Engine method, callback, promise or live VM handle crosses the
+transport. Core keeps source caching, resolution, transpilation and host waits.
+
+The original runtime adapter is this repository's code, not copied upstream
+source. Its QuickJS patch provenance and pinned upstream revisions remain in
+the linked QuickJS records above. No second monolithic QuickJS path remains.
 
 ## Classification
 

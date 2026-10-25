@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Actual rquickjs shared module. The RUN entry is an unmerged production checkpoint.
+# Actual rquickjs shared module. The registered RUN entry owns the VM and application driver.
 # Contract and provenance: docs/bun-patches/quickjs-shared-module.md.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
