@@ -12,7 +12,7 @@ const source = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.sp
 
 const EAGAIN = -6;
 
-interface FakePipe { chunks: Uint8Array[]; readers: number; writers: number }
+interface FakePipe { chunks: Uint8Array[]; queuedBytes: number; readers: number; writers: number; capacity: number }
 // Canonical runtime_proc.wait results, not shell-style 128 + signal exit statuses.
 export type ProcessExit = [kind: 0, code: number] | [kind: 1, signal: number] | [kind: 2, wasiErrno: number];
 interface FakeChild {
@@ -26,6 +26,7 @@ interface ServiceOptions {
   now?: () => number;
   onSpawn?(child: FakeChild): void;
   onPoll?(turn: number): void;
+  pipeCapacity?: number;
 }
 
 export function service(options: ServiceOptions = {}) {
@@ -60,7 +61,7 @@ export function service(options: ServiceOptions = {}) {
     },
     procAccess() { return 0; },
     procPipe() {
-      const pipe: FakePipe = { chunks: [], readers: 1, writers: 1 };
+      const pipe: FakePipe = { chunks: [], queuedBytes: 0, readers: 1, writers: 1, capacity: options.pipeCapacity ?? Number.POSITIVE_INFINITY };
       const ends = [next++, next++] as [number, number];
       pipes.set(ends[0], { pipe, write: false });
       pipes.set(ends[1], { pipe, write: true });
@@ -95,15 +96,22 @@ export function service(options: ServiceOptions = {}) {
       const entry = pipes.get(fd);
       if (!entry) return -8;
       const chunk = entry.pipe.chunks.shift();
-      if (chunk) return chunk;
+      if (chunk) {
+        entry.pipe.queuedBytes -= chunk.length;
+        return chunk;
+      }
       return entry.pipe.writers === 0 ? 0 : EAGAIN;
     },
     procWrite(fd: number, bytes: Uint8Array) {
       const entry = pipes.get(fd);
       if (!entry) return -8;
       if (entry.pipe.readers === 0) return -64;
-      entry.pipe.chunks.push(bytes.slice());
-      return bytes.length;
+      const available = entry.pipe.capacity - entry.pipe.queuedBytes;
+      if (available <= 0) return EAGAIN;
+      const count = Math.min(available, bytes.length);
+      entry.pipe.chunks.push(bytes.slice(0, count));
+      entry.pipe.queuedBytes += count;
+      return count;
     },
     procStartStatus(id: number) {
       const child = children.get(id);
@@ -157,12 +165,24 @@ export function service(options: ServiceOptions = {}) {
     /** What a child process would write to its descriptor. */
     childWrite(child: FakeChild, fd: number, text: string) {
       const entry = child.held.get(fd)!;
-      entry.pipe.chunks.push(new TextEncoder().encode(text));
+      const chunk = new TextEncoder().encode(text);
+      entry.pipe.chunks.push(chunk);
+      entry.pipe.queuedBytes += chunk.length;
+    },
+    childWriteBytes(child: FakeChild, fd: number, chunk: Uint8Array) {
+      const entry = child.held.get(fd)!;
+      const copy = chunk.slice();
+      entry.pipe.chunks.push(copy);
+      entry.pipe.queuedBytes += copy.length;
     },
     childRead(child: FakeChild, fd: number) {
       const entry = child.held.get(fd)!;
       const chunk = entry.pipe.chunks.shift();
-      return chunk ? new TextDecoder().decode(chunk) : entry.pipe.writers === 0 ? null : "";
+      if (chunk) {
+        entry.pipe.queuedBytes -= chunk.length;
+        return new TextDecoder().decode(chunk);
+      }
+      return entry.pipe.writers === 0 ? null : "";
     },
     open: () => pipes.size,
   };
@@ -215,7 +235,7 @@ export function load(fake: ReturnType<typeof service>, options: { timers?: TestT
     for (let turn = 0; turn < limit; turn++) {
       pumpTurn();
       await Promise.resolve();
-      if (!waiters.length) return;
+      if (!waiters.some((waiter) => waiter.ref || waiter.subscriptions?.().length)) return;
     }
     throw new Error("waiters did not finish");
   };

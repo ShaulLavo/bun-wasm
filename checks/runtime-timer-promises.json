@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/timer-promises.test.ts",
+  "localRuntime": true
+}

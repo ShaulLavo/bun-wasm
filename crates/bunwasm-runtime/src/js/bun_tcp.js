@@ -108,7 +108,10 @@
           if (options.socket.connectError) options.socket.connectError(result, err);
           reject(err);
         });
-        socket.connect({ host: options.hostname || "localhost", port: options.port }, () => {
+        let hostname;
+        try { hostname = internal.require("net_hostname")(options.hostname || "localhost", true); }
+        catch (err) { internal.nextTick(() => socket.destroy(err)); return; }
+        socket.connect({ host: hostname, port: options.port }, () => {
           socket._connected = true;
           result._open();
           resolve(result);

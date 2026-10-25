@@ -1,0 +1,1 @@
+This adapter deliberately cancels an in-flight interval wait on return/throw. Native async generators can yield that final tick before closing, so native --update is not this fixture's reference.
