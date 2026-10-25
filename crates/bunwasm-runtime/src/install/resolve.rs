@@ -1,3 +1,5 @@
+mod next_swc;
+
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, VecDeque},
