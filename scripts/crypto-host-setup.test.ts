@@ -33,7 +33,12 @@ for (const failRoot of [false, true]) {
 set -euo pipefail
 printf '%s|%s\n' "$PWD" "$*" >> "$INSTALL_TRACE"
 [[ "$PWD" != "$FAIL_ROOT" ]] || exit 23
-mkdir -p node_modules
+if [[ "$*" == node_modules/waffle/prepare.ts ]]; then
+  [[ "$WAFFLE_NETWORK_PREBUILT" == 1 ]]
+  exit 0
+fi
+mkdir -p node_modules/waffle/browser/net
+for part in wasm input-hash sha256; do printf '%s' "$PWD/$part" > "node_modules/waffle/browser/net/network.$part"; done
 `, { mode: 0o755 });
       expect(existsSync(join(directory, "node_modules"))).toBe(false);
       const result = spawnSync("bash", ["../scripts/test-web-host.sh", "--setup"], {
@@ -45,7 +50,7 @@ mkdir -p node_modules
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(failRoot ? 23 : 0);
       const installs = [`${directory}|install --frozen-lockfile --ignore-scripts`];
-      if (!failRoot) installs.push(`${directory}/web|install --frozen-lockfile`, `${directory}/sandbox|install --frozen-lockfile`);
+      if (!failRoot) installs.push(`${directory}/web|install --frozen-lockfile`, `${directory}/sandbox|install --frozen-lockfile`, `${directory}|node_modules/waffle/prepare.ts`);
       expect(readFileSync(join(directory, "installs"), "utf8").trim().split("\n")).toEqual(installs);
       expect(existsSync(join(directory, "node_modules"))).toBe(!failRoot);
     } finally {

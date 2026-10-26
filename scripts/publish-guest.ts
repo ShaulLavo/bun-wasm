@@ -10,7 +10,7 @@ import {
   GUEST_BUCKET, GUEST_CACHE_CONTROL, GUEST_ORIGIN,
   describeGuest, verifyGuest, writeGuestDescriptor,
 } from "./guest-artifact.ts";
-import type { GuestArtifact, GuestDescriptor } from "./guest-artifact.ts";
+import type { GuestArtifact, GuestDescriptor, GuestFile } from "./guest-artifact.ts";
 
 import { acceptGuestPublication } from "./guest-acceptance.ts";
 
@@ -44,26 +44,34 @@ export async function verifyPublicGuest(descriptor: GuestDescriptor, fetch: Gues
   verifyGuest(new Uint8Array(await response.arrayBuffer()), descriptor);
 }
 
+function snapshotFile(file: GuestFile): GuestFile {
+  return { key: file.key, gzip: new Uint8Array(file.gzip), descriptor: { ...file.descriptor } };
+}
+
+async function publishFile(file: GuestFile, name: string, publisher: GuestPublisher): Promise<void> {
+  verifyGuest(file.gzip, file.descriptor);
+  if (file.key !== `${file.descriptor.sha256}/${name}.gz`) throw new Error("Guest key does not match its SHA-256");
+  const existing = await publisher.read(file.key);
+  if (existing !== null) verifyGuest(existing, file.descriptor);
+  else await publisher.upload(file);
+  await verifyPublicGuest(file.descriptor, publisher.fetch);
+}
+
 export async function publishGuest(artifact: GuestArtifact, publisher: GuestPublisher): Promise<GuestDescriptor> {
-  // Own the verified bytes and metadata before any callback can mutate the caller's artifact.
-  const { key, gzip, descriptor } = artifact;
-  const snapshot: GuestArtifact = {
-    key, gzip: new Uint8Array(gzip),
-    descriptor: { url: descriptor.url, sha256: descriptor.sha256, bytes: descriptor.bytes },
-  };
-  // Keys are computed from the exact raw bytes uploaded. Concurrent valid publishers therefore
-  // publish the same content; do not use REST If-None-Match, which R2's management API ignores.
-  verifyGuest(snapshot.gzip, snapshot.descriptor);
-  if (snapshot.key !== `${snapshot.descriptor.sha256}/bun.wasm.gz`) throw new Error("Guest key does not match its SHA-256");
-  const existing = await publisher.read(snapshot.key);
-  if (existing !== null) {
-    // An existing wrong object is an error, never a reason to replace immutable data.
-    verifyGuest(existing, snapshot.descriptor);
-  } else {
-    await publisher.upload(snapshot);
+  const core = snapshotFile(artifact);
+  const quickjs = artifact.quickjs && snapshotFile(artifact.quickjs);
+  const descriptor: GuestDescriptor = { ...core.descriptor, ...(quickjs ? { quickjs: quickjs.descriptor } : {}) };
+  const expected = artifact.descriptor.quickjs;
+  if (expected?.url !== quickjs?.descriptor.url || expected?.sha256 !== quickjs?.descriptor.sha256
+    || expected?.bytes !== quickjs?.descriptor.bytes) {
+    throw new Error("Guest descriptor does not match paired QuickJS identity");
   }
-  await verifyPublicGuest(snapshot.descriptor, publisher.fetch);
-  return snapshot.descriptor;
+  // Validate the complete pair before a callback can change the caller's buffers.
+  verifyGuest(core.gzip, core.descriptor);
+  if (core.key !== `${descriptor.sha256}/bun.wasm.gz`) throw new Error("Guest key does not match its SHA-256");
+  if (quickjs) await publishFile(quickjs, "quickjs.wasm", publisher);
+  await publishFile(core, "bun.wasm", publisher);
+  return descriptor;
 }
 
 export function createR2Publisher(options: { accountId: string; token: string; bucket: string; scratch: string; wrangler: string; signal?: AbortSignal }): GuestPublisher {

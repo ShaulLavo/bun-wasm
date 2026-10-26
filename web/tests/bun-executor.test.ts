@@ -1,4 +1,4 @@
-import { afterAll, expect, mock, test } from "bun:test";
+import { afterAll, expect, mock, spyOn, test } from "bun:test";
 import { createFilesystemConnection, revokeFilesystem } from "waffle/fs";
 import { controlAdd, controlLoad } from "waffle/proc/control";
 import { WasiExit } from "waffle/core";
@@ -18,6 +18,15 @@ import { installLookupServer } from "../src/net/lookup";
 const actualEngineHost = { ...await import("../src/engine-host.js") };
 const actualTrampoline = { ...await import("../src/net/trampoline") };
 const actualControl = { ...await import("waffle/proc/control") };
+const actualLink = { ...await import("waffle/link") };
+let linkedFinishFailure: Error | undefined;
+mock.module("waffle/link", () => ({ ...actualLink, linkedWorkerHooks() {
+  const hooks = actualLink.linkedWorkerHooks();
+  return { ...hooks, beforeFinish() {
+    hooks.beforeFinish?.();
+    if (linkedFinishFailure) throw linkedFinishFailure;
+  } };
+} }));
 // Test-only observation of Waffle's existing exported wait boundary. Production captures
 // Atomics.wait before guest code runs; changing that global must not affect it.
 let observeWait: typeof actualControl.controlWait | undefined;
@@ -33,7 +42,7 @@ const startEngineHost = mock(async (_options: Record<string, unknown>): Promise<
 mock.module("../src/engine-host.js", () => ({ startEngineHost }));
 const { createBunExecutor } = await import("../src/bun-executor");
 // Module mocks are process-wide in `bun test`: leave the real engine host for the other files.
-afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); mock.module("waffle/proc/control", () => actualControl); });
+afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); mock.module("waffle/proc/control", () => actualControl); mock.module("waffle/link", () => actualLink); });
 
 async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env" | "net">> & { ready?: number; fetched?: string[]; onFetch?(): void } = {}) {
   const connection = createFilesystemConnection();
@@ -430,6 +439,48 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
   });
 }
 
+test("paired executor initializes the shared side once and releases its table range", async () => {
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareQuickjsProgram, programLinkPlan } = await import("../../src/assets");
+  const { core, side } = quickjsPair();
+  const module = await prepareQuickjsProgram(core, side);
+  const connection = createFilesystemConnection();
+  const messages: WorkerMessage[] = [];
+  const request: RunRequest = { engine: "quickjs", module: structuredClone(module), linkPlan: programLinkPlan(module),
+    args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, moduleCache: null, slots: "off" };
+  const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message) { messages.push(message); }, async fetch() { throw new Error("unexpected fetch"); } };
+  const { prepareLinkPlan } = await import("waffle/link");
+  if (!request.linkPlan) throw new Error("fixture link plan missing");
+  const local = await prepareLinkPlan(request.linkPlan);
+  const executor = createBunExecutor(request, host);
+  let instance: WebAssembly.Instance | undefined;
+  const NativeInstance = WebAssembly.Instance;
+  const instantiatedModules: WebAssembly.Module[] = [];
+  try {
+    WebAssembly.Instance = new Proxy(NativeInstance, { construct(Target, args: ConstructorParameters<typeof WebAssembly.Instance>) {
+      instantiatedModules.push(args[0]);
+      return new Target(...args);
+    } });
+    await bootstrap(request, { ...executor,
+      setup(context) { context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {}; },
+      async instantiated(context) { instance = context.instance; await executor.instantiated?.(context); },
+    }, host);
+    if (!instance) throw new Error("linked core did not instantiate");
+    const { value, ctors, __indirect_function_table: table } = instance.exports;
+    if (typeof value !== "function" || !(ctors instanceof WebAssembly.Global) || !(table instanceof WebAssembly.Table)) throw new Error("fixture exports missing");
+    expect(instantiatedModules).toHaveLength(2);
+    expect(instantiatedModules[0]).toBe(local.entryModule);
+    expect(instantiatedModules[0]).not.toBe(request.module);
+    expect(WebAssembly.Module.exports(instantiatedModules[1]!).some(entry => entry.name === "quickjs_run")).toBe(true);
+    expect(value()).toBe(42);
+    expect(ctors.value).toBe(1);
+    expect(table.length).toBe(2);
+    expect(table.get(1)).toBeNull();
+    expect(messages.some(message => message.type === "exit" && message.code === 0)).toBe(true);
+    expect(messages.some(message => message.type === "error")).toBe(false);
+  } finally { WebAssembly.Instance = NativeInstance; connection.client.port.close(); connection.server.port.close(); }
+});
 async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-export" | "engine-failure") {
   const connection = createFilesystemConnection(), broker = createSharedObjectBroker(), route = broker.register();
   const messages: WorkerMessage[] = [];
@@ -494,4 +545,58 @@ for (const mode of ["send-failure", "revoked-after-export", "engine-failure"] as
     if (mode !== "send-failure") expect(result.retained.clients).toBe(0);
     if (result.bound) expect(result.bound.inspect().closed).toBe(true);
   });
+}
+
+const keepFixtureReference = () => {};
+
+async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lookup") {
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareQuickjsProgram, programLinkPlan } = await import("../../src/assets");
+  const { core, side } = quickjsPair();
+  const module = await prepareQuickjsProgram(core, side);
+  const connection = createFilesystemConnection(), lookup = new MessageChannel();
+  const broker = createSharedObjectBroker(), route = broker.register();
+  const request: RunRequest = { engine: "browser", adapter: "bun", module, linkPlan: programLinkPlan(module),
+    args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, moduleCache: null,
+    slots: "off", sharedObjects: { owner: route.id }, lookupPort: lookup.port2 };
+  const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message) { if (message.type === "bun-shared-connect") route.attach(message.port); },
+    async fetch() { throw new Error("unexpected fetch"); } };
+  const executor = createBunExecutor(request, host);
+  const originalClose = MessagePort.prototype.close;
+  const released: string[] = [];
+  const expected = new Error(`${failure} cleanup failed`);
+  let restoreClose = () => {};
+  try {
+    await bootstrap(request, { ...executor, beforeFinish() {},
+      setup(context) {
+        context.fs.preopen = () => 1; context.fs.retain = keepFixtureReference; context.fs.release = keepFixtureReference;
+        executor.setup?.(context);
+      },
+    }, host);
+    linkedFinishFailure = failure === "linked" ? expected : undefined;
+    const close = spyOn(MessagePort.prototype, "close").mockImplementation(function(this: MessagePort) {
+      const kind = this === lookup.port2 ? "lookup" : "shared";
+      released.push(kind);
+      originalClose.call(this);
+      if (failure === kind && (kind === "shared" || released.filter(value => value === kind).length === 1)) throw expected;
+    });
+    restoreClose = () => close.mockRestore();
+    if (failure === "none") expect(() => executor.beforeFinish?.()).not.toThrow();
+    else expect(() => executor.beforeFinish?.()).toThrow(expected);
+    expect(released).toEqual(["shared", "lookup", "lookup"]);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(broker.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+  } finally {
+    linkedFinishFailure = undefined;
+    restoreClose();
+    executor.beforeFinish?.();
+    route.close(); broker.dispose();
+    lookup.port1.close(); lookup.port2.close();
+    connection.client.port.close(); connection.server.port.close();
+  }
+}
+
+for (const failure of ["none", "linked", "shared", "lookup"] as const) {
+  test(`composed executor releases linked, shared and both lookup owners after ${failure} failure`, () => assertComposedCleanup(failure));
 }

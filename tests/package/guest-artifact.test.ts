@@ -11,6 +11,8 @@ import {
 import { createR2Publisher, publishGuest, verifyPublicGuest } from "../../scripts/publish-guest.ts";
 import type { GuestArtifact } from "../../scripts/guest-artifact.ts";
 import type { GuestPublisher } from "../../scripts/publish-guest.ts";
+import { loadBunWasm, programLinkPlan, type BunWasmAsset } from "../../src/assets";
+import { quickjsPair } from "./quickjs-plan-fixture";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const artifact = prepareGuest(wasm);
@@ -132,6 +134,39 @@ test("publication fails on bad public headers, status, or body even after an upl
   await verifyPublicGuest(artifact.descriptor, async () => new Response(Buffer.from(artifact.gzip), { headers: publicHeaders }));
 });
 
+test("CLI emits a paired descriptor for a split core and rejects a missing side", async () => {
+  const scratch = await mkdtemp(join(scratchRoot, "bun-wasm-guest-cli-test-"));
+  try {
+    const { core, side } = quickjsPair();
+    const corePath = join(scratch, "bun.wasm");
+    const outputPath = join(scratch, "guest-asset.generated.ts");
+    await writeFile(corePath, core); await writeFile(join(scratch, "quickjs.wasm"), side);
+    const command = [process.execPath, "scripts/guest-artifact.ts", corePath, "--origin", GUEST_ORIGIN, "--output", outputPath];
+    const paired = Bun.spawnSync(command, { cwd: process.cwd() });
+    expect(paired.exitCode).toBe(0);
+    const descriptor = JSON.parse(paired.stdout.toString()) as BunWasmAsset;
+    expect(descriptor.quickjs).toEqual({
+      url: `${GUEST_ORIGIN}/${createHash("sha256").update(side).digest("hex")}/quickjs.wasm.gz`,
+      sha256: createHash("sha256").update(side).digest("hex"), bytes: side.length,
+    });
+    expect(await readFile(outputPath, "utf8")).toContain('quickjs.wasm.gz');
+    const module = await loadBunWasm({ asset: descriptor, fetch: async url => new Response(url === descriptor.url ? core : side) });
+    expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(side);
+    await writeFile(join(scratch, "quickjs.wasm"), Uint8Array.from([0]));
+    const invalid = Bun.spawnSync(command, { cwd: process.cwd() });
+    expect(invalid.exitCode).not.toBe(0);
+    expect(invalid.stderr.toString()).toContain("valid WASM");
+    await rm(join(scratch, "quickjs.wasm"));
+    const missing = Bun.spawnSync(command, { cwd: process.cwd() });
+    expect(missing.exitCode).not.toBe(0);
+    expect(missing.stderr.toString()).toContain("matching side module");
+    await writeFile(corePath, wasm);
+    const ordinary = Bun.spawnSync(command, { cwd: process.cwd() });
+    expect(ordinary.exitCode).toBe(0);
+    expect(JSON.parse(ordinary.stdout.toString())).toEqual(describeGuest(wasm));
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});
+
 test("descriptor generator writes a typed constant without bundling guest bytes", async () => {
   const scratch = await mkdtemp(join(scratchRoot, "bun-wasm-guest-descriptor-test-"));
   try {
@@ -185,4 +220,30 @@ test("interrupted uploads settle only after Wrangler stops using the upload file
     await uploading?.catch(() => {});
     await rm(scratch, { recursive: true, force: true });
   }
+});
+
+test("paired publication verifies and publishes the exact side before returning the core descriptor", async () => {
+  const sideBytes = new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120]));
+  const pair = prepareGuest(wasm, GUEST_ORIGIN, sideBytes);
+  if (!pair.quickjs) throw new Error("Missing pair");
+  const uploads: GuestArtifact[] = [];
+  const reads: string[] = [];
+  const store: GuestPublisher = {
+    async read(key) { reads.push(key); return null; },
+    async upload(value) { uploads.push(value); },
+    async fetch(url) {
+      const body = url === pair.descriptor.quickjs?.url ? sideBytes : wasm;
+      return new Response(body, { headers: publicHeaders });
+    },
+  };
+  expect(await publishGuest(pair, store)).toEqual(pair.descriptor);
+  expect(reads).toEqual([pair.quickjs.key, pair.key]);
+  expect(uploads.map(upload => upload.key)).toEqual(reads);
+  expect(pair.quickjs && new Uint8Array(gunzipSync(pair.quickjs.gzip))).toEqual(sideBytes);
+  await expect(publishGuest({ ...pair, quickjs: undefined }, store)).rejects.toThrow("paired QuickJS identity");
+  const corrupted = prepareGuest(wasm, GUEST_ORIGIN, sideBytes);
+  if (!corrupted.quickjs) throw new Error("Missing pair");
+  corrupted.quickjs.gzip.fill(0);
+  await expect(publishGuest(corrupted, store)).rejects.toThrow();
+  expect(reads).toHaveLength(2);
 });

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -41,7 +41,7 @@ test("native fixture smoke selects the typed runtime behavior without another bu
   expect(rust).toContain('BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts');
   expect(rust).toContain('BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/root-overrides.ts');
   expect(rust.match(/cargo build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g) ?? []).toHaveLength(0);
-  expect(rust.match(/"\$GUEST_CARGO" build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(2);
+  expect(rust.match(/"\$GUEST_CARGO" build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
 });
 
 test("every migrated selection retains one blocking owner and the original local runtime set", () => {
@@ -621,6 +621,74 @@ function nativeWorkflowStep(key: string, value: string): unknown {
   return matches[0];
 }
 
+const wasmToolsArchive = "wasm-tools-1.262.0-x86_64-linux.tar.gz";
+const wasmToolsSetupName = "Install pinned wasm-tools";
+
+function wasmToolsSetup(): string {
+  return workflowString(workflowField(nativeWorkflowStep("name", wasmToolsSetupName), "run"));
+}
+
+test("split producer wasm-tools setup is pinned, cached and unconditional before native gates", () => {
+  const step = nativeWorkflowStep("name", wasmToolsSetupName);
+  expect(step).not.toHaveProperty("if");
+  expect(workflowField(step, "shell")).toBe("bash");
+  const cache = workflowField(nativeWorkflowStep("id", "wasm-tools-cache"), "with");
+  expect(workflowField(cache, "path")).toBe("${{ env.WASM_TOOLS }}/" + wasmToolsArchive);
+  expect(workflowField(cache, "key")).toBe("wasm-tools-1.262.0-${{ runner.os }}-${{ runner.arch }}");
+  const script = wasmToolsSetup();
+  expect(script).toContain(`https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/${wasmToolsArchive}`);
+  expect(script).toContain("655b8df67d54c3ef9b52fc237c4e94bbfbb5f5f43825245cb0940a7002a9ed65");
+  expect(script).toContain('wasm-tools 1.262.0 (e22db44da 2026-10-13)');
+  expect(script.indexOf("sha256sum --check")).toBeLessThan(script.indexOf("tar -xzf"));
+  expect(script.indexOf("--version")).toBeLessThan(script.indexOf('>> "$GITHUB_PATH"'));
+  expect(rust.indexOf(`name: ${wasmToolsSetupName}`)).toBeLessThan(rust.indexOf(`name: ${prebuildStepName}`));
+  for (const path of ["build-bun-core.sh", "build-engine-quickjs.sh"]) {
+    expect(readFileSync(join(import.meta.dir, path), "utf8")).toContain("wasm-tools validate");
+  }
+});
+
+function runWasmToolsSetup(contents?: string) {
+  const script = wasmToolsSetup();
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-validator-"));
+  try {
+    const bin = join(directory, "bin");
+    const tools = join(directory, "tools");
+    const trace = join(directory, "trace");
+    const githubPath = join(directory, "github-path");
+    mkdirSync(bin);
+    mkdirSync(tools);
+    writeFileSync(githubPath, "");
+    writeFileSync(join(bin, "curl"), '#!/bin/sh\necho curl >> "$TRACE"\nexit 23\n', { mode: 0o700 });
+    writeFileSync(join(bin, "tar"), '#!/bin/sh\necho tar >> "$TRACE"\nexit 29\n', { mode: 0o700 });
+    if (contents !== undefined) writeFileSync(join(tools, wasmToolsArchive), contents);
+    const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-euo", "pipefail", "-c", script], {
+      env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, WASM_TOOLS: tools, GITHUB_PATH: githubPath, TRACE: trace }, encoding: "utf8",
+    });
+    return { status: result.status, stderr: result.stderr, stdout: result.stdout, files: readdirSync(tools), path: readFileSync(githubPath, "utf8"), calls: existsSync(trace) ? readFileSync(trace, "utf8") : "" };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test("wasm-tools cold download failure stops before extraction or PATH publication", () => {
+  const result = runWasmToolsSetup();
+  expect(result.status).toBe(23);
+  expect(result.calls).toBe("curl\n");
+  expect(result.files).toEqual([]);
+  expect(result.path).toBe("");
+});
+
+for (const contents of ["corrupt cached validator", ""]) {
+  test(`wasm-tools ${contents ? "corrupt" : "empty"} cache hit fails checksum before extraction or execution`, () => {
+    const result = runWasmToolsSetup(contents);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("FAILED");
+    expect(result.calls).toBe("");
+    expect(result.files).toEqual([wasmToolsArchive]);
+    expect(result.path).toBe("");
+  });
+}
+
 function nativeCacheContract(id: string, saveName: string) {
   const restore = nativeWorkflowStep("id", id);
   const save = nativeWorkflowStep("name", saveName);
@@ -787,13 +855,15 @@ test("ordered producers keep every blocking native command and save JSC before n
     expect(before).toContain(prerequisite);
   }
   const native = nativeScript() + workflowString(workflowField(nativeWorkflowStep("name", "Build native fixtures after the cache checkpoint"), "run"));
-  const commands = ["bun run quality --native", "cargo test --locked", "bun scripts/quality-input-times.ts", "cargo build --release --locked -j 2 -p bunwasm-host", "guest-build-receipt.ts inputs quickjs", "\"$GUEST_CARGO\" build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli", "guest-build-receipt.ts write dist/bun.wasm", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts", "bun tests/install/root-overrides.ts"];
+  const commands = ["bun run quality --native", "cargo test --locked", "bun scripts/quality-input-times.ts", "cargo build --release --locked -j 2 -p bunwasm-host", "guest-build-receipt.ts inputs quickjs", "CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh", "guest-build-receipt.ts write dist/bun.wasm", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts", "bun tests/install/root-overrides.ts"];
   const positions = commands.map(command => native.indexOf(command));
   expect(positions).toEqual(positions.toSorted((a, b) => a - b));
   for (const command of commands) expect(native.split(command)).toHaveLength(2);
   expect(native).toContain('guest_environment=$(bun scripts/guest-build-receipt.ts environment)\neval "$guest_environment"');
   expect(native).toContain('guest_inputs=$(mktemp "${TMPDIR}/bun-wasm-guest-inputs-XXXXXX")\nbun scripts/guest-build-receipt.ts inputs quickjs > "$guest_inputs"');
   expect(native).toContain('guest-build-receipt.ts write dist/bun.wasm "$guest_inputs"\nrm -f -- "$guest_inputs"\nguest_inputs=');
+  expect(native).toContain('cp "$BUN_CORE_BUILD_DIR/bun-core.wasm" dist/bun.wasm');
+  expect(native).toContain('cp "$BUN_CORE_BUILD_DIR/quickjs.wasm" dist/quickjs.wasm');
   expect(native).toContain('trap \'rm -f -- "${guest_inputs:-}"\' EXIT');
   expect(script).toContain('export JOBS=2 CAGE=');
   expect(script).toContain("check_jsc_inputs_stamp");

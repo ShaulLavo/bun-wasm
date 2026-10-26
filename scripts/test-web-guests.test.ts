@@ -59,9 +59,11 @@ test("preparation rejects missing tools and mismatched or corrupted receipt byte
       bunHead: "a".repeat(40), bunTree: "b".repeat(40), sysrootReceiptSha256: hash("fixture"),
       sourceManifest, sourceManifestSha256: hash(JSON.stringify(sourceManifest)),
       artifactSha256: hash(bytes), artifactBytes: bytes.length,
+      quickjs: { artifactSha256: hash(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), artifactBytes: 8 },
     };
     const guest = join(directory, "dist/bun.wasm");
     writeFileSync(guest, bytes);
+    writeFileSync(join(directory, "dist/quickjs.wasm"), new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     writeFileSync(`${guest}.build.json`, JSON.stringify(receipt));
     await expect(prepareWebGuestFixtures(directory, "quickjs")).rejects.toThrow("dist/bun-tools.wasm");
     const tools = join(directory, "dist/bun-tools.wasm");

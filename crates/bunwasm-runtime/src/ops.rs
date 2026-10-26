@@ -1,16 +1,10 @@
 //! Per-call data transport. VM values and exceptions stay with the caller.
 
-#![cfg(any(
-    feature = "engine-quickjs",
-    feature = "engine-jsc",
-    not(feature = "engine-host")
-))]
-
 use std::num::NonZeroU32;
 use std::ops::Range;
 
 use crate::data::codec::{self, CodecError};
-use crate::data::{Args, DataFn, ErrorKind, NativeError, NativeResult, Record, Val, drop_tree};
+use crate::data::{Args, DataFn, ErrorKind, NativeError, Record, Val, drop_tree};
 
 pub(crate) const DATA_NATIVE: u32 = 65_536;
 
@@ -114,43 +108,39 @@ impl Reply {
             bytes: Vec::new(),
         }
     }
-
-    pub fn into_result(self) -> NativeResult {
-        match self.status {
-            Status::Ok => codec::decode(&self.bytes).map_err(transport_error),
-            Status::NativeError => decode_error(&self.bytes).and_then(Err),
-            Status::BadCall => Err(NativeError::error("invalid core data call")),
-            Status::ResourceLimit => Err(NativeError::error("core data allocation failed")),
-        }
-    }
 }
 
-/// This unit registers one migrated native, not an engine-method opcode table.
+/// Process-local plain-data operations. No engine methods or VM handles.
 pub(crate) struct Dispatcher {
     session: NonZeroU32,
-    op: u32,
-    function: DataFn,
+    functions: std::collections::HashMap<u32, DataFn>,
 }
 
 impl Dispatcher {
-    pub fn new(session: NonZeroU32, native_id: u32, function: DataFn) -> Option<Self> {
-        let op = DATA_NATIVE.checked_add(native_id)?;
-        Some(Self {
-            session,
-            op,
-            function,
-        })
+    pub fn registry(session: NonZeroU32, entries: Vec<(u32, DataFn)>) -> Option<Self> {
+        if entries.is_empty() {
+            return None;
+        }
+        let count = entries.len();
+        let functions: std::collections::HashMap<_, _> = entries.into_iter().collect();
+        if functions.len() != count {
+            return None;
+        }
+        Some(Self { session, functions })
     }
 
     #[cfg(test)]
     pub fn op(&self) -> u32 {
-        self.op
+        *self.functions.keys().next().expect("nonempty registry")
     }
 
     pub fn dispatch(&self, op: u32, session: u32, request: Vec<u8>) -> Reply {
-        if op != self.op || session != self.session.get() {
+        if session != self.session.get() {
             return Reply::failed(Status::BadCall);
         }
+        let Some(function) = self.functions.get(&op).cloned() else {
+            return Reply::failed(Status::BadCall);
+        };
         let args = match codec::decode(&request) {
             Ok(Val::Array(args)) => args,
             Ok(value) => {
@@ -160,7 +150,6 @@ impl Dispatcher {
             Err(error) => return Reply::failed(error_status(error)),
         };
         drop(request);
-        let function = self.function.clone();
         let result = function(Args(&args));
         drop_tree(Val::Array(args));
         match result {
@@ -168,23 +157,12 @@ impl Dispatcher {
             Err(error) => Reply::encoded(Status::NativeError, error_value(error)),
         }
     }
-
-    pub fn call(&self, args: Vec<Val>) -> NativeResult {
-        abi::call(self, self.op, self.session.get(), args)
-    }
 }
 
 fn error_status(error: CodecError) -> Status {
     match error {
         CodecError::Invalid(_) => Status::BadCall,
         CodecError::Allocation => Status::ResourceLimit,
-    }
-}
-
-fn transport_error(error: CodecError) -> NativeError {
-    match error {
-        CodecError::Invalid(message) => NativeError::error(format!("invalid core data: {message}")),
-        CodecError::Allocation => NativeError::error("core data allocation failed"),
     }
 }
 
@@ -208,78 +186,54 @@ fn error_value(error: NativeError) -> Val {
         .into()
 }
 
-fn decode_error(bytes: &[u8]) -> Result<NativeError, NativeError> {
-    let Val::Object(fields) = codec::decode(bytes).map_err(transport_error)? else {
-        return Err(NativeError::error("invalid core error record"));
-    };
-    let mut fields = fields.into_iter();
-    let kind = match field(&mut fields, "kind")? {
-        Val::Str(kind) => parse_kind(&kind)?,
-        _ => return Err(NativeError::error("invalid core error kind")),
-    };
-    let Val::Str(message) = field(&mut fields, "message")? else {
-        return Err(NativeError::error("invalid core error message"));
-    };
-    let name = match field(&mut fields, "name")? {
-        Val::Null => None,
-        Val::Str(name) => Some(name),
-        _ => return Err(NativeError::error("invalid core error name")),
-    };
-    let Val::Array(props) = field(&mut fields, "props")? else {
-        return Err(NativeError::error("invalid core error properties"));
-    };
-    if fields.next().is_some() {
-        return Err(NativeError::error("unexpected core error field"));
-    }
-    let props = props
-        .into_iter()
-        .map(error_prop)
-        .collect::<Result<_, _>>()?;
-    Ok(NativeError {
-        kind,
-        message,
-        name,
-        props,
-    })
-}
-
-fn field(
-    fields: &mut impl Iterator<Item = (String, Val)>,
-    expected: &str,
-) -> Result<Val, NativeError> {
-    let Some((key, value)) = fields.next() else {
-        return Err(NativeError::error("missing core error field"));
-    };
-    if key != expected {
-        return Err(NativeError::error("unexpected core error field"));
-    }
-    Ok(value)
-}
-
-fn parse_kind(kind: &str) -> Result<ErrorKind, NativeError> {
-    match kind {
-        "Error" => Ok(ErrorKind::Error),
-        "TypeError" => Ok(ErrorKind::TypeError),
-        "RangeError" => Ok(ErrorKind::RangeError),
-        "SyntaxError" => Ok(ErrorKind::SyntaxError),
-        _ => Err(NativeError::error("invalid core error kind")),
-    }
-}
-
-fn error_prop(value: Val) -> Result<(String, Val), NativeError> {
-    let Val::Array(pair) = value else {
-        return Err(NativeError::error("invalid core error property"));
-    };
-    let mut pair = pair.into_iter();
-    let (Some(Val::Str(key)), Some(value), None) = (pair.next(), pair.next(), pair.next()) else {
-        return Err(NativeError::error("invalid core error property"));
-    };
-    Ok((key, value))
-}
-
 #[cfg(test)]
 #[path = "ops/tests.rs"]
 mod tests;
 
 #[path = "ops/abi.rs"]
 pub(crate) mod abi;
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use std::rc::Rc;
+
+    #[test]
+    fn registry_routes_multiple_natives_and_source_ops() {
+        let entries: Vec<(u32, DataFn)> = vec![
+            (1, Rc::new(|_| Ok("description".into()))),
+            (DATA_NATIVE + 2, Rc::new(|args| Ok(args.str(0)?.into()))),
+        ];
+        let dispatcher = Dispatcher::registry(NonZeroU32::MIN, entries).unwrap();
+        assert_eq!(
+            abi::call(&dispatcher, 1, 1, vec![]).unwrap(),
+            "description".into()
+        );
+        assert_eq!(
+            abi::call(&dispatcher, DATA_NATIVE + 2, 1, vec!["second".into()]).unwrap(),
+            "second".into()
+        );
+        assert!(abi::call(&dispatcher, DATA_NATIVE + 1, 1, vec![]).is_err());
+        assert!(abi::call(&dispatcher, 1, 2, vec![]).is_err());
+    }
+
+    #[test]
+    fn registry_rejects_duplicate_operations() {
+        let entries: Vec<(u32, DataFn)> = vec![
+            (1, Rc::new(|_| Ok(Val::Undefined))),
+            (1, Rc::new(|_| Ok(Val::Undefined))),
+        ];
+        assert!(Dispatcher::registry(NonZeroU32::MIN, entries).is_none());
+    }
+}
+
+#[cfg(any(test, feature = "engine-jsc", not(feature = "engine-split")))]
+#[path = "ops/client.rs"]
+mod client;
+#[cfg(any(test, feature = "engine-jsc", not(feature = "engine-split")))]
+use client::transport_error;
+
+#[cfg(test)]
+use crate::data::NativeResult;
+#[cfg(test)]
+use client::decode_error;

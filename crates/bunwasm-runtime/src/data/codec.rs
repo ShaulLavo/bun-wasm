@@ -1,7 +1,7 @@
 //! Strict codec for owned data calls. The browser legacy codec is separate.
 
 #![cfg(any(
-    feature = "engine-quickjs",
+    feature = "engine-split",
     feature = "engine-jsc",
     not(feature = "engine-host")
 ))]
