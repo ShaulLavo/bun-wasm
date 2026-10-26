@@ -112,3 +112,7 @@ mod tests {
         assert_eq!(meta, once);
     }
 }
+
+#[cfg(test)]
+#[path = "next16_swc_tests.rs"]
+mod next16_tests;

@@ -161,3 +161,21 @@ test("ISR and PPR metadata stays explicit about pending or N/A verification", ()
     expect(feature(app, "ppr:")).toMatch(/(pending|n\/a|experimental-available)/);
   }
 });
+
+
+test("only Next 16 dev and build select the official WASM-supported Webpack path", () => {
+  for (const app of nextApps) {
+    const bundler = app.id.startsWith("next-16-") ? ["--webpack"] : [];
+    expect(command(app, "dev").args).toEqual(
+      ["run", "node_modules/next/dist/bin/next", "dev"].concat(bundler, ["--hostname", "127.0.0.1", "--port", "{port}"]),
+    );
+    expect(command(app, "build").args).toEqual(
+      ["run", "node_modules/next/dist/bin/next", "build"].concat(bundler),
+    );
+    const production = app.id.includes("static") ? "preview" : "start";
+    const expected = production === "preview"
+      ? ["run", "preview.ts"]
+      : ["run", "node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "{port}"];
+    expect(command(app, production).args).toEqual(expected);
+  }
+});
