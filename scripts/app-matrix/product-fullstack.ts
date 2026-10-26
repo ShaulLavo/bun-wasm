@@ -294,7 +294,7 @@ export default function Home() {
       "vite.config.ts": `import { defineConfig } from 'vite';
 import { tanstackStart } from '@tanstack/react-start/plugin/vite';
 import react from '@vitejs/plugin-react';
-export default defineConfig({ plugins: [tanstackStart({ target: 'node-server', customViteReactPlugin: true, tsr: { srcDirectory: 'src' } }), react()] });
+export default defineConfig({ plugins: [tanstackStart({ target: 'bun', customViteReactPlugin: true, tsr: { srcDirectory: 'src' } }), react()] });
 `,
       "src/router.tsx": `import { createRouter as createTanStackRouter } from '@tanstack/react-router';
 import { routeTree } from './routeTree.gen';
