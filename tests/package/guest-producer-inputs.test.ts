@@ -70,14 +70,26 @@ test("native-only workflow paths give tools receipts the real JSC and Yarr input
     const inputs = receiptCli(fixture, "inputs", "tools");
     expect(inputs.stderr.toString()).toBe("");
     expect(inputs.exitCode).toBe(0);
-    for (const path of ["build/jsc/.bunwasm-inputs", "webkit/Source/JavaScriptCore/yarr/YarrPattern.cpp", "webkit/Source/JavaScriptCore/runtime/OptionsList.h", "build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp"]) {
-      expect(inputs.stdout.toString()).toContain(`"path": "${path}"`);
-    }
+    const snapshot = join(runner, "tools-inputs.json");
+    await writeFile(snapshot, inputs.stdout);
+    const artifact = join(fixture.root, "dist/bun-tools.wasm");
+    await copyFile(fixture.artifact, artifact);
+    const finished = receiptCli(fixture, "write", artifact, snapshot);
+    expect(finished.stderr.toString()).toBe("");
+    expect(finished.exitCode).toBe(0);
+    const receipt: unknown = await Bun.file(`${artifact}.build.json`).json();
+    verifyGuestBuildReceipt(await readFile(artifact), receipt);
+    expect(receipt.sourceManifest.build).toBe("tools");
+    const paths = receipt.sourceManifest.groups.find(group => group.name === "jsc-prebuild")?.files.map(file => file.path);
     const yarr = "build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp";
+    expect(paths).toEqual(expect.arrayContaining(["build/jsc/.bunwasm-inputs", "webkit/Source/JavaScriptCore/yarr/YarrPattern.cpp", "webkit/Source/JavaScriptCore/runtime/OptionsList.h", yarr]));
     await rm(join(prebuild, yarr));
+    await rm(`${artifact}.build.json`);
     const partial = receiptCli(fixture, "inputs", "tools");
     expect(partial.exitCode).not.toBe(0);
     expect(partial.stderr.toString()).toContain(yarr);
+    expect(receiptCli(fixture, "write", artifact, snapshot).exitCode).not.toBe(0);
+    expect(await Bun.file(`${artifact}.build.json`).exists()).toBe(false);
   });
 });
 

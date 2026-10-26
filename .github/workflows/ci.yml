@@ -267,12 +267,10 @@ jobs:
       - name: Preserve unchanged build-script input timestamps
         run: bun scripts/quality-input-times.ts
       - name: Configure private JSC build paths
-        if: needs.quality.outputs.jsc == 'true'
         run: |
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
           echo "JSC_CARGO_TARGET_DIR=$RUNNER_TEMP/jsc/target" >> "$GITHUB_ENV"
       - name: Identify JSC prebuild inputs
-        if: needs.quality.outputs.jsc == 'true'
         id: jsc-inputs
         env:
           JOBS: "2"
@@ -283,7 +281,6 @@ jobs:
           inputs=$(jsc_inputs_hash)
           echo "hash=$inputs" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
-        if: needs.quality.outputs.jsc == 'true'
         id: jsc-prebuild-cache
         with:
           path: ${{ runner.temp }}/jsc/prebuild
@@ -300,7 +297,6 @@ jobs:
             jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp') }}-
       - name: Build or verify the JSC prebuild
         id: jsc-producer
-        if: needs.quality.outputs.jsc == 'true'
         shell: bash
         env:
           CI_JSC_PREBUILD_HIT: ${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}
