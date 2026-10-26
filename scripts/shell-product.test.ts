@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guestProvenance } from "./app-matrix/product-provenance";
-import { createProductCleanup, exitAfterDeadline, liveServer, requireLiveServer, settleResources, withProgress, type Pending } from "../tests/shell-product/lifecycle";
+import { createProductCleanup, exitAfterDeadline, foregroundCycle, liveServer, requireLiveServer, settleResources, withProgress, type Pending } from "../tests/shell-product/lifecycle";
 import { PreparationFlow } from "../tests/shell-product/prepare-flow";
 import { networkFiles, readWaffleSelection, waffleCommits, waffleSelectionFile, waffleSourcePlan, writeWaffleSelection } from "../tests/shell-product/waffle-stage";
 
@@ -57,6 +57,38 @@ test("Ctrl-C rejects an exited server, a prompt, a command, and a missing or wro
   expect(() => requireLiveServer({ ...server, entered: false }, 2, ports)).toThrow();
   expect(() => requireLiveServer({ kind: "command", offset: 0, token: "done" }, 2, ports)).toThrow();
   expect(() => requireLiveServer(undefined, 2, ports)).toThrow();
+});
+
+test("failed startup with a pending foreground command blocks Ctrl-C and dependent commands", () => {
+  const diagnostics = {
+    tailAvailable: true,
+    transcripts: [{ app: "vite-react", text: "PRODUCT> bun install && bun run dev\r\nDone! Checked 63 packages (no changes) [14ms]\n" }],
+    listeners: [],
+    workers: 1,
+    pending: { kind: "server", port: 3137, offset: 2179, entered: true } satisfies Pending,
+    liveServer: false,
+  };
+  expect(foregroundCycle(diagnostics)).toEqual({
+    blocked: "Foreground command has not completed; no live expected listener for Ctrl-C",
+    available: false,
+  });
+});
+
+test("observed server exit permits continuation without claiming a Ctrl-C pass", () => {
+  expect(foregroundCycle({ pending: undefined, liveServer: false })).toEqual({
+    blocked: "Server returned to prompt before Ctrl-C",
+    available: true,
+  });
+});
+
+test("live expected server requires a successful stop before dependent commands", () => {
+  const diagnostics = {
+    pending: { kind: "server", port: 3137, offset: 2179, entered: true } satisfies Pending,
+    liveServer: true,
+  };
+  expect(foregroundCycle(diagnostics)).toEqual({ blocked: undefined, available: false });
+  expect(foregroundCycle(diagnostics, false).available).toBe(false);
+  expect(foregroundCycle(diagnostics, true).available).toBe(true);
 });
 
 test("preparation cancellation during filesystem work waits for main before deleting and forbids late spawning", async () => {

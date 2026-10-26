@@ -1,3 +1,5 @@
+import type { ProductApi } from "./protocol";
+
 export type Pending = { kind: "command"; token: string; offset: number } | { kind: "server"; port: number; offset: number; entered: boolean } | undefined;
 
 export function liveServer(pending: Pending, phase: number, ports: ReadonlyMap<number, unknown>) {
@@ -6,6 +8,15 @@ export function liveServer(pending: Pending, phase: number, ports: ReadonlyMap<n
 
 export function requireLiveServer(pending: Pending, phase: number, ports: ReadonlyMap<number, unknown>) {
   if (!liveServer(pending, phase, ports)) throw new Error("Ctrl-C requires a live foreground server and its expected listener");
+}
+
+export function foregroundCycle(diagnostics: Pick<ReturnType<ProductApi["diagnostics"]>, "pending" | "liveServer">, stopped = false) {
+  if (diagnostics.liveServer) return { blocked: undefined, available: stopped };
+  if (diagnostics.pending !== undefined) return {
+    blocked: "Foreground command has not completed; no live expected listener for Ctrl-C",
+    available: false,
+  };
+  return { blocked: "Server returned to prompt before Ctrl-C", available: true };
 }
 
 export async function settleResources(tasks: readonly (() => unknown | Promise<unknown>)[]) {

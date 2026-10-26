@@ -6,7 +6,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Browser, Page } from "playwright";
 import { guestProvenance } from "../../scripts/app-matrix/product-provenance";
-import { bounded, createProductCleanup, exitAfterDeadline, settleResources, withProgress } from "../../tests/shell-product/lifecycle";
+import { bounded, createProductCleanup, exitAfterDeadline, foregroundCycle, settleResources, withProgress } from "../../tests/shell-product/lifecycle";
 import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt";
 import { registry } from "../../scripts/app-matrix/registry.mjs";
 import { browserRegistryRoute } from "../../scripts/app-matrix/registry-request";
@@ -128,11 +128,11 @@ async function missingStages(fixture: Fixture) {
 }
 async function runCycle(fixture: Fixture, [start, stop, text]: readonly [Stage, Stage, string], installed: boolean, available: boolean) {
   assert.ok(page);
-  const blocked = !installed ? "Guest install failed" : !available ? "Previous stop failed" : undefined;
+  const blocked = !installed ? "Guest install failed" : !available ? "Previous foreground command completion or prompt recovery was not observed" : undefined;
   await stage(fixture, start, () => dev(fixture, start, text), blocked);
-  const pending = await page.evaluate(() => globalThis.shellProduct.diagnostics().liveServer);
-  const stopped = await stage(fixture, stop, interrupt, blocked ?? (!pending ? "Server returned to prompt before Ctrl-C" : undefined));
-  return blocked ? available : !pending || stopped;
+  const diagnostics = await page.evaluate(() => globalThis.shellProduct.diagnostics());
+  const stopped = await stage(fixture, stop, interrupt, blocked ?? foregroundCycle(diagnostics).blocked);
+  return blocked ? available : foregroundCycle(diagnostics, stopped).available;
 }
 async function runFixture(fixture: Fixture) {
   try { await runApp(fixture); }
@@ -146,7 +146,7 @@ async function runApp(fixture: Fixture) {
   let available = true;
   const cycles: readonly [Stage, Stage, string][] = [["install-and-dev-dom", "ctrl-c-1", "bun install && bun run dev"], ["restart-2-dom", "ctrl-c-2", "bun run dev"], ["restart-3-dom", "ctrl-c-3", "bun run dev"]];
   for (const cycle of cycles) available = await runCycle(fixture, cycle, installed, available);
-  const blocked = !available ? "Shell did not recover after foreground stop" : undefined;
+  const blocked = !available ? "Foreground command completion or prompt recovery was not observed" : undefined;
   const tail = await page.evaluate(() => globalThis.shellProduct.diagnostics().tailAvailable);
   await stage(fixture, "build-tail", async () => {
     const output = await command("set -o pipefail; bun run build | tail -n 8 && echo BUILD_PIPE_OK", "BUILD_PIPE_OK");
