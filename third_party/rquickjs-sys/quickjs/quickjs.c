@@ -21497,6 +21497,7 @@ static bool js_async_function_resume(JSContext *ctx, JSAsyncFunctionData *s)
     bool is_success = true;
     JSValue func_ret, ret2;
 
+ resume:
     func_ret = async_func_resume(ctx, &s->func_state);
     if (JS_IsException(func_ret)) {
     fail:
@@ -21537,6 +21538,12 @@ static bool js_async_function_resume(JSContext *ctx, JSAsyncFunctionData *s)
             promise = js_promise_resolve(ctx, ctx->promise_ctor,
                                          1, vc(&value), 0);
             JS_FreeValue(ctx, value);
+            if (JS_IsException(promise) &&
+                !JS_IsUncatchableError(ctx->rt->current_exception)) {
+                /* bun-wasm: deliver PromiseResolve errors at the suspended await. */
+                s->func_state.throw_flag = true;
+                goto resume;
+            }
             if (JS_IsException(promise))
                 goto fail;
             if (js_async_function_resolve_create(ctx, s, resolving_funcs)) {
