@@ -38,7 +38,7 @@ function isIP(s) {
     return Object.assign(new Ctor(message), { code });
   }
   function port(value = 0) {
-    if ((typeof value !== "number" && typeof value !== "string") || value === "" || !Number.isInteger(Number(value)) || Number(value) < 0 || Number(value) > 65535) {
+    if ((typeof value !== "number" && typeof value !== "string") || (typeof value === "string" && value.trim() === "") || !Number.isInteger(Number(value)) || Number(value) < 0 || Number(value) > 65535) {
       throw error(RangeError, "ERR_SOCKET_BAD_PORT", `Port should be >= 0 and < 65536. Received ${String(value)}.`);
     }
     return Number(value);

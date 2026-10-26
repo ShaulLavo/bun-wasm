@@ -4,31 +4,50 @@
   const process = internal.require("process");
   const path = internal.require("path");
 
-  function words(source: string): string[] {
+  function variable(source: string, quote: string): { value: string; length: number; keepEmpty: boolean } | undefined {
+    const match = /^(?:\{([A-Za-z_]\w*)(?:(:-|-)([^{}]*))?\}|([A-Za-z_]\w*))/.exec(source);
+    if (!match) {
+      if (source.startsWith("{")) throw new SyntaxError("Unsupported parameter expansion in package script");
+      if (source.startsWith("(")) throw new SyntaxError("Command substitution in package scripts is not supported in bun-wasm");
+      return;
+    }
+    const value: string | undefined = process.env[match[1] || match[4]];
+    const missing = value === undefined || (match[2] === ":-" && value === "");
+    const fallback = match[3] === undefined ? [] : words(match[3], true, quote);
+    return { value: missing ? fallback.join("") : value, length: match[0].length, keepEmpty: missing && fallback.length > 0 };
+  }
+
+  function escapedCharacter(source: string, index: number, quote: string): string {
+    if (index === source.length) throw new SyntaxError("Trailing escape in package script");
+    const char = source[index];
+    if (char === "\n") return "";
+    return quote === '"' && !/[\\$`"]/.test(char) ? "\\" + char : char;
+  }
+
+  function words(source: string, preserveWhitespace = false, initialQuote = ""): string[] {
     const result: string[] = [];
     let word = "";
-    let quote = "";
+    let quote = initialQuote;
     let started = false;
     for (let index = 0; index < source.length; index++) {
       const char = source[index];
       if (char === "\\" && quote !== "'") {
-        if (++index === source.length) throw new SyntaxError("Trailing escape in package script");
-        word += source[index]; started = true; continue;
+        const escaped = escapedCharacter(source, ++index, quote);
+        word += escaped; started ||= escaped.length > 0; continue;
       }
       if (char === quote) { quote = ""; continue; }
       if ((char === "'" || char === '"') && !quote) { quote = char; started = true; continue; }
-      if (!quote && /[|&;<>`\n]/.test(char)) throw new Error("Shell operators in package scripts are not supported in bun-wasm");
-      if (!quote && /\s/.test(char)) {
-        if (started) result.push(word);
+      if (char === "`" && quote !== "'") throw new SyntaxError("Command substitution in package scripts is not supported in bun-wasm");
+      if (!quote && /[|&;<>\n]/.test(char)) throw new Error("Shell operators in package scripts are not supported in bun-wasm");
+      if (!quote && !preserveWhitespace && /\s/.test(char)) {
+        started && result.push(word);
         word = ""; started = false; continue;
       }
-      if (char === "$" && quote !== "'") {
-        const variable = /^(?:\{([A-Za-z_][\w]*)\}|([A-Za-z_][\w]*))/.exec(source.slice(index + 1));
-        if (variable) { const value = process.env[variable[1] || variable[2]] || ""; word += value; index += variable[0].length; started ||= value.length > 0 || quote !== ""; continue; }
-      }
+      const expanded = char === "$" && quote !== "'" ? variable(source.slice(index + 1), quote) : undefined;
+      if (expanded) { word += expanded.value; index += expanded.length; started ||= expanded.value.length > 0 || expanded.keepEmpty || quote !== ""; continue; }
       word += char; started = true;
     }
-    if (quote) throw new SyntaxError("Unclosed quote in package script");
+    if (quote !== initialQuote) throw new SyntaxError("Unclosed quote in package script");
     if (started) result.push(word);
     return result;
   }

@@ -1118,9 +1118,12 @@
       listen(...args) {
         const callback = typeof args[args.length - 1] === "function" ? args.pop() : null;
         const opts = args[0] !== null && typeof args[0] === "object" ? args[0] : { port: args[0], host: typeof args[1] === "string" ? args[1] : undefined };
+        const { port, error } = internal.require("net_address");
+        if (opts.port != null && typeof opts.port !== "number" && typeof opts.port !== "string") throw error(TypeError, "ERR_INVALID_ARG_VALUE", "The argument 'options.port' must be a number or string");
+        const targetPort = port(opts.port ?? 0);
         if (callback) this.once("listening", callback);
         try {
-          this._listener = listenOrThrow(opts.host || "0.0.0.0", Number(opts.port || 0));
+          this._listener = listenOrThrow(opts.host || "0.0.0.0", targetPort);
         } catch (err) {
           internal.nextTick(() => this.emit("error", err));
           return this;

@@ -102,7 +102,7 @@ function httpFixture() {
   };
   const addressModules = { net_address: load("net_address.js")() };
   const modules = {
-    events: EventEmitter, buffer: { Buffer }, net_listener: factory({ native }),
+    events: EventEmitter, buffer: { Buffer }, net_address: addressModules.net_address, net_listener: factory({ native }),
     net_hostname: load("net_hostname.ts")({ require: (name: keyof typeof addressModules) => addressModules[name] }),
     http_common: load("http_common.ts")(), http_agent: load("http_agent.ts")(), websocket: { clientClass: () => undefined },
   };
