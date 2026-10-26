@@ -9,6 +9,14 @@ engine/status/category values and readonly rows without changing diagnostics,
 stage boundaries, row identity or classification rules. Its callers and the runner's
 source-hash inventory use the renamed file.
 
+The SvelteKit fullstack fixture in `product-fullstack.ts` is also an original
+fixture, not copied framework code. It uses the published `onMount` API from
+Svelte 5.39.11 with SvelteKit 2.43.1. Its marker becomes selectable only after
+hydration, and its button stays disabled until then. The existing browser driver
+waits for that fixture-specific selector before HMR and uses Playwright's normal
+button actionability after navigation. SSR text alone does not prove that the
+client has mounted. No framework implementation, watcher or runtime API changes.
+
 The browser driver calls the existing playground test helpers. Recorded dependency tarballs remain unmodified in the external cache, verified by SHA-256; registry metadata is rewritten only in loopback responses to point tarballs at that mirror.
 
 

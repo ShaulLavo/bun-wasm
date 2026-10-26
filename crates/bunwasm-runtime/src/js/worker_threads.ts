@@ -550,7 +550,7 @@
     if (!Array.isArray(value) || !value.every(arg => typeof arg === "string")) throw invalidArgument("execArgv");
     for (let index = 0; index < value.length; index++) {
       const arg = value[index];
-      if (["--no-warnings", "--expose-gc", "--experimental-strip-types"].includes(arg) || arg.startsWith("--require=")) continue;
+      if (["--no-warnings", "--no-deprecation", "--expose-gc", "--experimental-strip-types"].includes(arg) || arg.startsWith("--require=")) continue;
       if ((arg === "--require" || arg === "-r") && index + 1 < value.length) { index++; continue; }
       throw Object.assign(new Error(`Invalid execArgv flag: ${arg}`), { code: "ERR_WORKER_INVALID_EXEC_ARGV" });
     }
@@ -705,7 +705,13 @@
       error = Object.assign(new Error("Cannot serialize worker error"), { code: "ERR_WORKER_UNSERIALIZABLE_ERROR" });
       graph = codec.encode(error);
     }
-    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    let code: string | undefined;
+    if (error && typeof error === "object") {
+      try {
+        const value = Reflect.get(error, "code");
+        if (typeof value === "string") code = value;
+      } catch {}
+    }
     return { graph, code };
   }
 
@@ -744,6 +750,7 @@
       if (arg.startsWith("--require=")) requirePreload(arg.slice(10));
       if (arg === "--expose-gc") Object.defineProperty(globalThis, "gc", { configurable: true, writable: true, value: () => native.gc() });
       if (arg === "--no-warnings") internal.workerNoWarnings = true;
+      if (arg === "--no-deprecation") process.noDeprecation = true;
     }
     if (!config.web) parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
   }

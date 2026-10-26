@@ -52,8 +52,9 @@ for (const fixture of fullstackApps) {
     expect(source.split(edit.search)).toHaveLength(2);
     expect(edit.search).toBe(productMarker);
     expect(edit.replacement).toBe(`${productMarker} updated`);
-    expect(source.replace(edit.search, edit.replacement)).toContain(`<h1 id="product-marker">${edit.replacement}</h1>`);
-    expect(dev.check.selector).toBe("#product-marker");
+    const hydrated = fixture.id === "fullstack-sveltekit" ? ' data-hydrated={hydrated}' : "";
+    expect(source.replace(edit.search, edit.replacement)).toContain(`<h1 id="product-marker"${hydrated}>${edit.replacement}</h1>`);
+    expect(dev.check.selector).toBe(fixture.id === "fullstack-sveltekit" ? '#product-marker[data-hydrated="true"]' : "#product-marker");
     expect(dev.args).toContain("{port}");
   });
 
@@ -128,6 +129,21 @@ test("SvelteKit uses the node adapter and a server-only loader, never static pre
   expect(fixture.files["svelte.config.ts"]).toContain("@sveltejs/adapter-node");
   expect(fixture.files["src/routes/+page.server.ts"]).toContain("url.searchParams.get('value')");
   expect(Object.values(fixture.files).join("\n")).not.toContain("prerender = true");
+});
+
+test("SvelteKit waits for onMount before HMR and disables its SSR button until hydration", () => {
+  const fixture = app("fullstack-sveltekit");
+  const page = fixture.files["src/routes/+page.svelte"];
+  expect(page).toContain('import { onMount } from "svelte";');
+  expect(page).toContain("let hydrated = $state(false);");
+  expect(page).toContain("onMount(() => { hydrated = true; });");
+  expect(page).toContain('id="product-marker" data-hydrated={hydrated}');
+  expect(page).toContain('id="increment" disabled={!hydrated} onclick={() => count++}');
+  for (const stage of ["dev", "start"]) {
+    const check = command(fixture, stage).check;
+    if (check.kind !== "page") throw new Error(`Missing ${stage} page check`);
+    expect(check.selector).toBe('#product-marker[data-hydrated="true"]');
+  }
 });
 
 test("Astro emits a standalone server, not the existing static-only fixture", () => {

@@ -6,7 +6,7 @@ import { runInNewContext } from "node:vm";
 const source = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.workerFactory = ${readFileSync(
   new URL("../crates/bunwasm-runtime/src/js/worker_threads.ts", import.meta.url), "utf8")}`);
 
-function receiver() {
+function receiver(execArgv: string[] | undefined = undefined) {
   const immediate: (() => void)[] = [];
   const frames: unknown[] = [];
   let ended = false;
@@ -43,7 +43,7 @@ function receiver() {
     },
     addIoWaiter() {}, messagePortRefs: 0,
   });
-  const worker = new implementation.Worker("", { eval: true, stdout: true, stderr: true });
+  const worker = new implementation.Worker("", { eval: true, stdout: true, stderr: true, execArgv });
   const errors: Error[] = [];
   const exits: number[] = [];
   worker.on("error", (error: Error) => errors.push(error));
@@ -64,6 +64,11 @@ function receiver() {
     },
   };
 }
+
+
+test("worker accepts the no-deprecation exec flag", () => {
+  expect(() => receiver(["--no-deprecation"])).not.toThrow();
+});
 
 for (const [status, signal] of [[141, "SIGPIPE"], [143, "SIGTERM"], [137, "SIGKILL"]] as const) {
   test(`worker receiver does not synthesize an error for typed ${signal} death`, async () => {
