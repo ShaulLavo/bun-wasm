@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { viteApps } from "./app-matrix/product-vite";
 import { nextApps } from "./app-matrix/product-next";
 import { fixtures, stages } from "../tests/shell-product/fixtures";
+import { projectFiles } from "../tests/shell-product/project";
 // These unit fixtures do not launch the product browser or stage its packages.
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -144,4 +145,16 @@ test("strict independent guest provenance rejects duplicate, commented digest, w
   expect(() => guestProvenance(receipt.replace(sha256, "d".repeat(64)) + `#guest_sha256=${sha256}\n`, { sha256, bytes: 8 })).toThrow("does not match");
   expect(() => guestProvenance(receipt, { sha256, bytes: 9 })).toThrow("does not match");
   expect(() => guestProvenance(receipt.replace("b".repeat(40), "invalid"), { sha256, bytes: 8 })).toThrow("Invalid guest source");
+});
+
+
+test("guest projects configure the replay in bunfig.toml as the real installer consumes it", () => {
+  const registry = "http://127.0.0.1:43831";
+  for (const fixture of fixtures) {
+    const files = projectFiles(fixture, registry);
+    expect(Bun.TOML.parse(files["bunfig.toml"])).toEqual({ install: { registry } });
+    expect(JSON.parse(files["package.json"])).toMatchObject({ dependencies: fixture.dependencies, scripts: fixture.scripts });
+    expect(Object.hasOwn(files, ".npmrc")).toBe(false);
+    for (const [path, source] of Object.entries(fixture.files)) expect(files[path]).toBe(source);
+  }
 });

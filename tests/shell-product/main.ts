@@ -6,6 +6,7 @@ import { createRuntime } from "waffle";
 import { PreviewRouter } from "waffle/browser/preview";
 import { activated } from "waffle/browser/service-worker";
 import type { Fixture } from "./model";
+import { projectFiles } from "./project";
 import type { ProductApi } from "./protocol";
 import { liveServer, requireLiveServer, settleResources, type Pending } from "./lifecycle";
 
@@ -137,9 +138,7 @@ async function readFile(path: string) { const bytes = await runtime.filesystem.r
 async function open(fixture: Fixture, registry: string) {
   await close();
   const cwd = `/home/guest/${fixture.id}`;
-  for (const [path, source] of Object.entries(fixture.files)) await write(`${cwd}/${path}`, source);
-  await write(`${cwd}/package.json`, JSON.stringify({ name: `shell-product-${fixture.id}`, private: true, type: "module", dependencies: fixture.dependencies, scripts: fixture.scripts }));
-  await write(`${cwd}/.npmrc`, `registry=${registry}\n`);
+  for (const [path, source] of Object.entries(projectFiles(fixture, registry))) await write(`${cwd}/${path}`, source);
   await runtime.filesystem.flush();
   const bridge = new SharedBridge();
   Atomics.store(bridge.state, control.cols, 120); Atomics.store(bridge.state, control.rows, 24);
