@@ -136,10 +136,10 @@ function rootClient(request: RunRequest, deliver: (message: object) => void) {
   }, dispose: () => descriptors.dispose() };
 }
 
-const engines: Engine[] = ["quickjs", "jsc", "browser"];
+const engines: Engine[] = ["quickjs", "jsc", "browser", "hermes"];
 
 for (const engine of engines) {
-  test(`${engine} roots find bun/node through PATH with their selected engine and existing module`, async () => {
+  test(`${engine} roots find bun/node/nodejs through PATH with their selected engine and existing module`, async () => {
     const fetch = spyOn(globalThis, "fetch").mockRejectedValue(new Error("Root engine aliases must not download another guest"));
     const state = isolatedRoot(false, engine);
     let root: ReturnType<typeof rootClient> | undefined;
@@ -148,7 +148,7 @@ for (const engine of engines) {
       root = rootClient(state.request, message => state.worker.onmessage?.({ data: message } as MessageEvent));
       state.release();
       expect(await root.which("bun")).toBe(`${ENGINE_BIN[engine]}/bun`);
-      for (const name of ["bun", "node", `${ENGINE_BIN[engine]}/bun`, `${ENGINE_BIN[engine]}/node`]) {
+      for (const name of ["bun", "node", "nodejs", `${ENGINE_BIN[engine]}/bun`, `${ENGINE_BIN[engine]}/node`, `${ENGINE_BIN[engine]}/nodejs`]) {
         const pid = await root.spawn(name);
         const entry = await state.requestFor(pid);
         expect(entry.engine).toBe(engine);
@@ -159,6 +159,7 @@ for (const engine of engines) {
         expect((await supervisor.waitForExit(root.client.pid, pid)).status).toBe(0);
       }
       expect(fetch).not.toHaveBeenCalled();
+      for (const name of engine === "hermes" ? [] : ["bun", "node", "nodejs"]) await expect(root.which(`/opt/bun/hermes/bin/${name}`)).rejects.toThrow("No executable");
     } finally {
       try { root?.dispose(); await state.dispose(); }
       finally { fetch.mockRestore(); }
@@ -178,8 +179,9 @@ for (const engine of engines) {
     try {
       await state.ready;
       const entries = new Map(register.mock.calls);
+      const available = engines.filter(selected => selected !== "hermes" || engine === "hermes");
       const loaded = new Set<WebAssembly.Module>();
-      for (const selected of engines) {
+      for (const selected of available) {
         const entry = entries.get(`${ENGINE_BIN[selected]}/bun`);
         if (!entry) throw new Error(`Missing explicit engine registration: ${selected}`);
         if (entry.adapter !== "bun") throw new Error(`Explicit ${selected} program must use the Bun adapter`);
@@ -193,8 +195,8 @@ for (const engine of engines) {
         else expect(module).not.toBe(state.request.module);
         loaded.add(module);
       }
-      expect(loaded.size).toBe(3);
-      expect(urls).toEqual(engines.filter(selected => selected !== engine).flatMap(selected => [
+      expect(loaded.size).toBe(available.length);
+      expect(urls).toEqual(available.filter(selected => selected !== engine).flatMap(selected => [
         `http://localhost/${ENGINES[selected].wasm}.gz`, `http://localhost/${ENGINES[selected].wasm}`,
       ]));
     } finally {
@@ -329,7 +331,7 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
       worker.exit();
       expect(await run.done).toEqual({ code: 0 });
     }
-    expect(registered).toEqual(["/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/quickjs/bin/nodejs", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node", "/opt/bun/jsc/bin/nodejs", "/bin/bun", "/bin/node", "/bin/nodejs"]);
+    expect(registered).toEqual(["/opt/bun/quickjs/bin/bun", "/opt/bun/quickjs/bin/node", "/opt/bun/quickjs/bin/nodejs", "/opt/bun/jsc/bin/bun", "/opt/bun/jsc/bin/node", "/opt/bun/jsc/bin/nodejs", "/bin/bun", "/bin/node", "/bin/nodejs", "/opt/bun/hermes/bin/bun", "/opt/bun/hermes/bin/node", "/opt/bun/hermes/bin/nodejs"]);
     for (const path of registered) expect(await runtime.filesystem.lookup(path)).toMatchObject({ kind: "file" });
     // Page-launched modules never become executable files or retain a per-launch registry key.
     expect(await runtime.filesystem.lookup("/bin/preview1-root-1")).toBeUndefined();

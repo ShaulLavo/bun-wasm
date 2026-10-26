@@ -166,7 +166,9 @@ pub struct Resolver {
     pub registry: io::Registry,
     pub locked: Value,
     pub refresh: bool,
+    #[cfg(test)]
     packuments: BTreeMap<String, Value>,
+    responses: BTreeMap<String, Vec<u8>>,
     pending: VecDeque<String>,
     pub workspaces: BTreeMap<String, Local>,
     production: bool,
@@ -182,7 +184,9 @@ impl Resolver {
             registry,
             locked,
             refresh,
+            #[cfg(test)]
             packuments: BTreeMap::new(),
+            responses: BTreeMap::new(),
             pending: VecDeque::new(),
             workspaces: BTreeMap::new(),
             production: false,
@@ -207,6 +211,8 @@ impl Resolver {
             self.children(&package)?;
         }
         self.select_platform(manifest)?;
+        self.responses.clear();
+        #[cfg(test)]
         self.packuments.clear();
         Ok(())
     }
@@ -282,8 +288,8 @@ impl Resolver {
         if meta["os"] != "none" && meta["cpu"] != "none" {
             return Ok(true);
         }
-        self.load_packument(&package.name)?;
-        let metadata = self.packuments[&package.name]["versions"]
+        let packument = self.packument(&package.name)?;
+        let metadata = packument["versions"]
             .get(&package.version)
             .filter(|meta| meta.is_object())
             .ok_or("Locked version is missing from registry metadata")?;
@@ -528,8 +534,7 @@ impl Resolver {
         {
             return Ok(package);
         }
-        self.load_packument(name)?;
-        let packument = &self.packuments[name];
+        let packument = self.packument(name)?;
         let range = packument["dist-tags"][range].as_str().unwrap_or(range);
         let versions = packument["versions"]
             .as_object()
@@ -567,8 +572,26 @@ impl Resolver {
         })
     }
 
+    fn packument(&mut self, name: &str) -> Result<Value> {
+        self.load_packument(name)?;
+        #[cfg(test)]
+        if let Some(meta) = self.packuments.get(name) {
+            return Ok(meta.clone());
+        }
+        let parsed = serde_json::from_slice(&self.responses[name])
+            .map_err(|e| format!("Invalid registry response for {name}: {e}"));
+        if parsed.is_err() {
+            self.responses.remove(name);
+        }
+        parsed
+    }
+
     fn load_packument(&mut self, name: &str) -> Result<()> {
-        if !self.packuments.contains_key(name) {
+        #[cfg(test)]
+        if self.packuments.contains_key(name) {
+            return Ok(());
+        }
+        if !self.responses.contains_key(name) {
             let encoded = name.replace('/', "%2f");
             let bytes = io::fetch(
                 &format!("{}/{encoded}", self.registry.url),
@@ -576,9 +599,7 @@ impl Resolver {
                 self.refresh,
                 &self.registry,
             )?;
-            let meta = serde_json::from_slice(&bytes)
-                .map_err(|e| format!("Invalid registry response for {name}: {e}"))?;
-            self.packuments.insert(name.into(), meta);
+            self.responses.insert(name.into(), bytes);
         }
         Ok(())
     }

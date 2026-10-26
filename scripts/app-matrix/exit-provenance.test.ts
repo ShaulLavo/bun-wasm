@@ -36,8 +36,7 @@ function runtimeExitFixture(settings: { writeFails?: boolean; loopFails?: boolea
     },
     require(name: string) {
       if (name === "events") return EventEmitter;
-      const extension = name === "process" ? "js" : "ts";
-      const source = readFileSync(new URL(`../../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url), "utf8");
+      const source = readFileSync(new URL(`../../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url), "utf8");
       const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`));
       return factory(internal);
     },
