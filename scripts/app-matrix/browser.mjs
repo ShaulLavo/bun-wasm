@@ -18,6 +18,8 @@ export function earlyServerExit(command, stage) {
   return { status: "fail", exit: command.code, ...classified };
 }
 
+const since = started => Math.round(performance.now() - started);
+
 function guestSource(page) {
   return {
     read: path => readGuest(page, path),
@@ -27,6 +29,8 @@ function guestSource(page) {
 
 export async function serverCommand({ page, context, command, app, engine, options, terminalText }) {
   const text = browserCommand(command.args.map(arg => arg.replaceAll("{port}", "3137"))).join(" ");
+  const started = performance.now();
+  const timings = {};
   await page.evaluate(text => {
     globalThis.__matrixDone = false;
     globalThis.__matrixCommand = globalThis.playground.shell.submit(text).finally(() => { globalThis.__matrixDone = true; });
@@ -36,7 +40,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
   while (Date.now() < deadline) {
     const state = await page.evaluate(() => ({ done: globalThis.__matrixDone, serving: globalThis.playground.previews.serves(3137) }));
     if (state.done) return earlyServerExit({ code: await page.evaluate(() => globalThis.playground.shell.lastExit), output: await output() }, command.name);
-    if (state.serving) break;
+    if (state.serving) { timings.readyMs = since(started); break; }
     await page.waitForTimeout(100);
   }
   const preview = await context.newPage();
@@ -49,19 +53,21 @@ export async function serverCommand({ page, context, command, app, engine, optio
     const previewState = await page.evaluate(() => globalThis.playground.previews.ready);
     if (previewState !== "ready") throw new Error(`Preview service worker is ${previewState}`);
     url = await page.evaluate(() => globalThis.playground.previews.url(3137));
+    const loading = performance.now();
     const response = await preview.goto(url, { timeout: options.timeout });
     if (!response?.ok()) throw new Error(`Preview HTTP ${response?.status()}`);
     const check = command.check;
     if (!response.fromServiceWorker()) throw new Error("Preview response bypassed the service worker");
     await preview.locator(check.kind === "http" ? "body" : check.selector).filter({ hasText: check.text }).waitFor({ timeout: options.timeout });
+    timings.pageLoadMs = since(loading);
     const contract = check.framework ? await verifyBrowserServer(preview, url, check.framework, options.timeout, join(options.output, `${app.id}-${engine}-requests.json`)) : "";
     if (errors.length) throw new Error(errors.join("\n"));
     if (await page.evaluate(() => globalThis.__matrixDone)) return earlyServerExit({ code: await page.evaluate(() => globalThis.playground.shell.lastExit), output: await output() }, command.name);
     await preview.screenshot({ path: join(options.output, `${app.id}-${engine}-playground-${command.name}.png`) });
     const observations = await productObservations(preview, url, check, guestSource(page), traffic, options.timeout);
-    checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations };
+    checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations, timings };
   } catch (error) {
-    checked = { status: "fail", ...failure(`${await output()}\n${String(error)}`, command.name) };
+    checked = { status: "fail", ...failure(`${await output()}\n${String(error)}`, command.name), timings };
   } finally {
     await page.evaluate(async () => { globalThis.playground.shell.input("\x03"); await globalThis.__matrixCommand; });
     const error = checked?.status === "pass" && command.check.framework ? await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`)) : undefined;
@@ -125,8 +131,10 @@ export async function browserHost({ root, options, launch, stop }) {
 
   async function commandResult(page, context, app, engine, command) {
     if (["http", "page"].includes(command.check.kind)) return serverCommand({ page, context, command, app, engine, options, terminalText });
+    const started = performance.now();
     const runResult = await run(page, browserCommand(command.args).join(" "), options.timeout);
-    return checkCommand(command, runResult, path => readGuest(page, path));
+    const timings = { commandMs: since(started) };
+    return { ...await checkCommand(command, runResult, path => readGuest(page, path)), timings };
   }
 
   async function runApp({ app, engine, registry, record }) {
@@ -136,13 +144,18 @@ export async function browserHost({ root, options, launch, stop }) {
     const outcomes = new Map();
     await context.route("**/*", route => browserRegistryRoute(route, registry, external));
     try {
-      await page.goto(`${await serve()}?engine=${engine}`);
+      const base = await serve();
+      const loading = performance.now();
+      await page.goto(`${base}?engine=${engine}`);
       if (!(await ready(page)).includes("ready")) throw new Error(`Playground engine ${engine} failed to load`);
+      const engineReadyMs = since(loading);
       await page.evaluate(resetBrowserProject);
       for (const [path, contents] of Object.entries(projectFiles(app, registry))) await writeFile(page, `/home/user/${path}`, contents);
       await writeFile(page, "/home/user/.matrix-command.ts", browserLauncher);
+      const installing = performance.now();
       const installed = await run(page, "bun install", options.timeout);
-      const install = record(app, engine, "playground", "install", ["bun", "install"], await checkInstall(app, installed, path => readGuest(page, path)));
+      const timings = { engineReadyMs, commandMs: since(installing) };
+      const install = record(app, engine, "playground", "install", ["bun", "install"], { ...await checkInstall(app, installed, path => readGuest(page, path)), timings });
       for (const command of app.commands) {
         const prerequisite = command.after ? outcomes.get(command.after) : install;
         const checked = prerequisite.status === "pass" ? await commandResult(page, context, app, engine, command) : { status: "blocked", category: prerequisite.category, blocker: prerequisite.blocker, prerequisite: command.after ?? "install" };
