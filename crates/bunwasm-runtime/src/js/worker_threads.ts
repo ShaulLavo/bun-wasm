@@ -550,11 +550,20 @@
     if (!Array.isArray(value) || !value.every(arg => typeof arg === "string")) throw invalidArgument("execArgv");
     for (let index = 0; index < value.length; index++) {
       const arg = value[index];
-      if (["--no-warnings", "--no-deprecation", "--expose-gc", "--experimental-strip-types"].includes(arg) || arg.startsWith("--require=")) continue;
-      if ((arg === "--require" || arg === "-r") && index + 1 < value.length) { index++; continue; }
+      if (["--no-warnings", "--no-deprecation", "--expose-gc", "--experimental-strip-types"].includes(arg) || arg.startsWith("--require=") || arg.startsWith("--conditions=")) continue;
+      if ((arg === "--require" || arg === "-r" || arg === "--conditions") && index + 1 < value.length) { index++; continue; }
       throw Object.assign(new Error(`Invalid execArgv flag: ${arg}`), { code: "ERR_WORKER_INVALID_EXEC_ARGV" });
     }
     return value;
+  }
+  function conditionArguments(execArgv: string[]) {
+    const args: string[] = [];
+    for (let index = 0; index < execArgv.length; index++) {
+      const arg = execArgv[index];
+      if (arg.startsWith("--conditions=")) args.push(arg);
+      else if (arg === "--conditions") args.push(arg, execArgv[++index]);
+    }
+    return args;
   }
   class Worker extends EventEmitter {
     readonly stdout: BunWasm.WorkerReadable;
@@ -592,7 +601,7 @@
       env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv, graph, resourceLimits: this.resourceLimits, web });
       const memoryLimitMb = (this.resourceLimits.maxOldGenerationSizeMb || 0) + (this.resourceLimits.maxYoungGenerationSizeMb || 0);
       let child: BunWasm.WorkerChild;
-      try { child = internal.require("spawn").spawn([process.execPath].concat(target.argv, argv), {
+      try { child = internal.require("spawn").spawn([process.execPath].concat(conditionArguments(execArgv), target.argv, argv), {
         env, cwd: process.cwd(), stdin: options.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe",
         maxBuffer: Infinity,
         _worker: { resourceLimits: this.resourceLimits, memoryLimitMb: memoryLimitMb ? Math.ceil(memoryLimitMb) : undefined },

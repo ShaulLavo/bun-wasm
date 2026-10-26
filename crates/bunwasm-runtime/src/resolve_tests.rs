@@ -502,3 +502,45 @@ fn missing_package_keeps_one_malformed_manifest_diagnostic() {
         );
     }
 }
+
+#[test]
+fn custom_conditions_precede_builtin_defaults_for_exports_and_imports() {
+    let fixture = Fixture::new();
+    fixture.write(
+        "node_modules/p/package.json",
+        r#"{"exports":{"custom":"./custom.js","node":"./node.js","default":"./default.js"}}"#,
+    );
+    fixture.write(
+        "package.json",
+        r##"{"imports":{"#p":{"custom":"./custom.js","node":"./node.js","default":"./default.js"}}}"##,
+    );
+    for path in [
+        "node_modules/p/custom.js",
+        "node_modules/p/node.js",
+        "node_modules/p/default.js",
+        "custom.js",
+        "node.js",
+        "default.js",
+    ] {
+        fixture.file(path);
+    }
+
+    for kind in [Kind::Import, Kind::Require] {
+        let resolver = Resolver::with_conditions(vec!["custom".to_owned()]);
+        assert_eq!(
+            resolver.resolve("p", &fixture.path("index.ts"), kind),
+            Ok(Resolved::File(fixture.path("node_modules/p/custom.js")))
+        );
+        assert_eq!(
+            resolver.resolve("#p", &fixture.path("index.ts"), kind),
+            Ok(Resolved::File(fixture.path("custom.js")))
+        );
+    }
+
+    for kind in [Kind::Import, Kind::Require] {
+        assert_eq!(
+            Resolver::new().resolve("p", &fixture.path("index.ts"), kind),
+            Ok(Resolved::File(fixture.path("node_modules/p/node.js")))
+        );
+    }
+}

@@ -26,6 +26,7 @@ Flags:
   -v, --version                  Print version and exit
       --revision                 Print version with revision and exit
   -h, --help                     Display this menu and exit
+      --conditions <condition>   Add a package-export resolution condition
 
 Not available in bun.wasm: x, create, upgrade.
 ";
@@ -453,7 +454,7 @@ fn build(_: Vec<String>) -> i32 {
 mod tool_args;
 
 enum Command {
-    Run(Entry, Vec<String>),
+    Run(Entry, Vec<String>, Vec<String>, Vec<String>),
     Build(Vec<String>),
     Lint,
     Install(String, Vec<String>),
@@ -480,10 +481,15 @@ fn parse(args: Vec<String>, executable: &str) -> Command {
 
 fn node_command(args: Vec<String>) -> Command {
     match parse_command(args, true) {
-        Command::Run(Entry::File(file), args) => {
+        Command::Run(Entry::File(file), args, conditions, exec_argv) => {
             // Node operands are files even when their names match Bun commands or package scripts.
             let path = std::env::current_dir().unwrap_or_default().join(file);
-            Command::Run(Entry::File(path.to_string_lossy().into_owned()), args)
+            Command::Run(
+                Entry::File(path.to_string_lossy().into_owned()),
+                args,
+                conditions,
+                exec_argv,
+            )
         }
         command => command,
     }
@@ -502,10 +508,35 @@ fn direct_file(file: &str) -> String {
 }
 
 fn parse_command(args: Vec<String>, run_file: bool) -> Command {
+    parse_command_with_flags(args, run_file, Vec::new(), Vec::new())
+}
+
+fn parse_command_with_flags(
+    args: Vec<String>,
+    run_file: bool,
+    conditions: Vec<String>,
+    exec_argv: Vec<String>,
+) -> Command {
     let mut rest = args.into_iter();
+    let mut conditions = conditions;
+    let mut exec_argv = exec_argv;
     while let Some(arg) = rest.next() {
         if run_file && !arg.starts_with('-') {
-            return Command::Run(Entry::File(arg), rest.collect());
+            return Command::Run(Entry::File(arg), rest.collect(), conditions, exec_argv);
+        }
+        if arg == "--conditions" {
+            let Some(value) = rest.next() else {
+                return usage_error("--conditions requires a value");
+            };
+            conditions.push(value.clone());
+            exec_argv.push(arg);
+            exec_argv.push(value);
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--conditions=") {
+            conditions.push(value.to_owned());
+            exec_argv.push(arg);
+            continue;
         }
         match arg.as_str() {
             "-v" | "--version" => {
@@ -526,7 +557,7 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
                 let Some(code) = rest.next() else {
                     return usage_error("--eval requires code");
                 };
-                return Command::Run(Entry::Eval(code), rest.collect());
+                return Command::Run(Entry::Eval(code), rest.collect(), conditions, exec_argv);
             }
             "-p" | "--print" => {
                 let Some(code) = rest.next() else {
@@ -535,7 +566,14 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
                 return Command::Print(code);
             }
             "lint" | "fmt" => return Command::Lint,
-            "test" => return Command::Run(Entry::Test(rest.collect()), Vec::new()),
+            "test" => {
+                return Command::Run(
+                    Entry::Test(rest.collect()),
+                    Vec::new(),
+                    conditions,
+                    exec_argv,
+                );
+            }
             "build" | "bun" => return Command::Build(rest.collect()),
             "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm"
             | "update" | "up" => return Command::Install(arg, rest.collect()),
@@ -547,17 +585,24 @@ fn parse_command(args: Vec<String>, run_file: bool) -> Command {
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
             }
-            "run" => return parse_command(rest.collect(), true),
+            "run" => return parse_command_with_flags(rest.collect(), true, conditions, exec_argv),
             "--" => {
                 let Some(file) = rest.next() else {
                     return usage_error("bun run needs a file to run");
                 };
-                return Command::Run(Entry::File(file), rest.collect());
+                return Command::Run(Entry::File(file), rest.collect(), conditions, exec_argv);
             }
             // Flags native Bun accepts that change nothing here.
             "--bun" | "--silent" | "--smol" | "--no-install" => continue,
             flag if flag.starts_with('-') => return usage_error(&format!("unknown flag {flag}")),
-            file => return Command::Run(Entry::File(direct_file(file)), rest.collect()),
+            file => {
+                return Command::Run(
+                    Entry::File(direct_file(file)),
+                    rest.collect(),
+                    conditions,
+                    exec_argv,
+                );
+            }
         }
     }
     if run_file {
@@ -621,7 +666,7 @@ fn main() {
         argv.collect()
     };
     let command = parse(args, &executable);
-    let (entry, args) = match command {
+    let (entry, args, conditions, exec_argv) = match command {
         Command::Exit(code) => std::process::exit(code),
         Command::Lint => {
             eprintln!("error: bun lint/fmt requires a host that loads dist/bun-tools.wasm");
@@ -635,26 +680,28 @@ fn main() {
         )),
         Command::X(args) => {
             match bunwasm_runtime::install::prepare_x(args, transpiler().as_ref()) {
-                Ok((file, args)) => (Entry::File(file), args),
+                Ok((file, args)) => (Entry::File(file), args, Vec::new(), Vec::new()),
                 Err(error) => {
                     eprintln!("error: {error}");
                     std::process::exit(1);
                 }
             }
         }
-        Command::Run(entry, args) => (entry, args),
+        Command::Run(entry, args, conditions, exec_argv) => (entry, args, conditions, exec_argv),
         // `-p`: evaluate an expression and print it like Bun.
         Command::Print(code) => {
             let wrapped = format!(
                 "const __bunwasm_print = await (0, eval)({code:?}); \
                  console.log(typeof __bunwasm_print === 'string' ? __bunwasm_print : Bun.inspect(__bunwasm_print));"
             );
-            (Entry::Eval(wrapped), Vec::new())
+            (Entry::Eval(wrapped), Vec::new(), Vec::new(), Vec::new())
         }
     };
     let code = bunwasm_runtime::run(Options {
         entry,
         args,
+        conditions,
+        exec_argv,
         transpiler: transpiler(),
     });
     // The host engine runs the program after `_start` returns.
@@ -662,4 +709,42 @@ fn main() {
         return;
     }
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conditions_parse_in_order_and_preserve_exec_argv_shape() {
+        let command = parse_command(
+            vec![
+                "run".into(),
+                "--conditions".into(),
+                "first".into(),
+                "--conditions=second".into(),
+                "entry.ts".into(),
+                "arg".into(),
+            ],
+            false,
+        );
+        let Command::Run(Entry::File(entry), args, conditions, exec_argv) = command else {
+            panic!("expected a file command");
+        };
+        assert_eq!(entry, "entry.ts");
+        assert_eq!(args, ["arg"]);
+        assert_eq!(conditions, ["first", "second"]);
+        assert_eq!(exec_argv, ["--conditions", "first", "--conditions=second"]);
+    }
+
+    #[test]
+    fn conditions_work_for_node_file_operands() {
+        let command = node_command(vec!["--conditions=vitest".into(), "entry.ts".into()]);
+        let Command::Run(Entry::File(entry), _, conditions, exec_argv) = command else {
+            panic!("expected a node file command");
+        };
+        assert!(entry.ends_with("/entry.ts"));
+        assert_eq!(conditions, ["vitest"]);
+        assert_eq!(exec_argv, ["--conditions=vitest"]);
+    }
 }
