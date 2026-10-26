@@ -57,20 +57,51 @@ standalone `tail` leaves only the build pipeline blocked. It is never replaced
 with a Bun script. When the installed shell exports `bash-web/utilities/tail`,
 the test installs that real WASM utility and runs `bun run build | tail -n 8`.
 
-The command checks the installed guest apps, loaded service-worker preview DOM,
-three start/stop cycles, real terminal interruption and prompt recovery,
+By default, the command checks the installed guest apps, loaded service-worker
+preview DOM, three start/stop cycles, real terminal interruption and prompt recovery,
 redirection, exit status and boolean lists, cwd, package tools piped to grep, and
 an inline `PORT=3001` override. Raw terminal output and screenshots are retained.
 Task asset/registry servers, browsers, copied app sources, and scratch are removed
 on completion or interruption. The prepared packages and shared caches remain.
+
+## Next installation only
+
+`SHELL_PRODUCT_RUN` accepts `full` or `next-install-only`. An unset value selects
+`full`, keeping both apps and all 28 app stages. Unknown values, including an
+empty string, fail before scratch, registry, or browser setup.
+
+With the same prepared inputs, select only Next's guest installation:
+
+```sh
+SHELL_PRODUCT_RUN=next-install-only \
+  bun /work/platform-production/heavy/current/run.js --class browser shell-product-next-install -- \
+  bun web/tests/browser-shell-product.ts
+```
+
+This mode runs shared setup, opens only `next-15-app`, and requires the actual
+guest `bun install` to exit 0. It then checks guest worker/listener cleanup and
+registry replay. It does not run Vite, development servers, builds, or the later
+shell checks. Only the selected install stage gets a row or a missing-stage
+block. Shared setup, cleanup, and network rows remain required for success.
+The command keeps the same guest provenance, replay, one-runtime, deadline,
+and resource-cleanup guards.
+
+`run.json` records `mode`, `apps`, and expected app `stages` for both modes before
+staging begins, including runs that fail setup.
+A passing `next-install-only` scoreboard proves only this focused acceptance,
+not full workflow completion. Keep its report directory separate from full runs.
 
 ## Optional package preparation
 
 After Shell publishes a genuinely aligned commit, the preparation helper can
 create an empty, explicitly owned installation. It packs this checkout's public
 Bun package, ignores dependency lifecycle scripts, checks both exact Waffle
-peers, and builds only Shell's necessary guests. It archives the selected host
-commit from `SHELL_PRODUCT_WAFFLE_REPOSITORY`, a
+peers, and builds only Shell's necessary guests. After installation, it replaces
+`node_modules/bun-wasm` with a fresh extraction of the just-packed archive before
+checking Bun's peer. Cached installed files are not authoritative. Removing the
+old consumer entries before extraction breaks cache hardlinks, so private caller
+edits cannot change the shared package cache. The cache itself stays untouched.
+It archives the selected host commit from `SHELL_PRODUCT_WAFFLE_REPOSITORY`, a
 read-only local Git repository, into the owned Waffle package directory. Only
 `network.wasm`, `network.sha256`, and `network.input-hash` are borrowed. The
 selected tree's `tooling/build-network.ts --verify` checks network source inputs

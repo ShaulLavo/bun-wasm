@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readdir, rename, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { PreparationFlow } from "../../tests/shell-product/prepare-flow";
+import { PreparationFlow, restorePackedBun } from "../../tests/shell-product/prepare-flow";
 import { stageWaffle, waffleCommits, writeWaffleSelection } from "../../tests/shell-product/waffle-stage";
 
 const root = resolve(import.meta.dir, "../..");
@@ -55,6 +55,7 @@ async function prepareConsumer() {
   await flow.execute([process.execPath, "install", "--ignore-scripts"], destination);
   const installedWaffle = join(destination, "node_modules/waffle");
   const shell = join(destination, "node_modules/bash-web");
+  await restorePackedBun(flow, { archive: join(temporary, archive), destination: join(destination, "node_modules/bun-wasm") });
   assert.equal(await peer(shell), waffle, "Reject mismatched public Shell before any fixture build");
   assert.equal(await peer(join(destination, "node_modules/bun-wasm")), waffle, "Reject mismatched public Bun before any fixture build");
   flow.check();

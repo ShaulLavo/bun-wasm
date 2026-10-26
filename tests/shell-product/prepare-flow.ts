@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
+import { mkdir, rm } from "node:fs/promises";
 import { settleResources } from "./lifecycle";
 
 function kill(child: ChildProcess) {
@@ -48,4 +49,12 @@ export class PreparationFlow {
     await Promise.all(Array.from(this.children, stop));
     assert.equal(this.children.size, 0, "Owned preparation processes stopped");
   }
+}
+
+export async function restorePackedBun(flow: PreparationFlow, { archive, destination }: { archive: string; destination: string }) {
+  flow.check();
+  await rm(destination, { recursive: true, force: true });
+  await mkdir(destination, { recursive: true });
+  await flow.execute(["tar", "-xzf", archive, "--strip-components=1", "-C", destination], destination);
+  flow.check();
 }

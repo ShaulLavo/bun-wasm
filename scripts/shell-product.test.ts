@@ -3,16 +3,17 @@ import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 import { viteApps } from "./app-matrix/product-vite";
 import { nextApps } from "./app-matrix/product-next";
-import { fixtures, stages, type Row } from "../tests/shell-product/fixtures";
+import { fixtures, selectProductRun, stages, type Row } from "../tests/shell-product/fixtures";
 import { projectFiles } from "../tests/shell-product/project";
 // These unit fixtures do not launch the product browser or stage its packages.
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { cp, link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guestProvenance } from "./app-matrix/product-provenance";
 import { createProductCleanup, exitAfterDeadline, foregroundCycle, liveServer, requireLiveServer, settleResources, withProgress, type Pending } from "../tests/shell-product/lifecycle";
 import { PreparationFlow } from "../tests/shell-product/prepare-flow";
+import * as preparation from "../tests/shell-product/prepare-flow";
 import { networkFiles, readWaffleSelection, waffleCommits, waffleSelectionFile, waffleSourcePlan, writeWaffleSelection } from "../tests/shell-product/waffle-stage";
 
 test("shell product reuses unchanged original Vite React and Next 15 source and dependencies", () => {
@@ -120,7 +121,7 @@ async function installFailureFlow(pending: Pending) {
     return "EXIT:7\nOR_BRANCH\nAND_BRANCH\nREDIRECT_REAL_BUN";
   }
   const runApp: unknown = runInNewContext(`${code}\nrunApp`, {
-    assert, shellProduct, foregroundCycle, command, withProgress,
+    assert, shellProduct, foregroundCycle, command, withProgress, run: selectProductRun(),
     page: { evaluate: async (execute: (arg: unknown) => unknown, arg?: unknown) => structuredClone(await execute(arg)) },
     mirror: { base: "unused" },
     dev: async () => { calls.dev++; throw new Error("Development command must remain blocked"); },
@@ -157,6 +158,197 @@ test("actual driver flow allows independent commands after a completed nonzero i
   expect(result.rows.filter(row => row.status === "fail")).toHaveLength(1);
   expect(result.commands).toHaveLength(4);
   expect(result.calls).toEqual({ dev: 0, interrupt: 0 });
+});
+
+test("product run defaults to the unchanged full matrix and validates explicit modes", () => {
+  const full = selectProductRun();
+  expect(full.mode satisfies "full" | "next-install-only").toBe("full");
+  expect(full.fixtures).toBe(fixtures);
+  expect(full.stages).toBe(stages);
+  expect(selectProductRun("full")).toEqual(full);
+  const focused = selectProductRun("next-install-only");
+  expect(focused.mode).toBe("next-install-only");
+  expect(focused.fixtures.map(fixture => fixture.id)).toEqual(["next-15-app"]);
+  expect(focused.fixtures[0]).toBe(fixtures[1]);
+  expect(focused.stages).toEqual(["install"]);
+  for (const invalid of ["", "next", "FULL", "full "]) expect(() => selectProductRun(invalid)).toThrow("SHELL_PRODUCT_RUN");
+});
+
+test("unknown product run mode fails at driver initialization before report or resource creation", async () => {
+  const source = readFileSync(join(import.meta.dir, "../web/tests/browser-shell-product.ts"), "utf8");
+  const prefix = source.slice(source.indexOf("const root ="), source.indexOf("async function save()"));
+  const script = new Bun.Transpiler({ loader: "ts" }).transformSync(prefix.replaceAll("import.meta.dir", JSON.stringify(import.meta.dir)));
+  let created = false;
+  const initialize = async () => runInNewContext(`(async () => { ${script} })()`, {
+    assert, selectProductRun, resolve: (...parts: string[]) => parts.join("/"),
+    process: { env: { SHELL_PRODUCT_RUN: "next-install-typo" } },
+    mkdir: async () => { created = true; },
+  });
+  await expect(initialize()).rejects.toThrow("SHELL_PRODUCT_RUN");
+  expect(created).toBe(false);
+});
+
+test("driver persists selected scope before staging for full and focused reports", async () => {
+  const source = readFileSync(join(import.meta.dir, "../web/tests/browser-shell-product.ts"), "utf8");
+  const prefix = source.slice(source.indexOf("const root ="), source.indexOf("async function save()"));
+  const script = new Bun.Transpiler({ loader: "ts" }).transformSync(prefix.replaceAll("import.meta.dir", JSON.stringify(import.meta.dir)));
+  for (const mode of [undefined, "full", "next-install-only"]) {
+    const writes: { path: string; value: unknown }[] = [];
+    await runInNewContext(`(async () => { ${script} })()`, {
+      assert, selectProductRun, resolve: (...parts: string[]) => parts.join("/"), join,
+      process: { env: { SHELL_PRODUCT_RUN: mode, SHELL_PRODUCT_REPORTS: "/unused-reports" } },
+      mkdir: async () => {},
+      Bun: { write: async (path: string, text: string) => { writes.push({ path, value: JSON.parse(text) }); } },
+    });
+    const selected = selectProductRun(mode);
+    expect(writes).toEqual([{ path: "/unused-reports/run.json", value: {
+      mode: selected.mode, apps: selected.fixtures.map(fixture => fixture.id), stages: selected.stages,
+    } }]);
+  }
+});
+
+async function selectedDriverFlow(code = 0, openFailure = false, networkErrors: string[] = [], released = { workers: 0, listeners: 0 }) {
+  const source = readFileSync(join(import.meta.dir, "../web/tests/browser-shell-product.ts"), "utf8");
+  const functions = ["command", "stage", "missingStages", "runFixture", "runCycle", "runApp"].map(name => {
+    const match = source.match(new RegExp(`^async function ${name}\\([\\s\\S]*?^}`, "m"));
+    if (!match) throw new Error(`Missing driver function ${name}`);
+    return match[0];
+  });
+  const caller = source.slice(source.indexOf("  await page.evaluate(() => globalThis.shellProduct.setup());"), source.indexOf('} catch (error) {\n  await record'));
+  if (!caller.includes("await runFixture(fixture)")) throw new Error("Missing driver fixture caller");
+  const accounting = source.match(/^    const tasks:.*? = .+?\.map\(fixture => \(\) => missingStages\(fixture\)\);$/m)?.[0];
+  const exit = source.match(/^process.exitCode = .+;$/m)?.[0];
+  if (!accounting || !exit) throw new Error("Missing driver selection callers");
+  const script = new Bun.Transpiler({ loader: "ts" }).transformSync(functions.concat([
+    `async function execute() { ${caller}\n${accounting}\nawait settleResources(tasks); ${exit} }\nexecute()`,
+  ]).join("\n"));
+  const rows: Row[] = [];
+  const commands: string[] = [];
+  const opened: string[] = [];
+  let closed = 0;
+  const process: { exitCode?: number } = {};
+  const shellProduct = {
+    setup: async () => {}, cleanup: async () => released,
+    open: async (fixture: { id: string }) => {
+      opened.push(fixture.id);
+      if (openFailure) throw new Error("Fixture open failed");
+    },
+    close: async () => { closed++; },
+    command: async (text: string) => { commands.push(text); return { code, output: "guest install output" }; },
+    diagnostics: () => ({ pending: undefined, liveServer: false, tailAvailable: true }),
+  };
+  await runInNewContext(script, {
+    assert: { ...assert, deepEqual: (actual: unknown, expected: unknown) => assert.deepEqual(structuredClone(actual), structuredClone(expected)) },
+    shellProduct, foregroundCycle, withProgress, settleResources,
+    run: selectProductRun("next-install-only"),
+    fixtures, stages, rows, timeout: 1234,
+    page: { evaluate: async (execute: (arg: unknown) => unknown, arg?: unknown) => structuredClone(await execute(arg)) },
+    external: networkErrors, process,
+    mirror: { base: "unused", misses: [], errors: [], snapshot: () => ({}) },
+    Bun: { write: async () => {} }, join, reports: "unused",
+    dev: async () => { throw new Error("Unselected dev stage executed"); },
+    interrupt: async () => { throw new Error("Unselected interrupt executed"); },
+    record: async (row: Row) => { rows.push(row); },
+    capture: async () => {}, stopAfterFailure: async () => {},
+    message: (error: unknown) => error instanceof Error ? error.message : String(error),
+    console: { log() {}, error() {} },
+  });
+  return { rows, commands, opened, closed, exitCode: process.exitCode };
+}
+
+test("focused driver executes only Next guest install and accounts for only its selected stage", async () => {
+  const result = await selectedDriverFlow();
+  expect(result.opened).toEqual(["next-15-app"]);
+  expect(result.commands).toEqual(["bun install"]);
+  expect(result.rows.map(row => [row.app, row.stage, row.status])).toEqual([
+    ["all", "setup", "pass"], ["next-15-app", "install", "pass"], ["all", "cleanup", "pass"], ["all", "network", "pass"],
+  ]);
+  expect(result.rows[1]?.detail).toBe("bun install\nguest install output");
+  expect(result.closed).toBe(1);
+  expect(result.exitCode).toBe(0);
+});
+
+test("focused driver requires actual guest install exit zero without adding full-workflow blocked rows", async () => {
+  const result = await selectedDriverFlow(1);
+  expect(result.opened).toEqual(["next-15-app"]);
+  expect(result.commands).toEqual(["bun install"]);
+  expect(result.rows.map(row => [row.app, row.stage, row.status])).toEqual([
+    ["all", "setup", "pass"], ["next-15-app", "install", "fail"], ["all", "cleanup", "pass"], ["all", "network", "pass"],
+  ]);
+  expect(result.rows[1]?.detail).toContain("guest install output");
+  expect(result.closed).toBe(1);
+  expect(result.exitCode).toBe(1);
+});
+
+test("focused fixture setup failure records the missing install but no unselected stages", async () => {
+  const result = await selectedDriverFlow(0, true);
+  expect(result.commands).toEqual([]);
+  expect(result.rows.map(row => [row.app, row.stage, row.status])).toEqual([
+    ["all", "setup", "pass"], ["next-15-app", "session", "fail"], ["next-15-app", "install", "blocked"],
+    ["all", "cleanup", "pass"], ["all", "network", "pass"],
+  ]);
+  expect(result.closed).toBe(1);
+  expect(result.exitCode).toBe(1);
+});
+
+test("focused driver still fails replay and guest cleanup guards", async () => {
+  const result = await selectedDriverFlow(0, false, ["Unexpected external request"]);
+  expect(result.rows.find(row => row.stage === "network")?.status).toBe("fail");
+  expect(result.exitCode).toBe(1);
+  await expect(selectedDriverFlow(0, false, [], { workers: 1, listeners: 0 })).rejects.toThrow();
+  await expect(selectedDriverFlow(0, false, [], { workers: 0, listeners: 1 })).rejects.toThrow();
+});
+
+test("actual preparation caller restores Bun from the packed archive without editing shared hardlinks", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "bw-sp-restore-"));
+  const flow = new PreparationFlow();
+  try {
+    const temporary = join(directory, "packed");
+    const destination = join(directory, "consumer");
+    const source = join(directory, "source/package");
+    const installed = join(destination, "node_modules/bun-wasm");
+    const cached = join(directory, "borrowed-cache");
+    await Promise.all([temporary, source, installed, cached].map(path => mkdir(path, { recursive: true })));
+    const waffle = "git+https://github.com/ShaulLavo/waffle.git#" + "a".repeat(40);
+    const metadata = JSON.stringify({ name: "bun-wasm", peerDependencies: { waffle } });
+    await writeFile(join(source, "package.json"), metadata);
+    await writeFile(join(source, "launcher.ts"), 'export const clean = "packed archive";\n');
+    const archive = "bun-wasm-test.tgz";
+    await flow.execute(["tar", "-czf", join(temporary, archive), "-C", join(directory, "source"), "package"], directory);
+    await cp(join(temporary, archive), join(destination, archive));
+    await writeFile(join(cached, "launcher.ts"), 'import "./missing-diagnostic.js";\n');
+    await link(join(cached, "launcher.ts"), join(installed, "launcher.ts"));
+    await writeFile(join(installed, "package.json"), metadata);
+    await writeFile(join(installed, "stale-only.ts"), "not in the archive");
+    const shell = join(destination, "node_modules/bash-web");
+    await mkdir(shell);
+    await writeFile(join(shell, "package.json"), JSON.stringify({ peerDependencies: { waffle } }));
+    const driver = readFileSync(join(import.meta.dir, "../web/tests/browser-shell-product-prepare.ts"), "utf8");
+    const peer = driver.match(/^async function peer\([\s\S]*?^}/m)?.[0];
+    if (!peer) throw new Error("Missing preparation peer check");
+    const caller = driver.slice(driver.indexOf("  const installedWaffle ="), driver.indexOf("  await detachPackage(shell);"));
+    const script = new Bun.Transpiler({ loader: "ts" }).transformSync(`${peer}\n(async () => { ${caller} })()`);
+    await runInNewContext(script, { ...preparation, assert, Bun, join, destination, temporary, archive, waffle, flow });
+    expect(await readFile(join(installed, "launcher.ts"), "utf8")).toBe(await readFile(join(source, "launcher.ts"), "utf8"));
+    expect(await readFile(join(installed, "package.json"), "utf8")).toBe(metadata);
+    expect(existsSync(join(installed, "stale-only.ts"))).toBe(false);
+    expect((await stat(join(installed, "launcher.ts"))).ino).not.toBe((await stat(join(cached, "launcher.ts"))).ino);
+    await writeFile(join(installed, "launcher.ts"), "private caller edit");
+    expect(await readFile(join(cached, "launcher.ts"), "utf8")).toBe('import "./missing-diagnostic.js";\n');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+  expect(existsSync(directory)).toBe(false);
+});
+
+test("cancelled Bun archive restoration leaves the installed package untouched", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "bw-sp-restore-cancel-"));
+  const flow = new PreparationFlow();
+  try {
+    await writeFile(join(directory, "retained.txt"), "untouched");
+    flow.cancel(new Error("cancel restoration"));
+    await expect(preparation.restorePackedBun(flow, { archive: join(directory, "absent.tgz"), destination: directory })).rejects.toThrow("cancel restoration");
+    expect(await readFile(join(directory, "retained.txt"), "utf8")).toBe("untouched");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+  expect(existsSync(directory)).toBe(false);
 });
 
 test("preparation cancellation during filesystem work waits for main before deleting and forbids late spawning", async () => {

@@ -10,12 +10,13 @@ import { bounded, createProductCleanup, exitAfterDeadline, foregroundCycle, sett
 import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt";
 import { registry } from "../../scripts/app-matrix/registry.mjs";
 import { browserRegistryRoute } from "../../scripts/app-matrix/registry-request";
-import { fixtures, stages, type Fixture, type Row, type Stage } from "../../tests/shell-product/fixtures";
+import { selectProductRun, type Fixture, type Row, type Stage } from "../../tests/shell-product/fixtures";
 import type { ProductApi } from "../../tests/shell-product/protocol";
 import { bundleProduct } from "./browser-shell-product-install";
 
 declare global { var shellProduct: ProductApi; }
 const root = resolve(import.meta.dir, "../..");
+const run = selectProductRun(process.env.SHELL_PRODUCT_RUN);
 const reports = resolve(process.env.SHELL_PRODUCT_REPORTS ?? "/work/reports/wave-20261022/waffle/r2/shell-product-r318");
 const timeout = Number(process.env.SHELL_PRODUCT_TIMEOUT_MS ?? 90000);
 assert.ok(Number.isFinite(timeout) && timeout > 0, "Positive stage deadline required");
@@ -30,6 +31,7 @@ let page: Page | undefined;
 let activeURL: string | undefined;
 const external: string[] = [];
 await mkdir(reports, { recursive: true });
+await Bun.write(join(reports, "run.json"), JSON.stringify({ mode: run.mode, apps: run.fixtures.map(fixture => fixture.id), stages: run.stages }, null, 2) + "\n");
 async function save() { await Bun.write(join(reports, "scoreboard.json"), JSON.stringify(rows, null, 2) + "\n"); }
 async function record(row: Row) { rows.push(row); console.log(JSON.stringify(row)); await save(); }
 function message(error: unknown) { return error instanceof Error ? error.stack ?? error.message : String(error); }
@@ -121,7 +123,7 @@ async function stopAfterFailure() {
   if (pending) await page.evaluate(() => globalThis.shellProduct.interrupt());
 }
 async function missingStages(fixture: Fixture) {
-  for (const name of stages) {
+  for (const name of run.stages) {
     if (rows.some(row => row.app === fixture.id && row.stage === name)) continue;
     await record({ app: fixture.id, stage: name, status: "blocked", detail: "Earlier setup or session failure; see raw log and terminal.json" });
   }
@@ -143,6 +145,7 @@ async function runApp(fixture: Fixture) {
   assert.ok(page && mirror);
   await page.evaluate(({ fixture, base }) => globalThis.shellProduct.open(fixture, base), { fixture, base: mirror.base });
   const installed = await stage(fixture, "install", () => command("bun install"));
+  if (run.mode === "next-install-only") return;
   let available = true;
   const cycles: readonly [Stage, Stage, string][] = [["install-and-dev-dom", "ctrl-c-1", "bun install && bun run dev"], ["restart-2-dom", "ctrl-c-2", "bun run dev"], ["restart-3-dom", "ctrl-c-3", "bun run dev"]];
   for (const cycle of cycles) available = await runCycle(fixture, cycle, installed, available);
@@ -220,7 +223,7 @@ try {
   await page.waitForFunction(() => Boolean(globalThis.shellProduct));
   await page.evaluate(() => globalThis.shellProduct.setup());
   await record({ app: "all", stage: "setup", status: "pass", detail: "Real public packages, shared peer, accepted guest, terminal and preview service worker ready" });
-  for (const fixture of fixtures) await runFixture(fixture);
+  for (const fixture of run.fixtures) await runFixture(fixture);
   const released = await page.evaluate(() => globalThis.shellProduct.cleanup());
   assert.deepEqual(released, { workers: 0, listeners: 0 });
   await record({ app: "all", stage: "cleanup", status: "pass", detail: JSON.stringify(released) });
@@ -233,7 +236,7 @@ try {
   const assetPort = server?.port;
   const registryPort = mirror ? Number(new URL(mirror.base).port) : undefined;
   try {
-    const tasks: (() => unknown | Promise<unknown>)[] = fixtures.map(fixture => () => missingStages(fixture));
+    const tasks: (() => unknown | Promise<unknown>)[] = run.fixtures.map(fixture => () => missingStages(fixture));
     await settleResources(tasks.concat([
       cleanup,
       async () => { if (assetPort) assert.equal(await portOpen(assetPort), false, "Owned asset listener released"); },

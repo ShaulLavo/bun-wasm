@@ -1,6 +1,7 @@
 import { viteApps } from "../../scripts/app-matrix/product-vite";
 import { nextApps } from "../../scripts/app-matrix/product-next";
 import type { ProductApp } from "../../scripts/app-matrix/product-types";
+import type { Fixture } from "./model";
 
 function fixture(apps: readonly ProductApp[], id: string) {
   const app = apps.find(candidate => candidate.id === id);
@@ -18,8 +19,17 @@ function buildOutputs(app: ProductApp) {
   return command.check.paths;
 }
 
-export const fixtures = [fixture(viteApps, "vite-react"), fixture(nextApps, "next-15-app")];
-export type { Fixture } from "./model";
+const nextFixture = fixture(nextApps, "next-15-app");
+export const fixtures = [fixture(viteApps, "vite-react"), nextFixture];
+export type { Fixture };
 export const stages = ["install", "install-and-dev-dom", "ctrl-c-1", "restart-2-dom", "ctrl-c-2", "restart-3-dom", "ctrl-c-3", "build-tail", "bun-x-grep", "redirect", "and-or-status", "cwd", "port-3001-dom", "ctrl-c-port"] as const;
 export type Stage = (typeof stages)[number];
 export type Row = { app: string; stage: Stage | "setup" | "session" | "network" | "cleanup"; status: "pass" | "fail" | "blocked"; detail: string };
+
+export type ProductRun = { mode: "full" | "next-install-only"; fixtures: readonly Fixture[]; stages: readonly Stage[] };
+
+export function selectProductRun(value = "full"): ProductRun {
+  if (value === "full") return { mode: value, fixtures, stages };
+  if (value === "next-install-only") return { mode: value, fixtures: [nextFixture], stages: ["install"] };
+  throw new Error(`Invalid SHELL_PRODUCT_RUN ${JSON.stringify(value)}; expected full or next-install-only`);
+}
