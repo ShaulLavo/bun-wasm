@@ -1,0 +1,30 @@
+import { afterAll, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-module-compile-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+const probe = new URL("./module-compile-probe.ts", import.meta.url).pathname;
+
+for (const [engine, mode] of [["node", "native"], ["bun", "native"], ["node", "runtime"]] satisfies [string, string][]) {
+  test(`${engine} ${mode} Module._compile and cached Next config contract`, () => {
+    const result = Bun.spawnSync([engine, probe, mode, scratch], { stdout: "pipe", stderr: "pipe" });
+    expect(result.stderr.toString()).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toContain('"nextConfig":"passed"');
+  });
+}
+
+test("Next 15.5.6 and 16.4.3 use the same frozen config helper", () => {
+  const source = readFileSync(new URL("./fixtures/module-compile/next-require-hook.txt", import.meta.url));
+  expect(createHash("sha256").update(source).digest("hex")).toBe("9e9d766f499ebd65d83f8356c9345379d9c31c9be094c45145dc6433ca907540");
+});
+
+test("production loader executes the exact cached Next requireFromString helper", () => {
+  const result = Bun.spawnSync(["node", probe, "runtime", scratch, "next"], { stdout: "pipe", stderr: "pipe" });
+  expect(result.stderr.toString()).toBe("");
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString()).toContain("cached Next requireFromString passed");
+});
