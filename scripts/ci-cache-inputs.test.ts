@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { needsJsc, needsRust } from "./ci-changes";
 
 function field(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null || !(key in value)) throw new Error(`Missing workflow field: ${key}`);
@@ -35,6 +36,24 @@ test("sysroot and prebuild restores use effective inputs and have bounded compat
     expect(prefix).not.toContain("'env.sh'");
     expect(prefix).toContain("outputs.hash");
     expect(string(field(restore, "key"))).toStartWith(prefix);
+  }
+});
+
+test("native-only selections provision the tools JSC prerequisite without enabling JSC engine gates", () => {
+  for (const path of ["scripts/guest-source-manifest.ts", "crates/bunwasm-runtime/src/engine_quickjs.rs", "web/guest-tests/quickjs.test.ts"]) {
+    expect(needsRust([path])).toBe(true);
+    expect(needsJsc([path])).toBe(false);
+  }
+  expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("needs.quality.outputs.rust == 'true'");
+  for (const prerequisite of [named("Configure private JSC build paths"), byId("jsc-inputs"), byId("jsc-prebuild-cache"), byId("jsc-producer")]) {
+    expect(prerequisite).not.toHaveProperty("if");
+  }
+  const tools = named("Build the single tools fixture in the existing native target");
+  expect(tools).not.toHaveProperty("if");
+  expect(position("Build or verify the JSC prebuild")).toBeLessThan(stepList.indexOf(tools));
+  expect(position("Save the JSC prebuild cache once per input revision")).toBeLessThan(position("Blocking native quality checks"));
+  for (const engine of [byId("jsc-cargo-cache"), named("Build the JSC Cargo guest"), named("Blocking JSC embedding and allocation checks"), named("Blocking Web guest case (JSC)")]) {
+    expect(field(engine, "if")).toBe("needs.quality.outputs.jsc == 'true'");
   }
 });
 

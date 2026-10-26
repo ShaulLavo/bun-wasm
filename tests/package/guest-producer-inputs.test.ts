@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, copyFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
@@ -23,6 +23,63 @@ function quickjsNativeReceiptFragment(): string {
   return ["set -euo pipefail", "source env.sh", native.slice(start, end < 0 ? native.length : end)]
     .join("\n").replace(/^ {10}/gm, "");
 }
+
+function workflowField(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null || !(key in value)) throw new Error(`Missing workflow field: ${key}`);
+  return Reflect.get(value, key);
+}
+
+function jscPathSetup(jsc: boolean): string {
+  const parsed: unknown = Bun.YAML.parse(workflow);
+  const steps = workflowField(workflowField(workflowField(parsed, "jobs"), "rust"), "steps");
+  if (!Array.isArray(steps)) throw new Error("Expected native workflow steps");
+  const matches: unknown[] = steps.filter(step => typeof step === "object" && step !== null && "name" in step && step.name === "Configure private JSC build paths");
+  expect(matches).toHaveLength(1);
+  const step = matches[0];
+  const run = workflowField(step, "run");
+  if (typeof run !== "string") throw new Error("Expected JSC path setup shell");
+  if (typeof step !== "object" || step === null || !("if" in step)) return run;
+  expect(step.if).toBe("needs.quality.outputs.jsc == 'true'");
+  return jsc ? run : "";
+}
+
+test("native-only workflow paths give tools receipts the real JSC and Yarr inputs", async () => {
+  await withCliReceiptFixture(async fixture => {
+    const runner = join(fixture.root, "private/runner");
+    const prebuild = join(runner, "jsc/prebuild");
+    await mkdir(dirname(prebuild), { recursive: true });
+    await rename(join(fixture.root, "jsc-build"), prebuild);
+    fixture.env.JSC_BUILD_DIR = join(runner, "unprovisioned-jsc");
+    const missing = receiptCli(fixture, "inputs", "tools");
+    expect(missing.exitCode).not.toBe(0);
+    expect(missing.stderr.toString()).toContain(fixture.env.JSC_BUILD_DIR);
+    fixture.env.RUNNER_TEMP = runner;
+    fixture.env.GITHUB_ENV = join(runner, "github-env");
+    await writeFile(fixture.env.GITHUB_ENV, "");
+    const setup = Bun.spawnSync(["bash", "-euo", "pipefail", "-c", jscPathSetup(false)], { cwd: fixture.root, env: fixture.env });
+    expect(setup.exitCode).toBe(0);
+    const environment = await readFile(fixture.env.GITHUB_ENV, "utf8");
+    expect(environment).toContain(`JSC_BUILD_DIR=${prebuild}\n`);
+    for (const line of environment.trim().split("\n")) {
+      const separator = line.indexOf("=");
+      expect(separator).toBeGreaterThan(0);
+      fixture.env[line.slice(0, separator)] = line.slice(separator + 1);
+    }
+    expect(fixture.env.JSC_BUILD_DIR).toBe(prebuild);
+    expect(fixture.env.JSC_CARGO_TARGET_DIR).toBe(join(runner, "jsc/target"));
+    const inputs = receiptCli(fixture, "inputs", "tools");
+    expect(inputs.stderr.toString()).toBe("");
+    expect(inputs.exitCode).toBe(0);
+    for (const path of ["build/jsc/.bunwasm-inputs", "webkit/Source/JavaScriptCore/yarr/YarrPattern.cpp", "webkit/Source/JavaScriptCore/runtime/OptionsList.h", "build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp"]) {
+      expect(inputs.stdout.toString()).toContain(`"path": "${path}"`);
+    }
+    const yarr = "build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp";
+    await rm(join(prebuild, yarr));
+    const partial = receiptCli(fixture, "inputs", "tools");
+    expect(partial.exitCode).not.toBe(0);
+    expect(partial.stderr.toString()).toContain(yarr);
+  });
+});
 
 async function executable(path: string, source: string) {
   await mkdir(dirname(path), { recursive: true });

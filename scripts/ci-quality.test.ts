@@ -645,8 +645,10 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
 
 function assertJscSaveSelection(conditions: readonly string[], outputs: Readonly<Record<string, string>>) {
   expect(conditions.map(condition => cacheCondition(condition, outputs, true))).toEqual([true, true]);
-  const unselected = { ...outputs, "needs.quality.outputs.jsc": "false", "steps.jsc-producer.outputs.jsc-ready": "" };
-  expect(conditions.map(condition => cacheCondition(condition, unselected, true))).toEqual([false, false]);
+  const nativeOnly = { ...outputs, "needs.quality.outputs.jsc": "false" };
+  expect(conditions.map(condition => cacheCondition(condition, nativeOnly, true))).toEqual([true, false]);
+  const incomplete = { ...nativeOnly, "steps.jsc-producer.outputs.jsc-ready": "" };
+  expect(conditions.map(condition => cacheCondition(condition, incomplete, true))).toEqual([false, false]);
   const exact = { ...outputs, "steps.jsc-prebuild-cache.outputs.cache-hit": "true", "steps.jsc-cargo-cache.outputs.cache-hit": "true" };
   expect(conditions.map(condition => cacheCondition(condition, exact, true))).toEqual([false, false]);
 }
@@ -741,7 +743,7 @@ test("ordered producers keep every blocking native command and save JSC before n
   const script = prebuildScript();
   const step = nativeWorkflowStep("name", prebuildStepName);
   expect(workflowField(step, "shell")).toBe("bash");
-  expect(workflowField(step, "if")).toBe("needs.quality.outputs.jsc == 'true'");
+  expect(step).not.toHaveProperty("if");
   expect(workflowField(step, "env")).toEqual({
     CI_JSC_PREBUILD_HIT: "${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}",
   });
