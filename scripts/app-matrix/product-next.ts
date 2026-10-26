@@ -283,7 +283,11 @@ function pagesProbes(text: string): readonly FeatureProbe[] {
   ];
 }
 
-function dynamicCommands(text: string, check: Extract<ProductCheck, { kind: "page" }>): readonly ProductCommand[] {
+function bundlerArgs(version: string): readonly string[] {
+  return version === "16" ? ["--webpack"] : [];
+}
+
+function dynamicCommands(version: string, check: Extract<ProductCheck, { kind: "page" }>): readonly ProductCommand[] {
   const productionCheck: Extract<ProductCheck, { kind: "page" }> = {
     kind: "page",
     selector: check.selector,
@@ -291,18 +295,18 @@ function dynamicCommands(text: string, check: Extract<ProductCheck, { kind: "pag
     ...(check.probes ? { probes: check.probes } : {}),
   };
   return [
-    { name: "dev", args: ["run", "node_modules/next/dist/bin/next", "dev", "--hostname", "127.0.0.1", "--port", "{port}"], check },
-    { name: "build", args: ["run", "node_modules/next/dist/bin/next", "build"], check: { kind: "files", paths: [".next/BUILD_ID"], text: "" }, },
+    { name: "dev", args: ["run", "node_modules/next/dist/bin/next", "dev"].concat(bundlerArgs(version), ["--hostname", "127.0.0.1", "--port", "{port}"]), check },
+    { name: "build", args: ["run", "node_modules/next/dist/bin/next", "build"].concat(bundlerArgs(version)), check: { kind: "files", paths: [".next/BUILD_ID"], text: "" }, },
     { name: "start", after: "build", args: ["run", "node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "{port}"], check: productionCheck },
   ];
 }
 
-function staticCommands(text: string, router: "app" | "pages"): readonly ProductCommand[] {
+function staticCommands(version: string, text: string, router: "app" | "pages"): readonly ProductCommand[] {
   const check = router === "app" ? pageCheck(text) : pagesCheck(text);
   const previewCheck = router === "app" ? pageCheck(text, false) : pagesCheck(text, false);
   return [
-    { name: "dev", args: ["run", "node_modules/next/dist/bin/next", "dev", "--hostname", "127.0.0.1", "--port", "{port}"], check },
-    { name: "build", args: ["run", "node_modules/next/dist/bin/next", "build"], check: { kind: "files", paths: ["out/index.html"], text }, },
+    { name: "dev", args: ["run", "node_modules/next/dist/bin/next", "dev"].concat(bundlerArgs(version), ["--hostname", "127.0.0.1", "--port", "{port}"]), check },
+    { name: "build", args: ["run", "node_modules/next/dist/bin/next", "build"].concat(bundlerArgs(version)), check: { kind: "files", paths: ["out/index.html"], text }, },
     { name: "preview", after: "build", args: ["run", "preview.ts"], check: previewCheck },
   ];
 }
@@ -314,7 +318,7 @@ function dynamicApp(version: string, dependencies: Record<string, string>, withA
     family: "next",
     dependencies,
     files: appDynamicFiles(text, version, withActions),
-    commands: dynamicCommands(text, pageCheck(text, true, appProbes(text, withActions))),
+    commands: dynamicCommands(version, pageCheck(text, true, appProbes(text, withActions))),
     features: [
       "router:app",
       "mode:dev-hmr",
@@ -339,7 +343,7 @@ function dynamicPprApp(version: "15" | "16", dependencies: Record<string, string
       ...appDynamicFiles(text, version, false, version === "16"),
       ...pprFiles(pprText, version),
     },
-    commands: dynamicCommands(text, pageCheck(text, true, appProbes(text, false))),
+    commands: dynamicCommands(version, pageCheck(text, true, appProbes(text, false))),
     features: [
       "router:app",
       "mode:dev-hmr",
@@ -360,7 +364,7 @@ function dynamicPages(version: string, dependencies: Record<string, string>): Pr
     family: "next",
     dependencies,
     files: pagesDynamicFiles(text, version),
-    commands: dynamicCommands(text, pagesCheck(text, true, pagesProbes(text))),
+    commands: dynamicCommands(version, pagesCheck(text, true, pagesProbes(text))),
     features: [
       "router:pages",
       "mode:dev-hmr",
@@ -381,7 +385,7 @@ function staticApp(version: string, dependencies: Record<string, string>, router
     family: "next",
     dependencies,
     files: staticFiles(text, router, version),
-    commands: staticCommands(text, router),
+    commands: staticCommands(version, text, router),
     features: [
       `router:${router}`,
       "mode:dev-hmr",
