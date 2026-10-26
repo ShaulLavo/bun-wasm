@@ -32,6 +32,21 @@ test("native checks share one conditional job and the cached target directory", 
   expect(rust).toContain("--lib modules::tests::host_");
 });
 
+test("cold native scheduling budget covers the sequential gates within ninety minutes", () => {
+  const parsed: unknown = Bun.YAML.parse(workflow);
+  const job = workflowField(workflowField(parsed, "jobs"), "rust");
+  const coldStageSeconds = {
+    setupAndCompletedGates: 55 * 60 + 49,
+    toolsCompileAllowance: 15 * 60 + 32,
+    remainingGuestTestDeadlines: 3 * 120 + 30 + 105,
+    uploadAndCacheAllowance: 5 * 60,
+  };
+  const requiredMinutes = Math.ceil(Object.values(coldStageSeconds).reduce((total, seconds) => total + seconds, 0) / 60);
+  const minutes = workflowField(job, "timeout-minutes");
+  expect(minutes).toBeGreaterThanOrEqual(requiredMinutes);
+  expect(minutes).toBeLessThanOrEqual(90);
+});
+
 test("native fixture smoke selects the typed runtime behavior without another build", () => {
   expect(rust.match(/bun scripts\/test-checks\.ts native/g)).toHaveLength(1);
   const command = checkCommand("native");
