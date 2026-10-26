@@ -55846,17 +55846,22 @@ static JSValue js_promise_resolve_thenable_job(JSContext *ctx,
                                                int argc, JSValueConst *argv)
 {
     JSValueConst promise, thenable, then;
-    JSValue args[2], res;
+    JSValue args[2], res, saved_context;
     JSRuntime *rt;
 
     promise_trace(ctx, "js_promise_resolve_thenable_job\n");
 
-    assert(argc == 3);
+    assert(argc == 4);
+    /* bun-wasm: the then getter may have changed the enqueue context. */
+    saved_context = ctx->async_context;
+    ctx->async_context = js_dup(argv[3]);
     promise = argv[0];
     thenable = argv[1];
     then = argv[2];
-    if (js_create_resolving_functions(ctx, args, promise) < 0)
-        return JS_EXCEPTION;
+    if (js_create_resolving_functions(ctx, args, promise) < 0) {
+        res = JS_EXCEPTION;
+        goto done;
+    }
     rt = ctx->rt;
     if (rt->promise_hook) {
         rt->promise_hook(ctx, JS_PROMISE_HOOK_BEFORE, promise, JS_UNDEFINED,
@@ -55874,6 +55879,9 @@ static JSValue js_promise_resolve_thenable_job(JSContext *ctx,
     }
     JS_FreeValue(ctx, args[0]);
     JS_FreeValue(ctx, args[1]);
+ done:
+    JS_FreeValue(ctx, ctx->async_context);
+    ctx->async_context = saved_context;
     return res;
 }
 
@@ -55956,7 +55964,7 @@ static JSValue js_promise_resolve_function_call(JSContext *ctx,
 {
     JSObject *p = JS_VALUE_GET_OBJ(func_obj);
     JSPromiseFunctionData *s;
-    JSValueConst args[3];
+    JSValueConst args[4];
     JSValueConst resolution;
     JSValue then;
     bool is_reject;
@@ -55998,7 +56006,8 @@ static JSValue js_promise_resolve_function_call(JSContext *ctx,
         args[0] = s->promise;
         args[1] = resolution;
         args[2] = then;
-        JS_EnqueueJob(ctx, js_promise_resolve_thenable_job, 3, args);
+        args[3] = ctx->async_context;
+        JS_EnqueueJob(ctx, js_promise_resolve_thenable_job, 4, args);
         JS_FreeValue(ctx, then);
     }
     return JS_UNDEFINED;
