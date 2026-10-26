@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import * as path from "node:path";
 import { createContext, runInContext } from "node:vm";
+import { createScriptEvaluation } from "../web/src/script-evaluation.ts";
 
 type CompiledModule = {
   filename: string | null;
@@ -19,8 +20,31 @@ export type ModuleConstructor = {
 };
 type Runtime = { builtin(id: string): ModuleConstructor; makeRequire(filename: string): (specifier: string) => Record<string, unknown> };
 
-function productionRuntime(filename: string, compiledWrapper?: string): Runtime {
-  const context = createContext({ process, URL });
+type ScriptEvaluation = ReturnType<typeof createScriptEvaluation>;
+function hostEvaluation(context: ReturnType<typeof createContext>, mapPosition: ScriptEvaluation["mapPosition"] = () => null): ScriptEvaluation {
+  const host = readFileSync(new URL("../web/src/engine-host.js", import.meta.url), "utf8");
+  const start = host.indexOf("  valueNatives(");
+  const end = host.indexOf("  // --- ES modules", start);
+  if (start < 0 || end < 0) throw new Error("Missing real Host evaluator methods");
+  const methods = host.slice(start, end);
+  const evaluator: { valueNatives(mapPosition: ScriptEvaluation["mapPosition"]): ScriptEvaluation } = runInContext(`new (class { ${methods} })`, context);
+  const natives = evaluator.valueNatives(mapPosition);
+  return { evalScript: natives.evalScript, mapPosition: natives.mapPosition };
+}
+
+function runtimeContext() {
+  return createContext({
+    process, URL, createScriptEvaluation, NativeString: String, transferArrayBuffers: () => {},
+    isWasmMemoryBuffer: () => false, nativePromiseHasInstance: () => false,
+  });
+}
+
+export function productionHostEvaluation(mapPosition: ScriptEvaluation["mapPosition"]): ScriptEvaluation {
+  return hostEvaluation(runtimeContext(), mapPosition);
+}
+
+function productionRuntime(filename: string, compiledWrapper?: string, realHost = false): Runtime {
+  const context = runtimeContext();
   const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
   const source = (name: string) => readFileSync(new URL(name, directory), "utf8");
   const bootstrap: (native: object) => Runtime = runInContext(source("bootstrap.js"), context);
@@ -41,7 +65,7 @@ function productionRuntime(filename: string, compiledWrapper?: string): Runtime 
     compileCjs(file: string) {
       return runInContext(compiledWrapper ?? `(function(exports, require, module, __filename, __dirname) {\n${readFileSync(file, "utf8")}\n})`, context, { filename: file });
     },
-    evalScript: (code: string, file: string) => runInContext(code, context, { filename: file }),
+    evalScript: (code: string, file: string, firstLine = 1) => runInContext(code, context, { filename: file, lineOffset: firstLine - 1 }),
     loadPolyfill(name: string) {
       if (name === "builtins") return builtins;
       if (name === "process") return () => process;
@@ -53,14 +77,15 @@ function productionRuntime(filename: string, compiledWrapper?: string): Runtime 
       if (name === "module_compile") return runInContext(readFileSync(emittedFactory, "utf8"), context);
       return () => ({});
     },
+    ...(realHost ? hostEvaluation(context) : {}),
   });
   return runtime;
 }
 
-export function productionModule(filename: string): ModuleConstructor {
-  return productionRuntime(filename).builtin("node:module");
+export function productionModule(filename: string, realHost = false): ModuleConstructor {
+  return productionRuntime(filename, undefined, realHost).builtin("node:module");
 }
 
-export function productionRequire(filename: string, compiledWrapper?: string): Record<string, unknown> {
-  return productionRuntime(filename, compiledWrapper).makeRequire(filename)(filename);
+export function productionRequire(filename: string, compiledWrapper?: string, realHost = false): Record<string, unknown> {
+  return productionRuntime(filename, compiledWrapper, realHost).makeRequire(filename)(filename);
 }

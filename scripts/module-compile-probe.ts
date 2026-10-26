@@ -9,8 +9,9 @@ const argument = process.argv[3];
 assert(argument);
 const directory = argument;
 const filename = join(directory, "config.cjs");
-const Module: ModuleConstructor = mode === "runtime" ? productionModule(filename) : createRequire(import.meta.url)("node:module");
-const isBun = mode !== "runtime" && !!process.versions.bun;
+const runtime = mode === "runtime" || mode === "runtime-host";
+const Module: ModuleConstructor = runtime ? productionModule(filename, mode === "runtime-host") : createRequire(import.meta.url)("node:module");
+const isBun = !runtime && !!process.versions.bun;
 writeFileSync(join(directory, "child.cjs"), 'module.exports = { marker: "child" };');
 writeFileSync(join(directory, "data.json"), '{"answer":42}');
 mkdirSync(join(directory, "node_modules/config-dependency"), { recursive: true });
@@ -32,7 +33,7 @@ function syntaxError(error: unknown): boolean {
 function nextConfigContract() {
   const helperFile = join(directory, "next-require-hook.cjs");
   writeFileSync(helperFile, readFileSync(new URL("./fixtures/module-compile/next-require-hook.txt", import.meta.url)));
-  const helper = mode === "runtime" ? productionRequire(helperFile) : createRequire(helperFile)(helperFile);
+  const helper = runtime ? productionRequire(helperFile, undefined, mode === "runtime-host") : createRequire(helperFile)(helperFile);
   assert(typeof helper.requireFromString === "function");
   assert.deepEqual(JSON.parse(JSON.stringify(helper.requireFromString('module.exports = { reactStrictMode: true, name: require("node:path").basename(__filename) };', join(dirname(filename), "next.config.ts")))), { reactStrictMode: true, name: "next.config.ts" });
 }
@@ -136,8 +137,8 @@ if (!isBun) assert.throws(() => compile('\ufeff#!/usr/bin/node\nmodule.exports =
 let coercions = 0;
 const invalid = { get toString() { coercions++; return () => "module.exports = {};"; } };
 const checked = new Module(filename);
-if (mode === "runtime") assert.throws(() => Reflect.apply(checked._compile, checked, [invalid, filename]));
-if (mode === "runtime") assert.throws(() => Reflect.apply(checked._compile, checked, ["", invalid]));
+if (runtime) assert.throws(() => Reflect.apply(checked._compile, checked, [invalid, filename]));
+if (runtime) assert.throws(() => Reflect.apply(checked._compile, checked, ["", invalid]));
 assert.equal(coercions, 0);
 const once = compile('exports.calls = (exports.calls || 0) + 1;');
 assert.equal(once.module.exports.calls, 1);
@@ -155,7 +156,7 @@ repeat._compile('exports.two = 2;', filename);
 assert.deepEqual(JSON.parse(JSON.stringify(repeat.exports)), { one: 1, two: 2 });
 
 nextConfigContract();
-if (mode === "runtime") {
+if (runtime) {
   const compiledFile = join(directory, "compiled-six.cjs");
   writeFileSync(compiledFile, "");
   const six = productionRequire(compiledFile, '(function(exports, require, module, __filename, __dirname, $Bun_import_meta) { module.exports = { count: arguments.length, filename: $Bun_import_meta.path, directory: $Bun_import_meta.dir, receiver: this === exports }; })');

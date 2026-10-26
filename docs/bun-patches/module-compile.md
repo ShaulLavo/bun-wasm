@@ -16,7 +16,19 @@ The tests record those differences rather than claiming full native Bun parity.
 The factory captures the original Function intrinsic during bootstrap. It validates argument
 types and parses the body with the same five parameters before filename-aware evaluation.
 Parsing cannot execute the body. This rejects malformed bodies before either module effects
-or evaluation outside the wrapper. A leading BOM and hashbang follow the Node control.
+or evaluation outside the wrapper. Rejected syntax keeps its original error and gains the
+supplied filename in its stack without evaluating the rejected source. A leading BOM and
+hashbang follow the Node control, including U+2028 and U+2029 hashbang terminators.
+
+The wrapper uses the existing two-header-line CommonJS layout and starts evaluation at line
+-1, so source line 1 and its columns remain unchanged. The native `evalScript` closure forwards
+an optional numeric first line to the existing Engine method and otherwise uses line 1.
+The browser host's `script-evaluation.ts` adapter records explicit per-filename line offsets
+for its existing position mapper because indirect eval cannot set a first line. It captures
+the original mapper before installing the adapter, delegates ordinary positions unchanged,
+and clears an explicit offset when that filename is evaluated at the default first line.
+The focused host checks execute the actual `valueNatives` and `evalAt` methods with the
+production factory. They check filenames, repeated compilation, and module isolation.
 Invalid argument checks are adapter-specific. Node's private `_compile` can abort on a
 non-string input, so the regression does not send invalid values to the native oracle.
 The existing six-argument transpiler-wrapper path remains separate and unchanged except
@@ -40,6 +52,7 @@ They do not activate its extension hooks or claim a complete Next application pa
 
 | Local source | Classification | Purpose |
 | --- | --- | --- |
-| `src/js/module_compile.ts`, `module_compile_types.d.ts`, `bootstrap.js` | Host feature, original adapter | Compile supplied CommonJS bodies through the existing engine evaluator and wrapper caller. |
+| `src/js/module_compile.ts`, `module_compile_types.d.ts`, `bootstrap.js`, `engine_natives.rs`, `runtime.d.ts` | Host feature, original adapter | Compile supplied CommonJS bodies through the existing engine evaluator and wrapper caller with original source positions. |
+| `web/src/script-evaluation.ts`, `web/src/engine-host.js` | Host feature, original adapter | Preserve explicit script line offsets through the browser host position mapper. |
 | `scripts/module-compile*.ts` | Host feature, original test adapter | Native Node and Bun controls plus production factory regressions. |
 | `scripts/fixtures/module-compile/next-require-hook.txt`, `next-license.txt` | Unmodified upstream fixture | Exact Next 15.5.6 and 16.4.3 config loader regression. |
