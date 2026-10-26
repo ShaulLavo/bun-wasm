@@ -13,6 +13,7 @@ const runtimeSource = new URL("../crates/bunwasm-runtime/src/js/", import.meta.u
 const fsSource = hostFs.readFileSync(new URL("node_fs.js", runtimeSource), "utf8");
 const streamSource = hostFs.readFileSync(new URL("node_stream_core.js", runtimeSource), "utf8");
 const optionsSource = hostFs.readFileSync(new URL("fs_options.ts", runtimeSource), "utf8");
+const helperSource = hostFs.readFileSync(new URL("fs_stream_constructors.ts", runtimeSource), "utf8");
 type Filesystem = typeof import("node:fs");
 type Streams = typeof import("node:stream");
 
@@ -27,13 +28,14 @@ function productionFilesystem(root: string) {
   const core: unknown = streamFactory({ builtin: require, require: () => ({ adapters: {} }) });
   assert.ok(core && typeof core === "object" && "Stream" in core);
   const optionsFactory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${optionsSource}`));
+  const helperFactory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${helperSource}`));
   const factory: unknown = runInNewContext(fsSource, context);
   assert.ok(typeof factory === "function");
   const runtime: unknown = factory({
     native: {
       hostCaps: { proc_spawn: false },
-      open(path: string, flags: string | number) {
-        const fd = hostFs.openSync(path, flags);
+      open(path: string, flags: string | number, mode?: number) {
+        const fd = hostFs.openSync(path, flags, mode);
         descriptors.add(fd);
         return fd;
       },
@@ -49,6 +51,7 @@ function productionFilesystem(root: string) {
     require(name: string): unknown {
       if (name === "fs_watch") return () => ({});
       if (name === "fs_options") return optionsFactory({});
+      if (name === "fs_stream_constructors") return helperFactory();
       return require(name);
     },
     builtin: (name: string) => name === "node:stream" ? core.Stream : require(name),
@@ -128,6 +131,36 @@ async function verifyFilesystemStreams(fs: Filesystem, root: string, streams: St
   assert.ok(typeof writeFd === "number");
   const savedWriteFd = writeFd;
   assert.throws(() => fs.fstatSync(savedWriteFd), { code: "EBADF" });
+
+  const modePath = join(root, "mode.txt");
+  const modeOutput = fs.createWriteStream(modePath, { mode: 0o600 });
+  const modeClosed = closed(modeOutput);
+  modeOutput.end("secret");
+  await modeClosed;
+  assert.equal(hostFs.statSync(modePath).mode & 0o777, 0o600);
+
+  const decodedPath = join(root, "decoded.txt");
+  const decoded: import("node:fs").WriteStream = Reflect.apply(fs.createWriteStream, fs, [decodedPath, { decodeStrings: false }]);
+  const decodedClosed = closed(decoded);
+  decoded.end("éABC");
+  await decodedClosed;
+  assert.equal(hostFs.readFileSync(decodedPath).toString("hex"), "c3a9414243");
+  assert.equal(decoded.bytesWritten, 5);
+
+  const manual = fs.createWriteStream(join(root, "manual.txt"), { autoClose: false });
+  await once(manual, "ready");
+  const manualFd = descriptor(manual);
+  assert.ok(typeof manualFd === "number");
+  const manualClosed = closed(manual);
+  let closeCallbacks = 0;
+  manual.write("hello");
+  manual.close(() => { closeCallbacks++; });
+  await manualClosed;
+  assert.equal(closeCallbacks, 1);
+  assert.equal(manual.destroyed, true);
+  assert.equal(descriptor(manual), null);
+  assert.throws(() => hostFs.fstatSync(manualFd), { code: "EBADF" });
+  assert.equal(hostFs.readFileSync(join(root, "manual.txt"), "utf8"), "hello");
 
   const input = fs.createReadStream(path, { highWaterMark: 2, start: 1, end: 4 });
   const inputClosed = closed(input);

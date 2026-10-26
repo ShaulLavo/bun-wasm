@@ -839,147 +839,33 @@
 
   // --- file streams over the existing descriptor and Node stream adapters -----
 
-  let fileStreams;
-  function initializeFileStreams() {
-    if (fileStreams) return fileStreams;
-    fileStreams = internal.builtin("node:stream");
-    Object.setPrototypeOf(ReadStream.prototype, fileStreams.Readable.prototype);
-    Object.setPrototypeOf(WriteStream.prototype, fileStreams.Writable.prototype);
-    Object.defineProperties(fs, {
-      ReadStream: { value: ReadStream, writable: true, enumerable: true, configurable: true },
-      WriteStream: { value: WriteStream, writable: true, enumerable: true, configurable: true },
-      FileReadStream: { value: ReadStream, writable: true, enumerable: true, configurable: true },
-      FileWriteStream: { value: WriteStream, writable: true, enumerable: true, configurable: true },
+  let fileStreamAdapter;
+  function fileStreams() {
+    fileStreamAdapter ??= internal.require("fs_stream_constructors")({
+      Buffer, openSync, closeSync, readSync, writeSync, toPath, validateFd, readRange, invalidArg,
+      loadStreams: () => internal.builtin("node:stream"),
     });
-    return fileStreams;
+    return fileStreamAdapter;
   }
-
-  function fileStreamOptions(options) {
-    if (typeof options === "string") return { encoding: options };
-    if (options == null) return {};
-    if (typeof options !== "object") throw invalidArg("options", "an object or string", options);
-    return options;
-  }
-
-  function fileStreamPosition(name, value) {
-    if (!Number.isSafeInteger(value) || value < 0) throw readRange(name, value);
-    return value;
-  }
-
-  function initializeFileStream(stream, path, options, flags) {
-    stream.fd = options.fd === undefined ? null : options.fd;
-    if (stream.fd !== null) validateFd(stream.fd);
-    stream.path = stream.fd === null ? toPath(path) : path;
-    stream.flags = options.flags === undefined ? flags : options.flags;
-    stream.mode = options.mode === undefined ? 0o666 : options.mode;
-    stream.autoClose = options.autoClose !== false;
-    stream.pending = stream.fd === null;
-    stream.pos = options.start === undefined ? undefined : fileStreamPosition("start", options.start);
-  }
-
-  function ReadStream(path, options) {
-    if (!(this instanceof ReadStream)) return new ReadStream(path, options);
-    const streams = initializeFileStreams();
-    options = fileStreamOptions(options);
-    initializeFileStream(this, path, options, "r");
-    this.start = options.start;
-    this.end = options.end === undefined || options.end === Infinity ? Infinity : fileStreamPosition("end", options.end);
-    if (this.end < (this.pos || 0)) throw readRange("start", this.pos);
-    this.bytesRead = 0;
-    streams.Readable.call(this, { highWaterMark: 65536, ...options, autoDestroy: this.autoClose });
-  }
-
-  function WriteStream(path, options) {
-    if (!(this instanceof WriteStream)) return new WriteStream(path, options);
-    const streams = initializeFileStreams();
-    options = fileStreamOptions(options);
-    initializeFileStream(this, path, options, "w");
-    this.start = options.start;
-    this.bytesWritten = 0;
-    streams.Writable.call(this, { ...options, defaultEncoding: options.encoding || options.defaultEncoding, autoDestroy: this.autoClose });
-  }
-
-  function constructFileStream(callback) {
-    if (this.fd !== null) { callback(); return; }
-    try { this.fd = openSync(this.path, this.flags); }
-    catch (error) { this.pending = false; callback(error); return; }
-    this.pending = false;
-    this.emit("open", this.fd);
-    this.emit("ready");
-    callback();
-  }
-
-  function destroyFileStream(error, callback) {
-    const fd = this.fd;
-    this.fd = null;
-    this.pending = false;
-    if (fd === null) { callback(error); return; }
-    try { closeSync(fd); }
-    catch (closeError) { callback(error || closeError); return; }
-    callback(error);
-  }
-
-  ReadStream.prototype._construct = constructFileStream;
-  WriteStream.prototype._construct = constructFileStream;
-  ReadStream.prototype._destroy = destroyFileStream;
-  WriteStream.prototype._destroy = destroyFileStream;
-
-  ReadStream.prototype._read = function (size) {
-    const length = Math.min(Math.max(size, 1), this.end - (this.pos === undefined ? this.bytesRead : this.pos) + 1);
-    if (length <= 0) { this.push(null); return; }
-    const chunk = Buffer.allocUnsafe(length);
-    let count;
-    try { count = readSync(this.fd, chunk, 0, length, this.pos); }
-    catch (error) { this.destroy(error); return; }
-    this.bytesRead += count;
-    if (this.pos !== undefined) this.pos += count;
-    this.push(count === 0 ? null : chunk.subarray(0, count));
-  };
-
-  function writeFileStreamStep(stream, chunk, offset) {
-    const count = writeSync(stream.fd, chunk, offset, chunk.length - offset, stream.pos);
-    if (count === 0) throw Object.assign(new Error("write made no progress"), { code: "EIO", syscall: "write" });
-    stream.bytesWritten += count;
-    if (stream.pos !== undefined) stream.pos += count;
-    return count;
-  }
-
-  function writeFileStreamChunk(stream, chunk) {
-    let offset = 0;
-    while (offset < chunk.length) offset += writeFileStreamStep(stream, chunk, offset);
-  }
-
-  WriteStream.prototype._write = function (chunk, encoding, callback) {
-    try { writeFileStreamChunk(this, chunk); }
-    catch (error) { callback(error); return; }
-    callback();
-  };
-
-  ReadStream.prototype.close = function (callback) {
-    if (callback) this.once("close", callback);
-    this.destroy();
-  };
-  WriteStream.prototype.close = function (callback) {
-    if (callback) this.once("close", callback);
-    this.end();
-  };
 
   function createReadStream(path, options) {
-    return new ReadStream(path, options);
+    return fileStreams().createReadStream(path, options);
   }
 
   function createWriteStream(path, options) {
-    return new WriteStream(path, options);
+    return fileStreams().createWriteStream(path, options);
   }
 
   function readStreamConstructor() {
-    initializeFileStreams();
-    return ReadStream;
+    const adapter = fileStreams();
+    adapter.initializeFileStreams();
+    return adapter.ReadStream;
   }
 
   function writeStreamConstructor() {
-    initializeFileStreams();
-    return WriteStream;
+    const adapter = fileStreams();
+    adapter.initializeFileStreams();
+    return adapter.WriteStream;
   }
 
   function watchUnsupported() {
