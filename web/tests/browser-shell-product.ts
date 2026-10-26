@@ -6,7 +6,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Browser, Page } from "playwright";
 import { guestProvenance } from "../../scripts/app-matrix/product-provenance";
-import { settleResources } from "../../tests/shell-product/lifecycle";
+import { bounded, exitAfterDeadline, settleResources, withProgress } from "../../tests/shell-product/lifecycle";
 import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt";
 import { registry } from "../../scripts/app-matrix/registry.mjs";
 import { browserRegistryRoute } from "../../scripts/app-matrix/registry-request";
@@ -36,15 +36,13 @@ async function record(row: Row) { rows.push(row); console.log(JSON.stringify(row
 function message(error: unknown) { return error instanceof Error ? error.stack ?? error.message : String(error); }
 async function stage(fixture: Fixture, name: Stage, execute: () => Promise<string>, blocked?: string) {
   if (blocked) { await record({ app: fixture.id, stage: name, status: "blocked", detail: blocked }); return false; }
-  try { await record({ app: fixture.id, stage: name, status: "pass", detail: await execute() }); return true; }
+  try {
+    const detail = await withProgress({ app: fixture.id, stage: name, operation: "execute" }, execute, console.log);
+    await record({ app: fixture.id, stage: name, status: "pass", detail });
+    return true;
+  }
   catch (error) { await record({ app: fixture.id, stage: name, status: "fail", detail: message(error) }); return false; }
   finally { await capture(); }
-}
-async function bounded<T>(promise: Promise<T>, milliseconds: number, label: string) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`Timeout: ${label}`)), milliseconds); });
-  try { return await Promise.race([promise, expired]); }
-  finally { clearTimeout(timer); }
 }
 async function capture() {
   if (!page || page.isClosed()) return;
@@ -69,7 +67,13 @@ async function portOpen(port: number) {
   return Bun.connect({ hostname: "127.0.0.1", port, socket: { data() {}, open(socket) { socket.end(); } } }).then(() => true, () => false);
 }
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => void cleanup().finally(() => process.exit(130)));
-const deadline = setTimeout(() => { console.error("Shell product overall deadline"); void cleanup().finally(() => process.exit(1)); }, 20 * 60000);
+const deadline = setTimeout(() => void exitAfterDeadline({
+  primary: new Error("Shell product overall deadline"),
+  cleanup,
+  timeout: 3000,
+  report: error => console.error(message(error)),
+  exit: () => process.exit(1),
+}), 20 * 60000);
 async function command(text: string, expected?: string) {
   assert.ok(page);
   const result = await page.evaluate(({ text, timeout }) => globalThis.shellProduct.command(text, timeout), { text, timeout });
@@ -77,20 +81,26 @@ async function command(text: string, expected?: string) {
   if (expected) assert.ok(result.output.split(/\r?\n/).includes(expected), `Missing output line ${expected}: ${result.output}`);
   return `${text}\n${result.output}`;
 }
-async function dev(fixture: Fixture, text: string, port = 3137) {
-  assert.ok(page && browser);
-  const url = await page.evaluate(({ text, port, timeout }) => globalThis.shellProduct.start(text, port, timeout), { text, port, timeout });
+async function dev(fixture: Fixture, name: Stage, text: string, port = 3137) {
+  const current = page;
+  assert.ok(current && browser);
+  const pending = <T>(operation: string, execute: () => Promise<T>) => withProgress(
+    { app: fixture.id, stage: name, operation }, execute, console.log,
+  );
+  const url = await pending("shellProduct.start", () => current.evaluate(
+    ({ text, port, timeout }) => globalThis.shellProduct.start(text, port, timeout), { text, port, timeout },
+  ));
   activeURL = url;
-  const preview = await page.context().newPage();
+  const preview = await pending("preview.newPage", () => current.context().newPage());
   try {
-    const response = await preview.goto(url, { timeout });
+    const response = await pending("preview.goto", () => preview.goto(url, { timeout }));
     assert.ok(response, "Preview response required");
     assert.ok(response.fromServiceWorker(), "Preview must be delivered by the actual service worker");
     assert.equal(response.status(), 200);
-    await preview.locator(fixture.selector).filter({ hasText: fixture.text }).waitFor({ timeout });
-    await preview.screenshot({ path: join(reports, `${fixture.id}-${port}-${rows.length}.png`) });
+    await pending("preview.dom", () => preview.locator(fixture.selector).filter({ hasText: fixture.text }).waitFor({ timeout }));
+    await pending("preview.screenshot", () => preview.screenshot({ path: join(reports, `${fixture.id}-${port}-${rows.length}.png`) }));
     return `${text}: service-worker HTTP 200; loaded DOM ${fixture.selector} contains ${fixture.text}`;
-  } finally { await preview.close(); }
+  } finally { await pending("preview.close", () => preview.close()); }
 }
 async function interrupt() {
   assert.ok(page);
@@ -124,7 +134,7 @@ async function missingStages(fixture: Fixture) {
 async function runCycle(fixture: Fixture, [start, stop, text]: readonly [Stage, Stage, string], installed: boolean, available: boolean) {
   assert.ok(page);
   const blocked = !installed ? "Guest install failed" : !available ? "Previous stop failed" : undefined;
-  await stage(fixture, start, () => dev(fixture, text), blocked);
+  await stage(fixture, start, () => dev(fixture, start, text), blocked);
   const pending = await page.evaluate(() => globalThis.shellProduct.diagnostics().liveServer);
   const stopped = await stage(fixture, stop, interrupt, blocked ?? (!pending ? "Server returned to prompt before Ctrl-C" : undefined));
   return blocked ? available : !pending || stopped;
@@ -161,7 +171,7 @@ async function runApp(fixture: Fixture) {
     assert.ok(lines.includes("OR_BRANCH") && lines.includes("AND_BRANCH") && !lines.includes("WRONG_SUCCESS")); return output;
   }), blocked);
   await stage(fixture, "cwd", () => command(`cd /home/guest && bun -e 'console.log("CWD:"+process.cwd())'; cd /home/guest/${fixture.id}`, "CWD:/home/guest"), blocked);
-  const portStarted = await stage(fixture, "port-3001-dom", () => dev(fixture, "PORT=3001 bun run dev", 3001), !installed ? "Guest install failed" : blocked);
+  const portStarted = await stage(fixture, "port-3001-dom", () => dev(fixture, "port-3001-dom", "PORT=3001 bun run dev", 3001), !installed ? "Guest install failed" : blocked);
   const portPending = await page.evaluate(() => globalThis.shellProduct.diagnostics().liveServer);
   await stage(fixture, "ctrl-c-port", interrupt, !installed || blocked || !portPending ? "No runnable foreground session" : undefined);
   if (!portStarted) await capture();
@@ -225,18 +235,19 @@ try {
 } catch (error) {
   await record({ app: "all", stage: "setup", status: "fail", detail: message(error) });
 } finally {
-  clearTimeout(deadline);
   const assetPort = server?.port;
   const registryPort = mirror ? Number(new URL(mirror.base).port) : undefined;
-  const tasks: (() => unknown | Promise<unknown>)[] = fixtures.map(fixture => () => missingStages(fixture));
-  await settleResources(tasks.concat([
-    cleanup,
-    async () => { if (assetPort) assert.equal(await portOpen(assetPort), false, "Owned asset listener released"); },
-    async () => { if (registryPort) assert.equal(await portOpen(registryPort), false, "Owned registry listener released"); },
-    () => assert.ok(!browser?.isConnected(), "Owned browser disconnected"),
-    () => assert.ok(!scratch || !existsSync(scratch), "Owned scratch removed"),
-    () => assert.ok(!app || !existsSync(app), "Owned consumer app removed"),
-  ]));
-  console.log("Cleanup checked: browser closed, servers stopped, task app and scratch removed; borrowed inputs preserved");
+  try {
+    const tasks: (() => unknown | Promise<unknown>)[] = fixtures.map(fixture => () => missingStages(fixture));
+    await settleResources(tasks.concat([
+      cleanup,
+      async () => { if (assetPort) assert.equal(await portOpen(assetPort), false, "Owned asset listener released"); },
+      async () => { if (registryPort) assert.equal(await portOpen(registryPort), false, "Owned registry listener released"); },
+      () => assert.ok(!browser?.isConnected(), "Owned browser disconnected"),
+      () => assert.ok(!scratch || !existsSync(scratch), "Owned scratch removed"),
+      () => assert.ok(!app || !existsSync(app), "Owned consumer app removed"),
+    ]));
+    console.log("Cleanup checked: browser closed, servers stopped, task app and scratch removed; borrowed inputs preserved");
+  } finally { clearTimeout(deadline); }
 }
 process.exitCode = rows.some(row => row.status !== "pass") ? 1 : 0;

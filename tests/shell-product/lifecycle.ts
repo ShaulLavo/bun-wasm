@@ -16,3 +16,32 @@ export async function settleResources(tasks: readonly (() => unknown | Promise<u
   }
   if (errors.length) throw new AggregateError(errors, "Shell product cleanup failed");
 }
+
+export async function bounded<T>(promise: Promise<T>, milliseconds: number, label: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`Timeout: ${label}`)), milliseconds); });
+  try { return await Promise.race([promise, expired]); }
+  finally { clearTimeout(timer); }
+}
+
+export async function exitAfterDeadline(options: {
+  primary: Error;
+  cleanup: () => unknown | Promise<unknown>;
+  timeout: number;
+  report: (error: unknown) => void;
+  exit: () => void;
+}) {
+  options.report(options.primary);
+  try { await bounded(Promise.resolve().then(options.cleanup), options.timeout, "overall cleanup"); }
+  catch (error) { options.report(error); }
+  finally { options.exit(); }
+}
+
+export async function withProgress<T>(
+  progress: { app: string; stage: string; operation: string },
+  execute: () => Promise<T>,
+  log: (message: string) => void,
+) {
+  log(JSON.stringify({ app: progress.app, stage: progress.stage, status: "progress", operation: progress.operation }));
+  return execute();
+}

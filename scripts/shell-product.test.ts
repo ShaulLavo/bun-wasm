@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guestProvenance } from "./app-matrix/product-provenance";
-import { liveServer, requireLiveServer, settleResources, type Pending } from "../tests/shell-product/lifecycle";
+import { bounded, exitAfterDeadline, liveServer, requireLiveServer, settleResources, withProgress, type Pending } from "../tests/shell-product/lifecycle";
 import { PreparationFlow } from "../tests/shell-product/prepare-flow";
 import { networkFiles, readWaffleSelection, waffleCommits, waffleSelectionFile, waffleSourcePlan, writeWaffleSelection } from "../tests/shell-product/waffle-stage";
 
@@ -119,6 +119,57 @@ test("all teardown continues after capture and independent close failures", asyn
     expect(events).toEqual(["browser", "server", "mirror", "scratch"]);
     expect(existsSync(directory)).toBe(false);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("overall deadline exits after bounded teardown with pending browser work", async () => {
+  const primary = new Error("Shell product overall deadline");
+  const reported: unknown[] = [];
+  let exits = 0;
+  const running = exitAfterDeadline({
+    primary,
+    cleanup: () => new Promise(() => {}),
+    timeout: 10,
+    report: error => reported.push(error),
+    exit: () => { exits++; },
+  });
+  await bounded(running, 100, "deadline regression");
+  expect(reported[0]).toBe(primary);
+  expect(String(reported[1])).toContain("Timeout: overall cleanup");
+  expect(exits).toBe(1);
+});
+
+test("overall deadline reporting preserves primary and teardown failures", async () => {
+  const primary = new Error("Shell product overall deadline");
+  const close = new Error("browser close failed");
+  const reported: unknown[] = [];
+  let exits = 0;
+  await exitAfterDeadline({
+    primary,
+    cleanup: () => { throw close; },
+    timeout: 100,
+    report: error => reported.push(error),
+    exit: () => { exits++; },
+  });
+  expect(reported).toEqual([primary, close]);
+  expect(exits).toBe(1);
+});
+
+test("progress names the stage and pending operation before awaiting", async () => {
+  const pending = Promise.withResolvers<string>();
+  const messages: string[] = [];
+  const result = withProgress(
+    { app: "vite-react", stage: "install-and-dev-dom", operation: "shellProduct.start" },
+    () => pending.promise,
+    message => messages.push(message),
+  );
+  expect(messages).toEqual([JSON.stringify({
+    app: "vite-react",
+    stage: "install-and-dev-dom",
+    status: "progress",
+    operation: "shellProduct.start",
+  })]);
+  pending.resolve("ready");
+  expect(await result).toBe("ready");
 });
 
 test("Waffle staging names selected Git source and verifies borrowed network before fresh JS with rebuild forbidden", () => {
