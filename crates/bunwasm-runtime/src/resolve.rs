@@ -182,8 +182,8 @@ pub fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-#[derive(Default)]
 pub struct Resolver {
+    custom_conditions: Rc<[String]>,
     object_modules: RefCell<HashMap<String, String>>,
     next_object_module: Cell<u64>,
     /// package.json contents by directory (`None` = no package.json there).
@@ -202,8 +202,20 @@ pub struct ResolveNote {
 }
 
 impl Resolver {
+    #[cfg(test)]
     pub fn new() -> Self {
-        Self::default()
+        Self::with_conditions(Vec::new())
+    }
+
+    pub fn with_conditions(conditions: Vec<String>) -> Self {
+        Self {
+            custom_conditions: conditions.into(),
+            object_modules: RefCell::new(HashMap::new()),
+            next_object_module: Cell::new(0),
+            package_json: RefCell::new(HashMap::new()),
+            package_errors: RefCell::new(HashMap::new()),
+            notes: RefCell::new(Vec::new()),
+        }
     }
 
     pub fn register_object_module(&self, name: &str) -> String {
@@ -403,7 +415,8 @@ impl Resolver {
         kind: Kind,
     ) -> Option<String> {
         if let Some(exports) = pkg.and_then(package_exports) {
-            return resolve_exports(pkg_dir, exports, subpath, kind).filter(|p| is_file(p));
+            return resolve_exports(pkg_dir, exports, subpath, kind, &self.custom_conditions)
+                .filter(|p| is_file(p));
         }
         if subpath == "." {
             if let Some(found) = pkg.and_then(|p| self.resolve_main_fields(pkg_dir, p, kind)) {
@@ -422,7 +435,14 @@ impl Resolver {
     fn resolve_imports_field(&self, spec: &str, from_dir: &str, kind: Kind) -> Option<Resolved> {
         let (pkg_dir, pkg) = self.nearest_package_json(from_dir)?;
         let imports = pkg.get("imports")?.as_object()?;
-        let target = match_subpath_map(imports, spec, kind, TargetMap::Imports).into_path()?;
+        let target = match_subpath_map(
+            imports,
+            spec,
+            kind,
+            TargetMap::Imports,
+            &self.custom_conditions,
+        )
+        .into_path()?;
         if target.starts_with("./") {
             return Some(Resolved::File(join(&pkg_dir, &target)))
                 .filter(|r| matches!(r, Resolved::File(p) if is_file(p)));
@@ -544,10 +564,10 @@ fn package_name(spec: &str) -> (&str, String) {
     }
 }
 
-fn conditions(kind: Kind) -> &'static [&'static str] {
+fn builtin_condition(kind: Kind, condition: &str) -> bool {
     match kind {
-        Kind::Import => &["bun", "node", "import", "default"],
-        Kind::Require => &["bun", "node", "require", "default"],
+        Kind::Import => matches!(condition, "bun" | "node" | "import" | "default"),
+        Kind::Require => matches!(condition, "bun" | "node" | "require" | "default"),
     }
 }
 
@@ -584,14 +604,26 @@ impl PackageTarget {
 }
 
 /// Node's PACKAGE_EXPORTS_RESOLVE.
-fn resolve_exports(pkg_dir: &str, exports: &Json, subpath: &str, kind: Kind) -> Option<String> {
+fn resolve_exports(
+    pkg_dir: &str,
+    exports: &Json,
+    subpath: &str,
+    kind: Kind,
+    custom_conditions: &[String],
+) -> Option<String> {
     let is_subpath_map = exports
         .as_object()
         .is_some_and(|map| map.keys().next().is_some_and(|k| k.starts_with('.')));
     let target = if is_subpath_map {
-        match_subpath_map(exports.as_object()?, subpath, kind, TargetMap::Exports)
+        match_subpath_map(
+            exports.as_object()?,
+            subpath,
+            kind,
+            TargetMap::Exports,
+            custom_conditions,
+        )
     } else if subpath == "." {
-        resolve_target(exports, kind, None, TargetMap::Exports)
+        resolve_target(exports, kind, None, TargetMap::Exports, custom_conditions)
     } else {
         return None;
     };
@@ -604,9 +636,10 @@ fn match_subpath_map(
     key: &str,
     kind: Kind,
     target_map: TargetMap,
+    custom_conditions: &[String],
 ) -> PackageTarget {
     if let Some(target) = map.get(key).filter(|_| !key.contains('*')) {
-        return resolve_target(target, kind, None, target_map);
+        return resolve_target(target, kind, None, target_map, custom_conditions);
     }
     let mut best: Option<(&str, &Json, &str)> = None;
     for (pattern, target) in map {
@@ -629,7 +662,7 @@ fn match_subpath_map(
         }
     }
     if let Some((_, target, captured)) = best {
-        return resolve_pattern_target(target, captured, kind, target_map);
+        return resolve_pattern_target(target, captured, kind, target_map, custom_conditions);
     }
     // Legacy folder mappings: "./dir/": "./lib/dir/".
     let folder = map
@@ -639,7 +672,7 @@ fn match_subpath_map(
     let Some((folder, target)) = folder else {
         return PackageTarget::Unmatched;
     };
-    match resolve_target(target, kind, None, target_map) {
+    match resolve_target(target, kind, None, target_map, custom_conditions) {
         PackageTarget::Path(path) => PackageTarget::Path(format!("{path}{}", &key[folder.len()..])),
         other => other,
     }
@@ -650,11 +683,12 @@ fn resolve_pattern_target(
     captured: &str,
     kind: Kind,
     target_map: TargetMap,
+    custom_conditions: &[String],
 ) -> PackageTarget {
     if invalid_target_segments(captured) {
         return PackageTarget::Invalid;
     }
-    resolve_target(target, kind, Some(captured), target_map)
+    resolve_target(target, kind, Some(captured), target_map, custom_conditions)
 }
 
 fn pattern_priority(pattern: &str) -> (usize, usize) {
@@ -666,12 +700,17 @@ fn resolve_target(
     kind: Kind,
     captured: Option<&str>,
     target_map: TargetMap,
+    custom_conditions: &[String],
 ) -> PackageTarget {
     match target {
         Json::Null => PackageTarget::Null,
         Json::String(path) => resolve_string_target(path, captured, target_map),
-        Json::Array(items) => resolve_target_array(items, kind, captured, target_map),
-        Json::Object(map) => resolve_target_conditions(map, kind, captured, target_map),
+        Json::Array(items) => {
+            resolve_target_array(items, kind, captured, target_map, custom_conditions)
+        }
+        Json::Object(map) => {
+            resolve_target_conditions(map, kind, captured, target_map, custom_conditions)
+        }
         _ => PackageTarget::Invalid,
     }
 }
@@ -710,13 +749,14 @@ fn resolve_target_array(
     kind: Kind,
     captured: Option<&str>,
     target_map: TargetMap,
+    custom_conditions: &[String],
 ) -> PackageTarget {
     if items.is_empty() {
         return PackageTarget::Null;
     }
     let mut last = PackageTarget::Unmatched;
     for target in items {
-        match resolve_target(target, kind, captured, target_map) {
+        match resolve_target(target, kind, captured, target_map, custom_conditions) {
             PackageTarget::Path(path) => return PackageTarget::Path(path),
             PackageTarget::Unmatched => (),
             other => last = other,
@@ -730,15 +770,19 @@ fn resolve_target_conditions(
     kind: Kind,
     captured: Option<&str>,
     target_map: TargetMap,
+    custom_conditions: &[String],
 ) -> PackageTarget {
     map.iter()
-        .filter(|(condition, _)| conditions(kind).contains(&condition.as_str()))
-        .find_map(
-            |(_, target)| match resolve_target(target, kind, captured, target_map) {
+        .filter(|(condition, _)| {
+            builtin_condition(kind, condition)
+                || custom_conditions.iter().any(|custom| custom == *condition)
+        })
+        .find_map(|(_, target)| {
+            match resolve_target(target, kind, captured, target_map, custom_conditions) {
                 PackageTarget::Unmatched => None,
                 selected => Some(selected),
-            },
-        )
+            }
+        })
         .unwrap_or(PackageTarget::Unmatched)
 }
 

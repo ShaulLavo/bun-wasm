@@ -194,11 +194,11 @@ interface TestTimers {
   setImmediate: typeof setImmediate;
 }
 
-export function load(fake: ReturnType<typeof service>, options: { timers?: TestTimers; spawnArguments?: (argv: string[], cwd: unknown) => string[] } = {}) {
+export function load(fake: ReturnType<typeof service>, options: { execArgv?: string[]; timers?: TestTimers; spawnArguments?: (argv: string[], cwd: unknown) => string[] } = {}) {
   const waiters: any[] = [];
   const factory = runInNewContext(source, {
     ReadableStream, Response, URL, TextEncoder, TextDecoder, Promise,
-    process: { env: { HOME: "/home", PATH: "/bin:/usr/bin" }, execArgv: [], execPath: "bun", cwd: () => "/work" },
+    process: { env: { HOME: "/home", PATH: "/bin:/usr/bin" }, execArgv: options.execArgv ?? [], execPath: "bun", cwd: () => "/work" },
   });
   const modules: Record<string, unknown> = { buffer: { Buffer }, path: nodePath, net: {}, events: EventEmitter, package_scripts: { spawnArguments: options.spawnArguments ?? ((argv: string[]) => argv) } };
   const internal = {
