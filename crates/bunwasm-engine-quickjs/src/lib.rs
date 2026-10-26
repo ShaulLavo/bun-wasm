@@ -310,3 +310,6 @@ pub extern "C" fn quickjs_run(session: u32) -> i32 {
     );
     driver::run(session)
 }
+
+#[cfg(test)]
+mod native_contract_tests;
