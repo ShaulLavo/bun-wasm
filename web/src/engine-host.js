@@ -365,7 +365,7 @@ class EngineHost {
     this.installGlobals();
     this.wrapPromiseJobs();
     this.watchRejections();
-    this.runEntry();
+    this.startEntry();
     this.schedule(0);
     return undefined;
   }
@@ -829,6 +829,23 @@ class EngineHost {
     }
   }
 
+  startEntry() {
+    const startup = this.internal.workerStartup;
+    if (!startup) { this.runEntry(); return; }
+    this.pendingAsync++;
+    nativePromiseThen(startup.ready, () => {
+      this.pendingAsync--;
+      if (this.exited) return;
+      this.runEntry();
+      this.schedule(0);
+    }, error => {
+      this.pendingAsync--;
+      if (this.exited) return;
+      this.uncaught(error);
+      if (!this.exited) this.exit(1);
+    });
+  }
+
   runEntry() {
     const { entry, internal } = this;
     let started;
@@ -988,6 +1005,7 @@ class EngineHost {
   exit(code) {
     if (this.exited) return;
     this.exited = true;
+    this.internal?.workerStartup?.cancel();
     this.o.sharedObjects?.close();
     this.disposeNativeStreams?.();
     this.native.closeAllDirs();

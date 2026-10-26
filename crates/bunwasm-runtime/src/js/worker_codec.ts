@@ -30,6 +30,7 @@
   }
   function cloneError(message = "The object cannot be cloned") { return new DOMException(message, "DataCloneError"); }
   function create(hooks: BunWasm.WorkerCodecHooks): BunWasm.WorkerCodec {
+    const sharedObjects = hooks.sharedObjects;
     function prepare(value: unknown, transfer?: unknown, forbidden: readonly string[] = []) {
       const processEnv = typeof internal.require === "function" ? internal.require("process").env : undefined;
       const list = transfer == null ? [] : transfer;
@@ -40,8 +41,8 @@
       const ports = new Map<unknown, BunWasm.PortTransfer>();
       let publication: BunWasm.SharedPublication | undefined;
       function sharedNode(buffer: SharedArrayBuffer): Node {
-        if (!internal.sharedObjects) throw cloneError();
-        publication ??= internal.sharedObjects.begin();
+        if (!sharedObjects) throw cloneError();
+        publication ??= sharedObjects.begin();
         const reference = publication.reference(buffer);
         return ["shared", reference.id, reference.byteLength];
       }
@@ -187,8 +188,8 @@
     }
 
     function decode(value: unknown) {
-      const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(internal.sharedObjects));
-      for (const reference of sharedReferences(graph)) internal.sharedObjects!.read(reference);
+      const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(sharedObjects));
+      for (const reference of sharedReferences(graph)) sharedObjects!.read(reference);
       const memory = new Map<number, unknown>();
       const restored: unknown[] = [];
       function properties(target: object, entries: [string, number][]) {
@@ -227,7 +228,7 @@
           }
           case "shared": {
             const reference = { id: node[1], byteLength: node[2] };
-            const buffer = internal.sharedObjects!.read(reference);
+            const buffer = sharedObjects!.read(reference);
             if (!isSharedBuffer(buffer) || sharedByteLength!.call(buffer) !== node[2]) throw cloneError("Invalid shared backing store");
             result = buffer; break;
           }
@@ -267,9 +268,9 @@
       const plan = prepare(value, transfer, forbidden); plan.commit(); return plan.graph;
     }
     function wait(value: unknown, ready: () => void) {
-      const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(internal.sharedObjects));
+      const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(sharedObjects));
       const references = sharedReferences(graph);
-      return references.length ? internal.sharedObjects!.wait(references, ready) : null;
+      return references.length ? sharedObjects!.wait(references, ready) : null;
     }
     return { encode, decode, prepare, wait };
   }

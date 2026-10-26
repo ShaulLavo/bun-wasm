@@ -26,6 +26,7 @@ declare namespace BunWasm {
     commit(): void;
   }
   interface WorkerCodecHooks {
+    sharedObjects?: SharedObjects;
     buffer?: { isBuffer(value: unknown): boolean; from(buffer: ArrayBuffer, offset: number, length: number): Uint8Array };
     isPort(value: unknown): boolean;
     prepare(value: unknown): PortTransfer;
@@ -68,6 +69,7 @@ declare namespace BunWasm {
     on(event: string, callback: EventListener): unknown;
   }
   interface Native {
+    sharedObjects?: SharedObjects;
     gc(): void;
     hostCaps: Record<string, boolean>;
     hostRead(handle: number, capacity?: number): Uint8Array | number;
@@ -136,6 +138,7 @@ declare namespace BunWasm {
     workerExit?: (code: number) => void;
     workerEnvChange?: (key: string, value: unknown) => void;
     sharedObjects?: SharedObjects;
+    workerStartup?: { readonly ready: Promise<void>; cancel(): void };
     clonePorts?: (value: unknown, options: unknown) => unknown;
     isMessagePort?: (value: unknown) => boolean;
     isProxy?: (value: unknown) => boolean;

@@ -28,10 +28,13 @@ guest entry. Revocation, cleanup, failed setup, engine construction failure and
 engine exit release the service or its broker lease. Engine attachment waits hold
 its pending-work count and wake its event loop exactly once when settled.
 
-There is no default runtime installation or injection into the guest internal
-codec. Without that separate injection, public worker serialization still rejects SAB.
-Startup workerData hydration and nested graph-route liveness remain separate
-integration work. Releasing routes and broker references cannot revoke native
+There is no default runtime installation. Bootstrap forwards an explicitly supplied
+private service into the guest internal object. Each codec captures its own opt-in.
+Only source MessagePort and Worker startup codecs receive the service. Direct codecs,
+v8 serialization, BroadcastChannel graphs, clones, and worker error graphs remain
+strict even when the private service is installed. Public worker serialization
+still rejects SAB without that installation. Nested graph-route liveness remains
+separate integration work. Releasing routes and broker references cannot revoke native
 SAB aliases already delivered to guest code.
 
 ## Classification
@@ -71,8 +74,11 @@ Concurrent preparations of the same new backing reject explicitly until the
 first publication commits or aborts. This avoids assigning conflicting object
 identities to overlapping transactions. Node Buffer backed by SAB remains
 unsupported. Engine value-native binding is installed only for an explicitly
-supplied private service. Synchronous startup hydration and nested byte-graph routing remain
-unimplemented. The internal installation owner must call `close()` when it
+supplied private service. Worker startup waits for missing workerData, environmentData, and queued
+transferred-port backing before graph decode, port activation, preloads, or entry.
+Ordinary already-ready startup remains synchronous. A single readiness promise
+gates engine entry, and failure or exit cancels hydration without reviving entry.
+Nested byte-graph routing remains unimplemented. The internal installation owner must call `close()` when it
 releases the Runtime; process route revocation is not a Runtime disposal hook.
 
 Commit preflights transfer validity before publishing, then delivers the byte graph
@@ -80,3 +86,8 @@ before detaching ArrayBuffers and moving ports. Tests cover rejected serializati
 failed native publication and thrown byte-graph delivery with no detachment. This
 is not a general distributed transaction for arbitrary native detach or route-move
 failures after a receiver has already accepted the graph.
+
+The startup regression fixture evaluates the actual bootstrap, worker factories,
+and EngineHost entry gate with native MessageChannels. It stubs unrelated module
+services and the entry body. This is source-host evidence, not a built guest or
+an application result.
