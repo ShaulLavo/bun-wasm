@@ -26,7 +26,7 @@ function runtime(tty: boolean) {
   }
   const internal = {
     native: {
-      platformInfo: {}, env: () => ({}), argv: () => [], execPath: () => "/bin/bun", hostSignal: () => 0,
+      platformInfo: {}, env: () => ({}), argv: () => [], execArgv: () => [], execPath: () => "/bin/bun", hostSignal: () => 0,
       isatty() { state.ttyReads++; return tty; },
       readStdin() { state.reads++; return new Uint8Array(); },
       writeStdout: (chunk: string | Uint8Array, flush?: boolean) => write(1, chunk, flush),

@@ -22,3 +22,17 @@ test("browser interop inputs include executable typed streams without loading Pl
   expect(sources.streams).toContain('"use strict";');
   expect(runInNewContext(`typeof ${sources.streams}`)).toBe("function");
 });
+
+test("package archive carries the native stream bridge and its direct helper", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-direct-pack-"));
+  try {
+    const archive = join(scratch, "package.tgz");
+    const packed = Bun.spawnSync(["bun", "pm", "pack", "--ignore-scripts", "--filename", archive], { cwd: join(import.meta.dir, "..") });
+    expect(packed.exitCode).toBe(0);
+    const listed = Bun.spawnSync(["tar", "-tzf", archive]);
+    expect(listed.exitCode).toBe(0);
+    const files = listed.stdout.toString().split("\n");
+    expect(files).toContain("package/web/src/native-stream-state.ts");
+    expect(files).toContain("package/web/src/native-direct-stream.ts");
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});

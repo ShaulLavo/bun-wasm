@@ -629,7 +629,8 @@
       return mod ? mod.require(spec) : requireFrom(spec, fromPath);
     }
     require.resolve = function resolve(spec) {
-      return resolveFrom(spec, fromPath);
+      const resolved = resolveFrom(spec, fromPath);
+      return resolved === "node:" + spec ? spec : resolved;
     };
     require.resolve.paths = function paths(spec) {
       return isBuiltinId(spec) ? null : nodeModulePaths(dirname(fromPath));

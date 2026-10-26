@@ -259,7 +259,7 @@
     release: { name: "node", sourceUrl: "", headersUrl: "" },
     argv: native.argv(),
     argv0: native.argv()[0],
-    execArgv: [],
+    execArgv: native.execArgv(),
     execPath: native.execPath(),
     env,
     pid: 1,
