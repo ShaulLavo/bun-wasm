@@ -33,7 +33,9 @@ function hooksSource(): string {
     const options = { paths: [${JSON.stringify(directory)}] };
     const failure = new Error('resolver-sentinel');
     const observed = [];
+    let prefixedBuiltinHooks = 0;
     Module._resolveFilename = function(request, parent, isMain, passedOptions) {
+      if (request === 'node:process') prefixedBuiltinHooks++;
       if (request === 'resolver-failure') throw failure;
       if (request === 'virtual-webpack') {
         observed.push({ receiver: this === Module, parent: parent === module, instance: parent instanceof Module,
@@ -49,9 +51,11 @@ function hooksSource(): string {
     let sameError = false;
     try { require('resolver-failure'); } catch (error) { sameError = error === failure; }
     const nested = created('virtual-nested');
+    const prefixedBuiltin = require('node:process') === process;
+    const requireBuiltinHooks = prefixedBuiltinHooks;
     const builtinSpelling = [require.resolve('process'), require.resolve('node:process')];
     Module._resolveFilename = original;
-    module.exports = { resolved, loaded, observed, nested, sameError, builtinSpelling,
+    module.exports = { resolved, loaded, observed, nested, sameError, builtinSpelling, prefixedBuiltin, requireBuiltinHooks,
       sameCachedExport: require(resolved) === loaded };
   `;
 }
@@ -71,6 +75,9 @@ if (contract === "hooks") {
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(result.nested)), { marker: "nested-parent" });
   assert.equal(result.sameError, true);
+  assert("prefixedBuiltin" in result && "requireBuiltinHooks" in result);
+  assert.equal(result.prefixedBuiltin, true);
+  assert.equal(result.requireBuiltinHooks, 0);
   assert.deepEqual(JSON.parse(JSON.stringify(result.builtinSpelling)), ["process", "node:process"]);
 }
 console.log(JSON.stringify({ mode, contract, status: "pass", fixtureBytes: readFileSync(entry).byteLength }));

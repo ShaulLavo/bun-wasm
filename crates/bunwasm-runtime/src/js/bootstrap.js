@@ -538,7 +538,7 @@
         const exposed = internal.require("node_stream_internals").modules;
         if (Object.prototype.hasOwnProperty.call(exposed, spec)) return exposed[spec];
       }
-      return requireFrom(spec, this.filename);
+      return requireFrom(spec, this);
     }
   }
 
@@ -612,27 +612,30 @@
     return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
   }
 
-  function resolveFrom(spec, fromPath) {
+  function resolveFrom(spec, parent, options) {
     if (typeof spec !== "string") {
       const err = new TypeError(`The "id" argument must be of type string. Received ${internal.describe(spec)}`);
       err.code = "ERR_INVALID_ARG_TYPE";
       throw err;
     }
-    return native.resolve(spec, fromPath, true);
+    return internal.builtin("node:module")._resolveFilename(spec, parent, false, options);
   }
 
-  function requireFrom(spec, fromPath) {
-    const resolved = resolveFrom(spec, fromPath);
+  function requireFrom(spec, parent) {
+    const resolved = typeof spec === "string" && spec.startsWith("node:")
+      ? native.resolve(spec, parent.filename, true)
+      : resolveFrom(spec, parent);
     if (isBuiltinId(resolved)) return internal.builtin(resolved);
     return loadModule(resolved, null).exports;
   }
 
   function makeRequire(fromPath, mod) {
+    const parent = mod || new Module(fromPath, undefined);
     function require(spec) {
-      return mod ? mod.require(spec) : requireFrom(spec, fromPath);
+      return parent.require(spec);
     }
-    require.resolve = function resolve(spec) {
-      const resolved = resolveFrom(spec, fromPath);
+    require.resolve = function resolve(spec, options) {
+      const resolved = resolveFrom(spec, parent, options);
       return resolved === "node:" + spec ? spec : resolved;
     };
     require.resolve.paths = function paths(spec) {

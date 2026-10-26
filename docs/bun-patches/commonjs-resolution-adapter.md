@@ -32,7 +32,8 @@ The original adapter in `src/js/bootstrap.js` passes the calling `Module` to the
 public resolver. `createRequire()` and `import.meta.require` have a private
 synthetic parent with the same filename and module search paths. The existing
 native resolver remains the default, and module loading still uses the shared
-CommonJS cache. There are no Next-specific aliases in the runtime.
+CommonJS cache. Explicit `node:` imports bypass the mutable require hook, as in
+Node. There are no Next-specific aliases in the runtime.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
