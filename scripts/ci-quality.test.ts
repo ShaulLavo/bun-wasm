@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -607,6 +607,74 @@ function nativeWorkflowStep(key: string, value: string): unknown {
   const matches = steps.filter((item: unknown) => typeof item === "object" && item !== null && key in item && Reflect.get(item, key) === value);
   expect(matches).toHaveLength(1);
   return matches[0];
+}
+
+const wasmToolsArchive = "wasm-tools-1.262.0-x86_64-linux.tar.gz";
+const wasmToolsSetupName = "Install pinned wasm-tools";
+
+function wasmToolsSetup(): string {
+  return workflowString(workflowField(nativeWorkflowStep("name", wasmToolsSetupName), "run"));
+}
+
+test("split producer wasm-tools setup is pinned, cached and unconditional before native gates", () => {
+  const step = nativeWorkflowStep("name", wasmToolsSetupName);
+  expect("if" in Object(step)).toBe(false);
+  expect(workflowField(step, "shell")).toBe("bash");
+  const cache = workflowField(nativeWorkflowStep("id", "wasm-tools-cache"), "with");
+  expect(workflowField(cache, "path")).toBe("${{ env.WASM_TOOLS }}/" + wasmToolsArchive);
+  expect(workflowField(cache, "key")).toBe("wasm-tools-1.262.0-${{ runner.os }}-${{ runner.arch }}");
+  const script = wasmToolsSetup();
+  expect(script).toContain(`https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/${wasmToolsArchive}`);
+  expect(script).toContain("655b8df67d54c3ef9b52fc237c4e94bbfbb5f5f43825245cb0940a7002a9ed65");
+  expect(script).toContain('wasm-tools 1.262.0 (e22db44da 2026-10-13)');
+  expect(script.indexOf("sha256sum --check")).toBeLessThan(script.indexOf("tar -xzf"));
+  expect(script.indexOf("--version")).toBeLessThan(script.indexOf('>> "$GITHUB_PATH"'));
+  expect(rust.indexOf(`name: ${wasmToolsSetupName}`)).toBeLessThan(rust.indexOf(`name: ${overlapStepName}`));
+  for (const path of ["build-bun-core.sh", "build-engine-quickjs.sh"]) {
+    expect(readFileSync(join(import.meta.dir, path), "utf8")).toContain("wasm-tools validate");
+  }
+});
+
+function runWasmToolsSetup(contents?: string) {
+  const script = wasmToolsSetup();
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-validator-"));
+  try {
+    const bin = join(directory, "bin");
+    const tools = join(directory, "tools");
+    const trace = join(directory, "trace");
+    const githubPath = join(directory, "github-path");
+    mkdirSync(bin);
+    mkdirSync(tools);
+    writeFileSync(githubPath, "");
+    writeFileSync(join(bin, "curl"), '#!/bin/sh\necho curl >> "$TRACE"\nexit 23\n', { mode: 0o700 });
+    writeFileSync(join(bin, "tar"), '#!/bin/sh\necho tar >> "$TRACE"\nexit 29\n', { mode: 0o700 });
+    if (contents !== undefined) writeFileSync(join(tools, wasmToolsArchive), contents);
+    const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-euo", "pipefail", "-c", script], {
+      env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, WASM_TOOLS: tools, GITHUB_PATH: githubPath, TRACE: trace }, encoding: "utf8",
+    });
+    return { status: result.status, stderr: result.stderr, stdout: result.stdout, files: readdirSync(tools), path: readFileSync(githubPath, "utf8"), calls: existsSync(trace) ? readFileSync(trace, "utf8") : "" };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test("wasm-tools cold download failure stops before extraction or PATH publication", () => {
+  const result = runWasmToolsSetup();
+  expect(result.status).toBe(23);
+  expect(result.calls).toBe("curl\n");
+  expect(result.files).toEqual([]);
+  expect(result.path).toBe("");
+});
+
+for (const contents of ["corrupt cached validator", ""]) {
+  test(`wasm-tools ${contents ? "corrupt" : "empty"} cache hit fails checksum before extraction or execution`, () => {
+    const result = runWasmToolsSetup(contents);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("FAILED");
+    expect(result.calls).toBe("");
+    expect(result.files).toEqual([wasmToolsArchive]);
+    expect(result.path).toBe("");
+  });
 }
 
 function nativeCacheContract(id: string, saveName: string) {
