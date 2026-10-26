@@ -517,6 +517,7 @@
 
   const moduleCache = Object.create(null);
   let mainModule;
+  const compileModule = internal.require("module_compile");
 
   class Module {
     constructor(id, parent) {
@@ -528,6 +529,9 @@
       this.children = [];
       this.paths = nodeModulePaths(this.path);
       defineHidden(this, { parent });
+    }
+    _compile(content, filename) {
+      return callModuleWrapper(this, compileModule(content, filename), filename);
     }
     require(spec) {
       if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
@@ -601,12 +605,11 @@
     topLevelFunctions.add(wrapper);
     const require = makeRequire(path, mod);
     if (wrapper.length !== 6) {
-      wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
-      return;
+      return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
     }
     const meta = Object.create(null);
     internal.initImportMeta(meta, path, mod === mainModule);
-    wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
+    return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
   }
 
   function resolveFrom(spec, fromPath) {

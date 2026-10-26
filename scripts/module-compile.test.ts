@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,11 +6,18 @@ import { join } from "node:path";
 
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-module-compile-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+const factory = join(scratch, "module_compile.js");
+const env = { ...process.env, BUNWASM_MODULE_COMPILE_FACTORY: factory };
+beforeAll(() => {
+  const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", new URL("./transpile-runtime.ts", import.meta.url).pathname, new URL("../crates/bunwasm-runtime/src/js/module_compile.ts", import.meta.url).pathname, factory], { stdout: "pipe", stderr: "pipe" });
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr.toString()).toBe("");
+});
 const probe = new URL("./module-compile-probe.ts", import.meta.url).pathname;
 
 for (const [engine, mode] of [["node", "native"], ["bun", "native"], ["node", "runtime"]] satisfies [string, string][]) {
   test(`${engine} ${mode} Module._compile and cached Next config contract`, () => {
-    const result = Bun.spawnSync([engine, probe, mode, scratch], { stdout: "pipe", stderr: "pipe" });
+    const result = Bun.spawnSync([engine].concat(engine === "node" ? ["--disable-warning=ExperimentalWarning"] : [], [probe, mode, scratch]), { stdout: "pipe", stderr: "pipe", env });
     expect(result.stderr.toString()).toBe("");
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toContain('"nextConfig":"passed"');
@@ -23,7 +30,7 @@ test("Next 15.5.6 and 16.4.3 use the same frozen config helper", () => {
 });
 
 test("production loader executes the exact cached Next requireFromString helper", () => {
-  const result = Bun.spawnSync(["node", probe, "runtime", scratch, "next"], { stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", probe, "runtime", scratch, "next"], { stdout: "pipe", stderr: "pipe", env });
   expect(result.stderr.toString()).toBe("");
   expect(result.exitCode).toBe(0);
   expect(result.stdout.toString()).toContain("cached Next requireFromString passed");

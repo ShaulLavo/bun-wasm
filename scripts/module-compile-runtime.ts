@@ -1,15 +1,15 @@
 import { readFileSync } from "node:fs";
 import * as fs from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
-import * as nodeModule from "node:module";
 import * as path from "node:path";
 import { createContext, runInContext } from "node:vm";
 
-export type CompiledModule = {
+type CompiledModule = {
   filename: string | null;
   exports: Record<string, unknown>;
   loaded: boolean;
   paths: string[];
+  require(specifier: string): unknown;
   _compile(source: string, filename: string): unknown;
 };
 export type ModuleConstructor = {
@@ -19,14 +19,17 @@ export type ModuleConstructor = {
 };
 type Runtime = { builtin(id: string): ModuleConstructor; makeRequire(filename: string): (specifier: string) => Record<string, unknown> };
 
-function productionRuntime(filename: string): Runtime {
+function productionRuntime(filename: string, compiledWrapper?: string): Runtime {
   const context = createContext({ process, URL });
   const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
   const source = (name: string) => readFileSync(new URL(name, directory), "utf8");
   const bootstrap: (native: object) => Runtime = runInContext(source("bootstrap.js"), context);
   const builtins = runInContext(source("builtins.js"), context);
+  const emittedFactory = process.env.BUNWASM_MODULE_COMPILE_FACTORY;
+  if (!emittedFactory) throw new Error("Missing production-erased module_compile factory");
   const runtime = bootstrap({
     engine: "host",
+    mapPosition: () => null,
     mainPath: () => filename,
     moduleFormat: (file: string) => file.endsWith(".json") ? "json" : "cjs",
     readFileUtf8: (file: string) => readFileSync(file, "utf8"),
@@ -36,7 +39,7 @@ function productionRuntime(filename: string): Runtime {
       return isBuiltin(resolved) && !resolved.startsWith("node:") ? `node:${resolved}` : resolved;
     },
     compileCjs(file: string) {
-      return runInContext(`(function(exports, require, module, __filename, __dirname) {\n${readFileSync(file, "utf8")}\n})`, context, { filename: file });
+      return runInContext(compiledWrapper ?? `(function(exports, require, module, __filename, __dirname) {\n${readFileSync(file, "utf8")}\n})`, context, { filename: file });
     },
     evalScript: (code: string, file: string) => runInContext(code, context, { filename: file }),
     loadPolyfill(name: string) {
@@ -47,7 +50,7 @@ function productionRuntime(filename: string): Runtime {
       if (name === "path") return () => path;
       if (name === "node_fs") return () => ({ fs });
       if (name === "web" || name === "crypto") return () => () => {};
-      if (name === "module_compile") return runInContext(nodeModule.stripTypeScriptTypes(source("module_compile.ts"), { mode: "strip" }), context);
+      if (name === "module_compile") return runInContext(readFileSync(emittedFactory, "utf8"), context);
       return () => ({});
     },
   });
@@ -58,6 +61,6 @@ export function productionModule(filename: string): ModuleConstructor {
   return productionRuntime(filename).builtin("node:module");
 }
 
-export function productionRequire(filename: string): Record<string, unknown> {
-  return productionRuntime(filename).makeRequire(filename)(filename);
+export function productionRequire(filename: string, compiledWrapper?: string): Record<string, unknown> {
+  return productionRuntime(filename, compiledWrapper).makeRequire(filename)(filename);
 }
