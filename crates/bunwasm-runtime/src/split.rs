@@ -241,3 +241,7 @@ pub(crate) fn run(options: Options) -> i32 {
     state.flush();
     code
 }
+
+#[cfg(test)]
+#[path = "split_tests.rs"]
+mod tests;
