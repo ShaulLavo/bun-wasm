@@ -43,6 +43,48 @@ if (process.argv[4] === "next") {
   process.exit(0);
 }
 
+function hashbangSeparatorsContract() {
+  for (const separator of ["\u2028", "\u2029"]) {
+    assert.equal(compile(`#!node${separator}module.exports = 42;`).module.exports, 42);
+  }
+}
+
+function sourceLocationsContract() {
+  for (const [source, line] of [['throw new Error("line-sentinel")', 1], ['\n\nthrow new Error("line-sentinel")', 3]] satisfies [string, number][]) {
+    assert.throws(() => compile(source), error => {
+      assert(error && typeof error === "object" && "stack" in error);
+      assert(String(error.stack).includes(`${filename}:${line}:7`), String(error.stack));
+      return true;
+    });
+  }
+}
+
+function syntaxFilenameContract() {
+  const state = new Module(filename);
+  state.exports = { untouched: true };
+  assert.throws(() => state._compile('exports.changed = true; const broken = ;', filename), error => {
+    assert(syntaxError(error));
+    assert(error && typeof error === "object" && "stack" in error);
+    assert(String(error.stack).includes(filename), String(error.stack));
+    return true;
+  });
+  assert.deepEqual(state.exports, { untouched: true });
+  assert.throws(() => compile('}); globalThis.escaped = true; (function() {'), syntaxError);
+  assert.equal(compile('module.exports = typeof globalThis.escaped;').module.exports, "undefined");
+}
+
+const focusedContracts: Record<string, () => void> = {
+  hashbang: hashbangSeparatorsContract,
+  locations: sourceLocationsContract,
+  syntax: syntaxFilenameContract,
+};
+const focused = focusedContracts[process.argv[4] ?? ""];
+if (focused) {
+  focused();
+  console.log(`${process.argv[4]} contract passed`);
+  process.exit(0);
+}
+
 const wrapper = compile(`
 exports.initial = true;
 module.exports = {

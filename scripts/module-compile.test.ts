@@ -35,3 +35,14 @@ test("production loader executes the exact cached Next requireFromString helper"
   expect(result.exitCode).toBe(0);
   expect(result.stdout.toString()).toContain("cached Next requireFromString passed");
 });
+
+for (const mode of ["native", "runtime"]) {
+  for (const contract of ["hashbang", "locations", "syntax"]) {
+    test(`node ${mode} Module._compile ${contract} regression`, () => {
+      const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", probe, mode, scratch, contract], { stdout: "pipe", stderr: "pipe", env });
+      expect(result.stderr.toString()).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString()).toContain(`${contract} contract passed`);
+    });
+  }
+}
