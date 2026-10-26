@@ -13,9 +13,11 @@ function inputs() {
   sources.compression_streams = stripTypeScriptTypes(readFileSync(join(sourceRoot, "compression_streams.ts"), "utf8"));
   const builtins = readFileSync(join(sourceRoot, "builtins.js"), "utf8");
   sources.asyncHooks = builtins.slice(builtins.indexOf("  function asyncHooksModule()"), builtins.indexOf("  function diagnosticsChannelModule()"));
+  sources.directHelper = stripTypeScriptTypes(readFileSync(join(root, "web/src/native-direct-stream.ts"), "utf8"));
   sources.hostBridge = stripTypeScriptTypes(readFileSync(join(root, "web/src/native-stream-state.ts"), "utf8"));
   sources.fromControls = stripTypeScriptTypes(readFileSync(new URL("../web/tests/native-readable-from-controls.ts", import.meta.url), "utf8"));
   sources.completionControls = stripTypeScriptTypes(readFileSync(new URL("../web/tests/native-stream-completion-controls.ts", import.meta.url), "utf8"));
+  sources.reactControls = stripTypeScriptTypes(readFileSync(new URL("../web/tests/native-direct-react-controls.ts", import.meta.url), "utf8"));
   sources.directControls = stripTypeScriptTypes(readFileSync(new URL("../web/tests/native-direct-stream-controls.ts", import.meta.url), "utf8"));
   sources.fixture = readFileSync(join(root, "tests/fixtures/node-native-web-streams/index.js"), "utf8");
   return sources;
@@ -52,7 +54,8 @@ for (const name of ["chromium", "webkit"]) {
         return { count, milliseconds: runs.toSorted((a, b) => a - b)[3], runs };
       }
       const nativeConstruction = sources.benchmark ? await constructionTime(native.ReadableStream) : undefined;
-      const dispose = sources.hostBridge ? new Function(sources.hostBridge.replace("export function installNativeStreamState", "function installNativeStreamState") + ";return installNativeStreamState();")() : () => {};
+      const constructDirect = new Function(sources.directHelper.replace("export function constructNativeReadable", "function constructNativeReadable") + ";return constructNativeReadable;")();
+      const dispose = sources.hostBridge ? new Function("constructNativeReadable", sources.hostBridge.replace(/^import .*native-direct-stream.*;$/m, "").replace("export function installNativeStreamState", "function installNativeStreamState") + ";return installNativeStreamState();")(constructDirect) : () => {};
       const bridgeConstruction = sources.benchmark ? await constructionTime(ReadableStream) : undefined;
       const cache = new Map();
       let frame;
@@ -94,6 +97,10 @@ for (const name of ["chromium", "webkit"]) {
       } catch (failure) { error = String(failure); }
       const checkDirect = new Function(sources.directControls.replace("export async function checkNativeDirectStreams", "async function checkNativeDirectStreams") + ";return checkNativeDirectStreams;")();
       globalThis.__nativeStreamResults = globalThis.__nativeStreamResults.concat(await checkDirect(native.ReadableStream));
+      if (sources.reactModules) {
+        const checkReact = new Function(sources.reactControls.replace("export async function checkNativeReactDirectStreams", "async function checkNativeReactDirectStreams") + ";return checkNativeReactDirectStreams;")();
+        globalThis.__nativeStreamResults = globalThis.__nativeStreamResults.concat(await checkReact(sources.reactModules));
+      }
       const checkCompletion = new Function(sources.completionControls.replace("export async function checkNativeStreamCompletion", "async function checkNativeStreamCompletion") + ";return checkNativeStreamCompletion;")();
       const completionRows = await checkCompletion();
       globalThis.__nativeStreamResults = globalThis.__nativeStreamResults.concat(completionRows);

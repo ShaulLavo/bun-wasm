@@ -230,5 +230,26 @@ await check("cancel-settles-pressure-false-and-closes-pending-read", async () =>
   assert.equal(cancels, 1);
 });
 
+await check("buffered-end-closes-hook-now-and-settles-pressure-before-read", async () => {
+  let sink!: DirectController;
+  let pulls = 0;
+  let closes = 0;
+  const body = open({ type: "direct", pull(c) { sink = c; if (++pulls === 1) c.write("init"); }, close(reason) { closes++; assert.equal(reason, undefined); } }, { highWaterMark: 2 });
+  const reader = body.getReader();
+  assert.equal(new TextDecoder().decode((await reader.read()).value), "init");
+  const pressure = sink.write("buffer");
+  let settled: number | false | undefined;
+  if (!(pressure instanceof Promise)) throw new Error("Expected pressure promise");
+  pressure.then(value => { settled = value; });
+  sink.end();
+  assert.equal(closes, 1);
+  sink.error("ignored after end");
+  await wait();
+  assert.equal(settled, 6);
+  assert.equal(new TextDecoder().decode((await reader.read()).value), "buffer");
+  assert.equal((await reader.read()).done, true);
+  assert.equal(closes, 1);
+});
+
 return rows;
 }
