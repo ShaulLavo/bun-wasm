@@ -5,13 +5,13 @@ import { fixtures, stages } from "../tests/shell-product/fixtures";
 import { projectFiles } from "../tests/shell-product/project";
 // These unit fixtures do not launch the product browser or stage its packages.
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guestProvenance } from "./app-matrix/product-provenance";
 import { liveServer, requireLiveServer, settleResources, type Pending } from "../tests/shell-product/lifecycle";
 import { PreparationFlow } from "../tests/shell-product/prepare-flow";
-import { networkFiles, waffleSourcePlan } from "../tests/shell-product/waffle-stage";
+import { networkFiles, readWaffleSelection, waffleCommits, waffleSelectionFile, waffleSourcePlan, writeWaffleSelection } from "../tests/shell-product/waffle-stage";
 
 test("shell product reuses unchanged original Vite React and Next 15 source and dependencies", () => {
   expect(fixtures.map(fixture => fixture.id)).toEqual(["vite-react", "next-15-app"]);
@@ -136,6 +136,47 @@ test("Waffle staging names selected Git source and verifies borrowed network bef
   expect(env.WAFFLE_NETWORK_PREBUILT).toBe("0");
   expect(networkFiles).toEqual(["network.wasm", "network.sha256", "network.input-hash"]);
   expect(() => waffleSourcePlan("/repo", "not-a-commit", "/archive", "/destination", {})).toThrow();
+});
+
+test("Waffle host source defaults to the explicit package peer and requires full commits", () => {
+  const shellCommit = "a".repeat(40);
+  const wafflePeerCommit = "c1cb67c300439af24335d0b2ec481bfb52f79a01";
+  const waffleHostCommit = "e177e356cb9c32cac0a7baf3a85ec33849b5c409";
+  const environment = { SHELL_PRODUCT_SHELL_COMMIT: shellCommit, SHELL_PRODUCT_WAFFLE_COMMIT: wafflePeerCommit };
+  expect(waffleCommits(environment)).toEqual({ shellCommit, wafflePeerCommit, waffleHostCommit: wafflePeerCommit });
+  expect(waffleCommits({ ...environment, SHELL_PRODUCT_WAFFLE_HOST_COMMIT: waffleHostCommit })).toEqual({ shellCommit, wafflePeerCommit, waffleHostCommit });
+  for (const name of ["SHELL_PRODUCT_SHELL_COMMIT", "SHELL_PRODUCT_WAFFLE_COMMIT", "SHELL_PRODUCT_WAFFLE_HOST_COMMIT"] as const) {
+    expect(() => waffleCommits({ ...environment, [name]: "main" })).toThrow(`Set full ${name}`);
+  }
+});
+
+test("Retained Waffle selection checks Shell, peer, host, and network provenance", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "bw-sp-selection-"));
+  const commits = {
+    shellCommit: "a".repeat(40),
+    wafflePeerCommit: "c1cb67c300439af24335d0b2ec481bfb52f79a01",
+    waffleHostCommit: "e177e356cb9c32cac0a7baf3a85ec33849b5c409",
+  };
+  const networkInputHash = "b".repeat(64);
+  const networkPath = join(directory, "node_modules/waffle/browser/net/network.input-hash");
+  const selectionPath = join(directory, waffleSelectionFile);
+  try {
+    await mkdir(join(directory, "node_modules/waffle/browser/net"), { recursive: true });
+    await Bun.write(networkPath, networkInputHash);
+    await expect(readWaffleSelection(directory, commits)).rejects.toThrow();
+    const expected = await writeWaffleSelection(directory, commits);
+    expect(expected).toEqual({ ...commits, networkInputHash });
+    expect(await readWaffleSelection(directory, commits)).toEqual(expected);
+    expect(await Bun.file(selectionPath).json()).toEqual(expected);
+    await expect(readWaffleSelection(directory, { ...commits, shellCommit: "c".repeat(40) })).rejects.toThrow("Retained Waffle selection");
+    await expect(readWaffleSelection(directory, { ...commits, wafflePeerCommit: "d".repeat(40) })).rejects.toThrow("Retained Waffle selection");
+    await expect(readWaffleSelection(directory, { ...commits, waffleHostCommit: "e".repeat(40) })).rejects.toThrow("Retained Waffle selection");
+    await Bun.write(networkPath, "f".repeat(64));
+    await expect(readWaffleSelection(directory, commits)).rejects.toThrow("Retained Waffle selection");
+    await Bun.write(networkPath, networkInputHash);
+    await Bun.write(selectionPath, JSON.stringify({ ...expected, waffleHostCommit: "main" }));
+    await expect(readWaffleSelection(directory, commits)).rejects.toThrow("Set full retained waffleHostCommit");
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test("strict independent guest provenance rejects duplicate, commented digest, wrong bytes and invalid source", () => {

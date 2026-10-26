@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { cp, mkdir, readFile, realpath, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { buildBrowserEntries, buildClassicWorker, resolveRuntimePackage } from "../../scripts/browser-build";
+import { readWaffleSelection, waffleCommits } from "../../tests/shell-product/waffle-stage";
 
 export async function bundleProduct(root: string, installation: string, output: string) {
   const shell = join(installation, "node_modules/bash-web");
@@ -22,13 +23,12 @@ export async function bundleProduct(root: string, installation: string, output: 
   const [shellMetadata, bunMetadata] = packages;
   assert.ok(shellMetadata && bunMetadata);
   assert.equal(peer(shellMetadata), peer(bunMetadata), "Shell and Bun must declare the same exact Waffle peer. Do not patch installed manifests.");
-  const shellCommit = process.env.SHELL_PRODUCT_SHELL_COMMIT;
-  const waffleCommit = process.env.SHELL_PRODUCT_WAFFLE_COMMIT;
-  assert.match(shellCommit ?? "", /^[a-f0-9]{40}$/, "Explicit full shell commit required");
-  assert.match(waffleCommit ?? "", /^[a-f0-9]{40}$/, "Explicit full Waffle commit required");
+  const commits = waffleCommits(process.env);
+  const { shellCommit, wafflePeerCommit } = commits;
   const lock = await readFile(join(installation, "bun.lock"), "utf8");
-  assert.ok(shellCommit && waffleCommit && lock.includes(shellCommit) && lock.includes(waffleCommit), "Prepared installation must retain both exact Git pins");
-  assert.equal(peer(bunMetadata), `git+https://github.com/ShaulLavo/waffle.git#${waffleCommit}`);
+  assert.ok(lock.includes(shellCommit) && lock.includes(wafflePeerCommit), "Prepared installation must retain both exact Git pins");
+  assert.equal(peer(bunMetadata), `git+https://github.com/ShaulLavo/waffle.git#${wafflePeerCommit}`);
+  const waffleSelection = await readWaffleSelection(installation, commits);
   for (const consumer of [shell, bun]) assert.equal(await realpath(join(resolveRuntimePackage(join(consumer, "src/index.ts")).path, "package.json")), await realpath(join(runtime, "package.json")), "One physical runtime peer");
   const app = join(output, "../app");
   await cp(join(root, "tests/shell-product"), app, { recursive: true, errorOnExist: true, force: false, filter: path => !path.endsWith("fixtures.ts") && !path.endsWith(".test.ts") });
@@ -46,5 +46,5 @@ export async function bundleProduct(root: string, installation: string, output: 
   await cp(join(shell, "public/programs/shell-engine.wasm"), join(output, "programs/shell-engine.wasm"));
   await cp(join(shell, "dist/shell-worker.js"), join(output, "shell-worker.js"));
   await Bun.write(join(output, "index.html"), '<!doctype html><title>Shell product integration</title><script type="module" src="./main.js"></script>');
-  return { app, packages, shellCommit, waffleCommit };
+  return { app, packages, ...waffleSelection };
 }

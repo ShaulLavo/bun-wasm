@@ -36,6 +36,16 @@ bun /work/platform-production/heavy/current/run.js --class browser shell-product
   bun web/tests/browser-shell-product.ts
 ```
 
+`SHELL_PRODUCT_WAFFLE_COMMIT` always names the package peer retained in
+`bun.lock`. `SHELL_PRODUCT_WAFFLE_HOST_COMMIT` names the Git source archived into
+the physical runtime package. It defaults to the explicit package peer for
+ordinary same-ref preparation. Both commands require full lowercase commits.
+Preparation retains `.shell-product-host.json` beside `bun.lock`, recording the
+Shell, peer, host, and network input selections. The browser checks that record
+against the requested refs and installed network input before bundling. A host
+ref different from the package peer is an explicit host variant. It does not
+change package pins or qualify package-consumer adoption at the host ref.
+
 `PLAYWRIGHT` can select an already installed driver. Without it, the driver is
 loaded from the prepared consumer. `SHELL_PRODUCT_TIMEOUT_MS` sets each command,
 listener, and DOM deadline, defaulting to 90 seconds. An overall deadline stops
@@ -59,7 +69,8 @@ on completion or interruption. The prepared packages and shared caches remain.
 After Shell publishes a genuinely aligned commit, the preparation helper can
 create an empty, explicitly owned installation. It packs this checkout's public
 Bun package, ignores dependency lifecycle scripts, checks both exact Waffle
-peers, and builds only Shell's necessary guests. It archives the selected commit from `SHELL_PRODUCT_WAFFLE_REPOSITORY`, a
+peers, and builds only Shell's necessary guests. It archives the selected host
+commit from `SHELL_PRODUCT_WAFFLE_REPOSITORY`, a
 read-only local Git repository, into the owned Waffle package directory. Only
 `network.wasm`, `network.sha256`, and `network.input-hash` are borrowed. The
 selected tree's `tooling/build-network.ts --verify` checks network source inputs
