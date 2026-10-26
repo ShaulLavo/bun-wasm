@@ -141,3 +141,19 @@ Core constructors run once before side initialization. The existing process host
 still owns cancellation, child admission, host slots, WASI and final cleanup.
 The association retains the compiled core image and its side, so admitted child
 Module clones use the same pair. JSC and tools keep their single-module CRT.
+
+## Node fixture paired startup
+
+`src/quickjs-program.ts` holds the existing Waffle link plan for both the public
+asset loader and the Node fixture host. `web/scripts/node-linked.ts` is an
+original adapter, not copied Node or Waffle source. It forwards the existing
+Node WASI imports into Waffle's linker and keeps the plan with each selected
+Module, including admitted child modules. Node's `WASI.start` binds its native
+memory before the command wrapper initializes the shared plan and calls the
+core entry. The linker remains the only initializer schedule.
+
+Missing or invalid side modules fail before guest entry. Each finish or startup
+failure disposes the linked group and bridge descriptors. Ordinary JSC, browser
+and tools modules retain their single-module startup. The focused fixture runs
+the actual Node host with a child process, a promise and a timer. It also checks
+missing and mismatched side rejection. No provider source is changed.

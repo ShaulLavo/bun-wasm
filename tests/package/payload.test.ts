@@ -17,6 +17,7 @@ test("packed package includes a working public worker, no demo or guest binaries
     const { stdout: listing } = await execute("tar", ["-tzf", join(scratch, archive)], { timeout: 10_000 });
     const files = listing.trim().split("\n");
     expect(files).toContain("package/src/worker-entry.ts");
+    expect(files).toContain("package/src/quickjs-program.ts");
     expect(files).toContain("package/web/src/tool-command.ts");
     expect(files).toContain("package/dist/package/index.js");
     expect(files.some(name => /\.wasm(?:\.gz)?$/.test(name))).toBe(false);
@@ -57,7 +58,7 @@ test("packed package includes a working public worker, no demo or guest binaries
       console.log('ok');
     `], { cwd: scratch, timeout: 10_000 });
     expect(stdout.trim()).toBe("ok");
-    const { stdout: bunPaths } = await execute(process.execPath, ["--eval", "console.log(import.meta.resolve('bun-wasm')); console.log(import.meta.resolve('bun-wasm/asset'))"], { cwd: scratch, timeout: 10_000 });
+    const { stdout: bunPaths } = await execute(process.execPath, ["--eval", "console.log(import.meta.resolve('bun-wasm')); console.log(import.meta.resolve('bun-wasm/asset')); const asset = await import('bun-wasm/asset'); if (typeof asset.prepareQuickjsProgram !== 'function') throw Error('missing paired program loader')"], { cwd: scratch, timeout: 10_000 });
     expect(bunPaths).toContain("/src/index.ts");
     expect(bunPaths).toContain("/src/assets.ts");
     expect(bunPaths).not.toContain("/dist/");

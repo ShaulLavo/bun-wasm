@@ -1,4 +1,5 @@
 import { prepareLinkPlan, type LinkPlanSource } from "waffle/link";
+import { quickjsLinkPlan } from "./quickjs-program.js";
 import { BUN_WASM_ASSET } from "./guest-asset.generated.js";
 export { BUN_WASM_ASSET } from "./guest-asset.generated.js";
 
@@ -159,19 +160,7 @@ async function readLimited(stream: ReadableStream<Uint8Array<ArrayBuffer>>, limi
 const programs = new WeakMap<WebAssembly.Module, LinkPlanSource>();
 
 export async function prepareQuickjsProgram(core: Uint8Array, quickjs: Uint8Array): Promise<WebAssembly.Module> {
-  const plan = await prepareLinkPlan({
-    core: {
-      id: "bun-core", source: core, cooperative: true,
-      checkpoint: { module: "runtime_proc", name: "signal" },
-      initialize: ["__wasm_call_ctors"],
-    },
-    libraries: [{
-      id: "quickjs", source: quickjs, cooperative: true,
-      checkpoint: { module: "env", name: "core_checkpoint" },
-      initialize: ["quickjs_initialize_memory", "quickjs_apply_data_relocs", "quickjs_call_ctors", "quickjs_register"],
-    }],
-    reserve: "bun_core_alloc",
-  });
+  const plan = await prepareLinkPlan(quickjsLinkPlan(core, quickjs));
   programs.set(plan.entryModule, plan.toSource());
   return plan.entryModule;
 }

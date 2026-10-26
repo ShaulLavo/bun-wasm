@@ -33,6 +33,7 @@
     "README.md",
     "src/index.ts",
     "src/assets.ts",
+    "src/quickjs-program.ts",
     "src/bun-adapter.ts",
     "src/guest-asset.generated.ts",
     "src/worker-entry.ts",
