@@ -16,7 +16,7 @@ declare namespace BunWasm {
     | ["object", [string, number][]] | ["array", number, [string, number][]]
     | ["map", [number, number][]] | ["set", number[]] | ["date", string] | ["regexp", string, string]
     | ["blob", string, string] | ["buffer", string, number] | ["view", string, number, number, number]
-    | ["node-buffer", number, number, number]
+    | ["node-buffer", number, number, number] | ["shared", string, number]
     | ["error", string, string, string | null, number] | ["boxed", number]
     | ["port", Omit<PortSnapshot, "queue">, number];
   interface WorkerGraph { root: number; nodes: WorkerNode[]; }
@@ -32,10 +32,22 @@ declare namespace BunWasm {
     restore(snapshot: PortSnapshot): unknown;
     activate(value: unknown): void;
   }
+  interface SharedReference { readonly id: string; readonly byteLength: number; }
+  interface SharedPublication {
+    reference(buffer: SharedArrayBuffer): SharedReference;
+    publish(): void;
+    abort(): void;
+  }
+  interface SharedObjects {
+    begin(): SharedPublication;
+    read(reference: SharedReference): SharedArrayBuffer;
+    wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
+  }
   interface WorkerCodec {
-    prepare(value: unknown, transfer?: unknown, forbidden?: readonly string[]): { graph: WorkerGraph; commit(): void };
+    prepare(value: unknown, transfer?: unknown, forbidden?: readonly string[]): { graph: WorkerGraph; commit(deliver?: () => void): void; abort(): void };
     encode(value: unknown, transfer?: unknown, forbidden?: readonly string[]): WorkerGraph;
     decode(value: unknown): unknown;
+    wait(value: unknown, ready: () => void): (() => void) | null;
   }
   interface WorkerErrorData { graph: WorkerGraph; code: unknown; }
   interface WorkerLimits {
@@ -123,6 +135,7 @@ declare namespace BunWasm {
     workerErrorData?: (error: unknown) => WorkerErrorData;
     workerExit?: (code: number) => void;
     workerEnvChange?: (key: string, value: unknown) => void;
+    sharedObjects?: SharedObjects;
     clonePorts?: (value: unknown, options: unknown) => unknown;
     isMessagePort?: (value: unknown) => boolean;
     isProxy?: (value: unknown) => boolean;

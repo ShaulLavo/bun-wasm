@@ -223,6 +223,7 @@
     #state: PortState | null;
     #webListeners = new Map<EventListenerOrEventListenerObject, Set<boolean>>();
     #onmessage: ((event: MessageEvent) => unknown) | null = null;
+    #attachmentWait: (() => void) | null = null;
     onmessageerror: ((event: MessageEvent) => unknown) | null = null;
     constructor(key: object, snapshot?: Snapshot) {
       super();
@@ -263,6 +264,7 @@
         validate() { if (value.#state !== state || state.phase !== "open") throw cloneError("MessagePort changed during transfer"); },
         commit() {
           value.unref(); localPorts.delete(state.id); value.#state = null;
+          value.#attachmentWait?.(); value.#attachmentWait = null;
           const { queue: _queue, ...metadata } = snapshot;
           root({ kind: "moving", snapshot: metadata, origin: route });
         },
@@ -274,7 +276,7 @@
       port.#maybeClose();
       return { message };
     }
-    static #receivePacket(port: MessagePort, kind: string, sequence: number, graph: unknown) {
+    static #receivePacket(port: MessagePort, kind: string, sequence: number, graph: unknown, defer = false) {
       const state = port.#state;
       if (!state || state.phase === "closed") return;
       if (kind === "port-close") { state.peerClosing = sequence; port.#accept(); return; }
@@ -283,18 +285,30 @@
         const value = record(graph);
         if (!Array.isArray(value.nodes) || typeof value.root !== "number") throw new Error("Invalid graph");
         state.pending.set(sequence, graph as Graph);
-        port.#accept();
+        if (!defer) port.#accept();
       } catch (error) { internal.realTimers.setImmediate(() => port.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
     }
     #accept() {
       const state = this.#value();
-      while (state.pending.has(state.received)) {
-        const graph = state.pending.get(state.received);
-        state.pending.delete(state.received++);
-        state.queue.push(messagePacket(codec.decode(graph)));
-      }
+      this.#attachmentWait?.(); this.#attachmentWait = null;
+      while (this.#acceptNext(state)) { /* Keep contiguous messages in sequence order. */ }
       this.#schedule();
       this.#maybeClose();
+    }
+    #acceptNext(state: PortState): boolean {
+      const graph = state.pending.get(state.received);
+      if (!graph || state.phase !== "open") return false;
+      try {
+        this.#attachmentWait = internal.sharedObjects ? codec.wait(graph, () => this.#retryAttachments()) : null;
+        if (this.#attachmentWait) return false;
+        state.queue.push(messagePacket(codec.decode(graph)));
+      } catch (error) { internal.realTimers.setImmediate(() => this.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
+      state.pending.delete(state.received++);
+      return true;
+    }
+    #retryAttachments() {
+      if (this.#state?.phase !== "open") return;
+      this.#accept();
     }
     #maybeClose() {
       const state = this.#state;
@@ -334,12 +348,17 @@
       if (!state || state.phase !== "open" || !state.peer) return;
       const list = transfers(transfer);
       const packet = { data: value, ports: list.filter(item => item instanceof MessagePort) };
-      const graph = codec.encode(packet, list, [state.id, state.peer]);
-      const sequence = state.sent++;
+      const plan = codec.prepare(packet, list, [state.id, state.peer]);
+      const sequence = state.sent;
       const other = localPorts.get(state.peer);
-      if (other) { portOps.receivePacket(other, "port-data", sequence, graph); return; }
-      root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph });
+      plan.commit(() => {
+        if (other) portOps.receivePacket(other, "port-data", sequence, plan.graph, true);
+        else root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph: plan.graph });
+      });
+      state.sent++;
+      if (other) other.#accept();
     }
+
     #schedule() {
       const state = this.#state;
       if (!state || state.phase !== "open" || !state.started || state.scheduled || state.batch || !state.queue.length) return;
@@ -379,7 +398,9 @@
       if (typeof callback === "function") this.once("close", callback);
       const state = this.#state;
       if (!state || state.phase !== "open") return;
-      state.phase = "closing"; state.queue = []; state.pending.clear(); this.unref();
+      state.phase = "closing";
+      this.#attachmentWait?.(); this.#attachmentWait = null;
+      state.queue = []; state.pending.clear(); this.unref();
       if (!state.batch) internal.realTimers.setImmediate(() => this.#finishLocalClose(state));
     }
     #finishLocalClose(state: PortState) {
@@ -394,7 +415,9 @@
     #disconnect() {
       const state = this.#value();
       if (state.phase === "closed") return;
-      state.phase = "closed"; state.queue = []; state.pending.clear(); this.unref(); localPorts.delete(state.id);
+      state.phase = "closed";
+      this.#attachmentWait?.(); this.#attachmentWait = null;
+      state.queue = []; state.pending.clear(); this.unref(); localPorts.delete(state.id);
       root({ kind: "closed", id: state.id });
       internal.realTimers.setImmediate(() => this.#finishClose(state));
     }
@@ -596,7 +619,7 @@
         env, cwd: process.cwd(), stdin: options.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe",
         maxBuffer: Infinity,
         _worker: { resourceLimits: this.resourceLimits, memoryLimitMb: memoryLimitMb ? Math.ceil(memoryLimitMb) : undefined },
-      }); } catch (error) { publicPort.close(); childPort.close(); throw error; }
+      }); } catch (error) { transferPlan.abort(); publicPort.close(); childPort.close(); throw error; }
       this.#child = child;
       let control: BunWasm.WorkerChannel | null = null;
       try {
@@ -621,6 +644,7 @@
         publicPort.on("messageerror", error => this.emit("messageerror", error)); publicPort.unref();
         child.exited.then(code => this.#settled(code), error => { this.#settled(1); this.#error = true; this.emit("error", error); });
       } catch (error) {
+        transferPlan.abort();
         children.delete(this.#id);
         root({ kind: "gone", path: this.#path });
         publicPort.close(); childPort.close(); control?.close();

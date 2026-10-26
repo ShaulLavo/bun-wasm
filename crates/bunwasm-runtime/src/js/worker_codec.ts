@@ -4,9 +4,10 @@
   type Node = BunWasm.WorkerNode;
   type BufferNode = Extract<Node, ["node-buffer", number, number, number]>;
   const bufferByteLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")!.get!;
+  const sharedByteLength = typeof SharedArrayBuffer === "function" ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, "byteLength")!.get! : null;
   const tag = (value: object) => Object.prototype.toString.call(value).slice(8, -1);
   const errors: Record<string, ErrorConstructor> = { Error, TypeError, RangeError, SyntaxError, ReferenceError, URIError, EvalError };
-  const views: Record<string, (buffer: ArrayBuffer, offset: number, bytes: number) => ArrayBufferView> = {
+  const views: Record<string, (buffer: ArrayBufferLike, offset: number, bytes: number) => ArrayBufferView> = {
     Int8Array: (b, o, n) => new Int8Array(b, o, n), Uint8Array: (b, o, n) => new Uint8Array(b, o, n),
     Uint8ClampedArray: (b, o, n) => new Uint8ClampedArray(b, o, n),
     Int16Array: (b, o, n) => new Int16Array(b, o, n / 2), Uint16Array: (b, o, n) => new Uint16Array(b, o, n / 2),
@@ -17,6 +18,11 @@
   };
   function isArrayBuffer(value: unknown): value is ArrayBuffer {
     try { bufferByteLength.call(value); return true; }
+    catch { return false; }
+  }
+  function isSharedBuffer(value: unknown): value is SharedArrayBuffer {
+    if (!sharedByteLength) return false;
+    try { sharedByteLength.call(value); return true; }
     catch { return false; }
   }
   function encodeBuffer(buffer: ArrayBuffer): Node {
@@ -32,6 +38,13 @@
       const seen = new Set<unknown>();
       const buffers: ArrayBuffer[] = [];
       const ports = new Map<unknown, BunWasm.PortTransfer>();
+      let publication: BunWasm.SharedPublication | undefined;
+      function sharedNode(buffer: SharedArrayBuffer): Node {
+        if (!internal.sharedObjects) throw cloneError();
+        publication ??= internal.sharedObjects.begin();
+        const reference = publication.reference(buffer);
+        return ["shared", reference.id, reference.byteLength];
+      }
       function prepare(item: unknown) {
         if (internal.isMarkedAsUntransferable?.(item)) throw cloneError("Object is not transferable");
         if (!hooks.isPort(item)) throw cloneError("Invalid transferable object");
@@ -91,6 +104,7 @@
         }
         if (object === processEnv) return ["object", entries(object, implicit)];
         if (internal.isProxy?.(object)) throw cloneError();
+        if (isSharedBuffer(object)) return sharedNode(object);
         if (object instanceof Blob) return ["blob", internal.native.base64Encode(object._bytes(), false), object.type];
         if (isArrayBuffer(object)) return bufferViews.has(object) ? ["buffer", "", 0] : encodeBuffer(object);
         if (ArrayBuffer.isView(object) && hooks.buffer?.isBuffer(object)) return bufferView(object, implicit);
@@ -134,21 +148,47 @@
         nodes[index] = node;
         return index;
       }
-      const root = visit(value);
-      for (const [buffer, group] of bufferViews) finishBufferViews(buffer, group);
-      for (const plan of ports.values()) plan.validate();
-      for (const buffer of buffers) new Uint8Array(buffer);
-      return { graph: { root, nodes }, commit() {
+      let graph: Graph;
+      try {
+        const root = visit(value);
+        for (const [buffer, group] of bufferViews) finishBufferViews(buffer, group);
         for (const plan of ports.values()) plan.validate();
-        for (const buffer of buffers) if (internal.isWasmMemoryBuffer?.(buffer)) throw cloneError("WebAssembly memory is not transferable");
+        for (const buffer of buffers) new Uint8Array(buffer);
+        graph = { root, nodes };
+      } catch (error) { publication?.abort(); throw error; }
+      let phase: "prepared" | "committed" | "aborted" = "prepared";
+      function abort() {
+        if (phase === "aborted") return;
+        publication?.abort(); phase = "aborted";
+      }
+      function commit(deliver?: () => void) {
+        if (phase !== "prepared") throw cloneError("Worker transfer is no longer prepared");
+        try {
+          validateTransfers();
+          publication?.publish();
+          deliver?.();
+          detachBuffers();
+          for (const plan of ports.values()) plan.commit();
+          phase = "committed";
+        } catch (error) { abort(); throw error; }
+      }
+      function validateTransfers() {
+        for (const plan of ports.values()) plan.validate();
+        for (const buffer of buffers) {
+          new Uint8Array(buffer);
+          if (internal.isWasmMemoryBuffer?.(buffer)) throw cloneError("WebAssembly memory is not transferable");
+        }
+      }
+      function detachBuffers() {
         try { internal.native.transferArrayBuffers(buffers); }
         catch { throw cloneError("ArrayBuffer is not detachable"); }
-        for (const plan of ports.values()) plan.commit();
-      } };
+      }
+      return { graph, commit, abort };
     }
 
     function decode(value: unknown) {
-      const graph = validateGraph(value, 0, Boolean(hooks.buffer));
+      const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(internal.sharedObjects));
+      for (const reference of sharedReferences(graph)) internal.sharedObjects!.read(reference);
       const memory = new Map<number, unknown>();
       const restored: unknown[] = [];
       function properties(target: object, entries: [string, number][]) {
@@ -164,7 +204,7 @@
       }
       function readView(node: Extract<Node, ["view", string, number, number, number]>) {
         const buffer = read(node[2]);
-        if (!(buffer instanceof ArrayBuffer)) throw cloneError("Invalid typed array backing");
+        if (!isArrayBuffer(buffer) && !isSharedBuffer(buffer)) throw cloneError("Invalid typed array backing");
         return views[node[1]](buffer, node[3], node[4]);
       }
       function read(index: number): unknown {
@@ -184,6 +224,12 @@
             const bytes = internal.native.base64Decode(node[1]);
             const buffer = node[2] ? new ArrayBuffer(bytes.length, { maxByteLength: node[2] }) : new ArrayBuffer(bytes.length);
             new Uint8Array(buffer).set(bytes); result = buffer; break;
+          }
+          case "shared": {
+            const reference = { id: node[1], byteLength: node[2] };
+            const buffer = internal.sharedObjects!.read(reference);
+            if (!isSharedBuffer(buffer) || sharedByteLength!.call(buffer) !== node[2]) throw cloneError("Invalid shared backing store");
+            result = buffer; break;
           }
           case "node-buffer": result = readNodeBuffer(node); break;
           case "view": result = readView(node); break;
@@ -220,7 +266,22 @@
     function encode(value: unknown, transfer?: unknown, forbidden?: readonly string[]) {
       const plan = prepare(value, transfer, forbidden); plan.commit(); return plan.graph;
     }
-    return { encode, decode, prepare };
+    function wait(value: unknown, ready: () => void) {
+      const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(internal.sharedObjects));
+      const references = sharedReferences(graph);
+      return references.length ? internal.sharedObjects!.wait(references, ready) : null;
+    }
+    return { encode, decode, prepare, wait };
+  }
+
+  function sharedReferences(graph: Graph): BunWasm.SharedReference[] {
+    const references: BunWasm.SharedReference[] = [];
+    for (const node of graph.nodes) {
+      if (node[0] === "shared") references.push({ id: node[1], byteLength: node[2] });
+      if (node[0] !== "port") continue;
+      for (const [, pending] of node[1].pending) references.push(...sharedReferences(pending));
+    }
+    return references;
   }
 
   function canonicalBase64(value: unknown): value is string {
@@ -233,6 +294,10 @@
     return Array.isArray(node) && node[0] === "buffer" && node.length === 3 && canonicalBase64(node[1])
       && counter(node[2]) && (node[2] === 0 || node[2] >= binaryLength(node[1]));
   }
+  function validShared(node: unknown): node is ["shared", string, number] {
+    return Array.isArray(node) && node.length === 3 && node[0] === "shared" && typeof node[1] === "string"
+      && /^[\w-]{1,128}\/[\w-]{1,128}$/.test(node[1]) && counter(node[2]);
+  }
   function validNumber(value: unknown) {
     return typeof value === "string" && (value === "-0" || String(Number(value)) === value);
   }
@@ -241,7 +306,7 @@
     if (name.endsWith("16Array")) return 2;
     return name.endsWith("32Array") ? 4 : 8;
   }
-  function validateGraph(value: unknown, depth = 0, nodeBuffer = false): Graph {
+  function validateGraph(value: unknown, depth = 0, nodeBuffer = false, shared = false): Graph {
     if (depth > 256) throw cloneError("Worker port nesting exceeds 256 levels");
     if (!value || typeof value !== "object" || !("root" in value) || !("nodes" in value) || !Array.isArray(value.nodes)) throw cloneError("Invalid worker message");
     const nodes: unknown[] = value.nodes;
@@ -251,9 +316,11 @@
     function validView(bufferRef: unknown, offset: unknown, length: unknown, width: number) {
       if (!ref(bufferRef) || !counter(offset) || !counter(length)) return false;
       const buffer = nodes[bufferRef];
-      if (!validBuffer(buffer)) return false;
-      return offset % width === 0 && length % width === 0
-        && offset <= binaryLength(buffer[1]) && length <= binaryLength(buffer[1]) - offset;
+      const bytes = shared && validShared(buffer) ? buffer[2] : validBuffer(buffer) ? binaryLength(buffer[1]) : -1;
+      return bytes >= 0 && offset % width === 0 && length % width === 0 && offset <= bytes && length <= bytes - offset;
+    }
+    function validNodeBuffer(node: unknown[]) {
+      return nodeBuffer && node.length === 4 && ref(node[1]) && validBuffer(nodes[node[1]]) && validView(node[1], node[2], node[3], 1);
     }
     function valid(node: unknown): boolean {
       if (!Array.isArray(node)) return false;
@@ -268,31 +335,32 @@
         case "set": return Array.isArray(node[1]) && node[1].every(ref);
         case "blob": return node.length === 3 && canonicalBase64(node[1]) && typeof node[2] === "string";
         case "regexp": return strings(node.slice(1)) && node.length === 3;
+        case "shared": return shared && validShared(node);
         case "buffer": return validBuffer(node);
-        case "node-buffer": return nodeBuffer && node.length === 4 && validView(node[1], node[2], node[3], 1);
+        case "node-buffer": return validNodeBuffer(node);
         case "view": return node.length === 5 && typeof node[1] === "string" && Object.hasOwn(views, node[1])
           && validView(node[2], node[3], node[4], viewWidth(node[1]));
         case "error": return strings(node.slice(1, 3)) && (node[3] === null || typeof node[3] === "string") && ref(node[4]);
         case "boxed": return ref(node[1]);
-        case "port": return validPort(node[1], depth, nodeBuffer) && ref(node[2]);
+        case "port": return validPort(node[1], depth, nodeBuffer, shared) && ref(node[2]);
         default: return false;
       }
     }
     if (!ref(value.root) || !nodes.every(valid)) throw cloneError("Invalid worker message graph");
     return value as Graph;
   }
-  function validPort(value: unknown, depth: number, nodeBuffer: boolean) {
+  function validPort(value: unknown, depth: number, nodeBuffer: boolean, shared: boolean) {
     if (!value || typeof value !== "object") return false;
     return "id" in value && typeof value.id === "string" && "peer" in value && (value.peer === null || typeof value.peer === "string")
       && "version" in value && counter(value.version) && "sent" in value && counter(value.sent)
-      && "received" in value && counter(value.received) && "pending" in value && Array.isArray(value.pending) && value.pending.every(packet => validPending(packet, depth, nodeBuffer))
+      && "received" in value && counter(value.received) && "pending" in value && Array.isArray(value.pending) && value.pending.every(packet => validPending(packet, depth, nodeBuffer, shared))
       && "closing" in value && (value.closing === null || counter(value.closing))
       && "closed" in value && typeof value.closed === "boolean";
   }
   function counter(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
-  function validPending(value: unknown, depth: number, nodeBuffer: boolean) {
+  function validPending(value: unknown, depth: number, nodeBuffer: boolean, shared: boolean) {
     if (!Array.isArray(value) || value.length !== 2 || !counter(value[0])) return false;
-    validateGraph(value[1], depth + 1, nodeBuffer);
+    validateGraph(value[1], depth + 1, nodeBuffer, shared);
     return true;
   }
   return { create };
