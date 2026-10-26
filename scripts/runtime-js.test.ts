@@ -127,7 +127,7 @@ test("embeds the TCP factory chain under the names used by node:net", async () =
   expect(result.exitCode, result.diagnostic).toBe(0);
   expect(result.reason, result.diagnostic).toBe("exit");
   const table = readFileSync(join(directory, "polyfills.rs"), "utf8");
-  for (const name of ["net", "net_address", "node_net", "bun_tcp"]) {
+  for (const name of ["net", "net_address", "net_port", "node_net", "bun_tcp"]) {
     expect(table).toContain(`("${name}", include_str!(`);
   }
 });

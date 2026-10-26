@@ -16,6 +16,7 @@ function factory(name: string, extension = "js") {
 
 function fixture(handled = true) {
   const held = () => { throw new Error("Transport or lifecycle operation invoked in pure options test"); };
+  const ports = factory("net_port", "ts")();
   const errors: unknown[] = [], exits: number[] = [];
   const internal = {
     native: { exit(code: number) { exits.push(code); } },
@@ -27,7 +28,7 @@ function fixture(handled = true) {
     require(name: string) {
       if (name === "events") return EventEmitter;
       if (name === "buffer") return { Buffer };
-      if (name === "net_address") return factory(name)();
+      if (name === "net_address") return factory(name)({ require: () => ports });
       if (name === "node_net_onread") return onread;
       if (name === "node_net_socket_state") return factory(name, "ts")();
       if (name === "node_net_socket_options") return factory(name, "ts")();
