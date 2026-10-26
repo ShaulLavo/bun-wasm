@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guestProvenance } from "./app-matrix/product-provenance";
-import { bounded, exitAfterDeadline, liveServer, requireLiveServer, settleResources, withProgress, type Pending } from "../tests/shell-product/lifecycle";
+import { createProductCleanup, exitAfterDeadline, liveServer, requireLiveServer, settleResources, withProgress, type Pending } from "../tests/shell-product/lifecycle";
 import { PreparationFlow } from "../tests/shell-product/prepare-flow";
 import { networkFiles, readWaffleSelection, waffleCommits, waffleSelectionFile, waffleSourcePlan, writeWaffleSelection } from "../tests/shell-product/waffle-stage";
 
@@ -121,20 +121,89 @@ test("all teardown continues after capture and independent close failures", asyn
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("overall deadline exits after bounded teardown with pending browser work", async () => {
-  const primary = new Error("Shell product overall deadline");
+function controlledProductCleanup(events: string[], pending?: string) {
+  const task = (name: string) => async () => {
+    events.push(name);
+    if (name === pending) await new Promise(() => {});
+  };
+  return createProductCleanup({
+    capture: task("capture"),
+    captureTimeout: 10,
+    closeBrowser: task("browser close"),
+    stopServer: task("server stop"),
+    closeMirror: task("mirror close"),
+    removeScratch: task("scratch removal"),
+  });
+}
+
+test("production cleanup verifies every resource after healthy close", async () => {
+  const events: string[] = [];
+  const resources = controlledProductCleanup(events);
+  await resources.cleanup();
+  expect(new Set(events)).toEqual(new Set(["capture", "browser close", "server stop", "mirror close", "scratch removal"]));
+  expect(events.at(-1)).toBe("scratch removal");
+  expect(resources.unverified()).toEqual([]);
+});
+
+test("deadline cleanup attempts independent resources without removing scratch behind a pending browser", async () => {
+  const events: string[] = [];
   const reported: unknown[] = [];
+  const resources = controlledProductCleanup(events, "browser close");
+  const primary = new Error("Shell product overall deadline");
   let exits = 0;
-  const running = exitAfterDeadline({
+  await exitAfterDeadline({
     primary,
-    cleanup: () => new Promise(() => {}),
-    timeout: 10,
+    cleanup: resources.cleanup,
+    unverified: resources.unverified,
+    timeout: 30,
     report: error => reported.push(error),
     exit: () => { exits++; },
   });
-  await bounded(running, 100, "deadline regression");
+  expect(new Set(events)).toEqual(new Set(["capture", "browser close", "server stop", "mirror close"]));
+  expect(events).not.toContain("scratch removal");
   expect(reported[0]).toBe(primary);
-  expect(String(reported[1])).toContain("Timeout: overall cleanup");
+  expect(String(reported.at(-1))).toContain("browser close");
+  expect(String(reported.at(-1))).toContain("scratch removal");
+  expect(exits).toBe(1);
+});
+
+test("already-active production cleanup shares attempts and still closes independent resources", async () => {
+  const events: string[] = [];
+  const reported: unknown[] = [];
+  const resources = controlledProductCleanup(events, "browser close");
+  void resources.cleanup();
+  let exits = 0;
+  await exitAfterDeadline({
+    primary: new Error("Shell product overall deadline"),
+    cleanup: resources.cleanup,
+    unverified: resources.unverified,
+    timeout: 30,
+    report: error => reported.push(error),
+    exit: () => { exits++; },
+  });
+  expect(events.filter(event => event === "browser close")).toHaveLength(1);
+  expect(events).toContain("server stop");
+  expect(events).toContain("mirror close");
+  expect(events).not.toContain("scratch removal");
+  expect(exits).toBe(1);
+});
+
+test("stalled capture cannot consume the cleanup grace before resource attempts", async () => {
+  const events: string[] = [];
+  const reported: unknown[] = [];
+  const resources = controlledProductCleanup(events, "capture");
+  let exits = 0;
+  await exitAfterDeadline({
+    primary: new Error("Shell product overall deadline"),
+    cleanup: resources.cleanup,
+    unverified: resources.unverified,
+    timeout: 30,
+    report: error => reported.push(error),
+    exit: () => { exits++; },
+  });
+  expect(new Set(events)).toEqual(new Set(["capture", "browser close", "server stop", "mirror close", "scratch removal"]));
+  expect(events.at(-1)).toBe("scratch removal");
+  expect(resources.unverified()).toEqual([]);
   expect(exits).toBe(1);
 });
 
@@ -148,6 +217,45 @@ test("overall deadline reporting preserves primary and teardown failures", async
     cleanup: () => { throw close; },
     timeout: 100,
     report: error => reported.push(error),
+    exit: () => { exits++; },
+  });
+  expect(reported).toEqual([primary, close]);
+  expect(exits).toBe(1);
+});
+
+test("throwing primary reporter cannot bypass cleanup and exit", async () => {
+  const primary = new Error("Shell product overall deadline");
+  const reported: unknown[] = [];
+  let cleanupCalls = 0;
+  let exits = 0;
+  await exitAfterDeadline({
+    primary,
+    cleanup: () => { cleanupCalls++; },
+    timeout: 100,
+    report: error => {
+      reported.push(error);
+      throw new Error("log sink failed");
+    },
+    exit: () => { exits++; },
+  });
+  expect(reported[0]).toBe(primary);
+  expect(cleanupCalls).toBe(1);
+  expect(exits).toBe(1);
+});
+
+test("throwing teardown reporter preserves errors and still exits", async () => {
+  const primary = new Error("Shell product overall deadline");
+  const close = new Error("browser close failed");
+  const reported: unknown[] = [];
+  let exits = 0;
+  await exitAfterDeadline({
+    primary,
+    cleanup: () => { throw close; },
+    timeout: 100,
+    report: error => {
+      reported.push(error);
+      if (reported.length === 2) throw new Error("log sink failed");
+    },
     exit: () => { exits++; },
   });
   expect(reported).toEqual([primary, close]);

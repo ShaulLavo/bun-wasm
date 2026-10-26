@@ -6,7 +6,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Browser, Page } from "playwright";
 import { guestProvenance } from "../../scripts/app-matrix/product-provenance";
-import { bounded, exitAfterDeadline, settleResources, withProgress } from "../../tests/shell-product/lifecycle";
+import { bounded, createProductCleanup, exitAfterDeadline, settleResources, withProgress } from "../../tests/shell-product/lifecycle";
 import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt";
 import { registry } from "../../scripts/app-matrix/registry.mjs";
 import { browserRegistryRoute } from "../../scripts/app-matrix/registry-request";
@@ -26,7 +26,6 @@ let browser: Browser | undefined;
 let launching: Promise<Browser> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 let mirror: Awaited<ReturnType<typeof registry>> | undefined;
-let cleanupPromise: Promise<void> | undefined;
 let page: Page | undefined;
 let activeURL: string | undefined;
 const external: string[] = [];
@@ -49,20 +48,15 @@ async function capture() {
   const diagnostics = await bounded(page.evaluate(() => globalThis.shellProduct?.diagnostics()), 3000, "terminal capture").catch(error => ({ error: message(error) }));
   await Bun.write(join(reports, "terminal.json"), JSON.stringify(diagnostics, null, 2));
 }
-async function cleanup() {
-  return cleanupPromise ??= settleResources([
-    capture,
-    async () => { await (browser ?? await launching?.catch(() => undefined))?.close(); },
-    removeHostResources,
-  ]);
-}
-async function removeHostResources() {
-  await settleResources([
-    () => server?.stop(true),
-    () => mirror?.close(),
-    async () => { if (scratch) await rm(scratch, { recursive: true, force: true }); },
-  ]);
-}
+const productCleanup = createProductCleanup({
+  capture,
+  captureTimeout: 1000,
+  closeBrowser: async () => { await (browser ?? await launching?.catch(() => undefined))?.close(); },
+  stopServer: () => server?.stop(true),
+  closeMirror: () => mirror?.close(),
+  removeScratch: async () => { if (scratch) await rm(scratch, { recursive: true, force: true }); },
+});
+const cleanup = productCleanup.cleanup;
 async function portOpen(port: number) {
   return Bun.connect({ hostname: "127.0.0.1", port, socket: { data() {}, open(socket) { socket.end(); } } }).then(() => true, () => false);
 }
@@ -73,6 +67,7 @@ const deadline = setTimeout(() => void exitAfterDeadline({
   timeout: 3000,
   report: error => console.error(message(error)),
   exit: () => process.exit(1),
+  unverified: productCleanup.unverified,
 }), 20 * 60000);
 async function command(text: string, expected?: string) {
   assert.ok(page);

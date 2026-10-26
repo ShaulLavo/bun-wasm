@@ -24,17 +24,69 @@ export async function bounded<T>(promise: Promise<T>, milliseconds: number, labe
   finally { clearTimeout(timer); }
 }
 
-export async function exitAfterDeadline(options: {
+type DeadlineOptions = {
   primary: Error;
   cleanup: () => unknown | Promise<unknown>;
   timeout: number;
   report: (error: unknown) => void;
   exit: () => void;
+  unverified?: () => string[];
+};
+
+function reportSafely(report: (error: unknown) => void, error: unknown) {
+  try { report(error); } catch {}
+}
+
+function reportUnverified(options: DeadlineOptions) {
+  try {
+    const resources = options.unverified?.() ?? [];
+    if (resources.length) reportSafely(options.report, new Error(`Unverified resources: ${resources.join(", ")}`));
+  } catch (error) { reportSafely(options.report, error); }
+}
+
+export async function exitAfterDeadline(options: DeadlineOptions) {
+  try {
+    reportSafely(options.report, options.primary);
+    await bounded(Promise.resolve().then(options.cleanup), options.timeout, "overall cleanup");
+  } catch (error) {
+    reportSafely(options.report, error);
+    reportUnverified(options);
+  } finally { options.exit(); }
+}
+
+export function createProductCleanup(options: {
+  capture: () => unknown | Promise<unknown>;
+  captureTimeout: number;
+  closeBrowser: () => unknown | Promise<unknown>;
+  stopServer: () => unknown | Promise<unknown>;
+  closeMirror: () => unknown | Promise<unknown>;
+  removeScratch: () => unknown | Promise<unknown>;
 }) {
-  options.report(options.primary);
-  try { await bounded(Promise.resolve().then(options.cleanup), options.timeout, "overall cleanup"); }
-  catch (error) { options.report(error); }
-  finally { options.exit(); }
+  let cleanupPromise: Promise<void> | undefined;
+  const unverified = new Set(["browser close", "server stop", "mirror close", "scratch removal"]);
+  async function track(name: string, task: () => unknown | Promise<unknown>) {
+    await task();
+    unverified.delete(name);
+  }
+  async function run() {
+    const capture = bounded(Promise.resolve().then(options.capture), options.captureTimeout, "terminal capture");
+    const closeBrowser = () => track("browser close", options.closeBrowser);
+    const browser = capture.then(closeBrowser, closeBrowser);
+    const server = track("server stop", options.stopServer);
+    const mirror = track("mirror close", options.closeMirror);
+    const consumers = Promise.allSettled([browser, server, mirror]);
+    const scratch = consumers.then(results => {
+      if (results.some(result => result.status === "rejected")) return;
+      return track("scratch removal", options.removeScratch);
+    });
+    const results = await Promise.allSettled([capture, browser, server, mirror, scratch]);
+    const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, "Shell product cleanup failed");
+  }
+  function cleanup() {
+    return cleanupPromise ??= run();
+  }
+  return { cleanup, unverified: () => Array.from(unverified) };
 }
 
 export async function withProgress<T>(
