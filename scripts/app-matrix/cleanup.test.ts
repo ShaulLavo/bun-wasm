@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { serverCommand } from "./browser.mjs";
+import { browserHost, earlyServerExit, serverCommand } from "./browser.mjs";
+import { createContext, runInContext } from "node:vm";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import ts from "typescript-api";
+import { HarnessCleanupError } from "./cleanup";
+import { failure } from "./classify";
+import { exitProvenance } from "./exit-provenance";
+import { completeObservations } from "./product-browser";
+import { checkCommand, checkInstall } from "./checks.mjs";
 
 const pending = () => new Promise<never>(() => {});
 
@@ -143,4 +152,118 @@ test("closed product page and stuck preview close retain separate diagnostics", 
     expect.objectContaining({ operation: "server-stop", timedOut: false, error: "Error: Target page, context or browser has been closed" }),
     expect.objectContaining({ operation: "preview-close", timedOut: true }),
   ]);
+});
+
+
+function nativePageBoundary(close: "stalled" | "rejected", phase: "navigation" | "assertion") {
+  const listeners = new Map<string, (value: { type(): string; text(): string }) => void>();
+  let killed = false;
+  const productError = Object.assign(new Error(`original ${phase} Timeout 90000ms exceeded`), { name: "TimeoutError" });
+  const context = { close: async () => {
+    if (close === "rejected") throw new Error("context disposal rejected");
+    await new Promise(() => {});
+  } };
+  const page = {
+    on: (event: string, callback: (value: { type(): string; text(): string }) => void) => { listeners.set(event, callback); },
+    goto: async () => {
+      listeners.get("console")?.({ type: () => "error", text: () => "retained browser diagnostic" });
+      if (phase === "navigation") throw productError;
+    },
+    locator: () => ({ filter: () => ({ waitFor: async () => { throw productError; } }) }),
+    context: () => context,
+  };
+  return {
+    launchServer: async () => ({
+      wsEndpoint: () => "fixture",
+      close: async () => {},
+      kill: async () => { killed = true; },
+      process: () => ({ exitCode: killed ? 0 : null, signalCode: null }),
+    }),
+    connect: async () => ({ newPage: async () => page }),
+  };
+}
+
+async function withNativePageHost(close: "stalled" | "rejected", phase: "navigation" | "assertion", check: (host: Awaited<ReturnType<typeof browserHost>>) => Promise<void>) {
+  const scratch = mkdtempSync("/work/tmp/bun-wasm-matrix-checkpage-");
+  const previous = process.env.PLAYWRIGHT;
+  let host: Awaited<ReturnType<typeof browserHost>> | undefined;
+  try {
+    const fixturePath = join(scratch, "playwright.ts");
+    writeFileSync(fixturePath, `export const chromium = (${nativePageBoundary.toString()})(${JSON.stringify(close)}, ${JSON.stringify(phase)});`);
+    process.env.PLAYWRIGHT = fixturePath;
+    host = await browserHost({
+      root: resolve(import.meta.dir, "../.."), options: { timeout: 90_000, cleanupTimeout: 20, output: scratch },
+      launch: () => { throw new Error("Must not launch an app"); }, stop: () => { throw new Error("No app child exists"); },
+    });
+    await check(host);
+  } finally {
+    if (previous === undefined) delete process.env.PLAYWRIGHT;
+    else process.env.PLAYWRIGHT = previous;
+    try { await host?.close(); }
+    finally { rmSync(scratch, { recursive: true, force: true }); }
+  }
+}
+
+function nativeRunner(host: Pick<Awaited<ReturnType<typeof browserHost>>, "checkPage">) {
+  const source = ts.createSourceFile("run.mjs", readFileSync(new URL("./run.mjs", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const functions = new Set(["record", "recordProductObservations", "checkPage", "checkServer", "execute", "nativeApp"]);
+  const code = source.statements.filter(ts.isFunctionDeclaration).filter(node => functions.has(node.name?.text ?? "")).map(node => node.getText(source)).join("\n");
+  const rows: { stage: string }[] = [];
+  const writes: string[] = [];
+  let stopped = 0;
+  let finish: () => void = () => {};
+  const done = new Promise<void>(resolve => { finish = resolve; });
+  const proc = { child: { exitCode: null, signalCode: null }, done };
+  const context = createContext({
+    browserSession: host, options: { timeout: 100, output: "/unused" }, mirror: { base: "http://unused" },
+    failure, HarnessCleanupError, earlyServerExit, exitProvenance, completeObservations, checkCommand, checkInstall, join,
+    AbortSignal, Date, Map, Promise, JSON, console: { log() {} }, memory: { take: () => 0 }, results: rows,
+    writeFileSync: (_path: string, content: string) => { writes.push(content); },
+    prepare: () => "/unused/project", capture: async () => ({ code: 0, output: "installed" }),
+    guestCommand: () => ["unused"], launch: () => proc, stop: () => { stopped++; finish(); },
+    freePort: async () => 3137, text: () => "retained native terminal output", rmSync() {},
+    fetch: async () => ({ ok: true }), sleep: async () => {},
+  });
+  runInContext(code, context);
+  const app = { id: "control", dependencies: {}, commands: [
+    { name: "dev", args: ["run", "server.ts"], check: { kind: "page", selector: "body", text: "matrix", probes: [{ id: "unattempted" }] } },
+    { name: "later", after: "dev", args: ["run", "later.ts"], check: { kind: "stdout", text: "must not run" } },
+  ] };
+  context.app = app;
+  return { rows, writes, stopped: () => stopped, run: async (): Promise<unknown> => runInContext("nativeApp(app, 'browser').then(() => null, error => error)", context) };
+}
+
+for (const [close, phase] of [["stalled", "navigation"], ["rejected", "assertion"]] as const) {
+  test(`native ${phase} failure survives ${close} context cleanup`, async () => {
+    await withNativePageHost(close, phase, async host => {
+      const result = await host.checkPage("http://fixture.invalid", { selector: "body", text: "matrix" }, "/unused");
+      expect(result).toMatchObject({ status: "fail", timedOut: true, productError: `TimeoutError: original ${phase} Timeout 90000ms exceeded` });
+      expect("blocker" in result && result.blocker).toContain(`original ${phase}`);
+      expect(result).toMatchObject({ browserDiagnostics: { events: [{ kind: "console-error", text: "retained browser diagnostic" }] } });
+      expect(result).toHaveProperty("harnessCleanup", [expect.objectContaining({ operation: "context-close", timedOut: close === "stalled" })]);
+    });
+  });
+
+  test(`native runner records the attempted failure then aborts after ${close} context cleanup`, async () => {
+    await withNativePageHost(close, phase, async host => {
+      const runner = nativeRunner(host);
+      const error = await runner.run();
+      expect(error).toBeInstanceOf(HarnessCleanupError);
+      expect(runner.rows.map(row => row.stage)).toEqual(["install", "dev"]);
+      expect(runner.writes.at(-1)).toContain(`original ${phase}`);
+      expect(runner.writes.at(-1)).toContain("harnessCleanup");
+      expect(runner.stopped()).toBe(1);
+    });
+  });
+}
+
+test("outer native page and server catches rethrow cleanup exceptions without retrying", async () => {
+  const original = new Error("original product failure");
+  const cleanup = new HarnessCleanupError([{ operation: "context-close", timedOut: true, error: "deadline" }], original);
+  let attempts = 0;
+  const runner = nativeRunner({ checkPage: async () => { attempts++; throw cleanup; } });
+  expect(await runner.run()).toBe(cleanup);
+  expect(attempts).toBe(1);
+  expect(runner.rows.map(row => row.stage)).toEqual(["install"]);
+  expect(runner.stopped()).toBe(1);
 });

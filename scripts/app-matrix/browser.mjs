@@ -147,15 +147,24 @@ export async function browserHost({ root, options, launch, stop }) {
     const remaining = () => Math.max(1, deadline - Date.now());
     const errors = [];
     page.on("pageerror", error => errors.push(String(error)));
+    let checked;
+    let productError;
     try {
       await page.goto(url, { timeout: remaining() });
       await page.locator(check.selector).filter({ hasText: check.text }).waitFor({ timeout: remaining() });
       const hmr = check.hmr && await verifyHmr(project, check.selector, check.hmr, remaining(), () => page.screenshot({ path: join(options.output, `${basename(project)}-dev.png`) }));
       if (errors.length) throw new Error(errors.join("\n"));
-      return { status: "pass", assertion: `${check.selector} renders ${JSON.stringify(check.text)}${hmr ? `; ${hmr}` : ""}` };
+      checked = { status: "pass", assertion: `${check.selector} renders ${JSON.stringify(check.text)}${hmr ? `; ${hmr}` : ""}` };
     } catch (error) {
-      return { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server"), browserDiagnostics: diagnostics() };
-    } finally { await closeContext(page.context()); }
+      productError = error;
+      checked = { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server"), productError: String(error), browserDiagnostics: diagnostics() };
+    }
+    try { await closeContext(page.context(), productError); }
+    catch (error) {
+      if (!(error instanceof HarnessCleanupError)) throw error;
+      checked = withCleanupFailures(checked, error.failures);
+    }
+    return checked;
   }
 
   async function commandResult(page, context, app, engine, command, captureTerminal) {

@@ -168,7 +168,10 @@ function prepare(app, name) {
 
 async function checkPage(url, check, project, timeout) {
   try { return await browserSession.checkPage(url, check, project, timeout); }
-  catch (error) { return { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server") }; }
+  catch (error) {
+    if (error instanceof HarnessCleanupError) throw error;
+    return { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server") };
+  }
 }
 
 async function checkServer(proc, url, check, logfile, project) {
@@ -180,9 +183,12 @@ async function checkServer(proc, url, check, logfile, project) {
       let result;
       if (check.kind === "page") result = await checkPage(url, check, project, Math.max(1, deadline - Date.now()));
       else if ((await response.text()).includes(check.text)) result = { status: "pass", assertion: `HTTP ${response.status}, body contains ${JSON.stringify(check.text)}` };
+      if (result?.harnessCleanup) return result;
       if (proc.child.exitCode !== null || proc.child.signalCode !== null) return earlyServerExit({ code: proc.child.exitCode, signal: proc.child.signalCode, output: text(logfile) }, "server");
       if (result) return result;
-    } catch { /* The server may still be starting. */ }
+    } catch (error) {
+      if (error instanceof HarnessCleanupError) throw error;
+    }
     await sleep(100);
   }
   const result = { code: proc.child.exitCode, signal: proc.child.signalCode, timedOut: proc.child.exitCode === null && proc.child.signalCode === null, output: text(logfile) };
@@ -225,6 +231,7 @@ async function nativeApp(app, engine, reference = false) {
     else result = await execute(app, engine, project, command, reference);
     outcomes.set(command.name, result);
     record(app, engine, "native", command.name, ["bun"].concat(command.args), result);
+    if (result.harnessCleanup) throw new HarnessCleanupError(result.harnessCleanup, result.productError);
   }
   rmSync(project, { recursive: true, force: true });
 }
