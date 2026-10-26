@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readdir, rename, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { PreparationFlow } from "../../tests/shell-product/prepare-flow";
 import { stageWaffle } from "../../tests/shell-product/waffle-stage";
@@ -49,7 +50,7 @@ async function prepareConsumer() {
   await mkdir(destination, { recursive: true });
   assert.deepEqual(await readdir(destination), [], "Never overwrite an existing consumer installation");
   ownsDestination = true;
-  temporary = await mkdtemp("/work/tmp/bw-sp-pack-");
+  temporary = await mkdtemp(join(tmpdir(), "bw-sp-pack-"));
   console.log(JSON.stringify({ created: [destination, temporary, "package installation", "Shell guest build processes"], borrowed: [preparedWaffle], retainedOnSuccess: destination }));
   await flow.execute([process.execPath, "pm", "pack", "--destination", temporary, "--quiet"], root);
   const archive = (await readdir(temporary)).find(name => /^bun-wasm-.*\.tgz$/.test(name));

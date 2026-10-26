@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Browser, Page } from "playwright";
@@ -179,7 +180,7 @@ async function preflight() {
   return { bytes, source: provenance.source_commit, provenance };
 }
 try {
-  scratch = await mkdtemp("/work/tmp/bw-sp-");
+  scratch = await mkdtemp(join(tmpdir(), "bw-sp-"));
   console.log(JSON.stringify({ resources: { scratch, created: ["loopback asset server", "replay registry server", "headless browser", "consumer app sources"], borrowed: ["accepted guest", "explicit package installation", "registry replay", "browser cache"] } }));
   const accepted = await preflight();
   const installation = process.env.SHELL_PRODUCT_INSTALL;

@@ -6,6 +6,7 @@ import { projectFiles } from "../tests/shell-product/project";
 // These unit fixtures do not launch the product browser or stage its packages.
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guestProvenance } from "./app-matrix/product-provenance";
 import { liveServer, requireLiveServer, settleResources, type Pending } from "../tests/shell-product/lifecycle";
@@ -59,7 +60,7 @@ test("Ctrl-C rejects an exited server, a prompt, a command, and a missing or wro
 });
 
 test("preparation cancellation during filesystem work waits for main before deleting and forbids late spawning", async () => {
-  const directory = await mkdtemp("/work/tmp/bw-sp-flow-");
+  const directory = await mkdtemp(join(tmpdir(), "bw-sp-flow-"));
   const flow = new PreparationFlow();
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -85,7 +86,7 @@ test("preparation cancellation during filesystem work waits for main before dele
 });
 
 test("preparation cancellation stops an actual owned detached child before cleanup", async () => {
-  const directory = await mkdtemp("/work/tmp/bw-sp-child-");
+  const directory = await mkdtemp(join(tmpdir(), "bw-sp-child-"));
   const flow = new PreparationFlow();
   const ready = join(directory, "pid");
   const running = flow.run(() => flow.execute([process.execPath, "-e", `await Bun.write(${JSON.stringify(ready)}, String(process.pid)); setInterval(() => {}, 1000);`], directory), () => rm(directory, { recursive: true, force: true }));
@@ -102,7 +103,7 @@ test("preparation cancellation stops an actual owned detached child before clean
 });
 
 test("all teardown continues after capture and independent close failures", async () => {
-  const directory = await mkdtemp("/work/tmp/bw-sp-close-");
+  const directory = await mkdtemp(join(tmpdir(), "bw-sp-close-"));
   const events: string[] = [];
   const hostCleanup = () => settleResources([
     () => { events.push("server"); throw new Error("server close failed"); },
