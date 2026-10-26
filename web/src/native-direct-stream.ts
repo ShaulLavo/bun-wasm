@@ -27,6 +27,7 @@ function directSource(source: object, highWaterMark: number, onController: (cont
   let pressure: Pressure | undefined;
   let demand: Demand | undefined;
   let pulling = false;
+  let inPull = false;
   let scheduled = false;
 
   function settlePressure(value: number | false) {
@@ -95,12 +96,16 @@ function directSource(source: object, highWaterMark: number, onController: (cont
     pressure.bytes += chunk.byteLength;
     return pressure.promise;
   }
-  function end() {
-    if (phase !== "open") return;
-    phase = "ending";
+  function completeEnd() {
+    if (phase !== "ending") return;
     if (length === 0) finish();
     else schedule();
     close?.(undefined);
+  }
+  function end() {
+    if (phase !== "open") return;
+    phase = "ending";
+    if (!inPull) completeEnd();
   }
   function flush() {
     if (phase !== "open") return;
@@ -113,11 +118,14 @@ function directSource(source: object, highWaterMark: number, onController: (cont
     if (demand && phase === "open") invokePull();
   }
   function invokePull() {
-    if (pulling || !pull || phase !== "open") return;
+    if (pulling || phase !== "open") return;
+    if (!pull) { fail(new TypeError("underlyingSource.pull is not a function")); return; }
     pulling = true;
+    inPull = true;
     let result;
     try { result = pull(sink); }
     catch (error) { pulling = false; fail(error); return; }
+    finally { inPull = false; completeEnd(); }
     schedule();
     // Delivery can release a read before an async producer finishes. Keep its lock
     // until settlement, but do not repull a synchronous producer with no output.
@@ -175,6 +183,6 @@ export function constructNativeReadable(target: Function, args: unknown[], newTa
   // direct strategies rather than repeating observable numeric conversion.
   if (highWaterMark !== undefined && typeof highWaterMark !== "number") throw new TypeError("Direct stream highWaterMark must be a number");
   if (typeof highWaterMark === "number" && (Number.isNaN(highWaterMark) || highWaterMark < 0)) throw new RangeError("Invalid direct stream highWaterMark");
-  const source = directSource(original, highWaterMark ?? 65536, onController);
+  const source = directSource(original, highWaterMark || 65536, onController);
   return Reflect.construct(target, [source, { highWaterMark: 0 }], newTarget);
 }

@@ -18,7 +18,11 @@ honor pressure promises to bound their retained output, as with native Bun.
 A constructor sentinel dispatches only at the native source-type read, after
 native strategy reads. Ordinary and byte streams keep native conversion order.
 Direct streams require a numeric high-water mark rather than repeating an
-observable numeric conversion. This is not a replacement for every Bun stream API.
+observable numeric conversion. Zero uses Bun's 64-KiB default. A missing pull
+rejects the first read with Bun's TypeError. End inside a synchronous pull waits
+for that invocation to return before completing and calling the close hook.
+End outside that boundary calls the hook synchronously, including while an
+async pull is pending. This is not a replacement for every Bun stream API.
 
 The native reference is Bun 1.4.4, revision `38afee6c8`. Seven lifecycle controls
 and exact React Unicode, large output, Suspense, and cancellation controls were

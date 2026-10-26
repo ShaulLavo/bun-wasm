@@ -162,25 +162,25 @@ await check("missing-pull-rejects-read-with-native-type-error", async () => {
   assert.equal(outcome.message, "underlyingSource.pull is not a function");
   assert.equal(await closed, outcome);
 });
-for (const buffered of [false, true]) {
-  await check("end-in-synchronous-pull-defers-close-" + (buffered ? "buffered" : "empty"), async () => {
-    const events: string[] = [];
-    const body = open({ type: "direct", pull(c) {
-      events.push("pull");
-      if (buffered) c.write("buffer");
-      c.end();
-      events.push("after-end");
-      assert.equal(c.write("late"), 0);
-      c.error("ignored after end");
-    }, close() { events.push("close"); } });
-    const reader = body.getReader();
-    const first = await reader.read();
-    assert.equal(events.join(","), "pull,after-end,close");
-    if (buffered) assert.equal(new TextDecoder().decode(first.value), "buffer");
-    else assert.equal(first.done, true);
-    assert.equal((await reader.read()).done, true);
-  });
+async function endInSynchronousPull(buffered: boolean) {
+  const events: string[] = [];
+  const body = open({ type: "direct", pull(c) {
+    events.push("pull");
+    if (buffered) c.write("buffer");
+    c.end();
+    events.push("after-end");
+    assert.equal(c.write("late"), 0);
+    c.error("ignored after end");
+  }, close() { events.push("close"); } });
+  const reader = body.getReader();
+  const first = await reader.read();
+  assert.equal(events.join(","), "pull,after-end,close");
+  if (buffered) assert.equal(new TextDecoder().decode(first.value), "buffer");
+  else assert.equal(first.done, true);
+  assert.equal((await reader.read()).done, true);
 }
+await check("end-in-synchronous-pull-defers-close-empty", () => endInSynchronousPull(false));
+await check("end-in-synchronous-pull-defers-close-buffered", () => endInSynchronousPull(true));
 await check("zero-watermark-uses-native-default", async () => {
   let sink!: DirectController;
   const body = open({ type: "direct", pull(c) { sink = c; } }, { highWaterMark: 0 });
