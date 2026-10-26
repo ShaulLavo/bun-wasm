@@ -3,7 +3,7 @@ import { nextApps } from "./product-next";
 import { productMarker } from "./product-types";
 
 const exactVersion = /^\d+\.\d+\.\d+$/;
-const versioned = new Map([
+const versioned = new Map<string, Record<string, string>>([
   ["16", { next: "16.4.3", react: "19.2.0", "react-dom": "19.2.0", typescript: "5.9.3", "@types/node": "22.18.10", "@types/react": "19.2.2", "@types/react-dom": "19.2.2" }],
   ["15", { next: "15.5.6", react: "19.2.0", "react-dom": "19.2.0", typescript: "5.9.3", "@types/node": "22.18.10", "@types/react": "19.2.2", "@types/react-dom": "19.2.2" }],
   ["14", { next: "14.2.33", "@next/swc-wasm-nodejs": "14.2.33", react: "18.3.1", "react-dom": "18.3.1", typescript: "5.9.3", "@types/node": "22.18.10", "@types/react": "18.3.12", "@types/react-dom": "18.3.1" }],
