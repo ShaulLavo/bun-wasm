@@ -100,9 +100,10 @@ function httpFixture() {
     },
     hostClose(handle: number) { const state = listeners.get(handle); if (state) state.open = false; return 0; },
   };
-  const addressModules = { net_address: load("net_address.js")() };
+  const ports = load("net_port.ts")();
+  const addressModules = { net_address: load("net_address.js")({ require: () => ports }) };
   const modules = {
-    events: EventEmitter, buffer: { Buffer }, net_address: addressModules.net_address, net_listener: factory({ native }),
+    events: EventEmitter, buffer: { Buffer }, net_port: ports, net_address: addressModules.net_address, net_listener: factory({ native }),
     net_hostname: load("net_hostname.ts")({ require: (name: keyof typeof addressModules) => addressModules[name] }),
     http_common: load("http_common.ts")(), http_agent: load("http_agent.ts")(), websocket: { clientClass: () => undefined },
   };

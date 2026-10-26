@@ -18,8 +18,9 @@ function fixture(refuse = false) {
     const source = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url), "utf8");
     return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`), { TextEncoder, Buffer });
   }
+  const ports = load("net_port")();
   const modules: Record<string, unknown> = {
-    events: EventEmitter, buffer: { Buffer }, net_address: load("net_address", "js")(),
+    events: EventEmitter, buffer: { Buffer }, net_port: ports, net_address: load("net_address", "js")({ require: () => ports }),
     http_common: load("http_common")(), http_agent: load("http_agent")(), websocket: { clientClass() {} },
     net_listener: load("net_listener")({ native }),
   };
