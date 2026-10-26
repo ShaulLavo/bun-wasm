@@ -55,8 +55,11 @@ function enclosingFunction(node: ts.Node) {
 }
 
 test("events pins audited executable changes and the unchanged PR140 remainder", () => {
-  expect(createHash("sha256").update(syntax(emitted)).digest("hex")).toBe("7a42d9f48e3ef454ed1a74fa20f3a95e240d067f80abbf1fd344dc54b997c816");
-  const file = ts.createSourceFile("events.js", emitted, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const teardownGuard = 'if (typeof emitter.removeListener === "function") removeError();';
+  expect(emitted.split(teardownGuard)).toHaveLength(2);
+  const beforeTeardownFix = emitted.replace(teardownGuard, "removeError();");
+  expect(createHash("sha256").update(syntax(beforeTeardownFix)).digest("hex")).toBe("7a42d9f48e3ef454ed1a74fa20f3a95e240d067f80abbf1fd344dc54b997c816");
+  const file = ts.createSourceFile("events.js", beforeTeardownFix, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const changed = new Set([
     "addListener", "onceWrapper", "onceWrap", "proto.emit", "proto.removeAllListeners",
     "EventEmitter.on", "EventEmitter.addAbortListener",
