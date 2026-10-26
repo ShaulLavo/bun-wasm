@@ -3,10 +3,10 @@ import { nextApps } from "./product-next";
 import { productMarker } from "./product-types";
 
 const exactVersion = /^\d+\.\d+\.\d+$/;
-const versioned = new Map([
+const versioned = new Map<string, Record<string, string>>([
   ["16", { next: "16.4.3", react: "19.2.0", "react-dom": "19.2.0", typescript: "5.9.3", "@types/node": "22.18.10", "@types/react": "19.2.2", "@types/react-dom": "19.2.2" }],
   ["15", { next: "15.5.6", react: "19.2.0", "react-dom": "19.2.0", typescript: "5.9.3", "@types/node": "22.18.10", "@types/react": "19.2.2", "@types/react-dom": "19.2.2" }],
-  ["14", { next: "14.2.33", react: "18.3.1", "react-dom": "18.3.1", typescript: "5.9.3", "@types/node": "22.18.10", "@types/react": "18.3.12", "@types/react-dom": "18.3.1" }],
+  ["14", { next: "14.2.33", "@next/swc-wasm-nodejs": "14.2.33", react: "18.3.1", "react-dom": "18.3.1", typescript: "5.9.3", "@types/node": "22.18.10", "@types/react": "18.3.12", "@types/react-dom": "18.3.1" }],
 ]);
 
 function command(app: (typeof nextApps)[number], name: string) {
@@ -40,6 +40,15 @@ test("every Next major uses the registry-verified React pairing", () => {
     const apps = nextApps.filter(app => app.id.startsWith(`next-${major}-`));
     expect(apps.length).toBe(major === "14" ? 4 : 5);
     for (const app of apps) expect(app.dependencies).toEqual(expected);
+  }
+});
+
+test("Next 14 declares and opts into its official WASM compiler", () => {
+  for (const app of nextApps) {
+    const isNext14 = app.id.startsWith("next-14-");
+    const config = app.files["next.config.mjs"] ?? app.files["next.config.ts"] ?? "";
+    expect(config.includes("useWasmBinary: true")).toBe(isNext14);
+    if (isNext14) expect(app.dependencies["@next/swc-wasm-nodejs"]).toBe("14.2.33");
   }
 });
 
@@ -145,10 +154,10 @@ test("ISR fixture exposes a generation value for a real cache-window sequence", 
   }
 });
 
-test("Next 14 server actions rely on default support, not an obsolete config flag", () => {
+test("Next 14 server actions use default support alongside WASM compiler config", () => {
   const app = nextApps.find(candidate => candidate.id === "next-14-app");
   if (!app) throw new Error("next-14-app is missing");
-  expect(app.files["next.config.mjs"]).toBeUndefined();
+  expect(app.files["next.config.mjs"]).toContain("useWasmBinary: true");
   expect(app.files["next.config.ts"]).toBeUndefined();
   expect(app.files["app/action/action-form.tsx"]).toContain("useFormState");
   expect(app.files["app/action/action-form.tsx"]).toContain("useFormStatus");
@@ -159,5 +168,23 @@ test("ISR and PPR metadata stays explicit about pending or N/A verification", ()
   for (const app of nextApps) {
     expect(feature(app, "isr:")).toMatch(/(pending|n\/a)/);
     expect(feature(app, "ppr:")).toMatch(/(pending|n\/a|experimental-available)/);
+  }
+});
+
+
+test("only Next 16 dev and build select the official WASM-supported Webpack path", () => {
+  for (const app of nextApps) {
+    const bundler = app.id.startsWith("next-16-") ? ["--webpack"] : [];
+    expect(command(app, "dev").args).toEqual(
+      ["run", "node_modules/next/dist/bin/next", "dev"].concat(bundler, ["--hostname", "127.0.0.1", "--port", "{port}"]),
+    );
+    expect(command(app, "build").args).toEqual(
+      ["run", "node_modules/next/dist/bin/next", "build"].concat(bundler),
+    );
+    const production = app.id.includes("static") ? "preview" : "start";
+    const expected = production === "preview"
+      ? ["run", "preview.ts"]
+      : ["run", "node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "{port}"];
+    expect(command(app, production).args).toEqual(expected);
   }
 });

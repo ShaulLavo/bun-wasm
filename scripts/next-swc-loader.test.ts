@@ -20,6 +20,6 @@ test("Next SWC package adapter resolves installed backends without changing othe
   expect(compiled.stderr.toString()).toBe("");
   expect(compiled.exitCode).toBe(0);
   const tested = Bun.spawnSync([binary, "--nocapture"], { stdout: "pipe", stderr: "pipe", timeout: 30_000 });
-  expect(tested.stdout.toString()).toContain("6 passed; 0 failed");
+  expect(tested.stdout.toString()).toContain("9 passed; 0 failed");
   expect(tested.exitCode).toBe(0);
 }, 65_000);

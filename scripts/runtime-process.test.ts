@@ -20,6 +20,7 @@ const emitted = readFileSync(output, "utf8");
 // Invert only the approved executable deltas. The pinned original AST hash guards the remainder.
 function originalSyntax(text: string): string {
   const replacements: [RegExp, string, number][] = [
+    [/execArgv: native\.execArgv\(\)/g, "execArgv: []", 1],
     [/  function makeReader\(\) \{\n    return internal\.require\("process_stdin"\)\(\);\n  \}\n/g, readFileSync(join(root, "scripts/fixtures/process-reader-before.txt"), "utf8"), 1],
     [/  function validateCursorCallback[\s\S]*?(?=  \/\/ stdout\/stderr:)/g, "", 1],
     [/      clearLine,\n      clearScreenDown,\n      cursorTo,\n      moveCursor,\n/g, "", 1],
@@ -54,7 +55,7 @@ function syntax(text: string): string {
 }
 const original = originalSyntax(emitted);
 
-test("only approved staging, captured-failure, execve and cursor changes affect the pinned process AST", () => {
+test("only approved staging, captured-failure, execArgv, execve and cursor changes affect the pinned process AST", () => {
   expect(createHash("sha256").update(syntax(original)).digest("hex")).toBe("392f346ac5d0efd2ad0b59a01bd8c8e34cb3e58a09f1d9fd2f53fbb4f37352d9");
   expect(emitted).toContain('"use strict";');
   expect(emitted).not.toContain("finally");
@@ -88,7 +89,7 @@ function setupSnapshot(source: string): ProcessSnapshot {
   const internal = {
     native: {
       platformInfo: { version: "test", revision: "test", arch: "wasm32" },
-      env: () => ({}), argv: () => ["bun", "fixture.ts"], execPath: () => "/bin/bun",
+      env: () => ({}), argv: () => ["bun", "fixture.ts"], execArgv: () => [], execPath: () => "/bin/bun",
       hostSignal(number: number, mode: number) { assert.deepEqual([number, mode], [13, 1]); return 0; },
     },
     nextTick() { throw new Error("setup must not schedule lifecycle work"); },

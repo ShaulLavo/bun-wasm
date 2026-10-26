@@ -568,16 +568,22 @@
     const preloads = web.preload.map(path => `await import(${JSON.stringify(path)});`).join("\n");
     return { argv: ["-e", preloads + "\n;import.meta.__bunwasm_workerEntry?.();\n" + target.argv[1]], name: target.name };
   }
+  type ExecOption = { kind: "require"; value: string } | { kind: "flag"; value: string };
   function execArguments(value: unknown) {
-    if (value === undefined) return process.execArgv.slice();
-    if (!Array.isArray(value) || !value.every(arg => typeof arg === "string")) throw invalidArgument("execArgv");
-    for (let index = 0; index < value.length; index++) {
-      const arg = value[index];
-      if (["--no-warnings", "--no-deprecation", "--expose-gc", "--experimental-strip-types"].includes(arg) || arg.startsWith("--require=")) continue;
-      if ((arg === "--require" || arg === "-r") && index + 1 < value.length) { index++; continue; }
+    const argv = value === undefined ? process.execArgv.slice() : value;
+    if (!Array.isArray(argv) || !argv.every(arg => typeof arg === "string")) throw invalidArgument("execArgv");
+    const conditions: string[] = [];
+    const options: ExecOption[] = [];
+    for (let index = 0; index < argv.length; index++) {
+      const arg = argv[index];
+      if (["--no-warnings", "--no-deprecation", "--expose-gc", "--experimental-strip-types"].includes(arg)) { options.push({ kind: "flag", value: arg }); continue; }
+      if (arg.startsWith("--require=")) { options.push({ kind: "require", value: arg.slice(10) }); continue; }
+      if (arg.startsWith("--conditions=")) { conditions.push(arg); continue; }
+      if (arg === "--conditions" && index + 1 < argv.length) { conditions.push(arg, argv[++index]); continue; }
+      if ((arg === "--require" || arg === "-r") && index + 1 < argv.length) { options.push({ kind: "require", value: argv[++index] }); continue; }
       throw Object.assign(new Error(`Invalid execArgv flag: ${arg}`), { code: "ERR_WORKER_INVALID_EXEC_ARGV" });
     }
-    return value;
+    return { argv, conditions, options };
   }
   class Worker extends EventEmitter {
     readonly stdout: BunWasm.WorkerReadable;
@@ -595,7 +601,7 @@
       const target = web ? webEntry(requested, web) : requested;
       if (options.argv !== undefined && !Array.isArray(options.argv)) throw invalidArgument("argv");
       const argv = options.argv === undefined ? [] : Array.from(options.argv as unknown[], String);
-      const execArgv = execArguments(options.execArgv);
+      const exec = execArguments(options.execArgv);
       this.resourceLimits = limits(options.resourceLimits);
       this.#id = nextWorker++;
       this.#path = route.concat([this.#id]);
@@ -612,10 +618,10 @@
       catch (error) { publicPort.close(); childPort.close(); throw error; }
       const graph = transferPlan.graph;
       const group = options.env === SHARE_ENV ? envGroup : routeKey(this.#path);
-      env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv, graph, resourceLimits: this.resourceLimits, web });
+      env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv: exec.argv, graph, resourceLimits: this.resourceLimits, web });
       const memoryLimitMb = (this.resourceLimits.maxOldGenerationSizeMb || 0) + (this.resourceLimits.maxYoungGenerationSizeMb || 0);
       let child: BunWasm.WorkerChild;
-      try { child = internal.require("spawn").spawn([process.execPath].concat(target.argv, argv), {
+      try { child = internal.require("spawn").spawn([process.execPath].concat(exec.conditions, target.argv, argv), {
         env, cwd: process.cwd(), stdin: options.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe",
         maxBuffer: Infinity,
         _worker: { resourceLimits: this.resourceLimits, memoryLimitMb: memoryLimitMb ? Math.ceil(memoryLimitMb) : undefined },
@@ -741,6 +747,7 @@
 
   function initialize() {
     if (!config || initialized) return;
+    const exec = execArguments(config.execArgv);
     initialized = true;
     delete process.env.BUNWASM_WORKER_INIT;
     delete process.env.BUNWASM_WORKER_CONTROL;
@@ -768,10 +775,9 @@
       parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
     }
     const requirePreload = internal.builtin("node:module").createRequire(process.cwd() + "/__worker_preload__.cjs");
-    for (let index = 0; index < config.execArgv.length; index++) {
-      const arg = config.execArgv[index];
-      if (arg === "--require" || arg === "-r") requirePreload(config.execArgv[++index]);
-      if (arg.startsWith("--require=")) requirePreload(arg.slice(10));
+    for (const option of exec.options) {
+      if (option.kind === "require") { requirePreload(option.value); continue; }
+      const arg = option.value;
       if (arg === "--expose-gc") Object.defineProperty(globalThis, "gc", { configurable: true, writable: true, value: () => native.gc() });
       if (arg === "--no-warnings") internal.workerNoWarnings = true;
       if (arg === "--no-deprecation") process.noDeprecation = true;

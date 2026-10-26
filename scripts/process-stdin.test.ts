@@ -14,7 +14,7 @@ function fixture() {
   const closes: number[] = [];
   const reads: number[] = [];
   const native = {
-    platformInfo: {}, env: () => ({}), argv: () => ["bun"], execPath: () => "/bin/bun", isatty: () => false,
+    platformInfo: {}, env: () => ({}), argv: () => ["bun"], execArgv: () => [], execPath: () => "/bin/bun", isatty: () => false,
     hostSignal: () => 0,
     readStdin() { throw new Error("synchronous read-to-EOF must not run"); },
     procRead(fd: number, size: number) { expect(fd).toBe(0); reads.push(size); return chunks.shift() ?? -6; },
