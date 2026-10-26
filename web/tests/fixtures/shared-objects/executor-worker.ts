@@ -1,8 +1,8 @@
 import { bootstrap } from "waffle/browser/worker";
 import { createFilesystemConnection } from "waffle/fs";
 import { createWorkerProcessTransport } from "waffle/proc/worker-client";
-import { createBunExecutor, type RunRequest, type WorkerMessage } from "../../../web/src/bun-executor";
-import { guest } from "./executor-guest";
+import { createBunExecutor, type RunRequest, type WorkerMessage } from "../../../src/bun-executor.ts";
+import { guest } from "../../../../scripts/fixtures/shared-objects/executor-guest.ts";
 
 let resume: (() => void) | undefined;
 const continued = new Promise<void>(resolve => { resume = resolve; });

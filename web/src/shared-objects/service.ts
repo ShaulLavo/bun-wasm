@@ -1,5 +1,5 @@
-import { messageData, sharedBufferLength, sharedError, sharedObjectLimit, sharedResponse } from "./protocol";
-import type { BunSharedNativeHost, SharedAttachment, SharedObjects, SharedPort, SharedPublication, SharedReference } from "./protocol";
+import { messageData, sharedBufferLength, sharedError, sharedObjectLimit, sharedResponse } from "./protocol.ts";
+import type { BunSharedNativeHost, SharedAttachment, SharedObjects, SharedPort, SharedPublication, SharedReference } from "./protocol.ts";
 
 export interface SharedObjectService extends SharedObjects {
   close(reason?: DOMException): void;

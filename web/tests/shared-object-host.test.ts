@@ -192,7 +192,7 @@ test("cancelling or closing an attachment wait releases host liveness exactly on
 });
 
 async function nativeExecutor(route: SharedObjectRoute) {
-  const worker = new Worker(new URL("../../scripts/fixtures/shared-objects/executor-worker.ts", import.meta.url).href);
+  const worker = new Worker(new URL("./fixtures/shared-objects/executor-worker.ts", import.meta.url).href);
   cleanup.add(() => worker.terminate());
   const connected = Promise.withResolvers<void>(), finished = Promise.withResolvers<void>();
   const exits: unknown[] = [];

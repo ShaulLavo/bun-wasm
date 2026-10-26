@@ -1,5 +1,5 @@
-import { messageData, sharedError, sharedObjectLimit, sharedRequest } from "./protocol";
-import type { SharedAttachment, SharedPort, SharedReference, SharedRequest, SharedResponse } from "./protocol";
+import { messageData, sharedError, sharedObjectLimit, sharedRequest } from "./protocol.ts";
+import type { SharedAttachment, SharedPort, SharedReference, SharedRequest, SharedResponse } from "./protocol.ts";
 
 interface Client { readonly id: string; port: SharedPort | null; readonly held: Set<string>; readonly retired: Set<string>; readonly waiting: Map<string, SharedReference>; detach: () => void; }
 interface Entry { readonly attachment: SharedAttachment; readonly publisher: string; readonly transaction: string; readonly holders: Set<string>; revoked: boolean; }

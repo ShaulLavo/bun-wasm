@@ -1,6 +1,6 @@
 import type { Runtime } from "waffle";
-import { createSharedObjectBroker } from "./broker";
-import { sharedError } from "./protocol";
+import { createSharedObjectBroker } from "./broker.ts";
+import { sharedError } from "./protocol.ts";
 
 const NativeMessagePort = globalThis.MessagePort;
 const installations = new WeakMap<Runtime, SharedObjectRuntime>();

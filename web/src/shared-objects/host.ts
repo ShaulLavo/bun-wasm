@@ -1,5 +1,5 @@
-import { sharedError } from "./protocol";
-import type { SharedObjects, SharedReference } from "./protocol";
+import { sharedError } from "./protocol.ts";
+import type { SharedObjects, SharedReference } from "./protocol.ts";
 
 interface SharedHostLifetime {
   active(): boolean;
