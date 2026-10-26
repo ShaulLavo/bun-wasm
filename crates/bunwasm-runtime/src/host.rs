@@ -611,11 +611,9 @@ mod signal_tests {
         assert_eq!(SLOT_NAMES[14], "lookup_start");
         assert_eq!(SLOT_NAMES[15], "lookup_head");
         assert_eq!(SLOT_COUNT, 16);
-        assert!(
-            SLOT_NAMES
-                .iter()
-                .all(|name| !name.starts_with("child_") && *name != "spawn" && *name != "signal")
-        );
+        assert!(SLOT_NAMES
+            .iter()
+            .all(|name| !name.starts_with("child_") && *name != "spawn" && *name != "signal"));
         // Off wasm32 the imports do not exist, so every call reports UNSUPPORTED.
         const { assert!(!PROCESS_ABI) };
         assert_eq!(proc_spawn(b"{}"), UNSUPPORTED);
@@ -643,7 +641,11 @@ mod signal_tests {
             &mut deferred,
             || {
                 dequeues += 1;
-                if queue.is_empty() { 0 } else { queue.remove(0) }
+                if queue.is_empty() {
+                    0
+                } else {
+                    queue.remove(0)
+                }
             },
             |ms| {
                 idles += 1;
