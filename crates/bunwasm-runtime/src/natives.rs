@@ -459,6 +459,12 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
             st.argv.iter().map(|s| Val::from(s.as_str())).collect(),
         ))
     });
+    let st = state.clone();
+    t.add("execArgv", move |_| {
+        Ok(Val::Array(
+            st.exec_argv.iter().map(|s| Val::from(s.as_str())).collect(),
+        ))
+    });
     // Host-owned metadata, independent of the caller-controlled preview1 argv[0] and PATH.
     t.add("execPath", |_| {
         Ok(std::env::var("BUNWASM_EXEC_PATH")

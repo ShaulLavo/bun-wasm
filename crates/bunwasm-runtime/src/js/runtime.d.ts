@@ -387,6 +387,7 @@ declare namespace BunWasm {
     /** Starts as strings; the process Proxy permits raw Symbol values and accessor results. */
     env(): Record<PropertyKey, unknown>;
     argv(): string[];
+    execArgv(): string[];
     execPath(): string;
     chdir(path: string): void;
     nanoseconds(): number;

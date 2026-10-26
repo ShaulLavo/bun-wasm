@@ -25,7 +25,7 @@ function fixture() {
   const internal = {
     native: {
       platformInfo: { version: "test", revision: "test", arch: "wasm32" },
-      env: () => ({}), argv: () => ["bun"], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
+      env: () => ({}), argv: () => ["bun"], execArgv: () => [], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
       writeStdout(...args: unknown[]) { writes.push(args); if (writeError) throw writeError; }, writeStderr() {},
       closeAllDirs() {},
       exit(code: number): never { throw new GuestExit(code); },

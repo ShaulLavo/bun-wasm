@@ -21,6 +21,7 @@ const next15 = {
 } as const;
 const next14 = {
   next: "14.2.33",
+  "@next/swc-wasm-nodejs": "14.2.33",
   react: "18.3.1",
   "react-dom": "18.3.1",
   typescript: "5.9.3",
@@ -177,11 +178,14 @@ export default function handler(_request: NextApiRequest, response: NextApiRespo
 }
 
 function nextConfigFile(major: string, expression: string): Record<string, string> {
-  if (major === "14") return {
-    "next.config.mjs": `const nextConfig = ${expression};
+  if (major === "14") {
+    const config = expression.replace("{", "{ experimental: { useWasmBinary: true },");
+    return {
+      "next.config.mjs": `const nextConfig = ${config};
 export default nextConfig;
 `,
-  };
+    };
+  }
   return {
     "next.config.ts": `import type { NextConfig } from "next";
 
@@ -189,6 +193,10 @@ const nextConfig: NextConfig = ${expression};
 export default nextConfig;
 `,
   };
+}
+
+function compilerConfigFiles(major: string): Record<string, string> {
+  return major === "14" ? nextConfigFile(major, "{}") : {};
 }
 
 function pprFiles(text: string, major: string): Record<string, string> {
@@ -283,7 +291,11 @@ function pagesProbes(text: string): readonly FeatureProbe[] {
   ];
 }
 
-function dynamicCommands(text: string, check: Extract<ProductCheck, { kind: "page" }>): readonly ProductCommand[] {
+function bundlerArgs(version: string): readonly string[] {
+  return version === "16" ? ["--webpack"] : [];
+}
+
+function dynamicCommands(version: string, check: Extract<ProductCheck, { kind: "page" }>): readonly ProductCommand[] {
   const productionCheck: Extract<ProductCheck, { kind: "page" }> = {
     kind: "page",
     selector: check.selector,
@@ -291,18 +303,18 @@ function dynamicCommands(text: string, check: Extract<ProductCheck, { kind: "pag
     ...(check.probes ? { probes: check.probes } : {}),
   };
   return [
-    { name: "dev", args: ["run", "node_modules/next/dist/bin/next", "dev", "--hostname", "127.0.0.1", "--port", "{port}"], check },
-    { name: "build", args: ["run", "node_modules/next/dist/bin/next", "build"], check: { kind: "files", paths: [".next/BUILD_ID"], text: "" }, },
+    { name: "dev", args: ["run", "node_modules/next/dist/bin/next", "dev"].concat(bundlerArgs(version), ["--hostname", "127.0.0.1", "--port", "{port}"]), check },
+    { name: "build", args: ["run", "node_modules/next/dist/bin/next", "build"].concat(bundlerArgs(version)), check: { kind: "files", paths: [".next/BUILD_ID"], text: "" }, },
     { name: "start", after: "build", args: ["run", "node_modules/next/dist/bin/next", "start", "--hostname", "127.0.0.1", "--port", "{port}"], check: productionCheck },
   ];
 }
 
-function staticCommands(text: string, router: "app" | "pages"): readonly ProductCommand[] {
+function staticCommands(version: string, text: string, router: "app" | "pages"): readonly ProductCommand[] {
   const check = router === "app" ? pageCheck(text) : pagesCheck(text);
   const previewCheck = router === "app" ? pageCheck(text, false) : pagesCheck(text, false);
   return [
-    { name: "dev", args: ["run", "node_modules/next/dist/bin/next", "dev", "--hostname", "127.0.0.1", "--port", "{port}"], check },
-    { name: "build", args: ["run", "node_modules/next/dist/bin/next", "build"], check: { kind: "files", paths: ["out/index.html"], text }, },
+    { name: "dev", args: ["run", "node_modules/next/dist/bin/next", "dev"].concat(bundlerArgs(version), ["--hostname", "127.0.0.1", "--port", "{port}"]), check },
+    { name: "build", args: ["run", "node_modules/next/dist/bin/next", "build"].concat(bundlerArgs(version)), check: { kind: "files", paths: ["out/index.html"], text }, },
     { name: "preview", after: "build", args: ["run", "preview.ts"], check: previewCheck },
   ];
 }
@@ -313,8 +325,11 @@ function dynamicApp(version: string, dependencies: Record<string, string>, withA
     id: `next-${version}-app`,
     family: "next",
     dependencies,
-    files: appDynamicFiles(text, version, withActions),
-    commands: dynamicCommands(text, pageCheck(text, true, appProbes(text, withActions))),
+    files: {
+      ...compilerConfigFiles(version),
+      ...appDynamicFiles(text, version, withActions),
+    },
+    commands: dynamicCommands(version, pageCheck(text, true, appProbes(text, withActions))),
     features: [
       "router:app",
       "mode:dev-hmr",
@@ -339,7 +354,7 @@ function dynamicPprApp(version: "15" | "16", dependencies: Record<string, string
       ...appDynamicFiles(text, version, false, version === "16"),
       ...pprFiles(pprText, version),
     },
-    commands: dynamicCommands(text, pageCheck(text, true, appProbes(text, false))),
+    commands: dynamicCommands(version, pageCheck(text, true, appProbes(text, false))),
     features: [
       "router:app",
       "mode:dev-hmr",
@@ -359,8 +374,11 @@ function dynamicPages(version: string, dependencies: Record<string, string>): Pr
     id: `next-${version}-pages`,
     family: "next",
     dependencies,
-    files: pagesDynamicFiles(text, version),
-    commands: dynamicCommands(text, pagesCheck(text, true, pagesProbes(text))),
+    files: {
+      ...compilerConfigFiles(version),
+      ...pagesDynamicFiles(text, version),
+    },
+    commands: dynamicCommands(version, pagesCheck(text, true, pagesProbes(text))),
     features: [
       "router:pages",
       "mode:dev-hmr",
@@ -381,7 +399,7 @@ function staticApp(version: string, dependencies: Record<string, string>, router
     family: "next",
     dependencies,
     files: staticFiles(text, router, version),
-    commands: staticCommands(text, router),
+    commands: staticCommands(version, text, router),
     features: [
       `router:${router}`,
       "mode:dev-hmr",

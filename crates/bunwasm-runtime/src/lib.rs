@@ -88,6 +88,10 @@ pub struct Options {
     pub entry: Entry,
     /// Arguments after the entry point, exposed through `process.argv`.
     pub args: Vec<String>,
+    /// Custom package-export conditions supplied by the CLI.
+    pub conditions: Vec<String>,
+    /// Runtime flags exposed through `process.execArgv`.
+    pub exec_argv: Vec<String>,
     pub transpiler: Box<dyn Transpiler>,
 }
 
@@ -120,12 +124,23 @@ pub(crate) struct State {
     directories: Rc<RefCell<directory::Directories>>,
     start: Instant,
     argv: Vec<String>,
+    exec_argv: Vec<String>,
 }
 
 impl State {
+    #[cfg(test)]
     fn new(argv: Vec<String>, transpiler: Box<dyn Transpiler>) -> Self {
+        Self::with_conditions(argv, Vec::new(), Vec::new(), transpiler)
+    }
+
+    fn with_conditions(
+        argv: Vec<String>,
+        conditions: Vec<String>,
+        exec_argv: Vec<String>,
+        transpiler: Box<dyn Transpiler>,
+    ) -> Self {
         State {
-            resolver: resolve::Resolver::new(),
+            resolver: resolve::Resolver::with_conditions(conditions),
             transpiler,
             main: RefCell::new(String::new()),
             main_arg: RefCell::new(String::new()),
@@ -143,6 +158,7 @@ impl State {
             directories: Rc::new(RefCell::new(directory::Directories::default())),
             start: Instant::now(),
             argv,
+            exec_argv,
         }
     }
 
@@ -424,9 +440,11 @@ pub fn run(options: Options) -> i32 {
     let Options {
         entry,
         args,
+        conditions,
+        exec_argv,
         transpiler,
     } = options;
-    let (state, main_path) = new_state(&entry, &args, transpiler);
+    let (state, main_path) = new_state(&entry, &args, &conditions, &exec_argv, transpiler);
     engine_host::init(entry, state, main_path)
 }
 
@@ -447,6 +465,8 @@ pub fn host_engine_ready() -> bool {
 fn new_state(
     entry: &Entry,
     args: &[String],
+    conditions: &[String],
+    exec_argv: &[String],
     transpiler: Box<dyn Transpiler>,
 ) -> (Rc<State>, String) {
     let cwd = std::env::current_dir()
@@ -467,7 +487,12 @@ fn new_state(
         .chain(script)
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
-    let state = Rc::new(State::new(argv, transpiler));
+    let state = Rc::new(State::with_conditions(
+        argv,
+        conditions.to_vec(),
+        exec_argv.to_vec(),
+        transpiler,
+    ));
     *state.main.borrow_mut() = main_path.clone();
     if let Entry::File(arg) = entry {
         *state.main_arg.borrow_mut() = arg.clone();
@@ -480,12 +505,16 @@ fn run_with<E: Engine>(options: Options) -> i32 {
     let Options {
         entry,
         args,
+        conditions,
+        exec_argv,
         transpiler,
     } = options;
-    let (state, main_path) = new_state(&entry, &args, transpiler);
+    let (state, main_path) = new_state(&entry, &args, &conditions, &exec_argv, transpiler);
     let options = Options {
         entry,
         args,
+        conditions: Vec::new(),
+        exec_argv: Vec::new(),
         transpiler: Box::new(PassthroughTranspiler),
     };
 

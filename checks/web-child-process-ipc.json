@@ -1,0 +1,6 @@
+{
+  "owner": "web",
+  "path": "scripts/child-process-ipc.test.ts",
+  "localRuntime": true,
+  "batch": "10-web"
+}
