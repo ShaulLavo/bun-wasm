@@ -3,6 +3,10 @@
   const native = internal.native.wasm;
   const modules = new WeakMap();
   const instances = new WeakMap();
+  const memories = new Map();
+  const memoryCleanup = new FinalizationRegistry(({ resource, reference }) => {
+    if (memories.get(resource) === reference) memories.delete(resource);
+  });
   const memoryBuffers = new WeakSet();
   internal.isWasmMemoryBuffer = value => memoryBuffers.has(value);
   class CompileError extends Error { constructor(message) { super(message); this.name = 'CompileError'; } }
@@ -23,18 +27,38 @@
     static exports(module) { return modules.get(module).exports.map(({ name, kind }) => ({ name, kind })); }
   }
   class Memory {
-    constructor() { throw new LinkError('Standalone WebAssembly memories are not supported'); }
-    get buffer() { return instances.get(this).buffer; }
-    grow(pages) {
-      const state = instances.get(this);
-      if (!state?.owner) throw new TypeError('Expected a WebAssembly.Memory');
-      const count = Math.trunc(+pages);
-      if (!Number.isFinite(count) || count < 0 || count > 0xffffffff) throw new TypeError('Invalid WebAssembly page count');
-      flush(state.owner);
-      let old;
-      try { old = native.grow(state.id, state.name, count); }
+    constructor(descriptor) {
+      if (!descriptor || (typeof descriptor !== 'object' && typeof descriptor !== 'function')) throw new TypeError('WebAssembly.Memory descriptor must be an object');
+      const initial = pages(descriptor.initial);
+      const limit = descriptor.maximum;
+      const maximum = limit === undefined ? undefined : pages(limit);
+      if (initial > 65536 || maximum > 65536) throw new RangeError('WebAssembly.Memory exceeds the 32-bit page limit');
+      if (maximum !== undefined && maximum < initial) throw new RangeError('WebAssembly.Memory maximum is smaller than initial');
+      const shared = !!descriptor.shared;
+      if (shared && maximum === undefined) throw new TypeError('Shared WebAssembly memories require a maximum');
+      if (shared) throw new LinkError('Shared WebAssembly memories are not supported');
+      let resource;
+      try { resource = native.createMemory(initial, maximum); }
       catch (error) { throw new RangeError(error.message); }
-      refresh(state.owner);
+      const memory = { kind: 'memory', resource, buffer: new ArrayBuffer(0), generation: undefined };
+      instances.set(this, memory);
+      rememberMemory(resource, this);
+      refreshMemory(memory);
+    }
+    get buffer() {
+      const state = memoryState(this);
+      if (!state) throw new TypeError('Expected a WebAssembly.Memory');
+      return state.buffer;
+    }
+    grow(delta) {
+      const state = memoryState(this);
+      if (!state) throw new TypeError('Expected a WebAssembly.Memory');
+      const count = pages(delta);
+      flushMemory(state);
+      let old;
+      try { old = native.growMemory(state.resource, count); }
+      catch (error) { throw new RangeError(error.message); }
+      refreshMemory(state);
       return old;
     }
   }
@@ -48,20 +72,38 @@
     }
     valueOf() { return this.value; }
   }
+  function flushMemory(memory) {
+    native.writeMemory(memory.resource, byteView(memory.buffer));
+  }
   function flush(state) {
-    for (const memory of state.memories) native.write(state.id, memory.name, byteView(memory.buffer));
+    for (const memory of state.memories) flushMemory(memory);
+  }
+  function rememberMemory(resource, memory) {
+    const reference = new WeakRef(memory);
+    memories.set(resource, reference);
+    memoryCleanup.register(memory, { resource, reference });
   }
   function refresh(state) {
-    for (const memory of state.memories) {
-      const { bytes: data, generation } = native.read(state.id, memory.name);
-      if (memory.generation !== generation) {
-        memory.buffer.transfer(0);
-        memory.buffer = new ArrayBuffer(data.byteLength);
-        memoryBuffers.add(memory.buffer);
-        memory.generation = generation;
-      }
-      new Uint8Array(memory.buffer).set(data);
+    for (const memory of state.memories) refreshMemory(memory);
+  }
+  function refreshMemory(memory) {
+    const { bytes: data, generation } = native.readMemory(memory.resource);
+    if (memory.generation !== generation || memory.buffer.byteLength !== data.byteLength) {
+      memory.buffer.transfer(0);
+      memory.buffer = new ArrayBuffer(data.byteLength);
+      memoryBuffers.add(memory.buffer);
+      memory.generation = generation;
     }
+    new Uint8Array(memory.buffer).set(data);
+  }
+  function pages(value) {
+    const number = +value;
+    if (!Number.isFinite(number) || number < 0 || Math.trunc(number) > 0xffffffff) throw new TypeError('Invalid WebAssembly page count');
+    return Math.trunc(number);
+  }
+  function memoryState(value) {
+    const state = instances.get(value);
+    return state?.kind === 'memory' ? state : undefined;
   }
   function execute(action) {
     try { return action(); }
@@ -111,15 +153,29 @@
     constructor(module, imports = {}) {
       const description = modules.get(module);
       if (!description) throw new TypeError('Expected a WebAssembly.Module');
-      const functions = description.imports.map(item => {
+      const memoryRecords = [];
+      const functions = [];
+      const bindings = description.imports.map((item, index) => {
         const value = imports[item.module]?.[item.name];
-        if (item.kind !== 'function' || typeof value !== 'function') throw new LinkError(`Missing WebAssembly import ${item.module}.${item.name}`);
-        return { callback: value, results: item.results };
+        if (item.kind === 'function') {
+          if (typeof value !== 'function') throw new LinkError(`Missing WebAssembly import ${item.module}.${item.name}`);
+          functions[index] = { callback: value, results: item.results };
+          return undefined;
+        }
+        if (item.kind === 'memory') {
+          const state = memoryState(value);
+          if (!state) throw new LinkError(`Missing WebAssembly import ${item.module}.${item.name}`);
+          if (!memoryRecords.includes(state)) memoryRecords.push(state);
+          return state.resource;
+        }
+        throw new LinkError(`Unsupported WebAssembly import ${item.module}.${item.name}`);
       });
+      for (const memory of memoryRecords) flushMemory(memory);
       let id;
-      try { id = native.instantiate(description.id); }
+      try { id = native.instantiate(description.id, bindings); }
       catch (error) { throw new LinkError(error.message); }
-      const state = { id, imports: functions, memories: [], memoryObjects: new Map() };
+      finally { for (const memory of memoryRecords) refreshMemory(memory); }
+      const state = { id, imports: functions, memories: memoryRecords };
       const exports = Object.create(null);
       for (const item of description.exports) installExport(state, exports, item);
       refresh(state);
@@ -136,13 +192,16 @@
       return;
     }
     if (item.kind !== 'memory') throw new LinkError(`Unsupported WebAssembly export ${item.kind}`);
-    const identity = native.memoryIdentity(state.id, name);
-    if (state.memoryObjects.has(identity)) { exports[name] = state.memoryObjects.get(identity); return; }
-    const memory = Object.create(Memory.prototype);
-    const record = { id: state.id, name, buffer: new ArrayBuffer(0), owner: state, generation: undefined };
-    instances.set(memory, record);
-    state.memories.push(record);
-    state.memoryObjects.set(identity, memory);
+    const resource = native.memoryIdentity(state.id, name);
+    let memory = memories.get(resource)?.deref();
+    if (!memory) {
+      memory = Object.create(Memory.prototype);
+      const record = { kind: 'memory', resource, buffer: new ArrayBuffer(0), generation: undefined };
+      instances.set(memory, record);
+      rememberMemory(resource, memory);
+    }
+    const record = instances.get(memory);
+    if (!state.memories.includes(record)) state.memories.push(record);
     exports[name] = memory;
   }
   async function compile(source) { return new Module(source); }
