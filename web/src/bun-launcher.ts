@@ -7,6 +7,7 @@ import type { BunNetworkOptions } from "./net/helper.js";
 import { readOutcome } from "waffle/proc/outcome";
 import { isToolCommand } from "./tool-command.js";
 import { installLookupServer } from "./net/lookup.js";
+import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
 
 export interface BunLauncherOptions {
   /** The module worker URL that runs createBunExecutor (worker.ts). */
@@ -42,7 +43,8 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   let lookupChannel: BroadcastChannel | undefined;
   let disposeLookup: (() => void) | undefined;
   let released = false;
-  const unregister = context.registerRevocation(() => { revoked = true; });
+  let sharedRoute: SharedObjectRoute | undefined;
+  const unregister = context.registerRevocation(() => { revoked = true; sharedRoute?.close(); });
   const active = () => !released && !revoked && !options.runtime.disposed && !readOutcome(context.outcome);
   const cleanup = () => {
     if (released) return;
@@ -50,14 +52,18 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     unregister();
     try { helper?.dispose(); }
     finally {
+      sharedRoute?.close();
       disposeLookup?.();
       lookupChannel = undefined;
       if (moduleCache) void caches.delete(moduleCache);
     }
   };
   const onMessage = (message: unknown) => {
-    try { if (active()) dispatch?.(message); }
-    catch (error) { context.fail(error); }
+    try {
+      if (!active()) sharedRoute?.close();
+      if (sharedRoute?.accept(message)) return;
+      if (active()) dispatch?.(message);
+    } catch (error) { sharedRoute?.close(); if (active()) context.fail(error); }
   };
   let dispatch: ((message: unknown) => void) | undefined;
   try {
@@ -79,12 +85,14 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     const session = helper;
     dispatch = message => dispatchBunNetwork(session, message);
     moduleCache = engine === "browser" && scopedWorker(options.workerUrl) ? `bunwasm-m-${crypto.randomUUID()}` : null;
+    if (engine === "browser") sharedRoute = runtimeSharedObjectRoute(options.runtime);
     return service.launchWorker<RunRequest>(context, {
       workerUrl: options.workerUrl,
       request: {
         engine, adapter: "bun", module, interruptible: context.interruptible,
         args: context.request.argv, env: { ...context.request.env, PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
         trace: false, net: ring, moduleCache, lookupChannel: lookupChannel?.name,
+        sharedObjects: sharedRoute ? { owner: sharedRoute.owner } : undefined,
       },
       cleanup,
       onMessage,
