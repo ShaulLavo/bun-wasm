@@ -694,8 +694,7 @@
     "node:repl": () => unsupportedModule("repl", "no interactive terminal", ["start", "REPLServer"]),
     "node:v8": () => ({
       getHeapStatistics: () => ({ total_heap_size: native.memoryUsage().heapTotal, used_heap_size: native.memoryUsage().heapUsed, heap_size_limit: 4294967296 }),
-      serialize: thrower("v8.serialize", "no V8 serializer"),
-      deserialize: thrower("v8.deserialize", "no V8 serializer"),
+      ...internal.require("v8"),
       setFlagsFromString() {},
       cachedDataVersionTag: () => 0,
     }),

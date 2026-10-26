@@ -2,6 +2,8 @@
   "use strict";
   type Graph = BunWasm.WorkerGraph;
   type Node = BunWasm.WorkerNode;
+  type BufferNode = Extract<Node, ["node-buffer", number, number, number]>;
+  const bufferByteLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")!.get!;
   const tag = (value: object) => Object.prototype.toString.call(value).slice(8, -1);
   const errors: Record<string, ErrorConstructor> = { Error, TypeError, RangeError, SyntaxError, ReferenceError, URIError, EvalError };
   const views: Record<string, (buffer: ArrayBuffer, offset: number, bytes: number) => ArrayBufferView> = {
@@ -13,6 +15,13 @@
     BigInt64Array: (b, o, n) => new BigInt64Array(b, o, n / 8), BigUint64Array: (b, o, n) => new BigUint64Array(b, o, n / 8),
     DataView: (b, o, n) => new DataView(b, o, n),
   };
+  function isArrayBuffer(value: unknown): value is ArrayBuffer {
+    try { bufferByteLength.call(value); return true; }
+    catch { return false; }
+  }
+  function encodeBuffer(buffer: ArrayBuffer): Node {
+    return ["buffer", internal.native.base64Encode(new Uint8Array(buffer), false), buffer.resizable ? buffer.maxByteLength : 0];
+  }
   function cloneError(message = "The object cannot be cloned") { return new DOMException(message, "DataCloneError"); }
   function create(hooks: BunWasm.WorkerCodecHooks): BunWasm.WorkerCodec {
     function prepare(value: unknown, transfer?: unknown, forbidden: readonly string[] = []) {
@@ -40,6 +49,33 @@
       }
       const nodes: Node[] = [];
       const memory = new Map<object, number>();
+      const bufferViews = new Map<ArrayBuffer, [BufferNode, ...BufferNode[]]>();
+      const fullBuffers = new Set<ArrayBuffer>();
+      function bufferView(view: ArrayBufferView, implicit: boolean): BufferNode {
+        if (!isArrayBuffer(view.buffer)) throw cloneError();
+        const node: BufferNode = ["node-buffer", 0, view.byteOffset, view.byteLength];
+        const group = bufferViews.get(view.buffer);
+        if (group) group.push(node);
+        else bufferViews.set(view.buffer, [node]);
+        node[1] = visit(view.buffer, implicit, true);
+        return node;
+      }
+      function finishBufferViews(buffer: ArrayBuffer, group: [BufferNode, ...BufferNode[]]) {
+        const index = group[0][1];
+        if (fullBuffers.has(buffer)) { nodes[index] = encodeBuffer(buffer); return; }
+        let start = group[0][2];
+        let end = start + group[0][3];
+        for (const node of group) {
+          start = Math.min(start, node[2]);
+          end = Math.max(end, node[2] + node[3]);
+        }
+        const bytes = new Uint8Array(end - start);
+        for (const node of group) {
+          bytes.set(new Uint8Array(buffer, node[2], node[3]), node[2] - start);
+          node[2] -= start;
+        }
+        nodes[index] = ["buffer", internal.native.base64Encode(bytes, false), 0];
+      }
       function entries(object: object, implicit: boolean): [string, number][] {
         return Object.keys(object).map(key => [key, visit(Reflect.get(object, key), implicit)]);
       }
@@ -56,7 +92,8 @@
         if (object === processEnv) return ["object", entries(object, implicit)];
         if (internal.isProxy?.(object)) throw cloneError();
         if (object instanceof Blob) return ["blob", internal.native.base64Encode(object._bytes(), false), object.type];
-        if (object instanceof ArrayBuffer) return ["buffer", internal.native.base64Encode(new Uint8Array(object), false), object.resizable ? object.maxByteLength : 0];
+        if (isArrayBuffer(object)) return bufferViews.has(object) ? ["buffer", "", 0] : encodeBuffer(object);
+        if (ArrayBuffer.isView(object) && hooks.buffer?.isBuffer(object)) return bufferView(object, implicit);
         if (ArrayBuffer.isView(object)) return ["view", tag(object), visit(object.buffer, implicit), object.byteOffset, object.byteLength];
         if (object instanceof Date) return ["date", String(object.getTime())];
         if (object instanceof RegExp) return ["regexp", object.source, object.flags];
@@ -74,9 +111,10 @@
         if (object instanceof EventTarget || ["SharedArrayBuffer", "Promise", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry", "Symbol", "WebAssembly.Module", "WebAssembly.Memory"].includes(tag(object))) throw cloneError();
         return ["object", entries(object, implicit)];
       }
-      function visit(value: unknown, implicit = false): number {
+      function visit(value: unknown, implicit = false, bufferView = false): number {
         if (typeof value === "function" || typeof value === "symbol") throw cloneError();
         if (value !== null && typeof value === "object") {
+          if (hooks.buffer && !bufferView && isArrayBuffer(value)) fullBuffers.add(value);
           const known = memory.get(value);
           if (known !== undefined) return known;
         }
@@ -97,6 +135,7 @@
         return index;
       }
       const root = visit(value);
+      for (const [buffer, group] of bufferViews) finishBufferViews(buffer, group);
       for (const plan of ports.values()) plan.validate();
       for (const buffer of buffers) new Uint8Array(buffer);
       return { graph: { root, nodes }, commit() {
@@ -109,12 +148,24 @@
     }
 
     function decode(value: unknown) {
-      const graph = validateGraph(value);
+      const graph = validateGraph(value, 0, Boolean(hooks.buffer));
       const memory = new Map<number, unknown>();
       const restored: unknown[] = [];
       function properties(target: object, entries: [string, number][]) {
         for (const [key, ref] of entries) Object.defineProperty(target, key, { value: read(ref), writable: true, configurable: true, enumerable: true });
         return target;
+      }
+      function readNodeBuffer(node: BufferNode) {
+        const adapter = hooks.buffer;
+        if (!adapter) throw cloneError("Node Buffer decoding is unavailable");
+        const buffer = read(node[1]);
+        if (!(buffer instanceof ArrayBuffer)) throw cloneError("Invalid Node Buffer backing");
+        return adapter.from(buffer, node[2], node[3]);
+      }
+      function readView(node: Extract<Node, ["view", string, number, number, number]>) {
+        const buffer = read(node[2]);
+        if (!(buffer instanceof ArrayBuffer)) throw cloneError("Invalid typed array backing");
+        return views[node[1]](buffer, node[3], node[4]);
       }
       function read(index: number): unknown {
         if (memory.has(index)) return memory.get(index);
@@ -134,11 +185,8 @@
             const buffer = node[2] ? new ArrayBuffer(bytes.length, { maxByteLength: node[2] }) : new ArrayBuffer(bytes.length);
             new Uint8Array(buffer).set(bytes); result = buffer; break;
           }
-          case "view": {
-            const buffer = read(node[2]);
-            if (!(buffer instanceof ArrayBuffer) || !views[node[1]]) throw cloneError("Invalid typed array");
-            result = views[node[1]](buffer, node[3], node[4]); break;
-          }
+          case "node-buffer": result = readNodeBuffer(node); break;
+          case "view": result = readView(node); break;
           case "array": { const array = new Array(node[1]); memory.set(index, array); return properties(array, node[2]); }
           case "object": { const object = {}; memory.set(index, object); return properties(object, node[1]); }
           case "map": { const map = new Map(); memory.set(index, map); for (const [key, val] of node[1]) map.set(read(key), read(val)); return map; }
@@ -175,47 +223,76 @@
     return { encode, decode, prepare };
   }
 
-  function validateGraph(value: unknown, depth = 0): Graph {
+  function canonicalBase64(value: unknown): value is string {
+    return typeof value === "string" && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$/.test(value);
+  }
+  function binaryLength(value: string) {
+    return value.length / 4 * 3 - (value.endsWith("==") ? 2 : Number(value.endsWith("=")));
+  }
+  function validBuffer(node: unknown): node is ["buffer", string, number] {
+    return Array.isArray(node) && node[0] === "buffer" && node.length === 3 && canonicalBase64(node[1])
+      && counter(node[2]) && (node[2] === 0 || node[2] >= binaryLength(node[1]));
+  }
+  function validNumber(value: unknown) {
+    return typeof value === "string" && (value === "-0" || String(Number(value)) === value);
+  }
+  function viewWidth(name: string) {
+    if (name === "DataView" || name.endsWith("8Array") || name === "Uint8ClampedArray") return 1;
+    if (name.endsWith("16Array")) return 2;
+    return name.endsWith("32Array") ? 4 : 8;
+  }
+  function validateGraph(value: unknown, depth = 0, nodeBuffer = false): Graph {
     if (depth > 256) throw cloneError("Worker port nesting exceeds 256 levels");
     if (!value || typeof value !== "object" || !("root" in value) || !("nodes" in value) || !Array.isArray(value.nodes)) throw cloneError("Invalid worker message");
     const nodes: unknown[] = value.nodes;
     const ref = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0 && value < nodes.length;
     const strings = (values: unknown[]) => values.every(value => typeof value === "string");
     const pairs = (values: unknown, stringKeys: boolean) => Array.isArray(values) && values.every(pair => Array.isArray(pair) && pair.length === 2 && (stringKeys ? typeof pair[0] === "string" : ref(pair[0])) && ref(pair[1]));
+    function validView(bufferRef: unknown, offset: unknown, length: unknown, width: number) {
+      if (!ref(bufferRef) || !counter(offset) || !counter(length)) return false;
+      const buffer = nodes[bufferRef];
+      if (!validBuffer(buffer)) return false;
+      return offset % width === 0 && length % width === 0
+        && offset <= binaryLength(buffer[1]) && length <= binaryLength(buffer[1]) - offset;
+    }
     function valid(node: unknown): boolean {
       if (!Array.isArray(node)) return false;
       switch (node[0]) {
         case "undefined": case "null": return node.length === 1;
-        case "string": case "number": case "bigint": case "date": return node.length === 2 && typeof node[1] === "string";
+        case "number": return node.length === 2 && validNumber(node[1]);
+        case "string": case "bigint": case "date": return node.length === 2 && typeof node[1] === "string";
         case "boolean": return node.length === 2 && typeof node[1] === "boolean";
         case "object": return pairs(node[1], true);
         case "array": return Number.isSafeInteger(node[1]) && node[1] >= 0 && node[1] <= 0xffffffff && pairs(node[2], true);
         case "map": return pairs(node[1], false);
         case "set": return Array.isArray(node[1]) && node[1].every(ref);
-        case "blob": case "regexp": return strings(node.slice(1)) && node.length === 3;
-        case "buffer": return typeof node[1] === "string" && Number.isSafeInteger(node[2]) && node[2] >= 0;
-        case "view": return typeof node[1] === "string" && ref(node[2]) && Number.isInteger(node[3]) && Number.isInteger(node[4]) && node[3] >= 0 && node[4] >= 0;
+        case "blob": return node.length === 3 && canonicalBase64(node[1]) && typeof node[2] === "string";
+        case "regexp": return strings(node.slice(1)) && node.length === 3;
+        case "buffer": return validBuffer(node);
+        case "node-buffer": return nodeBuffer && node.length === 4 && validView(node[1], node[2], node[3], 1);
+        case "view": return node.length === 5 && typeof node[1] === "string" && Object.hasOwn(views, node[1])
+          && validView(node[2], node[3], node[4], viewWidth(node[1]));
         case "error": return strings(node.slice(1, 3)) && (node[3] === null || typeof node[3] === "string") && ref(node[4]);
         case "boxed": return ref(node[1]);
-        case "port": return validPort(node[1], depth) && ref(node[2]);
+        case "port": return validPort(node[1], depth, nodeBuffer) && ref(node[2]);
         default: return false;
       }
     }
     if (!ref(value.root) || !nodes.every(valid)) throw cloneError("Invalid worker message graph");
     return value as Graph;
   }
-  function validPort(value: unknown, depth: number) {
+  function validPort(value: unknown, depth: number, nodeBuffer: boolean) {
     if (!value || typeof value !== "object") return false;
     return "id" in value && typeof value.id === "string" && "peer" in value && (value.peer === null || typeof value.peer === "string")
       && "version" in value && counter(value.version) && "sent" in value && counter(value.sent)
-      && "received" in value && counter(value.received) && "pending" in value && Array.isArray(value.pending) && value.pending.every(packet => validPending(packet, depth))
+      && "received" in value && counter(value.received) && "pending" in value && Array.isArray(value.pending) && value.pending.every(packet => validPending(packet, depth, nodeBuffer))
       && "closing" in value && (value.closing === null || counter(value.closing))
       && "closed" in value && typeof value.closed === "boolean";
   }
-  function counter(value: unknown) { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
-  function validPending(value: unknown, depth: number) {
+  function counter(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
+  function validPending(value: unknown, depth: number, nodeBuffer: boolean) {
     if (!Array.isArray(value) || value.length !== 2 || !counter(value[0])) return false;
-    validateGraph(value[1], depth + 1);
+    validateGraph(value[1], depth + 1, nodeBuffer);
     return true;
   }
   return { create };
