@@ -21,4 +21,3 @@ export function guest(ready: number, imports: readonly { namespace: string; name
     section(10, [2, 2, 0, 0x0b, 4, 0, 0x41, ready, 0x0b]),
   )));
 }
-
