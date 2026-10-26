@@ -1,6 +1,7 @@
 (function (internal: BunWasm.ModuleCompileInternal) {
   "use strict";
   const NativeFunction = Function;
+  const NativeSyntaxError = SyntaxError;
 
   function requireString(value: unknown, name: string): asserts value is string {
     if (typeof value === "string") return;
@@ -15,7 +16,7 @@
     try {
       new NativeFunction("exports", "require", "module", "__filename", "__dirname", source);
     } catch (error) {
-      if (error instanceof SyntaxError) error.stack = `${filename}\n${error.stack}`;
+      if (error instanceof NativeSyntaxError) error.stack = `${filename}\n${error.stack}`;
       throw error;
     }
     return internal.native.evalScript(`(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {\n\n${source}\n})`, filename, -1);

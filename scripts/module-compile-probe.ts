@@ -60,6 +60,35 @@ function sourceLocationsContract() {
   }
 }
 
+function mutableSyntaxErrorContract() {
+  compile(`
+    globalThis.savedSyntaxError = globalThis.SyntaxError;
+    globalThis.savedPrepareStackTrace = Error.prepareStackTrace;
+    globalThis.seenSyntaxError = undefined;
+    Error.prepareStackTrace = error => { globalThis.seenSyntaxError = error; return "captured stack"; };
+    globalThis.SyntaxError = undefined;
+  `);
+  try {
+    const NativeSyntaxError: unknown = compile("module.exports = globalThis.savedSyntaxError;").module.exports;
+    assert(typeof NativeSyntaxError === "function");
+    let thrown: unknown;
+    assert.throws(() => compile("const broken = ;"), error => { thrown = error; return true; });
+    const seen = compile("module.exports = globalThis.seenSyntaxError;").module.exports;
+    assert(thrown instanceof NativeSyntaxError);
+    assert.equal(thrown, seen);
+    assert(thrown && typeof thrown === "object" && "stack" in thrown);
+    assert(String(thrown.stack).includes(filename), String(thrown.stack));
+  } finally {
+    compile(`
+      globalThis.SyntaxError = globalThis.savedSyntaxError;
+      Error.prepareStackTrace = globalThis.savedPrepareStackTrace;
+      delete globalThis.savedSyntaxError;
+      delete globalThis.savedPrepareStackTrace;
+      delete globalThis.seenSyntaxError;
+    `);
+  }
+}
+
 function syntaxFilenameContract() {
   const state = new Module(filename);
   state.exports = { untouched: true };
@@ -72,6 +101,7 @@ function syntaxFilenameContract() {
   assert.deepEqual(state.exports, { untouched: true });
   assert.throws(() => compile('}); globalThis.escaped = true; (function() {'), syntaxError);
   assert.equal(compile('module.exports = typeof globalThis.escaped;').module.exports, "undefined");
+  if (runtime) mutableSyntaxErrorContract();
 }
 
 const focusedContracts: Record<string, () => void> = {

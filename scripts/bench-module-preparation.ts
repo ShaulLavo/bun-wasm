@@ -28,7 +28,7 @@ async function loadWasmCaller(): Promise<(exports: WebAssembly.Exports) => WasmC
   const source = readFileSync(modulePath, "utf8")
     .replace('import { installNativeStreamState } from "./native-stream-state.ts";', "const installNativeStreamState = () => () => {};")
     .replace('"waffle/core/memory-views"', JSON.stringify(pathToFileURL(createRequire(modulePath).resolve("waffle/core/memory-views")).href));
-  const imports = ["buffer-transfer.ts", "content-modules.ts", "promise-reactions.ts", "crypto-inputs.js", "crypto-host.js", "net/trampoline.ts", "net/lookup.ts"];
+  const imports = ["buffer-transfer.ts", "script-evaluation.ts", "content-modules.ts", "promise-reactions.ts", "crypto-inputs.js", "crypto-host.js", "net/trampoline.ts", "net/lookup.ts"];
   const rewritten = imports.reduce((source, path) => source.replace(JSON.stringify(`./${path}`), JSON.stringify(pathToFileURL(resolve(root, "web/src", path)).href)), source)
     .concat("\nexport { wasmCaller };\n");
   const module = await import("data:text/javascript;base64,".concat(Buffer.from(rewritten).toString("base64")));
