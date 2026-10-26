@@ -10,7 +10,12 @@ keys reuse on the actual builder and patch content, SDK VERSION, compiler/archiv
 versions, host build tools, effective compiler environment and SDK overlay targets, with an integrity
 hash of the built libc. Waffle package revisions remain provenance rather than cache inputs: an
 unrelated process-only revision reuses the identical receipt, as the package regression proves. A
-nonmatching receipt is rejected outright, without upgrades or compatibility handling. The wrapper
+nonmatching receipt is rejected outright, without upgrades or compatibility handling. The wrapper exposes
+the same input object through `wasiSysrootInputs` and `--inputs` so Actions can
+select a compatible cache before restoring it. Restore prefixes preserve that
+input digest, image and architecture. The builder then validates the full receipt,
+libc bytes and overlay targets before the cache is saved, ahead of other native
+builds. Lockfile or scratch-policy edits alone do not alter this identity. The wrapper
 claims an atomic output lock, stages next to the destination for same-filesystem atomic publication,
 and refuses stale or caller-owned outputs. Reuse verifies the SDK overlay targets against the selected SDK, even
 when two SDK directories have identical VERSION files. It symlinks only

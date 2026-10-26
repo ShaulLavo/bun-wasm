@@ -15,7 +15,7 @@ function workerModule(env: Record<string, string> = {}, execArgv: string[] = [])
   let port: unknown;
   const modules = {
     process, path, events: EventEmitter, structured_clone: { structuredClone }, net: {},
-    worker_codec: { create: () => ({ prepare: () => ({ graph: {}, commit() {} }), decode: () => [null, [], port] }) },
+    worker_codec: { create: () => ({ wait: () => null, prepare: () => ({ graph: {}, commit() {}, abort() {} }), decode: () => [null, [], port] }) },
     spawn: { spawn(argv: string[], options: { env: Record<string, string> }) { launches.push({ argv, env: options.env }); throw stop; } },
     worker_channel: { open: () => ({ send() {} }) },
   };
