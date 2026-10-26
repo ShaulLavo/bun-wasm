@@ -14,6 +14,7 @@ import { productScoreboard, unlockCandidates } from "./product-report.ts";
 import { networkGuardStage, runProductBrowserCase } from "./product-campaign.ts";
 import { guestProvenance, verifyPlaygroundBuilds } from "./product-provenance.ts";
 import { memorySampler } from "./memory.ts";
+import { boundedCleanup, HarnessCleanupError } from "./cleanup.ts";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
 if (interfaces.some(line => line.split(":")[0].trim() !== "lo")) throw new Error("Use scripts/app-matrix.sh in its loopback-only network namespace");
@@ -53,7 +54,7 @@ if (options.hosts.includes("playground") && !existsSync(join(root, "web/dist/ind
 if (existsSync(join(options.output, "results.json"))) throw new Error("Results already exist; choose another --output");
 mkdirSync(options.output, { recursive: true });
 const scratch = mkdtempSync(join(process.env.MATRIX_SCRATCH_ROOT ?? "/work/tmp", "bun-wasm-app-matrix-run-"));
-for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => void cleanup().then(() => process.exit(130)));
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => void cleanup().then(() => process.exit(130), error => { console.error(error); process.exit(130); }));
 process.on("exit", () => {
   for (const child of children) stop(child);
   rmSync(scratch, { recursive: true, force: true });
@@ -70,22 +71,28 @@ let results = [];
 let mirror;
 let browserSession;
 const memory = memorySampler(process.pid);
-let cleaned = false;
+let cleaning;
 
 function stop(child) {
   if (!children.delete(child)) return;
   if (!child.pid) return;
   try { process.kill(-child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
 }
-async function cleanup() {
-  if (cleaned) return;
-  cleaned = true;
+function cleanup() {
+  return cleaning ??= releaseResources();
+}
+
+async function releaseResources() {
   memory.stop();
-  await Promise.allSettled([browserSession?.close(), mirror?.close()]);
   const exited = Array.from(children, child => child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise(resolve => child.once("close", resolve)));
   for (const child of children) stop(child);
-  await Promise.allSettled(exited);
+  const failures = (await Promise.all([
+    boundedCleanup("browser-session-close", () => browserSession?.close(), 35_000),
+    boundedCleanup("registry-close", () => mirror?.close()),
+    boundedCleanup("child-exit", () => Promise.all(exited)),
+  ])).filter(Boolean);
   rmSync(scratch, { recursive: true, force: true });
+  if (failures.length) throw new HarnessCleanupError(failures, infrastructureError);
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -140,7 +147,7 @@ function record(app, engine, host, stage, command, result) {
 }
 
 function recordProductObservations(app, engine, host, stage, command, check, result) {
-  for (const observation of completeObservations(check, result.observations ?? [], result)) {
+  for (const observation of result.harnessCleanup ? result.observations ?? [] : completeObservations(check, result.observations ?? [], result)) {
     const row = { app: app.id, versions: app.dependencies, engine, host, stage: `${stage}:${observation.stage}`, command: command.join(" "), ...observation };
     row.stage = `${stage}:${observation.stage}`;
     results.push(row);
@@ -272,7 +279,7 @@ try {
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "browser-environment.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "cleanup.ts", "browser-environment.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
   if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.map(engine => [wasmName[engine], artifacts[engine].sha256])));
   mirror = await registry({ directory: options.cache, record: options.record });

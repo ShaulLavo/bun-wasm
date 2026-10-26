@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { projectFiles } from "./apps.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
+import { boundedCleanup, closeOwnedBrowser, closeOwnedContext, HarnessCleanupError, withCleanupFailures } from "./cleanup.ts";
 import { browserDiagnostics } from "./browser-diagnostics.ts";
 import { verifyBrowserServer, stoppedPreviewError } from "./server-browser.ts";
 import { observeHmr } from "./hmr.ts";
@@ -49,6 +50,18 @@ export async function serverCommand({ page, context, command, app, engine, optio
   preview.on("pageerror", error => errors.push(String(error)));
   let checked;
   let url;
+  let captured = false;
+  const cleanupFailures = [];
+  const cleanupTimeout = options.cleanupTimeout ?? 10_000;
+  const release = async (operation, cleanup, timeout = cleanupTimeout) => {
+    const failed = await boundedCleanup(operation, cleanup, timeout);
+    if (failed) cleanupFailures.push(failed);
+  };
+  const verifyStopped = async () => {
+    const error = await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`));
+    if (error) checked = { status: "fail", ...failure(error, command.name) };
+    else checked.assertion += "; guest stop removes preview listener (502)";
+  };
   try {
     const previewState = await page.evaluate(() => globalThis.playground.previews.ready);
     if (previewState !== "ready") throw new Error(`Preview service worker is ${previewState}`);
@@ -62,21 +75,28 @@ export async function serverCommand({ page, context, command, app, engine, optio
     timings.pageLoadMs = since(loading);
     const contract = check.framework ? await verifyBrowserServer(preview, url, check.framework, options.timeout, join(options.output, `${app.id}-${engine}-requests.json`)) : "";
     if (errors.length) throw new Error(errors.join("\n"));
-    if (await page.evaluate(() => globalThis.__matrixDone)) return earlyServerExit({ code: await page.evaluate(() => globalThis.playground.shell.lastExit), output: await output() }, command.name);
-    await preview.screenshot({ path: join(options.output, `${app.id}-${engine}-playground-${command.name}.png`) });
-    const observations = await productObservations(preview, url, check, guestSource(page), traffic, options.timeout);
-    checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations, timings };
+    if (await page.evaluate(() => globalThis.__matrixDone)) {
+      checked = earlyServerExit({ code: await page.evaluate(() => globalThis.playground.shell.lastExit), output: await output() }, command.name);
+    } else {
+      await preview.screenshot({ path: join(options.output, `${app.id}-${engine}-playground-${command.name}.png`) });
+      const observations = await productObservations(preview, url, check, guestSource(page), traffic, options.timeout);
+      checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations, timings };
+    }
   } catch (error) {
-    checked = { status: "fail", ...failure(`${await output()}\n${String(error)}`, command.name), timings };
+    let diagnostic = "";
+    captured = true;
+    await release("terminal-capture", async () => { diagnostic = await output(); });
+    checked = { status: "fail", ...failure(`${diagnostic}\n${String(error)}`, command.name), productError: String(error), timings };
   } finally {
-    await page.evaluate(async () => { globalThis.playground.shell.input("\x03"); await globalThis.__matrixCommand; });
-    const error = checked?.status === "pass" && command.check.framework ? await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`)) : undefined;
-    if (error) checked = { status: "fail", ...failure(error, command.name) };
-    if (checked?.status === "pass" && command.check.framework) checked.assertion += "; guest stop removes preview listener (502)";
-    try { await traffic.close(); }
-    finally { await preview.close(); }
+    if (!captured) await release("terminal-capture", () => terminalText(page));
+    await release("server-stop", () => page.evaluate(async () => { globalThis.playground.shell.input("\x03"); await globalThis.__matrixCommand; }));
+    if (!cleanupFailures.length && checked?.status === "pass" && command.check.framework) {
+      await release("stopped-preview", verifyStopped, options.timeout);
+    }
+    await release("traffic-close", () => traffic.close());
+    await release("preview-close", () => preview.close());
   }
-  return checked;
+  return withCleanupFailures(checked, cleanupFailures);
 }
 
 
@@ -93,9 +113,18 @@ export async function browserHost({ root, options, launch, stop }) {
   const { chromium } = await import(pathToFileURL(playwrightPath).href);
   const { ready, run, terminalText, writeFile } = await import(pathToFileURL(join(root, "web/tests/playground.mjs")).href);
   let browser;
+  let browserServer;
   let server;
   let base;
-  const getBrowser = async () => browser ??= await chromium.launch();
+  const cleanupTimeout = options.cleanupTimeout ?? 10_000;
+  const getBrowser = async () => {
+    if (browser) return browser;
+    browserServer = await chromium.launchServer();
+    browser = await chromium.connect(browserServer.wsEndpoint());
+    return browser;
+  };
+
+  const closeContext = (context, cause) => closeOwnedContext(context, browserServer, cleanupTimeout, cause);
 
   async function serve() {
     if (base) return base;
@@ -126,11 +155,11 @@ export async function browserHost({ root, options, launch, stop }) {
       return { status: "pass", assertion: `${check.selector} renders ${JSON.stringify(check.text)}${hmr ? `; ${hmr}` : ""}` };
     } catch (error) {
       return { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server"), browserDiagnostics: diagnostics() };
-    } finally { await page.close(); }
+    } finally { await closeContext(page.context()); }
   }
 
-  async function commandResult(page, context, app, engine, command) {
-    if (["http", "page"].includes(command.check.kind)) return serverCommand({ page, context, command, app, engine, options, terminalText });
+  async function commandResult(page, context, app, engine, command, captureTerminal) {
+    if (["http", "page"].includes(command.check.kind)) return serverCommand({ page, context, command, app, engine, options, terminalText: captureTerminal });
     const started = performance.now();
     const runResult = await run(page, browserCommand(command.args).join(" "), options.timeout);
     const timings = { commandMs: since(started) };
@@ -139,11 +168,18 @@ export async function browserHost({ root, options, launch, stop }) {
 
   async function runApp({ app, engine, registry, record }) {
     const context = await (await getBrowser()).newContext({ serviceWorkers: "allow" });
-    const page = await context.newPage();
+    let page;
     const external = [];
+    let primaryError;
+    const captureTerminal = async page => {
+      const terminal = await terminalText(page);
+      writeFileSync(join(options.output, `${app.id}-${engine}-playground.log`), terminal);
+      return terminal;
+    };
     const outcomes = new Map();
-    await context.route("**/*", route => browserRegistryRoute(route, registry, external));
     try {
+      page = await context.newPage();
+      await context.route("**/*", route => browserRegistryRoute(route, registry, external));
       const base = await serve();
       const loading = performance.now();
       await page.goto(`${base}?engine=${engine}`);
@@ -158,20 +194,34 @@ export async function browserHost({ root, options, launch, stop }) {
       const install = record(app, engine, "playground", "install", ["bun", "install"], { ...await checkInstall(app, installed, path => readGuest(page, path)), timings });
       for (const command of app.commands) {
         const prerequisite = command.after ? outcomes.get(command.after) : install;
-        const checked = prerequisite.status === "pass" ? await commandResult(page, context, app, engine, command) : { status: "blocked", category: prerequisite.category, blocker: prerequisite.blocker, prerequisite: command.after ?? "install" };
+        const checked = prerequisite.status === "pass" ? await commandResult(page, context, app, engine, command, captureTerminal) : { status: "blocked", category: prerequisite.category, blocker: prerequisite.blocker, prerequisite: command.after ?? "install" };
         outcomes.set(command.name, checked);
         record(app, engine, "playground", command.name, ["bun"].concat(command.args), checked);
+        if (checked.harnessCleanup) throw new HarnessCleanupError(checked.harnessCleanup, checked.productError);
       }
-      writeFileSync(join(options.output, `${app.id}-${engine}-playground.log`), await terminalText(page));
+      const captureFailed = await boundedCleanup("terminal-capture", () => captureTerminal(page), cleanupTimeout);
+      if (captureFailed) throw new HarnessCleanupError([captureFailed]);
       if (external.length) throw new BlockedBrowserNetworkError(external);
-    } finally { await context.close(); }
+    } catch (error) {
+      primaryError = error;
+      if (page && !(error instanceof HarnessCleanupError)) {
+        const failed = await boundedCleanup("terminal-capture", () => captureTerminal(page), cleanupTimeout);
+        if (failed) throw new HarnessCleanupError([failed], error);
+      }
+      throw error;
+    } finally { await closeContext(context, primaryError); }
   }
 
   return {
     runApp, checkPage,
     async close() {
-      await browser?.close();
-      if (server) { stop(server.child); await server.done; }
+      if (server) stop(server.child);
+      const releases = [
+        browserServer && boundedCleanup("browser-release", () => closeOwnedBrowser(browserServer, cleanupTimeout), cleanupTimeout * 3),
+        server && boundedCleanup("server-exit", () => server.done, cleanupTimeout),
+      ];
+      const failed = (await Promise.all(releases)).filter(Boolean);
+      if (failed.length) throw new HarnessCleanupError(failed);
     },
   };
 }

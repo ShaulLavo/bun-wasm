@@ -46,8 +46,8 @@ test("stuck Ctrl-C does not swallow the original product timeout or prevent prev
   const { input, releases } = fixture(pending);
   const result = await within(serverCommand(input));
   expect(result.status).toBe("fail");
-  expect(result.blocker).toContain("page.goto: Timeout 90000ms exceeded");
-  expect(result.harnessCleanup).toEqual([expect.objectContaining({ operation: "server-stop", timedOut: true })]);
+  expect("blocker" in result && result.blocker).toContain("page.goto: Timeout 90000ms exceeded");
+  expect("harnessCleanup" in result && result.harnessCleanup).toEqual([expect.objectContaining({ operation: "server-stop", timedOut: true })]);
   expect(releases).toContain("preview");
 });
 
@@ -56,8 +56,8 @@ for (const outcome of ["resolved", "rejected"] as const) {
     const stop = async () => { if (outcome === "rejected") throw new Error("page already closed"); };
     const { input, releases } = fixture(stop, new Error("navigation cancelled"));
     const result = await within(serverCommand(input));
-    expect(result.blocker).toContain("navigation cancelled");
-    expect(Boolean(result.harnessCleanup?.length)).toBe(outcome === "rejected");
+    expect("blocker" in result && result.blocker).toContain("navigation cancelled");
+    expect(Boolean("harnessCleanup" in result && Array.isArray(result.harnessCleanup) && result.harnessCleanup.length)).toBe(outcome === "rejected");
     expect(releases).toContain("preview");
   });
 }
@@ -66,6 +66,81 @@ test("unresponsive terminal capture does not replace the original navigation err
   const { input } = fixture(async () => {});
   input.terminalText = pending;
   const result = await within(serverCommand(input));
-  expect(result.blocker).toContain("page.goto: Timeout 90000ms exceeded");
-  expect(result.harnessCleanup).toEqual([expect.objectContaining({ operation: "terminal-capture", timedOut: true })]);
+  expect("blocker" in result && result.blocker).toContain("page.goto: Timeout 90000ms exceeded");
+  expect("harnessCleanup" in result && result.harnessCleanup).toEqual([expect.objectContaining({ operation: "terminal-capture", timedOut: true })]);
+});
+
+test("traffic cleanup deadline still reaches preview close", async () => {
+  const { input, releases } = fixture(async () => {});
+  const preview = await input.context.newPage();
+  preview.evaluate = pending;
+  const result = await within(serverCommand(input));
+  expect("harnessCleanup" in result && result.harnessCleanup).toEqual([expect.objectContaining({ operation: "traffic-close", timedOut: true })]);
+  expect(releases).toContain("preview");
+});
+
+test("a cleanup failure after successful assertions is not a green stage", async () => {
+  const { withCleanupFailures } = await import("./cleanup");
+  const product = { status: "pass", observations: [{ stage: "render", status: "pass" }] };
+  expect(withCleanupFailures(product, [{ operation: "server-stop", timedOut: true, error: "stuck" }])).toMatchObject({
+    status: "fail", product, harnessCleanup: [{ operation: "server-stop", timedOut: true }],
+  });
+});
+
+for (const operation of ["context", "browser"] as const) {
+  test(`${operation} close deadline kills its owned process and preserves the primary failure`, async () => {
+    const { spawn } = await import("node:child_process");
+    const { closeOwnedBrowser, closeOwnedContext, HarnessCleanupError } = await import("./cleanup");
+    const primary = new Error("original product failure");
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const exit = new Promise<void>(resolve => child.once("exit", () => resolve()));
+    const browser = {
+      close: pending,
+      kill: async () => { child.kill("SIGKILL"); await exit; },
+      process: () => child,
+    };
+    try {
+      const close = operation === "context" ? closeOwnedContext({ close: pending }, browser, 20, primary) : closeOwnedBrowser(browser, 20);
+      const error = await close.catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(HarnessCleanupError);
+      if (!(error instanceof HarnessCleanupError)) throw error;
+      expect(error.failures[0]?.operation).toBe(`${operation}-close`);
+      if (operation === "context") expect(error.cause).toBe(primary);
+      expect(child.signalCode).toBe("SIGKILL");
+    } finally { child.kill("SIGKILL"); await exit; }
+  });
+}
+
+test("successful context release does not terminate the shared browser", async () => {
+  const { closeOwnedContext } = await import("./cleanup");
+  let closed = false;
+  const browser = { close: pending, kill: async () => { throw new Error("must keep healthy browser"); }, process: () => { throw new Error("must keep healthy browser"); } };
+  await closeOwnedContext({ close: async () => { closed = true; } }, browser, 20);
+  expect(closed).toBe(true);
+});
+
+test("failed force kill is reported instead of claiming browser cleanup", async () => {
+  const { closeOwnedBrowser, HarnessCleanupError } = await import("./cleanup");
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const exit = new Promise<void>(resolve => child.once("exit", () => resolve()));
+  try {
+    const browser = { close: pending, kill: pending, process: () => child };
+    const error = await closeOwnedBrowser(browser, 20).catch((error: unknown) => error);
+    if (!(error instanceof HarnessCleanupError)) throw new Error("Expected cleanup failure");
+    expect(error.failures.map(failure => failure.operation)).toEqual(["browser-close", "browser-kill", "browser-exit"]);
+    expect(child.signalCode).toBeNull();
+  } finally { child.kill("SIGKILL"); await exit; }
+});
+
+test("closed product page and stuck preview close retain separate diagnostics", async () => {
+  const { input } = fixture(async () => { throw new Error("Target page, context or browser has been closed"); }, new Error("page.goto: navigation interrupted"));
+  const preview = await input.context.newPage();
+  preview.close = pending;
+  const result = await within(serverCommand(input));
+  expect("productError" in result && result.productError).toBe("Error: page.goto: navigation interrupted");
+  expect("harnessCleanup" in result && result.harnessCleanup).toEqual([
+    expect.objectContaining({ operation: "server-stop", timedOut: false, error: "Error: Target page, context or browser has been closed" }),
+    expect.objectContaining({ operation: "preview-close", timedOut: true }),
+  ]);
 });
