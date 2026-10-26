@@ -9,5 +9,3 @@ and upstream bugs. Add or update the relevant record, not this entrypoint.
 The [migration map](../scripts/migrations/bun-patches-map.json) maps the former
 single-page anchors to their records. The deterministic splitter and proof are
 in [split-bun-patches.ts](../scripts/migrations/split-bun-patches.ts).
-
-[Native-host direct streams](bun-patches/native-direct-stream.md) records the original Bun-controller adapter.
