@@ -1,0 +1,1 @@
+ordered text, Blob and bytes; open and clean close states

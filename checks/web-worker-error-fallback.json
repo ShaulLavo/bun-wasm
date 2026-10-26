@@ -1,0 +1,6 @@
+{
+  "owner": "web",
+  "path": "scripts/web-worker-error-fallback.test.ts",
+  "localRuntime": true,
+  "batch": "10-web"
+}

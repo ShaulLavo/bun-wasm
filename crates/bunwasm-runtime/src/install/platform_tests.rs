@@ -106,6 +106,83 @@ fn releases_full_packuments_after_platform_selection() {
 }
 
 #[test]
+fn parsed_packuments_do_not_accumulate_during_resolution() {
+    if std::env::var_os("BUN_WASM_PACKUMENT_RESIDENCY_CHILD").is_some() {
+        assert_packument_residency();
+        return;
+    }
+    let directory =
+        std::env::temp_dir().join(format!("bun-wasm-packuments-{}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "install::resolve::platform_tests::parsed_packuments_do_not_accumulate_during_resolution",
+            "--nocapture",
+        ])
+        .current_dir(&directory)
+        .env("BUN_INSTALL_CACHE_DIR", directory.join("cache"))
+        .env("BUN_WASM_PACKUMENT_RESIDENCY_CHILD", "1")
+        .output();
+    std::fs::remove_dir_all(&directory).unwrap();
+    let output = output.unwrap();
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn unused_version(version: &str) -> Value {
+    let fields = (0..32)
+        .map(|index| (format!("field{index}"), json!("x")))
+        .collect::<serde_json::Map<String, Value>>();
+    json!({"version": version, "unused": fields})
+}
+
+fn assert_packument_residency() {
+    use sha2::{Digest, Sha256};
+    let names = ["first", "second", "third", "fourth", "fifth", "sixth"];
+    let manifest = json!({"dependencies": {
+        "first": "1.0.0", "second": "1.0.0", "third": "1.0.0",
+        "fourth": "1.0.0", "fifth": "1.0.0", "sixth": "1.0.0"
+    }});
+    std::fs::create_dir_all(io::cache_dir()).unwrap();
+    let mut response_bytes = 0;
+    for name in names {
+        let mut packument = json!({"versions": {"1.0.0": {
+            "name": name,
+            "version": "1.0.0",
+            "dist": {"tarball": format!("http://registry.invalid/{name}.tgz")}
+        }}});
+        for index in 0..2048 {
+            let version = format!("0.0.{index}");
+            packument["versions"][&version] = unused_version(&version);
+        }
+        let bytes = serde_json::to_vec(&packument).unwrap();
+        response_bytes += bytes.len();
+        let url = format!("http://registry.invalid/{name}");
+        let cache = io::cache_dir().join(format!("{:x}", Sha256::digest(url.as_bytes())));
+        std::fs::write(cache, bytes).unwrap();
+    }
+    let (result, _, peak) = crate::compression::tests::measure(|| {
+        let mut resolver = Resolver::new(
+            io::Registry::new("http://registry.invalid").unwrap(),
+            json!({}),
+            false,
+        );
+        resolver.resolve(&manifest, false)
+    });
+    result.unwrap();
+    println!("packument residency: peak={peak}, responses={response_bytes}");
+    assert!(
+        peak < response_bytes * 8,
+        "parsed packuments accumulated to {peak} bytes from {response_bytes} response bytes"
+    );
+}
+
+#[test]
 fn required_platform_mismatch_errors() {
     for locked in [false, true] {
         let (mut resolver, manifest) = fixture(locked, true);

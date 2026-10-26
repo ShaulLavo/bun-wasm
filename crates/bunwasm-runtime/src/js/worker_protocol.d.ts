@@ -17,7 +17,7 @@ declare namespace BunWasm {
     | ["map", [number, number][]] | ["set", number[]] | ["date", string] | ["regexp", string, string]
     | ["blob", string, string] | ["buffer", string, number] | ["view", string, number, number, number]
     | ["node-buffer", number, number, number]
-    | ["error", string, string, string, number] | ["boxed", number]
+    | ["error", string, string, string | null, number] | ["boxed", number]
     | ["port", Omit<PortSnapshot, "queue">, number];
   interface WorkerGraph { root: number; nodes: WorkerNode[]; }
   interface PortTransfer {
@@ -50,6 +50,7 @@ declare namespace BunWasm {
     execArgv: string[];
     execPath: string;
     exitCode?: number;
+    noDeprecation?: boolean;
     cwd(): string;
     exit(code?: number): never;
     on(event: string, callback: EventListener): unknown;

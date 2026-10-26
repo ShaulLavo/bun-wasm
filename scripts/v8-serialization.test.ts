@@ -27,6 +27,7 @@ function runtimeModules(useRuntimeBuffer = false) {
     require(name: string): unknown {
       if (name === "buffer" && !useRuntimeBuffer) return { Buffer };
       if (name === "dns") return {};
+      if (name === "process") return process;
       if (cache.has(name)) return cache.get(name);
       const extension = ["builtins", "buffer"].includes(name) ? "js" : "ts";
       const source = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url), "utf8");

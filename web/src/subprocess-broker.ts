@@ -123,5 +123,5 @@ export function installBunAdapters(runtime: Runtime, workerUrl: string, loadTool
   if (installedAdapters.has(runtime)) return;
   installedAdapters.add(runtime);
   runtime.registerAdapter("preview1", preview1Launcher({ workerUrl }));
-  for (const engine of ["quickjs", "jsc", "browser"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, loadTools, runtime, network }));
+  for (const engine of ["quickjs", "jsc", "browser", "hermes"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, loadTools, runtime, network }));
 }

@@ -1,5 +1,5 @@
 // The preview runs the runtime's existing WebSocket implementation over a MessagePort TCP stream.
-import websocketFactory from "../../crates/bunwasm-runtime/src/js/websocket.js";
+import websocketFactory from "bun-wasm:websocket";
 
 const nativeWebSocket = globalThis.WebSocket;
 const script = document.currentScript;
