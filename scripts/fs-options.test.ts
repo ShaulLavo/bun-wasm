@@ -3,6 +3,7 @@ import * as host from "node:fs";
 import * as path from "node:path";
 import { Buffer } from "node:buffer";
 import { runInNewContext } from "node:vm";
+import { execFileSync } from "node:child_process";
 import { checkFsOptions, checkBigintStats, checkCopyOptions, checkCopyTypeErrors } from "../tests/fixtures/fs-options/index";
 
 const source = host.readFileSync(new URL("../crates/bunwasm-runtime/src/js/node_fs.js", import.meta.url), "utf8");
@@ -136,6 +137,23 @@ const copyModes: readonly CopyMode[] = [
 ];
 
 for (const mode of copyModes) {
+  test(`${mode.name} copy below a regular file retains ENOTDIR`, async () => {
+    const { fs, root } = fixture();
+    const from = path.join(root, "source");
+    const parent = path.join(root, "file-parent");
+    const to = path.join(parent, "asset");
+    host.writeFileSync(from, "asset");
+    host.writeFileSync(parent, "not a directory");
+    await expect(mode.copy(host, from, to)).rejects.toMatchObject({ code: "ENOTDIR" });
+    execFileSync("node", ["--input-type=module", "-e", `
+      import * as fs from "node:fs";
+      import assert from "node:assert/strict";
+      await assert.rejects((${mode.copy.toString()})(fs, process.argv[1], process.argv[2]), { code: "ENOTDIR" });
+    `, from, to]);
+    await expect(mode.copy(fs, from, to)).rejects.toMatchObject({ code: "ENOTDIR" });
+    expect(host.readFileSync(parent, "utf8")).toBe("not a directory");
+  });
+
   test(`${mode.name} copy creates missing nested destination parents`, async () => {
     const { fs, root } = fixture();
     const from = path.join(root, "source");
