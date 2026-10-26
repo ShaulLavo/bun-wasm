@@ -147,6 +147,67 @@ await check("async-pull-does-not-overlap", async () => {
   return { maxInFlight, pulls };
 });
 
+await check("missing-pull-rejects-read-with-native-type-error", async () => {
+  const body: ReadableStream<Uint8Array> = Reflect.construct(ReadableStream, [{ type: "direct" }]);
+  const reader = body.getReader();
+  const closed = reader.closed.catch(error => error);
+  const timeout = Symbol("pending read");
+  const outcome = await Promise.race([
+    reader.read().catch(error => error),
+    new Promise(resolve => setTimeout(() => resolve(timeout), 100)),
+  ]);
+  await reader.cancel().catch(() => {});
+  assert.ok(outcome instanceof TypeError);
+  if (!(outcome instanceof TypeError)) throw new Error("Expected missing-pull TypeError");
+  assert.equal(outcome.message, "underlyingSource.pull is not a function");
+  assert.equal(await closed, outcome);
+});
+for (const buffered of [false, true]) {
+  await check("end-in-synchronous-pull-defers-close-" + (buffered ? "buffered" : "empty"), async () => {
+    const events: string[] = [];
+    const body = open({ type: "direct", pull(c) {
+      events.push("pull");
+      if (buffered) c.write("buffer");
+      c.end();
+      events.push("after-end");
+      assert.equal(c.write("late"), 0);
+      c.error("ignored after end");
+    }, close() { events.push("close"); } });
+    const reader = body.getReader();
+    const first = await reader.read();
+    assert.equal(events.join(","), "pull,after-end,close");
+    if (buffered) assert.equal(new TextDecoder().decode(first.value), "buffer");
+    else assert.equal(first.done, true);
+    assert.equal((await reader.read()).done, true);
+  });
+}
+await check("zero-watermark-uses-native-default", async () => {
+  let sink!: DirectController;
+  const body = open({ type: "direct", pull(c) { sink = c; } }, { highWaterMark: 0 });
+  const reader = body.getReader();
+  const next = reader.read();
+  await wait();
+  const written = sink.write("a");
+  await reader.cancel();
+  await next;
+  await written;
+  assert.equal(written, 1);
+});
+await check("end-outside-async-pull-calls-close-synchronously", async () => {
+  let sink!: DirectController;
+  const events: string[] = [];
+  const deferred = Promise.withResolvers<void>();
+  const body = open({ type: "direct", pull(c) { sink = c; return deferred.promise; }, close() { events.push("close"); } });
+  const reader = body.getReader();
+  const next = reader.read();
+  await wait();
+  sink.end();
+  events.push("after-end");
+  deferred.resolve();
+  assert.equal(events.join(","), "close,after-end");
+  assert.equal((await next).done, true);
+});
+
 async function getterTrace(Ctor: typeof ReadableStream, type: string | undefined) {
   const reads: string[] = [];
   const value = { type, start(c: ReadableStreamDefaultController<Uint8Array>) { reads.push("startCall"); c.close(); }, pull() {}, cancel() {} };
