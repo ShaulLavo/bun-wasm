@@ -21,7 +21,7 @@ const codecSource = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalTh
   new URL("../crates/bunwasm-runtime/src/js/worker_codec.ts", import.meta.url), "utf8")}`);
 
 type CodecRuntime = { create(hooks: WorkerCodecHooks): WorkerCodec };
-type CodecFactory = (internal: { native: typeof native }) => CodecRuntime;
+type CodecFactory = (internal: { native: typeof native; require: (name: string) => unknown }) => CodecRuntime;
 type WorkerInternal = {
   native: typeof native;
   realTimers: { setImmediate(): void };
@@ -53,7 +53,7 @@ function workerErrorData() {
     structured_clone: { structuredClone },
     worker_codec: {
       create(hooks: WorkerCodecHooks) {
-        const codecRuntime = codecFactoryValue({ native });
+        const codecRuntime = codecFactoryValue({ native, require: internal.require });
         if (!isCodecRuntime(codecRuntime)) throw new Error("Codec runtime was not created");
         implementation = codecRuntime.create(hooks);
         return implementation;
@@ -98,6 +98,34 @@ test("serializable worker error preserves its ordinary code sideband", () => {
   expect(decoded).toBeInstanceOf(TypeError);
   if (!(decoded instanceof Error)) throw new Error("Expected an Error graph");
   expect(decoded.message).toBe("ordinary");
+});
+
+
+test("non-string and throwing error codes are omitted from the sideband", () => {
+  const { encode } = workerErrorData();
+  const numeric = Object.assign(new Error("numeric"), { code: 1n });
+  expect(encode(numeric).code).toBeUndefined();
+  const throwing = new Error("throwing");
+  Object.defineProperty(throwing, "code", { configurable: true, get() { throw new Error("code getter"); } });
+  expect(() => encode(throwing)).not.toThrow();
+  expect(encode(throwing).code).toBeUndefined();
+});
+
+test("stackless and numeric-message worker errors retain their diagnostic and code", () => {
+  const { encode, codec } = workerErrorData();
+  const fields: [string, unknown][] = [["stack", undefined], ["stack", 1n], ["message", 42]];
+  for (const [key, value] of fields) {
+    const original = Object.assign(new Error("diagnostic"), { code: "ERR_ORIGINAL" });
+    Object.defineProperty(original, key, { configurable: true, value });
+    const expected = structuredClone(original);
+    const frame = encode(original);
+    expect(frame.code).toBe("ERR_ORIGINAL");
+    const output = codec.decode(JSON.parse(JSON.stringify(frame.graph)));
+    expect(output).toBeInstanceOf(Error);
+    if (!(output instanceof Error)) throw new Error("Expected an Error graph");
+    expect(output.message).toBe(expected.message);
+    expect(output.stack).toBe(expected.stack);
+  }
 });
 
 test("formatted BuildError is sent as a SyntaxError", () => {

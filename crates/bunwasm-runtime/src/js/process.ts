@@ -265,6 +265,7 @@
     pid: 1,
     ppid: 0,
     exitCode: undefined,
+    noDeprecation: false,
     isBun: true,
     browser: false,
     config: { target_defaults: {}, variables: {} },

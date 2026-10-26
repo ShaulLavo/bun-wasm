@@ -16,6 +16,7 @@
   function cloneError(message = "The object cannot be cloned") { return new DOMException(message, "DataCloneError"); }
   function create(hooks: BunWasm.WorkerCodecHooks): BunWasm.WorkerCodec {
     function prepare(value: unknown, transfer?: unknown, forbidden: readonly string[] = []) {
+      const processEnv = typeof internal.require === "function" ? internal.require("process").env : undefined;
       const list = transfer == null ? [] : transfer;
       if (typeof list !== "object" || !(Symbol.iterator in list)) throw new TypeError("transferList must be iterable");
       const items = Array.from(list as Iterable<unknown>);
@@ -52,6 +53,7 @@
           return ["port", { id: snapshot.id, peer: snapshot.peer, version: snapshot.version, sent: snapshot.sent,
             received: snapshot.received, pending: snapshot.pending, closing: snapshot.closing, closed: snapshot.closed }, queue];
         }
+        if (object === processEnv) return ["object", entries(object, implicit)];
         if (internal.isProxy?.(object)) throw cloneError();
         if (object instanceof Blob) return ["blob", internal.native.base64Encode(object._bytes(), false), object.type];
         if (object instanceof ArrayBuffer) return ["buffer", internal.native.base64Encode(new Uint8Array(object), false), object.resizable ? object.maxByteLength : 0];
@@ -60,7 +62,13 @@
         if (object instanceof RegExp) return ["regexp", object.source, object.flags];
         if (object instanceof Map) return ["map", Array.from(object, ([key, value]): [number, number] => [visit(key, implicit), visit(value, implicit)])];
         if (object instanceof Set) return ["set", Array.from(object, value => visit(value, implicit))];
-        if (object instanceof Error) return ["error", object.name, object.message, object.stack || "", visit("cause" in object ? object.cause : undefined, implicit)];
+        if (object instanceof Error) {
+          const name = object.name;
+          const message = `${object.message}`;
+          const stack = object.stack;
+          return ["error", typeof name === "string" ? name : "Error", message, typeof stack === "string" ? stack : null,
+            visit("cause" in object ? object.cause : undefined, implicit)];
+        }
         if (Array.isArray(object)) return ["array", object.length, entries(object, implicit)];
         if (object instanceof Number || object instanceof String || object instanceof Boolean || tag(object) === "BigInt") return ["boxed", visit(object.valueOf(), implicit)];
         if (object instanceof EventTarget || ["SharedArrayBuffer", "Promise", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry", "Symbol", "WebAssembly.Module", "WebAssembly.Memory"].includes(tag(object))) throw cloneError();
@@ -136,8 +144,9 @@
           case "map": { const map = new Map(); memory.set(index, map); for (const [key, val] of node[1]) map.set(read(key), read(val)); return map; }
           case "set": { const set = new Set(); memory.set(index, set); for (const ref of node[1]) set.add(read(ref)); return set; }
           case "error": {
-            const error = new (errors[node[1]] || Error)(node[2]); memory.set(index, error);
-            if (node[3]) Object.defineProperty(error, "stack", { value: node[3], writable: true, configurable: true });
+            const ErrorConstructor = Object.hasOwn(errors, node[1]) ? errors[node[1]] : Error;
+            const error = new ErrorConstructor(node[2]); memory.set(index, error);
+            Object.defineProperty(error, "stack", { value: node[3] === null ? undefined : node[3], writable: true, configurable: true });
             const cause = read(node[4]); if (cause !== undefined) Object.defineProperty(error, "cause", { value: cause, writable: true, configurable: true });
             return error;
           }
@@ -186,7 +195,7 @@
         case "blob": case "regexp": return strings(node.slice(1)) && node.length === 3;
         case "buffer": return typeof node[1] === "string" && Number.isSafeInteger(node[2]) && node[2] >= 0;
         case "view": return typeof node[1] === "string" && ref(node[2]) && Number.isInteger(node[3]) && Number.isInteger(node[4]) && node[3] >= 0 && node[4] >= 0;
-        case "error": return strings(node.slice(1, 4)) && ref(node[4]);
+        case "error": return strings(node.slice(1, 3)) && (node[3] === null || typeof node[3] === "string") && ref(node[4]);
         case "boxed": return ref(node[1]);
         case "port": return validPort(node[1], depth) && ref(node[2]);
         default: return false;

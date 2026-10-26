@@ -25,6 +25,7 @@ function originalSyntax(text: string): string {
     [/      clearLine,\n      clearScreenDown,\n      cursorTo,\n      moveCursor,\n/g, "", 1],
     [/\n  let execveWarned = false;\n/g, "\n", 1],
     [/\n    execve\(\) \{[\s\S]*?\n    \},/g, "", 1],
+    [/    noDeprecation: false,\n/g, "", 1],
     [/const processBase\s*=/g, "const process =", 1],
     [/\bprocessBase\b/g, "process", 5],
     [/const streamBase\s*=/g, "const stream =", 2],
@@ -116,9 +117,12 @@ function expectProcessSnapshot(converted: ProcessSnapshot, baseline: ProcessSnap
   expect(keys).not.toContain("execve");
   expect(Object.hasOwn(baseline.descriptors, "execve")).toBe(false);
   const kill = keys.indexOf("kill");
+  const noDeprecation = keys.indexOf("exitCode") + 1;
   expect(kill).toBeGreaterThan(0);
   expect(keys[kill - 1]).toBe("abort");
-  const expectedKeys = keys.slice(0, kill).concat(["execve"], keys.slice(kill));
+  const expectedKeys = keys.slice(0, noDeprecation).concat(["noDeprecation"], keys.slice(noDeprecation, kill), ["execve"], keys.slice(kill));
+  const noDeprecationDescriptor = { configurable: true, enumerable: true, writable: true,
+    getter: "undefined", setter: "undefined", value: "boolean" } satisfies ProcessSnapshot["descriptors"][string];
   const execve = { configurable: true, enumerable: true, writable: true,
     getter: "undefined", setter: "undefined", value: "function" } satisfies ProcessSnapshot["descriptors"][string];
   expect(converted.descriptors.execve).toEqual(execve);
@@ -126,7 +130,7 @@ function expectProcessSnapshot(converted: ProcessSnapshot, baseline: ProcessSnap
   expect(converted).toEqual({
     ...baseline,
     shapes: { ...baseline.shapes, process: expectedKeys },
-    descriptors: { ...baseline.descriptors, execve },
+    descriptors: { ...baseline.descriptors, noDeprecation: noDeprecationDescriptor, execve },
   });
 }
 
