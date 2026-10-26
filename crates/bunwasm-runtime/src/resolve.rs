@@ -202,6 +202,7 @@ pub struct ResolveNote {
 }
 
 impl Resolver {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::with_conditions(Vec::new())
     }

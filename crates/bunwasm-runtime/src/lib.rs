@@ -128,6 +128,7 @@ pub(crate) struct State {
 }
 
 impl State {
+    #[cfg(test)]
     fn new(argv: Vec<String>, transpiler: Box<dyn Transpiler>) -> Self {
         Self::with_conditions(argv, Vec::new(), Vec::new(), transpiler)
     }
