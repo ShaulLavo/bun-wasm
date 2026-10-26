@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeGuest, prepareGuest, verifyGuest, type GuestArtifact, type GuestDescriptor } from "./guest-artifact.ts";
 import { guestBuilds } from "./guest-source-manifest.ts";
-import { verifyGuestBuildReceipt, type GuestBuildReceipt } from "./guest-build-receipt.ts";
+import { verifyGuestBuildReceipt, verifyGuestCompanions, type GuestBuildReceipt } from "./guest-build-receipt.ts";
 
 const artifacts = ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"] as const;
 const browsers = ["chromium", "firefox", "webkit"] as const;
@@ -15,7 +15,7 @@ interface ArtifactReceipt { name: string; sha256: string; bytes: number }
 interface SnapshotArtifact extends ArtifactReceipt { receipt: GuestBuildReceipt }
 export interface PublicationSnapshot {
   directory: string;
-  artifacts: readonly SnapshotArtifact[];
+  artifacts: readonly ArtifactReceipt[];
   selected: SnapshotArtifact;
 }
 
@@ -53,6 +53,7 @@ export async function verifyPublicationInputs(dist: string, descriptor: GuestDes
     const candidate = await readFile(join(dist, name));
     const receipt: unknown = JSON.parse(await readFile(`${join(dist, name)}.build.json`, "utf8"));
     verifyGuestBuildReceipt(candidate, receipt);
+    await verifyGuestCompanions(receipt, dist);
     if (guestBuilds[receipt.sourceManifest.build].artifact !== name) throw new Error(`Guest publication engine mismatch: ${name}`);
     const described = describeGuest(candidate);
     if (described.sha256 === descriptor.sha256 && described.bytes === descriptor.bytes) matched = true;
@@ -78,8 +79,16 @@ export async function snapshotPublicationInputs(dist: string, descriptor: GuestD
   }
   const selected = receipts.find(candidate => candidate.sha256 === descriptor.sha256 && candidate.bytes === descriptor.bytes);
   if (!selected) throw new Error("Guest publication integrity mismatch: build changed before snapshot");
+  const paired = receipts.find(candidate => candidate.receipt.quickjs);
+  const loaded: ArtifactReceipt[] = receipts.slice();
+  if (paired) {
+    const side = await readFile(join(dist, "quickjs.wasm"));
+    await writeFile(join(directory, "quickjs.wasm"), side, { flag: "wx", mode: 0o400 });
+    await verifyGuestCompanions(paired.receipt, directory);
+    loaded.push({ name: "quickjs.wasm", ...describeGuest(side) });
+  }
   await chmod(directory, 0o500);
-  return { directory, artifacts: receipts, selected };
+  return { directory, artifacts: loaded, selected };
 }
 
 /** Evidence comes from the exact ArrayBuffers each browser hashed and compiled. */
@@ -134,7 +143,9 @@ export async function acceptedPublicationArtifact(snapshot: PublicationSnapshot,
   verifyPublicationReport(snapshot, report);
   const bytes = await readFile(join(snapshot.directory, snapshot.selected.name));
   verifyGuest(bytes, descriptor);
-  return prepareGuest(bytes, new URL(descriptor.url).origin);
+  await verifyGuestCompanions(snapshot.selected.receipt, snapshot.directory);
+  const side = snapshot.selected.receipt.quickjs ? await readFile(join(snapshot.directory, "quickjs.wasm")) : undefined;
+  return prepareGuest(bytes, new URL(descriptor.url).origin, side);
 }
 
 export async function acceptGuestPublication(dist: string, descriptor: GuestDescriptor, signal: AbortSignal): Promise<GuestArtifact> {

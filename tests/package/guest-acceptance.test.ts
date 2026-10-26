@@ -12,6 +12,7 @@ const descriptor = describeGuest(wasm);
 const names = ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"];
 
 async function writeReceipts(dist: string, bytes = wasm): Promise<void> {
+  await writeFile(join(dist, "quickjs.wasm"), wasm);
   for (const name of names) {
     await writeFile(join(dist, `${name}.build.json`), JSON.stringify(fixtureReceipt(bytes, name === "bun.wasm" ? "quickjs" : name === "bun-jsc.wasm" ? "jsc" : "browser")) + "\n");
   }
@@ -146,7 +147,7 @@ test("publication snapshots are private read-only copies and live rebuilds canno
     // Even a second live replacement cannot change the accepted upload source.
     await writeFile(join(dist, "bun.wasm"), rebuilt);
     const artifact = await acceptedPublicationArtifact(snapshot, greenReceipts(snapshot), descriptor);
-    expect(artifact.descriptor).toEqual(descriptor);
+    expect(artifact.descriptor).toEqual({ ...descriptor, quickjs: describeGuest(wasm, new URL(descriptor.url).origin, "quickjs.wasm") });
     expect(decodeGuest(artifact.gzip)).toEqual(wasm);
     expect(await readFile(join(snapshot.directory, "bun.wasm"))).toEqual(Buffer.from(wasm));
   });
@@ -221,5 +222,40 @@ test("publication snapshots retain the exact source manifest and its checksum", 
     const receipt = JSON.parse(await readFile(join(snapshot.directory, `${selected.name}.build.json`), "utf8"));
     expect(receipt.sourceManifest).toEqual(selected.receipt.sourceManifest);
     expect(receipt.sourceManifestSha256).toBe(selected.receipt.sourceManifestSha256);
+  });
+});
+
+test("publication requires the side bytes named by the QuickJS receipt", async () => {
+  await fixture(async dist => {
+    for (const name of names) await writeFile(join(dist, name), wasm);
+    await writeReceipts(dist);
+    await rm(join(dist, "quickjs.wasm"));
+    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("quickjs.wasm");
+    await writeFile(join(dist, "quickjs.wasm"), new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120])));
+    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("paired QuickJS bytes");
+    await writeFile(join(dist, "quickjs.wasm"), wasm);
+    const receipt = fixtureReceipt(wasm, "quickjs");
+    await writeFile(join(dist, "bun.wasm.build.json"), JSON.stringify({ ...receipt, quickjs: undefined }));
+    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("Missing paired QuickJS identity");
+  });
+});
+
+test("publication snapshots and browser receipts bind the actual side bytes", async () => {
+  await withSnapshot(async (dist, snapshot) => {
+    expect(await readFile(join(snapshot.directory, "quickjs.wasm"))).toEqual(Buffer.from(wasm));
+    expect((await stat(join(snapshot.directory, "quickjs.wasm"))).mode & 0o777).toBe(0o400);
+    const report = greenReceipts(snapshot);
+    const side = report.reports[0]!.artifacts.find(artifact => artifact.name === "quickjs.wasm");
+    expect(side).toBeDefined();
+    if (!side) throw new Error("Missing side receipt");
+    side.sha256 = "0".repeat(64);
+    expect(() => verifyPublicationReport(snapshot, report)).toThrow("loaded SHA-256 for quickjs.wasm");
+    await writeFile(join(dist, "quickjs.wasm"), new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120])));
+    const accepted = await acceptedPublicationArtifact(snapshot, greenReceipts(snapshot), descriptor);
+    expect(accepted.descriptor.quickjs?.sha256).toBe(descriptor.sha256);
+    expect(accepted.quickjs && decodeGuest(accepted.quickjs.gzip)).toEqual(wasm);
+    await chmod(join(snapshot.directory, "quickjs.wasm"), 0o600);
+    await writeFile(join(snapshot.directory, "quickjs.wasm"), new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120])));
+    await expect(acceptedPublicationArtifact(snapshot, greenReceipts(snapshot), descriptor)).rejects.toThrow("paired QuickJS bytes");
   });
 });

@@ -74,8 +74,8 @@ function fixture(explicit = true, deferNetwork = false) {
     runtime, signals, admission, admitting, activation, activating, fence, posts, events,
     allocations: () => allocations, releases: () => releases, stops: () => stops,
     onAllocate(callback: () => void) { onAllocate = callback; },
-    start() {
-      return startRun({ runtime, runtimeProcess: explicit ? transport : undefined, engine: "browser", module,
+    start(program = module, engine: RunRequest["engine"] = "browser") {
+      return startRun({ runtime, runtimeProcess: explicit ? transport : undefined, engine, module: program,
         args: [], env: {}, moduleScope: false }, { stdout() {}, stderr() {} });
     },
     async cleanup(run: Run) {
@@ -186,5 +186,23 @@ for (const explicit of [false, true]) test(`kill during a network await stops ${
     state.fence.resolve();
     expect(await run.done).toEqual({ code: 137 });
     expect(state.stops()).toBe(1);
+  } finally { await state.cleanup(run); }
+});
+
+
+test("the ordinary root runner forwards exact pair inputs to its existing worker", async () => {
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareQuickjsProgram, programLinkPlan } = await import("../../src/assets");
+  const { core, side } = quickjsPair();
+  const prepared = await prepareQuickjsProgram(core, side);
+  const state = fixture();
+  const run = state.start(prepared, "quickjs");
+  try {
+    state.admission.resolve();
+    await until(() => state.posts.length === 1);
+    expect(state.posts[0]!.module).toBe(prepared);
+    expect(state.posts[0]!.linkPlan).toEqual(programLinkPlan(prepared));
+    expect(state.posts[0]!.linkPlan?.libraries[0]?.source).toEqual(side);
+    expect(state.posts[0]!.engine).toBe("quickjs");
   } finally { await state.cleanup(run); }
 });

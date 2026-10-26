@@ -21,7 +21,7 @@ pub enum Val {
 
 /// Releases an owned tree without recursing through its descendants' drop glue.
 #[cfg(any(
-    feature = "engine-quickjs",
+    feature = "engine-split",
     feature = "engine-jsc",
     not(feature = "engine-host")
 ))]

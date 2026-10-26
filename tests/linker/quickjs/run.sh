@@ -4,6 +4,7 @@ root=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$root"
 source env.sh
 out=${QUICKJS_BUILD_DIR:?Set QUICKJS_BUILD_DIR to a lane-private build directory}
+node tests/linker/quickjs/check-smoke-exports.ts "$out/engine.wasm"
 tests/linker/quickjs/build-ops.sh
 out=$(cd "$out" && pwd)
 node --input-type=module - "$out" <<'JS'

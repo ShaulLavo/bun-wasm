@@ -167,6 +167,33 @@ jobs:
         with:
           path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
           key: ${{ steps.binaryen-cache.outputs.cache-primary-key }}
+      - uses: actions/cache@v4
+        id: wasm-tools-cache
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
+          key: wasm-tools-1.262.0-${{ runner.os }}-${{ runner.arch }}
+      - name: Install pinned wasm-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$WASM_TOOLS"
+          archive="$WASM_TOOLS/wasm-tools-1.262.0-x86_64-linux.tar.gz"
+          stage=$(mktemp -d "$WASM_TOOLS/.wasm-tools-XXXXXX")
+          trap 'rm -rf -- "$stage"' EXIT
+          input="$archive"
+          if [[ ! -f "$input" ]]; then
+            input="$stage/archive.tar.gz"
+            curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
+              https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/wasm-tools-1.262.0-x86_64-linux.tar.gz \
+              -o "$input"
+          fi
+          echo "655b8df67d54c3ef9b52fc237c4e94bbfbb5f5f43825245cb0940a7002a9ed65  $input" | sha256sum --check
+          if [[ "$input" != "$archive" ]]; then mv "$input" "$archive"; fi
+          tar -xzf "$archive" --strip-components=1 -C "$stage"
+          test "$("$stage/wasm-tools" --version)" = "wasm-tools 1.262.0 (e22db44da 2026-10-13)"
+          mkdir -p "$WASM_TOOLS/wasm-tools-bin"
+          mv "$stage/wasm-tools" "$WASM_TOOLS/wasm-tools-bin/wasm-tools"
+          echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
       - uses: actions/cache/restore@v4
         with:
           path: ~/.bun/install/cache
@@ -387,9 +414,11 @@ jobs:
           trap 'exit 143' TERM
           guest_inputs=$(mktemp "${TMPDIR}/bun-wasm-guest-inputs-XXXXXX")
           bun scripts/guest-build-receipt.ts inputs quickjs > "$guest_inputs"
-          "$GUEST_CARGO" build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli
+          export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-quickjs"
+          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh
           mkdir -p dist
-          cp "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm" dist/
+          cp "$BUN_CORE_BUILD_DIR/bun-core.wasm" dist/bun.wasm
+          cp "$BUN_CORE_BUILD_DIR/quickjs.wasm" dist/quickjs.wasm
           bun scripts/guest-build-receipt.ts write dist/bun.wasm "$guest_inputs"
           rm -f -- "$guest_inputs"
           guest_inputs=

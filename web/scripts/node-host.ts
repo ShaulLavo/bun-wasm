@@ -1,6 +1,6 @@
 // Headless Node fixture host. Guests always execute in workers; the main thread owns the
 // responsive Waffle process supervisor, descriptor transfers, and shared-pipe relays.
-import { readFileSync, writeSync } from "node:fs";
+import { writeSync } from "node:fs";
 import { registerHooks } from "node:module";
 import * as http from "node:http";
 import * as https from "node:https";
@@ -18,6 +18,8 @@ import { installCliFetch } from "./node-install-net.mjs";
 import { nodeModule, NodeProcessBroker, validateNodeCwd } from "./node-spawn.ts";
 import { createNodeSignalController } from "./node-signals.ts";
 import { createNodeProcess, type NodeWasiImports } from "./node-process.ts";
+import { loadNodeProgram, linkNodeProgram, startNodeProgram } from "./node-linked.ts";
+import type { LinkPlanSource, LinkedGroup } from "waffle/link";
 
 const STACK_MB = 32, GUEST_STACK_KIB = "6144";
 // The guest replaces globalThis.process; retain the actual native exit capability.
@@ -33,6 +35,7 @@ interface Settings {
 }
 interface GuestData {
   module: WebAssembly.Module;
+  linkPlan?: LinkPlanSource;
   settings: Settings;
   transport: WorkerProcessTransport;
   request?: SpawnRequest;
@@ -71,10 +74,19 @@ function settings(): Settings {
 
 async function main() {
   const config = settings();
-  const baseModule = await WebAssembly.compile(readFileSync(config.wasmPath));
+  const base = await loadNodeProgram(config.wasmPath);
+  const baseModule = base.module;
+  const programs = new Map<WebAssembly.Module, LinkPlanSource>();
+  if (base.linkPlan) programs.set(baseModule, base.linkPlan);
   const module = await nodeModule({ args: config.args, baseModule, wasmPath: config.wasmPath });
   const engines: Partial<Record<"quickjs" | "jsc", WebAssembly.Module>> = {};
-  for (const engine of ["quickjs", "jsc"] as const) if (config.engines[engine]) engines[engine] = await WebAssembly.compile(readFileSync(config.engines[engine]!));
+  for (const engine of ["quickjs", "jsc"] as const) {
+    const path = config.engines[engine];
+    if (!path) continue;
+    const program = await loadNodeProgram(path);
+    engines[engine] = program.module;
+    if (program.linkPlan) programs.set(program.module, program.linkPlan);
+  }
   const broker = new NodeProcessBroker({ module: baseModule, engines, preopens: config.preopens,
     launch(context, transport) {
       validateNodeCwd(config.preopens, context.request.cwd);
@@ -104,7 +116,7 @@ async function main() {
   } catch (error) { await broker.dispose(); throw error; }
   function launch(data: GuestData): Worker {
     const limits = (data.transport.data as { worker?: { resourceLimits?: ResourceLimits } } | undefined)?.worker?.resourceLimits;
-    return new Worker(new URL(import.meta.url), { workerData: data,
+    return new Worker(new URL(import.meta.url), { workerData: { ...data, linkPlan: programs.get(data.module) },
       resourceLimits: { maxOldGenerationSizeMb: 128, ...limits, stackSizeMb: Math.max(config.stackMb, limits?.stackSizeMb ?? 0) } });
   }
 }
@@ -120,8 +132,10 @@ async function run(data: GuestData) {
   const signals = createNodeSignalController(state.signals);
   let cliFetch: ReturnType<typeof installCliFetch> | undefined;
   let processHost: ReturnType<typeof createNodeProcess> | undefined;
+  let linked: LinkedGroup | undefined;
   function finish(code: number, signal?: number): never {
     const selected = signals.finish(code, signal);
+    linked?.dispose();
     cliFetch?.dispose();
     if (processHost) {
       if (selected.kind === "signaled") processHost.client.defaultSignal(processHost.client.pid, selected.code);
@@ -144,7 +158,8 @@ async function run(data: GuestData) {
     if (config.withNet) cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
     const host = processHost.install(imports, () => instance, cliFetch?.call);
     const module = request ? await nodeModule({ args, baseModule: data.module, wasmPath: config.wasmPath }) : data.module;
-    instance = await WebAssembly.instantiate(module, imports);
+    if (data.linkPlan && module === data.module) linked = await linkNodeProgram(data.linkPlan, imports);
+    instance = linked?.entry ?? await WebAssembly.instantiate(module, imports);
     cliFetch?.install();
     host.installSlots();
     if (typeof instance.exports._start !== "function" || !(instance.exports.memory instanceof WebAssembly.Memory)) {
@@ -154,7 +169,7 @@ async function run(data: GuestData) {
     // setup is complete. Entry and terminal selection arbitrate on the shared outcome word.
     if (!markStarted(state.signals.outcome)) finish(1);
     entered = true;
-    const code = wasi.start(instance as Parameters<typeof wasi.start>[0]);
+    const code = startNodeProgram(wasi, instance, linked);
     const ready = instance.exports.bunwasm_ready;
     if (typeof ready !== "function" || ready() !== 1) finish(code);
     // Force undici's lazy initialization before guest polyfills replace its input globals.

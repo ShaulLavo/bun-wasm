@@ -1,3 +1,4 @@
+import { prepareQuickjsProgram } from "../../src/assets";
 import { observedAtomics } from "./engine-interruption-atomics";
 import { controlLoad, controlStore, controlAdd } from "waffle/proc/control";
 import { createRuntime, type Runtime } from "waffle";
@@ -591,6 +592,19 @@ async function benchmark(module: WebAssembly.Module, engine: Engine, pristine?: 
   } finally { hooks = true; observeCheckpoints = true; }
 }
 
+async function loadCandidate(engine: Engine, name: string) {
+  const response = await fetch(`/${name}`); truth(response.ok, `fresh artifact ${name}: HTTP ${response.status}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const fingerprint = async (bytes: Uint8Array<ArrayBuffer>) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
+  const hash = await fingerprint(bytes);
+  const artifacts = [{ engine, name, sha256: hash, bytes: bytes.byteLength }];
+  if (engine !== "quickjs") return { module: await WebAssembly.compile(bytes), hash, artifacts };
+  const responseSide = await fetch("/quickjs.wasm"); truth(responseSide.ok, `fresh artifact quickjs.wasm: HTTP ${responseSide.status}`);
+  const side = new Uint8Array(await responseSide.arrayBuffer());
+  artifacts.push({ engine, name: "quickjs.wasm", sha256: await fingerprint(side), bytes: side.byteLength });
+  return { module: await prepareQuickjsProgram(bytes, side), hash, artifacts };
+}
+
 void (async () => {
   const benchmarks: unknown[] = [];
   const artifacts: { engine: Engine; name: string; sha256: string; bytes: number }[] = [];
@@ -603,11 +617,9 @@ void (async () => {
     for (const [engine, name] of [["quickjs", "bun.wasm"], ["jsc", "bun-jsc.wasm"], ["browser", "bun-browser.wasm"]] as const) {
       let module: WebAssembly.Module | undefined, hash = "";
       await runCase({ engine, route: "artifact", name: "load-candidate" }, async () => {
-        const response = await fetch(`/${name}`); truth(response.ok, `fresh artifact ${name}: HTTP ${response.status}`);
-        const bytes = await response.arrayBuffer();
-        hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
-        artifacts.push({ engine, name, sha256: hash, bytes: bytes.byteLength });
-        module = await WebAssembly.compile(bytes);
+        const loaded = await loadCandidate(engine, name);
+        hash = loaded.hash; module = loaded.module;
+        artifacts.push(...loaded.artifacts);
       });
       // Other engines and Preview1 remain independent of an unavailable artifact.
       if (!module) continue;

@@ -183,6 +183,7 @@ fn memory_len() -> usize {
     u32::MAX as usize + 1
 }
 
+#[cfg(any(test, feature = "engine-jsc", not(feature = "engine-split")))]
 pub(super) fn call(
     dispatcher: &Dispatcher,
     op: u32,
@@ -223,6 +224,7 @@ pub(super) fn call(
     super::Reply { status, bytes }.into_result()
 }
 
+#[cfg(any(test, feature = "engine-jsc", not(feature = "engine-split")))]
 pub(super) fn frame_bytes(op: u32, session: u32, pointer: u32, len: u32) -> [u8; Frame::SIZE] {
     let mut frame = [0; Frame::SIZE];
     for (index, word) in [op, session, pointer, len, 0, 0].into_iter().enumerate() {
@@ -231,6 +233,7 @@ pub(super) fn frame_bytes(op: u32, session: u32, pointer: u32, len: u32) -> [u8;
     frame
 }
 
+#[cfg(any(test, feature = "engine-jsc", not(feature = "engine-split")))]
 fn read_reply(transport: &Transport, frame: Frame) -> Result<Vec<u8>, crate::data::NativeError> {
     if frame.reply_len == 0 {
         return Ok(Vec::new());
@@ -244,6 +247,7 @@ fn read_reply(transport: &Transport, frame: Frame) -> Result<Vec<u8>, crate::dat
     Ok(bytes)
 }
 
+#[cfg(any(test, feature = "engine-jsc", not(feature = "engine-split")))]
 fn call_error(status: Status) -> crate::data::NativeError {
     match status {
         Status::ResourceLimit => crate::data::NativeError::error("core data allocation failed"),

@@ -6,7 +6,7 @@ export const guestBuilds = {
   browser: { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-transpiler", "bun-build"], optimizer: "required" },
   "source-cache-browser": { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-build"], optimizer: "unused" },
   quickjs: { artifact: "bun.wasm", package: "bunwasm-cli", features: ["default"], optimizer: "optional" },
-  "quickjs-minimal": { artifact: "bun.wasm", package: "bunwasm-cli", features: [], optimizer: "optional" },
+  "quickjs-minimal": { artifact: "bun.wasm", package: "bunwasm-cli", features: ["engine-quickjs"], optimizer: "optional" },
   jsc: { artifact: "bun-jsc.wasm", package: "bunwasm-cli", features: ["engine-jsc", "bun-transpiler", "bun-build"], optimizer: "required" },
   tools: { artifact: "bun-tools.wasm", package: "bunwasm-tools", features: ["default"], optimizer: "required" },
 } as const;

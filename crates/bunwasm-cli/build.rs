@@ -29,9 +29,43 @@ fn main() {
             println!("cargo:rustc-link-arg-bin=bun=--export={name}");
         }
     }
+    if std::env::var_os("CARGO_FEATURE_ENGINE_QUICKJS").is_some() {
+        split_entry();
+        return;
+    }
     // BoringSSL, JavaScriptCore and Rust share Waffle's patched wasi-libc.
     {
         let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("BUN_WASM_SYSROOT (source env.sh)");
         println!("cargo:rustc-link-arg-bin=bun={sysroot}/lib/wasm32-wasip1/crt1-command.o");
+    }
+}
+
+fn split_entry() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let exports = root.join("scripts/quickjs-core-exports.txt");
+    let source = root.join("crates/bunwasm-cli/entry-split.c");
+    let object = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("entry-split.o");
+    let compiler = std::env::var("CC_wasm32_wasip1").expect("source env.sh");
+    let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
+    assert!(
+        std::process::Command::new(compiler)
+            .args([
+                "--target=wasm32-wasip1",
+                &format!("--sysroot={sysroot}"),
+                "-O2",
+                "-c"
+            ])
+            .arg(&source)
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .unwrap()
+            .success()
+    );
+    println!("cargo:rerun-if-changed={}", source.display());
+    println!("cargo:rerun-if-changed={}", exports.display());
+    println!("cargo:rustc-link-arg-bin=bun={}", object.display());
+    for name in std::fs::read_to_string(exports).unwrap().lines() {
+        println!("cargo:rustc-link-arg-bin=bun=--export={name}");
     }
 }

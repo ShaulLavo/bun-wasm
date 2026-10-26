@@ -49,6 +49,7 @@ for (const id of requested) if (!apps.some(app => app.id === id)) throw new Erro
 const selected = apps.filter(app => requested.includes(app.id));
 const wasmName = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm", hermes: "bun-hermes.wasm" };
 for (const engine of options.engines) if (!existsSync(join(root, "dist", wasmName[engine]))) throw new Error(`Build dist/${wasmName[engine]} first`);
+if (options.engines.includes("quickjs") && !existsSync(join(root, "dist/quickjs.wasm"))) throw new Error("Build the matching dist/quickjs.wasm first");
 if (options.hosts.includes("native") && options.engines.some(engine => engine !== "browser") && !existsSync(options.launcher)) throw new Error(`Build launcher ${options.launcher} first`);
 if (options.hosts.includes("playground") && !existsSync(join(root, "web/dist/index.html"))) throw new Error("Build web/ first");
 if (existsSync(join(options.output, "results.json"))) throw new Error("Results already exist; choose another --output");
@@ -277,6 +278,12 @@ try {
     const bytes = readFileSync(path);
     return [engine, { path, bytes: bytes.byteLength, sha256: sha256(bytes) }];
   }));
+  if (artifacts.quickjs) {
+    const path = join(scratch, "quickjs.wasm");
+    copyFileSync(join(root, "dist/quickjs.wasm"), path);
+    const bytes = readFileSync(path);
+    artifacts.quickjs.side = { path, bytes: bytes.byteLength, sha256: sha256(bytes) };
+  }
   if (options.guestReceipt) {
     if (!artifacts.browser) throw new Error("--guest-receipt requires the browser engine");
     runtimeSource = guestProvenance(readFileSync(options.guestReceipt, "utf8"), artifacts.browser);
@@ -288,7 +295,7 @@ try {
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
   runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "cleanup.ts", "browser-environment.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
-  if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.map(engine => [wasmName[engine], artifacts[engine].sha256])));
+  if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.map(engine => [wasmName[engine], artifacts[engine].sha256]).concat(artifacts.quickjs ? [["quickjs.wasm", artifacts.quickjs.side.sha256]] : [])));
   mirror = await registry({ directory: options.cache, record: options.record });
   const { browserHost } = await import("./browser.mjs");
   browserSession = await browserHost({ root, scratch, options, launch, stop });
@@ -313,6 +320,7 @@ try {
       runtime_source: runtimeSource,
       catalog: options.product ? selected.map(app => ({ id: app.id, family: app.family, features: app.features, stages: app.commands.map(command => command.name) })) : undefined,
       artifacts: Object.fromEntries(Object.entries(artifacts).map(([engine, artifact]) => [engine, artifact.sha256])),
+      companions: artifacts.quickjs ? { quickjs: { name: "quickjs.wasm", bytes: artifacts.quickjs.side.bytes, sha256: artifacts.quickjs.side.sha256 } } : {},
       runner_sources: runnerSources,
       playground_builds: playgroundBuilds,
       launcher_sha256: launcherDigest,
