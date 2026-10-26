@@ -153,6 +153,14 @@ test("React Router uses framework mode, server loader and official production se
   expect(fixture.files["start.ts"]).toContain("@react-router/serve/bin.js");
 });
 
+test("React Router selects Bun SSR external exports for its readable server entry", () => {
+  const fixture = app("fullstack-react-router");
+  expect(fixture.files["vite.config.ts"]).toContain("plugins: [reactRouter()]");
+  expect(fixture.files["vite.config.ts"]).toContain("ssr: { resolve: { externalConditions: ['bun', 'node'] } }");
+  expect(fixture.files["app/entry.server.tsx"]).toContain("renderToReadableStream");
+  expect(fixture.files["app/entry.server.tsx"]).not.toContain("renderToPipeableStream");
+});
+
 test("SolidStart and TanStack use their verified integrated Nitro node-server targets", () => {
   const solid = app("fullstack-solidstart");
   expect(solid.files["app.config.ts"]).toContain("ssr: true");
