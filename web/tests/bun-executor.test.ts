@@ -1,4 +1,4 @@
-import { afterAll, expect, mock, test } from "bun:test";
+import { afterAll, expect, mock, spyOn, test } from "bun:test";
 import { createFilesystemConnection, revokeFilesystem } from "waffle/fs";
 import { controlAdd, controlLoad } from "waffle/proc/control";
 import { WasiExit } from "waffle/core";
@@ -8,6 +8,9 @@ import { bootstrap, type RuntimeWorkerHost } from "waffle/browser/worker";
 import { createRing } from "waffle/browser/net/ring";
 import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
+import { guest, PROCESS_IMPORTS } from "../../scripts/fixtures/shared-objects/executor-guest";
+import { createSharedObjectBroker } from "../src/shared-objects/broker";
+import type { SharedObjectService } from "../src/shared-objects/service";
 import { installLookupServer } from "../src/net/lookup";
 
 // The Bun executor is Waffle's bootstrap plus Bun policy. These tests run the real bootstrap with
@@ -15,6 +18,15 @@ import { installLookupServer } from "../src/net/lookup";
 const actualEngineHost = { ...await import("../src/engine-host.js") };
 const actualTrampoline = { ...await import("../src/net/trampoline") };
 const actualControl = { ...await import("waffle/proc/control") };
+const actualLink = { ...await import("waffle/link") };
+let linkedFinishFailure: Error | undefined;
+mock.module("waffle/link", () => ({ ...actualLink, linkedWorkerHooks() {
+  const hooks = actualLink.linkedWorkerHooks();
+  return { ...hooks, beforeFinish() {
+    hooks.beforeFinish?.();
+    if (linkedFinishFailure) throw linkedFinishFailure;
+  } };
+} }));
 // Test-only observation of Waffle's existing exported wait boundary. Production captures
 // Atomics.wait before guest code runs; changing that global must not affect it.
 let observeWait: typeof actualControl.controlWait | undefined;
@@ -30,31 +42,7 @@ const startEngineHost = mock(async (_options: Record<string, unknown>): Promise<
 mock.module("../src/engine-host.js", () => ({ startEngineHost }));
 const { createBunExecutor } = await import("../src/bun-executor");
 // Module mocks are process-wide in `bun test`: leave the real engine host for the other files.
-afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); mock.module("waffle/proc/control", () => actualControl); });
-
-const name = (value: string) => [value.length].concat(Array.from(new TextEncoder().encode(value)));
-const unsigned = (value: number): number[] => {
-  const bytes: number[] = [];
-  do { const byte = value & 127; value >>>= 7; bytes.push(byte | (value ? 128 : 0)); } while (value);
-  return bytes;
-};
-const section = (id: number, bytes: number[]) => [id].concat(unsigned(bytes.length), bytes);
-const PROCESS_IMPORTS = [
-  "access_cancel", "access_start", "access_take", "default_signal", "dup", "getpid",
-  "interrupted", "job_of", "kill", "kill_job", "pipe", "poll", "read", "signal", "spawn",
-  "wait", "wait_job", "write",
-] as const;
-/** Exports memory, an empty `_start` and `bunwasm_ready` returning `ready`.
- * Imports are linked but invoked directly by the test, so their dummy Wasm type is unused. */
-function guest(ready: number, imports: readonly { namespace: string; name: string }[] = []): WebAssembly.Module {
-  return new WebAssembly.Module(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0].concat(
-    section(1, [2, 0x60, 0, 0, 0x60, 0, 1, 0x7f]),
-    imports.length ? section(2, [imports.length].concat(imports.flatMap(entry => name(entry.namespace).concat(name(entry.name), [0, 0])))) : [],
-    section(3, [2, 0, 1]), section(5, [1, 0, 1]),
-    section(7, [3].concat(name("memory"), [2, 0], name("_start"), [0, imports.length], name("bunwasm_ready"), [0, imports.length + 1])),
-    section(10, [2, 2, 0, 0x0b, 4, 0, 0x41, ready, 0x0b]),
-  )));
-}
+afterAll(() => { mock.module("../src/engine-host.js", () => actualEngineHost); mock.module("../src/net/trampoline", () => actualTrampoline); mock.module("waffle/proc/control", () => actualControl); mock.module("waffle/link", () => actualLink); });
 
 async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slots" | "env" | "net">> & { ready?: number; fetched?: string[]; onFetch?(): void } = {}) {
   const connection = createFilesystemConnection();
@@ -493,3 +481,122 @@ test("paired executor initializes the shared side once and releases its table ra
     expect(messages.some(message => message.type === "error")).toBe(false);
   } finally { WebAssembly.Instance = NativeInstance; connection.client.port.close(); connection.server.port.close(); }
 });
+async function runSharedSetup(mode: "normal" | "send-failure" | "revoked-after-export" | "engine-failure") {
+  const connection = createFilesystemConnection(), broker = createSharedObjectBroker(), route = broker.register();
+  const messages: WorkerMessage[] = [];
+  let exported = false, bound: SharedObjectService | undefined;
+  const host: BunExecutorHost & RuntimeWorkerHost = {
+    crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    fetch: globalThis.fetch.bind(globalThis),
+    postMessage(message, transfer) {
+      if (message.type !== "bun-shared-connect") { messages.push(message); return; }
+      exported = true;
+      if (mode === "send-failure") throw new Error("native publication failed");
+      expect(transfer).toEqual([message.port]);
+      route.attach(message.port);
+    },
+  };
+  const request: RunRequest = {
+    engine: "browser", adapter: "bun", module: guest(1), args: ["bun"], env: {},
+    filesystem: connection.client, runtimeProcess: createWorkerProcessTransport({ pid: 1, job: 1 }),
+    trace: false, net: null, moduleCache: null, slots: "off", sharedObjects: { owner: route.id },
+  };
+  const executor = createBunExecutor(request, host);
+  startEngineHost.mockImplementationOnce(async options => {
+    bound = options.sharedObjects as SharedObjectService;
+    expect(bound.inspect().closed).toBe(false);
+    if (mode === "engine-failure") throw new Error("engine start rejected");
+    return 0;
+  });
+  try {
+    await bootstrap(request, { ...executor, setup(context) {
+      context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
+      executor.setup?.({ ...context, checkActive() {
+        context.checkActive();
+        if (mode === "revoked-after-export" && exported) throw new Error("setup revoked");
+      } });
+    } }, host);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    return { messages, exported, bound, retained: broker.inspect(), afterCleanup: broker.inspect };
+  } finally {
+    executor.beforeFinish?.(); route.close(); broker.dispose();
+    connection.client.port.close(); connection.server.port.close();
+    startEngineHost.mockReset();
+  }
+}
+
+test("real bootstrap exports a Bun-owned native setup port and closes engine service on finish", async () => {
+  const result = await runSharedSetup("normal");
+  expect(result.exported).toBe(true);
+  expect(result.afterCleanup()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+  expect(result.bound?.inspect()).toEqual({ buffers: 0, pending: 0, staged: 0, closed: true });
+  expect(result.retained).toEqual({ clients: 0, objects: 0, waiting: 0 });
+  expect(exits(result.messages)[0]?.type).toBe("exit");
+});
+
+for (const mode of ["send-failure", "revoked-after-export", "engine-failure"] as const) {
+  test(`real bootstrap ${mode} cleanup releases its route without retaining backing`, async () => {
+    const result = await runSharedSetup(mode);
+    expect(result.exported).toBe(true);
+    expect(result.afterCleanup()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    expect(exits(result.messages)[0]?.type).toBe("error");
+    expect(result.retained.objects).toBe(0);
+    expect(result.retained.waiting).toBe(0);
+    if (mode !== "send-failure") expect(result.retained.clients).toBe(0);
+    if (result.bound) expect(result.bound.inspect().closed).toBe(true);
+  });
+}
+
+const keepFixtureReference = () => {};
+
+async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lookup") {
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareQuickjsProgram, programLinkPlan } = await import("../../src/assets");
+  const { core, side } = quickjsPair();
+  const module = await prepareQuickjsProgram(core, side);
+  const connection = createFilesystemConnection(), lookup = new MessageChannel();
+  const broker = createSharedObjectBroker(), route = broker.register();
+  const request: RunRequest = { engine: "browser", adapter: "bun", module, linkPlan: programLinkPlan(module),
+    args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, moduleCache: null,
+    slots: "off", sharedObjects: { owner: route.id }, lookupPort: lookup.port2 };
+  const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message) { if (message.type === "bun-shared-connect") route.attach(message.port); },
+    async fetch() { throw new Error("unexpected fetch"); } };
+  const executor = createBunExecutor(request, host);
+  const originalClose = MessagePort.prototype.close;
+  const released: string[] = [];
+  const expected = new Error(`${failure} cleanup failed`);
+  let restoreClose = () => {};
+  try {
+    await bootstrap(request, { ...executor, beforeFinish() {},
+      setup(context) {
+        context.fs.preopen = () => 1; context.fs.retain = keepFixtureReference; context.fs.release = keepFixtureReference;
+        executor.setup?.(context);
+      },
+    }, host);
+    linkedFinishFailure = failure === "linked" ? expected : undefined;
+    const close = spyOn(MessagePort.prototype, "close").mockImplementation(function(this: MessagePort) {
+      const kind = this === lookup.port2 ? "lookup" : "shared";
+      released.push(kind);
+      originalClose.call(this);
+      if (failure === kind && (kind === "shared" || released.filter(value => value === kind).length === 1)) throw expected;
+    });
+    restoreClose = () => close.mockRestore();
+    if (failure === "none") expect(() => executor.beforeFinish?.()).not.toThrow();
+    else expect(() => executor.beforeFinish?.()).toThrow(expected);
+    expect(released).toEqual(["shared", "lookup", "lookup"]);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(broker.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+  } finally {
+    linkedFinishFailure = undefined;
+    restoreClose();
+    executor.beforeFinish?.();
+    route.close(); broker.dispose();
+    lookup.port1.close(); lookup.port2.close();
+    connection.client.port.close(); connection.server.port.close();
+  }
+}
+
+for (const failure of ["none", "linked", "shared", "lookup"] as const) {
+  test(`composed executor releases linked, shared and both lookup owners after ${failure} failure`, () => assertComposedCleanup(failure));
+}

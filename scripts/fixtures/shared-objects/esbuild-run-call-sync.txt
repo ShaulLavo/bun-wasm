@@ -1,0 +1,16 @@
+  let runCallSync = (command, args) => {
+    let id = nextID++;
+    let sharedBuffer = new SharedArrayBuffer(8);
+    let sharedBufferView = new Int32Array(sharedBuffer);
+    let msg = { sharedBuffer, id, command, args };
+    worker.postMessage(msg);
+    let status = Atomics.wait(sharedBufferView, 0, 0);
+    if (status !== "ok" && status !== "not-equal") throw new Error("Internal error: Atomics.wait() failed: " + status);
+    let { message: { id: id2, resolve, reject, properties } } = worker_threads2.receiveMessageOnPort(mainPort);
+    if (id !== id2) throw new Error(`Internal error: Expected id ${id} but got id ${id2}`);
+    if (reject) {
+      applyProperties(reject, properties);
+      throw reject;
+    }
+    return resolve;
+  };

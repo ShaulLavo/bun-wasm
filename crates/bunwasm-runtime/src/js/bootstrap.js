@@ -4,7 +4,7 @@
 (function (native) {
   "use strict";
 
-  const internal = { native };
+  const internal = { native, sharedObjects: native.sharedObjects };
 
   // Engine hooks for the formatter (inspect.js) and util.types.
   function isModuleNamespace(value) {

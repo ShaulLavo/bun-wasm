@@ -1,6 +1,8 @@
 // Types for engine-host.js (plain JS): runs the program in the worker's own JS engine after
 // bun-browser.wasm's `_start` returned with `bunwasm_ready() === 1`.
 
+import type { SharedObjectService } from "./shared-objects/service";
+
 export interface EngineHostOptions {
   /** The bun-browser.wasm instance, after `_start` returned. */
   instance: WebAssembly.Instance;
@@ -29,6 +31,8 @@ export interface EngineHostOptions {
    * While the program waits on I/O, the event loop wakes on it instead of only rescanning.
    */
   processWake?: Int32Array;
+  /** Private backing service. Supplying it does not enable guest codec/startup decoding. */
+  sharedObjects?: SharedObjectService;
   /** Called exactly once when the program ends (process.exit, uncaught error, empty event loop). */
   onExit(code: number): void;
 }
