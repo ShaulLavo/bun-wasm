@@ -30,9 +30,10 @@
     constructor(descriptor) {
       if (!descriptor || (typeof descriptor !== 'object' && typeof descriptor !== 'function')) throw new TypeError('WebAssembly.Memory descriptor must be an object');
       const initial = pages(descriptor.initial);
+      if (initial > 65536) throw new RangeError('WebAssembly.Memory exceeds the 32-bit page limit');
       const limit = descriptor.maximum;
       const maximum = limit === undefined ? undefined : pages(limit);
-      if (initial > 65536 || maximum > 65536) throw new RangeError('WebAssembly.Memory exceeds the 32-bit page limit');
+      if (maximum > 65536) throw new RangeError('WebAssembly.Memory exceeds the 32-bit page limit');
       if (maximum !== undefined && maximum < initial) throw new RangeError('WebAssembly.Memory maximum is smaller than initial');
       const shared = !!descriptor.shared;
       if (shared && maximum === undefined) throw new TypeError('Shared WebAssembly memories require a maximum');

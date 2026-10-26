@@ -217,3 +217,49 @@ test("source: BufferSource views retain offsets, snapshots, and current-main rea
   assert.throws(() => Reflect.construct(api.Module, [foreignBuffer]), TypeError);
   assert.equal(backing.byteLength, fixture.length + 8);
 });
+
+
+for (const backend of ["host", "source"]) {
+  test(`${backend}: reject invalid initial before accessing maximum`, () => {
+    const source = sourceApi();
+    const api = backend === "host" ? host : source.api;
+    const reads: string[] = [];
+    const sentinel = new Error("maximum getter must not run");
+    const descriptor = {
+      get initial() { reads.push("initial"); return 65_537; },
+      get maximum(): number { reads.push("maximum"); throw sentinel; },
+    };
+    assert.throws(() => new api.Memory(descriptor), RangeError);
+    assert.deepEqual(reads, ["initial"]);
+    assert.equal(source.allocations(), 0);
+  });
+
+  test(`${backend}: preserve an initial getter throw without reading maximum`, () => {
+    const source = sourceApi();
+    const api = backend === "host" ? host : source.api;
+    const reads: string[] = [];
+    const sentinel = new Error("initial getter failed");
+    const descriptor = {
+      get initial(): number { reads.push("initial"); throw sentinel; },
+      get maximum() { reads.push("maximum"); return 1; },
+    };
+    assert.throws(() => new api.Memory(descriptor), error => error === sentinel);
+    assert.deepEqual(reads, ["initial"]);
+    assert.equal(source.allocations(), 0);
+  });
+
+  test(`${backend}: preserve a maximum getter throw after a valid initial`, () => {
+    const source = sourceApi();
+    const api = backend === "host" ? host : source.api;
+    const reads: string[] = [];
+    const sentinel = new Error("maximum getter failed");
+    const descriptor = {
+      get initial() { reads.push("initial"); return 0; },
+      get maximum(): number { reads.push("maximum"); throw sentinel; },
+      get shared() { reads.push("shared"); return false; },
+    };
+    assert.throws(() => new api.Memory(descriptor), error => error === sentinel);
+    assert.deepEqual(reads, ["initial", "maximum"]);
+    assert.equal(source.allocations(), 0);
+  });
+}
