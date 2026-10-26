@@ -16,7 +16,7 @@ export interface SharedPort {
   start(): void;
   close(): void;
 }
-interface BunSharedConnection { readonly type: "bun-shared-connect"; readonly owner: string; readonly port: MessagePort; }
+export interface BunSharedConnection { readonly type: "bun-shared-connect"; readonly owner: string; readonly port: MessagePort; }
 // This is the native worker global, not Waffle's RuntimeWorkerHost message union.
 export interface BunSharedNativeHost { postMessage(message: BunSharedConnection, transfer: MessagePort[]): void; }
 export interface SharedPublication {

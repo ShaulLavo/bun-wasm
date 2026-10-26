@@ -21,8 +21,15 @@ The native host interface is Bun-owned. It describes native worker-global
 source or pin changes are needed. The accepted provider proof uses a separate
 Waffle source identity from the consumer's current pin.
 
-This source unit does not install the service into an engine, executor, or
-launcher. Without the service, public worker serialization still rejects SAB.
+An internal installation in `web/src/shared-objects/runtime.ts` keys the broker
+by the Waffle Runtime identity. The launcher acquires a process route only when
+that installation already exists. Executor setup exports its native port before
+guest entry. Revocation, cleanup, failed setup, engine construction failure and
+engine exit release the service or its broker lease. Engine attachment waits hold
+its pending-work count and wake its event loop exactly once when settled.
+
+There is no default runtime installation or injection into the guest internal
+codec. Without that separate injection, public worker serialization still rejects SAB.
 Startup workerData hydration and nested graph-route liveness remain separate
 integration work. Releasing routes and broker references cannot revoke native
 SAB aliases already delivered to guest code.
@@ -63,8 +70,10 @@ native-port disappearance alone is not a process-lifetime signal here.
 Concurrent preparations of the same new backing reject explicitly until the
 first publication commits or aborts. This avoids assigning conflicting object
 identities to overlapping transactions. Node Buffer backed by SAB remains
-unsupported. Engine value-native binding, synchronous startup hydration and
-nested byte-graph routing are not implemented by this record.
+unsupported. Engine value-native binding is installed only for an explicitly
+supplied private service. Synchronous startup hydration and nested byte-graph routing remain
+unimplemented. The internal installation owner must call `close()` when it
+releases the Runtime; process route revocation is not a Runtime disposal hook.
 
 Commit preflights transfer validity before publishing, then delivers the byte graph
 before detaching ArrayBuffers and moving ports. Tests cover rejected serialization,
