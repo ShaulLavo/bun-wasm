@@ -11,6 +11,8 @@ import {
 import { createR2Publisher, publishGuest, verifyPublicGuest } from "../../scripts/publish-guest.ts";
 import type { GuestArtifact } from "../../scripts/guest-artifact.ts";
 import type { GuestPublisher } from "../../scripts/publish-guest.ts";
+import { loadBunWasm, programLinkPlan, type BunWasmAsset } from "../../src/assets";
+import { quickjsPair } from "./quickjs-plan-fixture";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const artifact = prepareGuest(wasm);
@@ -130,6 +132,39 @@ test("publication fails on bad public headers, status, or body even after an upl
   await expect(verifyPublicGuest(artifact.descriptor, async () => new Response(null, { status: 404 }))).rejects.toThrow("HTTP 404");
   await expect(verifyPublicGuest(artifact.descriptor, async () => new Response(Buffer.concat([wasm, new Uint8Array([0, 1, 0])]), { headers: publicHeaders }))).rejects.toThrow("integrity mismatch");
   await verifyPublicGuest(artifact.descriptor, async () => new Response(Buffer.from(artifact.gzip), { headers: publicHeaders }));
+});
+
+test("CLI emits a paired descriptor for a split core and rejects a missing side", async () => {
+  const scratch = await mkdtemp(join(scratchRoot, "bun-wasm-guest-cli-test-"));
+  try {
+    const { core, side } = quickjsPair();
+    const corePath = join(scratch, "bun.wasm");
+    const outputPath = join(scratch, "guest-asset.generated.ts");
+    await writeFile(corePath, core); await writeFile(join(scratch, "quickjs.wasm"), side);
+    const command = [process.execPath, "scripts/guest-artifact.ts", corePath, "--origin", GUEST_ORIGIN, "--output", outputPath];
+    const paired = Bun.spawnSync(command, { cwd: process.cwd() });
+    expect(paired.exitCode).toBe(0);
+    const descriptor = JSON.parse(paired.stdout.toString()) as BunWasmAsset;
+    expect(descriptor.quickjs).toEqual({
+      url: `${GUEST_ORIGIN}/${createHash("sha256").update(side).digest("hex")}/quickjs.wasm.gz`,
+      sha256: createHash("sha256").update(side).digest("hex"), bytes: side.length,
+    });
+    expect(await readFile(outputPath, "utf8")).toContain('quickjs.wasm.gz');
+    const module = await loadBunWasm({ asset: descriptor, fetch: async url => new Response(url === descriptor.url ? core : side) });
+    expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(side);
+    await writeFile(join(scratch, "quickjs.wasm"), Uint8Array.from([0]));
+    const invalid = Bun.spawnSync(command, { cwd: process.cwd() });
+    expect(invalid.exitCode).not.toBe(0);
+    expect(invalid.stderr.toString()).toContain("valid WASM");
+    await rm(join(scratch, "quickjs.wasm"));
+    const missing = Bun.spawnSync(command, { cwd: process.cwd() });
+    expect(missing.exitCode).not.toBe(0);
+    expect(missing.stderr.toString()).toContain("matching side module");
+    await writeFile(corePath, wasm);
+    const ordinary = Bun.spawnSync(command, { cwd: process.cwd() });
+    expect(ordinary.exitCode).toBe(0);
+    expect(JSON.parse(ordinary.stdout.toString())).toEqual(describeGuest(wasm));
+  } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 
 test("descriptor generator writes a typed constant without bundling guest bytes", async () => {

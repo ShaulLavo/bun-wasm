@@ -1,6 +1,6 @@
 import { quickjsPair } from "./quickjs-plan-fixture";
 import { expect, test } from "bun:test";
-import { BunWasmAssetError, loadBunWasm, programLinkPlan, type BunWasmAsset } from "../../src/assets.js";
+import { BunWasmAssetError, loadBunWasm, prepareQuickjsProgram, programLinkPlan, type BunWasmAsset } from "../../src/assets.js";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const hash = new Bun.CryptoHasher("sha256").update(wasm).digest("hex");
@@ -128,13 +128,42 @@ test("snapshots paired metadata before the core fetch callback", async () => {
   } })).rejects.toThrow("SHA-256 mismatch");
 });
 
+test("distinct valid QuickJS sides retain distinct Waffle program associations", async () => {
+  const { core, side } = quickjsPair();
+  const sideB = Uint8Array.from(Array.from(side).concat([0, 2, 1, 120]));
+  expect(WebAssembly.validate(sideB)).toBe(true);
+  const first = await prepareQuickjsProgram(core, side);
+  const second = await prepareQuickjsProgram(core, sideB);
+  expect(first).not.toBe(second);
+  expect(await prepareQuickjsProgram(core, side)).toBe(first);
+  expect(programLinkPlan(first)?.libraries[0]?.source).toEqual(side);
+  expect(programLinkPlan(second)?.libraries[0]?.source).toEqual(sideB);
+  const digest = await crypto.subtle.digest("SHA-256", side);
+  expect(WebAssembly.Module.customSections(first, "bun-wasm-quickjs")).toEqual([digest]);
+  expect(WebAssembly.Module.exports(first)).toEqual(WebAssembly.Module.exports(new WebAssembly.Module(core)));
+  const ordinary = new WebAssembly.Module(wasm);
+  expect(programLinkPlan(ordinary)).toBeUndefined();
+  expect(await loadBunWasm({ module: ordinary })).toBe(ordinary);
+});
+
+test("paired preparation snapshots both inputs before asynchronous hashing", async () => {
+  const { core, side } = quickjsPair();
+  const originalCore = core.slice(), originalSide = side.slice();
+  const pending = prepareQuickjsProgram(core, side);
+  core.fill(0); side.fill(0);
+  const module = await pending;
+  expect(programLinkPlan(module)?.core.source.slice(0, originalCore.length)).toEqual(originalCore);
+  expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(originalSide);
+});
+
 test("prepares the verified pair and rejects its naked core override", async () => {
   const { core, side } = quickjsPair();
   const describe = (url: string, bytes: Uint8Array) => ({ url, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex") });
   const paired = { ...describe("https://example.test/bun.wasm", core), quickjs: describe("https://example.test/quickjs.wasm", side) };
   const module = await loadBunWasm({ asset: paired, fetch: async url => new Response(url === paired.url ? core : side) });
   const plan = programLinkPlan(module);
-  expect(plan?.core.source).toEqual(core);
+  expect(plan?.core.source.slice(0, core.length)).toEqual(core);
+  expect(plan?.core.source.length).toBeGreaterThan(core.length);
   expect(plan?.libraries[0]?.source).toEqual(side);
   expect(await loadBunWasm({ module })).toBe(module);
   await expect(loadBunWasm({ module: new WebAssembly.Module(core) })).rejects.toThrow("matching prepared side module");
