@@ -2,6 +2,7 @@ import { createContext, runInContext, type Context } from "node:vm";
 import { expect, test } from "bun:test";
 import { completeObservations, observeProductTraffic, productObservations, type ProductPage } from "./product-browser";
 import type { ProductCheck } from "./product-types";
+import { fullstackApps } from "./product-fullstack";
 import type { Page } from "../../web/node_modules/playwright";
 
 interface FixtureOptions {
@@ -11,6 +12,7 @@ interface FixtureOptions {
   initFailure?: boolean;
   bindingDelay?: number;
   initialVisible?: string;
+  hydration?: ReturnType<typeof hydrationGate>;
 }
 
 interface Fixture {
@@ -98,12 +100,17 @@ function fixture(options: FixtureOptions): Fixture {
   const bindings = new Map<string, (source: unknown, value: unknown) => void>();
   const writes: string[] = [];
   const visits: string[] = [];
-  const locator = (wanted = "") => ({
-    filter: ({ hasText }: { hasText: string }) => locator(hasText),
+  const locator = (selector: string, wanted = "") => ({
+    filter: ({ hasText }: { hasText: string }) => locator(selector, hasText),
     async waitFor() {
+      if (selector.includes('[data-hydrated="true"]')) await options.hydration?.wait();
       if ((options.domFailure && wanted === "changed") || !visible.includes(wanted)) throw new Error("DOM did not update");
     },
-    async click() { visible = "action-result"; },
+    async click() {
+      if (options.hydration?.buttonDisabled) await options.hydration.wait();
+      options.hydration?.entered();
+      if (!options.hydration || options.hydration.isReady()) visible = "action-result";
+    },
     async count() { return visible.includes(wanted) ? 1 : 0; },
   });
   const installBindings = () => {
@@ -158,6 +165,8 @@ function fixture(options: FixtureOptions): Fixture {
   const sourceAdapter = {
     async read() { return source; },
     async write(_path: string, contents: string) {
+      options.hydration?.entered();
+      if (options.hydration && !options.hydration.isReady()) throw new Error("Source edit preceded hydration");
       writes.push(contents);
       source = contents;
       visible = contents;
@@ -183,6 +192,60 @@ function fixture(options: FixtureOptions): Fixture {
 function hmrCheck() {
   return { kind: "page", selector: "h1", text: "original", hmr: { path: "page.tsx", search: "original", replacement: "changed" } } satisfies ProductCheck;
 }
+
+function hydrationGate(buttonDisabled = true) {
+  const ready = Promise.withResolvers<void>();
+  const waiting = Promise.withResolvers<void>();
+  let hydrated = false;
+  return {
+    buttonDisabled,
+    waiting: waiting.promise,
+    entered: () => waiting.resolve(),
+    isReady: () => hydrated,
+    async wait() { waiting.resolve(); await ready.promise; },
+    hydrate() { hydrated = true; ready.resolve(); },
+  };
+}
+
+function svelteDevCheck() {
+  const app = fullstackApps.find(app => app.id === "fullstack-sveltekit");
+  if (!app) throw new Error("Missing SvelteKit fixture");
+  const check = app.commands.find(command => command.name === "dev")?.check;
+  if (check?.kind !== "page") throw new Error("Missing SvelteKit dev page check");
+  return { app, check };
+}
+
+test("SvelteKit delays the first edit until its declared hydrated selector is ready", async () => {
+  const { check } = svelteDevCheck();
+  const hydration = hydrationGate();
+  const run = fixture({ hydration, updateMessage: JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/src/routes/+page.svelte" }] }) });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  try {
+    const pending = productObservations(run.page, "http://local/", { ...check, hmr: hmrCheck().hmr, probes: [] }, run.source, traffic, 1000);
+    await hydration.waiting;
+    expect(run.writes).toEqual([]);
+    hydration.hydrate();
+    const rows = await pending;
+    expect(rows[0]?.status).toBe("pass");
+    expect(rows[0]?.assertion).toContain("vite:update");
+    expect(run.writes).toEqual(["changed", "original"]);
+  } finally { hydration.hydrate(); await traffic.close(); }
+});
+
+test("SvelteKit awaits a disabled button's click actionability after a fresh navigation", async () => {
+  const { app, check } = svelteDevCheck();
+  const hydration = hydrationGate(app.files["src/routes/+page.svelte"]?.includes('id="increment" disabled={!hydrated}'));
+  const run = fixture({ hydration, updateMessage: null });
+  const pending = productObservations(run.page, "http://local/", { ...check, hmr: undefined, probes: [
+    { kind: "action", id: "client-interaction", path: "/", button: "#increment", selector: "#count", text: "action-result" },
+  ] }, run.source, { beginEdit: async () => {}, count: async () => 0, evidenceSince: async () => [] }, 1000);
+  await hydration.waiting;
+  hydration.hydrate();
+  const rows = await pending;
+  expect(rows[0]?.status).toBe("pass");
+  expect(run.visits).toEqual(["http://local/"]);
+});
 
 test("observes preview WebSocket messages over MessagePort after the edit boundary", async () => {
   const run = fixture({ updateMessage: JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/src/App.tsx" }] }) });

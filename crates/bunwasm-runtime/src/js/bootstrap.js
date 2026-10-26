@@ -629,7 +629,8 @@
       return mod ? mod.require(spec) : requireFrom(spec, fromPath);
     }
     require.resolve = function resolve(spec) {
-      return resolveFrom(spec, fromPath);
+      const resolved = resolveFrom(spec, fromPath);
+      return resolved === "node:" + spec ? spec : resolved;
     };
     require.resolve.paths = function paths(spec) {
       return isBuiltinId(spec) ? null : nodeModulePaths(dirname(fromPath));
@@ -760,7 +761,7 @@
       // An exception inside an exit handler is itself fatal.
       if (internal.workerError) internal.workerError(err);
       process.exitCode = 1;
-      printError(err);
+      if (!internal.workerError) printError(err);
     } finally {
       if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
       native.closeAllDirs();
@@ -797,7 +798,7 @@
     }
     if (internal.workerError) internal.workerError(err);
     internal.traceExit("uncaught-exception", 1, err);
-    printFatal(err);
+    if (!internal.workerError) printFatal(err);
     globalThis.process.exitCode = 1;
     emitExit(1);
     return false;
@@ -810,7 +811,7 @@
     }
     if (internal.workerError) internal.workerError(reason);
     internal.traceExit("unhandled-rejection", 1, reason);
-    printFatal(reason);
+    if (!internal.workerError) printFatal(reason);
     // Bun reports exit code 0 to "exit" listeners here (and still exits 1).
     emitExit(0);
     return false;

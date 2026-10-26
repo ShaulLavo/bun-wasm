@@ -459,6 +459,12 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
             st.argv.iter().map(|s| Val::from(s.as_str())).collect(),
         ))
     });
+    let st = state.clone();
+    t.add("execArgv", move |_| {
+        Ok(Val::Array(
+            st.exec_argv.iter().map(|s| Val::from(s.as_str())).collect(),
+        ))
+    });
     // Host-owned metadata, independent of the caller-controlled preview1 argv[0] and PATH.
     t.add("execPath", |_| {
         Ok(std::env::var("BUNWASM_EXEC_PATH")
@@ -1829,11 +1835,12 @@ mod builtin_tests {
             own_fd
         );
         call(&natives, "close", &[Val::Num(own_fd)]).unwrap();
+        assert!(!state.fds.borrow().files.contains_key(&(own_fd as i32)));
         assert!(!state.fds.borrow().sync_modes.contains_key(&(own_fd as i32)));
         let error = call(
             &natives,
             "read",
-            &[Val::Num(own_fd), Val::Num(1.0), Val::Num(-1.0)],
+            &[Val::Num(-1.0), Val::Num(1.0), Val::Num(-1.0)],
         )
         .unwrap_err();
         assert!(error.props.contains(&("code".into(), Val::from("EBADF"))));

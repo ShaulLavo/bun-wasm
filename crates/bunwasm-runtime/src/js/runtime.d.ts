@@ -76,6 +76,7 @@ declare namespace BunWasm {
   }
   interface Internal {
     require(name: "events"): { new(options?: { captureRejections?: boolean }): NodeEmitter; call(target: object): void; prototype: NodeEmitter };
+    require(name: "v8"): { serialize(value: unknown): BufferBytes; deserialize(value: unknown): unknown };
     require(name: "structured_clone"): { structuredClone(value: unknown, options?: unknown): unknown };
     messagePortRefs: number;
     isMarkedAsUntransferable?: (value: unknown) => boolean;
@@ -111,6 +112,7 @@ declare namespace BunWasm {
   interface BufferConstructor {
     from(data: unknown, encodingOrOffset?: string | number, length?: number): BufferBytes;
     isEncoding(encoding: string): boolean;
+    isBuffer(value: unknown): value is BufferBytes;
   }
   interface CompressionTransform extends NodeEmitter {
     readonly destroyed: boolean;
@@ -385,6 +387,7 @@ declare namespace BunWasm {
     /** Starts as strings; the process Proxy permits raw Symbol values and accessor results. */
     env(): Record<PropertyKey, unknown>;
     argv(): string[];
+    execArgv(): string[];
     execPath(): string;
     chdir(path: string): void;
     nanoseconds(): number;

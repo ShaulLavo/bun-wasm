@@ -52,8 +52,9 @@ for (const fixture of fullstackApps) {
     expect(source.split(edit.search)).toHaveLength(2);
     expect(edit.search).toBe(productMarker);
     expect(edit.replacement).toBe(`${productMarker} updated`);
-    expect(source.replace(edit.search, edit.replacement)).toContain(`<h1 id="product-marker">${edit.replacement}</h1>`);
-    expect(dev.check.selector).toBe("#product-marker");
+    const hydrated = fixture.id === "fullstack-sveltekit" ? ' data-hydrated={hydrated}' : "";
+    expect(source.replace(edit.search, edit.replacement)).toContain(`<h1 id="product-marker"${hydrated}>${edit.replacement}</h1>`);
+    expect(dev.check.selector).toBe(fixture.id === "fullstack-sveltekit" ? '#product-marker[data-hydrated="true"]' : "#product-marker");
     expect(dev.args).toContain("{port}");
   });
 
@@ -109,6 +110,18 @@ function checkSource(path: string, source: string) {
   expect(() => parser.transformSync(source)).not.toThrow();
 }
 
+test("React Router supplies a Bun-compatible server entry instead of the Node-only auto-install default", () => {
+  const fixture = app("fullstack-react-router");
+  const entry = fixture.files["app/entry.server.tsx"];
+  expect(entry).toBeString();
+  expect(entry).toContain("renderToReadableStream");
+  expect(entry).not.toContain("renderToPipeableStream");
+  expect(entry).toContain("ServerRouter");
+  expect(entry).toContain("signal: request.signal");
+  expect(entry).toContain("await body.allReady");
+  expect(entry).toContain("new Response(body");
+});
+
 test("SvelteKit uses the node adapter and a server-only loader, never static prerender", () => {
   const fixture = app("fullstack-sveltekit");
   expect(fixture.dependencies["@sveltejs/adapter-node"]).toBe("5.3.2");
@@ -116,6 +129,21 @@ test("SvelteKit uses the node adapter and a server-only loader, never static pre
   expect(fixture.files["svelte.config.ts"]).toContain("@sveltejs/adapter-node");
   expect(fixture.files["src/routes/+page.server.ts"]).toContain("url.searchParams.get('value')");
   expect(Object.values(fixture.files).join("\n")).not.toContain("prerender = true");
+});
+
+test("SvelteKit waits for onMount before HMR and disables its SSR button until hydration", () => {
+  const fixture = app("fullstack-sveltekit");
+  const page = fixture.files["src/routes/+page.svelte"];
+  expect(page).toContain('import { onMount } from "svelte";');
+  expect(page).toContain("let hydrated = $state(false);");
+  expect(page).toContain("onMount(() => { hydrated = true; });");
+  expect(page).toContain('id="product-marker" data-hydrated={hydrated}');
+  expect(page).toContain('id="increment" disabled={!hydrated} onclick={() => count++}');
+  for (const stage of ["dev", "start"]) {
+    const check = command(fixture, stage).check;
+    if (check.kind !== "page") throw new Error(`Missing ${stage} page check`);
+    expect(check.selector).toBe('#product-marker[data-hydrated="true"]');
+  }
 });
 
 test("Astro emits a standalone server, not the existing static-only fixture", () => {
@@ -139,6 +167,14 @@ test("React Router uses framework mode, server loader and official production se
   expect(fixture.files["react-router.config.ts"]).toContain("ssr: true");
   expect(fixture.files["app/routes/home.tsx"]).toContain("export function loader");
   expect(fixture.files["start.ts"]).toContain("@react-router/serve/bin.js");
+});
+
+test("React Router selects Bun SSR external exports for its readable server entry", () => {
+  const fixture = app("fullstack-react-router");
+  expect(fixture.files["vite.config.ts"]).toContain("plugins: [reactRouter()]");
+  expect(fixture.files["vite.config.ts"]).toContain("ssr: { resolve: { externalConditions: ['bun', 'node'] } }");
+  expect(fixture.files["app/entry.server.tsx"]).toContain("renderToReadableStream");
+  expect(fixture.files["app/entry.server.tsx"]).not.toContain("renderToPipeableStream");
 });
 
 test("SolidStart and TanStack use their verified integrated Nitro node-server targets", () => {

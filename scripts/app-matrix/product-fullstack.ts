@@ -15,6 +15,7 @@ const probes: readonly FeatureProbe[] = [
 
 interface Lifecycle {
   source: string;
+  selector?: string;
   dev: readonly string[];
   build: readonly string[];
   output: readonly string[];
@@ -27,14 +28,14 @@ function lifecycle(options: Lifecycle): ProductCommand[] {
       name: "dev",
       args: ["run"].concat(options.dev),
       check: {
-        kind: "page", selector: markerSelector, text: productMarker, probes,
+        kind: "page", selector: options.selector ?? markerSelector, text: productMarker, probes,
         hmr: { path: options.source, search: productMarker, replacement: `${productMarker} updated` },
       },
     },
     { name: "build", args: ["run"].concat(options.build), check: { kind: "files", paths: options.output, text: "" } },
     {
       name: "start", after: "build", args: ["run"].concat(options.start),
-      check: { kind: "page", selector: markerSelector, text: productMarker, probes },
+      check: { kind: "page", selector: options.selector ?? markerSelector, text: productMarker, probes },
     },
   ];
 }
@@ -80,18 +81,22 @@ export default defineConfig({ plugins: [sveltekit()] });
 }
 `,
       "src/routes/+page.svelte": `<script lang="ts">
+  import { onMount } from "svelte";
+  let hydrated = $state(false);
+  onMount(() => { hydrated = true; });
   let { data } = $props();
   let count = $state(0);
 </script>
-<h1 id="product-marker">${productMarker}</h1>
+<h1 id="product-marker" data-hydrated={hydrated}>${productMarker}</h1>
 <p id="server-value">{data.value}</p>
-<button id="increment" onclick={() => count++}>Increment</button>
+<button id="increment" disabled={!hydrated} onclick={() => count++}>Increment</button>
 <output id="count">{count}</output>
 `,
       "start.ts": productionLauncher("./build/index.js"),
     },
     commands: lifecycle({
       source: "src/routes/+page.svelte",
+      selector: '#product-marker[data-hydrated="true"]',
       dev: [viteBin, "--host", "127.0.0.1", "--port", "{port}", "--strictPort"],
       build: [viteBin, "build"], output: ["build/index.js", "build/handler.js", "build/server/index.js"],
       start: ["start.ts", "{port}"],
@@ -178,7 +183,10 @@ const value = Astro.url.searchParams.get('value') ?? 'initial';
       "tsconfig.json": tsconfig,
       "vite.config.ts": `import { defineConfig } from 'vite';
 import { reactRouter } from '@react-router/dev/vite';
-export default defineConfig({ plugins: [reactRouter()] });
+export default defineConfig({
+  plugins: [reactRouter()],
+  ssr: { resolve: { externalConditions: ['bun', 'node'] } },
+});
 `,
       "react-router.config.ts": `import type { Config } from '@react-router/dev/config';
 export default { ssr: true } satisfies Config;
@@ -189,6 +197,21 @@ export default [index('routes/home.tsx')] satisfies RouteConfig;
       "app/root.tsx": `import { Links, Meta, Outlet, Scripts, ScrollRestoration } from 'react-router';
 export default function Root() {
   return <html lang="en"><head><meta charSet="utf-8" /><Meta /><Links /></head><body><Outlet /><ScrollRestoration /><Scripts /></body></html>;
+}
+`,
+      "app/entry.server.tsx": `import { renderToReadableStream } from 'react-dom/server';
+import { ServerRouter, type EntryContext } from 'react-router';
+export default async function handleRequest(request: Request, status: number, headers: Headers, context: EntryContext) {
+  const body = await renderToReadableStream(<ServerRouter context={context} url={request.url} />, {
+    signal: request.signal,
+    onError(error: unknown) {
+      status = 500;
+      console.error(error);
+    },
+  });
+  await body.allReady;
+  headers.set('Content-Type', 'text/html');
+  return new Response(body, { status, headers });
 }
 `,
       "app/routes/home.tsx": `import { useState } from 'react';
