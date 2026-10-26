@@ -378,3 +378,25 @@ for (const terminal of ["complete", "destroy"] as const) {
     } finally { req.destroy(); await state.pump(); }
   });
 }
+
+test("ServerResponse implicit headers support compression response wrappers", async () => {
+  const state = fixture();
+  const { connection, response } = state.server();
+  const end = response.end;
+  Reflect.set(response, "end", function (this: ServerResponse, chunk?: string, encoding?: BufferEncoding) {
+    if (!Reflect.get(this, "_header")) Reflect.get(this, "_implicitHeader").call(this);
+    return Reflect.apply(end, this, [chunk, encoding]);
+  });
+  try {
+    response.setHeader("Content-Type", "text/plain");
+    response.end("hello");
+    await state.pump();
+    const header = Reflect.get(response, "_header");
+    const wire = Buffer.concat(state.writes).toString("latin1");
+    expect(header).toContain("HTTP/1.1 200 OK\r\n");
+    expect(header).toContain("Content-Type: text/plain\r\n");
+    expect(header).toContain("Transfer-Encoding: chunked\r\n");
+    expect(response.headersSent).toBe(true);
+    expect(wire).toBe(`${header}5\r\nhello\r\n0\r\n\r\n`);
+  } finally { connection.destroy(); state.flush(); }
+});

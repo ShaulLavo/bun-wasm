@@ -835,6 +835,7 @@
         this.shouldKeepAlive = keepAlive;
         this._done = done;
         this._headers = new Map();
+        this._header = null;
         this._trailers = [];
         this._headersFlushed = false;
         this._chunked = false;
@@ -909,6 +910,10 @@
         const next = Array.isArray(value) ? value : [value];
         hit[1] = previous.concat(next);
         return this;
+      }
+      _implicitHeader() {
+        if (this.headersSent) return;
+        this.writeHead(this.statusCode);
       }
       writeHead(status, message, headers) {
         if (this.headersSent) {
@@ -1052,6 +1057,7 @@
         }
         this.headersSent = true;
         this._headBytes = serializeHead(this.statusCode, this.statusMessage, pairs);
+        this._header = this._headBytes.toString("latin1");
         if (send) { this._conn.write(this._headBytes); this._headersFlushed = true; }
       }
       _writeBody(bytes, callback) {

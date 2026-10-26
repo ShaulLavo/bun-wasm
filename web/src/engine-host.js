@@ -7,6 +7,7 @@ import { isWasmMemoryBuffer, transferArrayBuffers } from "./buffer-transfer.ts";
 import { ContentModules } from "./content-modules.ts";
 import { SLOT_NAMES } from "./net/trampoline.ts";
 import { trackLookup } from "./net/lookup.ts";
+import { bindSharedObjectHost } from "./shared-objects/host.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -289,13 +290,16 @@ class ExitSignal {
  *   told when any handle may have changed
  * @param {Int32Array} [o.processWake]  the process wake word that pipe and child changes publish on;
  *   the loop waits on it while the program waits on I/O
+ * @param {import("./shared-objects/service").SharedObjectService} [o.sharedObjects] private backing transport
  * @returns {Promise<number>} the exit code (if onExit returns)
  */
 export function startEngineHost(o) {
   return new Promise((resolve) => {
-    const host = new EngineHost(o, resolve);
-    host.disposeNativeStreams = installNativeStreamState();
-    host.start();
+    try {
+      const host = new EngineHost(o, resolve);
+      host.disposeNativeStreams = installNativeStreamState();
+      host.start();
+    } catch (error) { o.sharedObjects?.close(); throw error; }
   });
 }
 
@@ -361,7 +365,7 @@ class EngineHost {
     this.installGlobals();
     this.wrapPromiseJobs();
     this.watchRejections();
-    this.runEntry();
+    this.startEntry();
     this.schedule(0);
     return undefined;
   }
@@ -431,7 +435,13 @@ class EngineHost {
 
   valueNatives() {
     const host = this;
+    const shared = this.o?.sharedObjects;
     return {
+      sharedObjects: shared ? bindSharedObjectHost(shared, {
+        active: () => !host.exited,
+        pending: delta => { host.pendingAsync += delta; },
+        wake: () => host.schedule(0),
+      }) : undefined,
       exit(code) {
         const status = (code | 0) & 0xff;
         host.exit(status);
@@ -819,6 +829,23 @@ class EngineHost {
     }
   }
 
+  startEntry() {
+    const startup = this.internal.workerStartup;
+    if (!startup) { this.runEntry(); return; }
+    this.pendingAsync++;
+    nativePromiseThen(startup.ready, () => {
+      this.pendingAsync--;
+      if (this.exited) return;
+      this.runEntry();
+      this.schedule(0);
+    }, error => {
+      this.pendingAsync--;
+      if (this.exited) return;
+      this.uncaught(error);
+      if (!this.exited) this.exit(1);
+    });
+  }
+
   runEntry() {
     const { entry, internal } = this;
     let started;
@@ -978,6 +1005,8 @@ class EngineHost {
   exit(code) {
     if (this.exited) return;
     this.exited = true;
+    this.internal?.workerStartup?.cancel();
+    this.o.sharedObjects?.close();
     this.disposeNativeStreams?.();
     this.native.closeAllDirs();
     this.flush();
