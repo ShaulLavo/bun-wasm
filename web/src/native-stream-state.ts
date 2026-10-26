@@ -1,3 +1,5 @@
+import { constructNativeReadable } from "./native-direct-stream.ts";
+
 const closedKey = Symbol.for("nodejs.webstream.isClosedPromise");
 const errorKey = Symbol.for("nodejs.webstream.controllerErrorFunction");
 const NativeAbortController = globalThis.AbortController;
@@ -237,8 +239,10 @@ function construct<T extends typeof ReadableStream | typeof WritableStream | typ
   let wrapper: T;
   wrapper = new Proxy(Ctor, { construct(target, args, newTarget) {
     const group: Group = { kind, controller: null, error: null, pending: [], barriers: new Set(), values: [] };
-    args[0] = dictionary(args[0], methods, group);
-    const stream = Reflect.construct(target, args, newTarget === wrapper ? target : newTarget);
+    const original = args[0];
+    args[0] = dictionary(original, methods, group);
+    const actualTarget = newTarget === wrapper ? target : newTarget;
+    const stream = kind === "readable" ? constructNativeReadable(target, args, actualTarget, original, (controller, error) => { captureController(group, controller); group.error = error; }) : Reflect.construct(target, args, actualTarget);
     if (kind === "transform") group.values = [record(stream.readable, true, group), record(stream.writable, false, group)];
     else group.values = [record(stream, kind === "readable", group)];
     if (group.controller) controllers.set(group.controller, group);

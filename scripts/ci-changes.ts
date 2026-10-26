@@ -33,7 +33,7 @@ const webGuestFiles = new Set([
   "web/tests/subprocess.ts", "web/tests/subprocess.mjs",
   "web/src/fs.ts", "web/src/tool-command.ts", "web/src/engine-host.js", "web/src/engine-host.d.ts",
   "web/src/crypto-host.js", "web/src/crypto-inputs.js", "web/src/promise-reactions.ts",
-  "web/src/native-stream-state.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
+  "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
 ]);
 const engineSpecificFiles = new Set([
   "crates/bunwasm-runtime/src/engine_quickjs.rs", "crates/bunwasm-runtime/src/engine_host.rs",

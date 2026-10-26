@@ -89,7 +89,7 @@ class ProvenanceTests(unittest.TestCase):
             "web/scripts/node-host.ts", "web/scripts/node-process.ts", "web/scripts/node-signals.ts",
             "web/scripts/node-spawn.ts", "web/scripts/node-net.mjs", "web/scripts/node-install-net.mjs",
             "web/scripts/node-stdio.ts", "web/src/net/trampoline.ts", "web/src/engine-host.js",
-            "web/src/promise-reactions.ts", "web/src/native-stream-state.ts", "web/src/crypto-inputs.js",
+            "web/src/promise-reactions.ts", "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts", "web/src/crypto-inputs.js",
             "web/src/crypto-host.js", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
             "web/src/net/package-fetch.ts",
         }
@@ -130,6 +130,19 @@ class ProvenanceTests(unittest.TestCase):
                         suite.load_results(opts, self.provenance())
                 finally:
                     path.write_text(text)
+
+    def test_helper_only_change_invalidates_browser_resume(self):
+        path = self.root / "web/src/native-direct-stream.ts"
+        path.write_text("direct helper before\n")
+        original = self.provenance()
+        output = self.root / "results.json"
+        output.write_text(json.dumps({"provenance": original, "results": []}))
+        path.write_text("direct helper after\n")
+        changed = self.provenance()
+        self.assertNotEqual(changed, original)
+        self.assertEqual(changed["host_sources"]["web/src/native-direct-stream.ts"], suite.digest(path))
+        with self.assertRaisesRegex(SystemExit, "Resume refused"):
+            suite.load_results(types.SimpleNamespace(output=output, resume=True), changed)
 
     def test_missing_local_host_module_refuses_provenance(self):
         for name in suite.BROWSER_HOST_SOURCES:
