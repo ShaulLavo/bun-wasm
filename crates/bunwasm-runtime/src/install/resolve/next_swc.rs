@@ -6,7 +6,10 @@ pub(super) fn adapt(meta: &mut Value) {
     if meta["name"] != "next" {
         return;
     }
-    let Some(version) = meta["version"].as_str().filter(|v| v.starts_with("15.")) else {
+    let Some(version) = meta["version"]
+        .as_str()
+        .filter(|v| v.starts_with("15.") || v.starts_with("16."))
+    else {
         return;
     };
     if meta["dependencies"].get(BACKEND).is_some()
@@ -69,7 +72,7 @@ mod tests {
     fn leaves_other_packages_and_unqualified_next_majors_unchanged() {
         let mut other = next("15.5.6");
         other["name"] = "not-next".into();
-        for mut meta in [other, next("14.2.33"), next("16.4.3")] {
+        for mut meta in [other, next("14.2.33"), next("17.0.0")] {
             let original = meta.clone();
             adapt(&mut meta);
             assert_eq!(meta, original);
