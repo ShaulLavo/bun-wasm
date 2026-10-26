@@ -17,7 +17,8 @@ function fixture() {
   const held = () => { throw new Error("Held transport, timer or lifecycle operation invoked"); };
   const native = new Proxy({}, { get: held });
   const processStub = { nextTick: held, env: {}, emitWarning: held };
-  const address = factory("net_address")();
+  const ports = factory("net_port", "ts")();
+  const address = factory("net_address")({ require: () => ports });
   const streamInternal = {
     builtin(name: string) {
       if (name === "node:process") return processStub;

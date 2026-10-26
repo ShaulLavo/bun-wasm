@@ -74,10 +74,11 @@ function fixture() {
     hostPeerAddr: () => '{"address":"127.0.0.1","port":80,"family":"IPv4"}',
     hostLocalAddr: () => '{"address":"127.0.0.1","port":1234,"family":"IPv4"}',
   };
+  const ports = load("net_port")();
   const modules: Record<string, unknown> = {
     events: EventEmitter, buffer: { Buffer }, websocket: { clientClass: () => undefined },
     http_common: load("http_common")(), http_body: load("http_body")(), http_agent: load("http_agent")(),
-    net_address: load("net_address", "js")(), node_net_socket_options: load("node_net_socket_options")(),
+    net_port: ports, net_address: load("net_address", "js")({ require: () => ports }), node_net_socket_options: load("node_net_socket_options")(),
     fetch_body: load("fetch_body")(), compression_streams: { decode: (body: ReadableStream) => body },
   };
   modules.net_hostname = load("net_hostname")({ require: (name: string) => modules[name] });

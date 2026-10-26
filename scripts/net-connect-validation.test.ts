@@ -28,7 +28,8 @@ function fixture(connect = true) {
     const text = extension === "ts" ? new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`) : source;
     return runInNewContext(text, context);
   }
-  const address = factory("net_address")();
+  const ports = factory("net_port", "ts")();
+  const address = factory("net_address")({ require: () => ports });
   const processStub = { nextTick, env: {}, emitWarning: held };
   const { Stream } = factory("node_stream_core")({
     builtin(name: string) {
