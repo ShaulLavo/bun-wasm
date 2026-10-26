@@ -106,8 +106,31 @@ impl Fixture {
 
 #[test]
 fn network_slots_have_no_child_or_signal_transport() {
-    assert_eq!(SLOT_NAMES.len(), 14);
-    assert_eq!(&SLOT_NAMES[12..], &["shutdown", "local_addr"]);
+    assert_eq!(SLOT_NAMES.len(), 16);
+    assert_eq!(
+        &SLOT_NAMES[12..],
+        &["shutdown", "local_addr", "lookup_start", "lookup_head"]
+    );
+    assert!(
+        SLOT_NAMES
+            .iter()
+            .all(|name| !name.starts_with("child_") && *name != "spawn" && *name != "signal")
+    );
+}
+
+#[test]
+fn lookup_sized_results_do_not_overwrite_small_buffers() {
+    let mut memory = vec![0x7f; 4];
+    assert_eq!(
+        put(&mut memory, 0, 3, Output::Bytes(b"abcd".to_vec())).unwrap(),
+        4
+    );
+    assert_eq!(memory, vec![0x7f; 4]);
+    assert_eq!(
+        put(&mut memory, 0, 4, Output::Bytes(b"abcd".to_vec())).unwrap(),
+        4
+    );
+    assert_eq!(memory, b"abcd");
 }
 
 #[test]

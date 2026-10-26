@@ -23,6 +23,8 @@ export const SLOT_NAMES = [
   "peer_addr",
   "shutdown",
   "local_addr",
+  "lookup_start",
+  "lookup_head",
 ] as const;
 export type SlotName = (typeof SLOT_NAMES)[number];
 
@@ -42,12 +44,14 @@ const ARITY: Record<SlotName, number> = {
   peer_addr: 3,
   shutdown: 1,
   local_addr: 3,
+  lookup_start: 4,
+  lookup_head: 3,
 };
 
 type SlotFunction = (...args: number[]) => number;
 export type SlotImpls = Partial<Record<SlotName, SlotFunction>>;
 
-const ABI_VERSION = 1;
+const ABI_VERSION = 2;
 
 /** Unsigned LEB128. */
 function uleb(n: number): number[] {

@@ -15,6 +15,8 @@ pub struct ErrorInfo {
     pub errno: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub syscall: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
 }
 
 impl ErrorInfo {
@@ -25,6 +27,7 @@ impl ErrorInfo {
             code: code.map(Into::into),
             errno: None,
             syscall: None,
+            hostname: None,
         }
     }
 
@@ -35,6 +38,11 @@ impl ErrorInfo {
 
     pub fn with_errno(mut self, errno: i32) -> Self {
         self.errno = Some(errno);
+        self
+    }
+
+    pub fn with_hostname(mut self, hostname: impl Into<String>) -> Self {
+        self.hostname = Some(hostname.into());
         self
     }
 

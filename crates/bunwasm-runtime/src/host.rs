@@ -8,8 +8,8 @@
 
 use std::ptr::{addr_of, addr_of_mut, read_volatile};
 
-pub const ABI_VERSION: u32 = 1;
-pub const SLOT_COUNT: usize = 14;
+pub const ABI_VERSION: u32 = 2;
+pub const SLOT_COUNT: usize = 16;
 
 pub const ERROR: i32 = -1;
 pub const AGAIN: i32 = -2;
@@ -33,6 +33,8 @@ pub enum Slot {
     PeerAddr = 11,
     Shutdown = 12,
     LocalAddr = 13,
+    LookupStart = 14,
+    LookupHead = 15,
 }
 
 pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
@@ -50,6 +52,8 @@ pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
     "peer_addr",
     "shutdown",
     "local_addr",
+    "lookup_start",
+    "lookup_head",
 ];
 
 #[repr(C)]
@@ -143,7 +147,7 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
             Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept | Slot::Shutdown => {
                 std::mem::transmute::<usize, F1>(index as usize)(args[0])
             }
-            Slot::Fetch => {
+            Slot::Fetch | Slot::LookupStart => {
                 std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3])
             }
             Slot::FetchHead
@@ -153,7 +157,8 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
             | Slot::Connect
             | Slot::Error
             | Slot::PeerAddr
-            | Slot::LocalAddr => {
+            | Slot::LocalAddr
+            | Slot::LookupHead => {
                 std::mem::transmute::<usize, F3>(index as usize)(args[0], args[1], args[2])
             }
         }
@@ -200,6 +205,23 @@ fn read_sized(slot_id: Slot, handle: i32) -> Result<Vec<u8>, i32> {
 
 pub fn fetch_head(handle: i32) -> Result<Vec<u8>, i32> {
     read_sized(Slot::FetchHead, handle)
+}
+
+pub fn lookup_start(hostname: &str, family: i32, hints: i32) -> i32 {
+    call(
+        Slot::LookupStart,
+        [
+            ptr(hostname.as_bytes()),
+            hostname.len() as i32,
+            family,
+            hints,
+        ],
+    )
+    .unwrap_or(UNSUPPORTED)
+}
+
+pub fn lookup_head(handle: i32) -> Result<Vec<u8>, i32> {
+    read_sized(Slot::LookupHead, handle)
 }
 
 pub fn error(handle: i32) -> Result<Vec<u8>, i32> {
@@ -583,8 +605,12 @@ mod signal_tests {
     #[test]
     fn bun_child_and_signal_slots_are_gone_and_processes_use_runtime_proc_imports() {
         assert_eq!(Slot::LocalAddr as usize, 13);
+        assert_eq!(Slot::LookupStart as usize, 14);
+        assert_eq!(Slot::LookupHead as usize, 15);
         assert_eq!(SLOT_NAMES[13], "local_addr");
-        assert_eq!(SLOT_COUNT, 14);
+        assert_eq!(SLOT_NAMES[14], "lookup_start");
+        assert_eq!(SLOT_NAMES[15], "lookup_head");
+        assert_eq!(SLOT_COUNT, 16);
         assert!(
             SLOT_NAMES
                 .iter()

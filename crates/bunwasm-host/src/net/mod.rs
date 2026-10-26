@@ -8,6 +8,7 @@
 
 mod error;
 mod fetch;
+mod resolver;
 mod tcp;
 #[cfg(test)]
 mod tests;
@@ -101,6 +102,7 @@ enum Handle {
     Fetch(fetch::Fetch),
     Listener(tcp::Listener),
     Conn(tcp::Conn),
+    Lookup(resolver::Lookup),
 }
 
 pub struct Net {
@@ -207,6 +209,23 @@ impl Net {
         }
     }
 
+    pub fn lookup(&mut self, hostname: &str, family: i32, hints: i32) -> i32 {
+        if let Err(error) = self.require_handle() {
+            return self.fail(error);
+        }
+        match resolver::Lookup::start(hostname, family, hints, self.notify.clone()) {
+            Ok(lookup) => self.insert(Handle::Lookup(lookup)),
+            Err(error) => self.fail(error),
+        }
+    }
+
+    pub fn lookup_head(&mut self, handle: i32) -> Output {
+        match self.handles.get(&handle) {
+            Some(Handle::Lookup(lookup)) => lookup.head(),
+            _ => Output::Code(BADF),
+        }
+    }
+
     pub fn read(&mut self, handle: i32, buf: &mut [u8]) -> i32 {
         match self.handles.get(&handle) {
             Some(Handle::Fetch(request)) => request.read(buf),
@@ -225,6 +244,7 @@ impl Net {
     pub fn close(&mut self, handle: i32) -> i32 {
         match self.handles.remove(&handle) {
             Some(Handle::Fetch(request)) => request.abort(),
+            Some(Handle::Lookup(_)) => {}
             Some(Handle::Listener(listener)) => listener.close(),
             Some(Handle::Conn(conn)) => {
                 conn.close();
@@ -309,6 +329,7 @@ impl Net {
             (0, _) => self.last_error.clone(),
             (_, Some(Handle::Fetch(request))) => request.error(),
             (_, Some(Handle::Conn(conn))) => conn.error(),
+            (_, Some(Handle::Lookup(lookup))) => lookup.error(),
             (_, Some(Handle::Listener(_))) => None,
             (_, None) => return Output::Code(BADF),
         };
@@ -349,6 +370,7 @@ impl Drop for Net {
                 Handle::Fetch(request) => request.abort(),
                 Handle::Listener(listener) => listener.close(),
                 Handle::Conn(conn) => conn.close(),
+                Handle::Lookup(_) => {}
             }
         }
     }
