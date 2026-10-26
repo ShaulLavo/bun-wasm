@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "../src/buffer-transfer";
 import * as lookupBridge from "../src/net/lookup";
+import { createScriptEvaluation } from "../src/script-evaluation.ts";
 
 type LookupMessage = Parameters<Parameters<typeof lookupBridge.installLookupServer>[0]["postMessage"]>[0];
 type LookupRequest = Extract<LookupMessage, { type: "bun-dns-lookup" }>;
@@ -14,7 +15,7 @@ const engineSource = readFileSync(new URL("../src/engine-host.js", import.meta.u
   .replace("export function startEngineHost", "function startEngineHost");
 const EngineHost = runInNewContext(engineSource + "\nEngineHost;", {
   TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, SLOT_NAMES: [], Atomics,
-  isWasmMemoryBuffer, transferArrayBuffers, ...lookupBridge,
+  isWasmMemoryBuffer, transferArrayBuffers, createScriptEvaluation, ...lookupBridge,
 });
 const dnsSource = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/dns.ts", import.meta.url), "utf8");
 const dnsFactory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${dnsSource}`));

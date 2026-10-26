@@ -1,3 +1,4 @@
+import { createScriptEvaluation } from "./script-evaluation.ts";
 import { observePromise } from "./promise-reactions.ts";
 import { installNativeStreamState } from "./native-stream-state.ts";
 import { oversizedCryptoInput } from "./crypto-inputs.js";
@@ -411,7 +412,7 @@ class EngineHost {
     native.DOMException = NativeDOMException;
     native.CryptoKey = NativeCryptoKey;
     native.SubtleCrypto = NativeSubtleCrypto;
-    Object.assign(native, this.valueNatives());
+    Object.assign(native, this.valueNatives(native.mapPosition));
     return native;
   }
 
@@ -433,10 +434,11 @@ class EngineHost {
     }
   }
 
-  valueNatives() {
+  valueNatives(mapPosition) {
     const host = this;
     const shared = this.o?.sharedObjects;
     return {
+      ...createScriptEvaluation((code, filename) => host.evalAt(code, filename), mapPosition),
       sharedObjects: shared ? bindSharedObjectHost(shared, {
         active: () => !host.exited,
         pending: delta => { host.pendingAsync += delta; },
@@ -471,9 +473,6 @@ class EngineHost {
       },
       importModule(spec) {
         return host.importKey(spec);
-      },
-      evalScript(code, filename) {
-        return host.evalAt(NativeString(code), filename || "evalmachine.<anonymous>");
       },
       loadPolyfill(name) {
         return host.evalPolyfill(name);

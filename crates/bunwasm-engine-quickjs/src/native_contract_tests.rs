@@ -6,7 +6,12 @@ fn produced_quickjs_out(root: &Path) -> PathBuf {
     let executable = std::env::current_exe().unwrap().canonicalize().unwrap();
     let profile = executable
         .ancestors()
-        .find(|path| matches!(path.file_name().and_then(|name| name.to_str()), Some("debug" | "release")))
+        .find(|path| {
+            matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some("debug" | "release")
+            )
+        })
         .expect("QuickJS test executable has a Cargo profile directory");
     let build = profile.join("build").join("rquickjs-sys");
     let mut candidates = fs::read_dir(build)

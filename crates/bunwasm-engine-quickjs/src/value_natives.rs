@@ -49,7 +49,11 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
             let code = arg_str(e, args, 0)?;
             let filename =
                 arg_str(e, args, 1).unwrap_or_else(|_| "evalmachine.<anonymous>".to_owned());
-            e.eval_script(&code, &filename, 1)
+            let first_line = match args.get(2).map(|value| e.to_val(value)) {
+                Some(Val::Num(line)) => line as i32,
+                _ => 1,
+            };
+            e.eval_script(&code, &filename, first_line)
         }),
     ));
     let c = core.clone();

@@ -289,7 +289,7 @@ declare namespace BunWasm {
     bunBuiltinSource(id: number): string | undefined;
     bunBuiltinHookName(id: number): string;
     bunBuiltinErrorCode(id: number): string;
-    evalScript(source: string, filename: string): (intrinsics: Record<string, unknown>) => unknown;
+    evalScript(source: string, filename: string, firstLine?: number): (intrinsics: Record<string, unknown>) => unknown;
     isPromise(value: unknown): boolean;
     isProxy(value: unknown): boolean;
     isError(value: unknown): boolean;

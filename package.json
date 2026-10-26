@@ -39,6 +39,7 @@
     "src/worker-entry.ts",
     "web/src/worker.ts",
     "web/src/engine-host.js",
+    "web/src/script-evaluation.ts",
     "web/src/engine-host.d.ts",
     "web/src/crypto-host.js",
     "web/src/crypto-inputs.js",

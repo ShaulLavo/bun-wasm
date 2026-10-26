@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createContext, runInContext, runInNewContext } from "node:vm";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "../../../web/src/buffer-transfer";
 import { bindSharedObjectHost } from "../../../web/src/shared-objects/host";
+import { createScriptEvaluation } from "../../../web/src/script-evaluation.ts";
 import type { SharedObjectService } from "../../../web/src/shared-objects/service";
 import type { Graph } from "./runtime-types";
 import type { SourcePort } from "./source-runtime";
@@ -24,7 +25,7 @@ const engineSource = readFileSync(new URL("../../../web/src/engine-host.js", imp
   .replace(/^import .*;\n/gm, "").replace("export function startEngineHost", "function startEngineHost");
 const EngineHost = runInNewContext(engineSource.concat("\nEngineHost;"), {
   TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask,
-  SLOT_NAMES: [], bindSharedObjectHost, isWasmMemoryBuffer, transferArrayBuffers, installHostCrypto() {},
+  SLOT_NAMES: [], bindSharedObjectHost, createScriptEvaluation, isWasmMemoryBuffer, transferArrayBuffers, installHostCrypto() {},
 });
 export function startupRuntime(options: { service?: SharedObjectService; graph: Graph; execArgv?: string[]; preload?(path: string): void }) {
   const frames: unknown[] = [], exits: number[] = [], failures: unknown[] = [], entries: unknown[] = [];
@@ -57,7 +58,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     loadPolyfill(name: string) {
       if (name in modules) return () => modules[name];
       if (empty.has(name)) return () => ({});
-      if (name !== "worker_threads" && name !== "worker_codec") throw new Error(`Unexpected startup module ${name}`);
+      if (name !== "worker_threads" && name !== "worker_codec" && name !== "module_compile") throw new Error(`Unexpected startup module ${name}`);
       const source = readFileSync(new URL(`${name}.ts`, runtimeRoot), "utf8");
       return runInContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`), context);
     },

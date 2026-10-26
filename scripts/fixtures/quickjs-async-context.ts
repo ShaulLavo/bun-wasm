@@ -146,6 +146,8 @@ async function getterSemantics(kind: string) {
       assert(kind + ".await.value", await promise === value && kind !== "reject");
     } catch (caught) {
       assert(kind + ".await.reason", caught === reason && (kind === "reject" || kind === "throw"));
+    } finally {
+      observe(kind + ".await.finally", kind === "change" ? "changed" : "getter");
     }
     observe(kind + ".await.frame", kind === "change" ? "changed" : "getter");
     trace.push("continuation");
@@ -208,7 +210,7 @@ async function main() {
   await falsyFrames();
   stage = "nativeAwait";
   await nativeAwait();
-  for (const kind of ["fulfill", "reject", "change"]) {
+  for (const kind of ["fulfill", "reject", "change", "throw"]) {
     stage = "getter." + kind;
     await getterSemantics(kind);
   }
