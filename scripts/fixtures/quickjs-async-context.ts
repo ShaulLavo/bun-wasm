@@ -14,6 +14,9 @@ function observe(label: string, expected: unknown, actual: unknown = storage.get
   observations.push({ label, pass: Object.is(actual, expected) });
 }
 function assert(label: string, pass: boolean) { observe(label, true, pass); }
+function isBooleanArray(value: unknown): value is boolean[] {
+  return Array.isArray(value) && value.every(item => typeof item === "boolean");
+}
 function outside(label: string) {
   observe(label + ".sync", null);
   Promise.resolve().then(() => observe(label + ".job", null));
@@ -111,8 +114,8 @@ async function nativeAwait() {
   const fn = new NativeAsyncFunction("first", "receiver", `"use strict";
     const args = arguments; await Promise.resolve();
     return [this === receiver, args === arguments, arguments[0] === first, new.target === undefined];`);
-  const checks = await storage.run("native", () => Reflect.apply(fn, receiver, [value, receiver]));
-  assert("native.receiver.arguments", checks.every(Boolean));
+  const checks: unknown = await storage.run("native", () => Reflect.apply(fn, receiver, [value, receiver]));
+  assert("native.receiver.arguments", isBooleanArray(checks) && checks.every(Boolean));
   outside("native.outside");
 }
 async function rejectAwait(index: number, failure: unknown) {
