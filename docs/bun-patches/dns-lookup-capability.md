@@ -28,19 +28,21 @@ root `MessageChannel` or per-launch `BroadcastChannel`. Minimal registration in
 `web/src/engine-host.js` wraps lookup with the TypeScript `trackLookup` helper, using
 the existing engine pending-work accounting and completion wake for success and
 rejection. No polling timer or deadline is added. The existing TCP ring and
-`node:process` descriptor ownership remain unchanged. The Rust native launcher has no
-resolver slot, so the compiled blocking fixture covers the Bun-owned literal/overload
-facade; hostname-backed Vitest/SolidStart startup remains a browser-runtime acceptance
-after a new guest build. `web/tests/dns-lookup-bridge.test.ts` also runs a prepared
-Waffle export control under native Bun with a real Worker, resolved from the Web
-installation. The Web host gate prepares that package; the Rust source precheck
-installs root tools with `--ignore-scripts` and runs only the facade controls in
-`scripts/dns-lookup.test.ts`. Child stderr is asserted before the exit code so
+`node:process` descriptor ownership remain unchanged. The Rust native launcher now
+exposes ABI v2/16 resolver data slots backed by the platform `getaddrinfo`; the
+compiled blocking fixture covers literals, hostname Promise/callback lookup, a
+`beforeExit`-scheduled lookup that must settle, and exit-time cancellation. This is
+source/native fixture coverage only, not production app acceptance, external DNS
+acceptance, or compiled-browser DNS. `web/tests/dns-lookup-bridge.test.ts` also runs
+a prepared Waffle export control under native Bun with a real Worker, resolved from
+the Web installation. The Web host gate prepares that package; the Rust source
+precheck installs root tools with `--ignore-scripts` and runs only the facade controls
+in `scripts/dns-lookup.test.ts`. Child stderr is asserted before the exit code so
 preparation failures retain their cause. Plain Node is not used as the full runtime
 host. The module-preparation benchmark rewrites the helper import to its
 real file URL, and the isolated Node host fixture copies `net/lookup.ts` with its
 other host assets. Its Waffle import is type-only and erased by Node. These controls
-verify host module linking without claiming native hostname resolution.
+verify host module linking without claiming browser raw hostname resolution.
 
 | Paths | Class | Provenance |
 | --- | --- | --- |
