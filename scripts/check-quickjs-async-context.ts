@@ -4,10 +4,11 @@ import { stripTypeScriptTypes } from "node:module";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const engine = resolve(process.argv[2] ?? join(root, "third_party/rquickjs-sys/quickjs"));
-const scratch = mkdtempSync("/work/tmp/bun-wasm-quickjs-context-");
+const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-quickjs-context-"));
 function cleanup() { rmSync(scratch, { recursive: true, force: true }); }
 process.once("SIGTERM", () => { cleanup(); process.exit(143); });
 process.once("SIGINT", () => { cleanup(); process.exit(130); });
@@ -18,6 +19,20 @@ function run(command: string, args: string[]) {
   process.stderr.write(result.stderr ?? "");
   if (result.error) throw result.error;
   return result.status ?? 1;
+}
+function hashFile(path: string) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+function producedLibrary(engine: string, inputs: readonly string[]) {
+  const out = process.env.BUN_WASM_QUICKJS_OUT_DIR;
+  if (!out) return null;
+  for (const name of inputs) {
+    if (hashFile(join(out, name)) !== hashFile(join(engine, name))) throw Error(`Produced QuickJS source mismatch: ${name}`);
+  }
+  const path = join(out, "libquickjs.a");
+  const identity = { path, sha256: hashFile(path) };
+  console.log(JSON.stringify({ ordinaryLibrary: identity, sourceIdentity: "all inputs match" }));
+  return path;
 }
 try {
   const bootstrap = source("crates/bunwasm-runtime/src/js/bootstrap.js");
@@ -36,14 +51,17 @@ try {
   const binary = join(scratch, "quickjs-context");
   writeFileSync(input, script);
   const inputs = readdirSync(engine).filter(name => /\.[ch]$/.test(name)).sort();
-  const hashes = Object.fromEntries(inputs.map(name => [name, createHash("sha256").update(readFileSync(join(engine, name))).digest("hex")]));
+  const hashes = Object.fromEntries(inputs.map(name => [name, hashFile(join(engine, name))]));
+  const ordinaryLibrary = producedLibrary(engine, inputs);
   console.log(JSON.stringify({ engine, hashes, scriptSha256: createHash("sha256").update(script).digest("hex"), compiler: process.env.CC ?? "cc" }));
   for (const stress of [false, true]) {
     const flags = stress ? ["-DFORCE_GC_AT_MALLOC"] : [];
     console.log(JSON.stringify({ gcStress: stress, flags }));
+    const linkInputs = stress || !ordinaryLibrary
+      ? ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"].map(name => join(engine, name))
+      : [ordinaryLibrary];
     const compiled = run(process.env.CC ?? "cc", ["-D_GNU_SOURCE", "-std=gnu11", "-O0", "-g", "-I", engine,
-      join(root, "scripts/fixtures/quickjs-async-context.c")].concat(flags,
-      ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c"].map(name => join(engine, name)),
+      join(root, "scripts/fixtures/quickjs-async-context.c")].concat(flags, linkInputs,
       ["-lm", "-lpthread", "-o", binary]));
     if (compiled !== 0) throw Error(`Native QuickJS compilation exited ${compiled}`);
     const contracts = run(binary, [input]);

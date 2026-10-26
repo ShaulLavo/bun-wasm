@@ -16,6 +16,7 @@ test.each([
   "env.sh", "tests/fixtures/node-misc/main.js", "scripts/test.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts",
   "scripts/quality-wasi-probe.ts", "scripts/quality.ts", "scripts/ci-changes.ts", "package.json", "bun.lock",
   ".github/workflows/ci.yml", "scripts/build.sh", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
+  "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
 ])("native input %s retains every Rust gate", path => {
   expect(needsRust([path])).toBe(true);
 });

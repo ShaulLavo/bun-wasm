@@ -1,6 +1,8 @@
 use super::*;
 
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 fn engine() -> (QuickJs, Rc<crate::Core<QuickJs>>) {
     let state = Rc::new(crate::State::new(
@@ -88,4 +90,40 @@ fn data_ops_stdout_invalid_arguments_throw_engine_error() {
         Val::Array(vec![Val::Bool(true), "write failed".into(), "EIO".into()])
     );
     std::mem::forget(engine);
+}
+
+fn produced_quickjs_out(root: &Path) -> PathBuf {
+    let source = fs::read(root.join("third_party/rquickjs-sys/quickjs/quickjs.c")).unwrap();
+    let build = Path::new(env!("OUT_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap()
+        .join("rquickjs-sys");
+    let mut candidates = fs::read_dir(build)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("out"))
+        .filter(|path| path.join("libquickjs.a").is_file())
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates
+        .into_iter()
+        .find(|path| fs::read(path.join("quickjs.c")).is_ok_and(|produced| produced == source))
+        .expect("QuickJS library produced from the current source")
+}
+
+#[test]
+fn async_context_native_contracts() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let produced = produced_quickjs_out(&root);
+    let status = std::process::Command::new("node")
+        .arg(root.join("scripts/check-quickjs-async-context.ts"))
+        .current_dir(&root)
+        .env("BUN_WASM_QUICKJS_OUT_DIR", produced)
+        .status()
+        .expect("run native QuickJS async-context contracts");
+    assert!(status.success(), "native QuickJS async-context contracts");
 }
