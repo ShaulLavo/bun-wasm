@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { buildWasiSysroot, type SysrootOptions } from "../../scripts/build-wasi-sysroot.ts";
+import { buildWasiSysroot, wasiSysrootInputs, type SysrootOptions } from "../../scripts/build-wasi-sysroot.ts";
 
 // Only a tiny fake builder runs here. Real libc/guest builds belong in the heavy gate.
 async function fixture(run: (options: SysrootOptions) => Promise<void>) {
@@ -213,5 +213,23 @@ await Bun.write(process.argv[2] + "/lib/wasm32-wasip1/libc.a", "fixture patched 
     expect(resolve(stage, "..")).toBe(resolve(options.output, ".."));
     expect(stage).not.toBe(tmpdir());
     await cleanScratch(options);
+  });
+});
+
+
+test("cache identity is the builder receipt input contract, independent of unrelated lock edits", async () => {
+  await fixture(async options => {
+    const before = await wasiSysrootInputs(options);
+    await writeFile(join(options.waffle, "bun.lock"), "unrelated package lock revision");
+    await writeFile(join(options.waffle, "env.sh"), "export TMPDIR=/other/scratch");
+    expect(await wasiSysrootInputs(options)).toEqual(before);
+    await buildWasiSysroot(options);
+    const receipt = await Bun.file(join(options.output, "bun-wasm-sysroot.json")).json();
+    const { libcSha256, ...recorded } = receipt;
+    expect(recorded).toEqual(before);
+    expect(libcSha256).toBeTruthy();
+    await writeFile(join(options.waffle, "patches/wasi-libc/preopen-scan.patch"), "changed real patch");
+    expect(await wasiSysrootInputs(options)).not.toEqual(before);
+    await expect(buildWasiSysroot(options)).rejects.toThrow("Sysroot inputs changed");
   });
 });

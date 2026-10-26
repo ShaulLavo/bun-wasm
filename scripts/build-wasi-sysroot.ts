@@ -26,8 +26,8 @@ export interface SysrootOptions {
   readonly output: string;
 }
 
-export async function buildWasiSysroot(options: SysrootOptions): Promise<void> {
-  const { waffle, sdk, output } = options;
+export async function wasiSysrootInputs(options: Omit<SysrootOptions, "output">) {
+  const { waffle, sdk } = options;
   const overlays = ["include/c++", "include/wasm32-wasip1/noeh", "lib/wasm32-wasip1/noeh"];
   const stock = join(sdk, "share/wasi-sysroot");
   const builder = join(waffle, "scripts/build-wasi-libc.sh");
@@ -43,12 +43,20 @@ export async function buildWasiSysroot(options: SysrootOptions): Promise<void> {
   const sdkOverlays = await Promise.all(overlays.map(async path => ({ path, target: await realpath(join(stock, path)) })));
   const environment = Object.fromEntries(["CFLAGS", "CXXFLAGS", "ASMFLAGS", "CPPFLAGS", "LDFLAGS", "CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "LIBRARY_PATH", "SDKROOT"]
     .map(name => [name, process.env[name] ?? ""]));
-  const inputs = {
+  return {
     sdkVersion: await readFile(join(sdk, "VERSION"), "utf8"),
     builderSha256: await hash(builder),
     patchSha256: await hash(join(waffle, "patches/wasi-libc/preopen-scan.patch")),
     tools, sdkOverlays, environment,
   };
+}
+
+export async function buildWasiSysroot(options: SysrootOptions): Promise<void> {
+  const { waffle, sdk, output } = options;
+  const overlays = ["include/c++", "include/wasm32-wasip1/noeh", "lib/wasm32-wasip1/noeh"];
+  const stock = join(sdk, "share/wasi-sysroot");
+  const builder = join(waffle, "scripts/build-wasi-libc.sh");
+  const inputs = await wasiSysrootInputs(options);
   const receiptPath = join(output, "bun-wasm-sysroot.json");
   if (await Bun.file(receiptPath).exists()) {
     const receipt = await Bun.file(receiptPath).json();
@@ -118,5 +126,10 @@ if (import.meta.main) {
   const revision = manifest.devDependencies.waffle.split("#")[1];
   if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("Waffle must be pinned to an exact merged commit");
   const waffle = dirname(Bun.resolveSync("waffle/package.json", root));
-  await buildWasiSysroot({ waffle, sdk, output });
+  if (process.argv.includes("--inputs")) {
+    const inputs = await wasiSysrootInputs({ waffle, sdk });
+    console.log(new Bun.CryptoHasher("sha256").update(JSON.stringify(inputs)).digest("hex"));
+  } else {
+    await buildWasiSysroot({ waffle, sdk, output });
+  }
 }

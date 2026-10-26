@@ -10,6 +10,7 @@ function fixture(run: (root: string, shell: (command: string, env?: Record<strin
     mkdirSync(join(root, "scripts"));
     copyFileSync(new URL("../jsc/common.sh", import.meta.url), join(root, "jsc", "common.sh"));
     copyFileSync(new URL("../env.sh", import.meta.url), join(root, "env.sh"));
+    copyFileSync(new URL("./check-wasi-cmake-cache.sh", import.meta.url), join(root, "scripts/check-wasi-cmake-cache.sh"));
     writeFileSync(join(root, "scripts", "build-jsc.sh"), "# fixture build recipe\n");
     writeFileSync(join(root, "jsc", "wasi-jsc.cmake"), "# fixture toolchain\n");
     for (const file of ["wasi-compat.h", "wasi-compat.c", "madvise.c"]) {
@@ -20,8 +21,8 @@ function fixture(run: (root: string, shell: (command: string, env?: Record<strin
     for (const path of [join(sdk, "bin"), sysroot, bin]) mkdirSync(path, { recursive: true });
     writeFileSync(join(sdk, "VERSION"), "34.0\n");
     writeFileSync(join(sysroot, "bun-wasm-sysroot.json"), '{"fixture":"patched sysroot"}\n');
-    for (const tool of [join(sdk, "bin/clang"), join(bin, "cmake"), join(bin, "ninja"), join(bin, "wasm-opt")]) {
-      writeFileSync(tool, "#!/usr/bin/env bash\necho 'fixture tool version 1'\n", { mode: 0o755 });
+    for (const tool of [join(sdk, "bin/clang"), join(sdk, "bin/clang++"), join(bin, "cmake"), join(bin, "ninja"), join(bin, "wasm-opt")]) {
+      writeFileSync(tool, "#!/usr/bin/env bash\nif [[ \"$*\" == *-P* && \"${FIXTURE_BAD_CMAKE:-}\" == true ]]; then exit 42; fi\necho 'fixture tool version 1'\n", { mode: 0o755 });
     }
     const shell = (command: string, env: Record<string, string> = {}) => {
       const result = Bun.spawnSync(["bash", "-c", 'source "$1/jsc/common.sh"; copy_jsc_config_inputs; ' + command, "jsc-inputs-test", root], {
@@ -64,5 +65,47 @@ test("JSC config refresh preserves identical input timestamps and copies changed
     expect(readFileSync(header, "utf8")).toBe("// changed injected header\n");
     expect(statSync(header).mtimeMs).not.toBe(timestamp.getTime());
     expect(statSync(toolchain).mtimeMs).toBe(timestamp.getTime());
+  });
+});
+
+
+test("warm JSC stamp rejects partial archives, dirty sources, changed SDK and stale CMake", () => {
+  fixture((root, shell) => {
+    const webkit = join(root, "build/webkit");
+    mkdirSync(webkit, { recursive: true });
+    writeFileSync(join(webkit, "tracked.cpp"), "original source\n");
+    mkdirSync(join(webkit, "outside-sparse"));
+    writeFileSync(join(webkit, "outside-sparse/unused.cpp"), "excluded source\n");
+    const setup = `git -C "$WEBKIT_DIR" init -q; git -C "$WEBKIT_DIR" add .; git -C "$WEBKIT_DIR" -c user.name=fixture -c user.email=fixture@example.invalid commit -qm fixture;
+git -C "$WEBKIT_DIR" sparse-checkout init --cone
+git -C "$WEBKIT_DIR" sparse-checkout set Source
+printf 'patched source\\n' > "$WEBKIT_DIR/tracked.cpp"
+git -C "$WEBKIT_DIR" diff > "$JSC_SRC/webkit-wasi.patch"
+for file in "\${JSC_ARTIFACTS[@]}"; do mkdir -p "$(dirname "$file")"; printf 'built archive\\n' > "$file"; done`;
+    shell(setup);
+    const pin = 'WEBKIT_COMMIT=$(git -C "$WEBKIT_DIR" rev-parse HEAD); ';
+    shell(pin + "write_jsc_inputs_stamp; check_jsc_inputs_stamp");
+    const reject = (command: string, env?: Record<string, string>) => shell(pin + command + "; if check_jsc_inputs_stamp >/dev/null 2>&1; then exit 91; fi", env);
+    reject('rm "$JSC_OBJ/lib/libWTF.a"');
+    shell(pin + 'printf "built archive\\n" > "$JSC_OBJ/lib/libWTF.a"; check_jsc_inputs_stamp');
+    reject('printf "corrupt archive\\n" > "$JSC_OBJ/lib/libWTF.a"');
+    shell(pin + 'printf "built archive\\n" > "$JSC_OBJ/lib/libWTF.a"; check_jsc_inputs_stamp');
+    reject('echo changed >> "$WEBKIT_DIR/tracked.cpp"');
+    shell(pin + 'if write_jsc_inputs_stamp >/dev/null 2>&1; then exit 93; fi');
+    shell(pin + 'git -C "$WEBKIT_DIR" checkout -- tracked.cpp; git -C "$WEBKIT_DIR" apply "$JSC_SRC/webkit-wasi.patch"; check_jsc_inputs_stamp');
+    reject('echo untracked > "$WEBKIT_DIR/untracked.cpp"');
+    shell(pin + 'rm "$WEBKIT_DIR/untracked.cpp"; check_jsc_inputs_stamp');
+    reject(':', { FIXTURE_BAD_CMAKE: "true" });
+    reject('rm "$JSC_OBJ/compile_commands.json"');
+    shell(pin + 'printf "built archive\\n" > "$JSC_OBJ/compile_commands.json"; check_jsc_inputs_stamp');
+    reject('echo changed >> "$JSC_OBJ/cmakeconfig.h"');
+    shell(pin + 'printf "built archive\\n" > "$JSC_OBJ/cmakeconfig.h"; check_jsc_inputs_stamp');
+    reject('echo changed >> "$WASI_SDK_PATH/VERSION"');
+  });
+});
+
+test("JSC cache fingerprint rejects failed host compiler probes", () => {
+  fixture((_root, shell) => {
+    shell('if jsc_inputs_hash >/dev/null 2>&1; then exit 92; fi', { CC: "false" });
   });
 });
