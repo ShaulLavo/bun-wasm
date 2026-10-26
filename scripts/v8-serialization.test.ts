@@ -156,3 +156,107 @@ test("builtin serializer uses the runtime Buffer implementation", () => {
   expect(Array.from(output.value)).toEqual([1, 2, 3]);
   expect(output.text).toBe("héllo 🌍");
 });
+
+for (const [name, implementation] of implementations) {
+  test(`${name} preserves overlapping Buffer views and their shared backing`, () => {
+    const b = Buffer.alloc(32, 17).subarray(8, 16);
+    const s = b.subarray(2, 4);
+    const output = implementation.deserialize(implementation.serialize({ b, s })) as { b: Buffer; s: Buffer };
+    expect(Buffer.isBuffer(output.b)).toBe(true);
+    expect(Buffer.isBuffer(output.s)).toBe(true);
+    expect(output.b.buffer).toBe(output.s.buffer);
+    expect(output.s.byteOffset - output.b.byteOffset).toBe(2);
+    output.b[2] = 91;
+    expect(output.s[0]).toBe(91);
+  });
+
+  test(`${name} accepts cross-realm ArrayBuffer values`, () => {
+    const foreign = runInNewContext("new Uint8Array([7, 9]).buffer") as ArrayBuffer;
+    const output = implementation.deserialize(implementation.serialize(foreign)) as ArrayBuffer;
+    expect(Object.prototype.toString.call(output)).toBe("[object ArrayBuffer]");
+    expect(Array.from(new Uint8Array(output))).toEqual([7, 9]);
+  });
+
+  test(`${name} deserializes its own bytes from a foreign ArrayBuffer`, () => {
+    const bytes = implementation.serialize({ value: 42 });
+    const input = runInNewContext("new ArrayBuffer(length)", { length: bytes.byteLength }) as ArrayBuffer;
+    new Uint8Array(input).set(bytes);
+    expect(implementation.deserialize(input)).toEqual({ value: 42 });
+  });
+}
+
+function graphBytes(nodes: unknown[]) {
+  return Buffer.from("bun-wasm:structured\0" + JSON.stringify({ root: 0, nodes }));
+}
+
+test("runtime Buffer views alias typed views and explicit backing in either property order", () => {
+  const backing = new ArrayBuffer(16);
+  const b = Buffer.from(backing, 4, 4);
+  b.set([1, 2, 3, 4]);
+  const typed = new Uint8Array(backing, 5, 2);
+  for (const input of [{ b, typed, backing }, { backing, typed, b }]) {
+    const output = runtime.deserialize(runtime.serialize(input)) as typeof input;
+    expect(output.b.buffer).toBe(output.backing);
+    expect(output.typed.buffer).toBe(output.backing);
+    output.b[1] = 99;
+    expect(output.typed[0]).toBe(99);
+  }
+});
+
+test("runtime Buffer-only views omit invisible slab bytes and zero uncovered gaps", () => {
+  const slab = Buffer.alloc(65536, 57);
+  const left = slab.subarray(100, 103);
+  const right = slab.subarray(105, 107);
+  const bytes = runtime.serialize({ right, left });
+  expect(bytes.byteLength).toBeLessThan(4096);
+  const output = runtime.deserialize(bytes) as { left: Buffer; right: Buffer };
+  expect(output.left.buffer).toBe(output.right.buffer);
+  expect(output.left.buffer.byteLength).toBe(7);
+  expect(Array.from(new Uint8Array(output.left.buffer))).toEqual([57, 57, 57, 0, 0, 57, 57]);
+});
+
+test("runtime rejects inherited view constructors, invalid bounds and malformed binary bytes", () => {
+  const invalidViews = ["toString", "constructor", "__proto__", "hasOwnProperty"];
+  for (const name of invalidViews) {
+    expect(() => runtime.deserialize(graphBytes([["view", name, 1, 0, 0], ["buffer", "", 0]]))).toThrow();
+  }
+});
+
+test("runtime rejects malformed base64 for ArrayBuffer and Blob", () => {
+  const invalidBytes = ["!", "AA=", "AB==", "AAB=", "AA==\n", "-w=="];
+  for (const bytes of invalidBytes) {
+    expect(() => runtime.deserialize(graphBytes([["buffer", bytes, 0]]))).toThrow();
+    expect(() => runtime.deserialize(graphBytes([["blob", bytes, ""]]))).toThrow();
+  }
+});
+
+test("runtime validates binary tuple arity and view bounds", () => {
+  const invalidNodes = [["buffer", "AA==", 0, 0], ["buffer", "AAA=", 1], ["blob", "", "", 0],
+    ["view", "Uint16Array", 1, 1, 2], ["view", "Uint8Array", 1, 0, 2], ["view", "Uint8Array", 0, 0, 0],
+    ["view", "Uint8Array", 1, 0, 0, 0]];
+  for (const node of invalidNodes) {
+    expect(() => runtime.deserialize(graphBytes([node, ["buffer", "AA==", 0]]))).toThrow();
+  }
+});
+
+test("runtime rejects noncanonical numeric nodes without turning them into NaN", () => {
+  for (const text of ["not-a-number", "", " ", "01", "+1", "1.0", "0x10", "1e999", "nan"]) {
+    expect(() => runtime.deserialize(graphBytes([["number", text]]))).toThrow();
+  }
+  for (const text of ["NaN", "Infinity", "-Infinity", "-0", "0", "1.25", "1e+21", "5e-324"]) {
+    expect(Object.is(runtime.deserialize(graphBytes([["number", text]])), Number(text))).toBe(true);
+  }
+});
+
+test("fork fixture reports early child exit instead of leaving the reply pending", async () => {
+  const fixture = new URL("../tests/fixtures/v8-fork-serialization/index.ts", import.meta.url).pathname;
+  const child = Bun.spawn([process.execPath, fixture, "--exit-before-reply"], { stdout: "pipe", stderr: "pipe", timeout: 2000 });
+  try {
+    const stderr = await new Response(child.stderr).text();
+    expect(await child.exited).not.toBe(0);
+    expect(stderr).toContain("Child exited before sending a reply (code 23)");
+  } finally {
+    child.kill();
+    await child.exited;
+  }
+});

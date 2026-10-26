@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { serialize, deserialize } from "node:v8";
 
-const child = fork(new URL("./worker.ts", import.meta.url).pathname, [], { silent: true });
+const child = fork(new URL("./worker.ts", import.meta.url).pathname, process.argv.slice(2), { silent: true });
 const exit = new Promise<number | null>((resolve, reject) => {
   child.once("exit", resolve);
   child.once("error", reject);
