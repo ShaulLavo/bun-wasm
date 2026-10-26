@@ -117,10 +117,10 @@ test("the refined Cargo cache keeps Cargo inputs and leaves JSC-only inputs to t
     expect(key).not.toContain("scripts/ci-binaryen.ts");
   }
   expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == ''");
-  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'");
+  expect(rust).toContain("steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'");
   expect(rust).toContain("JSC_CARGO_TARGET_DIR=$RUNNER_TEMP/jsc/target");
-  expect(rust).toContain("key: jsc-prebuild-v1-");
-  expect(rust).toContain("key: jsc-cargo-v1-");
+  expect(rust).toContain("key: jsc-prebuild-v2-");
+  expect(rust).toContain("key: jsc-cargo-v2-");
   expect(rust).toContain("'scripts/ci-binaryen.ts'");
   expect(rust).toContain("'crates/**'");
 });
@@ -148,6 +148,8 @@ function fixtureCacheKey(template: string, files: CacheFiles, image = "20261012.
     if (expression === "runner.os") return "Linux";
     if (expression === "runner.arch") return "X64";
     if (expression === "steps.homes.outputs.image") return image;
+    if (expression === "steps.native-inputs.outputs.hash") return "effective-native-inputs";
+    if (expression === "steps.jsc-inputs.outputs.hash") return "effective-jsc-inputs";
     if (!expression.startsWith("hashFiles(")) throw new Error(`Unexpected cache expression: ${expression}`);
     return fixtureHash(expression, files);
   });
@@ -199,13 +201,14 @@ test("native Cargo patch releases and Rust edits restore a previously saved comp
 test("native compatibility changes cannot select the prior Cargo cache", () => {
   const keys = nativeKeyTemplates(nativeCargoNamespace);
   const saved = fixtureCacheKey(keys.save, nativeCacheFiles);
-  for (const path of Object.keys(nativeCacheFiles).filter(path => !path.includes("Cargo.") && !path.endsWith("engine_jsc.rs") && path !== "scripts/build-bun-tools.sh")) {
+  for (const path of Object.keys(nativeCacheFiles).filter(path => !path.includes("Cargo.") && !path.endsWith("engine_jsc.rs") && !["scripts/build-bun-tools.sh", ".github/workflows/ci.yml", "env.sh", "bun.lock"].includes(path))) {
     const files = changedCacheFile(path);
     expect(fixtureCacheKey(keys.primary, files)).not.toBe(saved);
     expect(saved.startsWith(fixtureCacheKey(keys.prefix, files))).toBe(false);
   }
   const sdkChange = changedCacheFile(".github/workflows/ci.yml", workflow.replaceAll("wasi-sdk-34", "wasi-sdk-35"));
-  expect(saved.startsWith(fixtureCacheKey(keys.prefix, sdkChange))).toBe(false);
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, sdkChange))).toBe(true);
+  expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace("effective-native-inputs", "changed-sdk-environment"))).toBe(false);
   expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles, "next-image"))).toBe(false);
   expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace("Linux-X64", "Linux-ARM64"))).toBe(false);
   expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace("Linux-X64", "macOS-X64"))).toBe(false);
@@ -219,53 +222,24 @@ test("old Cargo-first keys cannot use the new compatibility prefix, and fallback
   expect(oldSaved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles))).toBe(false);
   expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == ''");
   expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-hit != 'true'");
-  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'");
+  expect(rust).toContain("steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'");
 });
 
 test("JSC prebuild and Cargo caches keep separate authoritative identities", () => {
-  const prebuildKeys = rust.split("\n").filter(line => line.includes("key: jsc-prebuild-v1-"));
-  const cargoKeys = rust.split("\n").filter(line => line.includes("key: jsc-cargo-v1-"));
-  expect(prebuildKeys).toHaveLength(2);
-  expect(cargoKeys).toHaveLength(2);
-  expect(rust).toContain("path: ${{ runner.temp }}/jsc/prebuild");
-  expect(rust).toContain("path: ${{ runner.temp }}/jsc/target");
-  expect(rust).not.toContain("path: ${{ runner.temp }}/jsc\n");
-
-  const groups = (key: string) => Array.from(key.matchAll(/hashFiles\(([^)]+)\)/g), match =>
-    Array.from(match[1]!.matchAll(/'([^']+)'/g), item => item[1]!));
-  const matches = (pattern: string, path: string) => {
-    if (pattern.endsWith("/**")) return path.startsWith(pattern.slice(0, -2));
-    if (!pattern.includes("*")) return pattern === path;
-    const [prefix, suffix] = pattern.split("*");
-    return path.startsWith(prefix!) && path.endsWith(suffix!);
-  };
-  const changedGroups = (key: string, path: string) => groups(key)
-    .map((patterns, index) => patterns.some(pattern => matches(pattern, path)) ? index : -1)
-    .filter(index => index >= 0);
-  const prebuild = prebuildKeys[0]!;
-  const cargo = cargoKeys[0]!;
-
-  expect(changedGroups(prebuild, "crates/bunwasm-runtime/src/engine_jsc.rs")).toEqual([]);
-  expect(changedGroups(cargo, "crates/bunwasm-runtime/src/engine_jsc.rs")).toEqual([1]);
-  for (const input of ["jsc/wasi-jsc.cmake", "scripts/build-wasi-sysroot.ts", "env.sh", "scripts/ci-binaryen.ts"]) {
-    expect(changedGroups(prebuild, input)).toEqual([0]);
-  }
-  expect(changedGroups(cargo, "jsc/wasi-jsc.cmake")).toEqual([0, 1]);
-  expect(changedGroups(cargo, "rust-toolchain.toml")).toEqual([1]);
-
-  const build = rust.split("name: Blocking native checks with one owned JSC prebuild")[1]!;
-  expect(build).toContain("steps.jsc-prebuild-cache.outputs.cache-hit");
-  expect(build).toContain("bash scripts/build-jsc.sh");
+  const prebuild = nativeCacheContract("jsc-prebuild-cache", "Save the JSC prebuild cache once per input revision");
+  const cargo = nativeCacheContract("jsc-cargo-cache", "Save the JSC Cargo cache once per input revision");
+  expect(prebuild.primary).toBe(prebuild.save);
+  expect(cargo.primary).toBe(cargo.save);
+  expect(prebuild.restorePath).toBe("${{ runner.temp }}/jsc/prebuild");
+  expect(cargo.restorePath).toBe("${{ runner.temp }}/jsc/target");
+  expect(prebuild.primary).toContain("steps.jsc-inputs.outputs.hash");
+  expect(cargo.prefix).toContain("steps.jsc-inputs.outputs.hash");
+  expect(cargo.prefix).toContain("steps.native-inputs.outputs.hash");
+  expect(prebuild.primary).not.toContain("crates/**");
+  expect(cargo.primary).toContain("crates/**");
   expect(rust).not.toContain("steps.jsc-cache");
-  const hostBuild = rust.indexOf("name: Build one host-engine guest for real-browser source cache acceptance");
-  const jscGate = rust.indexOf("name: Blocking JSC embedding and allocation checks");
-  for (const save of [
-    rust.indexOf("name: Save the JSC prebuild cache once per input revision"),
-    rust.indexOf("name: Save the JSC Cargo cache once per input revision"),
-  ]) {
-    expect(save).toBeGreaterThan(jscGate);
-    expect(save).toBeGreaterThan(hostBuild);
-  }
+  expect(rust.indexOf("name: Save the JSC prebuild")).toBeLessThan(rust.indexOf("name: Build native fixtures"));
+  expect(rust.indexOf("name: Save the JSC Cargo")).toBeLessThan(rust.indexOf("name: Blocking JSC embedding"));
 });
 
 test("crypto declares the toolchain and CMake preflight as Cargo build inputs", () => {
@@ -507,7 +481,7 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
-  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(4);
+  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(9);
   expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-hit != 'true'");
   expect(rust).not.toContain("github.run_id");
   expect(rust).not.toContain("github.run_attempt");
@@ -517,20 +491,21 @@ test("native cache stays bounded per input revision, and the SDK is not copied p
   expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched");
 });
 
-test("all four final caches are saved after every selected producer and guest gate", () => {
-  const saves = [
-    rust.indexOf("      - name: Save the JSC prebuild cache once per input revision"),
-    rust.indexOf("      - name: Save the JSC Cargo cache once per input revision"),
-    rust.indexOf("      - name: Save the refined native Cargo cache once per input revision"),
-    rust.indexOf("      - name: Save the complete native fallback once per input revision"),
-  ];
-  expect(saves.every(index => index > -1)).toBe(true);
-  expect(rust).toContain("JSC_CARGO_TARGET_DIR=$RUNNER_TEMP/jsc/target");
-  for (const command of ["bash scripts/build-jsc.sh", "bash scripts/build-bun-jsc.sh", "bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm", "name: Build one host-engine guest", "bash scripts/build-bun-tools.sh", "test-web-guests.ts quickjs browser", "test-web-guests.ts jsc"]) {
-    const step = rust.indexOf(command);
-    expect(step).toBeGreaterThan(-1);
-    for (const save of saves) expect(save).toBeGreaterThan(step);
-  }
+test("completed producers seed caches before unrelated guest gates", () => {
+  const prebuildSave = rust.indexOf("name: Save the JSC prebuild cache");
+  const bootstrapSave = rust.indexOf("name: Save the native quality checkpoint");
+  const jscCargoSave = rust.indexOf("name: Save the JSC Cargo cache");
+  const nativeSave = rust.indexOf("name: Save the refined native Cargo cache");
+  expect(prebuildSave).toBeGreaterThan(rust.indexOf("name: Build or verify the JSC prebuild"));
+  expect(prebuildSave).toBeLessThan(rust.indexOf("name: Blocking native quality checks"));
+  expect(bootstrapSave).toBeGreaterThan(rust.indexOf("name: Blocking native quality checks"));
+  expect(prebuildSave).toBeLessThan(rust.indexOf("name: Build native fixtures"));
+  expect(bootstrapSave).toBeLessThan(rust.indexOf("name: Build native fixtures"));
+  expect(jscCargoSave).toBeGreaterThan(rust.indexOf("name: Build the JSC Cargo guest"));
+  expect(jscCargoSave).toBeLessThan(rust.indexOf("bun scripts/jsc-embedding.ts test"));
+  expect(nativeSave).toBeGreaterThan(rust.indexOf("bash scripts/build-bun-tools.sh"));
+  expect(nativeSave).toBeLessThan(rust.indexOf("test-web-guests.ts quickjs browser"));
+  expect(nativeSave).toBeLessThan(rust.indexOf("test-web-guests.ts jsc"));
 });
 
 test("preinstalled native tools skip apt and fallback removes the known slow mirror", () => {
@@ -546,16 +521,17 @@ test("cold and restored JSC setup install Binaryen before sourcing common.sh", (
   expect(setup).toContain("bun scripts/ci-binaryen.ts");
   expect(setup).not.toContain("needs.quality.outputs.jsc");
   expect(setup).not.toContain("cache-hit");
-  expect(rust.indexOf(setup)).toBeLessThan(rust.indexOf("name: Blocking native checks with one owned JSC prebuild"));
+  expect(rust.indexOf(setup)).toBeLessThan(rust.indexOf("name: Build or verify the JSC prebuild"));
 });
 
-test("Binaryen pin and installer identity participate in tool, fallback and JSC caches", () => {
-  const keys = rust.split("\n").filter(line => /key: (?:binaryen-133|native-v4|jsc-(?:prebuild|cargo)-v1)|^\s+native-v4/.test(line));
-  expect(keys).toHaveLength(8);
+test("Binaryen remains pinned while runtime tool identity owns JSC reuse", () => {
+  const keys = rust.split("\n").filter(line => /key: (?:binaryen-133|native-v4)|^\s+native-v4/.test(line));
+  expect(keys).toHaveLength(4);
   expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz");
-  for (const key of keys) {
-    expect(key).toContain("'scripts/ci-binaryen.ts'");
-  }
+  for (const key of keys) expect(key).toContain("'scripts/ci-binaryen.ts'");
+  expect(rust).toContain("inputs=$(jsc_inputs_hash)");
+  const common = readFileSync(new URL("../jsc/common.sh", import.meta.url), "utf8");
+  expect(common).toContain("wasm-opt --version");
   expect(rust.split("\n").filter(line => /native-cargo-v2-/.test(line)).every(line => !line.includes("scripts/ci-binaryen.ts"))).toBe(true);
 });
 
@@ -623,8 +599,11 @@ function nativeCacheContract(id: string, saveName: string) {
   };
 }
 
-function cacheCondition(condition: string, outputs: Readonly<Record<string, string>>, succeeded: boolean): boolean {
-  return succeeded && condition.split(" && ").every(clause => {
+function cacheCondition(condition: string, outputs: Readonly<Record<string, string>>, succeeded: boolean, cancelled = false): boolean {
+  const explicit = condition.includes("!cancelled()");
+  const expression = condition.replace(/^\$\{\{ /, "").replace(/ \}\}$/, "");
+  return !cancelled && (succeeded || explicit) && expression.split(" && ").every(clause => {
+    if (clause === "!cancelled()") return true;
     const match = /^(steps\.[\w-]+\.outputs\.[\w-]+|needs\.quality\.outputs\.jsc) (==|!=) '([^']*)'$/.exec(clause);
     if (!match || !(match[1]! in outputs)) throw new Error(`Unsupported cache condition: ${clause}`);
     return match[2] === "==" ? outputs[match[1]!] === match[3] : outputs[match[1]!] !== match[3];
@@ -635,7 +614,7 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
   const fallback = workflowString(workflowField(nativeWorkflowStep("id", "native-cache"), "if"));
   const saves = [
     "Save the JSC prebuild cache once per input revision", "Save the JSC Cargo cache once per input revision",
-    "Save the refined native Cargo cache once per input revision", "Save the complete native fallback once per input revision",
+    "Save the refined native Cargo cache once per input revision", "Save the native quality checkpoint",
   ].map(name => workflowString(workflowField(nativeWorkflowStep("name", name), "if")));
   const states = [
     { v2: "exact", v4: "not-run", expected: [false, false, false] },
@@ -652,17 +631,24 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
       "steps.jsc-prebuild-cache.outputs.cache-hit": "false",
       "steps.jsc-cargo-cache.outputs.cache-hit": "false",
       "needs.quality.outputs.jsc": "true",
+      "steps.native-producers.outputs.native-ready": "true",
+      "steps.jsc-producer.outputs.jsc-ready": "true",
     };
     expect([fallback, saves[2]!, saves[3]!].map(condition => cacheCondition(condition, outputs, true))).toEqual(expected);
-    expect(saves.map(condition => cacheCondition(condition, outputs, false))).toEqual([false, false, false, false]);
+    expect(saves.map(condition => cacheCondition(condition, outputs, false))).toEqual([true, false, false, expected[2]!]);
+    expect(saves.map(condition => cacheCondition(condition, outputs, true, true))).toEqual([false, false, false, false]);
+    const incomplete = { ...outputs, "steps.native-producers.outputs.native-ready": "", "steps.jsc-producer.outputs.jsc-ready": "" };
+    expect(saves.map(condition => cacheCondition(condition, incomplete, false))).toEqual([false, false, false, false]);
     assertJscSaveSelection(saves.slice(0, 2), outputs);
   }
 });
 
 function assertJscSaveSelection(conditions: readonly string[], outputs: Readonly<Record<string, string>>) {
   expect(conditions.map(condition => cacheCondition(condition, outputs, true))).toEqual([true, true]);
-  const unselected = { ...outputs, "needs.quality.outputs.jsc": "false" };
-  expect(conditions.map(condition => cacheCondition(condition, unselected, true))).toEqual([false, false]);
+  const nativeOnly = { ...outputs, "needs.quality.outputs.jsc": "false" };
+  expect(conditions.map(condition => cacheCondition(condition, nativeOnly, true))).toEqual([true, false]);
+  const incomplete = { ...nativeOnly, "steps.jsc-producer.outputs.jsc-ready": "" };
+  expect(conditions.map(condition => cacheCondition(condition, incomplete, true))).toEqual([false, false]);
   const exact = { ...outputs, "steps.jsc-prebuild-cache.outputs.cache-hit": "true", "steps.jsc-cargo-cache.outputs.cache-hit": "true" };
   expect(conditions.map(condition => cacheCondition(condition, exact, true))).toEqual([false, false]);
 }
@@ -684,6 +670,8 @@ function expandNativeKey(template: string, inputs: ReadonlyMap<string, Buffer>):
     if (expression === "runner.os") return "Linux";
     if (expression === "runner.arch") return "X64";
     if (expression === "steps.homes.outputs.image") return "20261012.334.1";
+    if (expression === "steps.native-inputs.outputs.hash") return "effective-native-inputs";
+    if (expression === "steps.jsc-inputs.outputs.hash") return "effective-jsc-inputs";
     if (!expression.startsWith("hashFiles(")) throw new Error(`Unexpected cache expression: ${expression}`);
     const globs = cachePatterns(`\${{ ${expression} }}`).map(pattern => new Bun.Glob(pattern));
     const paths = Array.from(inputs.keys()).sort().filter(path => globs.some(glob => glob.match(path)));
@@ -699,8 +687,8 @@ function expandNativeKey(template: string, inputs: ReadonlyMap<string, Buffer>):
 }
 
 for (const { id, saveName, condition, workflowCompatible } of [
-  { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", condition: "steps.native-cargo-cache.outputs.cache-hit != 'true'", workflowCompatible: false },
-  { id: "native-cache", saveName: "Save the complete native fallback once per input revision", condition: "steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'", workflowCompatible: true },
+  { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", condition: "steps.native-cargo-cache.outputs.cache-hit != 'true'", workflowCompatible: true },
+  { id: "native-cache", saveName: "Save the native quality checkpoint", condition: "${{ !cancelled() && steps.native-producers.outputs.native-ready == 'true' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}", workflowCompatible: true },
 ]) {
   test(`${id} distinguishes tools builders and producers with its own guarded save`, () => {
     const contract = nativeCacheContract(id, saveName);
@@ -729,7 +717,7 @@ function assertProducerMutation(contract: ReturnType<typeof nativeCacheContract>
 }
 
 test("native v4 fallback still excludes incompatible environment and toolchain inputs", () => {
-  const { primary, prefix } = nativeCacheContract("native-cache", "Save the complete native fallback once per input revision");
+  const { primary, prefix } = nativeCacheContract("native-cache", "Save the native quality checkpoint");
   const inputs = nativeCacheInputs(primary);
   const saved = expandNativeKey(primary, inputs);
   for (const path of ["env.sh", ".cargo/config.toml", "rust-toolchain.toml", "scripts/ci-binaryen.ts"]) {
@@ -739,10 +727,10 @@ test("native v4 fallback still excludes incompatible environment and toolchain i
   }
 });
 
-const overlapStepName = "Blocking native checks with one owned JSC prebuild";
+const prebuildStepName = "Build or verify the JSC prebuild";
 
-function overlapScript(): string {
-  return workflowString(workflowField(nativeWorkflowStep("name", overlapStepName), "run"));
+function prebuildScript(): string {
+  return workflowString(workflowField(nativeWorkflowStep("name", prebuildStepName), "run"));
 }
 
 function replaceWorkload(script: string, functionName: string, body: string): string {
@@ -751,43 +739,46 @@ function replaceWorkload(script: string, functionName: string, body: string): st
   return script.replace(pattern, () => `${functionName}() {\n${body}\n}`);
 }
 
-test("only the disjoint prebuild overlaps the unchanged sequential native gates", () => {
-  const script = overlapScript();
-  const step = nativeWorkflowStep("name", overlapStepName);
+test("ordered producers keep every blocking native command and save JSC before native work", () => {
+  const script = prebuildScript();
+  const step = nativeWorkflowStep("name", prebuildStepName);
   expect(workflowField(step, "shell")).toBe("bash");
+  expect(step).not.toHaveProperty("if");
   expect(workflowField(step, "env")).toEqual({
-    CI_JSC_SELECTED: "${{ needs.quality.outputs.jsc }}",
-    CI_JSC_PREBUILD_HIT: "${{ steps.jsc-prebuild-cache.outputs.cache-hit }}",
+    CI_JSC_PREBUILD_HIT: "${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}",
   });
-  const before = rust.slice(0, rust.indexOf(`name: ${overlapStepName}`));
+  const before = rust.slice(0, rust.indexOf(`name: ${prebuildStepName}`));
   for (const prerequisite of ["Build patched WASI sysroot", "Preserve unchanged build-script input timestamps", "Configure private JSC build paths", "id: jsc-prebuild-cache", "id: jsc-cargo-cache"]) {
     expect(before).toContain(prerequisite);
   }
-  const native = script.match(/^run_native_checks\(\) \{\n([^]*?)^\}/m)?.[1] ?? "";
-  const commands = ["bun run quality --native", "cargo test --locked", "bun scripts/quality-input-times.ts", "cargo build --release --locked -j 2 -p bunwasm-host", "guest-build-receipt.ts inputs quickjs", "\"$GUEST_CARGO\" build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli", "guest-build-receipt.ts write dist/bun.wasm", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts"];
+  const native = nativeScript() + workflowString(workflowField(nativeWorkflowStep("name", "Build native fixtures after the cache checkpoint"), "run"));
+  const commands = ["bun run quality --native", "cargo test --locked", "bun scripts/quality-input-times.ts", "cargo build --release --locked -j 2 -p bunwasm-host", "guest-build-receipt.ts inputs quickjs", "\"$GUEST_CARGO\" build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli", "guest-build-receipt.ts write dist/bun.wasm", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts", "bun tests/install/root-overrides.ts"];
   const positions = commands.map(command => native.indexOf(command));
   expect(positions).toEqual(positions.toSorted((a, b) => a - b));
-  for (const command of commands) expect(native).toContain(command);
-  expect(native).toContain('guest_environment=$(bun scripts/guest-build-receipt.ts environment)\n  eval "$guest_environment"');
-  expect(native).toContain('guest_inputs=$(mktemp "${TMPDIR}/bun-wasm-guest-inputs-XXXXXX")\n  bun scripts/guest-build-receipt.ts inputs quickjs > "$guest_inputs"');
-  expect(native).toContain('"$GUEST_CARGO" build --release --locked -j 2 --target wasm32-wasip1 -p bunwasm-cli');
-  expect(native).toContain('bun scripts/guest-build-receipt.ts write dist/bun.wasm "$guest_inputs"\n  rm -f -- "$guest_inputs"\n  guest_inputs=');
-  expect(native).not.toContain('inputs=$(bun scripts/guest-build-receipt.ts inputs)');
-  expect(script).toContain('if [[ -n "$guest_inputs" ]]; then rm -f -- "$guest_inputs" || true; fi');
-  const prebuild = script.match(/^run_jsc_prebuild\(\) \{\n([^]*?)^\}/m)?.[1] ?? "";
-  expect(prebuild).toContain('export JOBS=2 CAGE=');
-  expect(prebuild).toContain('if [[ "$CI_JSC_PREBUILD_HIT" == \'true\' ]]; then');
-  expect(prebuild).toContain("check_jsc_inputs_stamp");
-  expect(prebuild.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
-  expect(prebuild).not.toContain("cargo");
-  expect(script.indexOf("trap cleanup EXIT")).toBeLessThan(script.indexOf("  set -m"));
-  expect(script).toContain(') > "$jsc_log" 2>&1 &\n  jsc_pid=$!');
-  expect(script).toContain("set +m\n    trap - EXIT INT TERM\n    run_jsc_prebuild");
-  expect(script).toContain('run_native_checks\nif [[ -n "$jsc_pid" ]]; then\n  wait "$jsc_pid"\nfi');
+  for (const command of commands) expect(native.split(command)).toHaveLength(2);
+  expect(native).toContain('guest_environment=$(bun scripts/guest-build-receipt.ts environment)\neval "$guest_environment"');
+  expect(native).toContain('guest_inputs=$(mktemp "${TMPDIR}/bun-wasm-guest-inputs-XXXXXX")\nbun scripts/guest-build-receipt.ts inputs quickjs > "$guest_inputs"');
+  expect(native).toContain('guest-build-receipt.ts write dist/bun.wasm "$guest_inputs"\nrm -f -- "$guest_inputs"\nguest_inputs=');
+  expect(native).toContain('trap \'rm -f -- "${guest_inputs:-}"\' EXIT');
+  expect(script).toContain('export JOBS=2 CAGE=');
+  expect(script).toContain("check_jsc_inputs_stamp");
+  expect(script.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
+  expect(script).not.toContain("cargo");
+  expect(script.indexOf("trap cleanup EXIT")).toBeLessThan(script.indexOf("set -m"));
+  expect(script).toContain(') > "$jsc_log" 2>&1 &\njsc_pid=$!');
+  expect(script).toContain("set +m\n  trap - EXIT INT TERM\n  run_jsc_prebuild");
+  expect(script).toContain('wait "$jsc_pid"\n[[ "$(cat "$jsc_completion")" == verified ]]\necho "jsc-ready=true" >> "$GITHUB_OUTPUT"');
   expect(script).not.toContain("tee");
+  const save = rust.indexOf("name: Save the JSC prebuild cache");
+  expect(save).toBeGreaterThan(rust.indexOf(`name: ${prebuildStepName}`));
+  expect(save).toBeLessThan(rust.indexOf("name: Blocking native quality checks"));
 });
 
-type OverlapControl = { selected?: boolean; nativeFirst?: boolean; nativeStatus?: number; jscStatus?: number; signal?: "SIGINT" | "SIGTERM" };
+function nativeScript(): string {
+  return workflowString(workflowField(nativeWorkflowStep("name", "Blocking native quality checks"), "run"));
+}
+
+type PrebuildControl = { jscStatus?: number; signal?: "SIGINT" | "SIGTERM" };
 
 async function waitForControlFile(path: string): Promise<string> {
   const deadline = Date.now() + 3000;
@@ -796,10 +787,10 @@ async function waitForControlFile(path: string): Promise<string> {
     if (value) return value;
     await Bun.sleep(5);
   }
-  throw new Error(`Synthetic overlap did not reach ${path}`);
+  throw new Error(`Synthetic prebuild did not reach ${path}`);
 }
 
-function controlWorkloads(): string {
+function controlledPrebuild(): string {
   const jsc = `
   printf '%s' "$BASHPID" > "$RUNNER_TEMP/jsc-pid"
   printf 'prebuild stderr retained\\n' >&2
@@ -812,32 +803,26 @@ function controlWorkloads(): string {
   fi
   printf 'jsc-done\\n' >> "$RUNNER_TEMP/events"
   return "$(cat "$RUNNER_TEMP/jsc-release")"`;
-  const native = `
-  printf 'native-start\\n' >> "$RUNNER_TEMP/events"
-  while [[ ! -f "$RUNNER_TEMP/native-release" ]]; do read -r -t 0.02 _ || true; done
-  printf 'native-done\\n' >> "$RUNNER_TEMP/events"
-  return "$(cat "$RUNNER_TEMP/native-release")"`;
-  return replaceWorkload(replaceWorkload(overlapScript(), "run_jsc_prebuild", jsc), "run_native_checks", native);
+  return replaceWorkload(prebuildScript(), "run_jsc_prebuild", jsc);
 }
 
-async function checkOverlapControl(control: OverlapControl) {
+async function checkPrebuildControl(control: PrebuildControl) {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-owned-prebuild-"));
-  const child = Bun.spawn(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", controlWorkloads()], {
-    env: { ...process.env, RUNNER_TEMP: directory, CI_JSC_SELECTED: String(control.selected !== false) },
+  const child = Bun.spawn(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", controlledPrebuild()], {
+    env: { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, "outputs"), CI_JSC_PREBUILD_HIT: "false" },
     stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
   const outsider = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
   const output = new Response(child.stdout).text();
   const errors = new Response(child.stderr).text();
   try {
-    await waitForControlFile(join(directory, "events"));
-    if (control.selected !== false) await waitForControlFile(join(directory, "descendant-pid"));
-    await releaseOverlapControl(control, directory, child);
+    await waitForControlFile(join(directory, "descendant-pid"));
+    await releasePrebuildControl(control, directory, child);
     const status = await waitForControlExit(child);
-    expect(status).toBe(control.signal === "SIGINT" ? 130 : control.signal === "SIGTERM" ? 143 : control.nativeStatus || control.jscStatus || 0);
+    expect(status).toBe(control.signal === "SIGINT" ? 130 : control.signal === "SIGTERM" ? 143 : control.jscStatus || 0);
     expect(outsider.exitCode).toBeNull();
     expect(await errors).not.toContain("unbound variable");
-    await assertOverlapOutcome(control, directory, await output);
+    await assertPrebuildOutcome(control, directory, await output);
   } finally {
     // The fallback kills only the group whose PID the synthetic workload recorded.
     const pidFile = join(directory, "jsc-pid");
@@ -852,7 +837,7 @@ async function checkOverlapControl(control: OverlapControl) {
 async function waitForControlExit(child: ReturnType<typeof Bun.spawn>): Promise<number> {
   const deadline = Date.now() + 3000;
   while (child.exitCode === null && Date.now() < deadline) await Bun.sleep(5);
-  if (child.exitCode === null) throw new Error("Owned overlap did not exit");
+  if (child.exitCode === null) throw new Error("Owned prebuild did not exit");
   return child.exited;
 }
 
@@ -862,45 +847,13 @@ function signalOwnedGroup(pid: number) {
   catch (error) { if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error; }
 }
 
-async function releaseOverlapControl(control: OverlapControl, directory: string, child: ReturnType<typeof Bun.spawn>) {
-  if (control.signal) {
-    if (control.nativeFirst) await releaseNativeForJoin(directory);
-    child.kill(control.signal);
-    return;
-  }
-  if (control.selected === false || control.nativeStatus) {
-    writeFileSync(join(directory, "native-release"), String(control.nativeStatus ?? 0));
-    return;
-  }
-  const first = control.nativeFirst ? "native" : "jsc";
-  const second = control.nativeFirst ? "jsc" : "native";
-  writeFileSync(join(directory, `${first}-release`), String(first === "jsc" ? control.jscStatus ?? 0 : 0));
-  await waitForEvent(directory, `${first}-done`);
-  expect(child.exitCode).toBeNull();
-  writeFileSync(join(directory, `${second}-release`), String(second === "jsc" ? control.jscStatus ?? 0 : 0));
+async function releasePrebuildControl(control: PrebuildControl, directory: string, child: ReturnType<typeof Bun.spawn>) {
+  if (control.signal) { child.kill(control.signal); return; }
+  writeFileSync(join(directory, "jsc-release"), String(control.jscStatus ?? 0));
 }
 
-async function releaseNativeForJoin(directory: string) {
-  writeFileSync(join(directory, "native-release"), "0");
-  await waitForEvent(directory, "native-done");
-}
-
-async function waitForEvent(directory: string, event: string) {
-  const deadline = Date.now() + 3000;
-  while (Date.now() < deadline) {
-    if (readFileSync(join(directory, "events"), "utf8").includes(event)) return;
-    await Bun.sleep(5);
-  }
-  throw new Error(`Missing overlap event: ${event}`);
-}
-
-async function assertOverlapOutcome(control: OverlapControl, directory: string, output: string) {
-  if (control.selected === false) {
-    expect(output).toBe("");
-    expect(await Bun.file(join(directory, "jsc-pid")).exists()).toBe(false);
-    expect(await Bun.file(join(directory, "jsc-prebuild.log")).exists()).toBe(false);
-    return;
-  }
+async function assertPrebuildOutcome(control: PrebuildControl, directory: string, output: string) {
+  expect(await Bun.file(join(directory, "outputs")).exists()).toBe(!control.signal && !control.jscStatus);
   expect(output).toContain("prebuild stderr retained");
   expect(readFileSync(join(directory, "jsc-prebuild.log"), "utf8")).toContain("prebuild stderr retained");
   for (const file of ["jsc-pid", "descendant-pid"]) {
@@ -927,25 +880,18 @@ async function waitForProcessExit(pid: number) {
 }
 
 for (const [label, control] of [
-  ["native finishes first", { nativeFirst: true }],
-  ["prebuild finishes first", {}],
-  ["native fails", { nativeStatus: 37 }],
-  ["prebuild fails", { jscStatus: 42 }],
-  ["cancel with SIGINT", { signal: "SIGINT" }],
-  ["cancel with SIGTERM", { signal: "SIGTERM" }],
-  ["cancel join with SIGINT", { signal: "SIGINT", nativeFirst: true }],
-  ["cancel join with SIGTERM", { signal: "SIGTERM", nativeFirst: true }],
-  ["JSC unselected", { selected: false }],
-] satisfies [string, OverlapControl][]) {
-  test(`extracted owned prebuild lifecycle: ${label}`, () => checkOverlapControl(control), 10000);
+  ["prebuild completes", {}], ["prebuild fails", { jscStatus: 42 }],
+  ["cancel with SIGINT", { signal: "SIGINT" }], ["cancel with SIGTERM", { signal: "SIGTERM" }],
+] satisfies [string, PrebuildControl][]) {
+  test(`extracted ordered prebuild lifecycle: ${label}`, () => checkPrebuildControl(control), 10000);
 }
 
 test("the owned scheduling fragment changes exact native keys without widening fallback compatibility", () => {
   const changedWorkflow = workflow.replace("          run_native_checks\n", "          run_native_checks # changed producer\n");
   expect(changedWorkflow).not.toBe(workflow);
   for (const { id, saveName, compatible } of [
-    { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", compatible: false },
-    { id: "native-cache", saveName: "Save the complete native fallback once per input revision", compatible: true },
+    { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", compatible: true },
+    { id: "native-cache", saveName: "Save the native quality checkpoint", compatible: true },
   ]) {
     const contract = nativeCacheContract(id, saveName);
     const inputs = nativeCacheInputs(contract.primary);
@@ -958,7 +904,7 @@ test("the owned scheduling fragment changes exact native keys without widening f
 });
 
 for (const hit of [false, true]) {
-  test(`extracted JSC branch propagates ${hit ? "stamp validation" : "builder"} failure without leaking its environment`, () => {
+  test(`extracted JSC branch propagates ${hit ? "stamp validation" : "builder"} failure before advertising completion`, () => {
     const directory = mkdtempSync(join(tmpdir(), "bun-wasm-prebuild-branch-"));
     try {
       mkdirSync(join(directory, "jsc"));
@@ -966,10 +912,11 @@ for (const hit of [false, true]) {
       writeFileSync(join(directory, "env.sh"), "export JSC_CHILD_ONLY=private\n");
       writeFileSync(join(directory, "jsc/common.sh"), 'check_jsc_inputs_stamp() { echo stamp-rejected >&2; return 43; }\n');
       writeFileSync(join(directory, "scripts/build-jsc.sh"), 'echo build-rejected >&2\nexit 44\n');
-      const script = replaceWorkload(overlapScript(), "run_native_checks", '  test "${JSC_CHILD_ONLY-unset}" = unset\n  test "${JOBS-unset}" = unset\n  test "${CAGE-unset}" = unset');
-      const env = { ...process.env, RUNNER_TEMP: directory, CI_JSC_SELECTED: "true", CI_JSC_PREBUILD_HIT: String(hit) };
+      const script = prebuildScript();
+      const env = { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, "outputs"), CI_JSC_PREBUILD_HIT: String(hit) };
       const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], { cwd: directory, env, encoding: "utf8", timeout: 3000 });
       expect(result.status).toBe(hit ? 43 : 44);
+      expect(Bun.spawnSync(["test", "!", "-e", join(directory, "outputs")]).exitCode).toBe(0);
       expect(result.stdout).toContain(hit ? "stamp-rejected" : "build-rejected");
       expect(result.stdout).not.toContain(hit ? "build-rejected" : "stamp-rejected");
     } finally { rmSync(directory, { recursive: true, force: true }); }
@@ -979,9 +926,9 @@ for (const hit of [false, true]) {
 test("extracted foreground commands fail on an intermediate pipeline, not just the last command", () => {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-native-failure-"));
   try {
-    const script = replaceWorkload(overlapScript(), "run_native_checks", '  false | true\n  echo masked-failure');
+    const script = replaceWorkload(nativeScript(), "run_native_checks", '  false | true\n  echo masked-failure');
     const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
-      env: { ...process.env, RUNNER_TEMP: directory, CI_JSC_SELECTED: "false" }, encoding: "utf8", timeout: 3000,
+      env: { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, "outputs") }, encoding: "utf8", timeout: 3000,
     });
     expect(result.status).toBe(1);
     expect(result.stdout).not.toContain("masked-failure");
@@ -991,13 +938,13 @@ test("extracted foreground commands fail on an intermediate pipeline, not just t
 test("cancellation between fork and PID capture still reaps the sole owned group", async () => {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-prebuild-fork-signal-"));
   try {
-    const script = controlWorkloads().replace('  jsc_pid=$!', () => '  while [[ ! -s "$RUNNER_TEMP/descendant-pid" ]]; do sleep 0.01; done\n  kill -TERM "$$"\n  jsc_pid=$!');
-    expect(script).not.toBe(controlWorkloads());
+    const script = controlledPrebuild().replace('jsc_pid=$!', () => 'while [[ ! -s "$RUNNER_TEMP/descendant-pid" ]]; do sleep 0.01; done\n  kill -TERM "$$"\n  jsc_pid=$!');
+    expect(script).not.toBe(controlledPrebuild());
     const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
-      env: { ...process.env, RUNNER_TEMP: directory, CI_JSC_SELECTED: "true" }, encoding: "utf8", timeout: 3000,
+      env: { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, "outputs") }, encoding: "utf8", timeout: 3000,
     });
     expect(result.status).toBe(143);
-    await assertOverlapOutcome({ signal: "SIGTERM" }, directory, result.stdout);
+    await assertPrebuildOutcome({ signal: "SIGTERM" }, directory, result.stdout);
   } finally {
     const pidFile = join(directory, "jsc-pid");
     if (await Bun.file(pidFile).exists()) signalOwnedGroup(Number(readFileSync(pidFile, "utf8")));
@@ -1008,10 +955,10 @@ test("cancellation between fork and PID capture still reaps the sole owned group
 test("a failed diagnostic display cannot replace the real prebuild exit status", () => {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-prebuild-status-"));
   try {
-    const script = replaceWorkload(replaceWorkload(overlapScript(), "run_jsc_prebuild", "  return 42"), "run_native_checks", "  true")
+    const script = replaceWorkload(prebuildScript(), "run_jsc_prebuild", "  return 42")
       .replace('cat "$jsc_log"', "false");
     const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
-      env: { ...process.env, RUNNER_TEMP: directory, CI_JSC_SELECTED: "true" }, encoding: "utf8", timeout: 3000,
+      env: { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, "outputs") }, encoding: "utf8", timeout: 3000,
     });
     expect(result.status).toBe(42);
   } finally { rmSync(directory, { recursive: true, force: true }); }
