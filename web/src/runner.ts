@@ -270,7 +270,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     for (const signal of pendingKills) kill(signal);
     pendingKills.length = 0;
     if (preparationStopped()) return;
-    if (options.adapter !== "preview1" && isToolCommand(options.args)) request.module = await loadTools();
+    if (options.adapter !== "preview1" && isToolCommand(options.args)) {
+      request.module = await loadTools();
+      request.linkPlan = programLinkPlan(request.module);
+    }
     if (preparationStopped()) return;
     let network;
     if (ring || lookupChannel) {

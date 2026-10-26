@@ -157,3 +157,21 @@ failure disposes the linked group and bridge descriptors. Ordinary JSC, browser
 and tools modules retain their single-module startup. The focused fixture runs
 the actual Node host with a child process, a promise and a timer. It also checks
 missing and mismatched side rejection. No provider source is changed.
+
+## Prepared pair ownership and publication
+
+The original consumer adapters in `src/quickjs-program.ts` and
+`web/scripts/node-linked.ts` snapshot both inputs before asynchronous hashing.
+Waffle's pinned `link/plan.ts` caches each compiled Module by that member's bytes,
+not the whole plan. The adapters append a valid custom section named
+`bun-wasm-quickjs` to the in-memory core input. Its payload is the side's SHA-256.
+This gives distinct sides distinct core Module identities while repeated identical
+pairs still share a cache entry. Exports, imports and instructions are unchanged.
+Published bytes and their integrity hashes remain unchanged. The existing shared
+plan still owns initialization, and child launchers carry that exact prepared plan.
+
+The sandbox stages the adjacent side with its own gzip and build fingerprint.
+The descriptor CLI detects marked split cores and describes both adjacent inputs.
+Default browser URLs require both build fingerprints; explicit custom URLs use
+their adjacent pair without comparing against an unrelated local build manifest.
+Tool selection replaces both the selected Module and its prepared plan.

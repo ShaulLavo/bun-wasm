@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { parseArgs } from "node:util";
@@ -89,7 +89,19 @@ if (import.meta.main) {
     options: { origin: { type: "string", default: GUEST_ORIGIN }, output: { type: "string" } },
   });
   if (positionals.length !== 1) throw new Error("Usage: bun scripts/guest-artifact.ts <bun.wasm[.gz]> [--origin https://host] [--output descriptor.ts]");
-  const descriptor = describeGuest(await readFile(positionals[0]!), values.origin);
+  const inputPath = resolve(positionals[0]!);
+  const input = await readFile(inputPath);
+  const core = decodeGuest(input);
+  const split = WebAssembly.Module.exports(new WebAssembly.Module(Uint8Array.from(core))).some(entry => entry.name === "bun_core_bind_engine");
+  let descriptor: GuestDescriptor;
+  if (!split) descriptor = describeGuest(input, values.origin);
+  else {
+    const sidePath = join(dirname(inputPath), "quickjs.wasm");
+    let side: Uint8Array;
+    try { side = await readFile(sidePath); }
+    catch { throw new Error(`QuickJS core requires its matching side module: ${sidePath}`); }
+    descriptor = prepareGuest(core, values.origin, side).descriptor;
+  }
   if (values.output) await writeGuestDescriptor(values.output, descriptor);
   console.log(JSON.stringify(descriptor, null, 2));
 }
