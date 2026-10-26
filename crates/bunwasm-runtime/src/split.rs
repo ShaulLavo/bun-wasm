@@ -225,7 +225,13 @@ pub(crate) fn run(options: Options) -> i32 {
         eprintln!("QuickJS engine is not registered");
         return 1;
     };
-    let (state, main_path) = new_state(&options.entry, &options.args, options.transpiler);
+    let (state, main_path) = new_state(
+        &options.entry,
+        &options.args,
+        &options.conditions,
+        &options.exec_argv,
+        options.transpiler,
+    );
     SESSION.with(|session| {
         assert!(
             session
