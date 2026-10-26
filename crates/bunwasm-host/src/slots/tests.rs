@@ -134,6 +134,35 @@ fn lookup_sized_results_do_not_overwrite_small_buffers() {
 }
 
 #[test]
+fn lookup_start_rejects_invalid_utf8_before_allocating_a_handle() {
+    let mut f = Fixture::new();
+    f.write(1024, &[0xff]);
+    let generation = f.store.data().net.notify().generation();
+    let lookup_start = functions(&mut f.store)
+        .into_iter()
+        .nth(14)
+        .unwrap()
+        .typed::<(i32, i32, i32, i32), i32>(&f.store)
+        .unwrap();
+
+    assert_eq!(
+        lookup_start.call(&mut f.store, (1024, 1, 0, 0)).unwrap(),
+        crate::net::ERROR
+    );
+    assert!(matches!(
+        f.store.data_mut().net.lookup_head(1),
+        Output::Code(crate::net::BADF)
+    ));
+    assert_eq!(f.store.data().net.notify().generation(), generation);
+    let error = match f.store.data_mut().net.error(0) {
+        Output::Bytes(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+        Output::Code(code) => panic!("expected handle-less lookup error, got {code}"),
+    };
+    assert_eq!(error["code"], "EINVAL");
+    assert_eq!(error["syscall"], "getaddrinfo");
+}
+
+#[test]
 fn runtime_pipe_and_preview1_io_close_and_renumber_share_descriptors() {
     let mut f = Fixture::new();
     let [read, write] = f.pipe();

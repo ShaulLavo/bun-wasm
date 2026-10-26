@@ -5,6 +5,7 @@
 //! guest pointer, store or engine reference.
 
 use std::ffi::{CStr, CString};
+use std::io;
 use std::mem::size_of;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::ptr;
@@ -143,7 +144,10 @@ fn resolve(hostname: &str, family: i32, hints: i32) -> Result<Vec<u8>, ErrorInfo
     let mut result = ptr::null_mut();
     let code = unsafe { libc::getaddrinfo(node.as_ptr(), ptr::null(), &hints, &mut result) };
     if code != 0 {
-        return Err(resolver_error(hostname, code));
+        let system_errno = (code == libc::EAI_SYSTEM)
+            .then(|| io::Error::last_os_error().raw_os_error())
+            .flatten();
+        return Err(resolver_error(hostname, code, system_errno));
     }
     let result = AddrInfo(result);
     let mut addresses = Vec::new();
@@ -154,6 +158,9 @@ fn resolve(hostname: &str, family: i32, hints: i32) -> Result<Vec<u8>, ErrorInfo
             addresses.push(address);
         }
         current = info.ai_next;
+    }
+    if addresses.is_empty() {
+        return Err(resolver_error(hostname, libc::EAI_NONAME, None));
     }
     serde_json::to_vec(&serde_json::json!({ "addresses": addresses }))
         .map_err(|error| ErrorInfo::new("Error", error.to_string(), Some("EIO")))
@@ -216,11 +223,20 @@ impl Drop for AddrInfo {
     }
 }
 
-fn resolver_error(hostname: &str, code: libc::c_int) -> ErrorInfo {
-    let code_name = if code == libc::EAI_NONAME {
-        "ENOTFOUND".to_owned()
-    } else {
-        format!("EAI_{code}")
+fn resolver_error(hostname: &str, code: libc::c_int, system_errno: Option<i32>) -> ErrorInfo {
+    let code_name = match code {
+        libc::EAI_AGAIN => "EAI_AGAIN",
+        libc::EAI_BADFLAGS => "EAI_BADFLAGS",
+        libc::EAI_FAIL => "EAI_FAIL",
+        libc::EAI_FAMILY => "EAI_FAMILY",
+        libc::EAI_MEMORY => "EAI_MEMORY",
+        libc::EAI_NODATA => "EAI_NODATA",
+        libc::EAI_NONAME => "ENOTFOUND",
+        libc::EAI_SERVICE => "EAI_SERVICE",
+        libc::EAI_SOCKTYPE => "EAI_SOCKTYPE",
+        libc::EAI_SYSTEM => "EAI_SYSTEM",
+        libc::EAI_OVERFLOW => "EAI_OVERFLOW",
+        _ => "EAI_UNKNOWN",
     };
     let detail = unsafe {
         let message = libc::gai_strerror(code);
@@ -235,9 +251,15 @@ fn resolver_error(hostname: &str, code: libc::c_int) -> ErrorInfo {
     } else {
         format!("getaddrinfo {code_name} {hostname}: {detail}")
     };
-    ErrorInfo::new("Error", message, Some(&code_name))
+    let mut error = ErrorInfo::new("Error", message, Some(code_name))
         .with_syscall("getaddrinfo")
-        .with_hostname(hostname)
+        .with_hostname(hostname);
+    if code_name == "EAI_SYSTEM" {
+        if let Some(errno) = system_errno {
+            error = error.with_errno(errno);
+        }
+    }
+    error
 }
 
 #[cfg(test)]
@@ -291,6 +313,34 @@ mod tests {
         assert_eq!(
             error.hostname.as_deref(),
             Some("bun-wasm-native-dns.invalid")
+        );
+    }
+
+    #[test]
+    fn resolver_errors_use_stable_symbolic_codes() {
+        for (code, expected) in [
+            (libc::EAI_AGAIN, "EAI_AGAIN"),
+            (libc::EAI_BADFLAGS, "EAI_BADFLAGS"),
+            (libc::EAI_FAIL, "EAI_FAIL"),
+            (libc::EAI_FAMILY, "EAI_FAMILY"),
+            (libc::EAI_MEMORY, "EAI_MEMORY"),
+            (libc::EAI_NODATA, "EAI_NODATA"),
+            (libc::EAI_NONAME, "ENOTFOUND"),
+            (libc::EAI_SERVICE, "EAI_SERVICE"),
+            (libc::EAI_SOCKTYPE, "EAI_SOCKTYPE"),
+            (libc::EAI_SYSTEM, "EAI_SYSTEM"),
+            (libc::EAI_OVERFLOW, "EAI_OVERFLOW"),
+        ] {
+            let error = resolver_error("example.test", code, None);
+            assert_eq!(error.code.as_deref(), Some(expected), "libc code {code}");
+        }
+        assert_eq!(
+            resolver_error("example.test", 12345, None).code.as_deref(),
+            Some("EAI_UNKNOWN")
+        );
+        assert_eq!(
+            resolver_error("example.test", libc::EAI_SYSTEM, Some(13)).errno,
+            Some(13)
         );
     }
 

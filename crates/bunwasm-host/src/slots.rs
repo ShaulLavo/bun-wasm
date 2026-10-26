@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use wasmtime::{Caller, Func, Instance, Linker, Store, Val};
 
 use crate::Host;
-use crate::net::Output;
+use crate::net::{ErrorInfo, Output};
 
 const ABI_VERSION: u32 = 2;
 const SLOT_NAMES: [&str; 16] = [
@@ -310,9 +310,27 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
              family: i32,
              hints: i32| {
                 with_memory(&mut caller, |memory, host| {
-                    let hostname =
-                        String::from_utf8_lossy(&memory[range(memory, host_ptr, host_len)?])
-                            .into_owned();
+                    let hostname = match std::str::from_utf8(
+                        &memory[range(memory, host_ptr, host_len)?],
+                    ) {
+                        Ok(hostname) => hostname,
+                        Err(_) => {
+                            let error = ErrorInfo::new(
+                                "TypeError",
+                                "hostname is not valid UTF-8",
+                                Some("EINVAL"),
+                            )
+                            .with_syscall("getaddrinfo");
+                            let handle = host.net.fail(error);
+                            trace(
+                                host,
+                                format_args!(
+                                    "lookup_start(<invalid utf-8>, {family}, {hints}) -> {handle}"
+                                ),
+                            );
+                            return Ok(handle);
+                        }
+                    };
                     let handle = host.net.lookup(&hostname, family, hints);
                     trace(
                         host,
