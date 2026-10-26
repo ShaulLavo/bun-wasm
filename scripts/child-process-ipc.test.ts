@@ -275,3 +275,30 @@ test("peer closed reader yields asynchronous EPIPE once and closes the channel",
   await pump();
   expect(fake.open()).toBe(0);
 });
+
+
+test("fork forwards ordered raw execArgv, with inheritance, explicit replacement and sibling isolation", async () => {
+  const fake = service();
+  const parent = ["--conditions=parent", "--conditions", "--require=condition-name"];
+  const { module, pump } = load(fake, { execArgv: parent });
+  const explicit = ["--conditions", "--no-deprecation", "--conditions=child"];
+  const children = [
+    module.nodeChildProcess().fork("child.ts", ["--conditions=app"]),
+    module.nodeChildProcess().fork("child.ts", [], { execArgv: [] }),
+    module.nodeChildProcess().fork("child.ts", [], { execArgv: explicit }),
+  ];
+  try {
+    const requests = children.map(child => fake.children.get(child.pid)!.request.argv);
+    expect(requests).toEqual([
+      ["bun"].concat(parent, ["child.ts", "--conditions=app"]),
+      ["bun", "child.ts"],
+      ["bun"].concat(explicit, ["child.ts"]),
+    ]);
+    expect(parent).toEqual(["--conditions=parent", "--conditions", "--require=condition-name"]);
+    expect(explicit).toEqual(["--conditions", "--no-deprecation", "--conditions=child"]);
+  } finally {
+    for (const child of children) child.kill("SIGKILL");
+    await pump();
+    expect(fake.open()).toBe(0);
+  }
+});

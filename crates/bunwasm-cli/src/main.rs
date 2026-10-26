@@ -716,6 +716,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn conditions_reach_every_runtime_entry_mode() {
+        for mode in ["-e", "-p", "--eval", "--print", "test", "entry.ts"] {
+            let command = parse_command(
+                vec!["--conditions=custom".into(), mode.into(), "require('p')".into()],
+                false,
+            );
+            let Command::Run(_, _, conditions, exec_argv) = command else {
+                panic!("{mode} discarded runtime flags");
+            };
+            assert_eq!(conditions, ["custom"], "{mode}");
+            assert_eq!(exec_argv, ["--conditions=custom"], "{mode}");
+        }
+    }
+
+    #[test]
     fn conditions_parse_in_order_and_preserve_exec_argv_shape() {
         let command = parse_command(
             vec![
