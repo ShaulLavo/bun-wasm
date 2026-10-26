@@ -618,7 +618,7 @@ function wasmToolsSetup(): string {
 
 test("split producer wasm-tools setup is pinned, cached and unconditional before native gates", () => {
   const step = nativeWorkflowStep("name", wasmToolsSetupName);
-  expect("if" in Object(step)).toBe(false);
+  expect(step).not.toHaveProperty("if");
   expect(workflowField(step, "shell")).toBe("bash");
   const cache = workflowField(nativeWorkflowStep("id", "wasm-tools-cache"), "with");
   expect(workflowField(cache, "path")).toBe("${{ env.WASM_TOOLS }}/" + wasmToolsArchive);

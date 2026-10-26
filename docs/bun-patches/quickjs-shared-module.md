@@ -41,6 +41,11 @@ Use the host's shared build queue. This script never changes workspace or
 standard-library manifests or lockfiles. The workspace's normal vendor dependency
 metadata must already be available.
 
+Both split producers require `wasm-tools validate`. Native CI prepares the pinned
+wasm-tools 1.262.0 release archive before its build gates. Cold downloads and cache
+hits both pass the archive checksum before extraction and the executable version
+check before PATH publication. The validator is not built with Cargo.
+
 The dedicated fixture links real core libc and includes the reusable data/ops
 modules by path. Its echo native proves frame transport, not production stdout.
 The fixture imports `runtime_proc.signal(0, 4)` as a fatal-only checkpoint.
