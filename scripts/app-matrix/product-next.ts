@@ -21,6 +21,7 @@ const next15 = {
 } as const;
 const next14 = {
   next: "14.2.33",
+  "@next/swc-wasm-nodejs": "14.2.33",
   react: "18.3.1",
   "react-dom": "18.3.1",
   typescript: "5.9.3",
@@ -177,11 +178,14 @@ export default function handler(_request: NextApiRequest, response: NextApiRespo
 }
 
 function nextConfigFile(major: string, expression: string): Record<string, string> {
-  if (major === "14") return {
-    "next.config.mjs": `const nextConfig = ${expression};
+  if (major === "14") {
+    const config = expression.replace("{", "{ experimental: { useWasmBinary: true },");
+    return {
+      "next.config.mjs": `const nextConfig = ${config};
 export default nextConfig;
 `,
-  };
+    };
+  }
   return {
     "next.config.ts": `import type { NextConfig } from "next";
 
@@ -189,6 +193,10 @@ const nextConfig: NextConfig = ${expression};
 export default nextConfig;
 `,
   };
+}
+
+function compilerConfigFiles(major: string): Record<string, string> {
+  return major === "14" ? nextConfigFile(major, "{}") : {};
 }
 
 function pprFiles(text: string, major: string): Record<string, string> {
@@ -313,7 +321,10 @@ function dynamicApp(version: string, dependencies: Record<string, string>, withA
     id: `next-${version}-app`,
     family: "next",
     dependencies,
-    files: appDynamicFiles(text, version, withActions),
+    files: {
+      ...compilerConfigFiles(version),
+      ...appDynamicFiles(text, version, withActions),
+    },
     commands: dynamicCommands(text, pageCheck(text, true, appProbes(text, withActions))),
     features: [
       "router:app",
@@ -359,7 +370,10 @@ function dynamicPages(version: string, dependencies: Record<string, string>): Pr
     id: `next-${version}-pages`,
     family: "next",
     dependencies,
-    files: pagesDynamicFiles(text, version),
+    files: {
+      ...compilerConfigFiles(version),
+      ...pagesDynamicFiles(text, version),
+    },
     commands: dynamicCommands(text, pagesCheck(text, true, pagesProbes(text))),
     features: [
       "router:pages",
