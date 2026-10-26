@@ -134,9 +134,14 @@ function nativeKeyTemplates(namespace: string) {
   return { primary, prefix, save };
 }
 
+function matchingCachePaths(patterns: readonly string[], paths: Iterable<string>): string[] {
+  const included = patterns.filter(pattern => !pattern.startsWith("!")).map(pattern => new Bun.Glob(pattern));
+  const excluded = patterns.filter(pattern => pattern.startsWith("!")).map(pattern => new Bun.Glob(pattern.slice(1)));
+  return Array.from(paths).sort().filter(path => included.some(pattern => pattern.match(path)) && !excluded.some(pattern => pattern.match(path)));
+}
+
 function fixtureHash(expression: string, files: CacheFiles): string {
-  const patterns = Array.from(expression.matchAll(/'([^']+)'/g), match => new Bun.Glob(match[1]!));
-  const paths = Object.keys(files).sort().filter(path => patterns.some(pattern => pattern.match(path)));
+  const paths = matchingCachePaths(Array.from(expression.matchAll(/'([^']+)'/g), match => match[1]!), Object.keys(files));
   if (paths.length === 0) return "";
   const digest = createHash("sha256");
   for (const path of paths) digest.update(createHash("sha256").update(files[path]!).digest());
@@ -163,6 +168,8 @@ const nativeCacheFiles: CacheFiles = {
   "crates/bunwasm-runtime/Cargo.toml": 'version.workspace = true',
   "crates/bunwasm-runtime/src/engine_jsc.rs": "old Rust source",
   "crates/bunwasm-runtime/build.rs": "native compiler flags",
+  "crates/bunwasm-cli/build.rs": "CLI Cargo build script",
+  "third_party/rquickjs-sys/quickjs/quickjs.c": "QuickJS C source",
   "crates/bunwasm-crypto-sys/c/rsa.c": "native C source",
   "crates/bunwasm-jsc/cpp/helpers.cpp": "JSC Cargo C++ helper",
   ".cargo/config.toml": "SQLite compile flags",
@@ -201,7 +208,7 @@ test("native Cargo patch releases and Rust edits restore a previously saved comp
 test("native compatibility changes cannot select the prior Cargo cache", () => {
   const keys = nativeKeyTemplates(nativeCargoNamespace);
   const saved = fixtureCacheKey(keys.save, nativeCacheFiles);
-  for (const path of Object.keys(nativeCacheFiles).filter(path => !path.includes("Cargo.") && !path.endsWith("engine_jsc.rs") && !["scripts/build-bun-tools.sh", ".github/workflows/ci.yml", "env.sh", "bun.lock"].includes(path))) {
+  for (const path of Object.keys(nativeCacheFiles).filter(path => !path.includes("Cargo.") && !path.endsWith("engine_jsc.rs") && !["crates/bunwasm-cli/build.rs", "third_party/rquickjs-sys/quickjs/quickjs.c", "scripts/build-bun-tools.sh", ".github/workflows/ci.yml", "env.sh", "bun.lock"].includes(path))) {
     const files = changedCacheFile(path);
     expect(fixtureCacheKey(keys.primary, files)).not.toBe(saved);
     expect(saved.startsWith(fixtureCacheKey(keys.prefix, files))).toBe(false);
@@ -212,6 +219,35 @@ test("native compatibility changes cannot select the prior Cargo cache", () => {
   expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles, "next-image"))).toBe(false);
   expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace("Linux-X64", "Linux-ARM64"))).toBe(false);
   expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace("Linux-X64", "macOS-X64"))).toBe(false);
+});
+
+for (const namespace of [nativeCargoNamespace, "jsc-cargo-v2"]) {
+  test(`${namespace} restores compatible dependencies but changes exact identity for audited Cargo source`, () => {
+    const keys = nativeKeyTemplates(namespace);
+    const saved = fixtureCacheKey(keys.save, nativeCacheFiles);
+    for (const path of ["crates/bunwasm-cli/build.rs", "crates/bunwasm-cli/entry-split.c", "third_party/rquickjs-sys/quickjs/quickjs.c"]) {
+      const files = changedCacheFile(path);
+      expect(fixtureCacheKey(keys.primary, files)).not.toBe(saved);
+      expect(saved.startsWith(fixtureCacheKey(keys.prefix, files))).toBe(true);
+      expect(fixtureCacheKey(keys.save, files)).toBe(fixtureCacheKey(keys.primary, files));
+    }
+    for (const path of [".cargo/config.toml", "rust-toolchain.toml", "patches/bun/0001.patch", "third_party/zlib-ng/zlib.h.in", "third_party/rquickjs-sys/build.rs", "third_party/rquickjs-sys/quickjs/quickjs.h", "crates/bunwasm-runtime/build.rs", "crates/bunwasm-crypto-sys/c/rsa.c", "scripts/check-cmake-cache.cmake"]) {
+      expect(saved.startsWith(fixtureCacheKey(keys.prefix, changedCacheFile(path)))).toBe(false);
+    }
+    for (const input of ["effective-native-inputs", "effective-jsc-inputs"]) {
+      if (!saved.includes(input)) continue;
+      expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace(input, "incompatible-environment"))).toBe(false);
+    }
+  });
+}
+
+test("the source partition cannot reuse old source-containing Cargo prefixes", () => {
+  for (const namespace of [nativeCargoNamespace, "jsc-cargo-v2"]) {
+    const keys = nativeKeyTemplates(namespace);
+    const previous = keys.save.replaceAll(/, '!([^']+)'/g, "");
+    expect(previous).not.toBe(keys.save);
+    expect(fixtureCacheKey(previous, nativeCacheFiles).startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles))).toBe(false);
+  }
 });
 
 test("old Cargo-first keys cannot use the new compatibility prefix, and fallback never overlays a match", () => {
@@ -660,7 +696,7 @@ function cachePatterns(template: string): string[] {
 
 function nativeCacheInputs(template: string): Map<string, Buffer> {
   const root = fileURLToPath(new URL("../", import.meta.url));
-  const paths = new Set(cachePatterns(template).flatMap(pattern =>
+  const paths = new Set(cachePatterns(template).filter(pattern => !pattern.startsWith("!")).flatMap(pattern =>
     Array.from(new Bun.Glob(pattern).scanSync({ cwd: root, onlyFiles: true, dot: true }))));
   return new Map(Array.from(paths, path => [path, readFileSync(join(root, path))]));
 }
@@ -673,8 +709,7 @@ function expandNativeKey(template: string, inputs: ReadonlyMap<string, Buffer>):
     if (expression === "steps.native-inputs.outputs.hash") return "effective-native-inputs";
     if (expression === "steps.jsc-inputs.outputs.hash") return "effective-jsc-inputs";
     if (!expression.startsWith("hashFiles(")) throw new Error(`Unexpected cache expression: ${expression}`);
-    const globs = cachePatterns(`\${{ ${expression} }}`).map(pattern => new Bun.Glob(pattern));
-    const paths = Array.from(inputs.keys()).sort().filter(path => globs.some(glob => glob.match(path)));
+    const paths = matchingCachePaths(cachePatterns(`\${{ ${expression} }}`), inputs.keys());
     if (paths.length === 0) return "";
     const hash = createHash("sha256");
     for (const path of paths) {
