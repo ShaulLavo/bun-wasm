@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import * as path from "node:path";
 
 const source = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${readFileSync(
   new URL("../crates/bunwasm-runtime/src/js/worker_threads.ts", import.meta.url), "utf8")}`);
@@ -13,7 +14,7 @@ function workerModule(env: Record<string, string> = {}, execArgv: string[] = [])
   const process = { env: { ...env }, execArgv, execPath: "bun", cwd: () => "/", noDeprecation: false };
   let port: unknown;
   const modules = {
-    process, events: EventEmitter, structured_clone: { structuredClone }, net: {},
+    process, path, events: EventEmitter, structured_clone: { structuredClone }, net: {},
     worker_codec: { create: () => ({ prepare: () => ({ graph: {}, commit() {} }), decode: () => [null, [], port] }) },
     spawn: { spawn(argv: string[], options: { env: Record<string, string> }) { launches.push({ argv, env: options.env }); throw stop; } },
     worker_channel: { open: () => ({ send() {} }) },
@@ -26,8 +27,8 @@ function workerModule(env: Record<string, string> = {}, execArgv: string[] = [])
   const context = { EventTarget, Event, MessageEvent, DOMException, URL, structuredClone };
   const implementation = runInNewContext(source, context)(internal);
   port = new implementation.MessageChannel().port1;
-  function launch(options: object = {}) {
-    expect(() => new implementation.Worker("", { eval: true, ...options })).toThrow(stop);
+  function launch(options: object = {}, filename = "") {
+    expect(() => new implementation.Worker(filename, { eval: true, ...options })).toThrow(stop);
     return launches[launches.length - 1]!;
   }
   return { process, preloads, launches, implementation, internal, context, launch };
@@ -58,6 +59,13 @@ for (const { execArgv, conditions, preloads } of operandCases) {
     expect(parent.process.execArgv).toEqual([]);
   });
 }
+
+test("file workers pass conditions before run and leave application operands after the file", () => {
+  const parent = workerModule();
+  const launch = parent.launch({ eval: false, execArgv: ["--conditions", "vitest"], argv: ["--conditions=app"] }, "./vitest-worker.js");
+  expect(launch.argv).toEqual(["bun", "--conditions", "vitest", "run", "/vitest-worker.js", "--conditions=app"]);
+  expect(JSON.parse(launch.env.BUNWASM_WORKER_INIT!).argv).toEqual(["bun", "/vitest-worker.js", "--conditions=app"]);
+});
 
 test("worker conditions inherit, explicitly replace and isolate parent and sibling execArgv", () => {
   const execArgv = ["--conditions=parent", "--conditions", "second"];

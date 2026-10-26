@@ -459,7 +459,6 @@ enum Command {
     Lint,
     Install(String, Vec<String>),
     X(Vec<String>),
-    Print(String),
     Exit(i32),
 }
 
@@ -563,7 +562,11 @@ fn parse_command_with_flags(
                 let Some(code) = rest.next() else {
                     return usage_error("--print requires code");
                 };
-                return Command::Print(code);
+                let wrapped = format!(
+                    "const __bunwasm_print = await (0, eval)({code:?}); \
+                     console.log(typeof __bunwasm_print === 'string' ? __bunwasm_print : Bun.inspect(__bunwasm_print));"
+                );
+                return Command::Run(Entry::Eval(wrapped), Vec::new(), conditions, exec_argv);
             }
             "lint" | "fmt" => return Command::Lint,
             "test" => {
@@ -688,14 +691,6 @@ fn main() {
             }
         }
         Command::Run(entry, args, conditions, exec_argv) => (entry, args, conditions, exec_argv),
-        // `-p`: evaluate an expression and print it like Bun.
-        Command::Print(code) => {
-            let wrapped = format!(
-                "const __bunwasm_print = await (0, eval)({code:?}); \
-                 console.log(typeof __bunwasm_print === 'string' ? __bunwasm_print : Bun.inspect(__bunwasm_print));"
-            );
-            (Entry::Eval(wrapped), Vec::new(), Vec::new(), Vec::new())
-        }
     };
     let code = bunwasm_runtime::run(Options {
         entry,
@@ -719,7 +714,11 @@ mod tests {
     fn conditions_reach_every_runtime_entry_mode() {
         for mode in ["-e", "-p", "--eval", "--print", "test", "entry.ts"] {
             let command = parse_command(
-                vec!["--conditions=custom".into(), mode.into(), "require('p')".into()],
+                vec![
+                    "--conditions=custom".into(),
+                    mode.into(),
+                    "require('p')".into(),
+                ],
                 false,
             );
             let Command::Run(_, _, conditions, exec_argv) = command else {
