@@ -4,6 +4,8 @@ export type SharedRequest =
   | { readonly kind: "publish"; readonly transaction: string; readonly attachments: readonly SharedAttachment[] }
   | { readonly kind: "abort"; readonly transaction: string }
   | { readonly kind: "need" | "cancel"; readonly references: readonly SharedReference[] }
+  | { readonly kind: "mailbox"; readonly reference: SharedReference }
+  | { readonly kind: "route"; readonly command: SharedRouteCommand }
   | { readonly kind: "close" };
 export type SharedResponse =
   | { readonly kind: "closed"; readonly message: string }
@@ -24,7 +26,15 @@ export interface SharedPublication {
   publish(): void;
   abort(): void;
 }
+export interface SharedRouteSnapshot { readonly id: string; readonly peer: string | null; readonly version: number; readonly sent: number; }
+export type SharedRouteCommand =
+  | { readonly kind: "bind" | "moving"; readonly snapshot: SharedRouteSnapshot }
+  | { readonly kind: "closed"; readonly id: string }
+  | { readonly kind: "port-data" | "port-close"; readonly id: string; readonly from: string; readonly sequence: number; readonly graph?: unknown };
+export interface SharedRoutes { readonly owner: string; readonly enabled: boolean; enable(): void; send(command: unknown): boolean; }
 export interface SharedObjects {
+  readonly mailbox?: import("./mailbox.ts").SharedMailbox;
+  readonly routes?: SharedRoutes;
   begin(): SharedPublication;
   read(reference: SharedReference): SharedArrayBuffer;
   wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
@@ -59,15 +69,38 @@ function attachments(value: unknown): SharedAttachment[] {
     return { ...reference, buffer: input.buffer as SharedArrayBuffer };
   });
 }
+function counter(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw sharedError("Invalid shared route counter");
+  return value;
+}
+function routeSnapshot(value: unknown): SharedRouteSnapshot {
+  const input = object(value);
+  if (typeof input.id !== "string" || input.peer !== null && typeof input.peer !== "string") throw sharedError("Invalid shared route snapshot");
+  return { id: input.id, peer: input.peer, version: counter(input.version), sent: counter(input.sent) };
+}
+function routeCommand(value: unknown): SharedRouteCommand {
+  const input = object(value);
+  if (input.kind === "bind" || input.kind === "moving") return { kind: input.kind, snapshot: routeSnapshot(input.snapshot) };
+  if (input.kind === "closed" && typeof input.id === "string") return { kind: input.kind, id: input.id };
+  if ((input.kind === "port-data" || input.kind === "port-close") && typeof input.id === "string" && typeof input.from === "string") {
+    const command = { id: input.id, from: input.from, sequence: counter(input.sequence) };
+    if (input.kind === "port-data") return { kind: "port-data", ...command, graph: input.graph };
+    return { kind: "port-close", ...command };
+  }
+  throw sharedError("Invalid shared route command");
+}
 function transaction(value: unknown): string {
   if (typeof value !== "string" || !/^[\w-]{1,128}$/.test(value)) throw sharedError("Invalid shared-object transaction");
   return value;
 }
+export function sharedRouteCommand(value: unknown): SharedRouteCommand { return routeCommand(value); }
 export function sharedRequest(value: unknown): SharedRequest {
   const input = object(value);
   switch (input.kind) {
     case "publish": return { kind: input.kind, transaction: transaction(input.transaction), attachments: attachments(input.attachments) };
     case "abort": return { kind: input.kind, transaction: transaction(input.transaction) };
+    case "mailbox": return { kind: input.kind, reference: sharedReference(input.reference) };
+    case "route": return { kind: input.kind, command: routeCommand(input.command) };
     case "need": case "cancel": return { kind: input.kind, references: references(input.references) };
     case "close": return { kind: input.kind };
     default: throw sharedError("Invalid shared-object request");

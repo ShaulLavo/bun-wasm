@@ -1,4 +1,5 @@
-import { messageData, sharedBufferLength, sharedError, sharedObjectLimit, sharedResponse } from "./protocol.ts";
+import { createSharedMailbox } from "./mailbox.ts";
+import { messageData, sharedBufferLength, sharedError, sharedObjectLimit, sharedResponse, sharedRouteCommand } from "./protocol.ts";
 import type { BunSharedNativeHost, SharedAttachment, SharedObjects, SharedPort, SharedPublication, SharedReference } from "./protocol.ts";
 
 export interface SharedObjectService extends SharedObjects {
@@ -17,6 +18,25 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   let reserved = 0;
   let closed: DOMException | null = null;
   let nextId = 0;
+  const mailbox = createSharedMailbox();
+  let mailboxPublication: SharedPublication | undefined;
+  let routesReady = false;
+  let routesEnabled = false;
+  function ensureRoutes() {
+    if (routesReady) return;
+    mailboxPublication = begin();
+    const reference = mailboxPublication.reference(mailbox.buffer);
+    mailboxPublication.publish();
+    port.postMessage({ kind: "mailbox", reference });
+    routesReady = true;
+  }
+  function sendRoute(command: unknown) {
+    if (closed || !routesEnabled) return false;
+    active();
+    ensureRoutes();
+    port.postMessage({ kind: "route", command: sharedRouteCommand(command) });
+    return true;
+  }
   function active() { if (closed) throw closed; }
   function present(reference: SharedReference) {
     active();
@@ -70,12 +90,13 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     if (closed) return;
     closed = reason;
     for (const publication of Array.from(publications)) publication.abort();
+    mailboxPublication?.abort();
     const waiters = new Set(Array.from(pending.values()).flatMap(request => Array.from(request.waiters)));
     pending.clear(); buffers.clear(); failures.clear();
     port.removeEventListener("message", onMessage);
     port.removeEventListener("messageerror", onError);
     try { port.postMessage({ kind: "close" }); } catch { /* The peer may already be gone. */ }
-    port.close();
+    port.close(); mailbox.close();
     for (const waiter of waiters) waiter.ready();
   }
   function onError() { close(sharedError("Shared-object transport failed")); }
@@ -161,7 +182,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   port.addEventListener("message", onMessage);
   port.addEventListener("messageerror", onError);
   port.start();
-  return { begin, read, wait, close, inspect: () => ({ buffers: buffers.size, pending: pending.size, staged: publications.size, closed: closed !== null }) };
+  return { mailbox, routes: { owner, get enabled() { return routesEnabled; }, enable() { routesEnabled = true; }, send: sendRoute }, begin, read, wait, close, inspect: () => ({ buffers: buffers.size, pending: pending.size, staged: publications.size, closed: closed !== null }) };
 }
 
 export function exportSharedObjects(owner: string, host: BunSharedNativeHost) {

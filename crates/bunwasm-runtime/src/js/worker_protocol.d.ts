@@ -40,6 +40,8 @@ declare namespace BunWasm {
     abort(): void;
   }
   interface SharedObjects {
+    readonly mailbox?: { drain(consume: (bytes: Uint8Array) => void): number };
+    readonly routes?: { readonly enabled: boolean; enable(): void; send(command: unknown): boolean };
     begin(): SharedPublication;
     read(reference: SharedReference): SharedArrayBuffer;
     wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;

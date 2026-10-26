@@ -28,6 +28,7 @@
   const route = config?.route || [];
   const threadId = route.reduce((parent, counter) => (parent + counter) * (parent + counter + 1) / 2 + counter + 1, 0);
   const envGroup = config?.envGroup || "root";
+  const mailboxDecoder = new TextDecoder();
   const routeKey = (path: Route) => JSON.stringify(path);
   const sameRoute = (first: Route, second: Route) => routeKey(first) === routeKey(second);
   const hasPrefix = (path: Route, prefix: Route) => prefix.every((part, index) => path[index] === part);
@@ -95,6 +96,12 @@
     child?.send({ kind: "down", path, body });
   }
   function root(body: Record<string, unknown>) {
+    const routes = internal.sharedObjects?.routes;
+    if (routes?.enabled && (body.kind === "bind" || body.kind === "moving" || body.kind === "port-data" || body.kind === "port-close" || body.kind === "closed")) {
+      routes.send(body);
+      if (body.kind === "bind" || body.kind === "moving" || body.kind === "closed") rootCommand(body);
+      return;
+    }
     if (route.length) { parentChannel?.send({ kind: "up", body }); return; }
     rootCommand(body);
   }
@@ -201,7 +208,10 @@
     throw new Error("Unknown worker delivery");
   }
   function pump() {
-    let progress = parentChannel?.pump(incoming) || false;
+    let progress = false;
+    const mailbox = internal.sharedObjects?.mailbox;
+    if (mailbox) progress = Boolean(mailbox.drain(bytes => rootCommand(record(JSON.parse(mailboxDecoder.decode(bytes))))));
+    progress = parentChannel?.pump(incoming) || progress;
     for (const child of Array.from(children.values())) progress = child.pump() || progress;
     return progress;
   }
