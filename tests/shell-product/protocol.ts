@@ -7,6 +7,6 @@ export interface ProductApi {
   interrupt(): Promise<{ code: number; output: string }>;
   close(): Promise<void>;
   readFile(path: string): Promise<string | null>;
-  diagnostics(): { tailAvailable: boolean; transcripts: { app: string; text: string }[]; pending: unknown };
+  diagnostics(): { tailAvailable: boolean; transcripts: { app: string; text: string }[]; pending: unknown; liveServer: boolean };
   cleanup(): Promise<{ workers: number; listeners: number }>;
 }

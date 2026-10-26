@@ -7,6 +7,7 @@ import { PreviewRouter } from "waffle/browser/preview";
 import { activated } from "waffle/browser/service-worker";
 import type { Fixture } from "./model";
 import type { ProductApi } from "./protocol";
+import { liveServer, requireLiveServer, settleResources, type Pending } from "./lifecycle";
 
 const router = new PreviewRouter({ baseURL: location.href, prefix: "__preview" });
 const listeners = new Map<number, RuntimeNetworkHelper>();
@@ -38,7 +39,7 @@ class Terminal {
   text = "";
   sequence = 0;
   baselineWorkers = workers.size;
-  pending: { kind: "command"; token: string; offset: number } | { kind: "server"; offset: number; entered: boolean } | undefined;
+  pending: Pending;
   readonly timer: ReturnType<typeof setInterval>;
   constructor(readonly app: string, readonly shell: Shell) {
     this.timer = setInterval(() => this.sample(), 5);
@@ -49,17 +50,20 @@ class Terminal {
   }
   send(line: string) { check(this.shell.terminal.send(new TextEncoder().encode(`${line}\n`)), "Terminal ring accepted input"); }
   begin(command: string) {
+    if (this.serverExited()) this.pending = undefined;
     check(!this.pending, "Previous foreground command must finish first");
     const token = `PRODUCT_DONE_${++this.sequence}`;
     this.pending = { kind: "command", token, offset: this.text.length };
     this.send(`${command}; __product_status=$?; printf '\\n${token}:%s\\n' "$__product_status"`);
   }
-  beginServer(command: string) {
+  beginServer(command: string, port: number) {
+    if (this.serverExited()) this.pending = undefined;
     check(!this.pending, "Previous foreground command must finish first");
-    this.pending = { kind: "server", offset: this.text.length, entered: false };
+    this.pending = { kind: "server", port, offset: this.text.length, entered: false };
     this.send(command);
   }
   serverExited() { return this.pending?.kind === "server" && this.pending.entered && Atomics.load(this.shell.terminal.state, control.phase) === 1; }
+  liveServer() { return liveServer(this.pending, Atomics.load(this.shell.terminal.state, control.phase), listeners); }
   completion() {
     if (this.pending?.kind !== "command") return null;
     const match = new RegExp(`(?:^|\\n)${this.pending.token}:(\\d+)\\r?(?:\\n|$)`).exec(this.text.slice(this.pending.offset));
@@ -77,6 +81,7 @@ class Terminal {
   }
   async ready() { await until(() => Atomics.load(this.shell.terminal.state, control.phase) === 1, "Shell prompt"); }
   async interrupt() {
+    requireLiveServer(this.pending, Atomics.load(this.shell.terminal.state, control.phase), listeners);
     // The same terminal-ring interrupt/input path used by a real terminal UI.
     this.shell.terminal.interrupt();
     check(this.shell.terminal.discardInput(), "Interrupted input discarded");
@@ -144,15 +149,20 @@ async function open(fixture: Fixture, registry: string) {
 async function close() { const session = active; active = undefined; await session?.dispose(); }
 async function command(text: string, milliseconds?: number) { const session = terminal(); session.begin(text); return session.finish(milliseconds); }
 async function start(command: string, port: number, milliseconds: number) {
-  const session = terminal(); session.beginServer(command);
-  await until(() => listeners.has(port) || session.serverExited(), `Listener ${port}`, milliseconds);
-  if (!listeners.has(port)) { session.pending = undefined; throw new Error(`Server exited before listener: ${session.text}`); }
+  const session = terminal(); session.beginServer(command, port);
+  await until(() => session.liveServer() || session.serverExited(), `Listener ${port}`, milliseconds);
+  if (!session.liveServer()) { session.pending = undefined; throw new Error(`Server exited before listener: ${session.text}`); }
   return router.url(port);
 }
-function diagnostics() { return { tailAvailable, transcripts: transcripts.concat(active ? [{ app: active.app, text: active.text }] : []), listeners: Array.from(listeners.keys()), workers: workers.size, runtime: runtimeSnapshot(runtime), pending: active?.pending }; }
+function diagnostics() { return { tailAvailable, transcripts: transcripts.concat(active ? [{ app: active.app, text: active.text }] : []), listeners: Array.from(listeners.keys()), workers: workers.size, runtime: runtimeSnapshot(runtime), pending: active?.pending, liveServer: active?.liveServer() ?? false }; }
 async function cleanup() {
-  try { await close(); installation?.dispose(); }
-  finally { await runtime.dispose(); navigator.serviceWorker.removeEventListener("message", previewMessage); await registration?.unregister(); }
+  await settleResources([
+    close,
+    () => installation?.dispose(),
+    () => runtime.dispose(),
+    () => navigator.serviceWorker.removeEventListener("message", previewMessage),
+    () => registration?.unregister(),
+  ]);
   check(workers.size === 0, `Remaining workers: ${workers.size}`);
   check(listeners.size === 0, `Remaining listeners: ${listeners.size}`);
   return { workers: workers.size, listeners: listeners.size };

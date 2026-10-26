@@ -15,7 +15,8 @@ shell guest, and utility guests. Do not use the shell CLI guest or edit package
 manifests to bypass a peer mismatch. The browser command compiles no guest.
 
 The Bun guest needs its producer `.build.json` and an independently accepted
-receipt containing `source_commit` and `guest_sha256`. These inputs are borrowed
+receipt. The existing strict provenance parser validates its source commit/tree,
+SHA-256, byte length, and required build fields. These inputs are borrowed
 read-only. The test builds a new public-package browser host variant, not the
 producer's original playground archive.
 
@@ -58,13 +59,21 @@ on completion or interruption. The prepared packages and shared caches remain.
 After Shell publishes a genuinely aligned commit, the preparation helper can
 create an empty, explicitly owned installation. It packs this checkout's public
 Bun package, ignores dependency lifecycle scripts, checks both exact Waffle
-peers, and builds only Shell's necessary guests. It copies the selected prepared
-Waffle's generated assets without rebuilding its network guest. Build outputs
+peers, and builds only Shell's necessary guests. It archives the selected commit from `SHELL_PRODUCT_WAFFLE_REPOSITORY`, a
+read-only local Git repository, into the owned Waffle package directory. Only
+`network.wasm`, `network.sha256`, and `network.input-hash` are borrowed. The
+selected tree's `tooling/build-network.ts --verify` checks network source inputs
+and WASM integrity before `prepare.ts` emits fresh JS from that tree. Both
+subprocesses receive `WAFFLE_NETWORK_PREBUILT=1`, so invalid network inputs are
+fatal and never trigger a network build. No borrowed `dist` is used. This binds
+exact network inputs and integrity, not a historical producer receipt. Build outputs
 use the installation's own Cargo target. Failed or interrupted preparation
-removes the owned installation and stops its process groups.
+sets cancellation before stopping its process groups, refuses new subprocesses,
+waits for the main flow to finish, then removes the owned installation.
 
-Set the inputs above and `SHELL_PRODUCT_PREPARED_WAFFLE` to the read-only matching
-Waffle package with built assets. Choose an empty `SHELL_PRODUCT_INSTALL` under
+Set the inputs above, `SHELL_PRODUCT_WAFFLE_REPOSITORY` to the read-only local
+Waffle Git repository, and `SHELL_PRODUCT_PREPARED_WAFFLE` to the read-only package
+containing the three network files. Choose an empty `SHELL_PRODUCT_INSTALL` under
 `/work/tmp`, then run through the host's canonical build queue:
 
 ```sh
