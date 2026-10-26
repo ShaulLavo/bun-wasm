@@ -18,9 +18,38 @@ mod tests {
     use super::*;
 
     const PATH: &str = "/project/node_modules/next/dist/build/swc/index.js";
+    const NEXT14_VERSION: &str = "const nextVersion = \"14.2.33\";";
+    const NEXT14_LOADER: &str = "async function loadWasm(importPath = \"\")";
+    const NEXT14_WASM_FIRST: &str = "const shouldLoadWasmFallbackFirst = !disableWasmFallback && unsupportedPlatform && useWasmBinary || isWebContainer;";
+    const NEXT14_WASM_FIRST_ADAPTED: &str = "const shouldLoadWasmFallbackFirst = !disableWasmFallback && (unsupportedPlatform || process.arch === \"wasm32\") && useWasmBinary || isWebContainer;";
 
     fn source() -> String {
         format!("async function loadWasmRawBindings(importPath = '') {{\n{IMPORT};\n}}")
+    }
+
+    fn next14_source() -> String {
+        format!("{NEXT14_VERSION}\n{NEXT14_WASM_FIRST}\n{NEXT14_LOADER} {{\n{IMPORT};\n}}")
+    }
+
+    #[test]
+    fn next14_resolves_installed_packages_after_wasm_opt_in() {
+        let source = next14_source();
+        let expected = source
+            .replace(IMPORT, RESOLVED_IMPORT)
+            .replace(NEXT14_WASM_FIRST, NEXT14_WASM_FIRST_ADAPTED);
+        assert_eq!(adapt(&source, PATH), expected);
+    }
+
+    #[test]
+    fn next14_adaptation_requires_the_exact_source_version() {
+        let source = next14_source().replace("14.2.33", "14.2.32");
+        assert!(matches!(adapt(&source, PATH), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn next14_adaptation_requires_unambiguous_selection() {
+        let source = format!("{}\n{NEXT14_WASM_FIRST}", next14_source());
+        assert!(matches!(adapt(&source, PATH), Cow::Borrowed(_)));
     }
 
     #[test]
