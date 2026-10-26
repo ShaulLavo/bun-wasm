@@ -12,6 +12,7 @@ import type { SharedObjects } from "../src/shared-objects/protocol";
 import { memoryViews } from "waffle/core/memory-views";
 import { outcomeWord } from "waffle/proc/outcome";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "../src/buffer-transfer";
+import { createScriptEvaluation } from "../src/script-evaluation.ts";
 
 const cleanup = new Set<() => void | Promise<void>>();
 afterEach(async () => { for (const close of Array.from(cleanup).reverse()) await close(); cleanup.clear(); });
@@ -20,7 +21,7 @@ const source = readFileSync(new URL("../src/engine-host.js", import.meta.url), "
   .replace(/^import .*;\n/gm, "").replace("export function startEngineHost", "function startEngineHost");
 const engine = runInNewContext(source + "\n({ EngineHost, startEngineHost });", {
   TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, SLOT_NAMES: [],
-  isWasmMemoryBuffer, transferArrayBuffers, bindSharedObjectHost, memoryViews,
+  isWasmMemoryBuffer, transferArrayBuffers, bindSharedObjectHost, createScriptEvaluation, memoryViews,
 });
 const EngineHost = engine.EngineHost;
 function host(service?: ReturnType<typeof createSharedObjects>) {
