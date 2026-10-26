@@ -122,25 +122,36 @@ test("runtime rejects corrupt bytes and malformed Buffer nodes", () => {
   for (const input of [Buffer.from("invalid"), runtime.serialize({ ok: true }).subarray(0, 25)]) {
     expect(() => runtime.deserialize(input)).toThrow();
   }
-  const factory = modules.require("worker_codec") as { create(hooks: object): { decode(value: unknown): unknown; encode(value: unknown): { nodes: unknown[] } } };
+  const factory = modules.require("worker_codec") as { create(hooks: object): { decode(value: unknown): unknown; encode(value: unknown): { root: number; nodes: unknown[] } } };
   const hooks = { isPort: () => false, prepare() { throw new Error("Unexpected transfer"); }, restore() {}, activate() {} };
   const plain = factory.create(hooks);
-  const withBuffer = factory.create({ ...hooks, buffer: { isBuffer: Buffer.isBuffer, from: (bytes: Uint8Array) => Buffer.from(bytes) } });
+  const withBuffer = factory.create({ ...hooks, buffer: { isBuffer: Buffer.isBuffer, from: (buffer: ArrayBuffer, offset: number, length: number) => Buffer.from(buffer, offset, length) } });
   for (const node of [["node-buffer", "!"], ["node-buffer", "AA="], ["node-buffer", "AB=="], ["node-buffer", "AA==", 1]]) {
     expect(() => withBuffer.decode({ root: 0, nodes: [node] })).toThrow();
     expect(() => withBuffer.decode({ root: 0, nodes: [["null"], node] })).toThrow();
   }
   expect(() => plain.decode({ root: 0, nodes: [["node-buffer", "AA=="]] })).toThrow();
   expect(() => plain.decode({ root: 0, nodes: [["null"], ["node-buffer", "AA=="]] })).toThrow();
-  const port = { id: "a", peer: "b", version: 1, sent: 0, received: 0, closing: null, closed: false,
-    pending: [[0, { root: 0, nodes: [["node-buffer", "AA=="]] }]] };
+  const pending: [number, { root: number; nodes: unknown[] }][] = [[0, { root: 0, nodes: [["node-buffer", "AA=="]] }]];
+  const port = { id: "a", peer: "b", version: 1, sent: 0, received: 0, closing: null, closed: false, pending };
   expect(() => plain.decode({ root: 0, nodes: [["port", port, 1], ["array", 0, []]] })).toThrow();
-  expect(withBuffer.decode({ root: 0, nodes: [["node-buffer", ""]] })).toEqual(Buffer.alloc(0));
+  const emptyGraph = { root: 0, nodes: [["node-buffer", 1, 0, 0], ["buffer", "", 0]] };
+  expect(withBuffer.decode(emptyGraph)).toEqual(Buffer.alloc(0));
+  expect(() => plain.decode(emptyGraph)).toThrow();
+  expect(() => plain.decode({ root: 2, nodes: emptyGraph.nodes.concat([["null"]]) })).toThrow();
+  port.pending = [[0, emptyGraph]];
+  expect(() => plain.decode({ root: 0, nodes: [["port", port, 1], ["array", 0, []]] })).toThrow();
   const value = Buffer.from([1, 2, 3]);
   const graph = plain.encode(value);
+  expect(graph).toEqual({ root: 0, nodes: [["view", "Uint8Array", 1, value.byteOffset, value.byteLength],
+    ["buffer", Buffer.from(value.buffer).toString("base64"), 0]] });
   expect(graph.nodes.every(node => Array.isArray(node) && node[0] !== "node-buffer")).toBe(true);
   expect(Buffer.isBuffer(plain.decode(graph))).toBe(false);
   expect(Array.from(plain.decode(graph) as Uint8Array)).toEqual([1, 2, 3]);
+  const shared = new SharedArrayBuffer(8);
+  expect(() => plain.encode(shared)).toThrow();
+  expect(() => withBuffer.encode(shared)).toThrow();
+  expect(() => withBuffer.encode(Buffer.from(shared))).toThrow();
 });
 
 
@@ -194,6 +205,10 @@ test("runtime Buffer views alias typed views and explicit backing in either prop
   const b = Buffer.from(backing, 4, 4);
   b.set([1, 2, 3, 4]);
   const typed = new Uint8Array(backing, 5, 2);
+  const implicit = runtime.deserialize(runtime.serialize({ b, typed })) as { b: Buffer; typed: Uint8Array };
+  expect(implicit.b.buffer).toBe(implicit.typed.buffer);
+  expect(implicit.b.byteOffset).toBe(4);
+  expect(implicit.b.buffer.byteLength).toBe(16);
   for (const input of [{ b, typed, backing }, { backing, typed, b }]) {
     const output = runtime.deserialize(runtime.serialize(input)) as typeof input;
     expect(output.b.buffer).toBe(output.backing);
@@ -259,4 +274,62 @@ test("fork fixture reports early child exit instead of leaving the reply pending
     child.kill();
     await child.exited;
   }
+});
+
+test("runtime accepts zero-length Buffer views and rebases offsets without losing aliases", () => {
+  const slab = Buffer.alloc(32, 11);
+  const input = { end: slab.subarray(12, 12), middle: slab.subarray(10, 10), value: slab.subarray(8, 12) };
+  const output = runtime.deserialize(runtime.serialize(input)) as typeof input;
+  expect(output.end.length).toBe(0);
+  expect(output.middle.length).toBe(0);
+  expect(output.end.buffer).toBe(output.value.buffer);
+  expect(output.middle.buffer).toBe(output.value.buffer);
+  expect(output.end.byteOffset).toBe(4);
+  expect(output.middle.byteOffset).toBe(2);
+  expect(output.value.byteOffset).toBe(0);
+  const empty = runtime.deserialize(runtime.serialize({ first: input.end, second: input.end })) as { first: Buffer; second: Buffer };
+  expect(empty.first).toBe(empty.second);
+  expect(empty.first.length).toBe(0);
+  expect(empty.first.buffer.byteLength).toBe(0);
+});
+
+test("runtime rejects cyclic, unreachable and out-of-bounds Buffer backing references", () => {
+  const invalid = [["node-buffer", 0, 0, 0], ["node-buffer", -1, 0, 0], ["node-buffer", 99, 0, 0],
+    ["node-buffer", 1, -1, 1], ["node-buffer", 1, 0.5, 0], ["node-buffer", 1, 0, 2],
+    ["node-buffer", 1, 2, 0], ["node-buffer", 1, 0, -1], ["node-buffer", 1, 0, 0, 0]];
+  for (const node of invalid) {
+    expect(() => runtime.deserialize(graphBytes([node, ["buffer", "AA==", 0]]))).toThrow();
+    const unreachable = { root: 2, nodes: [node, ["buffer", "AA==", 0], ["null"]] };
+    expect(() => runtime.deserialize(Buffer.from("bun-wasm:structured\0" + JSON.stringify(unreachable)))).toThrow();
+  }
+  expect(() => runtime.deserialize(graphBytes([["node-buffer", 1, 0, 0], ["node-buffer", 0, 0, 0]]))).toThrow();
+  expect(() => runtime.deserialize(graphBytes([["node-buffer", 1, 0, 0], ["object", []]]))).toThrow();
+});
+
+test("runtime rejects detached buffers and spoofed ArrayBuffer deserialization inputs", () => {
+  const detached = new ArrayBuffer(4);
+  const view = Buffer.from(detached);
+  structuredClone(null, { transfer: [detached] });
+  expect(() => runtime.serialize(detached)).toThrow();
+  expect(() => runtime.serialize(view)).toThrow();
+  expect(() => runtime.deserialize(detached)).toThrow();
+  expect(() => runtime.deserialize({ [Symbol.toStringTag]: "ArrayBuffer", byteLength: 4 })).toThrow(TypeError);
+});
+
+test("runtime Buffer factory restores overlapping views without copying their storage", () => {
+  const implementation = runtimeModules(true);
+  const { Buffer: RuntimeBuffer } = implementation.require("buffer") as { Buffer: typeof Buffer };
+  const serializer = builtinSerializer(implementation);
+  const backing = new ArrayBuffer(16);
+  const a = RuntimeBuffer.from(backing, 4, 4);
+  const b = RuntimeBuffer.from(backing, 6, 2);
+  const input = { a, b, self: null as unknown };
+  input.self = input;
+  const output = serializer.deserialize(serializer.serialize(input)) as typeof input;
+  expect(output.self).toBe(output);
+  expect(RuntimeBuffer.isBuffer(output.a)).toBe(true);
+  expect(RuntimeBuffer.isBuffer(output.b)).toBe(true);
+  expect(output.a.buffer).toBe(output.b.buffer);
+  output.b[0] = 78;
+  expect(output.a[2]).toBe(78);
 });

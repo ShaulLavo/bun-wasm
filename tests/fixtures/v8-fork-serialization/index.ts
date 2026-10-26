@@ -9,6 +9,7 @@ const exit = new Promise<number | null>((resolve, reject) => {
 });
 const reply = new Promise<unknown>((resolve, reject) => {
   child.once("message", resolve);
+  child.once("exit", code => reject(new Error(`Child exited before sending a reply (code ${code})`)));
   child.once("error", reject);
 });
 try {

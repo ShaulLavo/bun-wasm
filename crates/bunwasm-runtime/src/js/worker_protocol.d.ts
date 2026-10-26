@@ -16,7 +16,7 @@ declare namespace BunWasm {
     | ["object", [string, number][]] | ["array", number, [string, number][]]
     | ["map", [number, number][]] | ["set", number[]] | ["date", string] | ["regexp", string, string]
     | ["blob", string, string] | ["buffer", string, number] | ["view", string, number, number, number]
-    | ["node-buffer", string]
+    | ["node-buffer", number, number, number]
     | ["error", string, string, string, number] | ["boxed", number]
     | ["port", Omit<PortSnapshot, "queue">, number];
   interface WorkerGraph { root: number; nodes: WorkerNode[]; }
@@ -26,7 +26,7 @@ declare namespace BunWasm {
     commit(): void;
   }
   interface WorkerCodecHooks {
-    buffer?: { isBuffer(value: unknown): boolean; from(bytes: Uint8Array): Uint8Array };
+    buffer?: { isBuffer(value: unknown): boolean; from(buffer: ArrayBuffer, offset: number, length: number): Uint8Array };
     isPort(value: unknown): boolean;
     prepare(value: unknown): PortTransfer;
     restore(snapshot: PortSnapshot): unknown;
