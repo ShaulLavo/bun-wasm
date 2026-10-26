@@ -21,3 +21,16 @@ otherwise adds `isbot` to the package manifest and launches a second package
 install. The fixture needs no bot-detection dependency because it waits for the
 complete render for every request. It keeps the official production server and
 all SSR query, browser DOM, interaction and HMR assertions unchanged.
+
+The original fixture also sets Vite's `ssr.resolve.externalConditions` to
+`['bun', 'node']`. React Router 7.9.4 otherwise supplies Node external conditions
+in development, so Vite can select React DOM's Node server entry even when the
+process runs under Bun. The explicit conditions select `server.bun.js`, whose
+readable export matches the request handler. The `reactRouter()` plugin and all
+existing lifecycle checks remain unchanged.
+
+This configuration follows `@react-router/dev@7.9.4/dist/vite.js` and
+`vite@7.1.12/dist/node/chunks/config.js`. The Vite tarball SHA-256 is
+`85f5144ff94a0ee96ae48b142fb4f26a704381723702c6acd467020d43c657bf`.
+No upstream source is copied or changed. This fixture correction does not add
+Bun direct-stream support to the browser host or establish an application pass.
