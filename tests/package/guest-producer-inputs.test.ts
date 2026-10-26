@@ -8,20 +8,20 @@ import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture } fro
 const workflow = await readFile(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
 
 function quickjsNativeReceiptFragment(): string {
-  const step = workflow.split("      - name: Blocking native checks with one owned JSC prebuild\n")[1]?.split("      - name: Blocking JSC embedding")[0];
-  const native = step?.match(/^          run_native_checks\(\) \{\n([^]*?)^          \}/m)?.[1];
-  if (!native) throw new Error("Missing native check workflow fragment");
-  const input = native.indexOf("guest-build-receipt.ts inputs");
+  const step = workflow.split("      - name: Build native fixtures after the cache checkpoint\n")[1]?.split("\n      - ")[0];
+  const native = step?.match(/^        run: \|\n([^]*)$/m)?.[1];
+  if (!native) throw new Error("Missing native fixture producer workflow fragment");
+  const start = native.indexOf("          guest_environment=$(bun scripts/guest-build-receipt.ts environment)");
+  if (start < 0) throw new Error("Missing QuickJS producer environment command");
+  const input = native.indexOf("guest-build-receipt.ts inputs quickjs", start);
   if (input < 0) throw new Error("Missing QuickJS receipt input command");
-  const inputLine = native.lastIndexOf("\n", input) + 1;
-  const environment = native.indexOf("            guest_environment=$(bun scripts/guest-build-receipt.ts environment)");
-  const start = environment >= 0 ? environment : inputLine;
-  const write = native.indexOf("            bun scripts/guest-build-receipt.ts write dist/bun.wasm", start);
+  const write = native.indexOf("          bun scripts/guest-build-receipt.ts write dist/bun.wasm", input);
   if (write < 0) throw new Error("Missing QuickJS receipt write command");
-  const cleanup = native.indexOf("\n            guest_inputs=", write);
-  const end = native.indexOf("\n", cleanup >= 0 ? cleanup + 1 : write);
+  const cleanup = native.indexOf("\n          guest_inputs=", write);
+  if (cleanup < 0) throw new Error("Missing QuickJS receipt snapshot cleanup");
+  const end = native.indexOf("\n", cleanup + 1);
   return ["set -euo pipefail", "source env.sh", native.slice(start, end < 0 ? native.length : end)]
-    .join("\n").replace(/^ {12}/gm, "");
+    .join("\n").replace(/^ {10}/gm, "");
 }
 
 async function executable(path: string, source: string) {
@@ -202,7 +202,7 @@ test("actual browser entry point stops before a fixture producer on an unresolve
 });
 
 
-test("executed native workflow fragment selects QuickJS receipt inputs and cleans its snapshot", async () => {
+for (const status of [0, 42]) test(`executed native workflow fragment selects QuickJS receipt inputs and cleans its snapshot after producer status ${status}`, async () => {
   await withCliReceiptFixture(async fixture => {
     const target = join(fixture.root, "private/target");
     fixture.env.CARGO_TARGET_DIR = target;
@@ -210,6 +210,7 @@ test("executed native workflow fragment selects QuickJS receipt inputs and clean
     await writeFile(exclude, `${await readFile(exclude, "utf8")}\nbun-wasm-guest-inputs-*\n`);
     await writeFile(join(fixture.root, "fake-tool"), `#!/bin/sh
 if [ "$1" = build ]; then
+  if [ "${status}" != 0 ]; then exit ${status}; fi
   mkdir -p "$CARGO_TARGET_DIR/wasm32-wasip1/release"
   printf '\\000asm\\001\\000\\000\\000' > "$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm"
   exit 0
@@ -219,11 +220,15 @@ printf 'fixture tool 1\n'
     await chmod(join(fixture.root, "fake-tool"), 0o700);
     const finished = Bun.spawnSync(["bash", "-eu", "-o", "pipefail", "-c", quickjsNativeReceiptFragment()], { cwd: fixture.root, env: fixture.env });
     expect(finished.stderr.toString()).toBe("");
-    expect(finished.exitCode).toBe(0);
+    expect(finished.exitCode).toBe(status);
+    expect((await readdir(fixture.root)).filter(name => name.startsWith("bun-wasm-guest-inputs-")).length).toBe(0);
     const artifact = join(fixture.root, "dist/bun.wasm");
+    if (status !== 0) {
+      expect(await Bun.file(`${artifact}.build.json`).exists()).toBe(false);
+      return;
+    }
     const receipt = await Bun.file(`${artifact}.build.json`).json();
     verifyGuestBuildReceipt(await readFile(artifact), receipt);
     expect(receipt.sourceManifest.build).toBe("quickjs");
-    expect((await readdir(fixture.root)).filter(name => name.startsWith("bun-wasm-guest-inputs-")).length).toBe(0);
   });
 });

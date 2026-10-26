@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -141,7 +141,7 @@ const checkpointBoundaries = [
   ["Blocking Web guest cases (QuickJS and host engine)", ""],
 ] satisfies [string, string][];
 
-function boundaryCommands(failure: string, cancelled: boolean): string {
+function boundaryCommands(failure: string, cancelled: boolean, controller = true): string {
   const ordered = checkpointBoundaries.toSorted((left, right) => position(left[0]) - position(right[0]));
   expect(ordered).toEqual(checkpointBoundaries);
   return ordered.map(([name, marker]) => {
@@ -150,7 +150,8 @@ function boundaryCommands(failure: string, cancelled: boolean): string {
       expect(field(item, "uses")).toBe("actions/cache/save@v4");
       return `printf '%s\\n' '${marker}' >> "$CHECKPOINT_RECORDS"`;
     }
-    const body = name === failure ? cancelled ? 'kill -TERM "$BASHPID"' : "exit 42" : "true";
+    const signal = controller ? 'kill -TERM "$$"; sleep 30' : 'kill -TERM "$BASHPID"';
+    const body = name === failure ? cancelled ? signal : "exit 42" : "true";
     const original = string(field(item, "run"));
     const script = marker ? original.replace(new RegExp(`^${marker}\\(\\) {\\n[^]*?^}`, "m"), () => `${marker}() {\n  ${body}\n}`) : body;
     return `bash -eo pipefail -c '${script.replaceAll("'", "'\\''")}'`;
@@ -175,10 +176,35 @@ function assertCheckpointRecords(root: string, failure: string, expected: readon
   for (const cancelled of [false, true]) {
     const records = join(root, "checkpoint-records");
     writeFileSync(records, "");
+    const output = join(root, "outputs");
+    writeFileSync(output, "");
     const result = spawnSync("bash", ["-eo", "pipefail", "-c", boundaryCommands(failure, cancelled)], {
-      env: { ...process.env, RUNNER_TEMP: root, GITHUB_OUTPUT: join(root, "outputs"), CHECKPOINT_RECORDS: records }, timeout: 3000,
+      env: { ...process.env, RUNNER_TEMP: root, GITHUB_OUTPUT: output, CHECKPOINT_RECORDS: records }, timeout: 3000,
     });
     expect(result.signal === "SIGTERM" ? 143 : result.status).toBe(cancelled ? 143 : 42);
     expect<readonly string[]>(readFileSync(records, "utf8").trim().split("\n").filter(Boolean)).toEqual(expected);
+    const completions = ["jsc", "native"].filter(producer => expected.includes(producer)).map(producer => `${producer}-ready=true\n`).join("");
+    expect(readFileSync(output, "utf8")).toBe(completions);
+    expect(readdirSync(root).filter(name => name.startsWith("jsc-completion-"))).toEqual([]);
   }
 }
+
+for (const ignoreWaitFailure of [false, true]) test(`terminated JSC worker cannot advertise completion with ${ignoreWaitFailure ? "forced-success" : "native"} wait`, () => {
+  shellFixture(root => {
+    const output = join(root, "outputs"), records = join(root, "checkpoints");
+    writeFileSync(output, "");
+    writeFileSync(records, "");
+    const original = boundaryCommands("Build or verify the JSC prebuild", true, false);
+    const script = ignoreWaitFailure ? original.replace('wait "$jsc_pid"\n', 'wait "$jsc_pid" || true\n') : original;
+    expect(script === original).toBe(!ignoreWaitFailure);
+    const result = spawnSync("bash", ["-eo", "pipefail", "-c", script], {
+      env: { ...process.env, RUNNER_TEMP: root, GITHUB_OUTPUT: output, CHECKPOINT_RECORDS: records }, timeout: 3000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(output, "utf8")).toBe("");
+    expect(readFileSync(records, "utf8")).toBe("");
+    expect(readdirSync(root).filter(name => name.startsWith("jsc-completion-"))).toEqual([]);
+  });
+});

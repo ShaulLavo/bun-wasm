@@ -315,6 +315,7 @@ jobs:
             check_jsc_inputs_stamp
           }
           jsc_pid=
+          jsc_completion=
           jsc_log="$RUNNER_TEMP/jsc-prebuild.log"
           cleanup() {
             status=$?
@@ -326,22 +327,26 @@ jobs:
               kill -KILL -- "-$jsc_pid" 2>/dev/null || true
               wait "$jsc_pid" 2>/dev/null || true
             fi
+            if [[ -n "$jsc_completion" ]]; then rm -f -- "$jsc_completion" || true; fi
             if [[ -f "$jsc_log" ]]; then cat "$jsc_log" || true; fi
             exit "$status"
           }
           trap cleanup EXIT
           trap 'exit 130' INT
           trap 'exit 143' TERM
+          jsc_completion=$(mktemp "$RUNNER_TEMP/jsc-completion-XXXXXX")
           # Only this child owns a process group; its descendants inherit it.
           set -m
           (
             set +m
             trap - EXIT INT TERM
             run_jsc_prebuild
+            printf 'verified\n' > "$jsc_completion"
           ) > "$jsc_log" 2>&1 &
           jsc_pid=$!
           set +m
           wait "$jsc_pid"
+          [[ "$(cat "$jsc_completion")" == verified ]]
           echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
       - name: Save the JSC prebuild cache once per input revision
         if: ${{ !cancelled() && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}

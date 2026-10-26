@@ -22,7 +22,9 @@ tracked patch bytes and clean untracked state. Archive and shell hashes reject
 partial or corrupted outputs. The existing WASI CMake preflight still verifies
 compiler, SDK, toolchain and sysroot paths before reuse. Completed prebuilds are
 saved before native quality checks, guest fixtures and assertions. Ordered Actions
-steps trade cold-only overlap for a durable completed cache before a later timeout. A missing completion output never permits a save.
+steps trade cold-only overlap for a durable completed cache before a later timeout. The worker writes a fresh completion marker only after build and stamp validation.
+The controller checks that marker before advertising cache readiness, even if a
+shell reports a successful wait for a terminated worker. Missing proof never permits a save.
 
 
 ## Classification

@@ -183,7 +183,7 @@ test("the completed prebuild is saved before native checks and every later guest
   expect(workflow.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
   expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
   const prebuild = rust.split(`      - name: ${owner}\n`)[1]!.split("      - name: Save the JSC prebuild cache")[0]!;
-  expect(prebuild).toContain('wait "$jsc_pid"\n          echo "jsc-ready=true" >> "$GITHUB_OUTPUT"');
+  expect(prebuild).toContain('wait "$jsc_pid"\n          [[ "$(cat "$jsc_completion")" == verified ]]\n          echo "jsc-ready=true" >> "$GITHUB_OUTPUT"');
   expect(prebuild).not.toContain("run_native_checks");
   expect(prebuild).not.toContain("continue-on-error");
   expect(prebuild).not.toContain("uses: actions/cache/save");

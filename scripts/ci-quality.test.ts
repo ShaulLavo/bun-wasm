@@ -765,7 +765,7 @@ test("ordered producers keep every blocking native command and save JSC before n
   expect(script.indexOf("trap cleanup EXIT")).toBeLessThan(script.indexOf("set -m"));
   expect(script).toContain(') > "$jsc_log" 2>&1 &\njsc_pid=$!');
   expect(script).toContain("set +m\n  trap - EXIT INT TERM\n  run_jsc_prebuild");
-  expect(script).toContain('wait "$jsc_pid"\necho "jsc-ready=true" >> "$GITHUB_OUTPUT"');
+  expect(script).toContain('wait "$jsc_pid"\n[[ "$(cat "$jsc_completion")" == verified ]]\necho "jsc-ready=true" >> "$GITHUB_OUTPUT"');
   expect(script).not.toContain("tee");
   const save = rust.indexOf("name: Save the JSC prebuild cache");
   expect(save).toBeGreaterThan(rust.indexOf(`name: ${prebuildStepName}`));
