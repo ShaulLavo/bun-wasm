@@ -295,6 +295,22 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_worker_discards_late_result_without_waking_poll() {
+        let notify = Notify::new();
+        let shared = Arc::new(LookupShared {
+            state: Mutex::new(LookupState {
+                outcome: None,
+                cancelled: true,
+            }),
+            notify: notify.clone(),
+        });
+        let generation = notify.generation();
+        publish(shared.clone(), "localhost", 0, 0);
+        assert_eq!(notify.generation(), generation);
+        assert!(shared.state.lock().unwrap().outcome.is_none());
+    }
+
+    #[test]
     fn cancellation_is_logical_and_does_not_wait_for_worker() {
         let lookup = Lookup::start("localhost", 0, 0, Notify::new()).unwrap();
         let started = Instant::now();
