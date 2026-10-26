@@ -3,6 +3,7 @@ import { browserHost, earlyServerExit, serverCommand } from "./browser.mjs";
 import { createContext, runInContext } from "node:vm";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import ts from "typescript-api";
 import { HarnessCleanupError } from "./cleanup";
 import { failure } from "./classify";
@@ -184,7 +185,7 @@ function nativePageBoundary(close: "stalled" | "rejected", phase: "navigation" |
 }
 
 async function withNativePageHost(close: "stalled" | "rejected", phase: "navigation" | "assertion", check: (host: Awaited<ReturnType<typeof browserHost>>) => Promise<void>) {
-  const scratch = mkdtempSync("/work/tmp/bun-wasm-matrix-checkpage-");
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-matrix-checkpage-"));
   const previous = process.env.PLAYWRIGHT;
   let host: Awaited<ReturnType<typeof browserHost>> | undefined;
   try {
