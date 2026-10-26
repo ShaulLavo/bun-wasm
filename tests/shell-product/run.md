@@ -1,0 +1,78 @@
+# Real shell product browser test
+
+This test runs the original product catalog's Vite React and Next 15 apps through
+bash-web and guest Bun on one Waffle runtime. Native Bun only drives the test and
+serves static test assets and recorded registry responses. It never executes the
+framework, installs its dependencies, or answers preview requests.
+
+## Inputs
+
+Prepare a consumer directory containing the public `bash-web`, `bun-wasm`,
+`waffle`, and `playwright` packages. Both consumers must declare the same exact
+Waffle Git peer, resolve the same physical package, and retain the selected full
+Git commits in `bun.lock`. Build the installed shell's worker, runtime-backed
+shell guest, and utility guests. Do not use the shell CLI guest or edit package
+manifests to bypass a peer mismatch. The browser command compiles no guest.
+
+The Bun guest needs its producer `.build.json` and an independently accepted
+receipt containing `source_commit` and `guest_sha256`. These inputs are borrowed
+read-only. The test builds a new public-package browser host variant, not the
+producer's original playground archive.
+
+```sh
+export PATH=$HOME/.local/share/mise/shims:$PATH
+source env.sh
+export SHELL_PRODUCT_INSTALL=/absolute/prepared-consumer
+export SHELL_PRODUCT_SHELL_COMMIT=<full-shell-commit>
+export SHELL_PRODUCT_WAFFLE_COMMIT=<full-shared-waffle-commit>
+export SHELL_PRODUCT_GUEST=/absolute/producer/bun-browser.wasm
+export SHELL_PRODUCT_RECEIPT=/absolute/producer/receipt.txt
+export SHELL_PRODUCT_REGISTRY=/absolute/read-only-registry-replay
+export SHELL_PRODUCT_REPORTS=/absolute/report-directory
+# Keep TMPDIR physically short for Chromium sockets.
+export TMPDIR=/work/tmp
+bun /work/platform-production/heavy/current/run.js --class browser shell-product -- \
+  bun web/tests/browser-shell-product.ts
+```
+
+`PLAYWRIGHT` can select an already installed driver. Without it, the driver is
+loaded from the prepared consumer. `SHELL_PRODUCT_TIMEOUT_MS` sets each command,
+listener, and DOM deadline, defaulting to 90 seconds. An overall deadline stops
+the run after 20 minutes.
+
+Each stage writes a pass, fail, or blocked row to `scoreboard.json` immediately.
+Any failed or blocked row makes the command exit nonzero. A missing public
+standalone `tail` leaves only the build pipeline blocked. It is never replaced
+with a Bun script. When the installed shell exports `bash-web/utilities/tail`,
+the test installs that real WASM utility and runs `bun run build | tail -n 8`.
+
+The command checks the installed guest apps, loaded service-worker preview DOM,
+three start/stop cycles, real terminal interruption and prompt recovery,
+redirection, exit status and boolean lists, cwd, package tools piped to grep, and
+an inline `PORT=3001` override. Raw terminal output and screenshots are retained.
+Task asset/registry servers, browsers, copied app sources, and scratch are removed
+on completion or interruption. The prepared packages and shared caches remain.
+
+## Optional package preparation
+
+After Shell publishes a genuinely aligned commit, the preparation helper can
+create an empty, explicitly owned installation. It packs this checkout's public
+Bun package, ignores dependency lifecycle scripts, checks both exact Waffle
+peers, and builds only Shell's necessary guests. It copies the selected prepared
+Waffle's generated assets without rebuilding its network guest. Build outputs
+use the installation's own Cargo target. Failed or interrupted preparation
+removes the owned installation and stops its process groups.
+
+Set the inputs above and `SHELL_PRODUCT_PREPARED_WAFFLE` to the read-only matching
+Waffle package with built assets. Choose an empty `SHELL_PRODUCT_INSTALL` under
+`/work/tmp`, then run through the host's canonical build queue:
+
+```sh
+bun /work/platform-production/heavy/current/run.js --class build shell-product-prepare -- \
+  bun web/tests/browser-shell-product-prepare.ts
+```
+
+Successful preparation retains that installation for the browser command.
+Install caller teardown before preparing and running it together, removing only
+that explicitly owned installation after browser consumers have stopped. This
+helper does not select package commits or repair a peer mismatch.

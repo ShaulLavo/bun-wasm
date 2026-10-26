@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/shell-product.test.ts",
+  "localRuntime": true
+}
