@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { runInNewContext } from "node:vm";
 import { viteApps } from "./app-matrix/product-vite";
 import { nextApps } from "./app-matrix/product-next";
-import { fixtures, stages } from "../tests/shell-product/fixtures";
+import { fixtures, stages, type Row } from "../tests/shell-product/fixtures";
 import { projectFiles } from "../tests/shell-product/project";
 // These unit fixtures do not launch the product browser or stage its packages.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -89,6 +91,72 @@ test("live expected server requires a successful stop before dependent commands"
   expect(foregroundCycle(diagnostics)).toEqual({ blocked: undefined, available: false });
   expect(foregroundCycle(diagnostics, false).available).toBe(false);
   expect(foregroundCycle(diagnostics, true).available).toBe(true);
+});
+
+async function installFailureFlow(pending: Pending) {
+  const source = readFileSync(join(import.meta.dir, "../web/tests/browser-shell-product.ts"), "utf8");
+  const functions = ["stage", "runCycle", "runApp"].map(name => {
+    const match = source.match(new RegExp(`^async function ${name}\\([\\s\\S]*?^}`, "m"));
+    if (!match) throw new Error(`Missing driver function ${name}`);
+    return match[0];
+  });
+  const code = new Bun.Transpiler({ loader: "ts" }).transformSync(functions.join("\n"));
+  const rows: Row[] = [];
+  const commands: string[] = [];
+  const calls = { dev: 0, interrupt: 0 };
+  let foreground: Pending;
+  const shellProduct = {
+    open: async () => {}, close: async () => {},
+    diagnostics: () => ({ pending: foreground, liveServer: false, tailAvailable: true }),
+    readFile: async () => "REDIRECT_REAL_BUN\n",
+  };
+  async function command(text: string) {
+    commands.push(text);
+    if (foreground) throw new Error("Previous foreground command must finish first");
+    if (text === "bun install") {
+      foreground = pending;
+      throw new Error(pending ? "Timeout: PRODUCT_DONE_1" : "bun install exited with status 1");
+    }
+    return "EXIT:7\nOR_BRANCH\nAND_BRANCH\nREDIRECT_REAL_BUN";
+  }
+  const runApp: unknown = runInNewContext(`${code}\nrunApp`, {
+    assert, shellProduct, foregroundCycle, command, withProgress,
+    page: { evaluate: async (execute: (arg: unknown) => unknown, arg?: unknown) => structuredClone(await execute(arg)) },
+    mirror: { base: "unused" },
+    dev: async () => { calls.dev++; throw new Error("Development command must remain blocked"); },
+    interrupt: async () => { calls.interrupt++; throw new Error("Interrupt must remain blocked"); },
+    record: async (row: Row) => { rows.push(row); },
+    capture: async () => {}, stopAfterFailure: async () => {},
+    message: (error: unknown) => error instanceof Error ? error.message : String(error),
+    console: { log() {}, error() {} },
+  });
+  if (typeof runApp !== "function") throw new Error("Driver runApp must be callable");
+  await runApp(fixtures[0]);
+  return { rows, commands, calls };
+}
+
+test("actual driver flow blocks independent commands after a pending install timeout", async () => {
+  const result = await installFailureFlow({ kind: "command", token: "PRODUCT_DONE_1", offset: 0 });
+  expect(result.rows[0]).toEqual({ app: "vite-react", stage: "install", status: "fail", detail: "Timeout: PRODUCT_DONE_1" });
+  const independent = result.rows.filter(row => ["redirect", "and-or-status", "cwd"].includes(row.stage));
+  expect(independent.map(row => row.status)).toEqual(["blocked", "blocked", "blocked"]);
+  expect(independent.every(row => row.detail === "Foreground command completion or prompt recovery was not observed")).toBe(true);
+  expect(result.rows.filter(row => row.status === "fail")).toHaveLength(1);
+  expect(result.commands).toEqual(["bun install"]);
+  expect(result.calls).toEqual({ dev: 0, interrupt: 0 });
+});
+
+test("actual driver flow allows independent commands after a completed nonzero install", async () => {
+  const result = await installFailureFlow(undefined);
+  expect(result.rows[0]).toEqual({ app: "vite-react", stage: "install", status: "fail", detail: "bun install exited with status 1" });
+  const independent = result.rows.filter(row => ["redirect", "and-or-status", "cwd"].includes(row.stage));
+  expect(independent.map(row => row.status)).toEqual(["pass", "pass", "pass"]);
+  const installDependent = result.rows.filter(row => !["install", "redirect", "and-or-status", "cwd", "ctrl-c-port"].includes(row.stage));
+  expect(installDependent).toHaveLength(9);
+  expect(installDependent.every(row => row.status === "blocked" && row.detail === "Guest install failed")).toBe(true);
+  expect(result.rows.filter(row => row.status === "fail")).toHaveLength(1);
+  expect(result.commands).toHaveLength(4);
+  expect(result.calls).toEqual({ dev: 0, interrupt: 0 });
 });
 
 test("preparation cancellation during filesystem work waits for main before deleting and forbids late spawning", async () => {

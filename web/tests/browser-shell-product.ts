@@ -132,7 +132,7 @@ async function runCycle(fixture: Fixture, [start, stop, text]: readonly [Stage, 
   await stage(fixture, start, () => dev(fixture, start, text), blocked);
   const diagnostics = await page.evaluate(() => globalThis.shellProduct.diagnostics());
   const stopped = await stage(fixture, stop, interrupt, blocked ?? foregroundCycle(diagnostics).blocked);
-  return blocked ? available : foregroundCycle(diagnostics, stopped).available;
+  return available && foregroundCycle(diagnostics, stopped).available;
 }
 async function runFixture(fixture: Fixture) {
   try { await runApp(fixture); }
