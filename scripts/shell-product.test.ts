@@ -15,6 +15,221 @@ import { createProductCleanup, exitAfterDeadline, foregroundCycle, liveServer, r
 import { PreparationFlow } from "../tests/shell-product/prepare-flow";
 import * as preparation from "../tests/shell-product/prepare-flow";
 import { networkFiles, readWaffleSelection, waffleCommits, waffleSelectionFile, waffleSourcePlan, writeWaffleSelection } from "../tests/shell-product/waffle-stage";
+import { WorkerJobs } from "../tests/shell-product/worker-jobs";
+import { confirmWorkerProcessJob, createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessTransport } from "waffle/proc/worker-client";
+import type { SpawnRequest } from "waffle/proc";
+import { DescriptorTable } from "waffle/core/descriptors";
+
+function workerJobFixture() {
+  const live = new Set<object>();
+  const jobs = new WorkerJobs(live);
+  function worker(transport: WorkerProcessTransport, adapter: string | undefined = "bun") {
+    const handle = { transport };
+    live.add(handle);
+    jobs.observe(handle, { runtimeProcess: transport, adapter });
+    return handle;
+  }
+  const filesystem = {};
+  live.add(filesystem);
+  const root = worker(createWorkerProcessTransport({ pid: 23, job: 20 }));
+  const baseline = jobs.baseline(23);
+  function client(transport: WorkerProcessTransport, postMessage: ConstructorParameters<typeof WorkerProcessClient>[0]["postMessage"] = () => {}) {
+    return new WorkerProcessClient({
+      transport, descriptors: new DescriptorTable(), postMessage,
+      codec: { export() { throw new Error("No descriptors in probe"); }, import() { throw new Error("No descriptors in probe"); }, discard() {} },
+    });
+  }
+  function admit(transport: WorkerProcessTransport, request: SpawnRequest, stage: "reserved" | "launched" = "reserved") {
+    const state = workerProcessState(transport);
+    jobs.admission({ pid: state.pid, parentPid: state.parentPid, job: state.job, stage }, { request, rootPid: state.rootPid });
+  }
+  function reserve(parent: typeof root, job = 0) {
+    let child: WorkerProcessTransport | undefined;
+    let request: SpawnRequest | undefined;
+    const parentClient = client(parent.transport, message => {
+      if (message.operation !== "spawn") return;
+      child = message.transport;
+      request = message.request;
+      admit(child, request);
+    });
+    parentClient.spawn(parentClient.pid, { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/", job, fds: [] });
+    if (!child || !request) throw new Error("Expected real shared-directory spawn");
+    return { transport: child, request };
+  }
+  function launch(reservation: ReturnType<typeof reserve>, adapter = "bun") {
+    const handle = worker(reservation.transport, adapter);
+    admit(reservation.transport, reservation.request, "launched");
+    return handle;
+  }
+  function spawn(parent: typeof root, job = 0) { return launch(reserve(parent, job)); }
+  function collect(parent: typeof root, child: typeof root) {
+    client(child.transport).exit(0);
+    confirmWorkerProcessJob(child.transport);
+    expect(client(parent.transport).wait(parent.transport.pid, child.transport.pid)?.status).toBe(0);
+  }
+  return { live, jobs, root, filesystem, baseline, spawn, reserve, launch, admit, collect };
+}
+
+test("Ctrl-C physical worker proof allows a positively owned independent job created during interrupt", () => {
+  const probe = workerJobFixture();
+  const dev = probe.spawn(probe.root);
+  const child = probe.spawn(dev, workerProcessState(dev.transport).job);
+  const foreground = probe.jobs.foreground(probe.baseline);
+  const detached = probe.spawn(dev);
+  expect(workerProcessState(detached.transport).jobForeground).toBe(true);
+  expect(workerProcessState(detached.transport).jobOwner).toBe(workerProcessState(dev.transport).pid);
+  probe.live.delete(dev);
+  probe.live.delete(child);
+  expect(probe.live.size).toBe(3);
+  expect(() => probe.jobs.stopped(probe.baseline, foreground)).not.toThrow();
+});
+
+test("Ctrl-C rejects every live foreground member even when a legitimate independent job also survives", () => {
+  for (const survivor of ["dev", "child"] as const) {
+    const probe = workerJobFixture();
+    const dev = probe.spawn(probe.root);
+    const child = probe.spawn(dev, workerProcessState(dev.transport).job);
+    const foreground = probe.jobs.foreground(probe.baseline);
+    probe.spawn(dev);
+    probe.live.delete(survivor === "dev" ? child : dev);
+    expect(() => probe.jobs.stopped(probe.baseline, foreground)).toThrow("not physically stopped");
+  }
+});
+
+test("Ctrl-C keeps captured foreground ownership after shared process metadata is no longer readable", () => {
+  const probe = workerJobFixture();
+  const dev = probe.spawn(probe.root);
+  const foreground = probe.jobs.foreground(probe.baseline);
+  probe.collect(probe.root, dev);
+  expect(() => workerProcessState(dev.transport)).toThrow();
+  expect(() => probe.jobs.stopped(probe.baseline, foreground)).toThrow("not physically stopped");
+});
+
+test("Ctrl-C tracks positive requested ownership even when runtime assignment is wrong", () => {
+  const probe = workerJobFixture();
+  const dev = probe.spawn(probe.root);
+  const foreground = probe.jobs.foreground(probe.baseline);
+  const wrong = probe.reserve(dev);
+  // Fault injection only at admission: an ordinary join must not be excused as detach.
+  const requested = workerProcessState(dev.transport).job;
+  const state = workerProcessState(wrong.transport);
+  const live = new Set<object>([probe.root, probe.filesystem]);
+  const broken = new WorkerJobs(live);
+  broken.observe(probe.root, { runtimeProcess: probe.root.transport });
+  const baseline = broken.baseline(23);
+  broken.observe(dev, { runtimeProcess: dev.transport, adapter: "bun" });
+  broken.admission({ pid: state.pid, parentPid: state.parentPid, job: state.job, stage: "reserved" }, { rootPid: state.rootPid, request: { ...wrong.request, job: requested } });
+  const handle = probe.launch(wrong);
+  live.add(handle);
+  broken.observe(handle, { runtimeProcess: handle.transport, adapter: "bun" });
+  expect(() => broken.stopped(baseline, foreground)).toThrow("Requested job");
+});
+
+test("Ctrl-C rejects foreground reservations and late launches that have no physical worker yet", () => {
+  const probe = workerJobFixture();
+  const dev = probe.spawn(probe.root);
+  const foreground = probe.jobs.foreground(probe.baseline);
+  probe.reserve(dev, workerProcessState(dev.transport).job);
+  probe.live.delete(dev);
+  expect(() => probe.jobs.stopped(probe.baseline, foreground)).toThrow("Unresolved foreground launch");
+  const next = probe.jobs.command(probe.baseline);
+  const restarted = probe.spawn(probe.root);
+  const nextForeground = probe.jobs.foreground(next);
+  probe.live.delete(restarted);
+  expect(() => probe.jobs.stopped(next, nextForeground)).toThrow("Unresolved foreground launch");
+});
+
+test("Ctrl-C rejects unknown detach callers and an empty foreground cohort", () => {
+  const probe = workerJobFixture();
+  expect(() => probe.jobs.foreground(probe.baseline)).toThrow("no captured foreground");
+  const dev = probe.launch(probe.reserve(probe.root), "unknown-adapter");
+  const foreground = probe.jobs.foreground(probe.baseline);
+  probe.spawn(dev);
+  probe.live.delete(dev);
+  expect(() => probe.jobs.stopped(probe.baseline, foreground)).toThrow("no explicit Bun detach request");
+});
+
+test("Ctrl-C detects baseline identity loss even when another worker replaces its count", () => {
+  for (const missing of ["root", "filesystem"] as const) {
+    const probe = workerJobFixture();
+    const dev = probe.spawn(probe.root);
+    const foreground = probe.jobs.foreground(probe.baseline);
+    probe.spawn(dev);
+    probe.live.delete(dev);
+    probe.live.delete(probe[missing]);
+    expect(probe.live.size).toBe(2);
+    expect(() => probe.jobs.stopped(probe.baseline, foreground)).toThrow("Baseline worker");
+  }
+});
+
+test("Ctrl-C rejects unclassified workers, invalid transports and foreign roots", () => {
+  for (const extra of [undefined, { runtimeProcess: {} }, { runtimeProcess: createWorkerProcessTransport({ pid: 100, job: 100 }) }]) {
+    const probe = workerJobFixture();
+    const dev = probe.spawn(probe.root);
+    const foreground = probe.jobs.foreground(probe.baseline);
+    const unknown = {};
+    probe.live.add(unknown);
+    probe.jobs.observe(unknown, extra);
+    probe.live.delete(dev);
+    expect(() => probe.jobs.stopped(probe.baseline, foreground)).toThrow();
+  }
+});
+
+test("Ctrl-C does not exempt a new shell-owned foreground job created after selection", () => {
+  const probe = workerJobFixture();
+  const dev = probe.spawn(probe.root);
+  const foreground = probe.jobs.foreground(probe.baseline);
+  probe.live.delete(dev);
+  probe.spawn(probe.root);
+  expect(() => probe.jobs.stopped(probe.baseline, foreground)).toThrow("not physically stopped");
+});
+
+async function terminalInterruptWithIndependentJob(keepListener: boolean) {
+  const probe = workerJobFixture();
+  const source = readFileSync(join(import.meta.dir, "../tests/shell-product/main.ts"), "utf8");
+  const terminal = source.match(/^class Terminal \{[\s\S]*?^}/m)?.[0];
+  if (!terminal) throw new Error("Missing actual Terminal class");
+  const code = new Bun.Transpiler({ loader: "ts" }).transformSync(terminal);
+  const state = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.store(state, 0, 2);
+  const listeners = new Map([[3137, {}]]);
+  let dev: ReturnType<typeof probe.spawn> | undefined;
+  const shell = {
+    process: { pid: 23 },
+    terminal: { state, send: () => true, interrupt() {}, discardInput: () => true, resumeInput() {} },
+    interrupt() {
+      if (!dev) throw new Error("Expected live dev worker");
+      probe.spawn(dev);
+      probe.live.delete(dev);
+      if (!keepListener) listeners.clear();
+      Atomics.store(state, 0, 1);
+    },
+  };
+  const result: Promise<unknown> = runInNewContext(`${code}\n(async () => {
+    const subject = new Terminal("next-15-app", shell);
+    subject.beginServer("bun run dev", 3137);
+    start();
+    subject.pending.entered = true;
+    subject.finish = async () => ({ code: 0, output: "INTERRUPT_STATUS:130" });
+    return subject.interrupt();
+  })()`, {
+    shell, listeners, workerJobs: probe.jobs, control: { phase: 0 },
+    start: () => { dev = probe.spawn(probe.root); },
+    setInterval: () => 0,
+    check: (value: unknown, message: string) => assert.ok(value, message),
+    until: async (predicate: () => boolean) => assert.ok(predicate(), "Expected immediate prompt"),
+    requireLiveServer, liveServer, TextEncoder, Atomics,
+  });
+  return result;
+}
+
+test("actual Terminal interrupt accepts an independent job after status130 and foreground stop", async () => {
+  expect(await terminalInterruptWithIndependentJob(false)).toEqual({ code: 130, output: "INTERRUPT_STATUS:130" });
+});
+
+test("actual Terminal interrupt still rejects a listener left by an otherwise stopped foreground job", async () => {
+  await expect(terminalInterruptWithIndependentJob(true)).rejects.toThrow("Ctrl-C removes guest network listeners before prompt");
+});
 
 test("shell product reuses unchanged original Vite React and Next 15 source and dependencies", () => {
   expect(fixtures.map(fixture => fixture.id)).toEqual(["vite-react", "next-15-app"]);

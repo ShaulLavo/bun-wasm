@@ -2,23 +2,36 @@ import { createShell, SharedBridge, control, runtimeSnapshot, type Shell } from 
 import { installCat } from "bash-web/utilities/cat";
 import { installGrep } from "bash-web/utilities/grep";
 import { installBunAdapters, type BunAdapterInstallation, type RuntimeNetworkHelper } from "bun-wasm";
-import { createRuntime } from "waffle";
+import { createRuntime, type RuntimeSupervisor } from "waffle";
 import { PreviewRouter } from "waffle/browser/preview";
 import { activated } from "waffle/browser/service-worker";
 import type { Fixture } from "./model";
 import { projectFiles } from "./project";
 import type { ProductApi } from "./protocol";
 import { liveServer, requireLiveServer, settleResources, type Pending } from "./lifecycle";
+import { WorkerJobs } from "./worker-jobs";
 
 const router = new PreviewRouter({ baseURL: location.href, prefix: "__preview" });
 const listeners = new Map<number, RuntimeNetworkHelper>();
 const workers = new Set<Worker>();
+const workerJobs = new WorkerJobs(workers);
+let supervisor: RuntimeSupervisor | undefined;
 const NativeWorker = globalThis.Worker;
 globalThis.Worker = class extends NativeWorker {
   constructor(url: string | URL, options?: WorkerOptions) { super(url, options); workers.add(this); }
-  override terminate() { workers.delete(this); super.terminate(); }
+  override postMessage(message: unknown, transfer: Transferable[]): void;
+  override postMessage(message: unknown, options?: StructuredSerializeOptions): void;
+  override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions) {
+    workerJobs.observe(this, message);
+    if (Array.isArray(options)) super.postMessage(message, options);
+    else super.postMessage(message, options);
+  }
+  override terminate() { super.terminate(); workers.delete(this); }
 };
-const runtime = createRuntime({ filesystem: { mode: "memory", workerURL: new URL("./fs-worker.js", location.href) } });
+const runtime = createRuntime({
+  filesystem: { mode: "memory", workerURL: new URL("./fs-worker.js", location.href) },
+  onProcessAdmission: event => workerJobs.admission(event, supervisor?.get(event.pid)),
+});
 let tailAvailable = false;
 const previewMessage = (event: MessageEvent) => router.onMessage(event);
 let registration: ServiceWorkerRegistration | undefined;
@@ -39,10 +52,11 @@ async function until(predicate: () => boolean, label: string, milliseconds = 600
 class Terminal {
   text = "";
   sequence = 0;
-  baselineWorkers = workers.size;
+  workerScope;
   pending: Pending;
   readonly timer: ReturnType<typeof setInterval>;
   constructor(readonly app: string, readonly shell: Shell) {
+    this.workerScope = workerJobs.baseline(shell.process.pid);
     this.timer = setInterval(() => this.sample(), 5);
   }
   sample() {
@@ -60,6 +74,7 @@ class Terminal {
   beginServer(command: string, port: number) {
     if (this.serverExited()) this.pending = undefined;
     check(!this.pending, "Previous foreground command must finish first");
+    this.workerScope = workerJobs.command(this.workerScope);
     this.pending = { kind: "server", port, offset: this.text.length, entered: false };
     this.send(command);
   }
@@ -83,6 +98,7 @@ class Terminal {
   async ready() { await until(() => Atomics.load(this.shell.terminal.state, control.phase) === 1, "Shell prompt"); }
   async interrupt() {
     requireLiveServer(this.pending, Atomics.load(this.shell.terminal.state, control.phase), listeners);
+    const foreground = workerJobs.foreground(this.workerScope);
     // The same terminal-ring interrupt/input path used by a real terminal UI.
     this.shell.terminal.interrupt();
     check(this.shell.terminal.discardInput(), "Interrupted input discarded");
@@ -94,7 +110,7 @@ class Terminal {
     const result = await this.finish();
     const status = /INTERRUPT_STATUS:(\d+)/.exec(result.output)?.[1];
     check(status === "0" || status === "130", `Unexpected Ctrl-C status: ${result.output}`);
-    check(workers.size === this.baselineWorkers, "Foreground workers physically stopped before prompt");
+    workerJobs.stopped(this.workerScope, foreground);
     check(listeners.size === 0, "Ctrl-C removes guest network listeners before prompt");
     return { ...result, code: Number(status) };
   }
@@ -125,6 +141,7 @@ async function setup() {
   const capabilities: unknown = await (await fetch("./capabilities.json")).json();
   if (capabilities && typeof capabilities === "object" && "tail" in capabilities && capabilities.tail === true) await registerTail();
   const service = await runtime.processes();
+  supervisor = await service.ready();
   check(service === await runtime.processes(), "One runtime process service");
   check(await runtime.network() === await runtime.network(), "One runtime network service");
 }
