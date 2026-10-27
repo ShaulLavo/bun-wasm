@@ -45,8 +45,13 @@ impl Table {
 /// Node's (code, negative Linux errno, description) for an I/O error.
 fn errno_info(err: &io::Error) -> (&'static str, i32, &'static str) {
     use io::ErrorKind as K;
-    if err.raw_os_error() == Some(libc::EBADF) {
-        return ("EBADF", -9, "bad file descriptor");
+    match err.raw_os_error() {
+        Some(libc::EBADF) => return ("EBADF", -9, "bad file descriptor"),
+        Some(libc::EMFILE) => return ("EMFILE", -24, "too many open files"),
+        Some(libc::ENOMEM) => return ("ENOMEM", -12, "not enough memory"),
+        Some(libc::ENOSPC) => return ("ENOSPC", -28, "no space left on device"),
+        Some(libc::EAGAIN) => return ("EAGAIN", -11, "resource temporarily unavailable"),
+        _ => {}
     }
     match err.kind() {
         K::BrokenPipe => ("EPIPE", -32, "broken pipe"),

@@ -1,4 +1,4 @@
-fn check(error: io::Error, expected: (&str, i32, &str)) {
+fn check(error: io::Error, expected: (&str, i32, &str)) -> NativeError {
     let (code, errno, description) = expected;
     let with_path = io_error(error, "read", Some("/errno fixture"));
     assert_eq!(with_path.kind, data::ErrorKind::Error);
@@ -16,6 +16,7 @@ fn check(error: io::Error, expected: (&str, i32, &str)) {
             ("code".into(), code.into()),
         ]
     );
+    with_path
 }
 
 fn main() {
@@ -76,7 +77,7 @@ fn main() {
         ),
     ];
     for (raw, expected) in cases {
-        check(io::Error::from_raw_os_error(raw), expected);
+        let with_path = check(io::Error::from_raw_os_error(raw), expected);
         let error = io_error(io::Error::from_raw_os_error(raw), "read", None);
         assert_eq!(
             error.props,
@@ -90,7 +91,7 @@ fn main() {
             error.message,
             format!("{}: {}, read", expected.0, expected.2)
         );
-        println!("{}\t{}", expected.0, error.message);
+        println!("{}\t{}\t{}", expected.0, error.message, with_path.message);
     }
     check(
         io::Error::from_raw_os_error(libc::EWOULDBLOCK),
