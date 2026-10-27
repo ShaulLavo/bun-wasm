@@ -7,12 +7,14 @@ import { ENGINES, type Engine } from "../src/engine-loader";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { ENGINE_BIN } from "../../src/executable-paths.js";
 import type { SharedFilesystem } from "../src/shared-fs";
-import type { RunRequest } from "../src/bun-executor";
+import type { RunRequest, WorkerMessage } from "../src/bun-executor";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { WorkerProcessClient, workerProcessState } from "waffle/proc/worker-client";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity } from "waffle/fs";
+import { installRuntimeSharedObjects } from "../src/shared-objects/runtime";
+import { createSharedObjects } from "../src/shared-objects/service";
 
 /** The shared signal words of the process a request roots. */
 const signalsOf = (request: RunRequest) => workerProcessState(request.runtimeProcess!).signals;
@@ -110,6 +112,127 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
     },
   };
 }
+
+test("browser roots carry installed shared-object ownership and release it on teardown", async () => {
+  let installation: ReturnType<typeof installRuntimeSharedObjects> | undefined;
+  const state = isolatedRoot(true, "browser", {}, ["-e", "0"], runtime => {
+    installation = installRuntimeSharedObjects(runtime);
+  });
+  try {
+    await state.ready;
+    const owner = state.request?.sharedObjects?.owner;
+    expect(owner).toBeString();
+    const channel = new MessageChannel();
+    try {
+      state.worker.onmessage?.({ data: { type: "bun-shared-connect", owner, port: channel.port2 } } as MessageEvent<WorkerMessage>);
+      expect(installation?.inspect().clients).toBe(1);
+    } finally {
+      channel.port1.close();
+    }
+  } finally {
+    await state.dispose();
+    expect(installation?.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    installation?.close();
+  }
+});
+
+test("terminal browser roots retire their route before a held filesystem fence accepts late ports", async () => {
+  let installation: ReturnType<typeof installRuntimeSharedObjects> | undefined;
+  const state = isolatedRoot(true, "browser", {}, ["-e", "0"], runtime => {
+    installation = installRuntimeSharedObjects(runtime);
+  });
+  try {
+    await state.ready;
+    const owner = state.request?.sharedObjects?.owner;
+    expect(owner).toBeString();
+    state.run.kill(9);
+    expect(installation?.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    const channel = new MessageChannel();
+    try {
+      state.worker.onmessage?.({ data: { type: "bun-shared-connect", owner, port: channel.port2 } } as MessageEvent<WorkerMessage>);
+      expect(installation?.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    } finally { channel.port1.close(); }
+    state.release();
+    await state.run.done;
+  } finally {
+    await state.dispose();
+    expect(installation?.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    installation?.close();
+  }
+});
+
+test("direct fatal outcome refuses native connection and SAB publication before the timer", async () => {
+  let installation: ReturnType<typeof installRuntimeSharedObjects> | undefined;
+  const state = isolatedRoot(true, "browser", {}, ["-e", "0"], runtime => { installation = installRuntimeSharedObjects(runtime); });
+  const channel = new MessageChannel();
+  const closes = spyOn(channel.port2, "close");
+  let service: ReturnType<typeof createSharedObjects> | undefined;
+  try {
+    await state.ready;
+    const owner = state.request.sharedObjects?.owner;
+    if (!owner || !installation) throw new Error("Missing browser root service");
+    const message = new MessageEvent("message", { data: { type: "bun-shared-connect", owner, port: channel.port2 } });
+    service = createSharedObjects(owner, channel.port1);
+    // No task or timer runs between selecting the outcome and dispatching the native port.
+    claimOutcome(signalsOf(state.request).outcome, { kind: "signaled", code: 9 });
+    state.worker.onmessage?.(message);
+    const beforeTimer = installation.inspect();
+    const publication = service.begin();
+    publication.reference(new SharedArrayBuffer(8));
+    publication.publish();
+    expect(closes).toHaveBeenCalled();
+    expect(beforeTimer).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    expect(state.worker.terminated).toBe(0);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(installation.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    expect(state.worker.terminated).toBe(0);
+  } finally {
+    service?.close(); closes.mockRestore();
+    channel.port1.close(); channel.port2.close();
+    await state.dispose();
+    expect(installation?.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    installation?.close();
+  }
+});
+
+for (const failure of ["fork", "retainConsumer", "registerAdapter"] as const) test(`root setup rolls back its shared route when ${failure} throws`, async () => {
+  const channel = new MessageChannel();
+  const runtime = processRuntimeFixture(failure === "fork"
+    ? { fork: () => { throw new Error("fork failed"); } }
+    : { fork: () => ({ ...createFilesystemIdentity(), port: channel.port1 }) });
+  const installation = installRuntimeSharedObjects(runtime);
+  const NativeChannel = globalThis.MessageChannel;
+  const lookups: MessageChannel[] = [];
+  globalThis.MessageChannel = class extends NativeChannel {
+    constructor() { super(); lookups.push(this); }
+  };
+  const closed = new Set<MessagePort>();
+  const nativeClose = MessagePort.prototype.close;
+  const closes = spyOn(MessagePort.prototype, "close").mockImplementation(function(this: MessagePort) {
+    closed.add(this); nativeClose.call(this);
+  });
+  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/") });
+  const mutable = (failure === "fork" ? runtime.filesystem : runtime) as unknown as Record<string, unknown>;
+  const original = mutable[failure];
+  if (failure !== "fork") mutable[failure] = () => { throw new Error(`${failure} failed`); };
+  try {
+    const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    expect(() => startRun({ runtime, engine: "browser", module, args: [], env: {}, moduleScope: false }, { stdout() {}, stderr() {} })).toThrow(`${failure} failed`);
+    expect(installation.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    expect(lookups).toHaveLength(1);
+    expect(closed.has(lookups[0]!.port1)).toBe(true);
+    expect(closed.has(lookups[0]!.port2)).toBe(true);
+  } finally {
+    closes.mockRestore();
+    globalThis.MessageChannel = NativeChannel;
+    mutable[failure] = original;
+    installation.close();
+    channel.port1.close(); channel.port2.close();
+    await runtime.dispose();
+    if (previousLocation) Object.defineProperty(globalThis, "location", previousLocation); else Reflect.deleteProperty(globalThis, "location");
+  }
+});
 
 /** A worker-side client for the root a run adopted; its spawn messages go to the run's handler. */
 function rootClient(request: RunRequest, deliver: (message: object) => void) {
@@ -300,6 +423,7 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
   const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
   const ports: MessagePort[] = [];
   const workers: FakeWorker[] = [];
+  const launched = new Set<FakeWorker>();
   const runs: ReturnType<typeof startRun>[] = [];
   const registered: string[] = [];
   function connect(identity = createFilesystemIdentity()) {
@@ -321,9 +445,12 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
   const launch = async (module: WebAssembly.Module, engine: Engine = "browser", adapter: "bun" | "preview1" = "preview1") => {
     const run = startRun({ engine, adapter, module, args: [], env: {}, runtime, moduleScope: false }, { stdout() {}, stderr() {} });
     runs.push(run);
-    const worker = workers.at(-1)!;
+    // The root comes from the runtime's worker pool: find the worker this run posted to.
+    const fresh = () => workers.find(worker => worker.request && !launched.has(worker));
     const deadline = performance.now() + 1000;
-    while (!worker.request && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+    while (!fresh() && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+    const worker = fresh()!;
+    launched.add(worker);
     expect(worker.request?.module).toBe(module);
     expect(worker.request?.adapter).toBe(adapter);
     expect(worker.request?.env.PATH?.split(":")[0]).toBe(ENGINE_BIN[engine]);
@@ -822,7 +949,9 @@ test("worker failure before deferred executable markers cannot adopt a late runn
   });
   try {
     await entered.promise;
-    state.worker.onerror!({ preventDefault() {}, message: "early worker failure" } as ErrorEvent);
+    // The root worker is taken from the runtime's pool without waiting for the markers.
+    while (!state.worker?.onerror) await new Promise(resolve => setTimeout(resolve, 0));
+    state.worker.onerror({ preventDefault() {}, message: "early worker failure" } as ErrorEvent);
     state.release();
     expect(await state.run.done).toMatchObject({ code: 1 });
     expect(state.worker.terminated).toBe(1);

@@ -1,4 +1,4 @@
-import { createShell, SharedBridge, control, runtimeSnapshot, type Shell } from "bash-web";
+import { createShell, installShellCommands, SharedBridge, control, runtimeSnapshot, type Shell } from "bash-web";
 import { installCat } from "bash-web/utilities/cat";
 import { installGrep } from "bash-web/utilities/grep";
 import { installBunAdapters, type BunAdapterInstallation, type RuntimeNetworkHelper } from "bun-wasm";
@@ -136,6 +136,7 @@ async function setup() {
     listening(port, helper) { listeners.set(port, helper); router.register(port, helper); },
     stopped(port, helper) { if (listeners.get(port) === helper) listeners.delete(port); router.unregister(port, helper); },
   } });
+  await installShellCommands(runtime, { wasmUrl: "./programs/shell-engine.wasm", workerUrl: "./shell-worker.js" });
   await installCat(runtime, { wasmUrl: "./programs/cat.wasm", workerUrl: "./shell-worker.js" });
   await installGrep(runtime, { wasmUrl: "./programs/grep.wasm", workerUrl: "./shell-worker.js" });
   const capabilities: unknown = await (await fetch("./capabilities.json")).json();
@@ -164,6 +165,18 @@ async function open(fixture: Fixture, registry: string) {
 }
 async function close() { const session = active; active = undefined; await session?.dispose(); }
 async function command(text: string, milliseconds?: number) { const session = terminal(); session.begin(text); return session.finish(milliseconds); }
+// Types each reply once its expected text has appeared after the previous one, like a user at a prompt.
+async function interactive(text: string, steps: readonly { expect: string; send: string }[], milliseconds = 60000) {
+  const session = terminal();
+  session.begin(text);
+  let offset = session.text.length;
+  for (const step of steps) {
+    await until(() => session.text.indexOf(step.expect, offset) >= 0, step.expect, milliseconds);
+    offset = session.text.indexOf(step.expect, offset) + step.expect.length;
+    session.send(step.send);
+  }
+  return session.finish(milliseconds);
+}
 async function start(command: string, port: number, milliseconds: number) {
   const session = terminal(); session.beginServer(command, port);
   await until(() => session.liveServer() || session.serverExited(), `Listener ${port}`, milliseconds);
@@ -183,5 +196,5 @@ async function cleanup() {
   check(listeners.size === 0, `Remaining listeners: ${listeners.size}`);
   return { workers: workers.size, listeners: listeners.size };
 }
-export const shellProduct = { setup, open, command, start, readFile, interrupt: () => terminal().interrupt(), close, diagnostics, cleanup } satisfies ProductApi;
+export const shellProduct = { setup, open, command, interactive, start, readFile, interrupt: () => terminal().interrupt(), close, diagnostics, cleanup } satisfies ProductApi;
 Reflect.set(globalThis, "shellProduct", shellProduct);

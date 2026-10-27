@@ -29,6 +29,7 @@ mod engine_natives;
 mod glob;
 pub mod host;
 mod html_rewriter;
+pub mod init;
 pub mod install;
 mod modules;
 mod natives;

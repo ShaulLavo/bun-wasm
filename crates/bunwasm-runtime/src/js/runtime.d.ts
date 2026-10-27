@@ -310,6 +310,7 @@ declare namespace BunWasm {
       String: StringConstructor; Symbol: SymbolConstructor; TypeError: TypeErrorConstructor;
       URIError: URIErrorConstructor;
     };
+    builtin(name: "node:fs" | "node:os" | "node:crypto" | "node:zlib"): { readonly constants: object };
     builtin(name: string): unknown;
     defineHidden(target: object, values: object): void;
     mappedCallSites: WeakSet<object>;
