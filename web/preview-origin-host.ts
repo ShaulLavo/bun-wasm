@@ -15,7 +15,7 @@ interface PreviewOriginBinding {
   close(): Promise<void>;
 }
 interface OwnedBinding { owner: object; port: number; binding: PreviewOriginBinding }
-interface Reservation { owner: object; port: number; lifetime: AbortController; done: PromiseWithResolvers<void> }
+interface Reservation { owner: object; port: number; lifetime: AbortController; done: ReturnType<typeof Promise.withResolvers<void>> }
 
 /** Server-side capability registry. No browser request can choose its owner or target. */
 export class LoopbackPreviewOrigins {

@@ -11,7 +11,7 @@ interface Route {
   port: number;
   binding: ReturnType<LoopbackPreviewOrigins["bind"]>;
   lifetime: AbortController;
-  ready: PromiseWithResolvers<boolean>;
+  ready: ReturnType<typeof Promise.withResolvers<boolean>>;
   timer: ReturnType<typeof setTimeout>;
   stage: { kind: "pending" } | { kind: "reserved"; origin: string } | { kind: "ready"; authorization: PreviewHostAuthorization };
 }

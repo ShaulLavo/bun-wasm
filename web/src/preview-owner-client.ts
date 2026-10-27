@@ -10,7 +10,7 @@ type BindPreviewOwner = (options: { origin: string; port: number; signal: AbortS
 interface Route {
   port: number;
   lifetime: AbortController;
-  ready: PromiseWithResolvers<string>;
+  ready: ReturnType<typeof Promise.withResolvers<string>>;
   stage: { kind: "pending" } | { kind: "bound"; binding: OwnerBinding };
 }
 interface Exchange { route: Route; exchange: PreviewHostExchange }
