@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -122,6 +122,26 @@ function checkListenerHook(declarations: readonly string[], source: string) {
   }));
   return Bun.spawnSync([join(root, "web/node_modules/.bin/tsc"), "-p", hookConfig], { stdout: "pipe", stderr: "pipe" });
 }
+
+test("the specialized filesystem builtin retains constants alongside shell operations", () => {
+  const declarations = readdirSync(join(root, "crates/bunwasm-runtime/src/js")).filter(name => name.endsWith(".d.ts"));
+  const result = checkListenerHook(declarations, `
+    declare const internal: BunWasm.Internal;
+    const fs = internal.builtin("node:fs");
+    const constants: object = fs.constants;
+    const directory: string = fs.mkdtempSync("/tmp/example-");
+    fs.writeFileSync(directory + "/file", new Uint8Array(), { flag: "wx" });
+  `);
+  expect(result.stdout.toString()).toBe("");
+  expect(result.exitCode).toBe(0);
+});
+
+test("filesystem builtin constants retain their object contract", () => {
+  const declarations = readdirSync(join(root, "crates/bunwasm-runtime/src/js")).filter(name => name.endsWith(".d.ts"));
+  const result = checkListenerHook(declarations, 'declare const internal: BunWasm.Internal; const constants: string = internal.builtin("node:fs").constants;');
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stdout.toString()).toContain("error TS2322");
+});
 
 test("reproduces TS2300 for the former listener hook method/property union", async () => {
   const legacy = join(scratch, "legacy-events-types.d.ts");
