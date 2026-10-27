@@ -81,14 +81,20 @@ thread_local! {
 }
 
 fn init_state() -> Result<State, String> {
-    init_with_options(api::TransformOptions {
-        disable_hmr: true,
-        target: Some(api::Target::Bun),
-        ..Default::default()
-    })
+    init_with_options(
+        api::TransformOptions {
+            disable_hmr: true,
+            target: Some(api::Target::Bun),
+            ..Default::default()
+        },
+        api::DotEnvBehavior::LoadAllWithoutInlining,
+    )
 }
 
-fn init_with_options(opts: api::TransformOptions) -> Result<State, String> {
+fn init_with_options(
+    opts: api::TransformOptions,
+    env_behavior: api::DotEnvBehavior,
+) -> Result<State, String> {
     let arena = Box::new(Arena::new());
     // SAFETY: the arena is boxed and lives as long as `State`, which owns it.
     let arena_ref: &'static Arena = unsafe { &*(&*arena as *const Arena) };
@@ -98,7 +104,9 @@ fn init_with_options(opts: api::TransformOptions) -> Result<State, String> {
     let mut transpiler = Transpiler::init(arena_ref, &raw mut *log, opts, None)
         .map_err(|e| format!("transpiler init: {e:?}"))?;
     transpiler.configure_linker_with_auto_jsx(false);
-    transpiler.options.env.behavior = bun_bundler::options::EnvBehavior::disable;
+    transpiler.options.env.behavior = env_behavior;
+    transpiler.options.env.disable_default_env_files =
+        env_behavior == api::DotEnvBehavior::LoadAllWithoutInlining;
     transpiler
         .configure_defines()
         .map_err(|e| format!("transpiler defines: {e:?}"))?;
@@ -140,12 +148,15 @@ pub fn public_transpile(
         Some(text) => text.as_bytes().to_vec(),
         None => serde_json::to_vec(&options["tsconfig"]).map_err(|e| e.to_string())?,
     };
-    let mut state = init_with_options(api::TransformOptions {
-        target: Some(target),
-        disable_hmr: true,
-        define,
-        ..Default::default()
-    })?;
+    let mut state = init_with_options(
+        api::TransformOptions {
+            target: Some(target),
+            disable_hmr: true,
+            define,
+            ..Default::default()
+        },
+        api::DotEnvBehavior::Disable,
+    )?;
     state.public_api = true;
     configure_public(&mut state, &options, &tsconfig_bytes)?;
     if action == "validate" {
