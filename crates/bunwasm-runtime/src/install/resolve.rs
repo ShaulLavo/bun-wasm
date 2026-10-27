@@ -1,12 +1,15 @@
 mod next_swc;
+mod selection;
+
+pub use selection::matches;
+pub(super) use selection::order;
 
 use std::{
-    cmp::Ordering,
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::PathBuf,
 };
 
-use bun_semver::{SlicedString, Version, query};
+use bun_semver::{SlicedString, Version};
 use serde_json::{Value, json};
 
 use super::{
@@ -73,35 +76,6 @@ pub fn spec(input: &str) -> Result<(String, String)> {
         return Err(format!("Missing version for {name}"));
     }
     Ok((name.into(), range.into()))
-}
-
-pub fn matches(version: &str, range: &str) -> bool {
-    let version_bytes = version.as_bytes();
-    let range_bytes = range.as_bytes();
-    let Some(version) = Version::parse_exact(SlicedString::init(version_bytes, version_bytes))
-    else {
-        return false;
-    };
-    let Ok(group) = query::parse(range_bytes, SlicedString::init(range_bytes, range_bytes)) else {
-        return false;
-    };
-    if group.has_skipped() {
-        return false;
-    }
-    match group.get_exact_version() {
-        Some(exact) => version.eql(exact),
-        None => group.satisfies(version, range_bytes, version_bytes),
-    }
-}
-
-pub(super) fn order(a: &str, b: &str) -> Ordering {
-    let parse = |s: &[u8]| Version::parse_exact(SlicedString::init(s, s));
-    match (parse(a.as_bytes()), parse(b.as_bytes())) {
-        (Some(a_version), Some(b_version)) => {
-            a_version.order_without_build(b_version, a.as_bytes(), b.as_bytes())
-        }
-        _ => a.cmp(b),
-    }
 }
 
 pub fn dependencies(
@@ -539,16 +513,13 @@ impl Resolver {
         let versions = packument["versions"]
             .as_object()
             .ok_or_else(|| format!("No versions found for {name}"))?;
-        let version = versions
-            .keys()
-            .filter(|v| matches(v, range))
-            .max_by(|a, b| order(a, b))
+        let version = selection::select(versions, range)
             .ok_or_else(|| {
                 format!("No version matching \"{range}\" found for specifier \"{name}\" (but package exists)")
             })?;
         let replacement = platform_package(name, version);
         if replacement != name {
-            let version = version.clone();
+            let version = version.to_owned();
             return self.package(replacement, &version, chain, optional, lookup);
         }
         let mut meta = versions[version].clone();
@@ -561,7 +532,7 @@ impl Resolver {
         let integrity = package_integrity(&meta)?;
         Ok(Package {
             name: name.into(),
-            version: version.clone(),
+            version: version.into(),
             chain,
             source_chain: None,
             meta,
