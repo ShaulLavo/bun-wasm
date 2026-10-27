@@ -5,8 +5,14 @@ import { isatty } from "node:tty";
 import { createContext, runInContext } from "node:vm";
 import type { Readable } from "node:stream";
 
+type ConsumedBlob = {
+  readonly size: number;
+  readonly type: string;
+  text(): Promise<string>;
+};
+
 export type Consumers = {
-  blob(stream: unknown): Promise<Blob>;
+  blob(stream: unknown): Promise<ConsumedBlob>;
   arrayBuffer(stream: unknown): Promise<ArrayBuffer>;
   bytes(stream: unknown): Promise<Uint8Array>;
   buffer(stream: unknown): Promise<Uint8Array>;
