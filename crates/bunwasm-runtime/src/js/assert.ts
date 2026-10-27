@@ -295,6 +295,124 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // CallTracker (Bun's src/js/internal/assert/calltracker.ts, deprecated as DEP0173)
+  // ---------------------------------------------------------------------------
+
+  interface CallRecord {
+    thisArg: unknown;
+    arguments: readonly unknown[];
+  }
+
+  class CallTrackerContext {
+    #expected: number;
+    #calls: CallRecord[] = [];
+    #name: string;
+    #stackTrace: Error;
+    constructor({ expected, stackTrace, name }: { expected: number; stackTrace: Error; name: string }) {
+      this.#expected = expected;
+      this.#stackTrace = stackTrace;
+      this.#name = name;
+    }
+    track(thisArg: unknown, args: readonly unknown[]) {
+      this.#calls.push(Object.freeze({ thisArg, arguments: Object.freeze(Array.prototype.slice.call(args)) }));
+    }
+    get delta() {
+      return this.#calls.length - this.#expected;
+    }
+    reset() {
+      this.#calls = [];
+    }
+    getCalls() {
+      return Object.freeze(this.#calls.slice());
+    }
+    report(): BunWasm.AssertionDetail | undefined {
+      if (this.delta === 0) return undefined;
+      const message = `Expected the ${this.#name} function to be executed ${this.#expected} time(s) but was executed ${this.#calls.length} time(s).`;
+      return { message, actual: this.#calls.length, expected: this.#expected, operator: this.#name, stack: this.#stackTrace };
+    }
+  }
+
+  function validateExpectedCalls(expected: unknown): asserts expected is number {
+    if (typeof expected !== "number") throw invalidArgType("expected", "of type number", expected);
+    if (Number.isInteger(expected) && expected >= 1 && expected <= 0xffffffff) return;
+    const range = Number.isInteger(expected) ? ">= 1 && <= 4294967295" : "an integer";
+    throw makeError(RangeError, "ERR_OUT_OF_RANGE", `The value of "expected" is out of range. It must be ${range}. Received ${expected}`);
+  }
+
+  class CallTracker {
+    #callChecks = new Set<CallTrackerContext>();
+    #trackedFunctions = new WeakMap<Function, CallTrackerContext>();
+    #getTrackedFunction(tracked: Function) {
+      if (this.#trackedFunctions.has(tracked)) return this.#trackedFunctions.get(tracked)!;
+      throw makeError(TypeError, "ERR_INVALID_ARG_VALUE", `The argument 'tracked' is not a tracked function. Received ${inspect(tracked)}`);
+    }
+    reset(tracked?: Function) {
+      if (tracked === undefined) {
+        this.#callChecks.forEach(check => check.reset());
+        return;
+      }
+      this.#getTrackedFunction(tracked).reset();
+    }
+    getCalls(tracked: Function) {
+      return this.#getTrackedFunction(tracked).getCalls();
+    }
+    calls(fn?: Function | number, expected = 1) {
+      if ("_exiting" in globalThis.process && globalThis.process._exiting) {
+        throw makeError(Error, "ERR_UNAVAILABLE_DURING_EXIT", "Cannot call function in process exit handler");
+      }
+      let target: Function;
+      if (typeof fn === "number") {
+        expected = fn;
+        target = () => {};
+      } else {
+        target = fn ?? (() => {});
+      }
+      validateExpectedCalls(expected);
+      const context = new CallTrackerContext({ expected, stackTrace: new Error(), name: target.name || "calls" });
+      const handler = {
+        apply(target: Function, thisArg: unknown, argList: unknown[]) {
+          context.track(thisArg, argList);
+          return Reflect.apply(target, thisArg, argList);
+        },
+      };
+      Object.setPrototypeOf(handler, null);
+      const tracked = new Proxy(target, handler);
+      this.#callChecks.add(context);
+      this.#trackedFunctions.set(tracked, context);
+      return tracked;
+    }
+    report() {
+      const errors: BunWasm.AssertionDetail[] = [];
+      for (const context of this.#callChecks) {
+        const message = context.report();
+        if (message !== undefined) errors.push(message);
+      }
+      return errors;
+    }
+    verify() {
+      const errors = this.report();
+      if (errors.length === 0) return;
+      const message = errors.length === 1 ? errors[0].message : "Functions were not called the expected number of times";
+      throw new AssertionError({ message, details: errors });
+    }
+  }
+
+  function defineCallTracker(target: object) {
+    let tracker: typeof CallTracker | undefined;
+    Object.defineProperty(target, "CallTracker", {
+      get() {
+        if (tracker === undefined) tracker = util().deprecate(CallTracker, "assert.CallTracker is deprecated.", "DEP0173");
+        return tracker;
+      },
+      set(value) {
+        Object.defineProperty(this, "CallTracker", { value, writable: true, enumerable: true, configurable: true });
+      },
+      configurable: true,
+      enumerable: true,
+    });
+  }
+
   function innerFail(obj: BunWasm.AssertionOptions): never {
     if (obj.message instanceof Error) throw obj.message;
     throw new AssertionError(obj);
@@ -718,6 +836,8 @@
 
   assert.strict = strict;
   strict.strict = strict;
+  defineCallTracker(assert);
+  defineCallTracker(strict);
 
   return assert;
 });
