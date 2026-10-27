@@ -3,11 +3,15 @@ use std::path::Path;
 use anyhow::{Context, Result, bail, ensure};
 use wasmparser::{Dylink0Subsection, KnownCustom, MemInfo, Parser, Payload};
 use wasmtime::{
-    Engine, Extern, ExternType, Global, GlobalType, Instance, Linker, Module, Mutability, Ref,
-    Store, Val, ValType,
+    Engine, Extern, ExternType, Func, Global, GlobalType, Instance, Linker, Module, Mutability,
+    Ref, Store, Table, Val, ValType,
 };
 
 use crate::Host;
+
+#[path = "linked_relay.rs"]
+mod relay;
+use relay::{SelfPlan, SelfSlots};
 
 #[derive(Default)]
 pub struct Programs(Vec<Program>);
@@ -17,6 +21,7 @@ struct Program {
     library: Module,
     layout: MemInfo,
     kind: ProgramKind,
+    self_plan: SelfPlan,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,13 +85,15 @@ impl Programs {
         let bytes = std::fs::read(&path)
             .with_context(|| format!("loading paired {:?} engine {}", kind, path.display()))?;
         let layout = layout(&bytes)?;
-        let library = Module::new(engine, bytes)?;
+        let library = Module::new(engine, &bytes)?;
         validate_profile(kind, &library)?;
+        let self_plan = SelfPlan::new(engine, &core, &library, &bytes)?;
         self.0.push(Program {
             core: core.clone(),
             library,
             layout,
             kind,
+            self_plan,
         });
         Ok(core)
     }
@@ -265,9 +272,11 @@ impl Program {
         );
         let growth = table_end - table.size(&*store);
         table.grow(&mut *store, growth, Ref::Func(None))?;
+        let slots = self.self_plan.reserve(store, table)?;
         let mut imports = linker.clone();
-        self.imports(core, &mut imports, store, base, table_base as u32)?;
+        self.imports(core, &mut imports, store, base, table_base as u32, &slots)?;
         let side = imports.instantiate(&mut *store, &self.library)?;
+        self.self_plan.bind(store, table, &slots, side)?;
         for name in self.kind.initializers().iter().copied() {
             side.get_typed_func::<(), ()>(&mut *store, name)?
                 .call(&mut *store, ())
@@ -283,16 +292,24 @@ impl Program {
         store: &mut Store<Host>,
         memory: u32,
         table: u32,
+        slots: &SelfSlots,
     ) -> Result<()> {
         for import in self.library.imports() {
             let name = import.name();
+            let own = self.self_plan.slot(name);
             let value = match (import.module(), name) {
                 ("env", "__memory_base") => address_global(store, memory, Mutability::Const)?,
                 ("env", "__table_base") => address_global(store, table, Mutability::Const)?,
-                ("env", name) => core
-                    .get_export(&mut *store, name)
-                    .with_context(|| format!("missing core export {name}"))?,
+                ("env", name) => match (core.get_export(&mut *store, name), own) {
+                    (Some(export), _) => export,
+                    (None, Some(slot)) => slots.relay(store, slot)?,
+                    (None, None) => bail!("missing core export {name}"),
+                },
                 ("GOT.mem", name) => got_address(core, store, name)?,
+                ("GOT.func", name) => match own {
+                    Some(slot) => address_global(store, slots.address(slot), Mutability::Var)?,
+                    None => got_function(core, store, name)?,
+                },
                 ("wasi_snapshot_preview1", _) => continue,
                 (namespace, _) => bail!("unsupported side import {namespace}.{name}"),
             };
@@ -302,7 +319,7 @@ impl Program {
     }
 }
 
-fn address_global(store: &mut Store<Host>, value: u32, mutability: Mutability) -> Result<Extern> {
+fn address_global<T>(store: &mut Store<T>, value: u32, mutability: Mutability) -> Result<Extern> {
     Ok(Global::new(
         store,
         GlobalType::new(ValType::I32, mutability),
@@ -327,10 +344,45 @@ fn got_address(core: Instance, store: &mut Store<Host>, name: &str) -> Result<Ex
         .get_memory(&mut *store, "memory")
         .context("core memory")?;
     ensure!(
-        value != 0 && (value as usize) < memory.data_size(&*store),
-        "GOT address outside core memory"
+        data_address(name, value, memory.data_size(&*store)),
+        "GOT.mem.{name} address is outside core memory"
     );
     address_global(store, value, Mutability::Var)
+}
+
+/// Data symbols are nonzero addresses inside memory. The linker's stack bounds may sit at
+/// either edge: a stack-first core has `__stack_low` at 0.
+fn data_address(name: &str, address: u32, memory_size: usize) -> bool {
+    let address = address as usize;
+    if matches!(name, "__stack_low" | "__stack_high") {
+        return address <= memory_size;
+    }
+    address != 0 && address < memory_size
+}
+
+/// The table slot of a core function, so the side's `&f` equals the core's. A function not
+/// yet in the table gets one new slot.
+fn got_function<T>(core: Instance, store: &mut Store<T>, name: &str) -> Result<Extern> {
+    let function = core
+        .get_func(&mut *store, name)
+        .with_context(|| format!("GOT.func.{name} requires a core function export"))?;
+    let table = core
+        .get_table(&mut *store, "__indirect_function_table")
+        .context("core table")?;
+    let slot = match table_slot(store, table, function) {
+        Some(slot) => slot,
+        None => table.grow(&mut *store, 1, Ref::Func(Some(function)))?,
+    };
+    let slot = u32::try_from(slot).context("GOT.func slot exceeds wasm32")?;
+    address_global(store, slot, Mutability::Var)
+}
+
+fn table_slot<T>(store: &mut Store<T>, table: Table, function: Func) -> Option<u64> {
+    let target = function.to_raw(&mut *store);
+    (0..table.size(&*store)).find(|&slot| match table.get(&mut *store, slot) {
+        Some(Ref::Func(Some(entry))) => entry.to_raw(&mut *store) == target,
+        _ => false,
+    })
 }
 
 #[cfg(test)]
@@ -389,6 +441,98 @@ mod tests {
 
         let invalid = wasm_custom(b"bun-wasm-engine", b"other");
         assert!(parse_program_kind(&invalid, true).is_err());
+    }
+
+    #[test]
+    fn stack_bounds_may_sit_at_either_memory_edge() {
+        let size = 3 * 65_536;
+        assert!(data_address("__stack_low", 0, size));
+        assert!(data_address("__stack_high", size as u32, size));
+        assert!(!data_address("__stack_high", size as u32 + 1, size));
+        assert!(data_address("errno", 1024, size));
+        assert!(!data_address("errno", 0, size));
+        assert!(!data_address("errno", size as u32, size));
+    }
+
+    /// A core with `tabled` already at table slot 1, `loose` in no slot, and a global.
+    fn function_core() -> Vec<u8> {
+        use wasm_encoder::{
+            CodeSection, ConstExpr, ElementSection, Elements, ExportKind, ExportSection, Function,
+            FunctionSection, GlobalSection, GlobalType, Instruction, RefType, TableSection,
+            TableType, TypeSection, ValType,
+        };
+        let mut types = TypeSection::new();
+        types.ty().function([], []);
+        let mut functions = FunctionSection::new();
+        functions.function(0).function(0);
+        let mut tables = TableSection::new();
+        tables.table(TableType {
+            element_type: RefType::FUNCREF,
+            table64: false,
+            minimum: 2,
+            maximum: None,
+            shared: false,
+        });
+        let mut globals = GlobalSection::new();
+        let ty = GlobalType {
+            val_type: ValType::I32,
+            mutable: false,
+            shared: false,
+        };
+        globals.global(ty, &ConstExpr::i32_const(16));
+        let mut exports = ExportSection::new();
+        exports
+            .export("__indirect_function_table", ExportKind::Table, 0)
+            .export("tabled", ExportKind::Func, 0)
+            .export("loose", ExportKind::Func, 1)
+            .export("value", ExportKind::Global, 0);
+        let mut elements = ElementSection::new();
+        elements.active(
+            Some(0),
+            &ConstExpr::i32_const(1),
+            Elements::Functions([0].as_slice().into()),
+        );
+        let mut code = CodeSection::new();
+        for _ in 0..2 {
+            let mut body = Function::new([]);
+            body.instruction(&Instruction::End);
+            code.function(&body);
+        }
+        let mut module = wasm_encoder::Module::new();
+        module
+            .section(&types)
+            .section(&functions)
+            .section(&tables)
+            .section(&globals)
+            .section(&exports)
+            .section(&elements)
+            .section(&code);
+        module.finish()
+    }
+
+    fn got_slot(core: Instance, store: &mut Store<()>, name: &str) -> Result<i32> {
+        let Extern::Global(global) = got_function(core, store, name)? else {
+            bail!("GOT.func cell is not a global");
+        };
+        Ok(global.get(&mut *store).unwrap_i32())
+    }
+
+    #[test]
+    fn function_cells_reuse_the_core_table_slot() {
+        let engine = Engine::default();
+        let module = Module::new(&engine, function_core()).unwrap();
+        let mut store = Store::new(&engine, ());
+        let core = Instance::new(&mut store, &module, &[]).unwrap();
+        let table = core
+            .get_table(&mut store, "__indirect_function_table")
+            .unwrap();
+        assert_eq!(got_slot(core, &mut store, "tabled").unwrap(), 1);
+        assert_eq!(table.size(&store), 2);
+        assert_eq!(got_slot(core, &mut store, "loose").unwrap(), 2);
+        assert_eq!(got_slot(core, &mut store, "loose").unwrap(), 2);
+        assert_eq!(table.size(&store), 3);
+        assert!(got_slot(core, &mut store, "value").is_err());
+        assert!(got_slot(core, &mut store, "missing").is_err());
     }
 
     #[test]

@@ -138,12 +138,23 @@ admission error, not a monolith fallback.
 It uses Wasmparser's existing locked parser, not copied parser code. It reserves side
 storage with the core allocator, shares the core table and mutable stack global,
 binds GOT addresses, then initializes and registers the actual QuickJS driver.
-Core constructors run once before side initialization. The existing process host
+Core constructors run once before side initialization.
+`GOT.mem` addresses follow Waffle `98225a017ff379d746b3ec3178524d2b9ac0d6cd`'s `link/group.ts` rule: data symbols
+are nonzero and inside core memory, while `__stack_low` and `__stack_high` may sit
+at either edge (a stack-first core has `__stack_low` at 0). `GOT.func` cells hold
+the core function's existing table slot, or one appended slot, so function
+addresses compare equal across the pair. `crates/bunwasm-host/src/linked_relay.rs`
+is an original port of that revision's `link/relay.ts` and same-side binding: an
+`env` or `GOT.func` import that the core does not export binds only to a defined
+side export of the same type, through a reserved table slot and a
+`call_indirect` relay. The slots are filled after instantiation, before
+relocation and constructors. The JSC side needs this for 128 of its own
+definitions. The existing process host
 still owns cancellation, child admission, host slots, WASI and final cleanup.
 The association retains the compiled core image and its side, so admitted child
 Module clones use the same pair. Tools keep their single-module CRT. JSC uses
 the paired source contract in
-[JSC engine program](jsc-engine-program.md); its real-pair proof is pending.
+[JSC engine program](jsc-engine-program.md).
 
 ## Node fixture paired startup
 
