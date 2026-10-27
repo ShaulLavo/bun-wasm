@@ -195,6 +195,9 @@ JSGlobalContextRef bunjsc_create_context()
     // Native Bun enables the SharedArrayBuffer constructor (ZigGlobalObject.cpp). Its storage
     // stays in this guest; the worker codec refuses to send it to another one.
     JSC::initialize([] {
+        // Shared guest memory is capped at 512 MiB; WASI physical-page sysconf
+        // is unsupported and wraps into a larger, incorrect RAM estimate.
+        JSC::Options::forceRAMSize() = 512 * MB;
         JSC::Options::useSharedArrayBuffer() = true;
         JSC::Options::numberOfGCMarkers() = 1;
         JSC::Options::useWarmUpMarkedBlocks() = false;
