@@ -45,8 +45,13 @@ interface SharedRoutes {
   transaction(deliver: () => void, commit: () => void): void;
   credit(): void;
 }
+export interface SharedLanes {
+  create(): SharedArrayBuffer;
+  open(buffer: SharedArrayBuffer, side: 0 | 1): import("./lane.ts").SharedLane;
+}
 export interface SharedObjects {
   readonly mailbox?: import("./mailbox.ts").SharedMailbox;
+  readonly lanes?: SharedLanes;
   readonly routes?: SharedRoutes;
   begin(): SharedPublication;
   read(reference: SharedReference): SharedArrayBuffer;

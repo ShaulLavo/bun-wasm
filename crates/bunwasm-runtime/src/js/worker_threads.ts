@@ -244,8 +244,14 @@
     catch (error) { for (const port of created) portOps.discard(port); discardPendingTransfers(graph); throw error; }
     finally { restoredPorts = null; restoringLocally = false; }
   }
+  function sharedLanes() {
+    const shared = internal.sharedObjects;
+    return shared?.routes?.enabled ? shared.lanes : undefined;
+  }
   function pump() {
     const shared = internal.sharedObjects;
+    // Lanes first: a broker close behind lane data must not overtake it.
+    for (const port of Array.from(localPorts.values())) portOps.drainLane(port);
     const drained = shared?.routes?.enabled ? shared.mailbox?.drain(bytes => mailboxDelivery(record(JSON.parse(native.utf8Decode(bytes))))) || 0 : 0;
     if (drained) shared?.routes?.credit();
     for (const port of localPorts.values()) portOps.retry(port);
@@ -264,6 +270,7 @@
   interface PortState {
     id: string; peer: string | null; version: number; sent: number; received: number;
     queue: unknown[]; pending: Map<number, Graph>; peerClosing: number | null;
+    lane: (BunWasm.PortLane & { io: BunWasm.SharedLane; stop: () => void }) | null;
     phase: "open" | "closing" | "closed";
     batch: DeliveryBatch | null;
     started: boolean; ref: boolean; scheduled: boolean;
@@ -279,8 +286,10 @@
       if (key !== token) throw Object.assign(new TypeError("Illegal constructor"), { code: "ERR_CONSTRUCT_CALL_INVALID" });
       const id = `${internal.sharedObjects?.routes?.enabled ? internal.sharedObjects.routes.owner : routeKey(route)}:${nextPort++}`;
       const value = snapshot || { id, peer: null, version: 0, sent: 0, received: 0, queue: [], pending: [], closing: null, closed: false };
-      this.#state = { ...value, pending: new Map(value.pending), peerClosing: value.closing,
+      this.#state = { id: value.id, peer: value.peer, version: value.version, sent: value.sent, received: value.received, queue: value.queue,
+        pending: new Map(value.pending), peerClosing: value.closing, lane: null,
         phase: value.closed ? "closed" : "open", batch: null, started: false, ref: false, scheduled: false };
+      if (value.lane && !value.closed) this.#openLane(value.lane);
       localPorts.set(value.id, this);
       EventEmitter.call(this);
       super.addEventListener("message", event => {
@@ -301,17 +310,55 @@
       return [first, second];
     }
     static #discard(port: MessagePort) {
-      localPorts.delete(port.#value().id); port.#state = null;
+      port.#closeLane(); localPorts.delete(port.#value().id); port.#state = null;
+    }
+    // A channel whose ends live in different processes carries its packets in its own shared lane.
+    #openLane(lane: BunWasm.PortLane) {
+      const lanes = sharedLanes(), state = this.#value();
+      if (!lanes || state.lane) return;
+      const io = lanes.open(lane.buffer, lane.side);
+      state.lane = { ...lane, io, stop: io.watch(() => internal.realTimers.setImmediate(pump)) };
+    }
+    #closeLane() {
+      const state = this.#state;
+      if (!state?.lane) return;
+      state.lane.stop(); state.lane = null;
+    }
+    #ensureLane() {
+      const state = this.#value(), lanes = sharedLanes();
+      const other = state.peer === null ? undefined : localPorts.get(state.peer);
+      if (state.lane || !lanes || !other) return;
+      if (!other.#state || other.#state.lane) return;
+      const buffer = lanes.create();
+      this.#openLane({ buffer, side: 0 }); other.#openLane({ buffer, side: 1 });
+    }
+    static #drainLane(port: MessagePort, defer = false) {
+      const state = port.#state;
+      if (!state?.lane) return;
+      let arrived = false;
+      state.lane.io.drain(text => {
+        const body = record(JSON.parse(text));
+        if (typeof body.sequence !== "number" || body.kind !== "port-data" && body.kind !== "port-close") throw new Error("Invalid lane packet");
+        if (body.kind === "port-close") state.peerClosing = Math.max(state.peerClosing ?? 0, body.sequence);
+        else if (body.sequence >= state.received) state.pending.set(body.sequence, body.graph as Graph);
+        arrived = true;
+      });
+      if (arrived && !defer && state.phase === "open") port.#accept();
+    }
+    /** Sends a packet over the lane, visible to the peer's owner once commit runs; null when it must use the broker. */
+    #laneFrame(packet: Record<string, unknown>) {
+      return this.#value().lane?.io.reserve(JSON.stringify(packet)) ?? null;
     }
     #value() { if (!this.#state) throw cloneError("MessagePort is detached"); return this.#state; }
     #snapshot(version = this.#value().version): Snapshot {
       const state = this.#value();
       return { id: state.id, peer: state.peer, version, sent: state.sent, received: state.received,
-        queue: state.queue.slice(), pending: Array.from(state.pending), closing: state.peerClosing, closed: state.phase === "closed" };
+        queue: state.queue.slice(), pending: Array.from(state.pending), closing: state.peerClosing, closed: state.phase === "closed",
+        lane: state.lane ? { buffer: state.lane.buffer, side: state.lane.side } : null };
     }
     #bind() {
       if (restoringLocally) return;
-      const { queue: _queue, ...snapshot } = this.#snapshot(); root({ kind: "bind", snapshot, owner: route });
+      const { queue: _queue, lane: _lane, ...snapshot } = this.#snapshot(); root({ kind: "bind", snapshot, owner: route });
     }
     static #restore(snapshot: Snapshot) {
       const port = new MessagePort(token, snapshot);
@@ -322,21 +369,23 @@
       if (!(value instanceof MessagePort)) throw invalidPort();
       const state = value.#value();
       if (state.phase !== "open") throw cloneError("Cannot transfer a closed MessagePort");
+      // Packets already on this side's lane travel in the snapshot; later ones wait there for the new owner.
+      value.#ensureLane(); MessagePort.#drainLane(value, true);
       const snapshot = value.#snapshot(state.version + 1);
       return {
         snapshot,
         validate() { if (value.#state !== state || state.phase !== "open") throw cloneError("MessagePort changed during transfer"); },
         publish() {
           if (!internal.sharedObjects?.routes?.enabled) return;
-          const { queue: _queue, ...metadata } = snapshot;
+          const { queue: _queue, lane: _lane, ...metadata } = snapshot;
           root({ kind: "moving", snapshot: metadata, origin: route });
         },
         beforeCommit() { value.#attachmentWait?.(); value.#attachmentWait = null; },
         commit() {
           if (state.ref) { state.ref = false; internal.messagePortRefs--; }
-          deleteLocalPort(state.id); value.#state = null;
+          value.#closeLane(); deleteLocalPort(state.id); value.#state = null;
           if (internal.sharedObjects?.routes?.enabled) return;
-          const { queue: _queue, ...metadata } = snapshot;
+          const { queue: _queue, lane: _lane, ...metadata } = snapshot;
           root({ kind: "moving", snapshot: metadata, origin: route });
         },
       };
@@ -350,7 +399,11 @@
     static #receivePacket(port: MessagePort, kind: string, sequence: number, graph: unknown, defer = false) {
       const state = port.#state;
       if (!state || state.phase === "closed") return;
-      if (kind === "port-close") { state.peerClosing = sequence; port.#accept(); return; }
+      if (kind === "port-close") {
+        // A broker terminal can count fewer packets than the lane carried: take the lane's first.
+        MessagePort.#drainLane(port, true);
+        state.peerClosing = Math.max(state.peerClosing ?? 0, sequence); port.#accept(); return;
+      }
       if (sequence < state.received) return;
       try {
         const value = record(graph);
@@ -424,10 +477,16 @@
       const plan = codec.prepare(packet, list, [state.id, state.peer]);
       const sequence = state.sent;
       const other = localPorts.get(state.peer);
-      plan.commit(() => {
-        if (!other) root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph: plan.graph });
-        else if (internal.sharedObjects?.routes?.enabled) registerLocalTransfers(plan.graph);
-      });
+      // The lane frame becomes visible only after transfers and detachment commit.
+      const staged: { frame: { commit(): void; abort(): void } | null } = { frame: null };
+      try {
+        plan.commit(() => {
+          if (other) { if (internal.sharedObjects?.routes?.enabled) registerLocalTransfers(plan.graph); return; }
+          staged.frame = this.#laneFrame({ kind: "port-data", sequence, graph: plan.graph });
+          if (!staged.frame) root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph: plan.graph });
+        });
+      } catch (error) { staged.frame?.abort(); throw error; }
+      staged.frame?.commit();
       state.sent++;
       if (!other) return;
       restoringLocally = Boolean(internal.sharedObjects?.routes?.enabled);
@@ -493,7 +552,9 @@
       if (this.#state !== state || state.phase === "closed") return;
       if (state.peer) {
         const other = localPorts.get(state.peer);
+        const frame = other ? null : this.#laneFrame({ kind: "port-close", sequence: state.sent });
         if (other) portOps.receivePacket(other, "port-close", state.sent, undefined);
+        else if (frame) frame.commit();
         else root({ kind: "port-close", id: state.peer, from: state.id, sequence: state.sent });
       }
       this.#disconnect();
@@ -503,6 +564,7 @@
       if (state.phase === "closed") return;
       state.phase = "closed";
       this.#attachmentWait?.(); this.#attachmentWait = null;
+      this.#closeLane();
       state.queue = []; state.pending.clear(); this.unref(); localPorts.delete(state.id);
       root({ kind: "closed", id: state.id });
       internal.realTimers.setImmediate(() => this.#finishClose(state));
@@ -551,7 +613,7 @@
     }
     static get internals() {
       return { pair: MessagePort.#pair, restore: MessagePort.#restore, activate: MessagePort.#activate,
-        prepare: MessagePort.#prepare, retry: (port: MessagePort) => { if (port.#state?.phase === "open" && port.#state.pending.size && !port.#attachmentWait) port.#accept(); }, discard: MessagePort.#discard, receive: MessagePort.#receive, receivePacket: MessagePort.#receivePacket,
+        prepare: MessagePort.#prepare, retry: (port: MessagePort) => { if (port.#state?.phase === "open" && port.#state.pending.size && !port.#attachmentWait) port.#accept(); }, discard: MessagePort.#discard, receive: MessagePort.#receive, drainLane: (port: MessagePort) => MessagePort.#drainLane(port), receivePacket: MessagePort.#receivePacket,
         isClosed: MessagePort.#isClosed, drained: MessagePort.#drained, sent: MessagePort.#sent, received: MessagePort.#received };
     }
     get [Symbol.toStringTag]() { return "MessagePort"; }

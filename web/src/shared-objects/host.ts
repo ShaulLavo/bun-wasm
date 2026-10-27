@@ -29,11 +29,19 @@ export function bindSharedObjectHost(service: SharedObjects, host: SharedHostLif
   if (!routes) return { begin, read, wait, mailbox: service.mailbox };
   active();
   routes.enable();
-  const mailbox = service.mailbox;
+  const mailbox = service.mailbox, lanes = service.lanes;
   return {
     begin,
     read,
     wait,
+    lanes: lanes ? {
+      create() { active(); return lanes.create(); },
+      open(buffer, side) {
+        active();
+        const lane = lanes.open(buffer, side);
+        return { ...lane, watch: ready => lane.watch(() => { if (!host.active()) return; ready(); host.wake(); }) };
+      },
+    } : undefined,
     mailbox: mailbox ? {
       buffer: mailbox.buffer,
       capacity: mailbox.capacity,

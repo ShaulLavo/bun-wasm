@@ -100,8 +100,10 @@
           if (!plan) throw cloneError("Object that needs transfer was found in message but not listed in transferList");
           const snapshot = plan.snapshot;
           const queue = visit(snapshot.queue, true);
-          return ["port", { id: snapshot.id, peer: snapshot.peer, version: snapshot.version, sent: snapshot.sent,
-            received: snapshot.received, pending: snapshot.pending, closing: snapshot.closing, closed: snapshot.closed }, queue];
+          const meta = { id: snapshot.id, peer: snapshot.peer, version: snapshot.version, sent: snapshot.sent,
+            received: snapshot.received, pending: snapshot.pending, closing: snapshot.closing, closed: snapshot.closed };
+          if (!snapshot.lane) return ["port", meta, queue];
+          return ["port", { ...meta, side: snapshot.lane.side }, queue, visit(snapshot.lane.buffer, true)];
         }
         if (object === processEnv) return ["object", entries(object, implicit)];
         if (internal.isProxy?.(object)) throw cloneError();
@@ -255,7 +257,9 @@
           case "boxed": result = Object(read(node[1])); break;
           case "port": {
             const queue: unknown[] = [];
-            const port = hooks.restore({ ...node[1], queue });
+            const { side, ...meta } = node[1];
+            const lane = node.length === 4 && side !== undefined ? { buffer: read(node[3]) as SharedArrayBuffer, side } : null;
+            const port = hooks.restore({ ...meta, queue, lane });
             memory.set(index, port); restored.push(port);
             const messages = read(node[2]);
             if (!Array.isArray(messages)) throw cloneError("Invalid port queue");
@@ -330,6 +334,13 @@
     function validNodeBuffer(node: unknown[]) {
       return nodeBuffer && node.length === 4 && ref(node[1]) && validBuffer(nodes[node[1]]) && validView(node[1], node[2], node[3], 1);
     }
+    // A port node may name its channel's shared lane and the side of it this end reads.
+    function validPortNode(node: unknown[]) {
+      if (!validPort(node[1], depth, nodeBuffer, shared) || !ref(node[2])) return false;
+      const side = (node[1] as { side?: unknown }).side;
+      if (node.length === 3) return side === undefined;
+      return node.length === 4 && shared && ref(node[3]) && validShared(nodes[node[3]]) && (side === 0 || side === 1);
+    }
     function valid(node: unknown): boolean {
       if (!Array.isArray(node)) return false;
       switch (node[0]) {
@@ -350,7 +361,7 @@
           && validView(node[2], node[3], node[4], viewWidth(node[1]));
         case "error": return strings(node.slice(1, 3)) && (node[3] === null || typeof node[3] === "string") && ref(node[4]);
         case "boxed": return ref(node[1]);
-        case "port": return validPort(node[1], depth, nodeBuffer, shared) && ref(node[2]);
+        case "port": return validPortNode(node);
         default: return false;
       }
     }

@@ -52,6 +52,16 @@ native Bun 1.4.2. Node 26.7.0 instead returns the queued broadcast message. Refe
 counts keep a listening port or open broadcast channel alive until it is closed or
 unreferenced. Broadcast channels communicate across guests through the root broker.
 
+With browser shared objects, a channel whose ends live in different guests gets its
+own shared lane (`web/src/shared-objects/lane.ts`): two single-writer rings of 1 MiB,
+one per direction, moved with the port when it is transferred. A packet committed
+there is readable by the peer's current owner as soon as `postMessage` returns, so a
+reply posted before `Atomics.notify` reaches a caller blocked in `Atomics.wait`, as
+esbuild's `transformSync` needs. When the peer's ring is full, a packet takes the
+broker route instead, and sequence numbers keep delivery in order. That route carries
+at most one 8 KiB frame, so a larger packet to a full ring is rejected. A packet larger
+than a whole ring throws `DataCloneError` before anything is detached.
+
 `setEnvironmentData` stores values by key identity within a guest. Workers inherit
 a cloned snapshot at construction. A value of `undefined` deletes an entry.
 `markAsUntransferable` permanently marks an object. Both structured clone and port
