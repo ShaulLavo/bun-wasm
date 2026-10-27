@@ -1,40 +1,14 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { createSharedObjectBroker } from "../web/src/shared-objects/broker";
-import { createSharedObjects } from "../web/src/shared-objects/service";
-import { bindSharedObjectHost } from "../web/src/shared-objects/host";
 import { createSharedMailbox } from "../web/src/shared-objects/mailbox";
 import { once } from "node:events";
 import { Worker, MessagePort as NativeMessagePort } from "node:worker_threads";
 import { sourcePorts, type SourcePort } from "./fixtures/shared-objects/source-runtime";
-import type { SharedRequest, SharedResponse } from "../web/src/shared-objects/protocol";
+import { brokerClients, testCleanup, tick } from "./fixtures/shared-objects/broker-clients";
 
-const cleanup = new Set<() => void>();
-afterEach(async () => {
-  for (const close of Array.from(cleanup).reverse()) close();
-  cleanup.clear();
-  await new Promise<void>(resolve => setImmediate(resolve));
-});
-const tick = () => new Promise<void>(resolve => setTimeout(resolve, 5));
-function setup() {
-  const broker = createSharedObjectBroker();
-  cleanup.add(broker.dispose);
-  function client(options: { beforeDetach?: () => void; active?: () => boolean; observe?: (packet: SharedRequest | SharedResponse) => void } = {}) {
-    const lease = broker.register(), channel = new MessageChannel();
-    lease.attach(channel.port2);
-    const service = createSharedObjects(lease.id, {
-      postMessage(packet) { options.observe?.(packet); channel.port1.postMessage(packet); },
-      start: () => channel.port1.start(), close: () => channel.port1.close(),
-      addEventListener: (type, listener) => channel.port1.addEventListener(type, listener),
-      removeEventListener: (type, listener) => channel.port1.removeEventListener(type, listener),
-    });
-    // Without channel lanes: this covers the broker route that lanes fall back to.
-    const sharedObjects = bindSharedObjectHost({ ...service, lanes: undefined }, { active: options.active ?? (() => true), pending() {}, wake() {} });
-    const runtime = sourcePorts({ sharedObjects, beforeDetach: options.beforeDetach });
-    cleanup.add(() => { service.close(); lease.close(); channel.port1.close(); channel.port2.close(); });
-    return { service, sharedObjects, runtime };
-  }
-  return { broker, client };
-}
+const cleanup = testCleanup();
+// Without channel lanes: these cover the broker route that lanes fall back to.
+const setup = () => brokerClients(cleanup, { lanes: false });
 function restoredPort(value: unknown, runtime: ReturnType<typeof sourcePorts>): SourcePort {
   if (!(value instanceof runtime.MessagePort)) throw new Error("Missing restored source port");
   return value;

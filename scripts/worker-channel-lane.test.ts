@@ -1,37 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
-import { createSharedObjectBroker } from "../web/src/shared-objects/broker";
-import { createSharedObjects } from "../web/src/shared-objects/service";
-import { bindSharedObjectHost } from "../web/src/shared-objects/host";
+import { expect, test } from "bun:test";
 import { createSharedLaneBuffer, openSharedLane } from "../web/src/shared-objects/lane";
-import { sourcePorts, type SourcePort } from "./fixtures/shared-objects/source-runtime";
+import type { SourcePort } from "./fixtures/shared-objects/source-runtime";
+import { brokerClients, testCleanup, tick } from "./fixtures/shared-objects/broker-clients";
 import type { Graph } from "./fixtures/shared-objects/runtime-types";
 
-const cleanup = new Set<() => void>();
-afterEach(async () => {
-  for (const close of Array.from(cleanup).reverse()) close();
-  cleanup.clear();
-  await new Promise<void>(resolve => setImmediate(resolve));
-});
-const tick = () => new Promise<void>(resolve => setTimeout(resolve, 5));
-function setup() {
-  const broker = createSharedObjectBroker();
-  cleanup.add(broker.dispose);
-  function client() {
-    const lease = broker.register(), channel = new MessageChannel();
-    lease.attach(channel.port2);
-    const service = createSharedObjects(lease.id, {
-      postMessage: packet => channel.port1.postMessage(packet),
-      start: () => channel.port1.start(), close: () => channel.port1.close(),
-      addEventListener: (type, listener) => channel.port1.addEventListener(type, listener),
-      removeEventListener: (type, listener) => channel.port1.removeEventListener(type, listener),
-    });
-    const sharedObjects = bindSharedObjectHost(service, { active: () => true, pending() {}, wake() {} });
-    const runtime = sourcePorts({ sharedObjects });
-    cleanup.add(() => { service.close(); lease.close(); channel.port1.close(); channel.port2.close(); });
-    return { service, runtime };
-  }
-  return { broker, client };
-}
+const cleanup = testCleanup();
+const setup = () => brokerClients(cleanup, { lanes: true });
 type Client = ReturnType<ReturnType<typeof setup>["client"]>;
 /** Restores a transferred port once its shared backings are attached, as worker startup and receive do. */
 async function restore(graph: Graph, into: Client): Promise<SourcePort> {
