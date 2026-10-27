@@ -243,20 +243,20 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     event.preventDefault();
     finish({ code: 1, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
-  try {
-    worker = new Worker(workerUrl, { type: "module" });
-    worker.onmessage = onMessage;
-    worker.onerror = onError;
-  } catch (error) {
-    finish({ code: 126, error: String(error) });
-  }
   let interrupted = false;
   let prepared = false;
   const pendingKills: (2 | 9 | 15)[] = [];
   void (async () => {
     if (finished || options.runtime.disposed) return;
-    const { workerProcessState, createWorkerProcessTransport } = await import("waffle/proc/worker-client");
-    if (finished || options.runtime.disposed) return;
+    // The runtime's pool usually has this worker started already, so the command doesn't wait
+    // for the worker script and its imports. A taking failure is a startup failure (126).
+    const [taken, { workerProcessState, createWorkerProcessTransport }] = await Promise.all([
+      subprocess.takeWorker(workerUrl), import("waffle/proc/worker-client"),
+    ]);
+    if (finished || workerStopped || options.runtime.disposed) return taken.terminate();
+    worker = taken;
+    worker.onmessage = onMessage;
+    worker.onerror = onError;
     const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
     const state = workerProcessState(transport);
     const { port: _port, ...filesystem } = request.filesystem;

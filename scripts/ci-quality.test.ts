@@ -152,7 +152,7 @@ function fixtureCacheKey(template: string, files: CacheFiles, image = "20261012.
   return template.replace(/\$\{\{ (.*?) \}\}/g, (_, expression: string) => {
     if (expression === "runner.os") return "Linux";
     if (expression === "runner.arch") return "X64";
-    if (expression === "steps.homes.outputs.image") return image;
+    if (expression === "steps.host-tools.outputs.hash") return image;
     if (expression === "steps.native-inputs.outputs.hash") return "effective-native-inputs";
     if (expression === "steps.jsc-inputs.outputs.hash") return "effective-jsc-inputs";
     if (!expression.startsWith("hashFiles(")) throw new Error(`Unexpected cache expression: ${expression}`);
@@ -535,6 +535,14 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
   expect(browsers).toContain("--frozen-lockfile --linker=isolated");
 });
 
+test("Rust build caches follow host tool versions, not the runner image", () => {
+  expect(rust).not.toContain("ImageVersion");
+  const step = rust.indexOf("name: Identify host build tools");
+  expect(step).toBeGreaterThan(rust.indexOf("name: Install native build tools"));
+  expect(step).toBeLessThan(rust.indexOf("id: sysroot-cache"));
+  expect(rust.match(/steps\.host-tools\.outputs\.hash/g)).toHaveLength(14);
+});
+
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
@@ -544,7 +552,7 @@ test("native cache stays bounded per input revision, and the SDK is not copied p
   expect(rust).not.toContain("github.run_attempt");
   const sdkKey = rust.split("\n").find(line => line.includes("key: wasi-sdk-"))!;
   expect(sdkKey).not.toContain("hashFiles");
-  expect(sdkKey).not.toContain("steps.homes.outputs.image");
+  expect(sdkKey).not.toContain("steps.host-tools.outputs.hash");
   expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched");
 });
 
@@ -729,10 +737,16 @@ function cacheCondition(condition: string, outputs: Readonly<Record<string, stri
   const expression = condition.replace(/^\$\{\{ /, "").replace(/ \}\}$/, "");
   return !cancelled && (succeeded || explicit) && expression.split(" && ").every(clause => {
     if (clause === "!cancelled()") return true;
-    const match = /^(steps\.[\w-]+\.outputs\.[\w-]+|needs\.quality\.outputs\.jsc) (==|!=) '([^']*)'$/.exec(clause);
-    if (!match || !(match[1]! in outputs)) throw new Error(`Unsupported cache condition: ${clause}`);
-    return match[2] === "==" ? outputs[match[1]!] === match[3] : outputs[match[1]!] !== match[3];
+    const group = /^\((.*)\)$/.exec(clause);
+    if (group) return group[1]!.split(" || ").some(option => comparison(option, outputs));
+    return comparison(clause, outputs);
   });
+}
+
+function comparison(clause: string, outputs: Readonly<Record<string, string>>): boolean {
+  const match = /^(steps\.[\w-]+\.outputs\.[\w-]+|needs\.quality\.outputs\.jsc|github\.event_name) (==|!=) '([^']*)'$/.exec(clause);
+  if (!match || !(match[1]! in outputs)) throw new Error(`Unsupported cache condition: ${clause}`);
+  return match[2] === "==" ? outputs[match[1]!] === match[3] : outputs[match[1]!] !== match[3];
 }
 
 test("parsed native cache guards distinguish exact, prefix and missing restores after successful gates", () => {
@@ -755,6 +769,8 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
       "steps.native-cache.outputs.cache-hit": v4 === "not-run" ? "" : String(v4 === "exact"),
       "steps.jsc-prebuild-cache.outputs.cache-hit": "false",
       "steps.jsc-cargo-cache.outputs.cache-hit": "false",
+      "steps.jsc-cargo-cache.outputs.cache-matched-key": "",
+      "github.event_name": "push",
       "needs.quality.outputs.jsc": "true",
       "steps.native-producers.outputs.native-ready": "true",
       "steps.jsc-producer.outputs.jsc-ready": "true",
@@ -765,6 +781,12 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
     const incomplete = { ...outputs, "steps.native-producers.outputs.native-ready": "", "steps.jsc-producer.outputs.jsc-ready": "" };
     expect(saves.map(condition => cacheCondition(condition, incomplete, false))).toEqual([false, false, false, false]);
     assertJscSaveSelection(saves.slice(0, 2), outputs);
+    // Pull requests keep cold seeds but skip re-saving a compatible restore.
+    const pullRequest = { ...outputs, "github.event_name": "pull_request" };
+    expect(cacheCondition(saves[2]!, pullRequest, true)).toBe(expected[1]! && v2 === "miss");
+    expect(cacheCondition(saves[1]!, pullRequest, true)).toBe(true);
+    expect(cacheCondition(saves[1]!, { ...pullRequest, "steps.jsc-cargo-cache.outputs.cache-matched-key": "saved-prefix" }, true)).toBe(false);
+    expect(cacheCondition(saves[1]!, { ...outputs, "steps.jsc-cargo-cache.outputs.cache-matched-key": "saved-prefix" }, true)).toBe(true);
   }
 });
 
@@ -794,7 +816,7 @@ function expandNativeKey(template: string, inputs: ReadonlyMap<string, Buffer>):
   return template.replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_whole: string, expression: string) => {
     if (expression === "runner.os") return "Linux";
     if (expression === "runner.arch") return "X64";
-    if (expression === "steps.homes.outputs.image") return "20261012.334.1";
+    if (expression === "steps.host-tools.outputs.hash") return "20261012.334.1";
     if (expression === "steps.native-inputs.outputs.hash") return "effective-native-inputs";
     if (expression === "steps.jsc-inputs.outputs.hash") return "effective-jsc-inputs";
     if (!expression.startsWith("hashFiles(")) throw new Error(`Unexpected cache expression: ${expression}`);
@@ -811,7 +833,7 @@ function expandNativeKey(template: string, inputs: ReadonlyMap<string, Buffer>):
 }
 
 for (const { id, saveName, condition, workflowCompatible } of [
-  { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", condition: "steps.native-cargo-cache.outputs.cache-hit != 'true'", workflowCompatible: true },
+  { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", condition: "steps.native-cargo-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || steps.native-cargo-cache.outputs.cache-matched-key == '')", workflowCompatible: true },
   { id: "native-cache", saveName: "Save the native quality checkpoint", condition: "${{ !cancelled() && steps.native-producers.outputs.native-ready == 'true' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}", workflowCompatible: true },
 ]) {
   test(`${id} distinguishes tools builders and producers with its own guarded save`, () => {

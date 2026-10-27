@@ -63,7 +63,8 @@ for (const alreadyFinishing of [false, true]) test(`page disposal fences two roo
     const disposal = runtime.dispose();
     expect(runtime.disposed).toBe(true);
     await Promise.resolve();
-    expect(workers.filter(worker => !worker.filesystem).every(worker => worker.terminated === 0)).toBe(true);
+    // Idle pool workers never ran a process and may stop at once; process workers wait for the fence.
+    expect(workers.filter(worker => !worker.filesystem && worker.request).every(worker => worker.terminated === 0)).toBe(true);
     expect(events).not.toContain("filesystem:stop");
     section.exit(); entered = false;
     await disposal;
@@ -116,7 +117,7 @@ for (const generic of [false, true]) test(`same-task page disposal owns an unadm
     }
     const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     const run = startRun({ runtime, engine: "quickjs", module, args: [], env: {}, moduleScope: false, runtimeProcess: transport }, { stdout() {}, stderr() {} });
-    // No preparation/microtask drain between physical Worker creation and page disposal.
+    // No preparation/microtask drain between starting the run and page disposal.
     disposal = runtime.dispose();
     await new Promise(resolve => setTimeout(resolve, 0));
     if (held) {
@@ -124,7 +125,8 @@ for (const generic of [false, true]) test(`same-task page disposal owns an unadm
       section!.exit(); held = false;
     }
     await disposal;
-    expect(workers.filter(worker => !worker.filesystem)).toHaveLength(1);
+    // Disposal before preparation means the run never takes a root worker from the pool.
+    expect(workers.filter(worker => !worker.filesystem)).toHaveLength(0);
     expect(workers.every(worker => worker.stops === 1)).toBe(true);
     expect(workers.every(worker => worker.starts === 0)).toBe(true);
     expect(await run.done).toEqual({ code: 137 });
