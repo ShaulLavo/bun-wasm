@@ -405,6 +405,14 @@ test("focused dev modes select one original app and all mandatory first-cycle pr
   }
 });
 
+test("bun-shell mode selects the shell command stages without app installs", () => {
+  const selected = selectProductRun("bun-shell");
+  expect(selected.mode).toBe("bun-shell");
+  expect(selected.fixtures.map(fixture => fixture.id)).toEqual(["bun-shell"]);
+  expect(selected.stages).toEqual(["bun-exec", "bun-shell-api", "bun-init", "bun-create", "bun-repl"]);
+  expect(selected.stages.some(stage => (stages as readonly string[]).includes(stage))).toBe(false);
+});
+
 test("unknown product run mode fails at driver initialization before report or resource creation", async () => {
   const source = readFileSync(join(import.meta.dir, "../web/tests/browser-shell-product.ts"), "utf8");
   const prefix = source.slice(source.indexOf("const root ="), source.indexOf("async function save()"));

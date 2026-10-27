@@ -3,6 +3,7 @@ export interface ProductApi {
   setup(): Promise<void>;
   open(fixture: Fixture, registry: string): Promise<void>;
   command(text: string, milliseconds?: number): Promise<{ code: number | null; output: string }>;
+  interactive(text: string, steps: readonly { expect: string; send: string }[], milliseconds?: number): Promise<{ code: number | null; output: string }>;
   start(command: string, port: number, milliseconds: number): Promise<string>;
   interrupt(): Promise<{ code: number; output: string }>;
   close(): Promise<void>;
