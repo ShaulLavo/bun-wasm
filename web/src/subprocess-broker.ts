@@ -60,6 +60,8 @@ export class SubprocessBroker {
     return this.service ??= await this.runtime.processes();
   }
   ready(): Promise<RuntimeSupervisor> { return this.processService().then(service => service.ready()); }
+  /** A single-use root worker from the runtime's precreated pool; the run terminates it. */
+  async takeWorker(workerUrl: string): Promise<Worker> { return (await this.runtime.processes()).takeWorker(workerUrl); }
   /** Resolves when `pid` has confirmed its exit, as its parent would observe it. */
   async wait(pid: number): Promise<ProcessExit> {
     const supervisor = await this.ready();

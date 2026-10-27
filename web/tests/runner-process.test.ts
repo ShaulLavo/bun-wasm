@@ -300,6 +300,7 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
   const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
   const ports: MessagePort[] = [];
   const workers: FakeWorker[] = [];
+  const launched = new Set<FakeWorker>();
   const runs: ReturnType<typeof startRun>[] = [];
   const registered: string[] = [];
   function connect(identity = createFilesystemIdentity()) {
@@ -321,9 +322,12 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
   const launch = async (module: WebAssembly.Module, engine: Engine = "browser", adapter: "bun" | "preview1" = "preview1") => {
     const run = startRun({ engine, adapter, module, args: [], env: {}, runtime, moduleScope: false }, { stdout() {}, stderr() {} });
     runs.push(run);
-    const worker = workers.at(-1)!;
+    // The root comes from the runtime's worker pool: find the worker this run posted to.
+    const fresh = () => workers.find(worker => worker.request && !launched.has(worker));
     const deadline = performance.now() + 1000;
-    while (!worker.request && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+    while (!fresh() && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 0));
+    const worker = fresh()!;
+    launched.add(worker);
     expect(worker.request?.module).toBe(module);
     expect(worker.request?.adapter).toBe(adapter);
     expect(worker.request?.env.PATH?.split(":")[0]).toBe(ENGINE_BIN[engine]);
@@ -822,7 +826,9 @@ test("worker failure before deferred executable markers cannot adopt a late runn
   });
   try {
     await entered.promise;
-    state.worker.onerror!({ preventDefault() {}, message: "early worker failure" } as ErrorEvent);
+    // The root worker is taken from the runtime's pool without waiting for the markers.
+    while (!state.worker?.onerror) await new Promise(resolve => setTimeout(resolve, 0));
+    state.worker.onerror({ preventDefault() {}, message: "early worker failure" } as ErrorEvent);
     state.release();
     expect(await state.run.done).toMatchObject({ code: 1 });
     expect(state.worker.terminated).toBe(1);
