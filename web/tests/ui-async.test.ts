@@ -272,8 +272,8 @@ test("playground only seeds examples in a new home, preserving changes and delet
     },
     async flush() { checkpoints++; },
   };
-  const startup = new Function("createRuntime", "HOME", "examples", "mode", `return (async () => { ${transpiler.transformSync(code)} })();`);
-  const start = () => startup(() => ({ filesystem: fs }), "/home/user", { "index.ts": "example", "deleted.ts": "delete me" }, "fast");
+  const startup = new Function("createRuntime", "installRuntimeSharedObjects", "HOME", "examples", "mode", `return (async () => { ${transpiler.transformSync(code)} })();`);
+  const start = () => startup(() => ({ filesystem: fs }), () => ({ close() {} }), "/home/user", { "index.ts": "example", "deleted.ts": "delete me" }, "fast");
   await start();
   expect(files.get("/home/user/index.ts")).toBe("example");
   expect(checkpoints).toBe(1);
@@ -348,7 +348,7 @@ for (const app of ["web", "sandbox"] as const) {
     const workspace = app === "web" ? "/home/user" : "/home/user/app";
     const sources = { "index.html": "page", "first.ts": "first file", "second.ts": "second file" };
     const env = {
-      createRuntime: () => ({ filesystem: fs }), fs, HOME: workspace, APP: workspace, examples: sources, mode: "fast",
+      createRuntime: () => ({ filesystem: fs }), installRuntimeSharedObjects: () => ({ close() {} }), fs, HOME: workspace, APP: workspace, examples: sources, mode: "fast",
       setStatus() {}, templateFile: "template.json", measureStartup() {},
       abs: (path: string) => `${workspace}/${path}`,
       fetch: async () => ({ ok: true, text: async () => JSON.stringify({ files: sources }) }),
