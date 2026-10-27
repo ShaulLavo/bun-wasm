@@ -101,6 +101,19 @@ test("worker children get two bound control pipes announced through the environm
   expect(new TextDecoder().decode(fake.native.procRead(input, 16) as Uint8Array)).toBe("ok");
 });
 
+test("parent exit kills worker children without signalling ordinary subprocesses", () => {
+  const fake = service();
+  const { module, process } = load(fake);
+  const worker = module.spawn(["bun", "worker"], { stdout: "ignore", stderr: "ignore", _worker: {} });
+  const ordinary = module.spawn(["bun", "ordinary"], { stdout: "ignore", stderr: "ignore" });
+  const workerRecord = fake.children.get(worker.pid)!;
+  const ordinaryRecord = fake.children.get(ordinary.pid)!;
+  process.emit("exit", 0);
+  expect(workerRecord.selected).toEqual([1, 9]);
+  expect(ordinaryRecord.selected).toBeNull();
+  expect(fake.calls).not.toContain("killJob:9");
+});
+
 test("the idle loop sleeps on exactly the descriptors and child the waiter watches", () => {
   const fake = service();
   const { module, waiters } = load(fake);
