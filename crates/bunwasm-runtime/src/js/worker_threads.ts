@@ -21,6 +21,7 @@
   let nextWorker = 0;
   let applyingEnv = false;
   let initialized = false;
+  let restoringLocally = false;
   let parentPort: MessagePort | null = null;
   let parentChannel: BunWasm.WorkerChannel | null = null;
   const config = workerConfig(process.env.BUNWASM_WORKER_INIT);
@@ -95,6 +96,11 @@
     child?.send({ kind: "down", path, body });
   }
   function root(body: Record<string, unknown>) {
+    const routes = internal.sharedObjects?.routes;
+    if (routes?.enabled && (body.kind === "bind" || body.kind === "moving" || body.kind === "port-data" || body.kind === "port-close" || body.kind === "closed")) {
+      if (!routes.send(body)) throw cloneError("Shared route mailbox is full");
+      return;
+    }
     if (route.length) { parentChannel?.send({ kind: "up", body }); return; }
     rootCommand(body);
   }
@@ -125,6 +131,15 @@
       if (!Array.isArray(node) || node[0] !== "port") continue;
       own(snapshotRecord(node[1]), owner, owner, false);
     }
+  }
+  function registerLocalTransfers(graph: Graph) {
+    for (const node of graph.nodes) {
+      if (node[0] === "port") registerLocalPort(node[1]);
+    }
+  }
+  function registerLocalPort(snapshot: Omit<Snapshot, "queue">) {
+    root({ kind: "bind", snapshot, owner: route });
+    for (const [, graph] of snapshot.pending) registerLocalTransfers(graph);
   }
   function routePacket(body: Record<string, unknown>) {
     if (typeof body.id !== "string") return;
@@ -201,7 +216,11 @@
     throw new Error("Unknown worker delivery");
   }
   function pump() {
-    let progress = parentChannel?.pump(incoming) || false;
+    const shared = internal.sharedObjects;
+    const drained = shared?.routes?.enabled ? shared.mailbox?.drain(bytes => direct(record(JSON.parse(native.utf8Decode(bytes))))) || 0 : 0;
+    if (drained) shared?.routes?.credit();
+    let progress = Boolean(drained);
+    progress = parentChannel?.pump(incoming) || progress;
     for (const child of Array.from(children.values())) progress = child.pump() || progress;
     return progress;
   }
@@ -228,7 +247,7 @@
     constructor(key: object, snapshot?: Snapshot) {
       super();
       if (key !== token) throw Object.assign(new TypeError("Illegal constructor"), { code: "ERR_CONSTRUCT_CALL_INVALID" });
-      const id = `${routeKey(route)}:${nextPort++}`;
+      const id = `${internal.sharedObjects?.routes?.enabled ? internal.sharedObjects.routes.owner : routeKey(route)}:${nextPort++}`;
       const value = snapshot || { id, peer: null, version: 0, sent: 0, received: 0, queue: [], pending: [], closing: null, closed: false };
       this.#state = { ...value, pending: new Map(value.pending), peerClosing: value.closing,
         phase: value.closed ? "closed" : "open", batch: null, started: false, ref: false, scheduled: false };
@@ -243,7 +262,16 @@
     static #pair(): [MessagePort, MessagePort] {
       const first = new MessagePort(token); const second = new MessagePort(token);
       first.#value().peer = second.#value().id; second.#value().peer = first.#value().id;
-      first.#bind(); second.#bind(); return [first, second];
+      const bind = () => { first.#bind(); second.#bind(); };
+      try {
+        const routes = internal.sharedObjects?.routes;
+        if (routes?.enabled) routes.transaction(bind, () => {});
+        else bind();
+      } catch (error) { MessagePort.#discard(first); MessagePort.#discard(second); throw error; }
+      return [first, second];
+    }
+    static #discard(port: MessagePort) {
+      localPorts.delete(port.#value().id); port.#state = null;
     }
     #value() { if (!this.#state) throw cloneError("MessagePort is detached"); return this.#state; }
     #snapshot(version = this.#value().version): Snapshot {
@@ -251,7 +279,10 @@
       return { id: state.id, peer: state.peer, version, sent: state.sent, received: state.received,
         queue: state.queue.slice(), pending: Array.from(state.pending), closing: state.peerClosing, closed: state.phase === "closed" };
     }
-    #bind() { const { queue: _queue, ...snapshot } = this.#snapshot(); root({ kind: "bind", snapshot, owner: route }); }
+    #bind() {
+      if (restoringLocally) return;
+      const { queue: _queue, ...snapshot } = this.#snapshot(); root({ kind: "bind", snapshot, owner: route });
+    }
     static #restore(snapshot: Snapshot) { return new MessagePort(token, snapshot); }
     static #activate(value: unknown) { if (!(value instanceof MessagePort)) throw invalidPort(); value.#bind(); value.#accept(); }
     static #prepare(value: unknown): BunWasm.PortTransfer {
@@ -262,9 +293,15 @@
       return {
         snapshot,
         validate() { if (value.#state !== state || state.phase !== "open") throw cloneError("MessagePort changed during transfer"); },
+        publish() {
+          if (!internal.sharedObjects?.routes?.enabled) return;
+          const { queue: _queue, ...metadata } = snapshot;
+          root({ kind: "moving", snapshot: metadata, origin: route });
+        },
         commit() {
           value.unref(); localPorts.delete(state.id); value.#state = null;
           value.#attachmentWait?.(); value.#attachmentWait = null;
+          if (internal.sharedObjects?.routes?.enabled) return;
           const { queue: _queue, ...metadata } = snapshot;
           root({ kind: "moving", snapshot: metadata, origin: route });
         },
@@ -352,11 +389,14 @@
       const sequence = state.sent;
       const other = localPorts.get(state.peer);
       plan.commit(() => {
-        if (other) portOps.receivePacket(other, "port-data", sequence, plan.graph, true);
-        else root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph: plan.graph });
+        if (!other) root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph: plan.graph });
+        else if (internal.sharedObjects?.routes?.enabled) registerLocalTransfers(plan.graph);
       });
       state.sent++;
-      if (other) other.#accept();
+      if (!other) return;
+      restoringLocally = Boolean(internal.sharedObjects?.routes?.enabled);
+      try { portOps.receivePacket(other, "port-data", sequence, plan.graph); }
+      finally { restoringLocally = false; }
     }
 
     #schedule() {
@@ -405,12 +445,12 @@
     }
     #finishLocalClose(state: PortState) {
       if (this.#state !== state || state.phase === "closed") return;
-      this.#disconnect();
       if (state.peer) {
         const other = localPorts.get(state.peer);
         if (other) portOps.receivePacket(other, "port-close", state.sent, undefined);
         else root({ kind: "port-close", id: state.peer, from: state.id, sequence: state.sent });
       }
+      this.#disconnect();
     }
     #disconnect() {
       const state = this.#value();

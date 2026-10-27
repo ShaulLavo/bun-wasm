@@ -1,4 +1,4 @@
-import { sharedError } from "./protocol.ts";
+import { sharedError, sharedRouteCommand } from "./protocol.ts";
 import type { SharedObjects, SharedReference } from "./protocol.ts";
 
 interface SharedHostLifetime {
@@ -25,5 +25,35 @@ export function bindSharedObjectHost(service: SharedObjects, host: SharedHostLif
     if (state.phase !== "done") { state.phase = "pending"; host.pending(1); }
     return () => { try { cancel(); } finally { finish(false); } };
   }
-  return { begin, read, wait };
+  const routes = service.routes;
+  if (!routes) return { begin, read, wait, mailbox: service.mailbox };
+  active();
+  routes.enable();
+  const mailbox = service.mailbox;
+  return {
+    begin,
+    read,
+    wait,
+    mailbox: mailbox ? {
+      buffer: mailbox.buffer,
+      capacity: mailbox.capacity,
+      reserve(bytes) { active(); return mailbox.reserve(bytes); },
+      write(bytes) { active(); return mailbox.write(bytes); },
+      drain(consume) { if (!host.active()) return 0; return mailbox.drain(consume); },
+      close: () => mailbox.close(),
+      inspect: () => mailbox.inspect(),
+    } : undefined,
+    routes: {
+      owner: routes.owner,
+      get enabled() { return routes.enabled; },
+      enable() { active(); routes.enable(); host.wake(); },
+      send(command) {
+        const parsed = sharedRouteCommand(command);
+        if (!host.active() && (parsed.kind === "closed" || parsed.kind === "port-close")) return true;
+        active(); const accepted = routes.send(parsed); if (accepted) host.wake(); return accepted;
+      },
+      transaction(deliver, commit) { active(); routes.transaction(deliver, commit); host.wake(); },
+      credit() { if (!host.active()) return; routes.credit(); host.wake(); },
+    },
+  };
 }

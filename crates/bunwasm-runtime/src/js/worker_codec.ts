@@ -167,9 +167,11 @@
         try {
           validateTransfers();
           publication?.publish();
-          deliver?.();
-          detachBuffers();
-          for (const plan of ports.values()) plan.commit();
+          const stage = () => { for (const plan of ports.values()) plan.publish?.(); deliver?.(); };
+          const finish = () => { validateTransfers(); detachBuffers(); for (const plan of ports.values()) plan.commit(); };
+          const routes = sharedObjects?.routes;
+          if (routes?.enabled) routes.transaction(stage, finish);
+          else { stage(); finish(); }
           phase = "committed";
         } catch (error) { abort(); throw error; }
       }

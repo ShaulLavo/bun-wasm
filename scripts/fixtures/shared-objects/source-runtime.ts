@@ -10,6 +10,7 @@ export interface SourcePort {
   close(): void;
 }
 interface PortsRuntime {
+  MessagePort: { new(...args: never[]): SourcePort };
   MessageChannel: new() => { port1: SourcePort; port2: SourcePort };
   receiveMessageOnPort(port: SourcePort): { message: unknown } | undefined;
   initialize(): void;
@@ -21,6 +22,7 @@ interface PortsRuntime {
   __fixturePacket(port: SourcePort, sequence: number, graph: Graph): void;
 }
 const native = {
+  utf8Decode: (bytes: Uint8Array) => Buffer.from(bytes).toString("utf8"),
   base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
   base64Decode: (value: string) => new Uint8Array(Buffer.from(value, "base64")),
   transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
@@ -64,7 +66,8 @@ function childOverlay(source: string) {
     __fixturePacket(port, sequence, graph) { portOps.receivePacket(port, "port-data", sequence, graph); }
   });`);
 }
-export function sourcePorts(options: { sharedObjects?: SharedObjects; channel?: Channel; graph?: Graph } = {}) {
+export function sourcePorts(options: { sharedObjects?: SharedObjects; channel?: Channel; graph?: Graph; beforeDetach?: () => void } = {}) {
+  const runtimeNative = { ...native, transferArrayBuffers(buffers: ArrayBuffer[]) { options.beforeDetach?.(); native.transferArrayBuffers(buffers); } };
   let codec: Codec | undefined;
   let pump: (() => void) | undefined;
   const env = options.graph ? { BUNWASM_WORKER_INIT: JSON.stringify({ route: [0], envGroup: "fixture", argv: ["bun", "child.ts"], execArgv: [], graph: options.graph }), BUNWASM_WORKER_CONTROL: JSON.stringify({ input: 3, output: 4 }) } : {};
@@ -72,11 +75,12 @@ export function sourcePorts(options: { sharedObjects?: SharedObjects; channel?: 
     ["process", { env, execArgv: [], execPath: "bun", cwd: () => "/" }],
     ["events", EventEmitter], ["structured_clone", { structuredClone }], ["net", {}],
     ["worker_channel", { open: () => options.channel }],
-    ["worker_codec", { create(hooks: CodecHooks) { codec = factory("worker_codec")({ native, sharedObjects: options.sharedObjects }).create(hooks); return codec; } }],
+    ["worker_codec", { create(hooks: CodecHooks) { codec = factory("worker_codec")({ native: runtimeNative, sharedObjects: options.sharedObjects }).create(hooks); return codec; } }],
   ]);
   const lifecycle: Pick<BunWasm.Internal, "workerStartup" | "workerErrorData" | "clonePorts"> = {};
   const internal = Object.assign({
-    native, realTimers: { setImmediate }, messagePortRefs: 0, sharedObjects: options.sharedObjects,
+    native: runtimeNative,
+    realTimers: { setImmediate }, messagePortRefs: 0, sharedObjects: options.sharedObjects,
     require(name: string) { if (!modules.has(name)) throw new Error(`Unexpected module ${name}`); return modules.get(name); },
     builtin: () => ({ createRequire: () => () => { throw new Error("No fixture preloads"); } }),
     addIoWaiter() {},
