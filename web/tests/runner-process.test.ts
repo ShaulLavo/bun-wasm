@@ -14,6 +14,7 @@ import { WorkerProcessClient, workerProcessState } from "waffle/proc/worker-clie
 import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity } from "waffle/fs";
 import { installRuntimeSharedObjects } from "../src/shared-objects/runtime";
+import { createSharedObjects } from "../src/shared-objects/service";
 
 /** The shared signal words of the process a request roots. */
 const signalsOf = (request: RunRequest) => workerProcessState(request.runtimeProcess!).signals;
@@ -160,13 +161,56 @@ test("terminal browser roots retire their route before a held filesystem fence a
   }
 });
 
+test("direct fatal outcome refuses native connection and SAB publication before the timer", async () => {
+  let installation: ReturnType<typeof installRuntimeSharedObjects> | undefined;
+  const state = isolatedRoot(true, "browser", {}, ["-e", "0"], runtime => { installation = installRuntimeSharedObjects(runtime); });
+  const channel = new MessageChannel();
+  const closes = spyOn(channel.port2, "close");
+  let service: ReturnType<typeof createSharedObjects> | undefined;
+  try {
+    await state.ready;
+    const owner = state.request.sharedObjects?.owner;
+    if (!owner || !installation) throw new Error("Missing browser root service");
+    const message = new MessageEvent("message", { data: { type: "bun-shared-connect", owner, port: channel.port2 } });
+    service = createSharedObjects(owner, channel.port1);
+    // No task or timer runs between selecting the outcome and dispatching the native port.
+    claimOutcome(signalsOf(state.request).outcome, { kind: "signaled", code: 9 });
+    state.worker.onmessage?.(message);
+    const beforeTimer = installation.inspect();
+    const publication = service.begin();
+    publication.reference(new SharedArrayBuffer(8));
+    publication.publish();
+    expect(closes).toHaveBeenCalled();
+    expect(beforeTimer).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    expect(state.worker.terminated).toBe(0);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(installation.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    expect(state.worker.terminated).toBe(0);
+  } finally {
+    service?.close(); closes.mockRestore();
+    channel.port1.close(); channel.port2.close();
+    await state.dispose();
+    expect(installation?.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    installation?.close();
+  }
+});
+
 for (const failure of ["fork", "retainConsumer", "registerAdapter"] as const) test(`root setup rolls back its shared route when ${failure} throws`, async () => {
   const channel = new MessageChannel();
   const runtime = processRuntimeFixture(failure === "fork"
     ? { fork: () => { throw new Error("fork failed"); } }
     : { fork: () => ({ ...createFilesystemIdentity(), port: channel.port1 }) });
   const installation = installRuntimeSharedObjects(runtime);
-  const closes = spyOn(MessagePort.prototype, "close");
+  const NativeChannel = globalThis.MessageChannel;
+  const lookups: MessageChannel[] = [];
+  globalThis.MessageChannel = class extends NativeChannel {
+    constructor() { super(); lookups.push(this); }
+  };
+  const closed = new Set<MessagePort>();
+  const nativeClose = MessagePort.prototype.close;
+  const closes = spyOn(MessagePort.prototype, "close").mockImplementation(function(this: MessagePort) {
+    closed.add(this); nativeClose.call(this);
+  });
   const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/") });
   const mutable = (failure === "fork" ? runtime.filesystem : runtime) as unknown as Record<string, unknown>;
@@ -176,9 +220,12 @@ for (const failure of ["fork", "retainConsumer", "registerAdapter"] as const) te
     const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     expect(() => startRun({ runtime, engine: "browser", module, args: [], env: {}, moduleScope: false }, { stdout() {}, stderr() {} })).toThrow(`${failure} failed`);
     expect(installation.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
-    expect(closes.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(lookups).toHaveLength(1);
+    expect(closed.has(lookups[0]!.port1)).toBe(true);
+    expect(closed.has(lookups[0]!.port2)).toBe(true);
   } finally {
     closes.mockRestore();
+    globalThis.MessageChannel = NativeChannel;
     mutable[failure] = original;
     installation.close();
     channel.port1.close(); channel.port2.close();

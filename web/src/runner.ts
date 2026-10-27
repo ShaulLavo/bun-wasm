@@ -7,7 +7,7 @@ import type { Runtime } from "waffle";
 import { ENGINES, loadWasm, MODULE_SCOPE } from "./engine-loader";
 import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, type RuntimeNetworkHelper } from "./net/helper";
 import { createRing } from "./net/ring";
-import { SubprocessBroker } from "./subprocess-broker";
+import { SubprocessBroker, type ExecutableRegistration } from "./subprocess-broker";
 import { isToolCommand } from "./tool-command";
 import { ENGINE_BIN, bunEnvironment, engineEnvironment } from "../../src/executable-paths.js";
 import { claimOutcome, readOutcome, type OutcomeWord } from "waffle/proc/outcome";
@@ -15,6 +15,7 @@ import { waitStatus } from "waffle/proc/wait-status";
 import { installLookupServer } from "./net/lookup.js";
 import type { Engine, RunRequest, WorkerMessage } from "./bun-executor";
 import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
+import type { BunSharedConnection } from "./shared-objects/protocol.js";
 
 let toolsModule: Promise<WebAssembly.Module> | undefined;
 function loadTools(): Promise<WebAssembly.Module> {
@@ -67,7 +68,7 @@ function slotsMode(): RunRequest["slots"] {
 
 const registeredPrograms = new WeakMap<Runtime, Set<string>>();
 
-function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<string>, engine: Engine, module: WebAssembly.Module): void {
+function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<string>, engine: Engine, module: Extract<ExecutableRegistration, { adapter: "bun" }>["module"]): void {
   for (const command of ["bun", "node", "nodejs"]) {
     const path = `${ENGINE_BIN[engine]}/${command}`;
     subprocess.register(path, { module, adapter: "bun", engine });
@@ -76,14 +77,26 @@ function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<stri
 }
 
 function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<string>, selected: Engine, adapter: RunRequest["adapter"], selectedModule: WebAssembly.Module): void {
-  const engines: Engine[] = (["quickjs", "jsc", "browser"] as Engine[]).concat(selected === "hermes" ? ["hermes"] : []);
-  for (const engine of engines) {
+  const engines: Engine[] = ["quickjs", "jsc", "browser"];
+  for (const engine of engines.concat(selected === "hermes" ? ["hermes"] : [])) {
     const name = `${ENGINE_BIN[engine]}/bun`;
     if (programs.has(name)) continue;
     let loading: Promise<WebAssembly.Module> | undefined;
     const module = engine === selected && adapter !== "preview1" ? selectedModule
       : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
     registerEngineCommands(subprocess, programs, engine, module);
+  }
+}
+
+function acceptRootSharedConnection(route: SharedObjectRoute | undefined, message: BunSharedConnection, terminal: boolean): string | undefined {
+  if (terminal) { route?.close(); message.port.close(); return; }
+  try {
+    if (route?.accept(message)) return;
+    message.port.close();
+    return "Bun shared-object route is unavailable";
+  } catch (error) {
+    route?.close();
+    return String(error);
   }
 }
 
@@ -254,17 +267,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     const msg = event.data;
     if (msg.type === "bun-shared-connect") {
       const selected = rootOutcome && readOutcome(rootOutcome);
-      if (options.runtime.disposed || finished || selected) {
-        sharedRoute?.close(); msg.port.close(); return;
-      }
-      try {
-        if (sharedRoute?.accept(msg)) return;
-        msg.port.close();
-        if (!finished) finish({ code: 126, error: "Bun shared-object route is unavailable" });
-      } catch (error) {
-        sharedRoute?.close();
-        if (!finished) finish({ code: 126, error: String(error) });
-      }
+      const error = acceptRootSharedConnection(sharedRoute, msg, options.runtime.disposed || finished || Boolean(selected));
+      if (error) finish({ code: 126, error });
       return;
     }
     if (options.runtime.disposed) return;
