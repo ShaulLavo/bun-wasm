@@ -4,9 +4,32 @@ import { inspect } from "node:util";
 import { runInNewContext } from "node:vm";
 import nativeAssert from "node:assert";
 
+type AssertionDetail = {
+  message?: unknown;
+  actual?: unknown;
+  expected?: unknown;
+  operator?: unknown;
+  stack?: unknown;
+};
+
+type AssertionCallRecord = {
+  thisArg: unknown;
+  arguments: readonly unknown[];
+};
+
+type AssertionCallTracker = {
+  calls(fn?: Function | number, expected?: number): Function;
+  getCalls(tracked: Function): readonly AssertionCallRecord[];
+  reset(tracked?: Function): void;
+  report(): AssertionDetail[];
+  verify(): void;
+};
+
+type AssertionCallTrackerConstructor = new () => AssertionCallTracker;
+
 type AssertModule = {
-  CallTracker: BunWasm.AssertionCallTrackerConstructor;
-  strict: { CallTracker: BunWasm.AssertionCallTrackerConstructor };
+  CallTracker: AssertionCallTrackerConstructor;
+  strict: { CallTracker: AssertionCallTrackerConstructor };
 };
 
 type Factory = (internal: unknown) => unknown;
@@ -91,6 +114,7 @@ function exercise(assert: AssertModule) {
     const invalid = [
       capture(() => tracker.getCalls(add)),
       capture(() => tracker.calls(add, 0)),
+      capture(() => tracker.calls(add, -0)),
       capture(() => tracker.calls(add, 1.5)),
       capture(() => tracker.calls(add, "2" as never)),
     ];
@@ -126,6 +150,27 @@ function exercise(assert: AssertModule) {
     process.noDeprecation = previous;
   }
 }
+
+function noopContract(assert: AssertModule) {
+  const tracker = new assert.CallTracker();
+  const cases: (Function | number | undefined)[][] = [[], [undefined], [1], [2, 99]];
+  return cases.map(args => {
+    const tracked = tracker.calls(...args);
+    const report = tracker.report().at(-1);
+    const verification = capture(() => tracker.verify());
+    return {
+      args,
+      name: tracked.name,
+      report: report && { message: report.message, operator: report.operator, expected: report.expected, actual: report.actual },
+      verification,
+    };
+  });
+}
+
+test("CallTracker no-op overloads preserve Bun names and diagnostics", () => {
+  if (!isAssertModule(nativeAssert)) throw new Error("Native Bun CallTracker oracle unavailable");
+  expect(noopContract(loadCurrent())).toEqual(noopContract(nativeAssert));
+});
 
 test("current assert and strict expose the generic CallTracker API", () => {
   const current = loadCurrent();

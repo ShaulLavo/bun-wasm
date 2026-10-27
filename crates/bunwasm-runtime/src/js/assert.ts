@@ -337,8 +337,11 @@
     if (typeof expected !== "number") throw invalidArgType("expected", "of type number", expected);
     if (Number.isInteger(expected) && expected >= 1 && expected <= 0xffffffff) return;
     const range = Number.isInteger(expected) ? ">= 1 && <= 4294967295" : "an integer";
-    throw makeError(RangeError, "ERR_OUT_OF_RANGE", `The value of "expected" is out of range. It must be ${range}. Received ${expected}`);
+    const rendered = Object.is(expected, -0) ? "-0" : String(expected);
+    throw makeError(RangeError, "ERR_OUT_OF_RANGE", `The value of "expected" is out of range. It must be ${range}. Received ${rendered}`);
   }
+
+  const noop = () => {};
 
   class CallTracker {
     #callChecks = new Set<CallTrackerContext>();
@@ -364,9 +367,9 @@
       let target: Function;
       if (typeof fn === "number") {
         expected = fn;
-        target = () => {};
+        target = noop;
       } else {
-        target = fn === undefined ? () => {} : fn;
+        target = fn === undefined ? noop : fn;
       }
       validateExpectedCalls(expected);
       const context = new CallTrackerContext({ expected, stackTrace: new Error(), name: target.name || "calls" });
