@@ -7,6 +7,7 @@
 | `web/scripts/node-worker.ts` and the `node-host.ts` launcher call | Host feature, original adapter | Apply a finite general worker heap and retain host out-of-memory diagnostics. |
 | `scripts/node-worker-memory*.ts`, the compiler fixture and runtime check manifest | Host feature, original tests | Exercise real Node workers with the installed TypeScript compiler and the actual Next app catalog config. |
 | `scripts/app-matrix/product-next.ts` and its catalog test | Host feature, original fixture | Declare Bun's types for static previews that call `Bun.serve`. |
+| `web/tests/core-node.test.ts`, suite provenance lists and guest-selector tests | Host feature, original tests | Keep clean-host copies and resumed-suite fingerprints complete after extracting the worker helper. |
 
 No upstream implementation is copied or patched. The tests import the existing
 `typescript-api` development dependency and use the maintained Next 15 static app
@@ -39,3 +40,6 @@ The actual build exposed a separate fixture error after the worker survived.
 Static Next apps include a Bun preview server in `preview.ts`, which Next also
 typechecks. Those fixtures now declare `@types/bun@1.4.3`. The source and the
 typecheck remain enabled; dynamic Next fixtures do not gain this dependency.
+The preview copies Node's read buffer into an ordinary `Uint8Array` for the web
+response body boundary. This supplies an `ArrayBuffer` backing store that the DOM
+types accept, rather than the buffer declaration's wider `ArrayBufferLike`.
