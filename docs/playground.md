@@ -42,6 +42,10 @@ ISOLATE=0 bun run preview   # same, without isolation: exercises the busy-wait s
 HOST=0.0.0.0 PORT=8080 bun run preview
 ```
 
+The preview sends each file's `Cache-Control` from `dist/_headers`, as Cloudflare does. Hashed
+`chunks/*.js` files are cached as immutable; everything else is revalidated. `LATENCY_MS=70 bun run
+preview` delays every response, which shows what network round trips cost a remote user.
+
 `dist/` is plain files; any static host works. Without COOP/COEP headers the page is not
 cross-origin isolated, so `poll_oneoff` sleeps spin in the worker instead of using `Atomics.wait`.
 To get `Atomics.wait` on a static host, serve with:
