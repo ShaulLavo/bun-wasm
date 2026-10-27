@@ -1,5 +1,6 @@
 declare namespace BunWasm {
   interface ShellFs {
+    readonly constants: object;
     writeFileSync(path: string, data: Uint8Array, options?: { flag: string }): void;
     mkdtempSync(prefix: string): string;
     readFileSync(path: string): BufferBytes;
