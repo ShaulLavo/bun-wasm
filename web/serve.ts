@@ -29,9 +29,10 @@ function readCacheRules(path: string): { pattern: RegExp; value: string }[] {
   return rules;
 }
 
+/** Cloudflare joins the values of every matching rule with a comma. */
 function cacheControl(pathname: string): string {
-  const rule = cacheRules.findLast(rule => rule.pattern.test(pathname));
-  return rule?.value ?? (pathname.endsWith(".html") ? "no-store" : "no-cache");
+  const values = cacheRules.filter(rule => rule.pattern.test(pathname)).map(rule => rule.value);
+  return values.length ? values.join(", ") : pathname.endsWith(".html") ? "no-store" : "no-cache";
 }
 
 const server = Bun.serve({

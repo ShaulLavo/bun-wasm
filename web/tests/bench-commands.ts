@@ -95,11 +95,15 @@ async function openPlayground(url: string, page?: Page): Promise<{ page: Page; r
 function submit(page: Page, command: string) {
   return page.evaluate(async command => {
     const { shell, term } = Reflect.get(globalThis, "playground");
+    // xterm applies writes asynchronously: flush them before reading the buffer.
+    const flushed = () => new Promise<void>(resolve => term.write("", resolve));
+    await flushed();
     const buffer = term.buffer.active;
     const first = buffer.baseY + buffer.cursorY + 1;
     const start = performance.now();
     await shell.submit(command);
     const ms = performance.now() - start;
+    await flushed();
     const lines: string[] = [];
     for (let y = first; y < buffer.length; y++) lines.push(buffer.getLine(y)?.translateToString(true) ?? "");
     return { ms, code: Reflect.get(shell, "lastExit") as number, output: lines.join("\n") };
