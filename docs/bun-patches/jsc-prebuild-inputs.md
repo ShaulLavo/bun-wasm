@@ -124,6 +124,10 @@ existing safepoint, queues async requests from the active cycle without
 recursion, rejects direct synchronous reentry, and rejects heap-access/conn
 release with pending work or an unfinished phase transition. Notifications,
 request coalescing, marking, epilogues and finalizers stay upstream.
+Allocation-triggered async requests are allowed in `MutatorState::Allocating`,
+as `AllocatingScope` deliberately enters that state and `CollectingScope`
+saves and restores it. Synchronous requests still require `Running`; active
+collection continues through the existing queue or fails on synchronous reentry.
 
 The WASI branches of `WTF/wtf/posix/ThreadingPOSIX.cpp` fail closed for worker
 create/join/detach instead of referencing unavailable pthread lifecycle calls.
@@ -131,6 +135,6 @@ The context adapter sets one marker, no block warm-up/concurrent GC or JIT,
 polling traps and no optional profiler/continuous worker. This is a port of
 selected WebKit platform behavior and an original configuration adapter.
 The retained prepolicy fixture actually passed sync survivor/finalizer checks
-then aborted on the unserved bare async request at API unlock. Post-policy
-runtime proof and real-loader hello remain pending; these source conditions
-are not an admission or general thread-support claim.
+then aborted on the unserved bare async request at API unlock. Real-loader hello passed before the allocation-state repair; the allocation
+and GC regressions remain separate runtime checks. These source conditions
+are not a general thread-support claim.

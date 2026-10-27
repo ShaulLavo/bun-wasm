@@ -33,7 +33,7 @@ class NodeLinkWasi extends Wasi {
   override imports(module: WebAssembly.Module, bindings?: Parameters<Wasi["imports"]>[1]): WebAssembly.Imports {
     const imports: WebAssembly.Imports = {};
     for (const entry of WebAssembly.Module.imports(module)) {
-      const namespace = entry.module === "env" || entry.module === "GOT.mem" ? bindings?.[entry.module] : this.nativeImports[entry.module];
+      const namespace = entry.module === "env" || entry.module === "GOT.mem" || entry.module === "GOT.func" ? bindings?.[entry.module] : this.nativeImports[entry.module];
       const value = namespace?.[entry.name];
       if (value === undefined) throw new TypeError(`unsupported import ${entry.module}.${entry.name} (${entry.kind})`);
       (imports[entry.module] ??= {})[entry.name] = value;

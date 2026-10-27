@@ -513,7 +513,7 @@ diff --git a/Source/JavaScriptCore/heap/Collector.cpp b/Source/JavaScriptCore/he
 diff --git a/Source/JavaScriptCore/heap/Heap.cpp b/Source/JavaScriptCore/heap/Heap.cpp
 --- a/Source/JavaScriptCore/heap/Heap.cpp
 +++ b/Source/JavaScriptCore/heap/Heap.cpp
-@@ -1821,2 +1821,16 @@
+@@ -1821,2 +1821,20 @@
 
 +#if OS(WASI)
 +    bool inlineCycle = m_mutatorState == MutatorState::Collecting
@@ -527,17 +527,21 @@ diff --git a/Source/JavaScriptCore/heap/Heap.cpp b/Source/JavaScriptCore/heap/He
 +        m_collector->requestCollection(request);
 +        return;
 +    }
-+    RELEASE_ASSERT_WITH_MESSAGE(m_mutatorState == MutatorState::Running, "WASI single-agent GC requires a running mutator");
++    // Allocation-triggered async requests enter under AllocatingScope; the existing
++    // CollectingScope saves and restores that state around inline collection.
++    RELEASE_ASSERT_WITH_MESSAGE(m_mutatorState == MutatorState::Running
++        || (synchronousness == Async && m_mutatorState == MutatorState::Allocating),
++        "WASI single-agent GC requires a running or asynchronously allocating mutator");
 +#endif
      stopIfNecessary();
-@@ -1826,2 +1840,6 @@
+@@ -1826,2 +1844,6 @@
          waitForCollection(ticket);
 +#if OS(WASI)
 +    else
 +        stopIfNecessary();
 +#endif
  }
-@@ -1839,2 +1857,8 @@
+@@ -1839,2 +1861,8 @@
          collectAsync(request);
 +#if OS(WASI)
 +        if (m_mutatorState == MutatorState::Collecting
@@ -546,7 +550,7 @@ diff --git a/Source/JavaScriptCore/heap/Heap.cpp b/Source/JavaScriptCore/heap/He
 +            return;
 +#endif
          stopIfNecessary();
-@@ -2106,2 +2130,13 @@
+@@ -2106,2 +2134,13 @@
  {
 +#if OS(WASI)
 +    if (m_collector->hasOutstandingRequest()) [[unlikely]] {
@@ -560,7 +564,7 @@ diff --git a/Source/JavaScriptCore/heap/Heap.cpp b/Source/JavaScriptCore/heap/He
 +    }
 +#endif
      for (;;) {
-@@ -2161,2 +2196,5 @@
+@@ -2161,2 +2200,5 @@
      Locker locker { *m_collector->m_threadLock };
 +#if OS(WASI)
 +    RELEASE_ASSERT_WITH_MESSAGE(!m_collector->hasOutstandingRequestWithLock(), "WASI single-agent GC cannot relinquish a pending conn");
