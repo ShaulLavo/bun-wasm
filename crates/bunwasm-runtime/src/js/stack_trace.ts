@@ -34,6 +34,11 @@
     getScriptNameOrSourceURL(this: BunWasm.StackCallSite) { return this.getFileName(); },
     isEval(this: BunWasm.StackCallSite) { return /^(?:<input>|<eval>)$/.test(this.getFileName()); },
     getEvalOrigin() { return undefined; },
+    // Frames carry no receiver (getThis is undefined), which V8 and Bun report as top-level.
+    isToplevel() { return true; },
+    isAsync() { return false; },
+    isPromiseAll() { return false; },
+    getPromiseIndex() { return null; },
     toString(this: BunWasm.StackCallSite) { return internal.formatCallSite(this); },
   } satisfies ThisType<BunWasm.StackCallSite>;
 
@@ -47,7 +52,6 @@
     getColumnNumber() { return this.#frame.column; }
     isNative() { return false; }
     isConstructor() { return this.#frame.name.startsWith("new "); }
-    isToplevel() { return !this.#frame.name; }
   }
   internal.defineHidden(CallSite.prototype, methods);
 

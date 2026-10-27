@@ -1,0 +1,8 @@
+isToplevel function true
+isAsync function false
+isPromiseAll function false
+getPromiseIndex function null
+isEval function false
+isNative function false
+isConstructor function false
+collector true,false,true
