@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 test("native filesystem errors retain errno identity, Node messages, and ErrorKind fallbacks", () => {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-native-errno-"));
@@ -26,7 +27,7 @@ ${readFileSync(join(import.meta.dir, "fixtures/native-errno-control.rs"), "utf8"
       stdout: "pipe", stderr: "pipe", timeout: 60_000,
     });
     expect(native.exitCode, native.stderr.toString()).toBe(0);
-    const node = Bun.spawnSync(["node", "--expose-internals", join(import.meta.dir, "fixtures/native-errno-node.ts")], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+    const node = Bun.spawnSync(["node", "--expose-internals", fileURLToPath(new URL("./fixtures/native-errno-node.ts", import.meta.url))], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
     expect(node.exitCode, node.stderr.toString()).toBe(0);
     expect(native.stdout.toString()).toBe(node.stdout.toString());
   } finally { rmSync(scratch, { recursive: true, force: true }); }
