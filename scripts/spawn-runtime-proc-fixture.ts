@@ -196,11 +196,11 @@ interface TestTimers {
 
 export function load(fake: ReturnType<typeof service>, options: { execArgv?: string[]; timers?: TestTimers; spawnArguments?: (argv: string[], cwd: unknown) => string[] } = {}) {
   const waiters: any[] = [];
+  const process = Object.assign(new EventEmitter(), { env: { HOME: "/home", PATH: "/bin:/usr/bin" }, execArgv: options.execArgv ?? [], execPath: "bun", exitCode: 0, cwd: () => "/work" });
   const factory = runInNewContext(source, {
-    ReadableStream, Response, URL, TextEncoder, TextDecoder, Promise,
-    process: { env: { HOME: "/home", PATH: "/bin:/usr/bin" }, execArgv: options.execArgv ?? [], execPath: "bun", cwd: () => "/work" },
+    ReadableStream, Response, URL, TextEncoder, TextDecoder, Promise, process,
   });
-  const modules: Record<string, unknown> = { buffer: { Buffer }, path: nodePath, net: {}, events: EventEmitter, package_scripts: { spawnArguments: options.spawnArguments ?? ((argv: string[]) => argv) } };
+  const modules: Record<string, unknown> = { buffer: { Buffer }, path: nodePath, net: {}, events: EventEmitter, process, package_scripts: { spawnArguments: options.spawnArguments ?? ((argv: string[]) => argv) } };
   const internal = {
     native: fake.native,
     web: { ReadableStream, Response },
@@ -239,5 +239,20 @@ export function load(fake: ReturnType<typeof service>, options: { execArgv?: str
     }
     throw new Error("waiters did not finish");
   };
-  return { module, waiters, pump, pumpTurn, ipc: modules.child_ipc as { open(target: EventEmitter, descriptors: { input: number; output: number }, childSide?: boolean): { connected: boolean; send(message: unknown, handle?: unknown, options?: unknown, callback?: unknown): boolean; disconnect(): void; close(): void; ref(): unknown; unref(): unknown } } };
+  return { module, process, internal, waiters, pump, pumpTurn, ipc: modules.child_ipc as { open(target: EventEmitter, descriptors: { input: number; output: number }, childSide?: boolean): { connected: boolean; send(message: unknown, handle?: unknown, options?: unknown, callback?: unknown): boolean; disconnect(): void; close(): void; ref(): unknown; unref(): unknown } } };
+}
+
+export function loadExit(fake: ReturnType<typeof service>, options: { workerError?: (error: unknown) => void; workerExit?: (code: number) => void } = {}) {
+  const loaded = load(fake);
+  const errors: unknown[] = [];
+  const cleanup: string[] = [];
+  const bootstrap = readFileSync(new URL("../crates/bunwasm-runtime/src/js/bootstrap.js", import.meta.url), "utf8");
+  const source = bootstrap.slice(bootstrap.indexOf("  function emitExit(code)"), bootstrap.indexOf("  internal.emitExit = emitExit;"));
+  Object.assign(loaded.internal, options, { cancelIoWaiters() { cleanup.push("cancelIoWaiters"); } });
+  const emitExit: (code: number) => void = runInNewContext(`${source}; emitExit`, {
+    process: loaded.process, internal: loaded.internal,
+    native: { closeAllDirs() { cleanup.push("closeAllDirs"); } },
+    printError(error: unknown) { errors.push(error); },
+  });
+  return { ...loaded, emitExit, errors, cleanup };
 }

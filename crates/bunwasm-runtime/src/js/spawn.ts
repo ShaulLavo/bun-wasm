@@ -518,6 +518,27 @@
     }
   }
 
+  const workerChildren = new Set<Child>();
+  let workersFinalized = false;
+  internal.finalizeWorkerChildren = function finalizeWorkerChildren() {
+    if (workersFinalized) return;
+    workersFinalized = true;
+    const errors: unknown[] = [];
+    for (const child of workerChildren) {
+      workerChildren.delete(child);
+      try { child.kill(9); } catch (error) { errors.push(error); }
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Worker exit cleanup failed");
+  };
+  function trackWorkerChild(child: Child) {
+    if (workersFinalized) {
+      child.kill(9);
+      return;
+    }
+    workerChildren.add(child);
+  }
+
   function spawn(cmd: unknown, options?: SpawnOptions): Child {
     const spec = start(cmd, options, false);
     let observingStart = typeof spec.options._onSpawn === "function";
@@ -659,6 +680,7 @@
     function close() {
       if (closed) return;
       closed = true;
+      workerChildren.delete(child);
       ipc?.close();
       sink.destroy();
     }
@@ -751,6 +773,7 @@
       resolveExit(1);
       close();
     } });
+    if (spec.options._worker) trackWorkerChild(child);
     supplyInput(sink, () => initialInput(spec.input, sink));
     if (Number(spec.options.timeout) > 0) timer = internal.realTimers.setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, Number(spec.options.timeout));
     if (spec.options.signal) {

@@ -414,6 +414,7 @@ declare namespace BunWasm {
     nextTick(callback: Function, ...args: unknown[]): void;
     fakeTimers?: { elapsedNanoseconds: number };
     emitExit(code: number): void;
+    finalizeWorkerChildren?: () => void;
     traceExit(reason: string, code: number): void;
     getMainModule(): unknown;
     listenerChanged?: (target: object, name?: string | symbol) => void;
