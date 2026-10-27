@@ -2,6 +2,7 @@ import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { PreviewHostAuthorization, PreviewHostInput, PreviewHostOpen, PreviewHostOutput } from "waffle/browser/preview-host";
+import { NativeHTTPExchange, NativeSocketExchange, type NativeExchangeTransport } from "./preview-exchanges";
 import { PreviewPortSockets, type SocketAliasOwner } from "./preview-port-sockets";
 import { LoopbackPreviewOrigins } from "../preview-origin-host";
 import { encode, hostFrame, MAX_BODY, MAX_EXCHANGES, MAX_FRAME, OWNER_PATH, type HostFrame, type OwnerFrame } from "../src/preview-owner-protocol";
@@ -202,85 +203,23 @@ export class OwnerSession implements SocketAliasOwner {
     const grant = route.stage.authorization;
     const body = await requestBytes(request);
     const open: PreviewHostOpen = { type: "http", authorization: grant, url: request.url, method: request.method, headers: Array.from(request.headers), body };
-    return new Promise((resolve, reject) => {
-      let id = "";
-      let ended = false;
-      let head = false;
-      let demanded = false;
-      let unacknowledged = false;
-      const finish = (error?: Error, cancelled = false) => {
-        if (ended) return;
-        ended = true;
-        request.signal.removeEventListener("abort", abort);
-        if (id) this.retire(id);
-        if (id && !this.closing) this.input(id, { type: "end" });
-        if (error) { controller.error(error); reject(error); } else if (!cancelled) controller.close();
-      };
-      const abort = () => finish(new Error("Preview request cancelled"));
-      let controller: ReadableStreamDefaultController<Uint8Array>;
-      const stream = new ReadableStream<Uint8Array>({
-        start(value) { controller = value; },
-        pull: () => {
-          demanded = true;
-          if (!ended && unacknowledged) acknowledge();
-        },
-        cancel: () => finish(undefined, true),
-      }, { highWaterMark: 0 });
-      const acknowledge = () => { demanded = false; unacknowledged = false; this.input(id, { type: "pull" }); };
-      const output = (message: PreviewHostOutput) => {
-        if (ended || message.type === "accepted") return;
-        if (message.type === "error") { finish(new Error("Preview dispatcher rejected request")); return; }
-        if (message.type === "head") {
-          if (head) { finish(new Error("Duplicate preview response head")); return; }
-          head = true;
-          const bodyless = request.method === "HEAD" || [204, 205, 304].includes(message.status);
-          resolve(new Response(bodyless ? null : stream, { status: message.status, statusText: message.statusText, headers: message.headers }));
-          if (bodyless) finish();
-          return;
-        }
-        if (message.type === "end") { if (!head) finish(new Error("Missing preview head")); else finish(); return; }
-        if (!head || unacknowledged) { finish(new Error("Preview body exceeded pull credit")); return; }
-        unacknowledged = true;
-        controller.enqueue(message.chunk);
-        if (demanded) acknowledge();
-      };
-      request.signal.addEventListener("abort", abort, { once: true });
-      try { id = this.exchange(route, open, output, abort); } catch { finish(new Error("Preview exchange unavailable")); }
-      if (request.signal.aborted) abort();
-    });
+    return new NativeHTTPExchange(request, this.transport(route)).start(open);
+  }
+  private transport(route: Route): NativeExchangeTransport {
+    return {
+      open: (open, output, fail) => this.exchange(route, open, output, fail),
+      input: (id, message) => this.input(id, message),
+      retire: id => this.retire(id),
+      connected: () => !this.closing,
+    };
   }
   private upgrade(route: Route, request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (route.stage.kind !== "ready" || request.headers.upgrade?.toLowerCase() !== "websocket") { socket.destroy(); return; }
-    socket.pause();
     const grant = route.stage.authorization;
     const raw = `${request.method} ${request.url} HTTP/1.1\r\n${request.rawHeaders.reduce((result, value, index) => result + (index % 2 ? `${value}\r\n` : `${value}: `), "")}\r\n`;
-    let id = "";
-    let ended = false;
-    let accepted = false;
-    const finish = (graceful = false) => {
-      if (ended) return;
-      ended = true;
-      if (graceful) socket.end(); else socket.destroy();
-      if (id) this.retire(id);
-      if (id && !this.closing) this.input(id, { type: "end" });
-    };
-    const output = (message: PreviewHostOutput) => {
-      if (ended) return;
-      if (message.type === "accepted") {
-        if (accepted) { finish(); return; }
-        accepted = true;
-        this.input(id, { type: "data", chunk: new TextEncoder().encode(raw) });
-        if (head.byteLength) this.input(id, { type: "data", chunk: Uint8Array.from(head) });
-        socket.resume();
-      } else if (message.type === "data") {
-        if (!accepted || socket.writableLength > MAX_FRAME) { finish(); return; }
-        socket.write(message.chunk);
-      } else finish(message.type === "end");
-    };
-    socket.on("data", (chunk: Buffer) => { try { this.input(id, { type: "data", chunk: Uint8Array.from(chunk) }); } catch { finish(); } });
-    socket.once("close", () => finish());
-    socket.once("error", () => finish());
-    id = this.exchange(route, { type: "socket", authorization: grant, url: new URL(request.url ?? "/", grant.origin).href }, output, () => finish());
+    new NativeSocketExchange(socket, new TextEncoder().encode(raw), head, this.transport(route)).start({
+      type: "socket", authorization: grant, url: new URL(request.url ?? "/", grant.origin).href,
+    });
   }
 }
 

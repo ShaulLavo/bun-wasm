@@ -41,10 +41,19 @@ owner, port, scheme or origin cannot replace that grant. The page runtime retain
 the adapter as a consumer. Runtime revocation, page close and channel disconnect
 close the relays, raw sockets and host listeners.
 
+Cancelling registration retains the old route ID until its outstanding reservation,
+binding factory or grant reply settles. Only that expected reply can retire the ID.
+A replacement on the same port gets a new ID, and a late binding closes without
+publishing. Active and closing registrations share a 128-entry limit. A closing
+registration that does not settle within 30 seconds closes the owner connection.
+Unknown IDs and mismatched replies still fail closed.
+
 `web/preview-origin-host.ts` owns the native node:http listeners under Bun. It
 preserves HTTP method, target, headers, bodies, status, cookies and cancellation.
 It exposes the original upgrade request, already-read head bytes and raw socket
 so Waffle receives the actual WebSocket handshake and duplex bytes.
+`web/scripts/preview-exchanges.ts` holds the native HTTP stream and socket exchange
+state, keeping their callbacks outside the owner session's request handlers.
 
 The defaults bound the host to 128 lifetime origin allocations, 128 outstanding tickets or
 connected owners, 16 ports per owner, 64 active exchanges across owners, 256 root

@@ -332,3 +332,130 @@ test("an owned extra-port upgrade waits for its first authenticated grant", asyn
   await opened;
   expect(connection.protocol).toBe("fixture-hmr");
 });
+
+async function lifecycleClient(origin: string, target: ReturnType<typeof native>, frame: (value: OwnerFrame) => void = () => {}, created: (port: number, binding: ReturnType<typeof nativeBinding>) => Promise<void> = async () => {}) {
+  const lifetime = new AbortController();
+  releases.push(() => lifetime.abort());
+  const owner = crypto.randomUUID();
+  const client = await PreviewOwnerClient.connect({ baseURL: origin, signal: lifetime.signal,
+    fetch: (input, init) => fetch(input, { ...init, headers: { origin } }),
+    webSocket(url, protocols) {
+      const connection = nativeWebSocket(url, protocols, origin);
+      connection.addEventListener("message", event => frame(ownerFrame(String(event.data))));
+      return connection;
+    },
+    async bind({ origin, port, signal }) {
+      const binding = nativeBinding({ owner, origin, port, target: target.url.href, signal });
+      await created(port, binding);
+      return binding;
+    },
+  });
+  releases.push(() => client.close());
+  return client;
+}
+
+test("pending unregister consumes only its late reservation and preserves the sibling and immediate replacement", async () => {
+  const { origin } = hosting();
+  const target = native();
+  const reservations: Extract<OwnerFrame, { type: "reserved" }>[] = [];
+  let extraBindings = 0;
+  const client = await lifecycleClient(origin, target, frame => { if (frame.type === "reserved") reservations.push(frame); }, async port => { if (port === 49153) extraBindings++; });
+  const stable = await client.register(3137);
+  const pending = client.register(49153).then(() => "published", error => String(error));
+  client.unregister(49153);
+  const replacement = client.register(49153);
+  expect(await pending).toContain("Preview binding closed");
+  const current = await replacement;
+  const extras = reservations.filter(frame => frame.port === 49153);
+  expect(extras).toHaveLength(2);
+  expect(current).toBe(extras[1]!.origin);
+  expect(current).not.toBe(extras[0]!.origin);
+  expect(extraBindings).toBe(1);
+  expect((await fetch(stable)).status).toBe(201);
+  expect((await fetch(current)).status).toBe(201);
+  await expect(fetch(extras[0]!.origin)).rejects.toThrow();
+  expect(await client.register(3138)).toMatch(/^http:/);
+});
+
+test("cancelled grant consumes its valid late bound reply without publishing or closing the replacement", async () => {
+  const { origin } = hosting();
+  const target = native();
+  let extraId: string | undefined;
+  let oldOrigin: string | undefined;
+  let cancel = () => {};
+  let oldClosed = 0;
+  const replacement = Promise.withResolvers<string>();
+  const client = await lifecycleClient(origin, target, frame => {
+    if (frame.type === "reserved" && frame.port === 49153 && !extraId) { extraId = frame.id; oldOrigin = frame.origin; }
+    if (frame.type === "bound" && frame.id === extraId) cancel();
+  }, async (port, binding) => {
+    if (port !== 49153 || oldOrigin !== binding.authorization.origin) return;
+    const close = binding.close;
+    binding.close = () => { oldClosed++; close(); };
+  });
+  const stable = await client.register(3137);
+  cancel = () => {
+    client.unregister(49153);
+    void client.register(49153).then(replacement.resolve, replacement.reject);
+  };
+  const pending = client.register(49153).then(() => "published", error => String(error));
+  expect(await pending).toContain("Preview binding closed");
+  const current = await replacement.promise;
+  expect(current).not.toBe(oldOrigin);
+  expect(oldClosed).toBe(1);
+  expect((await fetch(stable)).status).toBe(201);
+  expect((await fetch(current)).status).toBe(201);
+  if (!oldOrigin) throw new Error("Missing old reservation");
+  await expect(fetch(oldOrigin)).rejects.toThrow();
+});
+
+test("a cancelled asynchronous binding settles against its old identity after immediate port reuse", async () => {
+  const { origin } = hosting();
+  const target = native();
+  const entered = Promise.withResolvers<void>(), settle = Promise.withResolvers<void>(), returned = Promise.withResolvers<void>();
+  let first = true;
+  let oldClosed = 0;
+  const client = await lifecycleClient(origin, target, () => {}, async (port, binding) => {
+    if (port !== 49153 || !first) return;
+    first = false;
+    const close = binding.close;
+    binding.close = () => { oldClosed++; close(); returned.resolve(); };
+    entered.resolve();
+    await settle.promise;
+  });
+  releases.push(() => settle.resolve());
+  const stable = await client.register(3137);
+  const pending = client.register(49153).then(() => "published", error => String(error));
+  await entered.promise;
+  client.unregister(49153);
+  const current = await client.register(49153);
+  expect(await pending).toContain("Preview binding closed");
+  expect((await fetch(stable)).status).toBe(201);
+  expect((await fetch(current)).status).toBe(201);
+  settle.resolve();
+  await returned.promise;
+  expect(oldClosed).toBe(1);
+  expect((await fetch(stable)).status).toBe(201);
+  expect((await fetch(current)).status).toBe(201);
+});
+
+for (const type of ["reserved", "bound"] as const) test(`unknown ${type} replies remain fatal to the client`, async () => {
+  const host = new PreviewOwnerHost();
+  const closed = Promise.withResolvers<void>();
+  let peer: import("bun").ServerWebSocket<OwnerSession> | undefined;
+  const server = Bun.serve<OwnerSession>({ hostname: "127.0.0.2", port: 0,
+    websocket: { ...host.websocket,
+      open(socket) { peer = socket; host.websocket.open?.(socket); },
+      close(socket, code, reason) { host.websocket.close?.(socket, code, reason); closed.resolve(); },
+    },
+    fetch: (request, server) => host.fetch(request, server),
+  });
+  releases.push(async () => { await host.close(); await server.stop(true); });
+  const client = await lifecycleClient(server.url.origin, native());
+  await client.register(3137);
+  if (!peer) throw new Error("Missing native peer");
+  const id = crypto.randomUUID();
+  peer.send(encode(type === "bound" ? { type, id } : { type, id, port: 49153, origin: "http://127.0.0.3:49153" }));
+  await closed.promise;
+  await expect(client.register(3138)).rejects.toThrow("closed");
+});

@@ -11,14 +11,17 @@ interface Route {
   port: number;
   lifetime: AbortController;
   ready: ReturnType<typeof Promise.withResolvers<string>>;
-  stage: { kind: "pending" } | { kind: "bound"; binding: OwnerBinding };
+  stage: { kind: "pending" } | { kind: "binding" } | { kind: "grant" | "ready"; binding: OwnerBinding };
 }
 interface Exchange { route: Route; exchange: PreviewHostExchange }
+interface ClosingRoute { port: number; expected: "reserved" | "binding" | "bound"; timer: ReturnType<typeof setTimeout> }
+const MAX_ROUTES = 128;
 
 /** Private page-owner connection. Keep this object outside the application preview. */
 export class PreviewOwnerClient {
   private readonly routes = new Map<string, Route>();
   private readonly exchanges = new Map<string, Exchange>();
+  private readonly closingRoutes = new Map<string, ClosingRoute>();
   private readonly retired = new Map<string, PreviewHostAuthorization>();
   private closed = false;
   private readonly stopped = Promise.withResolvers<void>();
@@ -52,6 +55,7 @@ export class PreviewOwnerClient {
 
   register(port: number): Promise<string> {
     if (this.closed) return Promise.reject(new Error("Preview owner connection closed"));
+    if (this.routes.size + this.closingRoutes.size >= MAX_ROUTES) return Promise.reject(new Error("Preview route limit"));
     if (Array.from(this.routes.values()).some(route => route.port === port)) return Promise.reject(new Error("Preview port already registered"));
     const route: Route = { port, lifetime: new AbortController(), ready: Promise.withResolvers<string>(), stage: { kind: "pending" } };
     const id = crypto.randomUUID();
@@ -65,6 +69,7 @@ export class PreviewOwnerClient {
     if (!found) return;
     const [id, route] = found;
     this.routes.delete(id);
+    this.retainClosing(id, route);
     this.release(route);
     this.send({ type: "unregister", id });
   }
@@ -76,6 +81,8 @@ export class PreviewOwnerClient {
     this.closed = true;
     for (const route of this.routes.values()) this.release(route);
     this.routes.clear();
+    for (const route of this.closingRoutes.values()) clearTimeout(route.timer);
+    this.closingRoutes.clear();
     this.exchanges.clear();
     this.retired.clear();
     this.socket.close();
@@ -83,7 +90,7 @@ export class PreviewOwnerClient {
 
   private release(route: Route): void {
     route.lifetime.abort();
-    if (route.stage.kind === "bound") {
+    if (route.stage.kind === "grant" || route.stage.kind === "ready") {
       const grant = route.stage.binding.authorization;
       this.retired.set(grant.capability, grant);
       const oldest = this.retired.keys().next().value;
@@ -92,6 +99,18 @@ export class PreviewOwnerClient {
     }
     route.ready.reject(new Error("Preview binding closed"));
     for (const [id, item] of this.exchanges) if (item.route === route) this.exchanges.delete(id);
+  }
+  private retainClosing(id: string, route: Route): void {
+    if (route.stage.kind === "ready") return;
+    const expected = route.stage.kind === "pending" ? "reserved" : route.stage.kind === "grant" ? "bound" : "binding";
+    this.closingRoutes.set(id, { port: route.port, expected, timer: setTimeout(() => this.close(), 30_000) });
+  }
+  private finishClosing(id: string, expected: ClosingRoute["expected"]): void {
+    const route = this.closingRoutes.get(id);
+    if (!route) return;
+    if (route.expected !== expected) throw new Error("Unexpected closing preview reply");
+    clearTimeout(route.timer);
+    this.closingRoutes.delete(id);
   }
   private send(frame: HostFrame): void {
     if (this.closed) return;
@@ -107,20 +126,29 @@ export class PreviewOwnerClient {
     await this.open(frame);
   }
   private async reserved(frame: Extract<OwnerFrame, { type: "reserved" }>): Promise<void> {
+    const closing = this.closingRoutes.get(frame.id);
+    if (closing) {
+      if (closing.expected !== "reserved" || closing.port !== frame.port) throw new Error("Wrong closing preview reservation");
+      this.finishClosing(frame.id, "reserved");
+      return;
+    }
     const route = this.routes.get(frame.id);
     if (!route || route.port !== frame.port || route.stage.kind !== "pending") throw new Error("Unknown preview reservation");
+    route.stage = { kind: "binding" };
     let binding: OwnerBinding;
     try { binding = await this.bind({ origin: frame.origin, port: frame.port, signal: route.lifetime.signal }); }
-    catch (error) { if (route.lifetime.signal.aborted) return; throw error; }
-    if (this.closed || route.lifetime.signal.aborted) { binding.close(); return; }
+    catch (error) { if (route.lifetime.signal.aborted) { this.finishClosing(frame.id, "binding"); return; } throw error; }
+    if (this.closed || route.lifetime.signal.aborted) { binding.close(); this.finishClosing(frame.id, "binding"); return; }
     const grant = binding.authorization;
     if (grant.origin !== frame.origin || grant.port !== frame.port) { binding.close(); throw new Error("Preview binding does not match reservation"); }
-    route.stage = { kind: "bound", binding };
+    route.stage = { kind: "grant", binding };
     this.send({ type: "grant", id: frame.id, authorization: grant });
   }
   private bound(id: string): void {
+    if (this.closingRoutes.has(id)) { this.finishClosing(id, "bound"); return; }
     const route = this.routes.get(id);
-    if (!route || route.stage.kind !== "bound") throw new Error("Unknown preview grant");
+    if (!route || route.stage.kind !== "grant") throw new Error("Unknown preview grant");
+    route.stage = { kind: "ready", binding: route.stage.binding };
     route.ready.resolve(route.stage.binding.authorization.origin);
   }
   private input(id: string, input: PreviewHostInput): void {
@@ -130,8 +158,8 @@ export class PreviewOwnerClient {
   }
   private async open(frame: Extract<OwnerFrame, { type: "open" }>): Promise<void> {
     if (this.exchanges.size >= MAX_EXCHANGES || this.exchanges.has(frame.id)) throw new Error("Preview exchange limit");
-    const route = Array.from(this.routes.values()).find(route => route.stage.kind === "bound" && sameGrant(route.stage.binding.authorization, frame.open.authorization));
-    if (!route || route.stage.kind !== "bound") {
+    const route = Array.from(this.routes.values()).find(route => route.stage.kind === "ready" && sameGrant(route.stage.binding.authorization, frame.open.authorization));
+    if (!route || route.stage.kind !== "ready") {
       const retired = this.retired.get(frame.open.authorization.capability);
       if (!retired || !sameGrant(retired, frame.open.authorization)) throw new Error("Wrong preview owner/port grant");
       this.send({ type: "output", id: frame.id, output: { type: "error", message: "Preview binding closed" } });
