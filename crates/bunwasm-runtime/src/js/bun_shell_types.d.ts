@@ -10,6 +10,6 @@ declare namespace BunWasm {
     BunFile: abstract new (...args: never[]) => { name?: unknown };
     builtin(name: "node:fs"): ShellFs;
     require(name: "spawn"): { spawn(argv: string[], options: Record<string, unknown>): WorkerChild; which(command: string, options?: { PATH?: string; cwd?: string }): string | null };
-    require(name: "bun_shell"): { $: Function; findShell(env: Record<string, string | undefined>, cwd: string): string };
+    require(name: "bun_shell"): { $: Function; findShell(env: Record<string, string | undefined>, cwd: string): string; escape(value: unknown): string };
   }
 }

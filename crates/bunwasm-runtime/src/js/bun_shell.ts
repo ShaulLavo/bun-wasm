@@ -458,5 +458,5 @@
     return [pattern];
   }
 
-  return { $: BunShell, findShell };
+  return { $: BunShell, findShell, escape };
 })
