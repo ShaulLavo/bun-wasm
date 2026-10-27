@@ -13,7 +13,10 @@ declare namespace BunWasm {
       join(windows: boolean, paths: Uint8Array[]): Uint8Array;
       relative(windows: boolean, from: Uint8Array, to: Uint8Array): Uint8Array;
     };
+    hostCaps: Record<string, boolean>;
     hostLocalAddr(handle: number): string | number;
+    hostLookupStart?(hostname: string, family: 0 | 4 | 6, hints: number): number;
+    hostLookupHead?(handle: number): string | number;
     hostLookup?: (hostname: string, family: 0 | 4 | 6, hints: number) => Promise<Array<{ address: string; family: 4 | 6 }>>;
     hostClose(handle: number): number;
     registerObjectModule(name: string): string;

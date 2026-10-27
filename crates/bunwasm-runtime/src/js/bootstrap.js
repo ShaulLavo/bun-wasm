@@ -448,6 +448,8 @@
   // Replaced by net.js when a networking host is present.
   internal.ioPending = () => 0;
   internal.pumpIo = () => false;
+  internal.removeIoWaiter = () => {};
+  internal.cancelIoWaiters = () => {};
   internal.require("loop_scheduler");
 
   // --- process.nextTick -------------------------------------------------------
@@ -761,6 +763,7 @@
     const process = globalThis.process;
     if (!process || process._exiting) return;
     process._exiting = true;
+    internal.cancelIoWaiters();
     try {
       process.emit("exit", code);
     } catch (err) {
@@ -769,6 +772,7 @@
       process.exitCode = 1;
       if (!internal.workerError) printError(err);
     } finally {
+      internal.cancelIoWaiters();
       if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
       native.closeAllDirs();
     }
@@ -827,7 +831,7 @@
     if (listenerCount("beforeExit") === 0) return false;
     const process = globalThis.process;
     process.emit("beforeExit", process.exitCode || 0);
-    return refedTimers > 0 || immediates.length > 0 || tickQueue.length > 0;
+    return refedTimers > 0 || immediates.length > 0 || tickQueue.length > 0 || internal.ioPending() > 0;
   };
 
   internal.beforeExit = function beforeExit() {
@@ -877,6 +881,10 @@
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
   internal.require("function");
   internal.fakeTimers = internal.require("fake_timers");
+  // Networking factories require the installed web globals.
+  if (native.hostCaps?.lookup_start && native.hostCaps?.lookup_head) {
+    internal.require("host_lookup").install();
+  }
   if (process.env.BUNWASM_IPC_CHANNEL) internal.require("child_ipc").initialize();
   if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
 

@@ -386,3 +386,60 @@ fn notify_wait_past_ends_on_a_bump_made_before_or_during_the_wait() {
     notify.wait_past(notify.generation(), Duration::from_millis(20));
     assert!(started.elapsed() >= Duration::from_millis(20));
 }
+
+#[test]
+fn lookup_publishes_ordered_family_results_wakes_poll_and_is_repeatable_until_close() {
+    let mut net = Net::new();
+    let handle = net.lookup("localhost", 6, 0);
+    assert!(handle > 0);
+    let first = loop {
+        match net.lookup_head(handle) {
+            Output::Code(AGAIN) => {
+                assert_eq!(net.poll(5000), 1);
+            }
+            output => break output,
+        }
+    };
+    let bytes = match first {
+        Output::Bytes(bytes) => bytes,
+        Output::Code(code) => panic!("unexpected lookup result {code}"),
+    };
+    let repeat = match net.lookup_head(handle) {
+        Output::Bytes(bytes) => bytes,
+        Output::Code(code) => panic!("unexpected repeated lookup result {code}"),
+    };
+    assert_eq!(bytes, repeat);
+    let value = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
+    assert!(
+        value["addresses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|address| address["family"] == 6)
+    );
+    assert_eq!(net.close(handle), 0);
+    assert_eq!(net.close(handle), BADF);
+    assert!(matches!(net.lookup_head(handle), Output::Code(BADF)));
+}
+
+#[test]
+fn lookup_error_preserves_hostname_and_getaddrinfo_metadata_until_close() {
+    let mut net = Net::new();
+    let hostname = "bun-wasm-native-dns.invalid";
+    let handle = net.lookup(hostname, 0, 0);
+    assert!(handle > 0);
+    loop {
+        match net.lookup_head(handle) {
+            Output::Code(AGAIN) => assert_eq!(net.poll(5000), 1),
+            Output::Code(ERROR) => break,
+            Output::Bytes(_) => panic!("unexpected successful lookup"),
+            Output::Code(code) => panic!("unexpected lookup status {code}"),
+        }
+    }
+    let error = json(net.error(handle));
+    assert_eq!(error["code"], "ENOTFOUND");
+    assert_eq!(error["syscall"], "getaddrinfo");
+    assert_eq!(error["hostname"], hostname);
+    assert_eq!(net.close(handle), 0);
+    assert!(matches!(net.error(handle), Output::Code(BADF)));
+}

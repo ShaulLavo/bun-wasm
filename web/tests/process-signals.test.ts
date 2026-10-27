@@ -20,6 +20,7 @@ function fixture() {
   const ticks: (() => void)[] = [];
   const writes: unknown[][] = [];
   let writeError: Error | undefined;
+  let cancelIoWaitersCalls = 0;
   let selected: { status: number; signal: number } | undefined;
   const context = createContext({ TextEncoder, TextDecoder, Uint8Array, Error });
   const internal = {
@@ -55,6 +56,7 @@ function fixture() {
       },
     },
     nextTick(callback: (...args: unknown[]) => void, ...args: unknown[]) { ticks.push(() => callback(...args)); },
+    cancelIoWaiters() { cancelIoWaitersCalls++; },
     emitExit() {},
     traceExit() {},
     require(name: string) {
@@ -70,6 +72,7 @@ function fixture() {
   context.process = process;
   return {
     process, events, internal, changes, dispositions, pending, context, writes,
+    cancelIoWaitersCalls: () => cancelIoWaitersCalls,
     writeFails(error: Error) { writeError = error; },
     ticks() { while (ticks.length) ticks.shift()!(); },
     selected: () => selected,
@@ -321,6 +324,7 @@ test("worker exit-listener errors are forwarded without duplicate local printing
   const error = new Error("exit failure");
   f.process.on("exit", () => { throw error; });
   f.internal.emitExit(0);
+  expect(f.cancelIoWaitersCalls()).toBe(2);
   expect(f.context.forwarded).toEqual([error]);
   expect(f.context.printed).toEqual([]);
 });

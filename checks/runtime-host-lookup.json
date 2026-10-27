@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/host-lookup.test.ts",
+  "localRuntime": true
+}

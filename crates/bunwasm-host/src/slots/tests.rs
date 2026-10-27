@@ -106,8 +106,60 @@ impl Fixture {
 
 #[test]
 fn network_slots_have_no_child_or_signal_transport() {
-    assert_eq!(SLOT_NAMES.len(), 14);
-    assert_eq!(&SLOT_NAMES[12..], &["shutdown", "local_addr"]);
+    assert_eq!(SLOT_NAMES.len(), 16);
+    assert_eq!(
+        &SLOT_NAMES[12..],
+        &["shutdown", "local_addr", "lookup_start", "lookup_head"]
+    );
+    assert!(
+        SLOT_NAMES
+            .iter()
+            .all(|name| !name.starts_with("child_") && *name != "spawn" && *name != "signal")
+    );
+}
+
+#[test]
+fn lookup_sized_results_do_not_overwrite_small_buffers() {
+    let mut memory = vec![0x7f; 4];
+    assert_eq!(
+        put(&mut memory, 0, 3, Output::Bytes(b"abcd".to_vec())).unwrap(),
+        4
+    );
+    assert_eq!(memory, vec![0x7f; 4]);
+    assert_eq!(
+        put(&mut memory, 0, 4, Output::Bytes(b"abcd".to_vec())).unwrap(),
+        4
+    );
+    assert_eq!(memory, b"abcd");
+}
+
+#[test]
+fn lookup_start_rejects_invalid_utf8_before_allocating_a_handle() {
+    let mut f = Fixture::new();
+    f.write(1024, &[0xff]);
+    let generation = f.store.data().net.notify().generation();
+    let lookup_start = functions(&mut f.store)
+        .into_iter()
+        .nth(14)
+        .unwrap()
+        .typed::<(i32, i32, i32, i32), i32>(&f.store)
+        .unwrap();
+
+    assert_eq!(
+        lookup_start.call(&mut f.store, (1024, 1, 0, 0)).unwrap(),
+        crate::net::ERROR
+    );
+    assert!(matches!(
+        f.store.data_mut().net.lookup_head(1),
+        Output::Code(crate::net::BADF)
+    ));
+    assert_eq!(f.store.data().net.notify().generation(), generation);
+    let error = match f.store.data_mut().net.error(0) {
+        Output::Bytes(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+        Output::Code(code) => panic!("expected handle-less lookup error, got {code}"),
+    };
+    assert_eq!(error["code"], "EINVAL");
+    assert_eq!(error["syscall"], "getaddrinfo");
 }
 
 #[test]

@@ -228,10 +228,14 @@ test("every network slot refuses to run once the process has a fatal outcome", a
   let signals!: ReturnType<typeof workerProcessState>["signals"];
   startEngineHost.mockImplementationOnce(async () => {
     const slots = installed[0]!;
-    expect(Object.keys(slots).sort()).toEqual(SLOT_NAMES.slice().sort());
+    const supportedSlots = SLOT_NAMES.filter(name => name !== "lookup_start" && name !== "lookup_head");
+    supportedSlots.sort();
+    expect(Object.keys(slots).sort()).toEqual(supportedSlots);
+    expect(slots.lookup_start).toBeUndefined();
+    expect(slots.lookup_head).toBeUndefined();
     claimOutcome(signals.outcome, { kind: "signaled", code: 15 });
     // The guard runs before the slot touches guest memory or the network ring.
-    for (const name of SLOT_NAMES) expect(() => slots[name]!(0, 0, 0, 0), name).toThrow(DefaultSignal);
+    for (const name of supportedSlots) expect(() => slots[name]!(0, 0, 0, 0), name).toThrow(DefaultSignal);
     return 0;
   });
   const result = await runCapturingSignals(options => { signals = options; }, createRing());

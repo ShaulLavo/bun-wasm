@@ -62,6 +62,7 @@ export class NetHost {
   /** Browser-engine native names are Bun policy, not generic network-service names. */
   engineNet(lookup?: (hostname: string, family: 0 | 4 | 6, hints: number) => Promise<{ address: string; family: 4 | 6 }[]>): EngineNet {
     const text = (result: Uint8Array | number) => result instanceof Uint8Array ? decoder.decode(result) : result;
+    const slotImpls = this.slots();
     return {
       natives: {
         hostPoll: () => UNSUPPORTED,
@@ -80,7 +81,7 @@ export class NetHost {
         hostLocalAddr: (handle: number) => this.host.localAddr(handle),
         ...(lookup ? { hostLookup: lookup } : {}),
       },
-      caps: Object.fromEntries(SLOT_NAMES.map((name) => [name, name !== "poll"])),
+      caps: Object.fromEntries(SLOT_NAMES.map((name) => [name, name !== "poll" && slotImpls[name] !== undefined])),
       onNews: (cb) => this.host.onNews(cb),
     };
   }

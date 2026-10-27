@@ -1,4 +1,4 @@
-# bun.wasm host ABI (`bun_wasm`, version 1)
+# bun.wasm host ABI (`bun_wasm`, version 2)
 
 WASI preview1 has no sockets. Hosts that want to give bun.wasm networking
 (`fetch`, `Bun.serve`, `node:http`, `node:net`) provide the extra functions described here.
@@ -19,7 +19,7 @@ instantiation and before calling `_start`:
 
    | offset   | type  | meaning                                          |
    |----------|-------|--------------------------------------------------|
-   | `p+0`    | `u32` | ABI version the guest speaks (`1`)               |
+   | `p+0`    | `u32` | ABI version the guest speaks (`2`)               |
    | `p+4`    | `u32` | number of slots `N`                              |
    | `p+8+4i` | `u32` | slot `i`: table index of the host function, or 0 |
 
@@ -91,8 +91,13 @@ reads as `UNSUPPORTED`. The playground and sandbox use this by default (`web/src
 | 11   | `peer_addr`  | `(handle, buf_ptr, buf_cap) -> len`                              |
 | 12   | `shutdown`   | `(connection) -> i32`                                            |
 | 13   | `local_addr` | `(handle, buf_ptr, buf_cap) -> len`                              |
+| 14   | `lookup_start` | `(host_ptr, host_len, family, hints) -> handle`                |
+| 15   | `lookup_head` | `(handle, buf_ptr, buf_cap) -> len`                              |
 
-Version 1 has 14 slots. The Bun-specific child slots (`spawn`, `child_wait`, `child_pipe`,
+Version 2 has 16 slots. Slots 0 through 13 are unchanged. Hosts that do not
+provide lookup leave slots 14 and 15 at 0; the runtime then keeps its existing
+unsupported-capability rejection. There is no version-skew bridge.
+The Bun-specific child slots (`spawn`, `child_wait`, `child_pipe`,
 `child_kill`) and the signal slot no longer exist; slots after `peer_addr` were renumbered when
 they went away. Child processes and signals use the `runtime_proc` imports.
 
@@ -194,6 +199,37 @@ A new connection handle, or `AGAIN` when none is pending.
 Open a TCP connection (for `node:net` clients). Returns a handle at once;
 `write` returns `AGAIN` until connected, `read`/`write` return `ERROR` if
 the connection failed.
+
+### `lookup_start(host_ptr, host_len, family, hints) -> handle`
+
+Start a side-effect-free asynchronous hostname lookup. The host copies the
+length-delimited UTF-8 hostname before returning and retains no guest pointer,
+store or engine reference. `family` is `0`, `4` or `6`; `hints` is the Bun/Node
+resolver bitmask (`AI_V4MAPPED` 8, `AI_ALL` 16 and `AI_ADDRCONFIG` 32), not a
+platform libc value. Invalid arguments fail immediately with `ERROR` and are
+described by `error(0, ...)`. A successful start returns a positive handle;
+`close` may cancel it logically without waiting for the resolver worker.
+
+The native implementation performs `getaddrinfo` on a detached host worker,
+walks the returned list in resolver order, and publishes either one owned JSON
+result or one structured resolver error. It does not connect, listen, fetch,
+inspect `/etc/hosts`, or substitute a local hostname table. A cancelled worker
+may finish later, but its result is discarded and it never retains guest state.
+
+### `lookup_head(handle, buf_ptr, buf_cap) -> len`
+
+Returns `AGAIN` while the resolver is pending. On success it returns repeatable
+sized JSON until `close`:
+
+```json
+{ "addresses": [{ "address": "127.0.0.1", "family": 4 }] }
+```
+
+The host preserves resolver order and returns the full required length without
+writing when `buf_cap` is too small. A resolver failure returns `ERROR`; read
+`error(handle, ...)` immediately for JSON containing `code`, `syscall` set to
+`"getaddrinfo"`, and the copied `hostname` (for example `ENOTFOUND`). After
+`close`, `lookup_head`, `error` and a second `close` return `BADF`.
 
 ### `error(handle, buf_ptr, buf_cap) -> len`
 
