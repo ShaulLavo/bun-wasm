@@ -385,7 +385,7 @@
     braces: { value: braces, enumerable: true, writable: true, configurable: true },
   });
 
-  // Bun's Bun.$.braces: Bash brace expansion of comma lists and numeric or letter sequences.
+  // Bun.$.braces: comma lists only, nested, like Bun (no {1..3} sequences).
   function braces(pattern: string): string[] {
     const open = pattern.indexOf("{");
     if (open < 0) return [pattern];
@@ -395,32 +395,16 @@
       const char = pattern[index];
       if (char === "\\") { index++; continue; }
       if (char === "{") depth++;
+      else if (char === "," && depth === 1) commas.push(index);
       else if (char === "}" && --depth === 0) {
-        const body = pattern.slice(open + 1, index);
         const prefix = pattern.slice(0, open);
         const suffix = pattern.slice(index + 1);
-        const items = commas.length ? split(body, commas.map(at => at - open - 1)) : sequence(body);
-        if (!items) return [prefix + "{" + body + "}"].flatMap(head => braces(suffix).map(tail => head + tail));
+        if (!commas.length) return braces(suffix).map(tail => pattern.slice(0, index + 1) + tail);
+        const items = commas.concat(index).map((end, at) => pattern.slice(at ? commas[at - 1] + 1 : open + 1, end));
         return items.flatMap(item => braces(prefix + item + suffix));
-      } else if (char === "," && depth === 1) commas.push(index);
+      }
     }
     return [pattern];
-  }
-  function split(body: string, at: number[]): string[] {
-    return at.concat(body.length).map((end, index) => body.slice(index ? at[index - 1] + 1 : 0, end));
-  }
-  function sequence(body: string): string[] | undefined {
-    const match = /^(-?\d+|[a-zA-Z])\.\.(-?\d+|[a-zA-Z])(?:\.\.(-?\d+))?$/.exec(body);
-    if (!match) return;
-    const numeric = /\d/.test(match[1]);
-    if (numeric !== /\d/.test(match[2])) return;
-    const start = numeric ? Number(match[1]) : match[1].charCodeAt(0);
-    const end = numeric ? Number(match[2]) : match[2].charCodeAt(0);
-    const step = Math.abs(Number(match[3] ?? 1)) || 1;
-    const items: string[] = [];
-    for (let value = start; start <= end ? value <= end : value >= end; value += start <= end ? step : -step)
-      items.push(numeric ? String(value) : String.fromCharCode(value));
-    return items;
   }
 
   return { $: BunShell, findShell };

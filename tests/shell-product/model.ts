@@ -6,5 +6,5 @@ export interface Fixture {
   text: string;
   tool: string;
   buildOutputs: readonly string[];
-  scripts: { dev: string; build: string };
+  scripts: Record<string, string>;
 }
