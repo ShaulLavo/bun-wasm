@@ -8,7 +8,7 @@ import * as net from "node:net";
 import * as zlib from "node:zlib";
 import { posix, resolve } from "node:path";
 import { WASI } from "node:wasi";
-import { Worker, isMainThread, parentPort, workerData, type ResourceLimits } from "node:worker_threads";
+import { isMainThread, parentPort, workerData, type ResourceLimits, type Worker } from "node:worker_threads";
 import { workerProcessState, wakeWorkerProcess, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import type { SpawnRequest } from "waffle/proc/types";
@@ -19,6 +19,7 @@ import { nodeModule, NodeProcessBroker, validateNodeCwd } from "./node-spawn.ts"
 import { createNodeSignalController } from "./node-signals.ts";
 import { createNodeProcess, type NodeWasiImports } from "./node-process.ts";
 import { loadNodeProgram, linkNodeProgram, startNodeProgram } from "./node-linked.ts";
+import { createNodeWorker } from "./node-worker.ts";
 import type { LinkPlanSource, LinkedGroup } from "waffle/link";
 
 const STACK_MB = 32, GUEST_STACK_KIB = "6144";
@@ -116,8 +117,8 @@ async function main() {
   } catch (error) { await broker.dispose(); throw error; }
   function launch(data: GuestData): Worker {
     const limits = (data.transport.data as { worker?: { resourceLimits?: ResourceLimits } } | undefined)?.worker?.resourceLimits;
-    return new Worker(new URL(import.meta.url), { workerData: { ...data, linkPlan: programs.get(data.module) },
-      resourceLimits: { maxOldGenerationSizeMb: 128, ...limits, stackSizeMb: Math.max(config.stackMb, limits?.stackSizeMb ?? 0) } });
+    return createNodeWorker(new URL(import.meta.url), { workerData: { ...data, linkPlan: programs.get(data.module) },
+      resourceLimits: limits }, config.stackMb);
   }
 }
 
