@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { attachPipePublicationRegistry, type PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import { createWorkerProcessTransport, type WorkerProcessMessage } from "waffle/proc/worker-client";
+import type { SpawnRequest } from "waffle/proc/types";
 import { NodeProcessBroker, type NodeEngineModules } from "../scripts/node-spawn.ts";
 import { createNodeProcess, type NodeWasiImports } from "../scripts/node-process.ts";
 
@@ -27,14 +28,24 @@ function fixture(engines: NodeEngineModules = {}) {
     start(path: string, cwd = "/", mode = 1) { return proc.access_start!(1024, put(path, 1024), 2048, put(cwd, 2048), mode); },
     poll(id: number) { const view = new DataView(memory.buffer); view.setUint32(256, 5, true); view.setUint32(260, id, true); view.setBigUint64(264, 99n, true); return proc.poll!(256, 1, 0, 512); },
     async query(path: string, cwd = "/") { const id = this.start(path, cwd); expect(id).toBeGreaterThan(0); await deliver(); return proc.access_take!(id); },
-    async spawn(path: string, cwd = "/") {
-      const pid = host.client.spawn(host.client.pid, { executable: path, argv: [path], cwd, env: {}, fds: [], job: 0 });
+    async spawn(path: string, cwd = "/", fds: SpawnRequest["fds"] = []) {
+      const pid = host.client.spawn(host.client.pid, { executable: path, argv: [path], cwd, env: {}, fds, job: 0 });
       await deliver();
       return broker.supervisor.waitForExit(host.client.pid, pid);
     },
     async close() { host.dispose(); await broker.dispose(); },
   };
 }
+
+test("Node children inherit root stdin through one relay owner", async () => {
+  const f = fixture();
+  try {
+    for (let child = 0; child < 2; child++) {
+      expect(await f.spawn("/bin/bun", "/", [{ child: 0, parent: 0 }])).toMatchObject({ status: 3 });
+    }
+    expect(f.errors).toEqual([]);
+  } finally { await f.close(); }
+});
 
 for (const engines of [{}, { quickjs }, { jsc }, { quickjs, jsc }]) test(`Node mounts only configured engine executables: ${Object.keys(engines).join(",") || "default"}`, async () => {
   const f = fixture(engines);
