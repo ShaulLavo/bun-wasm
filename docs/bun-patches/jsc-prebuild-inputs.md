@@ -113,3 +113,24 @@ product code. Actual archive definitions, code in the map, exported local
 functions and typed imports must be distinguished; an import alone does not
 prove missing native code. No whole-archive, symbol strengthening, hidden
 visibility rewrite, dummy provider or weakened loader admission is introduced.
+
+## WASI single-agent collection policy
+
+The WebKit patch ports the existing inline collector at the same pinned
+revision; it does not introduce a scheduler. `heap/Collector.cpp` retains its
+normal idle take-conn and request/ticket protocol, with WASI invariants before
+worker notification. `heap/Heap.cpp` advances bare async requests through the
+existing safepoint, queues async requests from the active cycle without
+recursion, rejects direct synchronous reentry, and rejects heap-access/conn
+release with pending work or an unfinished phase transition. Notifications,
+request coalescing, marking, epilogues and finalizers stay upstream.
+
+The WASI branches of `WTF/wtf/posix/ThreadingPOSIX.cpp` fail closed for worker
+create/join/detach instead of referencing unavailable pthread lifecycle calls.
+The context adapter sets one marker, no block warm-up/concurrent GC or JIT,
+polling traps and no optional profiler/continuous worker. This is a port of
+selected WebKit platform behavior and an original configuration adapter.
+The retained prepolicy fixture actually passed sync survivor/finalizer checks
+then aborted on the unserved bare async request at API unlock. Post-policy
+runtime proof and real-loader hello remain pending; these source conditions
+are not an admission or general thread-support claim.
