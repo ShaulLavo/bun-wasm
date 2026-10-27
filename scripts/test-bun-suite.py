@@ -86,7 +86,7 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(meta["dependencies"], suite.dependency_digest(self.root / "node_modules"))
         self.assertEqual(meta["test_dependencies"], suite.dependency_digest(self.root / "test/node_modules"))
         expected_host_sources = {
-            "web/scripts/node-host.ts", "web/scripts/node-process.ts", "web/scripts/node-signals.ts",
+            "web/scripts/node-host.ts", "web/scripts/node-worker.ts", "web/scripts/node-process.ts", "web/scripts/node-signals.ts",
             "web/scripts/node-spawn.ts", "web/scripts/node-net.mjs", "web/scripts/node-install-net.mjs",
             "web/scripts/node-stdio.ts", "web/src/net/trampoline.ts", "web/src/engine-host.js",
             "web/src/promise-reactions.ts", "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts", "web/src/crypto-inputs.js",

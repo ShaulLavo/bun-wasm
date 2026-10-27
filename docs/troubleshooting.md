@@ -43,7 +43,7 @@ The URL has `?mode=safe`, or a mode name that does not exist. Use `?mode=fast` o
 
 A workspace has one owner tab. In the default `fast` mode the newest tab takes the workspace, and the older tab stops with a Reload button, and its unsaved changes are not kept. The page shows "Waiting for this workspace to close in another tab" instead when a storage backend refuses to take ownership. It then opens the workspace on its own when the other tab closes.
 
-## `error: bun create is not supported in bun-wasm`
+## `error: bun upgrade is not supported in bun-wasm`
 
 The command exists in native Bun and not here. [Compatibility](compatibility.md#bun-commands) lists every unsupported command.
 
