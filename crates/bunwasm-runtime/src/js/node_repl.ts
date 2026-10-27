@@ -33,7 +33,8 @@
     #interrupted = false;
     #closed = false;
     #onData = (chunk: Uint8Array | string) => this.#data(chunk);
-    #onEnd = () => this.close();
+    // Piped input ends after its last line: finish evaluating what was read, then exit.
+    #onEnd = () => { this.#queue = this.#queue.then(() => this.close()); };
     #onInterrupt = () => this.#interrupt();
 
     constructor(options: Options) {
@@ -59,7 +60,7 @@
     getPrompt() { return this.#prompt; }
 
     displayPrompt() {
-      if (this.#closed) return;
+      if (this.#closed || !this.#terminal) return;
       this.#output.write(this.#pending.length ? "... " : this.#prompt);
     }
 
@@ -222,7 +223,7 @@
     #print(value: unknown, error: boolean) {
       const text = error && value instanceof Error ? (value.stack || String(value)) : Bun.inspect(value, { colors: this.#colors });
       const output = error ? process.stderr : this.#output;
-      output.write(text.replaceAll("\n", "\r\n") + "\r\n");
+      output.write(this.#terminal ? text.replaceAll("\n", "\r\n") + "\r\n" : text + "\n");
     }
   }
 

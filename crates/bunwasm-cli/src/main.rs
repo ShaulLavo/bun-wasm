@@ -469,7 +469,7 @@ const EXEC: &str = "const shell = Bun.which(\"bash\") ?? Bun.which(\"sh\") ?? \"
     process.exitCode = await child.exited;";
 
 /// `bun repl`: Bun's banner, then node:repl (Bun's REPL transform) until .exit or Ctrl+D.
-const REPL: &str = "process.stdout.write(`Welcome to Bun v${Bun.version}\\r\\nType .help for more info.\\r\\n\\r\\n`);\n\
+const REPL: &str = "if (process.stdin.isTTY) process.stdout.write(`Welcome to Bun v${Bun.version}\\r\\nType .help for more info.\\r\\n\\r\\n`);\n\
     const repl = (await import(\"node:repl\")).start();\n\
     await new Promise(resolve => repl.on(\"exit\", resolve));\n\
     process.exit(0);";
