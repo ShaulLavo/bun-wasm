@@ -239,7 +239,7 @@ async function preflight() {
   const sidecar: unknown = await Bun.file(`${artifact}.build.json`).json();
   verifyGuestBuildReceipt(bytes, sidecar);
   const receipt = await readFile(accepted, "utf8");
-  const provenance = guestProvenance(receipt, { sha256: sidecar.artifactSha256, bytes: sidecar.artifactBytes });
+  const provenance = guestProvenance(receipt, { sha256: sidecar.program.core.artifactSha256, bytes: sidecar.program.core.artifactBytes });
   return { bytes, source: provenance.source_commit, provenance };
 }
 try {

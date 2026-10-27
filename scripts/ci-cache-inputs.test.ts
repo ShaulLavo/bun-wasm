@@ -73,9 +73,13 @@ test("split producers keep the common core target separate from the JSC side cac
   expect(native).toContain('export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"');
   expect(native.match(/CARGO_BUILD_JOBS=2 bash scripts\/build\.sh/g)).toHaveLength(1);
   expect(native).not.toContain("build-bun-core.sh");
-  const jsc = string(field(named("Build the JSC Cargo guest"), "run"));
+  const common = string(field(named("Build the common engine core once"), "run"));
+  expect(common).toContain('export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"');
+  expect(common.match(/bash scripts\/build-bun-core\.sh/g)).toHaveLength(1);
+  expect(position("Build the common engine core once")).toBeLessThan(position("Start the JSC Cargo guest build"));
+  const jsc = string(field(named("Start the JSC Cargo guest build"), "run"));
   expect(jsc).toContain('export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"');
-  expect(jsc).toContain('export JSC_ENGINE_BUILD_DIR="${JSC_ENGINE_BUILD_DIR:-$JSC_BUILD_DIR/engine}"');
+  expect(string(field(named("Configure private JSC build paths"), "run"))).toContain('JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine');
   expect(jsc.match(/bash scripts\/build-bun-jsc\.sh/g)).toHaveLength(1);
   expect(string(field(field(byId("jsc-cargo-cache"), "with"), "path"))).toBe("${{ runner.temp }}/jsc/engine");
   expect(jsc).not.toContain("JSC_CARGO_TARGET_DIR=");

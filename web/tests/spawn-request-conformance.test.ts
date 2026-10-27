@@ -19,7 +19,7 @@ function decoder() {
   const abi = new ProcessABI({ memory, descriptors: new DescriptorTable(), fs: new MemFS(), pid: 1,
     signals: { signalState: createSignalState(), interrupt: new Int32Array(new SharedArrayBuffer(4)),
       requestedSignal: new Int32Array(new SharedArrayBuffer(4)), outcome: outcomeWord() },
-    service: { childExited: unused, startStatus: unused, spawn(_parent, request) { decoded.push(request); return 77; }, wait: unused, waitJob: unused, jobEmpty: unused,
+    service: { cwd: unused, jobCleanupReady: unused, childExited: unused, startStatus: unused, spawn(_parent, request) { decoded.push(request); return 77; }, wait: unused, waitJob: unused, jobEmpty: unused,
       kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused } });
   return { decoded, spawn(text: string) {
     const bytes = new TextEncoder().encode(text);
@@ -57,4 +57,10 @@ test("integral number lexemes in descriptor bindings are accepted as sent", () =
   const raw = '{"executable":"bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[{"child":1.0,"parent":1e0},{"child":-0,"parent":-0}]}';
   expect(host.spawn(raw)).toBe(77);
   expect(host.decoded[0]!.fds.map(({ child, parent }) => [Object.is(child, -0) ? 0 : child, Object.is(parent, -0) ? 0 : parent])).toEqual([[1, 1], [0, 0]]);
+});
+
+test("spawn JSON rejects a relative cwd before service lookup", () => {
+  const host = decoder();
+  expect(host.spawn(JSON.stringify({ executable: "bun", argv: [], env: {}, cwd: "relative", job: 42, fds: [] }))).toBe(-28);
+  expect(host.decoded).toEqual([]);
 });
