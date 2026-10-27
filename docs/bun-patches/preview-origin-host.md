@@ -64,3 +64,25 @@ a real page runtime, real Waffle relay and fixed native Bun fixture. It covers
 root paths/assets, history/reload, HTTP, raw WebSocket traffic, private grants,
 port reuse, page close and runtime disposal. This fixture is independent of the
 React Router application acceptance run.
+
+`web/scripts/preview-port-sockets.ts` also serves literal loopback addresses for
+registered virtual ports. An application opening `ws://127.0.0.1:<port>/path`
+selects its runtime through its registered browser Origin, then that runtime's
+fixed port grant. The same rule covers HTTP requests with an Origin header.
+Other owners and unregistered ports fail before dispatch. Shared native listeners
+retain separate owner/socket leases and close after the final owner releases them.
+Native port conflicts fail without touching a pre-existing listener. No package
+configuration, application URL rewriting, history patch or service-worker opener
+is needed. This specifically covers generic extra server ports as well as the
+primary port.
+
+The harness's `preview-paths.ts` observer records only the actual first HTTP
+request line sent into each virtual server connection. Original bytes, headers
+and bodies are forwarded unchanged. Root-mode app results retain caller pathname
+and those server request targets as independent path-agreement evidence.
+
+The literal-port pool has its own 256-socket/64-per-port limit. Pending first-grant
+requests count toward the shared exchange budget. They wait for that authenticated
+grant or revocation rather than racing startup. A reused native connection cannot
+switch runtime owners. Loopback aliases retain the browser's ordinary cookie
+rules; the dedicated root addresses provide the separate cookie hosts.

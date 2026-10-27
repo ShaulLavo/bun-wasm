@@ -1,7 +1,7 @@
 [
   {"name":"foreground stdio","valid":true,"request":{"executable":"bun","argv":["bun","-e","console.log('hi')"],"env":{"LANG":"en_US.UTF-8","UNICODE":"héllo"},"cwd":"/workspace","job":0,"fds":[{"child":0,"parent":17},{"child":1,"parent":20},{"child":2,"parent":22}]}},
   {"name":"background arbitrary descriptors","valid":true,"request":{"executable":"/node","argv":[],"env":{},"cwd":"/","job":-1,"fds":[{"child":9,"parent":12},{"child":12,"parent":9}]}},
-  {"name":"join existing job","valid":true,"request":{"executable":"bun","argv":["custom argv0"],"env":{},"cwd":"relative","job":42,"fds":[]}},
+  {"name":"join existing job","valid":true,"request":{"executable":"bun","argv":["custom argv0"],"env":{},"cwd":"/workspace","job":42,"fds":[]}},
   {"name":"worker extension","valid":true,"request":{"executable":"bun","argv":["bun","worker.ts"],"env":{"BUNWASM_WORKER_CONTROL":"{\"input\":19,\"output\":21}"},"cwd":"/workspace","job":0,"fds":[{"child":19,"parent":19},{"child":21,"parent":21}],"worker":{"resourceLimits":{"maxOldGenerationSizeMb":16},"memoryLimitMb":24}}},
   {"name":"maximum descriptor","valid":true,"request":{"executable":"bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[{"child":2147483647,"parent":2147483647}]}},
   {"name":"unrecognized extension is not a decoder error","valid":true,"request":{"executable":"bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[],"worker":{"memoryLimitMb":"ignored by generic decoder"}}},

@@ -268,3 +268,16 @@ test("the browser clears fixture sources after readiness and before project over
   expect(write).toBeGreaterThan(reset);
   expect(install).toBeGreaterThan(write);
 });
+
+
+test("browser routing retains the complete loopback range for dedicated preview origins", async () => {
+  for (const url of ["http://127.23.45.67:3137/", "http://127.255.255.254/", "http://[::1]:3137/"]) {
+    const result = await replayControl(url);
+    expect(result.continued).toBe(true);
+    expect(result.aborted).toBe(false);
+    expect(result.requests).toEqual([]);
+  }
+  const foreign = await replayControl("http://128.0.0.1:3137/");
+  expect(foreign.continued).toBe(false);
+  expect(foreign.aborted).toBe(true);
+});

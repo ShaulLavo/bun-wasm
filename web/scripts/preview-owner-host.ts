@@ -2,6 +2,7 @@ import type { Server, ServerWebSocket, WebSocketHandler } from "bun";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { PreviewHostAuthorization, PreviewHostInput, PreviewHostOpen, PreviewHostOutput } from "waffle/browser/preview-host";
+import { PreviewPortSockets, type SocketAliasOwner } from "./preview-port-sockets";
 import { LoopbackPreviewOrigins } from "../preview-origin-host";
 import { encode, hostFrame, MAX_BODY, MAX_EXCHANGES, MAX_FRAME, OWNER_PATH, type HostFrame, type OwnerFrame } from "../src/preview-owner-protocol";
 
@@ -10,6 +11,7 @@ interface Route {
   port: number;
   binding: ReturnType<LoopbackPreviewOrigins["bind"]>;
   lifetime: AbortController;
+  ready: PromiseWithResolvers<boolean>;
   timer: ReturnType<typeof setTimeout>;
   stage: { kind: "pending" } | { kind: "reserved"; origin: string } | { kind: "ready"; authorization: PreviewHostAuthorization };
 }
@@ -19,6 +21,7 @@ interface Exchange { route: Route; output(message: PreviewHostOutput): void; fai
 export class PreviewOwnerHost {
   readonly origins = new LoopbackPreviewOrigins();
   private readonly tickets = new Map<string, number>();
+  private readonly aliases = new PreviewPortSockets();
   private readonly owners = new Set<OwnerSession>();
   private closed = false;
   private readonly budget = { active: 0 };
@@ -42,7 +45,7 @@ export class PreviewOwnerHost {
     const ticket = protocols[1];
     if (protocols.length !== 2 || protocols[0] !== "bun-preview-owner" || !ticket || (this.tickets.get(ticket) ?? 0) <= Date.now()) return new Response(null, { status: 401 });
     this.tickets.delete(ticket);
-    const owner = new OwnerSession(this.origins, this.budget, () => this.owners.delete(owner));
+    const owner = new OwnerSession(this.origins, this.aliases, this.budget, () => this.owners.delete(owner));
     if (!server.upgrade(request, { data: owner, headers: { "sec-websocket-protocol": "bun-preview-owner" } })) return new Response(null, { status: 400 });
     this.owners.add(owner);
   }
@@ -62,7 +65,7 @@ export class PreviewOwnerHost {
   }
 }
 
-export class OwnerSession {
+export class OwnerSession implements SocketAliasOwner {
   private socket: ServerWebSocket<OwnerSession> | undefined;
   private readonly routes = new Map<string, Route>();
   private readonly exchanges = new Map<string, Exchange>();
@@ -70,7 +73,7 @@ export class OwnerSession {
   private owner: string | undefined;
   private closing: Promise<void> | undefined;
   private inbox: Promise<void> = Promise.resolve();
-  constructor(private readonly origins: LoopbackPreviewOrigins, private readonly budget: { active: number }, private readonly released: () => void) {}
+  constructor(private readonly origins: LoopbackPreviewOrigins, private readonly aliases: PreviewPortSockets, private readonly budget: { active: number }, private readonly released: () => void) {}
   attach(socket: ServerWebSocket<OwnerSession>): void { this.socket = socket; }
   message(source: string | Buffer): Promise<void> {
     this.inbox = this.inbox.then(() => this.receive(source));
@@ -95,6 +98,8 @@ export class OwnerSession {
       this.socket?.terminate();
       for (const route of this.routes.values()) { clearTimeout(route.timer); route.lifetime.abort(); }
       for (const exchange of Array.from(this.exchanges.values())) exchange.fail();
+      await Promise.all(Array.from(this.routes.values(), route => route.binding.catch(() => undefined)));
+      await this.aliases.closeOwner(this);
       await this.origins.closeOwner(this);
       this.routes.clear();
       this.released();
@@ -109,9 +114,11 @@ export class OwnerSession {
   private async register(id: string, port: number): Promise<void> {
     if (this.routes.has(id) || this.routes.size >= 16 || Array.from(this.routes.values()).some(route => route.port === port)) throw new Error("Preview route limit or duplicate");
     const lifetime = new AbortController();
+    const ready = Promise.withResolvers<boolean>();
+    lifetime.signal.addEventListener("abort", () => ready.resolve(false), { once: true });
     const route: Route = {
-      id, port, lifetime, stage: { kind: "pending" }, timer: setTimeout(() => { void this.close(); }, 30_000),
-      binding: this.origins.bind(this, port, {
+      id, port, lifetime, ready, stage: { kind: "pending" }, timer: setTimeout(() => { void this.close(); }, 30_000),
+      binding: this.bindRoute(port, lifetime, {
         fetch: request => this.http(route, request),
         upgrade: (request, socket, head) => this.upgrade(route, request, socket, head),
         close: () => { lifetime.abort(); for (const item of Array.from(this.exchanges.values())) if (item.route === route) item.fail(); },
@@ -131,6 +138,7 @@ export class OwnerSession {
     this.owner ??= grant.owner;
     route.stage = { kind: "ready", authorization: Object.freeze(grant) };
     clearTimeout(route.timer);
+    route.ready.resolve(true);
     this.send({ type: "bound", id: frame.id });
   }
   private async unregister(id: string): Promise<void> {
@@ -140,6 +148,39 @@ export class OwnerSession {
     clearTimeout(route.timer);
     route.lifetime.abort();
     await (await route.binding).close();
+    await this.aliases.release(route.port, this);
+  }
+  ownsOrigin(origin: string): boolean {
+    return !this.closing && Array.from(this.routes.values()).some(route => route.stage.kind === "ready" && route.stage.authorization.origin === origin && !route.lifetime.signal.aborted);
+  }
+  async fetchPort(port: number, request: Request): Promise<Response> {
+    if (request.signal.aborted) return new Response(null, { status: 410 });
+    const route = await this.readyPort(port);
+    if (!route || request.signal.aborted || route.stage.kind !== "ready") return new Response(null, { status: 403 });
+    const url = new URL(request.url);
+    const target = new URL(url.pathname + url.search, route.stage.authorization.origin);
+    return this.http(route, new Request(target, { method: request.method, headers: request.headers, body: request.body, signal: request.signal }));
+  }
+  async upgradePort(port: number, request: IncomingMessage, socket: Duplex, head: Buffer): Promise<boolean> {
+    if (socket.destroyed) return false;
+    const route = await this.readyPort(port);
+    if (!route || socket.destroyed || !this.ownsOrigin(request.headers.origin ?? "")) return false;
+    this.upgrade(route, request, socket, head);
+    return true;
+  }
+  private async readyPort(port: number): Promise<Route | undefined> {
+    const route = Array.from(this.routes.values()).find(route => route.port === port && !route.lifetime.signal.aborted);
+    if (this.closing || !route) return;
+    if (route.stage.kind === "ready") return route;
+    if (this.budget.active >= MAX_EXCHANGES) return;
+    this.budget.active++;
+    try { return await route.ready.promise && !route.lifetime.signal.aborted ? route : undefined; }
+    finally { this.budget.active--; }
+  }
+  private async bindRoute(port: number, lifetime: AbortController, endpoint: Parameters<LoopbackPreviewOrigins["bind"]>[2]) {
+    await this.aliases.reserve(port, this);
+    if (this.closing || lifetime.signal.aborted) throw new Error("Preview owner closed during socket setup");
+    return this.origins.bind(this, port, endpoint);
   }
   private exchange(route: Route, open: PreviewHostOpen, output: Exchange["output"], fail: () => void): string {
     if (this.exchanges.size >= MAX_EXCHANGES || this.budget.active >= MAX_EXCHANGES) throw new Error("Preview exchange limit");

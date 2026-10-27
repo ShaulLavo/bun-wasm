@@ -10,14 +10,14 @@ const releases: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const release of releases.reverse()) await release(); releases.length = 0; });
 function hosting() {
   const host = new PreviewOwnerHost();
-  const server: Server<OwnerSession> = Bun.serve({ hostname: "127.0.0.1", port: 0, websocket: host.websocket,
+  const server: Server<OwnerSession> = Bun.serve({ hostname: "127.0.0.2", port: 0, websocket: host.websocket,
     fetch: (request, server) => host.handles(new URL(request.url).pathname) ? host.fetch(request, server) : new Response("owner", { headers: { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp" } }),
   });
   releases.push(async () => { await host.close(); await server.stop(true); });
   return { host, server, origin: server.url.origin };
 }
 function native() {
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0,
+  const server = Bun.serve({ hostname: "127.0.0.2", port: 0,
     async fetch(request, server) {
       const url = new URL(request.url);
       if (url.pathname === "/redirect") return new Response(null, { status: 307, headers: { location: "/nested?from=redirect" } });
@@ -25,7 +25,7 @@ function native() {
         const headers = new Headers(); headers.append("set-cookie", "first=1; Path=/"); headers.append("set-cookie", "second=2; Path=/");
         return new Response("cookies", { headers });
       }
-      if (url.pathname === "/socket") { if (server.upgrade(request, { data: undefined })) return; return new Response(null, { status: 426 }); }
+      if ((url.pathname === "/socket" || url.pathname === "/_build/")) { if (server.upgrade(request, { data: undefined, headers: request.headers.get("sec-websocket-protocol") ? { "sec-websocket-protocol": request.headers.get("sec-websocket-protocol")!.split(",")[0]!.trim() } : {} })) return; return new Response(null, { status: 426 }); }
       return new Response(`${request.method}:${url.pathname}${url.search}:${await request.text()}`, { status: 201, headers: { "x-echo": request.headers.get("x-echo") ?? "", "content-type": "text/plain" } });
     }, websocket: { message(socket, message) { socket.send(message); } },
   });
@@ -173,7 +173,7 @@ for (const kind of ["pending", "stream"] as const) test(`real dispatcher propaga
   const { origin } = hosting();
   const entered = Promise.withResolvers<void>();
   const cancelled = Promise.withResolvers<void>();
-  const target = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+  const target = Bun.serve({ hostname: "127.0.0.2", port: 0, async fetch(request) {
     request.signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
     entered.resolve();
     if (kind === "stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("first")); } }));
@@ -246,4 +246,89 @@ test("an in-flight open for a retired port rejects without closing another port"
   retire = () => client.unregister(3137);
   await fetch(first).catch(() => undefined);
   expect((await fetch(second)).status).toBe(201);
+});
+
+
+test("literal extra-port WebSockets select their registered runtime and outlive another owner's close", async () => {
+  const { origin } = hosting();
+  const target = native();
+  async function ownerClient() {
+    const lifetime = new AbortController();
+    releases.push(() => lifetime.abort());
+    const owner = crypto.randomUUID();
+    const client = await PreviewOwnerClient.connect({ baseURL: origin, signal: lifetime.signal,
+      fetch: (input, init) => fetch(input, { ...init, headers: { origin } }),
+      webSocket: (url, protocols) => nativeWebSocket(url, protocols, origin),
+      async bind({ origin, port, signal }) { return nativeBinding({ owner, origin, port, target: target.url.href, signal }); },
+    });
+    releases.push(() => client.close()); return client;
+  }
+  const first = await ownerClient(), second = await ownerClient();
+  const firstRoot = await first.register(3137), secondRoot = await second.register(3137);
+  await first.register(49153);
+  async function exchange(source: string) {
+    const connection = nativeWebSocket("ws://127.0.0.1:49153/_build/", ["fixture-hmr"], source);
+    releases.push(() => connection.close());
+    await new Promise<void>((resolve, reject) => { connection.onopen = () => resolve(); connection.onerror = () => reject(new Error("Extra port rejected")); });
+    expect(connection.protocol).toBe("fixture-hmr");
+    const echoed = new Promise<string>(resolve => { connection.onmessage = event => resolve(String(event.data)); });
+    connection.send(source);
+    expect(await echoed).toBe(source);
+    connection.close();
+  }
+  await exchange(firstRoot);
+  await expect(exchange(secondRoot)).rejects.toThrow("Extra port rejected");
+  await second.register(49153);
+  await first.shutdown();
+  await exchange(secondRoot);
+  await second.shutdown();
+  const closed = nativeWebSocket("ws://127.0.0.1:49153/_build/", [], secondRoot);
+  await expect(new Promise<void>((resolve, reject) => { closed.onopen = () => resolve(); closed.onerror = () => reject(new Error("Alias closed")); })).rejects.toThrow("Alias closed");
+});
+
+test("an occupied native alias fails without replacing the existing listener", async () => {
+  const existing = Bun.serve({ hostname: "127.0.0.1", port: 49153, fetch: () => new Response("existing listener") });
+  releases.push(async () => { await existing.stop(true); });
+  const { origin } = hosting();
+  const target = native();
+  const lifetime = new AbortController();
+  releases.push(() => lifetime.abort());
+  const owner = crypto.randomUUID();
+  const client = await PreviewOwnerClient.connect({ baseURL: origin, signal: lifetime.signal,
+    fetch: (input, init) => fetch(input, { ...init, headers: { origin } }),
+    webSocket: (url, protocols) => nativeWebSocket(url, protocols, origin),
+    async bind({ origin, port, signal }) { return nativeBinding({ owner, origin, port, target: target.url.href, signal }); },
+  });
+  releases.push(() => client.close());
+  await expect(client.register(49153)).rejects.toThrow();
+  expect(await (await fetch(existing.url)).text()).toBe("existing listener");
+});
+
+test("an owned extra-port upgrade waits for its first authenticated grant", async () => {
+  const { origin } = hosting();
+  const target = native();
+  const lifetime = new AbortController();
+  releases.push(() => lifetime.abort());
+  const entered = Promise.withResolvers<void>(), ready = Promise.withResolvers<void>();
+  const owner = crypto.randomUUID();
+  const client = await PreviewOwnerClient.connect({ baseURL: origin, signal: lifetime.signal,
+    fetch: (input, init) => fetch(input, { ...init, headers: { origin } }),
+    webSocket: (url, protocols) => nativeWebSocket(url, protocols, origin),
+    async bind({ origin, port, signal }) {
+      if (port === 49153) { entered.resolve(); await ready.promise; }
+      return nativeBinding({ owner, origin, port, target: target.url.href, signal });
+    },
+  });
+  releases.push(() => { ready.resolve(); client.close(); });
+  const root = await client.register(3137);
+  const pending = client.register(49153);
+  await entered.promise;
+  const connection = nativeWebSocket("ws://127.0.0.1:49153/_build/", ["fixture-hmr"], root);
+  releases.push(() => connection.close());
+  const opened = new Promise<void>((resolve, reject) => { connection.onopen = () => resolve(); connection.onerror = () => reject(new Error("Pending owned upgrade rejected")); });
+  await Bun.sleep(1);
+  ready.resolve();
+  await pending;
+  await opened;
+  expect(connection.protocol).toBe("fixture-hmr");
 });

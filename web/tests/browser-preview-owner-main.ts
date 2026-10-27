@@ -1,17 +1,22 @@
 import { createRuntime } from "waffle";
 import type { PreviewServer } from "waffle/browser/preview";
+import { observePreviewPaths, readPreviewPaths } from "../../scripts/app-matrix/preview-paths";
 import { HostedPreviews } from "../src/hosted-previews";
 
 const runtime = createRuntime({ filesystem: { mode: "memory", workerURL: new URL("./fs-worker.js", location.href) } });
 const previews = new HostedPreviews(() => runtime);
+Reflect.set(globalThis, "playground", { previews });
+observePreviewPaths();
 const suppliedBridge = new URL(location.href).searchParams.get("bridge");
 if (!suppliedBridge) throw new Error("Missing native fixture bridge");
 const bridgeURL: string = suppliedBridge;
+const connections: number[] = [];
 function helper(): PreviewServer {
   return {
     request() { return false; },
     connect(port, sink) {
-      if (port !== 3137 && port !== 3138) return null;
+      if (port !== 3137 && port !== 3138 && port !== 49153) return null;
+      connections.push(port);
       const socket = new WebSocket(bridgeURL);
       socket.binaryType = "arraybuffer";
       const queued: Uint8Array<ArrayBuffer>[] = [];
@@ -31,8 +36,12 @@ let current = helper();
 let previous = current;
 previews.register(3137, current);
 previews.register(3138, current);
+if (new URL(location.href).searchParams.get("extra") !== "0") previews.register(49153, current);
 Reflect.set(globalThis, "previewOwnerFixture", {
   ready: () => previews.ready,
+  connects: () => connections.slice(),
+  paths: () => readPreviewPaths(),
+  addExtra: () => previews.register(49153, current),
   url: (port = 3137) => previews.url(port),
   stop: () => previews.unregister(3137, current),
   restart() { previous = current; current = helper(); previews.register(3137, current); },

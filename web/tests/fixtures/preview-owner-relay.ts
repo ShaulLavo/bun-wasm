@@ -8,7 +8,7 @@ export function nativeBinding(options: { owner: string; origin: string; port: nu
   const endpoint = new URL(options.target);
   const server: Pick<PreviewServer, "connect"> = { connect(port, sink) {
     if (port !== options.port) return null;
-    const socket = connect(Number(endpoint.port), "127.0.0.1");
+    const socket = connect(Number(endpoint.port), endpoint.hostname);
     let closed = false;
     socket.on("data", chunk => {
       const pending = sink.data(typeof chunk === "string" ? new TextEncoder().encode(chunk) : Uint8Array.from(chunk));

@@ -80,13 +80,14 @@ export class LoopbackPreviewOrigins {
   private async listen(owner: object, port: number, endpoint: PreviewOriginEndpoint, lifetime: AbortController): Promise<OwnedBinding> {
     const sockets = new Set<Socket>();
     let origin = "";
-    const server = createServer((request, response) => { void dispatch(request, response, origin, endpoint, lifetime.signal); });
+    const acceptsOrigin = (source: string) => source === origin || Array.from(this.bindings).some(route => route.owner === owner && route.binding.origin === source);
+    const server = createServer((request, response) => { void dispatchPreviewHTTP(request, response, origin, endpoint, lifetime.signal, acceptsOrigin); });
     server.on("connection", socket => {
       if (this.sockets.size >= 256 || sockets.size >= 64) { socket.destroy(); return; }
       sockets.add(socket); this.sockets.add(socket);
       socket.once("close", () => { sockets.delete(socket); this.sockets.delete(socket); });
     });
-    server.on("upgrade", (request, socket, head) => { void upgrade(request, socket, head, origin, endpoint, lifetime.signal); });
+    server.on("upgrade", (request, socket, head) => { void upgrade(request, socket, head, origin, endpoint, lifetime.signal, acceptsOrigin); });
     const addressHost = `127.${1 + this.subnet[0]! % 254}.${this.subnet[1]!}.${this.nextAddress++}`;
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, addressHost, resolve); });
     const address = server.address();
@@ -111,21 +112,21 @@ export class LoopbackPreviewOrigins {
   }
 }
 
-function rejected(request: IncomingMessage, origin: string, signal: AbortSignal): number | undefined {
+function rejected(request: IncomingMessage, origin: string, signal: AbortSignal, acceptsOrigin: (source: string) => boolean): number | undefined {
   if (signal.aborted) return 410;
   let url: URL;
   try { url = new URL(request.url ?? "/", origin); } catch { return 400; }
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.origin !== origin || request.headers.host !== new URL(origin).host) return 421;
-  if (request.headers.origin && request.headers.origin !== origin) return 403;
-  if (request.headers["sec-fetch-site"] === "cross-site" && request.headers["sec-fetch-mode"] !== "navigate") return 403;
+  if (request.headers.origin && !acceptsOrigin(request.headers.origin)) return 403;
+  if (request.headers["sec-fetch-site"] === "cross-site" && request.headers["sec-fetch-mode"] !== "navigate" && !request.headers.origin) return 403;
 }
 
-async function dispatch(incoming: IncomingMessage, outgoing: ServerResponse, origin: string, endpoint: PreviewOriginEndpoint, lifetime: AbortSignal): Promise<void> {
+export async function dispatchPreviewHTTP(incoming: IncomingMessage, outgoing: ServerResponse, origin: string, endpoint: Pick<PreviewOriginEndpoint, "fetch">, lifetime: AbortSignal, acceptsOrigin: (source: string) => boolean): Promise<void> {
   const cancelled = new AbortController();
   const abort = () => cancelled.abort();
   outgoing.once("close", abort);
   try {
-    const status = rejected(incoming, origin, lifetime);
+    const status = rejected(incoming, origin, lifetime, acceptsOrigin);
     if (status) { outgoing.writeHead(status); outgoing.end(); return; }
     const headers = new Headers();
     for (let index = 0; index < incoming.rawHeaders.length; index += 2) headers.append(incoming.rawHeaders[index]!, incoming.rawHeaders[index + 1]!);
@@ -160,9 +161,9 @@ function requestBody(incoming: IncomingMessage): ReadableStream<Uint8Array> {
   });
 }
 
-async function upgrade(request: IncomingMessage, socket: Duplex, head: Buffer, origin: string, endpoint: PreviewOriginEndpoint, signal: AbortSignal): Promise<void> {
+async function upgrade(request: IncomingMessage, socket: Duplex, head: Buffer, origin: string, endpoint: PreviewOriginEndpoint, signal: AbortSignal, acceptsOrigin: (source: string) => boolean): Promise<void> {
   try {
-    const status = rejected(request, origin, signal);
+    const status = rejected(request, origin, signal, acceptsOrigin);
     if (status) { socket.end(`HTTP/1.1 ${status} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`); return; }
     await endpoint.upgrade(request, socket, head);
   } catch { socket.destroy(); }
