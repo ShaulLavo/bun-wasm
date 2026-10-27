@@ -41,6 +41,15 @@ type Shell = typeof native;
 const cases: Record<string, (shell: Shell) => Promise<unknown>> = {
   interpolated: shell => Promise.all(strings.map(value => shell`printf '[%s]' ${value}`.text())),
   array: shell => shell`printf '[%s]' ${["a b", "c", ""]}`.text(),
+  doubleQuoted: shell => Promise.all(strings.map(value => shell`printf '[%s]' "${value}"`.text())),
+  singleQuoted: shell => Promise.all(strings.map(value => shell`printf '[%s]' '${value}'`.text())),
+  insideWord: shell => shell`printf '[%s]' "pre-${"a b"}-post" x${"$y z"}y`.text(),
+  envSnapshot: async shell => {
+    const env = { ...process.env, BUN_SHELL_VALUE: "one" };
+    const pending = shell`echo $BUN_SHELL_VALUE`.env(env);
+    env.BUN_SHELL_VALUE = "two";
+    return (await pending.text()).trim();
+  },
   json: shell => shell`echo ${JSON.stringify({ a: [1, "two"] })}`.json(),
   lines: async shell => { const lines = []; for await (const line of shell`printf '%s\n' one two`.lines()) lines.push(line); return lines; },
   nothrow: async shell => (await shell`exit 3`.nothrow().quiet()).exitCode,
@@ -75,6 +84,24 @@ test("promises run lazily and only once", async () => {
   await pending;
   expect(spawned.length).toBe(before + 1);
   expect(() => pending.cwd("/")).toThrow("Shell is already running");
+});
+
+test("a failed redirect leaves no files behind and never touches existing ones", async () => {
+  const scratch = fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/tmp", "bun-shell-test-"));
+  const previous = process.env.TMPDIR;
+  process.env.TMPDIR = scratch;
+  try {
+    fs.writeFileSync(path.join(scratch, "existing"), "kept");
+    const failing = new ReadableStream({ pull(controller) { controller.error(new Error("stream failed")); } });
+    await expect($`cat < ${failing}`.quiet()).rejects.toThrow("stream failed");
+    const buffer = Buffer.alloc(2);
+    await $`printf ok > ${buffer}`.quiet();
+    expect(buffer.toString()).toBe("ok");
+    expect(fs.readdirSync(scratch)).toEqual(["existing"]);
+  } finally {
+    process.env.TMPDIR = previous;
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
 });
 
 test("binary objects outside redirects are rejected, as a template misuse", () => {

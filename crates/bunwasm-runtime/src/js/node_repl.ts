@@ -31,10 +31,12 @@
     #decoder = new TextDecoder();
     #queue: Promise<void> = Promise.resolve();
     #interrupted = false;
+    #cancel: (() => void) | undefined;
     #closed = false;
     #onData = (chunk: Uint8Array | string) => this.#data(chunk);
     // Piped input ends after its last line: finish evaluating what was read, then exit.
     #onEnd = () => { this.#queue = this.#queue.then(() => this.close()); };
+
     #onInterrupt = () => this.#interrupt();
 
     constructor(options: Options) {
@@ -162,6 +164,8 @@
     }
 
     #interrupt() {
+      // Like Bun, Ctrl+C stops waiting for a running evaluation and returns to the prompt.
+      if (this.#cancel) return this.#cancel();
       if (this.#line || this.#pending.length) {
         this.#line = "";
         this.#cursor = 0;
@@ -182,28 +186,43 @@
     }
 
     #submit(line: string) {
+      if (this.#closed) return;
       this.#interrupted = false;
-      this.#queue = this.#queue.then(() => this.#run(line)).then(() => this.displayPrompt());
+      if (line.trim() && this.history.at(-1) !== line) this.history.push(line);
+      this.#queue = this.#queue.then(async () => {
+        if (this.#closed) return;
+        await this.#run(line);
+        this.displayPrompt();
+      });
     }
 
     async #run(line: string) {
       const trimmed = line.trim();
       if (!this.#pending.length && trimmed.startsWith(".")) return this.#command(trimmed);
       if (!this.#pending.length && !trimmed) return;
-      if (trimmed && this.history.at(-1) !== line) this.history.push(line);
       const source = this.#pending.concat(line).join("\n");
       let code: string;
       try {
         code = this.#transpiler.transformSync(source);
       } catch (error) {
-        if (incomplete(error)) { this.#pending.push(line); return; }
+        if (incomplete(error, source)) { this.#pending.push(line); return; }
         this.#pending = [];
         return this.#print(error, true);
       }
       this.#pending = [];
       try {
         let result: unknown = internal.native.evalScript(code, "[repl]");
-        if (result instanceof Promise) result = await result;
+        // The async IIFE for top-level await; a promise value itself arrives wrapped in { value }.
+        if (isThenable(result)) {
+          const cancelled = Symbol("cancelled");
+          const stop = new Promise<symbol>(resolve => { this.#cancel = () => resolve(cancelled); });
+          try {
+            result = await Promise.race([result, stop]);
+          } finally {
+            this.#cancel = undefined;
+          }
+          if (result === cancelled) { this.#output.write(this.#terminal ? "\r\n" : "\n"); return; }
+        }
         if (result && typeof result === "object" && Object.hasOwn(result, "value")) result = Reflect.get(result, "value");
         if (result !== undefined) Reflect.set(globalThis, "_", result);
         this.#print(result, false);
@@ -227,9 +246,42 @@
     }
   }
 
-  // Bun reports unterminated input as "Unexpected end of file" (and "Expected ... but found end of file").
-  function incomplete(error: unknown): boolean {
-    return /end of file/i.test(error instanceof Error ? error.message : String(error));
+  // Unterminated input continues on a "..." line: Bun reports "Unexpected end of file", and an
+  // open template literal, comment or bracket ("Unterminated string literal") is checked here.
+  function isThenable(value: unknown): value is PromiseLike<unknown> {
+    return (typeof value === "object" || typeof value === "function") && value !== null && typeof Reflect.get(value, "then") === "function";
+  }
+  function incomplete(error: unknown, source: string): boolean {
+    return /end of file/i.test(error instanceof Error ? error.message : String(error)) || unclosed(source);
+  }
+  function unclosed(source: string): boolean {
+    const stack: string[] = [];
+    const pairs: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
+    for (let index = 0; index < source.length; index++) {
+      const char = source[index];
+      if (stack.at(-1) === "`") {
+        if (char === "\\") index++;
+        else if (char === "`") stack.pop();
+        else if (char === "$" && source[index + 1] === "{") { stack.push("${"); index++; }
+        continue;
+      }
+      if (char === "/" && source[index + 1] === "/") { index = source.indexOf("\n", index); if (index < 0) return false; continue; }
+      if (char === "/" && source[index + 1] === "*") { index = source.indexOf("*/", index + 2); if (index < 0) return true; index++; continue; }
+      if (char === "'" || char === "\"") { index = closingQuote(source, index, char); if (index < 0) return false; continue; }
+      if (char === "`" || char === "(" || char === "[" || char === "{") stack.push(char);
+      else if (char === "}" && stack.at(-1) === "${") stack.pop();
+      else if (pairs[char]) { if (stack.pop() !== pairs[char]) return false; }
+    }
+    return stack.length > 0;
+  }
+  // An unterminated '...' or "..." is a real error, not more input.
+  function closingQuote(source: string, start: number, quote: string): number {
+    for (let index = start + 1; index < source.length; index++) {
+      if (source[index] === "\\") index++;
+      else if (source[index] === quote) return index;
+      else if (source[index] === "\n") return -1;
+    }
+    return -1;
   }
 
   const builtinCommands: Record<string, Command> = {

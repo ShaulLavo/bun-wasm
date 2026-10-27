@@ -35,35 +35,57 @@
     return new Uint8Array(await value.arrayBuffer());
   }
 
-  type Redirect = { kind: "input"; file: string; value: Parameters<typeof bytesOf>[0] } | { kind: "output"; file: string; target: ArrayBufferView };
-  let temporaryCounter = 0;
-  function temporaryFile(): string {
-    return path.resolve(process.env.TMPDIR || "/tmp", `bun-shell-${Date.now()}-${++temporaryCounter}`);
+  type Redirect = { kind: "input"; value: Parameters<typeof bytesOf>[0] } | { kind: "output"; target: ArrayBufferView };
+  type Quote = "" | "'" | "\"";
+
+  // The quoting state after `text`, so an interpolation stays one literal word inside "..." or '...'.
+  function quoteState(text: string, state: Quote): Quote {
+    for (let index = 0; index < text.length; index++) {
+      const char = text[index];
+      if (state === "'") {
+        if (char === "'") state = "";
+        continue;
+      }
+      if (char === "\\") { index++; continue; }
+      if (state === "\"") {
+        if (char === "\"") state = "";
+        continue;
+      }
+      if (char === "'" || char === "\"") state = char;
+    }
+    return state;
+  }
+  function quoted(text: string, state: Quote): string {
+    const inner = text.replace(/[$`"\\]/g, char => "\\" + char);
+    if (state === "\"") return inner;
+    // Close the single quotes, add a double-quoted word, and reopen them.
+    if (state === "'") return `'"${inner}"'`;
+    return escape(text);
   }
 
   // Interpolations are single words, as in Bun: strings are escaped, arrays become one word
-  // per element, { raw } is inserted as written, and JS objects after < or > become files.
+  // per element, { raw } is inserted as written, and JS objects after < or > become files that
+  // the script reaches through shell variables assigned when it runs.
   function interpolate(raw: readonly string[], values: readonly unknown[], redirects: Redirect[]): string {
     let script = raw[0];
+    let state = quoteState(raw[0], "");
     values.forEach((value, index) => {
-      script += word(value, script, redirects) + raw[index + 1];
+      script += word(value, script, state, redirects) + raw[index + 1];
+      state = quoteState(raw[index + 1], state);
     });
     return script;
   }
-  function word(value: unknown, before: string, redirects: Redirect[]): string {
-    if (Array.isArray(value)) return value.map(item => word(item, before, redirects)).join(" ");
+  function word(value: unknown, before: string, state: Quote, redirects: Redirect[]): string {
+    if (Array.isArray(value)) return value.map(item => word(item, before, state, redirects)).join(" ");
     if (value && typeof value === "object" && "raw" in value) return String(value.raw);
-    if (isBunFile(value)) return escape(value.name);
-    const redirect = /([<>])\s*$/.exec(before)?.[1];
-    if (binary(value)) {
-      if (!redirect) throw new TypeError("Bun.$ accepts binary JavaScript objects only as < or > redirect targets");
-      const file = temporaryFile();
-      if (redirect === "<") redirects.push({ kind: "input", file, value });
-      else if (ArrayBuffer.isView(value)) redirects.push({ kind: "output", file, target: value });
-      else throw new TypeError("Bun.$ can redirect output only into a Buffer, TypedArray or Bun.file()");
-      return escape(file);
-    }
-    return escape(value);
+    if (isBunFile(value)) return quoted(value.name, state);
+    if (!binary(value)) return quoted(String(value), state);
+    const redirect = state ? undefined : /([<>])\s*$/.exec(before)?.[1];
+    if (!redirect) throw new TypeError("Bun.$ accepts binary JavaScript objects only as < or > redirect targets");
+    if (redirect === "<") redirects.push({ kind: "input", value });
+    else if (ArrayBuffer.isView(value)) redirects.push({ kind: "output", target: value });
+    else throw new TypeError("Bun.$ can redirect output only into a Buffer, TypedArray or Bun.file()");
+    return `"$__bun_shell_redirect_${redirects.length - 1}"`;
   }
 
   class ParsedShellScript {
@@ -77,7 +99,7 @@
       this.redirects = redirects;
     }
     setCwd(cwd: string) { this.cwd = cwd; }
-    setEnv(env: Env) { this.env = env; }
+    setEnv(env: Env) { this.env = { ...env }; }
     setQuiet(quiet: boolean) { this.quiet = quiet; }
   }
 
@@ -103,12 +125,16 @@
   async function execute(parsed: ParsedShellScript): Promise<{ code: number; stdout: Bytes; stderr: Bytes }> {
     const fs = internal.builtin("node:fs");
     const cwd = parsed.cwd ?? process.cwd();
-    const env = parsed.env ?? process.env;
+    const env = parsed.env ?? { ...process.env };
+    // A private directory owns every redirect file, so cleanup removes only what this run made.
+    const directory = parsed.redirects.length ? fs.mkdtempSync(path.resolve(process.env.TMPDIR || "/tmp", "bun-shell-")) : undefined;
     try {
-      for (const redirect of parsed.redirects) {
-        if (redirect.kind === "input") fs.writeFileSync(redirect.file, await bytesOf(redirect.value));
+      const files = parsed.redirects.map((_, index) => path.resolve(directory!, String(index)));
+      for (const [index, redirect] of parsed.redirects.entries()) {
+        if (redirect.kind === "input") fs.writeFileSync(files[index], await bytesOf(redirect.value), { flag: "wx" });
       }
-      const child = internal.require("spawn").spawn([findShell(env, cwd), "-c", parsed.script], {
+      const assignments = files.map((file, index) => `__bun_shell_redirect_${index}=${quoted(file, "")}\n`).join("");
+      const child = internal.require("spawn").spawn([findShell(env, cwd), "-c", assignments + parsed.script], {
         cwd, env, stdin: "inherit", stdout: "pipe", stderr: "pipe",
       });
       const [stdout, stderr, code] = await Promise.all([
@@ -116,15 +142,15 @@
         collect(child.stderr, parsed.quiet ? undefined : process.stderr),
         child.exited,
       ]);
-      for (const redirect of parsed.redirects) {
-        if (redirect.kind !== "output" || !fs.existsSync(redirect.file)) continue;
-        const written = fs.readFileSync(redirect.file);
+      for (const [index, redirect] of parsed.redirects.entries()) {
+        if (redirect.kind !== "output" || !fs.existsSync(files[index])) continue;
+        const written = fs.readFileSync(files[index]);
         const target = new Uint8Array(redirect.target.buffer, redirect.target.byteOffset, redirect.target.byteLength);
         target.set(written.subarray(0, target.length));
       }
       return { code, stdout, stderr };
     } finally {
-      for (const redirect of parsed.redirects) fs.rmSync(redirect.file, { force: true });
+      if (directory) fs.rmSync(directory, { recursive: true, force: true });
     }
   }
 

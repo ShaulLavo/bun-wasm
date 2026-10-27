@@ -14,4 +14,4 @@ Native Bun runs `$` templates in its own shell interpreter. In bun-wasm the inte
 
 `bun exec <script>` runs the script with `sh -c` and inherited standard streams, and exits with its status.
 
-`scripts/bun-shell.test.ts` loads the real module over the host's bash and compares escaping, brace expansion and 21 command cases with native `Bun.$`. The browser proof is the `bun-shell` mode of `web/tests/browser-shell-product.ts`.
+`scripts/bun-shell.test.ts` loads the real module over the host's bash and compares escaping, brace expansion and 25 command cases (including interpolation inside double and single quotes and the `.env()` snapshot) with native `Bun.$`. Redirect files live in a private `mkdtemp` directory created when the command runs and removed afterwards, so a failed redirect leaves nothing and never touches other files. The browser proof is the `bun-shell` mode of `web/tests/browser-shell-product.ts`.

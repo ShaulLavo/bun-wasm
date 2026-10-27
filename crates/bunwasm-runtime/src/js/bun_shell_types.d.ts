@@ -1,9 +1,10 @@
 declare namespace BunWasm {
   interface ShellFs {
-    writeFileSync(path: string, data: Uint8Array): void;
+    writeFileSync(path: string, data: Uint8Array, options?: { flag: string }): void;
+    mkdtempSync(prefix: string): string;
     readFileSync(path: string): BufferBytes;
     existsSync(path: string): boolean;
-    rmSync(path: string, options: { force: boolean }): void;
+    rmSync(path: string, options: { recursive?: boolean; force: boolean }): void;
   }
   interface Internal {
     BunFile: abstract new (...args: never[]) => { name?: unknown };
