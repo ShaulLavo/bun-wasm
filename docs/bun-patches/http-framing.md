@@ -14,7 +14,11 @@ The Node v26.7.0 control and Bun's Node test files at
 `9510e74152073d850a18758ca41114d8f214ffa6` supply behavioral references.
 Header commitment is distinct from flushing bytes. Response framing preserves
 explicit length and transfer encoding, streams chunked bodies, omits bodies
-for HEAD and bodyless status codes, and writes trailers. HTTP clients use the
+for HEAD and bodyless status codes, and writes trailers. `ServerResponse` also
+exposes Node's `_implicitHeader()` and serialized `_header` state so response
+middleware can commit headers through `writeHead()` before writing or ending.
+`scripts/net-http-flow.test.ts` exercises that compression-middleware contract
+against the real response factory. HTTP clients use the
 same socket transport for ordinary and upgraded responses to preserve raw
 header names and trailers. A typed incremental body decoder handles fixed,
 chunked, and EOF framing. Header, method, path and status validation occurs

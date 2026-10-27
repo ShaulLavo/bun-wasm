@@ -4,7 +4,7 @@
 (function (native) {
   "use strict";
 
-  const internal = { native };
+  const internal = { native, sharedObjects: native.sharedObjects };
 
   // Engine hooks for the formatter (inspect.js) and util.types.
   function isModuleNamespace(value) {
@@ -517,6 +517,7 @@
 
   const moduleCache = Object.create(null);
   let mainModule;
+  const compileModule = internal.require("module_compile");
 
   class Module {
     constructor(id, parent) {
@@ -529,12 +530,15 @@
       this.paths = nodeModulePaths(this.path);
       defineHidden(this, { parent });
     }
+    _compile(content, filename) {
+      return callModuleWrapper(this, compileModule(content, filename), filename);
+    }
     require(spec) {
       if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
         const exposed = internal.require("node_stream_internals").modules;
         if (Object.prototype.hasOwnProperty.call(exposed, spec)) return exposed[spec];
       }
-      return requireFrom(spec, this.filename);
+      return requireFrom(spec, this);
     }
   }
 
@@ -601,35 +605,38 @@
     topLevelFunctions.add(wrapper);
     const require = makeRequire(path, mod);
     if (wrapper.length !== 6) {
-      wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
-      return;
+      return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
     }
     const meta = Object.create(null);
     internal.initImportMeta(meta, path, mod === mainModule);
-    wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
+    return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
   }
 
-  function resolveFrom(spec, fromPath) {
+  function resolveFrom(spec, parent, options) {
     if (typeof spec !== "string") {
       const err = new TypeError(`The "id" argument must be of type string. Received ${internal.describe(spec)}`);
       err.code = "ERR_INVALID_ARG_TYPE";
       throw err;
     }
-    return native.resolve(spec, fromPath, true);
+    return internal.builtin("node:module")._resolveFilename(spec, parent, false, options);
   }
 
-  function requireFrom(spec, fromPath) {
-    const resolved = resolveFrom(spec, fromPath);
+  function requireFrom(spec, parent) {
+    const resolved = typeof spec === "string" && spec.startsWith("node:")
+      ? native.resolve(spec, parent.filename, true)
+      : resolveFrom(spec, parent);
     if (isBuiltinId(resolved)) return internal.builtin(resolved);
     return loadModule(resolved, null).exports;
   }
 
   function makeRequire(fromPath, mod) {
+    const parent = mod || new Module(fromPath, undefined);
     function require(spec) {
-      return mod ? mod.require(spec) : requireFrom(spec, fromPath);
+      return parent.require(spec);
     }
-    require.resolve = function resolve(spec) {
-      return resolveFrom(spec, fromPath);
+    require.resolve = function resolve(spec, options) {
+      const resolved = resolveFrom(spec, parent, options);
+      return resolved === "node:" + spec ? spec : resolved;
     };
     require.resolve.paths = function paths(spec) {
       return isBuiltinId(spec) ? null : nodeModulePaths(dirname(fromPath));

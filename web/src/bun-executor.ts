@@ -1,3 +1,4 @@
+import { linkedWorkerHooks, type LinkPlanSource } from "waffle/link";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
 import { startEngineHost } from "./engine-host.js";
@@ -7,11 +8,14 @@ import { DefaultSignal } from "./default-signal.js";
 import type { NetRequest } from "./net/protocol.js";
 import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net/trampoline.js";
 import { createLookupClient, type LookupClient } from "./net/lookup.js";
+import { exportSharedObjects, type SharedObjectService } from "./shared-objects/service.js";
+import type { BunSharedConnection, BunSharedNativeHost } from "./shared-objects/protocol.js";
 
 export type Engine = "quickjs" | "jsc" | "browser" | "hermes";
 
 export interface RunRequest extends RuntimeWorkerRequest {
   engine: Engine;
+  linkPlan?: LinkPlanSource;
   adapter?: "bun" | "preview1";
   trace: boolean;
   /** The networking ring (net/ring.ts); null when the page is not cross-origin isolated. */
@@ -25,6 +29,8 @@ export interface RunRequest extends RuntimeWorkerRequest {
   lookupPort?: MessagePort;
   /** Browser-engine DNS lookup channel name used by adapter-launched workers. */
   lookupChannel?: string;
+  /** Private native route only. Guest codec installation/startup hydration is separate. */
+  sharedObjects?: { readonly owner: string };
   /**
    * How the wasm engines get the host functions (`?slots=`): "imports" (default) has the guest
    * call them through a WASI import; "table" appends them to the guest's function table as
@@ -34,7 +40,7 @@ export interface RunRequest extends RuntimeWorkerRequest {
   slots?: "table" | "imports" | "off";
 }
 
-export type WorkerMessage = RuntimeWorkerMessage | { type: "net"; req: NetRequest };
+export type WorkerMessage = RuntimeWorkerMessage | { type: "net"; req: NetRequest } | BunSharedConnection;
 
 // The browser engine's polyfills replace globalThis.Response; Cache.put needs the real one.
 const NativeResponse = Response;
@@ -65,7 +71,7 @@ const smallStackKib = (): Partial<Record<Engine, string>> | null => /\n\s+at /.t
   ? null
   : { quickjs: "32", jsc: "192" };
 
-export interface BunExecutorHost {
+export interface BunExecutorHost extends BunSharedNativeHost {
   /** The worker's global scope: its location and fetch, and where network requests are posted. */
   readonly location: { href: string };
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
@@ -79,6 +85,7 @@ export interface BunExecutorHost {
  */
 export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globalThis as unknown as BunExecutorHost): WorkerExecutor<RunRequest> {
   let netHost: NetHost | null = null;
+  let sharedObjects: SharedObjectService | undefined;
   const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
   const stackKib = smallStackKib()?.[req.engine];
   const env = stackKib && !("BUN_WASM_STACK_KIB" in req.env) ? { ...req.env, BUN_WASM_STACK_KIB: stackKib } : req.env;
@@ -88,8 +95,19 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       ? createLookupClient(new BroadcastChannel(req.lookupChannel))
       : undefined;
   const lookup = lookupClient;
+  const linked = linkedExecutor(req);
   return {
+    ...linked,
     hostCallFd: HOST_CALL_FD,
+    setup({ checkActive }) {
+      if (!req.sharedObjects) return;
+      if (req.engine !== "browser" || req.adapter === "preview1") throw new TypeError("Shared objects require the browser Bun engine");
+      if (sharedObjects) throw new Error("Shared-object setup already completed");
+      checkActive();
+      sharedObjects = exportSharedObjects(req.sharedObjects.owner, host);
+      try { checkActive(); }
+      catch (error) { sharedObjects.close(); throw error; }
+    },
     env: () => env,
     // Bun's own fatal-unwind type, which the engine interruption probes recognize.
     signalError(signal): never { throw new DefaultSignal(signal); },
@@ -107,12 +125,13 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       else installHostSlots(instance, impls);
     },
     beforeFinish() {
-      lookupClient?.close();
-      req.lookupPort?.close();
+      try { linked.beforeFinish?.(); }
+      finally { finishHostServices(sharedObjects, lookupClient, req.lookupPort); }
     },
     run({ instance, checkActive, finish, runtimeState }, exited) {
       const ready = instance.exports.bunwasm_ready as (() => number) | undefined;
       if (exited !== null || req.adapter === "preview1" || req.engine !== "browser" || ready?.() !== 1) return exited ?? 0;
+      if (req.sharedObjects && !sharedObjects) throw new Error("Shared-object setup did not complete");
       const net = slots !== "off" ? netHost?.engineNet(lookup) ?? (lookup ? {
         natives: { hostLookup: lookup },
         caps: {},
@@ -123,8 +142,30 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
         instance, moduleUrls: "blob",
         modules: req.moduleCache ? moduleStore(req.moduleCache, host.location) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
-        net, processWake: runtimeState?.wake, onExit: code => finish({ code }),
+        sharedObjects, net, processWake: runtimeState?.wake, onExit: code => finish({ code }),
       });
     },
+  };
+}
+
+function finishHostServices(sharedObjects: SharedObjectService | undefined, lookupClient: LookupClient | undefined, lookupPort: MessagePort | undefined) {
+  try { sharedObjects?.close(); }
+  finally {
+    try { lookupClient?.close(); }
+    finally { lookupPort?.close(); }
+  }
+}
+
+function linkedExecutor(req: RunRequest): Pick<WorkerExecutor<RunRequest>, "instantiate" | "initialize" | "beforeFinish"> {
+  if (!req.linkPlan) return {};
+  const request = { ...req, linkPlan: req.linkPlan };
+  const hooks = linkedWorkerHooks();
+  return {
+    instantiate(imports, context) {
+      if (!hooks.instantiate) throw new Error("linked worker instantiate hook is missing");
+      return hooks.instantiate(imports, { ...context, request });
+    },
+    initialize(context) { hooks.initialize?.({ ...context, request }); },
+    beforeFinish: hooks.beforeFinish,
   };
 }

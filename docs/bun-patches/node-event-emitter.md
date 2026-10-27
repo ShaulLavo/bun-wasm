@@ -129,7 +129,25 @@ come from Node; the fixture's manual marker preserves that attribution.
 | [`event_emitter_async_resource.ts`](#node-event-emitter) | Port | Adapt Bun's async emitter to the guest AsyncResource context bridge. |
 | [`crates/bunwasm-runtime/src/js/events.ts`, rejection capture](#listener-rejection-capture) | Port | Adapt Node v24.22.1 thenable observation and rejection dispatch to the existing guest tick scheduler. |
 | [`crates/bunwasm-runtime/src/js/events.ts`, listener publication](#node-event-emitter) | Host feature | Original mutation hook publishes signal dispositions before user listener-removal callbacks. |
+| [`crates/bunwasm-runtime/src/js/events.ts`, worker wrapper teardown](#worker-wrapper-teardown) | Port | Restore Bun's removal-capability check after a successful promise-based event wait. |
 
 [Parent context](bun-patch-series.md).
 
 [Ledger scope and pinned revisions](scope.md).
+
+### Worker wrapper teardown
+
+`events.ts::EventEmitter.once` checks for `removeListener` before removing the
+opposite error listener after a successful event. This restores the resolver
+check in Bun `src/js/node/events.ts` at pin
+`9510e74152073d850a18758ca41114d8f214ffa6`, also observed in the local comparison
+revision `d71508d31edf06765c12adf0df137ef531539f68`. This is a **Port** correction,
+not a new host adapter. The generic registration helper, failure cleanup and
+abort cleanup are unchanged.
+
+Tinypool 1.1.1 wraps its process and thread workers with `on` and `once` methods
+but no removal method. Its pool teardown passes those wrappers to `events.once`.
+Native Bun and Node resolve the successful exit and retain the unremovable
+error listener. The focused factory regression preserves that behavior and
+checks normal removal, worker failure and abort. The executable AST fence
+inverts exactly this guard before checking its unchanged original hashes.

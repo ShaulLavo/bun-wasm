@@ -24,7 +24,7 @@ function runConfirmation(run: ReturnType<typeof startRun>) {
   return { result, confirmed: () => confirmed };
 }
 
-function isolatedRoot(isolated = true, engine: Engine = "browser", options: Parameters<typeof processRuntimeFixture>[1] = {}, args = ["-e", "0"], prepare?: (runtime: ReturnType<typeof processRuntimeFixture>) => void) {
+function isolatedRoot(isolated = true, engine: Engine = "browser", options: Parameters<typeof processRuntimeFixture>[1] = {}, args = ["-e", "0"], prepare?: (runtime: ReturnType<typeof processRuntimeFixture>) => void, moduleOverride?: WebAssembly.Module) {
   const originalWorker = globalThis.Worker;
   const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
@@ -75,7 +75,7 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
   const runtime = processRuntimeFixture(filesystem, options);
   prepare?.(runtime);
   const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-  const run = startRun({ engine, module, args, env: {}, runtime, moduleScope: false }, {
+  const run = startRun({ engine, module: moduleOverride ?? module, args, env: {}, runtime, moduleScope: false }, {
     stdout(data) { output.push(new TextDecoder().decode(data)); }, stderr() {}, phase(name) { phases.push(name); },
   });
   return {
@@ -167,13 +167,21 @@ for (const engine of engines) {
   });
 
   test(`${engine} roots retain explicit engine overrides and cache each guest module`, async () => {
+    const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+    const { programLinkPlan } = await import("../../src/assets");
+    const { core, side } = quickjsPair();
+    const pair = new Map([["bun.wasm", core], ["quickjs.wasm", side]]);
+    const builds = Object.fromEntries(Array.from(pair, ([name, bytes]) => [name, new Bun.CryptoHasher("sha256").update(bytes).digest("hex")]));
+    const originalBuilds = Object.getOwnPropertyDescriptor(globalThis, "__bunwasmBuilds");
+    Object.defineProperty(globalThis, "__bunwasmBuilds", { configurable: true, value: builds });
     const register = spyOn(SubprocessBroker.prototype, "register");
     const urls: string[] = [];
     const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) => {
       const url = String(input);
       urls.push(url);
-      if (url.endsWith(".gz")) return new Response(null, { status: 404 });
-      return new Response(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]), { headers: { "content-type": "application/wasm" } });
+      const name = new URL(url).pathname.slice(1);
+      if (name.endsWith(".gz")) return new Response(null, { status: 404 });
+      return new Response(pair.get(name) ?? new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]), { headers: { "content-type": "application/wasm" } });
     }, { preconnect: globalThis.fetch.preconnect }));
     const state = isolatedRoot(false, engine);
     try {
@@ -193,15 +201,20 @@ for (const engine of engines) {
         expect(again).toBe(module);
         if (selected === engine) expect(module).toBe(state.request.module);
         else expect(module).not.toBe(state.request.module);
+        if (selected === "quickjs" && selected !== engine) expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(side);
         loaded.add(module);
       }
       expect(loaded.size).toBe(available.length);
-      expect(urls).toEqual(available.filter(selected => selected !== engine).flatMap(selected => [
-        `http://localhost/${ENGINES[selected].wasm}.gz`, `http://localhost/${ENGINES[selected].wasm}`,
-      ]));
+      expect(urls).toEqual(available.filter(selected => selected !== engine).flatMap(selected => selected === "quickjs"
+        ? ["bun.wasm", "quickjs.wasm"].flatMap(name => [`http://localhost/${name}.gz?v=${builds[name]}`, `http://localhost/${name}`])
+        : [`http://localhost/${ENGINES[selected].wasm}.gz`, `http://localhost/${ENGINES[selected].wasm}`]));
     } finally {
       try { await state.dispose(); }
-      finally { register.mockRestore(); fetch.mockRestore(); }
+      finally {
+        register.mockRestore(); fetch.mockRestore();
+        if (originalBuilds) Object.defineProperty(globalThis, "__bunwasmBuilds", originalBuilds);
+        else Reflect.deleteProperty(globalThis, "__bunwasmBuilds");
+      }
     }
   });
 }
@@ -758,8 +771,28 @@ test("process runtime fixture releases program registrations idempotently", asyn
   } finally { unregisterAdapter(); await runtime.dispose(); }
 });
 
-test("page lint/fmt roots lazily compile verified tools once and retain the selected engine", async () => {
+async function assertToolsRoot(engine: "quickjs" | "jsc" | "browser", linked: WebAssembly.Module, tools?: WebAssembly.Module) {
+  const state = isolatedRoot(false, engine, {}, engine === "jsc" ? ["--cwd", "/", "fmt"] : ["lint"], undefined, engine === "quickjs" ? linked : undefined);
+  try {
+    await state.ready;
+    tools ??= state.request.module;
+    expect(state.request.module).toBe(tools);
+    expect(state.request.engine).toBe(engine);
+    expect(state.request.args[0]).toBe(`${ENGINE_BIN[engine]}/bun`);
+    expect(state.request.runtimeProcess).toBeDefined();
+    expect(state.request.linkPlan).toBeUndefined();
+    state.worker.exit(0);
+    expect((await state.run.done).code).toBe(0);
+    return tools;
+  } finally { await state.dispose(); }
+}
+
+test("page lint/fmt roots lazily compile verified tools once and clear the selected pair plan", async () => {
   const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareQuickjsProgram } = await import("../../src/assets");
+  const { core, side } = quickjsPair();
+  const linked = await prepareQuickjsProgram(core, side);
   const build = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
   const originalBuilds = Object.getOwnPropertyDescriptor(globalThis, "__bunwasmBuilds");
   const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => new Response(Bun.gzipSync(bytes)), { preconnect: globalThis.fetch.preconnect }));
@@ -768,17 +801,7 @@ test("page lint/fmt roots lazily compile verified tools once and retain the sele
     Object.defineProperty(globalThis, "__bunwasmBuilds", { configurable: true, value: { "bun-tools.wasm": build } });
     let tools: WebAssembly.Module | undefined;
     for (const engine of ["quickjs", "jsc", "browser"] as const) {
-      const state = isolatedRoot(false, engine, {}, engine === "jsc" ? ["--cwd", "/", "fmt"] : ["lint"]);
-      try {
-        await state.ready;
-        tools ??= state.request.module;
-        expect(state.request.module).toBe(tools);
-        expect(state.request.engine).toBe(engine);
-        expect(state.request.args[0]).toBe(`${ENGINE_BIN[engine]}/bun`);
-        expect(state.request.runtimeProcess).toBeDefined();
-        state.worker.exit(0);
-        expect((await state.run.done).code).toBe(0);
-      } finally { await state.dispose(); }
+      tools = await assertToolsRoot(engine, linked, tools);
     }
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(compile).toHaveBeenCalledTimes(1);

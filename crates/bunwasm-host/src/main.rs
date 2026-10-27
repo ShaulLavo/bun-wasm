@@ -4,6 +4,7 @@
 #[path = "../../bunwasm-cli/src/tool_args.rs"]
 mod tool_args;
 
+mod linked;
 mod net;
 mod process;
 mod slots;
@@ -207,8 +208,8 @@ fn guest_pwd(cwd: &Path, dirs: &[(PathBuf, String)]) -> Option<String> {
 fn run(options: Options) -> Result<i32> {
     let wasm = wasm_path(&options);
     let engine = engine()?;
-    let module =
-        Module::from_file(&engine, &wasm).with_context(|| format!("loading {}", wasm.display()))?;
+    let mut linked = linked::Programs::default();
+    let module = linked.load(&engine, &wasm)?;
 
     let cwd = std::env::current_dir().context("reading the current directory")?;
     let dirs = if options.dirs.is_empty() {
@@ -231,8 +232,12 @@ fn run(options: Options) -> Result<i32> {
     env.push(("BUNWASM_EXEC_PATH".into(), "/bin/bun".into()));
     let mut runtime = process::Runtime::new(engine.clone(), module, dirs)?;
     Arc::get_mut(&mut runtime).unwrap().tools_path = Some(wasm.with_file_name("bun-tools.wasm"));
+    Arc::get_mut(&mut runtime).unwrap().linked = linked;
     for (name, path) in &options.engines {
-        let module = Module::from_file(&engine, path)
+        let module = Arc::get_mut(&mut runtime)
+            .unwrap()
+            .linked
+            .load(&engine, path)
             .with_context(|| format!("loading {name} engine {}", path.display()))?;
         runtime.register_engine(name, &module)?;
     }
@@ -353,10 +358,14 @@ fn run_module_instance(
     )?;
     linker.allow_shadowing(false);
     slots::add_import(&mut linker, &mut store)?;
-    let instance = linker.instantiate(&mut store, runtime.module_for(&argv, module)?)?;
+    let selected = runtime.module_for(&argv, module)?;
+    let instance = linker.instantiate(&mut store, selected)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");
     slots::install(&mut store, &instance)?;
     process::wasi::initialize(&linker, &mut store)?;
+    runtime
+        .linked
+        .initialize(selected, instance, &linker, &mut store)?;
 
     let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
     if !cancel.mark_started() {

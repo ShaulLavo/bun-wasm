@@ -13,7 +13,7 @@ path = "src/main.rs"
 default = ["engine-quickjs", "bun-transpiler", "bun-build"]
 # The JS engine: QuickJS-ng (bun.wasm) or Bun's JavaScriptCore (bun-jsc.wasm,
 # scripts/build-bun-jsc.sh). Pick exactly one.
-engine-quickjs = ["bunwasm-runtime/engine-quickjs"]
+engine-quickjs = ["bunwasm-runtime/engine-split"]
 engine-jsc = ["bunwasm-runtime/engine-jsc"]
 # The host's JS engine (bun-browser.wasm, scripts/build-bun-browser.sh).
 engine-host = ["bunwasm-runtime/engine-host", "bun-transpiler"]

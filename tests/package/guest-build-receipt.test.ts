@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { prepareGuestBuildInputs, verifyGuestBuildReceipt, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
+import { prepareGuestBuildInputs, verifyGuestBuildReceipt, verifyGuestCompanions, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { guestBuilds, hash } from "../../scripts/guest-source-manifest.ts";
 import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture, wasm } from "./guest-receipt-fixture.ts";
 
@@ -174,5 +174,28 @@ for (const path of ["vendor/boringssl/crypto/input.c", "jsc-build/webkit/Source/
     const inputs = await prepareGuestBuildInputs(selected);
     await writeFile(join(options.repository, path), "changed native input");
     await expect(writeGuestBuildReceipt(selected, artifact, inputs)).rejects.toThrow("changed during the build");
+  });
+});
+
+for (const build of ["quickjs", "quickjs-minimal"] as const) test(`${build} receipt requires matching side identity and bytes`, async () => {
+  await withReceiptFixture(async options => {
+    const selected = { ...options, build };
+    const directory = join(options.repository, "dist");
+    const artifact = join(directory, "bun.wasm");
+    const side = join(directory, "quickjs.wasm");
+    await writeFile(artifact, wasm);
+    const inputs = await prepareGuestBuildInputs(selected);
+    const receipt = await writeGuestBuildReceipt(selected, artifact, inputs);
+    expect(receipt.quickjs).toEqual({ artifactSha256: hash(wasm), artifactBytes: wasm.length });
+    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, quickjs: undefined })).toThrow("Missing paired QuickJS identity");
+    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, quickjs: { artifactSha256: "bad", artifactBytes: 8 } })).toThrow("Missing paired QuickJS identity");
+    await expect(verifyGuestCompanions(receipt, directory)).resolves.toBeUndefined();
+    await writeFile(side, new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120])));
+    await expect(verifyGuestCompanions(receipt, directory)).rejects.toThrow("paired QuickJS bytes");
+    await writeFile(side, "not wasm");
+    await expect(verifyGuestCompanions(receipt, directory)).rejects.toThrow("Invalid paired QuickJS module");
+    await rm(side);
+    await expect(verifyGuestCompanions(receipt, directory)).rejects.toThrow("quickjs.wasm");
+    await expect(writeGuestBuildReceipt(selected, artifact, inputs)).rejects.toThrow("quickjs.wasm");
   });
 });

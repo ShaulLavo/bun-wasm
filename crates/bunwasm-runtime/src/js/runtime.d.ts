@@ -43,7 +43,12 @@ declare namespace BunWasm {
       setImmediate(callback: () => void): unknown;
       clearImmediate(handle: unknown): void;
     };
-    require(name: "net_address"): { isIP(value: string): 0 | 4 | 6; isIPv6(value: string): boolean };
+    require(name: "net_address"): {
+      isIP(value: string): 0 | 4 | 6;
+      isIPv6(value: string): boolean;
+      port(value?: unknown): number;
+      error<T extends Error>(Ctor: new(message: string) => T, code: string, message: string): T & { code: string };
+    };
     require(name: "path"): { resolve(...paths: string[]): string; dirname(path: string): string; basename(path: string): string };
     runInContext(context: unknown, callback: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]): unknown;
     handleUncaught(error: unknown): boolean;
@@ -289,7 +294,7 @@ declare namespace BunWasm {
     bunBuiltinSource(id: number): string | undefined;
     bunBuiltinHookName(id: number): string;
     bunBuiltinErrorCode(id: number): string;
-    evalScript(source: string, filename: string): (intrinsics: Record<string, unknown>) => unknown;
+    evalScript(source: string, filename: string, firstLine?: number): (intrinsics: Record<string, unknown>) => unknown;
     isPromise(value: unknown): boolean;
     isProxy(value: unknown): boolean;
     isError(value: unknown): boolean;
@@ -387,6 +392,7 @@ declare namespace BunWasm {
     /** Starts as strings; the process Proxy permits raw Symbol values and accessor results. */
     env(): Record<PropertyKey, unknown>;
     argv(): string[];
+    execArgv(): string[];
     execPath(): string;
     chdir(path: string): void;
     nanoseconds(): number;

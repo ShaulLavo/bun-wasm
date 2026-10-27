@@ -30,12 +30,13 @@ function fixture() {
   class Duplex { constructor() { held(); } }
   const stream = { Duplex, getDefaultHighWaterMark() { defaultReads++; return getDefaultHighWaterMark(false); } };
   function factory(name: string) {
-    const extension = name === "node_net_server" ? "ts" : "js";
+    const extension = ["node_net_server", "net_port"].includes(name) ? "ts" : "js";
     const source = readFileSync(new URL(`../../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url), "utf8");
     const text = extension === "ts" ? new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`) : source;
     return runInNewContext(text);
   }
-  const address = factory("net_address")();
+  const ports = factory("net_port")();
+  const address = factory("net_address")({ require: () => ports });
   const internal = {
     native: new Proxy({}, { get: held }),
     builtin(name: string) { if (name !== "node:stream") return held(); return stream; },

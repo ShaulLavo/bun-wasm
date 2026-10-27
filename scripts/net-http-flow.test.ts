@@ -74,10 +74,11 @@ function fixture() {
     hostPeerAddr: () => '{"address":"127.0.0.1","port":80,"family":"IPv4"}',
     hostLocalAddr: () => '{"address":"127.0.0.1","port":1234,"family":"IPv4"}',
   };
+  const ports = load("net_port")();
   const modules: Record<string, unknown> = {
     events: EventEmitter, buffer: { Buffer }, websocket: { clientClass: () => undefined },
     http_common: load("http_common")(), http_body: load("http_body")(), http_agent: load("http_agent")(),
-    net_address: load("net_address", "js")(), node_net_socket_options: load("node_net_socket_options")(),
+    net_port: ports, net_address: load("net_address", "js")({ require: () => ports }), node_net_socket_options: load("node_net_socket_options")(),
     fetch_body: load("fetch_body")(), compression_streams: { decode: (body: ReadableStream) => body },
   };
   modules.net_hostname = load("net_hostname")({ require: (name: string) => modules[name] });
@@ -378,3 +379,25 @@ for (const terminal of ["complete", "destroy"] as const) {
     } finally { req.destroy(); await state.pump(); }
   });
 }
+
+test("ServerResponse implicit headers support compression response wrappers", async () => {
+  const state = fixture();
+  const { connection, response } = state.server();
+  const end = response.end;
+  Reflect.set(response, "end", function (this: ServerResponse, chunk?: string, encoding?: BufferEncoding) {
+    if (!Reflect.get(this, "_header")) Reflect.get(this, "_implicitHeader").call(this);
+    return Reflect.apply(end, this, [chunk, encoding]);
+  });
+  try {
+    response.setHeader("Content-Type", "text/plain");
+    response.end("hello");
+    await state.pump();
+    const header = Reflect.get(response, "_header");
+    const wire = Buffer.concat(state.writes).toString("latin1");
+    expect(header).toContain("HTTP/1.1 200 OK\r\n");
+    expect(header).toContain("Content-Type: text/plain\r\n");
+    expect(header).toContain("Transfer-Encoding: chunked\r\n");
+    expect(response.headersSent).toBe(true);
+    expect(wire).toBe(`${header}5\r\nhello\r\n0\r\n\r\n`);
+  } finally { connection.destroy(); state.flush(); }
+});

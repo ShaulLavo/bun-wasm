@@ -14,6 +14,7 @@ import { productScoreboard, unlockCandidates } from "./product-report.ts";
 import { networkGuardStage, runProductBrowserCase } from "./product-campaign.ts";
 import { guestProvenance, verifyPlaygroundBuilds } from "./product-provenance.ts";
 import { memorySampler } from "./memory.ts";
+import { boundedCleanup, HarnessCleanupError } from "./cleanup.ts";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
 if (interfaces.some(line => line.split(":")[0].trim() !== "lo")) throw new Error("Use scripts/app-matrix.sh in its loopback-only network namespace");
@@ -48,12 +49,13 @@ for (const id of requested) if (!apps.some(app => app.id === id)) throw new Erro
 const selected = apps.filter(app => requested.includes(app.id));
 const wasmName = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm", hermes: "bun-hermes.wasm" };
 for (const engine of options.engines) if (!existsSync(join(root, "dist", wasmName[engine]))) throw new Error(`Build dist/${wasmName[engine]} first`);
+if (options.engines.includes("quickjs") && !existsSync(join(root, "dist/quickjs.wasm"))) throw new Error("Build the matching dist/quickjs.wasm first");
 if (options.hosts.includes("native") && options.engines.some(engine => engine !== "browser") && !existsSync(options.launcher)) throw new Error(`Build launcher ${options.launcher} first`);
 if (options.hosts.includes("playground") && !existsSync(join(root, "web/dist/index.html"))) throw new Error("Build web/ first");
 if (existsSync(join(options.output, "results.json"))) throw new Error("Results already exist; choose another --output");
 mkdirSync(options.output, { recursive: true });
 const scratch = mkdtempSync(join(process.env.MATRIX_SCRATCH_ROOT ?? "/work/tmp", "bun-wasm-app-matrix-run-"));
-for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => void cleanup().then(() => process.exit(130)));
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => void cleanup().then(() => process.exit(130), error => { console.error(error); process.exit(130); }));
 process.on("exit", () => {
   for (const child of children) stop(child);
   rmSync(scratch, { recursive: true, force: true });
@@ -70,22 +72,28 @@ let results = [];
 let mirror;
 let browserSession;
 const memory = memorySampler(process.pid);
-let cleaned = false;
+let cleaning;
 
 function stop(child) {
   if (!children.delete(child)) return;
   if (!child.pid) return;
   try { process.kill(-child.pid, "SIGKILL"); } catch (error) { if (error.code !== "ESRCH") throw error; }
 }
-async function cleanup() {
-  if (cleaned) return;
-  cleaned = true;
+function cleanup() {
+  return cleaning ??= releaseResources();
+}
+
+async function releaseResources() {
   memory.stop();
-  await Promise.allSettled([browserSession?.close(), mirror?.close()]);
   const exited = Array.from(children, child => child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise(resolve => child.once("close", resolve)));
   for (const child of children) stop(child);
-  await Promise.allSettled(exited);
+  const failures = (await Promise.all([
+    boundedCleanup("browser-session-close", () => browserSession?.close(), 35_000),
+    boundedCleanup("registry-close", () => mirror?.close()),
+    boundedCleanup("child-exit", () => Promise.all(exited)),
+  ])).filter(Boolean);
   rmSync(scratch, { recursive: true, force: true });
+  if (failures.length) throw new HarnessCleanupError(failures, infrastructureError);
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -140,7 +148,7 @@ function record(app, engine, host, stage, command, result) {
 }
 
 function recordProductObservations(app, engine, host, stage, command, check, result) {
-  for (const observation of completeObservations(check, result.observations ?? [], result)) {
+  for (const observation of result.harnessCleanup ? result.observations ?? [] : completeObservations(check, result.observations ?? [], result)) {
     const row = { app: app.id, versions: app.dependencies, engine, host, stage: `${stage}:${observation.stage}`, command: command.join(" "), ...observation };
     row.stage = `${stage}:${observation.stage}`;
     results.push(row);
@@ -161,7 +169,10 @@ function prepare(app, name) {
 
 async function checkPage(url, check, project, timeout) {
   try { return await browserSession.checkPage(url, check, project, timeout); }
-  catch (error) { return { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server") }; }
+  catch (error) {
+    if (error instanceof HarnessCleanupError) throw error;
+    return { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server") };
+  }
 }
 
 async function checkServer(proc, url, check, logfile, project) {
@@ -173,9 +184,12 @@ async function checkServer(proc, url, check, logfile, project) {
       let result;
       if (check.kind === "page") result = await checkPage(url, check, project, Math.max(1, deadline - Date.now()));
       else if ((await response.text()).includes(check.text)) result = { status: "pass", assertion: `HTTP ${response.status}, body contains ${JSON.stringify(check.text)}` };
+      if (result?.harnessCleanup) return result;
       if (proc.child.exitCode !== null || proc.child.signalCode !== null) return earlyServerExit({ code: proc.child.exitCode, signal: proc.child.signalCode, output: text(logfile) }, "server");
       if (result) return result;
-    } catch { /* The server may still be starting. */ }
+    } catch (error) {
+      if (error instanceof HarnessCleanupError) throw error;
+    }
     await sleep(100);
   }
   const result = { code: proc.child.exitCode, signal: proc.child.signalCode, timedOut: proc.child.exitCode === null && proc.child.signalCode === null, output: text(logfile) };
@@ -218,6 +232,7 @@ async function nativeApp(app, engine, reference = false) {
     else result = await execute(app, engine, project, command, reference);
     outcomes.set(command.name, result);
     record(app, engine, "native", command.name, ["bun"].concat(command.args), result);
+    if (result.harnessCleanup) throw new HarnessCleanupError(result.harnessCleanup, result.productError);
   }
   rmSync(project, { recursive: true, force: true });
 }
@@ -263,6 +278,12 @@ try {
     const bytes = readFileSync(path);
     return [engine, { path, bytes: bytes.byteLength, sha256: sha256(bytes) }];
   }));
+  if (artifacts.quickjs) {
+    const path = join(scratch, "quickjs.wasm");
+    copyFileSync(join(root, "dist/quickjs.wasm"), path);
+    const bytes = readFileSync(path);
+    artifacts.quickjs.side = { path, bytes: bytes.byteLength, sha256: sha256(bytes) };
+  }
   if (options.guestReceipt) {
     if (!artifacts.browser) throw new Error("--guest-receipt requires the browser engine");
     runtimeSource = guestProvenance(readFileSync(options.guestReceipt, "utf8"), artifacts.browser);
@@ -272,9 +293,9 @@ try {
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "browser-environment.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "cleanup.ts", "browser-environment.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
-  if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.map(engine => [wasmName[engine], artifacts[engine].sha256])));
+  if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.map(engine => [wasmName[engine], artifacts[engine].sha256]).concat(artifacts.quickjs ? [["quickjs.wasm", artifacts.quickjs.side.sha256]] : [])));
   mirror = await registry({ directory: options.cache, record: options.record });
   const { browserHost } = await import("./browser.mjs");
   browserSession = await browserHost({ root, scratch, options, launch, stop });
@@ -299,6 +320,7 @@ try {
       runtime_source: runtimeSource,
       catalog: options.product ? selected.map(app => ({ id: app.id, family: app.family, features: app.features, stages: app.commands.map(command => command.name) })) : undefined,
       artifacts: Object.fromEntries(Object.entries(artifacts).map(([engine, artifact]) => [engine, artifact.sha256])),
+      companions: artifacts.quickjs ? { quickjs: { name: "quickjs.wasm", bytes: artifacts.quickjs.side.bytes, sha256: artifacts.quickjs.side.sha256 } } : {},
       runner_sources: runnerSources,
       playground_builds: playgroundBuilds,
       launcher_sha256: launcherDigest,

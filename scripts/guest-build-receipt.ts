@@ -1,4 +1,4 @@
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { captureSourceManifest, git, guestBuilds, guestToolEnvironment, hash, run, sourceOptions, type GuestBuild, type SourceManifest, type SourceOptions } from "./guest-source-manifest.ts";
 
 const root = resolve(import.meta.dir, "..");
@@ -14,6 +14,7 @@ export interface GuestBuildInputs {
 export interface GuestBuildReceipt extends GuestBuildInputs {
   readonly artifactSha256: string;
   readonly artifactBytes: number;
+  readonly quickjs?: { readonly artifactSha256: string; readonly artifactBytes: number };
 }
 
 async function readInputs(options: SourceOptions): Promise<GuestBuildInputs> {
@@ -41,10 +42,29 @@ export async function writeGuestBuildReceipt(options: SourceOptions, artifact: s
   if (!unchanged) throw new Error("Guest source or toolchain changed during the build");
   if (basename(artifact) !== guestBuilds[inputs.sourceManifest.build].artifact) throw new Error("Guest artifact name does not match selected build");
   const bytes = await Bun.file(artifact).bytes();
-  const receipt = { ...inputs, artifactSha256: hash(bytes), artifactBytes: bytes.byteLength };
+  const quickjs = await quickjsIdentity(options.build, dirname(artifact));
+  const receipt = { ...inputs, artifactSha256: hash(bytes), artifactBytes: bytes.byteLength, ...quickjs };
   verifyGuestBuildReceipt(bytes, receipt);
   await Bun.write(`${artifact}.build.json`, JSON.stringify(receipt, null, 2) + "\n");
   return receipt;
+}
+
+function splitBuild(build: GuestBuild): boolean {
+  return build === "quickjs" || build === "quickjs-minimal";
+}
+
+async function quickjsIdentity(build: GuestBuild, directory: string) {
+  if (!splitBuild(build)) return {};
+  const bytes = await Bun.file(join(directory, "quickjs.wasm")).bytes();
+  if (!WebAssembly.validate(bytes)) throw new Error("Invalid paired QuickJS module");
+  return { quickjs: { artifactSha256: hash(bytes), artifactBytes: bytes.byteLength } };
+}
+
+export async function verifyGuestCompanions(receipt: GuestBuildReceipt, directory: string): Promise<void> {
+  if (!splitBuild(receipt.sourceManifest.build)) return;
+  const identity = await quickjsIdentity(receipt.sourceManifest.build, directory);
+  if (identity.quickjs?.artifactSha256 !== receipt.quickjs?.artifactSha256
+    || identity.quickjs?.artifactBytes !== receipt.quickjs?.artifactBytes) throw new Error("Guest receipt does not match paired QuickJS bytes");
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -91,6 +111,9 @@ export function verifyGuestBuildReceipt(bytes: Uint8Array, value: unknown): asse
   if (hash(JSON.stringify(value.sourceManifest)) !== value.sourceManifestSha256) throw new Error("Guest source manifest digest mismatch");
   const sysroot = value.sourceManifest.groups.find(group => group.name === "sysroot");
   if (sysroot?.files.find(file => file.path === "bun-wasm-sysroot.json")?.sha256 !== value.sysrootReceiptSha256) throw new Error("Guest sysroot receipt differs from source manifest");
+  if (splitBuild(value.sourceManifest.build) && (!record(value.quickjs)
+    || !digest(value.quickjs.artifactSha256, 64) || !Number.isSafeInteger(value.quickjs.artifactBytes)
+    || Number(value.quickjs.artifactBytes) <= 0)) throw new Error("Missing paired QuickJS identity");
   if (value.artifactBytes !== bytes.byteLength || value.artifactSha256 !== hash(bytes)) throw new Error("Guest build receipt does not match artifact bytes");
 }
 
@@ -107,7 +130,8 @@ if (import.meta.main) {
     const bytes = await Bun.file(argument).bytes();
     if (!record(inputs)) throw new Error("Invalid guest build inputs");
     verifyManifest(inputs.sourceManifest);
-    const receipt = { ...inputs, artifactSha256: hash(bytes), artifactBytes: bytes.byteLength };
+    const quickjs = await quickjsIdentity(inputs.sourceManifest.build, dirname(argument));
+    const receipt = { ...inputs, artifactSha256: hash(bytes), artifactBytes: bytes.byteLength, ...quickjs };
     verifyGuestBuildReceipt(bytes, receipt);
     await writeGuestBuildReceipt(sourceOptions(root, sysroot, receipt.sourceManifest.build), argument, receipt);
   } else {

@@ -837,84 +837,35 @@
   delete promises.fstat;
   delete promises.ftruncate;
 
-  // --- streams (minimal: whole-file reads, synchronous writes) --------------
+  // --- file streams over the existing descriptor and Node stream adapters -----
 
-  function createReadStream(path, options = {}) {
-    const EventEmitter = internal.require("events");
-    const stream = new EventEmitter();
-    const encoding = encodingOf(options);
-    stream.path = path;
-    stream.readable = true;
-    stream.setEncoding = (enc) => {
-      stream._encoding = enc;
-      return stream;
-    };
-    stream.pipe = (dest) => {
-      stream.on("data", (chunk) => dest.write(chunk));
-      stream.on("end", () => dest !== globalThis.process.stdout && dest.end && dest.end());
-      return dest;
-    };
-    stream.destroy = () => stream;
-    stream[Symbol.asyncIterator] = async function* () {
-      yield readChunk();
-    };
-    function readChunk() {
-      let buf = readFileSync(path);
-      if (options.start !== undefined || options.end !== undefined) buf = buf.subarray(options.start || 0, options.end === undefined ? undefined : options.end + 1);
-      const enc = stream._encoding || encoding;
-      return enc ? buf.toString(enc) : buf;
-    }
-    later(() => {
-      let chunk;
-      try {
-        chunk = readChunk();
-      } catch (err) {
-        stream.emit("error", err);
-        return;
-      }
-      stream.emit("open");
-      stream.emit("ready");
-      if (chunk.length > 0) stream.emit("data", chunk);
-      stream.emit("end");
-      stream.emit("close");
+  let fileStreamAdapter;
+  function fileStreams() {
+    fileStreamAdapter ??= internal.require("fs_stream_constructors")({
+      Buffer, openSync, closeSync, readSync, writeSync, toPath, validateFd, readRange, invalidArg,
+      loadStreams: () => internal.builtin("node:stream"),
     });
-    return stream;
+    return fileStreamAdapter;
   }
 
-  function createWriteStream(path, options = {}) {
-    const EventEmitter = internal.require("events");
-    const stream = new EventEmitter();
-    const flags = (typeof options === "object" && options.flags) || "w";
-    const fd = openSync(path, flags);
-    stream.path = path;
-    stream.fd = fd;
-    stream.writable = true;
-    stream.bytesWritten = 0;
-    stream.write = (chunk, encoding, cb) => {
-      if (typeof encoding === "function") cb = encoding;
-      stream.bytesWritten += writeSync(fd, chunk, undefined, typeof encoding === "string" ? encoding : undefined);
-      if (typeof cb === "function") later(cb);
-      return true;
-    };
-    stream.end = (chunk, encoding, cb) => {
-      if (typeof chunk === "function") cb = chunk;
-      else if (chunk !== undefined && chunk !== null) stream.write(chunk, encoding);
-      closeSync(fd);
-      stream.writable = false;
-      later(() => {
-        stream.emit("finish");
-        stream.emit("close");
-        if (typeof cb === "function") cb();
-      });
-      return stream;
-    };
-    stream.close = (cb) => stream.end(cb);
-    stream.destroy = () => stream;
-    later(() => {
-      stream.emit("open", fd);
-      stream.emit("ready");
-    });
-    return stream;
+  function createReadStream(path, options) {
+    return fileStreams().createReadStream(path, options);
+  }
+
+  function createWriteStream(path, options) {
+    return fileStreams().createWriteStream(path, options);
+  }
+
+  function readStreamConstructor() {
+    const adapter = fileStreams();
+    adapter.initializeFileStreams();
+    return adapter.ReadStream;
+  }
+
+  function writeStreamConstructor() {
+    const adapter = fileStreams();
+    adapter.initializeFileStreams();
+    return adapter.WriteStream;
   }
 
   function watchUnsupported() {
@@ -940,5 +891,11 @@
     X_OK: 1,
   });
 
+  Object.defineProperties(fs, {
+    ReadStream: { get: readStreamConstructor, enumerable: true, configurable: true },
+    WriteStream: { get: writeStreamConstructor, enumerable: true, configurable: true },
+    FileReadStream: { get: readStreamConstructor, enumerable: true, configurable: true },
+    FileWriteStream: { get: writeStreamConstructor, enumerable: true, configurable: true },
+  });
   return { fs, promises };
 })

@@ -16,6 +16,7 @@ test.each([
   "env.sh", "tests/fixtures/node-misc/main.js", "scripts/test.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts",
   "scripts/quality-wasi-probe.ts", "scripts/quality.ts", "scripts/ci-changes.ts", "package.json", "bun.lock",
   ".github/workflows/ci.yml", "scripts/build.sh", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
+  "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
 ])("native input %s retains every Rust gate", path => {
   expect(needsRust([path])).toBe(true);
 });
@@ -133,8 +134,10 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
 
 for (const path of [
   "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp", "scripts/jsc-embedding.ts",
+  "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",
   "scripts/build-bun-jsc.sh", "scripts/bench-jsc.sh", "scripts/ci-binaryen.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
   "web/scripts/node-host.ts", "web/guest-tests/compose.ts", "web/src/net/trampoline.ts", "web/bun.lock",
+  "web/src/native-direct-stream.ts",
   "crates/bunwasm-runtime/src/host.rs", "scripts/test-web-guests.ts",
   "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "tests/fixtures/runtime-proc-spawn-requests.json",
 ]) {
@@ -169,3 +172,11 @@ test("the Astro response fixture selects the existing native and JSC gates", () 
   expect(needsRust(paths)).toBe(true);
   expect(needsJsc(paths)).toBe(true);
 });
+
+for (const path of ["crates/bunwasm-host/src/linked.rs", "crates/bunwasm-engine-quickjs/src/vm.rs", "crates/bunwasm-engine-quickjs/src/client.rs"]) {
+  test.each(["pull_request", "push"])(`${path} retains native-only selection for %s`, event => {
+    expect(needsRust([path])).toBe(true);
+    expect(needsJsc([path])).toBe(false);
+    expect(select(base, commitInput(path), event)).toBe("rust=true\njsc=false");
+  });
+}

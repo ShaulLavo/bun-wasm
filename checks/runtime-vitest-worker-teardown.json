@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/vitest-worker-teardown.test.ts",
+  "localRuntime": true
+}

@@ -61,6 +61,7 @@ pub(crate) fn validate_signal(signal: i32, probe: bool) -> Result<(), i32> {
 pub struct Runtime {
     pub engine: wasmtime::Engine,
     pub module: wasmtime::Module,
+    pub linked: crate::linked::Programs,
     pub tools_path: Option<std::path::PathBuf>,
     tools: std::sync::OnceLock<Result<wasmtime::Module, String>>,
     pub dirs: Vec<(std::path::PathBuf, String)>,
@@ -139,6 +140,7 @@ impl Runtime {
         Ok(Arc::new(Self {
             engine,
             module,
+            linked: crate::linked::Programs::default(),
             dirs,
             tools_path: None,
             tools: std::sync::OnceLock::new(),

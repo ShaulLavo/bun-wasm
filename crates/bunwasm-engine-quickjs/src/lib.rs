@@ -265,3 +265,51 @@ pub extern "C" fn quickjs_helpers_smoke() -> i32 {
     );
     context.with(|ctx| ctx.eval::<i32, _>("jobResult").expect("job value"))
 }
+
+mod client;
+#[allow(dead_code, unexpected_cfgs)]
+#[path = "../../bunwasm-runtime/src/data.rs"]
+mod data;
+mod driver;
+use driver::{Core, Entry};
+#[allow(unused_imports, dead_code)]
+#[path = "../../bunwasm-runtime/src/engine.rs"]
+mod engine;
+mod loader;
+mod natives;
+#[allow(dead_code, unexpected_cfgs)]
+#[path = "../../bunwasm-runtime/src/ops.rs"]
+mod ops;
+mod program;
+#[path = "../../bunwasm-runtime/src/split_api.rs"]
+mod split_api;
+mod value_natives;
+mod vm;
+
+unsafe extern "C" {
+    fn bun_core_bind_engine(run: extern "C" fn(u32) -> i32);
+    fn quickjs_ctor_value() -> u32;
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn quickjs_register() {
+    assert_eq!(
+        unsafe { quickjs_ctor_value() },
+        42,
+        "side constructors once"
+    );
+    unsafe { bun_core_bind_engine(quickjs_run) };
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn quickjs_run(session: u32) -> i32 {
+    assert_eq!(
+        unsafe { quickjs_ctor_value() },
+        42,
+        "side constructors once"
+    );
+    driver::run(session)
+}
+
+#[cfg(test)]
+mod native_contract_tests;

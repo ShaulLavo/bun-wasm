@@ -1,3 +1,4 @@
+import { programLinkPlan } from "../../src/assets.js";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
 // and the sandbox (../sandbox/).
@@ -82,6 +83,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     adapter: options.adapter,
     runtimeProcess: options.runtimeProcess,
     module: options.module,
+    linkPlan: programLinkPlan(options.module),
     args: [`${ENGINE_BIN[options.engine]}/bun`].concat(options.args),
     env: { ...engineEnvironment(options.engine, options.env), BUNWASM_EXEC_PATH: `${ENGINE_BIN[options.engine]}/bun` },
     filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
@@ -268,7 +270,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     for (const signal of pendingKills) kill(signal);
     pendingKills.length = 0;
     if (preparationStopped()) return;
-    if (options.adapter !== "preview1" && isToolCommand(options.args)) request.module = await loadTools();
+    if (options.adapter !== "preview1" && isToolCommand(options.args)) {
+      request.module = await loadTools();
+      request.linkPlan = programLinkPlan(request.module);
+    }
     if (preparationStopped()) return;
     let network;
     if (ring || lookupChannel) {

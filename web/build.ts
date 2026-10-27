@@ -5,7 +5,7 @@
 import { existsSync, rmSync, statSync } from "node:fs";
 import { previewWebsocketScript } from "./preview-build";
 import { buildBrowserEntries, buildClassicWorker } from "../scripts/browser-build";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const here = import.meta.dir;
 const out = join(here, "dist");
@@ -41,6 +41,10 @@ async function copyWasm(source: string, name: string): Promise<boolean> {
 }
 if (!(await copyWasm(wasmSource, "bun.wasm"))) {
   console.warn(`bun.wasm: ${wasmSource} not found; the site will say bun.wasm is missing (or pass ?wasm=<url>).`);
+}
+const quickjsSource = join(dirname(wasmSource), "quickjs.wasm");
+if (existsSync(wasmSource) && !(await copyWasm(quickjsSource, "quickjs.wasm"))) {
+  throw new Error(`QuickJS core requires its matching side module: ${quickjsSource}`);
 }
 const jscSource = resolve(here, process.env.JSC_WASM ?? "../dist/bun-jsc.wasm");
 if (!(await copyWasm(jscSource, "bun-jsc.wasm"))) {

@@ -180,7 +180,20 @@ test("the isolate broker sends JSON only for the exact path and retains package 
   } finally { fetch.mockRestore(); }
 });
 
-test("executing the launcher retains direct Bun normalized argv and sets telemetry before the CLI", () => {
+const launcherExecutionTest = "executing the launcher retains direct Bun normalized argv and sets telemetry before the CLI";
+const launcherReceiptVariable = "BUN_WASM_LAUNCHER_TEST_RECEIPT";
+
+function runLauncherExecution(directory: string, pattern = `^${launcherExecutionTest}$`) {
+  const temporary = join(directory, "tmp");
+  const receiptPath = join(directory, "launcher-receipt.json");
+  mkdirSync(temporary, { recursive: true });
+  const result = Bun.spawnSync([process.execPath, "test", import.meta.filename, "--test-name-pattern", pattern], {
+    env: { ...process.env, CI: "true", TMPDIR: temporary, TMP: temporary, TEMP: temporary, [launcherReceiptVariable]: receiptPath },
+  });
+  return { result, receiptPath, temporary, receipt: JSON.parse(readFileSync(receiptPath, "utf8")) };
+}
+
+test(launcherExecutionTest, () => {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-argv-"));
   try {
     expect(dirname(directory)).toBe(tmpdir());
@@ -197,18 +210,25 @@ test("executing the launcher retains direct Bun normalized argv and sets telemet
     expect(actual.argv).toEqual(original.argv);
     expect(actual.next).toBe("1");
     expect(actual.astro).toBe("1");
+    const receiptPath = process.env[launcherReceiptVariable];
+    if (receiptPath) writeFileSync(receiptPath, JSON.stringify({ test: launcherExecutionTest, directory, original, actual }));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("the launcher fixture honors a TMPDIR override and removes its files", () => {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-argv-env-"));
   try {
-    const result = Bun.spawnSync([process.execPath, "test", import.meta.filename, "--test-name-pattern", "^executing the launcher retains direct Bun normalized argv"], {
-      env: { ...process.env, CI: "true", TMPDIR: directory, TMP: directory, TEMP: directory },
-    });
-    expect(result.stderr.toString()).toContain("(pass) executing the launcher retains direct Bun normalized argv and sets telemetry before the CLI");
-    expect(result.exitCode).toBe(0);
-    expect(readdirSync(directory)).toEqual([]);
+    const execution = runLauncherExecution(directory);
+    expect(execution.result.exitCode).toBe(0);
+    expect(execution.receipt.test).toBe(launcherExecutionTest);
+    expect(dirname(execution.receipt.directory)).toBe(execution.temporary);
+    expect(execution.receipt.actual).toEqual({ argv: execution.receipt.original.argv, next: "1", astro: "1" });
+    expect(execution.receipt.actual.argv.slice(-5)).toEqual(["dev", "--hostname", "127.0.0.1", "--port", "3137"]);
+    expect(readdirSync(execution.temporary)).toEqual([]);
+
+    rmSync(execution.receiptPath);
+    expect(() => runLauncherExecution(directory, "^launcher test that does not exist$")).toThrow("launcher-receipt.json");
+    expect(readdirSync(execution.temporary)).toEqual([]);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

@@ -74,7 +74,11 @@ const startIndex = readU32(start.payload, { offset: 0 });
 const original = exportsOf(exportSection.payload);
 assert(original.some((entry) => entry.name === "__wasm_apply_data_relocs"));
 assert(original.some((entry) => entry.name === "__wasm_call_ctors"));
-const globals = WebAssembly.Module.imports(new WebAssembly.Module(readFileSync(input))).filter((entry) => entry.kind === "global");
+const imports = WebAssembly.Module.imports(new WebAssembly.Module(readFileSync(input)));
+const memories = imports.filter((entry) => entry.kind === "memory");
+assert.deepEqual(memories, [{ module: "env", name: "memory", kind: "memory" }], "sole core-owned memory import");
+assert(!original.some((entry) => entry.kind === 2 || entry.name === "memory"), "side must not already export memory");
+const globals = imports.filter((entry) => entry.kind === "global");
 const stackIndex = globals.findIndex((entry) => entry.module === "env" && entry.name === "__stack_pointer");
 assert(stackIndex >= 0, "shared stack import");
 const renamed = original.map((entry) => {
@@ -84,6 +88,7 @@ const renamed = original.map((entry) => {
 }).concat([
     { name: "quickjs_initialize_memory", kind: 0, index: startIndex },
     { name: "__stack_pointer", kind: 3, index: stackIndex },
+    { name: "memory", kind: 2, index: 0 },
 ]);
 const exports = Buffer.concat([Buffer.from(u32(renamed.length))].concat(renamed.map(encodeExport)));
 const changed = before.filter((entry) => entry.id !== 8).map((entry) => entry.id === 7 ? section(7, exports) : entry.raw);
@@ -96,5 +101,8 @@ assert.deepEqual(exportsOf(afterExports.payload), renamed);
 const unchanged = (entries: ReturnType<typeof sections>) => entries.filter((entry) => entry.id !== 7 && entry.id !== 8).map((entry) => Buffer.from(entry.raw));
 assert.deepEqual(unchanged(after), unchanged(before), "all non-export/start bytes, including function bodies and dylink, unchanged");
 assert(WebAssembly.validate(result));
+const module = new WebAssembly.Module(result);
+assert.deepEqual(WebAssembly.Module.exports(module).filter((entry) => entry.kind === "memory"), [{ name: "memory", kind: "memory" }]);
+assert.deepEqual(WebAssembly.Module.imports(module).filter((entry) => entry.kind === "memory"), memories);
 writeFileSync(output, result);
 console.log(JSON.stringify({ startIndex, unchangedCodeAndMetadata: true, explicitInitializers: renamed.filter((entry) => entry.name.startsWith("quickjs_")).map((entry) => entry.name) }));

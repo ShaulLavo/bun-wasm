@@ -1,3 +1,4 @@
+import { prepareQuickjsProgram } from "../../src/assets.js";
 // Engine metadata and downloads are usable before the execution/process graph loads.
 import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
@@ -30,7 +31,11 @@ export class WasmMissing extends Error {}
  * 3-4x smaller) and the page decompresses it; a plain .wasm URL works too. Throws WasmMissing on 404.
  */
 export async function loadWasm(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string | null }> {
-  if (url.endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
+  const requested = new URL(url, location.href);
+  const name = requested.pathname;
+  const custom = !Object.values(ENGINES).some(engine => new URL(engine.wasm, location.href).href === requested.href);
+  if (name.endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
+  if (name.endsWith("bun.wasm") || name.endsWith("bun.wasm.gz")) return loadQuickjs(url, progress);
   progress("loading bun.wasm…");
   const build = assetBuild(url);
   const key = new URL(url, location.href).href;
@@ -84,7 +89,7 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   body = body.pipeThrough(new TransformStream<Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>>({
     transform(chunk, controller) {
       size += chunk.length;
-      if (build) chunks.push(chunk);
+      if (build || custom) chunks.push(chunk);
       controller.enqueue(chunk);
     },
     flush() {
@@ -97,40 +102,69 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   const response = new Response(body, { headers: { "content-type": "application/wasm" } });
   const module = await WebAssembly.compileStreaming(response);
   measureStartup("compile", compiling, { streaming: true });
+  if (WebAssembly.Module.exports(module).some(entry => entry.name === "bun_core_bind_engine")) {
+    const bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    return loadQuickjsSide(url, { bytes, build: null }, progress, false);
+  }
   const engine = { module, size };
   if (build) setTimeout(() => void cacheIfExpected(key, build, chunks, size), 0);
   return { ...engine, build };
 }
 
+async function loadQuickjs(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string | null }> {
+  const requested = new URL(url, location.href);
+  const standard = new URL(ENGINES.quickjs.wasm, location.href);
+  const verifyBuild = requested.origin === standard.origin && requested.pathname.replace(/\.gz$/, "") === standard.pathname;
+  const core = await loadVerifiedFile(url, "bun.wasm", progress, verifyBuild);
+  return loadQuickjsSide(url, core, progress, verifyBuild);
+}
+
+async function loadQuickjsSide(url: string, core: { bytes: Uint8Array<ArrayBuffer>; build: string | null }, progress: (text: string) => void, verifyBuild: boolean) {
+  const side = new URL("quickjs.wasm", new URL(url, location.href));
+  const quickjs = await loadVerifiedFile(side.href, "quickjs.wasm", progress, verifyBuild);
+  const module = await prepareQuickjsProgram(core.bytes, quickjs.bytes);
+  return { module, size: core.bytes.length + quickjs.bytes.length, build: core.build };
+}
+
 async function loadVerifiedTools(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string }> {
-  const build = assetBuild(url);
-  if (!build) throw new Error("bun-tools.wasm: build manifest fingerprint is missing");
+  const { bytes, build } = await loadVerifiedFile(url, "bun-tools.wasm", progress);
+  if (build === null) throw new Error("bun-tools.wasm: build manifest fingerprint is missing");
+  return { module: await WebAssembly.compile(bytes), size: bytes.length, build };
+}
+
+async function loadVerifiedFile(url: string, name: string, progress: (text: string) => void, verifyBuild = true): Promise<{ bytes: Uint8Array<ArrayBuffer>; build: string | null }> {
+  const build = verifyBuild ? assetBuild(name) : null;
+  if (verifyBuild && build === null) throw new Error(`${name}: build manifest fingerprint is missing`);
   const key = new URL(url, location.href).href;
-  const cached = await cachedEngine(key, build);
-  if (cached) {
+  const cached = build === null ? null : await cachedEngine(key, build);
+  if (cached && build !== null) {
     const bytes = new Uint8Array(await cached.arrayBuffer());
-    try { await verifyArtifact("bun-tools.wasm", bytes, build); }
+    try { await verifyArtifact(name, bytes, build); }
     catch (error) { await evictEngine(key); throw error; }
-    progress(`compiling cached bun-tools.wasm (${mb(bytes.length)})…`);
-    return { module: await WebAssembly.compile(bytes), size: bytes.length, build };
+    progress(`verified cached ${name} (${mb(bytes.length)})…`);
+    return { bytes, build };
   }
-  progress("downloading bun-tools.wasm…");
+  progress(`downloading ${name}…`);
   const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
-  let response = await fetch(`${gzUrl}?v=${build}`);
+  let response = await fetch(build === null ? gzUrl : `${gzUrl}?v=${build}`);
   const gzipped = response.ok;
   if (!gzipped) response = await fetch(url);
   if (response.status === 404) throw new WasmMissing(`${url}: HTTP 404`);
   if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
   if (!response.body) throw new Error(`${url}: empty response body`);
   const body = gzipped ? response.body.pipeThrough(new DecompressionStream("gzip")) : response.body;
-  const wasm = new Uint8Array(await new Response(body).arrayBuffer());
-  await verifyArtifact("bun-tools.wasm", wasm, build);
-  progress(`compiling bun-tools.wasm (${mb(wasm.length)})…`);
-  const module = await WebAssembly.compile(wasm);
-  if (await cacheEngine(key, build, new Response(wasm, { headers: { "content-type": "application/wasm", "content-length": String(wasm.length) } }))) {
+  const bytes = new Uint8Array(await new Response(body).arrayBuffer());
+  if (build !== null) await verifyArtifact(name, bytes, build);
+  else verifyWasm(name, bytes);
+  progress(`verified ${name} (${mb(bytes.length)})…`);
+  if (build !== null && await cacheEngine(key, build, new Response(bytes, { headers: { "content-type": "application/wasm", "content-length": String(bytes.length) } }))) {
     performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
   }
-  return { module, size: wasm.length, build };
+  return { bytes, build };
+}
+
+function verifyWasm(name: string, bytes: Uint8Array<ArrayBuffer>): void {
+  if (!WebAssembly.validate(bytes)) throw new Error(`${name}: downloaded bytes are not a valid WebAssembly module`);
 }
 
 async function verifyArtifact(name: string, bytes: Uint8Array<ArrayBuffer>, expected: string): Promise<void> {

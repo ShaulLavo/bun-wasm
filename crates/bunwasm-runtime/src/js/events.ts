@@ -516,7 +516,7 @@
         emitter,
         name,
         function () {
-          removeError();
+          if (typeof emitter.removeListener === "function") removeError();
           removeAbort();
           resolve(Array.prototype.slice.call(arguments));
         },
