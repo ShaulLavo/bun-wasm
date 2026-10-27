@@ -4,7 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
-    "lib": ["ES2023", "DOM", "DOM.Iterable", "WebWorker"],
+    "lib": ["ES2023", "ES2024.SharedMemory", "DOM", "DOM.Iterable", "WebWorker"],
     "types": ["bun"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
