@@ -29,7 +29,7 @@ fn main() {
             println!("cargo:rustc-link-arg-bin=bun=--export={name}");
         }
     }
-    if std::env::var_os("CARGO_FEATURE_ENGINE_QUICKJS").is_some() {
+    if std::env::var_os("CARGO_FEATURE_ENGINE_SPLIT").is_some() {
         split_entry();
         return;
     }
