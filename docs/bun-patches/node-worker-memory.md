@@ -5,7 +5,7 @@
 | Local source | Classification | Purpose |
 | --- | --- | --- |
 | `web/scripts/node-worker.ts` and the `node-host.ts` launcher call | Host feature, original adapter | Apply a finite general worker heap and retain host out-of-memory diagnostics. |
-| `scripts/node-worker-memory*.ts`, the compiler fixture and runtime check manifest | Host feature, original tests | Exercise real Node workers with the installed TypeScript compiler and the actual Next app catalog config. |
+| `scripts/node-worker-memory*.ts`, compiler/error fixtures and runtime check manifest | Host feature, original tests | Exercise real Node workers with the installed TypeScript compiler and the actual Next app catalog config. |
 | `scripts/app-matrix/product-next.ts` and its catalog test | Host feature, original fixture | Declare Bun's types for static previews that call `Bun.serve`. |
 | `web/tests/core-node.test.ts`, suite provenance lists and guest-selector tests | Host feature, original tests | Keep clean-host copies and resumed-suite fingerprints complete after extracting the worker helper. |
 
@@ -30,10 +30,15 @@ original error synchronously to its stderr before the process broker handles the
 worker failure. It retains the existing broker outcome and guest descriptor
 handling. This also keeps the diagnostic visible when an application immediately
 exits on its child's failure.
+If the host diagnostic write fails, the same original worker error still reaches
+later broker listeners and their cleanup. Only that diagnostic write is isolated.
 
 The runtime check launches actual Node workers. It verifies the effective native
 limits and successful TypeScript compilation, then imports the real compiler in
 a deliberately constrained worker to verify the original fatal diagnostic.
+Deliberate out-of-memory subprocesses disable core dumps. Additional native-worker
+controls cover closed host stderr, later listener order, original error identity,
+cleanup and ordinary worker failures.
 It does not build a guest or change browser-engine memory policy.
 
 The actual build exposed a separate fixture error after the worker survived.

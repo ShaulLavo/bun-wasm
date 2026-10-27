@@ -9,7 +9,9 @@ export function createNodeWorker(url: string | URL, options: WorkerOptions, stac
   });
   worker.on("error", error => {
     if (!(error instanceof Error) || !("code" in error) || error.code !== "ERR_WORKER_OUT_OF_MEMORY") return;
-    writeSync(2, `node-host: ${error.stack ?? error}\n`);
+    try {
+      writeSync(2, `node-host: ${error.stack ?? error}\n`);
+    } catch {}
   });
   return worker;
 }
