@@ -102,9 +102,10 @@ The VM implementation moved from `bunwasm-runtime/src/engine_quickjs.rs` at
 rquickjs rooting, the six patched helper declarations, pending jobs, stack
 budgets and interruption policy. `program.rs`, `loader.rs` and
 `value_natives.rs` hold the existing generic VM-local algorithms. JSC compiles
-those same sources with its direct State adapter, preventing two event-loop
-implementations. The split adapter uses plain source, metadata and data-native
-operations. No Engine method, callback, promise or live VM handle crosses the
+those same sources with its VM-local adapter through the shared driver,
+preventing two event-loop implementations. The move and source-only proof limits
+are recorded in [JSC engine program](jsc-engine-program.md). The split adapter
+uses plain source, metadata and data-native operations. No Engine method, callback, promise or live VM handle crosses the
 transport. Core keeps source caching, resolution, transpilation and host waits.
 
 The original runtime adapter is this repository's code, not copied upstream
@@ -127,8 +128,9 @@ the linked QuickJS records above. No second monolithic QuickJS path remains.
 
 The standard QuickJS build emits `dist/bun.wasm` and `dist/quickjs.wasm` together.
 The core build receipt records both byte identities under the same source snapshot.
-The native launcher loads the sibling side whenever a core exports
-`bun_core_bind_engine`. A missing side is an admission error, not a monolith fallback.
+The native launcher requires the authoritative `bun-wasm-engine` declaration
+and bind export, then selects the fixed sibling side. A missing side is an
+admission error, not a monolith fallback.
 
 `crates/bunwasm-host/src/linked.rs` is an original native adapter for the WASM
 `dylink.0` memory/table profile used by Waffle at
@@ -139,7 +141,9 @@ binds GOT addresses, then initializes and registers the actual QuickJS driver.
 Core constructors run once before side initialization. The existing process host
 still owns cancellation, child admission, host slots, WASI and final cleanup.
 The association retains the compiled core image and its side, so admitted child
-Module clones use the same pair. JSC and tools keep their single-module CRT.
+Module clones use the same pair. Tools keep their single-module CRT. JSC uses
+the paired source contract in
+[JSC engine program](jsc-engine-program.md); its real-pair proof is pending.
 
 ## Node fixture paired startup
 
@@ -152,8 +156,9 @@ memory before the command wrapper initializes the shared plan and calls the
 core entry. The linker remains the only initializer schedule.
 
 Missing or invalid side modules fail before guest entry. Each finish or startup
-failure disposes the linked group and bridge descriptors. Ordinary JSC, browser
-and tools modules retain their single-module startup. The focused fixture runs
+failure disposes the linked group and bridge descriptors. Browser and tools
+modules retain their single-module startup. JSC uses its
+fixed paired profile, with real-pair startup still unproved. The focused fixture runs
 the actual Node host with a child process, a promise and a timer. It also checks
 missing and mismatched side rejection. No provider source is changed.
 

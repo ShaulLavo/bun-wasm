@@ -99,7 +99,9 @@ test("the existing native producer owns each guest group once, after completed c
     expect(rust.indexOf(command)).toBeGreaterThan(0);
   }
   expect(rust).toContain('TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2');
-  expect(rust).toContain('guest-build-receipt.ts write dist/bun.wasm "$guest_inputs"');
+  expect(rust.split("CARGO_BUILD_JOBS=2 bash scripts/build.sh")).toHaveLength(2);
+  const wrapper = readFileSync(new URL("./build.sh", import.meta.url), "utf8");
+  expect(wrapper).toContain('guest-build-receipt.ts" write "$root/dist/bun.wasm" "$guest_inputs"');
   expect(rust).toContain("ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm");
   expect(rust).toContain("ln -s source-cache-browser/bun-browser.wasm.build.json dist/bun-browser.wasm.build.json");
   expect(rust).toContain("name: web-guest-fixture-receipts");

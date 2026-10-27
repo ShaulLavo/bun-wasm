@@ -366,17 +366,20 @@ mod tests {
 
     #[test]
     fn engine_tag_rejects_duplicates_and_unknown_payloads() {
-        let duplicate = {
+        let duplicate: Vec<u8> = {
             let first = wasm_custom(b"bun-wasm-engine", b"quickjs");
             let second = wasm_custom(b"bun-wasm-engine", b"quickjs");
-            first[..8].iter().copied().chain(
-                first[8..]
-                    .iter()
-                    .copied()
-                    .chain(second[8..].iter().copied()),
-            )
+            first[..8]
+                .iter()
+                .copied()
+                .chain(
+                    first[8..]
+                        .iter()
+                        .copied()
+                        .chain(second[8..].iter().copied()),
+                )
+                .collect()
         };
-        let duplicate: Vec<u8> = duplicate.collect();
         assert!(parse_program_kind(&duplicate, true).is_err());
 
         let invalid = wasm_custom(b"bun-wasm-engine", b"other");

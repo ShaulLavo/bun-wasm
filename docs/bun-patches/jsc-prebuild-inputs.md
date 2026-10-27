@@ -37,6 +37,9 @@ shell reports a successful wait for a terminated worker. Missing proof never per
 
 ## JSC program recipes
 
+[JSC engine program](jsc-engine-program.md) records the moved VM and shared
+Rust driver provenance, and the remaining source-only delivery limits.
+
 The original adapters in `jsc/configure.sh`, `jsc/build-icu.sh`,
 `jsc/common.sh`, and `crates/bunwasm-jsc/build.rs` request PIC for WebKit's
 static archives, ICU target code and generated data wrapper, the separate shim
