@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { bindingControls, expectedBinding } from "./controls.ts";
 import { constants as fs } from "node:fs";
 import { constants as os } from "node:os";
 import { constants as crypto } from "node:crypto";
@@ -15,4 +16,6 @@ assert.equal(Reflect.get(constants, "zlib"), zlib);
 assert.equal(getBinding.call(process, "constants"), constants);
 assert.equal(fs.O_CREAT | fs.O_EXCL | fs.O_RDWR, 194);
 assert.throws(() => getBinding.call(process, "missing"), /No such module: missing/);
-console.log("PASS process constants binding");
+const snapshot = bindingControls(constants, () => getBinding.call(process, "constants"));
+assert.deepEqual(snapshot, expectedBinding);
+console.log(process.argv.includes("--snapshot") ? JSON.stringify(snapshot) : "PASS process constants binding");

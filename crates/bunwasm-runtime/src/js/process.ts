@@ -36,12 +36,12 @@
   let bindingConstants: object | undefined;
 
   function constantsBinding() {
-    return bindingConstants ??= {
-      get fs() { return internal.builtin("node:fs").constants; },
-      get os() { return internal.builtin("node:os").constants; },
-      get crypto() { return internal.builtin("node:crypto").constants; },
-      get zlib() { return internal.builtin("node:zlib").constants; },
-    };
+    return bindingConstants ??= Object.assign(Object.create(null), {
+      fs: internal.builtin("node:fs").constants,
+      os: internal.builtin("node:os").constants,
+      crypto: internal.builtin("node:crypto").constants,
+      zlib: internal.builtin("node:zlib").constants,
+    });
   }
 
   // Like Node, assigned values become strings (`process.env.N = 1` -> "1").
