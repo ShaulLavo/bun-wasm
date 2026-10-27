@@ -34,9 +34,11 @@
     getScriptNameOrSourceURL(this: BunWasm.StackCallSite) { return this.getFileName(); },
     isEval(this: BunWasm.StackCallSite) { return /^(?:<input>|<eval>)$/.test(this.getFileName()); },
     getEvalOrigin() { return undefined; },
-    // Frames carry no receiver (getThis is undefined), which V8 and Bun report as top-level.
-    isToplevel() { return true; },
-    isAsync() { return false; },
+    // Bun answers from the callee and the frame's strictness: a sloppy function call is not
+    // top-level. Neither engine's frames here carry strictness, so only program code (no
+    // function name) is top-level; a strict function frame, which Bun calls top-level, reads false.
+    isToplevel(this: BunWasm.StackCallSite) { return !this.getFunctionName(); },
+    // Neither engine reports Promise.all/any combinator frames.
     isPromiseAll() { return false; },
     getPromiseIndex() { return null; },
     toString(this: BunWasm.StackCallSite) { return internal.formatCallSite(this); },
@@ -52,6 +54,8 @@
     getColumnNumber() { return this.#frame.column; }
     isNative() { return false; }
     isConstructor() { return this.#frame.name.startsWith("new "); }
+    // JavaScriptCore names the frames of suspended awaiting callers `async <name>`.
+    isAsync() { return this.#frame.name.startsWith("async "); }
   }
   internal.defineHidden(CallSite.prototype, methods);
 
@@ -84,6 +88,9 @@
     Error.prepareStackTrace = defaultPrepare;
     const prototype = Object.getPrototypeOf(holder.stack![0]);
     internal.defineHidden(prototype, methods);
+    // QuickJS walks only live frames, so a suspended awaiting caller never appears: none of the
+    // frames it reports is an async frame.
+    internal.defineHidden(prototype, { isAsync() { return false; } });
     const nativeStack = Object.getOwnPropertyDescriptor(Error.prototype, "stack");
     const nativePrepare = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
     nativePrepare!.set!.call(Error, (_error: object, sites: unknown) => sites);
