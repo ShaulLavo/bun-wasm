@@ -2,7 +2,7 @@ import { createShell, installShellCommands, SharedBridge, control, runtimeSnapsh
 import { installCat } from "bash-web/utilities/cat";
 import { installGrep } from "bash-web/utilities/grep";
 import { installBunAdapters, type BunAdapterInstallation, type RuntimeNetworkHelper } from "bun-wasm";
-import { createRuntime, type RuntimeSupervisor } from "waffle";
+import { createRuntime, type ProcessService, type RuntimeSupervisor } from "waffle";
 import { PreviewRouter } from "waffle/browser/preview";
 import { activated } from "waffle/browser/service-worker";
 import type { Fixture } from "./model";
@@ -14,7 +14,11 @@ import { WorkerJobs } from "./worker-jobs";
 const router = new PreviewRouter({ baseURL: location.href, prefix: "__preview" });
 const listeners = new Map<number, RuntimeNetworkHelper>();
 const workers = new Set<Worker>();
-const workerJobs = new WorkerJobs(workers);
+let processService: ProcessService | undefined;
+const workerJobs = new WorkerJobs(workers, worker => {
+  check(processService, "Runtime process service is ready for worker ownership queries");
+  return processService.isIdleWorker(worker);
+});
 let supervisor: RuntimeSupervisor | undefined;
 const NativeWorker = globalThis.Worker;
 globalThis.Worker = class extends NativeWorker {
@@ -142,6 +146,7 @@ async function setup() {
   const capabilities: unknown = await (await fetch("./capabilities.json")).json();
   if (capabilities && typeof capabilities === "object" && "tail" in capabilities && capabilities.tail === true) await registerTail();
   const service = await runtime.processes();
+  processService = service;
   supervisor = await service.ready();
   check(service === await runtime.processes(), "One runtime process service");
   check(await runtime.network() === await runtime.network(), "One runtime network service");
