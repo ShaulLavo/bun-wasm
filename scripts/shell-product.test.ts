@@ -118,11 +118,13 @@ test("Ctrl-C tracks positive requested ownership even when runtime assignment is
   broken.observe(probe.root, { runtimeProcess: probe.root.transport });
   const baseline = broken.baseline(23);
   broken.observe(dev, { runtimeProcess: dev.transport, adapter: "bun" });
+  const devState = workerProcessState(dev.transport);
+  broken.admission({ pid: devState.pid, parentPid: devState.parentPid, job: devState.job, stage: "launched" }, { rootPid: devState.rootPid, request: { ...wrong.request, job: 0 } });
   broken.admission({ pid: state.pid, parentPid: state.parentPid, job: state.job, stage: "reserved" }, { rootPid: state.rootPid, request: { ...wrong.request, job: requested } });
   const handle = probe.launch(wrong);
   live.add(handle);
   broken.observe(handle, { runtimeProcess: handle.transport, adapter: "bun" });
-  expect(() => broken.stopped(baseline, foreground)).toThrow("Requested job");
+  expect(() => broken.stopped(baseline, foreground)).toThrow(`Requested job ${requested} assigned ${state.job} for PID ${state.pid}`);
 });
 
 test("Ctrl-C rejects foreground reservations and late launches that have no physical worker yet", () => {
