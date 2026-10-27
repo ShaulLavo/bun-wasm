@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Browser, Page } from "playwright";
 import type { ProductApi } from "../../tests/shell-product/protocol.ts";
 import { recipe } from "../../tests/ten-app-finishline/recipes.ts";
-import { registry } from "../../scripts/app-matrix/registry.mjs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { acceptedGuest, createFinishlineRun, openRegistry, runMode, networkSnapshot } from "../../tests/ten-app-finishline/acceptance.ts";
+import { bounded } from "../../tests/shell-product/lifecycle.ts";
 import { browserRegistryRoute, registryBrokerResponse } from "../../scripts/app-matrix/registry-request.ts";
-import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { buildClassicWorker } from "../../scripts/browser-build.ts";
 import { bundleProduct } from "./browser-shell-product-install.ts";
 
@@ -17,27 +18,69 @@ declare global {
 }
 const fixture = recipe(process.argv[2] ?? "");
 const root = resolve(import.meta.dir, "../..");
-const reports = process.env.TEN_APP_REPORT;
+const requestedReports = process.env.TEN_APP_REPORT;
 const installation = process.env.SHELL_PRODUCT_INSTALL;
-const artifact = process.env.SHELL_PRODUCT_GUEST;
 const corpus = process.env.SHELL_PRODUCT_REGISTRY;
-assert(reports && installation && artifact && corpus, "Set report, installation, guest and private registry paths");
-const bytes = await Bun.file(artifact).bytes();
-verifyGuestBuildReceipt(bytes, await Bun.file(`${artifact}.build.json`).json());
-await mkdir(reports, { recursive: true });
-const scratch = await mkdtemp(process.env.TEN_APP_SCRATCH ?? "/work/tmp/bw-ten-");
+assert(requestedReports && isAbsolute(requestedReports), "Set absolute TEN_APP_REPORT");
+const reports = requestedReports;
+let mode: ReturnType<typeof runMode> = "acceptance";
+let scratch: string | undefined;
+let creatingScratch: Promise<string> | undefined;
+let preparingFiles: Promise<unknown> | undefined;
+let launching: Promise<Browser> | undefined;
+let openingMirror: ReturnType<typeof openRegistry> | undefined;
 let browser: Browser | undefined;
 let page: Page | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
-let mirror: Awaited<ReturnType<typeof registry>> | undefined;
+let mirror: Awaited<ReturnType<typeof openRegistry>> | undefined;
 let broker: ReturnType<typeof Bun.serve> | undefined;
 const rows: object[] = [];
 const external: string[] = [];
-const save = (name: string, value: unknown) => Bun.write(join(reports, name), JSON.stringify(value, null, 2)+"\n");
+function save(name: string, value: unknown) {
+  mkdirSync(reports, { recursive: true });
+  writeFileSync(join(reports, name), JSON.stringify(value, null, 2)+"\n");
+}
+function snapshot() {
+  networkSnapshot(mirror, external, save);
+}
+const run = createFinishlineRun({
+  snapshot,
+  report: failure => save("failure.json", failure),
+  cleanup: {
+    captureTimeout: 1000,
+    capture: async () => {
+      if (!page || page.isClosed()) return;
+      const terminal = await bounded(page.evaluate(() => shellProduct?.diagnostics()), 400, "terminal capture").catch(String);
+      save("terminal.json", terminal);
+      const product = await bounded(page.evaluate(() => shellProduct?.cleanup()), 400, "product cleanup");
+      save("product-cleanup.json", product);
+    },
+    closeBrowser: async () => { await (browser ?? await launching?.catch(() => undefined))?.close(); },
+    stopServer: async () => {
+      const results = await Promise.allSettled([Promise.resolve().then(() => server?.stop(true)), Promise.resolve().then(() => broker?.stop(true))]);
+      const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+      if (errors.length) throw new AggregateError(errors, "Asset server or recorder broker stop failed");
+    },
+    closeMirror: async () => { await (mirror ?? await openingMirror?.catch(() => undefined))?.close(); },
+    removeScratch: async () => {
+      await preparingFiles?.catch(() => undefined);
+      const directory = scratch ?? await creatingScratch?.catch(() => undefined);
+      if (directory) await rm(directory, { recursive: true, force: true });
+    },
+  },
+});
 async function stage(name: string, execute: () => Promise<unknown>) {
-  try { const result = await execute(); rows.push({ name, status: "pass", result }); console.log(name, "PASS"); }
-  catch(error) { rows.push({ name, status: "fail", error:String(error) }); throw error; }
-  finally { await save("results.json", rows); }
+  try {
+    const result = await execute();
+    rows.push({ name, status: mode === "acceptance" ? "pass" : "prepared", result });
+    console.log(name, mode === "acceptance" ? "PASS" : "PREPARED");
+  } catch (error) {
+    run.fail(error);
+    rows.push({ name, status: "fail", error: String(error) });
+    try { save("results.json", rows); } catch (reportError) { run.fail(reportError); }
+    throw error;
+  }
+  save("results.json", rows);
 }
 async function command(text: string) {
   assert(page);
@@ -52,11 +95,12 @@ async function preview(expected: string) {
     preview.on("console", message => console.log("preview", message.type(), message.text()));
     preview.on("pageerror", error => console.error("preview", error));
     const response = await preview.goto(new URL("__preview/3137/", page.url()).href);
-    await save("last-page.json", { url: preview.url(), status: response?.status(), body: await preview.content() });
+    save("last-page.json", { url: preview.url(), status: response?.status(), body: await preview.content() });
     assert(response); assert(response.fromServiceWorker()); assert.equal(response.status(),200);
     await preview.locator(fixture.selector).filter({ hasText:expected }).waitFor({timeout:90000});
     return await preview.locator(fixture.selector).innerText();
-  } finally { await preview.close(); }
+  } catch (error) { run.fail(error); throw error; }
+  finally { await preview.close().catch(error => run.fail(error)); }
 }
 async function interrupt() {
   assert(page);
@@ -72,17 +116,8 @@ async function interrupt() {
   assert(prompt.output.split(/\r?\n/).includes("TEN_PROMPT_USABLE"));
   return {before,after,result,prompt};
 }
-async function cleanup() {
-  try { if(page) await page.evaluate(() => shellProduct?.cleanup()).then(value=>save("product-cleanup.json",value)); }
-  finally {
-    await browser?.close(); server?.stop(true); await mirror?.close(); await broker?.stop(true);
-    await rm(scratch,{recursive:true,force:true});
-  }
-}
-const onSignal = () => void cleanup().finally(()=>process.exit(130));
-for(const signal of ["SIGINT","SIGTERM"] as const) process.once(signal,onSignal);
-try {
-  const staging = join(scratch,"source");
+async function prepareFiles(directory: string, preparedInstallation: string) {
+  const staging = join(directory, "source");
   const sources = join(staging,"tests/shell-product");
   await cp(join(root,"tests/shell-product"),sources,{recursive:true});
   const main = join(sources,"main.ts");
@@ -94,22 +129,50 @@ let stopPromise;
 terminalInput.addEventListener('keydown', event => { if (!event.ctrlKey || event.key.toLowerCase() !== 'c') return; event.preventDefault(); stopPromise = shellProduct.interrupt(); });
 Reflect.set(globalThis, 'tenApp', { prepareModules: async () => { const registration = await navigator.serviceWorker.register('./module-sw.js', { scope: './__bunwasm/' }); await activated(registration); }, editFile: async (path, source) => { await write(path, source); await runtime.filesystem.flush(); }, stop: () => stopPromise });
 `);
-  const output=join(scratch,"dist");
-  const inputs=await bundleProduct(staging,installation,output); await save("inputs.json",inputs);
+  const output=join(directory,"dist");
+  const inputs=await bundleProduct(staging,preparedInstallation,output);
   await buildClassicWorker(join(inputs.app,"module-sw.ts"),output,undefined,join(inputs.app,"main.ts"));
-  const socket=join(scratch,"registry.sock");
-  broker=Bun.serve({unix:socket,fetch:registryBrokerResponse}); process.env.MATRIX_RECORDER_SOCKET=socket;
-  mirror=await registry({directory:corpus,record:true});
+  return { inputs, output };
+}
+async function execute() {
+  mode = runMode(process.argv.slice(3));
+  const accepted = await acceptedGuest(process.env);
+  run.check();
+  save("inputs.json", { mode, guestArtifact: accepted.artifact, acceptedReceipt: accepted.accepted, guestSource: accepted.source, guestProvenance: accepted.provenance });
+  assert(installation && isAbsolute(installation), "Set absolute SHELL_PRODUCT_INSTALL");
+  const preparedInstallation = installation;
+  const prefix = process.env.TEN_APP_SCRATCH ?? "/work/tmp/bw-ten-";
+  assert(isAbsolute(prefix), "TEN_APP_SCRATCH must be absolute");
+  creatingScratch = mkdtemp(prefix);
+  scratch = await creatingScratch;
+  run.check();
+  const preparing = prepareFiles(scratch, preparedInstallation);
+  preparingFiles = preparing;
+  const { inputs, output } = await preparing;
+  run.check();
+  save("inputs.json", { ...inputs, mode, guestArtifact: accepted.artifact, acceptedReceipt: accepted.accepted, guestSource: accepted.source, guestProvenance: accepted.provenance });
+  assert(corpus && isAbsolute(corpus), "Set absolute SHELL_PRODUCT_REGISTRY");
+  if (mode === "prepare-registry") {
+    const socket=join(scratch,"registry.sock");
+    broker=Bun.serve({unix:socket,fetch:registryBrokerResponse});
+    process.env.MATRIX_RECORDER_SOCKET=socket;
+  }
+  openingMirror = openRegistry(corpus, mode);
+  mirror = await openingMirror;
+  run.check();
   server=Bun.serve({hostname:"127.0.0.1",port:0,async fetch(request) {
     const path = new URL(request.url).pathname;
     const headers={"Cross-Origin-Opener-Policy":"same-origin","Cross-Origin-Embedder-Policy":"require-corp","Cache-Control":"no-store"};
-    if(path==="/bun-guest.wasm") return new Response(bytes,{headers:{...headers,"Content-Type":"application/wasm"}});
+    if(path==="/bun-guest.wasm") return new Response(accepted.bytes,{headers:{...headers,"Content-Type":"application/wasm"}});
     const file=resolve(output,`.${path==="/"?"/index.html":path}`);
     if(!file.startsWith(output+sep)||!await Bun.file(file).exists())return new Response(null,{status:404,headers});
     return new Response(Bun.file(file),{headers});
   }});
-  const {chromium}=await import(pathToFileURL(join(installation,"node_modules/playwright/index.mjs")).href);
-  browser=await chromium.launch({headless:true}); assert(browser);
+  const {chromium}=await import(pathToFileURL(join(preparedInstallation,"node_modules/playwright/index.mjs")).href);
+  run.check();
+  launching = chromium.launch({headless:true, env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch }});
+  browser=await launching; assert(browser);
+  run.check();
   const context=await browser.newContext(); const base=mirror.base;
   await context.route("**/*",route=>browserRegistryRoute(route,base,external));
   page=await context.newPage(); page.on("console",m=>console.log("browser",m.type(),m.text())); page.on("pageerror",e=>console.error(e));
@@ -117,6 +180,13 @@ Reflect.set(globalThis, 'tenApp', { prepareModules: async () => { const registra
   await page.evaluate(()=>tenApp.prepareModules());
   await page.evaluate(()=>shellProduct.setup());
   await page.evaluate(({fixture,base})=>shellProduct.open(fixture,base),{fixture,base});
+  if (mode === "prepare-registry") {
+    await stage("prepare-registry", () => command("bun install"));
+    return;
+  }
+  await runApplication();
+}
+async function runApplication() {
   await stage("install",()=>command("bun install"));
   await stage("dev",async()=>{assert(page);await page.evaluate(()=>shellProduct.start("bun run dev",3137,90000));return preview(fixture.text);});
   const edited=`${fixture.text} EDITED`;
@@ -133,11 +203,5 @@ Reflect.set(globalThis, 'tenApp', { prepareModules: async () => { const registra
   await stage("build",async()=>{const result=await command("bun run build");assert(page);for(const path of fixture.buildOutputs) assert(await page.evaluate(path=>shellProduct.readFile(path),`/home/guest/${fixture.id}/${path}`));return result;});
   await stage("built-page",async()=>{assert(page);await page.evaluate(()=>shellProduct.start("bun run start",3137,90000));return preview(edited);});
   await stage("ctrl-c",interrupt);
-  assert.deepEqual(external,[]); await save("registry.json",mirror.snapshot());
-} catch(error) {
-  console.error(error);process.exitCode=1;
-} finally {
-  if(page) await save("terminal.json",await page.evaluate(()=>shellProduct?.diagnostics()).catch(String));
-  await cleanup();
-  for(const signal of ["SIGINT","SIGTERM"] as const) process.off(signal,onSignal);
 }
+process.exitCode = await run.run(execute);
