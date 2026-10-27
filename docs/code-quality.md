@@ -297,6 +297,9 @@ job start through its last job finish, excluding queue time and pauses between a
 
 Inspect `gh api --paginate repos/ShaulLavo/bun-wasm/actions/caches` before
 changing cache policy. Closed PR caches are isolated from later PRs but still
-consume the shared quota. Remove only identified obsolete entries, not live
+consume the shared quota. Pull requests save the native and JSC Cargo
+snapshots only when they restored nothing compatible: re-saving a compatible
+restore added 1.4 GB per push and evicted main's entries, including the 2 GB JSC
+prebuild. A cold JSC prebuild uses all four runner cores. Remove only identified obsolete entries, not live
 branches or the main-branch toolchain/build caches. Process bundles are short-lived
 run artifacts, not more entries in the repository's cache quota.

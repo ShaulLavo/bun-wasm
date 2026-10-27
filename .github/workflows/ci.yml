@@ -346,7 +346,8 @@ jobs:
         run: |
           run_jsc_prebuild() {
             source env.sh
-            export JOBS=2 CAGE=
+            # Only a cold prebuild compiles; use all four runner cores for it.
+            export JOBS=4 CAGE=
             if [[ "$CI_JSC_PREBUILD_HIT" != 'true' ]]; then
               bash scripts/build-jsc.sh
             fi
@@ -450,7 +451,7 @@ jobs:
           source env.sh
           bash scripts/build-bun-jsc.sh
       - name: Save the JSC Cargo cache once per input revision
-        if: needs.quality.outputs.jsc == 'true' && steps.jsc-cargo-cache.outputs.cache-hit != 'true'
+        if: needs.quality.outputs.jsc == 'true' && steps.jsc-cargo-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || steps.jsc-cargo-cache.outputs.cache-matched-key == '')
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/jsc/target
@@ -496,8 +497,10 @@ jobs:
         run: |
           source env.sh
           TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-tools.sh
+      # Pull requests save a Cargo snapshot only when nothing compatible was restored.
+      # Every push would otherwise add 1.4 GB and evict main's entries from the 10 GB quota.
       - name: Save the refined native Cargo cache once per input revision
-        if: steps.native-cargo-cache.outputs.cache-hit != 'true'
+        if: steps.native-cargo-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || steps.native-cargo-cache.outputs.cache-matched-key == '')
         uses: actions/cache/save@v4
         with:
           path: |
