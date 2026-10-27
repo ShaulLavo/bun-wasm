@@ -23,6 +23,8 @@ declare namespace BunWasm {
   interface PortTransfer {
     snapshot: PortSnapshot;
     validate(): void;
+    publish?(): void;
+    beforeCommit?(): void;
     commit(): void;
   }
   interface WorkerCodecHooks {
@@ -40,6 +42,16 @@ declare namespace BunWasm {
     abort(): void;
   }
   interface SharedObjects {
+    readonly mailbox?: { drain(consume: (bytes: Uint8Array) => void | boolean): number; close(): void };
+    readonly routes?: {
+      readonly owner: string;
+      readonly enabled: boolean;
+      send(command: unknown): boolean;
+      transaction(deliver: () => void, commit: () => void): void;
+      tryTransaction(deliver: () => void, commit: () => void): boolean;
+      onCredit(ready: () => void): void;
+      credit(): void;
+    };
     begin(): SharedPublication;
     read(reference: SharedReference): SharedArrayBuffer;
     wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
@@ -103,6 +115,7 @@ declare namespace BunWasm {
     procKillJob(job: number, signal: number): number;
     /** 16-byte subscriptions in, 16-byte events out. */
     procPoll(subscriptions: Uint8Array, timeoutMs: number): Uint8Array | number;
+    utf8Decode(bytes: Uint8Array): string;
     base64Encode(bytes: Uint8Array, url: boolean): string;
     base64Decode(value: string): Uint8Array<ArrayBuffer>;
     transferArrayBuffers(buffers: ArrayBuffer[]): void;

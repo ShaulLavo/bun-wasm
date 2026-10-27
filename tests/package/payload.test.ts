@@ -39,7 +39,7 @@ test("packed package includes a working public worker, no demo or guest binaries
     // Check the actual tarball and its exact peer, including the complete worker import
     // closure. No path aliases, dependency exclusions or diagnostic filters apply here.
     await execute("node", [join(root, "node_modules/typescript/bin/tsc"), "--module", "NodeNext",
-      "--moduleResolution", "NodeNext", "--target", "ES2022", "--lib", "ES2023,DOM,DOM.Iterable,WebWorker",
+      "--moduleResolution", "NodeNext", "--target", "ES2022", "--lib", "ES2023,ES2024.SharedMemory,DOM,DOM.Iterable,WebWorker",
       "--types", "bun", "--strict", "--noUncheckedIndexedAccess", "--skipLibCheck", "--noEmit",
       "--allowImportingTsExtensions", join(scratch, "consumer.ts")], { cwd: scratch, timeout: 20_000 });
     await copyFile(join(import.meta.dir, "fixtures/vite-main.ts"), join(scratch, "main.ts"));
