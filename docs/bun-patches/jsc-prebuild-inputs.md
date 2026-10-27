@@ -132,12 +132,13 @@ collection continues through the existing queue or fails on synchronous reentry.
 The WASI branches of `WTF/wtf/posix/ThreadingPOSIX.cpp` fail closed for worker
 create/join/detach instead of referencing unavailable pthread lifecycle calls.
 The context adapter sets one marker, no block warm-up/concurrent GC or JIT,
-polling traps and no optional profiler/continuous worker.
-Its `forceRAMSize` option is 512 MiB, matching the loader’s shared guest-memory
-cap instead of the unsupported WASI physical-page query’s wrapped RAM estimate.
-This reports the actual memory budget; it does not remove cross-boundary copies
-or establish that allocation-heavy applications fit within that budget. This is a port of
+polling traps and no optional profiler/continuous worker. This is a port of
 selected WebKit platform behavior and an original configuration adapter.
+
+The configuration adapter sets `forceRAMSize` to 512 MiB, matching the loader's
+shared guest-memory cap instead of the unsupported WASI physical-page query's
+wrapped RAM estimate. This reports the actual memory budget; it does not remove
+cross-boundary copies or establish that allocation-heavy applications fit.
 The retained prepolicy fixture actually passed sync survivor/finalizer checks
 then aborted on the unserved bare async request at API unlock. Real-loader hello passed before the allocation-state repair; the allocation
 and GC regressions remain separate runtime checks. These source conditions

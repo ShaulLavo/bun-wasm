@@ -35,8 +35,15 @@ impl CoreClient {
         let bytes = unsafe { (frame.pointer as *const u32).add(5).read() };
         if status == ops::Status::ResourceLimit {
             // Core failed to allocate the request copy or the reply and wrote no reply.
-            assert!(pointer == 0 && bytes == 0, "core resource limit with a reply");
-            return ops::Reply { status, bytes: Vec::new() }.into_result();
+            assert!(
+                pointer == 0 && bytes == 0,
+                "core resource limit with a reply"
+            );
+            return ops::Reply {
+                status,
+                bytes: Vec::new(),
+            }
+            .into_result();
         }
         let reply = TransportBuffer { pointer, bytes };
         let bytes = unsafe {
