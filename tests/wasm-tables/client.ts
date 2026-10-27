@@ -87,10 +87,12 @@ async function teardownRoots() {
     const table = new localApi.Table({ element: 'externref', initial: 1 });
     table.set(0, root);
     assert.equal(table.get(0), root);
-    return new WeakRef(root);
+    const memory = new localApi.Memory({ initial: 1 });
+    return { root: new WeakRef(root), buffer: new WeakRef(memory.buffer) };
   })();
   for (let i = 0; i < 12; i++) await collect();
-  assert.equal(weak.deref(), undefined, 'runtime-local root map released with factory realm');
+  assert.equal(weak.root.deref(), undefined, 'runtime-local root map released with factory realm');
+  assert.equal(weak.buffer.deref(), undefined, 'memory buffer/state released with factory realm');
   console.log('PASS actual JS realm teardown releases externref roots');
 }
 
@@ -99,6 +101,9 @@ try {
   const oracleFixture = (name: string) => new WebAssembly.Module(readFileSync(join(scratch, name + '.wasm')));
   await runInNewContext(stripTypeScriptTypes(contract), { WebAssembly, fixture: oracleFixture, check, gc: globalThis.gc, console, WeakRef, FinalizationRegistry, setImmediate });
   console.log('PASS host oracle contract');
+  const corrections = readFileSync(join(process.cwd(), 'tests/wasm-tables/corrections.ts'), 'utf8');
+  await runInNewContext(stripTypeScriptTypes(corrections), { WebAssembly, fixture: oracleFixture, check, sourceMemory: false, gc: globalThis.gc, console, WeakRef, setImmediate });
+  await runInNewContext(stripTypeScriptTypes(corrections), { WebAssembly: api, fixture, check, sourceMemory: true, gc: globalThis.gc, console, WeakRef, setImmediate });
   const lifetime = readFileSync(join(process.cwd(), 'tests/wasm-tables/lifetime.ts'), 'utf8');
   await runInNewContext(stripTypeScriptTypes(contract + lifetime), { WebAssembly: api, fixture, check, gc: globalThis.gc, console, WeakRef, FinalizationRegistry, setImmediate });
   await teardownRoots();

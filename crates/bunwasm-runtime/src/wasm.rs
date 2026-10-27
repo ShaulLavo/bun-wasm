@@ -777,21 +777,20 @@ mod tests {
         drop(runtime);
         assert!(weak.upgrade().is_none());
     }
-    fn fixture_runtime(name: &str) -> Runtime {
-        let fixtures = std::env::var("WASM_TABLE_SCRATCH").unwrap();
-        let bytes = std::fs::read(std::path::Path::new(&fixtures).join(name)).unwrap();
+    fn fixture_runtime() -> Runtime {
+        let bytes = include_bytes!("../../../tests/wasm-tables/table.wasm");
         let mut runtime = Runtime::default();
-        runtime.compile(&bytes).unwrap();
+        runtime.compile(bytes).unwrap();
         runtime.instantiate(0, &[tagged("callback", 7)]).unwrap();
         runtime
     }
     #[test]
     fn public_reference_equality_is_store_and_entity_qualified() {
-        let mut runtime = fixture_runtime("table.wasm");
+        let mut runtime = fixture_runtime();
         runtime.instantiate(0, &[tagged("callback", 8)]).unwrap();
         let first = runtime.guests[0].instance;
         let second = runtime.guests[1].instance;
-        let other = fixture_runtime("table.wasm");
+        let other = fixture_runtime();
         let table = first.get_table(&runtime.store, "table").unwrap();
         assert_eq!(table, first.get_table(&runtime.store, "alias").unwrap());
         assert_ne!(table, second.get_table(&runtime.store, "table").unwrap());
@@ -822,7 +821,7 @@ mod tests {
     }
     #[test]
     fn retained_function_and_externref_survive_guest_removal_and_drop_with_store() {
-        let mut runtime = fixture_runtime("table.wasm");
+        let mut runtime = fixture_runtime();
         let table = runtime.guests[0]
             .instance
             .get_table(&runtime.store, "table")

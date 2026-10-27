@@ -50,8 +50,14 @@ registrations, and callable wrappers conservatively live for that same
 runtime lifetime. Overwriting a table entry does not reclaim its former JS
 root. This is an explicit limitation; no per-entry GC or memory-performance
 claim is made. The root map has no external owner after its factory realm is
-released. Tables and memories use weak wrapper interning. Retained tables and
-callables continue to work after the exporting JS instance is collected.
+released. Tables and memories use weak wrapper interning. Memory synchronization state
+is also weakly indexed by backend resource, independently of the wrapper.
+A weak map from each current buffer to its state keeps a retained buffer or
+view synchronized after wrapper collection. Growth deletes the old buffer's
+anchor before detaching it. When both wrapper and current buffer are dead,
+the mirror/state can collect; detached old buffers do not retain later mirrors.
+Retained tables and callables continue to work after the exporting JS instance
+is collected.
 
 Every Wasm call/resumption flushes all live memory wrappers before execution
 and refreshes them afterward, including suspension, callback exceptions, and
@@ -64,9 +70,23 @@ Run `source env.sh` and `bun test scripts/wasm-tables.test.ts`. The test creates
 an isolated offline Cargo crate containing actual production `wasm.rs`,
 `data.rs`, and the native registry declaration. Its native process exchanges
 plain data with the real factory on Node, without a mock table or callable.
+The two reference tests embed the repository-owned `tests/wasm-tables/table.wasm`
+compiled with `wasm-tools parse tests/wasm-tables/table.wat -o
+tests/wasm-tables/table.wasm`. The original 395-byte source SHA-256 is
+`d849070911fb1b6516ea32fa76dbcbeaa1461055fbb201c2e3eea41059879265`;
+the 150-byte binary SHA-256 is
+`e0a25470bbc2562a1e348886754f4627e05d1ccd83ab604d9020e1b68842bd74`.
+They need no fixture environment
+variables under ordinary Cargo test discovery. The runner removes both
+`WASM_TABLE_SCRATCH` and `TABLE_FIXTURES` from the Rust test process.
 It runs the existing Rust memory controls, real identity/Store-drop controls,
 JS GC and retained-callable controls, duplicate-signature imports, reentry,
-exceptions, and indirect cross-instance memory growth. Its unique checks
+exceptions, and indirect cross-instance memory growth. Review regressions also
+cover buffer-only and wrapper-only retention, both-dead collection, old-buffer
+anchor removal, re-exported memory views, immutable instance exports, table
+argument presence, element string conversion, and descriptor getter counts. The adjacent memory suite
+loads the actual TypeScript factory with the established Bun.Transpiler pattern
+and invokes actual Bun GC without a skipped lifetime assertion. Its unique checks
 manifest includes it in runtime and local-runtime discovery.
 
 The optional `WASM_TABLE_SWC` directory must contain exact cached `wasm.js`

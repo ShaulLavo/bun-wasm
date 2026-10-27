@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { stripTypeScriptTypes } from "node:module";
 import { runInNewContext, runInThisContext } from "node:vm";
 
 const host = globalThis.WebAssembly;
-const factory = runInThisContext(stripTypeScriptTypes(readFileSync(new URL("../../crates/bunwasm-runtime/src/js/webassembly.ts", import.meta.url), "utf8")));
+const factory = runInThisContext(new Bun.Transpiler({ loader: "ts" }).transformSync("globalThis.__wasmFactory = " + readFileSync(new URL("../../crates/bunwasm-runtime/src/js/webassembly.ts", import.meta.url), "utf8")));
 const encodeName = (name: string) => [name.length].concat(Array.from(new TextEncoder().encode(name)));
 const section = (id: number, data: number[]) => [id, data.length].concat(data);
 const exportEntry = (name: string, kind: number, index: number) => encodeName(name).concat([kind, index]);
@@ -199,9 +198,8 @@ test("source: invalid descriptors fail before native allocation with host error 
   assert.equal(allocations(), 1);
 });
 
-test("source: resource identity registry does not retain an unreachable Memory wrapper", async context => {
-  const gc: unknown = Reflect.get(globalThis, "gc");
-  if (typeof gc !== "function") { context.skip("run Node with --expose-gc"); return; }
+test("source: resource identity registry does not retain an unreachable Memory wrapper", async () => {
+  const gc = () => Bun.gc(true);
   const { api } = sourceApi();
   let memory: WebAssembly.Memory | undefined = new api.Memory({ initial: 0 });
   const reference = new WeakRef(memory);

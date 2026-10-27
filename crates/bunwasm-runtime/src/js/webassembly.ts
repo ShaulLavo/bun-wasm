@@ -9,6 +9,8 @@
   const tableStates = new WeakMap<Table, BunWasm.WasmTable>();
   const globalStates = new WeakMap<Global, { id: number; name: string; type: BunWasm.WasmType; mutable: boolean }>();
   const memories = new Map<number, WeakRef<Memory>>();
+  const memoryResources = new Map<number, WeakRef<MemoryState>>();
+  const memoryBufferStates = new WeakMap<ArrayBuffer, MemoryState>();
   const tables = new Map<number, WeakRef<Table>>();
   const functions = new Map<number, Callable>();
   const functionStates = new WeakMap<object, BunWasm.WasmFunction>();
@@ -83,8 +85,9 @@
       const maximum = limit === undefined ? undefined : count(limit);
       if (maximum !== undefined && maximum > 65536) throw new RangeError('WebAssembly.Memory exceeds the 32-bit page limit');
       if (maximum !== undefined && maximum < initial) throw new RangeError('WebAssembly.Memory maximum is smaller than initial');
-      if (descriptor.shared && maximum === undefined) throw new TypeError('Shared WebAssembly memories require a maximum');
-      if (descriptor.shared) throw new LinkError('Shared WebAssembly memories are not supported');
+      const shared = !!descriptor.shared;
+      if (shared && maximum === undefined) throw new TypeError('Shared WebAssembly memories require a maximum');
+      if (shared) throw new LinkError('Shared WebAssembly memories are not supported');
       let resource: number;
       try { resource = native.createMemory(initial, maximum); }
       catch (error) { throw new RangeError(message(error)); }
@@ -111,7 +114,7 @@
   class Table {
     constructor(descriptor: { element: unknown; initial: unknown; maximum?: unknown }, value?: unknown) {
       if (!isObject(descriptor)) throw new TypeError('WebAssembly.Table descriptor must be an object');
-      const requested = descriptor.element;
+      const requested = String(descriptor.element);
       if (requested !== 'anyfunc' && requested !== 'externref') throw new TypeError('Invalid WebAssembly table element');
       const element = requested === 'anyfunc' ? 'funcref' : 'externref';
       const initial = count(descriptor.initial);
@@ -130,12 +133,12 @@
     set(index: unknown, value?: unknown) {
       const state = tableState(this);
       const offset = count(index);
-      native.tableSet(state.id, offset, coerce(value, state.element));
+      native.tableSet(state.id, offset, coerce(arguments.length < 2 && state.element === 'funcref' ? null : value, state.element));
     }
     grow(delta: unknown, value?: unknown) {
       const state = tableState(this);
       const amount = count(delta);
-      return native.tableGrow(state.id, amount, coerce(value === undefined && state.element === 'funcref' ? null : value, state.element));
+      return native.tableGrow(state.id, amount, coerce(arguments.length < 2 && state.element === 'funcref' ? null : value, state.element));
     }
   }
   function globalState(global: Global) {
@@ -160,22 +163,27 @@
   }
   function flushMemory(memory: MemoryState) { native.writeMemory(memory.resource, byteView(memory.buffer)); }
   function sync(action: (state: MemoryState) => void) {
-    for (const reference of memories.values()) {
-      const memory = reference.deref();
-      if (memory) action(memoryState(memory));
+    for (const [resource, reference] of memoryResources) {
+      const state = reference.deref();
+      if (!state) { memoryResources.delete(resource); continue; }
+      action(state);
     }
   }
   function rememberMemory(resource: number, memory: Memory) {
     const reference = new WeakRef(memory);
-    memoryStates.set(memory, { resource, buffer: new ArrayBuffer(0), generation: undefined });
+    const state = memoryResources.get(resource)?.deref() ?? { resource, buffer: new ArrayBuffer(0), generation: undefined };
+    memoryStates.set(memory, state);
+    memoryResources.set(resource, new WeakRef(state));
     memories.set(resource, reference);
     memoryCleanup.register(memory, { resource, reference });
   }
   function refreshMemory(memory: MemoryState) {
     const { bytes: data, generation } = native.readMemory(memory.resource);
     if (memory.generation !== generation || memory.buffer.byteLength !== data.byteLength) {
+      memoryBufferStates.delete(memory.buffer);
       memory.buffer.transfer(0);
       memory.buffer = new ArrayBuffer(data.byteLength);
+      memoryBufferStates.set(memory.buffer, memory);
       memoryBuffers.add(memory.buffer);
       memory.generation = generation;
     }
@@ -257,7 +265,7 @@
   type Exports = Record<string, Callable | Memory | Table | Global>;
   type Imports = Record<string, Record<string, unknown>>;
   class Instance {
-    readonly exports: Exports;
+    declare readonly exports: Exports;
     constructor(module: Module, imports: Imports = {}) {
       const info = description(module);
       const bindings = info.imports.map(item => binding(item, imports[item.module]?.[item.name]));
@@ -269,8 +277,7 @@
       const exports: Exports = Object.create(null);
       for (const item of info.exports) installExport(id, exports, item);
       sync(refreshMemory);
-      this.exports = Object.freeze(exports);
-      Object.defineProperty(this, 'exports', { value: this.exports, enumerable: true });
+      Object.defineProperty(this, 'exports', { value: Object.freeze(exports), enumerable: true });
     }
   }
   function binding(item: BunWasm.WasmImport, value: unknown): number | { kind: 'callback' | 'function'; id: number } {
