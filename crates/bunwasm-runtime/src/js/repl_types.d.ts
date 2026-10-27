@@ -1,4 +1,5 @@
 declare namespace BunWasm {
+  interface Native { evalScript(code: string, filename: string): unknown }
   interface ReplInput {
     isTTY?: boolean;
     on(event: string, listener: (...args: never[]) => void): unknown;

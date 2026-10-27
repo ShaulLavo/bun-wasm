@@ -76,6 +76,7 @@ stage selections, fail before report, scratch, registry or browser setup.
 | `next-install-only` | Next 15 | Install |
 | `vite-dev-ctrl-c` | Vite React | Install, dev preview, first Ctrl-C |
 | `next-dev-ctrl-c` | Next 15 | Install, dev preview, first Ctrl-C |
+| `bun-shell` | A small project with `shell-api.ts` | `bun exec`, `Bun.$`, `bun init`, `bun create vite`, piped `bun repl` |
 
 With the same current verified prepared packages, guest, receipt and replay
 inputs, run a focused development cycle:
@@ -104,6 +105,20 @@ Ctrl-C can independently pass, while the overall command still exits nonzero.
 A missing listener or exited server blocks Ctrl-C; a failed interruption is
 not retried. These modes retain the normal provenance, one-runtime, deadline
 and final global zero-worker/listener guards.
+
+## Bun's shell commands
+
+`bun-shell` checks that Bun runs shell commands through bash-web's `/bin/sh` on
+the same runtime. `bun exec` runs a pipeline and returns a script's exit status.
+`shell-api.ts` checks 13 `Bun.$` results against `tests/shell-product/bun-shell.ts`.
+`bun init -y` writes and installs a blank project that then runs, and
+`bun create vite` scaffolds a project with `create-vite`. `bun repl` reads piped
+lines and prints their results.
+
+`bun init` and `bun create vite` need registry objects beyond the Vite and Next
+corpus. Run once with `SHELL_PRODUCT_RECORD=1` against a writable copy of the
+corpus to add them through the app matrix's registry broker, then run without it
+to replay offline. Recording contacts registry.npmjs.org; a replay run never does.
 
 ## Next installation only
 

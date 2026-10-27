@@ -202,7 +202,7 @@
       }
       this.#pending = [];
       try {
-        let result: unknown = (0, eval)(code);
+        let result: unknown = internal.native.evalScript(code, "[repl]");
         if (result instanceof Promise) result = await result;
         if (result && typeof result === "object" && Object.hasOwn(result, "value")) result = Reflect.get(result, "value");
         if (result !== undefined) Reflect.set(globalThis, "_", result);
@@ -253,7 +253,7 @@
         try {
           const source = internal.builtin("node:fs").readFileSync(file).toString();
           for (const line of source.split("\n")) this.history.push(line);
-          (0, eval)(new Bun.Transpiler({ loader: "tsx", replMode: true }).transformSync(source));
+          internal.native.evalScript(new Bun.Transpiler({ loader: "tsx", replMode: true }).transformSync(source), file);
         } catch (error) {
           process.stderr.write(`${error instanceof Error ? error.message : String(error)}\r\n`);
         }

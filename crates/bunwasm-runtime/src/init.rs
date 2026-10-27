@@ -1,4 +1,4 @@
-//! `bun init`, adapted from oven-sh/bun src/cli/init_command.rs (blank and minimal templates;
+//! `bun init`, adapted from oven-sh/bun src/runtime/cli/init_command.rs (blank and minimal templates;
 //! docs/bun-patches/bun-init-and-create.md). Writes the same files, then installs in-process.
 use std::{fs, path::Path};
 
@@ -6,10 +6,11 @@ use serde_json::{Map, Value};
 
 use crate::{BUN_VERSION, Transpiler};
 
-const GITIGNORE: &[u8] = include_bytes!("../../../vendor/bun/src/cli/init/gitignore.default");
+const GITIGNORE: &[u8] =
+    include_bytes!("../../../vendor/bun/src/runtime/cli/init/gitignore.default");
 const TSCONFIG_JSON: &[u8] =
-    include_bytes!("../../../vendor/bun/src/cli/init/tsconfig.default.json");
-const README_MD: &str = include_str!("../../../vendor/bun/src/cli/init/README.default.md");
+    include_bytes!("../../../vendor/bun/src/runtime/cli/init/tsconfig.default.json");
+const README_MD: &str = include_str!("../../../vendor/bun/src/runtime/cli/init/README.default.md");
 
 const HELP: &str = "Usage: bun init [flags] [<folder>]
   Initialize a Bun project in the current directory.
@@ -85,10 +86,10 @@ fn normalize_package_name(input: &str) -> String {
 }
 
 fn is_type_script(entry_point: &str) -> bool {
-    match Path::new(entry_point).extension().and_then(|e| e.to_str()) {
-        Some("js" | "mjs" | "cjs" | "jsx") => false,
-        _ => true,
-    }
+    !matches!(
+        Path::new(entry_point).extension().and_then(|e| e.to_str()),
+        Some("js" | "mjs" | "cjs" | "jsx")
+    )
 }
 
 fn is_safe_entry_point(path: &str) -> bool {

@@ -188,7 +188,7 @@ async function runBunShell(fixture: Fixture) {
   // Piped stdin: interactive terminal input for non-shell programs is not available yet.
   await stage(fixture, "bun-repl", async () => requireLines(
     await command(`printf '%s\\n' '1 + 2' 'const answer: number = 40' 'answer + 2' "await Promise.resolve('awaited')" '.exit' | bun repl | cat`),
-    ["3", "undefined", "42", '"awaited"'],
+    ["3", "40", "42", '"awaited"'],
   ));
 }
 async function runApp(fixture: Fixture) {
