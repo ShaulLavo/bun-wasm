@@ -46,5 +46,5 @@ if (import.meta.main) {
   const target = process.env.CARGO_TARGET_DIR;
   if (!target) throw new Error("CARGO_TARGET_DIR is required");
   mkdirSync(target, { recursive: true });
-  preserveInputTimes(process.cwd(), join(target, ".ci-input-times.json"), ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "crates", "third_party", "scripts", ".cargo", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "package.json", "bun.lock", "env.sh"]);
+  preserveInputTimes(process.cwd(), join(target, ".ci-input-times.json"), ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "tests/fixtures/webassembly", "tests/wasm-tables", "crates", "third_party", "scripts", ".cargo", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "package.json", "bun.lock", "env.sh"]);
 }

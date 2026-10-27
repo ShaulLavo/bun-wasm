@@ -162,3 +162,12 @@ The original bare `bun` script remains covered: it runs when PATH admits Bun and
 must fail with ENOENT before the probe when the portable PATH excludes it. Native
 Bun's temporary Node proxy remains a reference difference, not a portable PATH
 fallback. Source controls exercise both branches through production admission.
+
+The installer's original version selector now prefers a satisfying release over
+a satisfying prerelease, matching `PackageManifest::find_best_version` in Bun's
+`src/install/npm.rs` at the revision above. Range satisfaction and ordinary semver
+ordering remain unchanged, and an explicit prerelease request still resolves a
+prerelease. The published `@napi-rs/wasm-runtime@1.2.5` peer range
+`^1.7.1 || ^2.0.0-alpha.4` provides the regression case: native Bun selects
+emnapi 1.11.3, while numeric maximum selection had chosen 2.0.0-beta.2. No
+upstream implementation, package pin or loader workaround is copied or added.

@@ -33,6 +33,11 @@ export interface EngineHostOptions {
   processWake?: Int32Array;
   /** Private backing service. Supplying it does not enable guest codec/startup decoding. */
   sharedObjects?: SharedObjectService;
+  /** Engine-native continuation slot. Promise and await jobs must capture and restore it. */
+  asyncContext?: {
+    get(): unknown;
+    set(frame: unknown): void;
+  };
   /** Called exactly once when the program ends (process.exit, uncaught error, empty event loop). */
   onExit(code: number): void;
 }
