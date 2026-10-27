@@ -30,7 +30,7 @@ class NodeLinkWasi extends Wasi {
     super({ args: [], env: {}, fs: new MemFS(), preopens: {}, stdout() {}, stderr() {}, sleep() {} });
     this.nativeImports = nativeImports;
   }
-  override imports(module: WebAssembly.Module, bindings?: Parameters<Wasi["imports"]>[1]): WebAssembly.Imports {
+  override imports(module: WebAssembly.Module, bindings?: WebAssembly.Imports): WebAssembly.Imports {
     const imports: WebAssembly.Imports = {};
     for (const entry of WebAssembly.Module.imports(module)) {
       const namespace = entry.module === "env" || entry.module === "GOT.mem" || entry.module === "GOT.func" ? bindings?.[entry.module] : this.nativeImports[entry.module];
