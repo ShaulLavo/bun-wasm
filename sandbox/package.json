@@ -18,7 +18,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "codemirror": "^6.0.2",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#1fa934ed99f95a744af2448fc6fb14bb984c37d4"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#9ffe03e4fef900a0fedc76aa67f76a21bd3f48fa"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

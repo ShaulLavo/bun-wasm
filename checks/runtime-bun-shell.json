@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/bun-shell.test.ts",
+  "localRuntime": true
+}

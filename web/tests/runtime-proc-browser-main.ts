@@ -124,6 +124,10 @@ let admissionReports = 0;
 let ioReports = 0;
 const NativeWorker = globalThis.Worker;
 const activeWorkers = new Set<Worker>();
+// Waffle prestarts idle process workers that receive no request until a spawn takes one.
+// Guest and filesystem workers are the ones the page has posted to.
+const requestedWorkers = new WeakSet<Worker>();
+const busyWorkers = () => Array.from(activeWorkers).filter(worker => requestedWorkers.has(worker)).length;
 const messages: string[] = [];
 const exits: { worker: number; type: string; code: number; message?: string }[] = [];
 const reaps: { job: number; completedGuests: typeof exits }[] = [];
@@ -169,7 +173,12 @@ globalThis.Worker = class extends NativeWorker {
       }
       if (data.type === "exit" || data.type === "error") exits.push({ worker, type: data.type, code: data.code, message: data.message });
     });
-    if (bootstrapURL) this.postMessage({ type: "job-wait-test-gate", gate: jobWaitGate });
+    if (bootstrapURL) super.postMessage({ type: "job-wait-test-gate", gate: jobWaitGate });
+  }
+  override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions) {
+    requestedWorkers.add(this);
+    if (Array.isArray(options)) super.postMessage(message, options);
+    else super.postMessage(message, options);
   }
   override terminate() { activeWorkers.delete(this); super.terminate(); }
 };
@@ -197,7 +206,7 @@ async function checkForegroundStops(runtime: Runtime): Promise<number[]> {
       equal(outcome.code, 128 + signal, "foreground signal exit");
       codes.push(outcome.code);
     } finally { foreground.kill(9); }
-    await until(() => activeWorkers.size === 1, "foreground worker released before next run");
+    await until(() => busyWorkers() === 1, "foreground worker released before next run");
   }
   return codes;
 }
@@ -274,7 +283,7 @@ try {
   }
   if (workersCreated < (jobWait ? 6 : 3)) throw new Error(`expected real filesystem and all guest workers, saw ${workersCreated}`);
   // Completion acknowledges guest descriptor release. The run and broker must stop both guests.
-  await until(() => activeWorkers.size === 1, "completed guests terminated before filesystem disposal");
+  await until(() => busyWorkers() === 1, "completed guests terminated before filesystem disposal");
   const stopCodes = jobWait ? [] : await checkForegroundStops(runtime);
   await runtime.dispose(); runtime = undefined;
   await until(() => activeWorkers.size === 0, "all task-created workers terminated");

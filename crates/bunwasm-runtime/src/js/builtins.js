@@ -695,7 +695,7 @@
       unsupportedModule("inspector", "no debugger", ["open", "waitForDebugger", "Session"], { console: globalThis.console }),
       { close() {}, url() { return undefined; } },
     ),
-    "node:repl": () => unsupportedModule("repl", "no interactive terminal", ["start", "REPLServer"]),
+    "node:repl": () => internal.require("node_repl"),
     "node:v8": () => ({
       getHeapStatistics: () => ({ total_heap_size: native.memoryUsage().heapTotal, used_heap_size: native.memoryUsage().heapUsed, heap_size_limit: 4294967296 }),
       ...internal.require("v8"),

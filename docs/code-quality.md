@@ -90,7 +90,7 @@ source/build-input roots. Changed, added or renamed inputs get a fresh time.
 This keeps a fresh checkout from rebuilding every embedded runtime or C archive,
 without hiding real edits. Symlinks are fingerprinted without modifying targets.
 Rustup, Bun downloads, pinned upstream sources, the fixed WASI SDK and the patched
-sysroot each have caches. The sysroot cache key includes the runner image and
+sysroot each have caches. The sysroot cache key includes the host build tools and
 builder/dependency inputs; its existing receipt still verifies every tool and
 archive. The refined Cargo cache keeps upstream patches, third-party inputs, the
 WASI crypto toolchain, its CMake toolchain and guard, and Rust gate/build inputs.
@@ -264,10 +264,15 @@ after the launcher check passes. Keys identify inputs, never run IDs or attempts
 Only quality writes the shared Bun download cache. Other jobs restore it.
 
 `native-cargo-v2` puts compatibility inputs before the Cargo and source hash.
-The restore prefix retains the OS, architecture, runner image, Rust toolchain,
+The restore prefix retains the OS, architecture, host build tools, Rust toolchain,
 Cargo config, SDK and job configuration, upstream pins and patches, native C/C++
 sources and build scripts, and sysroot inputs. The workflow itself is hashed so
 an SDK pin or compiler-command change cannot select an incompatible v2 target.
+Host build tools means the `--version` output of the compilers, CMake, Ninja,
+Make, NASM, pkg-config, the JSC code generators (Ruby, Perl, Python, gperf,
+Bison), glibc and libclang. The runner image version is not part of any Rust
+key: image updates change many unrelated packages, and keying on them forced a
+cold JSC and Cargo rebuild (about 48 minutes) on every image rollout.
 `Cargo.*` stays in the exact-key suffix. Cargo validates manifest, dependency,
 feature, profile, and Rust source fingerprints after a compatible prefix restore.
 The existing input-time check restores timestamps only for unchanged content.
@@ -292,6 +297,9 @@ job start through its last job finish, excluding queue time and pauses between a
 
 Inspect `gh api --paginate repos/ShaulLavo/bun-wasm/actions/caches` before
 changing cache policy. Closed PR caches are isolated from later PRs but still
-consume the shared quota. Remove only identified obsolete entries, not live
+consume the shared quota. Pull requests save the native and JSC Cargo
+snapshots only when they restored nothing compatible: re-saving a compatible
+restore added 1.4 GB per push and evicted main's entries, including the 2 GB JSC
+prebuild. Remove only identified obsolete entries, not live
 branches or the main-branch toolchain/build caches. Process bundles are short-lived
 run artifacts, not more entries in the repository's cache quota.

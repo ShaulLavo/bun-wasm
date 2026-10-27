@@ -12,6 +12,9 @@ const name = parameters.get("scenario") ?? "nested";
 const scenario = bunRuntimeProcScenarios.find(item => item.name === name);
 const nativeWorker = globalThis.Worker;
 const workers = new Set<Worker>();
+// Waffle prestarts idle process workers that receive no request until a spawn takes one.
+const requestedWorkers = new WeakSet<Worker>();
+const busyWorkers = () => Array.from(workers).filter(worker => requestedWorkers.has(worker)).length;
 const operations: string[] = [];
 const launches: { pid: number; parentPid: number; job: number; executable: string; argv: string[] }[] = [];
 const exits: { worker: number; type: string; code: number; message?: string }[] = [];
@@ -19,6 +22,7 @@ const errors: string[] = [];
 const confirmedExits: { pid: number; parentPid: number; job: number; status: number | null; kind: string }[] = [];
 let workersCreated = 0;
 // Passive accounting only: every message and all production worker code remain unchanged.
+// postMessage below only records that a worker was sent a request.
 globalThis.Worker = class extends nativeWorker {
   constructor(url: string | URL, options?: WorkerOptions) {
     super(url, options); workers.add(this); const worker = ++workersCreated;
@@ -33,6 +37,11 @@ globalThis.Worker = class extends nativeWorker {
       if (data.type === "exit" || data.type === "error") exits.push({ worker, type: data.type, code: data.code, message: data.message });
     });
     this.addEventListener("error", event => errors.push(event.message));
+  }
+  override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions) {
+    requestedWorkers.add(this);
+    if (Array.isArray(options)) super.postMessage(message, options);
+    else super.postMessage(message, options);
   }
   override terminate() { workers.delete(this); super.terminate(); }
 };
@@ -146,7 +155,7 @@ try {
     equal(outcome.error, undefined, "external root did not crash");
     verifyOutput();
     if (name !== "generic-control") equal(operations.filter(operation => operation === "reap-job").length >= scenario!.commands.length, true, "generic root consumed real job results");
-    await until(() => workers.size === 1, "only page filesystem worker remains after guest completion");
+    await until(() => busyWorkers() === 1, "only page filesystem worker remains after guest completion");
     installation?.dispose(); installation?.dispose(); installation = undefined;
     await runtime!.dispose(); runtime = undefined;
   }
