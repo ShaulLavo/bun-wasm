@@ -1,24 +1,38 @@
 # Root preview origins
 
-Status: Approved, implementation in progress.
+Status: Approved. Consumer implementation and staged native/browser proof are
+complete. Parent owns the remaining landed Waffle pin adoption, full review,
+CI, merge and exact application acceptance.
 
-Claim: `web/preview-origin-host.ts`, `web/tests/preview-origin-host.test.ts`,
-`web/serve.ts`, `web/src/preview.ts`, and the additive app-matrix hosting adapter.
-No worker startup, shared-object activation, engine, shell, or Waffle changes.
+The staged Waffle source is PR160 at
+`277bd9a4963b1bf59fc4aa4b3dcf6ba724cb498f`. Its real relay implements the published
+`PreviewHostDispatcher`. No dependency manifest or lockfile has adopted this
+unmerged source. There is no remaining implementation API or type blocker.
 
-Waffle dependency: PR160 currently contains only `docs/preview.md` at d18a23f.
-Need its exported authenticated owner-relay constructor and resulting fixed-owner,
-fixed-virtual-port host HTTP/WebSocket handler, plus the page connection and close
-contract. Bun will supply a bounded loopback listener per owner/port and pass the
-published `originForPort` option. No duplicate wire protocol will be invented here.
+## Implemented
 
-The exact React Router app rerun stays held until both source changes are concrete
-and landed. Independent native HTTP/WebSocket host-boundary tests run first.
-Parent owns independent review, CI, and merge.
+- Bounded loopback addresses and origins per runtime owner and virtual port.
+- Same-origin one-use bootstrap tickets and authenticated private owner channels.
+- Waffle Open/Input/Output/Exchange payloads with Bun-owned native framing.
+- Actual `bindHost` relay dispatch, unchanged paths, streaming HTTP, raw upgrades,
+  cancellation and fixed owner/port/origin authorization.
+- Runtime-owned page adapters, page/channel disconnect revocation, origin and
+  cookie isolation, port reuse and stale-close protection.
+- Explicit `PREVIEW_ORIGINS=1` serving, `?root-previews` page setup and maintained
+  `--preview-origins` harness support. Static mounted mode remains explicit.
+- Native tests and an independent native Bun fixture driven through a real
+  browser page runtime and real Waffle relay. No guest or React Router rerun.
 
-Checkpoint: Waffle PR160 now has source at `a95cde9a`. Root options, `bindHost`,
-and the direct relay are published. The remaining dependency is the documented
-`dispatch(open: PreviewHostOpen, exchange: PreviewHostExchange): Promise<void>`
-on `PreviewHostRelay`. The exported dispatcher interface exists, its implementation
-and attachment to the relay do not. The Bun wrapper accepts inherited options;
-server/page transport wiring waits for that exact exported method.
+Files stay in the serving/preview/harness area. PR293 worker startup and PR294
+shared-object activation hunks are unchanged. No Waffle implementation, shell,
+engine, CI workflow, dependency pin or version changes.
+
+## Landing and acceptance
+
+1. Parent adopts the Waffle revision only after it lands green.
+2. Parent runs one full review of the complete consumer PR and required checks.
+3. Parent merges the Bun consumer change.
+4. Rerun the exact React Router app only after both changes have landed.
+
+Evidence and rerunnable commands:
+`/work/reports/bun-wasm/app-failure-wave-20261027/app-recovery/preview-origin/`.

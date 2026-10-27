@@ -58,9 +58,9 @@ export async function serverCommand({ page, context, command, app, engine, optio
     if (failed) cleanupFailures.push(failed);
   };
   const verifyStopped = async () => {
-    const error = await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`));
+    const error = await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`), options.previewOrigins ? "root" : "mounted");
     if (error) checked = { status: "fail", ...failure(error, command.name) };
-    else checked.assertion += "; guest stop removes preview listener (502)";
+    else checked.assertion += "; guest stop removes preview listener";
   };
   try {
     const previewState = await page.evaluate(() => globalThis.playground.previews.ready);
@@ -70,17 +70,19 @@ export async function serverCommand({ page, context, command, app, engine, optio
     const response = await preview.goto(url, { timeout: options.timeout });
     if (!response?.ok()) throw new Error(`Preview HTTP ${response?.status()}`);
     const check = command.check;
-    if (!response.fromServiceWorker()) throw new Error("Preview response bypassed the service worker");
+    if (options.previewOrigins) {
+      if (response.fromServiceWorker() || new URL(url).pathname !== "/" || new URL(url).origin === new URL(page.url()).origin) throw new Error("Root preview did not use its dedicated host origin");
+    } else if (!response.fromServiceWorker()) throw new Error("Preview response bypassed the service worker");
     await preview.locator(check.kind === "http" ? "body" : check.selector).filter({ hasText: check.text }).waitFor({ timeout: options.timeout });
     timings.pageLoadMs = since(loading);
-    const contract = check.framework ? await verifyBrowserServer(preview, url, check.framework, options.timeout, join(options.output, `${app.id}-${engine}-requests.json`)) : "";
+    const contract = check.framework ? await verifyBrowserServer(preview, url, check.framework, options.timeout, join(options.output, `${app.id}-${engine}-requests.json`), options.previewOrigins ? "root" : "mounted") : "";
     if (errors.length) throw new Error(errors.join("\n"));
     if (await page.evaluate(() => globalThis.__matrixDone)) {
       checked = earlyServerExit({ code: await page.evaluate(() => globalThis.playground.shell.lastExit), output: await output() }, command.name);
     } else {
       await preview.screenshot({ path: join(options.output, `${app.id}-${engine}-playground-${command.name}.png`) });
       const observations = await productObservations(preview, url, check, guestSource(page), traffic, options.timeout);
-      checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations, timings };
+      checked = { status: "pass", assertion: `${options.previewOrigins ? "Root-origin" : "Service-worker"} preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations, timings };
     }
   } catch (error) {
     let diagnostic = "";
@@ -129,10 +131,10 @@ export async function browserHost({ root, options, launch, stop }) {
   async function serve() {
     if (base) return base;
     const logfile = join(options.output, "playground-server.log");
-    server = launch(["bun", join(root, "web/serve.ts")], root, logfile, { PORT: "0" });
+    server = launch(["bun", join(root, "web/serve.ts")], root, logfile, { PORT: "0", PREVIEW_ORIGINS: options.previewOrigins ? "1" : "0" });
     for (let i = 0; i < 200; i++) {
       const match = readFileSync(logfile, "utf8").match(/at (http:\/\/\S+)/);
-      if (match) { base = match[1]; return base; }
+      if (match) { base = options.previewOrigins ? `${match[1]}?root-previews` : match[1]; return base; }
       if (server.child.exitCode !== null) throw new Error("Playground server exited");
       await new Promise(resolve => setTimeout(resolve, 50));
     }
@@ -191,7 +193,9 @@ export async function browserHost({ root, options, launch, stop }) {
       await context.route("**/*", route => browserRegistryRoute(route, registry, external));
       const base = await serve();
       const loading = performance.now();
-      await page.goto(`${base}?engine=${engine}`);
+      const playgroundURL = new URL(base);
+      playgroundURL.searchParams.set("engine", engine);
+      await page.goto(playgroundURL.href);
       if (!(await ready(page)).includes("ready")) throw new Error(`Playground engine ${engine} failed to load`);
       const engineReadyMs = since(loading);
       await page.evaluate(resetBrowserProject);

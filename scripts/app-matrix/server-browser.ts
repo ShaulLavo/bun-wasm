@@ -15,13 +15,14 @@ function browserRequest(page: Page, base: string, timeout: number): ServerReques
   }, { base, request, timeout });
 }
 
-export async function verifyBrowserServer(page: Page, base: string, framework: string, timeout: number, evidence: string): Promise<string> {
+export async function verifyBrowserServer(page: Page, base: string, framework: string, timeout: number, evidence: string, transport: "root" | "mounted" = "mounted"): Promise<string> {
   const controlled = await page.evaluate(() => Boolean(navigator.serviceWorker.controller), null);
-  if (!controlled) throw new Error("Preview is not controlled by a service worker");
+  if (transport === "mounted" && !controlled) throw new Error("Preview is not controlled by a service worker");
+  if (transport === "root" && (controlled || new URL(base).pathname !== "/")) throw new Error("Root preview has a worker or a mounted path");
   const observations: ServerObservation[] = [];
   return verifyServerContract(framework, browserRequest(page, base, timeout), observation => {
     observations.push(observation);
-    writeFileSync(evidence, JSON.stringify({ base, framework, serviceWorkerControlled: controlled, observations }, null, 2) + "\n");
+    writeFileSync(evidence, JSON.stringify({ base, framework, transport, serviceWorkerControlled: controlled, observations }, null, 2) + "\n");
   });
 }
 
@@ -31,7 +32,21 @@ async function assertStoppedPreview(page: Page, base: string, timeout: number, e
   if (response.status !== 502 || !response.body.includes("No bun.wasm server is listening")) throw new Error(`Preview survived guest stop: HTTP ${response.status}`);
 }
 
-export async function stoppedPreviewError(page: Page, base: string, timeout: number, evidence: string): Promise<string | undefined> {
-  try { await assertStoppedPreview(page, base, timeout, evidence); }
+export async function stoppedPreviewError(page: Page, base: string, timeout: number, evidence: string, transport: "root" | "mounted" = "mounted"): Promise<string | undefined> {
+  try {
+    if (transport === "root") {
+      const reachable = await page.evaluate(async ({ base, timeout }) => {
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+          try { await fetch(base, { signal: AbortSignal.timeout(Math.min(500, timeout)), cache: "no-store" }); }
+          catch { return false; }
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        return true;
+      }, { base, timeout });
+      writeFileSync(evidence, JSON.stringify({ base, transport, reachable }, null, 2) + "\n");
+      if (reachable) throw new Error("Root preview survived guest stop");
+    } else await assertStoppedPreview(page, base, timeout, evidence);
+  }
   catch (error) { return String(error); }
 }

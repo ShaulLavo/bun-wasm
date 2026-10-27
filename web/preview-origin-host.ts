@@ -20,13 +20,16 @@ interface Reservation { owner: object; port: number; lifetime: AbortController; 
 /** Server-side capability registry. No browser request can choose its owner or target. */
 export class LoopbackPreviewOrigins {
   private readonly bindings = new Set<OwnedBinding>();
+  private readonly sockets = new Set<Socket>();
   private readonly reservations = new Set<Reservation>();
   private readonly usedOrigins = new Set<string>();
   private readonly closing = new Set<{ owner: object; promise: Promise<void> }>();
   private closed = false;
+  private readonly subnet = crypto.getRandomValues(new Uint8Array(2));
+  private nextAddress = 1;
 
   constructor(private readonly limit = 128) {
-    if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Invalid preview origin limit");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 128) throw new Error("Invalid preview origin limit");
   }
 
   originForPort(owner: object, port: number): string {
@@ -78,12 +81,17 @@ export class LoopbackPreviewOrigins {
     const sockets = new Set<Socket>();
     let origin = "";
     const server = createServer((request, response) => { void dispatch(request, response, origin, endpoint, lifetime.signal); });
-    server.on("connection", socket => { sockets.add(socket); socket.once("close", () => sockets.delete(socket)); });
+    server.on("connection", socket => {
+      if (this.sockets.size >= 256 || sockets.size >= 64) { socket.destroy(); return; }
+      sockets.add(socket); this.sockets.add(socket);
+      socket.once("close", () => { sockets.delete(socket); this.sockets.delete(socket); });
+    });
     server.on("upgrade", (request, socket, head) => { void upgrade(request, socket, head, origin, endpoint, lifetime.signal); });
-    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+    const addressHost = `127.${1 + this.subnet[0]! % 254}.${this.subnet[1]!}.${this.nextAddress++}`;
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, addressHost, resolve); });
     const address = server.address();
     if (!address || typeof address === "string") { server.close(); throw new Error("Missing loopback listener"); }
-    origin = `http://127.0.0.1:${address.port}`;
+    origin = `http://${addressHost}:${address.port}`;
     if (this.usedOrigins.has(origin)) { server.close(); throw new Error("Retired preview origin was allocated again"); }
     this.usedOrigins.add(origin);
     let closing: Promise<void> | undefined;
@@ -109,7 +117,7 @@ function rejected(request: IncomingMessage, origin: string, signal: AbortSignal)
   try { url = new URL(request.url ?? "/", origin); } catch { return 400; }
   if (url.origin !== origin || request.headers.host !== new URL(origin).host) return 421;
   if (request.headers.origin && request.headers.origin !== origin) return 403;
-  if (request.headers["sec-fetch-site"] === "cross-site") return 403;
+  if (request.headers["sec-fetch-site"] === "cross-site" && request.headers["sec-fetch-mode"] !== "navigate") return 403;
 }
 
 async function dispatch(incoming: IncomingMessage, outgoing: ServerResponse, origin: string, endpoint: PreviewOriginEndpoint, lifetime: AbortSignal): Promise<void> {
