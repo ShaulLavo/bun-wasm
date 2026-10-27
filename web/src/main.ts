@@ -12,7 +12,6 @@ import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
 import { decode, normalize } from "./fs";
 import { createRuntime } from "waffle";
-import { installShellCommands } from "bash-web";
 import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
 import type { BunNetworkOptions } from "./net/helper";
 import { Previews } from "./preview";
@@ -115,8 +114,11 @@ try {
 
 // ---------- bun.wasm ----------
 
-// Package scripts, Bun.$ and bun exec run in bash-web's shell; it loads on first use.
-await installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: new URL("./shell-worker.js", location.href) });
+// Package scripts, Bun.$ and bun exec run in bash-web's shell. Like the process service, it is
+// installed with the first command, not at page startup.
+let shellCommands: Promise<unknown> | undefined;
+const installShell = () => shellCommands ??= import("bash-web").then(({ installShellCommands }) =>
+  installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: new URL("./shell-worker.js", location.href) }));
 
 let wasm: { module: WebAssembly.Module; size: number } | { error: string } | null = null;
 // The final status waits for the page to finish setting up, so "ready" means usable.
@@ -156,7 +158,7 @@ const moduleScope: Promise<boolean> = registerModuleScope();
 let current: Run | null = null;
 
 async function runBun(args: string[], cwd: string, io: Output): Promise<number> {
-  const [{ startRun }] = await Promise.all([import("./runner"), wasmReady, runtime.processes()]);
+  const [{ startRun }] = await Promise.all([import("./runner"), wasmReady, runtime.processes(), installShell()]);
   if (!wasm || "error" in wasm) {
     io.err(`\x1b[31m${wasm?.error ?? "bun.wasm unavailable"}\x1b[0m\r\n`);
     return 127;

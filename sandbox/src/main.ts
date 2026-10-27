@@ -12,7 +12,6 @@ import { decode } from "../../web/src/fs";
 import type { BunNetworkOptions, RuntimeNetworkHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
 import { createRuntime } from "waffle";
-import { installShellCommands } from "bash-web";
 import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../web/src/shared-fs";
 import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../../web/src/engine-loader";
 import type { Run } from "../../web/src/runner";
@@ -97,8 +96,11 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 let startup: "starting" | "ready" | "failed" = "starting";
 const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${template}` } });
 const fs = runtime.filesystem;
-// Package scripts, Bun.$ and bun exec run in bash-web's shell; it loads on first use.
-const shellCommands = installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: new URL("./shell-worker.js", location.href) });
+// Package scripts, Bun.$ and bun exec run in bash-web's shell. Like the process service, it is
+// installed with the first command, not at page startup.
+let shellCommands: Promise<unknown> | undefined;
+const installShell = () => shellCommands ??= import("bash-web").then(({ installShellCommands }) =>
+  installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: new URL("./shell-worker.js", location.href) }));
 function showStartupFailure(error: unknown): void {
   startup = "failed";
   setStatus(error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error), "error");
@@ -276,7 +278,7 @@ async function startDevServer(): Promise<void> {
     BUN_WASM_STARTUP: "1",
   };
   const started = performance.now();
-  const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes(), shellCommands]);
+  const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes(), installShell()]);
   if (revision !== serverRevision) return;
   const output = new StartupOutput((text) => term.write(text), startupRecord);
   serverTiming = { started, visibleStart };
