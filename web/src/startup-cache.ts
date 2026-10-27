@@ -7,9 +7,9 @@ export function assetBuild(name: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
-/** The Bun worker's hashed chunks (web/build.ts), relative to the page. */
-export function workerChunks(): string[] {
-  const chunks: unknown = Reflect.get(globalThis, "__bunwasmWorkerChunks");
+/** The hashed chunks a first command loads (web/build.ts), relative to the page. */
+export function commandChunks(): string[] {
+  const chunks: unknown = Reflect.get(globalThis, "__bunwasmCommandChunks");
   if (!Array.isArray(chunks)) return [];
   return chunks.filter((chunk): chunk is string => typeof chunk === "string" && /^chunks\/[\w-]+\.js$/.test(chunk));
 }

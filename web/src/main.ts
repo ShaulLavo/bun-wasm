@@ -18,7 +18,7 @@ import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope } from "./engine-loader";
 import type { Run } from "./runner";
 import { type Output, Shell } from "./shell";
-import { workerChunks } from "./startup-cache";
+import { commandChunks } from "./startup-cache";
 import { enableTerminalCopy } from "./terminal-copy";
 import { linkLocalUrls } from "./terminal-links";
 
@@ -457,12 +457,12 @@ pageSetUp();
 if (startup === "ready") whenIdle(warmFirstCommand);
 
 // The first command would otherwise load the runner, Waffle's process and network services and
-// then the worker's chunks one after another, each a network round trip. Load them while the page
-// is idle instead. All of these are memoized, so a command that starts first shares the same
-// loads; a failure here is ignored and surfaces in the command that needs it.
+// then the worker's chunks one after another, each a network round trip. Put them in the HTTP
+// cache while the page is idle. Only fetch: importing or initializing here could leave a failure
+// behind (a rejected module or service) that a later command would inherit. A failed fetch leaves
+// nothing, and the command loads the file itself.
 function warmFirstCommand(): void {
-  void Promise.all([import("./runner"), runtime.processes(), runtime.network()]).catch(() => {});
-  for (const chunk of workerChunks()) void fetch(chunk, { priority: "low" }).then(response => response.arrayBuffer()).catch(() => {});
+  for (const chunk of commandChunks()) void fetch(chunk, { priority: "low" }).then(response => response.arrayBuffer()).catch(() => {});
 }
 }
 

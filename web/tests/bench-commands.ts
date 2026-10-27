@@ -41,6 +41,8 @@ const { values: options } = parseArgs({
   options: {
     url: { type: "string" },
     browser: { type: "string", default: "chromium" },
+    // Another build of the chosen engine, such as Helium: --executable /Applications/Helium.app/Contents/MacOS/Helium
+    executable: { type: "string" },
     runs: { type: "string", default: "3" },
     repeats: { type: "string", default: "3" },
     output: { type: "string" },
@@ -144,7 +146,7 @@ async function round(url: string, samples: Samples): Promise<void> {
 
 try {
   const url = options.url ?? await startServer();
-  browser = await engines[options.browser as keyof typeof engines].launch({ headless: true });
+  browser = await engines[options.browser as keyof typeof engines].launch({ headless: true, executablePath: options.executable });
   const samples: Samples = { ready: [], cold: [], reloaded: [], warm: new Map(cases.map(item => [item.command, []])) };
   for (let run = 0; run < runs; run++) await round(url, samples);
   const command = offline[0]!.command;
@@ -154,7 +156,7 @@ try {
     { what: `after reload: ${command}`, median: median(samples.reloaded), samples: samples.reloaded },
   ].concat(Array.from(samples.warm, ([command, values]) => ({ what: `warm: ${command}`, median: median(values), samples: values })));
   for (const row of rows) console.log(`${row.what.padEnd(48)} ${row.median.toFixed(0).padStart(7)} ms   [${row.samples.map(value => value.toFixed(0)).join(" ")}]`);
-  const report = { url, browser: options.browser, latencyMs: Number(process.env.LATENCY_MS ?? 0), runs, repeats, think, date: new Date().toISOString(), rows };
+  const report = { url, browser: options.executable ?? options.browser, latencyMs: Number(process.env.LATENCY_MS ?? 0), runs, repeats, think, date: new Date().toISOString(), rows };
   if (options.output) await Bun.write(options.output, JSON.stringify({ ...report, failures: Object.fromEntries(failures) }, null, 2) + "\n");
   for (const [command, detail] of failures) console.error(`\nFAILED ${command}: ${detail}`);
   process.exitCode = failures.size ? 1 : 0;
