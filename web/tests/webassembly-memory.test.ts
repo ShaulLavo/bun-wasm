@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { runInNewContext, runInThisContext } from "node:vm";
 
 const host = globalThis.WebAssembly;
-const factory = runInThisContext(readFileSync(new URL("../../crates/bunwasm-runtime/src/js/webassembly.js", import.meta.url), "utf8"));
+const factory = runInThisContext(new Bun.Transpiler({ loader: "ts" }).transformSync("globalThis.__wasmFactory = " + readFileSync(new URL("../../crates/bunwasm-runtime/src/js/webassembly.ts", import.meta.url), "utf8")));
 const encodeName = (name: string) => [name.length].concat(Array.from(new TextEncoder().encode(name)));
 const section = (id: number, data: number[]) => [id, data.length].concat(data);
 const exportEntry = (name: string, kind: number, index: number) => encodeName(name).concat([kind, index]);
@@ -26,6 +26,8 @@ function sourceApi() {
   const instances: WebAssembly.Instance[] = [];
   const resources: Resource[] = [];
   let allocations = 0;
+  const callables: Function[] = [];
+  const descriptions: { id: number; params: string[]; results: string[] }[] = [];
   function resource(id: number) {
     const value = resources[id];
     assert.ok(value);
@@ -83,10 +85,25 @@ function sourceApi() {
       return instances.length - 1;
     },
     memoryIdentity(id: number, name: string) { return intern(exported(id, name)); },
-    call(id: number, name: string, args: number[]) {
+    functionIdentity(id: number, name: string) {
       const fn = instances[id]?.exports[name];
       assert.equal(typeof fn, "function");
       if (typeof fn !== "function") throw new Error("Expected exported function");
+      const prior = callables.indexOf(fn);
+      if (prior !== -1) return descriptions[prior];
+      const info = { id: callables.length, params: name === "read" ? [] : ["i32"], results: name === "write" ? [] : ["i32"] };
+      callables.push(fn);
+      descriptions.push(info);
+      return info;
+    },
+    functionInfo(id: number) {
+      const info = descriptions[id];
+      assert.ok(info);
+      return info;
+    },
+    call(id: number, args: number[]) {
+      const fn = callables[id];
+      assert.ok(fn);
       const value: unknown = fn(...args);
       return { values: value === undefined ? [] : [value] };
     },
@@ -181,9 +198,8 @@ test("source: invalid descriptors fail before native allocation with host error 
   assert.equal(allocations(), 1);
 });
 
-test("source: resource identity registry does not retain an unreachable Memory wrapper", async context => {
-  const gc: unknown = Reflect.get(globalThis, "gc");
-  if (typeof gc !== "function") { context.skip("run Node with --expose-gc"); return; }
+test("source: resource identity registry does not retain an unreachable Memory wrapper", async () => {
+  const gc = () => Bun.gc(true);
   const { api } = sourceApi();
   let memory: WebAssembly.Memory | undefined = new api.Memory({ initial: 0 });
   const reference = new WeakRef(memory);
