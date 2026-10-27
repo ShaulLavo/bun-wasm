@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/runtime-stream-consumers.test.ts",
+  "localRuntime": true
+}
