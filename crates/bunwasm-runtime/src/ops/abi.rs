@@ -32,6 +32,13 @@ impl Allocation {
         Ok(bytes)
     }
 
+    /// Reads the allocation in place. Core owns it, and the engine that wrote it is blocked in
+    /// the dispatch that holds this borrow, so nothing writes it meanwhile.
+    fn bytes(&self) -> &[u8] {
+        // SAFETY: allocation owns exactly layout.size initialized bytes, live while self is.
+        unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.layout.size()) }
+    }
+
     fn write(&self, bytes: &[u8]) {
         assert_eq!(bytes.len(), self.layout.size());
         // SAFETY: allocation owns exactly layout.size initialized bytes, disjoint from bytes.
@@ -150,8 +157,10 @@ impl Transport {
         let mut frame_bytes = frame_owner.copy()?;
         let frame = Frame::decode(&frame_bytes)?;
         frame.request(frame_ptr, memory_len())?;
-        let request = self.read(frame.request_ptr, frame.request_len)?;
-        let reply = dispatcher.dispatch(frame.op, frame.session, request);
+        // Decode the request where the engine wrote it; a copy would hold the payload twice.
+        let request = self.allocation(frame.request_ptr, frame.request_len)?;
+        let reply = dispatcher.dispatch(frame.op, frame.session, request.bytes());
+        drop(request);
         let len = u32::try_from(reply.bytes.len()).map_err(|_| Status::ResourceLimit)?;
         if len == 0 {
             return Ok(reply.status);

@@ -134,14 +134,14 @@ impl Dispatcher {
         *self.functions.keys().next().expect("nonempty registry")
     }
 
-    pub fn dispatch(&self, op: u32, session: u32, request: Vec<u8>) -> Reply {
+    pub fn dispatch(&self, op: u32, session: u32, request: &[u8]) -> Reply {
         if session != self.session.get() {
             return Reply::failed(Status::BadCall);
         }
         let Some(function) = self.functions.get(&op).cloned() else {
             return Reply::failed(Status::BadCall);
         };
-        let args = match codec::decode(&request) {
+        let args = match codec::decode(request) {
             Ok(Val::Array(args)) => args,
             Ok(value) => {
                 drop_tree(value);
@@ -149,7 +149,6 @@ impl Dispatcher {
             }
             Err(error) => return Reply::failed(error_status(error)),
         };
-        drop(request);
         let result = function(Args(&args));
         drop_tree(Val::Array(args));
         match result {

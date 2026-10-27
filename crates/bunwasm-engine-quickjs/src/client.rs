@@ -46,10 +46,14 @@ impl CoreClient {
             .into_result();
         }
         let reply = TransportBuffer { pointer, bytes };
-        let bytes = unsafe {
-            std::slice::from_raw_parts(reply.pointer as *const u8, reply.bytes as usize).to_vec()
+        // Decode the reply where core wrote it; copying it out would hold the payload twice.
+        let bytes: &[u8] = if reply.bytes == 0 {
+            &[]
+        } else {
+            // SAFETY: core allocated reply.bytes initialized bytes at reply.pointer for this reply.
+            unsafe { std::slice::from_raw_parts(reply.pointer as *const u8, reply.bytes as usize) }
         };
-        ops::Reply { status, bytes }.into_result()
+        ops::Reply::decode(status, bytes)
     }
 
     pub(crate) fn native(self, id: u32, args: Vec<Val>) -> NativeResult {
