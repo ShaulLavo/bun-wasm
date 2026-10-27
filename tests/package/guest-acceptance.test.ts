@@ -1,20 +1,30 @@
+import { quickjsPair } from "./quickjs-plan-fixture";
+import { appendCustomSection } from "../../src/engine-kind";
 import { expect, test } from "bun:test";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { acceptGuestPublication, acceptedPublicationArtifact, snapshotPublicationInputs, verifyPublicationInputs, verifyPublicationReport, type PublicationSnapshot } from "../../scripts/guest-acceptance.ts";
-import { decodeGuest, describeGuest } from "../../scripts/guest-artifact.ts";
+import { decodeGuest, describeGuest, prepareGuest } from "../../scripts/guest-artifact.ts";
 import { fixtureReceipt } from "./guest-receipt-fixture.ts";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
-const descriptor = describeGuest(wasm);
+const quickjs = quickjsPair();
+const jsc = quickjsPair("jsc");
+const descriptor = prepareGuest({ kind: "quickjs", ...quickjs }).descriptor;
 const names = ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"];
 
-async function writeReceipts(dist: string, bytes = wasm): Promise<void> {
-  await writeFile(join(dist, "quickjs.wasm"), wasm);
+async function writeReceipts(dist: string, changed?: Uint8Array): Promise<void> {
+  await writeFile(join(dist, "quickjs.wasm"), quickjs.side);
+  await writeFile(join(dist, "jsc-engine.wasm"), jsc.side);
   for (const name of names) {
-    await writeFile(join(dist, `${name}.build.json`), JSON.stringify(fixtureReceipt(bytes, name === "bun.wasm" ? "quickjs" : name === "bun-jsc.wasm" ? "jsc" : "browser")) + "\n");
+    const build = name === "bun.wasm" ? "quickjs" : name === "bun-jsc.wasm" ? "jsc" : "browser";
+    const core = build === "quickjs" ? quickjs.core : build === "jsc" ? jsc.core : wasm;
+    if (!changed) await writeFile(join(dist, name), core);
+    const receiptCore = changed ? appendCustomSection(core, "changed", changed) : core;
+    const side = build === "jsc" ? jsc.side : quickjs.side;
+    await writeFile(join(dist, `${name}.build.json`), JSON.stringify(fixtureReceipt(receiptCore, build, side)) + "\n");
   }
 }
 
@@ -41,7 +51,7 @@ test("publication verifies the exact upload against a matrix artifact", async ()
     for (const name of names) await writeFile(join(dist, name), wasm);
     await writeReceipts(dist);
     await expect(verifyPublicationInputs(dist, descriptor)).resolves.toBeUndefined();
-    await expect(verifyPublicationInputs(dist, { ...descriptor, sha256: "0".repeat(64) })).rejects.toThrow("integrity mismatch");
+    await expect(verifyPublicationInputs(dist, { ...descriptor, core: { ...descriptor.core, sha256: "0".repeat(64) } })).rejects.toThrow("integrity mismatch");
   });
 });
 
@@ -147,9 +157,9 @@ test("publication snapshots are private read-only copies and live rebuilds canno
     // Even a second live replacement cannot change the accepted upload source.
     await writeFile(join(dist, "bun.wasm"), rebuilt);
     const artifact = await acceptedPublicationArtifact(snapshot, greenReceipts(snapshot), descriptor);
-    expect(artifact.descriptor).toEqual({ ...descriptor, quickjs: describeGuest(wasm, new URL(descriptor.url).origin, "quickjs.wasm") });
-    expect(decodeGuest(artifact.gzip)).toEqual(wasm);
-    expect(await readFile(join(snapshot.directory, "bun.wasm"))).toEqual(Buffer.from(wasm));
+    expect(artifact.descriptor).toEqual(descriptor);
+    expect(decodeGuest(artifact.files.core.gzip)).toEqual(quickjs.core);
+    expect(await readFile(join(snapshot.directory, "bun.wasm"))).toEqual(Buffer.from(quickjs.core));
   });
 });
 
@@ -186,9 +196,11 @@ test("real CLI resolves its default dist inside a checkout path containing space
   await fixture(async directory => {
     const root = join(directory, "checkout with spaces # encoded"), dist = join(root, "dist");
     await mkdir(join(root, "scripts"), { recursive: true }); await mkdir(dist);
-    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts", "guest-build-receipt.ts", "guest-source-manifest.ts"]) {
+    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts", "guest-build-receipt.ts", "guest-source-manifest.ts", "guest-core-receipt.ts", "guest-engine-receipt.ts"]) {
       await copyFile(fileURLToPath(new URL(`../../scripts/${name}`, import.meta.url)), join(root, "scripts", name));
     }
+    await mkdir(join(root, "src"));
+    await copyFile(new URL("../../src/engine-kind.ts", import.meta.url), join(root, "src/engine-kind.ts"));
     const input = join(dist, "bun.wasm"); await writeFile(input, wasm);
     const child = Bun.spawn([process.execPath, join(root, "scripts/publish-guest.ts"), input, "--account-id", "a".repeat(32)], {
       env: { ...process.env, CLOUDFLARE_API_TOKEN: "test-invalid-not-a-credential" },
@@ -231,18 +243,18 @@ test("publication requires the side bytes named by the QuickJS receipt", async (
     await writeReceipts(dist);
     await rm(join(dist, "quickjs.wasm"));
     await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("quickjs.wasm");
-    await writeFile(join(dist, "quickjs.wasm"), new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120])));
-    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("paired QuickJS bytes");
-    await writeFile(join(dist, "quickjs.wasm"), wasm);
-    const receipt = fixtureReceipt(wasm, "quickjs");
-    await writeFile(join(dist, "bun.wasm.build.json"), JSON.stringify({ ...receipt, quickjs: undefined }));
-    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("Missing paired QuickJS identity");
+    await writeFile(join(dist, "quickjs.wasm"), new Uint8Array(Array.from(quickjs.side).concat([0, 2, 1, 120])));
+    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("artifact bytes");
+    await writeFile(join(dist, "quickjs.wasm"), quickjs.side);
+    const receipt = fixtureReceipt(quickjs.core, "quickjs", quickjs.side);
+    await writeFile(join(dist, "bun.wasm.build.json"), JSON.stringify({ ...receipt, program: { kind: "quickjs", core: receipt.program.core } }));
+    await expect(verifyPublicationInputs(dist, descriptor)).rejects.toThrow("companion fields");
   });
 });
 
 test("publication snapshots and browser receipts bind the actual side bytes", async () => {
   await withSnapshot(async (dist, snapshot) => {
-    expect(await readFile(join(snapshot.directory, "quickjs.wasm"))).toEqual(Buffer.from(wasm));
+    expect(await readFile(join(snapshot.directory, "quickjs.wasm"))).toEqual(Buffer.from(quickjs.side));
     expect((await stat(join(snapshot.directory, "quickjs.wasm"))).mode & 0o777).toBe(0o400);
     const report = greenReceipts(snapshot);
     const side = report.reports[0]!.artifacts.find(artifact => artifact.name === "quickjs.wasm");
@@ -252,10 +264,11 @@ test("publication snapshots and browser receipts bind the actual side bytes", as
     expect(() => verifyPublicationReport(snapshot, report)).toThrow("loaded SHA-256 for quickjs.wasm");
     await writeFile(join(dist, "quickjs.wasm"), new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120])));
     const accepted = await acceptedPublicationArtifact(snapshot, greenReceipts(snapshot), descriptor);
-    expect(accepted.descriptor.quickjs?.sha256).toBe(descriptor.sha256);
-    expect(accepted.quickjs && decodeGuest(accepted.quickjs.gzip)).toEqual(wasm);
+    if (accepted.descriptor.kind === "single" || accepted.files.kind === "single") throw new Error("Expected pair");
+    expect(accepted.descriptor.side.sha256).toBe(describeGuest(quickjs.side).sha256);
+    expect(decodeGuest(accepted.files.side.gzip)).toEqual(quickjs.side);
     await chmod(join(snapshot.directory, "quickjs.wasm"), 0o600);
-    await writeFile(join(snapshot.directory, "quickjs.wasm"), new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120])));
-    await expect(acceptedPublicationArtifact(snapshot, greenReceipts(snapshot), descriptor)).rejects.toThrow("paired QuickJS bytes");
+    await writeFile(join(snapshot.directory, "quickjs.wasm"), new Uint8Array(Array.from(quickjs.side).concat([0, 2, 1, 120])));
+    await expect(acceptedPublicationArtifact(snapshot, greenReceipts(snapshot), descriptor)).rejects.toThrow("artifact bytes");
   });
 });

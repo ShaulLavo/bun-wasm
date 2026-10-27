@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 // Compares the playground's engines (QuickJS, JavaScriptCore-in-wasm, Browser (native)) in a real
 // browser: wasm transfer size, page load to "ready", `console.log(1)` from Run click to exit (cold
 // first run and warm runs), tests/bench/micro.js per section, and which seeded examples pass.
@@ -10,7 +12,7 @@ import { clickRun, playwright, ready, run, session, web, writeFile } from "./pla
 const browserName = process.argv[2] ?? "chromium";
 const engines = (process.env.ENGINES ?? "quickjs,jsc,browser").split(",");
 const runs = Number(process.env.RUNS ?? 3);
-const wasmFile = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm" };
+const wasmFiles = { quickjs: ["bun.wasm", "quickjs.wasm"], jsc: ["bun-jsc.wasm", "jsc-engine.wasm"], browser: ["bun-browser.wasm"] };
 const micro = readFileSync(join(web, "../tests/bench/micro.js"), "utf8");
 const s = session("bun-wasm-web-engine-bench-");
 
@@ -39,7 +41,12 @@ const mb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 async function measure(type, engine, appUrl) {
   const out = { engine, sections: {} };
   try {
-    out.gz = statSync(join(web, "dist", `${wasmFile[engine]}.gz`)).size;
+    out.artifacts = wasmFiles[engine].map(name => {
+      const file = join(web, "dist", `${name}.gz`);
+      const bytes = gunzipSync(readFileSync(file));
+      return { name, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), gzipBytes: statSync(file).size };
+    });
+    out.gz = out.artifacts.reduce((sum, file) => sum + file.gzipBytes, 0);
   } catch {
     out.gz = null;
   }

@@ -307,6 +307,8 @@ printf '\\000asm\\001\\000\\000\\000' > "$BUN_CORE_BUILD_DIR/quickjs.wasm"
     const receipt = await Bun.file(`${artifact}.build.json`).json();
     verifyGuestBuildReceipt(await readFile(artifact), receipt);
     expect(receipt.sourceManifest.build).toBe("quickjs");
-    expect(receipt.quickjs).toEqual({ artifactSha256: hash(await readFile(join(fixture.root, "dist/quickjs.wasm"))), artifactBytes: 8 });
+    if (receipt.program.kind === "single") throw new Error("Expected QuickJS pair");
+    const side = await readFile(join(fixture.root, "dist/quickjs.wasm"));
+    expect(receipt.program.side).toEqual({ artifactSha256: hash(side), artifactBytes: side.length });
   });
 });

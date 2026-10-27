@@ -1,3 +1,4 @@
+import { programProfile } from "../../src/engine-kind";
 import { TaggedCells, controlLoad } from "waffle/proc/control";
 import type { RootProcessOptions } from "waffle/proc";
 import { processRuntimeFixture } from "./process-runtime-fixture";
@@ -170,7 +171,8 @@ for (const engine of engines) {
     const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
     const { programLinkPlan } = await import("../../src/assets");
     const { core, side } = quickjsPair();
-    const pair = new Map([["bun.wasm", core], ["quickjs.wasm", side]]);
+    const jsc = quickjsPair("jsc");
+    const pair = new Map([["bun.wasm", core], ["quickjs.wasm", side], ["bun-jsc.wasm", jsc.core], ["jsc-engine.wasm", jsc.side]]);
     const builds = Object.fromEntries(Array.from(pair, ([name, bytes]) => [name, new Bun.CryptoHasher("sha256").update(bytes).digest("hex")]));
     const originalBuilds = Object.getOwnPropertyDescriptor(globalThis, "__bunwasmBuilds");
     Object.defineProperty(globalThis, "__bunwasmBuilds", { configurable: true, value: builds });
@@ -201,12 +203,12 @@ for (const engine of engines) {
         expect(again).toBe(module);
         if (selected === engine) expect(module).toBe(state.request.module);
         else expect(module).not.toBe(state.request.module);
-        if (selected === "quickjs" && selected !== engine) expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(side);
+        if ((selected === "quickjs" || selected === "jsc") && selected !== engine) expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(selected === "jsc" ? jsc.side : side);
         loaded.add(module);
       }
       expect(loaded.size).toBe(available.length);
-      expect(urls).toEqual(available.filter(selected => selected !== engine).flatMap(selected => selected === "quickjs"
-        ? ["bun.wasm", "quickjs.wasm"].flatMap(name => [`http://localhost/${name}.gz?v=${builds[name]}`, `http://localhost/${name}`])
+      expect(urls).toEqual(available.filter(selected => selected !== engine).flatMap(selected => selected === "quickjs" || selected === "jsc"
+        ? [ENGINES[selected].wasm, programProfile(selected).side].flatMap(name => [`http://localhost/${name}.gz?v=${builds[name]}`, `http://localhost/${name}`])
         : [`http://localhost/${ENGINES[selected].wasm}.gz`, `http://localhost/${ENGINES[selected].wasm}`]));
     } finally {
       try { await state.dispose(); }

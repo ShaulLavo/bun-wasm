@@ -116,7 +116,7 @@ test("network preflight rejects a malformed build receipt before browser setup",
 
 test("network gate rejects a changed artifact byte count before browser setup", async () => {
   await fixture(async (root, artifact) => {
-    await writeFile(`${artifact}.build.json`, JSON.stringify({ ...receipt, artifactBytes: guest.byteLength + 1 }));
+    await writeFile(`${artifact}.build.json`, JSON.stringify({ ...receipt, program: { ...receipt.program, core: { ...receipt.program.core, artifactBytes: guest.byteLength + 1 } } }));
     await rejectsBeforeBrowserSetup(root, "does not match artifact bytes");
   });
 });
