@@ -262,6 +262,8 @@ jobs:
             sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" || exit 1
           } | sha256sum | cut -d' ' -f1)
           echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+      # Root bun.lock is intentionally absent from native identities: the native target does
+      # not compile JavaScript packages, while sysroot/JSC stamps hash consumed builder bytes.
       # These three audited Cargo sources change exact keys, not dependency compatibility.
       # All other native inputs remain hard guards; the new partition needs one cold seed.
       - uses: actions/cache/restore@v4
@@ -272,7 +274,7 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/build-bun-tools.sh', '.github/workflows/ci.yml', 'env.sh', 'bun.lock') }}
+          key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/build-bun-tools.sh', '.github/workflows/ci.yml', 'env.sh') }}
           restore-keys: |
             native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
       - uses: actions/cache/restore@v4
@@ -284,9 +286,9 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', '.github/workflows/ci.yml') }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', '.github/workflows/ci.yml') }}
           restore-keys: |
-            native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-
+            native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-
       - name: Install pinned Rust dependency checker
         run: |
           source env.sh
@@ -321,7 +323,7 @@ jobs:
         id: jsc-cargo-cache
         with:
           path: ${{ runner.temp }}/jsc/target
-          key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'bun.lock', 'scripts/quality*.ts') }}
+          key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts') }}
           restore-keys: |
             jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
       - name: Build or verify the JSC prebuild
@@ -401,7 +403,7 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'bun.lock', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', '.github/workflows/ci.yml') }}
+          key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', '.github/workflows/ci.yml') }}
       - name: Build native fixtures after the cache checkpoint
         run: |
           source env.sh
@@ -440,7 +442,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/jsc/target
-          key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'bun.lock', 'scripts/quality*.ts') }}
+          key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts') }}
 
       - name: Blocking JSC embedding and allocation checks
         if: needs.quality.outputs.jsc == 'true'
@@ -491,7 +493,7 @@ jobs:
             ${{ env.CARGO_HOME }}/git
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
-          key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/build-bun-tools.sh', '.github/workflows/ci.yml', 'env.sh', 'bun.lock') }}
+          key: native-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.homes.outputs.image }}-${{ steps.native-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cc', 'crates/**/*.cpp', 'crates/**/*.hpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts', 'scripts/build-bun-tools.sh', '.github/workflows/ci.yml', 'env.sh') }}
 
       - name: Blocking Web guest cases (QuickJS and host engine)
         shell: bash

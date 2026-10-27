@@ -186,6 +186,14 @@ const nativeCacheFiles: CacheFiles = {
   "scripts/check-cmake-cache.cmake": "CMake preflight",
 };
 
+function gitFile(revision: string, path: string): string {
+  const result = spawnSync("git", ["show", `${revision}:${path}`], { encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`Unable to read historical fixture ${revision}:${path}`);
+  return result.stdout;
+}
+
+const historicalWaffleLock = gitFile("0a9b3d92", "bun.lock");
+
 function changedCacheFile(path: string, contents = "changed"): CacheFiles {
   return { ...nativeCacheFiles, [path]: contents };
 }
@@ -220,6 +228,19 @@ test("native compatibility changes cannot select the prior Cargo cache", () => {
   expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace("Linux-X64", "Linux-ARM64"))).toBe(false);
   expect(saved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles).replace("Linux-X64", "macOS-X64"))).toBe(false);
 });
+
+for (const namespace of ["native-v4", nativeCargoNamespace, "jsc-cargo-v2"]) {
+  test(`${namespace} ignores the historical Waffle pin when native inputs are unchanged`, () => {
+    const keys = nativeKeyTemplates(namespace);
+    const saved = fixtureCacheKey(keys.save, nativeCacheFiles);
+    const pinOnly = changedCacheFile("bun.lock", historicalWaffleLock);
+    expect(fixtureCacheKey(keys.primary, pinOnly)).toBe(saved);
+    expect(fixtureCacheKey(keys.save, pinOnly)).toBe(saved);
+    for (const path of ["Cargo.lock", "crates/bunwasm-runtime/src/engine_jsc.rs", "third_party/rquickjs-sys/quickjs/quickjs.c"]) {
+      expect(fixtureCacheKey(keys.primary, changedCacheFile(path))).not.toBe(saved);
+    }
+  });
+}
 
 for (const namespace of [nativeCargoNamespace, "jsc-cargo-v2"]) {
   test(`${namespace} restores compatible dependencies but changes exact identity for audited Cargo source`, () => {
