@@ -15,7 +15,9 @@ and `src/js/node/trace_events.ts:1-4` at revision
 branch supplies the diagnostic contract for WASI, not an implementation of
 process replacement. Bun's tracing implementation is not imported.
 
-The accepted additions in legacy `bootstrap.js` and `builtins.js` remain exact.
+The accepted missing-entry error body in `bootstrap.js` and the additions in
+`builtins.js` remain exact. The residual reverses only the authorized stdin
+existence exemption before checking the original missing-entry AST fingerprint.
 The two process additions move unchanged into the already-typed `process.ts`.
 `worker_protocol.d.ts` adds only the existing module's boolean `isMainThread`
 export to the `require("worker_threads")` result. An erased local process view
@@ -25,8 +27,11 @@ error payloads, environment hooks or worker lifecycle.
 
 The process source test reverses the two additions before checking its original
 AST fingerprint. Its compiler tests cover the new boolean view. The separate
-residual test checks syntax fingerprints and resolver registration without
-executing these branches. These source checks do not qualify worker delivery,
+residual test checks syntax fingerprints and resolver registration. Its extracted
+main-entry function checks ordinary and worker error codes, messages and plain-error
+markers, plus the exact stdin sentinel's lookup exemption. Mutation controls reject
+a broader exemption, a disabled worker branch and a changed worker error code.
+These source checks do not qualify worker delivery,
 loader execution, process replacement or tracing. The separate worker error-data
 normalization and fallback are not part of this source checkpoint.
 

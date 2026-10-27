@@ -165,7 +165,7 @@ async function open(fixture: Fixture, registry: string) {
   await runtime.filesystem.flush();
   const bridge = new SharedBridge();
   Atomics.store(bridge.state, control.cols, 120); Atomics.store(bridge.state, control.rows, 24);
-  active = new Terminal(fixture.id, await createShell({ runtime, cwd, env: { PATH: "/bin:/usr/bin", HOME: "/home/guest", PS1: "PRODUCT> ", PORT: "3137", NEXT_TELEMETRY_DISABLED: "1" }, terminal: bridge, wasmUrl: "./programs/shell-engine.wasm", workerUrl: "./shell-worker.js" }));
+  active = new Terminal(fixture.id, await createShell({ runtime, cwd, env: { PATH: "/bin:/usr/bin", HOME: "/home/guest", PS1: "PRODUCT> ", PORT: "3137", NEXT_TELEMETRY_DISABLED: "1", ASTRO_TELEMETRY_DISABLED: "1", ASTRO_DISABLE_UPDATE_CHECK: "true" }, terminal: bridge, wasmUrl: "./programs/shell-engine.wasm", workerUrl: "./shell-worker.js" }));
   await active.ready();
 }
 async function close() { const session = active; active = undefined; await session?.dispose(); }

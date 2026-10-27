@@ -1,0 +1,1 @@
+{"type":"module","scripts":{"-":"bun -e 'throw new Error(\"stdin must precede package scripts\")'"}}

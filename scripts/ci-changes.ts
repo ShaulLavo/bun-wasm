@@ -13,6 +13,7 @@ const nativeFiles = new Set([
 const nativeCheckDirectories = discoverChecks().filter(check => check.owner === "native").map(check => `${check.path}/`);
 const nativeCheckManifests = /^checks\/(?:native|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
+const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
 const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
@@ -42,8 +43,16 @@ const engineSpecificFiles = new Set([
 ]);
 
 function sharedWebGuestInput(path: string): boolean {
+  if (runtimeDeclaration.test(path)) return false;
   if (engineSpecificFiles.has(path)) return false;
   return webGuestFiles.has(path) || path.startsWith("web/scripts/node-") || webGuestDirectories.some(root => path.startsWith(root));
+}
+
+function nativeInput(path: string): boolean {
+  if (runtimeDeclaration.test(path)) return false;
+  return path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || nativeCheckDirectories.some(root => path.startsWith(root))
+    || path.startsWith("web/tests/bun-runtime-proc-") || nativeFiles.has(path) || nativeScripts.test(path)
+    || nativeDirectories.some(root => path.startsWith(root));
 }
 
 export function needsJsc(paths: readonly string[]): boolean {
@@ -51,7 +60,7 @@ export function needsJsc(paths: readonly string[]): boolean {
 }
 
 export function needsRust(paths: readonly string[]): boolean {
-  return needsJsc(paths) || paths.some(path => path === "scripts/test-checks.ts" || nativeCheckManifests.test(path) || nativeCheckDirectories.some(root => path.startsWith(root)) || path.startsWith("web/tests/bun-runtime-proc-") || nativeFiles.has(path) || nativeScripts.test(path) || nativeDirectories.some(root => path.startsWith(root)));
+  return needsJsc(paths) || paths.some(nativeInput);
 }
 
 export function changedPaths(base: string, head: string, pullRequest: boolean): string[] {

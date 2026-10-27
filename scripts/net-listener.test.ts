@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { Readable, Writable } from "node:stream";
+import { Readable, Writable, Duplex, getDefaultHighWaterMark } from "node:stream";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
@@ -72,12 +72,16 @@ test("closing a pending listener prevents a late listening event", () => {
   expect(state.server._starting).toBeNull();
 });
 
-test("an unreferenced startup waiter does not keep the guest alive", () => {
+test("an unreferenced server keeps its bind request alive until completion", () => {
   const state = fixture(false);
-  expect(state.server._starting?.ref).toBe(false);
+  expect(state.server._starting?.ref).toBe(true);
+  state.ready("{}");
+  state.pump();
+  expect(state.server._starting).toBeNull();
+  expect(state.accepting.ref).toBe(false);
 });
 
-function httpFixture() {
+function httpFixture(protocol: "http" | "tcp" = "http") {
   let listener = 6;
   let accepts = 0;
   const listeners = new Map<number, { ready: boolean; open: boolean; connections: number[] }>();
@@ -111,10 +115,15 @@ function httpFixture() {
     native,
     web: {}, builtinFactories: {},
     require: (name: keyof typeof modules) => modules[name],
-    builtin: () => ({ Readable, Writable }), nextTick(callback: () => void) { ticks.push(callback); },
+    builtin: () => ({ Readable, Writable, Duplex, getDefaultHighWaterMark }), nextTick(callback: () => void) { ticks.push(callback); },
     pumpIo: () => false, ioPending: () => 0,
   };
-  const { createServer } = load("net.js")(internal).nodeHttp("http:");
+  Object.assign(modules, {
+    node_net_server: load("node_net_server.ts")(internal),
+    node_net: load("node_net.js")(internal),
+  });
+  const transport = load("net.js")(internal);
+  const { createServer } = protocol === "tcp" ? transport.nodeNet() : transport.nodeHttp("http:");
   const server = createServer();
   server._onConnection = (conn: { handle: number }) => { delivered.push(conn.handle); server.emit("connection"); };
   server.on("connection", () => events.push("connection"));
@@ -232,3 +241,36 @@ test("a nested I/O pump in the listen callback cannot announce the same startup 
   state.pump();
   expect(state.internal.ioPending()).toBe(0);
 });
+
+function checkUnreferencedProbe(protocol: "http" | "tcp") {
+  const state = httpFixture(protocol);
+  let closed = false;
+  state.server.unref();
+  state.server.listen(1234, () => state.server.close(() => { closed = true; }));
+  expect(state.internal.ioPending()).toBe(1);
+  state.pump();
+  expect(state.events).toEqual([]);
+  state.ready([]);
+  state.pump();
+  expect(state.events).toEqual(["listening"]);
+  expect(closed).toBe(true);
+  expect(state.internal.ioPending()).toBe(0);
+}
+
+function checkUnrefDuringBind(protocol: "http" | "tcp") {
+  const state = httpFixture(protocol);
+  state.server.listen(1234);
+  state.server.unref();
+  expect(state.internal.ioPending()).toBe(1);
+  state.ready([]);
+  state.pump();
+  expect(state.events).toEqual(["listening"]);
+  expect(state.internal.ioPending()).toBe(0);
+  state.server.close();
+  state.pump();
+}
+
+for (const protocol of ["tcp", "http"] as const) {
+  test(`${protocol} unref-before-listen completes the get-port-please probe`, () => checkUnreferencedProbe(protocol));
+  test(`${protocol} unref during bind affects acceptance without losing startup`, () => checkUnrefDuringBind(protocol));
+}

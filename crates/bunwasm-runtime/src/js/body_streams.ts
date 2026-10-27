@@ -1,4 +1,4 @@
-(function (internal: Pick<BunWasm.Internal, "native">) {
+(function (internal: Pick<BunWasm.Internal, "native" | "toUint8">) {
   const PlatformRequest = internal.native.engine === "host" ? globalThis.Request : null;
   const bodies = new WeakMap<ReadableStream<unknown>, Uint8Array>();
   function remember<T>(stream: ReadableStream<T>, bytes: Uint8Array): ReadableStream<T> {
@@ -47,5 +47,34 @@
       cancel: reason => reader.cancel(reason),
     });
   }
-  return { remember, tee, clone, transfer, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
+  type IterableBody = { iterator: AsyncIterator<unknown>; closed: boolean };
+  async function closeIterable(body: IterableBody): Promise<void> {
+    if (body.closed) return;
+    body.closed = true;
+    await body.iterator.return?.();
+  }
+  async function pullIterable(body: IterableBody, controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> {
+    const next = await body.iterator.next();
+    if (body.closed) return;
+    if (next.done) { body.closed = true; controller.close(); return; }
+    try {
+      const chunk = next.value;
+      const bytes = typeof chunk === "string" ? internal.native.utf8Encode(chunk) : internal.toUint8(chunk);
+      if (!body.closed) controller.enqueue(bytes);
+    } catch (error) {
+      try { await closeIterable(body); } catch {}
+      throw error;
+    }
+  }
+  function fromAsyncIterable(source: AsyncIterable<unknown>): ReadableStream<Uint8Array> {
+    const iterator = source[Symbol.asyncIterator]();
+    if (!iterator || (typeof iterator !== "object" && typeof iterator !== "function")) throw new TypeError("Expected an async generator");
+    if (typeof iterator.next !== "function") throw new TypeError("Expected an async generator");
+    const body: IterableBody = { iterator, closed: false };
+    return new ReadableStream({
+      pull: controller => pullIterable(body, controller),
+      cancel: () => closeIterable(body),
+    }, { highWaterMark: 0 });
+  }
+  return { remember, tee, clone, transfer, fromAsyncIterable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
 })

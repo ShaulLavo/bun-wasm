@@ -1,0 +1,172 @@
+[
+  [
+    "acquisition",
+    {
+      "constructed": [
+        "get",
+        "get",
+        "receiver:true"
+      ],
+      "idle": [
+        "get",
+        "get",
+        "receiver:true"
+      ],
+      "text": "a",
+      "events": [
+        "get",
+        "get",
+        "receiver:true",
+        "next",
+        "next"
+      ]
+    }
+  ],
+  [
+    "next-validation",
+    {
+      "constructed": [
+        "iterator",
+        "get-next"
+      ],
+      "idle": [
+        "iterator",
+        "get-next"
+      ],
+      "text": "a",
+      "events": [
+        "iterator",
+        "get-next",
+        "get-next",
+        "next:true",
+        "get-next",
+        "next:true"
+      ]
+    }
+  ],
+  [
+    "next-replaced",
+    {
+      "error": "Error: next replaced"
+    }
+  ],
+  [
+    "next-getter-error",
+    {
+      "original": true
+    }
+  ],
+  [
+    "invalid-producers",
+    [
+      true,
+      true,
+      true,
+      true
+    ]
+  ],
+  [
+    "one-getter",
+    {
+      "error": "Error: second getter"
+    }
+  ],
+  [
+    "getter-error",
+    {
+      "original": true
+    }
+  ],
+  [
+    "promise-chunk",
+    {
+      "error": "TypeError: Expected text, ArrayBuffer or ArrayBufferView"
+    }
+  ],
+  [
+    "thenable-chunk",
+    {
+      "error": "TypeError: Expected text, ArrayBuffer or ArrayBufferView",
+      "gets": 0,
+      "receiver": false
+    }
+  ],
+  [
+    "offsets",
+    "ababab"
+  ],
+  [
+    "snapshot",
+    "bb"
+  ],
+  [
+    "falsy-errors",
+    [
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  ],
+  [
+    "invalid-cleanup",
+    {
+      "type": true,
+      "events": [
+        "return"
+      ]
+    }
+  ],
+  [
+    "pending-cancel",
+    {
+      "beforeRelease": {
+        "events": [
+          "next",
+          "return"
+        ],
+        "state": "resolved"
+      },
+      "events": [
+        "next",
+        "return"
+      ],
+      "readDone": true,
+      "locked": false
+    }
+  ],
+  [
+    "clone-lock",
+    {
+      "lockedClone": "TypeError",
+      "first": "0123",
+      "second": "0123",
+      "pulled": 4
+    }
+  ],
+  [
+    "cancel-without-read",
+    [
+      "iterator:true",
+      "return:true"
+    ]
+  ],
+  [
+    "acquisition-throw",
+    {
+      "phase": "constructor",
+      "original": true
+    }
+  ],
+  [
+    "return-errors",
+    [
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  ]
+]
