@@ -397,7 +397,7 @@ function staticApp(version: string, dependencies: Record<string, string>, router
   return {
     id: `next-${version}-${router}-static`,
     family: "next",
-    dependencies,
+    dependencies: { ...dependencies, "@types/bun": "1.4.3" },
     files: staticFiles(text, router, version),
     commands: staticCommands(version, text, router),
     features: [

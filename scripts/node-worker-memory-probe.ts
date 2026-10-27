@@ -11,6 +11,7 @@ async function compile(options: WorkerOptions, expectedHeap: number, expectedSta
   const worker = createNodeWorker(url, { ...options, workerData: source }, 32);
   try {
     const output = once(worker, "message");
+    assert(worker.resourceLimits);
     assert.equal(worker.resourceLimits.maxOldGenerationSizeMb, expectedHeap);
     assert.equal(worker.resourceLimits.stackSizeMb, expectedStack);
     const [code] = await output;
