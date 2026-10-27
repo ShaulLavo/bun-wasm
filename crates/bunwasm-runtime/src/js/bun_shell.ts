@@ -36,42 +36,50 @@
   }
 
   type Redirect = { kind: "input"; value: Parameters<typeof bytesOf>[0] } | { kind: "output"; target: ArrayBufferView };
-  type Quote = "" | "'" | "\"";
+  type Quote = "" | "'" | "\"" | "$'" | "#";
 
-  // The quoting state after `text`, so an interpolation stays one literal word inside "..." or '...'.
-  function quoteState(text: string, state: Quote): Quote {
-    for (let index = 0; index < text.length; index++) {
-      const char = text[index];
+  // The shell's quoting state at the end of `script`, so an interpolation stays one literal word
+  // inside "...", '...' and $'...'. Comments run to the end of their line.
+  function quoteState(script: string): Quote {
+    let state: Quote = "";
+    for (let index = 0; index < script.length; index++) {
+      const char = script[index];
+      if (state === "#") {
+        if (char === "\n") state = "";
+        continue;
+      }
       if (state === "'") {
         if (char === "'") state = "";
         continue;
       }
       if (char === "\\") { index++; continue; }
-      if (state === "\"") {
-        if (char === "\"") state = "";
+      if (state === "$'" || state === "\"") {
+        if (char === state.at(-1)) state = "";
         continue;
       }
-      if (char === "'" || char === "\"") state = char;
+      if (char === "$" && script[index + 1] === "'") { state = "$'"; index++; }
+      else if (char === "'" || char === "\"") state = char;
+      else if (char === "#" && (index === 0 || /[\s;&|()]/.test(script[index - 1]))) state = "#";
     }
     return state;
   }
   function quoted(text: string, state: Quote): string {
     const inner = text.replace(/[$`"\\]/g, char => "\\" + char);
     if (state === "\"") return inner;
-    // Close the single quotes, add a double-quoted word, and reopen them.
+    // Close the quotes, add a double-quoted word, and reopen them.
     if (state === "'") return `'"${inner}"'`;
+    if (state === "$'") return `'"${inner}"$'`;
     return escape(text);
   }
 
   // Interpolations are single words, as in Bun: strings are escaped, arrays become one word
-  // per element, { raw } is inserted as written, and JS objects after < or > become files that
-  // the script reaches through shell variables assigned when it runs.
+  // per element, { raw } is inserted as written, and JS objects after < or > become files.
+  // A redirect is a NUL-delimited index (NUL cannot occur in a shell command) replaced by its
+  // private file path when the command runs.
   function interpolate(raw: readonly string[], values: readonly unknown[], redirects: Redirect[]): string {
     let script = raw[0];
-    let state = quoteState(raw[0], "");
     values.forEach((value, index) => {
-      script += word(value, script, state, redirects) + raw[index + 1];
-      state = quoteState(raw[index + 1], state);
+      script += word(value, script, quoteState(script), redirects) + raw[index + 1];
     });
     return script;
   }
@@ -85,7 +93,7 @@
     if (redirect === "<") redirects.push({ kind: "input", value });
     else if (ArrayBuffer.isView(value)) redirects.push({ kind: "output", target: value });
     else throw new TypeError("Bun.$ can redirect output only into a Buffer, TypedArray or Bun.file()");
-    return `"$__bun_shell_redirect_${redirects.length - 1}"`;
+    return `\0${redirects.length - 1}\0`;
   }
 
   class ParsedShellScript {
@@ -133,8 +141,8 @@
       for (const [index, redirect] of parsed.redirects.entries()) {
         if (redirect.kind === "input") fs.writeFileSync(files[index], await bytesOf(redirect.value), { flag: "wx" });
       }
-      const assignments = files.map((file, index) => `__bun_shell_redirect_${index}=${quoted(file, "")}\n`).join("");
-      const child = internal.require("spawn").spawn([findShell(env, cwd), "-c", assignments + parsed.script], {
+      const script = parsed.script.replace(/\0(\d+)\0/g, (_, index: string) => quoted(files[Number(index)], ""));
+      const child = internal.require("spawn").spawn([findShell(env, cwd), "-c", script], {
         cwd, env, stdin: "inherit", stdout: "pipe", stderr: "pipe",
       });
       const [stdout, stderr, code] = await Promise.all([

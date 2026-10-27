@@ -38,9 +38,9 @@ test("piped input evaluates in order with persistent TypeScript declarations and
   expect(repl.errors()).toBe("");
 });
 
-test("an open bracket or block comment continues; an unterminated string is an error", async () => {
+test("an open bracket or block comment continues; an unterminated string or regex is an error", async () => {
   const repl = session(false);
-  repl.stdin.emit("data", "[1,\n2].length\n/* still\ncomment */ 7\n'broken\n8\n");
+  repl.stdin.emit("data", "[1,\n2].length\n/* still\ncomment */ 7\n'broken\n/[/\n8\n");
   repl.stdin.emit("end");
   await repl.exited;
   expect(repl.output()).toBe("2\n7\n8\n");

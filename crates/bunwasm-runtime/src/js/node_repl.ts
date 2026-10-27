@@ -247,12 +247,15 @@
   }
 
   // Unterminated input continues on a "..." line: Bun reports "Unexpected end of file", and an
-  // open template literal, comment or bracket ("Unterminated string literal") is checked here.
+  // open template literal as "Unterminated string literal", which is told apart from a broken
+  // '...' or "..." here. Other syntax errors (an unterminated regex, say) are reported.
   function isThenable(value: unknown): value is PromiseLike<unknown> {
     return (typeof value === "object" || typeof value === "function") && value !== null && typeof Reflect.get(value, "then") === "function";
   }
   function incomplete(error: unknown, source: string): boolean {
-    return /end of file/i.test(error instanceof Error ? error.message : String(error)) || unclosed(source);
+    const message = error instanceof Error ? error.message : String(error);
+    if (/end of file|to terminate multi-line comment/i.test(message)) return true;
+    return /Unterminated string literal/.test(message) && unclosed(source);
   }
   function unclosed(source: string): boolean {
     const stack: string[] = [];

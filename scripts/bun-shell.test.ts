@@ -43,6 +43,8 @@ const cases: Record<string, (shell: Shell) => Promise<unknown>> = {
   array: shell => shell`printf '[%s]' ${["a b", "c", ""]}`.text(),
   doubleQuoted: shell => Promise.all(strings.map(value => shell`printf '[%s]' "${value}"`.text())),
   singleQuoted: shell => Promise.all(strings.map(value => shell`printf '[%s]' '${value}'`.text())),
+  rawOpensQuote: shell => shell`printf '[%s]' ${{ raw: "'pre" }}${"a b"}'`.text(),
+  redirectVariable: async shell => { const target = Buffer.alloc(3); await shell`__bun_shell_redirect_0=bad; printf bye > ${target}`.quiet(); return target.toString(); },
   insideWord: shell => shell`printf '[%s]' "pre-${"a b"}-post" x${"$y z"}y`.text(),
   envSnapshot: async shell => {
     const env = { ...process.env, BUN_SHELL_VALUE: "one" };
@@ -84,6 +86,16 @@ test("promises run lazily and only once", async () => {
   await pending;
   expect(spawned.length).toBe(before + 1);
   expect(() => pending.cwd("/")).toThrow("Shell is already running");
+});
+
+// Native Bun's own interpreter joins the next line here; bash, the system shell, starts a command.
+test("interpolation inside bash's $'...' quotes stays one word (native Bun has no $'...')", async () => {
+  expect(await $`printf '[%s]' $'it\'s ${"a b"}'`.text()).toBe("[it's a b]");
+});
+
+test("quotes inside a shell comment do not affect later interpolations", async () => {
+  expect(await $`printf '[%s]' x # user's value
+printf '[%s]' ${"a b"}`.text()).toBe("[x][a b]");
 });
 
 test("a failed redirect leaves no files behind and never touches existing ones", async () => {
