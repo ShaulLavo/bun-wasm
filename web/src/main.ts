@@ -12,6 +12,7 @@ import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
 import { decode, normalize } from "./fs";
 import { createRuntime } from "waffle";
+import { installShellCommands } from "bash-web";
 import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
 import type { BunNetworkOptions } from "./net/helper";
 import { Previews } from "./preview";
@@ -95,6 +96,8 @@ fs.onOwnershipLost = () => {
 };
 try {
   await fs.mkdirp("/tmp");
+  // Package scripts, Bun.$ and bun exec run in bash-web's shell; it loads on first use.
+  await installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: new URL("./shell-worker.js", location.href) });
   // Background persistence can save a prefix of startup. Publish completion only after
   // every example is present; a missing marker retries an interrupted seed from scratch.
   // After completion, missing examples are intentional deletions and stay deleted.

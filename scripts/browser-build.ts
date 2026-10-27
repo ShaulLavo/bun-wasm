@@ -191,3 +191,16 @@ export function buildClassicWorker(entrypoint: string, outdir: string, define?: 
   const { plugins } = browserBuildConfig([consumerEntry], outdir);
   return checked({ entrypoints: [entrypoint], outdir, define, plugins, target: "browser", format: "iife", minify: true, metafile: true, naming: "[name].[ext]" });
 }
+
+/**
+ * bash-web's shell at /bin/sh and /bin/bash for package scripts, Bun.$ and bun exec: its worker,
+ * bundled from the consumer's installed bash-web, and the guest from scripts/build-bash-web-shell.sh
+ * (BASH_WEB_SHELL_WASM overrides it). bash-web's loader fetches the guest itself, so it ships raw.
+ */
+export async function buildShellAssets(consumer: string, outdir: string) {
+  const worker = await Bun.build({ entrypoints: [join(consumer, "node_modules/bash-web/src/runtime/worker.ts")], outdir, naming: "shell-worker.js", target: "browser", format: "esm", minify: true });
+  if (!worker.success) throw new AggregateError(worker.logs, "bash-web shell worker build failed");
+  const guest = resolve(consumer, process.env.BASH_WEB_SHELL_WASM ?? "../dist/bash-web-shell.wasm");
+  if (existsSync(guest)) await Bun.write(join(outdir, "programs/shell-engine.wasm"), Bun.file(guest));
+  else console.warn(`bash-web-shell.wasm: ${guest} not found; package scripts, Bun.$ and bun exec will not run.`);
+}
