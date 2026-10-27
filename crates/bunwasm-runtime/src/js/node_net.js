@@ -275,7 +275,7 @@
         catch (err) { internal.nextTick(() => this.emit("error", err)); return this; }
         this.listening = true;
         this._closing = false;
-        this._starting = addWaiter({ ref: this._referenced, step: () => {
+        this._starting = addWaiter({ ref: true, step: () => {
           if (!this.listening) return true;
           const address = native.hostLocalAddr(this._listener);
           if (address === -2) return false;
@@ -317,8 +317,8 @@
       getConnections(callback) { internal.nextTick(() => callback(null, this._connections.size)); }
       close(callback) { return closeNodeServer(this, callback, false); }
       [Symbol.asyncDispose]() { return disposeNodeServer(this, true); }
-      ref() { this._referenced = true; if (this._accepting) this._accepting.ref = true; if (this._starting) this._starting.ref = true; return this; }
-      unref() { this._referenced = false; if (this._accepting) this._accepting.ref = false; if (this._starting) this._starting.ref = false; return this; }
+      ref() { this._referenced = true; if (this._accepting) this._accepting.ref = true; return this; }
+      unref() { this._referenced = false; if (this._accepting) this._accepting.ref = false; return this; }
     });
     const connect = (...args) => {
       const [options] = _normalizeArgs(args);

@@ -1227,13 +1227,11 @@
       }
       ref() {
         this._referenced = true;
-        if (this._starting) this._starting.ref = true;
         if (this._accepting) this._accepting.ref = true;
         return this;
       }
       unref() {
         this._referenced = false;
-        if (this._starting) this._starting.ref = false;
         if (this._accepting) this._accepting.ref = false;
         return this;
       }
