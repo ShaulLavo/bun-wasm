@@ -24,6 +24,7 @@ if [[ "${1:-}" == "--no-bun-transpiler" ]]; then guest_build=quickjs-minimal; fi
 bun "$root/scripts/guest-build-receipt.ts" inputs "$guest_build" > "$guest_inputs"
 export BUN_CORE_BUILD_DIR="${BUN_CORE_BUILD_DIR:-$CARGO_TARGET_DIR/split-common}"
 export CARGO_BUILD_JOBS="${JOBS:-4}"
+bun "$root/scripts/guest-core-receipt.ts" prepare "$guest_build" "$BUN_CORE_BUILD_DIR/bun-core.wasm" "$BUN_CORE_BUILD_DIR/quickjs/engine.wasm"
 "$root/scripts/build-bun-core.sh" "$@"
 mkdir -p "$root/dist"
 bun "$root/scripts/guest-core-receipt.ts" tag "$BUN_CORE_BUILD_DIR/bun-core.wasm" quickjs "$root/dist/bun.wasm"

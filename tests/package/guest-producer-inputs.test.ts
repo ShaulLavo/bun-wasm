@@ -3,6 +3,7 @@ import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from
 import { dirname, join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
+import { parseProgramReceipt, record } from "../../scripts/guest-core-receipt.ts";
 import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture } from "./guest-receipt-fixture.ts";
 import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { appendCustomSection, ENGINE_SECTION, programKind } from "../../src/engine-kind.ts";
@@ -272,8 +273,14 @@ async function quickjsWrapperFixture(fixture: Parameters<typeof receiptCli>[0], 
   const root = fixture.root;
   const temporary = join(root, "private/t");
   await mkdir(temporary, { recursive: true });
-  await writeFile(join(root, "env.sh"), `export TMPDIR=${JSON.stringify(temporary)}\n`);
-  await copyFile(new URL("../../scripts/build.sh", import.meta.url), join(root, "scripts/build.sh"));
+  await mkdir(join(root, "jsc"));
+  for (const path of ["scripts/build.sh", "scripts/build-bun-core.sh", "scripts/build-engine-quickjs.sh", "scripts/build-engine-jsc.sh", "scripts/build-bun-jsc.sh", "jsc/common.sh", "jsc/finalize.sh"]) {
+    await copyFile(new URL(`../../${path}`, import.meta.url), join(root, path));
+    await chmod(join(root, path), 0o700);
+  }
+  await writeFile(join(root, "jsc/common.sh"), (await readFile(join(root, "jsc/common.sh"), "utf8")) + "\ncheck_jsc_inputs_stamp() { :; }\n");
+  await writeFile(join(root, "scripts/jsc-embedding.ts"), 'if (process.argv[2] === "inputs") console.log("{}");\n');
+  await writeFile(join(root, "env.sh"), `export TMPDIR=${JSON.stringify(temporary)}\nexport CC_wasm32_wasip1="$WASI_SDK_PATH/bin/clang"\n`);
   await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), "export {};\n");
   await executable(join(root, "scripts/sync-crypto.sh"), "exit 0");
   await executable(join(root, "scripts/test-transpiler-example.sh"), "exit 0");
@@ -281,24 +288,62 @@ async function quickjsWrapperFixture(fixture: Parameters<typeof receiptCli>[0], 
   const tagBytes = appendCustomSection(new Uint8Array(), ENGINE_SECTION, new TextEncoder().encode("quickjs")).length;
   await writeFile(join(root, "private/common-core.wasm"), core.subarray(0, core.length - tagBytes));
   await writeFile(join(root, "private/quickjs.wasm"), side);
-  await executable(join(root, "scripts/build-bun-core.sh"), `
-if [ "${status}" != 0 ]; then exit ${status}; fi
-mkdir -p "$BUN_CORE_BUILD_DIR"
-printf '%s\\n' '{"features":["engine-split","bun-transpiler","bun-build"]}' > private/core-profile.json
-bun scripts/guest-core-receipt.ts inputs private/core-profile.json > private/core-inputs.json
-cp private/common-core.wasm "$BUN_CORE_BUILD_DIR/bun-core.wasm"
-bun scripts/guest-core-receipt.ts write "$BUN_CORE_BUILD_DIR/bun-core.wasm" private/core-inputs.json
+  await writeFile(join(root, "private/jsc.wasm"), quickjsPair("jsc").side);
+  await writeFile(join(root, "jsc-build/build/jsc/lib/libWTF.a"), "synthetic BUN_WASM_STACK_KIB\n");
+  await mkdir(join(root, "crates/bunwasm-engine-jsc/src"), { recursive: true });
+  await writeFile(join(root, "crates/bunwasm-engine-jsc/src/vm.rs"), "JSC source fixture\n");
+  await writeFile(join(root, "crates/bunwasm-engine-quickjs/src/vm.rs"), "QuickJS source fixture\n");
+  await executable(join(root, "fake-tool"), `
+if [ "$1" = --version ]; then echo 'fixture tool 1'; exit 0; fi
+if [ "$1" = tree ]; then echo 'bunwasm-cli v0.0.0'; exit 0; fi
+if [ "$1" = fetch ]; then exit 0; fi
+if [ "$1" = build ]; then
+  kind=core
+  for arg in "$@"; do
+    case "$arg" in bunwasm-engine-quickjs) kind=quickjs;; bunwasm-engine-jsc) kind=jsc;; esac
+  done
+  printf '%s\n' "$kind" >> private/recipe-builds.log
+  if [ "${status}" != 0 ]; then exit ${status}; fi
+  output="$CARGO_TARGET_DIR/wasm32-wasip1/release"
+  mkdir -p "$output"
+  cp private/common-core.wasm "$output/bun.wasm"
+  printf captured > "$output/libbunwasm_engine_quickjs.a"
+  printf captured > "$output/libbunwasm_engine_jsc.a"
+  exit 0
+fi
+case "\${0##*/}" in
+  clang|clang++|wasm-ld)
+    while [ "$1" != -o ]; do shift; done
+    printf captured > "$2"; exit 0;;
+  wasm-opt)
+    while [ "$1" != -o ]; do shift; done
+    cp private/common-core.wasm "$2"; exit 0;;
+  wasm-tools) exit 0;;
+esac
+printf 'fixture tool 1\n'
 `);
-  await executable(join(root, "scripts/build-engine-quickjs.sh"), `
-mkdir -p "$QUICKJS_BUILD_DIR"
-bun scripts/guest-engine-receipt.ts inputs quickjs > private/engine-inputs.json
-cp private/quickjs.wasm "$QUICKJS_BUILD_DIR/engine.wasm"
-bun scripts/guest-engine-receipt.ts write "$QUICKJS_BUILD_DIR/engine.wasm" private/engine-inputs.json
+  await executable(fixture.node, `
+if [ "$1" = -p ]; then echo ${JSON.stringify(fixture.node)}; exit 0; fi
+if [ "$1" = --version ]; then echo 'fixture node 1'; exit 0; fi
+cp "private/$2.wasm" "$4"
 `);
-  fixtureGit(root, "add", "scripts", "env.sh");
-  fixtureGit(root, "commit", "-m", "synthetic producer inputs for actual wrapper, no compilation");
+  await writeFile(fixture.rustc, `#!/bin/sh
+if [ "$1" = -vV ] && [ -n "\${FIXTURE_DRIFT_AT:-}" ]; then
+  count=$(cat private/drift-count 2>/dev/null || echo 0)
+  count=$((count + 1)); echo "$count" > private/drift-count
+  if [ "$count" = "$FIXTURE_DRIFT_AT" ]; then echo drift >> crates/fixture/src/lib.rs; fi
+fi
+` + (await readFile(fixture.rustc, "utf8")).replace(/^#![^\n]*\n/, ""));
+  fixtureGit(root, "add", "scripts", "env.sh", "jsc", "crates");
+  fixtureGit(root, "commit", "-m", "real source recipes with captured compilers and real receipts");
   fixture.env.CARGO_TARGET_DIR = join(root, "private/target");
-  return { core, side, temporary };
+  fixture.env.JSC_BUILD_DIR = join(root, "jsc-build");
+  fixture.env.JSC_ENGINE_BUILD_DIR = join(root, "private/jsc-engine");
+  fixture.env.CAGE = "";
+  const paths = { core: join(root, "private/target/split-common/bun-core.wasm"), quickjs: join(root, "private/target/split-common/quickjs/engine.wasm"), jsc: join(root, "private/jsc-engine/engine.wasm") };
+  const run = (kind: "quickjs" | "jsc") => Bun.spawnSync(["bash", join(root, kind === "jsc" ? "scripts/build-bun-jsc.sh" : "scripts/build.sh")], { cwd: root, env: fixture.env });
+  const builds = async () => (await readFile(join(root, "private/recipe-builds.log"), "utf8")).trim().split("\n");
+  return { core, side, temporary, paths, run, builds };
 }
 
 for (const status of [0, 42]) test(`executed native workflow wrapper publishes a tagged pair and cleans its snapshot after captured producer status ${status}`, async () => {
@@ -327,3 +372,122 @@ for (const status of [0, 42]) test(`executed native workflow wrapper publishes a
     expect(await Bun.file(join(fixture.root, "dist/quickjs.wasm.engine.json")).exists()).toBe(true);
   });
 });
+
+function succeeded(result: ReturnType<typeof Bun.spawnSync>) {
+  expect(result.exitCode, result.stderr?.toString()).toBe(0);
+}
+
+async function committedDelta(root: string, path: string) {
+  await writeFile(join(root, path), "changed source input\n");
+  fixtureGit(root, "add", path);
+  fixtureGit(root, "commit", "-m", `source delta ${path}`);
+}
+
+async function finalFiles(paths: { core: string; quickjs: string; jsc: string }) {
+  const files = [paths.core, `${paths.core}.core.json`, paths.quickjs, `${paths.quickjs}.engine.json`, paths.jsc, `${paths.jsc}.engine.json`];
+  return Promise.all(files.map(async path => ({ path, bytes: await Bun.file(path).exists() ? hash(await readFile(path)) : null })));
+}
+
+test("real wrappers retain engines across a core delta and rebuild only each changed engine", async () => {
+  await withCliReceiptFixture(async fixture => {
+    const recipe = await quickjsWrapperFixture(fixture, 0);
+    succeeded(recipe.run("quickjs"));
+    succeeded(recipe.run("jsc"));
+    expect(await recipe.builds()).toEqual(["core", "quickjs", "jsc"]);
+    const quickjsOrigin = await readFile(`${recipe.paths.quickjs}.engine.json`, "utf8");
+    const jscOrigin = await readFile(`${recipe.paths.jsc}.engine.json`, "utf8");
+    const coreOrigin = await readFile(`${recipe.paths.core}.core.json`, "utf8");
+    await committedDelta(fixture.root, "crates/fixture/src/lib.rs");
+    succeeded(recipe.run("quickjs"));
+    succeeded(recipe.run("jsc"));
+    expect(await recipe.builds()).toEqual(["core", "quickjs", "jsc", "core"]);
+    expect(await readFile(`${recipe.paths.core}.core.json`, "utf8")).not.toBe(coreOrigin);
+    expect(await readFile(`${recipe.paths.quickjs}.engine.json`, "utf8")).toBe(quickjsOrigin);
+    expect(await readFile(`${recipe.paths.jsc}.engine.json`, "utf8")).toBe(jscOrigin);
+    const coreAfter = await readFile(`${recipe.paths.core}.core.json`, "utf8");
+    await committedDelta(fixture.root, "crates/bunwasm-engine-quickjs/src/vm.rs");
+    succeeded(recipe.run("quickjs"));
+    succeeded(recipe.run("jsc"));
+    expect(await recipe.builds()).toEqual(["core", "quickjs", "jsc", "core", "quickjs"]);
+    expect(await readFile(`${recipe.paths.core}.core.json`, "utf8")).toBe(coreAfter);
+    expect(await readFile(`${recipe.paths.jsc}.engine.json`, "utf8")).toBe(jscOrigin);
+    const quickjsAfter = await readFile(`${recipe.paths.quickjs}.engine.json`, "utf8");
+    expect(quickjsAfter).not.toBe(quickjsOrigin);
+    await committedDelta(fixture.root, "crates/bunwasm-engine-jsc/src/vm.rs");
+    succeeded(recipe.run("jsc"));
+    succeeded(recipe.run("quickjs"));
+    expect(await recipe.builds()).toEqual(["core", "quickjs", "jsc", "core", "quickjs", "jsc"]);
+    expect(await readFile(`${recipe.paths.jsc}.engine.json`, "utf8")).not.toBe(jscOrigin);
+    expect(await readFile(`${recipe.paths.quickjs}.engine.json`, "utf8")).toBe(quickjsAfter);
+    expect(await readFile(`${recipe.paths.core}.core.json`, "utf8")).toBe(coreAfter);
+    for (const path of [join(dirname(recipe.paths.core), "core-target"), join(dirname(recipe.paths.quickjs), "target"), join(dirname(recipe.paths.jsc), "target")]) expect(await Bun.file(join(path, "wasm32-wasip1/release/bun.wasm")).exists()).toBe(true);
+    expect(await readdir(recipe.temporary)).toEqual([]);
+  });
+}, 30_000);
+
+for (const kind of ["quickjs", "jsc"] as const) for (const damage of ["corrupt", "partial", "wrong-scope", "wrong-profile", "input-hash", "command-profile"]) {
+  test(`${kind} wrapper preserves ${damage} output plus a source delta without retirement or compilation`, async () => {
+    await withCliReceiptFixture(async fixture => {
+      const recipe = await quickjsWrapperFixture(fixture, 0);
+      succeeded(recipe.run(kind));
+      const side = recipe.paths[kind];
+      const receiptPath = `${side}.engine.json`;
+      if (damage === "corrupt") await writeFile(side, "corrupt retained bytes");
+      if (damage === "partial") await rm(receiptPath);
+      if (damage === "wrong-profile") await writeFile(side, quickjsPair(kind === "jsc" ? "quickjs" : "jsc").side);
+      if (damage === "wrong-scope" || damage === "input-hash" || damage === "wrong-profile" || damage === "command-profile") {
+        const receipt = parseProgramReceipt(await Bun.file(receiptPath).json());
+        if (!record(receipt.inputs.content)) throw new Error("Missing fixture content");
+        const content = damage === "command-profile" ? { ...receipt.inputs.content, command: { target: "native" } } : receipt.inputs.content;
+        const inputs = damage === "wrong-scope" ? { ...receipt.inputs, scope: "core" }
+          : { ...receipt.inputs, content, contentSha256: damage === "input-hash" ? "0".repeat(64) : hash(JSON.stringify(content)) };
+        const artifact = damage === "wrong-profile" ? { artifactSha256: hash(await readFile(side)), artifactBytes: (await readFile(side)).length } : receipt.artifact;
+        await writeFile(receiptPath, JSON.stringify({ ...receipt, inputs, artifact }));
+      }
+      await committedDelta(fixture.root, "crates/fixture/src/lib.rs");
+      const files = await finalFiles(recipe.paths);
+      const builds = await recipe.builds();
+      expect(recipe.run(kind).exitCode).not.toBe(0);
+      expect(await finalFiles(recipe.paths)).toEqual(files);
+      expect(await recipe.builds()).toEqual(builds);
+    });
+  }, 15_000);
+}
+
+test("wrapper preparation refuses start/end source drift before retiring valid stale outputs", async () => {
+  await withCliReceiptFixture(async fixture => {
+    const recipe = await quickjsWrapperFixture(fixture, 0);
+    succeeded(recipe.run("quickjs"));
+    await committedDelta(fixture.root, "crates/fixture/src/lib.rs");
+    const files = await finalFiles(recipe.paths);
+    const builds = await recipe.builds();
+    const result = Bun.spawnSync([process.execPath, join(fixture.root, "scripts/guest-core-receipt.ts"), "prepare", "quickjs", recipe.paths.core, recipe.paths.quickjs], { cwd: fixture.root, env: { ...fixture.env, FIXTURE_DRIFT_AT: "4" } });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain("source changed");
+    expect(await readFile(join(fixture.root, "private/drift-count"), "utf8")).not.toBe("");
+    expect(await finalFiles(recipe.paths)).toEqual(files);
+    expect(await recipe.builds()).toEqual(builds);
+  });
+}, 15_000);
+
+for (const damage of ["corrupt", "partial", "profile"]) test(`core ${damage} plus source delta fails closed in composing caller`, async () => {
+  await withCliReceiptFixture(async fixture => {
+    const recipe = await quickjsWrapperFixture(fixture, 0);
+    succeeded(recipe.run("quickjs"));
+    if (damage === "corrupt") await writeFile(recipe.paths.core, "corrupt core");
+    if (damage === "partial") await rm(`${recipe.paths.core}.core.json`);
+    if (damage === "profile") {
+      const path = `${recipe.paths.core}.core.json`;
+      const receipt = parseProgramReceipt(await Bun.file(path).json());
+      if (!receipt.inputs.content || typeof receipt.inputs.content !== "object") throw new Error("Missing fixture input content");
+      const content = { ...receipt.inputs.content, selection: { features: ["engine-split"] } };
+      await writeFile(path, JSON.stringify({ ...receipt, inputs: { ...receipt.inputs, content, contentSha256: hash(JSON.stringify(content)) } }));
+    }
+    await committedDelta(fixture.root, "crates/fixture/src/lib.rs");
+    const files = await finalFiles(recipe.paths);
+    const builds = await recipe.builds();
+    expect(recipe.run("quickjs").exitCode).not.toBe(0);
+    expect(await finalFiles(recipe.paths)).toEqual(files);
+    expect(await recipe.builds()).toEqual(builds);
+  });
+}, 15_000);

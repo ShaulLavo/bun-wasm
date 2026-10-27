@@ -69,3 +69,26 @@ test("input and final-byte changes cannot be relabeled as reusable output", asyn
     expect(() => parseProgramInputs({ ...inputs, source: { ...inputs.source, head: "unrecorded" } })).toThrow("snapshot");
   });
 });
+
+for (const path of ["scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake"]) {
+  test(`core compatibility inventories consumed input ${path}`, async () => {
+    await withReceiptFixture(async options => {
+      const file = join(options.repository, path);
+      await Bun.write(file, "original consumed input\n");
+      fixtureGit(options.repository, "add", path);
+      fixtureGit(options.repository, "commit", "-m", "consumed core input");
+      const before = await captureProgramInputs(options, "core", { features: ["engine-split"] });
+      const quickjs = await captureProgramInputs({ ...options, build: "quickjs" }, "quickjs");
+      const jsc = await captureProgramInputs({ ...options, build: "jsc" }, "jsc");
+      await writeFile(file, "changed consumed input\n");
+      fixtureGit(options.repository, "add", path);
+      fixtureGit(options.repository, "commit", "-m", "changed consumed core input");
+      expect((await captureProgramInputs(options, "core", { features: ["engine-split"] })).contentSha256).not.toBe(before.contentSha256);
+      expect((await captureProgramInputs({ ...options, build: "quickjs" }, "quickjs")).contentSha256).toBe(quickjs.contentSha256);
+      const changedJsc = await captureProgramInputs({ ...options, build: "jsc" }, "jsc");
+      // The JSC toolchain file is also consumed by its existing native recipe scope.
+      if (path === "jsc/wasi-jsc.cmake") expect(changedJsc.contentSha256).not.toBe(jsc.contentSha256);
+      else expect(changedJsc.contentSha256).toBe(jsc.contentSha256);
+    });
+  });
+}

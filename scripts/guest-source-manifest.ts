@@ -185,7 +185,8 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
 
 function scopedRepositoryPaths(scope: ProgramInputScope): string[] {
   const common = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "scripts/guest-source-manifest.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "src/engine-kind.ts"];
-  if (scope === "core") return common.concat(["crates", "third_party", "patches", "scripts/build-bun-core.sh", "scripts/quickjs-core-exports.txt"]);
+  if (scope === "core") return common.concat(["crates", "third_party", "patches", "scripts/build-bun-core.sh", "scripts/quickjs-core-exports.txt",
+    "scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake"]);
   const shared = ["engine.rs", "data.rs", "data/codec.rs", "ops.rs", "ops", "split_api.rs"].map(path => `crates/bunwasm-runtime/src/${path}`);
   const program = ["driver.rs", "client.rs", "loader.rs", "program.rs", "natives.rs", "value_natives.rs", "allocator.rs", "transport.rs"].map(path => `crates/bunwasm-engine-quickjs/src/${path}`);
   const own = scope === "jsc" ? ["crates/bunwasm-engine-jsc", "crates/bunwasm-jsc", "jsc"] : ["crates/bunwasm-engine-quickjs", "third_party/rquickjs", "third_party/rquickjs-sys"];

@@ -135,6 +135,7 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
 for (const path of [
   "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp", "scripts/jsc-embedding.ts",
   "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",
+  "crates/bunwasm-engine-quickjs/src/driver.rs", "crates/bunwasm-engine-quickjs/src/client.rs", "crates/bunwasm-engine-quickjs/src/natives.rs", "crates/bunwasm-engine-quickjs/src/allocator.rs", "crates/bunwasm-engine-quickjs/src/transport.rs",
   "crates/bunwasm-engine-jsc/src/lib.rs", "scripts/build-bun-jsc.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "scripts/build-bun-core.sh", "scripts/build.sh", "scripts/quickjs-core-exports.txt",
   "scripts/guest-artifact.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-acceptance.ts",
   "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/engine-producer.test.ts", "scripts/src/engine-explicit-init.test.ts",
@@ -190,7 +191,7 @@ test("the Astro response fixture selects the existing native and JSC gates", () 
   expect(needsJsc(paths)).toBe(true);
 });
 
-for (const path of ["crates/bunwasm-host/src/linked.rs", "crates/bunwasm-engine-quickjs/src/vm.rs", "crates/bunwasm-engine-quickjs/src/client.rs"]) {
+for (const path of ["crates/bunwasm-host/src/linked.rs", "crates/bunwasm-engine-quickjs/src/vm.rs", "crates/bunwasm-engine-quickjs/src/lib.rs"]) {
   test.each(["pull_request", "push"])(`${path} retains native-only selection for %s`, event => {
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
