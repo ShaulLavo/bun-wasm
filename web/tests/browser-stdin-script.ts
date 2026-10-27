@@ -27,9 +27,11 @@ function cleanup() {
   return cleanupPromise ??= (async () => {
     try { released = await page?.evaluate(() => globalThis.shellProduct?.cleanup()); }
     finally {
-      await browser?.close();
-      server?.stop(true);
-      if (scratch) await rm(scratch, { recursive: true, force: true });
+      try { await browser?.close(); }
+      finally {
+        server?.stop(true);
+        if (scratch) await rm(scratch, { recursive: true, force: true });
+      }
     }
   })();
 }
@@ -50,7 +52,8 @@ try {
   const output = join(scratch, "dist");
   const packages = await bundleProduct(root, installation, output);
   const bytes = await Bun.file(guest).bytes();
-  console.log(JSON.stringify({ guest, guestBytes: bytes.length, guestSha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), packages }));
+  const { shellCommit, wafflePeerCommit, waffleHostCommit, networkInputHash } = packages;
+  console.log(JSON.stringify({ guest, guestBytes: bytes.length, guestSha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), shellCommit, wafflePeerCommit, waffleHostCommit, networkInputHash }));
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const pathname = new URL(request.url).pathname;
     const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };
