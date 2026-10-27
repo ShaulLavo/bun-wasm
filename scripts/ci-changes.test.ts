@@ -25,6 +25,17 @@ test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src
   expect(needsRust([path])).toBe(false);
 });
 
+test.each(["crates/bunwasm-runtime/src/js/runtime.d.ts", "crates/bunwasm-runtime/src/js/worker_protocol.d.ts"])("type-only runtime declaration %s needs no native engine build", path => {
+  expect(needsRust([path])).toBe(false);
+  expect(needsJsc([path])).toBe(false);
+});
+
+test("embedded runtime JavaScript remains a native and JSC input", () => {
+  const path = "crates/bunwasm-runtime/src/js/node_fs.js";
+  expect(needsRust([path])).toBe(true);
+  expect(needsJsc([path])).toBe(true);
+});
+
 test("the complete change list includes native inputs after any number of JavaScript paths", () => {
   const paths = Array.from({ length: 500 }, (_, index) => `web/src/file${index}.ts`);
   expect(needsRust(paths.concat(["crates/bunwasm-cli/src/main.rs"]))).toBe(true);
