@@ -366,7 +366,7 @@
         expected = fn;
         target = () => {};
       } else {
-        target = fn ?? (() => {});
+        target = fn === undefined ? () => {} : fn;
       }
       validateExpectedCalls(expected);
       const context = new CallTrackerContext({ expected, stackTrace: new Error(), name: target.name || "calls" });
@@ -398,9 +398,9 @@
     }
   }
 
-  function defineCallTracker(target: object) {
+  function defineCallTracker(): PropertyDescriptor {
     let tracker: typeof CallTracker | undefined;
-    Object.defineProperty(target, "CallTracker", {
+    return {
       get() {
         if (tracker === undefined) tracker = util().deprecate(CallTracker, "assert.CallTracker is deprecated.", "DEP0173");
         return tracker;
@@ -410,7 +410,7 @@
       },
       configurable: true,
       enumerable: true,
-    });
+    };
   }
 
   function innerFail(obj: BunWasm.AssertionOptions): never {
@@ -836,8 +836,9 @@
 
   assert.strict = strict;
   strict.strict = strict;
-  defineCallTracker(assert);
-  defineCallTracker(strict);
+  const callTrackerDescriptor = defineCallTracker();
+  Object.defineProperty(assert, "CallTracker", callTrackerDescriptor);
+  Object.defineProperty(strict, "CallTracker", callTrackerDescriptor);
 
   return assert;
 });

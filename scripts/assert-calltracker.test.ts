@@ -94,6 +94,7 @@ function exercise(assert: AssertModule) {
       capture(() => tracker.calls(add, 1.5)),
       capture(() => tracker.calls(add, "2" as never)),
     ];
+    const nullCall = capture(() => tracker.calls(null as never));
     const second = tracker.calls(() => {}, 1);
     const third = tracker.calls(() => {}, 1);
     const multiple = capture(() => tracker.verify());
@@ -119,6 +120,7 @@ function exercise(assert: AssertModule) {
       multiple,
       multipleKeys,
       duringExit,
+      nullCall: { kind: nullCall.kind, name: "name" in nullCall ? nullCall.name : undefined, code: "code" in nullCall ? nullCall.code : undefined },
     };
   } finally {
     process.noDeprecation = previous;
@@ -140,15 +142,23 @@ test("current CallTracker matches the native Bun behavior contract", () => {
   expect(exercise(loadCurrent())).toEqual(exercise(nativeAssert));
 });
 
-test("CallTracker keeps independent tracker and strict getter state", () => {
+test("CallTracker shares one lazy constructor per factory and isolates setters", () => {
+  if (!isAssertModule(nativeAssert)) throw new Error("Native Bun CallTracker oracle unavailable");
+  expect(nativeAssert.CallTracker).toBe(nativeAssert.strict.CallTracker);
   const current = loadCurrent();
-  const first = new current.CallTracker();
-  const second = new current.strict.CallTracker();
-  const tracked = first.calls(() => {}, 1);
+  const first = current.CallTracker;
+  expect(first).toBe(current.strict.CallTracker);
+  const other = loadCurrent();
+  expect(other.CallTracker).not.toBe(first);
+  expect(other.CallTracker).toBe(other.strict.CallTracker);
+  const firstTracker = new first();
+  const secondTracker = new current.strict.CallTracker();
+  const tracked = firstTracker.calls(() => {}, 1);
   tracked();
-  expect(first.report()).toEqual([]);
-  expect(second.report()).toEqual([]);
-  const replacement = current.strict.CallTracker;
-  Object.defineProperty(current, "CallTracker", { value: replacement, writable: true, enumerable: true, configurable: true });
-  expect(current.CallTracker).toBe(replacement);
+  expect(firstTracker.report()).toEqual([]);
+  expect(secondTracker.report()).toEqual([]);
+  class Replacement extends first {}
+  Object.defineProperty(current, "CallTracker", { value: Replacement, writable: true, enumerable: true, configurable: true });
+  expect(current.CallTracker).toBe(Replacement);
+  expect(current.strict.CallTracker).not.toBe(Replacement);
 });
