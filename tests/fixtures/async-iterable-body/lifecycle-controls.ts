@@ -1,5 +1,5 @@
 export async function lifecycleControls() {
-  const rows: unknown[] = [];
+  const rows: [string, unknown][] = [];
   const pause = () => new Promise(resolve => setTimeout(resolve, 20));
   async function bounded(promise: Promise<unknown>) {
     let timer: ReturnType<typeof setTimeout> | undefined;

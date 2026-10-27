@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { runInContext } from "node:vm";
 import { runOwned, sourceRuntime } from "./fixtures/stream-consumers-runtime";
+import { comparableLifecycle } from "../tests/fixtures/async-iterable-body/lifecycle-comparison";
 
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-iterable-body-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -29,14 +30,6 @@ for (const engine of ["node", process.execPath]) {
   });
 }
 
-function comparableLifecycle(rows: [string, unknown][]) {
-  return rows.map(([name, value]) => {
-    if (name !== "promise-chunk" && name !== "thenable-chunk") return [name, value];
-    if (value === null || typeof value !== "object" || !("error" in value)) throw new Error(`Missing ${name} TypeError`);
-    if (typeof value.error !== "string" || !value.error.startsWith("TypeError:")) throw new Error(`Wrong ${name} error`);
-    return [name, Object.assign({}, value, { error: "TypeError" })];
-  });
-}
 
 test("captured producer acquisition and cancellation match the retained native Bun controls", async () => {
   const source = sourceRuntime(scratch);
@@ -50,4 +43,31 @@ test("native Bun retains the measured lifecycle contract", () => {
   const result = runOwned(process.execPath, [join(fixture, "index.ts"), "--lifecycle"], 5000);
   expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual(lifecycleExpected);
+});
+
+test("only the two invalid-chunk cases compare by TypeError class", () => {
+  const guestRows: [string, unknown][] = lifecycleExpected.map(([name, value]: [string, unknown]) => {
+    if (name !== "promise-chunk" && name !== "thenable-chunk") return [name, value];
+    return [name, Object.assign({}, value, { error: "TypeError: Expected an ArrayBuffer or ArrayBufferView" })];
+  });
+  expect(comparableLifecycle(guestRows)).toEqual(comparableLifecycle(lifecycleExpected));
+  expect(() => comparableLifecycle([["promise-chunk", { error: "Error: wrong class" }]])).toThrow("Wrong promise-chunk error");
+  expect(() => comparableLifecycle([["thenable-chunk", { gets: 0 }]])).toThrow("Missing thenable-chunk TypeError");
+});
+
+test("constructor, cancellation, receiver, getter and falsy identity results remain strict", () => {
+  const changes: [string, unknown][] = [
+    ["acquisition", { constructed: ["get"], idle: ["get"], text: "a", events: [] }],
+    ["pending-cancel", { beforeRelease: { events: ["next"], state: "pending" }, events: ["next"], readDone: false, locked: true }],
+    ["cancel-without-read", ["iterator:true"]],
+    ["getter-error", { original: false }],
+    ["next-validation", { constructed: [], idle: [], text: "a", events: ["next:false"] }],
+    ["falsy-errors", [true, false, true, true, true]],
+    ["return-errors", [true, true, true, false, true]],
+  ];
+  for (const [name, changed] of changes) {
+    const original = lifecycleExpected.find((row: [string, unknown]) => row[0] === name);
+    expect(original).toBeDefined();
+    expect(comparableLifecycle([[name, changed]])).not.toEqual(comparableLifecycle([original]));
+  }
 });
