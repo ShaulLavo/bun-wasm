@@ -6,6 +6,7 @@
 //   bun tests/bench-commands.ts --url https://bun.sprockt.dev/playground/
 //   bun tests/bench-commands.ts --browser firefox --runs 7 --output /work/tmp/bun-wasm-bench.json
 //   bun tests/bench-commands.ts --network              # also install, add, update, remove and bunx
+//   bun tests/bench-commands.ts --think 1000           # wait 1 s (typing time) before each first command
 //
 // Each round opens a fresh browser context, so its first command is a cold start with empty
 // caches. After the warm repeats the page reloads: its first command is the returning-visitor
@@ -40,14 +41,19 @@ const { values: options } = parseArgs({
   options: {
     url: { type: "string" },
     browser: { type: "string", default: "chromium" },
+    // Another build of the chosen engine, such as Helium: --executable /Applications/Helium.app/Contents/MacOS/Helium
+    executable: { type: "string" },
     runs: { type: "string", default: "3" },
     repeats: { type: "string", default: "3" },
     output: { type: "string" },
+    // Typing time before the first command; the page may use it to prepare.
+    think: { type: "string", default: "0" },
     network: { type: "boolean", default: false },
   },
 });
 const runs = Number(options.runs);
 const repeats = Number(options.repeats);
+const think = Number(options.think);
 assert.ok(runs > 0 && repeats > 0, "--runs and --repeats must be positive");
 const engines = { chromium, firefox, webkit };
 assert.ok(options.browser in engines, `--browser must be one of ${Object.keys(engines).join(", ")}`);
@@ -127,18 +133,20 @@ interface Samples { ready: number[]; cold: number[]; reloaded: number[]; warm: M
 async function round(url: string, samples: Samples): Promise<void> {
   const { page, readyMs } = await openPlayground(url);
   samples.ready.push(readyMs);
+  await Bun.sleep(think);
   samples.cold.push(await measure(page, offline[0]!));
   for (let repeat = 0; repeat < repeats; repeat++) {
     for (const item of cases) samples.warm.get(item.command)!.push(await measure(page, item));
   }
   await openPlayground(url, page);
+  await Bun.sleep(think);
   samples.reloaded.push(await measure(page, offline[0]!));
   await page.context().close();
 }
 
 try {
   const url = options.url ?? await startServer();
-  browser = await engines[options.browser as keyof typeof engines].launch({ headless: true });
+  browser = await engines[options.browser as keyof typeof engines].launch({ headless: true, executablePath: options.executable });
   const samples: Samples = { ready: [], cold: [], reloaded: [], warm: new Map(cases.map(item => [item.command, []])) };
   for (let run = 0; run < runs; run++) await round(url, samples);
   const command = offline[0]!.command;
@@ -148,7 +156,7 @@ try {
     { what: `after reload: ${command}`, median: median(samples.reloaded), samples: samples.reloaded },
   ].concat(Array.from(samples.warm, ([command, values]) => ({ what: `warm: ${command}`, median: median(values), samples: values })));
   for (const row of rows) console.log(`${row.what.padEnd(48)} ${row.median.toFixed(0).padStart(7)} ms   [${row.samples.map(value => value.toFixed(0)).join(" ")}]`);
-  const report = { url, browser: options.browser, latencyMs: Number(process.env.LATENCY_MS ?? 0), runs, repeats, date: new Date().toISOString(), rows };
+  const report = { url, browser: options.executable ?? options.browser, latencyMs: Number(process.env.LATENCY_MS ?? 0), runs, repeats, think, date: new Date().toISOString(), rows };
   if (options.output) await Bun.write(options.output, JSON.stringify({ ...report, failures: Object.fromEntries(failures) }, null, 2) + "\n");
   for (const [command, detail] of failures) console.error(`\nFAILED ${command}: ${detail}`);
   process.exitCode = failures.size ? 1 : 0;
