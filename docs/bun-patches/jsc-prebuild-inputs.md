@@ -34,3 +34,44 @@ shell reports a successful wait for a terminated worker. Missing proof never per
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint, output integrity checks and early CI saves reuse only completed matching WebKit builds. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+## JSC program recipes
+
+The original adapters in `jsc/configure.sh`, `jsc/build-icu.sh`,
+`jsc/common.sh`, and `crates/bunwasm-jsc/build.rs` request PIC for WebKit's
+static archives, ICU target code and generated data wrapper, the separate shim
+members, and the private-header C++ helper. The helper discards the shell's
+PIE and conflicting PIC flags before adding `-fPIC`. WebKit remains pinned to
+`3d3257150c40a1aabdc5f8b48d5b33d0413674cb`; ICU remains 78.3. These recipe
+changes copy no upstream implementation. Existing input fingerprints include
+the changed recipes and reject native outputs built with the old flags.
+The shell-required prebuild completion contract remains unchanged.
+
+`scripts/build-engine-jsc.sh` is an original program producer. It compiles the
+JSC side with PIC Rust `std,panic_abort`, links against the existing native
+closure, spills pointers on the module containing the VM, then converts its
+implicit initializer with `scripts/src/engine-explicit-init.ts`. The fixed
+exports are `jsc_initialize_memory`, `jsc_apply_data_relocs`, `jsc_call_ctors`,
+`jsc_register`, and `jsc_run`. The constructor fixture in
+`scripts/src/engine-init.c` retains its relocated data pointer and core-backed
+allocation. The converter changes only start and export sections and checks
+that every other byte stays unchanged. These helpers are original adapters
+moved from the QuickJS fixture, not copied WebKit code.
+
+`scripts/build-bun-jsc.sh` composes a verified optimized common core with
+`jsc-engine.wasm`. A matching engine receipt permits reuse without compilation,
+linking, or finalization. Reuse retains the original engine receipt; the current
+pair receipt verifies current input compatibility and both final byte identities.
+Missing, partial, or incompatible retained output fails instead of falling back.
+
+PIC suitability of retained no-exception C++ and process-clock archive members,
+actual unresolved imports, stack-bound binding, and Binaryen's shared-module
+output remain real-link gates. The source recipe does not add JSC or C++
+interpreter internals to core, supply stubs, or treat `--allow-undefined` as
+acceptance. Parser and captured-command fixtures prove source contracts only.
+
+| Source | Class | Change |
+| --- | --- | --- |
+| `jsc/configure.sh`, `jsc/build-icu.sh`, `jsc/common.sh`, `crates/bunwasm-jsc/build.rs` | Port | Original PIC build adapters for the unchanged pinned upstreams. |
+| `scripts/build-engine-jsc.sh`, `scripts/build-bun-jsc.sh` | Host feature | Original separate-program producer and matched-pair composition. |
+| `scripts/src/engine-explicit-init.ts`, `scripts/src/engine-init.c` | Port | Shared original initializer converter and constructor fixture. |

@@ -146,7 +146,7 @@ build_shim() {
   copy_jsc_config_inputs
   local c
   for c in wasi-compat madvise; do
-    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -O2 -c "$JSC_CONFIG_SHIM_DIR/$c.c" -o "$SHIM_DIR/$c.o"
+    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC -O2 -c "$JSC_CONFIG_SHIM_DIR/$c.c" -o "$SHIM_DIR/$c.o"
   done
   rm -f "$SHIM_DIR/libwasi-compat.a"
   "$WASI_SDK_PATH/bin/llvm-ar" rcs "$SHIM_DIR/libwasi-compat.a" "$SHIM_DIR/wasi-compat.o" "$SHIM_DIR/madvise.o"

@@ -5,19 +5,38 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 source env.sh
+guest_environment=$(bun "$root/scripts/guest-build-receipt.ts" environment)
+eval "$guest_environment"
 out=${QUICKJS_BUILD_DIR:?Set QUICKJS_BUILD_DIR to a lane-private build directory}
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
 export CARGO_TARGET_DIR="$out/target"
-export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS='-C relocation-model=pic -C panic=abort -C link-self-contained=no'
-export CFLAGS_wasm32_wasip1="--sysroot=$BUN_WASM_SYSROOT -fPIC"
-export RQUICKJS_SYS_NO_WASI_SDK=1
-sysroot=$("${RUSTC:-rustc}" --print sysroot)
-cargo fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
-cargo build --locked --offline -Zbuild-std=std,panic_abort --release --target wasm32-wasip1 \
+engine_environment=$(bun "$root/scripts/guest-engine-receipt.ts" environment quickjs)
+eval "$engine_environment"
+inputs=''
+trap 'if [[ -n "$inputs" ]]; then rm -f -- "$inputs"; fi' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [[ "${QUICKJS_SMOKE_EXPORTS:-0}" == 1 ]]; then
+  if [[ -e "$out/engine.wasm.engine.json" ]]; then
+    echo 'error: use a separate QUICKJS_BUILD_DIR for smoke exports' >&2
+    exit 1
+  fi
+else
+  inputs=$(mktemp "$TMPDIR/bun-quickjs-engine-inputs-XXXXXX")
+  bun "$root/scripts/guest-engine-receipt.ts" inputs quickjs > "$inputs"
+  if [[ -e "$out/engine.wasm" || -e "$out/engine.wasm.engine.json" ]]; then
+    bun "$root/scripts/guest-engine-receipt.ts" verify "$out/engine.wasm" "$inputs"
+    printf 'QuickJS engine: verified unchanged origin %s\n' "$out/engine.wasm"
+    exit 0
+  fi
+fi
+sysroot=$("$RUSTC" --print sysroot)
+"$GUEST_CARGO" fetch --locked --offline --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
+"$GUEST_CARGO" build --locked --offline -Zbuild-std=std,panic_abort --release --target wasm32-wasip1 \
   -j "${CARGO_BUILD_JOBS:-4}" -p bunwasm-engine-quickjs
-clang --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC -O2 -fno-builtin-malloc -fno-builtin-free -c \
-  tests/linker/quickjs/engine-init.c -o "$out/engine-init.o"
+"$CC_wasm32_wasip1" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC -O2 -fno-builtin-malloc -fno-builtin-free \
+  -DENGINE_CTOR_VALUE=quickjs_ctor_value -c "$root/scripts/src/engine-init.c" -o "$out/engine-init.o"
 exports=(quickjs_ctor_value __stack_pointer __wasm_call_ctors)
 if [[ "${QUICKJS_SMOKE_EXPORTS:-0}" == 1 ]]; then
   exports+=(quickjs_helpers_smoke quickjs_link_smoke quickjs_rust_alloc quickjs_rust_free quickjs_rust_realloc
@@ -27,8 +46,11 @@ else
 fi
 args=()
 for name in "${exports[@]}"; do args+=("--export=$name"); done
-wasm-ld --shared --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
+"$WASI_SDK_PATH/bin/wasm-ld" --shared --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
   --import-memory=env,memory --import-table --allow-undefined "${args[@]}" \
   -o "$out/engine.implicit.wasm" "$out/engine-init.o" "$CARGO_TARGET_DIR/wasm32-wasip1/release/libbunwasm_engine_quickjs.a"
-node tests/linker/quickjs/explicit-init.ts "$out/engine.implicit.wasm" "$out/engine.wasm"
+node "$root/scripts/src/engine-explicit-init.ts" quickjs "$out/engine.implicit.wasm" "$out/engine.wasm"
 wasm-tools validate "$out/engine.wasm"
+if [[ -n "$inputs" ]]; then
+  bun "$root/scripts/guest-engine-receipt.ts" write "$out/engine.wasm" "$inputs"
+fi
