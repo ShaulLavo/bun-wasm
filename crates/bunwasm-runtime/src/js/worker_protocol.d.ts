@@ -24,6 +24,7 @@ declare namespace BunWasm {
     snapshot: PortSnapshot;
     validate(): void;
     publish?(): void;
+    beforeCommit?(): void;
     commit(): void;
   }
   interface WorkerCodecHooks {
@@ -41,12 +42,14 @@ declare namespace BunWasm {
     abort(): void;
   }
   interface SharedObjects {
-    readonly mailbox?: { drain(consume: (bytes: Uint8Array) => void): number; close(): void };
+    readonly mailbox?: { drain(consume: (bytes: Uint8Array) => void | boolean): number; close(): void };
     readonly routes?: {
       readonly owner: string;
       readonly enabled: boolean;
       send(command: unknown): boolean;
       transaction(deliver: () => void, commit: () => void): void;
+      tryTransaction(deliver: () => void, commit: () => void): boolean;
+      onCredit(ready: () => void): void;
       credit(): void;
     };
     begin(): SharedPublication;

@@ -6,7 +6,6 @@ export type SharedRequest =
   | { readonly kind: "need" | "cancel"; readonly references: readonly SharedReference[] }
   | { readonly kind: "mailbox"; readonly inbound: SharedReference; readonly outbound: SharedReference }
   | { readonly kind: "route-ready" }
-  | { readonly kind: "route-credit" }
   | { readonly kind: "close" };
 export type SharedResponse =
   | { readonly kind: "route-drained" }
@@ -32,6 +31,7 @@ export interface SharedPublication {
 interface SharedRouteSnapshot { readonly id: string; readonly peer: string | null; readonly version: number; readonly sent: number; }
 export type SharedRouteCommand =
   | { readonly kind: "bind" | "moving"; readonly snapshot: SharedRouteSnapshot }
+  | { readonly kind: "received" | "returned"; readonly receipt: string }
   | { readonly kind: "closed"; readonly id: string }
   | { readonly kind: "port-data"; readonly id: string; readonly from: string; readonly sequence: number; readonly graph: unknown }
   | { readonly kind: "port-close"; readonly id: string; readonly from: string; readonly sequence: number };
@@ -40,6 +40,8 @@ interface SharedRoutes {
   readonly enabled: boolean;
   enable(): void;
   send(command: unknown): boolean;
+  tryTransaction(deliver: () => void, commit: () => void): boolean;
+  onCredit(ready: () => void): void;
   transaction(deliver: () => void, commit: () => void): void;
   credit(): void;
 }
@@ -95,6 +97,7 @@ function routeSnapshot(value: unknown): SharedRouteSnapshot {
 function routeCommand(value: unknown): SharedRouteCommand {
   const input = object(value);
   if (input.kind === "bind" || input.kind === "moving") return { kind: input.kind, snapshot: routeSnapshot(input.snapshot) };
+  if (input.kind === "received" || input.kind === "returned") return { kind: input.kind, receipt: transaction(input.receipt) };
   if (input.kind === "closed") return { kind: input.kind, id: routeId(input.id) };
   if ((input.kind === "port-data" || input.kind === "port-close") && typeof input.id === "string" && typeof input.from === "string") {
     const command = { id: routeId(input.id), from: routeId(input.from), sequence: counter(input.sequence) };
@@ -118,7 +121,7 @@ export function sharedRequest(value: unknown): SharedRequest {
     case "publish": return { kind: input.kind, transaction: transaction(input.transaction), attachments: attachments(input.attachments) };
     case "abort": return { kind: input.kind, transaction: transaction(input.transaction) };
     case "mailbox": return { kind: input.kind, inbound: sharedReference(input.inbound), outbound: sharedReference(input.outbound) };
-    case "route-ready": case "route-credit": return { kind: input.kind };
+    case "route-ready": return { kind: input.kind };
     case "need": case "cancel": return { kind: input.kind, references: references(input.references) };
     case "close": return { kind: input.kind };
     default: throw sharedError("Invalid shared-object request");

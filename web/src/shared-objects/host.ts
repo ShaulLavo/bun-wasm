@@ -37,9 +37,13 @@ export function bindSharedObjectHost(service: SharedObjects, host: SharedHostLif
     mailbox: mailbox ? {
       buffer: mailbox.buffer,
       capacity: mailbox.capacity,
+      maxFrameBytes: mailbox.maxFrameBytes,
       reserve(bytes) { active(); return mailbox.reserve(bytes); },
       write(bytes) { active(); return mailbox.write(bytes); },
       drain(consume) { if (!host.active()) return 0; return mailbox.drain(consume); },
+      sweep(consume) { active(); return mailbox.sweep(consume); },
+      watch(ready) { active(); return mailbox.watch(() => { if (host.active()) ready(); }); },
+      wake: () => mailbox.wake(),
       close: () => mailbox.close(),
       inspect: () => mailbox.inspect(),
     } : undefined,
@@ -52,7 +56,9 @@ export function bindSharedObjectHost(service: SharedObjects, host: SharedHostLif
         if (!host.active() && (parsed.kind === "closed" || parsed.kind === "port-close")) return true;
         active(); const accepted = routes.send(parsed); if (accepted) host.wake(); return accepted;
       },
-      transaction(deliver, commit) { active(); routes.transaction(deliver, commit); host.wake(); },
+      transaction(deliver, commit) { active(); host.wake(); routes.transaction(deliver, commit); },
+      tryTransaction(deliver, commit) { active(); host.wake(); return routes.tryTransaction(deliver, commit); },
+      onCredit(ready) { active(); routes.onCredit(() => { if (host.active()) { ready(); host.wake(); } }); },
       credit() { if (!host.active()) return; routes.credit(); host.wake(); },
     },
   };

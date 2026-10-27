@@ -8,6 +8,9 @@ export interface SourcePort {
   on(event: string, listener: (value: unknown) => void): void;
   postMessage(value: unknown, transfer?: readonly unknown[]): void;
   close(): void;
+  ref(): void;
+  unref(): void;
+  hasRef(): boolean;
 }
 interface PortsRuntime {
   MessagePort: { new(...args: never[]): SourcePort };

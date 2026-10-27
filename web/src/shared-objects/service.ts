@@ -20,6 +20,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   let closed: DOMException | null = null;
   let nextId = 0;
   const mailbox = createSharedMailbox();
+  const wakeMailbox = mailbox.wake;
   const outbox = createSharedMailbox();
   let mailboxPublication: SharedPublication | undefined;
   let routesReady = false;
@@ -36,19 +37,14 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   let batch: SharedRouteCommand[] | null = null;
   const terminals = new Map<string, SharedRouteCommand>();
   const retiredTargets = new Set<string>();
+  let retryCredit: (() => void) | null = null;
   function flushTerminals() {
     if (!terminals.size || closed) return;
-    let flushed = false;
     for (const [key, command] of terminals) {
       const reservation = reserveBatch([command]);
       if (!reservation) break;
-      reservation.commit(); terminals.delete(key); flushed = true;
+      reservation.commit(); terminals.delete(key);
     }
-    if (flushed) notifyRoutes();
-  }
-  function notifyRoutes() {
-    try { port.postMessage({ kind: "route-ready" }); }
-    catch { close(sharedError("Shared route notification failed")); }
   }
   function announceReservation() {
     try { port.postMessage({ kind: "route-ready" }); }
@@ -57,7 +53,10 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   function reserveBatch(commands: readonly SharedRouteCommand[]) {
     active();
     ensureRoutes();
-    return outbox.reserve(new TextEncoder().encode(JSON.stringify(commands)));
+    const bytes = new TextEncoder().encode(JSON.stringify(commands));
+    const receiptBytes = JSON.stringify({ receipt: "00000000-0000-0000-0000-000000000000" }).length;
+    if (commands.some(command => command.kind === "port-data") && bytes.length + receiptBytes > outbox.maxFrameBytes) return null;
+    return outbox.reserve(bytes);
   }
   function sendRoute(command: unknown) {
     const parsed = sharedRouteCommand(command);
@@ -79,9 +78,9 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     }
     try { announceReservation(); }
     catch (error) { reservation.abort(); throw error; }
-    reservation.commit(); notifyRoutes(); return true;
+    reservation.commit(); return true;
   }
-  function transaction(deliver: () => void, commit: () => void) {
+  function tryTransaction(deliver: () => void, commit: () => void) {
     active();
     if (!routesEnabled || batch) throw sharedError("Shared route transaction is unavailable");
     batch = [];
@@ -90,21 +89,23 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
       deliver();
       if (batch.length) {
         flushTerminals();
-        if (terminals.size) throw sharedError("Shared route mailbox is full");
+        if (terminals.size) return false;
         reservation = reserveBatch(batch);
-        if (!reservation) throw sharedError("Shared route mailbox is full");
+        if (!reservation) return false;
         announceReservation();
       }
       commit();
       reservation?.commit();
     } catch (error) { reservation?.abort(); throw error; }
     finally { batch = null; }
-    if (reservation) notifyRoutes();
+    return true;
+  }
+  function transaction(deliver: () => void, commit: () => void) {
+    if (!tryTransaction(deliver, commit)) throw sharedError("Shared route mailbox is full");
   }
   function credit() {
     if (closed || !routesEnabled) return;
-    try { port.postMessage({ kind: "route-credit" }); }
-    catch { close(sharedError("Shared route credit failed")); }
+    wakeMailbox();
   }
   function active() { if (closed) throw closed; }
   function present(reference: SharedReference) {
@@ -131,7 +132,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   }
   function receive(value: unknown) {
     const response = sharedResponse(value);
-    if (response.kind === "route-drained") { flushTerminals(); return; }
+    if (response.kind === "route-drained") { flushTerminals(); retryCredit?.(); return; }
     if (response.kind === "route-retired") {
       if (retiredTargets.size >= sharedObjectLimit) throw sharedError("Shared retired route limit exceeded");
       retiredTargets.add(response.id); return;
@@ -163,7 +164,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   function close(reason = sharedError("Shared-object service is closed")) {
     if (closed) return;
     closed = reason;
-    terminals.clear();
+    terminals.clear(); retryCredit = null;
     retiredTargets.clear();
     for (const publication of Array.from(publications)) publication.abort();
     mailboxPublication?.abort();
@@ -258,7 +259,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   port.addEventListener("message", onMessage);
   port.addEventListener("messageerror", onError);
   port.start();
-  return { mailbox, routes: { owner, get enabled() { return routesEnabled; }, enable() { active(); routesEnabled = true; }, send: sendRoute, transaction, credit }, begin, read, wait, close,
+  return { mailbox, routes: { owner, get enabled() { return routesEnabled; }, enable() { active(); routesEnabled = true; }, send: sendRoute, transaction, tryTransaction, onCredit(ready) { retryCredit = ready; }, credit }, begin, read, wait, close,
     inspectRoutes: () => ({ outbound: outbox.inspect().queued, terminals: terminals.size, enabled: routesEnabled }),
     inspect: () => ({ buffers: buffers.size, pending: pending.size, staged: publications.size, closed: closed !== null }) };
 }

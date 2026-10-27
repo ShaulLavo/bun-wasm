@@ -1,18 +1,25 @@
 import { messageData, sharedError, sharedObjectLimit, sharedRequest, sharedRouteBatch } from "./protocol.ts";
-import { createSharedMailbox } from "./mailbox.ts";
+import { createSharedMailbox, requireSharedMailboxWake } from "./mailbox.ts";
 import type { SharedAttachment, SharedPort, SharedReference, SharedRequest, SharedResponse, SharedRouteCommand } from "./protocol.ts";
 
-interface Client { readonly id: string; port: SharedPort | null; mailbox: ReturnType<typeof createSharedMailbox> | null; outbox: ReturnType<typeof createSharedMailbox> | null; readonly held: Set<string>; readonly retired: Set<string>; readonly waiting: Map<string, SharedReference>; detach: () => void; }
+interface Source { owner: string | null; peer: string | null; sent: number; version: number; }
+interface Client { readonly id: string; port: SharedPort | null; mailbox: ReturnType<typeof createSharedMailbox> | null; outbox: ReturnType<typeof createSharedMailbox> | null; readonly held: Set<string>; readonly retired: Set<string>; readonly waiting: Map<string, SharedReference>; detach: () => void; readonly watches: (() => void)[]; readonly sources: Map<number, Map<string, Source>>; }
+type RoutePacket = Extract<SharedRouteCommand, { kind: "port-data" | "port-close" }>;
 interface Entry { readonly attachment: SharedAttachment; readonly publisher: string; readonly transaction: string; readonly holders: Set<string>; mailbox: boolean; revoked: boolean; }
 export function createSharedObjectBroker() {
+  requireSharedMailboxWake();
   const clients = new Map<string, Client>();
   const entries = new Map<string, Entry>();
   let disposed = false;
-  interface Endpoint { owner: string | null; origin: string; version: number; peer: string | null; sent: number; terminal?: Extract<SharedRouteCommand, { kind: "port-close" }>; }
+  interface Endpoint { owner: string | null; origin: string; expected: string | null; version: number; peer: string | null; sent: number; terminal?: Extract<SharedRouteCommand, { kind: "port-close" }>; }
   const routeOwners = new Map<string, Endpoint>();
   const registrations = new Map<string, { origin: string; command: Extract<SharedRouteCommand, { kind: "bind" | "moving" }> }>();
   const pendingRoutes: { origin: string; target: string; command: SharedRouteCommand }[] = [];
+  const deferredBatches: { origin: string; commands: SharedRouteCommand[]; sources: Map<string, Source> }[] = [];
+  const deliveries = new Map<string, { holder: string; origin: string; command: RoutePacket; returned: boolean }>();
+  const deliveryLimit = sharedObjectLimit * 8;
   const pendingRouteLimit = sharedObjectLimit;
+  function pendingSize() { return pendingRoutes.length + deferredBatches.length; }
   let draining = false;
   function send(client: Client, packet: SharedResponse) {
     if (!client.port) { closeClient(client); return; }
@@ -81,7 +88,7 @@ export function createSharedObjectBroker() {
     if (reference) unavailable(client, reference, "Shared publication was released");
   }
   function retainPending(origin: string, target: string, command: SharedRouteCommand) {
-    if (pendingRoutes.length >= pendingRouteLimit) throw sharedError("Shared route queue limit exceeded");
+    if (pendingSize() >= pendingRouteLimit) throw sharedError("Shared route queue limit exceeded");
     pendingRoutes.push({ origin, target, command });
   }
   function purgePending(target: string, origin?: string) {
@@ -96,17 +103,72 @@ export function createSharedObjectBroker() {
     const owner = routeOwners.get(target)?.owner;
     return owner ? clients.get(owner)?.mailbox : undefined;
   }
+  function holderCount(holder: string) {
+    let count = 0;
+    for (const delivery of deliveries.values()) if (delivery.holder === holder) count++;
+    return count;
+  }
+  function admit(origin: string, command: RoutePacket, replacing?: string) {
+    const holder = routeOwners.get(command.id)?.owner;
+    const mailbox = holder ? clients.get(holder)?.mailbox : undefined;
+    if (!holder || !mailbox || deliveries.size >= deliveryLimit && !replacing || holderCount(holder) >= mailbox.capacity) return false;
+    const snapshots = command.kind === "port-data" ? deliveryPorts(command.graph) : [];
+    const receipt = crypto.randomUUID();
+    const bytes = encoder.encode(JSON.stringify({ ...command, receipt }));
+    const reservation = mailbox.reserve(bytes);
+    if (!reservation) return false;
+    if (replacing) deliveries.delete(replacing);
+    deliveries.set(receipt, { holder, origin, command, returned: false });
+    for (const snapshot of snapshots) claimDeliveryPort(snapshot, origin, holder);
+    reservation.commit();
+    return true;
+  }
+  function deliveryPorts(graph: unknown) {
+    if (!graph || typeof graph !== "object" || !("nodes" in graph) || !Array.isArray(graph.nodes)) throw sharedError("Invalid delivered graph");
+    const ports: { id: string; version: number }[] = [];
+    for (const node of graph.nodes) {
+      if (!Array.isArray(node) || node[0] !== "port") continue;
+      ports.push(deliveryPort(node[1]));
+    }
+    return ports;
+  }
+  function deliveryPort(value: unknown) {
+    if (!value || typeof value !== "object" || !("id" in value) || typeof value.id !== "string"
+      || !("version" in value) || typeof value.version !== "number" || !Number.isSafeInteger(value.version)) throw sharedError("Invalid delivered port");
+    return { id: value.id, version: value.version };
+  }
+  function claimDeliveryPort(value: { id: string; version: number }, origin: string, holder: string) {
+    const endpoint = routeOwners.get(value.id);
+    if (endpoint && !endpoint.owner && endpoint.version === value.version && (endpoint.origin === origin || endpoint.expected === origin)) endpoint.expected = holder;
+  }
+  function settleReceipt(origin: string, command: Extract<SharedRouteCommand, { kind: "received" | "returned" }>) {
+    const delivery = deliveries.get(command.receipt);
+    if (!delivery) return;
+    if (delivery.holder !== origin) throw sharedError("Mailbox receipt belongs to another owner");
+    if (command.kind === "received") deliveries.delete(command.receipt);
+    else delivery.returned = true;
+  }
+  function rerouteDeliveries() {
+    for (const [receipt, delivery] of deliveries) {
+      const endpoint = routeOwners.get(delivery.command.id);
+      if (!endpoint) { deliveries.delete(receipt); continue; }
+      if (!delivery.returned && endpoint.owner === delivery.holder) continue;
+      if (endpoint.owner === delivery.holder || !endpoint.owner) continue;
+      admit(delivery.origin, delivery.command, receipt);
+    }
+  }
   function flush(target: string) {
     const mailbox = deliverable(target);
     if (!mailbox) return;
     for (let index = 0; index < pendingRoutes.length;) {
       const item = pendingRoutes[index];
       if (!item || item.target !== target) { index++; continue; }
-      if (!mailbox.write(encoder.encode(JSON.stringify(item.command)))) return;
+      if (item.command.kind !== "port-data" && item.command.kind !== "port-close") throw sharedError("Invalid pending delivery");
+      if (!admit(item.origin, item.command)) return;
       pendingRoutes.splice(index, 1);
     }
     const endpoint = routeOwners.get(target);
-    if (endpoint?.terminal && mailbox.write(encoder.encode(JSON.stringify(endpoint.terminal)))) delete endpoint.terminal;
+    if (endpoint?.terminal && admit("", endpoint.terminal)) delete endpoint.terminal;
   }
   function retire(id: string, endpoint: Endpoint) {
     routeOwners.delete(id); purgePending(id);
@@ -134,7 +196,7 @@ export function createSharedObjectBroker() {
     if (!previous && !snapshot.id.startsWith(`${origin}:`)) throw sharedError("Route endpoint has no owner");
     if (previous?.owner && previous.owner !== origin) throw sharedError("Route endpoint belongs to another owner");
     if (!previous && routeOwners.size >= sharedObjectLimit) throw sharedError("Shared route endpoint limit exceeded");
-    routeOwners.set(snapshot.id, { owner: command.kind === "bind" ? origin : null, origin,
+    routeOwners.set(snapshot.id, { owner: command.kind === "bind" ? origin : null, origin, expected: command.kind === "bind" ? origin : null,
       version: snapshot.version, peer: snapshot.peer, sent: Math.max(snapshot.sent, previous?.sent ?? 0), terminal: previous?.terminal });
     const registration = registrations.get(snapshot.id);
     if (command.kind === "moving" && registration?.command.snapshot.version === snapshot.version) {
@@ -142,18 +204,22 @@ export function createSharedObjectBroker() {
     }
     if (command.kind === "bind") flush(snapshot.id);
   }
-  function deliver(origin: string, command: SharedRouteCommand) {
+  function deliver(origin: string, command: SharedRouteCommand, sources?: ReadonlyMap<string, Source>) {
+    if (command.kind === "received" || command.kind === "returned") { settleReceipt(origin, command); return; }
     if (command.kind === "bind" || command.kind === "moving") { bindEndpoint(origin, command); return; }
     if (command.kind === "closed") {
       const endpoint = routeOwners.get(command.id);
-      if (endpoint?.owner !== origin) return;
+      if (!endpoint) { cancelDeferredBinding(origin, command.id); return; }
+      if ((endpoint.owner ?? endpoint.expected) !== origin) return;
       retire(command.id, endpoint);
       return;
     }
     if (command.kind !== "port-data" && command.kind !== "port-close") return;
-    const source = routeOwners.get(command.from);
+    const source = sources?.get(command.from) ?? routeOwners.get(command.from);
     if (!source || source.owner !== origin || source.peer !== command.id) throw sharedError("Route sender does not own the source port");
     source.sent = Math.max(source.sent, command.sequence + (command.kind === "port-data" ? 1 : 0));
+    const current = routeOwners.get(command.from);
+    if (current?.owner === source.owner && current.version === source.version) current.sent = Math.max(current.sent, source.sent);
     if (command.kind === "port-close") {
       const endpoint = routeOwners.get(command.id);
       if (endpoint) endpoint.terminal = command;
@@ -161,18 +227,89 @@ export function createSharedObjectBroker() {
     }
     const mailbox = deliverable(command.id);
     if (!mailbox || pendingRoutes.some(item => item.target === command.id)
-      || !mailbox.write(encoder.encode(JSON.stringify(command)))) retainPending(origin, command.id, command);
+      || !admit(origin, command)) retainPending(origin, command.id, command);
+  }
+  function cancelDeferredBinding(origin: string, id: string) {
+    for (const batch of deferredBatches) {
+      if (batch.origin !== origin) continue;
+      batch.commands = batch.commands.filter(command => !((command.kind === "bind" || command.kind === "moving") && command.snapshot.id === id));
+    }
+    if (registrations.get(id)?.origin === origin) registrations.delete(id);
+  }
+  function authorizeSources(origin: string, commands: readonly SharedRouteCommand[]) {
+    const sources = new Map<string, Source>();
+    for (const command of commands) {
+      if (command.kind !== "port-data" && command.kind !== "port-close") continue;
+      sources.set(command.from, authorizeSource(origin, command.from, command.id));
+    }
+    return sources;
+  }
+  function authorizeSource(origin: string, id: string, peer: string): Source {
+    const existing = routeOwners.get(id);
+    if (existing?.owner === origin && existing.peer === peer) return { owner: origin, peer, version: existing.version, sent: existing.sent };
+    for (const batch of deferredBatches) {
+      if (batch.origin !== origin) continue;
+      const bind = batch.commands.find(command => command.kind === "bind" && command.snapshot.id === id && command.snapshot.peer === peer);
+      if (bind?.kind === "bind") return { owner: origin, peer, version: bind.snapshot.version, sent: bind.snapshot.sent };
+    }
+    throw sharedError("Deferred source port has no owner");
+  }
+  function batchReady(commands: readonly SharedRouteCommand[], authorized = false) {
+    return registrationCapacity(commands) && (authorized || !commands.some(command => command.kind === "port-data" && !routeOwners.has(command.from)));
+  }
+  function rememberSources(client: Client, commands: readonly SharedRouteCommand[], cursor: number) {
+    if (client.sources.has(cursor)) return;
+    const sources = new Map<string, Source>();
+    for (const command of commands) {
+      if (command.kind !== "port-data" && command.kind !== "port-close") continue;
+      const source = routeOwners.get(command.from);
+      if (source?.owner === client.id && source.peer === command.id) sources.set(command.from, { owner: client.id, peer: source.peer, version: source.version, sent: source.sent });
+    }
+    if (sources.size) client.sources.set(cursor, sources);
+  }
+  function progressFrame(client: Client, bytes: Uint8Array, cursor: number) {
+    const commands = sharedRouteBatch(JSON.parse(decoder.decode(bytes)));
+    rememberSources(client, commands, cursor);
+    if (commands.some(command => command.kind === "port-close" && !client.sources.get(cursor)?.has(command.from))) return false;
+    const sources = client.sources.get(cursor);
+    const authorized = commands.every(command => command.kind !== "port-data" || sources?.has(command.from));
+    if (!batchReady(commands, authorized) || pendingSize() + requiredPending(commands) > pendingRouteLimit) return false;
+    for (const command of commands) deliver(client.id, command, client.sources.get(cursor));
+    client.sources.delete(cursor); return true;
   }
   function drainOutgoing(client: Client) {
     if (!client.outbox) return 0;
-    const drained = client.outbox.drain(bytes => {
-      const commands = sharedRouteBatch(JSON.parse(decoder.decode(bytes)));
-      if (pendingRoutes.length + requiredPending(commands) > pendingRouteLimit) return false;
-      if (!registrationCapacity(commands)) return false;
-      for (const command of commands) deliver(client.id, command);
-    });
+    let drained = 0;
+    try {
+      drained += client.outbox.sweep((bytes, cursor) => progressFrame(client, bytes, cursor));
+      drained += client.outbox.drain((bytes, cursor) => consumeBatch(client, bytes, cursor));
+    } catch { closeClient(client); }
     if (drained) send(client, { kind: "route-drained" });
     return drained;
+  }
+  function consumeBatch(client: Client, bytes: Uint8Array, cursor: number) {
+    const accepted = acceptBatch(client.id, sharedRouteBatch(JSON.parse(decoder.decode(bytes))), client.sources.get(cursor));
+    if (accepted !== false) client.sources.delete(cursor);
+    return accepted;
+  }
+  function acceptBatch(origin: string, commands: SharedRouteCommand[], sources?: Map<string, Source>) {
+    if (!batchReady(commands)) {
+      if (pendingSize() >= pendingRouteLimit) return false;
+      deferredBatches.push({ origin, commands, sources: sources ?? authorizeSources(origin, commands) }); return;
+    }
+    if (pendingSize() + requiredPending(commands) > pendingRouteLimit) return false;
+    for (const command of commands) deliver(origin, command, sources);
+  }
+  function flushDeferred() {
+    let count = 0;
+    for (let index = 0; index < deferredBatches.length;) {
+      const batch = deferredBatches[index];
+      if (!batch || !batchReady(batch.commands, true) || pendingSize() - 1 + requiredPending(batch.commands) > pendingRouteLimit) { index++; continue; }
+      deferredBatches.splice(index, 1);
+      for (const command of batch.commands) deliver(batch.origin, command, batch.sources);
+      count++;
+    }
+    return count;
   }
   function requiredPending(commands: readonly SharedRouteCommand[]) {
     const available = new Map<ReturnType<typeof createSharedMailbox>, number>();
@@ -190,7 +327,9 @@ export function createSharedObjectBroker() {
   function freeSlots(mailbox: ReturnType<typeof createSharedMailbox>) {
     let terminals = 0;
     for (const [id, endpoint] of routeOwners) if (endpoint.terminal && deliverable(id) === mailbox) terminals++;
-    return Math.max(0, mailbox.capacity - mailbox.inspect().queued - terminals);
+    const client = Array.from(clients.values()).find(client => client.mailbox === mailbox);
+    const held = client ? holderCount(client.id) : mailbox.capacity;
+    return Math.max(0, Math.min(mailbox.capacity - mailbox.inspect().queued, mailbox.capacity - held, deliveryLimit - deliveries.size) - terminals);
   }
   function registrationCapacity(commands: readonly SharedRouteCommand[]) {
     const fresh = new Set<string>();
@@ -206,8 +345,9 @@ export function createSharedObjectBroker() {
     finally { draining = false; }
   }
   function drainClients() {
+    rerouteDeliveries();
+    let drained = flushDeferred();
     for (const id of routeOwners.keys()) flush(id);
-    let drained = 0;
     for (const client of Array.from(clients.values())) drained += drainOutgoing(client);
     return drained > 0;
   }
@@ -224,10 +364,11 @@ export function createSharedObjectBroker() {
         inbound.mailbox = true; outbound.mailbox = true;
         client.mailbox = createSharedMailbox(inbound.attachment.buffer);
         client.outbox = createSharedMailbox(outbound.attachment.buffer);
+        client.watches.push(client.outbox.watch(credit), client.mailbox.watch(credit));
+        credit();
         return;
       }
       case "route-ready": credit(); return;
-      case "route-credit": credit(); return;
       case "cancel": for (const reference of packet.references) client.waiting.delete(reference.id); return;
       case "close": closeClient(client); return;
     }
@@ -235,11 +376,13 @@ export function createSharedObjectBroker() {
   function closeClient(client: Client) {
     if (!clients.delete(client.id)) return;
     try { client.port?.postMessage({ kind: "closed", message: "Shared-object route is closed" }); } catch { /* Stop retaining a failed route. */ }
-    client.detach(); client.port?.close(); client.port = null;
+    client.sources.clear(); client.detach(); for (const stop of client.watches.splice(0)) stop(); client.port?.close(); client.port = null;
     client.mailbox?.close(); client.mailbox = null;
     client.outbox?.close(); client.outbox = null;
-    for (const [id, endpoint] of routeOwners) if ((endpoint.owner ?? endpoint.origin) === client.id) retire(id, endpoint);
+    for (const [id, endpoint] of routeOwners) if ((endpoint.owner ?? endpoint.expected ?? endpoint.origin) === client.id) retire(id, endpoint);
     purgePending(client.id, client.id);
+    for (let index = deferredBatches.length - 1; index >= 0; index--) if (deferredBatches[index]?.origin === client.id) deferredBatches.splice(index, 1);
+    for (const [receipt, delivery] of deliveries) if (delivery.origin === client.id || delivery.holder === client.id && !routeOwners.has(delivery.command.id)) deliveries.delete(receipt);
     for (const [id, registration] of registrations) if (registration.origin === client.id || id.startsWith(`${client.id}:`)) registrations.delete(id);
     for (const id of Array.from(client.held)) release(client, id);
     client.waiting.clear();
@@ -255,7 +398,7 @@ export function createSharedObjectBroker() {
     if (disposed) throw sharedError("Shared-object broker is disposed");
     if (clients.size >= sharedObjectLimit) throw sharedError("Shared client limit exceeded");
     const id = crypto.randomUUID();
-    const client: Client = { id, port: null, mailbox: null, outbox: null, held: new Set(), retired: new Set(), waiting: new Map(), detach() {} };
+    const client: Client = { id, port: null, mailbox: null, outbox: null, held: new Set(), retired: new Set(), waiting: new Map(), watches: [], sources: new Map(), detach() {} };
     clients.set(id, client);
     function attach(port: SharedPort) {
       if (!clients.has(id) || client.port) { port.close(); throw sharedError("Shared-object route is unavailable"); }
@@ -276,5 +419,5 @@ export function createSharedObjectBroker() {
     disposed = true;
     for (const client of Array.from(clients.values())) closeClient(client);
   }
-  return { register, dispose, inspectRoutes: () => ({ endpoints: routeOwners.size, pending: pendingRoutes.length, registrations: registrations.size }), inspect: () => ({ clients: clients.size, objects: Array.from(entries.values()).filter(entry => !entry.mailbox).length, waiting: Array.from(clients.values()).reduce((count, client) => count + client.waiting.size, 0) }) };
+  return { register, dispose, inspectDeliveries: () => ({ receipts: deliveries.size, deferred: deferredBatches.length }), inspectRoutes: () => ({ endpoints: routeOwners.size, pending: pendingRoutes.length, registrations: registrations.size }), inspect: () => ({ clients: clients.size, objects: Array.from(entries.values()).filter(entry => !entry.mailbox).length, waiting: Array.from(clients.values()).reduce((count, client) => count + client.waiting.size, 0) }) };
 }
