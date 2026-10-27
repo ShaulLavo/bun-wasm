@@ -63,6 +63,7 @@ pub const NODE_BUILTINS: &[&str] = &[
     "readline/promises",
     "repl",
     "stream",
+    "stream/consumers",
     "stream/promises",
     "stream/web",
     "string_decoder",
