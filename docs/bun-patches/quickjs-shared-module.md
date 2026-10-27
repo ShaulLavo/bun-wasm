@@ -121,6 +121,7 @@ the linked QuickJS records above. No second monolithic QuickJS path remains.
 | `scripts/build-bun-core.sh`, `scripts/quickjs-core-exports.txt` | Port | Original VM-free production-core producer and explicit libc/GOT export list. |
 | `scripts/build-engine-quickjs.sh` | Port | Original PIC Rust/C shared-library build with no engine libc or heap-growth owner. |
 | `tests/linker/quickjs/**` | Port | Original raw linked-VM fixtures, section-preserving initializer conversion, and real core-libc checks. Data/ops source stays owned by its existing modules and is included by path. |
+| `crates/bunwasm-host/src/linked.rs`, `crates/bunwasm-host/src/linked_relay.rs` | Port | Original native paired-loader adapters following Waffle `98225a017ff379d746b3ec3178524d2b9ac0d6cd`, `link/group.ts`, `link/plan.ts`, and `link/relay.ts`. Wasm encoding uses wasm-encoder instead of copied TypeScript byte encoders. |
 
 [Ledger scope and pinned revisions](scope.md).
 

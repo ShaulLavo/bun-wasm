@@ -300,22 +300,42 @@ impl Program {
             let value = match (import.module(), name) {
                 ("env", "__memory_base") => address_global(store, memory, Mutability::Const)?,
                 ("env", "__table_base") => address_global(store, table, Mutability::Const)?,
-                ("env", name) => match (core.get_export(&mut *store, name), own) {
-                    (Some(export), _) => export,
-                    (None, Some(slot)) => slots.relay(store, slot)?,
-                    (None, None) => bail!("missing core export {name}"),
-                },
+                ("env", name) => env_export(core, store, name, own, slots)?,
                 ("GOT.mem", name) => got_address(core, store, name)?,
-                ("GOT.func", name) => match own {
-                    Some(slot) => address_global(store, slots.address(slot), Mutability::Var)?,
-                    None => got_function(core, store, name)?,
-                },
+                ("GOT.func", name) => function_cell(core, store, name, own, slots)?,
                 ("wasi_snapshot_preview1", _) => continue,
                 (namespace, _) => bail!("unsupported side import {namespace}.{name}"),
             };
             linker.define(&*store, import.module(), name, value)?;
         }
         Ok(())
+    }
+}
+
+fn env_export(
+    core: Instance,
+    store: &mut Store<Host>,
+    name: &str,
+    own: Option<u32>,
+    slots: &SelfSlots,
+) -> Result<Extern> {
+    match (core.get_export(&mut *store, name), own) {
+        (Some(export), _) => Ok(export),
+        (None, Some(slot)) => slots.relay(store, slot),
+        (None, None) => bail!("missing core export {name}"),
+    }
+}
+
+fn function_cell(
+    core: Instance,
+    store: &mut Store<Host>,
+    name: &str,
+    own: Option<u32>,
+    slots: &SelfSlots,
+) -> Result<Extern> {
+    match own {
+        Some(slot) => address_global(store, slots.address(slot), Mutability::Var),
+        None => got_function(core, store, name),
     }
 }
 

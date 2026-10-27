@@ -44,13 +44,12 @@ impl SelfPlan {
         let mut by_index = HashMap::new();
         for import in side.imports() {
             let (module, name) = (import.module(), import.name());
+            if module == "GOT.func" && core_function_export(core, name)? {
+                continue;
+            }
             let expected = match (module, import.ty()) {
                 ("env", ExternType::Func(ty)) if core.get_export(name).is_none() => Some(ty),
-                ("GOT.func", _) => match core.get_export(name) {
-                    Some(ExternType::Func(_)) => continue,
-                    Some(_) => bail!("core export GOT.func.{name} must be a function"),
-                    None => None,
-                },
+                ("GOT.func", _) => None,
                 _ => continue,
             };
             let Some(ExternType::Func(ty)) = side.get_export(name) else {
@@ -147,31 +146,53 @@ impl SelfSlots {
     }
 }
 
+fn core_function_export(core: &Module, name: &str) -> Result<bool> {
+    match core.get_export(name) {
+        Some(ExternType::Func(_)) => Ok(true),
+        Some(_) => bail!("core export GOT.func.{name} must be a function"),
+        None => Ok(false),
+    }
+}
+
 /// Exported function names mapped to their function index, for definitions only.
 fn defined_functions(bytes: &[u8]) -> Result<HashMap<String, u32>> {
     let mut imported = 0;
     let mut defined = HashMap::new();
     for payload in Parser::new(0).parse_all(bytes) {
         match payload? {
-            Payload::ImportSection(section) => {
-                for import in section {
-                    if matches!(import?.ty, TypeRef::Func(_)) {
-                        imported += 1;
-                    }
-                }
-            }
+            Payload::ImportSection(section) => imported = count_function_imports(section)?,
             Payload::ExportSection(section) => {
-                for export in section {
-                    let export = export?;
-                    if export.kind == ExternalKind::Func && export.index >= imported {
-                        defined.insert(export.name.to_owned(), export.index);
-                    }
-                }
+                collect_definitions(section, imported, &mut defined)?
             }
             _ => {}
         }
     }
     Ok(defined)
+}
+
+fn count_function_imports(section: wasmparser::ImportSectionReader<'_>) -> Result<u32> {
+    let mut count = 0;
+    for import in section {
+        if matches!(import?.ty, TypeRef::Func(_)) {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn collect_definitions(
+    section: wasmparser::ExportSectionReader<'_>,
+    imported: u32,
+    defined: &mut HashMap<String, u32>,
+) -> Result<()> {
+    for export in section {
+        let export = export?;
+        if export.kind != ExternalKind::Func || export.index < imported {
+            continue;
+        }
+        defined.insert(export.name.to_owned(), export.index);
+    }
+    Ok(())
 }
 
 /// Function `f{i}` forwards its parameters to `env.table[env.base + i]` with type `i`.
