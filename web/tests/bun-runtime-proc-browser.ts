@@ -37,8 +37,8 @@ const sourceCacheBytes = await Bun.file(sourceCacheFixture).bytes();
 const fixtureReceipt = { path: sourceCacheFixture, sha256: new Bun.CryptoHasher("sha256").update(sourceCacheBytes).digest("hex") };
 const artifactReceipt = { engine, path: artifact, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), procImports };
 if (publishedDefault) {
-  assert.equal(BUN_WASM_ASSET!.bytes, artifactReceipt.bytes, "published descriptor matches exact-merge build size");
-  assert.equal(BUN_WASM_ASSET!.sha256, artifactReceipt.sha256, "published descriptor matches exact-merge build hash");
+  assert.equal(BUN_WASM_ASSET!.core.bytes, artifactReceipt.bytes, "published descriptor matches exact-merge build size");
+  assert.equal(BUN_WASM_ASSET!.core.sha256, artifactReceipt.sha256, "published descriptor matches exact-merge build hash");
 }
 if (process.argv.includes("--check-artifact")) {
   console.log(JSON.stringify({ ready: true, artifact: artifactReceipt, acceptance: "pending browser execution" }));
@@ -97,7 +97,7 @@ async function runScenario(browser: Browser, name: string, scenario: string) {
   const consoleMessages: { type: string; text: string }[] = [];
   const guestRequests: string[] = [];
   page.on("request", request => {
-    if (request.url() === BUN_WASM_ASSET?.url || new URL(request.url()).pathname === "/bun-guest.wasm") guestRequests.push(request.url());
+    if (request.url() === BUN_WASM_ASSET?.core.url || new URL(request.url()).pathname === "/bun-guest.wasm") guestRequests.push(request.url());
   });
   page.on("pageerror", error => pageErrors.push(error.message));
   page.on("console", message => {
@@ -111,7 +111,7 @@ async function runScenario(browser: Browser, name: string, scenario: string) {
     console.log(JSON.stringify({ browser: name, version: browser.version(), scenario, artifact: artifactReceipt, fixture: scenario === "source-cache" ? fixtureReceipt : undefined, publishedDefault, guestRequests, result, pageErrors, consoleErrors, consoleMessages }));
     if (publishedDefault) {
       // The generic byte fixture and throwing module provider never enter a Bun guest.
-      const expectedRequests = scenario === "generic-control" || scenario === "start-failed" ? [] : [BUN_WASM_ASSET!.url];
+      const expectedRequests = scenario === "generic-control" || scenario === "start-failed" ? [] : [BUN_WASM_ASSET!.core.url];
       assert.deepEqual(guestRequests, expectedRequests, "public default loads only for guest entry, exactly once without a local artifact fallback");
     }
     assert.equal(result.ok, true, JSON.stringify(result));
@@ -142,7 +142,7 @@ try {
   scratch = await (scratchCreation = mkdtemp(join(base, "bw-proc-")));
   process.env.TMPDIR = scratch;
   console.log(JSON.stringify({ resources: { existing: { artifact: artifactReceipt, installedPackages: "read only", browserCaches: "read only" },
-    created: { scratch, listener: `127.0.0.1:${requestedPort}`, browsers: names, downloads: publishedDefault ? { immutableGuest: BUN_WASM_ASSET!.url, storage: "browser memory only" } : "none" } }, siteSmoke: site ? { build: site } : "pending: provide BUN_WASM_RUNTIME_PROC_SITE_DIR for production site/sandbox smoke" }));
+    created: { scratch, listener: `127.0.0.1:${requestedPort}`, browsers: names, downloads: publishedDefault ? { immutableGuest: BUN_WASM_ASSET!.core.url, storage: "browser memory only" } : "none" } }, siteSmoke: site ? { build: site } : "pending: provide BUN_WASM_RUNTIME_PROC_SITE_DIR for production site/sandbox smoke" }));
   const out = join(scratch, "dist");
   await processBundle("bun-runtime-proc", out);
   server = Bun.serve({ hostname: "127.0.0.1", port: requestedPort, reusePort: false, async fetch(request) {
