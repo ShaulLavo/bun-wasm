@@ -40,7 +40,8 @@ async function run(directory: string, args: string[], code = 0, path?: string) {
   const executable = native ? process.execPath : engine === "browser" ? Bun.which("node") : process.env.BUN_WASM_LAUNCHER;
   assert.ok(executable, "Set BUN_WASM_LAUNCHER for embedded engines");
   const guest = ["--wasm", wasm, "--dir", `${directory}::/`, "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache"].concat(path === undefined ? [] : ["--env", `PATH=${path}`], ["--"], args);
-  const argv = native ? args : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(guest) : guest;
+  // Package scripts run in bash-web's shell guest (scripts/build-bash-web-shell.sh).
+  const argv = native ? args : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(guest) : ["--shell", resolve(root, "dist/bash-web-shell.wasm")].concat(guest);
   const env: NodeJS.ProcessEnv = { ...process.env, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(directory, "cache") };
   delete env.PATH;
   if (path !== undefined) env.PATH = path;
@@ -146,9 +147,10 @@ async function validVersion() {
 
 async function scriptPathCase(directory: string, entry: string, path: string | undefined) {
   if (entry === "probe" && (path === "" || path === "/restricted") && process.env.INSTALL_NATIVE_BUN !== "1") {
-    const result = await run(directory, ["run", entry], 1, path);
+    // The system shell finds no bun on this PATH, as with native Bun's system shell.
+    const result = await run(directory, ["run", entry], 127, path);
     assert.equal(result.stdout, "", "a missing runtime must not reach the PATH probe");
-    assert.match(result.stderr, /spawn bun ENOENT/);
+    assert.match(result.stderr, /bun: command not found/);
     return;
   }
   const result = await run(directory, ["run", entry], 0, path);
