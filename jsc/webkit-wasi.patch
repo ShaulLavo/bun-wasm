@@ -520,7 +520,7 @@ diff --git a/Source/JavaScriptCore/heap/Heap.cpp b/Source/JavaScriptCore/heap/He
 +        || m_collector->m_currentPhase != CollectorPhase::NotRunning
 +        || m_collector->m_nextPhase != CollectorPhase::NotRunning;
 +    if (inlineCycle) {
-+        if (UNLIKELY(synchronousness != Async)) {
++        if (synchronousness != Async) [[unlikely]] {
 +            dataLogLn("WASI_SINGLE_AGENT_GC_SYNC_REENTRY");
 +            RELEASE_ASSERT_NOT_REACHED();
 +        }
@@ -549,12 +549,12 @@ diff --git a/Source/JavaScriptCore/heap/Heap.cpp b/Source/JavaScriptCore/heap/He
 @@ -2106,2 +2130,13 @@
  {
 +#if OS(WASI)
-+    if (UNLIKELY(m_collector->hasOutstandingRequest())) {
++    if (m_collector->hasOutstandingRequest()) [[unlikely]] {
 +        dataLogLn("WASI_SINGLE_AGENT_GC_RELEASE_PENDING");
 +        RELEASE_ASSERT_NOT_REACHED();
 +    }
-+    if (UNLIKELY(m_collector->m_currentPhase != CollectorPhase::NotRunning
-+        || m_collector->m_nextPhase != CollectorPhase::NotRunning)) {
++    if (m_collector->m_currentPhase != CollectorPhase::NotRunning
++        || m_collector->m_nextPhase != CollectorPhase::NotRunning) [[unlikely]] {
 +        dataLogLn("WASI_SINGLE_AGENT_GC_RELEASE_TRANSITION");
 +        RELEASE_ASSERT_NOT_REACHED();
 +    }
