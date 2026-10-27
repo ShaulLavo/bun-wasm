@@ -26,7 +26,19 @@
     return waiter;
   }
 
+  function removeWaiter(waiter) {
+    waiters.delete(waiter);
+  }
+
+  function cancelIoWaiters() {
+    for (const waiter of Array.from(waiters)) {
+      if (waiter.cancel) waiter.cancel();
+    }
+  }
+
   internal.addIoWaiter = addWaiter;
+  internal.removeIoWaiter = removeWaiter;
+  internal.cancelIoWaiters = cancelIoWaiters;
 
   internal.ioPending = function ioPending() {
     let n = 0;
@@ -86,6 +98,8 @@
     const err = new Ctor(info.message);
     if (info.code) err.code = info.code;
     if (info.syscall) err.syscall = info.syscall;
+    if (info.errno !== undefined) err.errno = info.errno;
+    if (info.hostname) err.hostname = info.hostname;
     if (info.name && info.name !== "TypeError" && info.name !== "Error") err.name = info.name;
     return err;
   }
@@ -1707,5 +1721,8 @@
   function bunTcp() { return internal.require("bun_tcp")({ Connection, listenOrThrow, acceptLoop, waiters }); }
 
   const WebSocket = internal.require("websocket").clientClass(Connection);
-  return { fetch, serve, nodeHttp, nodeNet, bunTcp, caps, WebSocket };
+  return {
+    fetch, serve, nodeHttp, nodeNet, bunTcp, caps, WebSocket,
+    addWaiter, removeWaiter, cancelIoWaiters, hostError,
+  };
 })

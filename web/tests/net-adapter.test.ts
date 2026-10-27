@@ -177,6 +177,9 @@ test("Bun browser-native names and capability flags remain in the adapter", () =
   expect(Object.keys(net.caps).some(name => name.startsWith("proc_") || name.startsWith("child_") || name === "spawn")).toBe(false);
   expect(net.caps.fetch).toBe(true);
   expect(net.caps.connect).toBe(true);
+  expect(net.caps.lookup_start).toBe(false);
+  expect(net.caps.lookup_head).toBe(false);
+  expect(net.natives.hostLookup).toBeUndefined();
   expect(typeof net.onNews).toBe("function");
 });
 

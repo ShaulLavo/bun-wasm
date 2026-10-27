@@ -177,13 +177,13 @@ test("React Router selects Bun SSR external exports for its readable server entr
   expect(fixture.files["app/entry.server.tsx"]).not.toContain("renderToPipeableStream");
 });
 
-test("SolidStart and TanStack use their verified integrated Nitro node-server targets", () => {
+test("SolidStart and TanStack use explicit Nitro production targets", () => {
   const solid = app("fullstack-solidstart");
   expect(solid.files["app.config.ts"]).toContain("ssr: true");
   expect(command(solid, "start").args).toContain("node-server");
   const tanstack = app("fullstack-tanstack-start");
   expect(tanstack.dependencies["@tanstack/react-start"]).toBe("1.131.2");
-  expect(tanstack.files["vite.config.ts"]).toContain("target: 'node-server'");
+  expect(tanstack.files["vite.config.ts"]).toContain("target: 'bun'");
   expect(tanstack.files["src/router.tsx"]).toContain("export function createRouter()");
 });
 

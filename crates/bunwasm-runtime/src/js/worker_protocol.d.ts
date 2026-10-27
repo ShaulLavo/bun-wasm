@@ -75,6 +75,8 @@ declare namespace BunWasm {
     hostRead(handle: number, capacity?: number): Uint8Array | number;
     hostWrite(handle: number, bytes: Uint8Array): number;
     hostClose(handle: number): number;
+    hostLookupStart?(hostname: string, family: 0 | 4 | 6, hints: number): number;
+    hostLookupHead?(handle: number): string | number;
     hostError(handle: number): string;
     cwd(): string;
     /** Node-style stat record; throws a system error (code ENOENT, ...). */
@@ -112,7 +114,14 @@ declare namespace BunWasm {
     ref: boolean;
     step(): boolean | "progress";
     fail(error: unknown): void;
+    cancel?(): void;
     subscriptions?(): Uint8Array;
+  }
+  interface NetWaiterModule {
+    addWaiter<W extends IoWaiter>(waiter: W): W;
+    removeWaiter(waiter: IoWaiter): void;
+    cancelIoWaiters(): void;
+    hostError(handle: number, fallback: string): Error;
   }
   interface WorkerChannel {
     send(frame: unknown): void;
@@ -129,7 +138,9 @@ declare namespace BunWasm {
     require(name: "worker_codec"): { create(hooks: WorkerCodecHooks): WorkerCodec };
     require(name: "worker_channel"): { open(input: number, output: number): WorkerChannel };
     require(name: "worker_threads"): { isMainThread: boolean; initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
-    require(name: "net"): unknown;
+    require(name: "net"): NetWaiterModule;
+    removeIoWaiter(waiter: IoWaiter): void;
+    cancelIoWaiters(): void;
     require(name: "node_url"): { fileURLToPath(url: URL): string };
     addIoWaiter<W extends IoWaiter>(waiter: W): W;
     workerPump?: () => boolean;

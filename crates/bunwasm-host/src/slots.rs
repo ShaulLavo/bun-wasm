@@ -11,10 +11,10 @@ use anyhow::{Context, Result, bail};
 use wasmtime::{Caller, Func, Instance, Linker, Store, Val};
 
 use crate::Host;
-use crate::net::Output;
+use crate::net::{ErrorInfo, Output};
 
-const ABI_VERSION: u32 = 1;
-const SLOT_NAMES: [&str; 14] = [
+const ABI_VERSION: u32 = 2;
+const SLOT_NAMES: [&str; 16] = [
     "poll",
     "fetch",
     "fetch_head",
@@ -29,6 +29,8 @@ const SLOT_NAMES: [&str; 14] = [
     "peer_addr",
     "shutdown",
     "local_addr",
+    "lookup_start",
+    "lookup_head",
 ];
 
 /// Fills the networking slot table. Generic guests without the export run
@@ -297,6 +299,59 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
             |mut caller: Caller<'_, Host>, id: i32, buf: i32, cap: i32| {
                 with_memory(&mut caller, |memory, host| {
                     put(memory, buf, cap, host.net.local_addr(id))
+                })
+            },
+        ),
+        Func::wrap(
+            &mut *store,
+            |mut caller: Caller<'_, Host>,
+             host_ptr: i32,
+             host_len: i32,
+             family: i32,
+             hints: i32| {
+                with_memory(&mut caller, |memory, host| {
+                    let hostname = match std::str::from_utf8(
+                        &memory[range(memory, host_ptr, host_len)?],
+                    ) {
+                        Ok(hostname) => hostname,
+                        Err(_) => {
+                            let error = ErrorInfo::new(
+                                "TypeError",
+                                "hostname is not valid UTF-8",
+                                Some("EINVAL"),
+                            )
+                            .with_syscall("getaddrinfo");
+                            let handle = host.net.fail(error);
+                            trace(
+                                host,
+                                format_args!(
+                                    "lookup_start(<invalid utf-8>, {family}, {hints}) -> {handle}"
+                                ),
+                            );
+                            return Ok(handle);
+                        }
+                    };
+                    let handle = host.net.lookup(hostname, family, hints);
+                    trace(
+                        host,
+                        format_args!("lookup_start({hostname:?}, {family}, {hints}) -> {handle}"),
+                    );
+                    Ok(handle)
+                })
+            },
+        ),
+        Func::wrap(
+            &mut *store,
+            |mut caller: Caller<'_, Host>, handle: i32, buf: i32, cap: i32| {
+                with_memory(&mut caller, |memory, host| {
+                    let output = host.net.lookup_head(handle);
+                    if let Output::Bytes(bytes) = &output {
+                        trace(
+                            host,
+                            format_args!("lookup_head({handle}) -> {} bytes", bytes.len()),
+                        );
+                    }
+                    put(memory, buf, cap, output)
                 })
             },
         ),

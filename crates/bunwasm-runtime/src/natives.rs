@@ -1497,6 +1497,14 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     t.add("hostFetchHead", |a| {
         text_or_code(host::fetch_head(a.i32(0)?))
     });
+    t.add("hostLookupStart", |a| {
+        let family = a.i32(1)?;
+        let hints = a.i32(2)?;
+        Ok(host::lookup_start(a.str(0)?, family, hints).into())
+    });
+    t.add("hostLookupHead", |a| {
+        text_or_code(host::lookup_head(a.i32(0)?))
+    });
     t.add("hostError", |a| text_or_code(host::error(a.i32(0)?)));
     t.add("hostShutdown", |a| Ok(host::shutdown(a.i32(0)?).into()));
     t.add("hostLocalAddr", |a| {

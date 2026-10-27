@@ -224,8 +224,14 @@ fn resume_idle<E: Engine>(e: &E, core: &Core<E>, main: &mut Option<E::Value>) ->
     }
     // A top-level await with no remaining work exits quietly.
     core.check_main(e, main);
-    // `beforeExit` listeners may schedule more work.
-    core.call_internal_num(e, "emitBeforeExit").unwrap_or(0.0) != 0.0
+    // `beforeExit` listeners may schedule work through promise jobs or I/O waiters.
+    if core.call_internal_num(e, "emitBeforeExit").unwrap_or(0.0) != 0.0 {
+        return true;
+    }
+    if core.drain_jobs(e) {
+        return true;
+    }
+    core.call_internal_num(e, "ioPending").unwrap_or(0.0) > 0.0
 }
 
 /// Surface a rejected entry module; keep pending ones around.
