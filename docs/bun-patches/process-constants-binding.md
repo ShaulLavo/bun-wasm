@@ -16,6 +16,8 @@ enumerable, configurable data properties containing the existing public builtin
 constants. Assignment, deletion and redefinition persist on the cached object,
 matching native Bun and Node. The builtins load at the binding call, preserving
 lazy process initialization without accessor-only properties or a proxy.
+The shared `ShellFs` declaration retains `constants` alongside the filesystem
+methods used by the shell, so the specialized builtin overload exposes both.
 First-call source controls exercise the actual builtin factories without cycles.
 Existing numeric constant values and native operations remain unchanged.
 Unsupported binding names still throw. Trace constants are not supplied.
