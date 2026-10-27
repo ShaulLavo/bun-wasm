@@ -31056,7 +31056,7 @@ static JSVarRef *js_get_local_export_var_ref1(JSContext *ctx, JSModuleDef *m,
         if (add_resolve_entry(ctx, s, m, mi->import_name) < 0)
             return NULL;
         m1 = m->req_module_entries[mi->req_module_idx].module;
-        if (js_resolve_export1(ctx, &res_m, &res_me, m1, mi->import_name, s) ==
+        if (js_resolve_export(ctx, &res_m, &res_me, m1, mi->import_name) ==
                 JS_RESOLVE_RES_FOUND &&
             res_me->local_name != JS_ATOM__star_)
             return js_get_local_export_var_ref1(ctx, res_m, res_me, s);
