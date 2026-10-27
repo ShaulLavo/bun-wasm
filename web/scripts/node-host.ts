@@ -17,6 +17,7 @@ import { ExecutableFormatError, startFailure } from "waffle/proc";
 import { installCliFetch } from "./node-install-net.mjs";
 import { nodeModule, NodeProcessBroker, validateNodeCwd } from "./node-spawn.ts";
 import { createNodeSignalController } from "./node-signals.ts";
+import { createNodeAsyncContext } from "./async-context.ts";
 import { createNodeProcess, type NodeWasiImports } from "./node-process.ts";
 import { loadNodeProgram, linkNodeProgram, startNodeProgram } from "./node-linked.ts";
 import type { LinkPlanSource, LinkedGroup } from "waffle/link";
@@ -184,6 +185,7 @@ async function run(data: GuestData) {
     const { createNodeNet } = await import("./node-net.mjs");
     const { startEngineHost } = await import("../src/engine-host.js");
     await startEngineHost({ instance, moduleUrls: "data", modules, fetch: nodeFetch,
+      asyncContext: createNodeAsyncContext(),
       net: processHost.engineNet(config.withNet ? createNodeNet({ net, http, https, zlib }) : undefined),
       processWake: processHost.client.wake,
       onExit: finish,

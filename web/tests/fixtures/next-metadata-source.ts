@@ -1,3 +1,26 @@
+/*
+The MIT License (MIT)
+
+Copyright (c) 2025 Vercel, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
 export const nextMetadataSources = {
   "collectMetadata": "async function collectMetadata({ tree, metadataItems, errorMetadataItem, props, route, errorConvention }) {\n    let mod;\n    let modType;\n    const hasErrorConventionComponent = Boolean(errorConvention && tree[2][errorConvention]);\n    if (errorConvention) {\n        mod = await (0, _appdirmodule.getComponentTypeModule)(tree, 'layout');\n        modType = errorConvention;\n    } else {\n        const { mod: layoutOrPageMod, modType: layoutOrPageModType } = await (0, _appdirmodule.getLayoutOrPageModule)(tree);\n        mod = layoutOrPageMod;\n        modType = layoutOrPageModType;\n    }\n    if (modType) {\n        route += `/${modType}`;\n    }\n    const staticFilesMetadata = await resolveStaticMetadata(tree[2], props);\n    const metadataExport = mod ? getDefinedMetadata(mod, props, {\n        route\n    }) : null;\n    metadataItems.push([\n        metadataExport,\n        staticFilesMetadata\n    ]);\n    if (hasErrorConventionComponent && errorConvention) {\n        const errorMod = await (0, _appdirmodule.getComponentTypeModule)(tree, errorConvention);\n        const errorMetadataExport = errorMod ? getDefinedMetadata(errorMod, props, {\n            route\n        }) : null;\n        errorMetadataItem[0] = errorMetadataExport;\n        errorMetadataItem[1] = staticFilesMetadata;\n    }\n}",
   "resolveMetadataItemsImpl": "async function resolveMetadataItemsImpl(metadataItems, tree, /** Provided tree can be nested subtree, this argument says what is the path of such subtree */ treePrefix, parentParams, searchParams, errorConvention, errorMetadataItem, getDynamicParamFromSegment, workStore) {\n    const [segment, parallelRoutes, { page }] = tree;\n    const currentTreePrefix = treePrefix && treePrefix.length ? [\n        ...treePrefix,\n        segment\n    ] : [\n        segment\n    ];\n    const isPage = typeof page !== 'undefined';\n    // Handle dynamic segment params.\n    const segmentParam = getDynamicParamFromSegment(segment);\n    /**\n   * Create object holding the parent params and current params\n   */ let currentParams = parentParams;\n    if (segmentParam && segmentParam.value !== null) {\n        currentParams = {\n            ...parentParams,\n            [segmentParam.param]: segmentParam.value\n        };\n    }\n    const params = (0, _params.createServerParamsForMetadata)(currentParams, workStore);\n    let layerProps;\n    if (isPage) {\n        layerProps = {\n            params,\n            searchParams\n        };\n    } else {\n        layerProps = {\n            params\n        };\n    }\n    await collectMetadata({\n        tree,\n        metadataItems,\n        errorMetadataItem,\n        errorConvention,\n        props: layerProps,\n        route: currentTreePrefix// __PAGE__ shouldn't be shown in a route\n        .filter((s)=>s !== _segment.PAGE_SEGMENT_KEY).join('/')\n    });\n    for(const key in parallelRoutes){\n        const childTree = parallelRoutes[key];\n        await resolveMetadataItemsImpl(metadataItems, childTree, currentTreePrefix, currentParams, searchParams, errorConvention, errorMetadataItem, getDynamicParamFromSegment, workStore);\n    }\n    if (Object.keys(parallelRoutes).length === 0 && errorConvention) {\n        // If there are no parallel routes, place error metadata as the last item.\n        // e.g. layout -> layout -> not-found\n        metadataItems.push(errorMetadataItem);\n    }\n    return metadataItems;\n}",
