@@ -887,7 +887,7 @@ test("ordered producers keep every blocking native command and save JSC before n
   expect(native).toContain('cp "$BUN_CORE_BUILD_DIR/bun-core.wasm" dist/bun.wasm');
   expect(native).toContain('cp "$BUN_CORE_BUILD_DIR/quickjs.wasm" dist/quickjs.wasm');
   expect(native).toContain('trap \'rm -f -- "${guest_inputs:-}"\' EXIT');
-  expect(script).toContain('export JOBS=4 CAGE=');
+  expect(script).toContain('export JOBS=2 CAGE=');
   expect(script).toContain("check_jsc_inputs_stamp");
   expect(script.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
   expect(script).not.toContain("cargo");

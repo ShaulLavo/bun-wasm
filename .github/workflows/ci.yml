@@ -346,8 +346,7 @@ jobs:
         run: |
           run_jsc_prebuild() {
             source env.sh
-            # Only a cold prebuild compiles; use all four runner cores for it.
-            export JOBS=4 CAGE=
+            export JOBS=2 CAGE=
             if [[ "$CI_JSC_PREBUILD_HIT" != 'true' ]]; then
               bash scripts/build-jsc.sh
             fi
