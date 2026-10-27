@@ -2,6 +2,7 @@
 import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { releasedWaffleNativeInputs } from "./waffle-release-inputs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const hash = async (path: string) => new Bun.CryptoHasher("sha256").update(await Bun.file(path).arrayBuffer()).digest("hex");
@@ -122,10 +123,7 @@ if (import.meta.main) {
   const sdk = process.env.WASI_SDK_PATH;
   const output = process.env.BUN_WASM_SYSROOT;
   if (!sdk || !output) throw new Error("Source env.sh before building the guest sysroot");
-  const manifest = await Bun.file(join(root, "package.json")).json();
-  const revision = manifest.devDependencies.waffle.split("#")[1];
-  if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("Waffle must be pinned to an exact merged commit");
-  const waffle = dirname(Bun.resolveSync("waffle/package.json", root));
+  const waffle = await releasedWaffleNativeInputs(root);
   if (process.argv.includes("--inputs")) {
     const inputs = await wasiSysrootInputs({ waffle, sdk });
     console.log(new Bun.CryptoHasher("sha256").update(JSON.stringify(inputs)).digest("hex"));

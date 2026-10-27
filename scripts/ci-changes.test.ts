@@ -21,6 +21,11 @@ test.each([
   expect(needsRust([path])).toBe(true);
 });
 
+test.each(["scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json"])("Waffle native release input %s selects both engine gates", path => {
+  expect(needsRust([path])).toBe(true);
+  expect(needsJsc([path])).toBe(true);
+});
+
 test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
   expect(needsRust([path])).toBe(false);
 });

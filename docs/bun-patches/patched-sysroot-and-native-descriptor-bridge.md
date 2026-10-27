@@ -1,10 +1,17 @@
 ## Patched sysroot and native descriptor bridge
 
 Class **Port**, with an original local build wrapper and native runtime adapter. The libc input is
-not copied into this repository: Waffle 0.0.90 at `c1cb67c300439af24335d0b2ec481bfb52f79a01`
-(the commit `package.json` pins; the wasi-libc revision below is unchanged since 0.0.53 at `f6017d12`)
-builds wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13` from the installed
-`waffle/scripts/build-wasi-libc.sh`. Its `preopen-scan.patch` skips occupied inherited descriptors
+not copied into this repository. The original `scripts/waffle-release-inputs.ts` adapter binds
+runtime archive `waffle-v0.0.90` to reviewed source `3767f358bc5e8e40fc1dc361c5611b60f023c569`.
+The checked `scripts/waffle-release-inputs.json` records its HTTPS archive URL, SHA-256/size,
+source commit, `packages/waffle` directory and the hashes of its package metadata, libc builder
+and patch. The adapter verifies the archive and installed builder, then caches those three
+native source files from that exact commit. It always uses this released-source directory;
+there is no installed-file fallback or old Git-pin branch. The runtime archive remains untouched.
+The build wrapper and guest source manifest use the same cached native directory, preserving
+source provenance and the actual builder/patch hashes even though the runtime archive omits
+its private libc patch. Update the release binding with the dependency pin. The builder pins
+wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13`. Its `preopen-scan.patch` skips occupied inherited descriptors
 only when `fd_fdstat_get` succeeds and stops on the first real BADF. `scripts/build-wasi-sysroot.ts`
 keys reuse on the actual builder and patch content, SDK VERSION, compiler/archive-tool binaries and
 versions, host build tools, effective compiler environment and SDK overlay targets, with an integrity
