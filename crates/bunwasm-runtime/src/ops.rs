@@ -227,10 +227,10 @@ mod registry_tests {
     }
 }
 
-#[cfg(any(test, feature = "engine-jsc", not(feature = "engine-split")))]
+#[cfg(any(test, not(feature = "engine-split")))]
 #[path = "ops/client.rs"]
 mod client;
-#[cfg(any(test, feature = "engine-jsc", not(feature = "engine-split")))]
+#[cfg(any(test, not(feature = "engine-split")))]
 use client::transport_error;
 
 #[cfg(test)]

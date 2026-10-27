@@ -1,5 +1,5 @@
 //! Bun's matcher and filesystem walker, shared by Bun.Glob and node:fs.
-use crate::engine::{NativeError, Val};
+use crate::data::{NativeError, Val};
 use crate::natives::{Table, io_error};
 
 pub fn install(t: &mut Table) {

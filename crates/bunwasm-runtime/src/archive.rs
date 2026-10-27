@@ -1,7 +1,7 @@
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 
-use crate::engine::{Args, NativeError, Record, Val};
+use crate::data::{Args, NativeError, Record, Val};
 use crate::natives::Table;
 
 fn archive_error(error: std::io::Error) -> NativeError {

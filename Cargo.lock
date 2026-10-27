@@ -1395,6 +1395,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-engine-jsc"
+version = "0.0.53"
+dependencies = [
+ "bunwasm-jsc",
+]
+
+[[package]]
 name = "bunwasm-engine-quickjs"
 version = "0.0.53"
 dependencies = [
@@ -1475,7 +1482,6 @@ dependencies = [
  "bun_zstd",
  "bunwasm-crypto-sys",
  "bunwasm-glue",
- "bunwasm-jsc",
  "bunwasm-posix",
  "bunwasm-semver",
  "bytemuck",

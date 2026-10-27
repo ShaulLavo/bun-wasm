@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::State;
-use crate::engine::{NativeError, NativeResult, Val};
+use crate::data::{NativeError, NativeResult, Val};
 use crate::natives::{Table, io_error};
 
 struct Cursor {

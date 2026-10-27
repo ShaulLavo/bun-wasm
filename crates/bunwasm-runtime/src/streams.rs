@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use encoding_rs::{CoderResult, Decoder, DecoderResult, Encoding};
 
-use crate::engine::{NativeError, Record, Val};
+use crate::data::{NativeError, Record, Val};
 use crate::natives::Table;
 
 use crate::compression::{Handle, Mode, Options, WebCoder, WebFormat};

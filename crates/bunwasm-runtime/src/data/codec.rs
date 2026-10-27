@@ -1,10 +1,6 @@
 //! Strict codec for owned data calls. The browser legacy codec is separate.
 
-#![cfg(any(
-    feature = "engine-split",
-    feature = "engine-jsc",
-    not(feature = "engine-host")
-))]
+#![cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 
 use super::{Val, drop_tree};
 

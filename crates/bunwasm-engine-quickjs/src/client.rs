@@ -1,5 +1,8 @@
 use crate::data::{NativeError, NativeResult, Val, codec, drop_tree};
-use crate::{TransportBuffer, bun_core_dispatch, ops};
+use crate::ops;
+use crate::transport::{
+    TransportBuffer, bun_core_dispatch, bun_core_exit, bun_core_idle, bun_core_poll,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct CoreClient {
@@ -197,16 +200,10 @@ impl CoreClient {
     }
 
     pub(crate) fn interrupt(self) -> bool {
-        unsafe { crate::core_checkpoint() != 0 }
+        unsafe { crate::transport::core_checkpoint() != 0 }
     }
 
     pub(crate) fn exit(self, code: i32) -> ! {
         unsafe { bun_core_exit(code) }
     }
-}
-
-unsafe extern "C" {
-    fn bun_core_idle(ms: i32);
-    fn bun_core_poll(ms: i32) -> i32;
-    fn bun_core_exit(code: i32) -> !;
 }

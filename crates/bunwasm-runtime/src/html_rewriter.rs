@@ -11,7 +11,7 @@ use lol_html::{
     Settings, SuspensionRequest,
 };
 
-use crate::engine::{Args, NativeError, NativeResult, Record, Val};
+use crate::data::{Args, NativeError, NativeResult, Record, Val};
 use crate::natives::Table;
 
 type Event = Rc<RefCell<Option<(usize, &'static str)>>>;
