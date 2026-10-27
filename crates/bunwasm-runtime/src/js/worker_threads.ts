@@ -499,13 +499,14 @@
       if (!arguments.length) throw Object.assign(new TypeError("Not enough arguments to MessagePort.postMessage"), { code: "ERR_MISSING_ARGS" });
       const state = this.#state;
       if (!state || state.phase !== "open" || !state.peer) return;
+      const other = localPorts.get(state.peer);
+      const lane = other ? null : state.lane;
+      // Refuse before preparing: past this point only plan.commit may fail, and it aborts the plan.
+      if (lane && internal.sharedObjects?.routes?.retired(state.peer)) throw cloneError("MessagePort peer is closed");
       const list = transfers(transfer);
       const packet = { data: value, ports: list.filter(item => item instanceof MessagePort) };
       const plan = codec.prepare(packet, list, [state.id, state.peer]);
       const sequence = state.sent;
-      const other = localPorts.get(state.peer);
-      const lane = other ? null : state.lane;
-      if (lane && internal.sharedObjects?.routes?.retired(state.peer)) throw cloneError("MessagePort peer is closed");
       // The lane frame becomes visible only after transfers and detachment commit. Ports it
       // carries stay in the custody of the lane's destination port until restored.
       const staged: { frame: { commit(): void; abort(): void } | null } = { frame: null };

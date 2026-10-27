@@ -120,6 +120,32 @@ for (const lanes of [true, false]) test(`a retired destination rejects a transfe
   expect(buffer.byteLength).toBe(8);
 });
 
+test("a refused send to a retired peer releases its staged shared backing for a live channel", async () => {
+  const { client, sender, receiver, source } = await connection();
+  const live = client(), channel = new sender.runtime.MessageChannel();
+  const target = await restore(sender.runtime.codec.encode(channel.port2, [channel.port2]), live);
+  cleanup.add(() => { channel.port1.close(); target.close(); });
+  const reply = new sender.runtime.MessageChannel(), shared = new SharedArrayBuffer(8), buffer = new ArrayBuffer(8);
+  cleanup.add(() => { reply.port1.close(); reply.port2.close(); });
+  await tick(); receiver.service.close(); await tick(); await tick();
+  const staged = sender.service.inspect().staged;
+  expect(() => source.postMessage({ shared, buffer, port: reply.port2 }, [buffer, reply.port2])).toThrow("peer is closed");
+  expect(sender.service.inspect().staged).toBe(staged);
+  expect(buffer.byteLength).toBe(8);
+  channel.port1.postMessage({ shared, port: reply.port2 }, [reply.port2]);
+  let received: { message: unknown } | undefined;
+  for (let attempt = 0; attempt < 100 && !received; attempt++) { await tick(); received = live.runtime.receiveMessageOnPort(target); }
+  const value = received?.message;
+  if (!value || typeof value !== "object" || !("shared" in value) || !(value.shared instanceof SharedArrayBuffer)) throw new Error("Missing shared message");
+  if (!("port" in value) || !(value.port instanceof live.runtime.MessagePort)) throw new Error("Missing transferred port");
+  const moved = value.port;
+  cleanup.add(() => moved.close());
+  Atomics.store(new Int32Array(value.shared), 0, 5);
+  expect(Atomics.load(new Int32Array(shared), 0)).toBe(5);
+  moved.postMessage("from the live channel");
+  expect(sender.runtime.receiveMessageOnPort(reply.port1)).toEqual({ message: "from the live channel" });
+});
+
 test("a closed destination port never takes a transfer", async () => {
   const { sender, receiver, source, target } = await connection();
   const reply = new sender.runtime.MessageChannel(), buffer = new ArrayBuffer(8);
