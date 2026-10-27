@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { runInNewContext } from "node:vm";
 
 test("run accepts only the lone dash as stdin and preserves script arguments and flags", () => {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-stdin-cli-"));
@@ -45,4 +46,25 @@ test("run accepts only the lone dash as stdin and preserves script arguments and
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+test("stdin main bypasses package aliases and files while ordinary runtime commands still dispatch", () => {
+  const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/bootstrap.js", import.meta.url), "utf8");
+  const start = source.indexOf("  internal.runMain =");
+  const end = source.indexOf("  internal.getMainModule", start);
+  const scripts = { resolve: () => ({ kind: "runtime" }), run: () => "package-command" };
+  const internal = { require: () => scripts, runMain: (_path: string): unknown => undefined };
+  const loaded: string[] = [];
+  const native = {
+    mainArg: () => "-",
+    exists() { throw new Error("stdin is not a file"); },
+    moduleFormat: () => "esm",
+    importModule(path: string) { loaded.push(path); return "stdin-source"; },
+  };
+  runInNewContext(source.slice(start, end), { internal, native });
+  expect(internal.runMain("/project/[stdin]")).toBe("stdin-source");
+  expect(loaded).toEqual(["/project/[stdin]"]);
+  expect(internal.runMain("/project/start")).toBe("package-command");
+  native.mainArg = () => "./[stdin]";
+  expect(internal.runMain("/project/[stdin]")).toBe("package-command");
 });

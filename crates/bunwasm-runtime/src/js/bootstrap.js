@@ -690,7 +690,7 @@
 
   internal.runMain = function runMain(requested) {
     const scripts = internal.require("package_scripts");
-    const stdin = native.mainArg() === "-";
+    const stdin = requested.endsWith("/[stdin]") && native.mainArg() === "-";
     const path = stdin ? requested : scripts.resolve(requested);
     if (typeof path !== "string") return scripts.run(path);
     if (!stdin && !native.exists(path)) {
