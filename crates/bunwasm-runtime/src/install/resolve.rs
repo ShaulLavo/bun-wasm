@@ -873,3 +873,6 @@ mod override_tests;
 
 #[cfg(test)]
 mod next_swc_tests;
+
+#[cfg(test)]
+mod peer_selection_tests;
