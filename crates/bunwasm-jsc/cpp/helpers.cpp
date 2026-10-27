@@ -47,9 +47,17 @@ char* bunjsc_host_resolve(const char* specifier, const char* referrer, JSValueRe
 char* bunjsc_host_fetch(const char* key, JSValueRef* exception);
 void bunjsc_host_init_meta(JSValueRef meta, const char* key, JSValueRef* exception);
 void bunjsc_host_free(char*);
+void bunjsc_host_uncaught(JSContextRef, JSValueRef);
 // Polls fatal host cancellation without entering JS or consuming handled signals.
 // True requests native, uncatchable termination after the callback has returned.
 bool bunjsc_host_interrupt();
+}
+
+extern "C" void Bun__reportUnhandledError(JSGlobalObject* globalObject, EncodedJSValue encoded)
+{
+    JSLockHolder lock(globalObject->vm());
+    JSValue value = JSValue::decode(encoded);
+    bunjsc_host_uncaught(toRef(globalObject), toRef(globalObject, value));
 }
 
 static std::string utf8(const String& s)
@@ -277,6 +285,13 @@ bool bunjsc_drain_microtasks(JSContextRef ctx)
     vm.deferredWorkTimer->doWork(vm);
     thread.setCurrentAtomStringTable(previousTable);
     return pending;
+}
+
+void bunjsc_report_unhandled_error(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* globalObject = toJS(ctx);
+    JSLockHolder lock(globalObject->vm());
+    Bun__reportUnhandledError(globalObject, JSValue::encode(toJS(globalObject, value)));
 }
 
 void bunjsc_collect_garbage(JSContextRef ctx)

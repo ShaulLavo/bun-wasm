@@ -624,6 +624,12 @@ mod tests {
     }
 
     impl ModuleHost<QuickJs> for InterruptHost {
+        fn uncaught(&self, engine: &QuickJs, error: &V) {
+            panic!(
+                "unexpected uncaught interrupt-test error: {:?}",
+                engine.to_val(error)
+            );
+        }
         fn resolve(&self, _: &QuickJs, _: &str, _: &str) -> Result<String, V> {
             unreachable!()
         }
@@ -694,6 +700,12 @@ mod tests {
             armed: std::cell::Cell<bool>,
         }
         impl ModuleHost<QuickJs> for OneShotInterruptHost {
+            fn uncaught(&self, engine: &QuickJs, error: &V) {
+                panic!(
+                    "unexpected uncaught interrupt-test error: {:?}",
+                    engine.to_val(error)
+                );
+            }
             fn resolve(&self, _: &QuickJs, _: &str, _: &str) -> Result<String, V> {
                 unreachable!()
             }

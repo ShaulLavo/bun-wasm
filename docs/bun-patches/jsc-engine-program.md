@@ -64,3 +64,34 @@ reentry, and native/Node/browser admission remain separate actual-pair gates.
 The pre-existing `array_items` getter/allocation/GC rooting risk remains
 unreproduced and unchanged. Source review and synthetic controls do not resolve
 that risk or establish a real-pair pass.
+
+## Captured values and immediate native error reporting
+
+`vm.rs::array_items` snapshots owned `JsVal` roots, including the input array,
+and borrows that complete snapshot through recursive conversion. A getter can
+clear the array and force collection without leaving later captured elements
+unprotected. This uses the existing C API protection adapter; no new root
+representation is introduced. The staged getter regression calls the real
+`Bun.gc(true)` during conversion. A pre-fix runtime failure is not claimed;
+conservative stack discovery can make reproduction sensitive to stack layout.
+
+The original C++ adapter now defines the side-local strong
+`Bun__reportUnhandledError(JSGlobalObject*, EncodedJSValue)`. Under
+`JSLockHolder` it decodes with `JSValue::decode` and converts through
+`APICast.h::toRef`, including `JSAPIValueWrapper` for wasm32 primitives.
+The Rust callback immediately protects the resulting `JSValueRef`, then calls
+the required `ModuleHost::uncaught` boundary. `Core<E>` delegates to its
+existing `Core::uncaught`/bootstrap `handleUncaught`; promise rejection queues
+and the VM-free common core are not used to store or decode this VM value.
+The upstream references remain the pinned WebKit `runtime/JSMicrotask.cpp`,
+`runtime/JSCJSValue.h`, and `API/APICast.h`. No upstream implementation is
+copied into this original adapter.
+
+The API-value reporter wrapper permits embedding callers to enter that exact
+C++ symbol without casting an encoded i64 to a pointer. Guest regression hooks
+are installed only in the Rust `cfg(test)` build, never in the production JS
+surface or export profile. The manual fixtures cover the captured second
+array item, object identity/handled continuation with real GC, primitive
+wrapper/fatal exit, and the existing errors-in-handler fallback. They are
+staged until an actual JSC test side is admitted; their presence or typecheck
+is not a runtime pass or production artifact qualification.

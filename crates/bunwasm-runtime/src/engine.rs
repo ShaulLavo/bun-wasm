@@ -29,6 +29,9 @@ pub enum PromiseState {
 
 /// The runtime's side of module loading, called by the engine's loader.
 pub trait ModuleHost<E: Engine> {
+    /// Report an immediate uncaught engine value through the owning driver.
+    fn uncaught(&self, engine: &E, error: &E::Value);
+
     /// Whether the host supplies CPU-bound process-signal checkpoints.
     /// Engines without a signal host do not install an interrupt callback.
     fn has_interrupt_handler(&self) -> bool {
