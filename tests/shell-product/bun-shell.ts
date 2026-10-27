@@ -47,11 +47,22 @@ export const SHELL_API_EXPECTED = {
 
 export const bunShellFixture: Fixture = {
   id: "bun-shell",
-  files: { "shell-api.ts": shellApi },
+  files: {
+    "shell-api.ts": shellApi,
+    // A package bin as npm installs it: a #!/usr/bin/env node script on PATH through node_modules/.bin.
+    "node_modules/.bin/greet": '#!/usr/bin/env node\nconsole.log("BIN", process.argv.slice(2).join("|"));\n',
+  },
   dependencies: {},
   selector: "",
   text: "",
   tool: "",
   buildOutputs: [],
-  scripts: {},
+  scripts: {
+    prechain: "echo PRE",
+    chain: "echo ONE && echo TWO | grep TWO; echo \"EVENT:$npm_lifecycle_event\"",
+    postchain: "echo POST",
+    bin: "greet first",
+    alias: "npm run bin",
+    fails: "echo before; exit 7",
+  },
 };

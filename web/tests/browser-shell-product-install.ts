@@ -40,7 +40,7 @@ export async function bundleProduct(root: string, installation: string, output: 
   await buildBrowserEntries(tail ? entries.concat([join(app, "tail-install.ts")]) : entries, output);
   await buildClassicWorker(join(app, "sw.ts"), output, undefined, entries[0]);
   await mkdir(join(output, "programs"), { recursive: true });
-  for (const name of ["cat", "grep"]) await cp(join(shell, `dist/${name}.wasm`), join(output, `programs/${name}.wasm`));
+  for (const name of ["cat", "grep", "env"]) await cp(join(shell, `dist/${name}.wasm`), join(output, `programs/${name}.wasm`));
   if (tail) await cp(join(shell, "dist/tail.wasm"), join(output, "programs/tail.wasm"));
   await Bun.write(join(output, "capabilities.json"), JSON.stringify({ tail }));
   await cp(join(shell, "public/programs/shell-engine.wasm"), join(output, "programs/shell-engine.wasm"));
