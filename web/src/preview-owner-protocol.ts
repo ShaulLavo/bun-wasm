@@ -41,7 +41,7 @@ function open(value: unknown): value is PreviewHostOpen {
   const url = new URL(value.url);
   if (url.protocol === "ws:") url.protocol = "http:";
   if (url.protocol === "wss:") url.protocol = "https:";
-  if (url.origin !== value.authorization.origin || url.username || url.password) return false;
+  if (!["http:", "https:"].includes(url.protocol) || url.origin !== value.authorization.origin || url.username || url.password) return false;
   if (value.type === "socket") return true;
   return value.type === "http" && /^https?:/.test(value.url) && text(value.method) && pairs(value.headers)
     && (value.body === null || value.body instanceof ArrayBuffer && value.body.byteLength <= MAX_BODY);

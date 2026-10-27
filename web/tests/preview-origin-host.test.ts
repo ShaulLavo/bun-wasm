@@ -12,9 +12,9 @@ function host(limit?: number) {
 }
 
 
-async function rawStatus(origin: string, headers: Record<string, string>) {
+async function rawStatus(origin: string, headers: Record<string, string>, path = "/") {
   return new Promise<number>((resolve, reject) => {
-    const req = request(origin, { headers }, response => { response.resume(); resolve(response.statusCode ?? 0); });
+    const req = request(origin, { headers, path }, response => { response.resume(); resolve(response.statusCode ?? 0); });
     req.on("error", reject);
     req.end();
   });
@@ -207,4 +207,17 @@ test("HTTP response body cancellation aborts the native endpoint request", async
   expect(new TextDecoder().decode((await reader.read()).value)).toBe("chunk");
   await reader.cancel();
   await aborted.promise;
+});
+
+
+test("native authority rejects origin-bearing blob and credential URLs before dispatch", async () => {
+  const registry = host();
+  let dispatched = 0;
+  const endpoint = fixture("boundary");
+  endpoint.fetch = () => { dispatched++; return new Response("unexpected"); };
+  const binding = await registry.bind({}, 3137, endpoint);
+  const authority = new URL(binding.origin).host;
+  expect([400, 421]).toContain(await rawStatus(binding.origin, { host: authority }, `blob:${binding.origin}/fixture`));
+  expect([400, 421]).toContain(await rawStatus(binding.origin, { host: authority }, `${binding.origin.replace("http://", "http://fixture-user:fixture-password@")}/fixture`));
+  expect(dispatched).toBe(0);
 });

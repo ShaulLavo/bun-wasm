@@ -115,7 +115,7 @@ function rejected(request: IncomingMessage, origin: string, signal: AbortSignal)
   if (signal.aborted) return 410;
   let url: URL;
   try { url = new URL(request.url ?? "/", origin); } catch { return 400; }
-  if (url.origin !== origin || request.headers.host !== new URL(origin).host) return 421;
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.origin !== origin || request.headers.host !== new URL(origin).host) return 421;
   if (request.headers.origin && request.headers.origin !== origin) return 403;
   if (request.headers["sec-fetch-site"] === "cross-site" && request.headers["sec-fetch-mode"] !== "navigate") return 403;
 }
