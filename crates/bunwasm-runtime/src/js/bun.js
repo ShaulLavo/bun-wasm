@@ -542,7 +542,9 @@
     unsafe: {
       arrayBufferToString: unsupported("Bun.unsafe.arrayBufferToString", "zero-copy strings are not exposed"),
     },
-    $: unsupported("Bun.$", noProcesses),
+    get $() {
+      return internal.require("bun_shell").$;
+    },
     build,
     serve: native.hostCaps.listen ? (options) => internal.require("net").serve(options) : unsupported("Bun.serve", noNetwork),
     listen: (options) => internal.require("net").bunTcp().listen(options),
