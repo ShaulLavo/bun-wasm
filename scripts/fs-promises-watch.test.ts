@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
@@ -20,16 +21,16 @@ function wrapperSource(value: object): string {
   return factory("node:fs/promises", value);
 }
 
-test("the exact shim import links through the production ESM wrapper", async () => {
+test("the exact shim import links through the production ESM wrapper", () => {
   const { promises } = filesystem();
-  const before = Object.getOwnPropertyDescriptor(globalThis, "__bunwasm_wrap");
-  Object.defineProperty(globalThis, "__bunwasm_wrap", { configurable: true, value: () => ({ value: promises, default: promises }) });
-  try {
-    const target = `data:text/javascript,${encodeURIComponent(wrapperSource(promises))}`;
-    const source = `import { watch } from ${JSON.stringify(target)}; export default typeof watch;`;
-    expect((await import(`data:text/javascript,${encodeURIComponent(source)}`)).default).toBe("function");
-  } finally {
-    if (before) Object.defineProperty(globalThis, "__bunwasm_wrap", before);
-    else Reflect.deleteProperty(globalThis, "__bunwasm_wrap");
-  }
+  const program = `import { SourceTextModule } from "node:vm";
+    import { readFileSync } from "node:fs";
+    const target = new SourceTextModule(readFileSync(0, "utf8"));
+    const importer = new SourceTextModule('import { watch } from "fs/promises";');
+    await importer.link(() => target);
+    console.log("linked");`;
+  const output = execFileSync("node", ["--experimental-vm-modules", "--disable-warning=ExperimentalWarning", "--input-type=module", "-e", program], {
+    input: wrapperSource(promises), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+  });
+  expect(output.trim()).toBe("linked");
 });
