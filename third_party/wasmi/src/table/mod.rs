@@ -31,7 +31,7 @@ impl ArenaIndex for TableIdx {
 }
 
 /// A Wasm table reference.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct Table(Stored<TableIdx>);
 
@@ -173,8 +173,8 @@ impl Table {
     ///
     /// # Note
     ///
-    /// We do not implement `Eq` and `PartialEq` and
-    /// intentionally keep this API hidden from users.
+    /// Internal table-copy operations use this helper. Public equality compares
+    /// the same store-qualified entity identity through `PartialEq` and `Eq`.
     #[inline]
     pub(crate) fn eq(lhs: &Self, rhs: &Self) -> bool {
         lhs.as_inner() == rhs.as_inner()
