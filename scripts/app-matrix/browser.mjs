@@ -108,6 +108,12 @@ export async function readGuest(page, path) {
   }, path);
 }
 
+/** The playground holds an engine load error until a command runs; one command prints it in the terminal. */
+async function engineLoadFailure(page, engine, status, diagnostics, run) {
+  const probe = await run(page, "bun --version", 30_000).catch(error => ({ output: `engine error probe failed: ${error}` }));
+  return new Error(`Playground engine ${engine} failed to load: ${status}\n${probe.output}\n${JSON.stringify(diagnostics())}`);
+}
+
 export async function browserHost({ root, options, launch, stop }) {
   const playwrightPath = process.env.PLAYWRIGHT ?? join(root, "web/node_modules/playwright/index.mjs");
   const { chromium } = await import(pathToFileURL(playwrightPath).href);
@@ -191,8 +197,10 @@ export async function browserHost({ root, options, launch, stop }) {
       await context.route("**/*", route => browserRegistryRoute(route, registry, external));
       const base = await serve();
       const loading = performance.now();
+      const diagnostics = browserDiagnostics(page);
       await page.goto(`${base}?engine=${engine}`);
-      if (!(await ready(page)).includes("ready")) throw new Error(`Playground engine ${engine} failed to load`);
+      const status = await ready(page);
+      if (!status.includes("ready")) throw await engineLoadFailure(page, engine, status, diagnostics, run);
       const engineReadyMs = since(loading);
       await page.evaluate(resetBrowserProject);
       for (const [path, contents] of Object.entries(projectFiles(app, registry))) await writeFile(page, `/home/user/${path}`, contents);
