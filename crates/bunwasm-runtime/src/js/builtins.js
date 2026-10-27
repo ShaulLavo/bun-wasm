@@ -702,7 +702,7 @@
       setFlagsFromString() {},
       cachedDataVersionTag: () => 0,
     }),
-    "node:wasi": () => unsupportedModule("wasi", "nested WASI instances are not supported", ["WASI"]),
+    "node:wasi": () => internal.require("bun_builtins").require("node:wasi"),
     "node:domain": () => unsupportedModule("domain", "domains are deprecated and not implemented", ["create", "createDomain", "Domain"]),
     "node:punycode": () => internal.require("bun_builtins").require("node:punycode"),
     bun: () => globalThis.Bun,

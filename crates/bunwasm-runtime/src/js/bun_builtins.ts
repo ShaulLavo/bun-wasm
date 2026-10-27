@@ -47,6 +47,9 @@
 
   const hooks: Record<PropertyKey, unknown> = {
     undefined,
+    processBindingConstants: {
+      get fs() { return internal.require("node_fs").fs.constants; },
+    },
     getPrototypeOf: Object.getPrototypeOf,
     setPrototypeOf: Object.setPrototypeOf,
     getOwnPropertyDescriptor: Object.getOwnPropertyDescriptor,

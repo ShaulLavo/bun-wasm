@@ -38,6 +38,22 @@ function syntaxHash(source: string) {
   return createHash("sha256").update(JSON.stringify(syntax(file))).digest("hex");
 }
 
+function withoutWasiConstants(source: string) {
+  const file = ts.createSourceFile("runtime.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const properties: ts.PropertyAssignment[] = [];
+  function visit(node: ts.Node) {
+    if (ts.isPropertyAssignment(node) && node.name.getText(file) === "processBindingConstants") properties.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(file);
+  expect(properties).toHaveLength(1);
+  const property = properties[0];
+  if (!property) throw new Error("Missing WASI filesystem constants hook");
+  expect(property.getText(file).replace(/\s/g, "")).toBe('processBindingConstants:{getfs(){returninternal.require("node_fs").fs.constants;},}');
+  expect(source[property.end]).toBe(",");
+  return source.slice(0, property.pos) + source.slice(property.end + 1);
+}
+
 function stackDescriptorRecords(source: string): { target: string; properties: string[]; nullPrototype: boolean }[] {
   const file = ts.createSourceFile("stack_trace.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const records: { target: string; properties: string[]; nullPrototype: boolean }[] = [];
@@ -85,7 +101,7 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
   return target;
 }
 
-// Hashes pin the emitted factory syntax at frozen main ec7fab1c; descriptor records have an explicit AST delta.
+// Hashes pin the original emitted syntax; stack descriptors and the WASI constants hook have explicit deltas.
 const originalTokens = {
   stack_trace: "1c0bfeba4929071f482d8549bfeee92ddea666bc8fda938c6cd50eaabb468f0a",
   bun_builtins: "58e3de8a4232bc992b2b483d817198d6f020bedafc8220c3a1903d4f360f3bbe",
@@ -130,7 +146,8 @@ test("null-prototype descriptors ignore synthetic inherited descriptor fields", 
 
 for (const [name, hash] of Object.entries(originalTokens)) {
   test(`stripped ${name} keeps every original executable token`, () => {
-    expect(syntaxHash(emit(name))).toBe(hash);
+    const source = emit(name);
+    expect(syntaxHash(name === "bun_builtins" ? withoutWasiConstants(source) : source)).toBe(hash);
   });
 
   test(`embedded ${name} does not grow after TypeScript erasure`, () => {
