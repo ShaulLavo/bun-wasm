@@ -1,3 +1,4 @@
+import { programKindForBuild } from "../src/engine-kind.ts";
 import { realpathSync } from "node:fs";
 import { lstat, readdir, readFile, readlink, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -5,9 +6,9 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 export const guestBuilds = {
   browser: { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-transpiler", "bun-build"], optimizer: "required" },
   "source-cache-browser": { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-build"], optimizer: "unused" },
-  quickjs: { artifact: "bun.wasm", package: "bunwasm-cli", features: ["default"], optimizer: "optional" },
-  "quickjs-minimal": { artifact: "bun.wasm", package: "bunwasm-cli", features: ["engine-quickjs"], optimizer: "optional" },
-  jsc: { artifact: "bun-jsc.wasm", package: "bunwasm-cli", features: ["engine-jsc", "bun-transpiler", "bun-build"], optimizer: "required" },
+  quickjs: { artifact: "bun.wasm", package: "bunwasm-cli", features: ["engine-split", "bun-transpiler", "bun-build"], optimizer: "required" },
+  "quickjs-minimal": { artifact: "bun.wasm", package: "bunwasm-cli", features: ["engine-split"], optimizer: "required" },
+  jsc: { artifact: "bun-jsc.wasm", package: "bunwasm-cli", features: ["engine-split", "bun-transpiler", "bun-build"], optimizer: "required" },
   tools: { artifact: "bun-tools.wasm", package: "bunwasm-tools", features: ["default"], optimizer: "required" },
 } as const;
 export type GuestBuild = keyof typeof guestBuilds;
@@ -32,6 +33,7 @@ export interface SourceOptions {
   readonly waffle: string;
   readonly boringssl: string;
   readonly rustTargetLib: string;
+  readonly rustSourceLib: string | undefined;
   readonly tools: Readonly<Record<string, string>>;
   readonly jscBuild: string | undefined;
 }
@@ -97,7 +99,7 @@ async function committedInput(repository: string, path: string, mode: string, li
   return readlink(absolute, { encoding: "buffer" });
 }
 
-async function committedGroup(name: string, repository: string, paths: readonly string[], links: ImportedLinks = "reject"): Promise<InputGroup> {
+async function committedGroup(name: string, repository: string, paths: readonly string[], links: ImportedLinks = "reject", exclude: (path: string) => boolean = () => false): Promise<InputGroup> {
   if (git(repository, "status", "--porcelain", "--untracked-files=normal")) throw new Error("Guest repository source must be committed and clean");
   const entries = git(repository, "ls-tree", "-rz", "HEAD", "--", ...paths).split("\0").filter(Boolean);
   const files: InputFile[] = [];
@@ -106,6 +108,7 @@ async function committedGroup(name: string, repository: string, paths: readonly 
     if (!match) throw new Error("Guest repository inputs must be regular committed files");
     const [, mode, object, path] = match;
     if (!path || !mode) throw new Error("Missing committed input path or mode");
+    if (exclude(path)) continue;
     const bytes = await committedInput(repository, path, mode, links);
     const blob = new Bun.CryptoHasher("sha1").update(`blob ${bytes.byteLength}\0`).update(bytes).digest("hex");
     if (blob !== object) throw new Error(`Guest repository input differs from committed source: ${path}`);
@@ -131,24 +134,40 @@ async function verifySysrootInputs(options: SourceOptions, groups: readonly Inpu
     || await Bun.file(join(options.sdk, "VERSION")).text() !== receipt.sdkVersion) throw new Error("Patched sysroot receipt does not match installed builder, patch, SDK or libc bytes");
 }
 
-export async function captureSourceManifest(options: SourceOptions): Promise<SourceManifest> {
+export type ProgramInputScope = "core" | "quickjs" | "jsc";
+
+export async function captureSourceManifest(options: SourceOptions, scope: "guest" | ProgramInputScope = "guest"): Promise<SourceManifest> {
   const { repository, build, sysroot, sdk, waffle, boringssl, rustTargetLib } = options;
   const source = { head: git(repository, "rev-parse", "HEAD"), tree: git(repository, "rev-parse", "HEAD^{tree}") };
-  const groups = [await committedGroup("repository", repository, ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "package.json", "bun.lock", "crates", "third_party", "scripts", "patches", "jsc"])];
+  const repositoryPaths = scope === "guest"
+    ? ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "package.json", "bun.lock", "crates", "third_party", "scripts", "patches", "jsc", "src/engine-kind.ts", "src/quickjs-program.ts"]
+    : scopedRepositoryPaths(scope);
+  const groups = [await committedGroup("repository", repository, repositoryPaths, "reject", path => scope === "core" && /^(crates\/bunwasm-(engine-quickjs|engine-jsc|jsc)\/|third_party\/rquickjs)/.test(path))];
   const bun = join(repository, "vendor/bun");
-  await committedGroup("bun", bun, ["src", "Cargo.toml", "Cargo.lock"], "within-repository");
-  groups.push(await group("bun", bun, ["src", "Cargo.toml", "Cargo.lock", "build/debug/codegen", "vendor/lolhtml", "vendor/rust-argon2"]));
-  groups.push(await group("boringssl", boringssl, ["CMakeLists.txt", "cmake", "include", "crypto", "gen", "third_party", "util", "decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h"]));
+  if (scope === "guest" || scope === "core") {
+    await committedGroup("bun", bun, ["src", "Cargo.toml", "Cargo.lock"], "within-repository");
+    groups.push(await group("bun", bun, ["src", "Cargo.toml", "Cargo.lock", "build/debug/codegen", "vendor/lolhtml", "vendor/rust-argon2"]));
+    groups.push(await group("boringssl", boringssl, ["CMakeLists.txt", "cmake", "include", "crypto", "gen", "third_party", "util", "decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h"]));
+  }
+  if (scope === "jsc") groups.push(await committedGroup("bun-version", bun, ["package.json"]));
   groups.push(await group("waffle-libc", waffle, ["package.json", "scripts/build-wasi-libc.sh", "patches/wasi-libc/preopen-scan.patch"]));
   groups.push(await group("sysroot", sysroot, ["bun-wasm-sysroot.json", "include", "lib"], [sdk]));
   groups.push(await group("sdk", sdk, ["VERSION", "lib/clang"]));
   groups.push(await group("rust-target", rustTargetLib, ["."]));
+  if (programKindForBuild(build) !== "single") {
+    if (!options.rustSourceLib) throw new Error("Engine program build requires Rust build-std source inputs");
+    groups.push(await group("rust-build-std", options.rustSourceLib, ["."]));
+  }
   await verifySysrootInputs(options, groups);
   if (build === "jsc" || build === "tools") {
     if (!options.jscBuild) throw new Error("JSC build requires JSC_BUILD_DIR");
     const paths = ["build/jsc/.bunwasm-inputs", "build/jsc/compile_commands.json", "inputs/wasi-jsc.cmake", "inputs/shim/wasi-compat.h", "build/jsc/lib/libJavaScriptCore.a", "build/jsc/lib/libWTF.a", "build/jsc/lib/libbmalloc.a", "icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a"];
     if (build === "tools") paths.push("webkit/Source/JavaScriptCore/yarr", "webkit/Source/JavaScriptCore/runtime/OptionsList.h", "build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp");
-    groups.push(await group("jsc-prebuild", options.jscBuild, paths));
+    const headers = scope === "jsc" ? await jscHeaderPaths(options) : undefined;
+    if (headers) paths.push(".bunwasm-artifacts", "build/jsc/CMakeCache.txt", "build/jsc/cmakeconfig.h", ...headers.prebuild);
+    groups.push(await group("jsc-prebuild", options.jscBuild, Array.from(new Set(paths)).sort()));
+    if (headers?.sdk.length) groups.push(await group("jsc-helper-sdk-headers", sdk, Array.from(new Set(headers.sdk)).sort()));
+    if (headers?.sysroot.length) groups.push(await group("jsc-helper-sysroot-headers", sysroot, Array.from(new Set(headers.sysroot)).sort(), [sdk]));
   }
   const tools = await Promise.all(Object.entries(options.tools).map(([name, path]) => tool(name, path, repository)));
   if (git(repository, "rev-parse", "HEAD") !== source.head || git(repository, "status", "--porcelain", "--untracked-files=normal")) throw new Error("Guest source changed while collecting manifest");
@@ -162,6 +181,47 @@ export async function captureSourceManifest(options: SourceOptions): Promise<Sou
       "JSC/tools prebuild archives, compiler flags and input stamp identify linked inputs; direct tools Yarr sources are inventoried, but remaining WebKit/ICU headers and full prebuild source closure are not. JSC embedding receipt remains separate.",
     ],
   };
+}
+
+function scopedRepositoryPaths(scope: ProgramInputScope): string[] {
+  const common = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "scripts/guest-source-manifest.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "src/engine-kind.ts"];
+  if (scope === "core") return common.concat(["crates", "third_party", "patches", "scripts/build-bun-core.sh", "scripts/quickjs-core-exports.txt"]);
+  const shared = ["engine.rs", "data.rs", "data/codec.rs", "ops.rs", "ops", "split_api.rs"].map(path => `crates/bunwasm-runtime/src/${path}`);
+  const program = ["driver.rs", "client.rs", "loader.rs", "program.rs", "natives.rs", "value_natives.rs", "allocator.rs", "transport.rs"].map(path => `crates/bunwasm-engine-quickjs/src/${path}`);
+  const own = scope === "jsc" ? ["crates/bunwasm-engine-jsc", "crates/bunwasm-jsc", "jsc"] : ["crates/bunwasm-engine-quickjs", "third_party/rquickjs", "third_party/rquickjs-sys"];
+  return common.concat(shared, program, own, [`scripts/build-engine-${scope}.sh`, "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c"]);
+}
+
+type HeaderRoot = "prebuild" | "sdk" | "sysroot";
+async function jscHeaderPaths(options: SourceOptions): Promise<Record<HeaderRoot, string[]>> {
+  const build = options.jscBuild;
+  if (!build) throw new Error("Missing JSC prebuild root");
+  const database: unknown = JSON.parse(await readFile(join(build, "build/jsc/compile_commands.json"), "utf8"));
+  if (!Array.isArray(database)) throw new Error("Invalid JSC compilation database");
+  const entry: unknown = database.find(row => row && typeof row === "object" && "file" in row && typeof row.file === "string" && row.file.endsWith("/jsc.cpp"));
+  if (!entry || typeof entry !== "object" || !("command" in entry) || typeof entry.command !== "string" || !("directory" in entry) || typeof entry.directory !== "string") throw new Error("Missing JSC helper compilation profile");
+  const words = entry.command.split(/\s+/);
+  const paths: Record<HeaderRoot, string[]> = { prebuild: [], sdk: [], sysroot: [] };
+  for (let index = 1; index < words.length; index++) {
+    const word = words[index]!;
+    const path = ["-I", "-isystem", "-iquote", "-include"].includes(word) ? words[++index] : /^-I.+/.test(word) ? word.slice(2) : undefined;
+    if (!path) continue;
+    const checked = await checkedHeaderPath(path, entry.directory, options);
+    paths[checked.root].push(checked.path);
+  }
+  return paths;
+}
+
+async function checkedHeaderPath(path: string, directory: string, options: SourceOptions): Promise<{ root: HeaderRoot; path: string }> {
+  const absolute = await realpath(resolve(directory, path));
+  const prebuild = options.jscBuild;
+  if (!prebuild) throw new Error("Missing JSC prebuild root");
+  const roots: readonly [HeaderRoot, string][] = [["prebuild", prebuild], ["sysroot", options.sysroot], ["sdk", options.sdk]];
+  for (const [name, path] of roots) {
+    const root = await realpath(path);
+    if (inside(root, absolute)) return { root: name, path: relative(root, absolute) };
+  }
+  throw new Error(`JSC helper header input escapes inventoried roots: ${path}`);
 }
 
 function rustTools(repository: string) {
@@ -179,7 +239,9 @@ function rustTools(repository: string) {
   const linker = realpathSync(join(sysroot, "lib/rustlib", host, "bin/rust-lld"));
   const selected = process.env.CARGO_TARGET_WASM32_WASIP1_LINKER;
   if (selected && realpathSync(selected) !== linker) throw new Error("CARGO_TARGET_WASM32_WASIP1_LINKER must be the active compiler's rust-lld");
-  return { rustc, cargo: realpathSync(run(["rustup", "which", "cargo"], repository)), "rust-lld": linker };
+  const cargo = realpathSync(run(["rustup", "which", "cargo"], repository));
+  if (process.env.GUEST_CARGO && realpathSync(process.env.GUEST_CARGO) !== cargo) throw new Error("GUEST_CARGO must be the active Rustup Cargo executable");
+  return { rustc, cargo, "rust-lld": linker };
 }
 
 function nodeExecutable(repository: string): string {
@@ -214,7 +276,6 @@ export function sourceOptions(repository: string, sysroot: string, build: GuestB
   for (const name of ["cmake", "ninja", "wasm-opt"]) {
     if (name === "wasm-opt" && optimizer === "unused") continue;
     const path = Bun.which(name);
-    if (!path && name === "wasm-opt" && optimizer === "optional") continue;
     if (!path) throw new Error(`Missing guest tool: ${name}`);
     tools[name] = path;
   }
@@ -223,6 +284,7 @@ export function sourceOptions(repository: string, sysroot: string, build: GuestB
     waffle: resolve(realpathSync(Bun.resolveSync("waffle/package.json", repository)), ".."),
     boringssl: process.env.BUNWASM_BORINGSSL_SOURCE ?? join(repository, "vendor/boringssl"),
     rustTargetLib: run([rust.rustc, "--print", "target-libdir", "--target", "wasm32-wasip1"], repository),
+    rustSourceLib: programKindForBuild(build) === "single" ? undefined : join(run([rust.rustc, "--print", "sysroot"], repository), "lib/rustlib/src/rust/library"),
     jscBuild: process.env.JSC_BUILD_DIR ?? "/work/tmp/bun-wasm-jsc",
   };
 }

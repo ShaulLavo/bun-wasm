@@ -1,9 +1,10 @@
+import { programKindForBuild, programProfile } from "../../src/engine-kind";
 import { expect, test } from "bun:test";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, verifyGuestCompanions, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { guestBuilds, hash } from "../../scripts/guest-source-manifest.ts";
-import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture, wasm } from "./guest-receipt-fixture.ts";
+import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture, stageProgramFixture, wasm } from "./guest-receipt-fixture.ts";
 
 test("guest receipt binds committed repository, selected engine, consumed inputs, tools and exact final bytes", async () => {
   await withReceiptFixture(async (options, artifact) => {
@@ -17,14 +18,14 @@ test("guest receipt binds committed repository, selected engine, consumed inputs
     expect(receipt.sourceManifest.tools.find(tool => tool.name === "clang")?.version).toBe("fixture tool 1");
     expect(JSON.stringify(receipt)).not.toContain("secret.txt");
     expect(receipt.sourceManifest.omissions.length).toBeGreaterThan(0);
-    expect(receipt.artifactBytes).toBe(8);
+    expect(receipt.program.core.artifactBytes).toBe(8);
     expect(receipt.sysrootReceiptSha256).toBe(hash(await readFile(join(options.sysroot, "bun-wasm-sysroot.json"))));
     expect(await Bun.file(`${artifact}.build.json`).json()).toEqual(receipt);
     expect(() => verifyGuestBuildReceipt(wasm, receipt)).not.toThrow();
     expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, bunHead: "stale" })).toThrow("bunHead");
-    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, artifactSha256: "0".repeat(64) })).toThrow("does not match");
+    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, program: { ...receipt.program, core: { ...receipt.program.core, artifactSha256: "0".repeat(64) } } })).toThrow("does not match");
     expect(() => verifyGuestBuildReceipt(new Uint8Array([1]), receipt)).toThrow("does not match");
-    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, sourceManifest: { ...receipt.sourceManifest, build: "quickjs" } })).toThrow("digest mismatch");
+    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, sourceManifest: { ...receipt.sourceManifest, build: "source-cache-browser" } })).toThrow("digest mismatch");
     const { sourceManifest: _, ...oldReceipt } = receipt;
     expect(() => verifyGuestBuildReceipt(wasm, oldReceipt)).toThrow("source manifest");
   });
@@ -33,7 +34,7 @@ test("guest receipt binds committed repository, selected engine, consumed inputs
 test("write command validation can pass its verified receipt as build inputs", async () => {
   await withReceiptFixture(async (options, artifact) => {
     const inputs = await prepareGuestBuildInputs(options);
-    const verified = { ...inputs, artifactSha256: hash(wasm), artifactBytes: wasm.byteLength };
+    const verified = { ...inputs, program: { kind: "single", core: { artifactSha256: hash(wasm), artifactBytes: wasm.byteLength } } };
     verifyGuestBuildReceipt(wasm, verified);
     await expect(writeGuestBuildReceipt(options, artifact, verified)).resolves.toEqual(verified);
   });
@@ -123,7 +124,9 @@ for (const build of ["quickjs", "quickjs-minimal", "tools", "jsc"] as const) tes
   await withReceiptFixture(async options => {
     const selected = { ...options, build };
     const artifact = join(options.repository, "dist", guestBuilds[build].artifact);
-    await writeFile(artifact, wasm);
+    const kind = programKindForBuild(build);
+    if (kind === "single") await writeFile(artifact, wasm);
+    else await stageProgramFixture(selected, artifact, kind);
     const inputs = await prepareGuestBuildInputs(selected);
     const receipt = await writeGuestBuildReceipt(selected, artifact, inputs);
     expect(receipt.sourceManifest.build).toBe(build);
@@ -177,25 +180,29 @@ for (const path of ["vendor/boringssl/crypto/input.c", "jsc-build/webkit/Source/
   });
 });
 
-for (const build of ["quickjs", "quickjs-minimal"] as const) test(`${build} receipt requires matching side identity and bytes`, async () => {
+for (const build of ["quickjs", "quickjs-minimal", "jsc"] as const) test(`${build} receipt requires matching side identity, origin and bytes`, async () => {
   await withReceiptFixture(async options => {
     const selected = { ...options, build };
+    const kind = build === "jsc" ? "jsc" : "quickjs";
     const directory = join(options.repository, "dist");
-    const artifact = join(directory, "bun.wasm");
-    const side = join(directory, "quickjs.wasm");
-    await writeFile(artifact, wasm);
+    const artifact = join(directory, programProfile(kind).core);
+    const sidePath = join(directory, programProfile(kind).side);
+    const { core, side } = await stageProgramFixture(selected, artifact, kind);
     const inputs = await prepareGuestBuildInputs(selected);
     const receipt = await writeGuestBuildReceipt(selected, artifact, inputs);
-    expect(receipt.quickjs).toEqual({ artifactSha256: hash(wasm), artifactBytes: wasm.length });
-    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, quickjs: undefined })).toThrow("Missing paired QuickJS identity");
-    expect(() => verifyGuestBuildReceipt(wasm, { ...receipt, quickjs: { artifactSha256: "bad", artifactBytes: 8 } })).toThrow("Missing paired QuickJS identity");
+    if (receipt.program.kind === "single") throw new Error("Expected paired receipt");
+    expect(receipt.program.side).toEqual({ artifactSha256: hash(side), artifactBytes: side.length });
+    expect(() => verifyGuestBuildReceipt(core, { ...receipt, program: { kind, core: receipt.program.core } })).toThrow("companion fields");
+    expect(() => verifyGuestBuildReceipt(core, { ...receipt, program: { ...receipt.program, side: { artifactSha256: "bad", artifactBytes: 8 } } })).toThrow("artifact identity");
+    expect(() => verifyGuestBuildReceipt(core, { ...receipt, engineOrigin: undefined })).toThrow("program build receipt");
+    expect(() => verifyGuestBuildReceipt(core, { ...receipt, engineInputSha256: "0".repeat(64) })).toThrow("origin/input");
     await expect(verifyGuestCompanions(receipt, directory)).resolves.toBeUndefined();
-    await writeFile(side, new Uint8Array(Array.from(wasm).concat([0, 2, 1, 120])));
-    await expect(verifyGuestCompanions(receipt, directory)).rejects.toThrow("paired QuickJS bytes");
-    await writeFile(side, "not wasm");
-    await expect(verifyGuestCompanions(receipt, directory)).rejects.toThrow("Invalid paired QuickJS module");
-    await rm(side);
-    await expect(verifyGuestCompanions(receipt, directory)).rejects.toThrow("quickjs.wasm");
-    await expect(writeGuestBuildReceipt(selected, artifact, inputs)).rejects.toThrow("quickjs.wasm");
+    await writeFile(sidePath, new Uint8Array(Array.from(side).concat([0, 2, 1, 120])));
+    await expect(verifyGuestCompanions(receipt, directory)).rejects.toThrow("artifact bytes");
+    await writeFile(sidePath, "not wasm");
+    await expect(verifyGuestCompanions(receipt, directory)).rejects.toThrow();
+    await rm(sidePath);
+    await expect(verifyGuestCompanions(receipt, directory)).rejects.toThrow(programProfile(kind).side);
+    await expect(writeGuestBuildReceipt(selected, artifact, inputs)).rejects.toThrow(programProfile(kind).side);
   });
 });

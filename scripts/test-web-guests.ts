@@ -1,3 +1,4 @@
+import { guestBuilds } from "./guest-source-manifest";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { verifyGuestBuildReceipt, verifyGuestCompanions } from "./guest-build-receipt";
@@ -29,6 +30,7 @@ async function fixture(directory: string, artifact: string) {
   if (!await sidecar.exists()) throw new Error(`Missing required Web guest receipt: ${path}.build.json`);
   const receipt: unknown = await sidecar.json();
   verifyGuestBuildReceipt(await file.bytes(), receipt);
+  if (guestBuilds[receipt.sourceManifest.build].artifact !== artifact) throw new Error(`Web guest engine mismatch: ${artifact}`);
   await verifyGuestCompanions(receipt, join(directory, "dist"));
   return { path, ...receipt };
 }

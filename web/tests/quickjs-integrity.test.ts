@@ -1,3 +1,4 @@
+import { programProfile, type PairedEngine } from "../../src/engine-kind";
 import { expect, test } from "bun:test";
 import { loadWasm } from "../src/engine-loader";
 import { programLinkPlan } from "../../src/assets";
@@ -5,11 +6,12 @@ import { quickjsPair } from "../../tests/package/quickjs-plan-fixture";
 
 const digest = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
-for (const source of ["download", "cache"] as const) {
-  for (const changed of ["bun.wasm", "quickjs.wasm"] as const) test(`paired ${source} rejects changed ${changed}`, async () => {
-    await withPair(source, changed, async () => {
-      await expect(loadWasm("bun.wasm", () => {})).rejects.toThrow(`${changed} integrity mismatch`);
-    });
+for (const kind of ["quickjs", "jsc"] as const) {
+  const profile = programProfile(kind);
+  for (const source of ["download", "cache"] as const) test(`${kind} ${source} rejects changed core and side`, async () => {
+    for (const changed of [profile.core, profile.side]) await withPair(source, changed, async () => {
+      await expect(loadWasm(profile.core, () => {})).rejects.toThrow(`${changed} integrity mismatch`);
+    }, kind);
   });
 }
 
@@ -21,8 +23,9 @@ for (const filename of ["bun.wasm", "bun.wasm.gz", "custom.wasm"]) {
   }
 }
 
-async function customPair(filename: string, manifest: Record<string, string> | undefined) {
-  const { core, side } = quickjsPair();
+async function customPair(filename: string, manifest: Record<string, string> | undefined, kind: PairedEngine = "quickjs") {
+  const { core, side } = quickjsPair(kind);
+  const profile = programProfile(kind);
   const originals = new Map(["location", "__bunwasmBuilds", "fetch"].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   const requested: string[] = [];
   try {
@@ -31,13 +34,13 @@ async function customPair(filename: string, manifest: Record<string, string> | u
     Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: Parameters<typeof fetch>[0]) => {
       const url = String(input);
       requested.push(url);
-      const bytes = url.endsWith("quickjs.wasm.gz") ? side : core;
+      const bytes = url.endsWith(`${profile.side}.gz`) ? side : core;
       return new Response(Bun.gzipSync(bytes));
     } });
     const result = await loadWasm(`https://cdn.test/build/${filename}`, () => {});
     expect(result.build).toBeNull();
     expect(programLinkPlan(result.module)?.libraries[0]?.source).toEqual(side);
-    expect(requested).toEqual([`https://cdn.test/build/${filename.replace(/\.gz$/, "")}.gz`, "https://cdn.test/build/quickjs.wasm.gz"]);
+    expect(requested).toEqual([`https://cdn.test/build/${filename.replace(/\.gz$/, "")}.gz`, `https://cdn.test/build/${profile.side}.gz`]);
   } finally {
     restoreGlobals(originals);
   }
@@ -58,9 +61,10 @@ test("downloaded and cached pairs preserve both exact program inputs", async () 
   });
 });
 
-async function withPair(source: "download" | "cache", changed: string | undefined, check: (state: ReturnType<typeof quickjsPair> & { downloads(): number }) => Promise<void>) {
-  const { core, side } = quickjsPair();
-  const files = new Map([["bun.wasm", core], ["quickjs.wasm", side]]);
+async function withPair(source: "download" | "cache", changed: string | undefined, check: (state: ReturnType<typeof quickjsPair> & { downloads(): number }) => Promise<void>, kind: PairedEngine = "quickjs") {
+  const { core, side } = quickjsPair(kind);
+  const profile = programProfile(kind);
+  const files = new Map<string, Uint8Array<ArrayBuffer>>([[profile.core, core], [profile.side, side]]);
   const originals = new Map(["location", "__bunwasmBuilds", "caches", "fetch"].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   const cache = new Map<string, Response>();
   let downloads = 0;
@@ -102,3 +106,28 @@ function restoreGlobals(originals: Map<string, PropertyDescriptor | undefined>):
     else Reflect.deleteProperty(globalThis, name);
   }
 }
+
+for (const filename of ["bun-jsc.wasm", "bun-jsc.wasm.gz", "bun.wasm", "renamed.wasm"]) test(`custom JSC declaration selects its side at ${filename}`, async () => {
+  await customPair(filename, { "bun.wasm": "unrelated", "bun-jsc.wasm": "unrelated", "jsc-engine.wasm": "unrelated" }, "jsc");
+});
+
+test("cached generic custom URL still prepares the declared JSC side", async () => {
+  const { core, side } = quickjsPair("jsc");
+  const url = "https://cdn.test/renamed.wasm";
+  const originals = new Map(["location", "__bunwasmBuilds", "caches", "fetch"].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
+  const requested: string[] = [];
+  try {
+    Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://app.test/") });
+    Object.defineProperty(globalThis, "__bunwasmBuilds", { configurable: true, value: { [url]: digest(core) } });
+    Object.defineProperty(globalThis, "caches", { configurable: true, value: { async match(key: string) {
+      return key === url ? new Response(core, { headers: { "x-bunwasm-build": digest(core) } }) : undefined;
+    } } });
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: string) => {
+      requested.push(input); return new Response(Bun.gzipSync(side));
+    } });
+    const loaded = await loadWasm(url, () => {});
+    expect(programLinkPlan(loaded.module)?.libraries[0]?.source).toEqual(side);
+    expect(loaded.size).toBe(core.length + side.length);
+    expect(requested).toEqual(["https://cdn.test/jsc-engine.wasm.gz"]);
+  } finally { restoreGlobals(originals); }
+});

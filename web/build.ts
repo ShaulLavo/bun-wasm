@@ -50,6 +50,10 @@ const jscSource = resolve(here, process.env.JSC_WASM ?? "../dist/bun-jsc.wasm");
 if (!(await copyWasm(jscSource, "bun-jsc.wasm"))) {
   console.warn(`bun-jsc.wasm: ${jscSource} not found; the JavaScriptCore engine option will fail to load.`);
 }
+const jscEngineSource = join(dirname(jscSource), "jsc-engine.wasm");
+if (existsSync(jscSource) && !(await copyWasm(jscEngineSource, "jsc-engine.wasm"))) {
+  throw new Error(`JSC core requires its matching side module: ${jscEngineSource}`);
+}
 const browserSource = resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun-browser.wasm");
 if (!(await copyWasm(browserSource, "bun-browser.wasm"))) {
   console.warn(`bun-browser.wasm: ${browserSource} not found; the Browser (native) engine option will fail to load.`);

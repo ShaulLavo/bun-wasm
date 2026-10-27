@@ -4,7 +4,8 @@ import type { WASI } from "node:wasi";
 import { Wasi } from "waffle/core";
 import { MemFS } from "waffle/fs/memory";
 import { instantiateLinkPlan, prepareLinkPlan, type LinkPlanSource, type LinkedGroup } from "waffle/link";
-import { quickjsProgramSource } from "../../src/quickjs-program.ts";
+import { engineLinkPlan } from "../../src/quickjs-program.ts";
+import { programKind, programProfile } from "../../src/engine-kind.ts";
 
 export interface NodeProgram {
   readonly module: WebAssembly.Module;
@@ -14,9 +15,10 @@ export interface NodeProgram {
 export async function loadNodeProgram(path: string): Promise<NodeProgram> {
   const bytes = readFileSync(path);
   const module = await WebAssembly.compile(bytes);
-  if (!WebAssembly.Module.exports(module).some(entry => entry.name === "bun_core_bind_engine")) return { module };
-  const side = readFileSync(join(dirname(path), "quickjs.wasm"));
-  const plan = await prepareLinkPlan(await quickjsProgramSource(bytes, side));
+  const kind = programKind(module);
+  if (kind === "single") return { module };
+  const side = readFileSync(join(dirname(path), programProfile(kind).side));
+  const plan = await prepareLinkPlan(await engineLinkPlan({ kind, core: bytes, side }));
   return { module: plan.entryModule, linkPlan: plan.toSource() };
 }
 

@@ -1,4 +1,5 @@
-import { prepareQuickjsProgram } from "../../src/assets";
+import { programKind, programProfile } from "../../src/engine-kind";
+import { prepareProgram } from "../../src/assets";
 import { observedAtomics } from "./engine-interruption-atomics";
 import { controlLoad, controlStore, controlAdd } from "waffle/proc/control";
 import { createRuntime, type Runtime } from "waffle";
@@ -592,17 +593,21 @@ async function benchmark(module: WebAssembly.Module, engine: Engine, pristine?: 
   } finally { hooks = true; observeCheckpoints = true; }
 }
 
-async function loadCandidate(engine: Engine, name: string) {
-  const response = await fetch(`/${name}`); truth(response.ok, `fresh artifact ${name}: HTTP ${response.status}`);
+async function loadCandidate(engine: Engine, name: string, prefix = "/") {
+  const response = await fetch(`${prefix}${name}`); truth(response.ok, `fresh artifact ${name}: HTTP ${response.status}`);
   const bytes = new Uint8Array(await response.arrayBuffer());
   const fingerprint = async (bytes: Uint8Array<ArrayBuffer>) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
   const hash = await fingerprint(bytes);
   const artifacts = [{ engine, name, sha256: hash, bytes: bytes.byteLength }];
-  if (engine !== "quickjs") return { module: await WebAssembly.compile(bytes), hash, artifacts };
-  const responseSide = await fetch("/quickjs.wasm"); truth(responseSide.ok, `fresh artifact quickjs.wasm: HTTP ${responseSide.status}`);
+  const kind = programKind(new WebAssembly.Module(bytes));
+  const expected = engine === "quickjs" || engine === "jsc" ? engine : "single";
+  truth(kind === expected, `${engine} core declaration mismatch`);
+  if (kind === "single") return { module: await prepareProgram({ kind, core: bytes }), hash, artifacts };
+  const sideName = programProfile(kind).side;
+  const responseSide = await fetch(`${prefix}${sideName}`); truth(responseSide.ok, `fresh artifact ${sideName}: HTTP ${responseSide.status}`);
   const side = new Uint8Array(await responseSide.arrayBuffer());
-  artifacts.push({ engine, name: "quickjs.wasm", sha256: await fingerprint(side), bytes: side.byteLength });
-  return { module: await prepareQuickjsProgram(bytes, side), hash, artifacts };
+  artifacts.push({ engine, name: sideName, sha256: await fingerprint(side), bytes: side.byteLength });
+  return { module: await prepareProgram({ kind, core: bytes, side }), hash, artifacts };
 }
 
 void (async () => {
@@ -656,14 +661,15 @@ void (async () => {
       for (const { engine, name, hash, module } of modules) {
         if (engine === "browser") continue;
         let pristine: WebAssembly.Module | undefined, pristineSha256: string | undefined;
+        let pristineArtifacts: Awaited<ReturnType<typeof loadCandidate>>["artifacts"] | undefined;
         if (query.has("baseline")) {
-          const response = await fetch(`/baseline/${name}`); truth(response.ok, `pristine baseline ${name}: HTTP ${response.status}`);
-          const bytes = await response.arrayBuffer();
-          pristineSha256 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
+          const baseline = await loadCandidate(engine, name, "/baseline/");
+          pristineSha256 = baseline.hash;
           truth(pristineSha256 !== hash, "pristine baseline must not reuse candidate bytes");
-          pristine = await WebAssembly.compile(bytes);
+          pristine = baseline.module;
+          pristineArtifacts = baseline.artifacts;
         }
-        benchmarks.push({ wasmSha256: hash, pristineSha256, ...await benchmark(module, engine, pristine) });
+        benchmarks.push({ wasmSha256: hash, artifacts: artifacts.filter(file => file.engine === engine), pristineSha256, pristineArtifacts, ...await benchmark(module, engine, pristine) });
       }
     }
       }

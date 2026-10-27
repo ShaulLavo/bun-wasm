@@ -1,3 +1,4 @@
+import { mapProgramFiles, parseProgramFiles, programKind, programProfile, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
@@ -16,9 +17,7 @@ export interface GuestFileDescriptor {
   readonly bytes: number;
 }
 
-export interface GuestDescriptor extends GuestFileDescriptor {
-  readonly quickjs?: GuestFileDescriptor;
-}
+export type GuestDescriptor = ProgramFiles<GuestFileDescriptor>;
 
 export interface GuestFile {
   readonly descriptor: GuestFileDescriptor;
@@ -26,9 +25,9 @@ export interface GuestFile {
   readonly gzip: Uint8Array;
 }
 
-export interface GuestArtifact extends GuestFile {
+export interface GuestArtifact {
   readonly descriptor: GuestDescriptor;
-  readonly quickjs?: GuestFile;
+  readonly files: ProgramFiles<GuestFile>;
 }
 
 export function decodeGuest(input: Uint8Array): Uint8Array {
@@ -56,14 +55,37 @@ function prepareFile(input: Uint8Array, origin: string, name: string): GuestFile
   return { descriptor, key: `${descriptor.sha256}/${name}.gz`, gzip: gzipSync(bytes, { level: 9 }) };
 }
 
-export function prepareGuest(input: Uint8Array, origin = GUEST_ORIGIN, side?: Uint8Array): GuestArtifact {
-  const core = prepareFile(input, origin, "bun.wasm");
-  if (!side) return core;
-  const quickjs = prepareFile(side, origin, "quickjs.wasm");
-  return { ...core, descriptor: { ...core.descriptor, quickjs: quickjs.descriptor }, quickjs };
+export function prepareGuest(input: ProgramFiles<Uint8Array>, origin = GUEST_ORIGIN): GuestArtifact {
+  const coreBytes = decodeGuest(input.core);
+  if (programKind(new WebAssembly.Module(Uint8Array.from(coreBytes))) !== input.kind) throw new Error("Guest program does not match core engine declaration");
+  const core = prepareFile(coreBytes, origin, input.kind === "single" ? "bun.wasm" : programProfile(input.kind).core);
+  if (input.kind === "single") return { files: { kind: "single", core }, descriptor: { kind: "single", core: core.descriptor } };
+  const sideBytes = decodeGuest(input.side);
+  verifyProgramSide(input.kind, new WebAssembly.Module(Uint8Array.from(sideBytes)));
+  const side = prepareFile(sideBytes, origin, programProfile(input.kind).side);
+  const files = { kind: input.kind, core, side };
+  return { files, descriptor: mapProgramFiles(files, file => file.descriptor) };
 }
 
-export function verifyGuest(input: Uint8Array, expected: GuestDescriptor): void {
+export function parseGuestDescriptor(value: unknown): GuestDescriptor {
+  return parseProgramFiles(value, file => {
+    if (!file || typeof file !== "object" || !("url" in file) || typeof file.url !== "string"
+      || !("sha256" in file) || typeof file.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(file.sha256)
+      || !("bytes" in file) || typeof file.bytes !== "number" || !Number.isSafeInteger(file.bytes) || file.bytes < 8) throw new TypeError("Invalid guest file descriptor");
+    return { url: file.url, sha256: file.sha256, bytes: file.bytes };
+  });
+}
+
+export async function readGuestArtifact(path: string, origin = GUEST_ORIGIN): Promise<GuestArtifact> {
+  const core = decodeGuest(await readFile(path));
+  const kind = programKind(new WebAssembly.Module(Uint8Array.from(core)));
+  if (kind === "single") return prepareGuest({ kind, core }, origin);
+  const sidePath = join(dirname(path), programProfile(kind).side);
+  const side = await readFile(sidePath);
+  return prepareGuest({ kind, core, side }, origin);
+}
+
+export function verifyGuest(input: Uint8Array, expected: GuestFileDescriptor): void {
   const actual = describeGuest(input);
   if (actual.bytes !== expected.bytes || actual.sha256 !== expected.sha256) {
     throw new Error(`Guest integrity mismatch: expected ${expected.sha256} (${expected.bytes} bytes), received ${actual.sha256} (${actual.bytes} bytes)`);
@@ -90,18 +112,7 @@ if (import.meta.main) {
   });
   if (positionals.length !== 1) throw new Error("Usage: bun scripts/guest-artifact.ts <bun.wasm[.gz]> [--origin https://host] [--output descriptor.ts]");
   const inputPath = resolve(positionals[0]!);
-  const input = await readFile(inputPath);
-  const core = decodeGuest(input);
-  const split = WebAssembly.Module.exports(new WebAssembly.Module(Uint8Array.from(core))).some(entry => entry.name === "bun_core_bind_engine");
-  let descriptor: GuestDescriptor;
-  if (!split) descriptor = describeGuest(input, values.origin);
-  else {
-    const sidePath = join(dirname(inputPath), "quickjs.wasm");
-    let side: Uint8Array;
-    try { side = await readFile(sidePath); }
-    catch { throw new Error(`QuickJS core requires its matching side module: ${sidePath}`); }
-    descriptor = prepareGuest(core, values.origin, side).descriptor;
-  }
+  const { descriptor } = await readGuestArtifact(inputPath, values.origin);
   if (values.output) await writeGuestDescriptor(values.output, descriptor);
   console.log(JSON.stringify(descriptor, null, 2));
 }

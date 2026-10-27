@@ -1,3 +1,4 @@
+import { programProfile } from "../src/engine-kind.ts";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -7,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeGuest, prepareGuest, verifyGuest, type GuestArtifact, type GuestDescriptor } from "./guest-artifact.ts";
 import { guestBuilds } from "./guest-source-manifest.ts";
-import { verifyGuestBuildReceipt, verifyGuestCompanions, type GuestBuildReceipt } from "./guest-build-receipt.ts";
+import { requiredGuestCompanions, verifyGuestBuildReceipt, verifyGuestCompanions, type GuestBuildReceipt, type ArtifactIdentity } from "./guest-build-receipt.ts";
 
 const artifacts = ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"] as const;
 const browsers = ["chromium", "firefox", "webkit"] as const;
@@ -56,7 +57,7 @@ export async function verifyPublicationInputs(dist: string, descriptor: GuestDes
     await verifyGuestCompanions(receipt, dist);
     if (guestBuilds[receipt.sourceManifest.build].artifact !== name) throw new Error(`Guest publication engine mismatch: ${name}`);
     const described = describeGuest(candidate);
-    if (described.sha256 === descriptor.sha256 && described.bytes === descriptor.bytes) matched = true;
+    if (described.sha256 === descriptor.core.sha256 && described.bytes === descriptor.core.bytes && matchesProgram(receipt, descriptor)) matched = true;
   }
   if (!matched) throw new Error("Guest publication integrity mismatch: upload is not one of the tested matrix artifacts");
 }
@@ -77,18 +78,39 @@ export async function snapshotPublicationInputs(dist: string, descriptor: GuestD
     await writeFile(join(directory, `${name}.build.json`), JSON.stringify(receipt, null, 2) + "\n", { flag: "wx", mode: 0o400 });
     receipts.push({ name, sha256: candidate.sha256, bytes: candidate.bytes, receipt });
   }
-  const selected = receipts.find(candidate => candidate.sha256 === descriptor.sha256 && candidate.bytes === descriptor.bytes);
+  const selected = receipts.find(candidate => candidate.sha256 === descriptor.core.sha256 && candidate.bytes === descriptor.core.bytes && matchesProgram(candidate.receipt, descriptor));
   if (!selected) throw new Error("Guest publication integrity mismatch: build changed before snapshot");
-  const paired = receipts.find(candidate => candidate.receipt.quickjs);
   const loaded: ArtifactReceipt[] = receipts.slice();
-  if (paired) {
-    const side = await readFile(join(dist, "quickjs.wasm"));
-    await writeFile(join(directory, "quickjs.wasm"), side, { flag: "wx", mode: 0o400 });
-    await verifyGuestCompanions(paired.receipt, directory);
-    loaded.push({ name: "quickjs.wasm", ...describeGuest(side) });
+  const companions = companionUnion(receipts);
+  for (const [name, identity] of companions) {
+    const side = await readFile(join(dist, name));
+    const described = describeGuest(side);
+    if (described.sha256 !== identity.artifactSha256 || described.bytes !== identity.artifactBytes) throw new Error(`Guest companion changed before snapshot: ${name}`);
+    await writeFile(join(directory, name), side, { flag: "wx", mode: 0o400 });
+    loaded.push({ name, sha256: described.sha256, bytes: described.bytes });
   }
+  for (const artifact of receipts) await verifyGuestCompanions(artifact.receipt, directory);
   await chmod(directory, 0o500);
   return { directory, artifacts: loaded, selected };
+}
+
+function matchesProgram(receipt: GuestBuildReceipt, descriptor: GuestDescriptor): boolean {
+  const { program } = receipt;
+  if (program.kind !== descriptor.kind) return false;
+  if (program.kind === "single" || descriptor.kind === "single") return true;
+  return program.side.artifactSha256 === descriptor.side.sha256 && program.side.artifactBytes === descriptor.side.bytes;
+}
+
+function companionUnion(receipts: readonly SnapshotArtifact[]): Map<string, ArtifactIdentity> {
+  const companions = new Map<string, ArtifactIdentity>();
+  for (const artifact of receipts) {
+    for (const { name, identity } of requiredGuestCompanions(artifact.receipt)) {
+      const previous = companions.get(name);
+      if (previous && (previous.artifactSha256 !== identity.artifactSha256 || previous.artifactBytes !== identity.artifactBytes)) throw new Error(`Conflicting companion identities: ${name}`);
+      companions.set(name, identity);
+    }
+  }
+  return companions;
 }
 
 /** Evidence comes from the exact ArrayBuffers each browser hashed and compiled. */
@@ -142,10 +164,14 @@ async function runAcceptance(snapshot: PublicationSnapshot, output: string, sign
 export async function acceptedPublicationArtifact(snapshot: PublicationSnapshot, report: unknown, descriptor: GuestDescriptor): Promise<GuestArtifact> {
   verifyPublicationReport(snapshot, report);
   const bytes = await readFile(join(snapshot.directory, snapshot.selected.name));
-  verifyGuest(bytes, descriptor);
+  verifyGuest(bytes, descriptor.core);
+  if (!matchesProgram(snapshot.selected.receipt, descriptor)) throw new Error("Guest program identity differs from accepted snapshot");
   await verifyGuestCompanions(snapshot.selected.receipt, snapshot.directory);
-  const side = snapshot.selected.receipt.quickjs ? await readFile(join(snapshot.directory, "quickjs.wasm")) : undefined;
-  return prepareGuest(bytes, new URL(descriptor.url).origin, side);
+  const kind = snapshot.selected.receipt.program.kind;
+  const origin = new URL(descriptor.core.url).origin;
+  if (kind === "single") return prepareGuest({ kind, core: bytes }, origin);
+  const side = await readFile(join(snapshot.directory, programProfile(kind).side));
+  return prepareGuest({ kind, core: bytes, side }, origin);
 }
 
 export async function acceptGuestPublication(dist: string, descriptor: GuestDescriptor, signal: AbortSignal): Promise<GuestArtifact> {
