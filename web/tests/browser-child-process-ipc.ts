@@ -47,12 +47,18 @@ try {
   const page = await context.newPage();
   await page.addInitScript(() => {
     const NativeWorker = globalThis.Worker;
+    // Only workers the page has sent a request count: Waffle prestarts idle process workers.
     const active = new Set<Worker>();
     let created = 0;
     let peak = 0;
     globalThis.Worker = class extends NativeWorker {
       constructor(url: string | URL, options?: WorkerOptions) {
-        super(url, options); active.add(this); created++; peak = Math.max(peak, active.size);
+        super(url, options); created++;
+      }
+      override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions) {
+        active.add(this); peak = Math.max(peak, active.size);
+        if (Array.isArray(options)) super.postMessage(message, options);
+        else super.postMessage(message, options);
       }
       override terminate() { active.delete(this); super.terminate(); }
     };
