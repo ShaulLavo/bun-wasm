@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 
 const root = resolve(import.meta.dir, "..");
@@ -9,7 +10,7 @@ const root = resolve(import.meta.dir, "..");
 test("Bun WASI runs actual WASM imports through native host filesystem calls", () => {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-wasi-control-"));
   try {
-    const result = Bun.spawnSync([process.execPath, join(import.meta.dir, "fixtures/runtime-wasi-host.ts")], {
+    const result = Bun.spawnSync([process.execPath, fileURLToPath(new URL("./fixtures/runtime-wasi-host.ts", import.meta.url))], {
       cwd: root, env: { ...process.env, TMPDIR: scratch }, stdout: "pipe", stderr: "pipe", timeout: 15_000,
     });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
