@@ -25,7 +25,7 @@ export function observePreviewPaths(): void {
               first = false;
               const line = new TextDecoder().decode(Uint8Array.from(chunk.subarray(0, 2048))).split("\r\n", 1)[0] ?? "";
               const match = /^([A-Z]+) (\S+) HTTP\/1\.[01]$/.exec(line);
-              if (match?.[1] && match[2]) paths.push({ sequence: ++sequence, port, method: match[1], target: match[2] });
+              if (match?.[1] && match[2]) paths.push({ sequence: ++sequence, port, method: match[1], target: match[2].split(/[?#]/, 1)[0] ?? "/" });
               if (paths.length > 4096) paths.shift();
             }
             connection.write(chunk);

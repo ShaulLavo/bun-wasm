@@ -4,10 +4,10 @@ import { pathToFileURL } from "node:url";
 import { projectFiles } from "./apps.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
 import { boundedCleanup, closeOwnedBrowser, closeOwnedContext, HarnessCleanupError, withCleanupFailures } from "./cleanup.ts";
-import { browserDiagnostics } from "./browser-diagnostics.ts";
+import { browserDiagnostics, redactDiagnosticText } from "./browser-diagnostics.ts";
 import { verifyBrowserServer, stoppedPreviewError } from "./server-browser.ts";
 import { observeHmr } from "./hmr.ts";
-import { observeProductTraffic, productObservations } from "./product-browser.ts";
+import { observeProductTraffic, observeNativeProductTraffic, productObservations } from "./product-browser.ts";
 import { failure, stageOutput } from "./classify.ts";
 import { BlockedBrowserNetworkError } from "./product-campaign.ts";
 import { browserRegistryRoute } from "./registry-request.ts";
@@ -57,9 +57,10 @@ export async function serverCommand({ page, context, command, app, engine, optio
     await page.waitForTimeout(100);
   }
   const preview = await context.newPage();
-  const traffic = await observeProductTraffic(preview);
+  const traffic = options.previewOrigins ? await observeNativeProductTraffic(preview) : await observeProductTraffic(preview);
+  const diagnostics = browserDiagnostics(preview);
   const errors = [];
-  preview.on("pageerror", error => errors.push(String(error)));
+  preview.on("pageerror", error => errors.push(redactDiagnosticText(String(error))));
   let checked;
   let url;
   let captured = false;
@@ -113,6 +114,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
     if (!cleanupFailures.length && checked?.status === "pass" && (command.check.framework || options.previewOrigins)) {
       await release("stopped-preview", verifyStopped, options.timeout);
     }
+    await release("browser-diagnostics", () => writeFileSync(join(options.output, `${app.id}-${engine}-${command.name}-browser.json`), JSON.stringify({ errors, ...diagnostics() }, null, 2) + "\n"));
     await release("traffic-close", () => traffic.close());
     await release("preview-close", () => preview.close());
   }
@@ -166,7 +168,7 @@ export async function browserHost({ root, options, launch, stop }) {
     const deadline = Date.now() + timeout;
     const remaining = () => Math.max(1, deadline - Date.now());
     const errors = [];
-    page.on("pageerror", error => errors.push(String(error)));
+    page.on("pageerror", error => errors.push(redactDiagnosticText(String(error))));
     let checked;
     let productError;
     try {

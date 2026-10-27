@@ -86,3 +86,11 @@ requests count toward the shared exchange budget. They wait for that authenticat
 grant or revocation rather than racing startup. A reused native connection cannot
 switch runtime owners. Loopback aliases retain the browser's ordinary cookie
 rules; the dedicated root addresses provide the separate cookie hosts.
+
+Root-mode HMR evidence comes from actual native browser WebSocket frames. The
+mounted-mode observer continues to handle the runtime polyfill's dispatched
+messages. Native events bypass JavaScript dispatchEvent, so using only that hook
+would falsely report missing updates. Native mode does not patch browser events,
+constructors or URLs, and a real-browser regression rejects synthetic events as
+native traffic. Persisted path observations omit query strings, and browser
+error diagnostics redact token query values.

@@ -63,11 +63,6 @@ function installPreviewTrafficObserver() {
   if (!descriptor || typeof descriptor.value !== "function") return;
 
   const originalDispatch = descriptor.value;
-  const nextActions = new Set([
-    "reloadPage", "serverComponentChanges", "clientChanges",
-    "serverOnlyChanges", "middlewareChanges", "addedPage", "removedPage",
-  ]);
-  const nextEvents = new Set(["clientChanges", "serverOnlyChanges", "middlewareChanges"]);
   let editing = false;
 
   function textPayload(data: unknown): string | null {
@@ -77,46 +72,17 @@ function installPreviewTrafficObserver() {
     return null;
   }
 
-  function stringProperty(value: object, key: string): string | null {
-    const candidate = Reflect.get(value, key);
-    return typeof candidate === "string" ? candidate : null;
-  }
-
-  function frameworkEvent(target: EventTarget, event: Event): { framework: "next" | "vite"; event: string; payload: string } | null {
+  function frameworkPayload(target: EventTarget, event: Event): string | null {
     if (event.type !== "message") return null;
     if (typeof globalThis.WebSocket !== "function" || !(target instanceof globalThis.WebSocket)) return null;
     if (typeof nativeWebSocket === "function" && target instanceof nativeWebSocket) return null;
-    if (!("data" in event)) return null;
-    const payload = textPayload(event.data);
-    if (payload === null) return null;
-
-    let message: unknown;
-    try { message = JSON.parse(payload); }
-    catch { return null; }
-    if (!message || typeof message !== "object") return null;
-
-    const type = stringProperty(message, "type");
-    if (type === "full-reload") return { framework: "vite", event: type, payload };
-    const updates = Reflect.get(message, "updates");
-    if (type === "update" && Array.isArray(updates) && updates.some(meaningfulUpdate)) return { framework: "vite", event: type, payload };
-    const action = stringProperty(message, "action");
-    if (action === "built" && stringProperty(message, "hash")) return { framework: "next", event: action, payload };
-    if (action && nextActions.has(action)) return { framework: "next", event: action, payload };
-    const eventName = stringProperty(message, "event");
-    if (eventName && nextEvents.has(eventName)) return { framework: "next", event: eventName, payload };
-    return null;
-  }
-
-  function meaningfulUpdate(value: unknown): boolean {
-    if (!value || typeof value !== "object") return false;
-    const kind = stringProperty(value, "type");
-    return (kind === "js-update" || kind === "css-update") && Boolean(stringProperty(value, "path"));
+    return "data" in event ? textPayload(event.data) : null;
   }
 
   const wrappedDispatch = function (this: EventTarget, event: Event): boolean {
     try {
-      const observed = frameworkEvent(this, event);
-      if (observed) void globalThis.__bunWasmProductTrafficReport?.({ ...observed, editing }).catch(() => {});
+      const payload = frameworkPayload(this, event);
+      if (payload !== null) void globalThis.__bunWasmProductTrafficReport?.({ payload, editing }).catch(() => {});
     } catch { }
     return Reflect.apply(originalDispatch, this, [event]);
   };
@@ -136,20 +102,61 @@ function closePreviewTrafficObserver(): void {
   globalThis.__bunWasmProductTraffic?.close();
 }
 
-function isTrafficEvidence(value: unknown): value is Omit<TrafficEvidence, "sequence"> {
+function frameworkTraffic(input: unknown): Omit<TrafficEvidence, "sequence"> | null {
+  const payload = typeof input === "string" ? input : input instanceof Uint8Array ? new TextDecoder().decode(Uint8Array.from(input)) : null;
+  if (payload === null || payload.length > 262144) return null;
+  const nextActions = new Set([
+    "reloadPage", "serverComponentChanges", "clientChanges",
+    "serverOnlyChanges", "middlewareChanges", "addedPage", "removedPage",
+  ]);
+  const nextEvents = new Set(["clientChanges", "serverOnlyChanges", "middlewareChanges"]);
+  let message: unknown;
+  try { message = JSON.parse(payload); }
+  catch { return null; }
+  if (!message || typeof message !== "object") return null;
+
+  const type = stringProperty(message, "type");
+  if (type === "full-reload") return { framework: "vite", event: type, payload };
+  const updates = Reflect.get(message, "updates");
+  if (type === "update" && Array.isArray(updates) && updates.some(meaningfulUpdate)) return { framework: "vite", event: type, payload };
+  const action = stringProperty(message, "action");
+  if (action === "built" && stringProperty(message, "hash")) return { framework: "next", event: action, payload };
+  if (action && nextActions.has(action)) return { framework: "next", event: action, payload };
+  const eventName = stringProperty(message, "event");
+  if (eventName && nextEvents.has(eventName)) return { framework: "next", event: eventName, payload };
+  return null;
+}
+
+function meaningfulUpdate(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
-  if (!("framework" in value) || !("event" in value) || !("payload" in value)) return false;
-  return (value.framework === "next" || value.framework === "vite")
-    && typeof value.event === "string"
-    && typeof value.payload === "string";
+  const kind = stringProperty(value, "type");
+  return (kind === "js-update" || kind === "css-update") && Boolean(stringProperty(value, "path"));
+}
+
+function stringProperty(value: object, key: string): string | null {
+  const candidate = Reflect.get(value, key);
+  return typeof candidate === "string" ? candidate : null;
+}
+
+
+class TrafficLog {
+  private readonly events: TrafficEvidence[] = [];
+  private sequence = 0;
+  record(payload: unknown): void {
+    const event = frameworkTraffic(payload);
+    if (!event) return;
+    this.events.push({ ...event, sequence: ++this.sequence });
+    if (this.events.length > 256) this.events.shift();
+  }
+  count(): number { return this.sequence; }
+  since(sequence: number): TrafficEvidence[] { return this.events.filter(event => event.sequence > sequence).map(event => ({ ...event })); }
 }
 
 export async function observeProductTraffic(page: ProductPage): Promise<ProductTraffic> {
-  const events: TrafficEvidence[] = [];
-  let nextSequence = 1;
+  const log = new TrafficLog();
   const receive = (_source: unknown, value: unknown): void => {
-    if (!isTrafficEvidence(value) || !("editing" in value) || value.editing !== true) return;
-    events.push({ sequence: nextSequence++, ...value });
+    if (!value || typeof value !== "object" || !("editing" in value) || value.editing !== true || !("payload" in value)) return;
+    log.record(value.payload);
   };
   const binding = await page.exposeBinding(trafficBindingName, receive);
   let script: Disposable;
@@ -162,8 +169,8 @@ export async function observeProductTraffic(page: ProductPage): Promise<ProductT
       if (!state) throw new Error("Preview traffic observer is not installed");
       state.beginEdit();
     }),
-    count: async () => events.length,
-    evidenceSince: async sequence => events.slice(sequence).map(event => ({ ...event })),
+    count: async () => log.count(),
+    evidenceSince: async sequence => log.since(sequence),
     close: async () => {
       if (closed) return;
       try { await page.evaluate(closePreviewTrafficObserver); }
@@ -171,6 +178,46 @@ export async function observeProductTraffic(page: ProductPage): Promise<ProductT
         closed = true;
         await Promise.all([script.dispose(), binding.dispose()]);
       }
+    },
+  };
+}
+
+interface NativeSocket {
+  on(event: "framereceived", listener: (frame: { payload: unknown }) => void): unknown;
+  off(event: "framereceived", listener: (frame: { payload: unknown }) => void): unknown;
+  on(event: "close", listener: () => void): unknown;
+  off(event: "close", listener: () => void): unknown;
+}
+interface NativeTrafficPage {
+  on(event: "websocket", listener: (socket: NativeSocket) => void): unknown;
+  off(event: "websocket", listener: (socket: NativeSocket) => void): unknown;
+}
+
+/** Native roots use browser-delivered events, which bypass JavaScript dispatchEvent. */
+export async function observeNativeProductTraffic(page: NativeTrafficPage): Promise<ProductTraffic> {
+  const log = new TrafficLog();
+  const sockets = new Map<NativeSocket, { receive(frame: { payload: unknown }): void; close(): void }>();
+  let editing = false;
+  let closed = false;
+  const connected = (socket: NativeSocket) => {
+    if (closed) return;
+    const receive = ({ payload }: { payload: unknown }) => { if (editing && !closed) log.record(payload); };
+    const close = () => { socket.off("framereceived", receive); socket.off("close", close); sockets.delete(socket); };
+    sockets.set(socket, { receive, close });
+    socket.on("framereceived", receive);
+    socket.on("close", close);
+  };
+  page.on("websocket", connected);
+  return {
+    beginEdit: async () => { editing = true; },
+    count: async () => log.count(),
+    evidenceSince: async sequence => log.since(sequence),
+    close: async () => {
+      if (closed) return;
+      closed = true; editing = false;
+      page.off("websocket", connected);
+      for (const [socket, observer] of sockets) { socket.off("framereceived", observer.receive); socket.off("close", observer.close); }
+      sockets.clear();
     },
   };
 }

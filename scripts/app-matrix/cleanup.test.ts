@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { browserHost, earlyServerExit, serverCommand } from "./browser.mjs";
 import { createContext, runInContext } from "node:vm";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -12,9 +12,13 @@ import { completeObservations } from "./product-browser";
 import { checkCommand, checkInstall } from "./checks.mjs";
 
 const pending = () => new Promise<never>(() => {});
+const fixtureDirectories: string[] = [];
+afterEach(() => { for (const directory of fixtureDirectories) rmSync(directory, { recursive: true, force: true }); fixtureDirectories.length = 0; });
 
 function fixture(stop: () => Promise<unknown>, productError = new Error("page.goto: Timeout 90000ms exceeded")) {
   const releases: string[] = [];
+  const output = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-cleanup-fixture-"));
+  fixtureDirectories.push(output);
   const preview = {
     on() {},
     exposeBinding: async () => ({ dispose: async () => { releases.push("binding"); } }),
@@ -37,7 +41,7 @@ function fixture(stop: () => Promise<unknown>, productError = new Error("page.go
   const input = {
     page, context: { newPage: async () => preview },
     command: { name: "dev", args: ["run", "dev"], check: { kind: "page", text: "matrix" } },
-    app: { id: "next" }, engine: "browser", options: { timeout: 90_000, cleanupTimeout: 20, output: "/unused" },
+    app: { id: "next" }, engine: "browser", options: { timeout: 90_000, cleanupTimeout: 20, output },
     terminalText: async () => "user@bun:~$ bun run .matrix-command.ts dev\noriginal product output\n",
   };
   return { input, releases };
