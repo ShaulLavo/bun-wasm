@@ -89,11 +89,11 @@
   class Http2ServerRequest extends Readable {
     #stream: Http2Stream;
     #headers: Headers;
-    #rawHeaders: string[];
+    #rawHeaders: string[] | undefined;
     #trailers: Headers = {};
     #rawTrailers: string[] = [];
     #state = { closed: false, didRead: false, aborted: false };
-    constructor(stream: Http2Stream, headers: Headers, options?: object, rawHeaders: string[] = []) {
+    constructor(stream: Http2Stream, headers: Headers, options?: object, rawHeaders?: string[]) {
       super({ autoDestroy: false, ...options });
       this.#stream = stream;
       this.#headers = headers;

@@ -28,7 +28,7 @@ test("actual builtin source supplies the request class and stream lifecycle", as
   await source.run(() => runInContext(`(async () => { ${emitted} })()`, source.context));
 });
 
-test("Hono 2.1.1 node-server import links through production builtin export generation", async () => {
+test("@hono/node-server 2.1.1 import links through production builtin export generation", async () => {
   const source = sourceRuntime(scratch);
   const value: unknown = runInContext('require("node:http2")', Object.assign(source.context, { require: source.runtime.makeRequire("/entry.ts") }));
   if (!value || typeof value !== "object") throw new Error("Missing http2 builtin");
