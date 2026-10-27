@@ -75,3 +75,11 @@ test("terminal editing echoes, recalls history and redraws", async () => {
   expect(repl.output()).toContain("42\r\n");
   repl.server.close();
 });
+
+test("a failing dot command reports its error and the REPL keeps going", async () => {
+  const repl = session(false);
+  repl.stdin.emit("data", ".save /nonexistent-bun-wasm-dir/history\n2 + 2\n.exit\n");
+  await repl.exited;
+  expect(repl.output()).toBe("4\n");
+  expect(repl.errors()).toContain("nonexistent-bun-wasm-dir");
+});

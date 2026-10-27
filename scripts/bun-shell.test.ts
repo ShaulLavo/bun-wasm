@@ -45,6 +45,8 @@ const cases: Record<string, (shell: Shell) => Promise<unknown>> = {
   singleQuoted: shell => Promise.all(strings.map(value => shell`printf '[%s]' '${value}'`.text())),
   rawOpensQuote: shell => shell`printf '[%s]' ${{ raw: "'pre" }}${"a b"}'`.text(),
   redirectVariable: async shell => { const target = Buffer.alloc(3); await shell`__bun_shell_redirect_0=bad; printf bye > ${target}`.quiet(); return target.toString(); },
+  substitution: shell => Promise.all(["a b", "x; echo injected", "$(echo no)"].map(value => shell`printf '%s' "$(printf '[%s]' ${value})"`.text())),
+  nestedSubstitution: shell => shell`echo "$(echo "$(printf '[%s]' ${"a b"})" ) after"`.text(),
   insideWord: shell => shell`printf '[%s]' "pre-${"a b"}-post" x${"$y z"}y`.text(),
   envSnapshot: async shell => {
     const env = { ...process.env, BUN_SHELL_VALUE: "one" };
@@ -114,6 +116,14 @@ test("a failed redirect leaves no files behind and never touches existing ones",
     process.env.TMPDIR = previous;
     fs.rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+// A template literal spells a backtick as \`, which bash reads literally, so a backtick substitution
+// only arises from { raw } text.
+test("interpolating inside a backtick substitution is rejected rather than run unsafely", async () => {
+  const tick = { raw: "`" };
+  expect(() => $`echo ${tick}printf '%s' ${"a b"}${tick}`).toThrow("command substitution");
+  expect(await $`printf '%s' \`${"a b"}\``.text()).toBe("`a b`");
 });
 
 test("binary objects outside redirects are rejected, as a template misuse", () => {

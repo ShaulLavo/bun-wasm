@@ -39,29 +39,44 @@
   type Quote = "" | "'" | "\"" | "$'" | "#";
 
   // The shell's quoting state at the end of `script`, so an interpolation stays one literal word
-  // inside "...", '...' and $'...'. Comments run to the end of their line.
-  function quoteState(script: string): Quote {
-    let state: Quote = "";
+  // inside "...", '...' and $'...'. Comments run to the end of their line. Each $(...) starts a
+  // fresh quoting context; a backtick substitution is reported as "`" so it can be rejected.
+  type Frame = { quote: Quote; kind: "top" | "sub" | "tick"; parens: number };
+  function quoteState(script: string): Quote | "`" {
+    const frames: Frame[] = [{ quote: "", kind: "top", parens: 0 }];
     for (let index = 0; index < script.length; index++) {
+      const frame = frames[frames.length - 1];
       const char = script[index];
-      if (state === "#") {
-        if (char === "\n") state = "";
+      if (frame.quote === "#") {
+        if (char === "\n") frame.quote = "";
         continue;
       }
-      if (state === "'") {
-        if (char === "'") state = "";
+      if (frame.quote === "'") {
+        if (char === "'") frame.quote = "";
         continue;
       }
       if (char === "\\") { index++; continue; }
-      if (state === "$'" || state === "\"") {
-        if (char === state.at(-1)) state = "";
+      if (frame.quote === "$'") {
+        if (char === "'") frame.quote = "";
         continue;
       }
-      if (char === "$" && script[index + 1] === "'") { state = "$'"; index++; }
-      else if (char === "'" || char === "\"") state = char;
-      else if (char === "#" && (index === 0 || /[\s;&|()]/.test(script[index - 1]))) state = "#";
+      if (char === "$" && script[index + 1] === "(") { frames.push({ quote: "", kind: "sub", parens: 0 }); index++; continue; }
+      if (char === "`") {
+        if (frame.kind === "tick" && !frame.quote) frames.pop();
+        else frames.push({ quote: "", kind: "tick", parens: 0 });
+        continue;
+      }
+      if (frame.quote === "\"") {
+        if (char === "\"") frame.quote = "";
+        continue;
+      }
+      if (char === "$" && script[index + 1] === "'") { frame.quote = "$'"; index++; }
+      else if (char === "'" || char === "\"") frame.quote = char;
+      else if (char === "#" && (index === 0 || /[\s;&|()]/.test(script[index - 1]))) frame.quote = "#";
+      else if (char === "(" && frame.kind === "sub") frame.parens++;
+      else if (char === ")" && frame.kind === "sub" && frame.parens-- === 0) frames.pop();
     }
-    return state;
+    return frames.some(frame => frame.kind === "tick") ? "`" : frames[frames.length - 1].quote;
   }
   function quoted(text: string, state: Quote): string {
     const inner = text.replace(/[$`"\\]/g, char => "\\" + char);
@@ -79,7 +94,9 @@
   function interpolate(raw: readonly string[], values: readonly unknown[], redirects: Redirect[]): string {
     let script = raw[0];
     values.forEach((value, index) => {
-      script += word(value, script, quoteState(script), redirects) + raw[index + 1];
+      const state = quoteState(script);
+      if (state === "`") throw new TypeError("Bun.$ cannot interpolate inside a `...` command substitution; use $(...)");
+      script += word(value, script, state, redirects) + raw[index + 1];
     });
     return script;
   }

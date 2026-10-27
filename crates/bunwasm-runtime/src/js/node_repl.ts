@@ -192,8 +192,7 @@
       this.#queue = this.#queue.then(async () => {
         if (this.#closed) return;
         await this.#run(line);
-        this.displayPrompt();
-      });
+      }).catch(error => this.#print(error, true)).then(() => this.displayPrompt());
     }
 
     async #run(line: string) {
@@ -236,7 +235,11 @@
       const [name, ...rest] = text.slice(1).split(/\s+/);
       const command = this.commands[name] ?? Object.entries(this.commands).find(([key]) => name && key.startsWith(name))?.[1];
       if (!command) { this.#output.write(`Invalid REPL keyword\r\n`); return; }
-      command.action.call(this, rest.join(" "));
+      try {
+        command.action.call(this, rest.join(" "));
+      } catch (error) {
+        this.#print(error, true);
+      }
     }
 
     #print(value: unknown, error: boolean) {
