@@ -19,3 +19,20 @@ Wall time starts before launcher spawn and ends after guest exit. It includes pr
 Peak RSS comes from the child process resource usage after exit. It covers native Wasmtime, its compiled code, guest linear memory, and, on cold runs, the compiler. It is not a guest linear-memory or GC-heap measurement. The Wasmtime CLI and this launcher expose no linear-memory high-water counter. Micro guest times come from the suite's own `performance.now()` readings.
 
 The JSON report records every argv, stdout, stderr, wall time, RSS sample, artifact hash, and median. Use the quiet benchmark queue on the maintainer's PC.
+
+# Playground command benchmark
+
+`web/tests/bench-commands.ts` times commands at the playground prompt in a real browser. It
+measures from submitting the command to the next prompt, and checks each exit code and output.
+Each round opens a fresh browser context. Its first `bun` is the cold start with empty caches.
+Warm repeats of every command follow, then a reload and its first `bun`.
+
+```sh
+cd web && bun run build
+bun tests/bench-commands.ts                       # local preview, Chromium
+LATENCY_MS=70 bun tests/bench-commands.ts         # each response 70 ms late, like the live site from Europe
+bun tests/bench-commands.ts --url https://bun.sprockt.dev/playground/ --browser firefox
+bun tests/bench-commands.ts --network --output /work/tmp/bun-wasm-bench.json
+```
+
+`--network` adds `bun add`, `install`, `update`, `remove` and `bun x`, which download from npm.

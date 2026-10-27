@@ -25,8 +25,11 @@ function originalSyntax(text: string): string {
     [/  function validateCursorCallback[\s\S]*?(?=  \/\/ stdout\/stderr:)/g, "", 1],
     [/      clearLine,\n      clearScreenDown,\n      cursorTo,\n      moveCursor,\n/g, "", 1],
     [/\n  let execveWarned = false;\n/g, "\n", 1],
+    [/  let bindingConstants[ \t]*;\n\n  function constantsBinding\(\) \{\n    return bindingConstants \?\?= Object\.assign\(Object\.create\(null\), \{\n      fs: internal\.builtin\("node:fs"\)\.constants,\n      os: internal\.builtin\("node:os"\)\.constants,\n      crypto: internal\.builtin\("node:crypto"\)\.constants,\n      zlib: internal\.builtin\("node:zlib"\)\.constants,\n    \}\);\n  \}\n/g, "", 1],
+    [/      if \(name === "constants"\) return constantsBinding\(\);\n/g, "", 1],
     [/\n    execve\(\) \{[\s\S]*?\n    \},/g, "", 1],
     [/    noDeprecation: false,\n/g, "", 1],
+    [/      if \(name === "DeprecationWarning" && process\.noDeprecation\) return;\n/g, "", 1],
     [/const processBase\s*=/g, "const process =", 1],
     [/\bprocessBase\b/g, "process", 5],
     [/const streamBase\s*=/g, "const stream =", 2],
@@ -59,6 +62,25 @@ test("only approved staging, captured-failure, execArgv, execve and cursor chang
   expect(createHash("sha256").update(syntax(original)).digest("hex")).toBe("392f346ac5d0efd2ad0b59a01bd8c8e34cb3e58a09f1d9fd2f53fbb4f37352d9");
   expect(emitted).toContain('"use strict";');
   expect(emitted).not.toContain("finally");
+});
+
+test("constants delta proof rejects a changed group lookup", () => {
+  const changed = emitted.replace('fs: internal.builtin("node:fs").constants', 'fs: internal.builtin("node:os").constants');
+  expect(changed).not.toBe(emitted);
+  expect(() => originalSyntax(changed)).toThrow();
+});
+
+test("constants delta proof rejects a changed binding name", () => {
+  const changed = emitted.replace('if (name === "constants") return constantsBinding();', 'if (name === "other") return constantsBinding();');
+  expect(changed).not.toBe(emitted);
+  expect(() => originalSyntax(changed)).toThrow();
+});
+
+test("constants delta proof retains unrelated process syntax", () => {
+  const changed = emitted.replace('const NODE_VERSION = "26.3.0";', 'const NODE_VERSION = "26.3.1";');
+  expect(changed).not.toBe(emitted);
+  expect(createHash("sha256").update(syntax(originalSyntax(changed))).digest("hex"))
+    .not.toBe("392f346ac5d0efd2ad0b59a01bd8c8e34cb3e58a09f1d9fd2f53fbb4f37352d9");
 });
 
 test("erasure preserves executable token positions, including exit operator bridges", () => {

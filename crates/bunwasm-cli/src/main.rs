@@ -459,7 +459,93 @@ enum Command {
     Lint,
     Install(String, Vec<String>),
     X(Vec<String>),
+    Init(Vec<String>),
     Exit(i32),
+}
+
+/// `bun exec <script>`: the script runs in the system shell (bash-web), as package scripts do.
+const EXEC: &str = "const shell = Bun.which(\"bash\") ?? Bun.which(\"sh\") ?? \"/bin/sh\";\n\
+    const child = Bun.spawn([shell, \"-c\", process.argv[1]], { stdio: [\"inherit\", \"inherit\", \"inherit\"] });\n\
+    process.exitCode = await child.exited;";
+
+/// `bun repl`: Bun's banner, then node:repl (Bun's REPL transform) until .exit or Ctrl+D.
+const REPL: &str = "if (process.stdin.isTTY) process.stdout.write(`Welcome to Bun v${Bun.version}\\r\\nType .help for more info.\\r\\n\\r\\n`);\n\
+    const repl = (await import(\"node:repl\")).start();\n\
+    await new Promise(resolve => repl.on(\"exit\", resolve));\n\
+    process.exit(0);";
+
+const CREATE_HELP: &str = "Usage:
+  bun create <template> [...flags] dest
+
+Templates:
+  • NPM: Runs bunx create-<template> with given arguments
+
+Learn more: https://bun.com/docs/cli/bun-create
+";
+
+/// Bun's BunxCommand::add_create_prefix: `vite` -> `create-vite`, `@scope/x` -> `@scope/create-x`,
+/// `@scope` -> `@scope/create`.
+fn create_package(template: &str) -> String {
+    let Some(scoped) = template.strip_prefix('@') else {
+        return format!("create-{template}");
+    };
+    if let Some(slash) = scoped.find('/') {
+        return format!("@{}/create-{}", &scoped[..slash], &scoped[slash + 1..]);
+    }
+    match scoped.find('@') {
+        Some(version) => format!("@{}/create{}", &scoped[..version], &scoped[version..]),
+        None => format!("{template}/create"),
+    }
+}
+
+/// `bun create <template> ...`: npm templates run `bun x create-<template>`, as in Bun.
+fn create_command(args: Vec<String>) -> Command {
+    let Some(index) = args
+        .iter()
+        .position(|arg| !arg.trim().is_empty() && !arg.starts_with("--"))
+    else {
+        print!("{CREATE_HELP}");
+        return Command::Exit(0);
+    };
+    let template = args[index].trim();
+    if args[..=index]
+        .iter()
+        .any(|arg| arg == "--help" || arg == "-h")
+    {
+        print!("{CREATE_HELP}");
+        return Command::Exit(0);
+    }
+    if template == "react" || template == "next" {
+        let tool = if template == "react" {
+            "vite"
+        } else {
+            "next-app"
+        };
+        eprintln!("error: the \"{template}\" template is not available; run bun create {tool}");
+        return Command::Exit(1);
+    }
+    if template.contains('/') && !template.starts_with('@')
+        || template.ends_with(".jsx")
+        || template.ends_with(".tsx")
+    {
+        eprintln!(
+            "error: bun create supports npm create-<template> packages in bun-wasm; {template} is not one"
+        );
+        return Command::Exit(1);
+    }
+    let bun = args[..index].iter().any(|arg| arg == "--bun");
+    let x_args = if bun {
+        vec!["--bun".to_owned()]
+    } else {
+        Vec::new()
+    };
+    Command::X(
+        x_args
+            .into_iter()
+            .chain([create_package(template)])
+            .chain(args[index + 1..].iter().cloned())
+            .collect(),
+    )
 }
 
 fn usage_error(message: &str) -> Command {
@@ -581,10 +667,31 @@ fn parse_command_with_flags(
             "install" | "i" | "ci" | "add" | "a" | "remove" | "rm" | "r" | "uninstall" | "pm"
             | "update" | "up" => return Command::Install(arg, rest.collect()),
             "x" | "bunx" => return Command::X(rest.collect()),
-            "create" | "c" | "init" | "upgrade" | "link" | "unlink" | "outdated" | "publish"
-            | "patch" | "patch-commit" | "repl" | "info" | "why" | "audit" | "completions"
-            | "getcompletes" | "discord" | "exec" | "dedupe" | "prune" | "check" | "deploy"
-            | "cloud" | "config" | "use" | "auth" | "login" | "logout" => {
+            "create" | "c" => return create_command(rest.collect()),
+            "init" => return Command::Init(rest.collect()),
+            "repl" => {
+                return Command::Run(
+                    Entry::Eval(REPL.to_owned()),
+                    rest.collect(),
+                    conditions,
+                    exec_argv,
+                );
+            }
+            "exec" => {
+                let Some(script) = rest.next() else {
+                    return usage_error("bun exec needs a script to run");
+                };
+                return Command::Run(
+                    Entry::Eval(EXEC.to_owned()),
+                    vec![script],
+                    conditions,
+                    exec_argv,
+                );
+            }
+            "upgrade" | "link" | "unlink" | "outdated" | "publish" | "patch" | "patch-commit"
+            | "info" | "why" | "audit" | "completions" | "getcompletes" | "discord" | "dedupe"
+            | "prune" | "check" | "deploy" | "cloud" | "config" | "use" | "auth" | "login"
+            | "logout" => {
                 eprintln!("error: bun {arg} is not supported in bun-wasm");
                 return Command::Exit(1);
             }
@@ -681,6 +788,9 @@ fn main() {
             args,
             transpiler().as_ref(),
         )),
+        Command::Init(args) => {
+            std::process::exit(bunwasm_runtime::init::run(args, transpiler().as_ref()))
+        }
         Command::X(args) => {
             match bunwasm_runtime::install::prepare_x(args, transpiler().as_ref()) {
                 Ok((file, args)) => (Entry::File(file), args, Vec::new(), Vec::new()),

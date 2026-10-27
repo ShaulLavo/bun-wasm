@@ -90,10 +90,13 @@ function collectErrors(node) {
 }
 collectErrors(errorsTree);
 const selected = new Set();
+const explicitlySelected = new Set(selection.modules);
 function include(name) {
   const id = names.indexOf(name);
   if (id < 0) throw new Error(`Unknown builtin ${name}`);
   if (id >= count || selected.has(id)) return;
+  const publicModule = name === "bun" || name.startsWith("node:") || name.startsWith("bun:");
+  if (publicModule && !explicitlySelected.has(name)) return;
   const original = readFileSync(join(bun, "src/js", upstream(id)), "utf8");
   if (/process\.arch/.test(original)) throw new Error(`Architecture-specialized builtin needs a WASI codegen policy: ${name}`);
   selected.add(id);

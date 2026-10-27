@@ -121,7 +121,7 @@ test("guest gate logs retain stderr and cannot hide failure behind tee", () => {
 });
 
 for (const path of [
-  "web/scripts/node-spawn.ts", "web/scripts/node-host.mjs", "web/scripts/node-process.ts", "web/src/net/trampoline.ts",
+  "web/scripts/node-spawn.ts", "web/scripts/node-host.mjs", "web/scripts/node-worker.ts", "web/scripts/node-process.ts", "web/src/net/trampoline.ts",
   "web/src/engine-host.js", "web/src/crypto-inputs.js", "web/bun.lock", "web/guest-tests/compose.ts",
   "web/tests/subprocess.ts", "tests/fixtures/spawn-executable/index.ts", "tests/install/run.mjs",
   "crates/bunwasm-runtime/src/host.rs", "crates/bunwasm-runtime/src/js/process.ts", "crates/bunwasm-cli/src/main.rs",

@@ -39,7 +39,7 @@ test("every Next major uses the registry-verified React pairing", () => {
   for (const [major, expected] of versioned) {
     const apps = nextApps.filter(app => app.id.startsWith(`next-${major}-`));
     expect(apps.length).toBe(major === "14" ? 4 : 5);
-    for (const app of apps) expect(app.dependencies).toEqual(expected);
+    for (const app of apps) expect(app.dependencies).toEqual(app.id.endsWith("-static") ? { ...expected, "@types/bun": "1.4.3" } : expected);
   }
 });
 
@@ -104,6 +104,7 @@ test("pages fixtures retain ISR source without claiming an unimplemented cache o
 
 test("static export fixtures build out/ and preview the generated artifact", () => {
   for (const app of nextApps.filter(candidate => candidate.id.includes("static"))) {
+    expect(app.dependencies["@types/bun"]).toBe("1.4.3");
     const build = command(app, "build");
     const preview = command(app, "preview");
     expect(build.check).toMatchObject({ kind: "files", paths: ["out/index.html"] });

@@ -26,6 +26,33 @@ await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 // Atomics.wait sleeps and the networking bridge). serve.ts sends the same locally.
 await Bun.write(join(out, "_headers"), Bun.file(join(here, "_headers")));
 
+type Metafile = NonNullable<typeof result.metafile>;
+
+/** Hashed chunks reachable through the imports of `roots`, as paths relative to dist. */
+function reachableChunks(metafile: Metafile, roots: string[]): string[] {
+  const chunks = new Set<string>();
+  const pending = roots.slice();
+  for (let path = pending.pop(); path !== undefined; path = pending.pop()) {
+    for (const imported of metafile.outputs[path]?.imports ?? []) {
+      const dependency = imported.path in metafile.outputs ? imported.path : `./${join(dirname(path), imported.path)}`;
+      if (!dependency.startsWith("./chunks/") || !dependency.endsWith(".js") || chunks.has(dependency)) continue;
+      chunks.add(dependency);
+      pending.push(dependency);
+    }
+  }
+  return Array.from(chunks, chunk => chunk.slice(2)).sort();
+}
+
+/**
+ * The chunks a first command loads: the page's lazy command code (main.js imports the runner and
+ * Waffle's process and network services on demand) and everything the Bun worker imports. The
+ * page fetches them while idle so the command finds them in the HTTP cache.
+ */
+function commandChunks(metafile: Metafile): string[] {
+  const lazy = (metafile.outputs["./main.js"]?.imports ?? []).filter(imported => imported.kind === "dynamic-import").map(imported => imported.path);
+  return Array.from(new Set(reachableChunks(metafile, ["./worker.js"]).concat(lazy.map(path => path.slice(2)), reachableChunks(metafile, lazy)))).sort();
+}
+
 // Each wasm gets a .gz twin; serve.ts sends that when the browser accepts gzip.
 const engineBuilds: Record<string, string> = {};
 
@@ -69,6 +96,7 @@ if (!(await copyWasm(toolsSource, "bun-tools.wasm"))) {
 
 await Bun.write(join(out, "engine-builds.json"), JSON.stringify(engineBuilds));
 const index = await Bun.file(join(here, "index.html")).text();
-await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>globalThis.__bunwasmBuilds=${JSON.stringify(engineBuilds)}</script>`));
+const startup = `globalThis.__bunwasmBuilds=${JSON.stringify(engineBuilds)};globalThis.__bunwasmCommandChunks=${JSON.stringify(commandChunks(result.metafile!))}`;
+await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>${startup}</script>`));
 
 for (const output of result.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);

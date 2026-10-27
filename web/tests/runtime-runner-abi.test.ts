@@ -353,7 +353,9 @@ for (const refusal of ["compiled", "SIMD"] as const) test(refusal === "compiled"
   const errors = spyOn(console, "error").mockImplementation(() => {});
   const state = registryFixture({ output(fd, data) { output.push({ fd, text: new TextDecoder().decode(data) }); } });
   try {
-    const body = [0, 0xfd, 0x0c].concat(new Array<number>(16).fill(0), [0x1a, 0x0b]);
+    // Waffle instruments standard SIMD but still refuses relaxed SIMD (i8x16.relaxed_swizzle).
+    const zero = [0xfd, 0x0c].concat(new Array<number>(16).fill(0));
+    const body = [0].concat(zero, zero, [0xfd, 0x80, 0x02, 0x1a, 0x0b]);
     const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 0x60, 0, 0, 3, 2, 1, 0,
       10, body.length + 2, 1, body.length].concat(body));
     expect(WebAssembly.validate(bytes)).toBe(true);

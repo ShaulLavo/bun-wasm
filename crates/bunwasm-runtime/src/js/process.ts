@@ -33,6 +33,16 @@
   }
 
   let execveWarned = false;
+  let bindingConstants: object | undefined;
+
+  function constantsBinding() {
+    return bindingConstants ??= Object.assign(Object.create(null), {
+      fs: internal.builtin("node:fs").constants,
+      os: internal.builtin("node:os").constants,
+      crypto: internal.builtin("node:crypto").constants,
+      zlib: internal.builtin("node:zlib").constants,
+    });
+  }
 
   // Like Node, assigned values become strings (`process.env.N = 1` -> "1").
   const env = new Proxy(native.env(), {
@@ -323,6 +333,7 @@
       if (internal.workerNoWarnings) return;
       const opts = type !== null && typeof type === "object" ? type : { type, code };
       const name = warning instanceof Error ? warning.name : opts.type || "Warning";
+      if (name === "DeprecationWarning" && process.noDeprecation) return;
       const message = warning instanceof Error ? warning.message : String(warning);
       if (process.listenerCount("warning") > 0) {
         const err: Omit<Error, "name"> & { name: unknown; code?: unknown } = warning instanceof Error ? warning : Object.assign(new Error(message), { name });
@@ -334,6 +345,7 @@
       native.writeStderr(`${prefix}${name}: ${message}\n`);
     },
     binding(name: unknown) {
+      if (name === "constants") return constantsBinding();
       throw new Error(`No such module: ${name}`);
     },
     dlopen() {
@@ -348,7 +360,7 @@
     report: { getReport: () => ({ header: {} }) },
     stdin: undefined,
   };
-  const process: BunWasm.NodeEmitter & { exitCode: unknown; pid: number; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
+  const process: BunWasm.NodeEmitter & { noDeprecation: boolean; exitCode: unknown; pid: number; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
   delete process.stdin;
 
   Object.defineProperties(process, {

@@ -7,3 +7,10 @@
   Cache-Control: no-store
 /index.html
   Cache-Control: no-store
+# Chunk names carry a content hash, so a browser may keep them. Every Bun process starts a
+# worker that imports them in a chain; revalidating each one cost a network round trip per link.
+# Unhashed files (worker.js, chunks/network.wasm) keep the default revalidation.
+/chunks/*.js
+  Cache-Control: public, max-age=31536000, immutable
+/__bunwasm/chunks/*.js
+  Cache-Control: public, max-age=31536000, immutable
