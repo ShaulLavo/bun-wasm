@@ -1,4 +1,4 @@
-(function (internal: Pick<BunWasm.Internal, "native">) {
+(function (internal: Pick<BunWasm.Internal, "native" | "toUint8">) {
   const PlatformRequest = internal.native.engine === "host" ? globalThis.Request : null;
   const bodies = new WeakMap<ReadableStream<unknown>, Uint8Array>();
   function remember<T>(stream: ReadableStream<T>, bytes: Uint8Array): ReadableStream<T> {
@@ -47,5 +47,21 @@
       cancel: reason => reader.cancel(reason),
     });
   }
-  return { remember, tee, clone, transfer, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
+  async function* iterableChunks(source: AsyncIterable<unknown>) {
+    for await (const chunk of source) {
+      yield typeof chunk === "string" ? internal.native.utf8Encode(chunk) : internal.toUint8(chunk);
+    }
+  }
+  function fromAsyncIterable(source: AsyncIterable<unknown>): ReadableStream<Uint8Array> {
+    const iterator = iterableChunks(source);
+    return new ReadableStream({
+      async pull(controller) {
+        const next = await iterator.next();
+        if (next.done) { controller.close(); return; }
+        controller.enqueue(next.value);
+      },
+      async cancel() { await iterator.return(undefined); },
+    });
+  }
+  return { remember, tee, clone, transfer, fromAsyncIterable, bytes: (stream: ReadableStream<unknown>) => bodies.get(stream) };
 })
