@@ -704,7 +704,9 @@ fn parse_command_with_flags(
             }
             // Flags native Bun accepts that change nothing here.
             "--bun" | "--silent" | "--smol" | "--no-install" => continue,
-            flag if flag.starts_with('-') => return usage_error(&format!("unknown flag {flag}")),
+            // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
+            // are accepted and kept in process.execArgv, so forked children receive them too.
+            flag if flag.starts_with('-') => exec_argv.push(flag.to_owned()),
             file => {
                 return Command::Run(
                     Entry::File(direct_file(file)),
