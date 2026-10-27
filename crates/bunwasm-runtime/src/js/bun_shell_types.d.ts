@@ -7,7 +7,7 @@ declare namespace BunWasm {
   }
   interface Internal {
     BunFile: abstract new (...args: never[]) => { name?: unknown };
-    require(name: "fs"): ShellFs;
+    builtin(name: "node:fs"): ShellFs;
     require(name: "spawn"): { spawn(argv: string[], options: Record<string, unknown>): WorkerChild; which(command: string, options?: { PATH?: string; cwd?: string }): string | null };
     require(name: "bun_shell"): { $: Function; findShell(env: Record<string, string | undefined>, cwd: string): string };
   }

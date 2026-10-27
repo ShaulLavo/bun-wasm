@@ -101,7 +101,7 @@
   }
 
   async function execute(parsed: ParsedShellScript): Promise<{ code: number; stdout: Bytes; stderr: Bytes }> {
-    const fs = internal.require("fs");
+    const fs = internal.builtin("node:fs");
     const cwd = parsed.cwd ?? process.cwd();
     const env = parsed.env ?? process.env;
     try {

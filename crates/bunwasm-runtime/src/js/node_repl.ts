@@ -250,7 +250,7 @@
       help: "Load a file into the REPL session",
       action(file) {
         try {
-          const source = internal.require("fs").readFileSync(file).toString();
+          const source = internal.builtin("node:fs").readFileSync(file).toString();
           for (const line of source.split("\n")) this.history.push(line);
           (0, eval)(new Bun.Transpiler({ loader: "tsx", replMode: true }).transformSync(source));
         } catch (error) {
@@ -261,7 +261,7 @@
     save: {
       help: "Save REPL history to a file",
       action(file) {
-        internal.require("fs").writeFileSync(file, new TextEncoder().encode(this.history.join("\n") + "\n"));
+        internal.builtin("node:fs").writeFileSync(file, new TextEncoder().encode(this.history.join("\n") + "\n"));
         process.stdout.write(`Session saved to: ${file}\r\n`);
       },
     },

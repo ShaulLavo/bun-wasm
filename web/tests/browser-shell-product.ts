@@ -169,7 +169,7 @@ async function runBunShell(fixture: Fixture) {
     return output;
   });
   await stage(fixture, "bun-init", async () => {
-    const output = await command("mkdir -p /home/guest/init-app && (cd /home/guest/init-app && bun init -y && bun run index.ts)", "Hello via Bun!");
+    const output = await command("bun init -y /home/guest/init-app && (cd /home/guest/init-app && bun run index.ts)", "Hello via Bun!");
     const manifest = JSON.parse(await readProject("/home/guest/init-app/package.json"));
     assert.equal(manifest.module, "index.ts");
     assert.equal(manifest.devDependencies["@types/bun"], "latest");
@@ -177,13 +177,18 @@ async function runBunShell(fixture: Fixture) {
     return output;
   });
   await stage(fixture, "bun-create", async () => {
-    const output = await command("(cd /home/guest && bun create vite create-app --template vanilla-ts --no-interactive)");
-    const manifest = JSON.parse(await readProject("/home/guest/create-app/package.json"));
+    // The project's bunfig.toml points bun x at the replay registry.
+    const output = await command("bun create vite create-app --template vanilla-ts --no-interactive");
+    const manifest = JSON.parse(await readProject("/home/guest/bun-shell/create-app/package.json"));
     assert.ok(manifest.devDependencies?.vite, `create-vite wrote no vite dependency: ${JSON.stringify(manifest)}`);
-    await readProject("/home/guest/create-app/index.html");
+    await readProject("/home/guest/bun-shell/create-app/index.html");
     return output;
   });
   await stage(fixture, "bun-repl", async () => {
+    const probe = await page!.evaluate(({ timeout }) => globalThis.shellProduct.interactive(`bun -e 'console.log("TTY:" + process.stdin.isTTY); process.stdin.on("data", d => { console.log("GOT:" + JSON.stringify(String(d))); process.exit(0); }); process.stdin.on("end", () => console.log("STDIN_END"))'`, [
+      { expect: "TTY:", send: "hello" },
+    ], timeout), { timeout });
+    console.log("STDIN_PROBE " + JSON.stringify(probe));
     const result = await page!.evaluate(({ timeout }) => globalThis.shellProduct.interactive("bun repl", [
       { expect: "Welcome to Bun", send: "1 + 2" },
       { expect: "3", send: "const answer: number = 40" },

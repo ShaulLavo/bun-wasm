@@ -24,7 +24,7 @@ const guest = {
     },
   },
 };
-const { $ } = factory({ require: (name: keyof typeof guest) => guest[name], BunFile });
+const { $ } = factory({ require: (name: keyof typeof guest) => guest[name], builtin: (name: string) => name === "node:fs" ? fs : undefined, BunFile });
 
 const strings = ["plain", "", "a b", "it's", "say \"hi\"", "$HOME", "`cmd`", "back\\slash", "semi;colon", "glob*", "tab\there", "ünïcode", "123"];
 
