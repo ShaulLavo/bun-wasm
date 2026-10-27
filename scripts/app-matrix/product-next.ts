@@ -241,7 +241,7 @@ const server = Bun.serve({
     const relative = pathname === "/" ? "index.html" : pathname.slice(1);
     try {
       const body = await readFile(join(root, relative));
-      return new Response(body, { headers: { "content-type": contentTypes[extname(relative)] ?? "text/plain; charset=utf-8" } });
+      return new Response(new Uint8Array(body), { headers: { "content-type": contentTypes[extname(relative)] ?? "text/plain; charset=utf-8" } });
     } catch {
       return new Response("Not found", { status: 404 });
     }
@@ -397,7 +397,7 @@ function staticApp(version: string, dependencies: Record<string, string>, router
   return {
     id: `next-${version}-${router}-static`,
     family: "next",
-    dependencies,
+    dependencies: { ...dependencies, "@types/bun": "1.4.3" },
     files: staticFiles(text, router, version),
     commands: staticCommands(version, text, router),
     features: [

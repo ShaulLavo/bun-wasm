@@ -67,7 +67,6 @@ declare namespace BunWasm {
     isError?(value: unknown): value is Error;
     isModuleNamespaceObject?(value: unknown): boolean;
     nodeCryptoIsKeyObject(value: unknown): boolean;
-    builtin(name: "node:crypto"): unknown;
   }
 }
 interface String { toWellFormed(): string }

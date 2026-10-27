@@ -9,7 +9,8 @@ import { guestProvenance } from "../../scripts/app-matrix/product-provenance";
 import { bounded, createProductCleanup, exitAfterDeadline, foregroundCycle, settleResources, withProgress } from "../../tests/shell-product/lifecycle";
 import { verifyGuestBuildReceipt } from "../../scripts/guest-build-receipt";
 import { registry } from "../../scripts/app-matrix/registry.mjs";
-import { browserRegistryRoute } from "../../scripts/app-matrix/registry-request";
+import { browserRegistryRoute, registryBrokerResponse } from "../../scripts/app-matrix/registry-request";
+import { SHELL_API_EXPECTED } from "../../tests/shell-product/bun-shell";
 import { selectProductRun, type Fixture, type Row, type Stage } from "../../tests/shell-product/fixtures";
 import type { ProductApi } from "../../tests/shell-product/protocol";
 import { bundleProduct } from "./browser-shell-product-install";
@@ -27,6 +28,7 @@ let browser: Browser | undefined;
 let launching: Promise<Browser> | undefined;
 let server: ReturnType<typeof Bun.serve> | undefined;
 let mirror: Awaited<ReturnType<typeof registry>> | undefined;
+let broker: ReturnType<typeof Bun.serve> | undefined;
 let page: Page | undefined;
 let activeURL: string | undefined;
 const external: string[] = [];
@@ -55,7 +57,7 @@ const productCleanup = createProductCleanup({
   captureTimeout: 1000,
   closeBrowser: async () => { await (browser ?? await launching?.catch(() => undefined))?.close(); },
   stopServer: () => server?.stop(true),
-  closeMirror: () => mirror?.close(),
+  closeMirror: async () => { await mirror?.close(); await broker?.stop(true); },
   removeScratch: async () => { if (scratch) await rm(scratch, { recursive: true, force: true }); },
 });
 const cleanup = productCleanup.cleanup;
@@ -141,9 +143,58 @@ async function runFixture(fixture: Fixture) {
   catch (error) { await record({ app: fixture.id, stage: "session", status: "fail", detail: message(error) }); }
   finally { await settleResources([capture, () => missingStages(fixture), () => page?.evaluate(() => globalThis.shellProduct.close())]); }
 }
+function lines(output: string) { return output.split(/\r?\n/); }
+function requireLines(output: string, expected: readonly string[]) {
+  for (const line of expected) assert.ok(lines(output).includes(line), `Missing output line ${line}: ${output}`);
+  return output;
+}
+async function readProject(path: string) {
+  assert.ok(page);
+  const text = await page.evaluate(path => globalThis.shellProduct.readFile(path), path);
+  assert.ok(text !== null, `Missing ${path}`);
+  return text;
+}
+// Bun.$, bun exec, init, create and repl through bash-web's /bin/sh on the same runtime.
+async function runBunShell(fixture: Fixture) {
+  assert.ok(page);
+  await stage(fixture, "bun-exec", async () => requireLines(
+    await command(`bun exec 'echo EXEC_OK; printf "%s\\n" a b | grep b'; bun exec 'exit 3'; echo EXEC_STATUS:$?`),
+    ["EXEC_OK", "b", "EXEC_STATUS:3"],
+  ));
+  await stage(fixture, "bun-shell-api", async () => {
+    const output = await command("bun run shell-api.ts", "SHELL_VISIBLE");
+    const line = lines(output).find(candidate => candidate.startsWith("SHELL_API:"));
+    assert.ok(line, `Missing SHELL_API result: ${output}`);
+    assert.deepEqual(JSON.parse(line.slice("SHELL_API:".length)), SHELL_API_EXPECTED);
+    return output;
+  });
+  await stage(fixture, "bun-init", async () => {
+    assert.ok(mirror);
+    const output = await command(`BUN_CONFIG_REGISTRY=${mirror.base} bun init -y /home/guest/init-app && (cd /home/guest/init-app && bun run index.ts)`, "Hello via Bun!");
+    const manifest = JSON.parse(await readProject("/home/guest/init-app/package.json"));
+    assert.equal(manifest.module, "index.ts");
+    assert.equal(manifest.devDependencies["@types/bun"], "latest");
+    for (const file of ["tsconfig.json", "README.md", ".gitignore", "node_modules/@types/bun/package.json"]) await readProject(`/home/guest/init-app/${file}`);
+    return output;
+  });
+  await stage(fixture, "bun-create", async () => {
+    // The project's bunfig.toml points bun x at the replay registry.
+    const output = await command("bun create vite create-app --template vanilla-ts --no-interactive");
+    const manifest = JSON.parse(await readProject("/home/guest/bun-shell/create-app/package.json"));
+    assert.ok(manifest.devDependencies?.vite, `create-vite wrote no vite dependency: ${JSON.stringify(manifest)}`);
+    await readProject("/home/guest/bun-shell/create-app/index.html");
+    return output;
+  });
+  // Piped stdin: interactive terminal input for non-shell programs is not available yet.
+  await stage(fixture, "bun-repl", async () => requireLines(
+    await command(`printf '%s\\n' '1 + 2' 'const answer: number = 40' 'answer + 2' "await Promise.resolve('awaited')" '.exit' | bun repl | cat`),
+    ["3", "40", "42", '"awaited"'],
+  ));
+}
 async function runApp(fixture: Fixture) {
   assert.ok(page && mirror);
   await page.evaluate(({ fixture, base }) => globalThis.shellProduct.open(fixture, base), { fixture, base: mirror.base });
+  if (run.mode === "bun-shell") return runBunShell(fixture);
   const installed = await stage(fixture, "install", () => command("bun install"));
   if (run.mode === "next-install-only") return;
   if (run.mode === "vite-dev-ctrl-c" || run.mode === "next-dev-ctrl-c") {
@@ -205,7 +256,14 @@ try {
   const output = join(scratch, "dist");
   const inputs = await bundleProduct(root, installation, output);
   await Bun.write(join(reports, "inputs.json"), JSON.stringify({ ...inputs, guestSource: accepted.source, guestProvenance: accepted.provenance }, null, 2));
-  mirror = await registry({ directory: corpus, record: false });
+  // SHELL_PRODUCT_RECORD=1 adds missing registry objects to the corpus through the same broker as the app matrix.
+  const recording = process.env.SHELL_PRODUCT_RECORD === "1";
+  if (recording) {
+    const socket = join(scratch, "recorder.sock");
+    broker = Bun.serve({ unix: socket, fetch: registryBrokerResponse });
+    process.env.MATRIX_RECORDER_SOCKET = socket;
+  }
+  mirror = await registry({ directory: corpus, record: recording });
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const pathname = new URL(request.url).pathname;
     const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };

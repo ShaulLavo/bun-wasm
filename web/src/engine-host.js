@@ -490,9 +490,9 @@ class EngineHost {
       isError: (v) => (typeof Error.isError === "function" ? Error.isError(v) : v instanceof Error),
       iteratorEntries: () => undefined,
       ownKeysInOrder: () => undefined,
-      // Carried through timers and ticks by the polyfills; not across await.
-      getAsyncContext: () => host.asyncContext,
+      getAsyncContext: () => host.o.asyncContext ? host.o.asyncContext.get() : host.asyncContext,
       setAsyncContext: (v) => {
+        if (host.o.asyncContext) return host.o.asyncContext.set(v);
         host.asyncContext = v;
       },
       gc: () => nativeGc?.(),
@@ -648,8 +648,11 @@ class EngineHost {
     // suspends again or returns; jobs the host wraps (then callbacks, timers,
     // ticks) set their own, and a microtask puts the previous one back if
     // nothing changed it meanwhile.
-    hidden("__bunwasm_capture", () => host.asyncContext);
+    // A native continuation provider already scopes every job, including raw eval.
+    // Its post-getter frame must not be replaced with the printer's earlier frame.
+    hidden("__bunwasm_capture", () => host.o.asyncContext ? undefined : host.asyncContext);
     hidden("__bunwasm_resume", (saved, value) => {
+      if (host.o.asyncContext) return value;
       const ambient = host.asyncContext;
       if (ambient !== saved) {
         host.asyncContext = saved;
@@ -733,10 +736,11 @@ class EngineHost {
     };
     const wrap = (fn, box, rejects) => {
       const context = host.asyncContext;
+      const nativeContext = host.o.asyncContext;
       return (value) => {
         if (host.tickQueued) host.drainTicks();
         const previous = host.asyncContext;
-        host.asyncContext = context;
+        if (!nativeContext) host.asyncContext = context;
         try {
           // A missing handler does what the default one would.
           if (typeof fn !== "function") {
@@ -751,7 +755,7 @@ class EngineHost {
           states.set(box.promise, { state: "rejected", value: err });
           throw err;
         } finally {
-          host.asyncContext = previous;
+          if (!nativeContext) host.asyncContext = previous;
         }
       };
     };

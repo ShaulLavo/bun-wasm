@@ -87,7 +87,11 @@ extern "C" void bunwasm_yarr_initialize() {{ WTF::initialize(); using namespace 
             "JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp",
         )));
     for (index, path) in paths.enumerate() {
-        println!("cargo:rerun-if-changed={}", path.display());
+        // Index 0 is yarr.cpp, written above by this script; watching it would rerun the
+        // script on every build. Its inputs are watched where they are read.
+        if index > 0 {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
         let object = out.join(format!("yarr-{index}.o"));
         let status = Command::new(sdk.join("bin/clang++"))
             .args(&flags)

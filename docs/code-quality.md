@@ -56,20 +56,20 @@ process-request JSON compiled into host tests also select native checks.
 Browser-only and documentation changes install no Rust toolchain or SDK.
 
 After the patched sysroot and input timestamps are ready, the native job restores
-both private JSC caches. One Bash step then starts the selected JSC C/C++ prebuild
-in its own process group. The foreground still runs native quality, host source-cache
-tests, launcher/QuickJS production and native fixtures in that order. Only the JSC
-prebuild overlaps them. It writes the private prebuild directory, not Cargo targets,
-Bun sources or guest outputs. JSC-specific environment changes stay in the child.
+both private JSC caches, then builds or verifies the JSC C/C++ prebuild in its own
+process group and saves it before any native check runs. Cancellation kills and
+reaps only that group; its log joins the always-run guest diagnostic upload.
 
-The step installs cleanup before starting that child. Either branch failing fails
-the step. Cancellation kills and reaps only the owned JSC process group, including
-its compiler descendants. The prebuild log retains stderr and is included in the
-always-run guest diagnostic upload. Both branches must succeed before JSC Cargo,
-embedding checks, the host/tools producers, guest consumers or the four final cache
-saves can run. No Cargo builds overlap and no prebuild cache is saved early. This
-removes a serial dependency; actual cold completion and contention require hosted
-CI evidence, not a timing claim from the dependency graph.
+One Cargo build overlaps others. Right after the native quality checkpoint,
+`Start the JSC Cargo guest build` runs `build-bun-jsc.sh` in its own session at
+`nice -n 19`. It writes only the private JSC Cargo target, `dist/bun-jsc.wasm*`
+and its own temporary files. Meanwhile the foreground builds the host launcher,
+the QuickJS core and the host-engine guest, which read none of those. `Build the
+JSC Cargo guest` then waits for it, prints its log and fails with its exit status,
+or fails if the process died without one. Its cache save and the embedding checks
+follow. Timed checks (native fixtures, tools, Web guests) start only afterwards:
+some subprocess limits are 4 s for work that takes 2.8 s on an idle runner, and a
+concurrent build pushed them over it.
 
 Host Clippy covers all test/example targets once. Host tests run once, in release
 mode, including integration and documentation tests. Both WASI feature graphs
@@ -81,16 +81,21 @@ The native job keeps `CARGO_TARGET_DIR` at the explicitly cached workspace
 Cargo target and registry, including vendored path dependencies, test binaries
 and workspace crates. Swatinem's target cleaner excludes in-repository path
 dependencies outside the workspace, including Bun's large parser crates; the
-native job uses an explicit cache instead. The pinned nightly uses checksum
-freshness for Rust source. Cargo still uses
-modification times for build-script inputs. `quality-input-times.ts` records
+native job uses an explicit cache instead. The job sets checksum freshness, but
+the pinned nightly ignores it (rustc gets no checksum flag), so Cargo decides
+freshness from modification times for Rust sources, embedded files and
+build-script inputs alike. `quality-input-times.ts` records
 content hashes and timestamps inside the cached target. Before compiling, it
 restores timestamps only for unchanged files and directories under the owned
-source/build-input roots. Changed, added or renamed inputs get a fresh time.
+source/build-input roots, including the `tests/` files the runtime embeds.
+Changed, added or renamed inputs get a fresh time. It runs again right after the
+WASI lint probe, which rewrites a source file. The rustup cache holds every
+`rust-toolchain.toml` component, so rust-src keeps its timestamps and the QuickJS
+engine's `-Zbuild-std` target stays fresh.
 This keeps a fresh checkout from rebuilding every embedded runtime or C archive,
 without hiding real edits. Symlinks are fingerprinted without modifying targets.
 Rustup, Bun downloads, pinned upstream sources, the fixed WASI SDK and the patched
-sysroot each have caches. The sysroot cache key includes the runner image and
+sysroot each have caches. The sysroot cache key includes the host build tools and
 builder/dependency inputs; its existing receipt still verifies every tool and
 archive. The refined Cargo cache keeps upstream patches, third-party inputs, the
 WASI crypto toolchain, its CMake toolchain and guard, and Rust gate/build inputs.
@@ -264,10 +269,15 @@ after the launcher check passes. Keys identify inputs, never run IDs or attempts
 Only quality writes the shared Bun download cache. Other jobs restore it.
 
 `native-cargo-v2` puts compatibility inputs before the Cargo and source hash.
-The restore prefix retains the OS, architecture, runner image, Rust toolchain,
+The restore prefix retains the OS, architecture, host build tools, Rust toolchain,
 Cargo config, SDK and job configuration, upstream pins and patches, native C/C++
 sources and build scripts, and sysroot inputs. The workflow itself is hashed so
 an SDK pin or compiler-command change cannot select an incompatible v2 target.
+Host build tools means the `--version` output of the compilers, CMake, Ninja,
+Make, NASM, pkg-config, the JSC code generators (Ruby, Perl, Python, gperf,
+Bison), glibc and libclang. The runner image version is not part of any Rust
+key: image updates change many unrelated packages, and keying on them forced a
+cold JSC and Cargo rebuild (about 48 minutes) on every image rollout.
 `Cargo.*` stays in the exact-key suffix. Cargo validates manifest, dependency,
 feature, profile, and Rust source fingerprints after a compatible prefix restore.
 The existing input-time check restores timestamps only for unchanged content.
@@ -292,6 +302,9 @@ job start through its last job finish, excluding queue time and pauses between a
 
 Inspect `gh api --paginate repos/ShaulLavo/bun-wasm/actions/caches` before
 changing cache policy. Closed PR caches are isolated from later PRs but still
-consume the shared quota. Remove only identified obsolete entries, not live
+consume the shared quota. Pull requests save the native and JSC Cargo
+snapshots only when they restored nothing compatible: re-saving a compatible
+restore added 1.4 GB per push and evicted main's entries, including the 2 GB JSC
+prebuild. Remove only identified obsolete entries, not live
 branches or the main-branch toolchain/build caches. Process bundles are short-lived
 run artifacts, not more entries in the repository's cache quota.
