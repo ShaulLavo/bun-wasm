@@ -379,7 +379,7 @@ test("actual driver flow allows independent commands after a completed nonzero i
 
 test("product run defaults to the unchanged full matrix and validates explicit modes", () => {
   const full = selectProductRun();
-  expect(full.mode satisfies "full" | "next-install-only").toBe("full");
+  expect(full.mode).toBe("full");
   expect(full.fixtures).toBe(fixtures);
   expect(full.stages).toBe(stages);
   expect(selectProductRun("full")).toEqual(full);
@@ -391,25 +391,41 @@ test("product run defaults to the unchanged full matrix and validates explicit m
   for (const invalid of ["", "next", "FULL", "full "]) expect(() => selectProductRun(invalid)).toThrow("SHELL_PRODUCT_RUN");
 });
 
+test("focused dev modes select one original app and all mandatory first-cycle prerequisites", () => {
+  for (const [mode, fixture] of [["vite-dev-ctrl-c", fixtures[0]], ["next-dev-ctrl-c", fixtures[1]]] as const) {
+    if (!fixture) throw new Error("Missing original catalog fixture");
+    const selected = selectProductRun(mode);
+    expect(selected.mode).toBe(mode);
+    expect(selected.fixtures).toEqual([fixture]);
+    expect(selected.fixtures[0]).toBe(fixture);
+    expect(selected.stages).toEqual(["install", "install-and-dev-dom", "ctrl-c-1"]);
+  }
+  for (const invalid of ["nuxt-dev-ctrl-c", "vite-install-only", "next-dev", "next-build", "next-dev-ctrl-c:ctrl-c-1", "vite-dev-ctrl-c "]) {
+    expect(() => selectProductRun(invalid)).toThrow("SHELL_PRODUCT_RUN");
+  }
+});
+
 test("unknown product run mode fails at driver initialization before report or resource creation", async () => {
   const source = readFileSync(join(import.meta.dir, "../web/tests/browser-shell-product.ts"), "utf8");
   const prefix = source.slice(source.indexOf("const root ="), source.indexOf("async function save()"));
   const script = new Bun.Transpiler({ loader: "ts" }).transformSync(prefix.replaceAll("import.meta.dir", JSON.stringify(import.meta.dir)));
-  let created = false;
-  const initialize = async () => runInNewContext(`(async () => { ${script} })()`, {
-    assert, selectProductRun, resolve: (...parts: string[]) => parts.join("/"),
-    process: { env: { SHELL_PRODUCT_RUN: "next-install-typo" } },
-    mkdir: async () => { created = true; },
-  });
-  await expect(initialize()).rejects.toThrow("SHELL_PRODUCT_RUN");
-  expect(created).toBe(false);
+  for (const mode of ["next-install-typo", "nuxt-dev-ctrl-c", "next-build", "vite-dev-ctrl-c:ctrl-c-1"]) {
+    let created = false;
+    const initialize = async () => runInNewContext(`(async () => { ${script} })()`, {
+      assert, selectProductRun, resolve: (...parts: string[]) => parts.join("/"),
+      process: { env: { SHELL_PRODUCT_RUN: mode } },
+      mkdir: async () => { created = true; },
+    });
+    await expect(initialize()).rejects.toThrow("SHELL_PRODUCT_RUN");
+    expect(created).toBe(false);
+  }
 });
 
 test("driver persists selected scope before staging for full and focused reports", async () => {
   const source = readFileSync(join(import.meta.dir, "../web/tests/browser-shell-product.ts"), "utf8");
   const prefix = source.slice(source.indexOf("const root ="), source.indexOf("async function save()"));
   const script = new Bun.Transpiler({ loader: "ts" }).transformSync(prefix.replaceAll("import.meta.dir", JSON.stringify(import.meta.dir)));
-  for (const mode of [undefined, "full", "next-install-only"]) {
+  for (const mode of [undefined, "full", "next-install-only", "vite-dev-ctrl-c", "next-dev-ctrl-c"]) {
     const writes: { path: string; value: unknown }[] = [];
     await runInNewContext(`(async () => { ${script} })()`, {
       assert, selectProductRun, resolve: (...parts: string[]) => parts.join("/"), join,
@@ -424,7 +440,11 @@ test("driver persists selected scope before staging for full and focused reports
   }
 });
 
-async function selectedDriverFlow(code = 0, openFailure = false, networkErrors: string[] = [], released = { workers: 0, listeners: 0 }) {
+type FocusedDevOptions = { mode: "vite-dev-ctrl-c" | "next-dev-ctrl-c"; installTimeout?: boolean; pageFailure?: boolean; startup?: "pending" | "exited"; interruptFailure?: boolean };
+
+type SelectedDriverOptions = { code?: number; openFailure?: boolean; networkErrors?: string[]; released?: { workers: number; listeners: number }; focused?: FocusedDevOptions };
+
+async function selectedDriverFlow({ code = 0, openFailure = false, networkErrors = [], released = { workers: 0, listeners: 0 }, focused }: SelectedDriverOptions = {}) {
   const source = readFileSync(join(import.meta.dir, "../web/tests/browser-shell-product.ts"), "utf8");
   const functions = ["command", "stage", "missingStages", "runFixture", "runCycle", "runApp"].map(name => {
     const match = source.match(new RegExp(`^async function ${name}\\([\\s\\S]*?^}`, "m"));
@@ -442,6 +462,10 @@ async function selectedDriverFlow(code = 0, openFailure = false, networkErrors: 
   const rows: Row[] = [];
   const commands: string[] = [];
   const opened: string[] = [];
+  const development: { app: string; command: string }[] = [];
+  let interrupts = 0;
+  let pending: Pending;
+  let liveServer = false;
   let closed = 0;
   const process: { exitCode?: number } = {};
   const shellProduct = {
@@ -451,26 +475,50 @@ async function selectedDriverFlow(code = 0, openFailure = false, networkErrors: 
       if (openFailure) throw new Error("Fixture open failed");
     },
     close: async () => { closed++; },
-    command: async (text: string) => { commands.push(text); return { code, output: "guest install output" }; },
-    diagnostics: () => ({ pending: undefined, liveServer: false, tailAvailable: true }),
+    command: async (text: string) => {
+      commands.push(text);
+      if (focused?.installTimeout) {
+        pending = { kind: "command", token: "PRODUCT_DONE_1", offset: 0 };
+        throw new Error("Timeout: PRODUCT_DONE_1");
+      }
+      return { code, output: "guest install output" };
+    },
+    diagnostics: () => ({ pending, liveServer, tailAvailable: true }),
   };
+  async function dev(fixture: { id: string }, _stage: string, command: string) {
+    if (!focused) throw new Error("Unselected dev stage executed");
+    development.push({ app: fixture.id, command });
+    pending = { kind: "server", port: 3137, offset: 0, entered: true };
+    if (focused.startup === "exited") pending = undefined;
+    if (focused.startup) throw new Error("Server failed before its expected listener");
+    liveServer = true;
+    if (focused.pageFailure) throw new Error("service-worker HTTP 500 !== 200");
+    return "service-worker HTTP 200; original fixture DOM loaded";
+  }
+  async function interrupt() {
+    if (!focused) throw new Error("Unselected interrupt executed");
+    interrupts++;
+    if (!liveServer) throw new Error("No live foreground server");
+    if (focused.interruptFailure) throw new Error("Foreground worker still running");
+    pending = undefined; liveServer = false;
+    return "Ctrl-C status 130; guest listener removed; PROMPT_USABLE";
+  }
   await runInNewContext(script, {
     assert: { ...assert, deepEqual: (actual: unknown, expected: unknown) => assert.deepEqual(structuredClone(actual), structuredClone(expected)) },
     shellProduct, foregroundCycle, withProgress, settleResources,
-    run: selectProductRun("next-install-only"),
+    run: selectProductRun(focused?.mode ?? "next-install-only"),
     fixtures, stages, rows, timeout: 1234,
     page: { evaluate: async (execute: (arg: unknown) => unknown, arg?: unknown) => structuredClone(await execute(arg)) },
     external: networkErrors, process,
     mirror: { base: "unused", misses: [], errors: [], snapshot: () => ({}) },
     Bun: { write: async () => {} }, join, reports: "unused",
-    dev: async () => { throw new Error("Unselected dev stage executed"); },
-    interrupt: async () => { throw new Error("Unselected interrupt executed"); },
+    dev, interrupt,
     record: async (row: Row) => { rows.push(row); },
     capture: async () => {}, stopAfterFailure: async () => {},
     message: (error: unknown) => error instanceof Error ? error.message : String(error),
     console: { log() {}, error() {} },
   });
-  return { rows, commands, opened, closed, exitCode: process.exitCode };
+  return { rows, commands, opened, closed, development, interrupts, exitCode: process.exitCode };
 }
 
 test("focused driver executes only Next guest install and accounts for only its selected stage", async () => {
@@ -486,7 +534,7 @@ test("focused driver executes only Next guest install and accounts for only its 
 });
 
 test("focused driver requires actual guest install exit zero without adding full-workflow blocked rows", async () => {
-  const result = await selectedDriverFlow(1);
+  const result = await selectedDriverFlow({ code: 1 });
   expect(result.opened).toEqual(["next-15-app"]);
   expect(result.commands).toEqual(["bun install"]);
   expect(result.rows.map(row => [row.app, row.stage, row.status])).toEqual([
@@ -498,7 +546,7 @@ test("focused driver requires actual guest install exit zero without adding full
 });
 
 test("focused fixture setup failure records the missing install but no unselected stages", async () => {
-  const result = await selectedDriverFlow(0, true);
+  const result = await selectedDriverFlow({ openFailure: true });
   expect(result.commands).toEqual([]);
   expect(result.rows.map(row => [row.app, row.stage, row.status])).toEqual([
     ["all", "setup", "pass"], ["next-15-app", "session", "fail"], ["next-15-app", "install", "blocked"],
@@ -509,12 +557,96 @@ test("focused fixture setup failure records the missing install but no unselecte
 });
 
 test("focused driver still fails replay and guest cleanup guards", async () => {
-  const result = await selectedDriverFlow(0, false, ["Unexpected external request"]);
+  const result = await selectedDriverFlow({ networkErrors: ["Unexpected external request"] });
   expect(result.rows.find(row => row.stage === "network")?.status).toBe("fail");
   expect(result.exitCode).toBe(1);
-  await expect(selectedDriverFlow(0, false, [], { workers: 1, listeners: 0 })).rejects.toThrow();
-  await expect(selectedDriverFlow(0, false, [], { workers: 0, listeners: 1 })).rejects.toThrow();
+  await expect(selectedDriverFlow({ released: { workers: 1, listeners: 0 } })).rejects.toThrow();
+  await expect(selectedDriverFlow({ released: { workers: 0, listeners: 1 } })).rejects.toThrow();
 });
+
+for (const [mode, app] of [["vite-dev-ctrl-c", "vite-react"], ["next-dev-ctrl-c", "next-15-app"]] as const) {
+  test(`${mode} dispatches install, one first cycle and exactly its six selected rows`, async () => {
+    const result = await selectedDriverFlow({ focused: { mode } });
+    expect(result.opened).toEqual([app]);
+    expect(result.commands).toEqual(["bun install"]);
+    expect(result.development).toEqual([{ app, command: "bun run dev" }]);
+    expect(result.interrupts).toBe(1);
+    expect(result.closed).toBe(1);
+    expect(result.rows.map(row => [row.app, row.stage, row.status])).toEqual([
+      ["all", "setup", "pass"], [app, "install", "pass"], [app, "install-and-dev-dom", "pass"],
+      [app, "ctrl-c-1", "pass"], ["all", "cleanup", "pass"], ["all", "network", "pass"],
+    ]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  test(`${mode} retains HTTP500 failure while a live server permits the original Ctrl-C`, async () => {
+    const result = await selectedDriverFlow({ focused: { mode, pageFailure: true } });
+    expect(result.rows.find(row => row.stage === "install-and-dev-dom")).toMatchObject({ app, status: "fail", detail: "service-worker HTTP 500 !== 200" });
+    expect(result.rows.find(row => row.stage === "ctrl-c-1")?.status).toBe("pass");
+    expect(result.rows).toHaveLength(6);
+    expect(result.interrupts).toBe(1);
+    expect(result.exitCode).toBe(1);
+  });
+
+  test(`${mode} cannot skip a failed install to claim dev or Ctrl-C success`, async () => {
+    const result = await selectedDriverFlow({ code: 1, focused: { mode } });
+    expect(result.commands).toEqual(["bun install"]);
+    expect(result.development).toEqual([]);
+    expect(result.interrupts).toBe(0);
+    expect(result.rows.filter(row => row.app === app).map(row => [row.stage, row.status])).toEqual([
+      ["install", "fail"], ["install-and-dev-dom", "blocked"], ["ctrl-c-1", "blocked"],
+    ]);
+    expect(result.exitCode).toBe(1);
+  });
+
+  test(`${mode} leaves dev and Ctrl-C blocked while an install command is pending`, async () => {
+    const result = await selectedDriverFlow({ focused: { mode, installTimeout: true } });
+    expect(result.rows.find(row => row.stage === "install")).toMatchObject({ status: "fail", detail: "Timeout: PRODUCT_DONE_1" });
+    expect(result.rows.filter(row => row.status === "blocked").map(row => row.stage)).toEqual(["install-and-dev-dom", "ctrl-c-1"]);
+    expect(result.development).toEqual([]);
+    expect(result.interrupts).toBe(0);
+    expect(result.exitCode).toBe(1);
+  });
+
+  test(`${mode} blocks interruption for a pending startup or an exited server`, async () => {
+    for (const startup of ["pending", "exited"] as const) {
+      const result = await selectedDriverFlow({ focused: { mode, startup } });
+      expect(result.development).toEqual([{ app, command: "bun run dev" }]);
+      expect(result.interrupts).toBe(0);
+      expect(result.rows.find(row => row.stage === "install-and-dev-dom")?.status).toBe("fail");
+      expect(result.rows.find(row => row.stage === "ctrl-c-1")?.status).toBe("blocked");
+      expect(result.exitCode).toBe(1);
+    }
+  });
+
+  test(`${mode} keeps an interrupt failure without a restart or retry`, async () => {
+    const result = await selectedDriverFlow({ focused: { mode, interruptFailure: true } });
+    expect(result.rows.find(row => row.stage === "ctrl-c-1")).toMatchObject({ status: "fail", detail: "Foreground worker still running" });
+    expect(result.interrupts).toBe(1);
+    expect(result.development).toHaveLength(1);
+    expect(result.rows).toHaveLength(6);
+    expect(result.exitCode).toBe(1);
+  });
+
+  test(`${mode} accounts for all selected prerequisites after fixture setup failure`, async () => {
+    const result = await selectedDriverFlow({ openFailure: true, focused: { mode } });
+    expect(result.commands).toEqual([]);
+    expect(result.development).toEqual([]);
+    expect(result.interrupts).toBe(0);
+    expect(result.rows.filter(row => row.status === "blocked").map(row => row.stage)).toEqual(["install", "install-and-dev-dom", "ctrl-c-1"]);
+    expect(result.rows.find(row => row.stage === "session")?.status).toBe("fail");
+    expect(result.closed).toBe(1);
+    expect(result.exitCode).toBe(1);
+  });
+
+  test(`${mode} retains mandatory replay and global worker/listener cleanup guards`, async () => {
+    const result = await selectedDriverFlow({ networkErrors: ["Unexpected external request"], focused: { mode } });
+    expect(result.rows.find(row => row.stage === "network")?.status).toBe("fail");
+    expect(result.exitCode).toBe(1);
+    await expect(selectedDriverFlow({ released: { workers: 1, listeners: 0 }, focused: { mode } })).rejects.toThrow();
+    await expect(selectedDriverFlow({ released: { workers: 0, listeners: 1 }, focused: { mode } })).rejects.toThrow();
+  });
+}
 
 test("actual preparation caller restores Bun from the packed archive without editing shared hardlinks", async () => {
   const directory = await mkdtemp(join(tmpdir(), "bw-sp-restore-"));

@@ -146,6 +146,10 @@ async function runApp(fixture: Fixture) {
   await page.evaluate(({ fixture, base }) => globalThis.shellProduct.open(fixture, base), { fixture, base: mirror.base });
   const installed = await stage(fixture, "install", () => command("bun install"));
   if (run.mode === "next-install-only") return;
+  if (run.mode === "vite-dev-ctrl-c" || run.mode === "next-dev-ctrl-c") {
+    await runCycle(fixture, ["install-and-dev-dom", "ctrl-c-1", "bun run dev"], installed, true);
+    return;
+  }
   let available = true;
   const cycles: readonly [Stage, Stage, string][] = [["install-and-dev-dom", "ctrl-c-1", "bun install && bun run dev"], ["restart-2-dom", "ctrl-c-2", "bun run dev"], ["restart-3-dom", "ctrl-c-3", "bun run dev"]];
   for (const cycle of cycles) available = await runCycle(fixture, cycle, installed, available);
