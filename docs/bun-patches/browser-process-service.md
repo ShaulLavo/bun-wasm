@@ -84,8 +84,10 @@ harnesses are original test programs, not copies of the spike implementations.
 
 The browser playground installs the private shared-object service on its page-owned Waffle
 runtime. `web/src/runner.ts` gives browser-engine root workers a leased route, forwards the
-executor's native `bun-shared-connect` message, closes late or mismatched ports, and releases the
-route with the root worker. This is an original caller activation adapter; it does not change
+executor's native `bun-shared-connect` message, retires authority at logical terminal selection
+before the filesystem fence, closes late or mismatched ports, and releases the route with the
+root worker. The page owner preserves the installation across persisted BFCache pagehide events
+and closes it on a real unload. This is an original caller activation adapter; it does not change
 Waffle's runtime or the public package adapter. The real Vitest 3.2.4 browser fixture exercises
 the startup shared buffer and transferred `MessagePort` with `useAtomics=false`, and its ordinary
 async test, thread-pool test, and intentional rejection all pass through the maintained app matrix.

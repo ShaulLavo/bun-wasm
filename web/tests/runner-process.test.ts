@@ -130,8 +130,57 @@ test("browser roots carry installed shared-object ownership and release it on te
     }
   } finally {
     await state.dispose();
-    installation?.close();
     expect(installation?.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    installation?.close();
+  }
+});
+
+test("terminal browser roots retire their route before a held filesystem fence accepts late ports", async () => {
+  let installation: ReturnType<typeof installRuntimeSharedObjects> | undefined;
+  const state = isolatedRoot(true, "browser", {}, ["-e", "0"], runtime => {
+    installation = installRuntimeSharedObjects(runtime);
+  });
+  try {
+    await state.ready;
+    const owner = state.request?.sharedObjects?.owner;
+    expect(owner).toBeString();
+    state.run.kill(9);
+    expect(installation?.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    const channel = new MessageChannel();
+    try {
+      state.worker.onmessage?.({ data: { type: "bun-shared-connect", owner, port: channel.port2 } } as MessageEvent<WorkerMessage>);
+      expect(installation?.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    } finally { channel.port1.close(); }
+    state.release();
+    await state.run.done;
+  } finally {
+    await state.dispose();
+    expect(installation?.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    installation?.close();
+  }
+});
+
+for (const failure of ["fork", "retainConsumer", "registerAdapter"] as const) test(`root setup rolls back its shared route when ${failure} throws`, async () => {
+  const channel = new MessageChannel();
+  const runtime = processRuntimeFixture(failure === "fork"
+    ? { fork: () => { throw new Error("fork failed"); } }
+    : { fork: () => ({ ...createFilesystemIdentity(), port: channel.port1 }) });
+  const installation = installRuntimeSharedObjects(runtime);
+  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/") });
+  const mutable = (failure === "fork" ? runtime.filesystem : runtime) as unknown as Record<string, unknown>;
+  const original = mutable[failure];
+  if (failure !== "fork") mutable[failure] = () => { throw new Error(`${failure} failed`); };
+  try {
+    const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    expect(() => startRun({ runtime, engine: "browser", module, args: [], env: {}, moduleScope: false }, { stdout() {}, stderr() {} })).toThrow(`${failure} failed`);
+    expect(installation.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+  } finally {
+    mutable[failure] = original;
+    installation.close();
+    channel.port1.close(); channel.port2.close();
+    await runtime.dispose();
+    if (previousLocation) Object.defineProperty(globalThis, "location", previousLocation); else Reflect.deleteProperty(globalThis, "location");
   }
 });
 

@@ -75,7 +75,7 @@ engineSelect.disabled = true;
 fileSelect.disabled = true;
 const runtime = createRuntime({ filesystem: { mode, name: "bun-wasm-workspace" } });
 const sharedObjects = installRuntimeSharedObjects(runtime);
-addEventListener("pagehide", () => sharedObjects.close(), { once: true });
+addEventListener("pagehide", (event: PageTransitionEvent) => { if (!event.persisted) sharedObjects.close(); });
 const fs = runtime.filesystem;
 fs.onStateChange = state => {
   if (state.status === "waiting") {
