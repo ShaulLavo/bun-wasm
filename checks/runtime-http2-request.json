@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/http2-request.test.ts",
+  "localRuntime": true
+}

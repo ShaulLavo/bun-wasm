@@ -1,0 +1,74 @@
+import assert from "node:assert/strict";
+import http2, { Http2ServerRequest, constants } from "node:http2";
+import { PassThrough, Readable } from "node:stream";
+
+assert.equal(typeof Http2ServerRequest, "function");
+assert.equal(typeof constants, "object");
+assert.equal(http2.Http2ServerRequest, Http2ServerRequest);
+assert.equal(require("node:http2").Http2ServerRequest, Http2ServerRequest);
+assert.equal(require("http2").Http2ServerRequest, Http2ServerRequest);
+assert.equal(Object.getPrototypeOf(Http2ServerRequest.prototype), Readable.prototype);
+console.log("http2 request named, default and CommonJS identity");
+
+class Transport extends PassThrough {
+  timeouts: unknown[][] = [];
+  setTimeout(...args: unknown[]) { this.timeouts.push(args); return this; }
+}
+const stream = new Transport();
+const headers = { ":method": "POST", ":path": "/hello", ":scheme": "https", ":authority": "example.test", host: "fallback.test" };
+const rawHeaders = [":method", "POST", ":path", "/hello"];
+const request: Http2ServerRequest = Reflect.construct(Http2ServerRequest, [stream, headers, {}, rawHeaders]);
+assert(request instanceof Readable);
+assert.equal(request.stream, stream);
+assert.equal(request.headers, headers);
+assert.equal(request.rawHeaders, rawHeaders);
+assert.equal(request.method, "POST");
+assert.equal(request.url, "/hello");
+assert.equal(request.authority, "example.test");
+assert.equal(request.scheme, "https");
+assert.equal(request.httpVersion, "2.0");
+assert.equal(request.httpVersionMajor, 2);
+assert.equal(request.httpVersionMinor, 0);
+assert.equal(request.complete, false);
+assert.equal(request.aborted, false);
+request.method = "PUT";
+request.url = "/changed";
+assert.equal(headers[":method"], "PUT");
+assert.equal(headers[":path"], "/changed");
+assert.throws(() => { request.method = " "; }, { code: "ERR_INVALID_ARG_VALUE" });
+assert.throws(() => Reflect.set(request, "method", 1), { code: "ERR_INVALID_ARG_TYPE" });
+assert.equal(request.setTimeout(123), request);
+assert.deepEqual(stream.timeouts, [[123, undefined]]);
+assert.equal(request.connection, request.socket);
+assert.throws(() => request.socket.write, { code: "ERR_HTTP2_NO_SOCKET_MANIPULATION" });
+console.log("http2 request headers, validation, timeout and socket");
+
+let body = "";
+let aborted = 0;
+let closed = 0;
+let timedOut = 0;
+request.on("data", chunk => { body += chunk; });
+request.on("aborted", () => { aborted++; });
+request.on("close", () => { closed++; });
+request.on("timeout", () => { timedOut++; });
+await new Promise<void>(resolve => setTimeout(resolve, 0));
+stream.write("hello");
+stream.emit("trailers", { checksum: "ok" }, 0, ["checksum", "ok"]);
+stream.emit("timeout");
+stream.emit("error", new Error("not forwarded to request"));
+stream.emit("aborted");
+assert.equal(request.aborted, true);
+assert.equal(request.complete, true);
+assert.equal(aborted, 1);
+assert.equal(timedOut, 1);
+stream.end(" world");
+await new Promise<void>(resolve => setTimeout(resolve, 0));
+assert.equal(body, "hello world");
+assert.equal(request.readableEnded, true);
+assert.deepEqual(request.trailers, { checksum: "ok" });
+assert.deepEqual(request.rawTrailers, ["checksum", "ok"]);
+stream.emit("close");
+assert.equal(closed, 1);
+request.setTimeout(456);
+assert.deepEqual(stream.timeouts, [[123, undefined]]);
+console.log("http2 request body, trailers, abort, timeout and close lifecycle");
