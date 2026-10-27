@@ -8,6 +8,10 @@ export const ENGINE_BIN: Readonly<Record<Engine, string>> = {
   hermes: "/opt/bun/hermes/bin",
 };
 
+export function bunEnvironment(env: Readonly<Record<string, string>>): Record<string, string> {
+  return { NEXT_TELEMETRY_DISABLED: "1", ...env };
+}
+
 export function engineEnvironment(engine: Engine, env: Readonly<Record<string, string>>): Record<string, string> {
   const bin = ENGINE_BIN[engine];
   const path = env.PATH ?? "/bin:/usr/bin";

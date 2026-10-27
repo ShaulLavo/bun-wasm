@@ -1,4 +1,5 @@
 import { programLinkPlan } from "../../src/assets.js";
+import { bunEnvironment } from "../../src/executable-paths.js";
 // Page-side launchers: one Waffle worker per Bun or preview1 process. The service owns admission,
 // descriptors, signals and filesystem fences; these only describe the worker to start.
 import type { GuestLauncher, Runtime, RuntimeNetworkHelper } from "waffle";
@@ -91,7 +92,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
       workerUrl: options.workerUrl,
       request: {
         engine, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
-        args: context.request.argv, env: { ...context.request.env, PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
+        args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
         trace: false, net: ring, moduleCache, lookupChannel: lookupChannel?.name,
         sharedObjects: sharedRoute ? { owner: sharedRoute.owner } : undefined,
       },

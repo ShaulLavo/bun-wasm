@@ -9,7 +9,7 @@ import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, typ
 import { createRing } from "./net/ring";
 import { SubprocessBroker } from "./subprocess-broker";
 import { isToolCommand } from "./tool-command";
-import { ENGINE_BIN, engineEnvironment } from "../../src/executable-paths.js";
+import { ENGINE_BIN, bunEnvironment, engineEnvironment } from "../../src/executable-paths.js";
 import { claimOutcome, readOutcome, type OutcomeWord } from "waffle/proc/outcome";
 import { waitStatus } from "waffle/proc/wait-status";
 import { installLookupServer } from "./net/lookup.js";
@@ -85,7 +85,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     module: options.module,
     linkPlan: programLinkPlan(options.module),
     args: [`${ENGINE_BIN[options.engine]}/bun`].concat(options.args),
-    env: { ...engineEnvironment(options.engine, options.env), BUNWASM_EXEC_PATH: `${ENGINE_BIN[options.engine]}/bun` },
+    env: { ...engineEnvironment(options.engine, options.adapter === "preview1" ? options.env : bunEnvironment(options.env)), BUNWASM_EXEC_PATH: `${ENGINE_BIN[options.engine]}/bun` },
     filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
     trace: options.trace ?? false,
     net: ring,
