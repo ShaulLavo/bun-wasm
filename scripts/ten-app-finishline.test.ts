@@ -303,3 +303,45 @@ test("overall deadline exits despite a hung capture and browser, while attemptin
     expect(final?.unverified).toContain("scratch removal");
   } finally { complete.resolve(); await operation; }
 });
+
+import { runInNewContext } from "node:vm";
+import { browserRegistryRoute } from "./app-matrix/registry-request.ts";
+
+test("actual shell fixture passes only the supported Astro opt-outs beside the existing Next opt-out", async () => {
+  const source = await readFile(resolve(import.meta.dir, "../tests/shell-product/main.ts"), "utf8");
+  const open = source.match(/^async function open\([\s\S]*?^}/m)?.[0];
+  if (!open) throw new Error("Missing maintained shell fixture open function");
+  const script = new Bun.Transpiler({ loader: "ts" }).transformSync(`let active;\n${open}`);
+  const environments: unknown[] = [];
+  const execute: unknown = runInNewContext(`${script}\nopen`, {
+    close: async () => {}, projectFiles: () => ({}), write: async () => {},
+    runtime: { filesystem: { flush: async () => {} } }, Atomics,
+    SharedBridge: class { state = new Int32Array(new SharedArrayBuffer(8)); }, control: { cols: 0, rows: 1 },
+    Terminal: class { async ready() {} },
+    createShell: async (options: { env: unknown }) => { environments.push(structuredClone(options.env)); return {}; },
+  });
+  if (typeof execute !== "function") throw new Error("Fixture open must be callable");
+  await execute(recipe("hono"), "http://127.0.0.1:3138");
+  expect(environments).toEqual([{
+    PATH: "/bin:/usr/bin", HOME: "/home/guest", PS1: "PRODUCT> ", PORT: "3137",
+    NEXT_TELEMETRY_DISABLED: "1", ASTRO_TELEMETRY_DISABLED: "1", ASTRO_DISABLE_UPDATE_CHECK: "true",
+  }]);
+});
+
+test("Astro opt-outs leave optional and unrelated external requests strictly blocked", async () => {
+  const targets = ["https://telemetry.astro.build/api/v1/record", "https://registry.npmjs.org/astro/latest", "https://outside.invalid/"];
+  const external: string[] = [];
+  let aborted = 0;
+  for (const target of targets) {
+    await browserRegistryRoute({
+      request: () => ({ url: () => target, method: () => "GET", headers: () => ({}) }),
+      abort: async () => { aborted++; },
+      continue: async () => { throw new Error("External request escaped guard"); },
+      fetch: async () => { throw new Error("External request reached fetch"); },
+      fulfill: async () => { throw new Error("External request was fulfilled"); },
+    }, "http://127.0.0.1:3138", external);
+  }
+  expect(aborted).toBe(3);
+  expect(external).toEqual(targets);
+  expect(() => networkSnapshot(undefined, external, () => {})).toThrow("External requests or registry replay misses/errors");
+});

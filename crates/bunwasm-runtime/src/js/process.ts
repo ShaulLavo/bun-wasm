@@ -33,6 +33,16 @@
   }
 
   let execveWarned = false;
+  let bindingConstants: object | undefined;
+
+  function constantsBinding() {
+    return bindingConstants ??= Object.assign(Object.create(null), {
+      fs: internal.builtin("node:fs").constants,
+      os: internal.builtin("node:os").constants,
+      crypto: internal.builtin("node:crypto").constants,
+      zlib: internal.builtin("node:zlib").constants,
+    });
+  }
 
   // Like Node, assigned values become strings (`process.env.N = 1` -> "1").
   const env = new Proxy(native.env(), {
@@ -335,6 +345,7 @@
       native.writeStderr(`${prefix}${name}: ${message}\n`);
     },
     binding(name: unknown) {
+      if (name === "constants") return constantsBinding();
       throw new Error(`No such module: ${name}`);
     },
     dlopen() {

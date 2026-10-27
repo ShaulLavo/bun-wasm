@@ -43,12 +43,8 @@ preparation precede all four final saves. Default success gating prevents any
 selected cache save after a failed guest gate. JSC prebuild validation and its
 separate Cargo cache retain their existing identities and guards.
 
-The native job overlaps only the single selected JSC C/C++ prebuild with its
-sequential native gates and QuickJS fixtures. It starts after shared sysroot and
-input preparation and private JSC cache restores. One Bash step owns the child
-process group, its failure log and cleanup. Either branch failing blocks the join;
-cancellation terminates and reaps the owned group and its descendants. The child
-keeps JSC environment changes private. JSC Cargo and every later host/tools/guest
-command wait for both branches to succeed. The prebuild log joins the always-run
-receipt diagnostics. The four successful-only saves and their cache-key rules
-remain unchanged; there is no early warming save or additional producer.
+The JSC Cargo guest builds in the background while the QuickJS core and the
+host-engine guest build, in its own target and `dist/bun-jsc.wasm*` outputs. Its
+wait step, cache save and embedding checks come before the native fixture checks
+and the tools build, and every later guest gate and final save still waits for it.
+See `docs/code-quality.md`.

@@ -272,8 +272,8 @@ test("playground only seeds examples in a new home, preserving changes and delet
     },
     async flush() { checkpoints++; },
   };
-  const startup = new Function("createRuntime", "HOME", "examples", "mode", `return (async () => { ${transpiler.transformSync(code)} })();`);
-  const start = () => startup(() => ({ filesystem: fs }), "/home/user", { "index.ts": "example", "deleted.ts": "delete me" }, "fast");
+  const startup = new Function("createRuntime", "installRuntimeSharedObjects", "HOME", "examples", "mode", `return (async () => { ${transpiler.transformSync(code)} })();`);
+  const start = () => startup(() => ({ filesystem: fs }), () => ({ close() {} }), "/home/user", { "index.ts": "example", "deleted.ts": "delete me" }, "fast");
   await start();
   expect(files.get("/home/user/index.ts")).toBe("example");
   expect(checkpoints).toBe(1);
@@ -283,6 +283,25 @@ test("playground only seeds examples in a new home, preserving changes and delet
   expect(files.get("/home/user/index.ts")).toBe("saved edit");
   expect(files.has("/home/user/deleted.ts")).toBe(false);
   expect(checkpoints).toBe(1);
+});
+
+test("persisted pagehide keeps shared-object installation for the next command", async () => {
+  const source = await Bun.file(new URL("../src/main.ts", import.meta.url)).text();
+  const code = source.slice(source.indexOf("const runtime = createRuntime"), source.indexOf("const fs = runtime.filesystem"));
+  let pagehide: ((event: { persisted: boolean }) => void) | undefined;
+  const state = { closed: false };
+  const startup = new Function("createRuntime", "installRuntimeSharedObjects", "addEventListener", "state", "mode", `${transpiler.transformSync(code)}; return () => { if (state.closed) throw new Error("installation closed"); return "command-ready"; };`)(
+    () => ({ filesystem: {} }),
+    () => ({ close() { state.closed = true; } }),
+    (_type: string, listener: (event: { persisted: boolean }) => void) => { pagehide = listener; },
+    state,
+    "fast",
+  );
+  expect(pagehide).toBeFunction();
+  pagehide!({ persisted: true });
+  expect(startup()).toBe("command-ready");
+  pagehide!({ persisted: false });
+  expect(() => startup()).toThrow("installation closed");
 });
 
 test("sandbox reload preserves its workspace and only an explicit reset replaces the template", async () => {
@@ -348,7 +367,7 @@ for (const app of ["web", "sandbox"] as const) {
     const workspace = app === "web" ? "/home/user" : "/home/user/app";
     const sources = { "index.html": "page", "first.ts": "first file", "second.ts": "second file" };
     const env = {
-      createRuntime: () => ({ filesystem: fs }), fs, HOME: workspace, APP: workspace, examples: sources, mode: "fast",
+      createRuntime: () => ({ filesystem: fs }), installRuntimeSharedObjects: () => ({ close() {} }), fs, HOME: workspace, APP: workspace, examples: sources, mode: "fast",
       setStatus() {}, templateFile: "template.json", measureStartup() {},
       abs: (path: string) => `${workspace}/${path}`,
       fetch: async () => ({ ok: true, text: async () => JSON.stringify({ files: sources }) }),
