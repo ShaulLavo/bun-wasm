@@ -518,6 +518,19 @@
     }
   }
 
+  const workerChildren = new Set<Child>();
+  let workerExitHook = false;
+  function trackWorkerChild(child: Child) {
+    workerChildren.add(child);
+    if (workerExitHook) return;
+    workerExitHook = true;
+    // Worker threads die with their parent; ordinary spawned processes may outlive it.
+    internal.require("process").once("exit", () => {
+      for (const child of workerChildren) child.kill(9);
+      workerChildren.clear();
+    });
+  }
+
   function spawn(cmd: unknown, options?: SpawnOptions): Child {
     const spec = start(cmd, options, false);
     let observingStart = typeof spec.options._onSpawn === "function";
@@ -659,6 +672,7 @@
     function close() {
       if (closed) return;
       closed = true;
+      workerChildren.delete(child);
       ipc?.close();
       sink.destroy();
     }
@@ -751,6 +765,7 @@
       resolveExit(1);
       close();
     } });
+    if (spec.options._worker) trackWorkerChild(child);
     supplyInput(sink, () => initialInput(spec.input, sink));
     if (Number(spec.options.timeout) > 0) timer = internal.realTimers.setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, Number(spec.options.timeout));
     if (spec.options.signal) {

@@ -68,7 +68,10 @@ These input/lifetime and demand rules and their fake-host and real-guest regress
 adapters, not copied Bun/Node stream code.
 Ordinary children join the caller's job from `job_of(0)`; lookup failure is a spawn error,
 not a fallback to a separate job. Detached children request their own job, which the parent
-can reap with `wait_job` or stop with `kill_job`. Before allocating any descriptor or child,
+can reap with `wait_job` or stop with `kill_job`. Worker-thread children are tracked separately
+and killed by PID from the parent's synchronous exit notification, matching thread lifetime even
+though each worker has its own guest process. Ordinary spawned children keep their existing
+orphan behavior and no job-wide signal is sent. Before allocating any descriptor or child,
 the original `checkCwd` adapter stats the resolved directory and reports missing or
 non-directory paths as `ENOENT` or `ENOTDIR` with syscall `spawn`, rather than an asynchronous
 child exit. `js/worker_channel.ts` and `js/worker_threads.ts` carry worker
@@ -103,6 +106,6 @@ libc or host code.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, process-aware idle waits, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
+| [Guest process ABI](#guest-process-abi) | Host feature | Original direct runtime_proc imports, descriptor-bound Bun spawn and worker control pipes, parent-exit worker teardown, process-aware idle waits, native/Node linkers, nonblocking filesystem preparation and lazy browser process integration. |
 
 [Ledger scope and pinned revisions](scope.md).
