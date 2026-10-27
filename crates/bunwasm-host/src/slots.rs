@@ -502,6 +502,21 @@ fn process_functions(store: &mut Store<Host>) -> Vec<Func> {
     ]
 }
 
+/// bash-web's shell guest imports two small namespaces besides runtime_proc. On this host it is
+/// never the terminal owner: it reads its inherited stdio, reports 80 columns and owns no phase.
+/// Its executable query is this host's own runtime_proc access functions.
+pub fn add_shell_imports(linker: &mut Linker<Host>) -> Result<()> {
+    for name in ["access_start", "access_take", "access_cancel", "poll"] {
+        linker.alias("runtime_proc", name, "bash_web_executable", name)?;
+    }
+    linker.func_wrap("shell_terminal", "inherited_fd", |index: i32| -> i32 {
+        if (0..3).contains(&index) { index } else { -1 }
+    })?;
+    linker.func_wrap("shell_terminal", "columns", || -> i32 { 80 })?;
+    linker.func_wrap("shell_terminal", "phase", |_: i32| {})?;
+    Ok(())
+}
+
 /// Register direct process imports and the networking-only WASI trampoline.
 pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()> {
     for (name, function) in PROCESS_NAMES.into_iter().zip(process_functions(store)) {

@@ -173,6 +173,11 @@ impl Runtime {
         self.executables.register(paths, module)?;
         Ok(())
     }
+    /// bash-web's shell guest at /bin/sh and /bin/bash, for package scripts, Bun.$ and bun exec.
+    pub fn register_shell(&self, module: &wasmtime::Module) -> anyhow::Result<()> {
+        self.executables.register(&executables::SHELL_PATHS, module)?;
+        Ok(())
+    }
     pub fn module_for<'a>(
         &'a self,
         argv: &[String],

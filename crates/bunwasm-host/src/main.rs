@@ -32,6 +32,7 @@ with networking. Launcher options must come before the bun arguments:
 
   --wasm PATH         bun.wasm to run
   --engine NAME=PATH  register quickjs or jsc at /opt/bun/NAME/bin (repeatable)
+  --shell PATH        register bash-web's shell guest at /bin/sh and /bin/bash
   --dir HOST[::GUEST] preopen a directory (repeatable); without any --dir
                       the current directory is preopened at its own path
   --env K=V           set a guest environment variable (repeatable)
@@ -59,6 +60,7 @@ pub struct Host {
 struct Options {
     wasm: Option<PathBuf>,
     engines: Vec<(String, PathBuf)>,
+    shell: Option<PathBuf>,
     dirs: Vec<(PathBuf, String)>,
     env: Vec<(String, String)>,
     inherit_env: bool,
@@ -95,6 +97,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options> {
                 }
                 options.engines.push((name.to_string(), path.into()));
             }
+            "--shell" => options.shell = Some(value("--shell")?.into()),
             "--dir" => {
                 let spec = value("--dir")?;
                 let (host, guest) = spec.split_once("::").unwrap_or((&spec, &spec));
@@ -241,6 +244,11 @@ fn run(options: Options) -> Result<i32> {
             .with_context(|| format!("loading {name} engine {}", path.display()))?;
         runtime.register_engine(name, &module)?;
     }
+    if let Some(path) = &options.shell {
+        let module = Module::from_file(&engine, path)
+            .with_context(|| format!("loading shell {}", path.display()))?;
+        runtime.register_shell(&module)?;
+    }
     let thread_stack = host_stack()? + (8 << 20);
     Arc::get_mut(&mut runtime).unwrap().thread_stack = thread_stack;
     let running = Arc::new(AtomicBool::new(true));
@@ -358,6 +366,7 @@ fn run_module_instance(
     )?;
     linker.allow_shadowing(false);
     slots::add_import(&mut linker, &mut store)?;
+    slots::add_shell_imports(&mut linker)?;
     let selected = runtime.module_for(&argv, module)?;
     let instance = linker.instantiate(&mut store, selected)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");
