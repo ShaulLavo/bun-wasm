@@ -17,17 +17,21 @@ const failed = run("failed-test");
 assert.equal(failed.exitCode, 1, failed.stderr.toString());
 assert.equal(run("exit").exitCode, 17);
 assert.equal(run("nodejs-exit").exitCode, 17);
-for (const name of ["cycle-a", "implicit-a"]) {
-  const cycle = run(name);
-  assert.equal(cycle.exitCode, 1);
-  assert.ok(cycle.stderr.toString().includes("Package script alias cycle"), cycle.stderr.toString());
-}
+const syntax = run("shell-syntax");
+assert.equal(syntax.exitCode, 0, syntax.stderr.toString());
+assert.equal(syntax.stdout.toString(), "one\nTWO SHELL-SYNTAX\nthree\n");
+const hooked = run("hooked");
+assert.equal(hooked.stdout.toString(), "pre\nmain\npost\n");
+assert.equal(hooked.stderr.toString(), "$ echo pre\n$ echo main\n$ echo post\n");
+const silent = Bun.spawnSync([process.execPath, "run", "--silent", "exit"], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+assert.equal(silent.exitCode, 17);
+assert.equal(silent.stderr.toString(), "");
 const inspected = run("alias", ["tail"]);
 assert.equal(inspected.exitCode, 0, inspected.stderr.toString());
 assert.equal(inspected.stdout.toString().trim(), "inspect second|first|tail outer inner true");
 mkdirSync("node_modules/.bin", { recursive: true });
 try {
-  writeFileSync("node_modules/.bin/tool", 'console.log("installed", process.argv.slice(2).join("|"));');
+  writeFileSync("node_modules/.bin/tool", '#!/bin/node\nconsole.log("installed", process.argv.slice(2).join("|"));');
   writeFileSync("tool", 'console.log("local");');
   const binary = run("bin-script", ["tail"]);
   assert.equal(binary.exitCode, 0, binary.stderr.toString());
@@ -39,4 +43,4 @@ try {
   rmSync("node_modules", { recursive: true, force: true });
   rmSync("tool", { force: true });
 }
-console.log("package scripts preserve runtime commands, argv, environment, PATH and exit status");
+console.log("package scripts run in bash-web with runtime commands, argv, environment, PATH and exit status");

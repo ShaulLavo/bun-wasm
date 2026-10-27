@@ -92,6 +92,14 @@ start_test_server() {
 if [[ $build == 1 && $update == 0 && $engine != browser ]]; then
   (cd "$root" && cargo build -j "${JOBS:-12}" --release -p bunwasm-host >"$scratch/host-build.log" 2>&1) ||
     { tail -30 "$scratch/host-build.log"; echo "launcher build failed"; exit 1; }
+  "$root/scripts/build-bash-web-shell.sh" >"$scratch/shell-build.log" 2>&1 ||
+    { tail -30 "$scratch/shell-build.log"; echo "bash-web shell build failed"; exit 1; }
+fi
+# Package scripts, Bun.$ and bun exec run in bash-web's shell at /bin/sh and /bin/bash.
+shell_wasm="${BUN_WASM_SHELL:-$root/dist/bash-web-shell.wasm}"
+if [[ $engine != browser && ! -f "$shell_wasm" ]]; then
+  echo "missing $shell_wasm; run scripts/build-bash-web-shell.sh"
+  exit 1
 fi
 
 if [[ ${#names[@]} == 0 ]]; then
@@ -226,7 +234,7 @@ for name in "${names[@]}"; do
       --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   else
-    (cd "$work" && timeout 60 "$launcher" --wasm "$wasm" --engine "$engine=$wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$work::/" --env PWD=/ --env HOME=/ \
+    (cd "$work" && timeout 60 "$launcher" --wasm "$wasm" --engine "$engine=$wasm" --shell "$shell_wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$work::/" --env PWD=/ --env HOME=/ \
       --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   fi
