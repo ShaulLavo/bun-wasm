@@ -3,12 +3,13 @@ import * as fs from "node:fs";
 import { readFileSync } from "node:fs";
 import { EventEmitter, getEventListeners } from "node:events";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 function productionSource(name: string) {
-  const scratch = fs.mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-promise-watch-source-"));
+  const scratch = fs.mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-promise-watch-source-"));
   try {
     const destination = join(scratch, "watch.js");
     execFileSync("node", [new URL("./transpile-runtime.ts", import.meta.url).pathname,
@@ -151,7 +152,7 @@ test("invalid signals fail before opening a watcher", () => {
 
 for (const implementation of ["native", "adapter"]) {
   test(`${implementation} receives real filesystem changes and cancels pending reads`, async () => {
-    const directory = fs.mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-promise-watch-"));
+    const directory = fs.mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-promise-watch-"));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort("test timeout"), 1000);
     let iterator: AsyncIterator<{ eventType: string; filename: string | Buffer | undefined }> | undefined;
