@@ -275,13 +275,19 @@
         catch (err) { internal.nextTick(() => this.emit("error", err)); return this; }
         this.listening = true;
         this._closing = false;
-        this._starting = addWaiter({ ref: true, step: () => {
+        const startup = { ref: true, phase: "binding", step: () => {
+          if (this._starting !== startup) return true;
+          if (startup.phase === "announcing") return false;
           if (!this.listening) return true;
           const address = native.hostLocalAddr(this._listener);
           if (address === -2) return false;
-          this._starting = null;
-          if (typeof address === "string") this.emit("listening");
-          else {
+          if (typeof address === "string") {
+            startup.phase = "announcing";
+            this.emit("listening");
+            if (this._starting !== startup) return true;
+            this._starting = null;
+          } else {
+            this._starting = null;
             const err = hostError(this._listener, "listen failed");
             waiters.delete(this._accepting);
             native.hostClose(this._listener);
@@ -289,7 +295,8 @@
             this.emit("error", err);
           }
           return true;
-        } });
+        } };
+        this._starting = addWaiter(startup);
         this._accepting = acceptLoop(this._listener, conn => this._accept(conn));
         this._accepting.ref = this._referenced;
         if (options.signal) {

@@ -14,6 +14,10 @@ accept waiter. Each startup owns a distinct waiter identity, checked before
 polling and after invoking listeners. Closing and re-listening inside the callback
 cannot let the previous startup install an accept waiter for the new listener.
 An announcing startup does not announce again during a nested I/O pump.
+The TCP startup waiter in `src/js/node_net.js` uses the same identity and
+announcing-phase checks. A snapshotted waiter canceled by a sibling server's
+listen callback cannot clear or announce the replacement bind, and a nested
+pump cannot repeat its own announcement. No timer, delay or retry is used.
 Failure releases the handle and emits the original host error
 without starting acceptance. Closing cancels startup. `ref`/`unref` control acceptance; an in-flight bind
 request remains referenced until its completion or cancellation. The Node host's synchronous
@@ -25,7 +29,7 @@ retry is used, and fake timers do not control the I/O waiter.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [HTTP listener readiness](#http-listener-readiness) | Host feature | Original typed startup waiter reports HTTP listener success or bind errors after the host finishes binding. |
+| [HTTP listener readiness](#http-listener-readiness) | Host feature | Original typed startup waiter reports HTTP listener success or bind errors after the host finishes binding; the TCP startup waiter shares its token lifetime and non-reentrant announcement discipline. |
 
 [Ledger scope and pinned revisions](scope.md).
 
