@@ -323,6 +323,7 @@
       if (internal.workerNoWarnings) return;
       const opts = type !== null && typeof type === "object" ? type : { type, code };
       const name = warning instanceof Error ? warning.name : opts.type || "Warning";
+      if (name === "DeprecationWarning" && process.noDeprecation) return;
       const message = warning instanceof Error ? warning.message : String(warning);
       if (process.listenerCount("warning") > 0) {
         const err: Omit<Error, "name"> & { name: unknown; code?: unknown } = warning instanceof Error ? warning : Object.assign(new Error(message), { name });
@@ -348,7 +349,7 @@
     report: { getReport: () => ({ header: {} }) },
     stdin: undefined,
   };
-  const process: BunWasm.NodeEmitter & { exitCode: unknown; pid: number; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
+  const process: BunWasm.NodeEmitter & { noDeprecation: boolean; exitCode: unknown; pid: number; stdin?: unknown; emitWarning(warning: unknown, type?: string | BunWasm.ProcessWarningOptions | null, code?: unknown): void } = Object.assign(processBase, props);
   delete process.stdin;
 
   Object.defineProperties(process, {
