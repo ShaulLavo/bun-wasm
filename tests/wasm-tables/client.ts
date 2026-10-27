@@ -58,7 +58,7 @@ function responseLine() {
   }
 }
 function call(name: string, args: unknown[]) {
-  const request = Buffer.from(JSON.stringify({ name: 'wasm.' + name, args: encode(args) }) + '\n');
+  const request = Buffer.from(JSON.stringify({ name: name.startsWith('bridge.') ? name : 'wasm.' + name, args: encode(args) }) + '\n');
   let offset = 0;
   while (offset < request.length) offset += writeSync(input, request, offset, request.length - offset);
   const response = JSON.parse(responseLine());
@@ -70,8 +70,44 @@ function call(name: string, args: unknown[]) {
 }
 const factorySource = readFileSync(join(process.cwd(), 'crates/bunwasm-runtime/src/js/webassembly.ts'), 'utf8');
 const factory = runInThisContext(stripTypeScriptTypes(factorySource));
-const native = new Proxy({}, { get: (_, name) => (...args: unknown[]) => call(String(name), args) });
-const api = factory({ native: { wasm: native } });
+// Stand-in for the engine across the process boundary: a mirror of each memory's span,
+// pushed before every native operation that runs wasm and pulled while its generation holds.
+type Mirror = { buffer: WeakRef<ArrayBuffer>; generation: unknown };
+const mirrors = new Map<number, Mirror>();
+const handed = new WeakSet<ArrayBuffer>();
+const runsWasm = new Set(['call', 'resume', 'instantiate', 'growMemory']);
+function push() {
+  for (const [id, mirror] of mirrors) {
+    const buffer = mirror.buffer.deref();
+    if (buffer === undefined) { mirrors.delete(id); continue; }
+    if (buffer.byteLength) call('bridge.write', [id, new Uint8Array(buffer)]);
+  }
+}
+function pull(id: number, generation: unknown) {
+  const mirror = mirrors.get(id);
+  const buffer = mirror?.buffer.deref();
+  if (!buffer || mirror?.generation !== generation || !buffer.byteLength) return;
+  new Uint8Array(buffer).set(call('bridge.read', [id]) as Uint8Array);
+}
+const native = new Proxy({}, { get: (_, name) => (...args: unknown[]) => {
+  if (runsWasm.has(String(name))) push();
+  const result = call(String(name), args);
+  if (name === 'memorySpan') pull(args[0] as number, (result as { generation: unknown }).generation);
+  return result;
+} });
+function wasmMemoryBuffer(id: number, previous: ArrayBuffer | undefined) {
+  if (previous !== undefined) {
+    assert.ok(handed.has(previous), 'previous buffer came from wasmMemoryBuffer');
+    if (previous.byteLength) previous.transfer(0);
+  }
+  const span = call('memorySpan', [id]) as { length: number; generation: unknown };
+  const buffer = new ArrayBuffer(span.length);
+  if (span.length) new Uint8Array(buffer).set(call('bridge.read', [id]) as Uint8Array);
+  handed.add(buffer);
+  mirrors.set(id, { buffer: new WeakRef(buffer), generation: span.generation });
+  return buffer;
+}
+const api = factory({ native: { wasm: native, wasmMemoryBuffer } });
 function fixture(name: string) { return new api.Module(readFileSync(join(scratch, name + '.wasm'))); }
 function check(condition: unknown, message: string) { assert.ok(condition, message); }
 async function collect() {
@@ -82,7 +118,7 @@ async function collect() {
 async function teardownRoots() {
   const weak = (() => {
     const localFactory = runInNewContext(stripTypeScriptTypes(factorySource));
-    const localApi = localFactory({ native: { wasm: native } });
+    const localApi = localFactory({ native: { wasm: native, wasmMemoryBuffer } });
     const root = { teardown: true };
     const table = new localApi.Table({ element: 'externref', initial: 1 });
     table.set(0, root);

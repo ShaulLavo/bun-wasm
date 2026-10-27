@@ -62,12 +62,11 @@ function sourceApi() {
       allocations++;
       return intern(new host.Memory({ initial, maximum }));
     },
-    readMemory(id: number) {
+    memorySpan(id: number) {
       const value = resource(id);
       observe(value);
-      return { bytes: new Uint8Array(value.memory.buffer).slice(), generation: value.generation };
+      return { pointer: 1, length: value.buffer.byteLength, generation: value.generation };
     },
-    writeMemory(id: number, bytes: Uint8Array) { new Uint8Array(resource(id).memory.buffer).set(bytes); },
     growMemory(id: number, delta: number) {
       const value = resource(id);
       const old = value.memory.grow(delta);
@@ -108,7 +107,20 @@ function sourceApi() {
       return { values: value === undefined ? [] : [value] };
     },
   };
-  const api: typeof WebAssembly = factory({ native: { wasm: native } });
+  // The engine's value native: the host buffer already views its memory in place, and
+  // host growth has already detached the previous generation's buffer.
+  const handed = new Set<ArrayBuffer>();
+  function wasmMemoryBuffer(id: number, previous: ArrayBuffer | undefined) {
+    if (previous !== undefined) {
+      assert.ok(handed.has(previous));
+      assert.equal(previous.byteLength, 0);
+    }
+    const value = resource(id);
+    observe(value);
+    handed.add(value.buffer);
+    return value.buffer;
+  }
+  const api: typeof WebAssembly = factory({ native: { wasm: native, wasmMemoryBuffer } });
   return { api, allocations: () => allocations };
 }
 
@@ -140,6 +152,28 @@ for (const backend of ["host", "source"]) {
     assert.throws(() => memory.grow(1), RangeError);
     assert.equal(memory.buffer, current);
     assert.equal(current.byteLength, 131_072);
+  });
+
+  test(`${backend}: buffers keep identity between calls and every view sees writes in place`, () => {
+    const api = backend === "host" ? host : sourceApi().api;
+    const memory = new api.Memory({ initial: 1, maximum: 2 });
+    const instance = new api.Instance(new api.Module(fixture), { env: { memory } });
+    const { read, write, grow } = functions(instance);
+    const buffer = memory.buffer;
+    const bytes = new Uint8Array(buffer), data = new DataView(buffer);
+    write(7);
+    assert.equal(memory.buffer, buffer);
+    assert.equal(bytes[0], 7);
+    assert.equal(data.getUint8(0), 7);
+    data.setUint8(0, 8);
+    assert.equal(read(), 8);
+    assert.equal(memory.buffer, buffer);
+    assert.equal(grow(0), 1);
+    assert.equal(buffer.byteLength, 0);
+    assert.equal(bytes.length, 0);
+    assert.throws(() => data.getUint8(0), TypeError);
+    assert.notEqual(memory.buffer, buffer);
+    assert.equal(new Uint8Array(memory.buffer)[0], 8);
   });
 
   test(`${backend}: imported memory aliases across instances without overwriting JS or guest writes`, () => {
