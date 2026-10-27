@@ -30,13 +30,12 @@ declare namespace BunWasm {
     tableGrow(id: number, count: number, value: WasmValue): number;
     createMemory(initial: number, maximum?: number): number;
     memoryIdentity(id: number, name: string): number;
-    readMemory(id: number): { bytes: Uint8Array; generation: bigint };
-    writeMemory(id: number, bytes: Uint8Array): void;
+    memorySpan(id: number): { pointer: number; length: number; generation: bigint };
     growMemory(id: number, count: number): number;
     global(id: number, name: string, value?: WasmValue): WasmValue;
   }
   interface WasmInternal {
-    native: { wasm: WasmNative };
+    native: { wasm: WasmNative; wasmMemoryBuffer(resource: number, previous: ArrayBuffer | undefined): ArrayBuffer };
     isWasmMemoryBuffer?: (value: unknown) => boolean;
   }
   interface Native { wasm: WasmNative }

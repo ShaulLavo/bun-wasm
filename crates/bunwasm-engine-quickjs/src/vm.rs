@@ -24,6 +24,13 @@ type V = Value<'static>;
 unsafe extern "C" {
     fn JS_bunwasm_IsArrayBufferLike(value: qjs::JSValue) -> bool;
     fn JS_bunwasm_IsDetachableArrayBuffer(value: qjs::JSValue) -> bool;
+    /// A WebAssembly.Memory buffer over bytes QuickJS never frees (new reference).
+    fn JS_bunwasm_NewWasmMemoryBuffer(
+        ctx: *mut qjs::JSContext,
+        data: *mut u8,
+        length: usize,
+    ) -> qjs::JSValue;
+    fn JS_bunwasm_DetachWasmMemoryBuffer(ctx: *mut qjs::JSContext, value: qjs::JSValue) -> bool;
     /// Added to QuickJS by bun-wasm (third_party/rquickjs-sys): remaining
     /// entries of a Map/Set iterator, without advancing it.
     fn JS_bunwasm_IteratorEntries(ctx: *mut qjs::JSContext, value: qjs::JSValue) -> qjs::JSValue;
@@ -392,6 +399,21 @@ impl Engine for QuickJs {
     fn detach_buffer(&self, v: &V) {
         // SAFETY: the transfer native validated every buffer before detaching any.
         unsafe { qjs::JS_DetachArrayBuffer(self.raw(), v.as_raw()) }
+    }
+
+    unsafe fn wasm_memory_buffer(&self, data: *mut u8, length: usize) -> V {
+        // SAFETY: the caller keeps the bytes valid until the buffer is detached.
+        unsafe {
+            Value::from_raw(
+                self.ctx().clone(),
+                JS_bunwasm_NewWasmMemoryBuffer(self.raw(), data, length),
+            )
+        }
+    }
+
+    fn detach_wasm_memory_buffer(&self, v: &V) -> bool {
+        // SAFETY: the helper checks the buffer class and WebAssembly.Memory flag.
+        unsafe { JS_bunwasm_DetachWasmMemoryBuffer(self.raw(), v.as_raw()) }
     }
 
     fn proxy_target(&self, v: &V) -> V {

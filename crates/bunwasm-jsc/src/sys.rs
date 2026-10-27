@@ -246,6 +246,9 @@ unsafe extern "C" {
     pub fn bunjsc_is_error(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_is_detachable_buffer(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_detach_buffer(ctx: JSContextRef, value: JSValueRef);
+    pub fn bunjsc_wasm_memory_buffer(ctx: JSContextRef, data: *mut u8, length: usize)
+    -> JSValueRef;
+    pub fn bunjsc_detach_wasm_memory_buffer(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_buffer_bytes(ctx: JSContextRef, value: JSValueRef, length: *mut usize)
     -> *mut u8;
     pub fn bunjsc_get_async_context(ctx: JSContextRef) -> JSValueRef;

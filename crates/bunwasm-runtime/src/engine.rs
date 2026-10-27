@@ -123,6 +123,17 @@ pub trait Engine: Sized + 'static {
     fn is_proxy(&self, v: &Self::Value) -> bool;
     fn is_detachable_buffer(&self, v: &Self::Value) -> bool;
     fn detach_buffer(&self, v: &Self::Value);
+    /// A `WebAssembly.Memory` buffer over `length` bytes at `data`, without copying.
+    /// User code cannot transfer or detach it, and the engine never frees the bytes.
+    ///
+    /// # Safety
+    ///
+    /// The bytes must stay valid until [`Engine::detach_wasm_memory_buffer`] detaches
+    /// the buffer, and no JavaScript may run while they are invalid.
+    unsafe fn wasm_memory_buffer(&self, data: *mut u8, length: usize) -> Self::Value;
+    /// Detach a buffer from [`Engine::wasm_memory_buffer`], and every view of it.
+    /// Already detached ones are accepted; false for any other value.
+    fn detach_wasm_memory_buffer(&self, v: &Self::Value) -> bool;
     fn proxy_target(&self, v: &Self::Value) -> Self::Value;
     fn is_error(&self, v: &Self::Value) -> bool;
     /// Remaining entries of a Map/Set iterator without advancing it.

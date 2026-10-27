@@ -946,6 +946,9 @@ typedef struct JSArrayBuffer {
     uint8_t detached;
     uint8_t immutable;
     uint8_t shared; /* if shared, the array buffer cannot be detached */
+    /* bun-wasm: a WebAssembly.Memory view of bytes owned elsewhere; JS cannot
+       transfer or detach it, only JS_bunwasm_DetachWasmMemoryBuffer can */
+    uint8_t wasm_memory;
     uint8_t *data; /* NULL if detached */
     struct list_head array_list;
     void *opaque;
@@ -59349,6 +59352,7 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
     abuf->detached = false;
     abuf->immutable = false;
     abuf->shared = (class_id == JS_CLASS_SHARED_ARRAY_BUFFER);
+    abuf->wasm_memory = false;
     abuf->opaque = opaque;
     abuf->realloc_func = realloc_func;
     if (alloc_flag && buf)
@@ -59416,7 +59420,28 @@ bool JS_bunwasm_IsArrayBufferLike(JSValueConst obj) {
 
 bool JS_bunwasm_IsDetachableArrayBuffer(JSValueConst obj) {
     JSArrayBuffer *buffer = JS_GetOpaque(obj, JS_CLASS_ARRAY_BUFFER);
-    return buffer && !buffer->detached;
+    return buffer && !buffer->detached && !buffer->wasm_memory;
+}
+
+/* A non-resizable WebAssembly.Memory buffer over 'len' bytes at 'buf', which
+   another owner keeps alive. Without a realloc function QuickJS never frees them. */
+JSValue JS_bunwasm_NewWasmMemoryBuffer(JSContext *ctx, uint8_t *buf, size_t len)
+{
+    JSValue obj = JS_NewArrayBuffer(ctx, buf, len, 0, NULL, NULL, false);
+    JSArrayBuffer *abuf = JS_GetOpaque(obj, JS_CLASS_ARRAY_BUFFER);
+    if (abuf)
+        abuf->wasm_memory = true;
+    return obj;
+}
+
+/* Detach a WebAssembly.Memory buffer and its views; false for other values. */
+bool JS_bunwasm_DetachWasmMemoryBuffer(JSContext *ctx, JSValueConst obj)
+{
+    JSArrayBuffer *abuf = JS_GetOpaque(obj, JS_CLASS_ARRAY_BUFFER);
+    if (!abuf || !abuf->wasm_memory)
+        return false;
+    JS_DetachArrayBuffer(ctx, obj);
+    return true;
 }
 
 /* create a new ArrayBuffer of length 'len' and copy 'buf' to it */
@@ -59749,6 +59774,8 @@ static JSValue js_array_buffer_transfer(JSContext *ctx, JSValueConst this_val,
         return JS_EXCEPTION;
     if (abuf->shared)
         return JS_ThrowTypeError(ctx, "cannot transfer a SharedArrayBuffer");
+    if (abuf->wasm_memory)
+        return JS_ThrowTypeError(ctx, "cannot transfer a WebAssembly.Memory buffer");
     // Spec (ArrayBufferCopyAndDetach): the newLength argument must be
     // coerced (its valueOf observed) before the buffer's detachability /
     // immutability is checked, so side effects of coercion are visible.

@@ -346,6 +346,22 @@ impl Runtime {
         self.memories.push(memory);
         id
     }
+    /// Where a memory's bytes sit in this process's linear memory, their length, and the
+    /// growth generation they belong to. The store keeps every interned memory until the
+    /// session ends. Only growth can move or resize the bytes, and each successful growth,
+    /// including by zero pages, advances the generation.
+    fn memory_span(&self, id: u32) -> NativeResult {
+        let memory = self.memory(id)?;
+        let data = memory.data(&self.store);
+        Ok(Record::new()
+            .set("pointer", data.as_ptr() as usize as f64)
+            .set("length", data.len() as f64)
+            .set(
+                "generation",
+                Val::BigUint(memory.growth_generation(&self.store)),
+            )
+            .into())
+    }
     fn create_memory(&mut self, minimum: u32, maximum: Option<u32>) -> NativeResult {
         let mut builder = MemoryType::builder();
         builder.min(u64::from(minimum));
@@ -575,29 +591,14 @@ pub fn install(table: &mut Table) {
         Ok(Val::Num(old as f64))
     });
     let rt = runtime.clone();
-    table.add("wasm.readMemory", move |a| {
-        let rt = rt.borrow();
-        let memory = rt.memory(a.u32(0)?)?;
-        Ok(Record::new()
-            .set("bytes", Val::Bytes(memory.data(&rt.store).to_vec()))
-            .set(
-                "generation",
-                Val::BigUint(memory.growth_generation(&rt.store)),
-            )
-            .into())
+    table.add("wasm.memorySpan", move |a| {
+        rt.borrow().memory_span(a.u32(0)?)
     });
     let rt = runtime.clone();
     table.add("wasm.memoryIdentity", move |a| {
         let mut rt = rt.borrow_mut();
         let memory = rt.guest(a.u32(0)?)?.memory(&rt.store, a.str(1)?)?;
         Ok(Val::Num(rt.intern_memory(memory) as f64))
-    });
-    let rt = runtime.clone();
-    table.add("wasm.writeMemory", move |a| {
-        let mut rt = rt.borrow_mut();
-        let memory = rt.memory(a.u32(0)?)?;
-        memory.write(&mut rt.store, 0, a.bytes(1)?).map_err(error)?;
-        Ok(Val::Undefined)
     });
     let rt = runtime.clone();
     table.add("wasm.growMemory", move |a| {
@@ -659,6 +660,46 @@ mod tests {
         assert_eq!(memory.size(&runtime.store), 2);
         assert!(memory.grow(&mut runtime.store, 1).is_err());
         assert_eq!(memory.size(&runtime.store), 2);
+    }
+
+    fn span(runtime: &Runtime, id: u32) -> (usize, usize, u64) {
+        let Val::Object(fields) = runtime.memory_span(id).unwrap() else {
+            panic!("expected memory span");
+        };
+        let field = |key: &str| {
+            fields
+                .iter()
+                .find(|(name, _)| name == key)
+                .unwrap()
+                .1
+                .clone()
+        };
+        let (Val::Num(pointer), Val::Num(length), Val::BigUint(generation)) =
+            (field("pointer"), field("length"), field("generation"))
+        else {
+            panic!("malformed memory span");
+        };
+        (pointer as usize, length as usize, generation)
+    }
+
+    #[test]
+    fn memory_span_tracks_the_store_bytes_through_growth() {
+        let mut runtime = Runtime::default();
+        let id = memory_id(runtime.create_memory(1, Some(3)).unwrap());
+        let memory = runtime.memory(id).unwrap();
+        let (pointer, length, generation) = span(&runtime, id);
+        assert_eq!(pointer, memory.data(&runtime.store).as_ptr() as usize);
+        assert_eq!((length, generation), (65_536, 0));
+        memory.grow(&mut runtime.store, 0).unwrap();
+        let (_, length, generation) = span(&runtime, id);
+        assert_eq!((length, generation), (65_536, 1));
+        memory.grow(&mut runtime.store, 2).unwrap();
+        let (pointer, length, generation) = span(&runtime, id);
+        assert_eq!(pointer, memory.data(&runtime.store).as_ptr() as usize);
+        assert_eq!((length, generation), (3 * 65_536, 2));
+        assert!(memory.grow(&mut runtime.store, 1).is_err());
+        assert_eq!(span(&runtime, id).2, 2);
+        assert!(runtime.memory_span(id + 1).is_err());
     }
 
     #[test]

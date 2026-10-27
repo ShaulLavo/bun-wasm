@@ -1,0 +1,11 @@
+identity true 42 42
+js writes 7 8 true
+import round trip 109 5 9
+grow in import 1 0,0,131072 0 131072 42
+api grow zero 2 0 131072 7
+failed grow true true
+transfer true true
+clone transfer refused true
+retained after wrapper gc 3 1 0
+wasm grow 2 1002
+crossings 3000 3000

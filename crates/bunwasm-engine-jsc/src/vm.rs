@@ -672,6 +672,16 @@ impl Engine for Jsc {
         unsafe { bunjsc_detach_buffer(ctx(), v.raw()) }
     }
 
+    unsafe fn wasm_memory_buffer(&self, data: *mut u8, length: usize) -> JsVal {
+        // SAFETY: the caller keeps the bytes valid until the buffer is detached.
+        JsVal::new(unsafe { bunjsc_wasm_memory_buffer(ctx(), data, length) })
+    }
+
+    fn detach_wasm_memory_buffer(&self, v: &JsVal) -> bool {
+        // SAFETY: the helper checks the value is a wasm memory buffer under the VM lock.
+        unsafe { bunjsc_detach_wasm_memory_buffer(ctx(), v.raw()) }
+    }
+
     fn proxy_target(&self, v: &JsVal) -> JsVal {
         let t = unsafe { bunjsc_proxy_target(ctx(), v.raw()) };
         if t.is_null() {
