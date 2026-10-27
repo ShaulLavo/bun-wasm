@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/stdin-script-cli.test.ts",
+  "localRuntime": true
+}
