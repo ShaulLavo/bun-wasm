@@ -96,8 +96,6 @@ fs.onOwnershipLost = () => {
 };
 try {
   await fs.mkdirp("/tmp");
-  // Package scripts, Bun.$ and bun exec run in bash-web's shell; it loads on first use.
-  await installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: new URL("./shell-worker.js", location.href) });
   // Background persistence can save a prefix of startup. Publish completion only after
   // every example is present; a missing marker retries an interrupted seed from scratch.
   // After completion, missing examples are intentional deletions and stay deleted.
@@ -116,6 +114,9 @@ try {
 }
 
 // ---------- bun.wasm ----------
+
+// Package scripts, Bun.$ and bun exec run in bash-web's shell; it loads on first use.
+await installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: new URL("./shell-worker.js", location.href) });
 
 let wasm: { module: WebAssembly.Module; size: number } | { error: string } | null = null;
 // The final status waits for the page to finish setting up, so "ready" means usable.

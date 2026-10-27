@@ -96,9 +96,9 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 
 let startup: "starting" | "ready" | "failed" = "starting";
 const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${template}` } });
+const fs = runtime.filesystem;
 // Package scripts, Bun.$ and bun exec run in bash-web's shell; it loads on first use.
 const shellCommands = installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: new URL("./shell-worker.js", location.href) });
-const fs = runtime.filesystem;
 function showStartupFailure(error: unknown): void {
   startup = "failed";
   setStatus(error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error), "error");
