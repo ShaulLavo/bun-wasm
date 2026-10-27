@@ -26,6 +26,24 @@ await Bun.write(join(out, "index.html"), Bun.file(join(here, "index.html")));
 // Atomics.wait sleeps and the networking bridge). serve.ts sends the same locally.
 await Bun.write(join(out, "_headers"), Bun.file(join(here, "_headers")));
 
+/**
+ * Every hashed chunk the Bun worker can import, static or lazy, as paths relative to dist. The
+ * page fetches them while idle so a command's worker finds them in the HTTP cache.
+ */
+function workerChunks(metafile: NonNullable<typeof result.metafile>): string[] {
+  const chunks = new Set<string>();
+  const pending = ["./worker.js"];
+  for (let path = pending.pop(); path !== undefined; path = pending.pop()) {
+    for (const imported of metafile.outputs[path]?.imports ?? []) {
+      const dependency = imported.path in metafile.outputs ? imported.path : `./${join(dirname(path), imported.path)}`;
+      if (!dependency.startsWith("./chunks/") || !dependency.endsWith(".js") || chunks.has(dependency)) continue;
+      chunks.add(dependency);
+      pending.push(dependency);
+    }
+  }
+  return Array.from(chunks, chunk => chunk.slice(2)).sort();
+}
+
 // Each wasm gets a .gz twin; serve.ts sends that when the browser accepts gzip.
 const engineBuilds: Record<string, string> = {};
 
@@ -65,6 +83,7 @@ if (!(await copyWasm(toolsSource, "bun-tools.wasm"))) {
 
 await Bun.write(join(out, "engine-builds.json"), JSON.stringify(engineBuilds));
 const index = await Bun.file(join(here, "index.html")).text();
-await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>globalThis.__bunwasmBuilds=${JSON.stringify(engineBuilds)}</script>`));
+const startup = `globalThis.__bunwasmBuilds=${JSON.stringify(engineBuilds)};globalThis.__bunwasmWorkerChunks=${JSON.stringify(workerChunks(result.metafile))}`;
+await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>${startup}</script>`));
 
 for (const output of result.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);

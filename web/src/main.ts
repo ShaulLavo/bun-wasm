@@ -18,6 +18,7 @@ import { Previews } from "./preview";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope } from "./engine-loader";
 import type { Run } from "./runner";
 import { type Output, Shell } from "./shell";
+import { workerChunks } from "./startup-cache";
 import { enableTerminalCopy } from "./terminal-copy";
 import { linkLocalUrls } from "./terminal-links";
 
@@ -453,6 +454,21 @@ if (!fs.ownershipLost) {
   fileSelect.disabled = false;
 }
 pageSetUp();
+if (startup === "ready") whenIdle(warmFirstCommand);
+
+// The first command would otherwise load the runner, Waffle's process and network services and
+// then the worker's chunks one after another, each a network round trip. Load them while the page
+// is idle instead. All of these are memoized, so a command that starts first shares the same
+// loads; a failure here is ignored and surfaces in the command that needs it.
+function warmFirstCommand(): void {
+  void Promise.all([import("./runner"), runtime.processes(), runtime.network()]).catch(() => {});
+  for (const chunk of workerChunks()) void fetch(chunk, { priority: "low" }).then(response => response.arrayBuffer()).catch(() => {});
+}
+}
+
+function whenIdle(run: () => void): void {
+  if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 2000 });
+  else setTimeout(run, 200);
 }
 
 void main().catch(error => showPageStartupFailure(error, {
