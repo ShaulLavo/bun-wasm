@@ -50,6 +50,15 @@ changes copy no upstream implementation. Existing input fingerprints include
 the changed recipes and reject native outputs built with the old flags.
 The shell-required prebuild completion contract remains unchanged.
 
+At this pinned WebKit revision, `Source/cmake/OptionsJSCOnly.cmake` sets
+`CMAKE_POSITION_INDEPENDENT_CODE` to false when Bun additions are enabled.
+The original configure adapter therefore also passes `-fPIC` explicitly in
+both compiler flag strings. The CMake cache request alone does not establish
+PIC; actual archive-target compile commands must contain the flag before the
+prebuild is admitted to a shared-side link. This changes no upstream source
+or pin.
+
+
 `scripts/build-engine-jsc.sh` is an original program producer. It compiles the
 JSC side with PIC Rust `std,panic_abort`, links against the existing native
 closure, spills pointers on the module containing the VM, then converts its
