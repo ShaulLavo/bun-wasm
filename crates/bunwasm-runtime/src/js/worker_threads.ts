@@ -756,7 +756,8 @@
       if (arg.startsWith("--conditions=")) { conditions.push(arg); continue; }
       if (arg === "--conditions" && index + 1 < argv.length) { conditions.push(arg, argv[++index]); continue; }
       if ((arg === "--require" || arg === "-r") && index + 1 < argv.length) { options.push({ kind: "require", value: argv[++index] }); continue; }
-      throw Object.assign(new Error(`Invalid execArgv flag: ${arg}`), { code: "ERR_WORKER_INVALID_EXEC_ARGV" });
+      // Like Bun, flags the runtime does not interpret (--enable-source-maps, --inspect, ...)
+      // still start the worker and stay in its process.execArgv.
     }
     return { argv, conditions, options };
   }
