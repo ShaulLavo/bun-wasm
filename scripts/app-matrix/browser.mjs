@@ -45,6 +45,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
     await page.waitForTimeout(100);
   }
   const preview = await context.newPage();
+  const previewDiagnostics = browserDiagnostics(preview);
   const traffic = await observeProductTraffic(preview);
   const errors = [];
   preview.on("pageerror", error => errors.push(String(error)));
@@ -86,7 +87,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
     let diagnostic = "";
     captured = true;
     await release("terminal-capture", async () => { diagnostic = await output(); });
-    checked = { status: "fail", ...failure(`${diagnostic}\n${String(error)}`, command.name), productError: String(error), timings };
+    checked = { status: "fail", ...failure(`${diagnostic}\n${String(error)}`, command.name), productError: String(error), timings, browserDiagnostics: previewDiagnostics() };
   } finally {
     if (!captured) await release("terminal-capture", () => terminalText(page));
     await release("server-stop", () => page.evaluate(async () => { globalThis.playground.shell.input("\x03"); await globalThis.__matrixCommand; }));
