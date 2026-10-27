@@ -10,6 +10,7 @@
 #[path = "next_swc.rs"]
 mod next_swc;
 
+use std::io::Read as _;
 use std::rc::Rc;
 
 use crate::State;
@@ -305,11 +306,26 @@ fn esm_prologue(source: &str) -> String {
     prologue
 }
 
+fn read_stdin() -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    std::io::stdin().read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 impl State {
     /// Read, transpile and classify a file. Results are cached while the
     /// file's content stays the same.
     pub fn load_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
-        let raw = match std::fs::read(path) {
+        let stdin = self.main_arg.borrow().as_str() == "-" && self.main.borrow().as_str() == path;
+        if stdin && let Some(hit) = self.sources.borrow().get(path) {
+            return Ok(hit.clone());
+        }
+        let input = if stdin {
+            read_stdin()
+        } else {
+            std::fs::read(path)
+        };
+        let raw = match input {
             Ok(raw) => raw,
             // A virtual module (`[eval]`) has no file behind it.
             Err(e) => {
@@ -327,7 +343,11 @@ impl State {
         }
         let raw = String::from_utf8(raw)
             .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
-        let loader = SourceLoader::from_path(path);
+        let loader = if stdin {
+            SourceLoader::Ts
+        } else {
+            SourceLoader::from_path(path)
+        };
         let (code, format) = match loader {
             SourceLoader::Json => (raw, Format::Json),
             SourceLoader::Text if path.ends_with(".html") => (raw, Format::Html),

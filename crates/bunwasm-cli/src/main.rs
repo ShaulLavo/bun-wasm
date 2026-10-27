@@ -606,7 +606,7 @@ fn parse_command_with_flags(
     let mut conditions = conditions;
     let mut exec_argv = exec_argv;
     while let Some(arg) = rest.next() {
-        if run_file && !arg.starts_with('-') {
+        if run_file && (arg == "-" || !arg.starts_with('-')) {
             return Command::Run(Entry::File(arg), rest.collect(), conditions, exec_argv);
         }
         if arg == "--conditions" {
