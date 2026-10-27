@@ -331,7 +331,7 @@ fn functions(store: &mut Store<Host>) -> Vec<Func> {
                             return Ok(handle);
                         }
                     };
-                    let handle = host.net.lookup(&hostname, family, hints);
+                    let handle = host.net.lookup(hostname, family, hints);
                     trace(
                         host,
                         format_args!("lookup_start({hostname:?}, {family}, {hints}) -> {handle}"),

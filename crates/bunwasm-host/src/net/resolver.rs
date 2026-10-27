@@ -253,10 +253,10 @@ fn resolver_error(hostname: &str, code: libc::c_int, system_errno: Option<i32>) 
     let mut error = ErrorInfo::new("Error", message, Some(code_name))
         .with_syscall("getaddrinfo")
         .with_hostname(hostname);
-    if code_name == "EAI_SYSTEM" {
-        if let Some(errno) = system_errno {
-            error = error.with_errno(errno);
-        }
+    if code_name == "EAI_SYSTEM"
+        && let Some(errno) = system_errno
+    {
+        error = error.with_errno(errno);
     }
     error
 }

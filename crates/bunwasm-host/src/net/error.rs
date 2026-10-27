@@ -16,7 +16,7 @@ pub struct ErrorInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub syscall: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub hostname: Option<String>,
+    pub hostname: Option<Box<str>>,
 }
 
 impl ErrorInfo {
@@ -42,7 +42,7 @@ impl ErrorInfo {
     }
 
     pub fn with_hostname(mut self, hostname: impl Into<String>) -> Self {
-        self.hostname = Some(hostname.into());
+        self.hostname = Some(hostname.into().into_boxed_str());
         self
     }
 
@@ -215,4 +215,78 @@ fn tls_error(err: &rustls::Error) -> ErrorInfo {
         }
     };
     ErrorInfo::new("TypeError", message, Some(code))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn json_error(error: &ErrorInfo) -> Value {
+        serde_json::from_slice(&error.to_json()).unwrap()
+    }
+
+    #[test]
+    fn error_info_stays_below_the_large_result_error_threshold() {
+        let size = std::mem::size_of::<ErrorInfo>();
+        println!("ErrorInfo size: {size} bytes");
+        assert!(size < 128, "ErrorInfo is {size} bytes");
+    }
+
+    #[test]
+    fn error_serialization_omits_only_absent_optional_fields() {
+        assert_eq!(
+            json_error(&ErrorInfo::new("Error", "plain error", None)),
+            json!({ "name": "Error", "message": "plain error" })
+        );
+        let error = ErrorInfo::new("TypeError", "empty hostname", Some("EINVAL"))
+            .with_syscall("getaddrinfo")
+            .with_errno(0)
+            .with_hostname("");
+        assert_eq!(
+            json_error(&error),
+            json!({
+                "name": "TypeError", "message": "empty hostname", "code": "EINVAL",
+                "syscall": "getaddrinfo", "errno": 0, "hostname": ""
+            })
+        );
+    }
+
+    #[test]
+    fn dns_error_serialization_preserves_all_fields_and_clone() {
+        let hostname = String::from("café\".example");
+        let error = ErrorInfo::new("Error", "resolver\nfailure", Some("EAI_SYSTEM"))
+            .with_syscall("getaddrinfo")
+            .with_errno(libc::EACCES)
+            .with_hostname(hostname.clone());
+        assert_eq!(error.hostname.as_deref(), Some(hostname.as_str()));
+        assert_eq!(
+            json_error(&error),
+            json!({
+                "name": "Error", "message": "resolver\nfailure", "code": "EAI_SYSTEM",
+                "syscall": "getaddrinfo", "errno": libc::EACCES, "hostname": hostname
+            })
+        );
+        assert_eq!(error.clone().to_json(), error.to_json());
+    }
+
+    #[test]
+    fn socket_and_fetch_error_serialization_keeps_existing_fields() {
+        let refused = io::Error::from(io::ErrorKind::ConnectionRefused);
+        assert_eq!(
+            json_error(&socket_error("connect", &refused, "127.0.0.1:9")),
+            json!({
+                "name": "Error", "message": "connect ECONNREFUSED 127.0.0.1:9",
+                "code": "ECONNREFUSED", "syscall": "connect"
+            })
+        );
+        assert_eq!(
+            json_error(&io_fetch_error(&refused, "example.test")),
+            json!({
+                "name": "TypeError",
+                "message": "Unable to connect. Is the computer able to access the url?",
+                "code": "ConnectionRefused"
+            })
+        );
+    }
 }
