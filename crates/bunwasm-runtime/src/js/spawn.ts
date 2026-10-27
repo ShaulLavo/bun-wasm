@@ -519,16 +519,24 @@
   }
 
   const workerChildren = new Set<Child>();
-  let workerExitHook = false;
+  let workersFinalized = false;
+  internal.finalizeWorkerChildren = function finalizeWorkerChildren() {
+    if (workersFinalized) return;
+    workersFinalized = true;
+    const errors: unknown[] = [];
+    for (const child of workerChildren) {
+      workerChildren.delete(child);
+      try { child.kill(9); } catch (error) { errors.push(error); }
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Worker exit cleanup failed");
+  };
   function trackWorkerChild(child: Child) {
+    if (workersFinalized) {
+      child.kill(9);
+      return;
+    }
     workerChildren.add(child);
-    if (workerExitHook) return;
-    workerExitHook = true;
-    // Worker threads die with their parent; ordinary spawned processes may outlive it.
-    internal.require("process").once("exit", () => {
-      for (const child of workerChildren) child.kill(9);
-      workerChildren.clear();
-    });
   }
 
   function spawn(cmd: unknown, options?: SpawnOptions): Child {

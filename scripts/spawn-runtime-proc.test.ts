@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { service, load, type ProcessExit } from "./spawn-runtime-proc-fixture.ts";
+import { service, load, loadExit, type ProcessExit } from "./spawn-runtime-proc-fixture.ts";
 const ENOENT = -44;
 const EAGAIN = -6;
 
@@ -103,15 +103,146 @@ test("worker children get two bound control pipes announced through the environm
 
 test("parent exit kills worker children without signalling ordinary subprocesses", () => {
   const fake = service();
-  const { module, process } = load(fake);
+  const { module, emitExit } = loadExit(fake);
   const worker = module.spawn(["bun", "worker"], { stdout: "ignore", stderr: "ignore", _worker: {} });
   const ordinary = module.spawn(["bun", "ordinary"], { stdout: "ignore", stderr: "ignore" });
   const workerRecord = fake.children.get(worker.pid)!;
   const ordinaryRecord = fake.children.get(ordinary.pid)!;
-  process.emit("exit", 0);
+  emitExit(0);
   expect(workerRecord.selected).toEqual([1, 9]);
   expect(ordinaryRecord.selected).toBeNull();
   expect(fake.calls).not.toContain("killJob:9");
+});
+
+function exitWorker(fixture: ReturnType<typeof loadExit>) {
+  return fixture.module.spawn(["bun", "worker"], { stdout: "ignore", stderr: "ignore", _worker: {} }).unref();
+}
+
+test("private parent exit finalization runs exactly once for unref workers", () => {
+  const fake = service();
+  const fixture = loadExit(fake);
+  const first = exitWorker(fixture);
+  const second = exitWorker(fixture);
+  expect(fixture.waiters.every(waiter => !waiter.ref)).toBe(true);
+  fixture.emitExit(7);
+  fixture.emitExit(7);
+  expect(fake.children.get(first.pid)!.selected).toEqual([1, 9]);
+  expect(fake.children.get(second.pid)!.selected).toEqual([1, 9]);
+  expect(fake.calls.filter(call => call === "kill:9")).toHaveLength(2);
+  expect(fixture.cleanup).toEqual(["cancelIoWaiters", "cancelIoWaiters", "closeAllDirs"]);
+});
+
+test("private parent exit finalization survives earlier throwing exit listeners", () => {
+  const fake = service();
+  const fixture = loadExit(fake);
+  const error = new Error("exit listener failure");
+  fixture.process.on("exit", () => { throw error; });
+  const child = exitWorker(fixture);
+  fixture.emitExit(0);
+  expect(fake.children.get(child.pid)!.selected).toEqual([1, 9]);
+  expect(fixture.process.exitCode).toBe(1);
+  expect(fixture.errors).toEqual([error]);
+});
+
+test("private parent exit finalization survives removal of public listeners", () => {
+  const fake = service();
+  const fixture = loadExit(fake);
+  const child = exitWorker(fixture);
+  fixture.process.removeAllListeners("exit");
+  fixture.emitExit(0);
+  expect(fake.children.get(child.pid)!.selected).toEqual([1, 9]);
+});
+
+test("private parent exit finalization includes workers created by later exit listeners", () => {
+  const fake = service();
+  const fixture = loadExit(fake);
+  const first = exitWorker(fixture);
+  const late: number[] = [];
+  fixture.process.on("exit", () => { late.push(exitWorker(fixture).pid); fixture.emitExit(0); });
+  fixture.emitExit(0);
+  expect(late).toHaveLength(1);
+  for (const pid of [first.pid].concat(late)) expect(fake.children.get(pid)!.selected).toEqual([1, 9]);
+  expect(fake.calls.filter(call => call === "kill:9")).toHaveLength(2);
+});
+
+test("private parent exit finalization attempts every worker after kill EIO", () => {
+  const fake = service();
+  const fixture = loadExit(fake);
+  const first = exitWorker(fixture);
+  const second = exitWorker(fixture);
+  const kill = fake.native.procKill;
+  const attempts: number[] = [];
+  fake.native.procKill = (pid: number, signal: number) => {
+    attempts.push(pid);
+    return pid === first.pid ? -29 : kill(pid, signal);
+  };
+  fixture.emitExit(0);
+  fixture.emitExit(0);
+  expect(attempts).toEqual([first.pid, second.pid]);
+  expect(fake.children.get(second.pid)!.selected).toEqual([1, 9]);
+  expect(fixture.errors).toMatchObject([{ code: "EIO", syscall: "kill" }]);
+  expect(fixture.process.exitCode).toBe(1);
+  expect(fixture.cleanup).toContain("closeAllDirs");
+});
+
+test("private parent exit finalization preserves listener and cleanup errors", () => {
+  const fake = service();
+  const fixture = loadExit(fake);
+  const original = new Error("original exit failure");
+  fixture.process.on("exit", () => { throw original; });
+  exitWorker(fixture);
+  fake.native.procKill = () => -29;
+  fixture.emitExit(0);
+  expect(fixture.errors[0]).toBe(original);
+  expect(fixture.errors).toMatchObject([original, { code: "EIO" }]);
+  expect(fixture.process.exitCode).toBe(1);
+});
+
+test("private parent exit finalization preserves worker error and exit reporting", () => {
+  const fake = service();
+  const errors: unknown[] = [];
+  const exits: number[] = [];
+  const fixture = loadExit(fake, { workerError(error) { errors.push(error); }, workerExit(code) { exits.push(code); } });
+  const original = new Error("worker exit failure");
+  fixture.process.on("exit", () => { throw original; });
+  const child = exitWorker(fixture);
+  fixture.emitExit(0);
+  expect(fake.children.get(child.pid)!.selected).toEqual([1, 9]);
+  expect(errors).toEqual([original]);
+  expect(exits).toEqual([1]);
+  expect(fixture.errors).toEqual([]);
+});
+
+test("private parent exit finalization immediately stops workers created after finalization", () => {
+  const fake = service();
+  const fixture = loadExit(fake);
+  exitWorker(fixture);
+  fixture.emitExit(0);
+  const late = exitWorker(fixture);
+  expect(fake.children.get(late.pid)!.selected).toEqual([1, 9]);
+  expect(fake.calls.filter(call => call === "kill:9")).toHaveLength(2);
+});
+
+test("private parent exit finalization reports every kill failure", () => {
+  const fake = service();
+  const fixture = loadExit(fake);
+  exitWorker(fixture);
+  exitWorker(fixture);
+  fake.native.procKill = () => -29;
+  fixture.emitExit(0);
+  expect(fixture.errors).toMatchObject([{ name: "AggregateError", errors: [{ code: "EIO" }, { code: "EIO" }] }]);
+  expect(fixture.process.exitCode).toBe(1);
+});
+
+test("private parent exit finalization skips completed and closed workers", () => {
+  const fake = service();
+  const fixture = loadExit(fake);
+  const child = exitWorker(fixture);
+  fake.exit(fake.children.get(child.pid)!, 0);
+  fixture.pumpTurn();
+  child._finishWorker();
+  fixture.emitExit(0);
+  expect(fake.calls.some(call => call.startsWith("kill"))).toBe(false);
 });
 
 test("the idle loop sleeps on exactly the descriptors and child the waiter watches", () => {
