@@ -179,7 +179,12 @@ fn function_signature(
     let Some(ExternType::Func(function)) = module.get_export(name) else {
         return false;
     };
-    function.params().eq(params.iter().copied()) && function.results().eq(results.iter().copied())
+    same_types(function.params(), params) && same_types(function.results(), results)
+}
+
+// wasmtime's ValType is neither Copy nor PartialEq; ValType::eq compares structurally.
+fn same_types(actual: impl ExactSizeIterator<Item = ValType>, expected: &[ValType]) -> bool {
+    actual.len() == expected.len() && actual.zip(expected).all(|(a, b)| ValType::eq(&a, b))
 }
 
 fn layout(bytes: &[u8]) -> Result<MemInfo> {

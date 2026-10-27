@@ -28,12 +28,17 @@ impl CoreClient {
         let status = match unsafe { bun_core_dispatch(frame.pointer) } {
             0 => ops::Status::Ok,
             1 => ops::Status::NativeError,
+            3 => ops::Status::ResourceLimit,
             status => panic!("terminal core transport failure {status}"),
         };
-        let reply = TransportBuffer {
-            pointer: unsafe { (frame.pointer as *const u32).add(4).read() },
-            bytes: unsafe { (frame.pointer as *const u32).add(5).read() },
-        };
+        let pointer = unsafe { (frame.pointer as *const u32).add(4).read() };
+        let bytes = unsafe { (frame.pointer as *const u32).add(5).read() };
+        if status == ops::Status::ResourceLimit {
+            // Core failed to allocate the request copy or the reply and wrote no reply.
+            assert!(pointer == 0 && bytes == 0, "core resource limit with a reply");
+            return ops::Reply { status, bytes: Vec::new() }.into_result();
+        }
+        let reply = TransportBuffer { pointer, bytes };
         let bytes = unsafe {
             std::slice::from_raw_parts(reply.pointer as *const u8, reply.bytes as usize).to_vec()
         };
