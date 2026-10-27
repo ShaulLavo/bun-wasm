@@ -21,6 +21,7 @@ import { type Output, Shell } from "./shell";
 import { commandChunks } from "./startup-cache";
 import { enableTerminalCopy } from "./terminal-copy";
 import { linkLocalUrls } from "./terminal-links";
+import { installRuntimeSharedObjects } from "./shared-objects/runtime";
 
 async function main(): Promise<void> {
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -73,6 +74,8 @@ newFileButton.disabled = true;
 engineSelect.disabled = true;
 fileSelect.disabled = true;
 const runtime = createRuntime({ filesystem: { mode, name: "bun-wasm-workspace" } });
+const sharedObjects = installRuntimeSharedObjects(runtime);
+addEventListener("pagehide", () => sharedObjects.close(), { once: true });
 const fs = runtime.filesystem;
 fs.onStateChange = state => {
   if (state.status === "waiting") {

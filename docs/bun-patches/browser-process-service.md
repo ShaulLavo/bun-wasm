@@ -82,11 +82,20 @@ Children use independent process revocation identities while
 sharing the filesystem service's root revocation word. New browser fixtures and timing
 harnesses are original test programs, not copies of the spike implementations.
 
+The browser playground installs the private shared-object service on its page-owned Waffle
+runtime. `web/src/runner.ts` gives browser-engine root workers a leased route, forwards the
+executor's native `bun-shared-connect` message, closes late or mismatched ports, and releases the
+route with the root worker. This is an original caller activation adapter; it does not change
+Waffle's runtime or the public package adapter. The real Vitest 3.2.4 browser fixture exercises
+the startup shared buffer and transferred `MessagePort` with `useAtomics=false`, and its ordinary
+async test, thread-pool test, and intentional rejection all pass through the maintained app matrix.
+
 
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`waffle/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry including nodejs, jobs, registered signal dispositions including Node/Bun's ignored SIGPIPE default, immutable final-kind query and byte-sized exit statuses. |
+| [`web/src/main.ts`, `web/src/runner.ts`, shared-object root activation](#browser-process-service) | Host feature | Original page-owned runtime installation and per-root shared-object route activation, native connect acceptance, late-port rejection, and teardown; verified by the real browser Vitest worker pool. |
 
 [Ledger scope and pinned revisions](scope.md).

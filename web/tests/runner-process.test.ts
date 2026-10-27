@@ -7,12 +7,13 @@ import { ENGINES, type Engine } from "../src/engine-loader";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { ENGINE_BIN } from "../../src/executable-paths.js";
 import type { SharedFilesystem } from "../src/shared-fs";
-import type { RunRequest } from "../src/bun-executor";
+import type { RunRequest, WorkerMessage } from "../src/bun-executor";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { WorkerProcessClient, workerProcessState } from "waffle/proc/worker-client";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity } from "waffle/fs";
+import { installRuntimeSharedObjects } from "../src/shared-objects/runtime";
 
 /** The shared signal words of the process a request roots. */
 const signalsOf = (request: RunRequest) => workerProcessState(request.runtimeProcess!).signals;
@@ -110,6 +111,29 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
     },
   };
 }
+
+test("browser roots carry installed shared-object ownership and release it on teardown", async () => {
+  let installation: ReturnType<typeof installRuntimeSharedObjects> | undefined;
+  const state = isolatedRoot(true, "browser", {}, ["-e", "0"], runtime => {
+    installation = installRuntimeSharedObjects(runtime);
+  });
+  try {
+    await state.ready;
+    const owner = state.request?.sharedObjects?.owner;
+    expect(owner).toBeString();
+    const channel = new MessageChannel();
+    try {
+      state.worker.onmessage?.({ data: { type: "bun-shared-connect", owner, port: channel.port2 } } as MessageEvent<WorkerMessage>);
+      expect(installation?.inspect().clients).toBe(1);
+    } finally {
+      channel.port1.close();
+    }
+  } finally {
+    await state.dispose();
+    installation?.close();
+    expect(installation?.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+  }
+});
 
 /** A worker-side client for the root a run adopted; its spawn messages go to the run's handler. */
 function rootClient(request: RunRequest, deliver: (message: object) => void) {

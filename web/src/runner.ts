@@ -14,6 +14,7 @@ import { claimOutcome, readOutcome, type OutcomeWord } from "waffle/proc/outcome
 import { waitStatus } from "waffle/proc/wait-status";
 import { installLookupServer } from "./net/lookup.js";
 import type { Engine, RunRequest, WorkerMessage } from "./bun-executor";
+import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
 
 let toolsModule: Promise<WebAssembly.Module> | undefined;
 function loadTools(): Promise<WebAssembly.Module> {
@@ -78,6 +79,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   // client chunks load on first use rather than with the page.
   const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("waffle/fs").FilesystemIdentity } | undefined)?.filesystem;
   const pid = options.runtime.identities.pid(), job = options.runtime.identities.job();
+  const sharedRoute: SharedObjectRoute | undefined = options.engine === "browser" && options.adapter !== "preview1"
+    ? runtimeSharedObjectRoute(options.runtime) : undefined;
   const request: RunRequest = {
     engine: options.engine,
     adapter: options.adapter,
@@ -92,6 +95,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     moduleCache,
     lookupPort: lookupChannel?.port2,
     slots: slotsMode(),
+    sharedObjects: sharedRoute ? { owner: sharedRoute.owner } : undefined,
   };
   let rootOutcome: OutcomeWord | null = null;
   let rootPid = pid, rootJob = job;
@@ -114,7 +118,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     disposeLookup?.();
     worker?.terminate();
     try { helper?.dispose(); }
-    finally { if (moduleCache) void caches.delete(moduleCache); }
+    finally {
+      sharedRoute?.close();
+      if (moduleCache) void caches.delete(moduleCache);
+    }
   };
   const stopRoot = () => { if (rootStopped) return; rootStopped = true; stopWorker(); };
   rootConsumerRelease = options.runtime.retainConsumer({
@@ -197,6 +204,17 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   };
   const onMessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
+    if (msg.type === "bun-shared-connect") {
+      try {
+        if (sharedRoute?.accept(msg)) return;
+        msg.port.close();
+        if (!finished) finish({ code: 126, error: "Bun shared-object route is unavailable" });
+      } catch (error) {
+        sharedRoute?.close();
+        if (!finished) finish({ code: 126, error: String(error) });
+      }
+      return;
+    }
     if (options.runtime.disposed) return;
     if (finished) {
       if (msg.type === "runtime-proc") subprocess.rejectRuntimeMessage(msg);
