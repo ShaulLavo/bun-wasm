@@ -45,31 +45,51 @@ Wasm and direct host suspensions share the runtime call registry.
 
 ## Lifetime and synchronization policy
 
-Wasmi retains Store allocations until teardown. Externref roots, callback
-registrations, and callable wrappers conservatively live for that same
-runtime lifetime. Overwriting a table entry does not reclaim its former JS
-root. This is an explicit limitation; no per-entry GC or memory-performance
-claim is made. The root map has no external owner after its factory realm is
-released. Tables and memories use weak wrapper interning. Memory synchronization state
-is also weakly indexed by backend resource, independently of the wrapper.
-A weak map from each current buffer to its state keeps a retained buffer or
-view synchronized after wrapper collection. Growth deletes the old buffer's
-anchor before detaching it. When both wrapper and current buffer are dead,
-the mirror/state can collect; detached old buffers do not retain later mirrors.
+Wasmi retains Store allocations until process teardown. Externref roots,
+callback registrations, callable wrappers, and external memory bytes live for
+that same process lifetime. The split driver deliberately retains the engine
+and rooted internal object; it provides no VM, Store, or session reuse path.
+Overwriting a table entry does not reclaim its former JS root. This is an
+explicit limitation, not a per-entry GC or memory-performance guarantee.
 Retained tables and callables continue to work after the exporting JS instance
 is collected.
 
-Every Wasm call/resumption flushes all live memory wrappers before execution
-and refreshes them afterward, including suspension, callback exceptions, and
-reentry. This covers indirect calls into other instances. Successful growth
-still detaches prior buffers. This policy makes no performance claim.
+`wasm.memorySpan` resolves a memory resource identity in the current Store and
+returns its pointer, byte length, and growth generation. JavaScript supplies a
+resource identity, never a pointer. The engine value native validates integer
+fields, page-sized length, non-null origin, overflow, and guest linear-memory
+bounds before creating an external ArrayBuffer over those bytes. Wasmi owns
+the allocation; the JSC and QuickJS buffer deallocators do not free it. Both
+engine adapters mark the buffer as WebAssembly memory and refuse user transfer.
+Shared Wasm memories (`shared: true`) remain unsupported; this protocol does
+not supply cross-agent synchronization.
+
+Tables and memories use weak wrapper interning. Memory state is also weakly
+indexed by backend resource. A weak map from each current buffer to its state
+keeps a retained buffer or view associated with its resource after wrapper
+collection. Growth removes the old buffer's anchor before detaching it. When
+both wrapper and current buffer are dead, that state can collect; detached old
+buffers do not retain later generations. The Store still owns the bytes.
+
+Calls and resumptions refresh memory generations in `finally`, including
+suspension, callback exceptions, and reentry. The import callback therefore
+sees current views, and resuming it refreshes again before returning to user
+code. Instantiation and successful explicit growth also refresh the views.
+An unchanged generation preserves buffer identity without copying bytes.
+Every successful growth, including zero pages, advances the generation and
+detaches the previous buffer and all its views before exposing a replacement.
+Failed growth leaves the generation and current buffer intact. This also
+covers indirect calls that grow another instance's memory.
 
 ## Verification
 
 Run `source env.sh` and `bun test scripts/wasm-tables.test.ts`. The test creates
 an isolated offline Cargo crate containing actual production `wasm.rs`,
 `data.rs`, and the native registry declaration. Its native process exchanges
-plain data with the real factory on Node, without a mock table or callable.
+plain data with the real factory on Node, without a mock table or callable. This
+out-of-process harness mirrors memory bytes through test-only bridge calls;
+it does not exercise the engine's in-place buffer adapter. The actual engine
+pair fixtures provide that separate evidence.
 The two reference tests embed the repository-owned `tests/wasm-tables/table.wasm`
 compiled with `wasm-tools parse tests/wasm-tables/table.wat -o
 tests/wasm-tables/table.wasm`. The original 395-byte source SHA-256 is
