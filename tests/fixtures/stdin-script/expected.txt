@@ -1,1 +1,6 @@
 Hello from stdin
+value 42
+args ["-","--help","tail"]
+main true
+file [stdin]
+empty 0
