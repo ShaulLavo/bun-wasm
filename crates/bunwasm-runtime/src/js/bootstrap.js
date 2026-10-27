@@ -450,9 +450,6 @@
   internal.pumpIo = () => false;
   internal.removeIoWaiter = () => {};
   internal.cancelIoWaiters = () => {};
-  if (native.hostCaps?.lookup_start && native.hostCaps?.lookup_head) {
-    internal.require("host_lookup").install();
-  }
   internal.require("loop_scheduler");
 
   // --- process.nextTick -------------------------------------------------------
@@ -884,6 +881,10 @@
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
   internal.require("function");
   internal.fakeTimers = internal.require("fake_timers");
+  // Networking factories require the installed web globals.
+  if (native.hostCaps?.lookup_start && native.hostCaps?.lookup_head) {
+    internal.require("host_lookup").install();
+  }
   if (process.env.BUNWASM_IPC_CHANNEL) internal.require("child_ipc").initialize();
   if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
 

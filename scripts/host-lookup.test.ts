@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
+import { existsSync, readFileSync } from "node:fs";
+import * as hostStreams from "node:stream/web";
+import { createContext, runInContext, runInNewContext } from "node:vm";
 
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/host_lookup.ts", import.meta.url), "utf8");
 const context = { Array, Error, JSON, Object, Promise, TypeError };
@@ -22,6 +23,102 @@ type FixtureOptions = {
 };
 
 const completeCaps = { poll: true, lookup_start: true, lookup_head: true, error: true, close: true };
+
+function bootstrapFixture(caps: Record<string, boolean> = completeCaps, provider?: (hostname: string, family: number, hints: number) => Promise<Address[]>) {
+  const realm = createContext({ ...hostStreams });
+  const loaded: string[] = [];
+  const closed: number[] = [];
+  const started: [string, number, number][] = [];
+  let head: string | number = -2;
+  const native = {
+    engine: "host",
+    platformInfo: { version: "1.4.4", revision: "startup-test", arch: "wasm32" },
+    hostCaps: caps,
+    hostLookup: provider,
+    hostLookupStart(hostname: string, family: number, hints: number) {
+      started.push([hostname, family, hints]);
+      return 17;
+    },
+    hostLookupHead: () => head,
+    hostError: () => JSON.stringify({ name: "Error", message: "getaddrinfo ENOTFOUND localhost", code: "ENOTFOUND", syscall: "getaddrinfo", hostname: "localhost" }),
+    hostClose(handle: number) { closed.push(handle); return 0; },
+    hostSignal: () => 0,
+    mainPath: () => "/startup.ts",
+    env: () => ({}),
+    argv: () => ["bun", "/startup.ts"],
+    execArgv: () => [],
+    execPath: () => "/bun",
+    isatty: () => false,
+    now: () => 0,
+    timeOrigin: () => 0,
+    utf8Encode: (text: string) => new TextEncoder().encode(text),
+    utf8Decode: (bytes: Uint8Array, fatal: boolean) => new TextDecoder("utf-8", { fatal, ignoreBOM: true }).decode(bytes),
+    getAsyncContext: () => undefined,
+    setAsyncContext() {},
+    closeAllDirs() {},
+    streams: {},
+    loadPolyfill(name: string): unknown {
+      loaded.push(name);
+      const typed = new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url);
+      const path = existsSync(typed) ? typed : new URL(`../crates/bunwasm-runtime/src/js/${name}.js`, import.meta.url);
+      const text = readFileSync(path, "utf8");
+      const code = path.pathname.endsWith(".ts") ? new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${text}`) : text;
+      return runInContext(code, realm, { filename: path.pathname });
+    },
+  };
+  realm.native = native;
+  const bootstrap = readFileSync(new URL("../crates/bunwasm-runtime/src/js/bootstrap.js", import.meta.url), "utf8");
+  runInContext(`globalThis.runtime = ${bootstrap}(native)`, realm, { filename: "bootstrap.js" });
+  return {
+    evaluate(code: string): unknown { return runInContext(code, realm); },
+    loaded, closed, started, native,
+    setHead(value: string | number) { head = value; },
+  };
+}
+
+test("whole bootstrap with real factories keeps missing lookup capability absent", () => {
+  const state = bootstrapFixture({});
+  expect(state.evaluate("typeof runtime.native.hostLookup")).toBe("undefined");
+  expect(state.loaded).not.toContain("host_lookup");
+  expect(state.evaluate("runtime.ioPending()")).toBe(0);
+});
+
+test("whole bootstrap installs native lookup after its real factory dependencies", async () => {
+  const state = bootstrapFixture();
+  expect(state.loaded).toContain("net");
+  expect(state.loaded).toContain("websocket");
+  const pending = state.evaluate("runtime.builtin('node:dns/promises').lookup('localhost', { all: true })");
+  await Promise.resolve();
+  expect(state.started).toEqual([["localhost", 0, 0]]);
+  expect(state.evaluate("runtime.ioPending()")).toBe(1);
+  expect(state.evaluate("runtime.pumpIo()")).toBe(false);
+  state.setHead(JSON.stringify({ addresses: [{ address: "127.0.0.1", family: 4 }] }));
+  expect(state.evaluate("runtime.pumpIo()")).toBe(true);
+  await expect(pending).resolves.toEqual([{ address: "127.0.0.1", family: 4 }]);
+  expect(state.evaluate("runtime.ioPending()")).toBe(0);
+  expect(state.closed).toEqual([17]);
+});
+
+test("whole bootstrap preserves an existing Promise provider", async () => {
+  const provider = async (): Promise<Address[]> => [{ address: "::1", family: 6 }];
+  const state = bootstrapFixture({}, provider);
+  expect(state.native.hostLookup).toBe(provider);
+  await expect(state.evaluate("runtime.builtin('node:dns/promises').lookup('localhost', { all: true })")).resolves.toEqual([{ address: "::1", family: 6 }]);
+  expect(state.started).toEqual([]);
+});
+
+test("whole bootstrap exit cancels the real lookup waiter exactly once", async () => {
+  const state = bootstrapFixture();
+  state.evaluate("globalThis.settled = false; runtime.native.hostLookup('localhost', 0, 0).then(() => { settled = true; }, () => { settled = true; })");
+  expect(state.evaluate("runtime.ioPending()")).toBe(1);
+  state.evaluate("runtime.emitExit(0); runtime.emitExit(0)");
+  state.setHead(JSON.stringify({ addresses: [{ address: "127.0.0.1", family: 4 }] }));
+  expect(state.evaluate("runtime.pumpIo()")).toBe(false);
+  await Promise.resolve();
+  expect(state.evaluate("settled")).toBe(false);
+  expect(state.evaluate("runtime.ioPending()")).toBe(0);
+  expect(state.closed).toEqual([17]);
+});
 
 function fixture(options: FixtureOptions = {}) {
   const waiters = new Set<Waiter>();
