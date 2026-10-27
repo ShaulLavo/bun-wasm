@@ -96,12 +96,8 @@ pub trait Transpiler {
         Err("generated imports need Bun's parser".to_owned())
     }
 
-    fn parse_data(
-        &self,
-        _source: &[u8],
-        format: &str,
-    ) -> Result<String, crate::engine::NativeError> {
-        Err(crate::engine::NativeError::error(format!(
+    fn parse_data(&self, _source: &[u8], format: &str) -> Result<String, crate::data::NativeError> {
+        Err(crate::data::NativeError::error(format!(
             "{format}.parse needs Bun's parser, which this bun.wasm was built without"
         )))
     }

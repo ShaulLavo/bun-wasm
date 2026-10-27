@@ -21,7 +21,7 @@ use bun_zstd::c as zs;
 // Links the Zstd C library that `bun_zstd` declares.
 use zstd_sys as _;
 
-use crate::engine::NativeError;
+use crate::data::NativeError;
 
 pub fn too_large(limit: usize) -> NativeError {
     NativeError::range_error(format!("Cannot create a Buffer larger than {limit} bytes"))

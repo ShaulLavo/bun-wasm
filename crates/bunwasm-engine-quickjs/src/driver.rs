@@ -4,8 +4,8 @@ use std::rc::Rc;
 
 use crate::client::CoreClient;
 use crate::engine::{Engine, NativeError};
+use crate::natives;
 use crate::program::run_in_engine;
-use crate::{natives, vm::QuickJs};
 
 pub(crate) enum Entry {
     File(#[allow(dead_code)] String),
@@ -13,15 +13,15 @@ pub(crate) enum Entry {
     Test(Vec<String>),
 }
 
-pub(crate) fn run(session: u32) -> i32 {
+pub(crate) fn run<E: Engine>(session: u32) -> i32 {
     let client = CoreClient { session };
     let (entry, main) = client.entry().expect("core entry description");
-    let core = Rc::new(Core::<QuickJs> {
+    let core = Rc::new(Core::<E> {
         client,
         internal: RefCell::new(None),
         handoffs: RefCell::new(HashMap::new()),
     });
-    let engine = QuickJs::new(core.clone());
+    let engine = E::new(core.clone());
     let code = run_in_engine(&engine, &core, &entry, &main);
     client.flush();
     // Rooted values live until process disposal, matching the existing driver.
