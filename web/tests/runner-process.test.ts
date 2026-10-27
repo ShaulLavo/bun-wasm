@@ -166,6 +166,7 @@ for (const failure of ["fork", "retainConsumer", "registerAdapter"] as const) te
     ? { fork: () => { throw new Error("fork failed"); } }
     : { fork: () => ({ ...createFilesystemIdentity(), port: channel.port1 }) });
   const installation = installRuntimeSharedObjects(runtime);
+  const closes = spyOn(MessagePort.prototype, "close");
   const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/") });
   const mutable = (failure === "fork" ? runtime.filesystem : runtime) as unknown as Record<string, unknown>;
@@ -175,7 +176,9 @@ for (const failure of ["fork", "retainConsumer", "registerAdapter"] as const) te
     const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
     expect(() => startRun({ runtime, engine: "browser", module, args: [], env: {}, moduleScope: false }, { stdout() {}, stderr() {} })).toThrow(`${failure} failed`);
     expect(installation.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+    expect(closes.mock.calls.length).toBeGreaterThanOrEqual(2);
   } finally {
+    closes.mockRestore();
     mutable[failure] = original;
     installation.close();
     channel.port1.close(); channel.port2.close();

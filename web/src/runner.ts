@@ -67,6 +67,26 @@ function slotsMode(): RunRequest["slots"] {
 
 const registeredPrograms = new WeakMap<Runtime, Set<string>>();
 
+function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<string>, engine: Engine, module: WebAssembly.Module): void {
+  for (const command of ["bun", "node", "nodejs"]) {
+    const path = `${ENGINE_BIN[engine]}/${command}`;
+    subprocess.register(path, { module, adapter: "bun", engine });
+    programs.add(path);
+  }
+}
+
+function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<string>, selected: Engine, adapter: RunRequest["adapter"], selectedModule: WebAssembly.Module): void {
+  const engines: Engine[] = (["quickjs", "jsc", "browser"] as Engine[]).concat(selected === "hermes" ? ["hermes"] : []);
+  for (const engine of engines) {
+    const name = `${ENGINE_BIN[engine]}/bun`;
+    if (programs.has(name)) continue;
+    let loading: Promise<WebAssembly.Module> | undefined;
+    const module = engine === selected && adapter !== "preview1" ? selectedModule
+      : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
+    registerEngineCommands(subprocess, programs, engine, module);
+  }
+}
+
 /** Starts `bun <args>` in a fresh worker, rooting a process tree in the page's runtime. */
 export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const ring = options.adapter !== "preview1" && globalThis.crossOriginIsolated === true ? createRing() : null;
@@ -109,6 +129,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   } catch (error) {
     request.filesystem.port.close();
     request.lookupPort?.close();
+    lookupChannel?.port1.close();
+    lookupChannel?.port2.close();
     sharedRoute?.close();
     throw error;
   }
@@ -136,6 +158,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     workerStopped = true;
     request.filesystem.port.close();
     request.lookupPort?.close();
+    lookupChannel?.port1.close();
+    lookupChannel?.port2.close();
     disposeLookup?.();
     worker?.terminate();
     try { helper?.dispose(); }
@@ -213,20 +237,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   try {
     let programs = registeredPrograms.get(options.runtime);
     if (!programs) registeredPrograms.set(options.runtime, programs = new Set());
-    // Hermes is opt-in: its executables exist only in runtimes whose root runs Hermes.
-    const engines: Engine[] = ["quickjs", "jsc", "browser"];
-    for (const engine of engines.concat(options.engine === "hermes" ? ["hermes"] : [])) {
-      const name = `${ENGINE_BIN[engine]}/bun`;
-      if (programs.has(name)) continue;
-      let loading: Promise<WebAssembly.Module> | undefined;
-      const module = engine === options.engine && options.adapter !== "preview1" ? options.module
-        : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
-      for (const command of ["bun", "node", "nodejs"]) {
-        const path = `${ENGINE_BIN[engine]}/${command}`;
-        subprocess.register(path, { module, adapter: "bun", engine });
-        programs.add(path);
-      }
-    }
+    if (!subprocess) throw new Error("Bun process controller did not initialize");
+    registerEnginePrograms(subprocess, programs, options.engine, options.adapter, options.module);
   } catch (error) {
     sharedRoute?.close();
     releaseRootConsumer();
@@ -241,6 +253,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const onMessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
     if (msg.type === "bun-shared-connect") {
+      const selected = rootOutcome && readOutcome(rootOutcome);
+      if (options.runtime.disposed || finished || selected) {
+        sharedRoute?.close(); msg.port.close(); return;
+      }
       try {
         if (sharedRoute?.accept(msg)) return;
         msg.port.close();
@@ -256,12 +272,12 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       if (msg.type === "runtime-proc") subprocess?.rejectRuntimeMessage(msg);
       return;
     }
-    const selected = rootOutcome && readOutcome(rootOutcome);
     if (msg.type === "cleanup-error") {
       console.error("bun-wasm: root cleanup failed", msg.message);
       finish({ code: msg.code }, false, msg.signal);
       return;
     }
+    const selected = rootOutcome && readOutcome(rootOutcome);
     if (selected?.kind === "signaled" && msg.type !== "exit" && msg.type !== "error") {
       // Reject capabilities at the dispatch boundary too: the periodic observer need not have
       // run yet when a guest catches its own terminal unwind and sends more messages.
