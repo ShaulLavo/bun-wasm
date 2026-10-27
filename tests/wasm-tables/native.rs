@@ -69,8 +69,45 @@ fn encode(value: Val) -> Value {
         ]),
     }
 }
+/// Where `wasm.memorySpan` reports a memory resource's bytes. An in-process engine views
+/// them in place; this out-of-process client copies them through `bridge.*`.
+fn span(table: &natives::Table, id: &Val) -> (*mut u8, usize) {
+    let (_, function) = table
+        .functions
+        .iter()
+        .find(|(key, _)| *key == "wasm.memorySpan")
+        .unwrap();
+    let Val::Object(fields) = function(Args(std::slice::from_ref(id))).unwrap() else {
+        panic!("memory span")
+    };
+    let field = |key: &str| match fields.iter().find(|(name, _)| name == key) {
+        Some((_, Val::Num(value))) => *value as usize,
+        _ => panic!("memory span field"),
+    };
+    (field("pointer") as *mut u8, field("length"))
+}
+fn bridge(table: &natives::Table, name: &str, args: &[Val]) -> Value {
+    let (pointer, length) = span(table, &args[0]);
+    // SAFETY: the store keeps the span valid until the memory grows, and this process
+    // handles one request at a time.
+    let bytes = unsafe { std::slice::from_raw_parts_mut(pointer, length) };
+    if name == "bridge.read" {
+        return json!({"ok": encode(Val::Bytes(bytes.to_vec()))});
+    }
+    let Val::Bytes(source) = &args[1] else {
+        panic!("bridge bytes")
+    };
+    bytes.copy_from_slice(source);
+    json!({"ok": encode(Val::Undefined)})
+}
 fn dispatch(table: &natives::Table, request: Value) -> Value {
     let name = request["name"].as_str().unwrap();
+    if name.starts_with("bridge.") {
+        let Val::Array(args) = decode(&request["args"]) else {
+            panic!("argument array")
+        };
+        return bridge(table, name, &args);
+    }
     let Some((_, function)) = table.functions.iter().find(|(key, _)| *key == name) else {
         return json!({"error": {"kind":"Error", "message": format!("Missing native {name}")}});
     };
