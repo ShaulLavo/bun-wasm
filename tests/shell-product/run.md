@@ -64,11 +64,48 @@ an inline `PORT=3001` override. Raw terminal output and screenshots are retained
 Task asset/registry servers, browsers, copied app sources, and scratch are removed
 on completion or interruption. The prepared packages and shared caches remain.
 
-## Next installation only
+## Select the workflow
 
-`SHELL_PRODUCT_RUN` accepts `full` or `next-install-only`. An unset value selects
-`full`, keeping both apps and all 28 app stages. Unknown values, including an
-empty string, fail before scratch, registry, or browser setup.
+`SHELL_PRODUCT_RUN` selects a fixed app and stage scope. An unset value selects
+`full`. Unknown values, including empty strings, unsupported apps and arbitrary
+stage selections, fail before report, scratch, registry or browser setup.
+
+| Mode | Apps | App stages |
+| --- | --- | --- |
+| `full` | Vite React, Next 15 | All 28 stages |
+| `next-install-only` | Next 15 | Install |
+| `vite-dev-ctrl-c` | Vite React | Install, dev preview, first Ctrl-C |
+| `next-dev-ctrl-c` | Next 15 | Install, dev preview, first Ctrl-C |
+
+With the same current verified prepared packages, guest, receipt and replay
+inputs, run a focused development cycle:
+
+```sh
+SHELL_PRODUCT_RUN=vite-dev-ctrl-c SHELL_PRODUCT_REPORTS=/absolute/vite-dev-reports \
+  bun /work/platform-production/heavy/current/run.js --class browser shell-product-vite-dev -- \
+  bun web/tests/browser-shell-product.ts
+
+SHELL_PRODUCT_RUN=next-dev-ctrl-c SHELL_PRODUCT_REPORTS=/absolute/next-dev-reports \
+  bun /work/platform-production/heavy/current/run.js --class browser shell-product-next-dev -- \
+  bun web/tests/browser-shell-product.ts
+```
+
+Each dev mode records six rows: setup, guest install, real dev preview, one
+Ctrl-C, global cleanup and replay/network. Installation must exit 0 before dev
+can start. Ctrl-C requires the actual entered foreground server and expected
+live listener. It retains terminal interruption, status, job-owned worker and
+baseline checks, listener removal, stopped-preview HTTP502 and `PROMPT_USABLE`.
+There are no restarts, builds or later shell commands in these modes.
+Use a separate report directory for each invocation. A passing focused run
+proves only its selected cycle, not the full workflow.
+
+A dev page HTTP500 remains a failed page row. If the real server remains live,
+Ctrl-C can independently pass, while the overall command still exits nonzero.
+A missing listener or exited server blocks Ctrl-C; a failed interruption is
+not retried. These modes retain the normal provenance, one-runtime, deadline
+and final global zero-worker/listener guards.
+
+## Next installation only
 
 With the same prepared inputs, select only Next's guest installation:
 
@@ -86,7 +123,7 @@ block. Shared setup, cleanup, and network rows remain required for success.
 The command keeps the same guest provenance, replay, one-runtime, deadline,
 and resource-cleanup guards.
 
-`run.json` records `mode`, `apps`, and expected app `stages` for both modes before
+`run.json` records `mode`, `apps`, and expected app `stages` for every mode before
 staging begins, including runs that fail setup.
 A passing `next-install-only` scoreboard proves only this focused acceptance,
 not full workflow completion. Keep its report directory separate from full runs.
