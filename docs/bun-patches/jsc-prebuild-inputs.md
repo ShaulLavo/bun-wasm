@@ -87,3 +87,29 @@ acceptance. Parser and captured-command fixtures prove source contracts only.
 | `jsc/configure.sh`, `jsc/build-icu.sh`, `jsc/common.sh`, `crates/bunwasm-jsc/build.rs` | Port | Original PIC build adapters for the unchanged pinned upstreams. |
 | `scripts/build-engine-jsc.sh`, `scripts/build-bun-jsc.sh` | Host feature | Original separate-program producer and matched-pair composition. |
 | `scripts/src/engine-explicit-init.ts`, `scripts/src/engine-init.c` | Port | Shared original initializer converter and constructor fixture. |
+
+## Actual common-core export roots and weak native binding
+
+The JSC side retains additional libc calls and the `stderr` and
+`_CLOCK_REALTIME` data addresses. The original shared-core export adapter in
+`scripts/quickjs-core-exports.txt` roots 66 existing implementations from the
+selected patched wasi-libc and those two data definitions. They stay in the
+single core libc/allocator; the side does not gain another libc or allocator.
+The underlying source is wasi-libc `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13`,
+with the existing Waffle preopen patch. A selected-libc probe verifies TLS,
+mutex/condition timeout, semaphore count operations and the single-processor
+profile; it does not establish concurrent thread lifecycle support.
+`pthread_create`, `pthread_join` and `pthread_detach` are not exported as real
+support. `Bun__reportUnhandledError` is also withheld: its upstream full Bun VM
+implementation is not the engine-independent core's error dispatch contract.
+
+Visible weak definitions are intentionally both imported and exported by
+LLVM's shared Wasm linker. At the selected LLVM revision
+`895aa2c896ada719451be2e3673c83da8ddf1141`, this is explicit in
+`lld/wasm/Writer.cpp` (`shouldImport`) and `lld/wasm/Symbols.cpp`
+(`Symbol::isExported`). A selected-toolchain fixture confirms `--undefined`
+does not remove the weak import/export. This is linker semantics, not copied
+product code. Actual archive definitions, code in the map, exported local
+functions and typed imports must be distinguished; an import alone does not
+prove missing native code. No whole-archive, symbol strengthening, hidden
+visibility rewrite, dummy provider or weakened loader admission is introduced.
