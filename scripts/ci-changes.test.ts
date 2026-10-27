@@ -135,7 +135,11 @@ test("patch-only manifest bumps skip Rust but dependency and script edits retain
 for (const path of [
   "jsc/webkit-wasi.patch", "crates/bunwasm-jsc/cpp/helpers.cpp", "scripts/jsc-embedding.ts",
   "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",
-  "scripts/build-bun-jsc.sh", "scripts/bench-jsc.sh", "scripts/ci-binaryen.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
+  "crates/bunwasm-engine-jsc/src/lib.rs", "scripts/build-bun-jsc.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "scripts/build-bun-core.sh", "scripts/build.sh", "scripts/quickjs-core-exports.txt",
+  "scripts/guest-artifact.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-acceptance.ts",
+  "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/engine-producer.test.ts", "scripts/src/engine-explicit-init.test.ts",
+  "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts",
+  "scripts/bench-jsc.sh", "scripts/ci-binaryen.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
   "web/scripts/node-host.ts", "web/guest-tests/compose.ts", "web/src/net/trampoline.ts", "web/bun.lock",
   "web/src/native-direct-stream.ts",
   "crates/bunwasm-runtime/src/host.rs", "scripts/test-web-guests.ts",
@@ -153,6 +157,19 @@ test("unrelated page changes skip JSC; its selected gate builds and executes onc
   expect(workflow.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
   expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
   expect(workflow).toContain("bun scripts/jsc-embedding.ts test dist/bun-jsc.wasm");
+});
+
+test("the paired JSC contract selects its crate, producer and consumer inputs", () => {
+  const paths = [
+    "crates/bunwasm-engine-jsc/src/lib.rs",
+    "scripts/build-engine-jsc.sh",
+    "scripts/guest-build-receipt.ts",
+    "src/engine-kind.ts",
+    "web/src/engine-loader.ts",
+  ];
+  expect(needsJsc(paths)).toBe(true);
+  expect(needsRust(paths)).toBe(true);
+  expect(needsJsc(["web/src/page.ts", "src/index.ts", "sandbox/src/main.ts"])).toBe(false);
 });
 
 for (const path of ["web/src/main.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/ci-web-guests.md"]) {

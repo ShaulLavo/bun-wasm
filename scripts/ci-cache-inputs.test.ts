@@ -40,7 +40,7 @@ test("sysroot and prebuild restores use effective inputs and have bounded compat
 });
 
 test("native-only selections provision the tools JSC prerequisite without enabling JSC engine gates", () => {
-  for (const path of ["scripts/guest-source-manifest.ts", "crates/bunwasm-runtime/src/engine_quickjs.rs", "web/guest-tests/quickjs.test.ts"]) {
+  for (const path of ["crates/bunwasm-runtime/src/engine_quickjs.rs", "web/guest-tests/quickjs.test.ts"]) {
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
   }
@@ -66,6 +66,19 @@ test("completed caches are saved before later validation can fail or time out", 
   expect(position("Save the refined native Cargo cache once per input revision")).toBeLessThan(position("Blocking Web guest cases (QuickJS and host engine)"));
   expect(field(named("Save the JSC prebuild cache once per input revision"), "if")).toContain("!cancelled()");
   expect(field(named("Save the JSC prebuild cache once per input revision"), "if")).toContain("outputs.jsc-ready == 'true'");
+});
+
+test("split producers keep the common core target separate from the JSC side cache", () => {
+  const native = string(field(named("Build native fixtures after the cache checkpoint"), "run"));
+  expect(native).toContain('export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"');
+  expect(native.match(/CARGO_BUILD_JOBS=2 bash scripts\/build\.sh/g)).toHaveLength(1);
+  expect(native).not.toContain("build-bun-core.sh");
+  const jsc = string(field(named("Build the JSC Cargo guest"), "run"));
+  expect(jsc).toContain('export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"');
+  expect(jsc).toContain('export JSC_ENGINE_BUILD_DIR="${JSC_ENGINE_BUILD_DIR:-$JSC_BUILD_DIR/engine}"');
+  expect(jsc.match(/bash scripts\/build-bun-jsc\.sh/g)).toHaveLength(1);
+  expect(string(field(field(byId("jsc-cargo-cache"), "with"), "path"))).toBe("${{ runner.temp }}/jsc/engine");
+  expect(jsc).not.toContain("JSC_CARGO_TARGET_DIR=");
 });
 
 test("each setup cache has one immediate save after its successful producer", () => {
