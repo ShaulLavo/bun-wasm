@@ -364,6 +364,7 @@ mod tool_args;
 
 enum Command {
     Run(Entry, Vec<String>),
+    RunStdin(Vec<String>),
     Build(Vec<String>),
     Lint,
     Install(String, Vec<String>),
@@ -490,6 +491,7 @@ fn main() {
             Err(error) => { eprintln!("error: {error}"); std::process::exit(1); }
         },
         Command::Run(entry, args) => (entry, args),
+        Command::RunStdin(_) => unreachable!("stdin entry is not wired yet"),
         // `-p`: evaluate an expression and print it like Bun.
         Command::Print(code) => {
             let wrapped = format!(
@@ -505,4 +507,21 @@ fn main() {
         return;
     }
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_dash_selects_stdin_without_broad_flag_fallback() {
+        assert!(matches!(parse(vec!["run".into(), "-".into()]), Command::RunStdin(args) if args.is_empty()));
+        assert!(matches!(parse(vec!["run".into(), "-".into(), "tail".into()]), Command::RunStdin(args) if args == ["tail"]));
+        assert!(matches!(parse(vec!["run".into(), "--wat".into()]), Command::Exit(1)));
+    }
+
+    #[test]
+    fn run_double_dash_dash_selects_stdin() {
+        assert!(matches!(parse(vec!["run".into(), "--".into(), "-".into()]), Command::RunStdin(args) if args.is_empty()));
+    }
 }
