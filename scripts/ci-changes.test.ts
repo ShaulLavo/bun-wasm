@@ -12,7 +12,7 @@ test.each([
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "crates/bunwasm-runtime/src/lib.rs", "vendor/bun/src/parser.rs", "patches/bun/001.patch",
   "third_party/libc/src/lib.rs", "Cargo.lock", "Cargo.toml", ".cargo/config.toml", "rust-toolchain.toml",
-  "tests/install/package-options.ts", "tests/install/registry.mjs",
+  "tests/install/package-options.ts", "tests/install/registry.mjs", "tests/wasm-tables/table.wasm", "tests/fixtures/webassembly/module.wasm",
   "env.sh", "tests/fixtures/node-misc/main.js", "scripts/test.sh", "scripts/build-wasi-sysroot.ts", "scripts/sync-crypto.sh", "scripts/quality-rust.ts",
   "scripts/quality-wasi-probe.ts", "scripts/quality.ts", "scripts/ci-changes.ts", "package.json", "bun.lock",
   ".github/workflows/ci.yml", "scripts/build.sh", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
@@ -23,6 +23,17 @@ test.each([
 
 test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
   expect(needsRust([path])).toBe(false);
+});
+
+test.each(["crates/bunwasm-runtime/src/js/runtime.d.ts", "crates/bunwasm-runtime/src/js/worker_protocol.d.ts"])("type-only runtime declaration %s needs no native engine build", path => {
+  expect(needsRust([path])).toBe(false);
+  expect(needsJsc([path])).toBe(false);
+});
+
+test("embedded runtime JavaScript remains a native and JSC input", () => {
+  const path = "crates/bunwasm-runtime/src/js/node_fs.js";
+  expect(needsRust([path])).toBe(true);
+  expect(needsJsc([path])).toBe(true);
 });
 
 test("the complete change list includes native inputs after any number of JavaScript paths", () => {

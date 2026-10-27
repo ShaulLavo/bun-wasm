@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/process-binding.test.ts",
+  "localRuntime": true
+}

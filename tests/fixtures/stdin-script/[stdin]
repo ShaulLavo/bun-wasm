@@ -1,0 +1,1 @@
+throw new Error("the stdin entry must not read a file named [stdin]");

@@ -310,11 +310,16 @@ declare namespace BunWasm {
       String: StringConstructor; Symbol: SymbolConstructor; TypeError: TypeErrorConstructor;
       URIError: URIErrorConstructor;
     };
+    builtin(name: "node:fs"): ShellFs;
+    builtin(name: "node:os" | "node:crypto" | "node:zlib"): { readonly constants: object };
     builtin(name: string): unknown;
     defineHidden(target: object, values: object): void;
     mappedCallSites: WeakSet<object>;
     formatCallSite(site: StackCallSite): string;
     require(name: "inspect"): ConsoleInspector;
+  }
+  interface ShellFs {
+    readonly constants: object;
   }
 }
 

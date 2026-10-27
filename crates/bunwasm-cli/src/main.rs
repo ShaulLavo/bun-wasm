@@ -606,7 +606,7 @@ fn parse_command_with_flags(
     let mut conditions = conditions;
     let mut exec_argv = exec_argv;
     while let Some(arg) = rest.next() {
-        if run_file && !arg.starts_with('-') {
+        if run_file && (arg == "-" || !arg.starts_with('-')) {
             return Command::Run(Entry::File(arg), rest.collect(), conditions, exec_argv);
         }
         if arg == "--conditions" {
@@ -704,7 +704,9 @@ fn parse_command_with_flags(
             }
             // Flags native Bun accepts that change nothing here.
             "--bun" | "--silent" | "--smol" | "--no-install" => continue,
-            flag if flag.starts_with('-') => return usage_error(&format!("unknown flag {flag}")),
+            // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
+            // are accepted and kept in process.execArgv, so forked children receive them too.
+            flag if flag.starts_with('-') => exec_argv.push(flag.to_owned()),
             file => {
                 return Command::Run(
                     Entry::File(direct_file(file)),
