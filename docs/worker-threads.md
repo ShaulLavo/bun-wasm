@@ -57,10 +57,14 @@ own shared lane (`web/src/shared-objects/lane.ts`): two single-writer rings of 1
 one per direction, moved with the port when it is transferred. A packet committed
 there is readable by the peer's current owner as soon as `postMessage` returns, so a
 reply posted before `Atomics.notify` reaches a caller blocked in `Atomics.wait`, as
-esbuild's `transformSync` needs. When the peer's ring is full, a packet takes the
-broker route instead, and sequence numbers keep delivery in order. That route carries
-at most one 8 KiB frame, so a larger packet to a full ring is rejected. A packet larger
-than a whole ring throws `DataCloneError` before anything is detached.
+esbuild's `transformSync` needs. A message that can't be committed that way is rejected
+with `DataCloneError` before anything is detached: a full ring (the receiver hasn't read
+1 MiB of earlier messages), a frame larger than a ring, or a peer that has closed or
+been retired. Ports carried over a lane stay in the custody of the lane's destination
+port until restored, so the sender exiting first doesn't retire them, and closing that
+port releases them. One limit remains: a SharedArrayBuffer created after the receiver
+blocked reaches it only through its event loop, so such a message is visible in order but
+decodes once the backing attaches.
 
 `setEnvironmentData` stores values by key identity within a guest. Workers inherit
 a cloned snapshot at construction. A value of `undefined` deletes an entry.

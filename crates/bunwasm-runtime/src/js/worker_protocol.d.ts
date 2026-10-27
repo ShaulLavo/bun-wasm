@@ -18,6 +18,8 @@ declare namespace BunWasm {
     reserve(text: string): { commit(): void; abort(): void } | null;
     drain(consume: (text: string) => void): number;
     watch(ready: () => void): () => void;
+    close(): void;
+    peerClosed(): boolean;
   }
   type WorkerNode =
     | ["undefined"] | ["null"] | ["string", string] | ["number", string] | ["boolean", boolean] | ["bigint", string]
@@ -31,7 +33,8 @@ declare namespace BunWasm {
   interface PortTransfer {
     snapshot: PortSnapshot;
     validate(): void;
-    publish?(): void;
+    /** `toward`: the port this transfer travels to over its channel lane, which holds it until restored. */
+    publish?(toward?: string): void;
     beforeCommit?(): void;
     commit(): void;
   }
@@ -56,6 +59,7 @@ declare namespace BunWasm {
       readonly owner: string;
       readonly enabled: boolean;
       send(command: unknown): boolean;
+      retired(id: string): boolean;
       transaction(deliver: () => void, commit: () => void): void;
       tryTransaction(deliver: () => void, commit: () => void): boolean;
       onCredit(ready: () => void): void;
@@ -66,7 +70,7 @@ declare namespace BunWasm {
     wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
   }
   interface WorkerCodec {
-    prepare(value: unknown, transfer?: unknown, forbidden?: readonly string[]): { graph: WorkerGraph; commit(deliver?: () => void): void; abort(): void };
+    prepare(value: unknown, transfer?: unknown, forbidden?: readonly string[]): { graph: WorkerGraph; commit(deliver?: () => void, toward?: string): void; abort(): void };
     encode(value: unknown, transfer?: unknown, forbidden?: readonly string[]): WorkerGraph;
     decode(value: unknown): unknown;
     wait(value: unknown, ready: () => void): (() => void) | null;

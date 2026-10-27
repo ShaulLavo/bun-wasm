@@ -310,7 +310,7 @@
       return [first, second];
     }
     static #discard(port: MessagePort) {
-      port.#closeLane(); localPorts.delete(port.#value().id); port.#state = null;
+      port.#closeLane(true); localPorts.delete(port.#value().id); port.#state = null;
     }
     // A channel whose ends live in different processes carries its packets in its own shared lane.
     #openLane(lane: BunWasm.PortLane) {
@@ -319,9 +319,11 @@
       const io = lanes.open(lane.buffer, lane.side);
       state.lane = { ...lane, io, stop: io.watch(() => internal.realTimers.setImmediate(pump)) };
     }
-    #closeLane() {
+    /** Stops reading the lane: for good when the port closes, or until a transferred port's next owner reads it. */
+    #closeLane(closed: boolean) {
       const state = this.#state;
       if (!state?.lane) return;
+      if (closed) state.lane.io.close();
       state.lane.stop(); state.lane = null;
     }
     #ensureLane() {
@@ -345,9 +347,34 @@
       });
       if (arrived && !defer && state.phase === "open") port.#accept();
     }
-    /** Sends a packet over the lane, visible to the peer's owner once commit runs; null when it must use the broker. */
+    /** Reserves a packet on the lane, visible to the peer's owner once committed; null when the lane is full. */
     #laneFrame(packet: Record<string, unknown>) {
       return this.#value().lane?.io.reserve(JSON.stringify(packet)) ?? null;
+    }
+    /** Sends this end's close behind its lane data; false when it must take the broker. A closed peer needs none. */
+    #laneClose(sent: number) {
+      const lane = this.#value().lane;
+      if (!lane) return false;
+      if (lane.io.peerClosed()) return true;
+      const frame = lane.io.reserve(JSON.stringify({ kind: "port-close", sequence: sent }));
+      frame?.commit();
+      return frame !== null;
+    }
+    /**
+     * Stages a message inside the codec transaction. A lane frame must be reserved here, before
+     * transfers detach: a full lane rejects the message rather than accept it somewhere the
+     * peer's owner cannot read it at once.
+     */
+    #stagePacket(graph: Graph, sequence: number, other: MessagePort | undefined) {
+      const state = this.#value();
+      if (other) {
+        if (internal.sharedObjects?.routes?.enabled) registerLocalTransfers(graph);
+        return null;
+      }
+      if (!state.lane) { root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph }); return null; }
+      const frame = this.#laneFrame({ kind: "port-data", sequence, graph });
+      if (!frame) throw cloneError("MessagePort lane is full: the receiver has not read 1 MiB of earlier messages");
+      return frame;
     }
     #value() { if (!this.#state) throw cloneError("MessagePort is detached"); return this.#state; }
     #snapshot(version = this.#value().version): Snapshot {
@@ -369,21 +396,21 @@
       if (!(value instanceof MessagePort)) throw invalidPort();
       const state = value.#value();
       if (state.phase !== "open") throw cloneError("Cannot transfer a closed MessagePort");
-      // Packets already on this side's lane travel in the snapshot; later ones wait there for the new owner.
-      value.#ensureLane(); MessagePort.#drainLane(value, true);
+      // Packets still on this side's lane wait there for the new owner.
+      value.#ensureLane();
       const snapshot = value.#snapshot(state.version + 1);
       return {
         snapshot,
         validate() { if (value.#state !== state || state.phase !== "open") throw cloneError("MessagePort changed during transfer"); },
-        publish() {
+        publish(toward?: string) {
           if (!internal.sharedObjects?.routes?.enabled) return;
           const { queue: _queue, lane: _lane, ...metadata } = snapshot;
-          root({ kind: "moving", snapshot: metadata, origin: route });
+          root({ kind: "moving", snapshot: metadata, origin: route, toward });
         },
         beforeCommit() { value.#attachmentWait?.(); value.#attachmentWait = null; },
         commit() {
           if (state.ref) { state.ref = false; internal.messagePortRefs--; }
-          value.#closeLane(); deleteLocalPort(state.id); value.#state = null;
+          value.#closeLane(false); deleteLocalPort(state.id); value.#state = null;
           if (internal.sharedObjects?.routes?.enabled) return;
           const { queue: _queue, lane: _lane, ...metadata } = snapshot;
           root({ kind: "moving", snapshot: metadata, origin: route });
@@ -477,15 +504,13 @@
       const plan = codec.prepare(packet, list, [state.id, state.peer]);
       const sequence = state.sent;
       const other = localPorts.get(state.peer);
-      // The lane frame becomes visible only after transfers and detachment commit.
+      const lane = other ? null : state.lane;
+      if (lane && internal.sharedObjects?.routes?.retired(state.peer)) throw cloneError("MessagePort peer is closed");
+      // The lane frame becomes visible only after transfers and detachment commit. Ports it
+      // carries stay in the custody of the lane's destination port until restored.
       const staged: { frame: { commit(): void; abort(): void } | null } = { frame: null };
-      try {
-        plan.commit(() => {
-          if (other) { if (internal.sharedObjects?.routes?.enabled) registerLocalTransfers(plan.graph); return; }
-          staged.frame = this.#laneFrame({ kind: "port-data", sequence, graph: plan.graph });
-          if (!staged.frame) root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph: plan.graph });
-        });
-      } catch (error) { staged.frame?.abort(); throw error; }
+      try { plan.commit(() => { staged.frame = this.#stagePacket(plan.graph, sequence, other); }, lane ? state.peer : undefined); }
+      catch (error) { staged.frame?.abort(); throw error; }
       staged.frame?.commit();
       state.sent++;
       if (!other) return;
@@ -552,10 +577,8 @@
       if (this.#state !== state || state.phase === "closed") return;
       if (state.peer) {
         const other = localPorts.get(state.peer);
-        const frame = other ? null : this.#laneFrame({ kind: "port-close", sequence: state.sent });
         if (other) portOps.receivePacket(other, "port-close", state.sent, undefined);
-        else if (frame) frame.commit();
-        else root({ kind: "port-close", id: state.peer, from: state.id, sequence: state.sent });
+        else if (!this.#laneClose(state.sent)) root({ kind: "port-close", id: state.peer, from: state.id, sequence: state.sent });
       }
       this.#disconnect();
     }
@@ -564,7 +587,7 @@
       if (state.phase === "closed") return;
       state.phase = "closed";
       this.#attachmentWait?.(); this.#attachmentWait = null;
-      this.#closeLane();
+      this.#closeLane(true);
       state.queue = []; state.pending.clear(); this.unref(); localPorts.delete(state.id);
       root({ kind: "closed", id: state.id });
       internal.realTimers.setImmediate(() => this.#finishClose(state));

@@ -5,7 +5,7 @@ import { brokerClients, testCleanup, tick } from "./fixtures/shared-objects/brok
 import type { Graph } from "./fixtures/shared-objects/runtime-types";
 
 const cleanup = testCleanup();
-const setup = () => brokerClients(cleanup, { lanes: true });
+const setup = (lanes = true) => brokerClients(cleanup, { lanes });
 type Client = ReturnType<ReturnType<typeof setup>["client"]>;
 /** Restores a transferred port once its shared backings are attached, as worker startup and receive do. */
 async function restore(graph: Graph, into: Client): Promise<SourcePort> {
@@ -14,8 +14,8 @@ async function restore(graph: Graph, into: Client): Promise<SourcePort> {
   if (!(port instanceof into.runtime.MessagePort)) throw new Error("Missing restored port");
   return port;
 }
-async function connection() {
-  const { broker, client } = setup(), sender = client(), receiver = client();
+async function connection(lanes = true) {
+  const { broker, client } = setup(lanes), sender = client(), receiver = client();
   const channel = new sender.runtime.MessageChannel();
   const target = await restore(sender.runtime.codec.encode(channel.port2, [channel.port2]), receiver);
   cleanup.add(() => { channel.port1.close(); target.close(); });
@@ -48,16 +48,15 @@ test("handing off the reading end keeps unread lane packets and later ones in or
   expect(sender.runtime.receiveMessageOnPort(source)).toEqual({ message: "back" });
 });
 
-test("a full lane falls back to the broker without reordering", async () => {
+test("a full lane rejects a message before anything detaches", async () => {
   const { receiver, source, target } = await connection();
-  const fill = "a".repeat(1024 * 1024 - 2048), overflow = "b".repeat(4096);
-  source.postMessage(fill); source.postMessage(overflow); source.postMessage("after");
+  const fill = "a".repeat(1024 * 1024 - 2048), buffer = new ArrayBuffer(8);
+  source.postMessage(fill);
+  expect(() => source.postMessage({ text: "b".repeat(4096), buffer }, [buffer])).toThrow("lane is full");
+  expect(buffer.byteLength).toBe(8);
   expect(receiver.runtime.receiveMessageOnPort(target)?.message).toBe(fill);
-  // The overflow took the broker, so "after" waits behind it on the receiving side.
-  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
-  for (let attempt = 0; attempt < 100 && !receiver.service.mailbox?.inspect().queued; attempt++) await tick();
-  const rest = Array.from({ length: 2 }, () => receiver.runtime.receiveMessageOnPort(target)?.message);
-  expect(rest).toEqual([overflow, "after"]);
+  source.postMessage("after");
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "after" });
 });
 
 test("a message larger than the lane is rejected before anything detaches", async () => {
@@ -88,6 +87,93 @@ test("a sender's exit cannot close the peer before the lane data it committed", 
   expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
 });
 
+for (const lanes of [true, false]) test(`a retired destination rejects a transfer before detachment, lanes=${lanes}`, async () => {
+  const { sender, receiver, source } = await connection(lanes);
+  const reply = new sender.runtime.MessageChannel(), buffer = new ArrayBuffer(8);
+  cleanup.add(() => { reply.port1.close(); reply.port2.close(); });
+  await tick(); receiver.service.close(); await tick(); await tick();
+  expect(() => source.postMessage({ buffer, port: reply.port2 }, [buffer, reply.port2])).toThrow();
+  expect(buffer.byteLength).toBe(8);
+});
+
+test("a closed destination port never takes a transfer", async () => {
+  const { sender, receiver, source, target } = await connection();
+  const reply = new sender.runtime.MessageChannel(), buffer = new ArrayBuffer(8);
+  cleanup.add(() => { reply.port1.close(); reply.port2.close(); });
+  target.close(); await tick();
+  // Rejected over the closed lane, or dropped by a source that already saw the close: never detached.
+  try { source.postMessage({ buffer, port: reply.port2 }, [buffer, reply.port2]); } catch (error) { expect(String(error)).toContain("peer is closed"); }
+  expect(buffer.byteLength).toBe(8);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+});
+
+for (const lanes of [true, false]) test(`closing a port releases transfers it never read, lanes=${lanes}`, async () => {
+  const { broker, sender, receiver, source, target } = await connection(lanes);
+  const reply = new sender.runtime.MessageChannel();
+  cleanup.add(() => { reply.port1.close(); reply.port2.close(); });
+  await tick();
+  source.postMessage({ port: reply.port2 }, [reply.port2]);
+  target.close();
+  await tick(); await tick(); sender.runtime.pump(); receiver.runtime.pump(); await tick();
+  reply.port1.close(); source.close();
+  await tick(); await tick();
+  expect(broker.inspectRoutes()).toEqual({ endpoints: 0, pending: 0, registrations: 0 });
+});
+
+test("a native detach failure leaves the lane empty and the transfers usable", async () => {
+  const { client } = setup();
+  let reject = false;
+  const sender = client({ beforeDetach() { if (reject) throw new Error("injected native rejection"); } }), receiver = client();
+  const channel = new sender.runtime.MessageChannel();
+  const target = await restore(sender.runtime.codec.encode(channel.port2, [channel.port2]), receiver);
+  cleanup.add(() => { channel.port1.close(); target.close(); });
+  const reply = new sender.runtime.MessageChannel(), buffer = new ArrayBuffer(8);
+  cleanup.add(() => { reply.port1.close(); reply.port2.close(); });
+  await tick(); reject = true;
+  expect(() => channel.port1.postMessage({ buffer, port: reply.port2 }, [buffer, reply.port2])).toThrow();
+  reject = false;
+  expect(buffer.byteLength).toBe(8);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  reply.port2.postMessage("still attached");
+  expect(sender.runtime.receiveMessageOnPort(reply.port1)).toEqual({ message: "still attached" });
+  channel.port1.postMessage("next");
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "next" });
+});
+
+test("a sender's exit keeps a port it sent over the lane for the receiver", async () => {
+  const { broker, sender, receiver, source, target } = await connection();
+  const third = new receiver.runtime.MessageChannel();
+  cleanup.add(() => third.port1.close());
+  const atSender = await restore(receiver.runtime.codec.encode(third.port2, [third.port2]), sender);
+  await tick();
+  source.postMessage(atSender, [atSender]);
+  sender.service.close(); await tick(); await tick();
+  const moved = receiver.runtime.receiveMessageOnPort(target)?.message;
+  if (!(moved instanceof receiver.runtime.MessagePort)) throw new Error("Missing returned endpoint");
+  cleanup.add(() => moved.close());
+  moved.postMessage("still authorized");
+  expect(receiver.runtime.receiveMessageOnPort(third.port1)).toEqual({ message: "still authorized" });
+  await tick();
+  expect(broker.inspectRoutes().registrations).toBe(0);
+});
+
+test("an unrelated broker sender cannot inject into a lane channel", async () => {
+  const { client } = setup(), sender = client(), receiver = client(), unrelated = client();
+  const channel = new sender.runtime.MessageChannel();
+  const graph = sender.runtime.codec.encode(channel.port2, [channel.port2]);
+  const target = await restore(graph, receiver);
+  cleanup.add(() => { channel.port1.close(); target.close(); });
+  await tick();
+  const node = graph.nodes.find(node => node[0] === "port");
+  if (!node || node[0] !== "port") throw new Error("Missing transferred endpoint snapshot");
+  unrelated.service.routes?.send({ kind: "port-data", id: node[1].id, from: node[1].peer, sequence: 0, graph: unrelated.runtime.codec.encode({ data: "unrelated", ports: [] }) });
+  await tick(); await tick();
+  expect(unrelated.service.inspect().closed).toBe(true);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  channel.port1.postMessage("authorized");
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "authorized" });
+});
+
 test("lane frames stay invisible until commit and wrap around the ring", () => {
   const buffer = createSharedLaneBuffer();
   const left = openSharedLane(buffer, 0), right = openSharedLane(buffer, 1);
@@ -109,4 +195,8 @@ test("lane frames stay invisible until commit and wrap around the ring", () => {
   expect(filled).toBe(5);
   expect(read()).toHaveLength(5);
   expect(() => left.reserve("x".repeat(1024 * 1024))).toThrow("byte limit between processes");
+  expect(left.peerClosed()).toBe(false);
+  right.close();
+  expect(left.peerClosed()).toBe(true);
+  expect(() => left.reserve("late")).toThrow("peer is closed");
 });

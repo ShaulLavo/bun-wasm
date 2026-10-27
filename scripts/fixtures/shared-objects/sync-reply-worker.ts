@@ -9,6 +9,7 @@ import type { Graph } from "./runtime-types";
 
 // esbuild's synchronous API over worker_threads with shared routes enabled: the service side
 // replies on a transferred port and then notifies; the blocked caller reads the reply once.
+// The gate holds the test thread, which runs the page broker, until the caller has received.
 const request: { owner: string; role: "caller" | "service" } = workerData;
 if (!parentPort) throw new Error("Missing native parent port");
 const host = parentPort;
@@ -17,7 +18,9 @@ const service = exportSharedObjects(request.owner, { postMessage(message, transf
   host.postMessage(message, ports);
 } });
 const sharedObjects = bindSharedObjectHost(service, { active: () => true, pending() {}, wake() {} });
-const runtime = sourcePorts({ sharedObjects });
+const runtime = sourcePorts({ sharedObjects: workerData.noLanes ? { ...sharedObjects, lanes: undefined } : sharedObjects });
+const gate = new Int32Array(workerData.gate);
+let gateRound = 0;
 const exact = readFileSync(new URL("./esbuild-run-call-sync.txt", import.meta.url), "utf8");
 const owned: SourcePort[] = [];
 const interval = setInterval(() => runtime.pump(), 1);
@@ -30,6 +33,9 @@ function serve(graph: Graph) {
     assert(value && typeof value === "object" && "sharedBuffer" in value && value.sharedBuffer instanceof SharedArrayBuffer);
     assert("id" in value && "args" in value && Array.isArray(value.args));
     const cells = new Int32Array(value.sharedBuffer);
+    const round = ++gateRound;
+    host.postMessage({ kind: "gate", round });
+    if (Atomics.load(gate, 0) < round) Atomics.wait(gate, 0, round - 1, 2000);
     reply.postMessage({ id: value.id, resolve: value.args[0] });
     Atomics.add(cells, 0, 1); Atomics.notify(cells, 0, Infinity);
   });
@@ -44,9 +50,12 @@ function caller() {
     const runCallSync = runInNewContext(`${exact}; runCallSync;`, { nextID: 0, SharedArrayBuffer, Int32Array, Atomics, worker, worker_threads2: runtime, mainPort: reply.port1, applyProperties() {} });
     const results: unknown[] = [];
     try {
-      for (const value of ["first", "second", "third"]) results.push(runCallSync("transform", [value]));
+      for (const value of ["first", "second", "third"]) {
+        results.push(runCallSync("transform", [value]));
+        Atomics.add(gate, 1, 1); Atomics.notify(gate, 1);
+      }
       host.postMessage({ kind: "result", results });
-    } catch (error) { host.postMessage({ kind: "result", results, error: String(error) }); }
+    } catch (error) { Atomics.add(gate, 1, 1); Atomics.notify(gate, 1); host.postMessage({ kind: "result", results, error: String(error) }); }
   };
 }
 let run: (() => void) | undefined;

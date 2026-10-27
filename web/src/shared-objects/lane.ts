@@ -6,9 +6,9 @@
 const atomicLoad = Atomics.load, atomicStore = Atomics.store, atomicAdd = Atomics.add, atomicNotify = Atomics.notify, atomicWaitAsync = Atomics.waitAsync;
 const NativeTextEncoder = TextEncoder, NativeTextDecoder = TextDecoder;
 const encoder = new NativeTextEncoder(), decoder = new NativeTextDecoder("utf-8", { fatal: true });
-// Per ring: write cursor, read cursor, wake signal. Cursors are byte positions modulo 2^32.
+// Per ring: write cursor, read cursor, wake signal, reader closed. Cursors are byte positions modulo 2^32.
 const ringWords = 4;
-const writeIndex = 0, readIndex = 1, signalIndex = 2;
+const writeIndex = 0, readIndex = 1, signalIndex = 2, closedIndex = 3;
 const headerBytes = 2 * ringWords * Int32Array.BYTES_PER_ELEMENT;
 const ringBytes = 1024 * 1024;
 const frameHeaderBytes = 4;
@@ -18,9 +18,13 @@ export interface SharedLane {
   readonly buffer: SharedArrayBuffer;
   /**
    * Prepares a frame toward the peer; nothing is visible until commit. Null when the peer's ring
-   * has no room now; throws DataCloneError for a frame larger than the whole ring.
+   * has no room now; throws DataCloneError for a frame larger than the whole ring or a closed peer.
    */
   reserve(text: string): { commit(): void; abort(): void } | null;
+  /** This side stops reading for good: the peer's later reservations throw. */
+  close(): void;
+  /** Whether the peer has stopped reading for good. */
+  peerClosed(): boolean;
   /** Delivers every frame committed to this side, in order. */
   drain(consume: (text: string) => void): number;
   /** Calls `ready` after frames may have arrived on this side, until the returned stop is called. */
@@ -39,6 +43,7 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1): SharedLa
   let reserved = false;
   function reserve(text: string) {
     if (reserved) return null;
+    if (atomicLoad(outbound.header, closedIndex)) throw new DOMException("MessagePort peer is closed", "DataCloneError");
     const bytes = encoder.encode(text);
     const need = frameHeaderBytes + align(bytes.byteLength);
     if (need > ringBytes) throw new DOMException(`Message exceeds the ${ringBytes - frameHeaderBytes} byte limit between processes`, "DataCloneError");
@@ -90,7 +95,11 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1): SharedLa
       atomicAdd(inbound.header, signalIndex, 1); atomicNotify(inbound.header, signalIndex);
     };
   }
-  return { buffer, reserve, drain, watch };
+  function close() {
+    atomicStore(inbound.header, closedIndex, 1);
+    atomicAdd(inbound.header, signalIndex, 1); atomicNotify(inbound.header, signalIndex);
+  }
+  return { buffer, reserve, drain, watch, close, peerClosed: () => atomicLoad(outbound.header, closedIndex) !== 0 };
 }
 
 function ring(buffer: SharedArrayBuffer, side: 0 | 1) {

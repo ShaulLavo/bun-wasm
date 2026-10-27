@@ -64,6 +64,7 @@ export function bindSharedObjectHost(service: SharedObjects, host: SharedHostLif
         if (!host.active() && (parsed.kind === "closed" || parsed.kind === "port-close")) return true;
         active(); const accepted = routes.send(parsed); if (accepted) host.wake(); return accepted;
       },
+      retired: id => routes.retired(id),
       transaction(deliver, commit) { active(); host.wake(); routes.transaction(deliver, commit); },
       tryTransaction(deliver, commit) { active(); host.wake(); return routes.tryTransaction(deliver, commit); },
       onCredit(ready) { active(); routes.onCredit(() => { if (host.active()) { ready(); host.wake(); } }); },

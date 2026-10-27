@@ -5,7 +5,8 @@ import { createSharedObjectBroker } from "../web/src/shared-objects/broker";
 
 // A reply posted before Atomics.notify must be readable by the woken caller's single
 // receiveMessageOnPort, as esbuild's transformSync expects, even when the broker is idle.
-test("a blocked caller reads a routed reply posted before the notify", async () => {
+for (const noLanes of [false, true]) test(`a blocked caller reads a reply posted before the notify while the broker is held, lanes=${!noLanes}`, async () => {
+  const gate = new Int32Array(new SharedArrayBuffer(8));
   const broker = createSharedObjectBroker();
   const workers: Worker[] = [], ports: NativeMessagePort[] = [];
   const result = Promise.withResolvers<{ kind: string; results: unknown[]; error?: string }>();
@@ -13,13 +14,19 @@ test("a blocked caller reads a routed reply posted before the notify", async () 
   try {
     const leases = { caller: broker.register(), service: broker.register() };
     const fixture = new URL("./fixtures/shared-objects/sync-reply-worker.ts", import.meta.url);
-    const caller = new Worker(fixture, { workerData: { owner: leases.caller.id, role: "caller" } });
-    const service = new Worker(fixture, { workerData: { owner: leases.service.id, role: "service" } });
+    const caller = new Worker(fixture, { workerData: { owner: leases.caller.id, role: "caller", gate: gate.buffer, noLanes } });
+    const service = new Worker(fixture, { workerData: { owner: leases.service.id, role: "service", gate: gate.buffer, noLanes } });
     workers.push(caller, service);
     function message(lease: typeof leases.caller, value: Record<string, unknown>) {
       if (value.type === "bun-shared-connect") {
         if (value.owner !== lease.id || !(value.port instanceof NativeMessagePort)) throw new Error("Invalid native shared attachment");
         ports.push(value.port); lease.attach(value.port); return;
+      }
+      if (value.kind === "gate") {
+        if (typeof value.round !== "number") throw new Error("Invalid gate round");
+        Atomics.store(gate, 0, value.round); Atomics.notify(gate, 0);
+        if (Atomics.load(gate, 1) < value.round && Atomics.wait(gate, 1, value.round - 1, 2000) === "timed-out") throw new Error("Caller failed to perform receive while broker held");
+        return;
       }
       if (value.kind === "initial") { service.postMessage({ kind: "restore", graph: value.graph }); return; }
       if (value.kind === "ready") { caller.postMessage({ kind: "run" }); return; }
@@ -31,7 +38,9 @@ test("a blocked caller reads a routed reply posted before the notify", async () 
       worker.on("error", result.reject);
       worker.once("exit", () => lease.close());
     }
-    expect(await result.promise).toEqual({ kind: "result", results: ["first", "second", "third"] });
+    const actual = await result.promise;
+    if (noLanes) { expect(actual.results).toEqual([]); expect(actual.error).toContain("Cannot destructure property"); }
+    else expect(actual).toEqual({ kind: "result", results: ["first", "second", "third"] });
     const exits = workers.map(worker => once(worker, "exit"));
     for (const worker of workers) worker.postMessage({ kind: "stop" });
     expect(await Promise.all(exits)).toEqual([[0], [0]]);

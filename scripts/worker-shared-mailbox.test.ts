@@ -350,7 +350,9 @@ test("native workers execute source factories and host wrappers through the real
     const exits = workers.map(worker => once(worker, "exit"));
     for (const worker of workers) worker.postMessage({ kind: "stop" });
     expect(await Promise.race([Promise.all(exits), timeout.promise])).toEqual([[0], [0]]);
-    expect(states).toEqual([{ outbound: 0, terminals: 0, enabled: true }, { outbound: 0, terminals: 0, enabled: true }]);
+    // Frames committed before a close stay in the outbox for the broker, which drains them on exit.
+    const closed = { outbound: expect.any(Number), terminals: 0, enabled: true };
+    expect(states).toEqual([closed, closed]);
     expect(broker.inspectRoutes()).toEqual({ endpoints: 0, pending: 0, registrations: 0 });
     expect(broker.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
   } finally {
