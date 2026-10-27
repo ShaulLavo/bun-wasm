@@ -13,8 +13,9 @@ function processWorker(message: unknown): ProcessWorker | undefined {
     !("directory" in value) || !(value.directory instanceof SharedArrayBuffer) ||
     !("identity" in value) || !(value.identity instanceof SharedArrayBuffer) ||
     !("slot" in value) || typeof value.slot !== "number" ||
-    !("pid" in value) || typeof value.pid !== "number") throw new Error("Invalid worker process transport");
-  const transport = { directory: value.directory, identity: value.identity, slot: value.slot, pid: value.pid, bindings: [], resources: [] };
+    !("pid" in value) || typeof value.pid !== "number" ||
+    !("cwd" in value) || typeof value.cwd !== "string") throw new Error("Invalid worker process transport");
+  const transport = { directory: value.directory, identity: value.identity, slot: value.slot, pid: value.pid, cwd: value.cwd, bindings: [], resources: [] };
   const { pid, parentPid, rootPid, job, jobOwner, jobLeaderPid } = workerProcessState(transport);
   return { directory: workerProcessDirectoryId(transport), pid, parentPid, rootPid, job, jobOwner, jobLeaderPid, adapter: "adapter" in message ? message.adapter : undefined };
 }
