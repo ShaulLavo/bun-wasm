@@ -1,8 +1,9 @@
 // A MessageChannel's own pair of single-producer single-consumer byte rings in one shared backing.
 // The current owner of the port on side `s` is the only reader of ring `s` and the only writer of
-// ring `1 - s`; a transfer hands both roles over with the port. A committed frame is readable by
-// the destination as soon as `write` returns, so a reply posted before a user Atomics.notify is
-// visible to the woken receiver's synchronous receive without any broker hop.
+// ring `1 - s`; a transfer hands both roles over with the port. A frame is complete and visible to
+// the destination as soon as its commit returns, so a reply posted before a user Atomics.notify
+// reaches the woken receiver's synchronous receive without any broker hop. Decoding it still needs
+// every shared backing it names: one the destination doesn't hold yet attaches through its event loop.
 const atomicLoad = Atomics.load, atomicStore = Atomics.store, atomicAdd = Atomics.add, atomicNotify = Atomics.notify, atomicWaitAsync = Atomics.waitAsync;
 const NativeTextEncoder = TextEncoder, NativeTextDecoder = TextDecoder;
 const encoder = new NativeTextEncoder(), decoder = new NativeTextDecoder("utf-8", { fatal: true });

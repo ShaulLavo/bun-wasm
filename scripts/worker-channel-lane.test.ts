@@ -22,7 +22,7 @@ async function connection(lanes = true) {
   return { broker, client, sender, receiver, source: channel.port1, target };
 }
 
-test("a packet is readable by the peer's owner as soon as postMessage returns", async () => {
+test("a complete packet is visible to the peer's owner as soon as postMessage returns", async () => {
   const { broker, sender, receiver, source, target } = await connection();
   await tick();
   source.postMessage({ answer: "42 λ 😀" });
@@ -31,6 +31,30 @@ test("a packet is readable by the peer's owner as soon as postMessage returns", 
   expect(sender.runtime.receiveMessageOnPort(source)).toEqual({ message: "reply" });
   expect(receiver.service.mailbox?.inspect().queued).toBe(0);
   expect(broker.inspectRoutes().pending).toBe(0);
+});
+
+// Limitation, not parity: a SharedArrayBuffer published with the packet attaches through the
+// receiver's event loop, so the complete frame is visible at once but decodes only after that.
+test("limitation: a fresh SharedArrayBuffer decodes after it attaches, in order and exactly once", async () => {
+  const { sender, receiver, source, target } = await connection();
+  await tick();
+  const shared = new SharedArrayBuffer(8);
+  Atomics.store(new Int32Array(shared), 0, 7);
+  source.postMessage("before"); source.postMessage({ shared, alias: shared }); source.postMessage("after");
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "before" });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  let received: { message: unknown } | undefined;
+  for (let attempt = 0; attempt < 100 && !received; attempt++) { await tick(); received = receiver.runtime.receiveMessageOnPort(target); }
+  const value = received?.message;
+  if (!value || typeof value !== "object" || !("shared" in value) || !(value.shared instanceof SharedArrayBuffer)) throw new Error("Missing shared message");
+  expect("alias" in value && value.alias).toBe(value.shared);
+  const cells = new Int32Array(value.shared);
+  expect(Atomics.load(cells, 0)).toBe(7);
+  Atomics.store(cells, 1, 9);
+  expect(Atomics.load(new Int32Array(shared), 1)).toBe(9);
+  expect(receiver.runtime.receiveMessageOnPort(target)).toEqual({ message: "after" });
+  expect(receiver.runtime.receiveMessageOnPort(target)).toBeUndefined();
+  expect(sender.runtime.receiveMessageOnPort(source)).toBeUndefined();
 });
 
 test("handing off the reading end keeps unread lane packets and later ones in order", async () => {

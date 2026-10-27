@@ -362,8 +362,8 @@
     }
     /**
      * Stages a message inside the codec transaction. A lane frame must be reserved here, before
-     * transfers detach: a full lane rejects the message rather than accept it somewhere the
-     * peer's owner cannot read it at once.
+     * transfers detach: a full lane rejects the message rather than accept it where the peer's
+     * owner cannot see the complete frame at once.
      */
     #stagePacket(graph: Graph, sequence: number, other: MessagePort | undefined) {
       const state = this.#value();
