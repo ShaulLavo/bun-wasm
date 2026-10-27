@@ -152,7 +152,7 @@ function fixtureCacheKey(template: string, files: CacheFiles, image = "20261012.
   return template.replace(/\$\{\{ (.*?) \}\}/g, (_, expression: string) => {
     if (expression === "runner.os") return "Linux";
     if (expression === "runner.arch") return "X64";
-    if (expression === "steps.homes.outputs.image") return image;
+    if (expression === "steps.host-tools.outputs.hash") return image;
     if (expression === "steps.native-inputs.outputs.hash") return "effective-native-inputs";
     if (expression === "steps.jsc-inputs.outputs.hash") return "effective-jsc-inputs";
     if (!expression.startsWith("hashFiles(")) throw new Error(`Unexpected cache expression: ${expression}`);
@@ -514,6 +514,14 @@ test("one artifact supplies all process browsers without recompiling fixtures", 
   expect(browsers).toContain("--frozen-lockfile --linker=isolated");
 });
 
+test("Rust build caches follow host tool versions, not the runner image", () => {
+  expect(rust).not.toContain("ImageVersion");
+  const step = rust.indexOf("name: Identify host build tools");
+  expect(step).toBeGreaterThan(rust.indexOf("name: Install native build tools"));
+  expect(step).toBeLessThan(rust.indexOf("id: sysroot-cache"));
+  expect(rust.match(/steps\.host-tools\.outputs\.hash/g)).toHaveLength(14);
+});
+
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
@@ -523,7 +531,7 @@ test("native cache stays bounded per input revision, and the SDK is not copied p
   expect(rust).not.toContain("github.run_attempt");
   const sdkKey = rust.split("\n").find(line => line.includes("key: wasi-sdk-"))!;
   expect(sdkKey).not.toContain("hashFiles");
-  expect(sdkKey).not.toContain("steps.homes.outputs.image");
+  expect(sdkKey).not.toContain("steps.host-tools.outputs.hash");
   expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched");
 });
 
@@ -773,7 +781,7 @@ function expandNativeKey(template: string, inputs: ReadonlyMap<string, Buffer>):
   return template.replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_whole: string, expression: string) => {
     if (expression === "runner.os") return "Linux";
     if (expression === "runner.arch") return "X64";
-    if (expression === "steps.homes.outputs.image") return "20261012.334.1";
+    if (expression === "steps.host-tools.outputs.hash") return "20261012.334.1";
     if (expression === "steps.native-inputs.outputs.hash") return "effective-native-inputs";
     if (expression === "steps.jsc-inputs.outputs.hash") return "effective-jsc-inputs";
     if (!expression.startsWith("hashFiles(")) throw new Error(`Unexpected cache expression: ${expression}`);
