@@ -93,10 +93,20 @@ test("worker bootstrap applies real flags and preloads in order without consumin
   expect(Object.hasOwn(child.context, "gc")).toBe(true);
 });
 
-for (const execArgv of [["--inspect"], ["--conditions"], ["--require"], ["--conditions=valid", "--not-supported"]]) {
-  test(`worker still rejects unsupported or incomplete execArgv: ${execArgv.join(" ")}`, () => {
+// Native Bun 1.4.4 starts each of these workers with its execArgv unchanged.
+for (const execArgv of [["--inspect"], ["--conditions"], ["--require"], ["--conditions=valid", "--not-supported"], ["--enable-source-maps"]]) {
+  test(`worker keeps flags it does not interpret, as Bun does: ${execArgv.join(" ")}`, () => {
     const parent = workerModule();
-    expect(() => new parent.implementation.Worker("", { eval: true, execArgv })).toThrow(expect.objectContaining({ code: "ERR_WORKER_INVALID_EXEC_ARGV" }));
-    expect(parent.launches).toEqual([]);
+    const child = workerModule({ ...parent.launch({ execArgv }).env, BUNWASM_WORKER_CONTROL: '{"input":12,"output":15}' });
+    child.implementation.initialize();
+    expect(parent.launches).toHaveLength(1);
+    expect(child.process.execArgv).toEqual(execArgv);
   });
 }
+
+test("a worker inherits CLI runtime flags such as --enable-source-maps", () => {
+  const parent = workerModule({}, ["--enable-source-maps", "--max-old-space-size=100"]);
+  const child = workerModule({ ...parent.launch({}).env, BUNWASM_WORKER_CONTROL: '{"input":12,"output":15}' });
+  child.implementation.initialize();
+  expect(child.process.execArgv).toEqual(["--enable-source-maps", "--max-old-space-size=100"]);
+});
