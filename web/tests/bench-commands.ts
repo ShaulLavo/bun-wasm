@@ -68,17 +68,18 @@ function cleanup(): Promise<void> {
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => void cleanup().finally(() => process.exit(130)));
 
 async function startServer(): Promise<string> {
-  const port = 4300 + Math.floor(Math.random() * 600);
+  // PORT=0 lets the server take a free port; its first line names the URL it got.
   const child = Bun.spawn(["bun", join(import.meta.dir, "../serve.ts")], {
-    env: { ...process.env, PORT: String(port) }, stdout: "pipe", stderr: "inherit",
+    env: { ...process.env, PORT: "0" }, stdout: "pipe", stderr: "inherit",
   });
   server = child;
   const reader = child.stdout.getReader();
   const { value } = await reader.read();
   reader.releaseLock();
   const line = new TextDecoder().decode(value);
-  assert.match(line, /serving .* at /, `serve.ts did not start: ${line}`);
-  return `http://127.0.0.1:${port}/`;
+  const url = / at (http:\/\/\S+) /.exec(line)?.[1];
+  assert.ok(url, `serve.ts did not start: ${line}`);
+  return url;
 }
 
 async function openPlayground(url: string, page?: Page): Promise<{ page: Page; readyMs: number }> {
