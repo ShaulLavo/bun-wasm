@@ -1,7 +1,7 @@
 //! Original native adapter for Waffle's live executable registry contract.
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -92,57 +92,8 @@ impl Executables {
         cwd: &str,
         dirs: &[(PathBuf, String)],
     ) -> Result<(wasmtime::Module, String), i32> {
-        let absolute = if executable.starts_with('/') {
-            executable.to_string()
-        } else {
-            format!("{cwd}/{executable}")
-        };
-        let mut path = PathBuf::from("/");
-        let mut remaining: VecDeque<String> =
-            absolute.split('/').skip(1).map(str::to_owned).collect();
-        let mut links = 0;
-        while let Some(component) = remaining.pop_front() {
-            // Inspect each original component, including those before `..` and trailing `/`.
-            if !matches!(entry(&path, dirs)?, Entry::Directory) {
-                return Err(NOTDIR);
-            }
-            match component.as_str() {
-                ".." => {
-                    path.pop();
-                }
-                "" | "." => {}
-                part => path.push(part),
-            }
-            if let Entry::Symlink(target) = entry(&path, dirs)? {
-                links += 1;
-                if links > 40 {
-                    return Err(-32);
-                } // WASI ELOOP.
-                path.pop();
-                if target.is_absolute() {
-                    path = PathBuf::from("/");
-                }
-                let target = target.to_str().ok_or(IO)?;
-                for part in target.split('/').rev() {
-                    remaining.push_front(part.to_owned());
-                }
-            }
-        }
-        if matches!(entry(&path, dirs)?, Entry::Directory) {
-            return Err(ACCES);
-        }
+        let (path, lexical) = walk(executable, cwd, dirs)?;
         // Match the pinned Waffle registry: a resolved alias cannot change its lexical key.
-        // Do this only after walking every original component, so missing/.. still fails.
-        let mut lexical = PathBuf::from("/");
-        for component in absolute.split('/') {
-            match component {
-                ".." => {
-                    lexical.pop();
-                }
-                "" | "." => {}
-                part => lexical.push(part),
-            }
-        }
         if path != lexical {
             return Err(ACCES);
         }
@@ -154,6 +105,150 @@ impl Executables {
             .map(|module| (module, path.to_string_lossy().into_owned()))
             .ok_or(ACCES)
     }
+
+    /// Executable access for PATH search: a registered program, or a `#!` script whose
+    /// interpreter is checked only when it runs (as Linux execve reports a bad interpreter).
+    pub fn access(&self, executable: &str, cwd: &str, dirs: &[(PathBuf, String)]) -> i32 {
+        match self.check(executable, cwd, dirs) {
+            Ok(_) => 0,
+            Err(ACCES) if script(executable, cwd, dirs).is_some() => 0,
+            Err(errno) => errno,
+        }
+    }
+
+    /// execve: a registered program runs as is. An unregistered regular file starting with `#!`
+    /// runs its interpreter with Linux's argv: interpreter, its one optional argument, the script
+    /// path as given, then the original arguments. Nesting stops at Linux's four levels (ELOOP).
+    pub fn resolve(
+        &self,
+        executable: &str,
+        cwd: &str,
+        dirs: &[(PathBuf, String)],
+        argv: Vec<String>,
+    ) -> Result<Resolved, i32> {
+        let mut executable = executable.to_owned();
+        let mut argv = argv;
+        for _ in 0..=SHEBANG_DEPTH {
+            let error = match self.check(&executable, cwd, dirs) {
+                Ok((module, path)) => return Ok(Resolved { module, path, argv }),
+                Err(error) => error,
+            };
+            let Some((interpreter, argument)) = (error == ACCES)
+                .then(|| script(&executable, cwd, dirs))
+                .flatten()
+            else {
+                return Err(error);
+            };
+            argv = std::iter::once(interpreter.clone())
+                .chain(argument)
+                .chain(std::iter::once(executable))
+                .chain(argv.into_iter().skip(1))
+                .collect();
+            executable = interpreter;
+        }
+        Err(-32) // WASI ELOOP.
+    }
+}
+
+/// The program a spawn admits, with the argv a `#!` chain produced.
+pub struct Resolved {
+    pub module: wasmtime::Module,
+    pub path: String,
+    pub argv: Vec<String>,
+}
+
+/// Linux's BINPRM_BUF_SIZE and BINPRM_MAX_RECURSION.
+const SHEBANG_BYTES: u64 = 256;
+const SHEBANG_DEPTH: usize = 4;
+
+/// The interpreter and optional argument of a regular `#!` file, following symlinks.
+fn script(
+    executable: &str,
+    cwd: &str,
+    dirs: &[(PathBuf, String)],
+) -> Option<(String, Option<String>)> {
+    let (path, _) = walk(executable, cwd, dirs).ok()?;
+    let mut head = Vec::new();
+    File::open(host(&path, dirs)?)
+        .ok()?
+        .take(SHEBANG_BYTES)
+        .read_to_end(&mut head)
+        .ok()?;
+    let line = head.strip_prefix(b"#!")?;
+    let line = &line[..line.iter().position(|&b| b == b'\n').unwrap_or(line.len())];
+    let line = std::str::from_utf8(line)
+        .ok()?
+        .trim_matches([' ', '\t', '\r']);
+    let (interpreter, argument) = line
+        .split_once([' ', '\t'])
+        .map_or((line, ""), |(interpreter, rest)| {
+            (interpreter, rest.trim_matches([' ', '\t']))
+        });
+    if interpreter.is_empty() {
+        return None;
+    }
+    Some((
+        interpreter.to_owned(),
+        (!argument.is_empty()).then(|| argument.to_owned()),
+    ))
+}
+
+/// The guest path after following every component and symlink, and its lexical form.
+fn walk(
+    executable: &str,
+    cwd: &str,
+    dirs: &[(PathBuf, String)],
+) -> Result<(PathBuf, PathBuf), i32> {
+    let absolute = if executable.starts_with('/') {
+        executable.to_string()
+    } else {
+        format!("{cwd}/{executable}")
+    };
+    let mut path = PathBuf::from("/");
+    let mut remaining: VecDeque<String> = absolute.split('/').skip(1).map(str::to_owned).collect();
+    let mut links = 0;
+    while let Some(component) = remaining.pop_front() {
+        // Inspect each original component, including those before `..` and trailing `/`.
+        if !matches!(entry(&path, dirs)?, Entry::Directory) {
+            return Err(NOTDIR);
+        }
+        match component.as_str() {
+            ".." => {
+                path.pop();
+            }
+            "" | "." => {}
+            part => path.push(part),
+        }
+        if let Entry::Symlink(target) = entry(&path, dirs)? {
+            links += 1;
+            if links > 40 {
+                return Err(-32);
+            } // WASI ELOOP.
+            path.pop();
+            if target.is_absolute() {
+                path = PathBuf::from("/");
+            }
+            let target = target.to_str().ok_or(IO)?;
+            for part in target.split('/').rev() {
+                remaining.push_front(part.to_owned());
+            }
+        }
+    }
+    if matches!(entry(&path, dirs)?, Entry::Directory) {
+        return Err(ACCES);
+    }
+    // Only after walking every original component, so missing/.. still fails.
+    let mut lexical = PathBuf::from("/");
+    for component in absolute.split('/') {
+        match component {
+            ".." => {
+                lexical.pop();
+            }
+            "" | "." => {}
+            part => lexical.push(part),
+        }
+    }
+    Ok((path, lexical))
 }
 
 impl Drop for Executables {
@@ -178,17 +273,7 @@ fn entry(path: &Path, dirs: &[(PathBuf, String)]) -> Result<Entry, i32> {
     {
         return Ok(Entry::Directory);
     }
-    let mapped = dirs
-        .iter()
-        .filter_map(|(host, guest)| {
-            let guest = Path::new(guest);
-            path.strip_prefix(guest)
-                .ok()
-                .map(|rest| (guest.components().count(), host.join(rest)))
-        })
-        .max_by_key(|(length, _)| *length)
-        .map(|(_, host)| host);
-    let host = mapped.ok_or(NOENT)?;
+    let host = host(path, dirs).ok_or(NOENT)?;
     let metadata = fs::symlink_metadata(&host).map_err(map_io)?;
     if metadata.is_symlink() {
         // Interpret targets in the guest namespace, never against the host's root filesystem.
@@ -198,6 +283,19 @@ fn entry(path: &Path, dirs: &[(PathBuf, String)]) -> Result<Entry, i32> {
     } else {
         Ok(Entry::File)
     }
+}
+
+/// The host file behind a guest path: its deepest mount.
+fn host(path: &Path, dirs: &[(PathBuf, String)]) -> Option<PathBuf> {
+    dirs.iter()
+        .filter_map(|(host, guest)| {
+            let guest = Path::new(guest);
+            path.strip_prefix(guest)
+                .ok()
+                .map(|rest| (guest.components().count(), host.join(rest)))
+        })
+        .max_by_key(|(length, _)| *length)
+        .map(|(_, host)| host)
 }
 
 fn map_io(error: io::Error) -> i32 {

@@ -175,7 +175,8 @@ impl Runtime {
     }
     /// bash-web's shell guest at /bin/sh and /bin/bash, for package scripts, Bun.$ and bun exec.
     pub fn register_shell(&self, module: &wasmtime::Module) -> anyhow::Result<()> {
-        self.executables.register(&executables::SHELL_PATHS, module)?;
+        self.executables
+            .register(&executables::SHELL_PATHS, module)?;
         Ok(())
     }
     pub fn module_for<'a>(
@@ -367,10 +368,7 @@ impl Processes {
         let thread = std::thread::Builder::new()
             .name("bun-wasm-access".into())
             .spawn(move || {
-                let result = runtime
-                    .executables
-                    .check(&path, &cwd, &runtime.dirs)
-                    .map_or_else(|error| error, |_| 0);
+                let result = runtime.executables.access(&path, &cwd, &runtime.dirs);
                 let mut state = slot.lock().unwrap();
                 if matches!(*state, AccessState::Pending) {
                     *state = AccessState::Complete(result);
@@ -556,7 +554,12 @@ impl Processes {
         let startup = self
             .runtime
             .executables
-            .check(&request.executable, &request.cwd, &self.runtime.dirs)
+            .resolve(
+                &request.executable,
+                &request.cwd,
+                &self.runtime.dirs,
+                request.argv.clone(),
+            )
             .map_err(|errno| match errno {
                 NOENT | ACCES | NOTDIR | -45 | -48 | AGAIN | IO => errno,
                 PERM => ACCES,
@@ -628,7 +631,11 @@ impl Processes {
                         drop(fds);
                         cancellation.select(FinalOutcome::StartFailed(-errno))
                     }
-                    Ok((module, executable)) => {
+                    Ok(executables::Resolved {
+                        module,
+                        path: executable,
+                        argv,
+                    }) => {
                         let stdio = Stdio {
                             fds,
                             pid,
@@ -638,7 +645,7 @@ impl Processes {
                             crate::run_module_instance(
                                 runtime.clone(),
                                 &module,
-                                request.argv,
+                                argv,
                                 {
                                     let mut env = request.env;
                                     env.insert("BUNWASM_EXEC_PATH".into(), executable);
