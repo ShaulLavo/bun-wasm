@@ -97,7 +97,7 @@ if [[ $build == 1 && $update == 0 && $engine != browser ]]; then
 fi
 # Package scripts, Bun.$ and bun exec run in bash-web's shell at /bin/sh and /bin/bash.
 shell_wasm="${BUN_WASM_SHELL:-$root/dist/bash-web-shell.wasm}"
-if [[ $engine != browser && ! -f "$shell_wasm" ]]; then
+if [[ $update == 0 && $engine != browser && ! -f "$shell_wasm" ]]; then
   echo "missing $shell_wasm; run scripts/build-bash-web-shell.sh"
   exit 1
 fi
