@@ -30,6 +30,9 @@ test("Prisma's bundled tmp module can read process binding constants", () => {
   expect(result.fsIdentity).toBe(true);
   expect(result.osIdentity).toBe(true);
   expect(result.bindingIdentity).toBe(true);
+  for (const name of ["crypto", "zlib"]) {
+    expect(runInContext(`process.binding("constants").${name} === fixtureRequire("node:${name}").constants`, context)).toBe(true);
+  }
   expect(() => runInContext('process.binding("missing")', context)).toThrow("No such module: missing");
 });
 

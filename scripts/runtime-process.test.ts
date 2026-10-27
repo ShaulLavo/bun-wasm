@@ -25,6 +25,8 @@ function originalSyntax(text: string): string {
     [/  function validateCursorCallback[\s\S]*?(?=  \/\/ stdout\/stderr:)/g, "", 1],
     [/      clearLine,\n      clearScreenDown,\n      cursorTo,\n      moveCursor,\n/g, "", 1],
     [/\n  let execveWarned = false;\n/g, "\n", 1],
+    [/  let bindingConstants\s*;\n\n  function constantsBinding\(\) \{[\s\S]*?\n  \}\n/g, "", 1],
+    [/      if \(name === "constants"\) return constantsBinding\(\);\n/g, "", 1],
     [/\n    execve\(\) \{[\s\S]*?\n    \},/g, "", 1],
     [/    noDeprecation: false,\n/g, "", 1],
     [/      if \(name === "DeprecationWarning" && process\.noDeprecation\) return;\n/g, "", 1],

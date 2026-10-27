@@ -1,0 +1,18 @@
+import assert from "node:assert/strict";
+import { constants as fs } from "node:fs";
+import { constants as os } from "node:os";
+import { constants as crypto } from "node:crypto";
+import { constants as zlib } from "node:zlib";
+
+const getBinding = Reflect.get(process, "binding");
+assert.ok(typeof getBinding === "function");
+const constants: unknown = getBinding.call(process, "constants");
+assert.ok(constants !== null && typeof constants === "object");
+assert.equal(Reflect.get(constants, "fs"), fs);
+assert.equal(Reflect.get(constants, "os"), os);
+assert.equal(Reflect.get(constants, "crypto"), crypto);
+assert.equal(Reflect.get(constants, "zlib"), zlib);
+assert.equal(getBinding.call(process, "constants"), constants);
+assert.equal(fs.O_CREAT | fs.O_EXCL | fs.O_RDWR, 194);
+assert.throws(() => getBinding.call(process, "missing"), /No such module: missing/);
+console.log("PASS process constants binding");
