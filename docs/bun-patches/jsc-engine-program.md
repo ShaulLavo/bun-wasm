@@ -61,9 +61,8 @@ release tag, URL, or hash is supplied by this source checkpoint.
 Real PIC/native C++ closure, process-clock members, shared stack and allocator,
 constructors, pointer spilling, Binaryen finalization, GC, promises, callback
 reentry, and native/Node/browser admission remain separate actual-pair gates.
-The pre-existing `array_items` getter/allocation/GC rooting risk remains
-unreproduced and unchanged. Source review and synthetic controls do not resolve
-that risk or establish a real-pair pass.
+Captured-value roots are described below. Source review and synthetic controls
+do not establish a real-pair pass.
 
 ## Captured values and immediate native error reporting
 
@@ -95,3 +94,20 @@ array item, object identity/handled continuation with real GC, primitive
 wrapper/fatal exit, and the existing errors-in-handler fallback. They are
 staged until an actual JSC test side is admitted; their presence or typecheck
 is not a runtime pass or production artifact qualification.
+
+## WebAssembly memory view adapters
+
+The original `cpp/helpers.cpp` and `src/sys.rs` adapters expose WebKit's
+`ArrayBuffer::createFromBytes`, `makeWasmMemory`, `isWasmMemory`, and `detach`
+through the JSC engine trait. The upstream reference is the same pinned
+WebKit `Source/JavaScriptCore/runtime/ArrayBuffer.{h,cpp}` and
+`JSArrayBuffer.h`; no implementation was copied. The external bytes remain
+owned by the common core's Wasmi store, and the adapter's deallocator does
+not free them. The WebAssembly-memory flag blocks user transfer while the
+polyfill detaches an older growth generation before exposing its replacement.
+
+The shared engine value native accepts a memory resource identity and obtains
+a bounds-checked span from core; JavaScript does not supply an address. These
+are original repository adapters. Their lifetime, session-end, growth and
+reentry requirements are tested on actual engine pairs separately from the
+out-of-process mirror harness in `tests/wasm-tables`.
