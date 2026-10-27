@@ -520,6 +520,7 @@ test("the WASI lint probe cannot dirty release build timestamps", () => {
   const gates = rust.indexOf("bun run quality --native");
   const restore = rust.indexOf("bun scripts/quality-input-times.ts", gates);
   expect(restore).toBeGreaterThan(gates);
+  expect(restore).toBeLessThan(rust.indexOf("cargo test --locked --release", gates));
   expect(restore).toBeLessThan(rust.indexOf("cargo build --release", gates));
 });
 
@@ -897,8 +898,9 @@ test("ordered producers keep every blocking native command and save JSC before n
   for (const prerequisite of ["Build patched WASI sysroot", "Preserve unchanged build-script input timestamps", "Configure private JSC build paths", "id: jsc-prebuild-cache", "id: jsc-cargo-cache"]) {
     expect(before).toContain(prerequisite);
   }
-  const native = nativeScript() + workflowString(workflowField(nativeWorkflowStep("name", "Build native fixtures after the cache checkpoint"), "run"));
-  const commands = ["bun run quality --native", "cargo test --locked", "bun scripts/quality-input-times.ts", "cargo build --release --locked -j 2 -p bunwasm-host", "guest-build-receipt.ts inputs quickjs", "CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh", "guest-build-receipt.ts write dist/bun.wasm", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts", "bun tests/install/root-overrides.ts"];
+  const native = nativeScript() + ["Build native fixtures after the cache checkpoint", "Blocking native fixture checks"]
+    .map(name => workflowString(workflowField(nativeWorkflowStep("name", name), "run"))).join("");
+  const commands = ["bun run quality --native", "bun scripts/quality-input-times.ts", "cargo test --locked", "cargo build --release --locked -j 2 -p bunwasm-host", "guest-build-receipt.ts inputs quickjs", "CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh", "guest-build-receipt.ts write dist/bun.wasm", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts", "bun tests/install/root-overrides.ts"];
   const positions = commands.map(command => native.indexOf(command));
   expect(positions).toEqual(positions.toSorted((a, b) => a - b));
   for (const command of commands) expect(native.split(command)).toHaveLength(2);
@@ -1111,3 +1113,41 @@ test("a failed diagnostic display cannot replace the real prebuild exit status",
     expect(result.status).toBe(42);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+test("the JSC guest builds once in the background, overlapping only other builds", () => {
+  const start = rust.indexOf("name: Start the JSC Cargo guest build");
+  const wait = rust.indexOf("name: Build the JSC Cargo guest\n");
+  expect(start).toBeGreaterThan(rust.indexOf("name: Save the native quality checkpoint"));
+  expect(start).toBeGreaterThan(rust.indexOf("name: Install the Web host dependencies"));
+  expect(start).toBeLessThan(rust.indexOf("name: Build native fixtures after the cache checkpoint"));
+  expect(wait).toBeGreaterThan(rust.indexOf("name: Build one host-engine guest"));
+  expect(wait).toBeLessThan(rust.indexOf("name: Blocking native fixture checks"));
+  expect(wait).toBeLessThan(rust.indexOf("name: Build the single tools fixture"));
+  expect(rust.match(/bash scripts\/build-bun-jsc\.sh/g)).toHaveLength(1);
+  const launch = workflowString(workflowField(nativeWorkflowStep("name", "Start the JSC Cargo guest build"), "run"));
+  expect(launch).toContain("setsid nice -n 19 bash -c");
+  expect(launch).toContain("< /dev/null &");
+});
+
+for (const [label, status, expected] of [
+  ["a finished build passes", "0", 0], ["a failed build fails", "3", 1],
+  ["a build that died without a status fails", undefined, 1],
+] satisfies [string, string | undefined, number][]) {
+  test(`JSC guest wait: ${label}`, () => {
+    const script = workflowString(workflowField(nativeWorkflowStep("name", "Build the JSC Cargo guest"), "run"));
+    const directory = mkdtempSync(join(tmpdir(), "bun-wasm-jsc-guest-wait-"));
+    try {
+      const state = join(directory, "jsc-guest");
+      mkdirSync(state);
+      writeFileSync(join(state, "build.log"), "background build log\n");
+      // Above Linux's largest pid_max, so the recorded build process is gone.
+      writeFileSync(join(state, "pid"), String(2 ** 22 + 1));
+      if (status !== undefined) writeFileSync(join(state, "status"), `${status}\n`);
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", script], { env: { ...process.env, RUNNER_TEMP: directory }, encoding: "utf8", timeout: 5000 });
+      expect(result.status).toBe(expected);
+      expect(result.stdout).toContain("background build log");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}
