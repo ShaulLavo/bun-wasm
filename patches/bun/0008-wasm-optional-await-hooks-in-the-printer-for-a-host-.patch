@@ -1,7 +1,7 @@
 From 4ceda2c2868d3a7703c7737ddd9de7244ec384df Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 09:15:42 +0300
-Subject: [PATCH 08/12] wasm: optional await hooks in the printer for a host
+Subject: [PATCH 08/14] wasm: optional await hooks in the printer for a host
  engine without AsyncContext
 
 BUNWASM_AWAIT_HOOKS (off by default) prints `await x` as

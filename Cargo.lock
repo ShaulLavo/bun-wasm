@@ -1335,7 +1335,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-build"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "bitflags",
  "bstr",
@@ -1364,14 +1364,14 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-bun-jsc"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "bunwasm-bun-jsc-macros",
 ]
 
 [[package]]
 name = "bunwasm-bun-jsc-macros"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -1379,25 +1379,31 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-cli"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "bunwasm-build",
  "bunwasm-glue",
  "bunwasm-runtime",
  "bunwasm-transpiler",
- "serde_json",
 ]
 
 [[package]]
 name = "bunwasm-crypto-sys"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "cc",
 ]
 
 [[package]]
+name = "bunwasm-engine-quickjs"
+version = "0.0.53"
+dependencies = [
+ "rquickjs",
+]
+
+[[package]]
 name = "bunwasm-glue"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "bstr",
  "bun_ast",
@@ -1413,7 +1419,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-host"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1427,6 +1433,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "wasmparser 0.240.0",
  "wasmtime",
  "wasmtime-wasi",
  "zstd",
@@ -1434,11 +1441,11 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-jsc"
-version = "0.0.28"
+version = "0.0.53"
 
 [[package]]
 name = "bunwasm-lint-native"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "serde_json",
  "zstd-sys",
@@ -1446,19 +1453,22 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-posix"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "bunwasm-runtime"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "aes",
  "aes-kw",
  "bun_brotli_sys",
+ "bun_core",
  "bun_glob",
+ "bun_node_path",
+ "bun_paths",
  "bun_semver",
  "bun_sys",
  "bun_wyhash",
@@ -1468,6 +1478,7 @@ dependencies = [
  "bunwasm-jsc",
  "bunwasm-posix",
  "bunwasm-semver",
+ "bytemuck",
  "cbc",
  "cc",
  "ctr",
@@ -1487,7 +1498,6 @@ dependencies = [
  "pbkdf2",
  "pkcs8",
  "rand_core 0.6.4",
- "rquickjs",
  "serde_json",
  "sha1",
  "sha2",
@@ -1503,7 +1513,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-semver"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "bstr",
  "bun_core",
@@ -1513,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-tools"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "bun_alloc",
  "bun_ast",
@@ -1532,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "bunwasm-transpiler"
-version = "0.0.28"
+version = "0.0.53"
 dependencies = [
  "bun_alloc",
  "bun_ast",
@@ -2464,10 +2474,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
 dependencies = [
  "futures-core",
- "futures-io",
  "futures-sink",
  "futures-task",
- "memchr",
  "pin-project-lite",
  "slab",
 ]
@@ -3571,9 +3579,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "futures-channel",
  "futures-core",
- "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -3737,9 +3743,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -4874,9 +4880,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]

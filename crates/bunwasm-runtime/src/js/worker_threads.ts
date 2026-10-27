@@ -13,7 +13,9 @@
   const messagePayloads = new WeakMap<Event, unknown>();
   const channels = new Map<string, Set<BroadcastChannel>>();
   const localPorts = new Map<string, MessagePort>();
-  const children = new Map<number, { ref: boolean; send(frame: unknown): void; pump(): boolean; event(frame: Record<string, unknown>): void }>();
+  const deleteLocalPort = localPorts.delete.bind(localPorts);
+  let restoredPorts: MessagePort[] | null = null;
+  const children = new Map<number, { ref: boolean; send(frame: unknown): void; pump(): boolean; watch(): Uint8Array; event(frame: Record<string, unknown>): void }>();
   const owners = new Map<string, { owner: Route | null; origin: Route; version: number; peer: string | null; sent: number; ready: boolean }>();
   const pending = new Map<string, Record<string, unknown>[]>();
   const members = new Map<string, { route: Route; group: string }>();
@@ -21,9 +23,11 @@
   let nextWorker = 0;
   let applyingEnv = false;
   let initialized = false;
+  let restoringLocally = false;
   let parentPort: MessagePort | null = null;
   let parentChannel: BunWasm.WorkerChannel | null = null;
   const config = workerConfig(process.env.BUNWASM_WORKER_INIT);
+  const controlFds = process.env.BUNWASM_WORKER_CONTROL;
   const route = config?.route || [];
   const threadId = route.reduce((parent, counter) => (parent + counter) * (parent + counter + 1) / 2 + counter + 1, 0);
   const envGroup = config?.envGroup || "root";
@@ -94,6 +98,11 @@
     child?.send({ kind: "down", path, body });
   }
   function root(body: Record<string, unknown>) {
+    const routes = internal.sharedObjects?.routes;
+    if (routes?.enabled && (body.kind === "bind" || body.kind === "moving" || body.kind === "port-data" || body.kind === "port-close" || body.kind === "closed")) {
+      if (!routes.send(body)) throw cloneError("Shared route mailbox is full");
+      return;
+    }
     if (route.length) { parentChannel?.send({ kind: "up", body }); return; }
     rootCommand(body);
   }
@@ -124,6 +133,24 @@
       if (!Array.isArray(node) || node[0] !== "port") continue;
       own(snapshotRecord(node[1]), owner, owner, false);
     }
+  }
+  function registerLocalTransfers(graph: Graph) {
+    for (const node of graph.nodes) {
+      if (node[0] === "port") registerLocalPort(node[1]);
+    }
+  }
+  function registerLocalPort(snapshot: Omit<Snapshot, "queue">) {
+    root({ kind: "bind", snapshot, owner: route });
+    for (const [, graph] of snapshot.pending) registerLocalTransfers(graph);
+  }
+  function discardPendingTransfers(graph: Graph) {
+    for (const node of graph.nodes) {
+      if (node[0] === "port") discardPendingPort(node[1]);
+    }
+  }
+  function discardPendingPort(snapshot: Omit<Snapshot, "queue">) {
+    root({ kind: "closed", id: snapshot.id });
+    for (const [, graph] of snapshot.pending) discardPendingTransfers(graph);
   }
   function routePacket(body: Record<string, unknown>) {
     if (typeof body.id !== "string") return;
@@ -193,14 +220,37 @@
       return;
     }
     if (body.kind === "broadcast" && typeof body.name === "string") {
-      for (const channel of channels.get(body.name) || []) BroadcastChannel.receive(channel, codec.decode(body.graph));
+      for (const channel of channels.get(body.name) || []) BroadcastChannel.receive(channel, strictCodec.decode(body.graph));
       return;
     }
     if (typeof body.child === "number") { children.get(body.child)?.event(body); return; }
     throw new Error("Unknown worker delivery");
   }
+  function mailboxDelivery(body: Record<string, unknown>) {
+    const routes = internal.sharedObjects?.routes;
+    if (!routes || typeof body.receipt !== "string") throw new Error("Missing mailbox receipt");
+    if (typeof body.id !== "string") throw new Error("Invalid mailbox target");
+    if (!localPorts.has(body.id)) return routes.send({ kind: "returned", receipt: body.receipt });
+    direct(body);
+    return routes.send({ kind: "received", receipt: body.receipt });
+  }
+  function decodeReceived(graph: Graph) {
+    const routes = internal.sharedObjects?.routes;
+    if (!routes?.enabled || restoringLocally) return messagePacket(codec.decode(graph));
+    if (!routes.tryTransaction(() => registerLocalTransfers(graph), () => {})) return null;
+    const created: MessagePort[] = [];
+    restoredPorts = created; restoringLocally = true;
+    try { return messagePacket(codec.decode(graph)); }
+    catch (error) { for (const port of created) portOps.discard(port); discardPendingTransfers(graph); throw error; }
+    finally { restoredPorts = null; restoringLocally = false; }
+  }
   function pump() {
-    let progress = parentChannel?.pump(incoming) || false;
+    const shared = internal.sharedObjects;
+    const drained = shared?.routes?.enabled ? shared.mailbox?.drain(bytes => mailboxDelivery(record(JSON.parse(native.utf8Decode(bytes))))) || 0 : 0;
+    if (drained) shared?.routes?.credit();
+    for (const port of localPorts.values()) portOps.retry(port);
+    let progress = Boolean(drained);
+    progress = parentChannel?.pump(incoming) || progress;
     for (const child of Array.from(children.values())) progress = child.pump() || progress;
     return progress;
   }
@@ -222,11 +272,12 @@
     #state: PortState | null;
     #webListeners = new Map<EventListenerOrEventListenerObject, Set<boolean>>();
     #onmessage: ((event: MessageEvent) => unknown) | null = null;
+    #attachmentWait: (() => void) | null = null;
     onmessageerror: ((event: MessageEvent) => unknown) | null = null;
     constructor(key: object, snapshot?: Snapshot) {
       super();
-      if (key !== token) throw new TypeError("Illegal constructor");
-      const id = `${routeKey(route)}:${nextPort++}`;
+      if (key !== token) throw Object.assign(new TypeError("Illegal constructor"), { code: "ERR_CONSTRUCT_CALL_INVALID" });
+      const id = `${internal.sharedObjects?.routes?.enabled ? internal.sharedObjects.routes.owner : routeKey(route)}:${nextPort++}`;
       const value = snapshot || { id, peer: null, version: 0, sent: 0, received: 0, queue: [], pending: [], closing: null, closed: false };
       this.#state = { ...value, pending: new Map(value.pending), peerClosing: value.closing,
         phase: value.closed ? "closed" : "open", batch: null, started: false, ref: false, scheduled: false };
@@ -241,7 +292,16 @@
     static #pair(): [MessagePort, MessagePort] {
       const first = new MessagePort(token); const second = new MessagePort(token);
       first.#value().peer = second.#value().id; second.#value().peer = first.#value().id;
-      first.#bind(); second.#bind(); return [first, second];
+      const bind = () => { first.#bind(); second.#bind(); };
+      try {
+        const routes = internal.sharedObjects?.routes;
+        if (routes?.enabled) routes.transaction(bind, () => {});
+        else bind();
+      } catch (error) { MessagePort.#discard(first); MessagePort.#discard(second); throw error; }
+      return [first, second];
+    }
+    static #discard(port: MessagePort) {
+      localPorts.delete(port.#value().id); port.#state = null;
     }
     #value() { if (!this.#state) throw cloneError("MessagePort is detached"); return this.#state; }
     #snapshot(version = this.#value().version): Snapshot {
@@ -249,8 +309,14 @@
       return { id: state.id, peer: state.peer, version, sent: state.sent, received: state.received,
         queue: state.queue.slice(), pending: Array.from(state.pending), closing: state.peerClosing, closed: state.phase === "closed" };
     }
-    #bind() { const { queue, ...snapshot } = this.#snapshot(); root({ kind: "bind", snapshot, owner: route }); }
-    static #restore(snapshot: Snapshot) { return new MessagePort(token, snapshot); }
+    #bind() {
+      if (restoringLocally) return;
+      const { queue: _queue, ...snapshot } = this.#snapshot(); root({ kind: "bind", snapshot, owner: route });
+    }
+    static #restore(snapshot: Snapshot) {
+      const port = new MessagePort(token, snapshot);
+      restoredPorts?.push(port); return port;
+    }
     static #activate(value: unknown) { if (!(value instanceof MessagePort)) throw invalidPort(); value.#bind(); value.#accept(); }
     static #prepare(value: unknown): BunWasm.PortTransfer {
       if (!(value instanceof MessagePort)) throw invalidPort();
@@ -260,9 +326,17 @@
       return {
         snapshot,
         validate() { if (value.#state !== state || state.phase !== "open") throw cloneError("MessagePort changed during transfer"); },
+        publish() {
+          if (!internal.sharedObjects?.routes?.enabled) return;
+          const { queue: _queue, ...metadata } = snapshot;
+          root({ kind: "moving", snapshot: metadata, origin: route });
+        },
+        beforeCommit() { value.#attachmentWait?.(); value.#attachmentWait = null; },
         commit() {
-          value.unref(); localPorts.delete(state.id); value.#state = null;
-          const { queue, ...metadata } = snapshot;
+          if (state.ref) { state.ref = false; internal.messagePortRefs--; }
+          deleteLocalPort(state.id); value.#state = null;
+          if (internal.sharedObjects?.routes?.enabled) return;
+          const { queue: _queue, ...metadata } = snapshot;
           root({ kind: "moving", snapshot: metadata, origin: route });
         },
       };
@@ -273,7 +347,7 @@
       port.#maybeClose();
       return { message };
     }
-    static #receivePacket(port: MessagePort, kind: string, sequence: number, graph: unknown) {
+    static #receivePacket(port: MessagePort, kind: string, sequence: number, graph: unknown, defer = false) {
       const state = port.#state;
       if (!state || state.phase === "closed") return;
       if (kind === "port-close") { state.peerClosing = sequence; port.#accept(); return; }
@@ -282,18 +356,32 @@
         const value = record(graph);
         if (!Array.isArray(value.nodes) || typeof value.root !== "number") throw new Error("Invalid graph");
         state.pending.set(sequence, graph as Graph);
-        port.#accept();
+        if (!defer) port.#accept();
       } catch (error) { internal.realTimers.setImmediate(() => port.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
     }
     #accept() {
       const state = this.#value();
-      while (state.pending.has(state.received)) {
-        const graph = state.pending.get(state.received);
-        state.pending.delete(state.received++);
-        state.queue.push(messagePacket(codec.decode(graph)));
-      }
+      this.#attachmentWait?.(); this.#attachmentWait = null;
+      while (this.#acceptNext(state)) { /* Keep contiguous messages in sequence order. */ }
       this.#schedule();
       this.#maybeClose();
+    }
+    #acceptNext(state: PortState): boolean {
+      const graph = state.pending.get(state.received);
+      if (!graph || state.phase !== "open") return false;
+      try {
+        this.#attachmentWait = codec.wait(graph, () => this.#retryAttachments());
+        if (this.#attachmentWait) return false;
+        const decoded = decodeReceived(graph);
+        if (!decoded) return false;
+        state.queue.push(decoded);
+      } catch (error) { internal.realTimers.setImmediate(() => this.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
+      state.pending.delete(state.received++);
+      return true;
+    }
+    #retryAttachments() {
+      if (this.#state?.phase !== "open") return;
+      this.#accept();
     }
     #maybeClose() {
       const state = this.#state;
@@ -333,12 +421,20 @@
       if (!state || state.phase !== "open" || !state.peer) return;
       const list = transfers(transfer);
       const packet = { data: value, ports: list.filter(item => item instanceof MessagePort) };
-      const graph = codec.encode(packet, list, [state.id, state.peer]);
-      const sequence = state.sent++;
+      const plan = codec.prepare(packet, list, [state.id, state.peer]);
+      const sequence = state.sent;
       const other = localPorts.get(state.peer);
-      if (other) { portOps.receivePacket(other, "port-data", sequence, graph); return; }
-      root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph });
+      plan.commit(() => {
+        if (!other) root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph: plan.graph });
+        else if (internal.sharedObjects?.routes?.enabled) registerLocalTransfers(plan.graph);
+      });
+      state.sent++;
+      if (!other) return;
+      restoringLocally = Boolean(internal.sharedObjects?.routes?.enabled);
+      try { portOps.receivePacket(other, "port-data", sequence, plan.graph); }
+      finally { restoringLocally = false; }
     }
+
     #schedule() {
       const state = this.#state;
       if (!state || state.phase !== "open" || !state.started || state.scheduled || state.batch || !state.queue.length) return;
@@ -376,24 +472,38 @@
     hasRef() { return this.#state?.ref || false; }
     close(callback?: () => void) {
       if (typeof callback === "function") this.once("close", callback);
+      this.#beginClose();
+    }
+    #beginClose() {
       const state = this.#state;
       if (!state || state.phase !== "open") return;
-      state.phase = "closing"; state.queue = []; state.pending.clear(); this.unref();
+      state.phase = "closing";
+      this.#attachmentWait?.(); this.#attachmentWait = null;
+      for (const graph of state.pending.values()) discardPendingTransfers(graph);
+      MessagePort.#closeQueuedPorts(state.queue);
+      state.queue = []; state.pending.clear(); this.unref();
       if (!state.batch) internal.realTimers.setImmediate(() => this.#finishLocalClose(state));
+    }
+    static #closeQueuedPorts(queue: unknown[]) {
+      for (const value of queue) {
+        for (const port of messagePacket(value).ports) port.#beginClose();
+      }
     }
     #finishLocalClose(state: PortState) {
       if (this.#state !== state || state.phase === "closed") return;
-      this.#disconnect();
       if (state.peer) {
         const other = localPorts.get(state.peer);
         if (other) portOps.receivePacket(other, "port-close", state.sent, undefined);
         else root({ kind: "port-close", id: state.peer, from: state.id, sequence: state.sent });
       }
+      this.#disconnect();
     }
     #disconnect() {
       const state = this.#value();
       if (state.phase === "closed") return;
-      state.phase = "closed"; state.queue = []; state.pending.clear(); this.unref(); localPorts.delete(state.id);
+      state.phase = "closed";
+      this.#attachmentWait?.(); this.#attachmentWait = null;
+      state.queue = []; state.pending.clear(); this.unref(); localPorts.delete(state.id);
       root({ kind: "closed", id: state.id });
       internal.realTimers.setImmediate(() => this.#finishClose(state));
     }
@@ -441,25 +551,37 @@
     }
     static get internals() {
       return { pair: MessagePort.#pair, restore: MessagePort.#restore, activate: MessagePort.#activate,
-        prepare: MessagePort.#prepare, receive: MessagePort.#receive, receivePacket: MessagePort.#receivePacket,
+        prepare: MessagePort.#prepare, retry: (port: MessagePort) => { if (port.#state?.phase === "open" && port.#state.pending.size && !port.#attachmentWait) port.#accept(); }, discard: MessagePort.#discard, receive: MessagePort.#receive, receivePacket: MessagePort.#receivePacket,
         isClosed: MessagePort.#isClosed, drained: MessagePort.#drained, sent: MessagePort.#sent, received: MessagePort.#received };
     }
     get [Symbol.toStringTag]() { return "MessagePort"; }
   }
   const portOps = MessagePort.internals;
+  internal.sharedObjects?.routes?.onCredit(() => internal.realTimers.setImmediate(pump));
   Reflect.deleteProperty(MessagePort, "internals");
   class MessageChannel {
     readonly port1: MessagePort; readonly port2: MessagePort;
     constructor() { [this.port1, this.port2] = portOps.pair(); }
   }
-  const codec = internal.require("worker_codec").create({
+  const PublicMessagePort = new Proxy(MessagePort, {
+    apply() { throw Object.assign(new TypeError("Illegal constructor"), { code: "ERR_CONSTRUCT_CALL_INVALID" }); },
+  });
+  const PublicMessageChannel = new Proxy(MessageChannel, {
+    apply() { throw Object.assign(new TypeError("Cannot call a class constructor without new"), { code: "ERR_CONSTRUCT_CALL_REQUIRED" }); },
+  });
+  Object.defineProperty(MessagePort.prototype, "constructor", { value: PublicMessagePort, writable: true, configurable: true });
+  Object.defineProperty(MessageChannel.prototype, "constructor", { value: PublicMessageChannel, writable: true, configurable: true });
+  const codecHooks: BunWasm.WorkerCodecHooks = {
     isPort: value => value instanceof MessagePort,
     prepare: portOps.prepare,
     restore: portOps.restore,
     activate: portOps.activate,
-  });
+  };
+  const strictCodec = internal.require("worker_codec").create(codecHooks);
+  const codec = internal.require("worker_codec").create({ ...codecHooks, sharedObjects: internal.sharedObjects });
   internal.isMessagePort = value => value instanceof MessagePort;
-  internal.clonePorts = (value, options) => codec.decode(codec.encode(value, transfers(options)));
+  internal.clonePorts = (value, options) => strictCodec.decode(strictCodec.encode(value, transfers(options)));
+  internal.workerErrorData = encodeWorkerError;
 
   class BroadcastChannel extends EventTarget {
     readonly name: string;
@@ -482,7 +604,7 @@
       if (!arguments.length) throw new TypeError("postMessage requires a message");
       const message = clone(value);
       for (const peer of channels.get(this.name) || []) if (peer !== this) BroadcastChannel.receive(peer, clone(message));
-      if (route.length || children.size) root({ kind: "broadcast", name: this.name, graph: codec.encode(value), source: route });
+      if (route.length || children.size) root({ kind: "broadcast", name: this.name, graph: strictCodec.encode(value), source: route });
     }
     #deliver() { if (!this.#closed && this.#queue.length) this.dispatchEvent(messageEvent(this.#queue.shift())); }
     close() {
@@ -535,16 +657,22 @@
     const preloads = web.preload.map(path => `await import(${JSON.stringify(path)});`).join("\n");
     return { argv: ["-e", preloads + "\n;import.meta.__bunwasm_workerEntry?.();\n" + target.argv[1]], name: target.name };
   }
+  type ExecOption = { kind: "require"; value: string } | { kind: "flag"; value: string };
   function execArguments(value: unknown) {
-    if (value === undefined) return process.execArgv.slice();
-    if (!Array.isArray(value) || !value.every(arg => typeof arg === "string")) throw invalidArgument("execArgv");
-    for (let index = 0; index < value.length; index++) {
-      const arg = value[index];
-      if (["--no-warnings", "--expose-gc", "--experimental-strip-types"].includes(arg) || arg.startsWith("--require=")) continue;
-      if ((arg === "--require" || arg === "-r") && index + 1 < value.length) { index++; continue; }
+    const argv = value === undefined ? process.execArgv.slice() : value;
+    if (!Array.isArray(argv) || !argv.every(arg => typeof arg === "string")) throw invalidArgument("execArgv");
+    const conditions: string[] = [];
+    const options: ExecOption[] = [];
+    for (let index = 0; index < argv.length; index++) {
+      const arg = argv[index];
+      if (["--no-warnings", "--no-deprecation", "--expose-gc", "--experimental-strip-types"].includes(arg)) { options.push({ kind: "flag", value: arg }); continue; }
+      if (arg.startsWith("--require=")) { options.push({ kind: "require", value: arg.slice(10) }); continue; }
+      if (arg.startsWith("--conditions=")) { conditions.push(arg); continue; }
+      if (arg === "--conditions" && index + 1 < argv.length) { conditions.push(arg, argv[++index]); continue; }
+      if ((arg === "--require" || arg === "-r") && index + 1 < argv.length) { options.push({ kind: "require", value: argv[++index] }); continue; }
       throw Object.assign(new Error(`Invalid execArgv flag: ${arg}`), { code: "ERR_WORKER_INVALID_EXEC_ARGV" });
     }
-    return value;
+    return { argv, conditions, options };
   }
   class Worker extends EventEmitter {
     readonly stdout: BunWasm.WorkerReadable;
@@ -562,7 +690,7 @@
       const target = web ? webEntry(requested, web) : requested;
       if (options.argv !== undefined && !Array.isArray(options.argv)) throw invalidArgument("argv");
       const argv = options.argv === undefined ? [] : Array.from(options.argv as unknown[], String);
-      const execArgv = execArguments(options.execArgv);
+      const exec = execArguments(options.execArgv);
       this.resourceLimits = limits(options.resourceLimits);
       this.#id = nextWorker++;
       this.#path = route.concat([this.#id]);
@@ -579,21 +707,21 @@
       catch (error) { publicPort.close(); childPort.close(); throw error; }
       const graph = transferPlan.graph;
       const group = options.env === SHARE_ENV ? envGroup : routeKey(this.#path);
-      env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv, graph, resourceLimits: this.resourceLimits, web });
+      env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv: exec.argv, graph, resourceLimits: this.resourceLimits, web });
       const memoryLimitMb = (this.resourceLimits.maxOldGenerationSizeMb || 0) + (this.resourceLimits.maxYoungGenerationSizeMb || 0);
       let child: BunWasm.WorkerChild;
-      try { child = internal.require("spawn").spawn(["bun"].concat(target.argv, argv), {
+      try { child = internal.require("spawn").spawn([process.execPath].concat(exec.conditions, target.argv, argv), {
         env, cwd: process.cwd(), stdin: options.stdin ? "pipe" : "ignore", stdout: "pipe", stderr: "pipe",
         maxBuffer: Infinity,
         _worker: { resourceLimits: this.resourceLimits, memoryLimitMb: memoryLimitMb ? Math.ceil(memoryLimitMb) : undefined },
-      }); } catch (error) { publicPort.close(); childPort.close(); throw error; }
+      }); } catch (error) { transferPlan.abort(); publicPort.close(); childPort.close(); throw error; }
       this.#child = child;
       let control: BunWasm.WorkerChannel | null = null;
       try {
-        control = internal.require("worker_channel").open(native.hostChildPipe(child.pid, 5), native.hostChildPipe(child.pid, 4));
+        control = internal.require("worker_channel").open(child._workerChannel.input, child._workerChannel.output);
         this.#channel = control;
         transferPlan.commit();
-        children.set(this.#id, { ref: true, send: frame => { if (!this.#exited) this.#channel.send(frame); }, pump: () => this.#pump(), event: frame => this.#event(frame) });
+        children.set(this.#id, { ref: true, send: frame => { if (!this.#exited) this.#channel.send(frame); }, pump: () => this.#pump(), watch: () => this.#channel.subscriptions(), event: frame => this.#event(frame) });
         root({ kind: "member", path: this.#path, group });
         if (!route.length) claimTransferred(graph, this.#path);
         else root({ kind: "claim", graph, owner: this.#path });
@@ -611,6 +739,7 @@
         publicPort.on("messageerror", error => this.emit("messageerror", error)); publicPort.unref();
         child.exited.then(code => this.#settled(code), error => { this.#settled(1); this.#error = true; this.emit("error", error); });
       } catch (error) {
+        transferPlan.abort();
         children.delete(this.#id);
         root({ kind: "gone", path: this.#path });
         publicPort.close(); childPort.close(); control?.close();
@@ -643,7 +772,7 @@
       if (frame.kind === "online") { internal.realTimers.setImmediate(() => this.emit("online")); return; }
       if (frame.kind === "error") {
         this.#error = true;
-        const error = codec.decode(frame.graph);
+        const error = strictCodec.decode(frame.graph);
         if (error instanceof Error && typeof frame.code === "string") Object.assign(error, { code: frame.code });
         internal.realTimers.setImmediate(() => this.emit("error", error)); return;
       }
@@ -679,16 +808,74 @@
     if (port instanceof BroadcastChannel) return undefined;
     throw invalidPort();
   }
-  function moveMessagePortToContext(port: unknown, context: unknown): never {
+  function moveMessagePortToContext(port: unknown, _context: unknown): never {
     if (!(port instanceof MessagePort)) throw invalidPort();
     if (portOps.isClosed(port)) throw Object.assign(new Error("Cannot send data on closed MessagePort"), { code: "ERR_CLOSED_MESSAGE_PORT" });
     throw Object.assign(new Error("VM contexts are not supported in bun-wasm"), { code: "ERR_NOT_SUPPORTED_IN_WASM" });
   }
+  function isBuildError(error: unknown): error is Error {
+    return error instanceof Error && error.name === "BuildError" && "__bunwasmFormatted" in error;
+  }
+  function encodeWorkerError(reported: unknown): BunWasm.WorkerErrorData {
+    let error = isBuildError(reported) ? new SyntaxError(reported.message) : reported;
+    let graph: Graph;
+    try { graph = strictCodec.encode(error); }
+    catch {
+      error = Object.assign(new Error("Cannot serialize worker error"), { code: "ERR_WORKER_UNSERIALIZABLE_ERROR" });
+      graph = strictCodec.encode(error);
+    }
+    let code: string | undefined;
+    if (error && typeof error === "object") {
+      try {
+        const value = Reflect.get(error, "code");
+        if (typeof value === "string") code = value;
+      } catch {}
+    }
+    return { graph, code };
+  }
+
   function initialize() {
     if (!config || initialized) return;
+    const exec = execArguments(config.execArgv);
     initialized = true;
     delete process.env.BUNWASM_WORKER_INIT;
-    parentChannel = internal.require("worker_channel").open(native.hostChildPipe(0, 4), native.hostChildPipe(0, 5));
+    delete process.env.BUNWASM_WORKER_CONTROL;
+    // The parent bound its two control pipe ends and published their numbers in the environment.
+    const control = JSON.parse(controlFds || "{}");
+    if (!Number.isInteger(control.input) || !Number.isInteger(control.output) || control.input < 3 || control.output < 3) throw new Error("Invalid worker control descriptors");
+    parentChannel = internal.require("worker_channel").open(control.input, control.output);
+    try {
+      let startup: ReturnType<typeof deferredInitialization> | undefined;
+      let notified = false;
+      const cancel = codec.wait(config.graph, () => { notified = true; startup?.resume(); });
+      if (!cancel) { initializeData(exec); return; }
+      startup = deferredInitialization(cancel, () => initializeData(exec));
+      internal.workerStartup = startup;
+      if (notified) startup.resume();
+    } catch (error) { parentChannel.close(); throw error; }
+  }
+  function deferredInitialization(cancelWait: () => void, hydrate: () => void) {
+    let phase: "pending" | "settled" | "cancelled" = "pending";
+    let resolveReady = () => {};
+    let rejectReady = (_error: unknown) => {};
+    const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+    function resume() {
+      if (phase !== "pending") return;
+      phase = "settled";
+      try { hydrate(); resolveReady(); }
+      catch (error) { rejectReady(error); }
+    }
+    function cancel() {
+      if (phase === "cancelled") return;
+      const pending = phase === "pending";
+      phase = "cancelled";
+      cancelWait(); parentChannel?.close();
+      if (pending) rejectReady(new Error("Worker initialization was cancelled"));
+    }
+    return { ready, resume, cancel };
+  }
+  function initializeData(exec: ReturnType<typeof execArguments>) {
+    if (!config || !parentChannel) throw new Error("Missing worker initialization");
     const initial = codec.decode(config.graph);
     if (!Array.isArray(initial) || initial.length !== 3 || !(initial[2] instanceof MessagePort) || !Array.isArray(initial[1])) throw new Error("Invalid worker initial data");
     exports.workerData = initial[0]; parentPort = initial[2]; exports.parentPort = parentPort;
@@ -700,11 +887,8 @@
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "exiting", child: route[route.length - 1], code, messages: parentPort ? portOps.sent(parentPort) : 0 } });
       parentChannel?.drain();
     };
-    internal.workerError = error => {
-      let graph: Graph;
-      try { graph = codec.encode(error); }
-      catch { graph = codec.encode(Object.assign(new Error("Cannot serialize worker error"), { code: "ERR_WORKER_UNSERIALIZABLE_ERROR" })); }
-      const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    internal.workerError = reported => {
+      const { graph, code } = encodeWorkerError(reported);
       parentChannel?.send({ kind: "down", path: route.slice(0, -1), body: { kind: "error", child: route[route.length - 1], graph, code } });
     };
     if (config.web) {
@@ -712,19 +896,19 @@
       parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
     }
     const requirePreload = internal.builtin("node:module").createRequire(process.cwd() + "/__worker_preload__.cjs");
-    for (let index = 0; index < config.execArgv.length; index++) {
-      const arg = config.execArgv[index];
-      if (arg === "--require" || arg === "-r") requirePreload(config.execArgv[++index]);
-      if (arg.startsWith("--require=")) requirePreload(arg.slice(10));
+    for (const option of exec.options) {
+      if (option.kind === "require") { requirePreload(option.value); continue; }
+      const arg = option.value;
       if (arg === "--expose-gc") Object.defineProperty(globalThis, "gc", { configurable: true, writable: true, value: () => native.gc() });
       if (arg === "--no-warnings") internal.workerNoWarnings = true;
+      if (arg === "--no-deprecation") process.noDeprecation = true;
     }
     if (!config.web) parentChannel.send({ kind: "down", path: route.slice(0, -1), body: { kind: "online", child: route[route.length - 1] } });
   }
   const initialState: { parentPort: MessagePort | null; workerData: unknown } = { parentPort, workerData: null };
   const exports = Object.assign(initialState, {
     isMainThread: !config, threadId,
-    resourceLimits: config?.resourceLimits || {}, SHARE_ENV, MessageChannel, MessagePort, BroadcastChannel, Worker,
+    resourceLimits: config?.resourceLimits || {}, SHARE_ENV, MessageChannel: PublicMessageChannel, MessagePort: PublicMessagePort, BroadcastChannel, Worker,
     markAsUntransferable, isMarkedAsUntransferable, moveMessagePortToContext, receiveMessageOnPort, initialize,
     getEnvironmentData(key: unknown) { return environmentData.get(key); },
     setEnvironmentData(key: unknown, value: unknown) { if (value === undefined) environmentData.delete(key); else environmentData.set(key, value); },
@@ -735,6 +919,12 @@
   internal.addIoWaiter({
     get ref() { return Boolean(parentChannel && (parentChannel.pending || parentPort?.hasRef()) || Array.from(children.values()).some(child => child.ref)); },
     step() { return pump() ? "progress" : false; },
+    // Every open control channel: the idle loop wakes for a frame from any of them.
+    subscriptions() {
+      const list = parentChannel ? [parentChannel.subscriptions()] : [];
+      for (const child of children.values()) list.push(child.watch());
+      return internal.concatBytes(list);
+    },
     fail(error) { if (parentChannel) internal.workerError?.(error); },
   });
   return exports;

@@ -34,15 +34,7 @@ function isIP(s) {
 }
 
 
-  function error(Ctor, code, message) {
-    return Object.assign(new Ctor(message), { code });
-  }
-  function port(value = 0) {
-    if ((typeof value !== "number" && typeof value !== "string") || value === "" || !Number.isInteger(Number(value)) || Number(value) < 0 || Number(value) > 65535) {
-      throw error(RangeError, "ERR_SOCKET_BAD_PORT", `Port should be >= 0 and < 65536. Received ${String(value)}.`);
-    }
-    return Number(value);
-  }
+  const { error, port } = internal.require("net_port");
   function ipNumber(address, family) {
     if (typeof address !== "string" || isIP(address) !== family) throw error(TypeError, "ERR_INVALID_ADDRESS", `Invalid IP address: ${String(address)}`);
     if (family === 4) return address.split(".").reduce((value, part) => (value << 8n) | BigInt(part), 0n);

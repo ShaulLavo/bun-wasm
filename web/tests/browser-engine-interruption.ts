@@ -4,6 +4,7 @@
 // Safari is actual desktop Safari via its existing WebDriver permission, not Playwright WebKit.
 // The same page/worker harness runs on the Mac fleet host; do not enable automation settings here.
 import assert from "node:assert/strict";
+import { assertEngineInterruptionResult } from "./engine-interruption-result";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { tmpdir, availableParallelism, loadavg } from "node:os";
@@ -80,23 +81,6 @@ export async function finishRunnerCleanup(options: {
   const errors = (prepared.errors ?? []).concat(closed.errors ?? [], listener.errors ?? [], rest.errors ?? []);
   return { ...prepared, ...closed, ...listener, ...rest, safe: prepared.safe && closed.safe && listener.safe && rest.safe, ...(errors.length ? { errors } : {}) };
 }
-function assertGreenResult(result: Record<string, any>, benchmark: boolean): void {
-  assert.equal(result.ok, true, JSON.stringify(result));
-  assert.equal(result.cleanup?.safe, true, "page execution quiescence and cleanup");
-  // WebDriver JSON cloning represents an absent undefined page field as null.
-  assert.equal(result.unsafeCleanup ?? undefined, undefined, "page unsafe cleanup");
-  assert.ok(Array.isArray(result.outcomes) && result.outcomes.length > 0, "page functional outcomes");
-  assert.ok(result.outcomes.every((outcome: any) => outcome.ok === true && outcome.cleanup?.safe === true), "all page functional cases passed safely");
-  assert.deepEqual(result.pageErrors ?? [], [], "page errors");
-  assert.equal(result.checks.length, 28, "fourteen legacy host, twelve page/generic-route and two actual Preview1 clock cases");
-  assert.equal(result.checks.filter((check: any) => check.route === "runtimeProcess").length, 10, "new-route fatal, pending and page-idle proof on both engines");
-  for (const engine of ["quickjs", "jsc"]) {
-    assert.equal(result.checks.filter((check: any) => check.engine === engine).length, 12, `${engine} complete legacy/new-route case set`);
-  }
-  assert.equal(new Set(result.checks.map((check: any) => `${check.engine}:${check.name}`)).size, 28, "all named proofs are distinct");
-  assert.equal(result.cleanup.activeWorkers, 0, "worker cleanup");
-  if (benchmark) assert.equal(result.benchmarks.length, 2, "per-engine overhead measurements");
-}
 
 // Import-safe orchestration lets failure/teardown paths be exercised without a
 // browser or WASM. Functional RED is independent from unsafe resource cleanup.
@@ -116,6 +100,7 @@ export async function runBrowserGate(options: {
   const output: BrowserGateOutput = { ok: false, artifacts: options.artifacts, reports: [], cleanup: { safe: false } };
   options.onState?.(output);
   try {
+    const checkEngineCase = async () => {
     await options.prepare?.();
     for (const name of options.names) {
       const report: BrowserGateReport = { browser: name, ok: false, cleanup: { safe: true } };
@@ -129,7 +114,7 @@ export async function runBrowserGate(options: {
           report.cleanup = { ...result.cleanup, safe: false };
           output.unsafeCleanup = `${name}: ${result.unsafeCleanup ?? "page execution quiescence or resource cleanup is unproved"}`;
         }
-        assertGreenResult(result, Boolean(options.benchmark));
+        assertEngineInterruptionResult(result, Boolean(options.benchmark));
       } catch (error) { report.ok = false; report.error = errorText(error); }
       finally {
         let closed: RunnerCleanup;
@@ -147,6 +132,9 @@ export async function runBrowserGate(options: {
       options.onReport?.(report);
       if (output.unsafeCleanup) break;
     }
+
+    };
+    await checkEngineCase();
   } catch (error) { output.error = errorText(error); }
   finally {
     try { output.cleanup = await boundedCleanup("all owned resources", options.cleanup, options.cleanupTimeoutMs ?? 45_000); }
@@ -261,6 +249,7 @@ async function main(): Promise<boolean> {
     interruption ??= (async () => {
       console.error(reason);
       try {
+        const checkEngineCase = async () => {
         let cleaned: RunnerCleanup;
         try { cleaned = await boundedCleanup("interrupted owned resources", cleanup, 45_000); }
         catch (error) { cleaned = { safe: false, errors: [errorText(error)] }; }
@@ -271,6 +260,9 @@ async function main(): Promise<boolean> {
           for (const report of state.reports) if (!report.browserCleanup) { report.ok = false; report.cleanup.safe = false; }
           await writeReport(state);
         }
+
+        };
+        await checkEngineCase();
       } finally { process.exit(1); }
     })();
   }
@@ -286,7 +278,7 @@ async function main(): Promise<boolean> {
         if (names.includes("safari")) assert.equal(process.platform, "darwin", "actual Safari runs on the Mac fleet host");
         assert.ok(!baselineDist || benchmark, "baseline artifacts are used only with --benchmark");
         assert.ok(Number.isInteger(requestedDriverPort) && (requestedDriverPort === 0 || requestedDriverPort > 1023 && requestedDriverPort < 65536), "invalid Safari driver port");
-        const inputs = ["bun.wasm", "bun-jsc.wasm", "bun-browser.wasm"].map(name => ({ name, path: join(dist, name), route: `/${name}` }))
+        const inputs = ["bun.wasm", "quickjs.wasm", "bun-jsc.wasm", "bun-browser.wasm"].map(name => ({ name, path: join(dist, name), route: `/${name}` }))
           .concat(baselineDist ? ["bun.wasm", "bun-jsc.wasm"].map(name => ({ name, path: resolve(baselineDist, name), route: `/baseline/${name}` })) : []);
         for (const input of inputs) {
           const info = await stat(input.path);
@@ -302,10 +294,10 @@ async function main(): Promise<boolean> {
         // The caller owns a supplied bundle. Only this run's profile/build scratch is removed.
         const out = process.env.ENGINE_INTERRUPTION_BROWSER_BUNDLE ? resolve(process.env.ENGINE_INTERRUPTION_BROWSER_BUNDLE) : join(scratch, "browser");
         if (!process.env.ENGINE_INTERRUPTION_BROWSER_BUNDLE) {
-          await buildBrowserEntries([join(import.meta.dir, "engine-interruption-main.ts"), join(import.meta.dir, "engine-interruption-worker.ts"),
+          await buildBrowserEntries([join(import.meta.dir, "engine-interruption-page.ts"), join(import.meta.dir, "engine-interruption-worker.ts"),
             join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts")], out, { runtimeWorker: true });
           assertRunning();
-          await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./engine-interruption-main.js"></script>');
+          await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./engine-interruption-page.js"></script>');
         }
         assertRunning();
         server = Bun.serve({ hostname: "127.0.0.1", port: 0, reusePort: false, async fetch(request) {
@@ -324,6 +316,7 @@ async function main(): Promise<boolean> {
         assertRunning(); browserCleanupPromise = undefined;
         let result: any, version: string;
         if (name === "safari") {
+          const runSafariEngine = async () => {
           driverPort = await allocateSafariDriverPort(requestedDriverPort);
           assertRunning();
           const spawnedAfter = Date.now();
@@ -344,11 +337,15 @@ async function main(): Promise<boolean> {
           if (diagnostic) console.log(JSON.stringify({ safariDriverOwnershipDiagnostic: diagnostic }));
           assertRunning();
           const opened = await (openingSession = webdriver("/session", "POST", { capabilities: { alwaysMatch: { browserName: "safari" } } }));
-          session = opened.sessionId; version = opened.capabilities.browserVersion; report.version = version;
+          session = opened.sessionId; report.version = opened.capabilities.browserVersion;
           assertRunning();
           await webdriver(`/session/${session}/timeouts`, "POST", { script: benchmark ? 530_000 : functionalDriverTimeoutMs, pageLoad: 30_000, implicit: 0 });
           await webdriver(`/session/${session}/url`, "POST", { url });
           result = await safariScript(`const end=Date.now()+${benchmark ? 525_000 : functionalPageTimeoutMs}; while(!globalThis.engineInterruptionResult){if(Date.now()>end)throw Error('engine interruption page timed out');await new Promise(r=>setTimeout(r,25));} return globalThis.engineInterruptionResult;`);
+
+          return String(opened.capabilities.browserVersion);
+          };
+          version = await runSafariEngine();
         } else {
           const types = await import("playwright");
           assertRunning();

@@ -28,10 +28,15 @@ bun_paths = { path = "../../vendor/bun/src/paths" }
 bun_resolver = { path = "../../vendor/bun/src/resolver" }
 bun_sys = { path = "../../vendor/bun/src/sys" }
 
+bunwasm-glue = { path = "../bunwasm-glue" }
+
 [target.'cfg(target_os = "wasi")'.dependencies]
 bunwasm-posix = { path = "../bunwasm-posix" }
-bunwasm-glue = { path = "../bunwasm-glue" }
 
 [[bin]]
 name = "bun-build"
 path = "src/bin/bun-build.rs"
+
+# Used by Bun's incremental_graph.rs and serialized_failure.rs #[path] modules.
+[package.metadata.cargo-machete]
+ignored = ["bstr", "bun_io", "bun_ptr"]

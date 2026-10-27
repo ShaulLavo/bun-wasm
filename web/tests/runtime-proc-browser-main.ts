@@ -1,5 +1,7 @@
 import { createRuntime, type ProcessAdmissionEvent, type Runtime } from "waffle";
+import { cliShimFixture } from "./cli-shim-fixture";
 import { startRun, type Run } from "../src/runner";
+import { installBunAdapters } from "../src/subprocess-broker";
 import { createWorkerProcessTransport, workerProcessDirectoryId, workerProcessState } from "waffle/proc/worker-client";
 import { runtimeProcChecks, runtimeProcFixture, runtimeProcStages, runtimeProcJobWaitChecks, runtimeProcJobWaitFixture, runtimeProcJobWaitStages } from "./runtime-proc-fixtures";
 
@@ -122,6 +124,10 @@ let admissionReports = 0;
 let ioReports = 0;
 const NativeWorker = globalThis.Worker;
 const activeWorkers = new Set<Worker>();
+// Waffle prestarts idle process workers that receive no request until a spawn takes one.
+// Guest and filesystem workers are the ones the page has posted to.
+const requestedWorkers = new WeakSet<Worker>();
+const busyWorkers = () => Array.from(activeWorkers).filter(worker => requestedWorkers.has(worker)).length;
 const messages: string[] = [];
 const exits: { worker: number; type: string; code: number; message?: string }[] = [];
 const reaps: { job: number; completedGuests: typeof exits }[] = [];
@@ -167,7 +173,12 @@ globalThis.Worker = class extends NativeWorker {
       }
       if (data.type === "exit" || data.type === "error") exits.push({ worker, type: data.type, code: data.code, message: data.message });
     });
-    if (bootstrapURL) this.postMessage({ type: "job-wait-test-gate", gate: jobWaitGate });
+    if (bootstrapURL) super.postMessage({ type: "job-wait-test-gate", gate: jobWaitGate });
+  }
+  override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions) {
+    requestedWorkers.add(this);
+    if (Array.isArray(options)) super.postMessage(message, options);
+    else super.postMessage(message, options);
   }
   override terminate() { activeWorkers.delete(this); super.terminate(); }
 };
@@ -178,6 +189,26 @@ function equal(actual: unknown, expected: unknown, label: string) {
 async function until(condition: () => boolean, label: string) {
   const deadline = performance.now() + 10_000;
   while (!condition()) { if (performance.now() >= deadline) throw new Error(`${label} timed out`); await pause(); }
+}
+
+async function checkForegroundStops(runtime: Runtime): Promise<number[]> {
+  const codes: number[] = [];
+  for (const signal of [2, 9] as const) {
+    let output = "";
+    const foreground = startRun({ engine: "browser", adapter: "preview1", runtime,
+      module: new WebAssembly.Module(cliShimFixture("wait")), args: ["foreground-stop"], env: {}, moduleScope: false,
+    }, { stdout(bytes) { output += new TextDecoder().decode(bytes); }, stderr(bytes) { throw new Error(new TextDecoder().decode(bytes)); } });
+    try {
+      await until(() => output === "runner-ready\n", "foreground guest reached signal polling");
+      foreground.kill(signal);
+      const outcome = await foreground.done;
+      equal(outcome.error, undefined, "foreground stop did not crash");
+      equal(outcome.code, 128 + signal, "foreground signal exit");
+      codes.push(outcome.code);
+    } finally { foreground.kill(9); }
+    await until(() => busyWorkers() === 1, "foreground worker released before next run");
+  }
+  return codes;
 }
 
 let runtime: Runtime | undefined;
@@ -206,7 +237,15 @@ try {
   const jobWait = parameters.has("job-wait");
   const checks = jobWait ? runtimeProcJobWaitChecks : runtimeProcChecks;
   const stages = jobWait ? runtimeProcJobWaitStages : runtimeProcStages;
-  const module = new WebAssembly.Module(jobWait ? runtimeProcJobWaitFixture() : runtimeProcFixture());
+  // This original preview1 fixture is not Bun. Give it its own admitted marker and
+  // executable registration rather than accidentally loading the real /bin/bun guest.
+  const executable = "/fixtures/runtime-proc";
+  const module = new WebAssembly.Module(jobWait ? runtimeProcJobWaitFixture(executable) : runtimeProcFixture(executable));
+  await runtime.filesystem.mkdirp("/fixtures");
+  await runtime.filesystem.writeFile(executable, "original byte-encoded preview1 fixture");
+  await runtime.filesystem.flush();
+  installBunAdapters(runtime, new URL("./worker.js", location.href).href);
+  runtime.registerProgram(executable, { adapter: "preview1", module, cooperative: true });
   const explicit = parameters.has("explicit");
   // Omitting runtimeProcess is intentional: a generic root must be recognized from real imports,
   // not only when a privileged caller already knows to manufacture the transport.
@@ -244,10 +283,11 @@ try {
   }
   if (workersCreated < (jobWait ? 6 : 3)) throw new Error(`expected real filesystem and all guest workers, saw ${workersCreated}`);
   // Completion acknowledges guest descriptor release. The run and broker must stop both guests.
-  await until(() => activeWorkers.size === 1, "completed guests terminated before filesystem disposal");
+  await until(() => busyWorkers() === 1, "completed guests terminated before filesystem disposal");
+  const stopCodes = jobWait ? [] : await checkForegroundStops(runtime);
   await runtime.dispose(); runtime = undefined;
   await until(() => activeWorkers.size === 0, "all task-created workers terminated");
-  result = { ok: true, mode: explicit ? "explicit" : "automatic", scenario: jobWait ? "job-wait" : "pipes", checks, stdout,
+  result = { ok: true, mode: explicit ? "explicit" : "automatic", scenario: jobWait ? "job-wait" : "pipes", checks, stdout, stopCodes,
     messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, admissions, admissionReports, workerErrors, bufferDecode, cleanup: { activeWorkers: activeWorkers.size, workersCreated } };
 } catch (error) {
   result = { ok: false, stdout, stderr, messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, admissions, admissionReportsAtFailure: admissionReports, workerErrors, bufferDecode,

@@ -15,11 +15,20 @@ pub struct ErrorInfo {
     pub errno: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub syscall: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<Box<str>>,
 }
 
 impl ErrorInfo {
     pub fn new(name: &str, message: impl Into<String>, code: Option<&str>) -> Self {
-        ErrorInfo { name: name.into(), message: message.into(), code: code.map(Into::into), errno: None, syscall: None }
+        ErrorInfo {
+            name: name.into(),
+            message: message.into(),
+            code: code.map(Into::into),
+            errno: None,
+            syscall: None,
+            hostname: None,
+        }
     }
 
     pub fn with_syscall(mut self, syscall: &str) -> Self {
@@ -29,6 +38,11 @@ impl ErrorInfo {
 
     pub fn with_errno(mut self, errno: i32) -> Self {
         self.errno = Some(errno);
+        self
+    }
+
+    pub fn with_hostname(mut self, hostname: impl Into<String>) -> Self {
+        self.hostname = Some(hostname.into().into_boxed_str());
         self
     }
 
@@ -69,11 +83,18 @@ pub fn is_dns_error(err: &io::Error) -> bool {
 pub fn socket_error(syscall: &str, err: &io::Error, target: &str) -> ErrorInfo {
     let code = errno_code(err);
     let message = if code == "ENOTFOUND" {
-        format!("getaddrinfo ENOTFOUND {}", target.rsplit_once(':').map_or(target, |(host, _)| host))
+        format!(
+            "getaddrinfo ENOTFOUND {}",
+            target.rsplit_once(':').map_or(target, |(host, _)| host)
+        )
     } else {
         format!("{syscall} {code} {target}")
     };
-    let syscall = if code == "ENOTFOUND" { "getaddrinfo" } else { syscall };
+    let syscall = if code == "ENOTFOUND" {
+        "getaddrinfo"
+    } else {
+        syscall
+    };
     ErrorInfo::new("Error", message, Some(code)).with_syscall(syscall)
 }
 
@@ -106,30 +127,44 @@ pub fn fetch_error(err: &reqwest::Error, url: &str, host: &str) -> ErrorInfo {
         );
     }
     if err.is_timeout() {
-        return type_error(format!("The operation timed out fetching \"{url}\""), "Timeout");
+        return type_error(
+            format!("The operation timed out fetching \"{url}\""),
+            "Timeout",
+        );
     }
     if text.contains("dns error") || text.contains("failed to lookup address") {
-        return type_error(format!("getaddrinfo ENOTFOUND {host}"), "ENOTFOUND").with_syscall("getaddrinfo");
+        return type_error(format!("getaddrinfo ENOTFOUND {host}"), "ENOTFOUND")
+            .with_syscall("getaddrinfo");
     }
     if let Some(io) = io {
         return io_fetch_error(io, host);
     }
     if err.is_connect() {
-        return type_error("Unable to connect. Is the computer able to access the url?".into(), "ConnectionRefused");
+        return type_error(
+            "Unable to connect. Is the computer able to access the url?".into(),
+            "ConnectionRefused",
+        );
     }
     if err.is_builder() {
         return type_error("fetch() URL is invalid".into(), "ERR_INVALID_URL");
     }
     type_error(
         format!("{} fetching \"{url}\"", text.trim_end_matches(": ")),
-        if err.is_body() || err.is_request() { "ConnectionClosed" } else { "FetchError" },
+        if err.is_body() || err.is_request() {
+            "ConnectionClosed"
+        } else {
+            "FetchError"
+        },
     )
 }
 
 fn io_fetch_error(io: &io::Error, host: &str) -> ErrorInfo {
     use io::ErrorKind::*;
     // TLS failures during the handshake surface as I/O errors wrapping rustls's.
-    if let Some(tls) = io.get_ref().and_then(|inner| inner.downcast_ref::<rustls::Error>()) {
+    if let Some(tls) = io
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+    {
         return tls_error(tls);
     }
     let (message, code) = match io.kind() {
@@ -157,14 +192,101 @@ fn tls_error(err: &rustls::Error) -> ErrorInfo {
         rustls::Error::InvalidCertificate(C::Expired | C::ExpiredContext { .. }) => {
             ("certificate has expired", "CERT_HAS_EXPIRED")
         }
-        rustls::Error::InvalidCertificate(C::NotValidForName | C::NotValidForNameContext { .. }) => {
-            ("Hostname/IP does not match certificate's altnames", "ERR_TLS_CERT_ALTNAME_INVALID")
+        rustls::Error::InvalidCertificate(
+            C::NotValidForName | C::NotValidForNameContext { .. },
+        ) => (
+            "Hostname/IP does not match certificate's altnames",
+            "ERR_TLS_CERT_ALTNAME_INVALID",
+        ),
+        rustls::Error::InvalidCertificate(C::UnknownIssuer) => (
+            "unable to get local issuer certificate",
+            "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+        ),
+        rustls::Error::InvalidCertificate(_) => (
+            "certificate verify failed",
+            "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+        ),
+        _ => {
+            return ErrorInfo::new(
+                "TypeError",
+                format!("TLS handshake failed: {err}"),
+                Some("ERR_TLS_HANDSHAKE"),
+            );
         }
-        rustls::Error::InvalidCertificate(C::UnknownIssuer) => {
-            ("unable to get local issuer certificate", "UNABLE_TO_GET_ISSUER_CERT_LOCALLY")
-        }
-        rustls::Error::InvalidCertificate(_) => ("certificate verify failed", "UNABLE_TO_VERIFY_LEAF_SIGNATURE"),
-        _ => return ErrorInfo::new("TypeError", format!("TLS handshake failed: {err}"), Some("ERR_TLS_HANDSHAKE")),
     };
     ErrorInfo::new("TypeError", message, Some(code))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn json_error(error: &ErrorInfo) -> Value {
+        serde_json::from_slice(&error.to_json()).unwrap()
+    }
+
+    #[test]
+    fn error_info_stays_below_the_large_result_error_threshold() {
+        let size = std::mem::size_of::<ErrorInfo>();
+        println!("ErrorInfo size: {size} bytes");
+        assert!(size < 128, "ErrorInfo is {size} bytes");
+    }
+
+    #[test]
+    fn error_serialization_omits_only_absent_optional_fields() {
+        assert_eq!(
+            json_error(&ErrorInfo::new("Error", "plain error", None)),
+            json!({ "name": "Error", "message": "plain error" })
+        );
+        let error = ErrorInfo::new("TypeError", "empty hostname", Some("EINVAL"))
+            .with_syscall("getaddrinfo")
+            .with_errno(0)
+            .with_hostname("");
+        assert_eq!(
+            json_error(&error),
+            json!({
+                "name": "TypeError", "message": "empty hostname", "code": "EINVAL",
+                "syscall": "getaddrinfo", "errno": 0, "hostname": ""
+            })
+        );
+    }
+
+    #[test]
+    fn dns_error_serialization_preserves_all_fields_and_clone() {
+        let hostname = String::from("café\".example");
+        let error = ErrorInfo::new("Error", "resolver\nfailure", Some("EAI_SYSTEM"))
+            .with_syscall("getaddrinfo")
+            .with_errno(libc::EACCES)
+            .with_hostname(hostname.clone());
+        assert_eq!(error.hostname.as_deref(), Some(hostname.as_str()));
+        assert_eq!(
+            json_error(&error),
+            json!({
+                "name": "Error", "message": "resolver\nfailure", "code": "EAI_SYSTEM",
+                "syscall": "getaddrinfo", "errno": libc::EACCES, "hostname": hostname
+            })
+        );
+        assert_eq!(error.clone().to_json(), error.to_json());
+    }
+
+    #[test]
+    fn socket_and_fetch_error_serialization_keeps_existing_fields() {
+        let refused = io::Error::from(io::ErrorKind::ConnectionRefused);
+        assert_eq!(
+            json_error(&socket_error("connect", &refused, "127.0.0.1:9")),
+            json!({
+                "name": "Error", "message": "connect ECONNREFUSED 127.0.0.1:9",
+                "code": "ECONNREFUSED", "syscall": "connect"
+            })
+        );
+        assert_eq!(
+            json_error(&io_fetch_error(&refused, "example.test")),
+            json!({
+                "name": "TypeError",
+                "message": "Unable to connect. Is the computer able to access the url?",
+                "code": "ConnectionRefused"
+            })
+        );
+    }
 }

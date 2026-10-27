@@ -14,10 +14,9 @@ use bun_options_types::schema::api;
 
 pub use bun_wyhash::hash as wyhash;
 
+extern crate bunwasm_glue;
 #[cfg(target_os = "wasi")]
 extern crate bunwasm_posix;
-#[cfg(target_os = "wasi")]
-extern crate bunwasm_glue;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Loader {
@@ -82,33 +81,54 @@ thread_local! {
 }
 
 fn init_state() -> Result<State, String> {
-    init_with_options(api::TransformOptions {
-        disable_hmr: true,
-        target: Some(api::Target::Bun),
-        ..Default::default()
-    })
+    init_with_options(
+        api::TransformOptions {
+            disable_hmr: true,
+            target: Some(api::Target::Bun),
+            ..Default::default()
+        },
+        api::DotEnvBehavior::LoadAllWithoutInlining,
+    )
 }
 
-fn init_with_options(opts: api::TransformOptions) -> Result<State, String> {
+fn init_with_options(
+    opts: api::TransformOptions,
+    env_behavior: api::DotEnvBehavior,
+) -> Result<State, String> {
     let arena = Box::new(Arena::new());
     // SAFETY: the arena is boxed and lives as long as `State`, which owns it.
     let arena_ref: &'static Arena = unsafe { &*(&*arena as *const Arena) };
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(arena_ref);
     let _ast_scope = ast_alloc.enter();
     let mut log = Box::new(bun_ast::Log::init());
-    let mut transpiler =
-        Transpiler::init(arena_ref, &raw mut *log, opts, None).map_err(|e| format!("transpiler init: {e:?}"))?;
+    let mut transpiler = Transpiler::init(arena_ref, &raw mut *log, opts, None)
+        .map_err(|e| format!("transpiler init: {e:?}"))?;
     transpiler.configure_linker_with_auto_jsx(false);
-    transpiler.options.env.behavior = bun_bundler::options::EnvBehavior::disable;
-    transpiler.configure_defines().map_err(|e| format!("transpiler defines: {e:?}"))?;
+    transpiler.options.env.behavior = env_behavior;
+    transpiler.options.env.disable_default_env_files =
+        env_behavior == api::DotEnvBehavior::LoadAllWithoutInlining;
+    transpiler
+        .configure_defines()
+        .map_err(|e| format!("transpiler defines: {e:?}"))?;
     transpiler.options.transform_only = true;
     transpiler.options.tree_shaking = false;
-    Ok(State { transpiler, log, tsconfig: None, public_api: false, _arena: arena })
+    Ok(State {
+        transpiler,
+        log,
+        tsconfig: None,
+        public_api: false,
+        _arena: arena,
+    })
 }
 
 /// The public JS API uses the same Bun parser/printer with its own options,
 /// rather than the module loader's Bun target and source-preserving fast path.
-pub fn public_transpile(source: &[u8], options: &str, action: &str, name: &str) -> Result<String, String> {
+pub fn public_transpile(
+    source: &[u8],
+    options: &str,
+    action: &str,
+    name: &str,
+) -> Result<String, String> {
     let options: serde_json::Value = serde_json::from_str(options).map_err(|e| e.to_string())?;
     let target = match options["target"].as_str().unwrap_or("browser") {
         "bun" => api::Target::Bun,
@@ -119,7 +139,8 @@ pub fn public_transpile(source: &[u8], options: &str, action: &str, name: &str) 
         let mut map = api::StringMap::EMPTY;
         for (key, value) in entries {
             map.keys.push(key.as_bytes().into());
-            map.values.push(value.as_str().unwrap_or("").as_bytes().into());
+            map.values
+                .push(value.as_str().unwrap_or("").as_bytes().into());
         }
         map
     });
@@ -127,14 +148,37 @@ pub fn public_transpile(source: &[u8], options: &str, action: &str, name: &str) 
         Some(text) => text.as_bytes().to_vec(),
         None => serde_json::to_vec(&options["tsconfig"]).map_err(|e| e.to_string())?,
     };
-    let mut state = init_with_options(api::TransformOptions { target: Some(target), disable_hmr: true, define, ..Default::default() })?;
+    let mut state = init_with_options(
+        api::TransformOptions {
+            target: Some(target),
+            disable_hmr: true,
+            define,
+            ..Default::default()
+        },
+        api::DotEnvBehavior::Disable,
+    )?;
     state.public_api = true;
     configure_public(&mut state, &options, &tsconfig_bytes)?;
-    if action == "validate" { return Ok(String::new()); }
-    let loader = if name == "text" { Loader::Text } else { Loader::from_path(&format!("input.{name}")).ok_or_else(|| format!("Invalid loader: {name}"))? };
+    if action == "validate" {
+        return Ok(String::new());
+    }
+    let loader = if name == "text" {
+        Loader::Text
+    } else {
+        Loader::from_path(&format!("input.{name}"))
+            .ok_or_else(|| format!("Invalid loader: {name}"))?
+    };
     let source = String::from_utf8_lossy(source);
     let path = format!("input.{}", options["loader"].as_str().unwrap_or("jsx"));
-    let out = run_with_scan(&mut state, &source, &path, loader, None, false, action != "transform")?;
+    let out = run_with_scan(
+        &mut state,
+        &source,
+        &path,
+        loader,
+        None,
+        false,
+        action != "transform",
+    )?;
     if action == "scanImports" {
         let scan: serde_json::Value = serde_json::from_str(&out.code).map_err(|e| e.to_string())?;
         return Ok(scan["imports"].to_string());
@@ -142,20 +186,35 @@ pub fn public_transpile(source: &[u8], options: &str, action: &str, name: &str) 
     Ok(out.code)
 }
 
-fn configure_public(state: &mut State, options: &serde_json::Value, tsconfig: &[u8]) -> Result<(), String> {
+fn configure_public(
+    state: &mut State,
+    options: &serde_json::Value,
+    tsconfig: &[u8],
+) -> Result<(), String> {
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&state._arena);
     let _ast_scope = ast_alloc.enter();
     if !options["tsconfig"].is_null() {
         let source = bun_ast::Source::init_path_string(b"tsconfig.json", tsconfig);
-        state.tsconfig = bun_resolver::tsconfig_json::TSConfigJSON::parse(&mut state.log, &source, &mut state.transpiler.resolver.caches.json)
-            .map_err(|e| format!("Invalid tsconfig: {e:?}"))?;
-        if state.log.errors > 0 { return Err(format_log(&state.log, "tsconfig.json")); }
+        state.tsconfig = bun_resolver::tsconfig_json::TSConfigJSON::parse(
+            &mut state.log,
+            &source,
+            &mut state.transpiler.resolver.caches.json,
+        )
+        .map_err(|e| format!("Invalid tsconfig: {e:?}"))?;
+        if state.log.errors > 0 {
+            return Err(format_log(&state.log, "tsconfig.json"));
+        }
     }
     let opts = &mut state.transpiler.options;
     opts.repl_mode = options["replMode"].as_bool().unwrap_or(false);
-    opts.dead_code_elimination = options["deadCodeElimination"].as_bool().unwrap_or(true) && !opts.repl_mode;
+    opts.dead_code_elimination =
+        options["deadCodeElimination"].as_bool().unwrap_or(true) && !opts.repl_mode;
     opts.tree_shaking = options["treeShaking"].as_bool().unwrap_or(false);
-    opts.trim_unused_imports = Some(options["trimUnusedImports"].as_bool().unwrap_or(opts.tree_shaking));
+    opts.trim_unused_imports = Some(
+        options["trimUnusedImports"]
+            .as_bool()
+            .unwrap_or(opts.tree_shaking),
+    );
     opts.minify_whitespace = options["minifyWhitespace"].as_bool().unwrap_or(false);
     opts.minify_syntax = options["minifySyntax"].as_bool().unwrap_or(false);
     opts.minify_identifiers = options["minifyIdentifiers"].as_bool().unwrap_or(false);
@@ -187,20 +246,27 @@ pub fn function_imports(args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, 
     }
     source.push_str("\n})");
     let (_, mut offsets) = with_state(|state| {
-        let (result, offsets) = bun_js_parser::with_bunwasm_dynamic_imports(|| run(state, &source, "<Function>", Loader::Js, None, false));
+        let (result, offsets) = bun_js_parser::with_bunwasm_dynamic_imports(|| {
+            run(state, &source, "<Function>", Loader::Js, None, false)
+        });
         result.map(|code| (code, offsets))
     })?;
     offsets.sort_unstable();
     offsets.dedup();
-    Ok(ranges.into_iter().map(|range| {
-        offsets.iter().filter(|offset| range.contains(offset)).map(|offset| {
-            source[range.start..*offset].encode_utf16().count()
-        }).collect()
-    }).collect())
+    Ok(ranges
+        .into_iter()
+        .map(|range| {
+            offsets
+                .iter()
+                .filter(|offset| range.contains(offset))
+                .map(|offset| source[range.start..*offset].encode_utf16().count())
+                .collect()
+        })
+        .collect())
 }
 
 /// Transpile one module to ESM JavaScript. `path` is used for error messages
-/// and the JSX/TS pragma lookups; it is not read from disk.
+/// and project decorator settings; the supplied source is not read from disk.
 pub fn transpile(source: &str, path: &str, loader: Loader) -> Result<String, String> {
     with_state(|state| run(state, source, path, loader, None, false)).map(|out| out.code)
 }
@@ -238,32 +304,49 @@ fn scan_imports(state: &State, source: &str, path: &str) -> Result<Vec<ModuleImp
     let mut log = bun_ast::Log::init();
     let mut scanned = bun_js_parser::ScanPassResult::init();
     let (result, dynamic) = bun_js_parser::with_bunwasm_dynamic_imports(|| {
-        let mut options = bun_js_parser::ParserOptions::init(state.transpiler.options.jsx.clone(), BunLoader::Js);
+        let mut options =
+            bun_js_parser::ParserOptions::init(state.transpiler.options.jsx.clone(), BunLoader::Js);
         options.features.commonjs_at_runtime = true;
-        let mut parser = bun_js_parser::Parser::init(options, &mut log, &src, &state.transpiler.options.define, &arena)
-            .map_err(|e| format!("failed to scan {path}: {e:?}"))?;
-        parser.scan_imports(&mut scanned).map_err(|e| format!("failed to scan {path}: {e:?}"))
+        let mut parser = bun_js_parser::Parser::init(
+            options,
+            &mut log,
+            &src,
+            &state.transpiler.options.define,
+            &arena,
+        )
+        .map_err(|e| format!("failed to scan {path}: {e:?}"))?;
+        parser
+            .scan_imports(&mut scanned)
+            .map_err(|e| format!("failed to scan {path}: {e:?}"))
     });
     result?;
     if log.errors > 0 {
         return Err(format_log(&log, path));
     }
     let mut imports = static_imports(&scanned.import_records);
-    imports.extend(dynamic.into_iter().map(|start| ModuleImport { start, end: start + 6, specifier: None }));
+    imports.extend(dynamic.into_iter().map(|start| ModuleImport {
+        start,
+        end: start + 6,
+        specifier: None,
+    }));
     imports.sort_by_key(|import| import.start);
     imports.dedup_by_key(|import| import.start);
     Ok(imports)
 }
 
 fn static_imports(records: &[bun_ast::ImportRecord]) -> Vec<ModuleImport> {
-    records.iter().filter(|r| r.kind == bun_ast::ImportKind::Stmt).map(|record| {
-        let start = record.range.loc.start as usize;
-        ModuleImport {
-            start,
-            end: start + record.range.len as usize,
-            specifier: Some(String::from_utf8_lossy(record.path.text).into_owned()),
-        }
-    }).collect()
+    records
+        .iter()
+        .filter(|r| r.kind == bun_ast::ImportKind::Stmt)
+        .map(|record| {
+            let start = record.range.loc.start as usize;
+            ModuleImport {
+                start,
+                end: start + record.range.len as usize,
+                specifier: Some(String::from_utf8_lossy(record.path.text).into_owned()),
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -284,18 +367,35 @@ pub struct Transpiled {
 
 /// Like [`transpile`], also returning the source map the printer recorded,
 /// so stack traces can point at the original TypeScript lines.
-pub fn transpile_with_source_map(source: &str, path: &str, loader: Loader, preserve_source: bool) -> Result<Transpiled, String> {
+pub fn transpile_with_source_map(
+    source: &str,
+    path: &str,
+    loader: Loader,
+    preserve_source: bool,
+) -> Result<Transpiled, String> {
     let mut collector = ChunkCollector(None);
     let (out, imports) = bun_js_printer::with_bunwasm_imports(|| {
-        with_state(|state| run(state, source, path, loader, Some(&mut collector), preserve_source))
+        with_state(|state| {
+            run(
+                state,
+                source,
+                path,
+                loader,
+                Some(&mut collector),
+                preserve_source,
+            )
+        })
     });
     let mut out = out?;
     if !preserve_source {
-        out.imports = imports.into_iter().map(|import| ModuleImport {
-            start: import.start,
-            end: import.end,
-            specifier: import.specifier,
-        }).collect();
+        out.imports = imports
+            .into_iter()
+            .map(|import| ModuleImport {
+                start: import.start,
+                end: import.end,
+                specifier: import.specifier,
+            })
+            .collect();
     }
     out.mappings = collector
         .0
@@ -378,7 +478,33 @@ fn run(
     source_map: Option<&mut ChunkCollector>,
     preserve_source: bool,
 ) -> Result<Transpiled, String> {
-    run_with_scan(state, source, path, loader, source_map, preserve_source, false)
+    run_with_scan(
+        state,
+        source,
+        path,
+        loader,
+        source_map,
+        preserve_source,
+        false,
+    )
+}
+
+fn runtime_decorator_config(
+    state: &mut State,
+    path: &str,
+    loader: Loader,
+) -> Option<&'static bun_resolver::tsconfig_json::TSConfigJSON> {
+    if state.public_api || !matches!(loader, Loader::Ts | Loader::Tsx) {
+        return None;
+    }
+    let path = std::path::absolute(path).ok()?;
+    path.parent()?.ancestors().find_map(|directory| {
+        state
+            .transpiler
+            .resolver
+            .read_dir_info_ignore_error(directory.as_os_str().as_encoded_bytes())
+            .and_then(|directory| directory.tsconfig_json())
+    })
 }
 
 fn run_with_scan(
@@ -407,21 +533,31 @@ fn run_with_scan(
 
     let path_static: &'static [u8] = arena_ref.alloc_slice_copy(path.as_bytes());
     let code: &'static [u8] = arena_ref.alloc_slice_copy(source.as_bytes());
-    let src: &'static bun_ast::Source = arena_ref.alloc(bun_ast::Source::init_path_string(path_static, code));
+    let src: &'static bun_ast::Source =
+        arena_ref.alloc(bun_ast::Source::init_path_string(path_static, code));
+    let decorator_config = runtime_decorator_config(state, path, loader);
+    let decorator_config = state.tsconfig.as_deref().or(decorator_config);
     let parse_options = ParseOptions {
         arena: arena_ref,
         macro_remappings: Default::default(),
         dirname_fd: bun_sys::Fd::INVALID,
         file_descriptor: None,
         loader: loader.to_bun(),
-        jsx: state.tsconfig.as_deref().map_or_else(|| state.transpiler.options.jsx.clone(), |ts| ts.merge_jsx(state.transpiler.options.jsx.clone())),
+        jsx: state.tsconfig.as_deref().map_or_else(
+            || state.transpiler.options.jsx.clone(),
+            |ts| ts.merge_jsx(state.transpiler.options.jsx.clone()),
+        ),
         path: src.path,
         virtual_source: Some(src),
         replace_exports: Default::default(),
         macro_js_ctx: bun_bundler::transpiler::default_macro_js_value(),
-        experimental_decorators: state.tsconfig.as_deref().is_some_and(|ts| ts.experimental_decorators),
-        emit_decorator_metadata: state.tsconfig.as_deref().is_some_and(|ts| ts.emit_decorator_metadata),
-        use_define_for_class_fields: state.tsconfig.as_deref().and_then(|ts| ts.use_define_for_class_fields).unwrap_or(true),
+        experimental_decorators: decorator_config.is_some_and(|ts| ts.experimental_decorators),
+        emit_decorator_metadata: decorator_config.is_some_and(|ts| ts.emit_decorator_metadata),
+        use_define_for_class_fields: state
+            .tsconfig
+            .as_deref()
+            .and_then(|ts| ts.use_define_for_class_fields)
+            .unwrap_or(true),
         file_fd_ptr: None,
         inject_jest_globals: false,
         set_breakpoint_on_first_line: false,
@@ -442,25 +578,54 @@ fn run_with_scan(
     if log.errors > 0 || parsed.is_none() {
         let msg = format_log(&log, path);
         restore(&mut state.transpiler, &mut state.log);
-        return Err(if msg.is_empty() { format!("failed to parse {path}") } else { msg });
+        return Err(if msg.is_empty() {
+            format!("failed to parse {path}")
+        } else {
+            msg
+        });
     }
     let mut parsed = parsed.expect("checked above");
     let module_kind = module_kind(&parsed.ast, loader);
     if scan {
-        let code = scan_json(&mut parsed.ast, state.transpiler.options.trim_unused_imports.unwrap_or(false));
+        let code = scan_json(
+            &mut parsed.ast,
+            state
+                .transpiler
+                .options
+                .trim_unused_imports
+                .unwrap_or(false),
+        );
         restore(&mut state.transpiler, &mut state.log);
-        return Ok(Transpiled { code, mappings: String::new(), imports: Vec::new(), module_kind });
+        return Ok(Transpiled {
+            code,
+            mappings: String::new(),
+            imports: Vec::new(),
+            module_kind,
+        });
     }
     if preserve_source {
         let mut imports = static_imports(&parsed.ast.import_records);
-        imports.extend(dynamic.into_iter().map(|start| ModuleImport { start, end: start + 6, specifier: None }));
+        imports.extend(dynamic.into_iter().map(|start| ModuleImport {
+            start,
+            end: start + 6,
+            specifier: None,
+        }));
         imports.sort_by_key(|import| import.start);
         imports.dedup_by_key(|import| import.start);
         restore(&mut state.transpiler, &mut state.log);
-        return Ok(Transpiled { code: source.to_owned(), mappings: String::new(), imports, module_kind });
+        return Ok(Transpiled {
+            code: source.to_owned(),
+            mappings: String::new(),
+            imports,
+            module_kind,
+        });
     }
     let mut printer = bun_js_printer::BufferPrinter::init(bun_js_printer::BufferWriter::init());
-    let format = if state.public_api { bun_bundler::transpiler::PrintFormat::EsmAscii } else { bun_bundler::transpiler::PrintFormat::Esm };
+    let format = if state.public_api {
+        bun_bundler::transpiler::PrintFormat::EsmAscii
+    } else {
+        bun_bundler::transpiler::PrintFormat::Esm
+    };
     let printed = match source_map {
         Some(collector) => state.transpiler.print_with_source_map(
             &arena,
@@ -475,7 +640,12 @@ fn run_with_scan(
     restore(&mut state.transpiler, &mut state.log);
     printed.map_err(|e| format!("failed to print {path}: {e:?}"))?;
     let code = String::from_utf8(printer.ctx.written().to_vec()).map_err(|e| e.to_string())?;
-    Ok(Transpiled { code, mappings: String::new(), imports: Vec::new(), module_kind })
+    Ok(Transpiled {
+        code,
+        mappings: String::new(),
+        imports: Vec::new(),
+        module_kind,
+    })
 }
 
 fn scan_json(ast: &mut bun_ast::Ast<'_>, trim_unused: bool) -> String {
@@ -485,24 +655,40 @@ fn scan_json(ast: &mut bun_ast::Ast<'_>, trim_unused: bool) -> String {
         .map(|record| serde_json::json!({ "path": String::from_utf8_lossy(record.path.text), "kind": String::from_utf8_lossy(record.kind.label()) }))
         .collect();
     let mut exports = Vec::new();
-    let mut entries = ast.named_exports.iterator();
-    while let Some(entry) = entries.next() {
-        exports.push(String::from_utf8_lossy(&**entry.key_ptr).into_owned());
+    let entries = ast.named_exports.iterator();
+    for entry in entries {
+        exports.push(String::from_utf8_lossy(entry.key_ptr).into_owned());
     }
     exports.sort();
     serde_json::json!({ "exports": exports, "imports": imports }).to_string()
 }
 
 fn module_kind(ast: &bun_ast::Ast<'_>, loader: Loader) -> ModuleKind {
-    if ast.has_import_meta || matches!(loader, Loader::Json | Loader::Toml | Loader::Yaml | Loader::Json5 | Loader::Jsonc | Loader::Text) {
+    if ast.has_import_meta
+        || matches!(
+            loader,
+            Loader::Json
+                | Loader::Toml
+                | Loader::Yaml
+                | Loader::Json5
+                | Loader::Jsonc
+                | Loader::Text
+        )
+    {
         return ModuleKind::Esm;
     }
-    if matches!(ast.exports_kind, bun_ast::ExportsKind::Cjs | bun_ast::ExportsKind::EsmWithDynamicFallbackFromCjs) {
+    if matches!(
+        ast.exports_kind,
+        bun_ast::ExportsKind::Cjs | bun_ast::ExportsKind::EsmWithDynamicFallbackFromCjs
+    ) {
         return ModuleKind::CommonJs;
     }
     let imports = ast.import_records.as_slice().iter().any(|record| {
         record.kind == bun_ast::ImportKind::Stmt
-            && !record.flags.intersects(bun_ast::import_record::Flags::IS_INTERNAL | bun_ast::import_record::Flags::IS_UNUSED)
+            && !record.flags.intersects(
+                bun_ast::import_record::Flags::IS_INTERNAL
+                    | bun_ast::import_record::Flags::IS_UNUSED,
+            )
     });
     if ast.export_keyword.len > 0 || ast.top_level_await_keyword.len > 0 || imports {
         return ModuleKind::Esm;

@@ -1,6 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EditorState } from "@codemirror/state";
 import { Shell } from "../src/shell";
+import { SharedFilesystem } from "waffle/browser/shared-fs";
+import { FilesystemClient, FilesystemError, FilesystemService, MemoryBackend, createFilesystemConnection } from "waffle/fs";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -254,15 +256,6 @@ test("sandbox HMR notifications stay ordered and stale replies do not replace th
   expect(statuses).toEqual(["saved"]);
 });
 
-test("playground storage selection defaults to IndexedDB and requires an explicit OPFS query", async () => {
-  const source = await Bun.file(new URL("../src/main.ts", import.meta.url)).text();
-  const selector = source.match(/^const storage = .*;$/m)![0];
-  const select = new Function("params", `${transpiler.transformSync(selector)} return storage;`);
-  expect(select(new URLSearchParams())).toBe("indexeddb");
-  expect(select(new URLSearchParams("storage=opfs"))).toBe("opfs");
-  expect(select(new URLSearchParams("storage=unknown"))).toBe("indexeddb");
-});
-
 test("playground only seeds examples in a new home, preserving changes and deletions on reload", async () => {
   const source = await Bun.file(new URL("../src/main.ts", import.meta.url)).text();
   const code = source.slice(source.indexOf("const runtime = createRuntime"), source.indexOf("// ---------- bun.wasm ----------"));
@@ -279,8 +272,8 @@ test("playground only seeds examples in a new home, preserving changes and delet
     },
     async flush() { checkpoints++; },
   };
-  const startup = new Function("createRuntime", "HOME", "examples", "storage", `return (async () => { ${transpiler.transformSync(code)} })();`);
-  const start = () => startup(() => ({ filesystem: fs }), "/home/user", { "index.ts": "example", "deleted.ts": "delete me" }, "indexeddb");
+  const startup = new Function("createRuntime", "installRuntimeSharedObjects", "HOME", "examples", "mode", `return (async () => { ${transpiler.transformSync(code)} })();`);
+  const start = () => startup(() => ({ filesystem: fs }), () => ({ close() {} }), "/home/user", { "index.ts": "example", "deleted.ts": "delete me" }, "fast");
   await start();
   expect(files.get("/home/user/index.ts")).toBe("example");
   expect(checkpoints).toBe(1);
@@ -290,6 +283,25 @@ test("playground only seeds examples in a new home, preserving changes and delet
   expect(files.get("/home/user/index.ts")).toBe("saved edit");
   expect(files.has("/home/user/deleted.ts")).toBe(false);
   expect(checkpoints).toBe(1);
+});
+
+test("persisted pagehide keeps shared-object installation for the next command", async () => {
+  const source = await Bun.file(new URL("../src/main.ts", import.meta.url)).text();
+  const code = source.slice(source.indexOf("const runtime = createRuntime"), source.indexOf("const fs = runtime.filesystem"));
+  let pagehide: ((event: { persisted: boolean }) => void) | undefined;
+  const state = { closed: false };
+  const startup = new Function("createRuntime", "installRuntimeSharedObjects", "addEventListener", "state", "mode", `${transpiler.transformSync(code)}; return () => { if (state.closed) throw new Error("installation closed"); return "command-ready"; };`)(
+    () => ({ filesystem: {} }),
+    () => ({ close() { state.closed = true; } }),
+    (_type: string, listener: (event: { persisted: boolean }) => void) => { pagehide = listener; },
+    state,
+    "fast",
+  );
+  expect(pagehide).toBeFunction();
+  pagehide!({ persisted: true });
+  expect(startup()).toBe("command-ready");
+  pagehide!({ persisted: false });
+  expect(() => startup()).toThrow("installation closed");
 });
 
 test("sandbox reload preserves its workspace and only an explicit reset replaces the template", async () => {
@@ -355,7 +367,7 @@ for (const app of ["web", "sandbox"] as const) {
     const workspace = app === "web" ? "/home/user" : "/home/user/app";
     const sources = { "index.html": "page", "first.ts": "first file", "second.ts": "second file" };
     const env = {
-      createRuntime: () => ({ filesystem: fs }), fs, HOME: workspace, APP: workspace, examples: sources, storage: "indexeddb",
+      createRuntime: () => ({ filesystem: fs }), installRuntimeSharedObjects: () => ({ close() {} }), fs, HOME: workspace, APP: workspace, examples: sources, mode: "fast",
       setStatus() {}, templateFile: "template.json", measureStartup() {},
       abs: (path: string) => `${workspace}/${path}`,
       fetch: async () => ({ ok: true, text: async () => JSON.stringify({ files: sources }) }),
@@ -439,60 +451,117 @@ test("shell discards filesystem completion after the line was submitted", async 
   expect(ui.line).toBe("cat f");
 });
 
-async function filesystemFixture() {
-  const source = await Bun.file(new URL(import.meta.resolve("waffle/browser/shared-fs"))).text();
-  const code = source.slice(source.indexOf("export class SharedFilesystem")).replace("export class", "class");
-  const Filesystem = new Function(`${transpiler.transformSync(code)}; return SharedFilesystem;`)();
-  const fs = Object.create(Filesystem.prototype);
-  fs.writes = Promise.resolve();
-  return fs;
+class ControlledFilesystemBackend extends MemoryBackend {
+  readonly writeEntered = deferred<void>();
+  readonly flushEntered = deferred<void>();
+  write: Promise<void> | undefined;
+  checkpoint = Promise.resolve();
+  prepare(operation: string): Promise<void> | undefined {
+    if (operation !== "writeFile" || !this.write) return;
+    const pending = this.write;
+    this.write = undefined;
+    this.writeEntered.resolve();
+    return pending;
+  }
+  flush(): Promise<void> {
+    this.flushEntered.resolve();
+    return this.checkpoint;
+  }
+}
+
+const filesystemCleanups: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const cleanup of filesystemCleanups.splice(0)) await cleanup();
+});
+
+function filesystemFixture() {
+  const connection = createFilesystemConnection();
+  const backend = new ControlledFilesystemBackend();
+  const service = new FilesystemService(backend);
+  const client = new FilesystemClient(connection.client);
+  const operations: string[] = [];
+  const asyncCall = client.asyncCall.bind(client);
+  const requests = spyOn(client, "asyncCall").mockImplementation((...args) => {
+    operations.push(args[0]);
+    return asyncCall(...args);
+  });
+  const fs: SharedFilesystem = Object.assign(Object.create(SharedFilesystem.prototype), {
+    client, writes: Promise.resolve(),
+  });
+  filesystemCleanups.push(async () => {
+    requests.mockRestore();
+    try { await service.drainForOwner(); }
+    finally {
+      client.dispose();
+      service.dispose();
+      connection.server.port.close();
+    }
+  });
+  service.connect(connection.server);
+  return { fs, backend, operations };
 }
 
 test("shared filesystem reads drain writes without requesting storage checkpoints", async () => {
-  const fs = await filesystemFixture();
+  const { fs, backend, operations } = filesystemFixture();
   const write = deferred<void>();
-  const operations: string[] = [];
-  fs.client = { asyncCall: (operation: string) => { operations.push(operation); return operation === "writeFile" ? write.promise : Promise.resolve(); } };
+  backend.write = write.promise;
   const writing = fs.writeFile("/file", "memory-first");
   const reading = fs.readFile("/file");
   const lookup = fs.lookup("/file");
   const listing = fs.listFiles();
-  await Bun.sleep(0);
-  expect(operations).toEqual(["writeFile"]);
-  write.resolve();
-  await Promise.all([writing, reading, lookup, listing]);
-  expect(operations).toEqual(["writeFile", "readFile", "lookup", "listFiles"]);
+  try {
+    await backend.writeEntered.promise;
+    expect(operations).toEqual(["writeFile"]);
+    write.resolve();
+    const [, contents, entry, files] = await Promise.all([writing, reading, lookup, listing]);
+    expect(operations).toEqual(["writeFile", "readFile", "lookup", "listFiles"]);
+    expect(decoder.decode(contents)).toBe("memory-first");
+    expect(entry?.kind).toBe("file");
+    expect(files).toContain("/file");
+  } finally { write.resolve(); }
 });
 
 test("shared filesystem flush waits for pending writes and a durable service checkpoint", async () => {
-  const fs = await filesystemFixture();
+  const { fs, backend, operations } = filesystemFixture();
   const write = deferred<void>();
   const checkpoint = deferred<void>();
-  const operations: string[] = [];
-  fs.client = { asyncCall: (operation: string) => { operations.push(operation); return operation === "writeFile" ? write.promise : checkpoint.promise; } };
+  backend.write = write.promise;
+  backend.checkpoint = checkpoint.promise;
   const writing = fs.writeFile("/file", "durable");
   let completed = false;
   const saving = fs.flush().then(() => { completed = true; });
-  await Bun.sleep(0);
-  expect(operations).toEqual(["writeFile"]);
-  write.resolve();
-  await writing;
-  await Bun.sleep(0);
-  expect(operations).toEqual(["writeFile", "flush"]);
-  expect(completed).toBe(false);
-  checkpoint.resolve();
-  await saving;
+  try {
+    await backend.writeEntered.promise;
+    expect(operations).toEqual(["writeFile"]);
+    write.resolve();
+    await writing;
+    await backend.flushEntered.promise;
+    expect(operations).toEqual(["writeFile", "flush"]);
+    expect(completed).toBe(false);
+    checkpoint.resolve();
+    await saving;
+    expect(completed).toBe(true);
+    expect(decoder.decode(await fs.readFile("/file"))).toBe("durable");
+  } finally { write.resolve(); checkpoint.resolve(); }
 });
 
 test("shared filesystem flush reports failed writes and permits later writes", async () => {
-  const fs = await filesystemFixture();
-  const failure = new Error("failed editor save");
-  fs.client = { asyncCall: async () => { throw failure; } };
-  await expect(fs.writeFile("/file", "first")).rejects.toBe(failure);
+  const { fs, backend, operations } = filesystemFixture();
+  const write = deferred<void>();
+  backend.write = write.promise;
+  const writing = fs.writeFile("/file", "first");
+  await backend.writeEntered.promise;
+  write.reject(new FilesystemError(51, "failed editor save"));
+  // The service transports errors, so the page owns the decoded error, not the backend object.
+  const failure = await writing.catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(FilesystemError);
+  expect(failure).toHaveProperty("errno", 51);
   await expect(fs.flush()).rejects.toBe(failure);
-  fs.client = { asyncCall: async () => {} };
+  expect(operations).toEqual(["writeFile"]);
   await fs.writeFile("/file", "second");
   await fs.flush();
+  expect(operations).toEqual(["writeFile", "writeFile", "flush"]);
+  expect(decoder.decode(await fs.readFile("/file"))).toBe("second");
 });
 
 test("sandbox Restart is available while the initial dev server is still running", async () => {

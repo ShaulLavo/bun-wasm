@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 import { sha256 } from "./registry.mjs";
@@ -36,6 +36,14 @@ function fixture() {
     cpSync(join(root, "web/tests/playground.mjs"), join(directory, "web/tests/playground.mjs"), { recursive: true });
     cpSync(join(root, "web/tests/foreground.ts"), join(directory, "web/tests/foreground.ts"));
     mkdirSync(join(directory, "owned-scratch"));
+    // The runner records its own checkout revision before executing any stages.
+    for (const args of [
+      ["init", "--quiet", directory],
+      ["-C", directory, "-c", "user.name=Matrix fixture", "-c", "user.email=matrix@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "Create isolated matrix fixture"],
+    ]) {
+      const git = spawnSync("git", args, { encoding: "utf8" });
+      if (git.status !== 0) throw new Error(`Cannot prepare matrix fixture revision: ${git.stderr}`);
+    }
     return { directory, cleanup };
   } catch (error) { cleanup(); throw error; }
 }
@@ -55,7 +63,7 @@ test("native server must stay alive until its DOM assertion completes", async ()
     };
     writeFileSync(join(directory, "scripts/app-matrix/apps.mjs"), `export { projectFiles } from ${JSON.stringify(join(root, "scripts/app-matrix/apps.mjs"))}; export const apps = ${JSON.stringify([app])}; export const browserSubset = [];`);
     const result = await matrix(directory, ["--apps=native-dom", "--reference", "--timeout=10"]);
-    expect(result.code).toBe(0);
+    expect(result.code, result.output).toBe(0);
     const { results } = JSON.parse(readFileSync(join(directory, "results/results.json")));
     const reference = results.filter(row => row.engine === "reference");
     expect(reference.find(row => row.stage === "install").status).toBe("pass");
@@ -107,11 +115,15 @@ test("real no-op launcher cannot pass install or tooling stages", async () => {
   const { directory, cleanup } = fixture();
   try {
     const result = await matrix(directory);
-    expect(result.code).toBe(0);
+    expect(result.code, result.output).toBe(0);
     const { results } = JSON.parse(readFileSync(join(directory, "results/results.json")));
     expect(results.length).toBe(6);
     expect(results.filter(row => row.status === "pass")).toEqual([]);
     expect(results.filter(row => row.stage === "install").map(row => row.status)).toEqual(["fail", "fail"]);
+    rmSync(join(directory, "results"), { recursive: true });
+    const strict = await matrix(directory, ["--strict"]);
+    expect(strict.code, strict.output).toBe(1);
+    expect(strict.output).toContain('"cleanup":true');
     expect(readdirSync(join(directory, "owned-scratch"))).toEqual([]);
   } finally { cleanup(); }
 }, 30000);

@@ -17,7 +17,6 @@ use std::collections::{BTreeMap, HashMap};
 mod cache;
 mod finalize;
 pub(crate) mod graph;
-#[cfg(target_os = "wasi")]
 mod hooks;
 
 #[derive(Clone, Default)]

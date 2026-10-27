@@ -146,8 +146,7 @@ its reentry paths (parser blocks about six times more). Deeply nested input stil
 traps there as it did before, for example blocks after 415 levels on wasmtime. On the
 native launcher's 16 MiB stack they throw instead, except unary operator chains, which
 trap after 80,618 levels at any budget. Fixing
-them needs reservations in WebKit, like those in QuickJS. See
-`plans/compatibility-followups.md`.
+them needs reservations in WebKit, like those in QuickJS.
 
 ## Browser-native engine
 

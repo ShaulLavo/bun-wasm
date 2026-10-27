@@ -3,15 +3,57 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { assertSafariCaseRows, selectSafariCaseNames } from "./browser-safari";
+import { assertEngineInterruptionResult } from "./engine-interruption-result";
 import { collectRunnerCleanup, finishRunnerCleanup, runBrowserGate, type RunnerCleanup } from "./browser-engine-interruption";
 
 function green() {
-  const checks = ["quickjs", "jsc"].flatMap(engine => Array.from({ length: 12 }, (_, index) => ({
-    engine, route: index < 5 ? "runtimeProcess" : "legacy", name: `proof-${index}`,
+  const checks = ["quickjs", "jsc"].flatMap(engine => Array.from({ length: 14 }, (_, index) => ({
+    engine, route: index < 7 ? "runtimeProcess" : "legacy", name: `proof-${index}`,
   }))).concat(Array.from({ length: 4 }, (_, index) => ({ engine: "browser", route: "legacy", name: `browser-${index}` })));
   return { ok: true, checks, outcomes: [{ ok: true, cleanup: { safe: true } }], pageErrors: [],
     cleanup: { safe: true, activeWorkers: 0 }, benchmarks: [{ engine: "quickjs" }, { engine: "jsc" }] };
 }
+
+test("Safari selection rejects unknown cases and missing interruption guests before opening a driver", () => {
+  expect(() => selectSafariCaseNames({ prefix: "typo", publishedDefault: false })).toThrow("matched no scenarios");
+  expect(() => selectSafariCaseNames({ prefix: "engine-interruption", publishedDefault: false })).toThrow("SAFARI_GUEST_DIR");
+  expect(selectSafariCaseNames({ prefix: "engine-interruption", guestDirectory: "/guests", publishedDefault: false })).toEqual(["engine-interruption"]);
+  expect(selectSafariCaseNames({ prefix: "runtime-proc/", publishedDefault: true })).toHaveLength(4);
+});
+test("invalid Safari CLI selections exit nonzero without requesting Safari", () => {
+  for (const prefix of ["typo", "engine-interruption"]) {
+    const child = Bun.spawnSync([process.execPath, new URL("./browser-safari.ts", import.meta.url).pathname, "--run", "/unused"], {
+      env: { ...process.env, SAFARI_CASE: prefix, SAFARI_GUEST_DIR: undefined }, stdout: "pipe", stderr: "pipe",
+    });
+    expect(child.exitCode).not.toBe(0);
+    expect(new TextDecoder().decode(child.stderr)).toContain(prefix === "typo" ? "matched no scenarios" : "requires SAFARI_GUEST_DIR");
+  }
+});
+test("Safari admits success only when every selected scenario executed", () => {
+  expect(() => assertSafariCaseRows([], [])).toThrow("executed no scenarios");
+  expect(() => assertSafariCaseRows([], ["artifact-free-process"])).toThrow("executed no scenarios");
+  expect(() => assertSafariCaseRows([{ name: "wrong" }], ["artifact-free-process"])).toThrow("every selected");
+  expect(() => assertSafariCaseRows([{ name: "artifact-free-process" }], ["artifact-free-process"])).not.toThrow();
+});
+test("Safari and Playwright share the exact interruption coverage validator", () => {
+  expect(() => assertEngineInterruptionResult(green(), false)).not.toThrow();
+  const incomplete = [
+    { checks: [] },
+    { outcomes: [] },
+    { unsafeCleanup: "unproved" },
+    { outcomes: [{ ok: false, cleanup: { safe: true } }] },
+    { outcomes: [{ ok: true, cleanup: { safe: false } }] },
+    { pageErrors: ["unhandled page error"] },
+    { checks: green().checks.slice(1) },
+    { checks: green().checks.map(check => ({ ...check, route: "legacy" })) },
+    { checks: green().checks.map(check => ({ ...check, engine: "quickjs" })) },
+    { checks: green().checks.map(check => ({ ...check, name: "duplicate" })) },
+    { cleanup: { safe: true, activeWorkers: 1 } },
+  ];
+  for (const missing of incomplete) expect(() => assertEngineInterruptionResult({ ...green(), ...missing }, false)).toThrow();
+  expect(() => assertEngineInterruptionResult({ ...green(), benchmarks: [] }, true)).toThrow();
+});
 
 function fixture(overrides: Record<string, unknown> = {}) {
   const events: string[] = [], written: any[] = [];
@@ -176,7 +218,7 @@ test("failed admission marks nominally green result RED and still closes before 
   f.options.runBrowser = async name => { const result = green(); if (name === "chromium") result.checks.pop(); f.events.push(`run:${name}`); return result; };
   const report = await runBrowserGate(f.options);
   expect(report.ok).toBe(false); expect(report.reports).toHaveLength(4); expect(report.cleanup.safe).toBe(true);
-  expect(report.reports[0]!.ok).toBe(false); expect(report.reports[0]!.error).toContain("28"); expect(report.reports[1]!.ok).toBe(true);
+  expect(report.reports[0]!.ok).toBe(false); expect(report.reports[0]!.error).toContain("32"); expect(report.reports[1]!.ok).toBe(true);
   expect(f.events.indexOf("close:chromium")).toBeLessThan(f.events.indexOf("run:firefox"));
 });
 

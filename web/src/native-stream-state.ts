@@ -1,3 +1,5 @@
+import { constructNativeReadable } from "./native-direct-stream.ts";
+
 const closedKey = Symbol.for("nodejs.webstream.isClosedPromise");
 const errorKey = Symbol.for("nodejs.webstream.controllerErrorFunction");
 const NativeAbortController = globalThis.AbortController;
@@ -15,20 +17,23 @@ type Group = {
   values: Completion[];
   notification?: { owner: Session; id?: Timer } | null;
 };
+type Settlement = { error: unknown; failed: boolean };
 type Completion = {
   stream: WeakRef<object>;
   readable: boolean;
   group?: Group;
-  promise: Promise<void>;
-  fulfill: () => void;
-  fail: (error: unknown) => void;
+  // Node's finished() reads `promise`; most streams never reach it, so it is made on first read.
+  readonly promise: Promise<void>;
+  resolvers?: { promise: Promise<void>; fulfill: () => void; fail: (error: unknown) => void };
+  settled?: Settlement;
   watching: boolean;
   done: boolean;
   queued: boolean;
   handle: WeakRef<object> | null;
   session?: Session;
-  weak: WeakRef<Completion>;
-  observation?: { error: unknown; failed: boolean };
+  readonly weak: WeakRef<Completion>;
+  weakRef?: WeakRef<Completion>;
+  observation?: Settlement;
 };
 type Observer = { value: Completion; observed: false } | {
   value: Completion; observed: true; promise: Promise<void>; ignore: boolean;
@@ -71,15 +76,23 @@ const writerClosed = getter(Native.WritableStreamDefaultWriter.prototype, "close
 const releaseReader = Native.ReadableStreamDefaultReader.prototype.releaseLock;
 const releaseWriter = Native.WritableStreamDefaultWriter.prototype.releaseLock;
 
+function resolvers(value: Completion) {
+  if (value.resolvers) return value.resolvers;
+  let fulfill!: () => void, fail!: (error: unknown) => void;
+  const promise = new NativePromise<void>((a, b) => { fulfill = a; fail = b; });
+  then(promise, undefined, () => {});
+  value.resolvers = { promise, fulfill, fail };
+  if (value.settled?.failed) fail(value.settled.error);
+  else if (value.settled) fulfill();
+  return value.resolvers;
+}
 function record(stream: object, readable: boolean, group?: Group): Completion {
   let value = records.get(stream);
   if (value) { if (group) value.group = group; return value; }
   apply(readable ? readableLocked : writableLocked, stream, []);
-  let fulfill!: () => void, fail!: (error: unknown) => void;
-  const promise = new NativePromise<void>((a, b) => { fulfill = a; fail = b; });
-  then(promise, undefined, () => {});
-  value = { stream: new WeakRef(stream), readable, group, promise, fulfill, fail, watching: false, done: false, queued: false, handle: null, session, get weak(): WeakRef<Completion> { return weak; } };
-  const weak: WeakRef<Completion> = new WeakRef(value);
+  value = { stream: new WeakRef(stream), readable, group, watching: false, done: false, queued: false, handle: null, session,
+    get promise() { return resolvers(this).promise; },
+    get weak() { return this.weakRef ??= new WeakRef(this); } };
   records.set(stream, value);
   return value;
 }
@@ -97,9 +110,10 @@ function settle(value: Completion, error?: unknown, failed = false) {
     return;
   }
   value.done = true;
-  pending.delete(value.weak);
-  if (failed) value.fail(error);
-  else value.fulfill();
+  if (value.weakRef) pending.delete(value.weakRef);
+  value.settled = { error, failed };
+  if (failed) value.resolvers?.fail(error);
+  else value.resolvers?.fulfill();
   for (const peer of value.group?.values ?? []) if (peer !== value) request(peer);
 }
 function poll(value: Completion) {
@@ -225,14 +239,93 @@ function construct<T extends typeof ReadableStream | typeof WritableStream | typ
   let wrapper: T;
   wrapper = new Proxy(Ctor, { construct(target, args, newTarget) {
     const group: Group = { kind, controller: null, error: null, pending: [], barriers: new Set(), values: [] };
-    args[0] = dictionary(args[0], methods, group);
-    const stream = Reflect.construct(target, args, newTarget === wrapper ? target : newTarget);
+    const original = args[0];
+    args[0] = dictionary(original, methods, group);
+    const actualTarget = newTarget === wrapper ? target : newTarget;
+    const stream = kind === "readable" ? constructNativeReadable(target, args, actualTarget, original, (controller, error) => { captureController(group, controller); group.error = error; }) : Reflect.construct(target, args, actualTarget);
     if (kind === "transform") group.values = [record(stream.readable, true, group), record(stream.writable, false, group)];
     else group.values = [record(stream, kind === "readable", group)];
     if (group.controller) controllers.set(group.controller, group);
     return stream;
   } });
   return wrapper;
+}
+type Sequence = { kind: "async" | "sync"; iterator: object; next: unknown };
+type SequenceStep = { done: true } | { done: false; value: unknown };
+function sequenceObject(value: unknown): object {
+  if (value === null || typeof value !== "object" && typeof value !== "function") throw new TypeError("Iterator result must be an object");
+  return value;
+}
+function sequenceMethod(object: object, key: PropertyKey): Function | undefined {
+  const value = Reflect.get(object, key);
+  if (value === undefined || value === null) return;
+  if (typeof value !== "function") throw new TypeError("Iterator method must be callable");
+  return value;
+}
+function openSequence(input: unknown): Sequence {
+  const object = sequenceObject(input);
+  const asyncMethod = sequenceMethod(object, Symbol.asyncIterator);
+  const method = asyncMethod ?? sequenceMethod(object, Symbol.iterator);
+  if (!method) throw new TypeError("Value must be iterable");
+  const iterator = sequenceObject(apply(method, object, []));
+  return { kind: asyncMethod ? "async" : "sync", iterator, next: Reflect.get(iterator, "next") };
+}
+function callNext(sequence: Sequence): object {
+  if (typeof sequence.next !== "function") throw new TypeError("Iterator next must be callable");
+  return sequenceObject(apply(sequence.next, sequence.iterator, []));
+}
+function closeRejectedSync(sequence: Sequence, error: unknown): never {
+  try {
+    const method = sequenceMethod(sequence.iterator, "return");
+    if (method) apply(method, sequence.iterator, []);
+  } catch { /* IteratorClose preserves the original abrupt completion. */ }
+  throw error;
+}
+async function syncSequenceResult(sequence: Sequence, result: object, closeOnRejection: boolean): Promise<SequenceStep> {
+  const done = Boolean(Reflect.get(result, "done"));
+  const value = Reflect.get(result, "value");
+  let unwrapped;
+  try { unwrapped = await value; }
+  catch (error) {
+    if (!done && closeOnRejection) closeRejectedSync(sequence, error);
+    throw error;
+  }
+  return done ? { done: true } : { done: false, value: unwrapped };
+}
+async function nextSequence(sequence: Sequence): Promise<SequenceStep> {
+  const result = callNext(sequence);
+  const resolved = sequence.kind === "sync"
+    ? await syncSequenceResult(sequence, result, true)
+    : sequenceObject(await result);
+  if (Reflect.get(resolved, "done")) return { done: true };
+  return { done: false, value: await Reflect.get(resolved, "value") };
+}
+async function closeSequence(sequence: Sequence, reason: unknown): Promise<void> {
+  const method = sequenceMethod(sequence.iterator, "return");
+  if (!method) return;
+  const result = apply(method, sequence.iterator, [reason]);
+  if (sequence.kind === "sync") {
+    await syncSequenceResult(sequence, sequenceObject(result), false);
+    return;
+  }
+  sequenceObject(await result);
+}
+function readableFrom(Ctor: typeof ReadableStream, input: unknown): ReadableStream<unknown> {
+  const sequence = openSequence(input);
+  let cancelled = false;
+  return new Ctor({
+    async pull(controller) {
+      const step = await nextSequence(sequence);
+      if (cancelled) return;
+      if (step.done) controller.close();
+      else controller.enqueue(step.value);
+    },
+    cancel(reason) { cancelled = true; return closeSequence(sequence, reason); },
+  }, { highWaterMark: 0 });
+}
+function installReadableFrom(Ctor: typeof ReadableStream) {
+  const method = { from(input: unknown) { return readableFrom(Ctor, input); } }.from;
+  Object.defineProperty(Ctor, "from", { configurable: true, enumerable: true, writable: true, value: method });
 }
 function method(prototype: object, name: PropertyKey, after: (self: object, args: unknown[], result: unknown) => void) {
   const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
@@ -328,6 +421,14 @@ function streamMethods(Ctor: typeof ReadableStream | typeof WritableStream, read
   }
 }
 
+function publishNativeHooks(): void {
+  for (const Ctor of [Native.ReadableStream, Native.WritableStream]) {
+    for (const key of [closedKey, errorKey]) {
+      if (!(key in Ctor.prototype)) Object.defineProperty(Ctor.prototype, key, { configurable: true, writable: true, value: undefined });
+    }
+  }
+}
+
 export function installNativeStreamState() {
   if (!constructors) {
     if (closedKey in Native.ReadableStream.prototype) return () => {};
@@ -335,11 +436,7 @@ export function installNativeStreamState() {
     // capability slots for the guest's prototype check, never getter-only hooks
     // that would prevent those assignments. Each instance keeps its native state.
     if (closedKey in new Native.ReadableStream({ start(controller) { controller.close(); } })) {
-      for (const Ctor of [Native.ReadableStream, Native.WritableStream]) {
-        for (const key of [closedKey, errorKey]) {
-          if (!(key in Ctor.prototype)) Object.defineProperty(Ctor.prototype, key, { configurable: true, writable: true, value: undefined });
-        }
-      }
+      publishNativeHooks();
       return () => {};
     }
   }
@@ -356,6 +453,7 @@ export function installNativeStreamState() {
     const readable = construct(Native.ReadableStream, "readable", ["start", "pull", "cancel"]);
     const writable = construct(Native.WritableStream, "writable", ["start", "write", "close", "abort"]);
     const transform = construct(Native.TransformStream, "transform", ["start", "transform", "flush", "cancel"]);
+    installReadableFrom(readable);
     linkConstructor(Native.ReadableStream, readable);
     linkConstructor(Native.WritableStream, writable);
     linkConstructor(Native.TransformStream, transform);

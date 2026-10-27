@@ -8,12 +8,12 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 use std::rc::Rc;
 
-use bunwasm_jsc::sys::*;
 use bunwasm_jsc::JsString;
+use bunwasm_jsc::sys::*;
 
 use crate::engine::{Engine, ErrorKind, ModuleHost, NativeError, PromiseState, Val, ValueFn};
 
@@ -36,7 +36,11 @@ pub struct JsVal(JSValueRef);
 
 impl JsVal {
     fn new(v: JSValueRef) -> JsVal {
-        let v = if v.is_null() { unsafe { JSValueMakeUndefined(ctx()) } } else { v };
+        let v = if v.is_null() {
+            unsafe { JSValueMakeUndefined(ctx()) }
+        } else {
+            v
+        };
         // SAFETY: a live value of the one context.
         unsafe { JSValueProtect(ctx(), v) };
         JsVal(v)
@@ -67,7 +71,11 @@ impl Drop for JsVal {
 pub struct Jsc;
 
 fn checked(exc: JSValueRef, v: JSValueRef) -> Result<JsVal, JsVal> {
-    if exc.is_null() { Ok(JsVal::new(v)) } else { Err(JsVal::new(exc)) }
+    if exc.is_null() {
+        Ok(JsVal::new(v))
+    } else {
+        Err(JsVal::new(exc))
+    }
 }
 
 fn js_string(s: &str) -> JSValueRef {
@@ -102,7 +110,9 @@ fn get_raw(obj: JSObjectRef, key: &str) -> Result<JSValueRef, JSValueRef> {
 fn global_function(name: &str) -> JSObjectRef {
     // SAFETY: valid context.
     let global = unsafe { JSContextGetGlobalObject(ctx()) };
-    get_raw(global, name).map(|v| v as JSObjectRef).unwrap_or(ptr::null_mut())
+    get_raw(global, name)
+        .map(|v| v as JSObjectRef)
+        .unwrap_or(ptr::null_mut())
 }
 
 /// `Object.keys(obj)` (cached).
@@ -126,7 +136,10 @@ fn object_keys(obj: JSValueRef) -> Vec<String> {
     if !exc.is_null() || arr.is_null() {
         return Vec::new();
     }
-    array_items(arr).into_iter().filter_map(to_rust_string).collect()
+    array_items(arr)
+        .into_iter()
+        .filter_map(to_rust_string)
+        .collect()
 }
 
 fn array_items(arr: JSValueRef) -> Vec<JSValueRef> {
@@ -135,7 +148,9 @@ fn array_items(arr: JSValueRef) -> Vec<JSValueRef> {
         .map(|v| unsafe { JSValueToNumber(ctx(), v, ptr::null_mut()) })
         .unwrap_or(0.0) as u32;
     // SAFETY: valid array object.
-    (0..len).map(|i| unsafe { JSObjectGetPropertyAtIndex(ctx(), obj, i, ptr::null_mut()) }).collect()
+    (0..len)
+        .map(|i| unsafe { JSObjectGetPropertyAtIndex(ctx(), obj, i, ptr::null_mut()) })
+        .collect()
 }
 
 // The JSC C API's enum constants (kJSType*) are used as match patterns.
@@ -157,7 +172,9 @@ fn to_val(v: JSValueRef) -> Val {
             return Val::BigInt(JSValueToInt64(c, v, ptr::null_mut()));
         }
         if JSValueGetTypedArrayType(c, v, ptr::null_mut()) != kJSTypedArrayTypeNone {
-            return bunwasm_jsc::Js { ctx: c }.bytes(v).map_or(Val::Undefined, Val::Bytes);
+            return bunwasm_jsc::Js { ctx: c }
+                .bytes(v)
+                .map_or(Val::Undefined, Val::Bytes);
         }
         if JSValueIsArray(c, v) {
             return Val::Array(array_items(v).into_iter().map(to_val).collect());
@@ -168,7 +185,9 @@ fn to_val(v: JSValueRef) -> Val {
         let fields = object_keys(v)
             .into_iter()
             .map(|k| {
-                let item = get_raw(v as JSObjectRef, &k).map(to_val).unwrap_or(Val::Undefined);
+                let item = get_raw(v as JSObjectRef, &k)
+                    .map(to_val)
+                    .unwrap_or(Val::Undefined);
                 (k, item)
             })
             .collect();
@@ -195,18 +214,20 @@ fn uint8_array(bytes: &[u8]) -> JSValueRef {
         k.get()
     });
     // SAFETY: a fresh array of `len` bytes; its storage is written before any JS runs.
+    // bunjsc_buffer_bytes leaves it unpinned, so the result stays transferable.
     unsafe {
         let len = JSValueMakeNumber(c, bytes.len() as f64);
         let arr = JSObjectCallAsConstructor(c, ctor, 1, &len, ptr::null_mut());
         if !bytes.is_empty() {
-            let data = JSObjectGetTypedArrayBytesPtr(c, arr, ptr::null_mut()).cast::<u8>();
-            ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
+            let mut size = 0;
+            let data = bunjsc_buffer_bytes(c, arr, &mut size);
+            ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len().min(size));
         }
         arr
     }
 }
 
-fn from_val(v: Val) -> JSValueRef {
+fn value_from(v: Val) -> JSValueRef {
     let c = ctx();
     // SAFETY: valid context throughout.
     unsafe {
@@ -221,7 +242,10 @@ fn from_val(v: Val) -> JSValueRef {
             Val::Bytes(b) => uint8_array(&b),
             Val::Array(items) => {
                 // Keep the items reachable while the array is built.
-                let items: Vec<JsVal> = items.into_iter().map(|i| JsVal::new(from_val(i))).collect();
+                let items: Vec<JsVal> = items
+                    .into_iter()
+                    .map(|i| JsVal::new(value_from(i)))
+                    .collect();
                 let raw: Vec<JSValueRef> = items.iter().map(JsVal::raw).collect();
                 JSObjectMakeArray(c, raw.len(), raw.as_ptr(), ptr::null_mut())
             }
@@ -229,7 +253,14 @@ fn from_val(v: Val) -> JSValueRef {
                 let obj = JsVal::new(JSObjectMake(c, ptr::null_mut(), ptr::null_mut()));
                 for (k, item) in fields {
                     let name = JsString::new(&k);
-                    JSObjectSetProperty(c, obj.object(), name.raw(), from_val(item), kJSPropertyAttributeNone, ptr::null_mut());
+                    JSObjectSetProperty(
+                        c,
+                        obj.object(),
+                        name.raw(),
+                        value_from(item),
+                        kJSPropertyAttributeNone,
+                        ptr::null_mut(),
+                    );
                 }
                 obj.raw()
             }
@@ -272,7 +303,11 @@ unsafe extern "C" fn dispatch(
         return unsafe { JSValueMakeUndefined(ctx()) };
     };
     // SAFETY: JSC passes argc valid values.
-    let raw: &[JSValueRef] = if argc == 0 { &[] } else { unsafe { std::slice::from_raw_parts(argv, argc) } };
+    let raw: &[JSValueRef] = if argc == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(argv, argc) }
+    };
     let args: Vec<JsVal> = raw.iter().map(|v| JsVal::new(*v)).collect();
     match f(&Jsc, &args) {
         Ok(v) => v.raw(),
@@ -285,7 +320,9 @@ unsafe extern "C" fn dispatch(
 }
 
 fn with_host<R>(f: impl FnOnce(&Rc<dyn ModuleHost<Jsc>>) -> R) -> R {
-    let host = HOST.with(|h| h.borrow().clone()).expect("module host installed");
+    let host = HOST
+        .with(|h| h.borrow().clone())
+        .expect("module host installed");
     f(&host)
 }
 
@@ -306,7 +343,11 @@ extern "C" fn bunjsc_host_interrupt() -> bool {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn bunjsc_host_resolve(specifier: *const c_char, referrer: *const c_char, exception: *mut JSValueRef) -> *mut c_char {
+extern "C" fn bunjsc_host_resolve(
+    specifier: *const c_char,
+    referrer: *const c_char,
+    exception: *mut JSValueRef,
+) -> *mut c_char {
     let specifier = cstr(specifier);
     if VIRTUAL.with(|v| v.borrow().contains_key(&specifier)) {
         return c_string_out(specifier);
@@ -338,7 +379,11 @@ extern "C" fn bunjsc_host_fetch(key: *const c_char, exception: *mut JSValueRef) 
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn bunjsc_host_init_meta(meta: JSValueRef, key: *const c_char, exception: *mut JSValueRef) {
+extern "C" fn bunjsc_host_init_meta(
+    meta: JSValueRef,
+    key: *const c_char,
+    exception: *mut JSValueRef,
+) {
     let meta = JsVal::new(meta);
     if let Err(thrown) = with_host(|h| h.init_meta(&Jsc, &cstr(key), &meta)) {
         // SAFETY: helpers.cpp's out-parameter.
@@ -375,7 +420,13 @@ impl Engine for Jsc {
             }),
         );
         // SAFETY: the context was created by bunjsc_create_context.
-        unsafe { JSGlobalContextSetUnhandledRejectionCallback(c as JSGlobalContextRef, tracker.object(), ptr::null_mut()) };
+        unsafe {
+            JSGlobalContextSetUnhandledRejectionCallback(
+                c as JSGlobalContextRef,
+                tracker.object(),
+                ptr::null_mut(),
+            )
+        };
         std::mem::forget(tracker);
         if has_interrupt_handler {
             // SAFETY: the context and its host are fully installed; the C++
@@ -401,8 +452,8 @@ impl Engine for Jsc {
         to_val(v.raw())
     }
 
-    fn from_val(&self, v: Val) -> JsVal {
-        JsVal::new(from_val(v))
+    fn value_from(&self, v: Val) -> JsVal {
+        JsVal::new(value_from(v))
     }
 
     fn new_object(&self) -> JsVal {
@@ -411,17 +462,34 @@ impl Engine for Jsc {
 
     fn get(&self, obj: &JsVal, key: &str) -> Result<JsVal, JsVal> {
         if !unsafe { JSValueIsObject(ctx(), obj.raw()) } {
-            return Err(self.error_value(&NativeError::type_error(format!("cannot read property '{key}' of a primitive"))));
+            return Err(self.error_value(&NativeError::type_error(format!(
+                "cannot read property '{key}' of a primitive"
+            ))));
         }
-        get_raw(obj.object(), key).map(JsVal::new).map_err(JsVal::new)
+        get_raw(obj.object(), key)
+            .map(JsVal::new)
+            .map_err(JsVal::new)
     }
 
     fn set(&self, obj: &JsVal, key: &str, value: JsVal) -> Result<(), JsVal> {
         let name = JsString::new(key);
         let mut exc = ptr::null();
         // SAFETY: valid context, object, name and value.
-        unsafe { JSObjectSetProperty(ctx(), obj.object(), name.raw(), value.raw(), kJSPropertyAttributeNone, &mut exc) };
-        if exc.is_null() { Ok(()) } else { Err(JsVal::new(exc)) }
+        unsafe {
+            JSObjectSetProperty(
+                ctx(),
+                obj.object(),
+                name.raw(),
+                value.raw(),
+                kJSPropertyAttributeNone,
+                &mut exc,
+            )
+        };
+        if exc.is_null() {
+            Ok(())
+        } else {
+            Err(JsVal::new(exc))
+        }
     }
 
     fn keys(&self, obj: &JsVal) -> Vec<String> {
@@ -440,14 +508,25 @@ impl Engine for Jsc {
         };
         let message = js_string(&err.message);
         // SAFETY: valid constructor; one argument.
-        let e = JsVal::new(unsafe { JSObjectCallAsConstructor(ctx(), global_function(ctor), 1, &message, ptr::null_mut()) });
+        let e = JsVal::new(unsafe {
+            JSObjectCallAsConstructor(ctx(), global_function(ctor), 1, &message, ptr::null_mut())
+        });
         for (k, v) in &err.props {
             if k == "name" {
-                define_hidden(&e, k, from_val(v.clone()));
+                define_hidden(&e, k, value_from(v.clone()));
                 continue;
             }
             let name = JsString::new(k);
-            unsafe { JSObjectSetProperty(ctx(), e.object(), name.raw(), from_val(v.clone()), kJSPropertyAttributeNone, ptr::null_mut()) };
+            unsafe {
+                JSObjectSetProperty(
+                    ctx(),
+                    e.object(),
+                    name.raw(),
+                    value_from(v.clone()),
+                    kJSPropertyAttributeNone,
+                    ptr::null_mut(),
+                )
+            };
         }
         if let Some(n) = &err.name {
             define_hidden(&e, "name", js_string(n));
@@ -458,7 +537,8 @@ impl Engine for Jsc {
     fn new_function(&self, name: &str, f: ValueFn<Self>) -> JsVal {
         let n = JsString::new(name);
         // SAFETY: `dispatch` has the C API callback signature.
-        let func = JsVal::new(unsafe { JSObjectMakeFunctionWithCallback(ctx(), n.raw(), dispatch) });
+        let func =
+            JsVal::new(unsafe { JSObjectMakeFunctionWithCallback(ctx(), n.raw(), dispatch) });
         // Natives live for the process: keep them protected (and their address stable).
         unsafe { JSValueProtect(ctx(), func.raw()) };
         NATIVES.with(|m| m.borrow_mut().insert(func.raw() as usize, f));
@@ -471,10 +551,16 @@ impl Engine for Jsc {
             return Err(self.error_value(&NativeError::type_error("not a function")));
         }
         let raw: Vec<JSValueRef> = args.iter().map(JsVal::raw).collect();
-        let this = if unsafe { JSValueIsObject(c, this.raw()) } { this.object() } else { ptr::null_mut() };
+        let this = if unsafe { JSValueIsObject(c, this.raw()) } {
+            this.object()
+        } else {
+            ptr::null_mut()
+        };
         let mut exc = ptr::null();
         // SAFETY: valid function; the arguments are protected by `args`.
-        let v = unsafe { JSObjectCallAsFunction(c, f.object(), this, raw.len(), raw.as_ptr(), &mut exc) };
+        let v = unsafe {
+            JSObjectCallAsFunction(c, f.object(), this, raw.len(), raw.as_ptr(), &mut exc)
+        };
         checked(exc, v)
     }
 
@@ -483,7 +569,9 @@ impl Engine for Jsc {
         let name = CString::new(filename).unwrap_or_default();
         let mut exc = ptr::null();
         // SAFETY: NUL-terminated strings.
-        let v = unsafe { bunjsc_evaluate_script(ctx(), src.as_ptr(), name.as_ptr(), first_line, &mut exc) };
+        let v = unsafe {
+            bunjsc_evaluate_script(ctx(), src.as_ptr(), name.as_ptr(), first_line, &mut exc)
+        };
         checked(exc, v)
     }
 
@@ -522,10 +610,23 @@ impl Engine for Jsc {
         JsVal::new(unsafe { bunjsc_promise_result(ctx(), v.raw()) })
     }
 
-    fn promise_then(&self, promise: &JsVal, fulfilled: &JsVal, rejected: &JsVal) -> Result<JsVal, JsVal> {
+    fn promise_then(
+        &self,
+        promise: &JsVal,
+        fulfilled: &JsVal,
+        rejected: &JsVal,
+    ) -> Result<JsVal, JsVal> {
         let mut exc = ptr::null();
         // SAFETY: the helper holds the VM lock and checks the promise brand.
-        let result = unsafe { bunjsc_promise_then(ctx(), promise.raw(), fulfilled.raw(), rejected.raw(), &mut exc) };
+        let result = unsafe {
+            bunjsc_promise_then(
+                ctx(),
+                promise.raw(),
+                fulfilled.raw(),
+                rejected.raw(),
+                &mut exc,
+            )
+        };
         checked(exc, result)
     }
 
@@ -557,7 +658,11 @@ impl Engine for Jsc {
 
     fn proxy_target(&self, v: &JsVal) -> JsVal {
         let t = unsafe { bunjsc_proxy_target(ctx(), v.raw()) };
-        if t.is_null() { self.undefined() } else { JsVal::new(t) }
+        if t.is_null() {
+            self.undefined()
+        } else {
+            JsVal::new(t)
+        }
     }
 
     fn is_error(&self, v: &JsVal) -> bool {

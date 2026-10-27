@@ -1,30 +1,39 @@
+import { controlLoad, controlWait } from "waffle/proc/control";
 import { expect, test } from "bun:test";
 import { Wasi } from "waffle/core/wasi";
+import type { Stream } from "waffle/core/descriptors";
 import { MemFS } from "waffle/fs/memory";
 import { outcomeWord } from "waffle/proc/outcome";
 import { ProcessABI } from "waffle/proc/abi";
-import { createSignalState, requestSignal } from "waffle/proc/signals";
-import { SubprocessHost } from "../src/subprocess";
+import { createSignalState, requestSignal, signalPending } from "waffle/proc/signals";
 
-for (const mode of ["legacy", "generic"] as const) test(`${mode} dequeue preserves later pending signals and releases the final WASI wait`, () => {
+test("dequeue preserves later pending signals and releases the final WASI wait", () => {
   const signals = { signalState: createSignalState(), interrupt: new Int32Array(new SharedArrayBuffer(4)),
     requestedSignal: new Int32Array(new SharedArrayBuffer(4)), outcome: outcomeWord() };
-  const host = new SubprocessHost({ ...signals, output() {}, launch() { throw new Error("unexpected launch"); } });
   const memory = new WebAssembly.Memory({ initial: 1 });
   let waits = 0;
   const fs = new MemFS();
-  const wasi = new Wasi({ fs, args: [], env: {}, preopens: {}, interrupt: signals.interrupt,
+  const unused = (): never => { throw new Error("unexpected operation"); };
+  // Only a completed native wait makes stdin ready; elapsed time cannot release this poll.
+  const stdin: Stream = { kind: "pipe", read: unused, write: unused, notification: signals.interrupt,
+    readiness: () => ({ readable: waits > 0, writable: false, hangup: false }) };
+  const wasi = new Wasi({ fs, args: [], env: {}, preopens: {}, interrupt: signals.interrupt, interruptPending: () => signalPending(signals),
+    stdio: { 0: stdin },
     stdout() {}, stderr() {}, sleep() { throw new Error("shared interrupt must select a native wait"); },
-    wait(word, expected, milliseconds) { waits++; Atomics.wait(word, 0, expected, milliseconds); } });
-  const unused = (): never => { throw new Error("unexpected service operation"); };
+    wait(word, expected, milliseconds) {
+      expect(word).toBe(signals.interrupt);
+      expect(expected).toBe(0);
+      expect(controlWait(word, 0, expected, milliseconds)).toBe("timed-out");
+      waits++;
+    } });
   const abi = new ProcessABI({ memory, descriptors: wasi.descriptors, fs, pid: 1, signals,
-    service: { spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused } });
-  const signal = mode === "legacy" ? host.signal.bind(host) : abi.imports.signal!;
+    service: { waitJob: unused, jobEmpty: unused, childExited: unused, startStatus: unused, spawn: unused, wait: unused, kill: unused, killJob: unused, jobOf: unused, defaultSignal: unused } });
+  const signal = abi.imports.signal!;
   const imports = (wasi as unknown as { functions(): Record<string, (...args: number[]) => number> }).functions();
   wasi.start({ exports: { memory, _start() {} } } as unknown as WebAssembly.Instance);
-  const clock = (timeout = 0n) => {
+  const clock = () => {
     const view = new DataView(memory.buffer);
-    view.setUint8(8, 0); view.setUint32(16, 1, true); view.setBigUint64(24, timeout, true);
+    view.setUint8(8, 0); view.setUint32(16, 1, true); view.setBigUint64(24, 0n, true);
     return imports.poll_oneoff!(0, 128, 1, 256);
   };
   try {
@@ -32,15 +41,20 @@ for (const mode of ["legacy", "generic"] as const) test(`${mode} dequeue preserv
     requestSignal(signals, 2); requestSignal(signals, 15);
     expect(clock()).toBe(27);
     expect(signal(0, 4)).toBe(0);
-    expect(Atomics.load(signals.interrupt, 0)).toBe(15);
+    expect(controlLoad(signals.interrupt, 0)).toBe(15);
     expect(signal(0, 0)).toBe(2);
     expect(clock()).toBe(27);
     expect(signal(0, 0)).toBe(15);
-    expect(Atomics.load(signals.interrupt, 0)).toBe(0);
+    expect(controlLoad(signals.interrupt, 0)).toBe(0);
     expect(signal(0, 0)).toBe(0);
     expect(clock()).toBe(0);
     expect(waits).toBe(0);
-    expect(clock(1_000_000n)).toBe(0);
-    expect(waits).toBeGreaterThan(0);
-  } finally { host.dispose(); wasi.descriptors.dispose(); }
+    const view = new DataView(memory.buffer);
+    view.setUint8(8, 1); view.setUint32(16, 0, true);
+    expect(imports.poll_oneoff!(0, 128, 1, 256)).toBe(0);
+    expect(waits).toBe(1);
+    expect(view.getUint32(256, true)).toBe(1);
+    expect(view.getUint16(136, true)).toBe(0);
+    expect(view.getUint8(138)).toBe(1);
+  } finally { wasi.descriptors.dispose(); }
 });

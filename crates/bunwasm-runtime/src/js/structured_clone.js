@@ -151,6 +151,7 @@
       if (boxed !== undefined) return boxed;
       if (brand(Date.prototype.getTime, value)) return new Date(Date.prototype.getTime.call(value));
       if (value !== RegExp.prototype && brand(regexpSource, value)) return new RegExp(value.source, value.flags);
+      if (value instanceof Blob) return new Blob([value._bytes()], { type: value.type });
       if (isArrayBuffer(value)) return this.cloneArrayBuffer(value);
       if (isSharedArrayBuffer(value)) return value;
       if (isTypedArray(value) || isDataView(value)) return this.cloneView(value);

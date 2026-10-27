@@ -10,11 +10,13 @@ fi
 source_dir=$(realpath "$1")
 build_dir=$(realpath -m "$2")
 cage=(systemd-run --user --scope -p MemoryMax=4G nice -n 10)
+bash "$root/scripts/check-wasi-cmake-cache.sh" "$build_dir" "$root/jsc/wasi-jsc.cmake"
 "${cage[@]}" cmake -S "$source_dir" -B "$build_dir" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$root/jsc/wasi-jsc.cmake" \
   -DCMAKE_BUILD_TYPE=Release -DOPENSSL_NO_ASM=1 -DBUILD_TESTING=OFF \
   -DCMAKE_C_FLAGS="-DOPENSSL_NO_THREADS_CORRUPT_MEMORY_AND_LEAK_SECRETS_IF_THREADED -DOPENSSL_NO_SOCK" \
   -DCMAKE_CXX_FLAGS="-DOPENSSL_NO_THREADS_CORRUPT_MEMORY_AND_LEAK_SECRETS_IF_THREADED -DOPENSSL_NO_SOCK"
+bash "$root/scripts/check-wasi-cmake-cache.sh" "$build_dir" "$root/jsc/wasi-jsc.cmake"
 "${cage[@]}" ninja -C "$build_dir" -k 0 -j 6 crypto ssl
 smoke=$(mktemp "$build_dir/realrt-smoke-XXXXXX.wasm")
 trap 'rm -f "$smoke"' EXIT

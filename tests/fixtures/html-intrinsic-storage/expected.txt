@@ -1,0 +1,1 @@
+HTML private handlers and output ignore indexed prototype accessors

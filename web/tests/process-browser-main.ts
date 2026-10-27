@@ -1,95 +1,176 @@
-import { waitStatus } from "waffle/proc/wait-status";
-import { outcomeWord, readOutcome } from "waffle/proc/outcome";
-import { createRuntime, type Runtime, type RuntimeOptions } from "waffle";
+import { controlLoad } from "waffle/proc/control";
+import { createRuntime, type Runtime, type RuntimeOptions, type ProcessService } from "waffle";
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
-import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess-broker";
-import { SubprocessHost, type ChildTransport, type SpawnMeta } from "../src/subprocess.ts";
-import { createFilesystemIdentity, type FilesystemIdentity } from "waffle/fs";
+import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
+import { DescriptorTable } from "waffle/core/descriptors";
+import { FilesystemClient, createProcessFilesystemIdentity, revokeFilesystem, reapFilesystem, type FilesystemIdentity } from "waffle/fs";
+import { ProcessABI } from "waffle/proc/abi";
+import { ProcessError, ProcessErrno, type ProcessExit, type SpawnRequest } from "waffle/proc/types";
+import { readOutcome } from "waffle/proc/outcome";
+import { createWorkerProcessTransport, WorkerProcessClient, workerProcessSlots, workerProcessState, type WorkerProcessTransport } from "waffle/proc/worker-client";
+import { WorkerPipeHost } from "waffle/proc/worker-pipes";
 import { processFixture, type ProcessFixture } from "./process-fixtures";
 import { measureProcessStarts } from "./process-benchmark";
 
+type ExecutableRegistration = { module: WebAssembly.Module | (() => Promise<WebAssembly.Module>); adapter: "preview1" | "bun"; cooperative?: true; engine?: "quickjs" };
 const decoder = new TextDecoder();
 const pause = () => new Promise<void>(resolve => setTimeout(resolve, 1));
 function equal(actual: unknown, expected: unknown, label: string) { if (actual !== expected) throw new Error(`${label}: ${JSON.stringify(actual)} !== ${JSON.stringify(expected)}`); }
 function truth(value: unknown, label: string): asserts value { if (!value) throw new Error(label); }
 const checks: string[] = [];
 const activeWorkers = new Set<Worker>();
+let currentTest = "startup";
+const workerProgress: { url: string; events: unknown[] }[] = [];
+Object.assign(globalThis, { processProgress: () => ({ checks, currentTest, activeWorkers: activeWorkers.size, workers: workerProgress }) });
 const NativeWorker = globalThis.Worker;
 globalThis.Worker = class extends NativeWorker {
-  constructor(url: string | URL, options?: WorkerOptions) { super(url, options); activeWorkers.add(this); }
+  constructor(url: string | URL, options?: WorkerOptions) {
+    super(url, options); activeWorkers.add(this);
+    const progress: { url: string; events: unknown[] } = { url: String(url), events: [] }; workerProgress.push(progress);
+    this.addEventListener("error", event => progress.events.push({ error: event.message }));
+    this.addEventListener("message", event => {
+      if (["phase", "exit", "error"].includes(event.data?.type)) progress.events.push(event.data);
+    });
+  }
   override terminate() { activeWorkers.delete(this); super.terminate(); }
 };
 let activeRuntime: Runtime | undefined;
-// These own preview1 fixtures implement runtime_proc signal checkpoints directly and exercise
-// handled delivery. Third-party byte registrations are covered by browser-interrupt.ts.
+// Original preview1 bytes call the generic runtime_proc ABI directly: no Bun artifact or slots.
 const modules = new Map<ProcessFixture, WebAssembly.Module>();
 function module(mode: ProcessFixture) { let result = modules.get(mode); if (!result) { result = new WebAssembly.Module(processFixture(mode)); modules.set(mode, result); } return result; }
-interface Child { host: SubprocessHost; handle: number; transport: ChildTransport; filesystem: FilesystemIdentity; stdout: string; stderr: string; }
+type Controller = ReturnType<typeof controller>;
+interface Child {
+  owner: Controller; pid: number; transport: WorkerProcessTransport;
+  state: ReturnType<typeof workerProcessState>; filesystem: FilesystemIdentity;
+  readers: number[]; stdout: string; stderr: string;
+  result: Promise<ProcessExit>; status?: number;
+}
+// Human-readable fixture labels are not executable names at the runtime boundary.
+const fixtureExecutable = (name: string) => name.startsWith("/") ? name : `/bin/${name}`;
+function controller(transport: WorkerProcessTransport, service: ProcessService, runtime: Runtime, publish: (transport: WorkerProcessTransport, owner: Controller, admission: Promise<void>) => void, failures: unknown[]) {
+  const descriptors = new DescriptorTable();
+  const identity = (transport.data as { filesystem: FilesystemIdentity }).filesystem;
+  const fs = new FilesystemClient(runtime.filesystem.connect(identity));
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const postMessage = (message: Parameters<ProcessService["runtimeMessage"]>[0]) => {
+    const admission = service.runtimeMessage(message, client.pid);
+    if (message.operation === "spawn") publish(message.transport, owned, admission);
+    void admission.catch(error => { failures.push(error); });
+  };
+  const pipes = new WorkerPipeHost({ transport, postMessage,
+    registry: (transport.data as { pipeRegistry: ConstructorParameters<typeof WorkerPipeHost>[0]["registry"] }).pipeRegistry });
+  const client = new WorkerProcessClient({ transport, descriptors, codec: pipes.codec(), postMessage,
+    createPipe: () => pipes.createPipe(), revokeProcess: pid => pipes.revokeProcess(pid),
+    prepareSpawn: pid => {
+      const filesystem = createProcessFilesystemIdentity(identity);
+      try { pipes.registry.registerProcess(pid); }
+      catch (error) { revokeFilesystem(filesystem); reapFilesystem(filesystem); throw error; }
+      return {
+        data: { filesystem, pipeRegistry: pipes.registry.handle() },
+        cancel() { revokeFilesystem(filesystem); reapFilesystem(filesystem); pipes.registry.collectProcess(pid); },
+      };
+    },
+  });
+  const abi = new ProcessABI({ memory, descriptors, fs, pid: client.pid, service: client, signals: client.signals,
+    wake: client.wake, createPipe: () => client.createPipe() });
+  const owned = { client, abi, memory, descriptors, transport, dispose() { descriptors.dispose(); fs.dispose(); } };
+  return owned;
+}
 async function scope(entries: Record<string, ExecutableRegistration>, options: RuntimeOptions = {}, owner?: Runtime) {
   const runtime = owner ?? createRuntime({ ...options, filesystem: { workerURL: new URL("./fs-worker.js", location.href) } });
   activeRuntime = runtime;
-  const fs = runtime.filesystem;
-  if (!owner) { await fs.mkdirp("/home/user"); await fs.flush(); }
-  const pid = runtime.identities.pid(), job = runtime.identities.job();
-  const broker = new SubprocessBroker(new URL("./worker.js", location.href).href, runtime, { root: { pid, job } });
-  for (const [name, entry] of Object.entries(entries)) broker.register(name, entry);
-  const children = new Map<number, Child>();
-  const hosts: SubprocessHost[] = [];
-  function makeHost(parent?: Child) {
-    const host = new SubprocessHost({
-      budget: parent?.transport.budget, identity: parent?.transport.identity ?? runtime.identities.buffer,
-      pid: parent?.transport.pid ?? pid, jobId: parent?.transport.jobId ?? job, slot: parent?.transport.slot, token: parent?.transport.token,
-      output() {}, onChildClose: childPid => broker.close(parent?.transport.pid ?? pid, childPid),
-      launch(meta, transport) {
-        const filesystem = parent ? createFilesystemIdentity(parent.filesystem) : fs.createIdentity();
-        const child: Child = { host, handle: transport.pid, transport, filesystem, stdout: "", stderr: "" };
-        children.set(transport.pid, child);
-        broker.spawn({ executable: meta.executable!, argv: meta.argv, pid: transport.pid, parentPid: transport.parentPid, jobId: transport.jobId,
-          cwd: meta.cwd ?? "/home/user", env: meta.env ?? {}, filesystem, child: transport, trace: false, spawnBroker: true });
-        return { revoke() { fs.revoke(filesystem); }, terminate() {} };
-      },
-    });
-    hosts.push(host); return host;
-  }
-  const root = makeHost();
-  function spawn(executable: string, meta: Partial<SpawnMeta> = {}, parent?: Child): Child {
-    const host = parent ? makeHost(parent) : root;
-    const handle = host.spawn(JSON.stringify({ executable, argv: [executable], ...meta }));
-    truth(handle > 0, `spawn must return a pid immediately: ${handle}`);
-    const child = children.get(handle); truth(child, "launch must retain child transport before spawn returns"); return child;
-  }
-  return { broker, children, spawn, filesystem: fs, async dispose() {
-    const failures: unknown[] = [];
-    try { if (owner) await broker.rootExit(0); } catch (error) { failures.push(error); }
-    try { broker.dispose(); } catch (error) { failures.push(error); }
-    for (const host of hosts.reverse()) {
-      try { host.dispose(); } catch (error) { failures.push(error); }
-    }
+  const filesystem = runtime.filesystem;
+  const children = new Map<number, Child>(), controllers: Controller[] = [], failures: unknown[] = [];
+  let service: ProcessService | undefined, root: WorkerProcessTransport | undefined;
+  try {
     if (!owner) {
-      try { await runtime.dispose(); } catch (error) { failures.push(error); }
-      finally { if (activeRuntime === runtime) activeRuntime = undefined; }
+      await filesystem.mkdirp("/home/user"); await filesystem.flush();
+      const workerUrl = new URL("./worker.js", location.href).href;
+      runtime.registerAdapter("preview1", preview1Launcher({ workerUrl }));
+      runtime.registerAdapter("bun:quickjs", bunLauncher("quickjs", { runtime, workerUrl }));
     }
-    if (failures.length) throw new AggregateError(failures, "process fixture cleanup failed");
-  } };
+    await filesystem.mkdirp("/bin");
+    for (const [name, entry] of Object.entries(entries)) {
+      const path = fixtureExecutable(name);
+      await filesystem.writeFile(path, "process fixture");
+      runtime.registerProgram(path,
+        { module: entry.module, adapter: entry.adapter === "bun" ? "bun:quickjs" : "preview1", cooperative: true });
+    }
+    await filesystem.flush();
+    service = await runtime.processes();
+    root = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
+    root.data = { filesystem: filesystem.createIdentity() };
+    await service.adoptRuntimeRoot(root);
+    function publish(transport: WorkerProcessTransport, owner: Controller, admission: Promise<void>) {
+      const state = workerProcessState(transport);
+      const result = admission.then(() => service!.ready()).then(supervisor => supervisor.waitForExit(state.parentPid, state.pid));
+      const child: Child = { owner, pid: state.pid, transport, state,
+        filesystem: (transport.data as { filesystem: FilesystemIdentity }).filesystem, readers: [], stdout: "", stderr: "", result };
+      children.set(state.pid, child);
+      void result.then(outcome => { child.status = outcome.kind === "start-failed" ? outcome.error === "ENOENT" ? 127 : 126 : outcome.status; });
+    }
+    function makeController(transport: WorkerProcessTransport) {
+      const result = controller(transport, service!, runtime, publish, failures); controllers.push(result); return result;
+    }
+    const rootController = makeController(root);
+    function spawn(executable: string, meta: Partial<SpawnRequest> = {}, parent?: Child): Child {
+      const caller = parent ? makeController(parent.transport) : rootController;
+      const view = new DataView(caller.memory.buffer), bindings: { parent: number; child: number }[] = [], readers: number[] = [];
+      for (const fd of [0, 1, 2]) {
+        equal(caller.abi.imports.pipe!(0), 0, "runtime_proc.pipe");
+        const read = view.getUint32(0, true), write = view.getUint32(4, true);
+        bindings.push({ parent: fd === 0 ? read : write, child: fd }); readers.push(fd === 0 ? write : read);
+      }
+      const request: SpawnRequest = { executable: fixtureExecutable(executable), argv: [executable], cwd: "/home/user", env: { PATH: "/bin" }, job: parent?.state.job ?? 0, fds: bindings, ...meta };
+      const bytes = new TextEncoder().encode(JSON.stringify(request)); new Uint8Array(caller.memory.buffer, 64, bytes.length).set(bytes);
+      const pid = caller.abi.imports.spawn!(64, bytes.length);
+      truth(pid > 0, `generic spawn returns a pid synchronously: ${pid}`);
+      const child = children.get(pid); truth(child, "generic publication retains transport before spawn returns"); child.readers = readers;
+      for (const binding of bindings) caller.descriptors.close(binding.parent);
+      caller.descriptors.close(readers[0]!); // EOF stdin; keep stdout/stderr readers until explicit closure.
+      return child;
+    }
+    return { service, children, spawn, filesystem,
+      wait: (pid: number) => children.get(pid)!.result,
+      async dispose() {
+        const errors: unknown[] = failures.slice();
+        try { await service!.rootExit(workerProcessState(root!).pid, 0); } catch (error) { errors.push(error); }
+        for (const owned of controllers.reverse()) try { owned.dispose(); } catch (error) { errors.push(error); }
+        if (!owner) {
+          try { await runtime.dispose(); } catch (error) { errors.push(error); }
+          finally { if (activeRuntime === runtime) activeRuntime = undefined; }
+        }
+        if (errors.length) throw new AggregateError(errors, "process fixture cleanup failed");
+      },
+      check() { if (failures.length) throw new AggregateError(failures, "generic controller message failed"); },
+    };
+  } catch (error) {
+    for (const owned of controllers.reverse()) owned.dispose();
+    if (!owner) { await runtime.dispose(); if (activeRuntime === runtime) activeRuntime = undefined; }
+    throw error;
+  }
 }
 function drain(child: Child) {
   for (const fd of [1, 2]) for (;;) {
-    const bytes = child.host.read(child.host.pipe(child.handle, fd));
-    if (!(bytes instanceof Uint8Array)) break;
-    if (fd === 1) child.stdout += decoder.decode(bytes); else child.stderr += decoder.decode(bytes);
+    const length = child.owner.abi.imports.read!(child.readers[fd]!, 4096, 4096);
+    if (length <= 0) break;
+    const text = decoder.decode(new Uint8Array(child.owner.memory.buffer, 4096, length));
+    if (fd === 1) child.stdout += text; else child.stderr += text;
   }
 }
+// This signal/job harness observes without collecting: assertions below still inspect
+// the process's signal cells. Generic ABI consuming waits are covered by browser-runtime-proc.
+function waitStatus(child: Child) { return child.status ?? -2; }
 async function until(condition: () => boolean, label: string) {
   const end = performance.now() + 10_000;
   for (;;) { if (condition()) return; if (performance.now() > end) throw new Error(`${label} timed out`); await pause(); }
 }
-async function ready(child: Child) { await until(() => { drain(child); return child.stdout.includes("ready\n"); }, `pid ${child.transport.pid} first output (${child.stderr})`); }
+async function ready(child: Child) { await until(() => { drain(child); return child.stdout.includes("ready\n"); }, `pid ${child.pid} first output (${child.stderr})`); }
 async function exit(child: Child, expected: number) {
-  await until(() => { drain(child); return child.host.wait(child.handle) !== -2; }, `pid ${child.transport.pid} exit`);
-  drain(child); const result = readOutcome(outcomeWord(child.transport.outcome));
-  equal(result?.kind === "start-failed" ? waitStatus(result) : child.host.wait(child.handle), expected, `pid ${child.transport.pid} status (${child.stderr})`);
+  await until(() => { drain(child); return waitStatus(child) !== -2; }, `pid ${child.pid} exit`);
+  drain(child); equal(waitStatus(child), expected, `pid ${child.pid} status (${child.stderr})`);
 }
-async function test(name: string, run: () => Promise<void>) { await run(); checks.push(name); }
+async function test(name: string, run: () => Promise<void>) { currentTest = name; await run(); checks.push(name); }
 
 try {
   truth(crossOriginIsolated, "process tests require cross-origin isolation");
@@ -104,13 +185,13 @@ try {
       const s = await scope({ spin: { module: module("default"), adapter: "preview1", cooperative: true } });
       try {
         const child = s.spawn("spin"); await ready(child);
-        const recorded = s.broker.wait(child.transport.pid);
-        await s.broker.kill(child.transport.pid, signal!);
+        const recorded = s.wait(child.pid);
+        await s.service.kill(child.pid, signal!);
         await exit(child, status!);
         const result = await recorded;
         equal(result.kind, "signaled", "signal outcome kind"); equal(result.code, signal, "unregistered signal is claimed by the supervisor");
-        equal(Atomics.load(new Int32Array(child.transport.signalState), signal!), 0, "default signal never becomes pending handled work");
-        truth(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0) !== 0, "signal default action revokes filesystem access");
+        equal(controlLoad(child.state.signals.signalState, signal!), 0, "default signal never becomes pending handled work");
+        truth(controlLoad(new Int32Array(child.filesystem.revocations[0]!), 0) !== 0, "signal default action revokes filesystem access");
       } finally { await s.dispose(); }
     });
   }
@@ -119,8 +200,8 @@ try {
     try {
       const child = s.spawn("epipe");
       // Close before async activation, guaranteeing the guest's ordinary fd_write sees EPIPE.
-      equal(child.host.close(child.host.pipe(child.handle, 1)), 0, "close reader");
-      const recorded = s.broker.wait(child.transport.pid); await exit(child, 42);
+      equal(child.owner.descriptors.close(child.readers[1]!), true, "close reader");
+      const recorded = s.wait(child.pid); await exit(child, 42);
       equal((await recorded).kind, "exited", "handled EPIPE is not default SIGPIPE"); equal(child.stderr, "", "handled EPIPE stderr");
     } finally { await s.dispose(); }
   });
@@ -128,9 +209,9 @@ try {
     await test(`${mode}-signal-${signal}-keeps-own-exit-${status}`, async () => {
       const s = await scope({ handled: { module: module(mode), adapter: "preview1", cooperative: true } });
       try {
-        const child = s.spawn("handled"); await ready(child); const recorded = s.broker.wait(child.transport.pid);
-        equal(Atomics.load(new Int32Array(child.transport.signalState), signal), 2, "handler registered before readiness");
-        await s.broker.kill(child.transport.pid, signal); await exit(child, status);
+        const child = s.spawn("handled"); await ready(child); const recorded = s.wait(child.pid);
+        equal(controlLoad(child.state.signals.signalState, signal), 2, "handler registered before readiness");
+        await s.service.kill(child.pid, signal); await exit(child, status);
         const result = await recorded;
         equal(result.kind, "exited", "handled signal preserves ordinary exit kind"); equal(result.code, status, "own exit code is not inferred to be a signal");
       } finally { await s.dispose(); }
@@ -140,14 +221,14 @@ try {
     const s = await scope({ ignored: { module: module("ignored-pipe"), adapter: "preview1", cooperative: true } });
     try {
       const child = s.spawn("ignored"); await ready(child);
-      const interruptBefore = Atomics.load(new Int32Array(child.transport.interrupt), 0);
-      await s.broker.kill(child.transport.pid, 13);
-      equal(Atomics.load(new Int32Array(child.transport.signalState), 13), 1, "ignored PIPE has no pending bit");
-      equal(Atomics.load(new Int32Array(child.transport.interrupt), 0), interruptBefore, "ignored PIPE does not request an interrupt wake");
-      equal(child.host.wait(child.handle), -2, "ignored PIPE leaves guest alive");
-      equal(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "ignored PIPE does not revoke filesystem");
-      const recorded = s.broker.wait(child.transport.pid);
-      await s.broker.kill(child.transport.pid, 2); await exit(child, 0);
+      const interruptBefore = controlLoad(child.state.signals.interrupt, 0);
+      await s.service.kill(child.pid, 13);
+      equal(controlLoad(child.state.signals.signalState, 13), 1, "ignored PIPE has no pending bit");
+      equal(controlLoad(child.state.signals.interrupt, 0), interruptBefore, "ignored PIPE does not request an interrupt wake");
+      equal(waitStatus(child), -2, "ignored PIPE leaves guest alive");
+      equal(controlLoad(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "ignored PIPE does not revoke filesystem");
+      const recorded = s.wait(child.pid);
+      await s.service.kill(child.pid, 2); await exit(child, 0);
       equal((await recorded).kind, "exited", "ignored PIPE cannot overwrite later ordinary exit");
     } finally { await s.dispose(); }
   });
@@ -155,28 +236,28 @@ try {
     const s = await scope({ once: { module: module("removed"), adapter: "preview1", cooperative: true } });
     try {
       const child = s.spawn("once"); await ready(child);
-      await s.broker.kill(child.transport.pid, 2);
+      await s.service.kill(child.pid, 2);
       await until(() => { drain(child); return child.stdout.includes("handling\n"); }, "once handler removed acknowledgement");
-      equal(Atomics.load(new Int32Array(child.transport.signalState), 2), 0, "last removal resets disposition and clears consumed pending");
-      equal(child.host.wait(child.handle), -2, "removal cannot reinterpret already consumed first signal");
-      const recorded = s.broker.wait(child.transport.pid);
-      await s.broker.kill(child.transport.pid, 2); await exit(child, 130);
+      equal(controlLoad(child.state.signals.signalState, 2), 0, "last removal resets disposition and clears consumed pending");
+      equal(waitStatus(child), -2, "removal cannot reinterpret already consumed first signal");
+      const recorded = s.wait(child.pid);
+      await s.service.kill(child.pid, 2); await exit(child, 130);
       equal((await recorded).kind, "signaled", "second INT applies restored default");
     } finally { await s.dispose(); }
   });
   await test("explicit-default-signal-remains-typed-signal-outcome", async () => {
     const s = await scope({ explicit: { module: module("explicit-default"), adapter: "preview1", cooperative: true } });
     try {
-      const child = s.spawn("explicit"); await ready(child); const recorded = s.broker.wait(child.transport.pid);
-      await s.broker.kill(child.transport.pid, 2); await exit(child, 130);
+      const child = s.spawn("explicit"); await ready(child); const recorded = s.wait(child.pid);
+      await s.service.kill(child.pid, 2); await exit(child, 130);
       const result = await recorded; equal(result.kind, "signaled", "explicit default trap is typed"); equal(result.code, 2, "explicit default signal");
     } finally { await s.dispose(); }
   });
   await test("handled-INT-then-unrelated-trap-not-signal-default", async () => {
     const s = await scope({ trap: { module: module("handled-trap"), adapter: "preview1", cooperative: true } });
     try {
-      const child = s.spawn("trap"); await ready(child); const recorded = s.broker.wait(child.transport.pid);
-      await s.broker.kill(child.transport.pid, 2); await exit(child, 1);
+      const child = s.spawn("trap"); await ready(child); const recorded = s.wait(child.pid);
+      await s.service.kill(child.pid, 2); await exit(child, 1);
       equal((await recorded).kind, "exited", "arbitrary RuntimeError must not be inferred to be SIGINT");
     } finally { await s.dispose(); }
   });
@@ -184,13 +265,13 @@ try {
     const s = await scope({ handler: { module: module("handling"), adapter: "preview1", cooperative: true } });
     try {
       const child = s.spawn("handler"); await ready(child);
-      equal(child.host.kill(child.handle, 2), 0, "guest SubprocessHost.kill publishes the shared request");
+      equal(child.owner.abi.imports.kill!(child.pid, 2), 0, "guest runtime_proc.kill publishes the shared request");
       await until(() => { drain(child); return child.stdout.includes("handling\n"); }, "signal handler output");
       // The acknowledgement proves dequeue completed; no arbitrary delay is needed.
-      equal(Atomics.load(new Int32Array(child.transport.signalState), 2), 2, "INT pending bit was consumed, disposition remains handled");
-      equal(child.host.wait(child.handle), -2, "catchable INT must not force termination");
-      equal(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "handled INT must not revoke");
-      const recorded = s.broker.wait(child.transport.pid); await s.broker.kill(child.transport.pid, 9); await exit(child, 137);
+      equal(controlLoad(child.state.signals.signalState, 2), 2, "INT pending bit was consumed, disposition remains handled");
+      equal(waitStatus(child), -2, "catchable INT must not force termination");
+      equal(controlLoad(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "handled INT must not revoke");
+      const recorded = s.wait(child.pid); await s.service.kill(child.pid, 9); await exit(child, 137);
       equal((await recorded).code, 9, "KILL overrides an in-progress handler");
       equal(child.stdout.split("handling\n").length - 1, 1, "broker observation never redelivers a consumed INT request");
     } finally { await s.dispose(); }
@@ -201,19 +282,19 @@ try {
       const parent = s.spawn("active", { job: 0 }); await ready(parent);
       const unhandled = s.spawn("unhandled", {}, parent), ignored = s.spawn("ignored", {}, parent);
       await Promise.all([ready(unhandled), ready(ignored)]);
-      equal(unhandled.transport.jobId, parent.transport.jobId, "default child shares foreground job");
-      equal(ignored.transport.jobId, parent.transport.jobId, "ignored child shares foreground job");
-      const unhandledExit = s.broker.wait(unhandled.transport.pid);
-      await s.broker.killJob(parent.transport.jobId, 2);
+      equal(unhandled.state.job, parent.state.job, "default child shares foreground job");
+      equal(ignored.state.job, parent.state.job, "ignored child shares foreground job");
+      const unhandledExit = s.wait(unhandled.pid);
+      await s.service.killJob(parent.state.job, 2);
       await exit(unhandled, 130);
       await until(() => { drain(parent); return parent.stdout.includes("handling\n"); }, "mixed job handled acknowledgement");
       equal((await unhandledExit).kind, "signaled", "default member exits on INT");
-      equal(parent.host.wait(parent.handle), -2, "handled member remains alive");
-      equal(ignored.host.wait(ignored.handle), -2, "ignored member remains alive");
-      equal(Atomics.load(new Int32Array(ignored.transport.signalState), 2), 1, "ignored member never queues INT");
-      for (const child of [parent, ignored]) equal(Atomics.load(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "nondefault member keeps filesystem capability");
-      const remaining = Promise.all([s.broker.wait(parent.transport.pid), s.broker.wait(ignored.transport.pid)]);
-      await s.broker.killJob(parent.transport.jobId, 9);
+      equal(waitStatus(parent), -2, "handled member remains alive");
+      equal(waitStatus(ignored), -2, "ignored member remains alive");
+      equal(controlLoad(ignored.state.signals.signalState, 2), 1, "ignored member never queues INT");
+      for (const child of [parent, ignored]) equal(controlLoad(new Int32Array(child.filesystem.revocations[0]!), 0), 0, "nondefault member keeps filesystem capability");
+      const remaining = Promise.all([s.wait(parent.pid), s.wait(ignored.pid)]);
+      await s.service.killJob(parent.state.job, 9);
       for (const result of await remaining) { equal(result.kind, "signaled", "KILL ignores member dispositions"); equal(result.status, 137, "KILL member status"); }
       await exit(parent, 137);
       equal((await unhandledExit).status, 130, "later job KILL cannot overwrite completed INT outcome");
@@ -225,9 +306,9 @@ try {
     const s = await scope({ tiny: { module: module("exit"), adapter: "preview1", cooperative: true } }, { processHost: options => new BrowserProcessBroker({ ...options, activate: async () => { activationCalls++; await gate; return import("waffle/proc"); } }) });
     try {
       const child = s.spawn("tiny");
-      equal(child.host.wait(child.handle), -2, "delayed spawn returns before activation");
+      equal(waitStatus(child), -2, "delayed spawn returns before activation");
       let ticks = 0;
-      for (let i = 0; i < 5; i++) { await pause(); ticks++; equal(child.host.wait(child.handle), -2, "unrelated async task can run before activation"); }
+      for (let i = 0; i < 5; i++) { await pause(); ticks++; equal(waitStatus(child), -2, "unrelated async task can run before activation"); }
       equal(ticks, 5, "other shell task progressed"); equal(activationCalls, 1, "activation shared once");
       release(); await exit(child, 0);
     } finally { release(); await s.dispose(); }
@@ -243,9 +324,11 @@ try {
     try {
       const missing = s.spawn("missing"); const broken = s.spawn("broken"); const unrunnable = s.spawn("unrunnable");
       await Promise.all([exit(missing, 127), exit(broken, 126), exit(unrunnable, 126)]);
-      const missingResult = await s.broker.wait(missing.transport.pid), brokenResult = await s.broker.wait(broken.transport.pid);
-      equal(missingResult.kind, "start-failed", "missing program has no ordinary exit"); equal(missingResult.code, 2, "missing registry executable"); equal(brokenResult.kind, "start-failed", "load failure is not an exit"); equal(brokenResult.code, 13, "failed compile/load");
-      equal((await s.broker.wait(unrunnable.transport.pid)).code, 13, "unknown imports refuse registered executable at instantiation");
+      const missingResult = await s.wait(missing.pid), brokenResult = await s.wait(broken.pid);
+      equal(missingResult.kind, "start-failed", "missing program is a typed startup failure");
+      truth(missingResult.kind === "start-failed", "missing startup failure"); equal(missingResult.error, "ENOENT", "missing registry executable");
+      equal(brokenResult.kind, "start-failed", "failed compile/load is a startup failure");
+      equal((await s.wait(unrunnable.pid)).kind, "start-failed", "unknown imports refuse registered executable at instantiation");
     } finally { await s.dispose(); }
   });
   await test("foreground-descendants-reaped-background-survives-next-command", async () => {
@@ -255,38 +338,48 @@ try {
       const descendant = s.spawn("spin", {}, foreground);
       const background = s.spawn("spin", { job: -1 });
       await Promise.all([ready(descendant), ready(background)]);
-      equal(descendant.transport.parentPid, foreground.transport.pid, "descendant parent");
-      equal(descendant.transport.jobId, foreground.transport.jobId, "descendant inherits foreground job");
-      truth(background.transport.jobId !== foreground.transport.jobId, "background has independent job");
-      truth(descendant.transport.pid !== descendant.transport.jobId, "job identity is not child pid");
+      equal(descendant.state.parentPid, foreground.pid, "descendant parent");
+      equal(descendant.state.job, foreground.state.job, "descendant inherits foreground job");
+      truth(background.state.job !== foreground.state.job, "background has independent job");
+      truth(descendant.pid !== descendant.state.job, "job identity is not child pid");
       // Register controller observations before completion can reap the orphan's record.
       // The foreground guest loses its child-control capability when its own process exits.
-      const jobExits = Promise.all([s.broker.wait(foreground.transport.pid), s.broker.wait(descendant.transport.pid)]);
-      await s.broker.killJob(foreground.transport.jobId, 2);
+      const jobExits = Promise.all([s.wait(foreground.pid), s.wait(descendant.pid)]);
+      await s.service.killJob(foreground.state.job, 2);
       for (const result of await jobExits) {
         equal(result.kind, "signaled", "foreground job member has a signal outcome");
         equal(result.code, 2, "foreground job member records INT");
         equal(result.status, 130, "controller observes foreground job member status");
       }
       await exit(foreground, 130);
-      equal(descendant.host.wait(descendant.handle), -1, "exited parent cannot wait through its revoked guest capability");
-      const supervisor = await s.broker.ready();
-      await until(() => supervisor.get(descendant.transport.pid) === undefined, "completed foreground descendant record reaped");
-      equal(background.host.wait(background.handle), -2, "Ctrl+C leaves unrelated background child alive");
-      foreground.host.close(foreground.handle);
+      truth(readOutcome(foreground.state.signals.outcome), "parent has selected its terminal outcome");
+      truth(controlLoad(new Int32Array(foreground.filesystem.revocations[0]!), 0) !== 0, "exited parent guest capability is revoked");
+      const supervisor = await s.service.ready();
+      await until(() => supervisor.jobEmpty(foreground.state.parentPid, foreground.state.job), "foreground job host-work fences");
+      supervisor.reapJob(foreground.state.parentPid, foreground.state.job);
+      await until(() => supervisor.get(descendant.pid) === undefined, "completed foreground descendant record reaped");
+      equal(waitStatus(background), -2, "Ctrl+C leaves unrelated background child alive");
+      for (const fd of [1, 2]) foreground.owner.descriptors.close(foreground.readers[fd]!);
       const next = s.spawn("tiny", { job: 0 }); await exit(next, 0);
-      equal(background.host.wait(background.handle), -2, "background survives subsequent command completion");
-      await s.broker.killJob(background.transport.jobId, 15); await exit(background, 143);
+      equal(waitStatus(background), -2, "background survives subsequent command completion");
+      await s.service.killJob(background.state.job, 15); await exit(background, 143);
     } finally { await s.dispose(); }
   });
-  await test("pids-never-reuse-when-budget-slot-recycles", async () => {
+  await test("pids-never-reuse-when-completed-process-capacity-is-released", async () => {
     const s = await scope({ tiny: { module: module("exit"), adapter: "preview1", cooperative: true } });
     try {
-      let previous = 1; let initialSlot: number | undefined;
+      let previous = 1; let retired: Child | undefined;
       for (let index = 0; index < 8; index++) {
-        const child = s.spawn("tiny"); truth(child.transport.pid > previous, "pids are monotonic"); previous = child.transport.pid;
-        initialSlot ??= child.transport.slot; equal(child.transport.slot, initialSlot, "same budget slot reused");
-        await exit(child, 0); child.host.close(child.handle);
+        const child = s.spawn("tiny"); truth(child.pid > previous, "pids are monotonic"); previous = child.pid;
+        if (retired) assertRetiredCapability(retired);
+        await exit(child, 0);
+        for (const fd of [1, 2]) child.owner.descriptors.close(child.readers[fd]!);
+        const supervisor = await s.service.ready();
+        await until(() => supervisor.jobEmpty(child.state.parentPid, child.state.job), "completed job releases host-work capacity");
+        supervisor.reapJob(child.state.parentPid, child.state.job);
+        equal(supervisor.get(child.pid), undefined, "completed child metadata is reaped before next admission");
+        equal(Array.from(supervisor.table.values()).length, 1, "only the controller consumes live process capacity");
+        retired = child;
       }
     } finally { await s.dispose(); }
   });
@@ -303,17 +396,18 @@ try {
           const parentCode = `Bun.spawn(['bun','-e',${JSON.stringify(childCode)}],{stdin:'ignore',stdout:'ignore',stderr:'ignore'}).unref(); console.log('parent');`;
           const parent = s.spawn("bun", { argv: ["bun", "-e", parentCode] });
           await exit(parent, 0); equal(parent.stdout, "parent\n", "real guest parent exited without waiting for child");
-          const slots = new Int32Array(parent.transport.budget).subarray(2);
-          truth(slots.some(word => word !== 0), "unawaited child still owns capacity after its parent exits");
+          const liveDescendants = () => workerProcessSlots(parent.transport).filter(slot => { const state = workerProcessState(parent.transport, slot); return state.parentPid === parent.pid && controlLoad(state.confirmed, 0) === 0; });
+          truth(liveDescendants().length > 0, "unawaited child still owns capacity after its parent exits");
           equal(await s.filesystem.readFile(marker), undefined, "orphan has not been allowed to finish before parent exit");
           await s.filesystem.writeFile(permit, "go");
-          const end = performance.now() + 10_000;
-          while (decoder.decode(await s.filesystem.readFile(marker)) !== "done") { if (performance.now() > end) throw new Error(`orphan ${iteration} lost filesystem access after parent exit`); await pause(); }
-          await until(() => slots.every(word => word === 0), "orphan completion releases capacity without a living parent waiter");
-          parent.host.close(parent.handle);
-          const supervisor = await s.broker.ready();
+          await waitForOrphanMarker(() => s.filesystem.readFile(marker), iteration);
+          await until(() => liveDescendants().length === 0, "orphan completion releases capacity without a living parent waiter");
+          for (const fd of [1, 2]) parent.owner.descriptors.close(parent.readers[fd]!);
+          const supervisor = await s.service.ready();
+          await until(() => supervisor.jobEmpty(parent.state.parentPid, parent.state.job), "orphan job quiescence");
+          supervisor.reapJob(parent.state.parentPid, parent.state.job);
           await until(() => Array.from(supervisor.table.values()).length === 1, "closed parent and completed orphan release process metadata");
-          equal(supervisor.get(parent.transport.pid), undefined, "closed parent record reaped");
+          equal(supervisor.get(parent.pid), undefined, "closed parent record reaped");
         }
       } finally { await s.dispose(); }
     });
@@ -326,6 +420,9 @@ try {
     activeRuntime = owner;
     try {
       await owner.filesystem.mkdirp("/home/user"); await owner.filesystem.flush();
+      const workerUrl = new URL("./worker.js", location.href).href;
+      owner.registerAdapter("preview1", preview1Launcher({ workerUrl }));
+      owner.registerAdapter("bun:quickjs", bunLauncher("quickjs", { runtime: owner, workerUrl }));
       let sample = 0;
       benchmark = await measureProcessStarts(async (compiled, started) => {
         const executable = `bun-benchmark-${++sample}`;
@@ -345,9 +442,23 @@ try {
   equal(activeWorkers.size, 0, "every task-created guest and filesystem worker was terminated");
   Object.assign(globalThis, { processResult: { ok: true, checks, benchmark, cleanup: { activeWorkers: activeWorkers.size } } });
 } catch (error) {
-  Object.assign(globalThis, { processResult: { ok: false, checks, error: error instanceof Error ? error.stack : String(error) } });
+  Object.assign(globalThis, { processResult: { ok: false, checks, error: String(error), stack: error instanceof Error ? error.stack : undefined } });
 } finally {
   try { await activeRuntime?.dispose(); }
   catch (error) { Object.assign(globalThis, { processResult: { ok: false, checks, cleanupError: String(error) } }); }
   finally { for (const worker of activeWorkers) worker.terminate(); globalThis.Worker = NativeWorker; }
+}
+
+function assertRetiredCapability(child: Child) {
+  let rejected = false;
+  try { controlLoad(child.state.signals.interrupt, 0); }
+  catch (error) { rejected = error instanceof ProcessError && error.errno === ProcessErrno.SRCH; }
+  truth(rejected, "retired process capability cannot observe a reused directory slot");
+}
+async function waitForOrphanMarker(read: () => Promise<Uint8Array | undefined>, iteration: number) {
+  const end = performance.now() + 10_000;
+  while (decoder.decode(await read()) !== "done") {
+    if (performance.now() > end) throw new Error(`orphan ${iteration} lost filesystem access after parent exit`);
+    await pause();
+  }
 }

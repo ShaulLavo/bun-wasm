@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.package.json",
+  "include": [
+    "scripts/**/*.ts",
+    "scripts/**/*.mts",
+    "site/*.ts",
+    "tests/check-worker-regressions.ts",
+    "tests/install/package-options.ts",
+    "tests/install/root-overrides.ts"
+  ],
+  "compilerOptions": {
+    "allowJs": true,
+    "lib": [
+      "ES2024",
+      "DOM",
+      "DOM.Iterable",
+      "WebWorker"
+    ],
+    "checkJs": false
+  }
+}

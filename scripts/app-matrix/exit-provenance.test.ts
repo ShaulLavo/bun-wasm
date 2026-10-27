@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { runInNewContext } from "node:vm";
-import { firstError } from "./classify.mjs";
+import { firstError } from "./classify.ts";
 
 test("system errors in framework logs retain their diagnostic", () => {
   expect(firstError('1 | import.meta.require("ws")\nENOENT: no such file or directory, open \'ws\'\n    at /vite/config.js:23728:63')).toBe("ENOENT: no such file or directory, open 'ws'");
@@ -17,7 +17,8 @@ function runtimeExitFixture(settings: { writeFails?: boolean; loopFails?: boolea
     native: {
       platformInfo: {},
       env: () => ({ BUN_WASM_TRACE_EXIT: settings.enabled === false ? "0" : "1" }),
-      argv: () => [],
+      argv: () => [], execArgv: () => [],
+      execPath: () => "/bin/bun",
       hostSignal: () => 0,
       writeStderr(text: string) {
         if (settings.writeFails) throw Object.assign(new Error("broken pipe"), { code: "EPIPE" });
@@ -35,8 +36,7 @@ function runtimeExitFixture(settings: { writeFails?: boolean; loopFails?: boolea
     },
     require(name: string) {
       if (name === "events") return EventEmitter;
-      const extension = name === "process" ? "js" : "ts";
-      const source = readFileSync(new URL(`../../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url), "utf8");
+      const source = readFileSync(new URL(`../../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url), "utf8");
       const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`));
       return factory(internal);
     },

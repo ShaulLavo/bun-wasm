@@ -62,7 +62,7 @@ async function check(engine) {
   const style = /href="([^"]+\.css)"/.exec(html)[1];
   const css = await fetch(new URL(style, url));
   assert.match(css.headers.get("content-type"), /^text\/css/);
-  const styles = await css.text();
+  assert.ok((await css.text()).length > 0, "CSS response has content");
   const image = /["']([^"']*\/[^"']+\.png)["']/.exec(source)[1];
   const asset = await fetch(new URL(image, url));
   assert.equal(asset.headers.get("content-type"), "image/png", `Asset ${image} did not resolve`);

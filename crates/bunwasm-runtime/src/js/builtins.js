@@ -31,6 +31,8 @@
   const NO_PROCESSES = "WASI has no processes";
   const NO_NETWORK = "WASI has no network access";
 
+  const dns = internal.require("dns");
+
   // --- os -------------------------------------------------------------------
 
   function osModule() {
@@ -211,39 +213,7 @@
   // --- timers ---------------------------------------------------------------
 
   function timersPromises() {
-    const t = internal.timers;
-    const abortError = (signal) => Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR", cause: signal.reason });
-    function delayed(schedule) {
-      return (value, options = {}) =>
-        new Promise((resolve, reject) => {
-          const { signal } = options;
-          if (signal && signal.aborted) {
-            reject(abortError(signal));
-            return;
-          }
-          const handle = schedule(() => resolve(value));
-          if (options.ref === false && handle.unref) handle.unref();
-          if (signal) signal.addEventListener("abort", () => {
-            t.clearTimeout(handle);
-            t.clearImmediate(handle);
-            reject(abortError(signal));
-          });
-        });
-    }
-    const setTimeoutP = (ms, value, options) => delayed((cb) => t.setTimeout(cb, ms))(value, options);
-    const setImmediateP = (value, options) => delayed((cb) => t.setImmediate(cb))(value, options);
-    async function* setIntervalP(ms, value) {
-      for (;;) {
-        await setTimeoutP(ms);
-        yield value;
-      }
-    }
-    return {
-      setTimeout: setTimeoutP,
-      setImmediate: setImmediateP,
-      setInterval: setIntervalP,
-      scheduler: { wait: (ms, options) => setTimeoutP(ms, undefined, options), yield: () => setImmediateP() },
-    };
+    return internal.require("timer_promises");
   }
 
   function timersModule() {
@@ -310,6 +280,9 @@
     // Not a real separate realm: globals resolve through the context object
     // first (`with`), then fall back to this realm's globals.
     function runWith(code, context, filename) {
+      if (!("globalThis" in context) && Object.isExtensible(context)) {
+        Object.defineProperty(context, "globalThis", { value: context, writable: true, configurable: true });
+      }
       const runner = native.evalScript(`(function (__ctx, __code) { with (__ctx) { return eval(__code); } })`, filename);
       return runner(context, String(code));
     }
@@ -683,6 +656,7 @@
     "node:readline/promises": () => internal.builtin("node:readline").promises,
     "node:stream": streamModule,
     "node:stream/promises": () => internal.builtin("node:stream").promises,
+    "node:stream/consumers": lazy("stream_consumers"),
     "node:stream/web": () => internal.require("streams"),
     "node:perf_hooks": () => ({
       performance: globalThis.performance,
@@ -707,22 +681,28 @@
     "node:net": () => Object.assign(internal.require("net").nodeNet(), internal.require("net_address")),
     "node:tls": () => unsupportedModule("tls", NO_NETWORK, ["connect", "createServer", "createSecureContext", "TLSSocket", "Server", "checkServerIdentity"], { rootCertificates: [], DEFAULT_MIN_VERSION: "TLSv1.2", DEFAULT_MAX_VERSION: "TLSv1.3", DEFAULT_ECDH_CURVE: "auto" }),
     "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
-    "node:dns": () => unsupportedModule("dns", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "resolveMx", "resolveTxt", "resolveSrv", "resolveNs", "resolveCname", "reverse", "lookupService", "Resolver"], { promises: internal.builtin("node:dns/promises"), getServers: () => [], setServers() {}, setDefaultResultOrder() {} }),
-    "node:dns/promises": () => unsupportedModule("dns.promises", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "reverse", "Resolver"]),
+    "node:dns": () => dns.module(),
+    "node:dns/promises": () => dns.promises(),
     "node:http": () => httpModule("http"),
     "node:https": () => httpModule("https"),
-    "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {} }),
+    "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {}, Http2ServerResponse: internal.require("http2_response") }),
     "node:zlib": zlibModule,
-    "node:inspector": () => unsupportedModule("inspector", "no debugger", ["open", "close", "url", "waitForDebugger", "Session"], { console: globalThis.console }),
-    "node:repl": () => unsupportedModule("repl", "no interactive terminal", ["start", "REPLServer"]),
+    // Node's contract when built without tracing. Bun and Node also reject it in workers.
+    "node:trace_events": () => {
+      throw Object.assign(new Error("Trace events are unavailable"), { code: "ERR_TRACE_EVENTS_UNAVAILABLE" });
+    },
+    "node:inspector": () => Object.assign(
+      unsupportedModule("inspector", "no debugger", ["open", "waitForDebugger", "Session"], { console: globalThis.console }),
+      { close() {}, url() { return undefined; } },
+    ),
+    "node:repl": () => internal.require("node_repl"),
     "node:v8": () => ({
       getHeapStatistics: () => ({ total_heap_size: native.memoryUsage().heapTotal, used_heap_size: native.memoryUsage().heapUsed, heap_size_limit: 4294967296 }),
-      serialize: thrower("v8.serialize", "no V8 serializer"),
-      deserialize: thrower("v8.deserialize", "no V8 serializer"),
+      ...internal.require("v8"),
       setFlagsFromString() {},
       cachedDataVersionTag: () => 0,
     }),
-    "node:wasi": () => unsupportedModule("wasi", "nested WASI instances are not supported", ["WASI"]),
+    "node:wasi": () => internal.require("bun_builtins").require("node:wasi"),
     "node:domain": () => unsupportedModule("domain", "domains are deprecated and not implemented", ["create", "createDomain", "Domain"]),
     "node:punycode": () => internal.require("bun_builtins").require("node:punycode"),
     bun: () => globalThis.Bun,

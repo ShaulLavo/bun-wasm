@@ -22,6 +22,8 @@ pub fn embed(manifest: &Path, out: &Path) {
     // polyfills (handy to test a module without touching the tree).
     println!("cargo:rerun-if-env-changed=BUNWASM_JS_OVERRIDE_DIR");
     let override_dir = std::env::var_os("BUNWASM_JS_OVERRIDE_DIR").map(std::path::PathBuf::from);
+    let mut ordinary = Vec::new();
+    let mut compact = Vec::new();
     let mut table = String::from("pub static POLYFILLS: &[(&str, &str)] = &[\n");
     for name in &names {
         let path = override_dir
@@ -35,8 +37,15 @@ pub fn embed(manifest: &Path, out: &Path) {
             stems.insert(stem),
             "duplicate runtime module {stem} (.js and .ts)"
         );
+        let batch = if matches!(stem, "stack_trace" | "bun_builtins") {
+            &mut compact
+        } else {
+            &mut ordinary
+        };
         let path = if name.ends_with(".ts") {
-            transpile(&path, out, stem, &transpiler)
+            let destination = out.join("runtime-js").join(format!("{stem}.js"));
+            batch.push((path, destination.clone()));
+            destination
         } else {
             path
         };
@@ -45,33 +54,58 @@ pub fn embed(manifest: &Path, out: &Path) {
             path.display().to_string()
         ));
     }
+    fs::create_dir_all(out.join("runtime-js")).expect("create transpiled runtime directory");
+    transpile_batch(&ordinary, &transpiler, false);
+    transpile_batch(&compact, &transpiler, true);
     let runtime = manifest.join("../../vendor/bun/src/runtime.js");
     let generator = manifest.join("../../scripts/generate-bun-wrap.ts");
     println!("cargo:rerun-if-changed={}", runtime.display());
     println!("cargo:rerun-if-changed={}", generator.display());
     let destination = out.join("bun-wrap.js");
-    let output = Command::new("node").arg(generator).arg(runtime).arg(&destination).output().expect("generate bun:wrap");
-    assert!(output.status.success(), "generate bun:wrap: {}", String::from_utf8_lossy(&output.stderr));
-    table.push_str(&format!("    (\"bun_wrap\", include_str!({:?})),\n", destination.display().to_string()));
+    eprintln!("runtime-js phase=wrap source={}", runtime.display());
+    let output = Command::new("node")
+        .arg(generator)
+        .arg(runtime)
+        .arg(&destination)
+        .output()
+        .expect("generate bun:wrap");
+    assert!(
+        output.status.success(),
+        "runtime-js phase=wrap status={} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    table.push_str(&format!(
+        "    (\"bun_wrap\", include_str!({:?})),\n",
+        destination.display().to_string()
+    ));
     table.push_str("];\n");
     fs::write(out.join("polyfills.rs"), table).unwrap();
 }
 
-fn transpile(source: &Path, out: &Path, stem: &str, script: &Path) -> PathBuf {
-    let dir = out.join("runtime-js");
-    fs::create_dir_all(&dir).expect("create transpiled runtime directory");
-    let destination = dir.join(format!("{stem}.js"));
-    let output = Command::new("node")
-        .arg(script)
-        .arg(source)
-        .arg(&destination)
+fn transpile_batch(files: &[(PathBuf, PathBuf)], script: &Path, compact: bool) {
+    if files.is_empty() {
+        return;
+    }
+    let runner = if compact { "bun" } else { "node" };
+    let phase = if compact { "compact" } else { "strip" };
+    let mut command = Command::new(runner);
+    command.arg(script).arg("--batch");
+    for (source, destination) in files {
+        command.arg(source).arg(destination);
+    }
+    if compact {
+        command.arg("--minify-whitespace");
+    }
+    eprintln!("runtime-js launch phase={phase} files={}", files.len());
+    let output = command
+        .stderr(std::process::Stdio::inherit())
         .output()
-        .expect("runtime TypeScript requires Node.js 24+ on PATH");
+        .expect("runtime TypeScript requires Node.js 24+ and Bun on PATH");
     assert!(
         output.status.success(),
-        "transpile {}: {}",
-        source.display(),
+        "runtime-js phase={phase} status={} stderr={}",
+        output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    destination
 }

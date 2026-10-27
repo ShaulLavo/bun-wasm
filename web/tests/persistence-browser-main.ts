@@ -1,3 +1,5 @@
+// Conformance-only implementation override, never exposed by either product page.
+import { withVfsImplementation } from "../node_modules/waffle/fs/vfs-internal.ts";
 import { SharedFilesystem, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../src/shared-fs";
 
 let fs: SharedFilesystem | undefined;
@@ -28,9 +30,9 @@ Object.assign(globalThis, {
   persistenceHarness: {
     state,
     async open(name: string, persistence = true, storage: "indexeddb" | "opfs" = "indexeddb") {
-      fs?.dispose();
+      await fs?.dispose();
       state.ownershipLost = false; state.ownershipMessage = "";
-      fs = new SharedFilesystem({ name, persistence, storage });
+      fs = new SharedFilesystem(withVfsImplementation(persistence ? storage === "opfs" ? "opfs-memory" : "indexeddb" : "memory", { name, mode: persistence ? "fast" : "memory" }));
       fs.onOwnershipLost = () => {
         state.ownershipLost = true;
         state.ownershipMessage = `${WORKSPACE_TAKEN_OVER} ${UNSAVED_CHANGES_LOST}`;
@@ -42,13 +44,35 @@ Object.assign(globalThis, {
     async remove(path: string) { return fs!.remove(path); },
     async mkdir(path: string) { await fs!.mkdirp(path); },
     async flush() { await fs!.flush(); },
+    async unlinkWhileOpen() {
+      if (!fs) throw new Error("filesystem not opened");
+      await fs.writeFile("/held.bin", Uint8Array.from([0, 255, 1, 0, 128]));
+      const descriptor = new Worker("./safari-open-descriptor-worker.js", { type: "module" });
+      function reply(): Promise<unknown> {
+        return new Promise((resolve, reject) => {
+          descriptor.onmessage = event => event.data.error ? reject(new Error(event.data.error)) : resolve(event.data);
+          descriptor.onerror = event => reject(new Error(event.message));
+        });
+      }
+      try {
+        const ready = reply(), connection = fs.fork();
+        descriptor.postMessage({ kind: "open", connection }, [connection.port]);
+        await ready;
+        await fs.remove("/held.bin"); await fs.flush();
+        const missing = await fs.lookup("/held.bin");
+        if (missing) throw new Error("unlinked path is still visible");
+        const bytes = reply(); descriptor.postMessage({ kind: "read" });
+        return await bytes;
+      } finally { descriptor.terminate(); }
+    },
     async snapshot() {
       const files = (await fs!.listFiles()).sort();
       return Promise.all(files.map(async path => ({ path, metadata: await fs!.lookup(path), bytes: Array.from((await fs!.readFile(path))!) })));
     },
     direct,
+    storageState() { return fs?.state.status; },
     async destroy() {
-      fs?.dispose(); fs = undefined;
+      await fs?.dispose(); fs = undefined;
       if (worker) { await direct("close"); worker.terminate(); worker = undefined; }
     },
     async deleteDatabase(name: string, storage: "indexeddb" | "opfs" = "indexeddb") {

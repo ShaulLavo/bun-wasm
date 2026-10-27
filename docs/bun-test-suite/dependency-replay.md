@@ -15,10 +15,10 @@ The 2026-10-18 replay selects the 49 files previously assigned to category c for
 | --- | --- | --- |
 | a | 84 | 95 |
 | b | 81 | 82 |
-| c | 54 | 5 |
-| d | 1451 | 1479 |
+| c | 54 | 4 |
+| d | 1451 | 1466 |
 | e | 93 | 93 |
-| f | 23 | 24 |
+| f | 23 | 25 |
 
 [dependency-replay.json](dependency-replay.json) records all 49 outcomes and first failures on each engine, with input provenance and raw-result hashes. [dependency-files.txt](dependency-files.txt) fixes the selection. [Dependency setup](dependencies/setup.md) gives the install and replay commands and version sources.
 

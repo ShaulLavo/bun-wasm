@@ -1,5 +1,6 @@
 //! Link settings for bun.wasm.
 fn main() {
+    println!("cargo:rerun-if-env-changed=BUN_WASM_SYSROOT");
     let target = std::env::var("TARGET").unwrap_or_default();
     if !target.starts_with("wasm32") {
         return;
@@ -17,13 +18,54 @@ fn main() {
     println!("cargo:rustc-link-arg-bin=bun=--export=bun_wasm_host_slots");
     // Host-engine build: the exports web/src/engine-host.js calls.
     if std::env::var_os("CARGO_FEATURE_ENGINE_HOST").is_some() {
-        for name in ["bunwasm_ready", "bunwasm_alloc", "bunwasm_call", "bunwasm_describe", "bunwasm_result_ptr", "bunwasm_result_len"] {
+        for name in [
+            "bunwasm_ready",
+            "bunwasm_alloc",
+            "bunwasm_call",
+            "bunwasm_describe",
+            "bunwasm_result_ptr",
+            "bunwasm_result_len",
+        ] {
             println!("cargo:rustc-link-arg-bin=bun=--export={name}");
         }
     }
-    // BoringSSL and JavaScriptCore share wasi-sdk's libc with Rust.
+    if std::env::var_os("CARGO_FEATURE_ENGINE_QUICKJS").is_some() {
+        split_entry();
+        return;
+    }
+    // BoringSSL, JavaScriptCore and Rust share Waffle's patched wasi-libc.
     {
-        let sdk = std::env::var("WASI_SDK_PATH").expect("WASI_SDK_PATH (source env.sh)");
-        println!("cargo:rustc-link-arg-bin=bun={sdk}/share/wasi-sysroot/lib/wasm32-wasip1/crt1-command.o");
+        let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("BUN_WASM_SYSROOT (source env.sh)");
+        println!("cargo:rustc-link-arg-bin=bun={sysroot}/lib/wasm32-wasip1/crt1-command.o");
+    }
+}
+
+fn split_entry() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let exports = root.join("scripts/quickjs-core-exports.txt");
+    let source = root.join("crates/bunwasm-cli/entry-split.c");
+    let object = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("entry-split.o");
+    let compiler = std::env::var("CC_wasm32_wasip1").expect("source env.sh");
+    let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
+    assert!(
+        std::process::Command::new(compiler)
+            .args([
+                "--target=wasm32-wasip1",
+                &format!("--sysroot={sysroot}"),
+                "-O2",
+                "-c"
+            ])
+            .arg(&source)
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .unwrap()
+            .success()
+    );
+    println!("cargo:rerun-if-changed={}", source.display());
+    println!("cargo:rerun-if-changed={}", exports.display());
+    println!("cargo:rustc-link-arg-bin=bun={}", object.display());
+    for name in std::fs::read_to_string(exports).unwrap().lines() {
+        println!("cargo:rustc-link-arg-bin=bun=--export={name}");
     }
 }

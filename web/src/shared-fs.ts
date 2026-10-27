@@ -1,6 +1,6 @@
 import { SharedFilesystem as RuntimeFilesystem, type SharedFilesystemOptions } from "waffle/browser/shared-fs";
-export { WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "waffle/browser/shared-fs";
-export type { Entry, SharedFilesystemOptions } from "waffle/browser/shared-fs";
+export { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "waffle/browser/shared-fs";
+export type { SharedFilesystemOptions } from "waffle/browser/shared-fs";
 
 /** Bun owns its existing persistence namespace; the runtime supplies the filesystem service. */
 export class SharedFilesystem extends RuntimeFilesystem {

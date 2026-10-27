@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { apps } from "./apps.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
-import { failure, compareEngines, stageOutput } from "./classify.mjs";
+import { failure, compareEngines, stageOutput } from "./classify.ts";
 import { readGuest, serverCommand } from "./browser.mjs";
 
 test("playground server exit zero before HTTP assertion fails", async () => {
@@ -12,7 +12,7 @@ test("playground server exit zero before HTTP assertion fails", async () => {
     if (text) return;
     return fn.toString().includes("serving:") ? { done: true, serving: false } : 0;
   } };
-  const result = await serverCommand({ page, context: { newPage() { throw new Error("Must not assert preview after exit"); } }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run server.ts\nuser@bun:~$" });
+  const result = await serverCommand({ page, context: { newPage() { throw new Error("Must not assert preview after exit"); } }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run .matrix-command.ts server.ts\nuser@bun:~$" });
   expect(result).toMatchObject({ status: "fail", exit: 0 });
 });
 
@@ -87,10 +87,11 @@ test("playground server exiting during the page assertion also fails", async () 
     const source = fn.toString();
     if (source.includes("serving:")) return { done: false, serving: true };
     if (source.includes("previews.url")) return "http://127.0.0.1/preview";
+    if (source.includes("previews.ready")) return "ready";
     return source.includes("shell.lastExit") ? 0 : true;
   } };
-  const preview = { on() {}, goto: async () => ({ ok: () => true }), locator: () => ({ filter: () => ({ waitFor: async () => {} }) }), close: async () => {} };
-  const result = await serverCommand({ page, context: { newPage: async () => preview }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run server.ts\nuser@bun:~$" });
+  const preview = { on() {}, exposeBinding: async () => ({ dispose: async () => {} }), addInitScript: async () => ({ dispose: async () => {} }), evaluate: async () => {}, goto: async () => ({ ok: () => true, fromServiceWorker: () => true }), locator: () => ({ filter: () => ({ waitFor: async () => {} }) }), close: async () => {} };
+  const result = await serverCommand({ page, context: { newPage: async () => preview }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run .matrix-command.ts server.ts\nuser@bun:~$" });
   expect(result).toMatchObject({ status: "fail", exit: 0 });
 });
 
@@ -106,4 +107,15 @@ test("rejection diagnostics recognize bracketed errors", () => {
       expect(failure(output, "build")).toEqual({ category: "d", blocker: "build: " + error });
     }
   }
+});
+
+
+test("declaration-only dependencies with empty main still require exact package identity", async () => {
+  const app = { dependencies: { "@types/node": "22.18.10" }, commands: [] };
+  const metadata = { name: "@types/node", version: "22.18.10", main: "", types: "index.d.ts" };
+  const read = path => path === "node_modules/@types/node/package.json" ? JSON.stringify(metadata) : null;
+  expect((await checkInstall(app, { code: 0 }, read)).status).toBe("pass");
+  expect((await checkInstall(app, { code: 0 }, () => null)).status).toBe("fail");
+  metadata.version = "22.18.9";
+  expect((await checkInstall(app, { code: 0 }, read)).status).toBe("fail");
 });

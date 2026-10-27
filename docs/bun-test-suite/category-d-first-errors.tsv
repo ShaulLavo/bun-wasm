@@ -1,0 +1,721 @@
+file	test	error	cause
+cli/bunfig-test-options.test.ts	bunfig.toml test options > randomize with seed produces consistent order	error: expect(received).not.toEqual(expected)	unknown
+cli/check/check.test.ts	bun check > colors change nothing but the colors	error: expect(received).toContain(expected)	check-command
+cli/env/bun-options.test.ts	BUN_OPTIONS environment variable > basic usage - passes options to bun command	error: expect(received).toContain(expected)	bun-options
+cli/env/ci-info.test.ts	CI detection > CI=true enables CI detection even with no CI env vars	error: expect(received).toContain(expected)	ci-only
+cli/format/bunfig.test.ts	sortImports > groups built-ins, packages, aliases, relative paths and styles, separated by blank lines	error: expect(received).toBe(expected)	formatter
+cli/format/format-doctor.test.ts	bun fmt --doctor > with a .prettierrc	error: expect(received).toBe(expected)	formatter
+cli/format/glob.test.ts	the command line pattern src/**/*.@(js|ts) lists the same files as Prettier	error: expect(received).toBe(expected)	formatter
+cli/format/oxfmt-cli/oxfmt-cli.test.ts	bun fmt does what oxfmt does > config_file/1: --check !*.{json,jsonc,ts}	error: expect(received).toEqual(expected)	formatter
+cli/format/prettier-cli/prettier-cli.test.ts	bun fmt does what Prettier does > arg-parsing.js: cli/arg-parsing $ --end-of-line lf --single-quote file.js	error: expect(received).toEqual(expected)	formatter
+cli/format/sort-imports.test.ts	sortImports > formats every case without errors	error: expect(received).toBe(expected)	formatter
+cli/format/sort-imports/sort-imports.test.ts	"trivago > tests/Angular/imports-with-decorators.js .. {""overrides"":[{""files"":""*.js"",""options"":{""parser"":""typescript""}}],""tabWidth"":4,""importOrder"":[""^@core/(.*)$"",""^@server/(.*)"",""^@ui/(.*)$"",""^[./]""],""importOrderSeparation"":true,""importOrderParserPlugins"":[""typescript"",""classProperties"",""[\""decorators\"", { \""decoratorsBeforeExport\"": true }]""]}"	error: expect(received).toBe(expected)	formatter
+cli/format/svelte/svelte.test.ts	Svelte > as prettier: {}	error: expect(received).toEqual(expected)	formatter
+cli/format/tailwind/tailwind.test.ts	"sortTailwindcss > as oxfmt: {""experimentalTailwindcss"":{}}"	error: expect(received).toBe(expected)	formatter
+cli/format/words.test.ts	bun fmt --check > lists the files that need formatting, writes nothing and exits with 1	error: expect(received).toEqual(expected)	formatter
+cli/heap-prof.test.ts	--heap-prof writes a .heapprofile with node's filename format on exit	error: expect(received).toBe(expected)	profiler-flags
+cli/init/init.test.ts	bun init > bun init works	error: bun init is not supported in bun-wasm	init-command
+cli/inspect/compile-bytecode-tooling.test.ts	(unnamed)	error: expect(received).toBe(expected)	compiled-bytecode
+cli/inspect/inspect.test.ts	websocket > bun --inspect	error: expect(received).toMatchObject(expected)	unknown
+cli/inspect/test-reporter.test.ts	TestReporter inspector protocol > retroactively reports tests when TestReporter.enable is called after tests are discovered	error: Unix sockets and TLS sockets are not supported in bun-wasm	unknown
+cli/install/GHSA-pfwx-36v6-832x.test.ts	<collection/hook/exit; no named failure>	TypeError: not a function	archive
+cli/install/bun-add-filter.test.ts	"add --filter targets one workspace by name (and does not install an npm package called ""api"")"	error: expect(received).toBe(expected)	install-filter
+cli/install/bun-add.test.ts	(unnamed)	TypeError: not a function	archive
+cli/install/bun-audit.test.ts	`bun audit` > should fail with no package.json	ERR: error: bun audit is not supported in bun-wasm	unknown
+cli/install/bun-create.test.ts	"should not crash > [""create"",""""]"	error: bun create is not supported in bun-wasm	create-init-command
+cli/install/bun-dedupe.test.ts	collapses a range onto the exact version that satisfies every edge	error: expect(received).toStrictEqual(expected)	unknown
+cli/install/bun-info.test.ts	bun info > bun info (main command) > should display package info for latest version	error: expect(received).toBe(expected)	info-why-command
+cli/install/bun-install-backends.test.ts	install backends on POSIX > hardlink backend reports a file whose relative path exceeds PATH_MAX	error: expect(received).toContain(expected)	install-equals-linker
+cli/install/bun-install-cache-publish.test.ts	concurrent installs that share a cache all succeed and leave nothing in the temp dir	TypeError: not a function	archive
+cli/install/bun-install-cpu-os.test.ts	bun install --cpu and --os flags > should filter dependencies by CPU architecture	error: expect(received).toBe(expected)	install-platform
+cli/install/bun-install-env-file.test.ts	bun install .env loading (#12011) > --env-file loads the requested file for bunfig $VAR substitution	error: expect(received).toBeGreaterThan(expected)	unknown
+cli/install/bun-install-lifecycle-scripts.test.ts	<collection/hook/exit; no named failure>	TypeError: not a function	archive
+cli/install/bun-install-link-path.test.ts	link:<path> (hoisted) > is relative to the declaring package.json, in the root and in a workspace	error: expect(received).not.toContain(expected)	install-workspaces
+cli/install/bun-install-native-binlink.test.ts	native binlink optimization > uses platform-specific bin instead of main package bin with linker hoisted	error: expect(received).not.toContain(expected)	install-platform
+cli/install/bun-install-offline-misses.test.ts	--offline with an optional dependency that is not in the cache > (unnamed)	TypeError: not a function	archive
+cli/install/bun-install-offline.test.ts	--prefer-offline resolves from cached manifests without touching the network	error: expect(received).toContain(expected)	manifest-accept
+cli/install/bun-install-package-extensions.test.ts	packageExtensions (hoisted) > adds a dependency, which bun.lock reproduces	error: expect(received).toEqual(expected)	package-extensions
+cli/install/bun-install-patch.test.ts	patch > should patch a dependency when its dependencies are not hoisted	error: expect(received).toMatchInlineSnapshot(expected)	install-patch-progress
+cli/install/bun-install-pathname-trailing-slash.test.ts	registry path without trailing slash is preserved > .npmrc registry= and @scope:registry=	error: expect(received).toEqual(expected)	install-registry-config
+cli/install/bun-install-proxy.test.ts	<collection/hook/exit; no named failure>	error: A functional `docker` is required in CI for some tests.	unknown
+cli/install/bun-install-retry.test.ts	retries a manifest whose redirect target 500s once	error: expect(received).not.toContain(expected)	install-equals-linker
+cli/install/bun-install-security-provider.test.ts	basic	error: expect(received).toContain(expected)	manifest-accept
+cli/install/bun-install-staging.test.ts	hoisted linker: a package whose install was interrupted is installed again	TypeError: not a function	archive
+cli/install/bun-install-tarball-integrity.test.ts	<collection/hook/exit; no named failure>	error: test expects a function as the second argument	test-options-first
+cli/install/bun-install.test.ts	<collection/hook/exit; no named failure>	TypeError: not a function	archive
+cli/install/bun-link.test.ts	should link and unlink workspace package	error: expect(received).not.toContain(expected)	install-workspaces
+cli/install/bun-patch.test.ts	error messages > 'bun patch' with no package name shows a usage example	error: expect(received).toMatchInlineSnapshot(expected)	patch-command
+cli/install/bun-pm-cache-pack.test.ts	"bun pm cache unpack > refuses, and leaves the cache as it was: > entry name """""	TypeError: cannot convert BigInt to number	unknown
+cli/install/bun-pm-diff.test.ts	(unnamed)	error: pack failed: error: Unknown install option: --quiet	install-quiet
+cli/install/bun-pm-fetch.test.ts	should fetch dependencies into the cache without installing	error: expect(received).toMatchInlineSnapshot(expected)	pm-fetch
+cli/install/bun-pm-pkg.test.ts	bun pm pkg > get command > should get a single property	error: Expected success but got code 1. stderr: error: Only bun pm ls is supported in bun-wasm	pm-pkg
+cli/install/bun-pm-version.test.ts	bun pm version > help and version previews > should show help when no arguments provided	error: expect(received).toBe(expected)	pm-version
+cli/install/bun-pm-why.test.ts	bun why > should show help when no package is specified	error: expect(received).toBe(expected)	info-why-command
+cli/install/bun-pm.test.ts	should list top-level dependency	error: expect(received).toContain(expected)	manifest-accept
+cli/install/bun-prune.test.ts	removes extraneous packages, keeps everything the lockfile installs	error: expect(received).toMatchInlineSnapshot(expected)	patch-command
+cli/install/bun-publish.test.ts	(unnamed)	"error: Failed to create user publish-tests: 500 {""error"":""Internal Server Error""}"	unknown
+cli/install/bun-remove.test.ts	should remove existing package	error: expect(received).toBe(expected)	file-dependencies
+cli/install/bun-run-dir.test.ts	should download dependency to run local file	error: expect(received).toBe(expected)	autoinstall
+cli/install/bun-run.test.ts	bun run > bun > should work with . > respecting 'main' field and allowing trailing commas/comments in package.json	error: expect(received).toBe(expected)	entry-directory
+cli/install/bun-security-scanner-matrix-with-node-modules.test.ts	bun install > no args > --linker=hoisted > (scanner: npm) > (bun.lock exists: false) > (advisories: warn) > (TTY:n) > 0019 (with modules)	error: setup install exited with 1:	install-integrity
+cli/install/bun-security-scanner-matrix-without-node-modules.test.ts	bun install > no args > --linker=hoisted > (scanner: local) > (bun.lock exists: false) > (advisories: warn) > (no-TTY) > 0007 (without modules)	error: expect(received).toEqual(expected)	install-integrity
+cli/install/bun-security-scanner-workspaces.test.ts	security scanner workspaces > security scanner receives packages from workspace dependencies	error: expect(received).toContain(expected)	install-workspaces
+cli/install/bun-update-security-edge-cases.test.ts	bun update security edge cases > bun update detects vulnerability in updated version that was safe before	error: expect(received).toContain(expected)	install-integrity
+cli/install/bun-update-security-provider.test.ts	security scanner blocks bun update on fatal advisory	error: expect(received).toMatchInlineSnapshot(expected)	update-command
+cli/install/bun-update-security-simple.test.ts	security scanner blocks bun update with fatal advisory	error: expect(received).toBe(expected)	update-command
+cli/install/bun-update.test.ts	should update to latest version of dependency	error: expect(received).toContain(expected)	manifest-accept
+cli/install/bun-workspaces-self-contained.test.ts	self-contained workspace via installConfig.hoistingLimits in the workspace's package.json > gets a complete, physical node_modules while other workspaces still hoist	error: expect(received).not.toContain(expected)	install-backend
+cli/install/bunx-concurrent.test.ts	concurrent bunx spawns of the same package do not corrupt the shared install dir	error: expect(received).toContain(expected)	x-command
+cli/install/bunx-directories-bin.test.ts	bunx runs the bin of a directories.bin package	error: expect(received).toMatchObject(expected)	loopback-external
+cli/install/bunx.test.ts	should choose the tagged versions instead of the PATH versions when a tag is specified	TypeError: not a function	archive
+cli/install/config-precedence.test.ts	(unnamed)	"error: Failed to create user config-precedence: 500 {""error"":""Internal Server Error""}"	unknown
+cli/install/config-version.test.ts	configVersion > new projects use current config version	error: expect(received).toContain(expected)	loopback-external
+cli/install/escape-control-characters.test.ts	(unnamed)	TypeError: not a function	archive
+cli/install/frozen-lockfile-member-pins.test.ts	a workspace member keeps the versions its lockfile pins > when nothing in the project changed > bun ci passes with a preinstall script in a member	error: expect(received).not.toContain(expected)	install-workspaces
+cli/install/frozen-lockfile-outdated.test.ts	bun.lock > --frozen-lockfile fails when > a dependency's range is loosened but still satisfied by the locked version	error: expect(received).toContain(expected)	install-workspaces
+cli/install/frozen-lockfile-pruned.test.ts	linker: hoisted > turbo output: peer-held package survives --frozen-lockfile although turbo dropped trustedDependencies and the workspace bin from bun.lock	error: expect(received).toEqual(expected)	install-workspaces
+cli/install/frozen-lockfile-workspace-names.test.ts	hoisted linker > a root dependency on a registry version that the workspace of that name does not satisfy > takes the name, and a dependent still gets the workspace	error: expect(received).toEqual(expected)	install-workspaces
+cli/install/hoist.test.ts	should handle resolving optional peer from multiple instances of same package	error: expect(received).not.toContain(expected)	unknown
+cli/install/hosted-git-info/boundary-conditions.test.ts	hosted-git-info boundary conditions > shortcut with nothing after the colon > override values of all five providers	error: expect(received).toContain(expected)	install-empty-lock
+cli/install/isolated-install.test.ts	basic > single dependency	error: expect(received).toEqual(expected)	install-isolated
+cli/install/isolated-relink.test.ts	an existing store entry is re-linked when an override re-resolves its dependency	error: expect(received).toEqual(expected)	install-isolated
+cli/install/lockfile-only.test.ts	should not download tarballs with --lockfile-only using bun.lockb	error: expect(received).toBe(expected)	install-lockfile-only
+cli/install/lockfile-version-2.test.ts	a freshly written text lockfile defaults to version 2	error: expect(received).not.toContain(expected)	loopback-external
+cli/install/migration/complex-workspace.test.ts	(unnamed)	error: expect(received).not.toContain(expected)	install-destination
+cli/install/migration/migrate.test.ts	migrate from npm lockfile v3 during `bun add`	error: expect(received).toMatchInlineSnapshot(expected)	lock-migration
+cli/install/migration/npm-arborist.test.ts	package-lock.json migration fixes > arborist fixtures > audit-fix-old-tap	error: expect(received).toMatchSnapshot(expected)	pm-migrate
+cli/install/migration/pnpm-lock-v9.test.ts	pnpm-lock.yaml v9 > v9 git and userinfo-tarball references migrate	error: expect(received).toContain(expected)	pm-migrate
+cli/install/migration/pnpm-migration.test.ts	version is number with dot	error: expect(received).toContain(expected)	lock-migration
+cli/install/migration/yarn-berry.test.ts	yarn berry migration > npm packages keep the versions yarn.lock pinned	error: expect(received).toContain(expected)	lock-migration
+cli/install/migration/yarn-lock-migration.test.ts	yarn.lock migration basic > simple yarn.lock migration produces correct bun.lock	error: expect(received).toBe(expected)	lock-migration
+cli/install/minimum-release-age.test.ts	minimum-release-age > basic filtering > filters packages by minimum release age	error: expect(received).toBe(expected)	install-release-age
+cli/install/nested-overrides.test.ts	syntax > npm object scopes the rule to the parent's edge	error: expect(received).toBe(expected)	snapshot-version
+cli/install/overrides.test.ts	overrides affect your own packages	error: expect(received).toMatchInlineSnapshot(expected)	install-add-header
+cli/install/public-hoist-pattern.test.ts	(unnamed)	error: expect(received).toMatch(expected)	unknown
+cli/install/semver.test.ts	bun install resolves a space-separated range as an intersection	error: expect(received).toBe(expected)	install-lockfile-only
+cli/install/shebang-normalize.test.ts	bin linking normalizes CRLF in shebang	error: expect(received).toBe(expected)	link-command
+cli/install/test-dev-peer-dependency-priority.test.ts	workspace devDependencies should take priority over peerDependencies for resolution	error: expect(received).not.toContain(expected)	install-workspaces
+cli/lint/bun-rules.test.ts	bun/ > no-eager-dynamic-import	SyntaxError: Unexpected end of JSON input	linter
+cli/lint/bunfig.test.ts	"[lint] in bunfig.toml > config = ""other.config.js"""	error: expect(received).not.toEqual(expected)	linter
+cli/lint/config-files.test.ts	a function in an eslint.config.js > in `files` is an error	error: expect(received).toContain(expected)	linter
+cli/lint/doctor.test.ts	bun lint --doctor > with an eslint.config.js	error: expect(received).toBe(expected)	linter
+cli/lint/explain.test.ts	--rules -f json > has oxlint's keys first, then Bun's	SyntaxError: Unexpected end of JSON input	linter
+cli/lint/glob.test.ts	extglob patterns in `files` match the same files as ESLint	error: exit code 1	linter
+cli/lint/help.test.ts	bun lint > --help is short	error: expect(received).toBe(expected)	linter
+cli/lint/hints.test.ts	no-useless-assignment > every branch assigns again	error: expect(received).toEqual(expected)	linter
+cli/lint/import-attributes.test.ts	import types with options inside the options of an import type > plugins get oxlint's tree with an .oxlintrc.json	error: bun lint is not supported in bun-wasm	linter
+cli/lint/init.test.ts	bun lint --init > creates bunfig.toml	error: expect(received).toEqual(expected)	linter
+cli/lint/js-parsers.test.ts	bun lint with processors > the blocks are linted with the configuration for their own names, next to other files	error: expect(received).not.toContain(expected)	linter
+cli/lint/json-parse.test.ts	JSON files that rules read > syntax errors have V8's messages and positions	error: expect(received).toBe(expected)	linter
+cli/lint/messages.test.ts	bun lint > rules that need types are skipped with a warning	error: expect(received).toStartWith(expected)	linter
+cli/lint/native-rules.test.ts	every built-in rule > is accepted under all of its names and resolves to the same ID	SyntaxError: Unexpected end of JSON input	linter
+cli/lint/output.test.ts	without a config file > the default format is pretty, which ends with a summary	error: expect(received).toBe(expected)	linter
+cli/lint/oxc-errors.test.ts	bun lint with .oxlintrc.json > has every error of a file that oxc refuses, in oxlint's order and words	error: expect(received).toBe(expected)	linter
+cli/lint/oxc-names.test.ts	beside an .oxlintrc.json, when no rule needs the variables > imports that are declared again come in oxlint's order	error: expect(received).toBe(expected)	linter
+cli/lint/prettier-rule.test.ts	prettier/prettier > reports what the rule of the package reports	SyntaxError: Unexpected end of JSON input	linter
+cli/lint/react-compiler.test.ts	bun lint: the rules of the React Compiler report what oxlint 1.87.0 reports > for oxlint's own test cases	TypeError: cannot read property 'maxRSS' of undefined	subprocess-resource
+cli/lint/rule-docs.test.ts	(unnamed)	SyntaxError: Unexpected end of JSON input	linter
+cli/lint/rule-throws.test.ts	with an oxlint config > a JavaScript rule that throws > in create() is an error in every file when it's set to warn	SyntaxError: Unexpected end of JSON input	linter
+cli/lint/rules.test.ts	rules that can use types but don't need them get them when types are on > naming-convention's `types` option	error: exit code 1	linter
+cli/lint/scanner.test.ts	scanner > names of every length, after every indentation, in one file	SyntaxError: Unexpected end of JSON input	linter
+cli/run/as-node.test.ts	fake node cli > the node cli actually works	"error: error: Module not found ""node"""	unknown
+cli/run/autoinstall-cached-manifest.test.ts	auto-install with cached manifest but missing tarball does not read a dangling dependency pointer	error: expect(received).toContain(expected)	autoinstall
+cli/run/commonjs-invalid.test.ts	commonjs-invalid > Loading an invalid commonjs module	error: expect(received).toContain(expected)	compiled-cjs-marker
+cli/run/commonjs-no-export.test.ts	commonjs-no-export > CommonJS entry point with no exports	"error: Module not found ""--bun"""	unknown
+cli/run/crash-report-command-char.test.ts	crash report command character > bun <script> encodes AutoCommand	error: expect(received).not.toBeNull()	unknown
+cli/run/empty-file.test.ts	empty-file > should execute empty scripts	error: expect(received).toBeEmpty()	unknown
+cli/run/esm-defineProperty.test.ts	<collection/hook/exit; no named failure>	error: 4	unknown
+cli/run/if-present.test.ts	bun > should error with missing script	error: expect(received).toMatch(expected)	unknown
+cli/run/jsx-symbol-collision.test.ts	jsx-symbol-collision > should not have a symbol collision with jsx imports	error: expect(received).toBe(expected)	post-run-flags
+cli/run/markdown-entrypoint.test.ts	bun <file.md> > renders headings with underlines	error: expect(received).toMatchSnapshot(expected)	unknown
+cli/run/multi-run.test.ts	parallel: basic > runs two scripts in parallel	error: expect(received).toMatch(expected)	unknown
+cli/run/no-envfile.test.ts	--no-env-file disables .env loading	error: expect(received).toBe(expected)	dotenv
+cli/run/preload-test.test.js	preload > throws an error when preloaded module fails to execute	error: expect(received).toContain(expected)	preload
+cli/run/require-and-import-trailing.test.ts	require() with trailing slash	SyntaxError: Expected property name or '}' in JSON at position 13 (line 3 column 7)	unknown
+cli/run/require-cache.test.ts	require.cache > require.cache is not an empty object literal when inspected	ReferenceError: require is not defined	unknown
+cli/run/run-autoinstall-abs-path.test.ts	auto-install: DirInfo.abs_path survives threadlocal buffer reuse across resolutions	TypeError: not a function	archive
+cli/run/run-autoinstall.test.ts	<collection/hook/exit; no named failure>	TypeError: not a function	conditional-tests
+cli/run/run-cjs.test.ts	run-cjs > a pre-bundled entry point still consults require.extensions	error: expect(received).toMatchObject(expected)	unknown
+cli/run/run-eval.test.ts	bun -e > import, tsx, require in esm, import.meta	error: expect(received).toEqual(expected)	eval-jsx
+cli/run/run-extensionless.test.ts	run-extensionless > running extensionless file works	"error: Expected "";"" but found "":"""	unknown
+cli/run/run-process-env.test.ts	process.env > npm_lifecycle_event	"error: error: Module not found ""start:dev"""	unknown
+cli/run/run-propagate-sigkill.test.ts	bun run propagates SIGKILL from a child without hitting unreachable	error: expect(received).toContain(expected)	package-run-script
+cli/run/run-quote.test.ts	should handle quote escapes	"error: error: Module not found ""test"""	unknown
+cli/run/run-shell.test.ts	run-shell > running a shell script works	"error: Expected "";"" but found ""wah"""	unknown
+cli/run/run_command.test.ts	bun > should error with missing script	error: expect(received).toMatch(expected)	unknown
+cli/run/syntax.test.ts	"exit code 0 > eval #0: "" """	error: expect(received).toEqual(expected)	eval-data-url
+cli/run/transpiler-cache.test.ts	transpiler cache > works	error: expect(received).toBeTrue()	unknown
+cli/run/tsconfig-override.test.ts	bun run --tsconfig-override > should use custom tsconfig for path resolution	error: expect(received).toContain(expected)	resolve-wording
+cli/run/workspaces.test.ts	bun run --workspaces > runs script in all workspace packages	error: expect(received).toBe(expected)	post-run-flags
+cli/test/bun-test.test.ts	bun test > works with cjs dynamic import	error: expect(received).toContain(expected)	cjs-dynamic-import
+cli/test/claudecode-flag.test.ts	CLAUDECODE=1 shows quiet test output (only failures)	error: expect(received).toMatchSnapshot(expected)	runner-path
+cli/test/concurrent-test-glob.test.ts	concurrent-test-glob > tests matching glob pattern run concurrently	error: expect(received).toBeGreaterThan(expected)	unknown
+cli/test/coverage.test.ts	coverage crash	error: expect(received).toBeUndefined()	unknown
+cli/test/parallel.test.ts	--parallel: each worker has a unique JEST_WORKER_ID and BUN_TEST_WORKER_ID	error: expect(received).not.toContain(expected)	unknown
+cli/test/pass-with-no-tests.test.ts	--pass-with-no-tests exits with 0 when no test files found	error: expect(received).toBe(expected)	no-tests
+cli/test/path-ignore-patterns.test.ts	pathIgnorePatterns > bunfig - single pattern string	error: expect(received).not.toContain(expected)	unknown
+cli/test/rerun-each.test.ts	--rerun-each should run tests exactly N times	error: expect(received).toContain(expected)	retry-rerun
+cli/test/retry-flag.test.ts	--retry retries failed tests	error: expect(received).toContain(expected)	retry-rerun
+cli/test/test-filter-lifecycle-snapshot.test.ts	snapshot	error: expect(received).toMatchInlineSnapshot(expected)	snapshot-version
+cli/test/test-randomize.test.ts	--randomize and --seed work	error: expect(received).toBeFinite()	unknown
+cli/test/test-shard.test.ts	--shard > partitions test files across shards with no overlap or gaps	error: expect(received).toContain(expected)	shard
+cli/update_interactive_formatting.test.ts	bun update --interactive > should render the outdated-package table with aligned name/version columns	error: expect(received).toContain(expected)	update-command
+cli/update_interactive_install.test.ts	bun update --interactive actually installs packages > should update package.json AND install packages	error: expect(received).not.toContain(expected)	unknown
+cli/update_interactive_snapshots.test.ts	bun update --interactive snapshots > should not crash with various package name lengths	error: Child process pipe is closed	unknown
+config/bunfig/bunfig-errors.test.ts	"bunfig.toml type-mismatch error messages > smol = ""yes"" -> expected boolean but received string"	error: expect(received).toBe(expected)	bunfig-validation
+config/bunfig/preload.test.ts	Given a single universal preload > When `bun run` is run and `bunfig.toml` is implicitly loaded, preloads are run	error: expect(received).toMatchInlineSnapshot(expected)	preload
+integration/bun-types/bun-types.test.ts	<collection/hook/exit; no named failure>	error: Cannot find module '../../../' from '/bun/test/integration/bun-types/bun-types.test.ts'	unknown
+integration/datadog-pprof/datadog-pprof.test.ts	@datadog/pprof > TimeProfiler start/stop returns a populated profile	error: bun install failed (exit 1)	loopback-external
+integration/esbuild/esbuild.test.ts	esbuild integration test > install and use esbuild	error: expect(received).toContain(expected)	loopback-external
+integration/expo-app/expo.test.ts	expo export works (no ajv issues)	error: Network is unreachable (os error 101)	loopback-external
+integration/vite-build/vite-build.test.ts	vite build works	error: Network is unreachable (os error 101)	loopback-external
+internal/build-rust-toolchain-probe.test.ts	the configure-time rustc probe pins the rustup proxy to the pinned channel	error: expect(received).toEqual(expected)	external-program
+internal/build-timings.test.ts	loadBuild > finds when a command released an output early from the output's mtime	error: expect(received).toEqual(expected)	mtime-write
+internal/harness-max-rss.test.ts	runCommandMaxRSS measures the command, not the test runner	error: expect(received).toBe(expected)	subprocess-resource
+internal/rust-check-all.test.ts	rust:check-all > checks the targets whose std is installed, says how to install the rest, and fails if any check failed	error: expect(received).toEqual(expected)	external-program
+internal/sigaction-layout.test.ts	bun.sys.Sigaction matches the host libc's struct sigaction	error: expect(received).toBeFunction()	unknown
+internal/source-lints/host-export-callers.test.ts	the marker grammar still recognizes the tree's host exports	error: expect(received).toBeGreaterThan(expected)	unknown
+js/bun/archive.test.ts	Bun.Archive > new Archive() > creates archive from object with string values	TypeError: not a function	archive
+js/bun/bun-object/deep-equals-temporal.test.ts	Bun.deepEquals on Temporal values (strict: true) > two separately constructed instances of the same value are equal ([Function])	RangeError: Offset +02:00 is invalid for 2024-06-15T12:34:56 in Europe/Berlin	unknown
+js/bun/bun-object/deep-equals.test.ts	Bun.deepEquals strict mode > ignores class names when the fourth argument is true	error: expect(received).toBe(expected)	deep-equals-fourth
+js/bun/bun-object/deep-match.spec.ts	Bun.deepMatch > Bun.deepMatch({	error: expect(received).toBe(expected)	deep-match
+js/bun/bun-object/write.spec.ts	Bun.write() > Throws when no arguments are provided	error: Unexpected return from matcher function `toThrowWithCodeAsync`.	unknown
+js/bun/console/bun-inspect-table.test.ts	"inspect.table > Map(2) { ""a"": 1, ""b"": 2 }"	error: expect(received).toMatchSnapshot(expected)	unknown
+js/bun/console/console-iterator.test.ts	should work for static input > hello world	error: expect(received).toBe(expected)	console-iterator
+js/bun/console/console-table.test.ts	console.table > throws when second arg is invalid	error: expect(received).toThrow()	unknown
+js/bun/console/console-write.test.ts	<collection/hook/exit; no named failure>	TypeError: not a function	conditional-tests
+js/bun/cron/cron-local-time.test.ts	Bun.cron.parse — local time zone > 0 9 * * * in America/Los_Angeles is 9am Pacific (PDT = UTC-7)	error: expect(received).toBe(expected)	cron
+js/bun/cron/cron-parse.test.ts	Bun.cron.parse — algorithm (pinned TZ=UTC) > weekday matching uses local day-of-week	error: expect(received).toBe(expected)	cron
+js/bun/cron/cron.test.ts	Bun.cron API > is a function	error: expect(received).toBe(expected)	cron
+js/bun/cron/in-process-cron.test.ts	Bun.cron (in-process) > validates cron expression	error: expect(received).toThrow(expected)	cron
+js/bun/css/angle-serialization-hang.test.ts	huge and non-finite radian angle values serialize instead of hanging	error: expect(received).toBe(expected)	css-test-hook
+js/bun/css/atan2-backtracking-hang.test.ts	deeply nested atan2() color values parse in linear time instead of hanging	error: expect(received).toBe(expected)	public-color
+js/bun/css/css-loader.test.ts	css loader default export > bun run	error: expect(received).toBe(expected)	css-default
+js/bun/css/invalid-utf8-column.test.ts	lone 0xF0 byte reports column 2, not 3, and does not panic	error: expect(received).toEqual(expected)	source-map-diagnostic
+js/bun/css/nested-selector-expansion.test.ts	deeply nested `&` selectors error out instead of expanding without bound when compiling nesting	error: expect(received).toContain(expected)	css-test-hook
+js/bun/glob/match.test.ts	Glob.match > **/*.ts > gives the same answers however often it's asked, short paths first	TypeError: not a function	within
+js/bun/glob/proto.test.ts	Object prototype followSymlinks	<see JSON excerpt; no error line>	unknown
+js/bun/glob/scan.test.ts	<collection/hook/exit; no named failure>	TypeError: not a function	unsafe-gc
+js/bun/globals.test.js	ERR_INVALID_THIS	error: expect(received).toBe(expected)	invalid-this
+js/bun/image/image-adversarial.test.ts	<collection/hook/exit; no named failure>	TypeError: cannot read property 'backend' of undefined	unknown
+js/bun/image/image-kernels.test.ts	resize filter properties > nearest preserves a flat field exactly (sum-to-one + edge renormalisation)	TypeError: not a function	archive-api-image
+js/bun/image/image-vs-sharp.test.ts	Bun.Image kernel output ≈ Sharp/libvips reference > gradient 21×16 bilinear: MAE<0.5 max≤2	TypeError: not a function	archive-api-image
+js/bun/ini/ini.test.ts	<collection/hook/exit; no named failure>	TypeError: Cannot convert undefined or null to object	unknown
+js/bun/io/bun-write.test.js	Bun.write > Bun.write file not found returns ENOENT, issue#6336	error: expect(received).toBe(expected)	fs-error-fields
+js/bun/jsc-stress/fixtures/simd-baseline.test.ts	JPEG codec: libjpeg-turbo jsimd runtime dispatch > flat grey survives encode, decode, encode byte for byte	TypeError: not a function	archive-api-image
+js/bun/jsc/exception-checks.test.ts	Bun.deepEquals with one argument	error: expect(received).toEqual(expected)	deep-equals-arity
+js/bun/jsc/heapStats-mimalloc.test.ts	heapStats() mimalloc integration > mimalloc aggregate stats are present	error: expect(received).toBeDefined()	unknown
+js/bun/jsc/shadow.test.js	shadow realm works	ReferenceError: ShadowRealm is not defined	unknown
+js/bun/jsc/temporal-global.test.ts	BUN_JSC_useTemporal=0 disables Temporal	error: expect(received).toEqual(expected)	temporal-toggle
+js/bun/jsc/webkit-upgrade-6b879687ee.test.ts	WebKit 6b879687ee upgrade > a destructuring pattern nested too deep does not crash bytecode generation (752ab90072)	TypeError: not a function	array-size
+js/bun/jsc/webkit-upgrade-7b485a76e9.test.ts	WebKit 7b485a76e9 upgrade > Error.stackTraceLimit is read from the Error constructor when a stack is captured (a5bfdb3aaf)	error: expect(received).toBe(expected)	stacktrace-limit
+js/bun/md/gfm-compat.test.ts	tables interrupting paragraphs > table immediately after paragraph text	TypeError: cannot read property 'html' of undefined	markdown
+js/bun/md/md-edge-cases.test.ts	fuzzer-like edge cases > empty string produces empty output across all APIs	TypeError: cannot read property 'html' of undefined	markdown
+js/bun/md/md-heading-ids.test.ts	headingIds option > basic heading gets an id attribute	TypeError: cannot read property 'html' of undefined	markdown
+js/bun/md/md-react.test.ts	Bun.markdown.react > returns a Fragment element	TypeError: cannot read property 'react' of undefined	unknown
+js/bun/md/md-render-callback.test.ts	Bun.markdown.render > returns a string	TypeError: cannot read property 'render' of undefined	unknown
+js/bun/md/md-spec.test.ts	CommonMark > example 1 (line 355): Tabs	TypeError: cannot read property 'html' of undefined	markdown
+js/bun/memfd-disabled.test.ts	Bun.spawn stdin from Blob falls back when memfd is disabled	error: expect(received).toBe(expected)	stdin-pipe
+js/bun/module-graph/module-graph-io.test.ts	ModuleGraph: what a graph opens is the graph's > run() calls fn in the graph's context and validates it; a subclass is a ModuleGraph	TypeError: not a function	module-graph
+js/bun/module-graph/module-graph-workers.test.ts	ModuleGraph and workers, A: a graph on the main thread whose code starts a worker > web Worker starting: dispose()	error: expect(received).toEqual(expected)	module-graph
+js/bun/module-graph/module-graph.test.ts	Bun.ModuleGraph is exposed	error: expect(received).toBe(expected)	module-graph
+js/bun/namespace-prototype-pollution.test.ts	namespace imports should not inherit from Object.prototype	TypeError: object is not extensible	unknown
+js/bun/perf/linker-order.test.ts	app workloads > keeps the machine's proxy settings away from the app: direct stays direct, and its own proxy is used	error: expect(received).toEqual(expected)	fetch-proxy
+js/bun/perf_hooks/histogram.test.ts	Histogram > basic histogram creation and initial state	AssertionError: Expected values to be strictly equal:	unknown
+js/bun/repl/repl.test.ts	Bun REPL > basic evaluation > prints the value of each evaluated line	error: Child process pipe is closed	unknown
+js/bun/resolve/build-error.test.ts	BuildError is modifiable	error: Expected BuildMessage, got BuildError	unknown
+js/bun/resolve/bun-lock.test.ts	import bun.lock file as json	error: Expected process to exit with code 0 but got 1	unknown
+js/bun/resolve/bun-main-entry-point.test.ts	dynamic import('bun:main') returns the wrapper module	error: expect(received).toEqual(expected)	bun-main
+js/bun/resolve/dynamic-import-tla-cycle.test.ts	dynamic import inside TLA whose target imports the awaiter back does not deadlock	error: expect(received).toBe(expected)	tla-cycle
+js/bun/resolve/esModule-annotation.test.js	"without type: ""module"" > exports.__esModule = true"	error: expect(received).toEqual(expected)	cjs-interop
+js/bun/resolve/esModule.test.ts	__esModule is settable	TypeError: object is not extensible	unknown
+js/bun/resolve/import-custom-condition.test.ts	custom condition 'import' in package.json resolves	error: expect(received).toBe(expected)	custom-conditions
+js/bun/resolve/import-defer.test.ts	import defer > defers module evaluation until a property is accessed	error: expect(received).toBe(expected)	import-defer
+js/bun/resolve/import-empty.test.js	importing empty text file returns empty string	error: expect(received).toEqual(expected)	empty-text-loader
+js/bun/resolve/import-meta-resolve.test.mjs	./haha.mjs	error: Cannot find module './haha.mjs' from '/bun/test/js/bun/resolve/import-meta-resolve.test.mjs'	unknown
+js/bun/resolve/import-query.test.ts	[query, no query]	error: Cannot find module './import-query-fixture.ts?query' from '/bun/test/js/bun/resolve/import-query.test.ts'	unknown
+js/bun/resolve/load-same-js-file-a-lot.test.ts	load the same file 10000 times	TypeError: not a function	unsafe-gc
+js/bun/resolve/lower-using-bun-target.test.ts	using / await using is not lowered when targeting bun > single-use using declaration is not inlined away	TypeError: not a function	transpiler
+js/bun/resolve/require-esm-evaluating-cycle.test.ts	require(esm) inside a require cycle returns the live namespace, not an empty placeholder	bun-wasm: bun.wasm trapped: error while executing at wasm backtrace:	unknown
+js/bun/resolve/require-esm-transitive-tla.test.ts	require(esm) rejects when a transitive dependency has top-level await	error: expect(received).toBe(expected)	require-async-module
+js/bun/resolve/require.test.ts	require(specifier) > has an empty prototype	error: expect(received).toEqual(expected)	cjs-interop
+js/bun/resolve/resolve-autoinstall-invalid-name.test.ts	resolver does not attempt auto-install for invalid npm package names	error: expect(received).toContain(expected)	autoinstall
+js/bun/resolve/resolve-error.test.ts	ResolveMessage > carries what the resolver logged while failing as notes	error: expect(received).toMatchInlineSnapshot(expected)	resolve-wording
+js/bun/resolve/resolve-ts.test.ts	with package.json > as dir > resolve without package.json exports type:module with .js file	error: Unexpected value	unknown
+js/bun/resolve/resolve.test.ts	#imports with wildcard	error: Cannot find module '#foo/wildcard.js' from '/bun/test/js/bun/resolve/resolve-test.js'	unknown
+js/bun/resolve/tsconfig-extends-leak.test.ts	tsconfig 'extends' merge still works after freeing intermediates	error: expect(received).toBe(expected)	tsconfig-paths
+js/bun/resolve/xml/xml.test.js	<collection/hook/exit; no named failure>	BuildError: Unexpected <	unknown
+js/bun/s3/s3-connection-close.test.ts	peer sends FIN: true > S3Client.write() resolves on a Content-Length: 0 + Connection: close response	error: expect(received).toEqual(expected)	s3-api
+js/bun/s3/s3-numeric-options-coerce.test.ts	"presign expiresIn coercion > expiresIn: ""3600"" -> X-Amz-Expires=3600"	TypeError: cannot read property 'presign' of undefined	s3-api
+js/bun/s3/s3-write-to-file-sync-close.test.ts	Bun.file().write(S3 file) when the S3 stream closes synchronously	error: expect(received).toEqual(expected)	s3-api
+js/bun/s3/s3.leak.test.ts	<collection/hook/exit; no named failure>	error: Secret not found: S3_R2_ACCESS_KEY	unknown
+js/bun/secrets-error-codes.test.ts	Bun.secrets argument validation > rejects service, name, and value strings containing a null byte	error: expect(received).toBe(expected)	secrets-validation
+js/bun/sourcemap/external-sourcemap-stack-leak.test.ts	error.stack with an external source map does not leak the remapped file names > stack	error: expect(received).toBe(expected)	stack-map
+js/bun/sourcemap/internal-sourcemap.test.ts	InternalSourceMap > remaps thrown error, new Error().stack, and captureStackTrace to original lines	error: expect(received).toEqual(expected)	stack-map
+js/bun/sourcemap/negative-vlq-mapping.test.ts	sourcemap: negative VLQ delta in mappings is rejected, not asserted > external .map: negative generated column	error: expect(received).toContain(expected)	negative-vlq
+js/bun/spawn/null-byte-injection.test.ts	null byte injection protection > Bun.spawn > throws error when command contains null byte	error: expect(received).toThrow(expected)	null-argument-wording
+js/bun/spawn/readablestream-helpers.test.ts	ReadableStream conversion methods > Bun.spawn() process.stdout.json() should throw on invalid JSON	error: expect(received).toThrowErrorMatchingInlineSnapshot()	unknown
+js/bun/spawn/spawn-empty-arrayBufferOrBlob.test.ts	spawn with empty > ArrayBuffer for stdin	error: expect(received).toBe(expected)	stdin-pipe
+js/bun/spawn/spawn-maxbuf.test.ts	yes is killed > Bun.spawn	error: expect(received).toBe(expected)	external-program
+js/bun/spawn/spawn-pipe-read-error-leak.test.ts	PipeReader is freed when a subprocess stdout read fails	error: expect(received).toEqual(expected)	ffi
+js/bun/spawn/spawn-pipe-stale-fd-unregister.test.ts	FilePoll teardown tolerates an fd closed while still registered	error: expect(received).toEqual(expected)	procfs-descriptors
+js/bun/spawn/spawn-renamed-cwd.test.ts	spawn without explicit cwd works after the parent's cwd is renamed	error: expect(received).toBe(expected)	spawn-renamed-cwd
+js/bun/spawn/spawn-signal.test.ts	spawn AbortSignal throws if already aborted	error: expect(received).toEqual(expected)	spawn-abort-code
+js/bun/spawn/spawn-stdin-destroy.test.ts	stdin destroy after exit crash	error: test	unknown
+js/bun/spawn/spawn-stdin-readable-stream-edge-cases.test.ts	spawn stdin ReadableStream edge cases > ReadableStream with exception in pull	TypeError: not a function	stdin-pipe
+js/bun/spawn/spawn-stdin-readable-stream-integration.test.ts	spawn stdin ReadableStream integration > example from documentation	TypeError: not a function	stdin-pipe
+js/bun/spawn/spawn-streaming-stdin.test.ts	spawn can write to stdin multiple chunks	<see JSON excerpt; no error line>	unknown
+js/bun/spawn/spawn.ipc.bun-node.test.ts	ipc with json serialization still works when bun is parent and not the child	error: expect(received).toEqual(expected)	child-ipc
+js/bun/spawn/spawn.test.ts	gcTick > spawnSync > Uint8Array works as stdin	error: expect(received).toHaveLength(expected)	unknown
+js/bun/spawn/spawnSync.test.ts	spawnSync > should throw a RangeError if timeout is less than 0	error: expect(received).toThrowErrorMatchingInlineSnapshot()	unknown
+js/bun/spawn/spawn_waiter_thread.test.ts	issue #9404	TypeError: cannot read property 'cpuTime' of undefined	unknown
+js/bun/spawn/spawnsync-isolated-event-loop.test.ts	spawnSync isolated event loop > stdin/stdout from main process should not be affected by spawnSync	error: expect(received).toContain(expected)	external-program
+js/bun/symbols.test.ts	objdump -T does not include symbols from glibc > 2.17	error: objdump executable not found. Please install it.	unknown
+js/bun/terminal/terminal-platform-gaps.test.ts	Bun.Terminal platform behaviour > GAP: termios flag accessors	TypeError: not a function	terminal
+js/bun/terminal/terminal-spawn.test.ts	Bun.Terminal subprocess integration > constructor creates a PTY	TypeError: not a function	terminal
+js/bun/terminal/terminal.test.ts	Bun.Terminal > constructor > creates a PTY with default options	TypeError: not a function	terminal
+js/bun/test/bun-test.test.ts	toBeWithin() with missing or non-number arguments fails the test without crashing	error: expect(received).toContain(expected)	within
+js/bun/test/bun_test.test.ts	describe/test	error: expect(received).toMatchInlineSnapshot(expected)	runner-path
+js/bun/test/ci-restrictions.test.ts	CI restrictions > test.only restrictions > test.only should fail when GITHUB_ACTIONS=1	error: expect(received).toBe(expected)	ci-only
+js/bun/test/concurrent.test.ts	concurrent order	error: expect(received).toMatchInlineSnapshot(expected)	runner-path
+js/bun/test/concurrent_immediate.test.ts	concurrent immediate	error: expect(received).toMatchInlineSnapshot(expected)	snapshot-version
+js/bun/test/dots.test.ts	dots 1	error: expect(received).toMatchInlineSnapshot(expected)	runner-reporters
+js/bun/test/expect-extend-preload.test.ts	custom matcher	TypeError: not a function	preload
+js/bun/test/expect-extend.test.js	throws descriptive errors for invalid matchers	error: expect(received).toThrow(expected)	extend-validation
+js/bun/test/expect-failure-message-angle-brackets.test.ts	expect() failure messages preserve <...> in user data > colors disabled: angle-bracketed strings render verbatim	error: expect(received).toContain(expected)	expect-label
+js/bun/test/expect-formdata-tojson-crash.test.ts	failing matcher on FormData without a callable toJSON does not abort the test runner	error: expect(received).toContain(expected)	formdata-inspect
+js/bun/test/expect-label.test.ts	expect-label	error: expect(received).toContain(expected)	expect-label
+js/bun/test/expect-stack-overflow-crash.test.ts	expect().toMatchObject() throws RangeError on deeply nested objects instead of crashing	error: expect(received).toBe(expected)	parser-native-wording
+js/bun/test/expect-type-doctest.test.ts	<collection/hook/exit; no named failure>	SyntaxError: Could not find export 'expectTypeOf' in module 'bun:test'	unknown
+js/bun/test/expect-type-global.test.ts	types	ReferenceError: expectTypeOf is not defined	unknown
+js/bun/test/expect-type.test.ts	<collection/hook/exit; no named failure>	SyntaxError: Could not find export 'expectTypeOf' in module 'bun:test'	unknown
+js/bun/test/expect-unreaachable.test.ts	expect.unreachable()	error: expect(received).toThrow(expected)	unreachable-message
+js/bun/test/expect.test.js	expect() > rejects	error: expect(received).toThrow()	async-tothrow
+js/bun/test/failure-skip.test.ts	failure-skip > beforeall1	error: expect(received).toMatchInlineSnapshot(expected)	runner-failure-hooks
+js/bun/test/fake-timers/sinonjs/issue-187.test.ts	#187 - Support timeout.refresh in node environments > calls the stub again after refreshing the timeout	TypeError: not a function	fake-timers
+js/bun/test/fake-timers/sinonjs/issue-207.test.ts	issue #207 - nanosecond round-off errors on high-res timer > should not round off nanosecond arithmetic on hrtime - case 1	TypeError: not a function	fake-timers
+js/bun/test/fake-timers/sinonjs/issue-315.test.ts	issue #315 - praseInt if delay is not a number > should successfully execute the timer	TypeError: not a function	fake-timers
+js/bun/test/fake-timers/sinonjs/issue-368.test.ts	#368 - timeout.refresh setTimeout arguments > should forward arguments passed to setTimeout	TypeError: not a function	fake-timers
+js/bun/test/fake-timers/sinonjs/issue-437.test.ts	issue #437 > should save methods of subclass instance	TypeError: not a function	fake-timers
+js/bun/test/fake-timers/sinonjs/issue-504.test.ts	issue #504 > should not mutate Date class	TypeError: not a function	fake-timers
+js/bun/test/fake-timers/sinonjs/issue-67.test.ts	issue #67 > should execute setTimeout smaller than 1	TypeError: not a function	fake-timers
+js/bun/test/fake-timers/sinonjs/issue-73.test.ts	issue #73 > should install with date object	TypeError: not a function	fake-timers
+js/bun/test/jest-each-gc-root.test.ts	test.each/describe.each table array is a GC root	error: expect(received).toContain(expected)	conditional-tests
+js/bun/test/jest-extended.test.js	jest-extended > pass()	error: expect(received).toBeTypeOf()	unknown
+js/bun/test/mock-disposable.test.ts	spyOn returns a disposable that calls mockRestore	TypeError: value is not disposable	unknown
+js/bun/test/mock-fn.test.js	mock() > mock	TypeError: not a function	within
+js/bun/test/only-failures.test.ts	only-failures flag should show only failures	error: expect(received).toMatchInlineSnapshot(expected)	runner-path
+js/bun/test/only-inside-only.test.ts	only-inside-only	error: expect(received).not.toContain(expected)	unknown
+js/bun/test/printing/diffexample.test.ts	no color	error: expect(received).toMatchInlineSnapshot(expected)	runner-format
+js/bun/test/spyMatchers.test.ts	toHaveBeenCalled > fails with any argument passed	error: expect(received).toThrow()	unknown
+js/bun/test/stack.test.ts	err.line and err.column are set	"error: Expected stdout to be ""{\n  \""line\"": 3,\n  \""column\"": 17,\n  \""originalLine\"": 1,\n  \""originalColumn\"": 18\n}"" but got ""{}"""	unknown
+js/bun/test/test-error-code-done-callback.test.ts	verify we print error messages passed to done callbacks	error: expect(received).toMatchInlineSnapshot(expected)	snapshot-version
+js/bun/test/test-failing.test.ts	test.failing > requires a test function (unlike test.todo)	error: expect(received).toThrow(expected)	failing-validation
+js/bun/test/test-on-test-finished.test.ts	<collection/hook/exit; no named failure>	SyntaxError: Could not find export 'onTestFinished' in module 'bun:test'	runner-onfinished
+js/bun/test/test-only.test.ts	test.only shouldn't need --only for ./only-fixture-1.ts	TypeError: not a function	shell-config
+js/bun/test/test-retry-repeats-basic.test.ts	retry and repeats hook ordering	error: expect(received).toContain(expected)	runner-onfinished
+js/bun/test/test-test.test.ts	shouldn't crash when async test runner callback throws	error: expect(received).toBe(expected)	snapshot-version
+js/bun/test/test-timers.test.ts	we can go back in time	TypeError: not a function	fake-timers
+js/bun/transpiler/parse-error-column.test.ts	JS parse error after astral characters reports UTF-16 column	error: expect(received).toEqual(expected)	source-map-diagnostic
+js/bun/transpiler/repl-transform.test.ts	<collection/hook/exit; no named failure>	TypeError: not a function	transpiler
+js/bun/transpiler/transpiler-comma-chain-oom.test.ts	long comma expression does not blow up memory with target: bun	error: expect(received).toMatchObject(expected)	transpiler
+js/bun/transpiler/transpiler-enum-concat-chain-oom.test.ts	long `+` chain of inlined enum members folds in linear memory	error: expect(received).toEqual(expected)	transpiler
+js/bun/transpiler/transpiler-error-gc-uaf.test.ts	Log.to_js roots BuildMessage cells across allocation	error: expect(received).toBe(expected)	transpiler
+js/bun/transpiler/transpiler-radix-bigint.test.ts	radix BigInt literals round-trip through the printer	TypeError: not a function	transpiler
+js/bun/transpiler/transpiler-truncated-utf8.test.ts	Bun.Transpiler.transformSync with truncated UTF-8 at end of buffer > does not read past the end of the input buffer	error: expect(received).toEqual(expected)	ffi
+js/bun/transpiler/transpiler-tsconfig-uaf.test.ts	Transpiler tsconfig lifetime > multiple async transform() calls with tsconfig do not crash	TypeError: not a function	transpiler
+js/bun/transpiler/transpiler-utf16-loader.test.ts	Bun.Transpiler with a UTF-16 loader string > scan	TypeError: not a function	transpiler
+js/bun/udp/dgram.test.ts	<collection/hook/exit; no named failure>	TypeError: cannot read property 'internal/dgram' of undefined	unknown
+js/bun/udp/udp_socket.test.ts	udpSocket() > setTTL does not crash when socket is closed during argument coercion	error: expect(received).toBe(expected)	udp
+js/bun/util/bun-cryptohasher.test.ts	<collection/hook/exit; no named failure>	TypeError: cannot read property 'name' of undefined	unknown
+js/bun/util/bun-file-exists.test.js	bun-file-exists	error: expect(received).toBeFalse()	bun-file-exists-dir
+js/bun/util/bun-file-fd-read.test.ts	Bun.file(fd) read > text() and arrayBuffer() on a regular-file fd return file contents	TypeError: cannot read property 'startsWith' of null	unknown
+js/bun/util/bun-file-windows.test.ts	"Bun.file(""/dev/null"") works on windows"	<see JSON excerpt; no error line>	unknown
+js/bun/util/bun-file.test.ts	delete() and stat() should work with unicode paths	error: expect(received).toContain(expected)	async-stack-wording
+js/bun/util/bun-isMainThread.test.js	Bun.isMainThread	ReferenceError: Worker is not defined	web-worker
+js/bun/util/bun-main.test.ts	Bun.main > can be overridden	TypeError: no setter for property	unknown
+js/bun/util/bun-stdin-slice.test.ts	Bun.stdin.slice(1).text() does not crash when stdin is a pipe	error: expect(received).toBe(expected)	file-stdin-slice
+js/bun/util/error-code-mirror.test.ts	Rust-thrown error codes round-trip through Bun__createErrorWithCode	error: expect(received).toEqual(expected)	error-code-mirror
+js/bun/util/error-name-preservation.test.ts	native error name/code preservation > fetch connection-refused message is preserved verbatim	error: expect(received).toEqual(expected)	fetch-refused-code
+js/bun/util/escapeHTML.test.js	escapeHTML > coerces non-string arguments	error: expect(received).toThrow(expected)	escape-html-symbol
+js/bun/util/escapeRegExp.test.ts	escapeRegExp	TypeError: not a function	escape-regexp
+js/bun/util/file-type.test.ts	util file tests > custom set mime-type respected (#6507)	error: expect(received).toBe(expected)	file-mime
+js/bun/util/fuzzy-wuzzy.test.ts	<collection/hook/exit; no named failure>	TypeError: cannot read property 'name' of undefined	unknown
+js/bun/util/highlighter.test.ts	highlighter	TypeError: not a function	highlighter
+js/bun/util/inspect-error.test.js	BuildMessage	error: expect(received).toMatchInlineSnapshot(expected)	inspect-build-error
+js/bun/util/inspect.test.js	<collection/hook/exit; no named failure>	BuildError: Unexpected <	unknown
+js/bun/util/open-in-editor-gc.test.ts	Bun.openInEditor finds the editor's binary on PATH	error: expect(received).toEqual(expected)	open-editor
+js/bun/util/randomUUIDv5.test.ts	randomUUIDv5 > basic functionality	TypeError: not a function	uuid5
+js/bun/util/randomUUIDv7.test.ts	randomUUIDv7 > base64 format	error: expect(received).toMatch(expected)	unknown
+js/bun/util/readablestreamtoarraybuffer.test.ts	readableStreamToArrayBuffer does not call a patched Promise.prototype.then	error: expect(received).toBe(expected)	public-promise-then
+js/bun/util/reportError.test.ts	reportError	error: expect(received).toMatchInlineSnapshot(expected)	report-error
+js/bun/util/sleepSync.test.ts	sleepSync with no arguments throws	error: expect(received).toThrow()	unknown
+js/bun/util/sliceAnsi-fuzz.test.ts	sliceAnsi invariants > output width never exceeds requested range	TypeError: not a function	slice-ansi
+js/bun/util/sliceAnsi.test.ts	Bun.sliceAnsi > plain strings > slices ASCII string like String.prototype.slice	TypeError: not a function	slice-ansi
+js/bun/util/stringWidth.test.ts	stringWidth	error: expected undefined to have npm string width 0 but got 9	unknown
+js/bun/util/stripANSI.test.ts	"Bun.stripANSI > ""\u001b]0;window title\u0007text"""	error: expect(received).toBe(expected)	strip-ansi
+js/bun/util/text-loader.test.ts	text-loader > should load text > using dynamic-import reloaded 10000 times	error: Cannot find module './text-loader-fixture-text-file.txt?0' from '/bun/test/js/bun/util/text-loader-fixture-dynamic-import-stress.ts'	unknown
+js/bun/util/unsafe.test.js	arrayBufferToString u8	error: Bun.unsafe.arrayBufferToString is not supported in bun-wasm: zero-copy strings are not exposed	unknown
+js/bun/util/v8-heap-snapshot.test.ts	v8 heap snapshot	"error: ""generate-string"" fixture exited with code 1"	unknown
+js/bun/util/which.test.ts	<collection/hook/exit; no named failure>	TypeError: not a function	shell-config
+js/bun/util/wrapAnsi.npm.test.ts	wraps string at 20 characters	TypeError: not a function	wrap-ansi
+js/bun/util/wrapAnsi.test.ts	Bun.wrapAnsi > basic wrapping > wraps text at word boundaries	TypeError: not a function	wrap-ansi
+js/bun/wasm/wasi.test.js	Should support printing 'hello world'	error: expect(received).toEqual(expected)	wasm-entry
+js/bun/webview/webview-chrome-disconnect.test.ts	navigate() rejects when the connection drops after the document committed	error: expect(received).toEndWith(expected)	webview
+js/bun/webview/webview-chrome-pipe.test.ts	navigate, events and evaluate cross the pipes	error: expect(received).toBe(expected)	webview
+js/bun/webview/webview-chrome.test.ts	chrome: constructor rejects url combined with spawn options	error: expect(received).toThrow(expected)	webview
+js/bun/webview/webview.test.ts	backend: 'webkit' throws on non-darwin	error: expect(received).toThrow(expected)	webview
+js/deno/abort/abort-controller.test.ts	controllerHasProperToString	error: expect(received).toEqual(expected)	web-brand
+js/deno/encoding/encoding.test.ts	textDecoderASCII	error: expect(received).toEqual(expected)	encoding-ascii
+js/deno/event/custom-event.test.ts	toStringShouldBeWebCompatibility	error: expect(received).toEqual(expected)	web-brand
+js/deno/event/event-target.test.ts	toStringShouldBeWebCompatible	error: expect(received).toEqual(expected)	web-brand
+js/deno/event/event.test.ts	eventIsTrusted	error: expect(received).toBeTruthy()	unknown
+js/deno/performance/performance.test.ts	performanceToJSON	error: expect(received).toEqual(expected)	performance-json
+js/deno/url/url.test.ts	urlPathRepeatedSlashes	error: expect(received).toEqual(expected)	url-file-slashes
+js/deno/url/urlsearchparams.test.ts	urlSearchParamsAppendArgumentsCheck	error: expect(received).toEqual(expected)	urlsearchparams-arity
+js/junit-reporter/junit.test.js	junit reporter > should generate valid junit xml for passing tests %s	<see JSON excerpt; no error line>	unknown
+js/node/assert/assert-typedarray-deepequal.test.ts	assert.deepStrictEqual diff message stays bounded for large arrays with many differing elements	error: expect(received).toBeInstanceOf(expected)	unknown
+js/node/assert/assert.test.cjs	assert.partialDeepStrictEqual > arrays match an in-order subsequence with partial element comparison	TypeError: not a function	partial-assert
+js/node/assert/deep-equal.test.ts	assert.deepStrictEqual > accepts own constructor: Buffer on objects with different prototypes	error: expect(received).toBeNull()	unknown
+js/node/async_hooks/AsyncLocalStorage.test.ts	AsyncLocalStorage > run() works with a defaultValue and no prior context	error: expect(received).toBe(expected)	als-default
+js/node/async_hooks/async_hooks.node.test.ts	node async_hooks.AsyncLocalStorage enable disable	AssertionError: Expected values to be strictly equal:	unknown
+js/node/buffer-concat.test.ts	Buffer.concat throws RangeError for too large buffers	error: expect(received).toThrow(expected)	large-buffer-wording
+js/node/buffer-copy-fill-detach.test.ts	Buffer.copy with detach / resize via valueOf > copy clamps to post-resize logical length when source is resized in sourceStart valueOf (OOB read repro)	error: expect(received).toEqual(expected)	buffer-resize
+js/node/buffer-indexOf-detach.test.ts	Buffer.indexOf/lastIndexOf/includes with buffer detached via side-effect > indexOf returns -1 when haystack is detached via encoding toString (Buffer search)	AssertionError: Expected values to be strictly equal:	unknown
+js/node/buffer-jit.test.ts	Buffer accessor JIT > the JIT path is actually taken, and compile counts converge	error: expect(received).toBe(expected)	noinline
+js/node/buffer.test.js	with native Buffer.write > isAscii	error: expect(received).toBeFalse()	unknown
+js/node/child_process/child-process-stdio.test.js	process.stdin > should allow us to read from stdin in readable mode	error: expect(received).toBe(expected)	stdin-pipe
+js/node/child_process/child_process-node.test.js	ChildProcess.spawn() > should throw on invalid options	AssertionError: Expected values to be strictly deep-equal:	unknown
+js/node/child_process/child_process.test.ts	ChildProcess.spawn() > should emit `spawn` on spawn	TypeError: not a function	child-instance-spawn
+js/node/child_process/child_process_ipc_large_disconnect.test.js	child_process_ipc_large_disconnect	error: expect(received).toBe(expected)	child-ipc
+js/node/child_process/child_process_send_cb.test.js	child_process_send_cb	error: expect(received).toMatchInlineSnapshot(expected)	child-ipc
+js/node/cluster.test.ts	cloneable and transferable equals	error: Expected process to exit with code 0 but got 1	unknown
+js/node/dgram/node-dgram.test.js	node:dgram close() inside 'message' handler stops remaining batch datagrams	SyntaxError: Unexpected end of JSON input	unknown
+js/node/diagnostics_channel/diagnostics_channel.test.ts	Channel > can have symbol as name	error: expect(received).toThrow(expected)	diagnostic-channel
+js/node/disallow-code-generation-from-strings.test.ts	--disallow-code-generation-from-strings > without the flag, every route makes script	SyntaxError: Unexpected end of JSON input	unknown
+js/node/dns/dns-lookup-keepalive.test.ts	expect dns.lookup to keep the process alive	error: Expected process to exit with code 0 but got 1	unknown
+js/node/dns/dns-resolver-concurrent-timeout.test.ts	dns.Resolver: unanswered queries past 32 concurrent still time out	error: expect(received).toBe(expected)	udp
+js/node/dns/dns-tcp-bidirectional-poll.test.ts	c-ares TCP DNS fd registers readable+writable on one FilePoll without asserting	error: expect(received).toBe(expected)	udp
+js/node/domexception-node.test.js	DOMException in Node.js environment > creates instance with options object	error: expect(received).toBe(expected)	domexception-name
+js/node/errors/error-code-messages.test.ts	table-driven ERR_* codes keep their exact messages	error: expect(received).toBe(expected)	zlib-brotli
+js/node/errors/error-code-toString-receiver.test.ts	node error toString() > formats name, code and message	error: expect(received).toEqual(expected)	node-error-tostring
+js/node/events/event-emitter.test.ts	node:events > once is an async function	error: expect(received).toBe(expected)	event-once-constructor
+js/node/fs/cp-symlink-target.test.ts	fs.cp preserves symlink targets instead of linking back to the source path > fs.cpSync	<see JSON excerpt; no error line>	unknown
+js/node/fs/cp.test.ts	fs.cpSync > refuse to copy directory with 'recursive: false'	error: expect(received).toBe(expected)	fs-error-fields
+js/node/fs/dir.test.ts	"fs.Dir > given an empty temp directory > when an empty directory is opened > when closed > attempts to close again will throw ""Directory handle was closed"""	error: expect(received).toThrow(expected)	async-tothrow
+js/node/fs/fs-birthtime-linux.test.ts	birthtime > birthtime should remain constant while other timestamps change	error: expect(received).toBeGreaterThan(expected)	unknown
+js/node/fs/fs-leak.test.js	createWriteStream does not leak file descriptors	<see JSON excerpt; no error line>	unknown
+js/node/fs/fs-mkdir.test.ts	fs.mkdir > throws for invalid path types	error: expect(received).toThrow(expected)	mkdir-validation
+js/node/fs/fs-open-cloexec.test.ts	node:fs opens set O_CLOEXEC > fs.openSync	TypeError: not a function	fs-readstream-close
+js/node/fs/fs-path-length.test.ts	path length validation with multi-byte characters > rejects overly long multi-byte paths in async readFile	error: expect(received).toThrow(expected)	async-tothrow
+js/node/fs/fs-promises-writeFile-async-iterator.test.ts	fs.promises.writeFile async iterator	"TypeError: The ""data"" argument must be of type string or an instance of Buffer, TypedArray, or DataView. Received an instance of Object"	unknown
+js/node/fs/fs-read-buffer-before-offset.test.ts	fs.read()/fs.readSync() check the buffer type before the offset > readSync(fd, buffer, offset, length)	AssertionError: Expected values to be strictly deep-equal:	unknown
+js/node/fs/fs-stats-constructor.test.ts	new Stats(...) assigns fields in Node's order	error: expect(received).toMatchObject(expected)	unknown
+js/node/fs/fs-write-offset-bound.test.ts	fs.write()/fs.writeSync() reject an offset past the end of the buffer > writeSync(fd, view, offset) with no length	AssertionError: Missing expected exception (RangeError).	unknown
+js/node/fs/promises.test.js	appendFile with flag 'ax' rejects with EEXIST on an existing file	error: expect(received).toBe(expected)	fs-error-fields
+js/node/fs/readdirSync-recursive-error-leak.test.ts	readdirSync({recursive:true, withFileTypes:true}) error path does not leak Dirent.path	error: expect(received).toBe(expected)	fs-recursive-links
+js/node/inspector/inspector.test.ts	inspector.url()	error: inspector.url is not supported in bun-wasm: no debugger	unknown
+js/node/missing-module.test.js	not implemented yet module throws an error	AssertionError: Expected values to be strictly deep-equal:	unknown
+js/node/module/esm-registry-concurrent-gc.test.ts	ESM registry removeEntry/clearAll under concurrent GC	error: expect(received).toBe(expected)	eval-data-url
+js/node/module/module-children-concurrent-gc.test.ts	JSCommonJSModule m_children mutation under concurrent GC	error: expect(received).toBe(expected)	module-children
+js/node/module/module-sourcemap.test.js	Can create SourceMap instance from node:module	error: expect(received).toBe(expected)	module-source-map
+js/node/module/node-module-module.test.js	node-module-module > builtinModules exists	error: expect(received).toHaveLength(expected)	unknown
+js/node/module/require-extensions.test.ts	require.extensions shape makes sense	error: expect(received).toBeFunction()	unknown
+js/node/module/sourcemap-simd.test.ts	SourceMap SIMD mappings decode > all 1-char 4-field segments (the 76% case)	error: expect(received).toBeNull()	unknown
+js/node/module/sourcemap.test.js	SourceMap constructor requires payload	error: expect(received).toThrowErrorMatchingInlineSnapshot()	unknown
+js/node/no-addons.test.ts	--no-addons stays in effect inside a Worker with an empty execArgv	error: expect(received).toBe(expected)	no-addons-flag
+js/node/nodettywrap.test.ts	process.binding('tty_wrap')	error: No such module: tty_wrap	unknown
+js/node/os/os.test.js	arch	error: expect(received).toBe(expected)	os-arch
+js/node/path/basename.test.js	path.dirname > win32	AssertionError: Expected values to be strictly equal:	node-path
+js/node/path/browserify.test.js	browserify path tests > dirname > path.win32.dirname	error: expect(received).toBe(expected)	node-path
+js/node/path/dirname.test.js	path.dirname > win32	AssertionError: Expected values to be strictly equal:	node-path
+js/node/path/normalize.test.js	path.normalize > win32	AssertionError: Expected values to be strictly equal:	node-path
+js/node/path/parse-format.test.js	path.parse > general	AssertionError: Expected values to be strictly equal:	node-path
+js/node/path/path.test.js	String-object arguments whose toPrimitive triggers GC do not corrupt earlier arguments	error: expect(received).toEqual(expected)	path-string-coercion
+js/node/path/to-namespaced-path.test.js	path.toNamespacedPath > alias as _makeLong	AssertionError: Expected values to be strictly equal:	path-makelong-alias
+js/node/process-binding.test.ts	process.binding > process.binding('constants')	error: No such module: constants	unknown
+js/node/process/call-constructor.test.js	the constructor of process can be called	TypeError: not an object	unknown
+js/node/process/dlopen-duplicate-load.test.ts	process.dlopen native addon > (unnamed)	error: Network is unreachable (os error 101)	loopback-external
+js/node/process/process-array-accessor-crash.test.ts	process.setgroups > propagates exceptions thrown from an accessor	error: expect(received).toThrow(expected)	setgroups
+js/node/process/process-execve.test.ts	process.execve > is a function	error: expect(received).toBe(expected)	process-execve
+js/node/process/process-memory-pressure.test.ts	process.on('memoryPressure') > listener receives level argument	error: expect(received).toEqual(expected)	emit-memory-pressure
+js/node/process/process-nexttick.test.js	after the tick queue went idle, a tick that a microtask schedules runs in the same checkpoint, after the microtasks	error: expect(received).toEqual(expected)	nexttick-order
+js/node/process/process-signal-listener-count.test.ts	removing one of multiple signal listeners keeps the handler installed	bun-wasm: bun.wasm trapped: error while executing at wasm backtrace:	unknown
+js/node/process/process-stdin.test.ts	file does the right thing	error: expect(received).toMatchInlineSnapshot(expected)	stdin-ref-type
+js/node/process/process-stdio-stack-overflow.test.ts	process.stdin lazy init near stack limit does not assert	error: expect(received).toEqual(expected)	spawn-sync-signal-code
+js/node/process/process-stdio.test.ts	process-stdio > process.stdin	error: expect(received).toBe(expected)	process-tty
+js/node/process/process-stdout-write-after-end.test.ts	process.stdout - write after end() errors and is not delivered (piped)	error: expect(received).toEqual(expected)	stdout-lifecycle
+js/node/process/process.test.js	process	error: process.env is not an object	unknown
+js/node/process/stdin/stdin-fixtures.test.ts	stdin > pause allows process to exit	"error: [/usr/local/bin/bun] Not all stdin was sent. Unsent: [""abc\n"",""pause\n"",""def\n""]"	unknown
+js/node/readline/getStringWidth.test.ts	<collection/hook/exit; no named failure>	TypeError: Cannot convert undefined or null to object	unknown
+js/node/readline/pause_stdin_should_exit.test.ts	pause stdin should exit	error: expect(received).toEqual(expected)	stdin-pipe
+js/node/readline/readline_promises.node.test.ts	readline/promises.createInterface() > should throw an error when failed completion	error: expect(received).toMatch(expected)	unknown
+js/node/string_decoder/string-decoder.test.js	FakeStringDecoderCall > StringDecoder-utf8	TypeError: class constructors must be invoked with 'new'	unknown
+js/node/timers.promises/timers.promises.test.ts	setTimeout > rejects even when another listener stopped propagation	error: expect(received).rejects.toThrow(expected)	unknown
+js/node/timers/node-timers.test.ts	node.js util.promisify(setTimeout) works	"TypeError: The ""callback"" argument must be of type function. Received type number (1)"	unknown
+js/node/trace_events/trace-events.test.ts	http.client.request span is closed when the proxy CONNECT tunnel fails	error: expect(received).toContain(expected)	fetch-proxy
+js/node/url/url-canParse-whatwg.test.js	URL.canParse > invalid input	AssertionError: Missing expected exception (TypeError).	unknown
+js/node/url/url-domain-ascii-unicode.test.js	url.domainToASCII > -> 'a@b' is ''	error: expect(received).toEqual(expected)	url-idna
+js/node/url/url-format-whatwg.test.js	url.format > WHATWG	AssertionError: Missing expected exception (TypeError).	unknown
+js/node/url/url-format.test.js	url.format > slightly wonky content	"AssertionError: wonky format(http://google.com"" onload=""alert(42)/) == http://google.com/%22%20onload=%22alert(42)/"	unknown
+js/node/url/url-parse-invalid-input.test.js	url.parse > rethrows a primitive thrown while describing the argument	error: expect(received).toBe(expected)	legacy-url-coercion
+js/node/url/url-parse-ipv6.test.ts	Invalid IPv6 addresses > Invalid hostnames - parsing 'https://[::1' fails	error: expect(received).toThrowError(expected)	unknown
+js/node/url/url-parse-query.test.js	url.parse > parseQueryString returns a null-prototype query object	AssertionError: Expected values to be strictly equal:	unknown
+js/node/url/url-relative.test.js	url.resolveObject > source is false	AssertionError: Expected values to be strictly equal:	unknown
+js/node/url/url.test.ts	Url.prototype.parse > accepts ipv6 host	error: expect(received).toEqual(expected)	url-legacy-ipv6
+js/node/util/bun-inspect.test.ts	Bun.inspect > supports colors: true	error: expect(received).not.toBe(expected)	unknown
+js/node/util/custom-inspect.test.js	util.inspect calls inspect.custom with valid options	error: expect(received).toBe(expected)	custom-inspect
+js/node/util/node-inspect-tests/internal-inspect.test.js	no assertion failures	error: Error message	unknown
+js/node/util/node-inspect-tests/parallel/util-format.test.js	no assertion failures	"AssertionError: Expected ""Error: foo"	unknown
+js/node/util/node-inspect-tests/parallel/util-inspect-proxy.test.js	no assertion failures	error: get: Symbol(nodejs.util.inspect.custom)	unknown
+js/node/util/node-inspect-tests/parallel/util-inspect.test.js	no assertion failures	AssertionError: Expected values to be strictly equal:	unknown
+js/node/util/parse_args/default-args.test.mjs	"parseArgs default args > running ""bun --bun file-test.js --foo asdf"""	error: expect(received).toEqual(expected)	argv-bun-flag
+js/node/util/test-util-types.test.js	#11780	error: expect(received).toBe(expected)	resolve-wording
+js/node/v8/v8-date-parser.test.js	<collection/hook/exit; no named failure>	TypeError: not a function	unsafe-gc
+js/node/vm/sourcetextmodule-leak.test.ts	vm.SourceTextModule > shouldn't leak memory	TypeError: not a function	vm-module
+js/node/vm/sourcetextmodule-link-gc.test.ts	vm.SourceTextModule link() m_resolveCache survives concurrent GC	error: expect(received).toEqual(expected)	vm-module
+js/node/vm/vm-sourceUrl.test.ts	can get sourceURL from eval inside node:vm	error: expect(received).toMatchSnapshot(expected)	unknown
+js/node/watch/fs.watch.deadlock.test.ts	rapid create/close of recursive fs.watch does not deadlock	error: expect(received).toStartWith(expected)	unknown
+js/node/watch/fs.watch.test.ts	fs.watch > non-persistent watcher should not block the event loop	error: Expected process to exit with code 0 but got 1	unknown
+js/node/worker_threads/15787.test.ts	SharedArrayBuffer with workers doesn't crash	error: Expected process to exit with code 0 but got 1	unknown
+js/node/worker_threads/worker-async-dispose.test.ts	Worker implements Symbol.asyncDispose	error: expect(received).toBe(expected)	worker-dispose
+js/node/worker_threads/worker-top-level-await.test.ts	worker with an unsettled top-level await exits with code 13	error: expect(received).toBe(expected)	worker-tla-exit
+js/node/worker_threads/worker-transfer-list.test.ts	an invalid transferList entry throws before anything is detached	error: expect(received).toThrow(expected)	transfer-error
+js/node/zlib/bytesWritten.test.ts	Test createGzip and createGunzip	TypeError: not a function	zlib-flush
+js/node/zlib/deflate-streaming.test.ts	<collection/hook/exit; no named failure>	Total data received: 524288 bytes	unknown
+js/node/zlib/leak.test.ts	zlib compression does not leak memory > deflate	error: expect(received).toBe(expected)	shake256
+js/node/zlib/zlib-handle-bounds-check.test.ts	zlib native handle bounds checking > writeSync rejects in_len exceeding input buffer	error: expect(received).toThrow(expected)	zlib-native-handle
+js/node/zlib/zlib-onerror-reentrancy.test.ts	zlib native handle onerror re-entrancy > re-entrant write()+close() from onerror completes both writes (iteration 0)	error: expect(received).toBe(expected)	zlib-brotli
+js/node/zlib/zlib-reset-race.test.ts	zstd: reset() while an async write is in flight does not use-after-free	error: expect(received).toBe(expected)	zlib-zstd
+js/node/zlib/zlib.kMaxLength.global.test.js	decompress brotli beyond kMaxLength throws RangeError (sync and async)	error: expect(received).toBe(expected)	zlib-brotli
+js/node/zlib/zlib.test.js	<collection/hook/exit; no named failure>	error: zlib.brotliCompressSync is not supported in bun-wasm: brotli is not compiled into bun.wasm	zlib-brotli
+js/third_party/body-parser/express-bun-build-compile.test.ts	<collection/hook/exit; no named failure>	TypeError: not a function	shell-config
+js/third_party/comlink/comlink.test.ts	comlink > should start without big delay	ReferenceError: Worker is not defined	web-worker
+js/third_party/es-module-lexer/es-module-lexer.test.ts	es-module-lexer consistently loads	SyntaxError: import.meta only valid in module code	unknown
+js/third_party/esbuild/esbuild-child_process.test.ts	esbuild	error: Unsupported platform: linux wasm32 LE	unknown
+js/third_party/express/express.json.test.ts	express.json() > should parse JSON	"error: expected 200 ""OK"", got 400 ""Bad Request"""	unknown
+js/third_party/express/express.text.test.ts	express.text() > should parse text/plain	"error: expected 200 ""OK"", got 400 ""Bad Request"""	unknown
+js/third_party/express/res.location.test.ts	res > location header encoding > should work correctly despite using deprecated url.parse	error: cannot GET /?q=https%3A%2F%2Fgoogle.com'.bb.com%2F1.html (400)	unknown
+js/third_party/express/res.sendFile.test.ts	res > .sendFile(path) > should error missing path	error: expected body '<!DOCTYPE html>\n' +	unknown
+js/third_party/grpc-js/test-channelz.test.ts	<collection/hook/exit; no named failure>	TypeError: cannot read property 'loadPackageDefinition' of undefined	unknown
+js/third_party/grpc-js/test-client.test.ts	<collection/hook/exit; no named failure>	TypeError: cannot read property 'credentials' of undefined	unknown
+js/third_party/grpc-js/test-logging.test.ts	Logging > sets the logger to a new value	TypeError: cannot read property 'setLogger' of undefined	unknown
+js/third_party/grpc-js/test-outlier-detection.test.ts	Outlier detection > (unnamed)	TypeError: cannot read property 'Server' of undefined	unknown
+js/third_party/grpc-js/test-pick-first.test.ts	pick_first load balancing policy > Should report READY when a subchannel connects	TypeError: cannot read property 'connectivityState' of undefined	unknown
+js/third_party/jsonwebtoken/issue_147.test.js	issue 147 - signing with a sealed payload > should put the expiration claim	TypeError: not a function	within
+js/third_party/jsonwebtoken/jwt.asymmetric_signing.test.js	<collection/hook/exit; no named failure>	error: secretOrPrivateKey must be an asymmetric key when using ES256	unknown
+js/third_party/jsonwebtoken/option-complete.test.js	complete option > should return header, payload and signature	error: expect(received).toBeNull()	unknown
+js/third_party/jsonwebtoken/schema.test.js	schema > sign options > should validate algorithm	error: secretOrPrivateKey must be an asymmetric key when using ES256	unknown
+js/third_party/jsonwebtoken/validateAsymmetricKey.test.js	<collection/hook/exit; no named failure>	error: Failed to read asymmetric key	unknown
+js/third_party/jsonwebtoken/wrong_alg.test.js	when setting a wrong `header.alg` > signing with pub key as symmetric > should not verify	error: expect(received).toThrow(expected)	jwt-key-classification
+js/third_party/msw/msw.test.ts	works	error: Expected process to exit with code 0 but got 1	unknown
+js/third_party/next-auth/next-auth.test.ts	next-auth > should be able to call server action multiple times using auth middleware #18977	error: expect(received).not.toContain(expected)	loopback-external
+js/third_party/nodemailer/nodemailer.test.ts	<collection/hook/exit; no named failure>	error: Secret not found: SMTP_MAILGUN_PASS	unknown
+js/third_party/pino/pino.test.js	using pino does not crash, particularly on windows	error: expect(received).toBeEmpty()	unknown
+js/third_party/pnpm/pnpm.test.ts	successfully traverses pnpm-generated install directory	error: bun x is not supported in bun-wasm	x-command
+js/third_party/st/st.test.ts	works	error: expect(received).toBeEmpty()	unknown
+js/third_party/vitest/vitest.test.ts	<collection/hook/exit; no named failure>	error: test/node_modules has vitest <missing> but test/package.json requires 4.1.9. Run 'bun install' in test/ before running this test.	unknown
+js/web/abort/abort.test.ts	AbortSignal > AbortSignal.any() rejects a non-AbortSignal element without allocating a dependent signal	error: expect(received).toEqual(expected)	abort-any-validation
+js/web/atomics.test.ts	Atomics > basic operations > store and load	ReferenceError: Atomics is not defined	unknown
+js/web/broadcastchannel/broadcast-channel-worker-gc.test.ts	BroadcastChannel: no UAF when posting to channel after worker terminates	error: expect(received).toBe(expected)	web-worker
+js/web/broadcastchannel/broadcast-channel.test.ts	broadcast channel worker wait	ReferenceError: Worker is not defined	web-worker
+js/web/broadcastchannel/message-event-init-gc.test.ts	MessageEvent.initMessageEvent does not race GC visitor on m_data	error: expect(received).toBe(expected)	messageevent-init
+js/web/console/console-log.test.ts	should log to console correctly	TypeError: expected depth to be greater than or equal to 0, got -1	unknown
+js/web/console/console-timeLog.test.ts	console.timeEnd with empty label emits exactly one trailing newline	error: expect(received).toBe(expected)	console-time-stream
+js/web/encoding/encode-bad-chunks.test.ts	a chunk that cannot be converted to a string should error the streams	error: expect(received).toThrow(expected)	async-tothrow
+js/web/encoding/text-decoder-cjk.test.ts	TextDecoder - Shift_JIS encoding	"RangeError: Unsupported encoding label ""shift_jis"""	unknown
+js/web/encoding/text-decoder-single-byte.test.ts	TextDecoder - IBM866 encoding	"RangeError: Unsupported encoding label ""ibm866"""	unknown
+js/web/encoding/text-decoder-wpt.test.ts	WPT: single-byte-decoder > IBM866 decodes every byte per index ibm866	"RangeError: Unsupported encoding label ""IBM866"""	unknown
+js/web/encoding/text-decoder.test.js	TextDecoder > should decode unicode text with multiple consecutive emoji	TypeError: cannot read property 'isUTF16String' of undefined	unknown
+js/web/html/FormData-file-error-leak.test.ts	FormData serialization does not leak prior file buffers when a later file read fails	SyntaxError: Unexpected end of JSON input	unknown
+js/web/html/FormData-multipart-serialization.test.ts	multipart serialization (new Response(formData)) > serializes string fields, blobs, unicode and escaped names exactly	error: expect(received).toMatch(expected)	unknown
+js/web/html/FormData.test.ts	FormData > should get filename from file	error: expect(received).toBeUndefined()	unknown
+js/web/html/URLSearchParams.test.ts	URLSearchParams > does not crash when calling .toJSON() on a URLSearchParams object with a large number of properties	TypeError: not a function	urlsearchparams-json
+js/web/html/html-rewriter-doctype.test.ts	HTMLRewriter DOCTYPE handler > remove and removed property work on DOCTYPE	ReferenceError: HTMLRewriter is not defined	htmlrewriter
+js/web/intl/intl.test.ts	<collection/hook/exit; no named failure>	TypeError: cannot read property 'supportedLocalesOf' of undefined	unknown
+js/web/request/request-method-getter.test.ts	new Request(http://localhost:3000/).clone().method doesnt create a new JSString every time	error: expect(received).toBeLessThan(expected)	unknown
+js/web/request/request.test.ts	RequestInit signal presence > new Request(request, { signal: null }) detaches from input's signal	error: expect(received).not.toBe(expected)	unknown
+js/web/streams/compression.test.ts	<collection/hook/exit; no named failure>	error: zlib.zstdCompressSync is not supported in bun-wasm: brotli is not compiled into bun.wasm	zlib-zstd
+js/web/streams/readable-stream-blob-consumed.test.ts	ReadableStream.blob() after body consumed does not crash	error: expect(received).toBe(expected)	stream-lock
+js/web/structured-clone-shared-array-buffer.test.ts	structuredClone(SharedArrayBuffer) > worker postMessage shares the SAB	ReferenceError: Worker is not defined	web-worker
+js/web/temporal/temporal.test.ts	Temporal global > is installed with the spec property attributes	error: expect(received).toMatchObject(expected)	unknown
+js/web/timers/performance.test.js	performance.clearResourceTimings()	TypeError: not a function	performance-resource
+js/web/timers/setImmediate.test.js	setImmediate	error: expect(received).toBe(expected)	immediate-id
+js/web/timers/setInterval.test.js	setInterval runs with at least the delay time	error: Expected elapsed time to be less than 180	unknown
+js/web/timers/timer-heap-race.test.ts	timer heap survives cross-thread Atomics.waitAsync timeout cancellation	error: expect(received).toEqual(expected)	web-worker
+js/web/url/url-wpt-constructor.test.ts	WPT url-constructor > section 0: See ../README.md for a description of the format. (110 entries)	error: expect(received).toEqual(expected)	url-opaque-origin
+js/web/web-globals.test.js	<collection/hook/exit; no named failure>	ReferenceError: PerformanceMark is not defined	unknown
+js/web/websocket/autobahn.test.ts	<collection/hook/exit; no named failure>	error: A functional `docker` is required in CI for some tests.	unknown
+js/web/websocket/websocket-client-short-read.test.ts	WebSocket upgrade split across reads > large frame pipelined after split 101 header is not counted against the header-size cap	Error:	unknown
+js/web/websocket/websocket-handshake-event.test.ts	WebSocket 'handshake' event surfaces status/head/body on non-101	error: 'handshake' never fired	unknown
+js/web/websocket/websocket-subprotocol-strict.test.ts	WebSocket strict RFC 6455 subprotocol handling > should reject multiple comma-separated protocols	error: expect(received).toBe(expected)	ws-protocol-error
+js/web/websocket/websocket-utf16-headers.test.ts	WebSocket upgrade with non-ASCII inputs > Latin1 header value with high bytes is sent as UTF-8 without crashing	error: expect(received).toContain(expected)	http-header-case
+js/web/workers/message-channel.test.ts	transfer message port	error: expect(received).toHaveLength(expected)	unknown
+js/web/workers/message-event.test.ts	MessageEvent constructor > has the right defaults	TypeError: cannot read property 'bubbles' of null	unknown
+js/web/workers/message-port-closed-leak.test.ts	MessagePortChannel closed port > postMessage to closed port does not accumulate in pending queue	bun-wasm: bun.wasm trapped: error while executing at wasm backtrace:	unknown
+js/web/workers/message-port-context-destroy-leak.test.ts	MessagePort self-ref is released when the owning context is destroyed	error: expect(received).toBe(expected)	web-worker
+js/web/workers/message-port-pipe.test.ts	MessagePort pipe > messages queued on a port follow it across transfer	TypeError: cannot set property 'onmessage' of undefined	unknown
+js/web/workers/worker-entry-point.test.ts	package.json imports alias as the entry point > the worker runs and its thread exits without leaking	error: expect(received).toBe(expected)	web-worker
+js/web/workers/worker-postmessage-transfer.test.ts	self.postMessage transfer list > postMessage(msg, [ArrayBuffer]) transfers and detaches the buffer	TypeError: not a function	blob-url
+js/web/workers/worker-terminate-funnels.test.ts	terminate() at every native→JS entry point > timers	error: expect(received).toEqual(expected)	worker-terminate-clone
+js/web/workers/worker-terminate-lifetime.test.ts	new Worker with { ref: false } does not keep the parent alive	error: expect(received).toBe(expected)	web-worker
+js/web/workers/worker.test.ts	web worker > preload > invalid file URL	error: expect(received).toThrow(expected)	web-worker
+js/web/workers/worker_blob.test.ts	Worker from a Blob	ReferenceError: Worker is not defined	web-worker
+js/workerd/html-rewriter-end-error.test.ts	HTMLRewriter > does not crash when a document text handler rejects during end() on an ArrayBuffer input	ReferenceError: HTMLRewriter is not defined	htmlrewriter
+js/workerd/html-rewriter-leak.test.ts	transform(new Response(ascii)) releases the input WTFStringImpl	error: expect(received).toBe(expected)	htmlrewriter
+packages/registry/test/auth.test.ts	adduser and login > a new user gets a token	SuppressedError:	unknown
+packages/registry/test/cli.test.ts	bun against the registry > install	error: expect(received).toBe(expected)	manifest-accept
+packages/registry/test/publish.test.ts	(unnamed)	TypeError: not a function	archive
+packages/registry/test/read.test.ts	(unnamed)	TypeError: not a function	archive
+regression/brotli-reset-leak.test.ts	<collection/hook/exit; no named failure>	error: test expects a function as the second argument	test-options-first
+regression/issue/00631.test.ts	issue/00631 > JSON strings escaped properly	error: Network is unreachable (os error 101)	loopback-external
+regression/issue/012039.test.ts	#12039 ZWJ	error: expect(received).not.toThrow()	transpiler
+regression/issue/015201.test.ts	<collection/hook/exit; no named failure>	"TypeError: The ""callback"" argument must be of type function. Received type number (1)"	unknown
+regression/issue/02367.test.ts	should not be able to parse json from empty body	error: expect(received).toThrow(expected)	async-tothrow
+regression/issue/02499/02499.test.ts	onAborted() and onWritable are not called after receiving an empty response body due to a promise rejection	error: write after end	unknown
+regression/issue/026039.test.ts	frozen lockfile should use scope-specific registry for scoped packages	error: expect(received).toContain(expected)	install-registry-config
+regression/issue/03830.test.ts	issue/03830 > macros should not lead to seg faults under any given input	error: expect(received).toMatchSnapshot(expected)	unknown
+regression/issue/07001.test.ts	req.body.locked is true after body is consumed	error: expect(received).toBe(expected)	stream-lock
+regression/issue/07324.test.ts	override is an accessibility modifier	TypeError: not a function	pass-fail-matchers
+regression/issue/07500/07500.test.ts	7500 - Bun.stdin.text() doesn't read all data	Error:	unknown
+regression/issue/07740.test.ts	duplicate dependencies should warn instead of error	error: expect(received).toContain(expected)	loopback-external
+regression/issue/07827.test.ts	#7827	ReferenceError: HTMLRewriter is not defined	htmlrewriter
+regression/issue/07917/7917.test.ts	boundary does not have quotes (#7917)	error: expect(received).toEqual(expected)	formdata-body
+regression/issue/08093.test.ts	should install vendored node_modules with hardlink	error: expect(received).toContain(expected)	install-backend
+regression/issue/08095.test.ts	spawn can pass null as option to stdio	error: expect(received).toBeInstanceOf(expected)	unknown
+regression/issue/08757.test.ts	absolute path to a file that is symlinked has import.meta.main	error: Expected process to exit with code 0 but got 1	unknown
+regression/issue/08964/08964.test.ts	issue 8964	error: expect(received).toBeUndefined()	unknown
+regression/issue/09469.test.ts	09469	error: expect(received).toHaveLength(expected)	unknown
+regression/issue/09555.test.ts	#09555 > Readable.fromWeb consumes the ReadableStream	error: expect(received).toBe(expected)	stream-lock
+regression/issue/09559.test.ts	bun build --target bun should support non-ascii source	TypeError: not a function	shell-config
+regression/issue/09563/09563.test.ts	importing empty files in the async transpiler does not crash	error: Cannot find module './empty.ts?i0' from '/bun/test/regression/issue/09563/09563.test.ts'	unknown
+regression/issue/09748.test.ts	09748	TypeError: not a function	transpiler
+regression/issue/10132.test.ts	bun run sets cwd for script, matching npm	TypeError: not a function	shell-config
+regression/issue/10887.test.ts	does not segfault	error: expect(received).toBe(expected)	decorators
+regression/issue/11029-crypto-verify-null-algorithm.test.ts	<collection/hook/exit; no named failure>	NotSupportedError: Crypto generate failed	unknown
+regression/issue/11297/11297.test.ts	issue #11297	TypeError: not a function	stdin-pipe
+regression/issue/11793.test.ts	11793	error: expect(received).toMatchInlineSnapshot(expected)	runner-path
+regression/issue/11806.test.ts	11806	error: Network is unreachable (os error 101)	loopback-external
+regression/issue/12042.test.ts	#12042 curl verbose fetch logs form-urlencoded body	error: expect(received).toContain(expected)	fetch-verbose
+regression/issue/12548.test.ts	issue #12548: TypeScript syntax should work with 'ts' loader in BunPlugin	error: expect(received).toBe(expected)	plugin-loader
+regression/issue/12782.test.ts	12782	error: expect(received).toMatchInlineSnapshot(expected)	runner-path
+regression/issue/13251.test.ts	scanImports respects trimUnusedImports	TypeError: not a function	transpiler
+regression/issue/1365.test.ts	running unsupported file types shows helpful error message instead of 'File not found'	error: expect(received).toContain(expected)	css-entry-diagnostic
+regression/issue/14135.test.ts	14135	error: expect(received).toMatchInlineSnapshot(expected)	snapshot-version
+regression/issue/14477/14477.test.ts	JSX closing-tag mismatch error quotes <Foo> without escape characters	"error: Expected closing JSX tag to match opening tag ""<div>"""	transpiler
+regression/issue/14799.test.ts	nested bun run waits for the child on SIGINT	error: expect(received).toBeGreaterThan(expected)	unknown
+regression/issue/14945-lifecycle-script-crash.test.ts	lifecycle script should handle directory deletion gracefully	error: expect(received).toBe(expected)	install-lifecycle
+regression/issue/15276.test.ts	parsing npm aliases without package manager does not crash	error: expect(received).toContain(expected)	x-command
+regression/issue/15753.test.ts	issue #15753: glibc addon on musl throws instead of segfaulting > glibc-linked addon (libc.so.6) is rejected with ERR_DLOPEN_FAILED	error: expect(received).toContain(expected)	dlopen-rejection-code
+regression/issue/1632.test.ts	issue #1632 - broken pipe behavior for process.stdout.write() > process.stdout.write() should exit non-zero on broken pipe	error: expect(received).not.toBe(expected)	unknown
+regression/issue/16474.test.ts	fs.mkdir recursive should not error on existing	error: expect(received).toThrow(expected)	mkdir-existing
+regression/issue/16476/16476.test.ts	<collection/hook/exit; no named failure>	error: Cannot find module './a.txt?1' from '/bun/test/regression/issue/16476/16476.test.ts'	unknown
+regression/issue/17327.test.ts	issue #17327: template literal syntax highlighting edge cases	error: expect(received).not.toMatch(expected)	unknown
+regression/issue/17605.test.ts	empty and invalid JSON import do not crash	error: expect(received).toThrow(expected)	async-tothrow
+regression/issue/18239/18239.test.ts	TTY stdin buffering should work correctly	error: expect(received).toContain(expected)	external-program
+regression/issue/18242.test.ts	Bun.build works multiple times after FileSystemRouter is created	SyntaxError: Unexpected end of JSON input	unknown
+regression/issue/19111.test.ts	Standalone ServerResponse.writableNeedDrain is false	TypeError: cannot read property 'method' of undefined	unknown
+regression/issue/19219.test.ts	HTMLRewriter should throw proper errors instead of [native code: Exception]	ReferenceError: HTMLRewriter is not defined	htmlrewriter
+regression/issue/19758.test.ts	19758	error: expect(received).toMatchInlineSnapshot(expected)	snapshot-version
+regression/issue/19850/19850.test.ts	when beforeEach callback throws > test name is not garbled	error: expect(received).toBe(expected)	runner-format
+regression/issue/19875.test.ts	19875	error: expect(received).toMatchInlineSnapshot(expected)	runner-path
+regression/issue/20053.test.ts	issue #20053 - multi-frame zstd responses should be fully decompressed	error: zlib.zstdCompressSync is not supported in bun-wasm: brotli is not compiled into bun.wasm	zlib-zstd
+regression/issue/20092.test.ts	20092	error: expect(received).toMatchInlineSnapshot(expected)	runner-path
+regression/issue/20100.test.ts	20100	error: expect(received).toMatchInlineSnapshot(expected)	snapshot-version
+regression/issue/20753.test.js	stdout should always be a string > execFile returns string stdout/stderr for permission denied errors	error: expect(received).toBe(expected)	external-program
+regression/issue/20980.test.ts	20980	error: expect(received).toMatchInlineSnapshot(expected)	runner-path
+regression/issue/21177.test.ts	21177	error: expect(received).toMatchInlineSnapshot(expected)	snapshot-version
+regression/issue/21257.test.ts	Response.json() throws TypeError for non-JSON serializable top-level values	error: expect(received).toThrow(expected)	response-json-validation
+regression/issue/21677.test.ts	issue #21677 - reproduce with raw HTTP to verify duplicate headers	error: expect(received).toBe(expected)	http-header-case
+regression/issue/21680.test.ts	HTMLRewriter should not crash when element handler throws an exception - issue #21680	ReferenceError: HTMLRewriter is not defined	htmlrewriter
+regression/issue/21830.test.ts	21830	error: expect(received).toMatchInlineSnapshot(expected)	snapshot-version
+regression/issue/23183.test.ts	process.title should return a non-empty string or fallback to 'bun'	error: expect(received).toBe(expected)	process-title
+regression/issue/23314/zstd-async-compress.test.ts	zstd compression compatibility > should decompress data compressed with zlib.zstdCompressSync	error: zlib.zstdCompressSync is not supported in bun-wasm: brotli is not compiled into bun.wasm	zlib-zstd
+regression/issue/23314/zstd-large-decompression.test.ts	should handle large data decompression safely	error: zlib.zstdCompress is not supported in bun-wasm: brotli is not compiled into bun.wasm	zlib-zstd
+regression/issue/23314/zstd-large-input.test.ts	zstd compression with larger inputs > should handle larger strings	error: zlib.zstdCompress is not supported in bun-wasm: brotli is not compiled into bun.wasm	zlib-zstd
+regression/issue/23474.test.ts	request.cookies.set() should set websocket upgrade response cookie - issue #23474	error: expect(received).toContain(expected)	http-header-case
+regression/issue/23865.test.ts	23865	error: expect(received).toMatchInlineSnapshot(expected)	snapshot-version
+regression/issue/24129.test.ts	Dirent with unknown type should return false for all type checks	error: expect(received).toBe(expected)	dirent-unknown
+regression/issue/24131.test.ts	issue #24131 - 'l' key should select package in interactive update > should select package when pressing 'l' to toggle use_latest	error: expect(received).toBe(expected)	update-command
+regression/issue/24157.test.ts	UDP bind throws EADDRINUSE without reuseAddr when port is in use	error: expect(received).toContain(expected)	udp
+regression/issue/24191.test.ts	url.domainToUnicode returns empty string for invalid domains	error: expect(received).toBe(expected)	url-idna
+regression/issue/24329.test.ts	bun npm placeholder script should exit with error if postinstall hasn't run	error: expect(received).toBe(expected)	external-program
+regression/issue/24338.test.ts	partialDeepStrictEqual with Map subset - basic case	TypeError: not a function	partial-assert
+regression/issue/24364.test.ts	react-tailwind template passes tsc --noEmit	error: expect(received).toBe(expected)	loopback-external
+regression/issue/24385.test.ts	Redis loads with REDIS_URL=localhost:6379	error: expect(received).toContain(expected)	redis
+regression/issue/24387.test.ts	regression: require()ing a module with TLA should error and then wipe the module cache, so that importing it again works	error: expect(received).toBe(expected)	post-run-flags
+regression/issue/24502/bun-pm-ls-all-invalid-package-id.test.ts	unresolved optional peers don't crash	error: expect(received).toBe(expected)	pm-optional-peer
+regression/issue/24709.test.ts	bun build produces valid JS for unused dynamic imports	TypeError: not a function	transpiler
+regression/issue/24806.test.ts	bun publish --help shows correct message for --dry-run	error: expect(received).toContain(expected)	publish-command
+regression/issue/25231.test.ts	Bun.FFI.CString is callable with new	TypeError: Cannot convert undefined or null to object	unknown
+regression/issue/25432.test.ts	process.stdout.end() flushes pending writes before callback > large write followed by end() with process.exit in callback	error: expect(received).toBe(expected)	stdout-lifecycle
+regression/issue/25622.test.ts	child tsconfig paths replace parent paths (not merge)	error: expect(received).toContain(expected)	resolve-wording
+regression/issue/25628.test.ts	<collection/hook/exit; no named failure>	error: test expects a function as the second argument	test-options-first
+regression/issue/25639.test.ts	setTimeout returns Timeout object with _idleStart property	error: expect(received).toBe(expected)	timer-idlestart
+regression/issue/25707.test.ts	dynamic import of non-existent node: module in CJS rejects at runtime with correct error	error: expect(received).toBe(expected)	unknown-builtin-code
+regression/issue/25831.test.ts	ls -l shows long listing format	error: expect(received).toBe(expected)	shell-config
+regression/issue/25869.test.ts	setTimeout.clock is set after useFakeTimers	TypeError: not a function	fake-timers
+regression/issue/25903.test.ts	Bun.write() mode option > Bun.write() respects mode option when copying files via Bun.file()	error: expect(received).toBe(expected)	bun-write-mode
+regression/issue/26058.test.ts	issue #26058 - bun repl startup time > bun repl starts without downloading packages	error: expect(received).toContain(expected)	repl-command
+regression/issue/26143.test.ts	issue #26143 - https GET request with body hangs > Bun.fetch without allowGetBody should still throw	error: expect(received).toThrow(expected)	async-tothrow
+regression/issue/26207.test.ts	bun run --workspaces creates node symlink when NODE env points to non-existent path	error: expect(received).toContain(expected)	post-run-flags
+regression/issue/26225.test.ts	node-fetch with form-data and fs.createReadStream works correctly	error: expect(received).toBe(expected)	formdata-body
+regression/issue/26249.test.ts	cc() respects C_INCLUDE_PATH environment variable	error: expect(received).toBe(expected)	ffi
+regression/issue/26284.test.ts	hasOwnProperty('clock') returns false before useFakeTimers	TypeError: not a function	fake-timers
+regression/issue/26286.test.ts	Bun.Terminal data callback works inside AsyncLocalStorage.run()	TypeError: not a function	terminal
+regression/issue/26337.test.ts	issue #26337 - missing file: dependency error should show dependency name > should show which dependency path is missing when lockfile has stale file: path	error: expect(received).toBe(expected)	file-dependencies
+regression/issue/26338.test.ts	shows informative error for missing file: dependency path	error: expect(received).toContain(expected)	loopback-external
+regression/issue/26360.test.ts	Bun.build from macro during bundling throws instead of hanging	error: expect(received).toContain(expected)	macro-build
+regression/issue/26460.test.ts	shell cwd('.') should use current working directory	error: expect(received).toBe(expected)	shell-config
+regression/issue/26657.test.ts	bun update -i select all with 'A' key > should update packages when 'A' is pressed to select all	Install STDERR: error: Network is unreachable (os error 101)	loopback-external
+regression/issue/26851.test.ts	--bail writes JUnit reporter outfile	<see JSON excerpt; no error line>	unknown
+regression/issue/27049.test.ts	ClientRequest.setHeaders should not throw ERR_HTTP_HEADERS_SENT on new request	TypeError: not a function	http-setheaders
+regression/issue/27478.test.ts	multipart formdata preserves null bytes in small binary files	TypeError: formData() is not supported in bun-wasm	unknown
+regression/issue/27526.test.ts	legacy decorators work when emitDecoratorMetadata is true without experimentalDecorators	error: expect(received).toBe(expected)	decorators
+regression/issue/27575.test.ts	Bun.Transpiler respects experimentalDecorators: true from tsconfig	TypeError: not a function	transpiler
+regression/issue/28017.test.ts	fs.stat *Ms properties preserve sub-millisecond precision	error: expect(received).toBeCloseTo(expected, precision)	unknown
+regression/issue/28024.test.ts	Hash native update() throws ERR_INVALID_THIS instead of segfaulting on bad this	TypeError: cannot read property 'update' of undefined	unknown
+regression/issue/28083.test.ts	dgram implicit bind on send > reusePort option works with dgram sockets	error: expect(received).toContain(expected)	udp
+regression/issue/28170.test.ts	barrel optimization propagates through namespace re-exports	error: expect(received).not.toContain(expected)	install-workspaces
+regression/issue/28193.test.ts	bun install prints error when security scanner is unavailable	error: expect(received).toContain(expected)	loopback-external
+regression/issue/28522.test.ts	assert.partialDeepStrictEqual supports arrays	TypeError: not a function	partial-assert
+regression/issue/28756.test.ts	AbortSignal.timeout + util.aborted does not leak memory	TypeError: not a function	pass-fail-matchers
+regression/issue/28948.test.ts	dns.getDefaultResultOrder is a function returning a string	error: expect(received).toBe(expected)	dns-order
+regression/issue/29072.test.ts	os.freemem() uses MemAvailable, not MemFree (#29072)	<see JSON excerpt; no error line>	unknown
+regression/issue/29169.test.ts	process.ppid is a live accessor (#29169)	error: expect(received).toBe(expected)	process-ppid
+regression/issue/29181.test.ts	Bun.serve static file route does not leak fds on 304 / HEAD	error: expect(received).toBe(expected)	static-conditional
+regression/issue/29240.test.ts	cpu-prof callFrame.lineNumber/columnNumber point at function definition, not sample position (#29240)	error: expect(received).toBe(expected)	profiler-flags
+regression/issue/29264.test.ts	<collection/hook/exit; no named failure>	error: test expects a function as the second argument	test-options-first
+regression/issue/29298.test.ts	standalone HTML inlines file-loader assets imported from JS as data URIs	<see JSON excerpt; no error line>	unknown
+regression/issue/29519.test.ts	Zig::GlobalObject creation on a warm VM under concurrent GC > ShadowRealm creation survives concurrent GC	error: expect(received).toBe(expected)	shadowrealm
+regression/issue/2993.test.ts	Request cache option is set correctly	error: expect(received).toBe(expected)	request-cache
+regression/issue/30205.test.ts	#30205 > (unnamed)	error: Network is unreachable (os error 101)	loopback-external
+regression/issue/30887.test.ts	async preload is awaited before tests run (sequential (default))	error: expect(received).toContain(expected)	async-preload
+regression/issue/30963.test.ts	`static { ... }` in an object-literal position ([{static{}) is a syntax error, not a parser crash	error: expect(received).toContain(expected)	eval-parser-diagnostic
+regression/issue/31002.test.ts	`if(0)var[]` does not crash the printer (dead-branch destructuring var with no bindings)	error: expect(received).toBe(expected)	raw-js-parser
+regression/issue/31503.test.ts	resolver filename store survives interning >270k long names (#31503)	error: expect(received).toMatchObject(expected)	unknown
+regression/issue/31575.test.ts	bun build --compile keeps the asset [dir] in Bun.embeddedFiles[].name (issue #31575)	error: expect(received).toBe(expected)	compiled-bytecode
+regression/issue/31652.test.ts	install does not abort on an unresolved optional dependency with an empty name (#31652)	error: expect(received).toBe(expected)	install-optional-empty
+regression/issue/3192.test.ts	issue #3192 > yarn lockfile quotes workspace:* versions correctly	error: expect(received).toBe(expected)	yarn-workspace
+regression/issue/32793.test.ts	setSystemTime() keeps overriding Date.now() after the call site is JIT compiled	error: expect(received).toBe(expected)	fake-timers
+regression/issue/36577.test.ts	frozen lockfile accepts a freshly generated lockfile (24 fillers)	error: expect(received).not.toContain(expected)	install-lockfile-only
+regression/issue/39900.test.ts	macro that awaits crypto.subtle.digest resolves under bun run	error: expect(received).toContain(expected)	macro-promise
+regression/issue/40561.test.ts	catalog: peer inside a file: dep does not break a sibling absolute file: dep	error: expect(received).toContain(expected)	file-dependencies
+regression/issue/44275.test.ts	util.promisify.custom stays per timer once the property read is warm	error: expect(received).toBe(expected)	timer-promisify
+regression/issue/5228.test.js	xit, xtest, and xdescribe aliases should work as test.skip/describe.skip	error: expect(received).toBe(expected)	skip-aliases
+regression/issue/5738.test.ts	5738	error: expect(received).toMatchInlineSnapshot(expected)	snapshot-version
+regression/issue/5961.test.ts	5961	error: expect(received).toMatchInlineSnapshot(expected)	snapshot-version
+regression/issue/8254.test.ts	Bun.write() should write past 2GB boundary without corruption	InternalError: out of memory	unknown
+regression/issue/ctrl-c.test.ts	verify that we can call sigint 4096 times	error: Network is unreachable (os error 101)	loopback-external
+regression/issue/fuzzer-ENG-22942.test.ts	expect.extend with jest object should throw TypeError, not crash	error: expect(received).toThrow(expected)	extend-validation
+regression/issue/htmlrewriter-additional-bugs.test.ts	HTMLRewriter should properly validate handler objects	error: expect(received).toThrow(expected)	htmlrewriter
+regression/issue/isArray-proxy-crash.test.ts	isArray + Proxy crash fixes > vm.compileFunction throws for Proxy params (no crash)	error: expect(received).toThrow()	vm-proxy-validation
+regression/issue/issue-1825-jest-mock-functions.test.ts	Jest mock functions from issue #1825 > jest.mock should be available and work with factory function	error: expect(received).not.toThrow()	unknown
+regression/issue/jsx-template-string-crash.test.ts	JSX lexer should not crash with slice bounds issues	error: expect(received).toMatchInlineSnapshot(expected)	eval-jsx
+regression/issue/malformed-integrity-base64.test.ts	malformed integrity base64 in lockfile should be handled gracefully	error: Initial install failed	unknown
+regression/issue/patch-bounds-check.test.ts	patch application should handle out-of-bounds line numbers gracefully	error: expect(received).toMatchInlineSnapshot(expected)	install-equals-linker
+regression/issue/prepare-stack-trace-crash.test.ts	Error.prepareStackTrace should not crash when stacktrace parameter is not an array	TypeError: not a function	prepare-stack
+regression/issue/require-extensions-override.test.ts	Module._extensions override should preserve loader type for each extension	error: expect(received).toContain(expected)	require-extensions
+regression/issue/test-process-stdout-async-iterator.test.ts	process.stdout and process.stderr have Symbol.asyncIterator for Node.js compatibility	error: expect(received).toBe(expected)	stdout-lifecycle
+regression/issue/test_env_loader_threading.test.ts	env_loader should not have allocator threading issues with BUN_INSPECT_CONNECT_TO	error: expect(received).toBe(expected)	dotenv
+regression/issue/text-chunk-null-access.test.ts	TextChunk methods handle null text_chunk gracefully	ReferenceError: HTMLRewriter is not defined	htmlrewriter

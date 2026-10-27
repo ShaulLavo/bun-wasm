@@ -1,20 +1,49 @@
 // Local preview of web/dist. Sends COOP/COEP so the page is cross-origin isolated
 // (SharedArrayBuffer + Atomics.wait for sleeps). ISOLATE=0 previews the busy-wait fallback.
 // ROOT=<dir> serves another build (the sandbox: `ROOT=dist bun ../web/serve.ts`).
+// Cache-Control follows the build's _headers, as on Cloudflare. LATENCY_MS=<n> delays every
+// response by n milliseconds, to measure what network round trips cost a remote user.
+import { existsSync, readFileSync } from "node:fs";
 import { join, normalize, resolve } from "node:path";
 
 const root = process.env.ROOT ? resolve(process.env.ROOT) : join(import.meta.dir, "dist");
 const isolate = process.env.ISOLATE !== "0";
 const port = Number(process.env.PORT ?? 4173);
+const latency = Number(process.env.LATENCY_MS ?? 0);
+const cacheRules = readCacheRules(join(root, "_headers"));
+
+/** The Cache-Control rules of a Cloudflare _headers file: a path pattern with at most one splat. */
+function readCacheRules(path: string): { pattern: RegExp; value: string }[] {
+  if (!existsSync(path)) return [];
+  const rules: { pattern: RegExp; value: string }[] = [];
+  let pattern: RegExp | undefined;
+  for (const line of readFileSync(path, "utf8").split("\n")) {
+    if (!line.trim() || line.startsWith("#")) continue;
+    if (!/^\s/.test(line)) {
+      pattern = new RegExp(`^${line.trim().split("*").map(part => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+      continue;
+    }
+    const header = /^\s+cache-control:\s*(.+)$/i.exec(line);
+    if (header && pattern) rules.push({ pattern, value: header[1]!.trim() });
+  }
+  return rules;
+}
+
+/** Cloudflare joins the values of every matching rule with a comma. */
+function cacheControl(pathname: string): string {
+  const values = cacheRules.filter(rule => rule.pattern.test(pathname)).map(rule => rule.value);
+  return values.length ? values.join(", ") : pathname.endsWith(".html") ? "no-store" : "no-cache";
+}
 
 const server = Bun.serve({
   port,
   hostname: process.env.HOST ?? "127.0.0.1",
   async fetch(req) {
+    if (latency > 0) await Bun.sleep(latency);
     const url = new URL(req.url);
     let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");
     if (path.endsWith("/")) path += "index.html";
-    const headers: Record<string, string> = { "cache-control": path.endsWith(".html") ? "no-store" : "no-cache" };
+    const headers: Record<string, string> = { "cache-control": cacheControl(url.pathname) };
     // .wasm files may be published only as their .gz twin (Mesh apps cap source size).
     const gz = Bun.file(join(root, `${path}.gz`));
     if (path.endsWith(".wasm") && (await gz.exists())) {

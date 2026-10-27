@@ -2,6 +2,7 @@
   "modules": [
     "internal:freelist",
     "node:querystring",
-    "node:punycode"
+    "node:punycode",
+    "node:wasi"
   ]
 }

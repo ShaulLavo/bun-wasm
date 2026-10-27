@@ -1,12 +1,16 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "lib": ["ES2023", "DOM", "DOM.Iterable", "WebWorker"]
+    "lib": ["ES2023", "ES2024.SharedMemory", "DOM", "DOM.Iterable", "WebWorker"]
   },
   "include": [
     "browser-engine-interruption.ts",
     "browser-engine-interruption.test.ts",
     "engine-interruption-main.ts",
+    "engine-interruption-page.ts",
+    "engine-interruption-atomics.ts",
+    "worker-signals.test.ts",
+    "fixtures/worker-signals-intrinsics.ts",
     "engine-interruption-cases.ts",
     "engine-interruption-cases.test.ts",
     "engine-interruption-worker.ts",
@@ -22,6 +26,8 @@
     "engine-interruption-benchmark.test.ts",
     "engine-interruption-guests.ts",
     "engine-interruption-guests.test.ts",
+    "engine-interruption-sleep.ts",
+    "engine-interruption-sleep.test.ts",
     "engine-interruption-safari.ts",
     "engine-interruption-safari.test.ts",
     "engine-interruption-idle.test.ts",

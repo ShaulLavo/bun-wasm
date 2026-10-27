@@ -15,7 +15,7 @@ fi
 cp "$root/tests/builtins/loader.js" "$scratch/loader.js"
 cp "$root/tests/builtins/intrinsic-globals.js" "$scratch/intrinsic-globals.js"
 printf 'import "./loader.js";\nimport "./intrinsic-globals.js";\n' > "$scratch/index.js"
-cp "$root/crates/bunwasm-runtime/src/js/bun_builtins.js" "$scratch/runtime.js"
+bun "$root/scripts/transpile-runtime.ts" "$root/crates/bunwasm-runtime/src/js/bun_builtins.ts" "$scratch/runtime.js" --minify-whitespace
 node "$root/scripts/transpile-runtime.ts" "$root/crates/bunwasm-runtime/src/js/bun_builtin_globals.ts" "$scratch/globals.js"
 cp "$root/crates/bunwasm-runtime/generated/builtins/"*.js "$scratch/"
 cp "$root/crates/bunwasm-runtime/generated/builtins/catalog.json" "$scratch/catalog.json"
@@ -29,7 +29,7 @@ for engine in quickjs jsc browser; do
   if [[ "$engine" == browser ]]; then
     (cd "$scratch" && timeout 60 node --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --dir "$scratch::/" --env PWD=/ -- run /index.js)
   else
-    timeout 60 wasmtime run --dir "$scratch::/" --env PWD=/ "$wasm" run /index.js
+    timeout 60 "${BUN_WASM_LAUNCHER:-$CARGO_TARGET_DIR/release/bun-wasm}" --wasm "$wasm" --engine "$engine=$wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$scratch::/" --env PWD=/ -- run /index.js
   fi
   echo "PASS generated builtins ($engine)"
 done

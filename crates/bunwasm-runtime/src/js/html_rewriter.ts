@@ -7,6 +7,10 @@
   type Options = { html?: boolean };
   const encoder = new TextEncoder();
   const empty = new Uint8Array();
+  const defineProperty = Object.defineProperty;
+  function append<T>(values: T[], value: T) {
+    defineProperty(values, values.length, { value, writable: true, configurable: true, enumerable: true });
+  }
   const finalizers = new FinalizationRegistry<number>(id => native.htmlClose(id));
 
   function domString(value: unknown) {
@@ -51,6 +55,7 @@
     get attributes() {
       const values = this.call("attributes") ?? [];
       const version = this.#attributesVersion;
+      // oxlint-disable-next-line no-this-alias -- Retain the owner for callbacks whose receiver differs.
       const token = this;
       return (function* () {
         for (const pair of values) {
@@ -141,12 +146,12 @@
       } finally { this.close(); }
     }
     syncStep(step: BunWasm.HTMLStep, output: Uint8Array[]) {
-      output.push(step.output);
+      append(output, step.output);
       while (step.event) {
         const pending = this.invoke(step.event);
         if (pending) { pending.catch(() => {}); throw new TypeError("HTMLRewriter.transform() cannot synchronously return a body when a handler returns a Promise. Use a Response input."); }
         step = this.resume();
-        output.push(step.output);
+        append(output, step.output);
       }
     }
     async asyncStep(step: BunWasm.HTMLStep, controller: ReadableStreamDefaultController<Uint8Array>) {
@@ -166,6 +171,7 @@
       try { reader = input.body?.getReader(); }
       catch (error) { this.close(); throw error; }
       if (reader) Reflect.set(input, "_bodyUsed", true);
+      // oxlint-disable-next-line no-this-alias -- Retain the owner for callbacks whose receiver differs.
       const rewrite = this;
       return new ReadableStream<Uint8Array>({
         start(controller) {
@@ -230,10 +236,10 @@
       if (selector == null) throw new TypeError("Expected string");
       const pattern = domString(selector);
       native.htmlValidateSelector(pattern);
-      this.#registrations.push(registration(pattern, handlers));
+      append(this.#registrations, registration(pattern, handlers));
       return this;
     }
-    onDocument(handlers: unknown) { this.#registrations.push(registration(null, handlers)); return this; }
+    onDocument(handlers: unknown) { append(this.#registrations, registration(null, handlers)); return this; }
     transform(input: unknown) {
       if (input instanceof Response) {
         if (input.bodyUsed) throw new TypeError("Response body already used");

@@ -1,8 +1,23 @@
-import { expect, test } from "bun:test";
+import { processRuntimeFixture } from "../../web/tests/process-runtime-fixture";
+import { outcomeWord } from "waffle/proc/outcome";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import type { Runtime, GuestLauncher, ProgramDefinition } from "waffle";
-import { installBunAdapters, BunWasmProcessUnavailableError, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
+import { FilesystemClient } from "waffle/fs/client";
+import { MemoryBackend } from "waffle/fs/backend";
+import { FilesystemService } from "waffle/fs/service";
+import { createFilesystemConnection, FilesystemError } from "waffle/fs/protocol";
+import { installBunAdapters as installReal, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
+import type { BunAdapterOptions } from "../../src/index.js";
+const workerUrl = "https://example.test/worker.js";
+// @ts-expect-error Hermes is a playground-only engine, not a package adapter engine.
+const packageHermesOptions: BunAdapterOptions = { workerUrl, engine: "hermes" };
+void packageHermesOptions;
+const installBunAdapters = (runtime: Runtime, options: Omit<BunAdapterOptions, "workerUrl"> & { workerUrl?: string | URL } = {}) => installReal(runtime, { workerUrl, ...options });
+
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+const cleanups: Array<() => void> = [];
+afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
 function fixture() {
   const adapters = new Map<string, GuestLauncher>();
   const programs = new Map<string, ProgramDefinition>();
@@ -14,16 +29,41 @@ function fixture() {
     entries.set(name, value);
     return () => { if (entries.get(name) === value) { entries.delete(name); removed.push(`${kind}:${name}`); } };
   }
+  const networkOwner = processRuntimeFixture({});
   const runtime = {
+    network: () => networkOwner.network(),
     registerAdapter: (name: string, value: GuestLauncher) => register("adapter", adapters, name, value),
     registerProgram: (name: string, value: ProgramDefinition) => register("program", programs, name, value),
     filesystem: {
       lookup: async (path: string) => files.has(path) ? { kind: "file" } : directories.has(path) ? { kind: "dir" } : undefined,
       readFile: async (path: string) => files.get(path),
-      writeFile: async (path: string, bytes: Uint8Array) => { files.set(path, new Uint8Array(bytes)); },
+      writeFile: async (path: string, bytes: Uint8Array, mode?: { exclusive?: boolean }) => {
+        if (mode?.exclusive && (files.has(path) || directories.has(path))) throw new FilesystemError(20);
+        files.set(path, new Uint8Array(bytes));
+      },
       mkdirp: async (path: string) => { directories.add(path); },
       remove: async (path: string) => files.delete(path),
       drain: async () => {},
+      resolvePath: async () => ({ path: "/", kind: "dir" }),
+      fork: () => {
+        const backend = new MemoryBackend();
+        backend.execute = (operation, args, bytes) => {
+          const path = args[0] as string;
+          switch (operation) {
+            case "writeFile": return runtime.filesystem.writeFile(path, bytes!, { exclusive: args[2] === true });
+            case "mkdirp": return runtime.filesystem.mkdirp(path);
+            case "lookup": return runtime.filesystem.lookup(path);
+            case "readFile": return runtime.filesystem.readFile(path);
+            case "remove": return runtime.filesystem.remove(path);
+            default: throw new Error(`Unexpected fixture operation: ${operation}`);
+          }
+        };
+        const service = new FilesystemService(backend);
+        const connection = createFilesystemConnection();
+        cleanups.push(() => { service.dispose(); connection.server.port.close(); connection.client.port.close(); });
+        service.connect(connection.server);
+        return connection.client;
+      },
     },
   } as unknown as Runtime;
   return { runtime, adapters, programs, files, directories, removed };
@@ -33,10 +73,12 @@ test("install provisions /bin/bun and owns registrations without reserving a Run
   const f = fixture();
   const install = await installBunAdapters(f.runtime);
   expect(Array.from(f.adapters.keys())).toEqual(["bun:quickjs", "bun:jsc", "bun:browser"]);
-  expect(Array.from(f.programs.keys())).toEqual(["/bin/bun"]);
+  expect(Array.from(f.programs.keys())).toEqual(["/bin/bun", "/bin/node", "/bin/nodejs"]);
   expect(f.programs.get("/bin/bun")?.adapter).toBe("bun:browser");
   expect(f.directories.has("/bin")).toBe(true);
   expect(f.files.has("/bin/bun")).toBe(true);
+  expect(f.files.has("/bin/nodejs")).toBe(true);
+  expect(f.programs.get("/bin/nodejs")?.adapter).toBe("bun:browser");
   install.dispose();
   expect(f.adapters.size).toBe(0);
   expect(f.programs.size).toBe(0);
@@ -50,7 +92,7 @@ test("concurrent and duplicate installs reject; disposal unregisters once and pe
   const first = await pending;
   await expect(installBunAdapters(f.runtime)).rejects.toThrow("already installed");
   first.dispose(); first.dispose();
-  expect(f.removed.length).toBe(4);
+  expect(f.removed.length).toBe(6);
   const second = await installBunAdapters(f.runtime);
   first.dispose();
   expect(f.adapters.size).toBe(3);
@@ -69,16 +111,18 @@ test("failed registration rolls back only this installation", async () => {
   (await installBunAdapters(f.runtime)).dispose();
 });
 
-test("every engine rejects with the typed unimplemented-process-bridge boundary", async () => {
+test("every engine forwards to the production process worker", async () => {
   const f = fixture();
-  const install = await installBunAdapters(f.runtime);
+  const install = await installBunAdapters(f.runtime, { module });
   try {
-    for (const launch of f.adapters.values()) {
-      await expect(launch({} as never, {} as never)).rejects.toBeInstanceOf(BunWasmProcessUnavailableError);
-      await expect(launch({} as never, {} as never)).rejects.toMatchObject({ code: "BUN_WASM_PROCESS_UNAVAILABLE" });
+    const launches: any[] = [];
+    const context = { outcome: outcomeWord(), registerRevocation: () => () => {}, module, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { PATH: "/bin" }, cwd: "/" } };
+    for (const [name, launch] of f.adapters) {
+      await launch(context as never, { launchWorker(_context: unknown, options: unknown) { launches.push(options); return { terminate() {} }; } } as never);
+      expect(launches.at(-1)).toMatchObject({ workerUrl, request: { engine: name.slice(4), module, args: ["bun", "-e", "0"], env: { BUNWASM_EXEC_PATH: "/bin/bun", PATH: "/bin" } } });
     }
     const load = f.programs.get("/bin/bun")!.module as () => Promise<WebAssembly.Module>;
-    await expect(load()).rejects.toMatchObject({ code: "BUN_WASM_PROCESS_UNAVAILABLE" });
+    expect(await load()).toBe(module);
   } finally { install.dispose(); }
 });
 
@@ -92,12 +136,11 @@ test("caller can choose canonical aliases or keep program registration separatel
   (await installBunAdapters(f.runtime, { executables: [] })).dispose();
 });
 
-test("disabled bridge refuses before guest fetch or compilation", async () => {
+test("provided guest module loads without fetching", async () => {
   const f = fixture();
-  const install = await installBunAdapters(f.runtime, { fetch: async () => { throw new Error("unexpected download"); } });
-  const definition = f.programs.get("/bin/bun")!;
-  await expect((definition.module as () => Promise<WebAssembly.Module>)()).rejects.toBeInstanceOf(BunWasmProcessUnavailableError);
-  install.dispose();
+  const install = await installBunAdapters(f.runtime, { module, fetch: async () => { throw new Error("unexpected download"); } });
+  try { expect(await (f.programs.get("/bin/bun")!.module as () => Promise<WebAssembly.Module>)()).toBe(module); }
+  finally { install.dispose(); }
 });
 
 test("different files and directories produce a typed conflict without overwriting caller data", async () => {
@@ -121,6 +164,65 @@ test("invalid executable names and explicit engines are validated before registr
   }
   await expect(installBunAdapters(f.runtime, { engine: "quickjs" })).rejects.toThrow("matching guest");
   const install = await installBunAdapters(f.runtime, { engine: "quickjs", module });
-  expect(f.programs.get("/bin/bun")?.adapter).toBe("bun:quickjs");
+  expect(f.programs.get("/opt/bun/quickjs/bin/bun")?.adapter).toBe("bun:quickjs");
   install.dispose();
+});
+
+for (const failure of [new FilesystemError(29), Object.assign(new Error("not a filesystem conflict"), { errno: 20 })]) {
+  test(`exclusive marker creation preserves unrelated ${failure.message} errors`, async () => {
+    const f = fixture();
+    f.runtime.filesystem.writeFile = async (_path, _bytes, mode) => {
+      expect(mode).toEqual({ exclusive: true });
+      throw failure;
+    };
+    // The service preserves typed errno and normalizes arbitrary backend errors to EIO.
+    expect(await installBunAdapters(f.runtime).catch(error => error)).toMatchObject({ errno: 29 });
+    expect(f.adapters.size).toBe(0);
+    expect(f.programs.size).toBe(0);
+    expect(f.files.size).toBe(0);
+  });
+}
+
+test("resolving an exclusive marker race never consumes a shared drain error", async () => {
+  const f = fixture();
+  const failure = new FilesystemError(29);
+  const winner = new TextEncoder().encode("bun-wasm registered executable\n");
+  f.runtime.filesystem.writeFile = async path => {
+    f.files.set(path, winner);
+    throw new FilesystemError(20);
+  };
+  f.runtime.filesystem.drain = async () => { throw failure; };
+  const install = await installBunAdapters(f.runtime);
+  try {
+    expect(f.files.get("/bin/bun")).toBe(winner);
+    await expect(f.runtime.filesystem.drain()).rejects.toBe(failure);
+  } finally { install.dispose(); }
+  expect(f.adapters.size).toBe(0);
+  expect(f.programs.size).toBe(0);
+});
+
+for (const conflict of [false, true]) {
+  test(`installer disposes its borrowed filesystem client after ${conflict ? "failure" : "success"}`, async () => {
+    const f = fixture();
+    if (conflict) f.files.set("/bin/bun", new Uint8Array([1]));
+    const dispose = spyOn(FilesystemClient.prototype, "dispose");
+    try {
+      if (conflict) await expect(installBunAdapters(f.runtime)).rejects.toBeInstanceOf(BunWasmExecutableConflictError);
+      else (await installBunAdapters(f.runtime)).dispose();
+      expect(dispose).toHaveBeenCalledTimes(1);
+    } finally { dispose.mockRestore(); }
+  });
+}
+
+for (const engine of ["quickjs", "jsc", "browser"] as const) test(`default ${engine} nodejs registration uses its selected module`, async () => {
+  const f = fixture();
+  const installed = await installBunAdapters(f.runtime, { engine, module });
+  try {
+    const bin = engine === "browser" ? "/bin" : `/opt/bun/${engine}/bin`;
+    const program = f.programs.get(`${bin}/nodejs`);
+    expect(program?.adapter).toBe(`bun:${engine}`);
+    expect(f.files.has(`${bin}/nodejs`)).toBe(true);
+    if (typeof program?.module !== "function") throw new Error("Expected lazy module registration");
+    expect(await program.module()).toBe(module);
+  } finally { installed.dispose(); }
 });

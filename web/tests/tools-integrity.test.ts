@@ -1,9 +1,30 @@
 import { expect, spyOn, test } from "bun:test";
-import { loadWasm } from "../src/runner";
+import { ENGINES, loadWasm, WasmMissing } from "../src/engine-loader";
 
 const valid = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const substituted = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 0, 2, 1, 120]);
 const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+
+test("missing Hermes artifacts try compressed and plain URLs without fallback", async () => {
+  const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const requested: string[] = [];
+  const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) => {
+    requested.push(String(input));
+    return new Response(null, { status: 404 });
+  }, { preconnect: globalThis.fetch.preconnect }));
+  Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
+  try {
+    expect(ENGINES.hermes).toEqual({ name: "Hermes", wasm: "bun-hermes.wasm", script: "scripts/build-bun-hermes.sh" });
+    const loading = loadWasm(ENGINES.hermes.wasm, () => {});
+    await expect(loading).rejects.toBeInstanceOf(WasmMissing);
+    await expect(loading).rejects.toThrow("bun-hermes.wasm: HTTP 404");
+    expect(requested).toEqual(["bun-hermes.wasm.gz", "bun-hermes.wasm"]);
+  } finally {
+    fetch.mockRestore();
+    if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation);
+    else Reflect.deleteProperty(globalThis, "location");
+  }
+});
 
 for (const source of ["download", "cache"] as const) {
   for (const bytes of [valid, substituted]) test(`tools integrity rejects ${source} mismatch before compilation (${bytes.length} bytes)`, async () => {
@@ -54,7 +75,7 @@ async function withTools(bytes: Uint8Array, expected: string, source: "download"
         async delete() { cached = undefined; return true; },
       }; },
     },
-    async fetch() { downloads++; return new Response(Bun.gzipSync(bytes)); },
+    async fetch() { downloads++; return new Response(Bun.gzipSync(new Uint8Array(bytes))); },
   };
   try {
     for (const [name, value] of Object.entries(globals)) Object.defineProperty(globalThis, name, { configurable: true, value });

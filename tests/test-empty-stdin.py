@@ -4,6 +4,7 @@
 source env.sh && python3 tests/test-empty-stdin.py [--engine quickjs|jsc|browser|native] [--wasm PATH]
 """
 import argparse
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -24,7 +25,8 @@ def main():
         "browser": "bun-browser.wasm", "native": "unused",
     }
     wasm = (args.wasm or root / "dist" / binaries[args.engine]).resolve()
-    command = ["wasmtime", "run", "--dir", f"{fixture}::/", str(wasm), "run", "/index.js"]
+    launcher = os.environ.get("BUN_WASM_LAUNCHER", str(Path(os.environ.get("CARGO_TARGET_DIR", "/work/tmp/bun-wasm-target")) / "release/bun-wasm"))
+    command = [launcher, "--wasm", str(wasm), "--engine", f"{args.engine}={wasm}", "--env", f"PATH=/opt/bun/{args.engine}/bin:/bin:/usr/bin", "--dir", f"{fixture}::/", "--env", "PWD=/", "--", "run", "/index.js"]
     if args.engine == "native":
         command = ["bun", "run", "index.js"]
     if args.engine == "browser":

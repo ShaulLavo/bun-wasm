@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/vm-context.test.ts",
+  "localRuntime": true
+}

@@ -6,7 +6,7 @@
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { previewWebsocketScript } from "../web/preview-build";
 import { buildBrowserEntries, buildClassicWorker } from "../scripts/browser-build";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
 const here = import.meta.dir;
 const web = resolve(here, "../web");
@@ -23,7 +23,7 @@ async function bundle(config: Parameters<typeof Bun.build>[0]): Promise<Awaited<
   return result;
 }
 
-// Main and worker share chunks, also mirrored into the worker's controlling scope.
+// Bundle each browser realm independently and mirror worker chunks into its scope.
 const page = await buildBrowserEntries([join(here, "src/main.ts"), join(web, "src/worker.ts"), join(web, "src/fs-worker.ts")], out, { runtimeWorker: true });
 // The service worker stays standalone and classic for Safari.
 const sw = await buildClassicWorker(join(web, "src/sw.ts"), out, {
@@ -37,18 +37,25 @@ await Bun.write(join(out, "_headers"), Bun.file(join(web, "_headers")));
 
 const engineBuilds: Record<string, string> = {};
 
-async function copyWasm(source: string, name: string): Promise<void> {
+async function copyWasm(source: string, name: string): Promise<boolean> {
   if (!existsSync(source)) {
     console.warn(`${name}: ${source} not found; that engine will say it is missing.`);
-    return;
+    return false;
   }
   // Only the .gz ships: the page decompresses it (hosts cap file sizes).
   const bytes = new Uint8Array(await Bun.file(source).arrayBuffer());
   engineBuilds[name] = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
   await Bun.write(join(out, `${name}.gz`), Bun.gzipSync(bytes, { level: 9 }));
   console.log(`${name}: ${source} (${(statSync(source).size / 1024 / 1024).toFixed(1)} MB)`);
+  return true;
 }
-await copyWasm(resolve(here, process.env.BUN_WASM ?? "../dist/bun.wasm"), "bun.wasm");
+const wasmSource = resolve(here, process.env.BUN_WASM ?? "../dist/bun.wasm");
+if (await copyWasm(wasmSource, "bun.wasm")) {
+  const quickjsSource = join(dirname(wasmSource), "quickjs.wasm");
+  if (!(await copyWasm(quickjsSource, "quickjs.wasm"))) {
+    throw new Error(`QuickJS core requires its matching side module: ${quickjsSource}`);
+  }
+}
 await copyWasm(resolve(here, process.env.JSC_WASM ?? "../dist/bun-jsc.wasm"), "bun-jsc.wasm");
 await copyWasm(resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun-browser.wasm"), "bun-browser.wasm");
 

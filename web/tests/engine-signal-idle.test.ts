@@ -2,12 +2,14 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "../src/buffer-transfer.ts";
+import { SLOT_NAMES } from "../src/net/trampoline.ts";
+import { createScriptEvaluation } from "../src/script-evaluation.ts";
 
 // Exercise the actual host turn without loading a guest or changing the test runner's globals.
 const source = readFileSync(new URL("../src/engine-host.js", import.meta.url), "utf8")
   .replace(/^import .*;\n/gm, "")
   .replace("export function startEngineHost", "function startEngineHost");
-const EngineHost = runInNewContext(source + "\nEngineHost;", { TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, transferArrayBuffers, isWasmMemoryBuffer });
+const EngineHost = runInNewContext(source + "\nEngineHost;", { TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, isWasmMemoryBuffer, transferArrayBuffers, createScriptEvaluation, SLOT_NAMES });
 
 function turn(next: number, pendingAsync = 0, io = 0, signal = true) {
   const order: string[] = [];
@@ -67,7 +69,7 @@ test("signal handler exit does not run another timer or finish again", () => {
   expect(f.finished()).toBe(0);
 });
 
-for (const [input, expected] of [[-1, 255], [-2147483648, 0], [256, 0], [511, 255], [143, 143], [0, 0], [undefined, 0]]) {
+for (const [input, expected] of [[-1, 255], [-2147483648, 0], [256, 0], [511, 255], [143, 143], [0, 0], [undefined, 0]] as const) {
   test(`host-engine exit ${input} publishes byte status ${expected}`, () => {
     const statuses: number[] = [];
     const host = Object.assign(Object.create(EngineHost.prototype), { exit(code: number) { statuses.push(code); } });

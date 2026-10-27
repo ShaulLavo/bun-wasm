@@ -2,7 +2,7 @@
 (function (internal) {
   "use strict";
   const native = internal.native;
-  const { Blob, Response } = internal.web;
+  const { Blob, Response, TextDecoder } = internal.web;
   const info = native.platformInfo;
 
   function unsupported(name, why) {
@@ -36,7 +36,7 @@
       super([], options);
       if (key !== internal) throw new TypeError("BunFile is not constructable; use Bun.file()");
       if (typeof target === "number") {
-        this.#fd = target;
+        this.#fd = internal.require("bun_file").validateDescriptor(target);
         this.#path = null;
       } else {
         this.#path = toPath(target);
@@ -54,14 +54,18 @@
       return this.#fd;
     }
     _bytes() {
-      const bytes = this.#fd === 0 ? native.readStdin() : native.readFile(absolute(this.#path));
-      if (this.#start === 0 && this.#end === undefined) return bytes;
-      return bytes.subarray(this.#start, this.#end);
+      if (this.#fd === 0 && this.#start === 0 && this.#end === undefined) return native.readStdin();
+      if (this.#path !== null && this.#start === 0 && this.#end === undefined) return native.readFile(absolute(this.#path));
+      return internal.require("bun_file").bytes(this.#fd !== null ? this.#fd : absolute(this.#path), this.#start, this.#end);
+    }
+    stream() {
+      return internal.require("bun_file").stream(this.#fd !== null ? this.#fd : absolute(this.#path), this.#start, this.#end);
     }
     get size() {
-      if (this.#fd !== null) return Infinity;
       try {
-        const total = native.stat(absolute(this.#path)).size;
+        const stat = this.#fd !== null ? native.fstat(this.#fd) : native.stat(absolute(this.#path));
+        if (this.#fd !== null && (stat.mode & 0o170000) !== 0o100000) return Infinity;
+        const total = stat.size;
         const end = this.#end === undefined ? total : Math.min(this.#end, total);
         return Math.max(0, end - this.#start);
       } catch {
@@ -70,19 +74,19 @@
     }
     get lastModified() {
       try {
-        return native.stat(absolute(this.#path)).mtimeMs;
+        return (this.#fd !== null ? native.fstat(this.#fd) : native.stat(absolute(this.#path))).mtimeMs;
       } catch {
         return 0;
       }
     }
     async exists() {
-      return this.#path !== null && native.exists(absolute(this.#path));
-    }
-    async text() {
-      return native.utf8Decode(this._bytes());
+      if (this.#fd === null) return native.exists(absolute(this.#path));
+      try { return (native.fstat(this.#fd).mode & 0o170000) === 0o100000; }
+      catch (err) { if (err.code === "EBADF") return false; throw err; }
     }
     async stat() {
-      return internal.builtin("node:fs").statSync(absolute(this.#path));
+      const fs = internal.builtin("node:fs");
+      return this.#fd !== null ? fs.fstatSync(this.#fd) : fs.statSync(absolute(this.#path));
     }
     async write(data) {
       return writeTo(this, data);
@@ -142,6 +146,7 @@
 
   async function writeTo(dest, data) {
     const bytes = await dataBytes(data);
+    if (typeof dest === "number") return native.write(dest, bytes);
     if (dest instanceof BunFile && dest.fd !== null) return native.write(dest.fd, bytes);
     const path = absolute(dest instanceof BunFile ? dest.name : toPath(dest));
     try {
@@ -155,6 +160,7 @@
   }
 
   function write(dest, data) {
+    if (typeof dest === "number") internal.require("bun_file").validateDescriptor(dest);
     return writeTo(dest, data);
   }
 
@@ -168,6 +174,7 @@
     return String(value).replace(/[&<>"']/g, (c) => ESCAPES[c]);
   }
 
+  // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
   const ANSI_RE = /[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-ntqry=><~]))/g;
 
   function stripANSI(str) {
@@ -461,6 +468,8 @@
     ? forceColor !== "0"
     : globalThis.process.env.NO_COLOR === undefined && native.isatty(2);
 
+  const dns = internal.require("dns");
+
   const Bun = {
     ArrayBufferSink,
     Archive: internal.require("archive").Archive,
@@ -492,7 +501,7 @@
     escapeHTML,
     stringWidth,
     stripANSI,
-    which: () => null,
+    which: (command, options) => internal.require("spawn").which(command, options),
     hash,
     CryptoHasher,
     randomUUIDv7,
@@ -514,8 +523,8 @@
     zstdDecompress: (data) => new Promise(resolve => resolve(internal.require("zlib").bunDecompress(data))),
     readableStreamToBytes,
     readableStreamToArrayBuffer: async (s) => (await readableStreamToBytes(s)).buffer,
-    readableStreamToText: async (s) => native.utf8Decode(await readableStreamToBytes(s)),
-    readableStreamToJSON: async (s) => JSON.parse(native.utf8Decode(await readableStreamToBytes(s))),
+    readableStreamToText: async (s) => new TextDecoder().decode(await readableStreamToBytes(s)),
+    readableStreamToJSON: async (s) => JSON.parse(new TextDecoder().decode(await readableStreamToBytes(s))),
     readableStreamToBlob: async (s) => new Blob([await readableStreamToBytes(s)]),
     isMainThread: true,
     enableANSIColors,
@@ -533,13 +542,15 @@
     unsafe: {
       arrayBufferToString: unsupported("Bun.unsafe.arrayBufferToString", "zero-copy strings are not exposed"),
     },
-    $: unsupported("Bun.$", noProcesses),
+    get $() {
+      return internal.require("bun_shell").$;
+    },
     build,
     serve: native.hostCaps.listen ? (options) => internal.require("net").serve(options) : unsupported("Bun.serve", noNetwork),
     listen: (options) => internal.require("net").bunTcp().listen(options),
     connect: (options) => internal.require("net").bunTcp().connect(options),
     udpSocket: unsupported("Bun.udpSocket", noNetwork),
-    dns: { lookup: unsupported("Bun.dns.lookup", noNetwork) },
+    dns: dns.bun(),
     openInEditor: unsupported("Bun.openInEditor", noProcesses),
   };
   internal.BunFile = BunFile;

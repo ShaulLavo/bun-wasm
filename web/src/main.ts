@@ -1,4 +1,5 @@
 import "@xterm/xterm/css/xterm.css";
+import { showPageStartupFailure } from "./startup";
 import "./style.css";
 
 import { javascript } from "@codemirror/lang-javascript";
@@ -11,12 +12,16 @@ import { basicSetup } from "codemirror";
 import { HOME, examples } from "./examples";
 import { decode, normalize } from "./fs";
 import { createRuntime } from "waffle";
-import { WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
+import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
+import type { BunNetworkOptions } from "./net/helper";
 import { Previews } from "./preview";
-import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope, type Run, startRun } from "./runner";
+import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope } from "./engine-loader";
+import type { Run } from "./runner";
 import { type Output, Shell } from "./shell";
+import { commandChunks } from "./startup-cache";
 import { enableTerminalCopy } from "./terminal-copy";
 import { linkLocalUrls } from "./terminal-links";
+import { installRuntimeSharedObjects } from "./shared-objects/runtime";
 
 async function main(): Promise<void> {
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -37,7 +42,7 @@ const engine: Engine = isEngine(requested) ? requested : defaultEngine;
 const engineName = engines[engine].name;
 const wasmUrl = params.get("wasm") ?? engines[engine].wasm;
 const trace = params.has("trace");
-const storage = params.get("storage") === "opfs" ? "opfs" as const : "indexeddb" as const;
+const mode = getVfsDescriptor(params.get("mode") ?? "fast").mode;
 const isolated = globalThis.crossOriginIsolated === true;
 const sleepMode = isolated ? "Atomics.wait (cross-origin isolated)" : "busy-wait (page is not cross-origin isolated)";
 
@@ -52,6 +57,10 @@ engineSelect.addEventListener("change", () => {
 
 // Networking needs SharedArrayBuffer: without cross-origin isolation bun.wasm gets no fetch slots.
 const previews = new Previews();
+const network: BunNetworkOptions = {
+  listening: (port, helper) => { previews.register(port, helper); void previews.ready.then(state => term.write(previewLine(port, state))); },
+  stopped: (port, helper) => previews.unregister(port, helper),
+};
 
 // ---------- filesystem ----------
 
@@ -60,8 +69,19 @@ runButton.onclick = () => {
   if (startup === "failed") { location.reload(); return; }
   if (startup === "ready") void runCurrent().catch(reportError);
 };
-const runtime = createRuntime({ filesystem: { storage, name: "bun-wasm-workspace" } });
+runButton.disabled = true;
+newFileButton.disabled = true;
+engineSelect.disabled = true;
+fileSelect.disabled = true;
+const runtime = createRuntime({ filesystem: { mode, name: "bun-wasm-workspace" } });
+const sharedObjects = installRuntimeSharedObjects(runtime);
+addEventListener("pagehide", (event: PageTransitionEvent) => { if (!event.persisted) sharedObjects.close(); });
 const fs = runtime.filesystem;
+fs.onStateChange = state => {
+  if (state.status === "waiting") {
+    setStatus("Waiting for this workspace to close in another tab. It will open here automatically.");
+  }
+};
 fs.onOwnershipLost = () => {
   startup = "failed";
   setStatus("", "error");
@@ -131,7 +151,7 @@ const moduleScope: Promise<boolean> = registerModuleScope();
 let current: Run | null = null;
 
 async function runBun(args: string[], cwd: string, io: Output): Promise<number> {
-  await wasmReady;
+  const [{ startRun }] = await Promise.all([import("./runner"), wasmReady, runtime.processes()]);
   if (!wasm || "error" in wasm) {
     io.err(`\x1b[31m${wasm?.error ?? "bun.wasm unavailable"}\x1b[0m\r\n`);
     return 127;
@@ -151,14 +171,9 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
   runButton.disabled = true;
   try {
     await fs.drain();
-    const run = startRun({ engine, module: wasm.module, args, env, runtime, moduleScope: scoped, trace }, {
+    const run = startRun({ engine, module: wasm.module, args, env, runtime, moduleScope: scoped, trace, network }, {
       stdout: (data) => io.out(data),
       stderr: (data) => io.err(data),
-      listening: (port, helper) => {
-        previews.register(port, helper);
-        void previews.ready.then((state) => io.out(previewLine(port, state)));
-      },
-      stopped: (port, helper) => previews.unregister(port, helper),
     });
     current = run;
     const result = await run.done;
@@ -223,7 +238,9 @@ const shell = new Shell(term, {
     `sleeps: ${sleepMode}`,
     `engine: ${engineName}`,
     `network: ${networkInfo()}`,
-    `filesystem: persistent browser storage, preopened at /, cwd ${HOME}; editor saves survive reload`,
+    fs.vfs.persistent
+      ? `filesystem: persistent browser storage, preopened at /, cwd ${HOME}; editor saves survive reload`
+      : `filesystem: memory-only browser storage, preopened at /, cwd ${HOME}; editor saves do not survive reload`,
   ],
 });
 
@@ -432,24 +449,31 @@ shell.start([
 ]);
 
 Object.assign(globalThis, { playground: { fs, shell, term, editor, previews } });
-startup = "ready";
+if (!fs.ownershipLost) {
+  startup = "ready";
+  runButton.disabled = false;
+  newFileButton.disabled = false;
+  engineSelect.disabled = false;
+  fileSelect.disabled = false;
+}
 pageSetUp();
+if (startup === "ready") whenIdle(warmFirstCommand);
+
+// The first command would otherwise load the runner, Waffle's process and network services and
+// then the worker's chunks one after another, each a network round trip. Put them in the HTTP
+// cache while the page is idle. Only fetch: importing or initializing here could leave a failure
+// behind (a rejected module or service) that a later command would inherit. A failed fetch leaves
+// nothing, and the command loads the file itself.
+function warmFirstCommand(): void {
+  for (const chunk of commandChunks()) void fetch(chunk, { priority: "low" }).then(response => response.arrayBuffer()).catch(() => {});
+}
 }
 
-void main().catch(error => {
-  console.error(error);
-  const status = document.querySelector<HTMLElement>("#status");
-  if (status) {
-    status.textContent = String(error);
-    status.dataset.kind = "error";
-  }
-  const run = document.querySelector<HTMLButtonElement>("#run");
-  if (run) {
-    run.textContent = "Reload";
-    run.title = "Retry playground startup";
-    run.onclick = () => location.reload();
-  }
-  const newFile = document.querySelector<HTMLButtonElement>("#new-file");
-  if (newFile) newFile.disabled = true;
-  for (const select of document.querySelectorAll<HTMLSelectElement>("#engine, #file-select")) select.disabled = true;
-});
+function whenIdle(run: () => void): void {
+  if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 2000 });
+  else setTimeout(run, 200);
+}
+
+void main().catch(error => showPageStartupFailure(error, {
+  button: "#run", disable: "#new-file, #engine, #file-select", title: "Retry playground startup",
+}));

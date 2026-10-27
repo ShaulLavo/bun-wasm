@@ -1,9 +1,12 @@
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { WASI } from "node:wasi";
 import { startEngineHost } from "../web/src/engine-host.js";
+import { createNodeProcess, type NodeWasiImports } from "../web/scripts/node-process.ts";
+import { NodeProcessBroker } from "../web/scripts/node-spawn.ts";
 
 const nodeProcess = process;
 const root = resolve(import.meta.dirname, "..");
@@ -11,8 +14,9 @@ const engines = new Map([["quickjs", "bun.wasm"], ["jsc", "bun-jsc.wasm"], ["bro
 const [engine, mode, directory] = nodeProcess.argv.slice(2);
 if (!directory) {
   if (engine) assert(engines.has(engine), `unknown engine ${engine}`);
-  const scratch = mkdtempSync("/work/tmp/bun-wasm-directory-descriptors-");
+  const scratch = mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-directory-descriptors-"));
   try {
+const checkDirectoryDescriptors = () => {
     mkdirSync(`${scratch}/retained-tree`);
     const failures: string[] = [];
     const cases = Array.from(engines.keys()).flatMap(name => [[name, "natural"], [name, "explicit"], [name, "gc"]])
@@ -42,7 +46,10 @@ if (!directory) {
       nodeProcess.stdout.write(result.stdout);
     }
     assert.deepEqual(failures, []);
-  } finally {
+
+};
+checkDirectoryDescriptors();
+} finally {
     rmSync(scratch, { recursive: true });
   }
 } else {
@@ -91,13 +98,28 @@ async function observe() {
   const artifact = engines.get(engine);
   assert(artifact, `unknown engine ${engine}`);
   const module = await WebAssembly.compile(readFileSync(resolve(root, "dist", artifact)));
+  const broker = new NodeProcessBroker({ module, launch() { throw new Error("directory observer does not launch child guests"); } });
+  const processHost = createNodeProcess({ transport: broker.root,
+    registry: (broker.root.data as { registry: Parameters<typeof createNodeProcess>[0]["registry"] }).registry,
+    postMessage: message => { void broker.broker.handle(message); },
+    finish(code): never {
+      // This harness deliberately retains its guest instance. Route the selected default action
+      // through the guest's hard-exit path so its directory cleanup remains observable; the
+      // production Node host instead uses the saved native process.exit capability.
+      (globalThis.process as unknown as { reallyExit(code: number): never }).reallyExit(code);
+      throw new Error("guest hard exit returned");
+    },
+  });
+  const host = processHost.install(imports as NodeWasiImports, () => instance);
+  try {
   instance = await WebAssembly.instantiate(module, imports);
+    host.installSlots();
   const expectedCode = new Map([["abort", 134], ["kill", 143], ["uncaught", 1]]).get(mode) || 0;
   const code = wasi.start(instance);
   if (engine === "browser") {
     await globalThis.fetch("data:,");
     let exitSnapshot;
-    const exitCode = await startEngineHost({ instance, moduleUrls: "data", onExit() {
+      const exitCode = await startEngineHost({ instance, moduleUrls: "data", net: processHost.engineNet(), onExit() {
       exitSnapshot = { cursors: globalThis.directoryCountForTest(), descriptors: live.size };
     } });
     assert.equal(exitCode, expectedCode);
@@ -118,4 +140,5 @@ async function observe() {
     assert.equal(live.size, 0);
   }
   nodeProcess.stdout.write(`PASS directory descriptors ${engine} ${mode}: ${opened} opens, ${opened} closes, retained instance\n`);
+  } finally { processHost.dispose(); broker.dispose(); }
 }

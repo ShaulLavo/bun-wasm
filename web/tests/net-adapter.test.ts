@@ -56,7 +56,7 @@ for (const kind of ["resizable", "growable"] as const) {
         return nativeDecode.call(this, input, options);
       });
       try {
-        for (let round = 0; round < 2; round++) {
+        const checkGuestMemoryRound = (round: number) => {
           if (round) memory.grow(1);
           const ptr = round * 65536 + 128;
           const text = operation === "fetch" ? JSON.stringify({ url: "https://network.invalid/", method: "POST" }) : "localhost";
@@ -93,13 +93,15 @@ for (const kind of ["resizable", "growable"] as const) {
           expect(Object.prototype.toString.call(copy)).toBe("[object ArrayBuffer]");
           expect(Reflect.get(copy, "resizable")).toBe(false);
           expect(new Uint8Array(copy)).toEqual(source);
-        }
+        };
+        for (let round = 0; round < 2; round++) checkGuestMemoryRound(round);
       } finally {
         strict.mockRestore();
       }
       expect(TextDecoder.prototype.decode).toBe(nativeDecode);
     });
   }
+
 }
 
 test("Bun sized-result slots return full length without overwriting a small buffer", async () => {
@@ -170,9 +172,14 @@ test("Bun browser-native names and capability flags remain in the adapter", () =
   expect(call("hostFetch", "malformed")).toBe(-1);
   expect(JSON.parse(call("hostError", 0)).message).toContain("malformed request metadata");
   expect(net.caps.poll).toBe(false);
-  expect(net.caps.signal).toBe(false);
+  // Signals and processes are the guest's own runtime_proc imports, not host network capabilities.
+  expect(Object.hasOwn(net.caps, "signal")).toBe(false);
+  expect(Object.keys(net.caps).some(name => name.startsWith("proc_") || name.startsWith("child_") || name === "spawn")).toBe(false);
   expect(net.caps.fetch).toBe(true);
   expect(net.caps.connect).toBe(true);
+  expect(net.caps.lookup_start).toBe(false);
+  expect(net.caps.lookup_head).toBe(false);
+  expect(net.natives.hostLookup).toBeUndefined();
   expect(typeof net.onNews).toBe("function");
 });
 
@@ -191,7 +198,7 @@ test("Bun helper keeps installer cache policy outside the generic runtime", asyn
   const host = new RuntimeNetHost(sab, (request) => helper.handle(request));
   try {
     Object.defineProperty(globalThis, "caches", { configurable: true, value: { async open(name: string) { opened.push(name); return cache; } } });
-    globalThis.fetch = (async () => { throw new Error("Installer should use the cached response"); }) as typeof fetch;
+    globalThis.fetch = Object.assign(async () => { throw new Error("Installer should use the cached response"); }, { preconnect: fetch.preconnect });
     const handle = host.fetch(JSON.stringify({ url: "https://network.invalid/pkg.tgz", headers: [["accept", "application/vnd.bun.install-tarball"]] }));
     await until(() => typeof host.fetchHead(handle) !== "number");
     let body: Uint8Array | number = AGAIN;

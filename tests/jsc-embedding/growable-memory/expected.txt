@@ -1,0 +1,3 @@
+ArrayBuffer unsupported growth caught; fixed allocation works
+SharedArrayBuffer unsupported growth caught; fixed allocation works
+guest survived

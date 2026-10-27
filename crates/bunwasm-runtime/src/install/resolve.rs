@@ -1,3 +1,5 @@
+mod next_swc;
+
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -10,6 +12,7 @@ use serde_json::{Value, json};
 use super::{
     io::{self, Result},
     local::Local,
+    overrides::Overrides,
 };
 
 #[derive(Clone)]
@@ -44,10 +47,17 @@ pub fn valid_name(name: &str) -> Result<()> {
     let bare = name.strip_prefix('@').unwrap_or(name);
     let segments: Vec<_> = bare.split('/').collect();
     let count = if name.starts_with('@') { 2 } else { 1 };
-    if segments.len() != count || segments.iter().any(|s| s.is_empty() || *s == "." || *s == "..") {
+    if segments.len() != count
+        || segments
+            .iter()
+            .any(|s| s.is_empty() || *s == "." || *s == "..")
+    {
         return Err(format!("Invalid package name: {name}"));
     }
-    if !bare.bytes().all(|b| b.is_ascii_alphanumeric() || b"/-_.~".contains(&b)) {
+    if !bare
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"/-_.~".contains(&b))
+    {
         return Err(format!("Invalid package name: {name}"));
     }
     Ok(())
@@ -68,7 +78,8 @@ pub fn spec(input: &str) -> Result<(String, String)> {
 pub fn matches(version: &str, range: &str) -> bool {
     let version_bytes = version.as_bytes();
     let range_bytes = range.as_bytes();
-    let Some(version) = Version::parse_exact(SlicedString::init(version_bytes, version_bytes)) else {
+    let Some(version) = Version::parse_exact(SlicedString::init(version_bytes, version_bytes))
+    else {
         return false;
     };
     let Ok(group) = query::parse(range_bytes, SlicedString::init(range_bytes, range_bytes)) else {
@@ -86,12 +97,18 @@ pub fn matches(version: &str, range: &str) -> bool {
 pub(super) fn order(a: &str, b: &str) -> Ordering {
     let parse = |s: &[u8]| Version::parse_exact(SlicedString::init(s, s));
     match (parse(a.as_bytes()), parse(b.as_bytes())) {
-        (Some(a_version), Some(b_version)) => a_version.order_without_build(b_version, a.as_bytes(), b.as_bytes()),
+        (Some(a_version), Some(b_version)) => {
+            a_version.order_without_build(b_version, a.as_bytes(), b.as_bytes())
+        }
         _ => a.cmp(b),
     }
 }
 
-pub fn dependencies(meta: &Value, production: bool, root: bool) -> BTreeMap<String, (String, bool, bool)> {
+pub fn dependencies(
+    meta: &Value,
+    production: bool,
+    root: bool,
+) -> BTreeMap<String, (String, bool, bool)> {
     let mut result = BTreeMap::new();
     add_dependencies(&mut result, meta, "dependencies", false, false);
     if root && !production {
@@ -127,7 +144,8 @@ fn add_dependencies(
             out.insert(name.clone(), (range.into(), true, peer));
             continue;
         }
-        out.entry(name.clone()).or_insert((range.into(), false, peer));
+        out.entry(name.clone())
+            .or_insert((range.into(), false, peer));
     }
 }
 
@@ -137,49 +155,157 @@ pub struct MemberUpdate {
 }
 
 #[derive(Clone, Copy)]
-enum LockLookup { Use, Skip }
+enum LockLookup {
+    Use,
+    Skip,
+}
 
 pub struct Resolver {
     pub packages: BTreeMap<String, Package>,
+    pub skipped: BTreeMap<String, Package>,
     pub registry: io::Registry,
     pub locked: Value,
     pub refresh: bool,
+    #[cfg(test)]
     packuments: BTreeMap<String, Value>,
+    responses: BTreeMap<String, Vec<u8>>,
     pending: VecDeque<String>,
     pub workspaces: BTreeMap<String, Local>,
     production: bool,
     pub member_update: Option<MemberUpdate>,
+    pub(super) overrides: Overrides,
 }
 
 impl Resolver {
     pub fn new(registry: io::Registry, locked: Value, refresh: bool) -> Self {
         Self {
             packages: BTreeMap::new(),
+            skipped: BTreeMap::new(),
             registry,
             locked,
             refresh,
+            #[cfg(test)]
             packuments: BTreeMap::new(),
+            responses: BTreeMap::new(),
             pending: VecDeque::new(),
             workspaces: BTreeMap::new(),
             production: false,
             member_update: None,
+            overrides: Overrides::default(),
         }
     }
 
     pub fn resolve(&mut self, manifest: &Value, production: bool) -> Result<()> {
         self.production = production;
+        self.overrides = Overrides::new(manifest, &self.locked)?;
         let members: Vec<_> = self.workspaces.keys().cloned().collect();
         for name in members {
             self.add(&name, "workspace:*", vec![name.clone()], false)?;
         }
         for (name, (range, optional, _)) in dependencies(manifest, production, true) {
+            let range = self.overrides.target(&name, &range).to_owned();
             self.add(&name, &range, vec![name.clone()], optional)?;
         }
         while let Some(key) = self.pending.pop_front() {
             let package = self.packages[&key].clone();
             self.children(&package)?;
         }
+        self.select_platform(manifest)?;
+        self.responses.clear();
+        #[cfg(test)]
+        self.packuments.clear();
         Ok(())
+    }
+
+    fn select_platform(&mut self, manifest: &Value) -> Result<()> {
+        let mut pending: VecDeque<_> = dependencies(manifest, self.production, true)
+            .into_keys()
+            .chain(self.workspaces.keys().cloned())
+            .collect();
+        let mut active = BTreeSet::new();
+        while let Some(key) = pending.pop_front() {
+            if active.contains(&key) {
+                continue;
+            }
+            let Some(children) = self.platform_children(&key)? else {
+                continue;
+            };
+            active.insert(key);
+            pending.extend(children);
+        }
+        let (packages, skipped) = std::mem::take(&mut self.packages)
+            .into_iter()
+            .partition(|(key, _)| active.contains(key));
+        self.packages = packages;
+        self.skipped = skipped;
+        Ok(())
+    }
+
+    fn platform_children(&mut self, key: &str) -> Result<Option<Vec<String>>> {
+        let Some(package) = self.packages.get(key).cloned() else {
+            return Ok(None);
+        };
+        let compatible = match self.package_compatible(&package) {
+            Ok(compatible) => compatible,
+            Err(error) if package.optional => {
+                eprintln!(
+                    "warn: optional dependency {}: {}",
+                    package.name,
+                    self.registry.redact(&error)
+                );
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        if !compatible {
+            if package.optional {
+                return Ok(None);
+            }
+            return Err(format!(
+                "{}@{} is not compatible with linux/wasm32",
+                package.name, package.version
+            ));
+        }
+        let workspace = package.local.as_ref().is_some_and(|local| local.workspace);
+        Ok(Some(
+            dependencies(&package.meta, self.production, workspace)
+                .into_keys()
+                .filter_map(|name| self.dependency_key(&package, &name))
+                .collect(),
+        ))
+    }
+
+    fn package_compatible(&mut self, package: &Package) -> Result<bool> {
+        let meta = &package.meta;
+        if package.source_chain.is_none() {
+            return Ok(compatible(meta));
+        }
+        for (field, target) in [("os", "linux"), ("cpu", "wasm32")] {
+            if meta[field] != "none" && !compatible_field(&meta[field], target) {
+                return Ok(false);
+            }
+        }
+        if meta["os"] != "none" && meta["cpu"] != "none" {
+            return Ok(true);
+        }
+        let packument = self.packument(&package.name)?;
+        let metadata = packument["versions"]
+            .get(&package.version)
+            .filter(|meta| meta.is_object())
+            .ok_or("Locked version is missing from registry metadata")?;
+        Ok(compatible(metadata))
+    }
+
+    fn dependency_key(&self, parent: &Package, name: &str) -> Option<String> {
+        for level in (0..=parent.chain.len()).rev() {
+            let mut chain = parent.chain[..level].to_vec();
+            chain.push(name.into());
+            let key = chain.join("/");
+            if self.packages.contains_key(&key) {
+                return Some(key);
+            }
+        }
+        None
     }
 
     fn children(&mut self, parent: &Package) -> Result<()> {
@@ -188,16 +314,13 @@ impl Resolver {
             self.production,
             parent.local.as_ref().is_some_and(|p| p.workspace),
         ) {
-            let range = if let Some(local) = &parent.local {
-                if let Some(path) = range.strip_prefix("link:").or_else(|| range.strip_prefix("file:")) {
-                    format!("link:{}", local.path.join(path).display())
-                } else {
-                    range
-                }
-            } else {
-                range
-            };
-            let Some(target) = self.target(parent, &name, &range, optional || parent.optional)? else {
+            let range = self
+                .overrides
+                .replacement(&name, &range)
+                .map(str::to_owned)
+                .unwrap_or_else(|| declared_local_target(parent, range));
+            let Some(target) = self.target(parent, &name, &range, optional || parent.optional)?
+            else {
                 continue;
             };
             let chain = self.placement(parent, &name, &target, peer, optional || parent.optional);
@@ -209,53 +332,82 @@ impl Resolver {
         Ok(())
     }
 
-    fn target(&mut self, parent: &Package, name: &str, range: &str, optional: bool) -> Result<Option<String>> {
+    fn target(
+        &mut self,
+        parent: &Package,
+        name: &str,
+        range: &str,
+        optional: bool,
+    ) -> Result<Option<String>> {
         if self.local_package(name, range)?.is_some() {
             return Ok(Some(range.into()));
         }
-        if self.member_update.as_ref().is_some_and(|update| update.member == parent.name && update.dependencies.contains(name)) {
-            return self.member_target(name, range, optional);
+        if self.member_update.as_ref().is_some_and(|update| {
+            update.member == parent.name && update.dependencies.contains(name)
+        }) {
+            return self.resolved_target(name, range, optional, LockLookup::Skip);
         }
         if let Some(version) = self.locked_child(parent, name, range) {
             return Ok(Some(version));
         }
-        if !is_tag(range) || self.workspaces.contains_key(name) {
+        if (!is_tag(range) && !range.starts_with("npm:")) || self.workspaces.contains_key(name) {
             return Ok(Some(range.into()));
         }
-        match self.package(name, range, vec![name.into()], optional, LockLookup::Use) {
-            Ok(package) => Ok(Some(package.version)),
-            Err(_) if optional => Ok(None),
-            Err(error) => Err(error),
-        }
+        let lookup = if self.overrides.changed.contains(name) {
+            LockLookup::Skip
+        } else {
+            LockLookup::Use
+        };
+        self.resolved_target(name, range, optional, lookup)
     }
 
-    fn member_target(&mut self, name: &str, range: &str, optional: bool) -> Result<Option<String>> {
-        match self.package(name, range, vec![name.into()], optional, LockLookup::Skip) {
+    fn resolved_target(
+        &mut self,
+        name: &str,
+        range: &str,
+        optional: bool,
+        lookup: LockLookup,
+    ) -> Result<Option<String>> {
+        match self.package(name, range, vec![name.into()], optional, lookup) {
             Ok(package) => Ok(Some(if range.starts_with("npm:") {
                 format!("npm:{}@{}", package.name, package.version)
-            } else { package.version })),
+            } else {
+                package.version
+            })),
             Err(_) if optional => Ok(None),
             Err(error) => Err(error),
         }
     }
 
     fn locked_child(&self, parent: &Package, name: &str, range: &str) -> Option<String> {
-        let source_chain = parent.source_chain.as_deref()?;
-        let row = &self.locked["packages"][source_chain.join("/")];
-        if row[0] != format!("{}@{}", parent.name, parent.version) || !declared(&row[2], name, range) {
+        if self.overrides.changed.contains(name) {
             return None;
         }
+        let source_chain = parent.source_chain.as_deref()?;
+        let row = &self.locked["packages"][source_chain.join("/")];
+        if row[0] != format!("{}@{}", parent.name, parent.version)
+            || !declared_effective(&row[2], name, range, &self.overrides)
+        {
+            return None;
+        }
+        let alias = range.strip_prefix("npm:").map(spec).transpose().ok()?;
+        let (target_name, target_range) = alias.as_ref().map_or((name, range), |(name, range)| {
+            (name.as_str(), range.as_str())
+        });
         for level in (0..=source_chain.len()).rev() {
             let mut candidate = source_chain[..level].to_vec();
             candidate.push(name.into());
             let row = &self.locked["packages"][candidate.join("/")];
-            let Some(version) = locked_version(row, name) else {
+            let Some(version) = locked_version(row, target_name) else {
                 continue;
             };
-            if matches(version, range) || is_tag(range) {
-                return Some(version.into());
+            if !matches(version, target_range) && !is_tag(target_range) {
+                return None;
             }
-            return None;
+            return Some(alias.as_ref().map_or_else(
+                || version.into(),
+                |_| format!("npm:{target_name}@{version}"),
+            ));
         }
         None
     }
@@ -269,6 +421,9 @@ impl Resolver {
         optional: bool,
     ) -> Option<Vec<String>> {
         let target = self.local_package(name, range).ok().flatten();
+        let alias = range
+            .strip_prefix("npm:")
+            .and_then(|alias| spec(alias).ok());
         for level in (0..=parent.chain.len()).rev() {
             let mut candidate = parent.chain[..level].to_vec();
             candidate.push(name.into());
@@ -277,7 +432,12 @@ impl Resolver {
                 continue;
             };
             let satisfies = if let Some(target) = &target {
-                found.local.as_ref().is_some_and(|local| local.path == target.path)
+                found
+                    .local
+                    .as_ref()
+                    .is_some_and(|local| local.path == target.path)
+            } else if let Some((name, range)) = &alias {
+                found.name == *name && matches(&found.version, range)
             } else {
                 matches(&found.version, range)
             };
@@ -286,7 +446,10 @@ impl Resolver {
                 return None;
             }
             if peer {
-                eprintln!("warn: incorrect peer dependency \"{}\"", io::redact(&format!("{name}@{range}")));
+                eprintln!(
+                    "warn: incorrect peer dependency \"{}\"",
+                    io::redact(&format!("{name}@{range}"))
+                );
                 return None;
             }
             break;
@@ -318,11 +481,19 @@ impl Resolver {
             return Err("Dependency graph exceeds install limit".into());
         }
         valid_name(name)?;
-        let result = self.package(name, range, chain, optional, LockLookup::Use);
+        let lookup = if self.overrides.changed.contains(name) {
+            LockLookup::Skip
+        } else {
+            LockLookup::Use
+        };
+        let result = self.package(name, range, chain, optional, lookup);
         let package = match result {
             Ok(package) => package,
             Err(error) if optional => {
-                eprintln!("warn: optional dependency {name}: {}", self.registry.redact(&error));
+                eprintln!(
+                    "warn: optional dependency {name}: {}",
+                    self.registry.redact(&error)
+                );
                 return Ok(());
             }
             Err(error) => return Err(error),
@@ -333,7 +504,14 @@ impl Resolver {
         Ok(())
     }
 
-    fn package(&mut self, name: &str, range: &str, chain: Vec<String>, optional: bool, lookup: LockLookup) -> Result<Package> {
+    fn package(
+        &mut self,
+        name: &str,
+        range: &str,
+        chain: Vec<String>,
+        optional: bool,
+        lookup: LockLookup,
+    ) -> Result<Package> {
         if let Some(alias) = range.strip_prefix("npm:") {
             let (target, version) = spec(alias)?;
             return self.package(&target, &version, chain, optional, lookup);
@@ -351,17 +529,12 @@ impl Resolver {
                 local: Some(local),
             });
         }
-        if matches!(lookup, LockLookup::Use) && let Some(package) = self.from_lock(name, range, &chain, optional) {
+        if matches!(lookup, LockLookup::Use)
+            && let Some(package) = self.resolve_from_lock(name, range, &chain, optional)
+        {
             return Ok(package);
         }
-        if !self.packuments.contains_key(name) {
-            let encoded = name.replace('/', "%2f");
-            let bytes = io::fetch(&format!("{}/{encoded}", self.registry.url), false, self.refresh, &self.registry)?;
-            let meta =
-                serde_json::from_slice(&bytes).map_err(|e| format!("Invalid registry response for {name}: {e}"))?;
-            self.packuments.insert(name.into(), meta);
-        }
-        let packument = &self.packuments[name];
+        let packument = self.packument(name)?;
         let range = packument["dist-tags"][range].as_str().unwrap_or(range);
         let versions = packument["versions"]
             .as_object()
@@ -370,17 +543,21 @@ impl Resolver {
             .keys()
             .filter(|v| matches(v, range))
             .max_by(|a, b| order(a, b))
-            .ok_or_else(|| format!("No version matching \"{range}\" found for specifier \"{name}\""))?;
+            .ok_or_else(|| {
+                format!("No version matching \"{range}\" found for specifier \"{name}\" (but package exists)")
+            })?;
         let replacement = platform_package(name, version);
         if replacement != name {
             let version = version.clone();
             return self.package(replacement, &version, chain, optional, lookup);
         }
-        let meta = versions[version].clone();
-        if !compatible(&meta) {
-            return Err(format!("{name}@{version} is not compatible with wasm32-wasip1"));
-        }
-        let tarball = io::source_url(meta["dist"]["tarball"].as_str().ok_or("Missing package tarball URL")?)?;
+        let mut meta = versions[version].clone();
+        next_swc::adapt(&mut meta);
+        let tarball = io::source_url(
+            meta["dist"]["tarball"]
+                .as_str()
+                .ok_or("Missing package tarball URL")?,
+        )?;
         let integrity = package_integrity(&meta)?;
         Ok(Package {
             name: name.into(),
@@ -395,13 +572,47 @@ impl Resolver {
         })
     }
 
+    fn packument(&mut self, name: &str) -> Result<Value> {
+        self.load_packument(name)?;
+        #[cfg(test)]
+        if let Some(meta) = self.packuments.get(name) {
+            return Ok(meta.clone());
+        }
+        let parsed = serde_json::from_slice(&self.responses[name])
+            .map_err(|e| format!("Invalid registry response for {name}: {e}"));
+        if parsed.is_err() {
+            self.responses.remove(name);
+        }
+        parsed
+    }
+
+    fn load_packument(&mut self, name: &str) -> Result<()> {
+        #[cfg(test)]
+        if self.packuments.contains_key(name) {
+            return Ok(());
+        }
+        if !self.responses.contains_key(name) {
+            let encoded = name.replace('/', "%2f");
+            let bytes = io::fetch(
+                &format!("{}/{encoded}", self.registry.url),
+                false,
+                self.refresh,
+                &self.registry,
+            )?;
+            self.responses.insert(name.into(), bytes);
+        }
+        Ok(())
+    }
+
     fn local_package(&self, name: &str, range: &str) -> Result<Option<Local>> {
         if let Some(local) = self.workspaces.get(name) {
             let version = local.meta["version"].as_str().unwrap_or("0.0.0");
             if range.starts_with("workspace:") || range == "*" || matches(version, range) {
                 let requested = range.strip_prefix("workspace:").unwrap_or("*");
                 if !["*", "^", "~"].contains(&requested) && !matches(version, requested) {
-                    return Err(format!("Workspace {name}@{version} does not satisfy {range}"));
+                    return Err(format!(
+                        "Workspace {name}@{version} does not satisfy {range}"
+                    ));
                 }
                 return Ok(Some(local.clone()));
             }
@@ -409,17 +620,26 @@ impl Resolver {
         if range.starts_with("workspace:") {
             return Err(format!("Workspace dependency not found: {name}@{range}"));
         }
-        let Some(path) = range.strip_prefix("link:").or_else(|| range.strip_prefix("file:")) else {
+        let Some(path) = range
+            .strip_prefix("link:")
+            .or_else(|| range.strip_prefix("file:"))
+        else {
             return Ok(None);
         };
-        let path = std::env::current_dir().map_err(|e| e.to_string())?.join(path);
+        let path = std::env::current_dir()
+            .map_err(|e| e.to_string())?
+            .join(path);
         let path = PathBuf::from(crate::resolve::normalize(&path.to_string_lossy()));
         if !path.is_dir() {
-            return Err(format!("Local dependency is not a directory: {}", path.display()));
+            return Err(format!(
+                "Local dependency is not a directory: {}",
+                path.display()
+            ));
         }
         let file = path.join("package.json");
         let meta = if file.exists() {
-            serde_json::from_slice(&std::fs::read(file).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?
+            serde_json::from_slice(&std::fs::read(file).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?
         } else {
             json!({"name": name})
         };
@@ -430,24 +650,47 @@ impl Resolver {
         }))
     }
 
-    fn from_lock(&self, name: &str, range: &str, chain: &[String], optional: bool) -> Option<Package> {
+    fn resolve_from_lock(
+        &self,
+        name: &str,
+        range: &str,
+        chain: &[String],
+        optional: bool,
+    ) -> Option<Package> {
         let row = &self.locked["packages"][chain.join("/")];
         if let Some(package) = self.locked_row(row, name, range, chain, optional) {
             return Some(package);
         }
         Version::parse_exact(SlicedString::init(range.as_bytes(), range.as_bytes()))?;
-        self.locked["packages"].as_object()?.iter().find_map(|(key, row)| {
-            let mut package = self.locked_row(row, name, range, chain, optional)?;
-            package.source_chain = Some(super::chain_from_lock(key, row).ok()?);
-            Some(package)
-        })
+        self.locked["packages"]
+            .as_object()?
+            .iter()
+            .find_map(|(key, row)| {
+                let mut package = self.locked_row(row, name, range, chain, optional)?;
+                package.source_chain = Some(super::chain_from_lock(key, row).ok()?);
+                Some(package)
+            })
     }
 
-    fn locked_row(&self, row: &Value, name: &str, range: &str, chain: &[String], optional: bool) -> Option<Package> {
+    fn locked_row(
+        &self,
+        row: &Value,
+        name: &str,
+        range: &str,
+        chain: &[String],
+        optional: bool,
+    ) -> Option<Package> {
         let version = locked_version(row, name)?;
         let resolved_name = platform_package(name, version);
-        let root_tag =
-            chain.len() == 1 && is_tag(range) && declared_root(&self.locked["workspaces"][""], &chain[0], name, range);
+        let root_tag = chain.len() == 1
+            && is_tag(range)
+            && declared_root(
+                &self.locked["workspaces"][""],
+                &chain[0],
+                name,
+                range,
+                &self.overrides,
+            );
         if !matches(version, range) && !root_tag {
             return None;
         }
@@ -467,6 +710,7 @@ impl Resolver {
         let mut meta = row[2].clone();
         meta["name"] = resolved_name.into();
         meta["version"] = version.into();
+        next_swc::adapt(&mut meta);
         Some(Package {
             name: resolved_name.into(),
             version: version.into(),
@@ -479,6 +723,19 @@ impl Resolver {
             optional,
         })
     }
+}
+
+fn declared_local_target(parent: &Package, range: String) -> String {
+    let Some(local) = &parent.local else {
+        return range;
+    };
+    let Some(path) = range
+        .strip_prefix("link:")
+        .or_else(|| range.strip_prefix("file:"))
+    else {
+        return range;
+    };
+    format!("link:{}", local.path.join(path).display())
 }
 
 fn platform_package<'a>(name: &'a str, version: &str) -> &'a str {
@@ -497,11 +754,16 @@ fn locked_version<'a>(row: &'a Value, name: &str) -> Option<&'a str> {
 }
 
 fn is_tag(range: &str) -> bool {
-    range.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
-        && range.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
+    range
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphabetic)
+        && range
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._".contains(&b))
 }
 
-fn declared(meta: &Value, name: &str, range: &str) -> bool {
+fn declared_effective(meta: &Value, name: &str, range: &str, overrides: &Overrides) -> bool {
     [
         "dependencies",
         "devDependencies",
@@ -509,11 +771,18 @@ fn declared(meta: &Value, name: &str, range: &str) -> bool {
         "peerDependencies",
     ]
     .iter()
-    .any(|field| meta[*field][name].as_str() == Some(range))
+    .filter_map(|field| meta[*field][name].as_str())
+    .any(|declared| overrides.target(name, declared) == range)
 }
 
-fn declared_root(meta: &Value, logical_name: &str, resolved_name: &str, range: &str) -> bool {
-    if logical_name == resolved_name && declared(meta, logical_name, range) {
+fn declared_root(
+    meta: &Value,
+    logical_name: &str,
+    resolved_name: &str,
+    range: &str,
+    overrides: &Overrides,
+) -> bool {
+    if logical_name == resolved_name && declared_effective(meta, logical_name, range, overrides) {
         return true;
     }
     [
@@ -524,6 +793,7 @@ fn declared_root(meta: &Value, logical_name: &str, resolved_name: &str, range: &
     ]
     .iter()
     .filter_map(|field| meta[*field][logical_name].as_str())
+    .map(|value| overrides.target(logical_name, value))
     .filter_map(|value| value.strip_prefix("npm:"))
     .filter_map(|alias| spec(alias).ok())
     .any(|(name, target)| name == resolved_name && target == range)
@@ -531,14 +801,19 @@ fn declared_root(meta: &Value, logical_name: &str, resolved_name: &str, range: &
 
 fn package_integrity(meta: &Value) -> Result<String> {
     if let Some(sri) = meta["dist"]["integrity"].as_str() {
-        return io::normalized_integrity(sri).ok_or_else(|| "Missing or unsupported package integrity".into());
+        return io::normalized_integrity(sri)
+            .ok_or_else(|| "Missing or unsupported package integrity".into());
     }
     let Some(shasum) = meta["dist"]["shasum"].as_str() else {
         return Ok(String::new());
     };
     let bytes: Option<Vec<u8>> = (0..shasum.len())
         .step_by(2)
-        .map(|i| shasum.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok()))
+        .map(|i| {
+            shasum
+                .get(i..i + 2)
+                .and_then(|s| u8::from_str_radix(s, 16).ok())
+        })
         .collect();
     Ok(format!(
         "sha1-{}",
@@ -547,18 +822,35 @@ fn package_integrity(meta: &Value) -> Result<String> {
 }
 
 fn compatible(meta: &Value) -> bool {
-    compatible_field(&meta["os"], "wasi") && compatible_field(&meta["cpu"], "wasm32")
+    compatible_field(&meta["os"], "linux") && compatible_field(&meta["cpu"], "wasm32")
 }
 
 fn compatible_field(field: &Value, value: &str) -> bool {
+    if let Some(rule) = field.as_str() {
+        return rule == "any"
+            || rule
+                .strip_prefix('!')
+                .map_or(rule == value, |deny| deny != value);
+    }
     let Some(values) = field.as_array() else {
         return true;
     };
-    if values.iter().any(|v| v.as_str() == Some(&format!("!{value}"))) {
-        return false;
+    if values.len() == 1 && values[0] == "any" {
+        return true;
     }
-    !values.iter().any(|v| !v.as_str().unwrap_or("").starts_with('!'))
-        || values.iter().any(|v| v == value || v == "any")
+    let mut positive = false;
+    let mut matched = false;
+    for rule in values.iter().filter_map(Value::as_str) {
+        if rule.strip_prefix('!') == Some(value) {
+            return false;
+        }
+        if rule.starts_with('!') {
+            continue;
+        }
+        positive = true;
+        matched |= rule == value;
+    }
+    !positive || matched
 }
 
 pub fn lock_info(meta: &Value) -> Value {
@@ -600,3 +892,13 @@ pub fn lock_info(meta: &Value) -> Value {
     }
     info
 }
+
+#[cfg(test)]
+#[path = "platform_tests.rs"]
+mod platform_tests;
+
+#[cfg(test)]
+mod override_tests;
+
+#[cfg(test)]
+mod next_swc_tests;

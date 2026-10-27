@@ -1,7 +1,12 @@
 //! Hand-written declarations for the part of the JavaScriptCore C API this crate uses
 //! (JSBase.h, JSContextRef.h, JSStringRef.h, JSValueRef.h, JSObjectRef.h, JSTypedArray.h,
 //! JSContextRefPrivate.h), plus cpp/helpers.cpp.
-#![allow(non_camel_case_types, non_snake_case, dead_code)]
+#![allow(
+    non_camel_case_types,
+    non_snake_case,
+    non_upper_case_globals,
+    dead_code
+)]
 use core::ffi::{c_char, c_int, c_uint, c_void};
 
 #[repr(C)]
@@ -56,7 +61,8 @@ pub type JSObjectCallAsFunctionCallback = unsafe extern "C" fn(
     argv: *const JSValueRef,
     exception: *mut JSValueRef,
 ) -> JSValueRef;
-pub type JSTypedArrayBytesDeallocator = unsafe extern "C" fn(bytes: *mut c_void, context: *mut c_void);
+pub type JSTypedArrayBytesDeallocator =
+    unsafe extern "C" fn(bytes: *mut c_void, context: *mut c_void);
 
 unsafe extern "C" {
     pub fn JSGlobalContextCreate(globalObjectClass: JSClassRef) -> JSGlobalContextRef;
@@ -83,16 +89,29 @@ unsafe extern "C" {
     pub fn JSValueIsNull(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn JSValueIsString(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn JSValueIsObject(ctx: JSContextRef, value: JSValueRef) -> bool;
-    pub fn JSValueGetTypedArrayType(ctx: JSContextRef, value: JSValueRef, exception: *mut JSValueRef) -> JSTypedArrayType;
+    pub fn JSValueGetTypedArrayType(
+        ctx: JSContextRef,
+        value: JSValueRef,
+        exception: *mut JSValueRef,
+    ) -> JSTypedArrayType;
     pub fn JSValueMakeUndefined(ctx: JSContextRef) -> JSValueRef;
     pub fn JSValueMakeNull(ctx: JSContextRef) -> JSValueRef;
     pub fn JSValueMakeBoolean(ctx: JSContextRef, boolean: bool) -> JSValueRef;
     pub fn JSValueMakeNumber(ctx: JSContextRef, number: f64) -> JSValueRef;
     pub fn JSValueMakeString(ctx: JSContextRef, string: JSStringRef) -> JSValueRef;
     pub fn JSValueToBoolean(ctx: JSContextRef, value: JSValueRef) -> bool;
-    pub fn JSValueToNumber(ctx: JSContextRef, value: JSValueRef, exception: *mut JSValueRef) -> f64;
-    pub fn JSValueToStringCopy(ctx: JSContextRef, value: JSValueRef, exception: *mut JSValueRef) -> JSStringRef;
-    pub fn JSValueToObject(ctx: JSContextRef, value: JSValueRef, exception: *mut JSValueRef) -> JSObjectRef;
+    pub fn JSValueToNumber(ctx: JSContextRef, value: JSValueRef, exception: *mut JSValueRef)
+    -> f64;
+    pub fn JSValueToStringCopy(
+        ctx: JSContextRef,
+        value: JSValueRef,
+        exception: *mut JSValueRef,
+    ) -> JSStringRef;
+    pub fn JSValueToObject(
+        ctx: JSContextRef,
+        value: JSValueRef,
+        exception: *mut JSValueRef,
+    ) -> JSObjectRef;
     pub fn JSValueProtect(ctx: JSContextRef, value: JSValueRef);
     pub fn JSValueUnprotect(ctx: JSContextRef, value: JSValueRef);
 
@@ -102,7 +121,12 @@ unsafe extern "C" {
         name: JSStringRef,
         callAsFunction: JSObjectCallAsFunctionCallback,
     ) -> JSObjectRef;
-    pub fn JSObjectMakeError(ctx: JSContextRef, argc: usize, argv: *const JSValueRef, exception: *mut JSValueRef) -> JSObjectRef;
+    pub fn JSObjectMakeError(
+        ctx: JSContextRef,
+        argc: usize,
+        argv: *const JSValueRef,
+        exception: *mut JSValueRef,
+    ) -> JSObjectRef;
     pub fn JSObjectSetProperty(
         ctx: JSContextRef,
         object: JSObjectRef,
@@ -111,7 +135,12 @@ unsafe extern "C" {
         attributes: JSPropertyAttributes,
         exception: *mut JSValueRef,
     );
-    pub fn JSObjectGetProperty(ctx: JSContextRef, object: JSObjectRef, name: JSStringRef, exception: *mut JSValueRef) -> JSValueRef;
+    pub fn JSObjectGetProperty(
+        ctx: JSContextRef,
+        object: JSObjectRef,
+        name: JSStringRef,
+        exception: *mut JSValueRef,
+    ) -> JSValueRef;
     pub fn JSObjectIsFunction(ctx: JSContextRef, object: JSObjectRef) -> bool;
     pub fn JSObjectCallAsFunction(
         ctx: JSContextRef,
@@ -122,7 +151,12 @@ unsafe extern "C" {
         exception: *mut JSValueRef,
     ) -> JSValueRef;
 
-    pub fn JSObjectMakeTypedArray(ctx: JSContextRef, arrayType: JSTypedArrayType, length: usize, exception: *mut JSValueRef) -> JSObjectRef;
+    pub fn JSObjectMakeTypedArray(
+        ctx: JSContextRef,
+        arrayType: JSTypedArrayType,
+        length: usize,
+        exception: *mut JSValueRef,
+    ) -> JSObjectRef;
     pub fn JSObjectMakeTypedArrayWithBytesNoCopy(
         ctx: JSContextRef,
         arrayType: JSTypedArrayType,
@@ -132,13 +166,27 @@ unsafe extern "C" {
         deallocatorContext: *mut c_void,
         exception: *mut JSValueRef,
     ) -> JSObjectRef;
-    pub fn JSObjectGetTypedArrayBytesPtr(ctx: JSContextRef, object: JSObjectRef, exception: *mut JSValueRef) -> *mut c_void;
-    pub fn JSObjectGetTypedArrayByteLength(ctx: JSContextRef, object: JSObjectRef, exception: *mut JSValueRef) -> usize;
-    pub fn JSObjectGetTypedArrayByteOffset(ctx: JSContextRef, object: JSObjectRef, exception: *mut JSValueRef) -> usize;
-    pub fn JSObjectGetArrayBufferBytesPtr(ctx: JSContextRef, object: JSObjectRef, exception: *mut JSValueRef) -> *mut c_void;
-    pub fn JSObjectGetArrayBufferByteLength(ctx: JSContextRef, object: JSObjectRef, exception: *mut JSValueRef) -> usize;
+    pub fn JSObjectGetTypedArrayByteLength(
+        ctx: JSContextRef,
+        object: JSObjectRef,
+        exception: *mut JSValueRef,
+    ) -> usize;
+    pub fn JSObjectGetTypedArrayByteOffset(
+        ctx: JSContextRef,
+        object: JSObjectRef,
+        exception: *mut JSValueRef,
+    ) -> usize;
+    pub fn JSObjectGetArrayBufferByteLength(
+        ctx: JSContextRef,
+        object: JSObjectRef,
+        exception: *mut JSValueRef,
+    ) -> usize;
 
-    pub fn JSGlobalContextSetUnhandledRejectionCallback(ctx: JSGlobalContextRef, function: JSObjectRef, exception: *mut JSValueRef);
+    pub fn JSGlobalContextSetUnhandledRejectionCallback(
+        ctx: JSGlobalContextRef,
+        function: JSObjectRef,
+        exception: *mut JSValueRef,
+    );
 
     pub fn JSValueIsBoolean(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn JSValueIsNumber(ctx: JSContextRef, value: JSValueRef) -> bool;
@@ -146,27 +194,69 @@ unsafe extern "C" {
     pub fn JSValueIsArray(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn JSValueIsStrictEqual(ctx: JSContextRef, a: JSValueRef, b: JSValueRef) -> bool;
     pub fn JSValueToInt64(ctx: JSContextRef, value: JSValueRef, exception: *mut JSValueRef) -> i64;
-    pub fn JSBigIntCreateWithInt64(ctx: JSContextRef, integer: i64, exception: *mut JSValueRef) -> JSValueRef;
-    pub fn JSBigIntCreateWithUInt64(ctx: JSContextRef, integer: u64, exception: *mut JSValueRef) -> JSValueRef;
-    pub fn JSObjectMakeArray(ctx: JSContextRef, argc: usize, argv: *const JSValueRef, exception: *mut JSValueRef) -> JSObjectRef;
-    pub fn JSObjectGetPropertyAtIndex(ctx: JSContextRef, object: JSObjectRef, index: c_uint, exception: *mut JSValueRef) -> JSValueRef;
-    pub fn JSObjectCallAsConstructor(ctx: JSContextRef, object: JSObjectRef, argc: usize, argv: *const JSValueRef, exception: *mut JSValueRef) -> JSObjectRef;
+    pub fn JSBigIntCreateWithInt64(
+        ctx: JSContextRef,
+        integer: i64,
+        exception: *mut JSValueRef,
+    ) -> JSValueRef;
+    pub fn JSBigIntCreateWithUInt64(
+        ctx: JSContextRef,
+        integer: u64,
+        exception: *mut JSValueRef,
+    ) -> JSValueRef;
+    pub fn JSObjectMakeArray(
+        ctx: JSContextRef,
+        argc: usize,
+        argv: *const JSValueRef,
+        exception: *mut JSValueRef,
+    ) -> JSObjectRef;
+    pub fn JSObjectGetPropertyAtIndex(
+        ctx: JSContextRef,
+        object: JSObjectRef,
+        index: c_uint,
+        exception: *mut JSValueRef,
+    ) -> JSValueRef;
+    pub fn JSObjectCallAsConstructor(
+        ctx: JSContextRef,
+        object: JSObjectRef,
+        argc: usize,
+        argv: *const JSValueRef,
+        exception: *mut JSValueRef,
+    ) -> JSObjectRef;
 
     // cpp/helpers.cpp
     pub fn bunjsc_create_context() -> JSGlobalContextRef;
     pub fn bunjsc_set_interrupt_handler(ctx: JSContextRef, enabled: bool);
-    pub fn bunjsc_import(ctx: JSContextRef, specifier: *const c_char, exception: *mut JSValueRef) -> JSValueRef;
-    pub fn bunjsc_evaluate_script(ctx: JSContextRef, source: *const c_char, filename: *const c_char, first_line: c_int, exception: *mut JSValueRef) -> JSValueRef;
+    pub fn bunjsc_import(
+        ctx: JSContextRef,
+        specifier: *const c_char,
+        exception: *mut JSValueRef,
+    ) -> JSValueRef;
+    pub fn bunjsc_evaluate_script(
+        ctx: JSContextRef,
+        source: *const c_char,
+        filename: *const c_char,
+        first_line: c_int,
+        exception: *mut JSValueRef,
+    ) -> JSValueRef;
     pub fn bunjsc_enter(ctx: JSContextRef);
     pub fn bunjsc_drain_microtasks(ctx: JSContextRef) -> bool;
     pub fn bunjsc_collect_garbage(ctx: JSContextRef);
     pub fn bunjsc_is_error(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_is_detachable_buffer(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_detach_buffer(ctx: JSContextRef, value: JSValueRef);
+    pub fn bunjsc_buffer_bytes(ctx: JSContextRef, value: JSValueRef, length: *mut usize)
+    -> *mut u8;
     pub fn bunjsc_get_async_context(ctx: JSContextRef) -> JSValueRef;
     pub fn bunjsc_set_async_context(ctx: JSContextRef, value: JSValueRef);
     pub fn bunjsc_promise_state(ctx: JSContextRef, value: JSValueRef) -> c_int;
     pub fn bunjsc_promise_result(ctx: JSContextRef, value: JSValueRef) -> JSValueRef;
-    pub fn bunjsc_promise_then(ctx: JSContextRef, promise: JSValueRef, fulfilled: JSValueRef, rejected: JSValueRef, exception: *mut JSValueRef) -> JSValueRef;
+    pub fn bunjsc_promise_then(
+        ctx: JSContextRef,
+        promise: JSValueRef,
+        fulfilled: JSValueRef,
+        rejected: JSValueRef,
+        exception: *mut JSValueRef,
+    ) -> JSValueRef;
     pub fn bunjsc_proxy_target(ctx: JSContextRef, value: JSValueRef) -> JSValueRef;
 }

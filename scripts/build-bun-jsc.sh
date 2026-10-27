@@ -2,7 +2,7 @@
 # Build dist/bun-jsc.wasm: bunwasm-cli with the JavaScriptCore engine (feature engine-jsc,
 # crates/bunwasm-runtime/src/engine_jsc.rs) linked with the static JavaScriptCore from
 # scripts/build-jsc.sh, then finalized (wasm-opt --spill-pointers, which JSC's GC needs; see
-# jsc/README.md). Same runtime and polyfills as dist/bun.wasm.
+# docs/jsc-build.md). Same runtime and polyfills as dist/bun.wasm.
 #
 # Its own target dir: `-C link-self-contained=no` (one wasi-libc, wasi-sdk's, for Rust, JSC and
 # libc++) changes RUSTFLAGS, which would invalidate the shared target dir's cache.
@@ -10,10 +10,11 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$root/jsc/common.sh"
+cd "$root"
+bun "$root/scripts/build-wasi-sysroot.ts"
 check_jsc_inputs_stamp
 "$root/scripts/sync-crypto.sh"
 export CARGO_TARGET_DIR="${JSC_CARGO_TARGET_DIR:-$JSC_BUILD_DIR/target}"
-export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="--cap-lints=warn -C link-self-contained=no"
 export JSC_BUILD_DIR
 # rquickjs-sys isn't built here, but sqlite's cc build uses the same wasi-sdk.
 export WASI_SDK="${WASI_SDK:-$WASI_SDK_PATH}"
@@ -32,10 +33,20 @@ if ! LC_ALL=C grep -qa BUN_WASM_STACK_KIB "$JSC_OBJ/lib/libWTF.a"; then
   exit 1
 fi
 
-PATH="$PATH_NO_BINARYEN" $CAGE cargo build -j "$JOBS" --release --target wasm32-wasip1 -p bunwasm-cli \
+embedding_inputs=$(bun "$root/scripts/jsc-embedding.ts" inputs)
+guest_environment=$(bun "$root/scripts/guest-build-receipt.ts" environment)
+eval "$guest_environment"
+guest_inputs=$(mktemp "${TMPDIR}/bun-wasm-guest-inputs-XXXXXX")
+trap 'rm -f -- "$guest_inputs"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+bun "$root/scripts/guest-build-receipt.ts" inputs jsc > "$guest_inputs"
+PATH="$(dirname "$(command -v node)"):$PATH_NO_BINARYEN" $CAGE "$GUEST_CARGO" build -j "$JOBS" --release --target wasm32-wasip1 -p bunwasm-cli \
   --no-default-features --features engine-jsc,bun-transpiler,bun-build
 raw="$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm"
 mkdir -p "$root/dist"
 "$root/jsc/finalize.sh" "$raw" "$root/dist/bun-jsc.wasm"
+bun "$root/scripts/guest-build-receipt.ts" write "$root/dist/bun-jsc.wasm" "$guest_inputs"
+bun "$root/scripts/jsc-embedding.ts" write "$root/dist/bun-jsc.wasm" "$embedding_inputs"
 printf 'dist/bun-jsc.wasm: %s bytes (cargo output: %s bytes)\n' \
   "$(stat -c %s "$root/dist/bun-jsc.wasm")" "$(stat -c %s "$raw")"

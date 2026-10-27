@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm",
-  "version": "0.0.2",
+  "version": "0.0.61",
   "private": true,
   "type": "module",
   "exports": {
@@ -33,22 +33,28 @@
     "README.md",
     "src/index.ts",
     "src/assets.ts",
+    "src/quickjs-program.ts",
     "src/bun-adapter.ts",
     "src/guest-asset.generated.ts",
     "src/worker-entry.ts",
     "web/src/worker.ts",
     "web/src/engine-host.js",
+    "web/src/script-evaluation.ts",
     "web/src/engine-host.d.ts",
     "web/src/crypto-host.js",
     "web/src/crypto-inputs.js",
     "web/src/default-signal.ts",
     "web/src/promise-reactions.ts",
     "web/src/buffer-transfer.ts",
+    "web/src/shared-objects",
     "web/src/native-stream-state.ts",
+    "web/src/native-direct-stream.ts",
     "web/src/content-modules.ts",
-    "web/src/subprocess.ts",
-    "web/src/worker-pipes.ts",
-    "web/src/net"
+    "web/src/net",
+    "src/executable-paths.ts",
+    "web/src/bun-launcher.ts",
+    "web/src/tool-command.ts",
+    "web/src/bun-executor.ts"
   ],
   "scripts": {
     "build": "bun build.ts",
@@ -56,16 +62,33 @@
     "check": "tsc -p tsconfig.package.json",
     "test": "bun test ./tests/package/*.test.ts",
     "generate-guest": "bun scripts/guest-artifact.ts",
-    "publish-guest": "bun scripts/publish-guest.ts"
+    "publish-guest": "bun scripts/publish-guest.ts",
+    "quality": "bun scripts/quality.ts",
+    "quality:lint": "oxlint --deny-warnings",
+    "quality:types": "tsc -p tsconfig.scripts.json && tsc -p web/tsconfig.quality.json && tsc -p sandbox/tsconfig.quality.json",
+    "quality:unused": "knip --no-progress",
+    "quality:duplicates": "jscpd --config .jscpd.json --baseline .jscpd-baseline.json --fail-on-new-clones 0 --fail-on-empty",
+    "quality:probes": "bun scripts/test-checks.ts quality",
+    "quality:rust": "bun scripts/quality-rust.ts",
+    "quality:wasi": "bun scripts/quality-wasi.ts",
+    "test:browser:shell-consumer": "bun web/tests/browser-shell-consumer.ts chromium firefox",
+    "bench:light-startup": "bun scripts/measure-light-startup.ts",
+    "bench:engines": "bun scripts/bench-engines.ts"
   },
   "peerDependencies": {
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e41f4cdd6eaa376888b4eb24d6557789b98b59f9"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#c312af63a554602906b462a2b49c7d5e14a97c5b"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
+    "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e41f4cdd6eaa376888b4eb24d6557789b98b59f9"
+    "waffle": "git+https://github.com/ShaulLavo/waffle.git#9ffe03e4fef900a0fedc76aa67f76a21bd3f48fa",
+    "jscpd": "5.4.1",
+    "knip": "6.41.0",
+    "oxlint": "1.88.0",
+    "wrangler": "4.151.0",
+    "playwright": "1.64.1"
   },
   "trustedDependencies": [
     "waffle"

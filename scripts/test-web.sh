@@ -8,6 +8,7 @@
 #   scripts/test-web.sh --no-browser
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+browser_test() { node "$root/scripts/run-with-timeout.mts" "${BROWSER_TEST_TIMEOUT_SECONDS:-300}" "$@"; }
 browser=1
 [[ "${1:-}" == "--no-browser" ]] && browser=0
 
@@ -87,39 +88,43 @@ for slots in table imports; do
 done
 
 if [[ $browser == 1 ]]; then
-  node --test "$root/sandbox/tests/first-visit-lifecycle.test.ts" || failed=1
+  browser_test node --test "$root/sandbox/tests/first-visit-lifecycle.test.ts" || failed=1
   bash "$root/scripts/test-web-host.sh" --browser || failed=1
-  bun tests/browser-editor.ts webkit || failed=1
-  bun tests/browser-filesystem-lifecycle.ts chromium || failed=1
-  bun tests/browser-filesystem-lifecycle.ts webkit || failed=1
+  browser_test bun tests/browser-editor.ts webkit || failed=1
+  browser_test bun tests/browser-filesystem-lifecycle.ts chromium || failed=1
+  browser_test bun tests/browser-filesystem-lifecycle.ts webkit || failed=1
   storage_runner="$(cd "$root/web" && realpath node_modules/waffle/tests/storage-browser-runner.ts)"
   if [[ -f "$storage_runner" ]]; then
-    bun "$storage_runner" chromium webkit || failed=1
+    browser_test bun "$storage_runner" chromium webkit || failed=1
   else
     echo "missing installed Waffle storage browser runner: $storage_runner" >&2
     failed=1
   fi
-  node tests/browser-install.mjs || failed=1
-  node tests/browser-installer-links.ts || failed=1
-  node tests/browser-shell-stop.ts || failed=1
-  node tests/browser-net.mjs || failed=1
-  node tests/browser-web-workers.ts || failed=1
-  bun tests/browser-subprocess.ts || failed=1
-  bun tests/browser-module-retry.ts || failed=1
-  bun tests/browser-interrupt.ts chromium firefox webkit || failed=1
-  bun tests/browser-runtime-proc.ts chromium webkit || failed=1
-  node tests/browser-stack.mjs || failed=1
-  if [[ -f "$root/dist/bun-jsc.wasm" && -f "$root/dist/bun-browser.wasm" ]]; then
-    bun tests/browser-engine-interruption.ts || failed=1
+  browser_test node tests/browser-install.mjs || failed=1
+  browser_test node tests/browser-installer-links.ts || failed=1
+  browser_test node tests/browser-shell-stop.ts || failed=1
+  browser_test node tests/browser-net.mjs || failed=1
+  browser_test node tests/browser-web-workers.ts || failed=1
+  browser_test bun tests/browser-subprocess.ts || failed=1
+  browser_test bun tests/browser-module-retry.ts || failed=1
+  browser_test bun tests/browser-interrupt.ts chromium firefox webkit || failed=1
+  browser_test bun tests/browser-runtime-proc.ts chromium webkit || failed=1
+  browser_test node tests/browser-stack.mjs || failed=1
+  missing_interruption=()
+  for artifact in bun.wasm bun-jsc.wasm bun-browser.wasm; do
+    [[ -f "$root/dist/$artifact" ]] || missing_interruption+=("dist/$artifact")
+  done
+  if (( ${#missing_interruption[@]} == 0 )); then
+    browser_test bun run test:browser:engine-interruption || failed=1
   else
-    echo "skip engine interruption: needs dist/bun-jsc.wasm and dist/bun-browser.wasm alongside bun.wasm"
+    echo "SKIPPED engine interruption: missing ${missing_interruption[*]}"
   fi
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
-    node tests/browser-worker-modules.ts || failed=1
-    node tests/browser-engine.mjs || failed=1
-    node tests/browser-tools.ts || failed=1
-    node tests/browser-crypto.mjs || failed=1
-    node tests/browser-memory.mjs || failed=1
+    browser_test node tests/browser-worker-modules.ts || failed=1
+    browser_test node tests/browser-engine.mjs || failed=1
+    browser_test node tests/browser-tools.ts || failed=1
+    browser_test node tests/browser-crypto.mjs || failed=1
+    browser_test node tests/browser-memory.mjs || failed=1
   else
     echo "skip browser engine: no dist/bun-browser.wasm (scripts/build-bun-browser.sh)"
   fi

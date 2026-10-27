@@ -1,0 +1,3 @@
+DNS lookup literals, overloads, callback delivery and promise identity passed
+DNS lookup native hostname, callback and beforeExit promise lifecycle passed
+DNS lookup exit cancellation passed

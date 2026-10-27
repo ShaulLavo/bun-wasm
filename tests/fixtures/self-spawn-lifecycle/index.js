@@ -26,7 +26,8 @@ const clock = Bun.spawn(cmd("Bun.sleepSync(3000)"), { timeout: 100, killSignal: 
 const clockStatus = await clock.exited;
 console.log("clock timeout", Date.now() - clockStart < 1500, clockStatus === stopStatus, clock.signalCode === stopSignal);
 const children = Array.from({ length: 4 }, () => Bun.spawn(cmd("setInterval(() => {}, 1000)"), { stdout: "pipe", stderr: "pipe" }));
-console.log("child limit", Bun.spawnSync(cmd("console.log('never')")).error.code);
+const fifth = Bun.spawnSync(cmd("console.log('fifth')"));
+console.log("child capacity", fifth.exitCode, fifth.stdout.toString().trim());
 for (const child of children) child.kill(stopSignal);
 const stopped = await Promise.all(children.map((child) => child.exited));
 console.log("children stopped", stopped.every((code) => code === stopStatus), children.every((child) => child.signalCode === stopSignal));

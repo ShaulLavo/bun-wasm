@@ -17,6 +17,8 @@ test("packed package includes a working public worker, no demo or guest binaries
     const { stdout: listing } = await execute("tar", ["-tzf", join(scratch, archive)], { timeout: 10_000 });
     const files = listing.trim().split("\n");
     expect(files).toContain("package/src/worker-entry.ts");
+    expect(files).toContain("package/src/quickjs-program.ts");
+    expect(files).toContain("package/web/src/tool-command.ts");
     expect(files).toContain("package/dist/package/index.js");
     expect(files.some(name => /\.wasm(?:\.gz)?$/.test(name))).toBe(false);
     expect(files).not.toContain("package/web/src/main.ts");
@@ -31,13 +33,13 @@ test("packed package includes a working public worker, no demo or guest binaries
       import { loadBunWasm } from "bun-wasm/asset";
       import "bun-wasm/worker";
       import type { Runtime } from "waffle";
-      export async function install(runtime: Runtime) { return installBunAdapters(runtime); }
+      export async function install(runtime: Runtime) { return installBunAdapters(runtime, { workerUrl: "https://example.test/worker.js" }); }
       export { loadBunWasm, BunWasmExecutableConflictError };
     `);
     // Check the actual tarball and its exact peer, including the complete worker import
     // closure. No path aliases, dependency exclusions or diagnostic filters apply here.
     await execute("node", [join(root, "node_modules/typescript/bin/tsc"), "--module", "NodeNext",
-      "--moduleResolution", "NodeNext", "--target", "ES2022", "--lib", "ES2022,DOM,DOM.Iterable,WebWorker",
+      "--moduleResolution", "NodeNext", "--target", "ES2022", "--lib", "ES2023,ES2024.SharedMemory,DOM,DOM.Iterable,WebWorker",
       "--types", "bun", "--strict", "--noUncheckedIndexedAccess", "--skipLibCheck", "--noEmit",
       "--allowImportingTsExtensions", join(scratch, "consumer.ts")], { cwd: scratch, timeout: 20_000 });
     await copyFile(join(import.meta.dir, "fixtures/vite-main.ts"), join(scratch, "main.ts"));
@@ -56,7 +58,7 @@ test("packed package includes a working public worker, no demo or guest binaries
       console.log('ok');
     `], { cwd: scratch, timeout: 10_000 });
     expect(stdout.trim()).toBe("ok");
-    const { stdout: bunPaths } = await execute(process.execPath, ["--eval", "console.log(import.meta.resolve('bun-wasm')); console.log(import.meta.resolve('bun-wasm/asset'))"], { cwd: scratch, timeout: 10_000 });
+    const { stdout: bunPaths } = await execute(process.execPath, ["--eval", "console.log(import.meta.resolve('bun-wasm')); console.log(import.meta.resolve('bun-wasm/asset')); const asset = await import('bun-wasm/asset'); if (typeof asset.prepareQuickjsProgram !== 'function') throw Error('missing paired program loader')"], { cwd: scratch, timeout: 10_000 });
     expect(bunPaths).toContain("/src/index.ts");
     expect(bunPaths).toContain("/src/assets.ts");
     expect(bunPaths).not.toContain("/dist/");

@@ -28,69 +28,114 @@ PATH_NO_BINARYEN="$(echo "$PATH" | tr ':' '\n' | grep -v binaryen | paste -sd:)"
 mkdir -p "$JSC_BUILD_DIR"
 
 JSC_INPUTS_STAMP="$JSC_BUILD_DIR/build/jsc/.bunwasm-inputs"
+JSC_ARTIFACTS=("$JSC_OBJ"/lib/lib{JavaScriptCore,WTF,bmalloc}.a "$ICU_PREFIX"/lib/libicu{uc,i18n,data}.a "$SHIM_DIR/libwasi-compat.a" "$JSC_BUILD_DIR/jsc.wasm" "$JSC_OBJ/CMakeCache.txt" "$JSC_OBJ/compile_commands.json" "$JSC_OBJ/cmakeconfig.h")
+
+jsc_source_hashes() (
+  cd "$JSC_SRC" || return 1
+  find . -type f \
+    ! -name README.md \
+    ! -name real-runtime-probe.py \
+    ! -name real-runtime-tls-smoke.cpp \
+    -print0 | sort -z | while IFS= read -r -d '' file; do
+    sha256sum "$file" || exit 1
+  done
+)
 
 jsc_inputs_hash() {
+  local variable compiler file
+  local -a command
   {
-    printf 'format=1\n'
+    printf 'format=3\n'
     printf 'WEBKIT_COMMIT=%s\n' "$WEBKIT_COMMIT"
     printf 'ICU_VERSION=%s\n' "$ICU_VERSION"
     printf 'ICU_SHA256=%s\n' "$ICU_SHA256"
-    for file in scripts/build-jsc.sh env.sh; do
-      printf '%s=' "$file"
-      sha256sum "$REPO/$file" | cut -d' ' -f1
+    # Fingerprint the effective build environment, not unrelated workstation
+    # scratch/cache policy or comments in the shell file that establishes it.
+    for variable in WASI_SDK_PATH BUN_WASM_SYSROOT CC CXX AR RANLIB CFLAGS CXXFLAGS CPPFLAGS LDFLAGS \
+      CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH LD LD_LIBRARY_PATH SDKROOT PKG_CONFIG_PATH; do
+      printf '%s=%s\n' "$variable" "${!variable-}"
     done
+    for compiler in "${CC:-cc}" "${CXX:-c++}"; do
+      read -r -a command <<< "$compiler"
+      command -v "${command[0]}" || return 1
+      "${command[@]}" --version || return 1
+    done
+    printf 'scripts/build-jsc.sh='
+    sha256sum "$REPO/scripts/build-jsc.sh" | cut -d' ' -f1 || return 1
     for file in wasi-jsc.cmake shim/wasi-compat.h shim/wasi-compat.c shim/madvise.c; do
       printf 'embedded/%s=' "$file"
-      if [[ -f "$JSC_CONFIG_DIR/$file" ]]; then
-        sha256sum "$JSC_CONFIG_DIR/$file" | cut -d' ' -f1
-      else
-        printf 'missing\n'
-      fi
+      sha256sum "$JSC_CONFIG_DIR/$file" | cut -d' ' -f1 || return 1
     done
-    (
-      cd "$JSC_SRC"
-      find . -type f \
-        ! -name README.md \
-        ! -name real-runtime-probe.py \
-        ! -name real-runtime-tls-smoke.cpp \
-        -print0 | sort -z | while IFS= read -r -d '' file; do
-        sha256sum "$file"
-      done
-    )
+    jsc_source_hashes || return 1
+    printf 'patched-sysroot/receipt\n'
+    cat "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" || return 1
     printf 'wasi-sdk/VERSION\n'
-    cat "$WASI_SDK_PATH/VERSION"
+    cat "$WASI_SDK_PATH/VERSION" || return 1
     printf 'clang: '
-    "$WASI_SDK_PATH/bin/clang" --version | head -1
+    "$WASI_SDK_PATH/bin/clang" --version | head -1 || return 1
+    printf 'clang++: '
+    "$WASI_SDK_PATH/bin/clang++" --version | head -1 || return 1
     printf 'cmake: '
-    cmake --version | head -1
+    cmake --version | head -1 || return 1
     printf 'ninja: '
-    ninja --version
+    ninja --version || return 1
     printf 'wasm-opt: '
-    wasm-opt --version | head -1
+    wasm-opt --version | head -1 || return 1
   } | sha256sum | cut -d' ' -f1
 }
 
 copy_jsc_config_inputs() {
   mkdir -p "$JSC_CONFIG_SHIM_DIR"
-  cp "$JSC_SRC/wasi-jsc.cmake" "$JSC_TOOLCHAIN_FILE"
+  # Preserve identical input timestamps: the injected header is a dependency of
+  # every WebKit object, so touching it makes a no-op refresh rebuild the engine.
+  if ! cmp -s "$JSC_SRC/wasi-jsc.cmake" "$JSC_TOOLCHAIN_FILE"; then
+    cp "$JSC_SRC/wasi-jsc.cmake" "$JSC_TOOLCHAIN_FILE"
+  fi
   for file in wasi-compat.h wasi-compat.c madvise.c; do
-    cp "$JSC_SRC/shim/$file" "$JSC_CONFIG_SHIM_DIR/$file"
+    if ! cmp -s "$JSC_SRC/shim/$file" "$JSC_CONFIG_SHIM_DIR/$file"; then
+      cp "$JSC_SRC/shim/$file" "$JSC_CONFIG_SHIM_DIR/$file"
+    fi
   done
 }
 
+check_jsc_webkit_tree() (
+  [[ "$(git -C "$WEBKIT_DIR" rev-parse HEAD)" == "$WEBKIT_COMMIT" ]] || return 1
+  [[ -z "$(git -C "$WEBKIT_DIR" ls-files --others --exclude-standard)" ]] || return 1
+  local index expected
+  index=$(mktemp "$JSC_BUILD_DIR/.webkit-index-XXXXXX") || return 1
+  trap 'rm -f -- "$index"' EXIT
+  rm -f -- "$index" || return 1
+  GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" read-tree HEAD || return 1
+  GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" apply --cached "$JSC_SRC/webkit-wasi.patch" || return 1
+  expected=$(GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" write-tree) || return 1
+  git -C "$WEBKIT_DIR" diff --quiet "$expected" --
+)
+
 write_jsc_inputs_stamp() {
   mkdir -p "$(dirname "$JSC_INPUTS_STAMP")"
+  sha256sum "${JSC_ARTIFACTS[@]}" > "$JSC_BUILD_DIR/.bunwasm-artifacts" || return 1
+  check_jsc_webkit_tree || return 1
   jsc_inputs_hash > "$JSC_INPUTS_STAMP"
 }
 
 check_jsc_inputs_stamp() {
   local expected actual
-  expected="$(jsc_inputs_hash)"
+  expected="$(jsc_inputs_hash)" || return 1
   actual="$(cat "$JSC_INPUTS_STAMP" 2>/dev/null || true)"
   if [[ "$actual" != "$expected" ]]; then
     echo "error: the JSC prebuild at $JSC_BUILD_DIR was built from different JSC inputs; rebuild with JSC_BUILD_DIR=$JSC_BUILD_DIR scripts/build-jsc.sh (or point JSC_BUILD_DIR at a fresh directory)." >&2
     return 1
   fi
+  local file
+  for file in "${JSC_ARTIFACTS[@]}"; do
+    if [[ ! -s "$file" ]]; then
+      echo "error: incomplete JSC prebuild: $file" >&2
+      return 1
+    fi
+  done
+  sha256sum "${JSC_ARTIFACTS[@]}" | cmp -s "$JSC_BUILD_DIR/.bunwasm-artifacts" - || return 1
+  check_jsc_webkit_tree || return 1
+  bash "$REPO/scripts/check-wasi-cmake-cache.sh" "$JSC_OBJ" "$JSC_TOOLCHAIN_FILE"
 }
 
 # The shim: wasi-compat.o (temp files) and madvise.o, separate members so a link that already
@@ -101,7 +146,7 @@ build_shim() {
   copy_jsc_config_inputs
   local c
   for c in wasi-compat madvise; do
-    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 -O2 -c "$JSC_CONFIG_SHIM_DIR/$c.c" -o "$SHIM_DIR/$c.o"
+    "$WASI_SDK_PATH/bin/clang" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -O2 -c "$JSC_CONFIG_SHIM_DIR/$c.c" -o "$SHIM_DIR/$c.o"
   done
   rm -f "$SHIM_DIR/libwasi-compat.a"
   "$WASI_SDK_PATH/bin/llvm-ar" rcs "$SHIM_DIR/libwasi-compat.a" "$SHIM_DIR/wasi-compat.o" "$SHIM_DIR/madvise.o"

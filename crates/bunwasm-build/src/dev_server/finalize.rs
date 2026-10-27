@@ -175,7 +175,7 @@ fn receive_css(
     // Bun's emitter reads chunk metadata and mutates only intermediate_output.
     // All chunks stay in the bundler arena until the caller finishes this pass.
     let code = unsafe {
-        (&mut (*chunk_ptr).intermediate_output).code(
+        (*chunk_ptr).intermediate_output.code(
             None,
             &bv2.graph,
             &bv2.linker.graph,

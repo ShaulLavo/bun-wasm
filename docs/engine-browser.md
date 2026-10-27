@@ -27,6 +27,14 @@ Build it with `scripts/build-bun-browser.sh`, which compiles `bunwasm-cli` with 
 
 The host side is one plain-JS ES module, `web/src/engine-host.js`, used both by the playground worker (`web/src/worker.ts`) and by the headless runner (`web/scripts/node-host.mjs`).
 
+## AsyncLocalStorage and native continuations
+
+The Node host supplies `EngineHostOptions.asyncContext` using Node's native `AsyncLocalStorage`. The runtime stores its frame in that continuation slot. Native promise jobs capture and restore it, including raw awaits in direct eval and `new Function` bodies. The host's synthetic await hooks become no-ops on this path, and its promise wrappers leave context entry and exit to Node.
+
+Browser workers have no equivalent public continuation API. Their source hooks cannot preserve exact request context for dynamically evaluated async code. In particular, Next.js development Webpack chunks can lose the request store during metadata resolution and throw E696. Run the whole process on QuickJS for this workload: select `?engine=quickjs` in the playground, or supply the matching QuickJS guest with `engine: "quickjs"` to `installBunAdapters`. QuickJS runs inside Wasm without JIT, so execution can be slower. Selecting it does not repair the browser-native engine.
+
+The [metadata continuation regression](bun-patches/next-metadata-context.md) preserves the captured functions and distinguishes the two-segment failure from the resolving layout-only control. It does not establish the cause of a particular live HTTP response.
+
 ## How the Engine trait maps onto the host
 
 The QuickJS and JSC engines implement the `Engine` trait (`crates/bunwasm-runtime/src/engine.rs`) inside the wasm. The browser engine cannot do that, because its values live outside the wasm. The split is the one the trait already draws:
@@ -170,7 +178,7 @@ Node is the closest headless stand-in for a worker: it has V8, ES modules from `
 
 `scripts/test-host-profile.sh` builds the exact `--no-default-features --features engine-host,bun-build` profile and runs eval plus TypeScript static and dynamic imports. Run it through the build slot wrapper.
 
-`scripts/bench-module-preparation.mjs <wasm>` measures the actual `hostModuleSource` ABI on 242 KB plain JS, JS with await, and TypeScript inputs. It reports medians across 15 fresh paths and 31 cached preparations per input. Run it through the light slot wrapper on before/after artifacts. It owns and removes its temporary fixtures. These are module-preparation timings in Node, not browser startup timings.
+`scripts/bench-module-preparation.mjs <wasm> [hostModuleSource|hostCjsSource]` measures the actual module-preparation ABI on 242 KB plain JS, JS with await, and TypeScript inputs. Its TypeScript harness runs the guest in a worker with the headless host's real process imports and descriptor table; the main thread keeps the shared process broker responsive. It reports medians across 15 fresh paths and 31 cached preparations per input. Run it through the light slot wrapper on before/after artifacts. It stops its worker and removes temporary fixtures on success, failure, interruption or its 120-second deadline. `--check` validates the host source wrapper without a Wasm artifact. These are module-preparation timings in Node, not browser startup timings.
 
 The browser side is covered by `scripts/test-web.sh`, which includes `web/tests/browser-engine.mjs` in Chromium and WebKit, and by `web/tests/bench-engines.mjs` for timings.
 

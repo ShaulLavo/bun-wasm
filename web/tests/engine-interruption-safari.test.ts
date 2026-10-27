@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { allocateSafariDriverPort, assertSafariDriverAlive, assertSafariDriverOwnership, ownSafariDriver, parseSafariProcessTable, safariDriverOwnershipDiagnostic, stopSafariDriver,
   type SafariDriverIdentity, type SafariInspection, type SafariProcessIdentity } from "./engine-interruption-safari";
@@ -318,13 +318,16 @@ test("Safari teardown tolerates ESRCH but does not claim success on inspection o
 });
 test("Safari teardown shares one bounded inspection deadline instead of leaving an inspection race running", async () => {
   const before = Date.now(), deadlines: (number | undefined)[] = [];
-  let processes = [row()];
-  await stopSafariDriver(scope(), 43186, { processes: async deadline => { deadlines.push(deadline); return processes; },
-    listeners: async (_port, deadline) => { deadlines.push(deadline); return []; } }, () => { processes = []; });
-  expect(deadlines).toHaveLength(3);
-  expect(deadlines.every(deadline => deadline === deadlines[0])).toBe(true);
-  expect(deadlines[0]).toBeGreaterThan(before);
-  expect(deadlines[0]! - before).toBeLessThanOrEqual(12_000);
+  const clock = spyOn(Date, "now").mockReturnValue(before);
+  try {
+    let processes = [row()];
+    await stopSafariDriver(scope(), 43186, { processes: async deadline => { deadlines.push(deadline); return processes; },
+      listeners: async (_port, deadline) => { deadlines.push(deadline); return []; } }, () => { processes = []; });
+    expect(deadlines).toHaveLength(3);
+    expect(deadlines.every(deadline => deadline === deadlines[0])).toBe(true);
+    expect(deadlines[0]).toBeGreaterThan(before);
+    expect(deadlines[0]! - before).toBe(12_000);
+  } finally { clock.mockRestore(); }
 });
 test("Safari teardown discovers a non-listening child forked during shutdown but signals only the root", async () => {
   const owned = scope(), signalled: number[] = [];
@@ -386,34 +389,37 @@ test("Safari owns a real parent-spawned child listener and tears down both witho
     catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error; }
   }
   try {
-    const spawnedAfter = fixtureSpawnThreshold(Date.now(), process.platform === "linux" ? {
-      stat: readFileSync("/proc/stat", "utf8"), uptime: readFileSync("/proc/uptime", "utf8"),
-    } : undefined);
-    const spawned = Bun.spawn([process.execPath, `${import.meta.dir}/fixtures/safari-driver-listener.ts`], { stdout: "pipe", stderr: "inherit" });
-    parent = spawned;
-    deadline = setTimeout(() => { kill(childPid); if (parent?.exitCode === null) parent.kill("SIGKILL"); }, 7_000);
-    const reader = spawned.stdout.getReader();
-    const decoder = new TextDecoder();
-    let line = "";
-    try {
-      while (!line.includes("\n")) {
-        const chunk = await reader.read();
-        if (chunk.done) throw new Error("listener fixture exited before publishing its PID and port");
-        line += decoder.decode(chunk.value, { stream: true });
-      }
-    } finally { reader.releaseLock(); }
-    const published: unknown = JSON.parse(line.trim());
-    if (typeof published !== "object" || published === null || !("pid" in published) || !("port" in published)
-      || typeof published.pid !== "number" || typeof published.port !== "number") throw new Error("invalid listener fixture identity");
-    childPid = published.pid;
-    const port = published.port;
-    expect(childPid).not.toBe(parent.pid);
-    const owned = ownSafariDriver(parent, spawnedAfter);
-    await assertSafariDriverOwnership(owned, port);
-    expect(await (await fetch(`http://127.0.0.1:${port}`)).text()).toBe("owned child");
-    await stopSafariDriver(owned, port);
-    await parent.exited;
-    await expect(fetch(`http://127.0.0.1:${port}`)).rejects.toThrow();
+    const checkOwnedDriverShutdown = async () => {
+      const spawnedAfter = fixtureSpawnThreshold(Date.now(), process.platform === "linux" ? {
+        stat: readFileSync("/proc/stat", "utf8"), uptime: readFileSync("/proc/uptime", "utf8"),
+      } : undefined);
+      const spawned = Bun.spawn([process.execPath, `${import.meta.dir}/fixtures/safari-driver-listener.ts`], { stdout: "pipe", stderr: "inherit" });
+      parent = spawned;
+      deadline = setTimeout(() => { kill(childPid); if (parent?.exitCode === null) parent.kill("SIGKILL"); }, 7_000);
+      const reader = spawned.stdout.getReader();
+      const decoder = new TextDecoder();
+      let line = "";
+      try {
+        while (!line.includes("\n")) {
+          const chunk = await reader.read();
+          if (chunk.done) throw new Error("listener fixture exited before publishing its PID and port");
+          line += decoder.decode(chunk.value, { stream: true });
+        }
+      } finally { reader.releaseLock(); }
+      const published: unknown = JSON.parse(line.trim());
+      if (typeof published !== "object" || published === null || !("pid" in published) || !("port" in published)
+        || typeof published.pid !== "number" || typeof published.port !== "number") throw new Error("invalid listener fixture identity");
+      childPid = published.pid;
+      const port = published.port;
+      expect(childPid).not.toBe(parent.pid);
+      const owned = ownSafariDriver(parent, spawnedAfter);
+      await assertSafariDriverOwnership(owned, port);
+      expect(await (await fetch(`http://127.0.0.1:${port}`)).text()).toBe("owned child");
+      await stopSafariDriver(owned, port);
+      await parent.exited;
+      await expect(fetch(`http://127.0.0.1:${port}`)).rejects.toThrow();
+    };
+    await checkOwnedDriverShutdown();
   } finally {
     clearTimeout(deadline);
     kill(childPid);

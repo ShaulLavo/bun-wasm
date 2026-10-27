@@ -32,14 +32,29 @@ package.json, bunfig.toml and the JSONC text lockfile. Root dependencies take
 priority in the hoisted node_modules tree; incompatible transitive versions go
 under their dependent package. Required peers are installed, incompatible peers
 produce warnings, optional peers are skipped, and unavailable optional packages
-produce warnings. Native platform packages incompatible with WASI are skipped
-when optional.
+produce warnings. Platform selection uses the guest's advertised `linux` OS and
+`wasm32` architecture. Absent or empty `os`/`cpu` rules allow any platform;
+positive lists select platforms and `!` entries exclude them. Incompatible
+optional packages and their optional-only descendants are excluded from archive
+downloads and extraction. An incompatible required dependency fails installation,
+including when a required consumer shares a hoisted package with an optional dependency.
+
+Locked installs keep the complete dependency graph even when some packages cannot
+be installed on this platform. If a compact lock field contains lossy `none`
+platform metadata, the installer reads metadata for that exact pinned version
+through the existing cache and registry policy. It never substitutes the latest
+version or replaces the original locked metadata. An optional metadata failure
+keeps the package's lock row and lock-only descendants; required unresolved
+metadata remains an error.
 
 New lockfiles use Bun's text `bun.lock` version 2/config version 1. Simple project
 output matches native Bun's lockfile byte for byte, checked against a local
 registry golden. Existing locked resolutions and integrity hashes are reused,
-including when a dist-tag changes. `--frozen-lockfile` rejects changes.
-`--production` omits dev dependencies and preserves the full lockfile.
+including when a dist-tag changes. `--frozen-lockfile` and `bun ci` reject semantic
+changes before installation or writes. Successful frozen installs preserve the
+existing lockfile bytes, including metadata property order and formatting.
+Unlocked installs can still update or migrate locks. `--production` omits dev
+dependencies and preserves the full lockfile.
 
 Tarballs and packuments are cached in `$BUN_INSTALL_CACHE_DIR`, or
 `$HOME/.bun/install/cache/bun-wasm` (relative to cwd when HOME is absent).
@@ -63,8 +78,7 @@ the graph is limited to 10,000 packages and 128 nesting levels.
 ## Workspaces and commands
 
 Native hosts create workspace and package-bin links. The page filesystem does
-not yet support symbolic links, so workspace and local-link installs still need
-the [filesystem prerequisite](../plans/browser-runtime.md#installer-filesystem-link-prerequisite).
+not yet support symbolic links, so workspace and local-link installs fail in the browser until it does.
 For package bins, ENOTSUP or EPERM from link creation produces a warning naming
 the package and bin. Installation continues and writes its lockfile. Other
 errors remain fatal. Node's native WASI also rejects some relative links under
@@ -139,6 +153,14 @@ so they cannot be linked as independent parser/serializer libraries.
 
 ## Verification
 
+The native Rust installer tests cover locked and unlocked platform selection,
+required versus optional consumers, transitive dependencies, pinned metadata
+recovery, real archive extraction and frozen lock-byte preservation. Run them with
+`cargo test --locked --offline -p bunwasm-runtime --lib --no-default-features --features engine-host install::`.
+These source tests are not browser guest acceptance or proof of complete framework
+support; the unchanged application and lockfile must also pass against the built
+guest.
+
 `tests/install/run.mjs` starts a local CORS registry with deterministic tarballs.
 It tests aliases, add/remove, all dev flags, exact versions, hoisting conflicts,
 peers, optional dependencies, skipped lifecycle scripts, registry configuration,
@@ -148,10 +170,9 @@ Tests never contact npm. `web/tests/browser-install.mjs` drives
 `bun add is-odd` and a TS import in the playground across Chromium/WebKit and all
 three engines. The headless Node host uses a separate fetch worker during synchronous
 Rust CLI startup, then keeps its existing asynchronous network adapter for JS.
-See [the fixture README](../tests/install/README.md).
+See [the fixture README](install-fixtures.md).
 
-Raw bounded upstream results and command logs live in
-`/work/reports/bun-wasm-install/` for coordinator review. The install subset is
+The install subset is
 `cli/install` (113 files), run unchanged with `scripts/bun-suite.sh --network
 loopback --jobs 2`. The checked-in full baseline is deliberately unchanged.
 
@@ -269,31 +290,26 @@ Those results do not exercise the published esbuild package, which has its own
 recorded-registry check above. The full upstream baseline is unchanged.
 
 [Framework results](app-matrix/esbuild-results.md) record the subsequent Vite,
-Astro, and SvelteKit blockers. TCP and ws review heads changed after that pinned
-integration measurement; the report does not claim to measure those later heads.
+Astro, and SvelteKit blockers. The report does not measure TCP and ws changes made after that pinned integration.
 
 The esbuild package checks cover synchronous APIs and watch edits without an
 explicit rebuild request on every engine, including Chromium and WebKit pages.
-See [the package-check instructions](../tests/esbuild/README.md) for offline
-mirror requirements and the retained official package recording.
+See [the package-check instructions](esbuild-checks.md) for offline
+mirror requirements.
 
 ## Historical combined installer measurement, 2026-10-17
 
-This frozen comparison predates the split into command/workspace and migration
-PRs. Its migration counts describe the implementation moved to the follow-up,
-not the remaining command/workspace PR.
+This frozen comparison predates the split of workspace and command support from lockfile migration. Its migration counts describe the migration implementation.
 
 The fixed [25-file selection](bun-test-suite/installer-files.txt) covers every
-workspace, manifest-header, lock-migration, update and bunx cause assigned by PR #40.
+workspace, manifest-header, lock-migration, update and bunx failure causes.
 Each unchanged upstream file has a 15-second deadline and 2-second initial test
 timeout, one worker, with loopback-only networking. The paired artifacts are main
 `2759d45b` before and installer commit `9651da83` after, including the selected
 workspace update fix. Both sides use the same suite, launcher, host sources,
 dependencies and deadlines. Only the wasm hash differs within each engine pair.
 
-The branch later integrates main `205ad909`. Installer sources, CLI wiring,
-package-command dispatch and installer regression fixtures are unchanged by that
-integration. The tables describe the frozen pair, including its artifact sizes.
+The tables describe the frozen pair, including its artifact sizes.
 
 | Engine | Observed passes before / after | Fully passing files before / after | Timeouts before / after |
 |---|---|---|---|

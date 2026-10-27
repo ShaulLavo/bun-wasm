@@ -1,8 +1,6 @@
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 
-import { css } from "@codemirror/lang-css";
-import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
 import { EditorState, type Extension } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -11,17 +9,19 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
 import { decode } from "../../web/src/fs";
-import type { NetHelper } from "../../web/src/net/helper";
+import type { BunNetworkOptions, RuntimeNetworkHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
 import { createRuntime } from "waffle";
-import { WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../web/src/shared-fs";
-import { ENGINES, type Engine, type Run, WasmMissing, isEngine, loadWasm, mb, registerModuleScope, startRun } from "../../web/src/runner";
+import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../web/src/shared-fs";
+import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../../web/src/engine-loader";
+import type { Run } from "../../web/src/runner";
 import { enableTerminalCopy } from "../../web/src/terminal-copy";
 import { linkLocalUrls } from "../../web/src/terminal-links";
-import { measureStartup } from "../../web/src/startup";
+import { measureStartup, showPageStartupFailure } from "../../web/src/startup";
 import { depsCacheKey, readDeps, writeDeps } from "./deps-cache";
 import { StartupOutput } from "./startup-output";
 
+async function main(): Promise<void> {
 const HOME = "/home/user";
 /** The project's directory in the guest's filesystem. */
 const APP = `${HOME}/app`;
@@ -64,6 +64,7 @@ const DEFAULT_ENGINE: Engine = "browser";
 const requested = params.get("engine");
 const engine: Engine = isEngine(requested) ? requested : DEFAULT_ENGINE;
 const wasmUrl = params.get("wasm") ?? ENGINES[engine].wasm;
+const mode = getVfsDescriptor(params.get("mode") ?? "fast").mode;
 
 engineSelect.value = engine;
 engineSelect.addEventListener("change", () => {
@@ -93,11 +94,11 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 // ---------- filesystem ----------
 
 let startup: "starting" | "ready" | "failed" = "starting";
-const runtime = createRuntime({ filesystem: { name: `bun-wasm-sandbox-${template}` } });
+const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${template}` } });
 const fs = runtime.filesystem;
 function showStartupFailure(error: unknown): void {
   startup = "failed";
-  setStatus(String(error), "error");
+  setStatus(error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error), "error");
   restartButton.textContent = "Reload";
   restartButton.disabled = false;
   restartButton.title = "Open the latest saved workspace";
@@ -194,7 +195,7 @@ const DEPS_PATH = "/.bunwasm/deps-cache";
 
 interface Server {
   port: number;
-  helper: NetHelper;
+  helper: RuntimeNetworkHelper;
   updates: Promise<void>;
 }
 
@@ -202,6 +203,23 @@ let run: Run | null = null;
 let server: Server | null = null;
 let serverRevision = 0;
 let editRevision = 0;
+let serverTiming = { started: 0, visibleStart: 0 };
+const network: BunNetworkOptions = {
+  listening: (port, helper) => {
+    previews.register(port, helper);
+    server = { port, helper, updates: Promise.resolve() };
+    measureStartup("dev-server", serverTiming.started);
+    void showPreview(server, serverTiming.visibleStart).catch(reportError);
+    for (const [path, revision] of unsent) void sendUpdate(path, revision);
+    unsent.clear();
+  },
+  stopped: (port, helper) => {
+    previews.unregister(port, helper);
+    if (server?.helper !== helper) return;
+    server = null;
+    setServerState("down", "dev server stopped · press Restart");
+  },
+};
 /** Saved while the dev server was starting (before it listens): sent once it listens. */
 const unsent = new Map<string, number>();
 
@@ -255,26 +273,16 @@ async function startDevServer(): Promise<void> {
     BUN_WASM_STARTUP: "1",
   };
   const started = performance.now();
+  const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes()]);
+  if (revision !== serverRevision) return;
   const output = new StartupOutput((text) => term.write(text), startupRecord);
-  const current = startRun({ engine, module: wasm.module, args: ["./index.html"], env, runtime, moduleScope: scoped }, {
+  serverTiming = { started, visibleStart };
+  const current = startRun({ engine, module: wasm.module, args: ["./index.html"], env, runtime, moduleScope: scoped, network }, {
     phase: (name) => {
       if (name === "worker-start") setStatus("starting dev server…");
     },
     stdout: (data) => output.write(data),
     stderr: (data) => output.write(data),
-    listening: (port, helper) => {
-      if (run !== current) return;
-      previews.register(port, helper);
-      server = { port, helper, updates: Promise.resolve() };
-      measureStartup("dev-server", started);
-      void showPreview(server, visibleStart).catch(reportError);
-      for (const [path, revision] of unsent) void sendUpdate(path, revision);
-      unsent.clear();
-    },
-    stopped: (port, helper) => {
-      previews.unregister(port, helper);
-      if (server?.helper === helper) server = null;
-    },
   });
   run = current;
   const result = await current.done;
@@ -282,9 +290,8 @@ async function startDevServer(): Promise<void> {
   if (result.error) term.write(`\x1b[31m${result.error}\x1b[0m\r\n`);
   if (run !== current) return; // restarted
   run = null;
-  server = null;
   term.write(`\x1b[2m[dev server exited with code ${result.code}]\x1b[0m\r\n`);
-  setServerState("down", `dev server stopped (exit ${result.code}) · press Restart`);
+  if (!server) setServerState("down", `dev server stopped (exit ${result.code}) · press Restart`);
 }
 
 function startupRecord(line: string): boolean {
@@ -389,15 +396,15 @@ async function save(path: string, text: string, revision: number): Promise<void>
 }
 
 function reportError(error: unknown): void {
-  setStatus(String(error), "error");
+  setStatus(error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error), "error");
   term.write(`\x1b[31m${String(error)}\x1b[0m\r\n`);
 }
 
 // ---------- editor ----------
 
-function language(path: string): Extension {
-  if (/\.css$/.test(path)) return css();
-  if (/\.html?$/.test(path)) return html();
+async function language(path: string): Promise<Extension> {
+  if (/\.css$/.test(path)) return (await import("@codemirror/lang-css")).css();
+  if (/\.html?$/.test(path)) return (await import("@codemirror/lang-html")).html();
   return javascript({ typescript: /\.(m|c)?tsx?$/.test(path), jsx: /x$/.test(path) });
 }
 
@@ -413,11 +420,11 @@ class Editor {
     this.view = new EditorView({ parent });
   }
 
-  private extensions(path: string): Extension[] {
+  private async extensions(path: string): Promise<Extension[]> {
     const readOnly = path.startsWith("node_modules/");
     return [
       basicSetup,
-      language(path),
+      await language(path),
       oneDark,
       EditorView.lineWrapping,
       EditorState.readOnly.of(readOnly),
@@ -432,9 +439,10 @@ class Editor {
     let state = this.states.get(path);
     if (!state) {
       const text = decode(await fs.readFile(abs(path)) ?? new Uint8Array());
+      const extensions = await this.extensions(path);
       state = this.states.get(path);
       if (state) return state;
-      state = EditorState.create({ doc: text, extensions: this.extensions(path) });
+      state = EditorState.create({ doc: text, extensions });
       this.states.set(path, state);
     }
     return state;
@@ -672,3 +680,9 @@ async function boot(): Promise<void> {
 void boot().catch(error => { showStartupFailure(error); reportError(error); });
 
 Object.assign(globalThis, { sandbox: { fs, editor, term, restart: startDevServer, server: () => server, engine, template } });
+
+}
+
+void main().catch(error => showPageStartupFailure(error, {
+  button: "#restart", disable: "#reset, #engine, #template, #file-select", title: "Retry sandbox startup",
+}));

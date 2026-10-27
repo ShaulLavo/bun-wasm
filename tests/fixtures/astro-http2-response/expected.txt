@@ -1,0 +1,7 @@
+http2 class identity and stream inheritance
+http2 headers, validation, hints and forwarding
+http2 body, trailers and finish/close lifecycle
+http2 duplicate tuples, push response and subclasses
+http2 end overloads complete once and remove paired finish listeners
+http2 repeated end and already-ended stream lifecycle
+http2 end preserves stream error identity

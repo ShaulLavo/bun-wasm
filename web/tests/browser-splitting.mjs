@@ -33,7 +33,6 @@ try {
   assert.equal(execFileSync("ss", ["-H", "-ltn", `sport = :${port}`], { encoding: "utf8" }).trim(), "", `Port ${port} is already in use`);
   // Only this directory, server, browser and profile belong to this test.
   scratch = await mkdtemp(resolve(import.meta.dir, "../node_modules/.browser-splitting-"));
-  process.env.TMPDIR = scratch;
   const out = join(scratch, "dist");
   const fsSource = JSON.stringify(resolve(import.meta.dir, "../src/fs.ts"));
   await Bun.write(join(scratch, "shared.ts"), `
@@ -44,7 +43,7 @@ try {
       return decode(fs.readFile('/result')!).toUpperCase();
     };
   `);
-  await Bun.write(join(scratch, "lazy.ts"), "export const lazy = 'dynamic chunk';\n");
+  await Bun.write(join(scratch, "lazy.ts"), "import { shared } from './shared'; export const lazy = shared('dynamic chunk');\n");
   await Bun.write(join(scratch, "main.ts"), "import { shared } from './shared'; globalThis.pageResult = shared('page');");
   await Bun.write(join(scratch, "worker.ts"), `
     import { Wasi, memoryViews } from 'waffle/core';
@@ -94,6 +93,7 @@ try {
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
   for (const prefix of ["/", "/nested/app/"]) {
     await page.goto(`http://127.0.0.1:${port}${prefix}`, { waitUntil: "load" });
+    assert.ok(!requests.some((path) => path.startsWith(`${prefix}chunks/`)), "Page-only code must stay inline instead of sharing worker chunks");
     for (const controlled of [false, true]) {
       const result = await page.evaluate(async (controlled) => {
         if (controlled) {
@@ -116,9 +116,8 @@ try {
         });
         return { page: globalThis.pageResult, worker: workerResult };
       }, controlled);
-      assert.deepEqual(result, { page: "PAGE", worker: { value: "WORKER", lazy: "dynamic chunk", code: 0, memoryBytes: 65536, control: controlled ? "controlled" : "direct" } });
+      assert.deepEqual(result, { page: "PAGE", worker: { value: "WORKER", lazy: "DYNAMIC CHUNK", code: 0, memoryBytes: 65536, control: controlled ? "controlled" : "direct" } });
     }
-    assert.ok(requests.some((path) => path.startsWith(`${prefix}chunks/`)), "Page must fetch its shared chunk");
     assert.ok(requests.filter((path) => path.startsWith(`${prefix}__bunwasm/chunks/`)).length >= 2, "Uncontrolled worker must fetch mirrored static/dynamic chunks directly");
   }
   assert.deepEqual(errors, []);

@@ -1,0 +1,3 @@
+call, new, subclass, absent prototype storage and fresh instance storage
+static accessors, validation, function arity and prototype aliases
+bound once descriptor and omitted versus explicit undefined removal

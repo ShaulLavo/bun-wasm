@@ -1,3 +1,4 @@
+import { withVfsImplementation } from "../../node_modules/waffle/fs/vfs-internal.ts";
 import { SharedFilesystem, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../src/shared-fs";
 
 const options = new URLSearchParams(location.search);
@@ -10,7 +11,7 @@ function log(event: Event) {
 }
 addEventListener("pagehide", log);
 addEventListener("pageshow", log);
-const fs = new SharedFilesystem({ storage, name: options.get("name") ?? "lifecycle" });
+const fs = new SharedFilesystem(withVfsImplementation(storage === "opfs" ? "opfs-memory" : "indexeddb", { mode: "fast", name: options.get("name") ?? "lifecycle" }));
 const state = { fs, id, ready: false, error: "" };
 Object.assign(globalThis, { lifecycle: state });
 const edits = document.createElement("textarea");
@@ -18,6 +19,13 @@ document.body.append(edits);
 const style = document.createElement("style");
 style.textContent = "pre{white-space:pre-wrap;overflow-wrap:anywhere}textarea{max-width:90vw}";
 document.head.append(style);
+const status = document.createElement("pre");
+document.body.append(status);
+fs.onStateChange = state => {
+  status.textContent = state.status === "waiting"
+    ? "Waiting for this workspace to close in another tab. It will open here automatically."
+    : "";
+};
 fs.onOwnershipLost = () => {
   state.ready = false;
   state.error = `${WORKSPACE_TAKEN_OVER} ${UNSAVED_CHANGES_LOST}`;

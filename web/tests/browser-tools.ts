@@ -1,7 +1,8 @@
+import { browserType } from "./browser-type.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { playwright, session, ready, writeFile, run, web } from "./playground.mjs";
+import { session, ready, writeFile, run, web } from "./playground.mjs";
 
 const s = session("bun-wasm-tools-");
 const deadline = setTimeout(() => { void s.cleanup().finally(() => process.exit(1)); }, 300000);
@@ -9,7 +10,7 @@ try {
   const url = await s.serve();
   for (const name of process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "webkit"]) {
     for (const engine of ["quickjs", "jsc", "browser"]) {
-      const context = await s.launch({ launch: () => playwright[name].launchPersistentContext(join(s.scratch, `${name}-${engine}`)) });
+      const context = await s.launch({ launch: () => browserType(name).launchPersistentContext(join(s.scratch, `${name}-${engine}`)) });
       const page = await context.newPage();
       const downloads: string[] = [];
       page.on("request", request => { if (request.url().includes("bun-tools.wasm")) downloads.push(request.url()); });
@@ -24,7 +25,7 @@ try {
         WebAssembly.compile = async bytes => {
           const current = Number(Reflect.get(globalThis, "__bunwasmCompileCount") ?? 0);
           Reflect.set(globalThis, "__bunwasmCompileCount", current + 1);
-          return compile(bytes);
+          return compile(ArrayBuffer.isView(bytes) ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength).slice().buffer : new Uint8Array(bytes).buffer);
         };
         Reflect.set(globalThis, "__bunwasmCompileCount", 0);
       });

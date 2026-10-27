@@ -1,186 +1,27 @@
+import { programLinkPlan } from "../../src/assets.js";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
 // and the sandbox (../sandbox/).
 
 import type { Runtime } from "waffle";
-import { isToolCommand } from "./tool-command";
-import { NetHelper } from "./net/helper";
+import { ENGINES, loadWasm, MODULE_SCOPE } from "./engine-loader";
+import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, type RuntimeNetworkHelper } from "./net/helper";
 import { createRing } from "./net/ring";
-import { activated } from "./preview";
-import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
-import { measureStartup } from "./startup";
-import { SubprocessBroker } from "./subprocess-broker";
-import { createProcessBudget } from "./subprocess";
-import { createSignalState } from "waffle/proc/signals";
+import { SubprocessBroker, type ExecutableRegistration } from "./subprocess-broker";
+import { isToolCommand } from "./tool-command";
+import { ENGINE_BIN, bunEnvironment, engineEnvironment } from "../../src/executable-paths.js";
+import { claimOutcome, readOutcome, type OutcomeWord } from "waffle/proc/outcome";
 import { waitStatus } from "waffle/proc/wait-status";
-import { claimOutcome, outcomeWord, readOutcome } from "waffle/proc/outcome";
-import type { Engine, RunRequest, WorkerMessage } from "./worker";
-
-export type { Engine } from "./worker";
-
-/** What each `?engine=` loads. The browser engine runs the program in the page's own JS engine. */
-export const ENGINES: Record<Engine, { name: string; wasm: string; script: string }> = {
-  quickjs: { name: "QuickJS", wasm: "bun.wasm", script: "scripts/build.sh" },
-  jsc: { name: "JavaScriptCore", wasm: "bun-jsc.wasm", script: "scripts/build-bun-jsc.sh" },
-  browser: { name: "Browser (native)", wasm: "bun-browser.wasm", script: "scripts/build-bun-browser.sh" },
-};
-
-export function isEngine(name: string | null): name is Engine {
-  return name !== null && Object.hasOwn(ENGINES, name);
-}
-
-export function mb(bytes: number): string {
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-export class WasmMissing extends Error {}
+import { installLookupServer } from "./net/lookup.js";
+import type { Engine, RunRequest, WorkerMessage } from "./bun-executor";
+import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
+import type { BunSharedConnection } from "./shared-objects/protocol.js";
 
 let toolsModule: Promise<WebAssembly.Module> | undefined;
 function loadTools(): Promise<WebAssembly.Module> {
   return toolsModule ??= loadWasm("bun-tools.wasm", () => {})
     .then(result => result.module)
     .catch(error => { toolsModule = undefined; throw error; });
-}
-
-/**
- * Fetches and compiles a wasm module. Sites ship it gzipped (static hosts cap file sizes, and it is
- * 3-4x smaller) and the page decompresses it; a plain .wasm URL works too. Throws WasmMissing on 404.
- */
-export async function loadWasm(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string | null }> {
-  if (url.endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
-  progress("loading bun.wasm…");
-  const build = assetBuild(url);
-  const key = new URL(url, location.href).href;
-  const cached = build ? await cachedEngine(key, build) : null;
-  let size = 0;
-  if (cached) {
-    progress("compiling cached bun.wasm…");
-    const started = performance.now();
-    try {
-      size = Number(cached.headers.get("content-length"));
-      const module = await WebAssembly.compileStreaming(cached);
-      performance.mark("bunwasm:engine-cache-hit");
-      measureStartup("compile", started, { cached: true });
-      return { module, size, build };
-    } catch {
-      await evictEngine(key);
-    }
-  }
-  progress("downloading bun.wasm…");
-  const started = performance.now();
-  const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
-  // The build hash in the query gives every build its own URL, so a CDN edge that still holds the
-  // previous build right after a deploy can't serve it in place of this one.
-  let res = await fetch(build ? `${gzUrl}?v=${build}` : gzUrl);
-  const gzipped = res.ok;
-  if (!gzipped) res = await fetch(url);
-  if (res.status === 404) throw new WasmMissing(`${url}: HTTP 404`);
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-  const total = Number(res.headers.get("content-length")) || 0;
-  let received = 0;
-  let lastProgress = 0;
-  const counter = new TransformStream<Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>>({
-    transform(chunk, controller) {
-      received += chunk.length;
-      if (performance.now() - lastProgress >= 50 || received === total) {
-        progress(`downloading bun.wasm… ${mb(received)}${total ? ` / ${mb(total)}` : ""}`);
-        lastProgress = performance.now();
-      }
-      controller.enqueue(chunk);
-    },
-    flush() {
-      measureStartup("download", started, { bytes: received });
-      progress("decompressing and compiling bun.wasm…");
-    },
-  });
-  if (!res.body) throw new Error(`${url}: empty response body`);
-  let body = res.body.pipeThrough(counter);
-  const decompressing = performance.now();
-  if (gzipped) body = body.pipeThrough(new DecompressionStream("gzip"));
-  const chunks: Uint8Array<ArrayBuffer>[] = [];
-  body = body.pipeThrough(new TransformStream<Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>>({
-    transform(chunk, controller) {
-      size += chunk.length;
-      if (build) chunks.push(chunk);
-      controller.enqueue(chunk);
-    },
-    flush() {
-      measureStartup("decompress", decompressing, { bytes: size, gzipped });
-      progress(`compiling bun.wasm (${mb(size)})…`);
-    },
-  }));
-  // Compilation consumes the decompressed stream while the remaining bytes are still arriving.
-  const compiling = performance.now();
-  const response = new Response(body, { headers: { "content-type": "application/wasm" } });
-  const module = await WebAssembly.compileStreaming(response);
-  measureStartup("compile", compiling, { streaming: true });
-  const engine = { module, size };
-  if (build) setTimeout(() => void cacheIfExpected(key, build, chunks, size), 0);
-  return { ...engine, build };
-}
-
-async function loadVerifiedTools(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string }> {
-  const build = assetBuild(url);
-  if (!build) throw new Error("bun-tools.wasm: build manifest fingerprint is missing");
-  const key = new URL(url, location.href).href;
-  const cached = await cachedEngine(key, build);
-  if (cached) {
-    const bytes = new Uint8Array(await cached.arrayBuffer());
-    try { await verifyArtifact("bun-tools.wasm", bytes, build); }
-    catch (error) { await evictEngine(key); throw error; }
-    progress(`compiling cached bun-tools.wasm (${mb(bytes.length)})…`);
-    return { module: await WebAssembly.compile(bytes), size: bytes.length, build };
-  }
-  progress("downloading bun-tools.wasm…");
-  const gzUrl = url.endsWith(".gz") ? url : `${url}.gz`;
-  let response = await fetch(`${gzUrl}?v=${build}`);
-  const gzipped = response.ok;
-  if (!gzipped) response = await fetch(url);
-  if (response.status === 404) throw new WasmMissing(`${url}: HTTP 404`);
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
-  if (!response.body) throw new Error(`${url}: empty response body`);
-  const body = gzipped ? response.body.pipeThrough(new DecompressionStream("gzip")) : response.body;
-  const wasm = new Uint8Array(await new Response(body).arrayBuffer());
-  await verifyArtifact("bun-tools.wasm", wasm, build);
-  progress(`compiling bun-tools.wasm (${mb(wasm.length)})…`);
-  const module = await WebAssembly.compile(wasm);
-  if (await cacheEngine(key, build, new Response(wasm, { headers: { "content-type": "application/wasm", "content-length": String(wasm.length) } }))) {
-    performance.mark("bunwasm:engine-cache-stored", { detail: { url: key, build } });
-  }
-  return { module, size: wasm.length, build };
-}
-
-async function verifyArtifact(name: string, bytes: Uint8Array<ArrayBuffer>, expected: string): Promise<void> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-  const actual = Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("");
-  if (actual !== expected) throw new Error(`${name} integrity mismatch: expected ${expected}, received ${actual}`);
-}
-
-/** Caches the downloaded engine only if its bytes are the build the page expects. */
-async function cacheIfExpected(key: string, build: string, chunks: Uint8Array<ArrayBuffer>[], size: number): Promise<void> {
-  const blob = new Blob(chunks);
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()));
-  const hex = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
-  if (hex !== build) return;
-  const headers = { "content-type": "application/wasm", "content-length": String(size) };
-  await cacheEngine(key, build, new Response(blob, { headers }));
-}
-
-// The service worker at ./__bunwasm/ (sw.ts) serves named module URLs for import cycles.
-// Acyclic modules use blob URLs, including when WebKit starts an uncontrolled worker in the scope.
-const MODULE_SCOPE = "./__bunwasm/";
-
-export async function registerModuleScope(): Promise<boolean> {
-  const container = navigator.serviceWorker;
-  if (!container) return false;
-  try {
-    const registration = await container.register("./sw.js", { scope: MODULE_SCOPE });
-    await activated(registration);
-    return registration.active !== null;
-  } catch (err) {
-    console.warn("module service worker registration failed:", err);
-    return false;
-  }
 }
 
 export interface RunOptions {
@@ -191,12 +32,13 @@ export interface RunOptions {
   env: Record<string, string>;
   /** Shared service owned by the page, also used by editor and shell. */
   runtime: Runtime;
+  network?: BunNetworkOptions;
   /** From registerModuleScope(): run the worker under ./__bunwasm/. */
   moduleScope: boolean;
   trace?: boolean;
   /** Skip Bun host slots for arbitrary Preview1 guests. */
   adapter?: RunRequest["adapter"];
-  /** Explicit generic ownership transport; extended runtime_proc imports activate one automatically. */
+  /** An existing process transport to root the run at; the run creates one otherwise. */
   runtimeProcess?: RunRequest["runtimeProcess"];
 }
 
@@ -204,9 +46,6 @@ export interface RunHooks {
   phase?(name: string, duration: number): void;
   stdout(data: Uint8Array): void;
   stderr(data: Uint8Array): void;
-  /** A guest server started listening; `helper` delivers requests to it. */
-  listening?(port: number, helper: NetHelper): void;
-  stopped?(port: number, helper: NetHelper): void;
 }
 
 export interface RunResult {
@@ -218,10 +57,10 @@ export interface RunResult {
 export interface Run {
   readonly done: Promise<RunResult>;
   /** Signal the foreground job with SIGINT; a second call or explicit 9 force-kills it. */
-  kill(signal?: 2 | 9): void;
+  kill(signal?: 2 | 9 | 15): void;
 }
 
-/** `?slots=table|off` on the page: how the wasm engines get networking (see RunRequest.slots). */
+/** `?slots=table|off` on the page: how the wasm engines get host functions (see RunRequest.slots). */
 function slotsMode(): RunRequest["slots"] {
   const value = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("slots");
   return value === "table" || value === "off" ? value : "imports";
@@ -229,51 +68,97 @@ function slotsMode(): RunRequest["slots"] {
 
 const registeredPrograms = new WeakMap<Runtime, Set<string>>();
 
-/** Starts `bun <args>` in a fresh worker. Networking needs a cross-origin isolated page. */
+function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<string>, engine: Engine, module: Extract<ExecutableRegistration, { adapter: "bun" }>["module"]): void {
+  for (const command of ["bun", "node", "nodejs"]) {
+    const path = `${ENGINE_BIN[engine]}/${command}`;
+    subprocess.register(path, { module, adapter: "bun", engine });
+    programs.add(path);
+  }
+}
+
+function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<string>, selected: Engine, adapter: RunRequest["adapter"], selectedModule: WebAssembly.Module): void {
+  const engines: Engine[] = ["quickjs", "jsc", "browser"];
+  for (const engine of engines.concat(selected === "hermes" ? ["hermes"] : [])) {
+    const name = `${ENGINE_BIN[engine]}/bun`;
+    if (programs.has(name)) continue;
+    let loading: Promise<WebAssembly.Module> | undefined;
+    const module = engine === selected && adapter !== "preview1" ? selectedModule
+      : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
+    registerEngineCommands(subprocess, programs, engine, module);
+  }
+}
+
+function acceptRootSharedConnection(route: SharedObjectRoute | undefined, message: BunSharedConnection, terminal: boolean): string | undefined {
+  if (terminal) { route?.close(); message.port.close(); return; }
+  try {
+    if (route?.accept(message)) return;
+    message.port.close();
+    return "Bun shared-object route is unavailable";
+  } catch (error) {
+    route?.close();
+    return String(error);
+  }
+}
+
+/** Starts `bun <args>` in a fresh worker, rooting a process tree in the page's runtime. */
 export function startRun(options: RunOptions, hooks: RunHooks): Run {
-  const ring = globalThis.crossOriginIsolated === true ? createRing() : null;
-  const helper: NetHelper | null = ring
-    ? new NetHelper(ring, {
-        listening: (port) => hooks.listening?.(port, helper!),
-        stopped: (port) => hooks.stopped?.(port, helper!),
-      })
-    : null;
-  // One Cache Storage cache per run holds its modules; deleted when the run ends.
+  const ring = options.adapter !== "preview1" && globalThis.crossOriginIsolated === true ? createRing() : null;
+  const lookupChannel = options.engine === "browser" && options.adapter !== "preview1" ? new MessageChannel() : null;
+  let helper: RuntimeNetworkHelper | undefined;
+  let disposeLookup: (() => void) | undefined;
   const moduleCache = options.moduleScope ? `bunwasm-m-${crypto.randomUUID()}` : null;
-  const isolated = globalThis.crossOriginIsolated === true && typeof SharedArrayBuffer !== "undefined";
-  const generic = !!options.runtimeProcess || WebAssembly.Module.imports(options.module).some(entry =>
-    entry.module === "runtime_proc" && !["signal", "interrupted", "default_signal"].includes(entry.name));
+  // The runtime exists only on an isolated page, so every run roots a process tree. The root
+  // worker, its children and the shell all spawn through the same service; its transport and
+  // client chunks load on first use rather than with the page.
   const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("waffle/fs").FilesystemIdentity } | undefined)?.filesystem;
   const pid = options.runtime.identities.pid(), job = options.runtime.identities.job();
-  const request: RunRequest = {
-    engine: options.engine,
-    adapter: options.adapter,
-    runtimeProcess: options.runtimeProcess,
-    module: options.module,
-    args: ["bun", ...options.args],
-    env: options.env,
-    filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
-    trace: options.trace ?? false,
-    net: ring,
-    moduleCache,
-    slots: slotsMode(),
-    spawnBroker: true,
-    pid,
-    jobId: job,
-    identity: isolated ? options.runtime.identities.buffer : undefined,
-    budget: isolated ? createProcessBudget() : undefined,
-    interrupt: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
-    requestedSignal: isolated && !generic ? new SharedArrayBuffer(4) : undefined,
-    signalState: isolated && !generic ? createSignalState().buffer as SharedArrayBuffer : undefined,
-    outcome: isolated && !generic ? new SharedArrayBuffer(8) : undefined,
-  };
-  let rootOutcome = request.outcome ? outcomeWord(request.outcome) : null;
+  let request: RunRequest;
+  try {
+    request = {
+      engine: options.engine,
+      adapter: options.adapter,
+      runtimeProcess: options.runtimeProcess,
+      module: options.module,
+      linkPlan: programLinkPlan(options.module),
+      args: [`${ENGINE_BIN[options.engine]}/bun`].concat(options.args),
+      env: { ...engineEnvironment(options.engine, options.adapter === "preview1" ? options.env : bunEnvironment(options.env)), BUNWASM_EXEC_PATH: `${ENGINE_BIN[options.engine]}/bun` },
+      filesystem: filesystemIdentity ? options.runtime.filesystem.connect(filesystemIdentity) : options.runtime.filesystem.fork(),
+      trace: options.trace ?? false,
+      net: ring,
+      moduleCache,
+      lookupPort: lookupChannel?.port2,
+      slots: slotsMode(),
+    };
+  } catch (error) {
+    lookupChannel?.port1.close();
+    lookupChannel?.port2.close();
+    throw error;
+  }
+  let sharedRoute: SharedObjectRoute | undefined;
+  try {
+    sharedRoute = options.engine === "browser" && options.adapter !== "preview1"
+      ? runtimeSharedObjectRoute(options.runtime) : undefined;
+    request.sharedObjects = sharedRoute ? { owner: sharedRoute.owner } : undefined;
+  } catch (error) {
+    request.filesystem.port.close();
+    request.lookupPort?.close();
+    lookupChannel?.port1.close();
+    lookupChannel?.port2.close();
+    sharedRoute?.close();
+    throw error;
+  }
+  let rootOutcome: OutcomeWord | null = null;
   let rootPid = pid, rootJob = job;
   const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
   let rootAcknowledged = false;
   let rootQuiescence: Promise<void> | undefined;
   let rootStopped = false;
   let rootConsumerRelease: (() => void) | undefined;
+  let worker: Worker | undefined;
+  let subprocess: SubprocessBroker | undefined;
+  let finished = false;
+  let confirmed = false;
+  let setupRevoked = false;
   const quiesceRoot = (): void | Promise<void> => {
     if (rootAcknowledged) return;
     return rootQuiescence ??= options.runtime.filesystem.quiesce(request.filesystem);
@@ -281,53 +166,33 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   let workerStopped = false;
   const releaseRootConsumer = () => { rootConsumerRelease?.(); rootConsumerRelease = undefined; };
   const stopWorker = () => {
+    sharedRoute?.close();
     if (workerStopped) return;
     workerStopped = true;
     request.filesystem.port.close();
-    worker.terminate();
+    request.lookupPort?.close();
+    lookupChannel?.port1.close();
+    lookupChannel?.port2.close();
+    disposeLookup?.();
+    worker?.terminate();
+    try { helper?.dispose(); }
+    finally { if (moduleCache) void caches.delete(moduleCache); }
   };
   const stopRoot = () => { if (rootStopped) return; rootStopped = true; stopWorker(); };
-  rootConsumerRelease = options.runtime.retainConsumer({
-    filesystem: request.filesystem,
-    revoke: () => { if (!finished) finish({ code: 137 }, false, 9, true); },
-    stop: stopRoot,
-  });
-  const subprocess = new SubprocessBroker(workerUrl, options.runtime, { quiesceRoot, tools: loadTools, rootIdentity: { pid, job }, rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged, stopRoot: () => finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true), engine: options.engine, aliasExecutable: options.adapter === "preview1" ? `preview1-root-${pid}` : undefined, budget: request.budget, output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data), root: isolated && !generic ? {
-
-    pid, job, interrupt: request.interrupt, requestedSignal: request.requestedSignal,
-    signalState: request.signalState, outcome: request.outcome,
-  } : undefined });
-  // Programs are engine-qualified and registered once for this runtime, never rebound by
-  // the next run. Bun's per-root adapter resolves legacy aliases to its immutable selection.
-  let programs = registeredPrograms.get(options.runtime);
-  if (!programs) registeredPrograms.set(options.runtime, programs = new Set());
-  for (const engine of ["quickjs", "jsc", "browser"] as const) {
-    const name = `bun-${engine}`;
-    if (programs.has(name)) continue;
-    let loading: Promise<WebAssembly.Module> | undefined;
-    const module = engine === options.engine && options.adapter !== "preview1" ? options.module
-      : () => loading ??= loadWasm(new URL(ENGINES[engine].wasm, location.href).href, () => {}).then(result => result.module);
-    subprocess.register(name, { module, adapter: "bun", engine });
-    programs.add(name);
-  }
-  if (options.adapter === "preview1") subprocess.register(`preview1-root-${pid}`, { module: options.module, adapter: "preview1", cooperative: true });
   const starting = performance.now();
-  const worker = new Worker(workerUrl, { type: "module" });
   let settle: (result: RunResult) => void = () => {};
   const done = new Promise<RunResult>((resolve) => (settle = resolve));
-  let finished = false;
-  let confirmed = false;
   let selectedResult: RunResult | undefined;
   let outcomeTimer: ReturnType<typeof setTimeout> | null = null;
-  const confirm = (ownedDisposal = false) => {
+  function confirm(ownedDisposal = false) {
     if (confirmed || (options.runtime.disposed && !ownedDisposal)) return;
     confirmed = true;
     // The admission fence proves completion. Never make run.done depend on terminate().
     settle(selectedResult!);
     stopWorker();
     releaseRootConsumer();
-  };
-  const finish = (result: RunResult, acknowledged = false, signal?: number, ownedDisposal = false) => {
+  }
+  function finish(result: RunResult, acknowledged = false, signal?: number, ownedDisposal = false) {
     // Page disposal may take ownership while this run is already awaiting its root fence.
     // Its stop hook runs after the owned fence and must settle that existing outcome too.
     if (finished) { if (ownedDisposal) confirm(true); return; }
@@ -338,58 +203,94 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       result = (winner.kind === "start-failed" || winner.kind === "exited" && winner.code === result.code) && result.error
         ? { code: waitStatus(winner), error: result.error } : { code: waitStatus(winner) };
     }
-    if (!ownedDisposal) subprocess.revokeRuntimeProcess(rootPid);
+    if (!ownedDisposal) subprocess?.revokeRuntimeProcess(rootPid);
     selectedResult = result;
     finished = true;
+    sharedRoute?.close();
     if (outcomeTimer !== null) clearTimeout(outcomeTimer);
     outcomeTimer = null;
-    let quiescence: void | Promise<void> = undefined;
     if (acknowledged) {
       rootAcknowledged = true;
       options.runtime.filesystem.reap(request.filesystem);
-    } else if (!ownedDisposal) {
-      // Outcome/revocation is immediate; confirmation and physical stop require the fence.
-      quiescence = quiesceRoot();
     }
-    const rootExit = ownedDisposal ? undefined : subprocess.rootExit(result.code);
-    helper?.dispose();
-    if (moduleCache) void caches.delete(moduleCache);
+    const rootExit = ownedDisposal ? undefined : subprocess?.rootExit(result.code);
+    // Outcome/revocation is immediate; confirmation and physical stop require the filesystem
+    // fence. An adopted root's exit already joins it; only a root the service never saw needs its own.
+    const quiescence = acknowledged || ownedDisposal || rootExit ? undefined : quiesceRoot();
     if (quiescence || rootExit) void Promise.all([quiescence, rootExit]).then(() => confirm())
       .catch(error => { if (!options.runtime.disposed) console.error("bun-wasm: root teardown failed", error); });
     else confirm(ownedDisposal);
+  }
+  try {
+    rootConsumerRelease = options.runtime.retainConsumer({
+      filesystem: request.filesystem,
+      revoke: () => { if (finished) return; if (!subprocess) { setupRevoked = true; sharedRoute?.close(); stopWorker(); return; } finish({ code: 137 }, false, 9, true); },
+      stop: stopRoot,
+    });
+    subprocess = new SubprocessBroker(workerUrl, options.runtime, {
+      loadTools, network: options.network,
+      rootFilesystem: request.filesystem, rootAcknowledged: () => rootAcknowledged,
+      stopRoot: () => finish({ code: rootOutcome ? readOutcome(rootOutcome)?.status ?? 137 : 137 }, false, undefined, true),
+      output: (fd, data) => (fd === 2 ? hooks.stderr : hooks.stdout)(data),
+    });
+  } catch (error) {
+    sharedRoute?.close();
+    releaseRootConsumer();
+    stopWorker();
+    throw error;
+  }
+  if (setupRevoked || finished) {
+    sharedRoute?.close();
+    releaseRootConsumer();
+    stopWorker();
+    throw new Error("Bun root runtime was revoked during setup");
+  }
+  // Real engine executables are registered once per runtime. Each root inherits an ordinary
+  // PATH selecting its engine; explicit absolute paths are never rewritten.
+  try {
+    let programs = registeredPrograms.get(options.runtime);
+    if (!programs) registeredPrograms.set(options.runtime, programs = new Set());
+    if (!subprocess) throw new Error("Bun process controller did not initialize");
+    registerEnginePrograms(subprocess, programs, options.engine, options.adapter, options.module);
+  } catch (error) {
+    sharedRoute?.close();
+    releaseRootConsumer();
+    stopWorker();
+    throw error;
+  }
+  const onNetwork = (message: unknown) => {
+    if (!helper) return;
+    try { dispatchBunNetwork(helper, message); }
+    catch (error) { finish({ code: 126, error: String(error) }); }
   };
-  worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
+  const onMessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
-    if (options.runtime.disposed) return;
-    if (finished) {
-      if (msg.type === "spawn") subprocess.rejectSpawn(msg.request);
-      if (msg.type === "runtime-proc") subprocess.rejectRuntimeMessage(msg);
+    if (msg.type === "bun-shared-connect") {
+      const selected = rootOutcome && readOutcome(rootOutcome);
+      const error = acceptRootSharedConnection(sharedRoute, msg, options.runtime.disposed || finished || Boolean(selected));
+      if (error) finish({ code: 126, error });
       return;
     }
-    const selected = rootOutcome && readOutcome(rootOutcome);
+    if (options.runtime.disposed) return;
+    if (finished) {
+      if (msg.type === "runtime-proc") subprocess?.rejectRuntimeMessage(msg);
+      return;
+    }
     if (msg.type === "cleanup-error") {
       console.error("bun-wasm: root cleanup failed", msg.message);
       finish({ code: msg.code }, false, msg.signal);
       return;
     }
+    const selected = rootOutcome && readOutcome(rootOutcome);
     if (selected?.kind === "signaled" && msg.type !== "exit" && msg.type !== "error") {
       // Reject capabilities at the dispatch boundary too: the periodic observer need not have
       // run yet when a guest catches its own terminal unwind and sends more messages.
-      if (msg.type === "spawn") subprocess.rejectSpawn(msg.request);
-      if (msg.type === "runtime-proc") subprocess.rejectRuntimeMessage(msg);
+      if (msg.type === "runtime-proc") subprocess?.rejectRuntimeMessage(msg);
       finish({ code: selected.status }, false, selected.code);
       return;
     }
     if (msg.type === "runtime-proc") {
-      void subprocess.runtimeMessage(msg, rootPid).catch(error => console.error("bun-wasm: process message failed", error));
-      return;
-    }
-    if (msg.type === "spawn") {
-      subprocess.spawn(msg.request);
-      return;
-    }
-    if (msg.type === "child-close") {
-      subprocess.close(msg.parentPid, msg.pid);
+      void subprocess?.runtimeMessage(msg, rootPid).catch(error => console.error("bun-wasm: process message failed", error));
       return;
     }
     if (msg.type === "phase") {
@@ -399,16 +300,11 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       return;
     }
     if (msg.type === "net") {
-      helper?.handle(msg.req);
+      onNetwork(msg);
       return;
     }
     if (msg.type === "stdout" || msg.type === "stderr") {
       (msg.type === "stdout" ? hooks.stdout : hooks.stderr)(msg.data);
-      return;
-    }
-    if (msg.type === "default-signal") {
-      // This is fatal selection, not proof that a caught unwind released filesystem locks.
-      finish({ code: 128 + msg.signal }, false, msg.signal);
       return;
     }
     if (msg.type !== "exit" && msg.type !== "error") return;
@@ -417,35 +313,66 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     if (msg.type === "error") finish({ code: msg.code, error: `bun.wasm crashed: ${msg.message}`.replace(/\r?\n/g, "\r\n") }, true);
     else finish({ code: msg.code }, true, msg.signal);
   };
-  worker.onerror = (event) => {
+  const onError = (event: ErrorEvent) => {
     event.preventDefault();
     finish({ code: 1, error: `worker error (${workerUrl}): ${event.message || (event.error instanceof Error ? event.error.message : "the browser could not load or execute the worker script")}${event.filename ? ` at ${event.filename}:${event.lineno}:${event.colno}` : ""}` });
   };
-  const tooling = options.adapter !== "preview1" && isToolCommand(options.args);
-  let prepared = !isolated && !generic && !tooling;
-  const preparation = prepared ? undefined : (async () => {
-    if (tooling) request.module = await loadTools();
-    if (generic) {
-      const { workerProcessState, createWorkerProcessTransport } = await import("waffle/proc/worker-client");
-      const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
-      const state = workerProcessState(transport);
-      // The host endpoint and descriptor reservations use the same filesystem identity.
-      const { port, ...filesystem } = request.filesystem;
-      transport.data = { ...(transport.data as object | undefined), filesystem };
-      await subprocess.adoptRuntimeRoot(transport);
-      rootOutcome = state.signals.outcome;
-      request.outcome = rootOutcome;
-      rootPid = request.pid = state.pid;
-      rootJob = request.jobId = state.job;
-    } else if (isolated) await subprocess.prepareRoot();
-    if (generic || isolated) releaseRootConsumer();
+  let interrupted = false;
+  let prepared = false;
+  const pendingKills: (2 | 9 | 15)[] = [];
+  void (async () => {
+    if (finished || options.runtime.disposed) return;
+    // The runtime's pool usually has this worker started already, so the command doesn't wait
+    // for the worker script and its imports. A taking failure is a startup failure (126).
+    const [taken, { workerProcessState, createWorkerProcessTransport }] = await Promise.all([
+      subprocess.takeWorker(workerUrl), import("waffle/proc/worker-client"),
+    ]);
+    if (finished || workerStopped || options.runtime.disposed) return taken.terminate();
+    worker = taken;
+    worker.onmessage = onMessage;
+    worker.onerror = onError;
+    const transport = request.runtimeProcess ??= createWorkerProcessTransport({ pid, job, identity: options.runtime.identities.buffer });
+    const state = workerProcessState(transport);
+    const { port: _port, ...filesystem } = request.filesystem;
+    transport.data = { ...(transport.data as object | undefined), filesystem };
+    if (!subprocess || !await subprocess.adoptRuntimeRoot(transport, () => finished)) return;
+    rootOutcome = state.signals.outcome;
+    rootPid = state.pid;
+    rootJob = state.job;
+    releaseRootConsumer();
     prepared = true;
-    if (!finished) {
-      worker.postMessage(request, [request.filesystem.port]);
+    for (const signal of pendingKills) kill(signal);
+    pendingKills.length = 0;
+    if (preparationStopped()) return;
+    if (options.adapter !== "preview1" && isToolCommand(options.args)) {
+      request.module = await loadTools();
+      request.linkPlan = programLinkPlan(request.module);
+    }
+    if (preparationStopped()) return;
+    let network;
+    if (ring || lookupChannel) {
+      network = await options.runtime.network();
+      if (preparationStopped()) return;
+      if (lookupChannel) disposeLookup = installLookupServer(lookupChannel.port1, network);
+      if (ring) {
+        helper = createBunNetworkHelper(network, ring, options.network);
+        if (workerStopped) return helper.dispose();
+      }
+      if (preparationStopped()) return;
+    }
+    if (!preparationStopped() && worker) {
+      const transfers = [request.filesystem.port].concat(request.lookupPort ? [request.lookupPort] : []);
+      worker.postMessage(request, transfers);
       watchOutcome();
     }
   })().catch(error => finish({ code: 126, error: String(error) }));
-  if (prepared) worker.postMessage(request, [request.filesystem.port]);
+  function preparationStopped(): boolean {
+    if (finished || options.runtime.disposed) return true;
+    const result = rootOutcome && readOutcome(rootOutcome);
+    if (!result) return false;
+    finish({ code: waitStatus(result) }, false, result.kind === "signaled" ? result.code : undefined);
+    return true;
+  }
   function watchOutcome(): void {
     if (!rootOutcome || finished) return;
     outcomeTimer = setTimeout(() => {
@@ -457,20 +384,17 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       else watchOutcome();
     }, 4);
   }
-  watchOutcome();
-  let interrupted = false;
-  const kill = (requestedSignal?: 2 | 9): void => {
+  function kill(requestedSignal?: 2 | 9 | 15): void {
     if (finished) return;
-    if (!prepared) { void preparation!.then(() => kill(requestedSignal)); return; }
     const signal = requestedSignal ?? (interrupted ? 9 : 2);
     interrupted = true;
-    // Without isolation there is no shared interrupt channel or subprocess service.
-    if (!request.interrupt && !request.runtimeProcess) { finish({ code: 128 + signal }, false, signal); return; }
+    if (!prepared && options.runtimeProcess) { pendingKills.push(signal); return; }
+    if (!prepared) { finish({ code: 128 + signal }, false, signal); return; }
     // The broker synchronously publishes every job member before any teardown callback. Root
     // HANDLE/IGNORE stays alive; DEFAULT selects its typed outcome without guest cooperation.
-    void subprocess.killJob(rootJob, signal).catch(error => console.error("bun-wasm: job signal failed", error));
+    void subprocess?.killJob(rootJob, signal).catch(error => console.error("bun-wasm: job signal failed", error));
     const result = readOutcome(rootOutcome!);
     if (result) finish({ code: waitStatus(result) }, false, result.kind === "signaled" ? result.code : undefined);
-  };
+  }
   return { done, kill };
 }
