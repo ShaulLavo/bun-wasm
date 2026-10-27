@@ -42,7 +42,7 @@ function runtime(cwd: string, name: string, args: string[] = [], options: { exit
       if (module === "spawn") return {
         spawn(argv: string[], spawnOptions: { env: Record<string, string> }) {
           spawned.push({ argv, event: spawnOptions.env.npm_lifecycle_event, script: spawnOptions.env.npm_lifecycle_script });
-          const exit = options.exits?.[spawnOptions.env.npm_lifecycle_event] ?? { code: 0 };
+          const exit = options.exits?.[spawnOptions.env.npm_lifecycle_event ?? ""] ?? { code: 0 };
           return { exited: Promise.resolve(exit.code), signalCode: exit.signal ?? null };
         },
       };
