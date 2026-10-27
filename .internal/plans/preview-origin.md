@@ -15,3 +15,10 @@ published `originForPort` option. No duplicate wire protocol will be invented he
 The exact React Router app rerun stays held until both source changes are concrete
 and landed. Independent native HTTP/WebSocket host-boundary tests run first.
 Parent owns independent review, CI, and merge.
+
+Checkpoint: Waffle PR160 now has source at `a95cde9a`. Root options, `bindHost`,
+and the direct relay are published. The remaining dependency is the documented
+`dispatch(open: PreviewHostOpen, exchange: PreviewHostExchange): Promise<void>`
+on `PreviewHostRelay`. The exported dispatcher interface exists, its implementation
+and attachment to the relay do not. The Bun wrapper accepts inherited options;
+server/page transport wiring waits for that exact exported method.
