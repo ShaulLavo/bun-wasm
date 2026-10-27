@@ -24,7 +24,8 @@ function setup(observe: (packet: Packet) => void = () => {}) {
       addEventListener: (type, listener) => channel.port1.addEventListener(type, listener),
       removeEventListener: (type, listener) => channel.port1.removeEventListener(type, listener),
     });
-    const sharedObjects = bindSharedObjectHost(service, { active: () => true, pending() {}, wake() {} });
+    // Without channel lanes: this covers the broker route that lanes fall back to.
+    const sharedObjects = bindSharedObjectHost({ ...service, lanes: undefined }, { active: () => true, pending() {}, wake() {} });
     const runtime = sourcePorts({ sharedObjects });
     cleanup.push(() => { service.close(); lease.close(); channel.port1.close(); channel.port2.close(); });
     return { service, sharedObjects, runtime };

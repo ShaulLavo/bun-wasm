@@ -11,7 +11,8 @@ export function createSharedObjectBroker() {
   const clients = new Map<string, Client>();
   const entries = new Map<string, Entry>();
   let disposed = false;
-  interface Endpoint { owner: string | null; origin: string; expected: string | null; version: number; peer: string | null; sent: number; terminal?: Extract<SharedRouteCommand, { kind: "port-close" }>; }
+  // `toward`: the port an in-flight endpoint was sent to; whoever holds that port holds this one.
+  interface Endpoint { owner: string | null; origin: string; expected: string | null; toward: string | null; version: number; peer: string | null; sent: number; terminal?: Extract<SharedRouteCommand, { kind: "port-close" }>; }
   const routeOwners = new Map<string, Endpoint>();
   const registrations = new Map<string, { origin: string; command: Extract<SharedRouteCommand, { kind: "bind" | "moving" }> }>();
   const pendingRoutes: { origin: string; target: string; command: SharedRouteCommand }[] = [];
@@ -119,7 +120,7 @@ export function createSharedObjectBroker() {
     if (!reservation) return false;
     if (replacing) deliveries.delete(replacing);
     deliveries.set(receipt, { holder, origin, command, returned: false });
-    for (const snapshot of snapshots) claimDeliveryPort(snapshot, origin, holder);
+    for (const snapshot of snapshots) claimDeliveryPort(snapshot, origin, holder, command.id);
     reservation.commit();
     return true;
   }
@@ -137,9 +138,17 @@ export function createSharedObjectBroker() {
       || !("version" in value) || typeof value.version !== "number" || !Number.isSafeInteger(value.version)) throw sharedError("Invalid delivered port");
     return { id: value.id, version: value.version };
   }
-  function claimDeliveryPort(value: { id: string; version: number }, origin: string, holder: string) {
+  function claimDeliveryPort(value: { id: string; version: number }, origin: string, holder: string, toward: string) {
     const endpoint = routeOwners.get(value.id);
-    if (endpoint && !endpoint.owner && endpoint.version === value.version && (endpoint.origin === origin || endpoint.expected === origin)) endpoint.expected = holder;
+    if (!endpoint || endpoint.owner || endpoint.version !== value.version || endpoint.origin !== origin && endpoint.expected !== origin) return;
+    endpoint.expected = holder; endpoint.toward = toward;
+  }
+  /** The client that holds an endpoint: its owner, or for one in flight, the holder of the port it was sent to. */
+  function holderOf(endpoint: Endpoint, depth = 0): string {
+    if (endpoint.owner) return endpoint.owner;
+    const toward = endpoint.toward === null ? undefined : routeOwners.get(endpoint.toward);
+    if (toward && depth < sharedObjectLimit) return holderOf(toward, depth + 1);
+    return endpoint.expected ?? endpoint.origin;
   }
   function settleReceipt(origin: string, command: Extract<SharedRouteCommand, { kind: "received" | "returned" }>) {
     const delivery = deliveries.get(command.receipt);
@@ -173,6 +182,8 @@ export function createSharedObjectBroker() {
   function retire(id: string, endpoint: Endpoint) {
     routeOwners.delete(id); purgePending(id);
     registrations.delete(id);
+    // Endpoints still in flight toward a retired port can never be restored.
+    for (const [other, inFlight] of Array.from(routeOwners)) if (!inFlight.owner && inFlight.toward === id) retire(other, inFlight);
     if (!endpoint.peer) return;
     const peer = routeOwners.get(endpoint.peer);
     const owner = peer?.owner ? clients.get(peer.owner) : undefined;
@@ -197,6 +208,7 @@ export function createSharedObjectBroker() {
     if (previous?.owner && previous.owner !== origin) throw sharedError("Route endpoint belongs to another owner");
     if (!previous && routeOwners.size >= sharedObjectLimit) throw sharedError("Shared route endpoint limit exceeded");
     routeOwners.set(snapshot.id, { owner: command.kind === "bind" ? origin : null, origin, expected: command.kind === "bind" ? origin : null,
+      toward: command.kind === "moving" ? command.toward ?? null : null,
       version: snapshot.version, peer: snapshot.peer, sent: Math.max(snapshot.sent, previous?.sent ?? 0), terminal: previous?.terminal });
     const registration = registrations.get(snapshot.id);
     if (command.kind === "moving" && registration?.command.snapshot.version === snapshot.version) {
@@ -375,11 +387,13 @@ export function createSharedObjectBroker() {
   }
   function closeClient(client: Client) {
     if (!clients.delete(client.id)) return;
+    // Route records committed before the exit still count, such as custody of a port it sent.
+    drainOutgoing(client);
     try { client.port?.postMessage({ kind: "closed", message: "Shared-object route is closed" }); } catch { /* Stop retaining a failed route. */ }
     client.sources.clear(); client.detach(); for (const stop of client.watches.splice(0)) stop(); client.port?.close(); client.port = null;
     client.mailbox?.close(); client.mailbox = null;
     client.outbox?.close(); client.outbox = null;
-    for (const [id, endpoint] of routeOwners) if ((endpoint.owner ?? endpoint.expected ?? endpoint.origin) === client.id) retire(id, endpoint);
+    for (const [id, endpoint] of Array.from(routeOwners)) if (routeOwners.has(id) && holderOf(endpoint) === client.id) retire(id, endpoint);
     purgePending(client.id, client.id);
     for (let index = deferredBatches.length - 1; index >= 0; index--) if (deferredBatches[index]?.origin === client.id) deferredBatches.splice(index, 1);
     for (const [receipt, delivery] of deliveries) if (delivery.origin === client.id || delivery.holder === client.id && !routeOwners.has(delivery.command.id)) deliveries.delete(receipt);

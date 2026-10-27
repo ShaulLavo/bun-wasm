@@ -30,7 +30,8 @@ export interface SharedPublication {
 }
 interface SharedRouteSnapshot { readonly id: string; readonly peer: string | null; readonly version: number; readonly sent: number; }
 export type SharedRouteCommand =
-  | { readonly kind: "bind" | "moving"; readonly snapshot: SharedRouteSnapshot }
+  // `toward`: the port a moving endpoint was sent to over its channel lane, which holds it until restored.
+  | { readonly kind: "bind" | "moving"; readonly snapshot: SharedRouteSnapshot; readonly toward?: string }
   | { readonly kind: "received" | "returned"; readonly receipt: string }
   | { readonly kind: "closed"; readonly id: string }
   | { readonly kind: "port-data"; readonly id: string; readonly from: string; readonly sequence: number; readonly graph: unknown }
@@ -40,13 +41,20 @@ interface SharedRoutes {
   readonly enabled: boolean;
   enable(): void;
   send(command: unknown): boolean;
+  /** Whether the broker has reported this endpoint retired: nothing more can reach it. */
+  retired(id: string): boolean;
   tryTransaction(deliver: () => void, commit: () => void): boolean;
   onCredit(ready: () => void): void;
   transaction(deliver: () => void, commit: () => void): void;
   credit(): void;
 }
+interface SharedLanes {
+  create(): SharedArrayBuffer;
+  open(buffer: SharedArrayBuffer, side: 0 | 1): import("./lane.ts").SharedLane;
+}
 export interface SharedObjects {
   readonly mailbox?: import("./mailbox.ts").SharedMailbox;
+  readonly lanes?: SharedLanes;
   readonly routes?: SharedRoutes;
   begin(): SharedPublication;
   read(reference: SharedReference): SharedArrayBuffer;
@@ -96,7 +104,11 @@ function routeSnapshot(value: unknown): SharedRouteSnapshot {
 }
 function routeCommand(value: unknown): SharedRouteCommand {
   const input = object(value);
-  if (input.kind === "bind" || input.kind === "moving") return { kind: input.kind, snapshot: routeSnapshot(input.snapshot) };
+  if (input.kind === "bind") return { kind: input.kind, snapshot: routeSnapshot(input.snapshot) };
+  if (input.kind === "moving") {
+    const snapshot = routeSnapshot(input.snapshot);
+    return input.toward === undefined ? { kind: input.kind, snapshot } : { kind: input.kind, snapshot, toward: routeId(input.toward) };
+  }
   if (input.kind === "received" || input.kind === "returned") return { kind: input.kind, receipt: transaction(input.receipt) };
   if (input.kind === "closed") return { kind: input.kind, id: routeId(input.id) };
   if ((input.kind === "port-data" || input.kind === "port-close") && typeof input.id === "string" && typeof input.from === "string") {
