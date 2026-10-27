@@ -40,7 +40,7 @@
   }
   function start(server: Server, options: Options): void {
     const startup: Startup = {
-      ref: server._referenced !== false,
+      ref: true,
       phase: "binding",
       step: () => step(server, options, startup),
     };

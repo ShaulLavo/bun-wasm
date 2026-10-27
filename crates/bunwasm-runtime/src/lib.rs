@@ -263,12 +263,14 @@ fn new_state(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "/".to_owned());
     let main_path = match entry {
+        Entry::File(path) if path == "-" => format!("{}/[stdin]", cwd.trim_end_matches('/')),
         Entry::File(path) => resolve::join(&cwd, path),
         Entry::Eval(_) => format!("{}/[eval]", cwd.trim_end_matches('/')),
         Entry::Test(_) => format!("{}/", cwd.trim_end_matches('/')),
     };
     // Like Bun, `-e` code gets no script path in argv.
     let script = match entry {
+        Entry::File(path) if path == "-" => Some("-".to_owned()),
         Entry::File(_) => Some(main_path.clone()),
         Entry::Eval(_) => None,
         Entry::Test(_) => Some("test".to_owned()),

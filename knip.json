@@ -54,6 +54,7 @@
         "tests/*.test.{ts,js}",
         "guest-tests/*.test.ts",
         "tests/browser-*.{ts,mjs}",
+        "tests/ten-app-finishline.ts",
         "scripts/*.{ts,mjs}",
         "src/fs-worker.ts",
         "src/sw.ts",

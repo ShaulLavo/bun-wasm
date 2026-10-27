@@ -1,3 +1,4 @@
+import { createSharedLaneBuffer, openSharedLane } from "./lane.ts";
 import { createSharedMailbox } from "./mailbox.ts";
 import { messageData, sharedBufferLength, sharedError, sharedObjectLimit, sharedResponse, sharedRouteCommand } from "./protocol.ts";
 import type { BunSharedNativeHost, SharedAttachment, SharedObjects, SharedPort, SharedPublication, SharedReference, SharedRouteCommand } from "./protocol.ts";
@@ -173,7 +174,8 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     port.removeEventListener("message", onMessage);
     port.removeEventListener("messageerror", onError);
     try { port.postMessage({ kind: "close" }); } catch { /* The peer may already be gone. */ }
-    port.close(); mailbox.close(); outbox.close();
+    // The outbox stays readable: the broker drains what was committed before this close.
+    port.close(); mailbox.close();
     for (const waiter of waiters) waiter.ready();
   }
   function onError() { close(sharedError("Shared-object transport failed")); }
@@ -259,7 +261,8 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   port.addEventListener("message", onMessage);
   port.addEventListener("messageerror", onError);
   port.start();
-  return { mailbox, routes: { owner, get enabled() { return routesEnabled; }, enable() { active(); routesEnabled = true; }, send: sendRoute, transaction, tryTransaction, onCredit(ready) { retryCredit = ready; }, credit }, begin, read, wait, close,
+  const lanes = { create: createSharedLaneBuffer, open(buffer: SharedArrayBuffer, side: 0 | 1) { active(); return openSharedLane(buffer, side); } };
+  return { mailbox, lanes, routes: { owner, get enabled() { return routesEnabled; }, enable() { active(); routesEnabled = true; }, send: sendRoute, retired: (id: string) => retiredTargets.has(id), transaction, tryTransaction, onCredit(ready) { retryCredit = ready; }, credit }, begin, read, wait, close,
     inspectRoutes: () => ({ outbound: outbox.inspect().queued, terminals: terminals.size, enabled: routesEnabled }),
     inspect: () => ({ buffers: buffers.size, pending: pending.size, staged: publications.size, closed: closed !== null }) };
 }

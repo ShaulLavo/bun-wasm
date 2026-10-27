@@ -114,3 +114,16 @@ and `wasm_bg.wasm` from `@next/swc-wasm-nodejs@16.4.3`. The retained report
 records their hashes and a successful unmodified backend transform using the
 original ES2022 probe options. No application, browser, production artifact,
 or engine-integration acceptance follows from this source/native result.
+
+## Engine buffer adapters
+
+The original JSC adapters in `crates/bunwasm-engine-jsc/src/vm.rs` and
+`crates/bunwasm-jsc/{cpp/helpers.cpp,src/sys.rs}` call WebKit's
+`ArrayBuffer::createFromBytes`, `makeWasmMemory`, `isWasmMemory`, and `detach`.
+Their upstream reference is Bun's WebKit fork at
+`3d3257150c40a1aabdc5f8b48d5b33d0413674cb`, under
+`Source/JavaScriptCore/runtime/ArrayBuffer.{h,cpp}` and `JSArrayBuffer.h`.
+These are original host-feature adapters, not copied WebKit implementations.
+They view the Store-owned bytes with a deallocator that does not free them.
+The QuickJS adapter and its local buffer flag/helper patch are classified in
+[the QuickJS record](quickjs.md).

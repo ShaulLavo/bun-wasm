@@ -29,11 +29,19 @@ export function bindSharedObjectHost(service: SharedObjects, host: SharedHostLif
   if (!routes) return { begin, read, wait, mailbox: service.mailbox };
   active();
   routes.enable();
-  const mailbox = service.mailbox;
+  const mailbox = service.mailbox, lanes = service.lanes;
   return {
     begin,
     read,
     wait,
+    lanes: lanes ? {
+      create() { active(); return lanes.create(); },
+      open(buffer, side) {
+        active();
+        const lane = lanes.open(buffer, side);
+        return { ...lane, watch: ready => lane.watch(() => { if (!host.active()) return; ready(); host.wake(); }) };
+      },
+    } : undefined,
     mailbox: mailbox ? {
       buffer: mailbox.buffer,
       capacity: mailbox.capacity,
@@ -56,6 +64,7 @@ export function bindSharedObjectHost(service: SharedObjects, host: SharedHostLif
         if (!host.active() && (parsed.kind === "closed" || parsed.kind === "port-close")) return true;
         active(); const accepted = routes.send(parsed); if (accepted) host.wake(); return accepted;
       },
+      retired: id => routes.retired(id),
       transaction(deliver, commit) { active(); host.wake(); routes.transaction(deliver, commit); },
       tryTransaction(deliver, commit) { active(); host.wake(); return routes.tryTransaction(deliver, commit); },
       onCredit(ready) { active(); routes.onCredit(() => { if (host.active()) { ready(); host.wake(); } }); },
