@@ -80,6 +80,33 @@ test("stage output uses the last exact command and preserves body whitespace unt
   expect(() => stageOutput(log, "bun run missing")).toThrow("Missing stage boundary for bun run missing");
 });
 
+test("Next build errors appended to type-checking progress retain the failed stage diagnostic", () => {
+  const command = "bun run .matrix-command.ts node_modules/next/dist/bin/next build";
+  const log = [
+    "user@bun:~$ bun install",
+    "debug: EAGAIN during install write backpressure",
+    `user@bun:~$ ${command}`,
+    " ✓ Compiled successfully in 48s",
+    "   Linting and checking validity of types  ..EAGAIN: resource temporarily unavailable, open '/home/user/node_modules/typescript/lib/typescript.js'",
+    "Next.js build worker exited with code: 1 and signal: null",
+    "[1] user@bun:~$",
+  ].join("\n");
+  expect(failure(stageOutput(log, command), "build")).toEqual({
+    category: "d",
+    blocker: "build: EAGAIN: resource temporarily unavailable, open '/home/user/node_modules/typescript/lib/typescript.js'",
+  });
+});
+
+test("embedded debug and backpressure EAGAIN text is not a diagnostic", () => {
+  const outputs = [
+    "debug: EAGAIN: resource temporarily unavailable, open '/tmp/cache'",
+    "install write backpressure: EAGAIN: resource temporarily unavailable",
+    "Linting and checking validity of types  ..",
+    "✓ Compiled successfully in 48s",
+  ];
+  for (const output of outputs) expect(firstError(output)).toBe("No diagnostic before exit or deadline");
+});
+
 test("only matching QuickJS failures get category f, retaining extra fields and pass order", () => {
   const failed: Readonly<ComparisonRow & { blocker: string; metadata: { code: number } }> = Object.freeze({
     app: "prettier", host: "native", stage: "check", engine: "quickjs", status: "fail", category: "c",
