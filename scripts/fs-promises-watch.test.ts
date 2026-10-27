@@ -7,16 +7,17 @@ import { execFileSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
-function productionSource() {
+function productionSource(name: string) {
   const scratch = fs.mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-promise-watch-source-"));
   try {
     const destination = join(scratch, "watch.js");
     execFileSync("node", [new URL("./transpile-runtime.ts", import.meta.url).pathname,
-      new URL("fs_promises_watch.ts", directory).pathname, destination], { stdio: "pipe" });
+      new URL(`${name}.ts`, directory).pathname, destination], { stdio: "pipe" });
     return fs.readFileSync(destination, "utf8");
   } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
 }
-const emitted = productionSource();
+const emitted = productionSource("fs_promises_watch");
+const backendSource = productionSource("fs_watch");
 function adapter() {
   return runInNewContext(emitted, { AbortSignal })();
 }
@@ -46,10 +47,7 @@ function wrapperSource(value: object): string {
 test("the exact shim import links through the production ESM wrapper", () => {
   const { promises } = filesystem();
   const program = `import { SourceTextModule } from "node:vm";
-    import * as fs from "node:fs";
-import { readFileSync } from "node:fs";
-import { EventEmitter, getEventListeners } from "node:events";
-import { join } from "node:path";
+    import { readFileSync } from "node:fs";
     const target = new SourceTextModule(readFileSync(0, "utf8"));
     const importer = new SourceTextModule('import { watch } from "fs/promises";');
     await importer.link(() => target);
@@ -63,12 +61,11 @@ import { join } from "node:path";
 function controlled() {
   const watcher = new EventEmitter();
   let closed = 0;
-  let callback: (event: string, filename: string | Buffer) => void = () => {};
-  const watch = adapter()((_path: string, _options: unknown, listener: typeof callback) => {
-    callback = listener;
+  const watch = adapter()((_path: string, _options: unknown, listener: (event: string, filename: string | Buffer) => void) => {
+    watcher.on("change", listener);
     return Object.assign(watcher, { close() { closed++; watcher.emit("close"); } });
   }, String);
-  return { watch, watcher, closed: () => closed, change: (name: string | Buffer) => callback("change", name) };
+  return { watch, watcher, closed: () => closed, change: (name: string | Buffer) => watcher.emit("change", "change", name) };
 }
 
 test("promise watcher delivers queued events and concurrent reads once in order", async () => {
@@ -143,6 +140,7 @@ test("external close settles pending reads", async () => {
   control.watcher.emit("close");
   expect(await pending).toEqual({ value: undefined, done: true });
   expect(control.closed()).toBe(1);
+  expect(control.watcher.eventNames()).toEqual([]);
 });
 
 test("invalid signals fail before opening a watcher", () => {
@@ -189,4 +187,71 @@ test("return before consuming a pre-aborted iterator suppresses further reads", 
   iterator.return();
   expect(await iterator.next()).toEqual({ value: undefined, done: true });
   expect(control.closed()).toBe(0);
+});
+
+function productionBackend() {
+  let stamp = 0;
+  let failure: Error | undefined;
+  let poll: () => void = () => { throw new Error("No active watcher"); };
+  let watcher: EventEmitter & { close(): void };
+  const timers = new Set<object>();
+  const stat = () => {
+    if (failure) throw failure;
+    return { ino: 1, size: stamp, mtimeMs: stamp, ctimeMs: stamp, isDirectory: () => false, isSymbolicLink: () => false };
+  };
+  const factory = runInNewContext(backendSource, { AbortSignal });
+  const backend = factory({
+    require: (name: string) => name === "events" ? EventEmitter : { Buffer },
+    timers: {
+      setInterval(callback: () => void) {
+        poll = callback;
+        const timer = { ref() {}, unref() {} };
+        timers.add(timer);
+        return timer;
+      },
+      clearInterval(timer: object) { expect(timers.delete(timer)).toBe(true); },
+    },
+    nextTick: queueMicrotask,
+  })({ statSync: stat, lstatSync: stat, readdirSync: () => [], toPath: String, absolute: String });
+  const watch = adapter()((...args: unknown[]) => { watcher = backend.watch(...args); return watcher; }, String);
+  return {
+    watch, handle: () => watcher, timers,
+    change() { stamp++; poll(); },
+    fail(error: Error) { failure = error; poll(); },
+  };
+}
+
+async function consumeOne(iterable: AsyncIterable<{ filename: string | Buffer | undefined }>) {
+  for await (const event of iterable) { expect(event.filename).toBe("file.txt"); break; }
+}
+
+test.each(["return", "abort", "error", "external-close", "break"] as const)("real callback backend releases all listeners after %s", async end => {
+  const backend = productionBackend();
+  const controller = new AbortController();
+  const iterable = backend.watch("file.txt", { signal: controller.signal });
+  const iterator = iterable[Symbol.asyncIterator]();
+  try {
+    expect(backend.handle().listenerCount("change")).toBe(1);
+    expect(backend.timers.size).toBe(1);
+    const pending = iterator.next();
+    const error = new Error("poll EIO");
+    if (end === "return") iterator.return();
+    if (end === "abort") controller.abort(error);
+    if (end === "error") backend.fail(error);
+    if (end === "external-close") backend.handle().close();
+    if (end === "break") {
+      backend.change();
+      await pending;
+      backend.change();
+      await consumeOne(iterable);
+    }
+    if (end === "abort") await expect(pending).rejects.toMatchObject({ name: "AbortError", code: "ABORT_ERR", cause: error });
+    if (end === "error") await expect(pending).rejects.toBe(error);
+    if (end === "return" || end === "external-close") expect(await pending).toEqual({ value: undefined, done: true });
+    await Promise.resolve();
+    expect(backend.handle().eventNames()).toEqual([]);
+    expect(backend.timers.size).toBe(0);
+    expect(getEventListeners(controller.signal, "abort")).toEqual([]);
+    expect(await iterator.next()).toEqual({ value: undefined, done: true });
+  } finally { iterator.return(); }
 });

@@ -5,6 +5,7 @@ type FsPromiseWatchWaiter = { resolve(result: FsPromiseWatchResult): void; rejec
 interface FsPromiseWatchHandle {
   on(event: "error", listener: (error: unknown) => void): void;
   on(event: "close", listener: () => void): void;
+  off(event: "change", listener: (eventType: string, filename: FsPromiseWatchEvent["filename"]) => void): void;
   off(event: "error", listener: (error: unknown) => void): void;
   off(event: "close", listener: () => void): void;
   close(): void;
@@ -45,9 +46,11 @@ type FsPromiseWatchCallback = (path: string, options: unknown, listener: (eventT
     state = terminal;
     events.length = 0;
     signal?.removeEventListener("abort", onAbort);
+    watcher?.off("change", onChange);
     watcher?.off("error", onError);
     watcher?.off("close", onClose);
     watcher?.close();
+    watcher = undefined;
     for (const waiter of waiters.splice(0)) void next().then(waiter.resolve, waiter.reject);
   }
   function onAbort() { finish({ kind: "error", error: abortError() }); }
