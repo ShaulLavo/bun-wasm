@@ -4,9 +4,10 @@ import { appendCustomSection, programKind, programProfile, verifyProgramSide, ty
 /** Snapshot both inputs before hashing; the cache association owns kind and both exact bytes. */
 export async function engineLinkPlan(files: PairedProgramFiles<Uint8Array>): Promise<LinkPlanSource> {
   const input = { kind: files.kind, core: Uint8Array.from(files.core), side: Uint8Array.from(files.side) };
-  const core = new WebAssembly.Module(input.core);
+  // Browser main threads refuse synchronous compilation of modules over 8 MB.
+  const [core, side] = await Promise.all([WebAssembly.compile(input.core), WebAssembly.compile(input.side)]);
   if (programKind(core) !== input.kind) throw new TypeError("Program kind does not match core declaration");
-  verifyProgramSide(input.kind, new WebAssembly.Module(input.side));
+  verifyProgramSide(input.kind, side);
   const digests = await Promise.all([input.core, input.side].map(bytes => crypto.subtle.digest("SHA-256", bytes)));
   const kind = new TextEncoder().encode(input.kind);
   const identity = Uint8Array.from(Array.from(kind).concat([0], Array.from(new Uint8Array(digests[0]!)), Array.from(new Uint8Array(digests[1]!))));

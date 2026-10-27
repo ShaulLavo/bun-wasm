@@ -182,3 +182,15 @@ for (const kind of ["quickjs", "jsc"] as const) test(`${kind} preparation reject
   expect(programLinkPlan(module)?.core.source.slice(0, expectedCore.length)).toEqual(expectedCore);
   expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(expectedSide);
 });
+
+test("paired preparation never compiles synchronously, which browser main threads refuse for large modules", async () => {
+  const { core, side } = quickjsPair("jsc");
+  const Module = WebAssembly.Module;
+  const refused = new Proxy(Module, { construct() { throw new RangeError("WebAssembly.Compile is disallowed on the main thread"); } });
+  Reflect.set(WebAssembly, "Module", refused);
+  try {
+    expect(programLinkPlan(await prepareProgram({ kind: "jsc", core, side }))?.libraries[0]?.source).toEqual(side);
+  } finally {
+    Reflect.set(WebAssembly, "Module", Module);
+  }
+});

@@ -128,9 +128,8 @@ async function compileCached(response: Response, key: string) {
 
 async function loadPaired(url: string, expected: PairedEngine, progress: (text: string) => void) {
   const core = await loadVerifiedFile(url, programProfile(expected).core, progress);
-  const kind = programKind(new WebAssembly.Module(core.bytes));
-  if (kind !== expected) throw new TypeError(`Expected ${expected} core declaration`);
-  return loadProgramSide(url, kind, core, progress, true);
+  // Preparation compiles asynchronously and rejects a core that declares another engine.
+  return loadProgramSide(url, expected, core, progress, true);
 }
 
 async function loadProgramSide(url: string, kind: PairedEngine, core: { bytes: Uint8Array<ArrayBuffer>; build: string | null }, progress: (text: string) => void, verifyBuild: boolean) {
