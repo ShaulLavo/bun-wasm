@@ -45,7 +45,7 @@ interface SharedRoutes {
   transaction(deliver: () => void, commit: () => void): void;
   credit(): void;
 }
-export interface SharedLanes {
+interface SharedLanes {
   create(): SharedArrayBuffer;
   open(buffer: SharedArrayBuffer, side: 0 | 1): import("./lane.ts").SharedLane;
 }

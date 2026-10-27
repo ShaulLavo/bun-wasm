@@ -12,7 +12,7 @@ const writeIndex = 0, readIndex = 1, signalIndex = 2;
 const headerBytes = 2 * ringWords * Int32Array.BYTES_PER_ELEMENT;
 const ringBytes = 1024 * 1024;
 const frameHeaderBytes = 4;
-export const sharedLaneBytes = headerBytes + 2 * ringBytes;
+const sharedLaneBytes = headerBytes + 2 * ringBytes;
 
 export interface SharedLane {
   readonly buffer: SharedArrayBuffer;
