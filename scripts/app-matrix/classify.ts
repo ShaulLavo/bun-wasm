@@ -61,7 +61,7 @@ function firstJsonLintDiagnostic(lines: readonly string[]): string | undefined {
 
 export function firstError(output: string): string {
   // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
-  const lines = output.replace(/\x1b\[[0-9;]*m/g, "").split("\n").map(line => line.trim().replace(/^\d{1,2}:\d{2}:\d{2} [AP]M \[vite\] (?:\([^)]*\) )?/, "").replace(/^(?:unhandled\s*Rejection|uncaught\s*Exception)(?:\s*:\s*|\s+)\[?(\w*Error:.*?)\]?$/i, "$1").replace(/^\[((?:\w*Error|error):.*)\]$/, "$1"));
+  const lines = output.replace(/\x1b\[[0-9;]*m/g, "").split("\n").map(line => line.trim().replace(/^Linting and checking validity of types\s*\.*(?=(?:\w*Error|E[A-Z][A-Z0-9_]+):)/, "").replace(/^\d{1,2}:\d{2}:\d{2} [AP]M \[vite\] (?:\([^)]*\) )?/, "").replace(/^(?:unhandled\s*Rejection|uncaught\s*Exception)(?:\s*:\s*|\s+)\[?(\w*Error:.*?)\]?$/i, "$1").replace(/^\[((?:\w*Error|error):.*)\]$/, "$1"));
   const diagnostic = lines.find(line => /^(?:(?:\w*Error|error|panic|fatal|bun-wasm|E[A-Z][A-Z0-9_]+):|Error when evaluating SSR module |circular import:|Export named .* not found in module |The requested module .*does not provide an export named|memory allocation of \d+ bytes failed|thread '.+' panicked|[^|\n]+error TS\d+:)/i.test(line)) ?? firstJsonLintDiagnostic(lines);
   const exit = exitProvenance({ code: null, output }).runtimeExits.at(-1);
   return (diagnostic ?? (exit ? `Runtime exited ${exit.code}: ${exit.reason}` : "No diagnostic before exit or deadline")).slice(0, 500);
