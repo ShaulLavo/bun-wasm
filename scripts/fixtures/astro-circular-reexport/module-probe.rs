@@ -63,8 +63,11 @@ fn main() {
     runtime.set_loader(FileResolver, FileLoader);
     let context = Context::full(&runtime).expect("context");
     let result = context.with(|ctx| {
-        let promise = Module::evaluate(ctx.clone(), name, source).map_err(|error| describe(&ctx, error))?;
-        promise.finish::<()>().map_err(|error| describe(&ctx, error))
+        let promise =
+            Module::evaluate(ctx.clone(), name, source).map_err(|error| describe(&ctx, error))?;
+        promise
+            .finish::<()>()
+            .map_err(|error| describe(&ctx, error))
     });
     if let Err(message) = result {
         eprintln!("{message}");

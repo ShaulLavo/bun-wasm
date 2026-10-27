@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,7 +18,7 @@ function writeModules(name: string, modules: Record<string, string>) {
   for (const [file, source] of Object.entries(modules)) writeFileSync(join(directory, file), source);
 }
 
-const concrete = 'const Fragment = Symbol.for("astro:fragment");\nexport { Fragment };\n';
+const concrete = 'let Fragment = Symbol.for("astro:fragment");\nfunction setFragment(value) { Fragment = value; }\nexport { Fragment, setFragment };\n';
 const indirect = 'import { Fragment } from "./common.mjs";\nexport { Fragment };\n';
 const server = 'import { isVNode } from "./jsx-runtime.mjs";\nimport { Fragment } from "./render.mjs";\nexport { Fragment, isVNode };\n';
 const jsxRuntime = (parent: string) => `import { Fragment } from "./${parent}.mjs";\nconst AstroJSX = "astro:jsx";\nfunction isVNode(value) { return value && typeof value === "object" && value[AstroJSX]; }\nexport { Fragment, isVNode };\n`;
@@ -28,11 +28,31 @@ const validEntries: Record<string, string[]> = {
   astro: ["server", "jsx", "jsx-runtime", "render", "common"],
   duplicate: ["server", "jsx-runtime", "render", "common"],
 };
+const adjacentEntries: Record<string, string[]> = {
+  minimal: ["server", "jsx-runtime", "render"],
+  direct: ["server", "jsx-runtime", "render", "common"],
+  local: ["server", "jsx-runtime"],
+  acyclic: ["server", "jsx-runtime", "render", "common"],
+};
+const allValidEntries = { ...validEntries, ...adjacentEntries };
+const concreteModules: Record<string, string> = { deeper: "concrete", minimal: "render", local: "server" };
 
-function forEachValidEntry(run: (graph: string, entry: string) => void) {
-  for (const [graph, entries] of Object.entries(validEntries)) {
+function forEachEntry(groups: Record<string, string[]>, run: (graph: string, entry: string) => void) {
+  for (const [graph, entries] of Object.entries(groups)) {
     for (const entry of entries) run(graph, entry);
   }
+}
+
+function forEachValidEntry(run: (graph: string, entry: string) => void) {
+  forEachEntry(validEntries, run);
+}
+
+function forEachAdjacentEntry(run: (graph: string, entry: string) => void) {
+  forEachEntry(adjacentEntries, run);
+}
+
+function forEachEveryValidEntry(run: (graph: string, entry: string) => void) {
+  forEachEntry(allValidEntries, run);
 }
 
 function forEachNegativeEntry(run: (graph: string, entry: string) => void) {
@@ -74,7 +94,7 @@ function writeAdjacentGraphs() {
     "jsx-runtime.mjs": jsxRuntime("server"), "render.mjs": indirect, "common.mjs": concrete,
   });
   writeModules("local", {
-    "server.mjs": 'import { isVNode } from "./jsx-runtime.mjs";\nconst Fragment = Symbol.for("astro:fragment");\nexport { Fragment, isVNode };\n',
+    "server.mjs": 'import { isVNode } from "./jsx-runtime.mjs";\nlet Fragment = Symbol.for("astro:fragment");\nfunction setFragment(value) { Fragment = value; }\nexport { Fragment, setFragment, isVNode };\n',
     "jsx-runtime.mjs": jsxRuntime("server"),
   });
   writeModules("acyclic", { "server.mjs": server, "jsx-runtime.mjs": jsxRuntime("render"), "render.mjs": indirect, "common.mjs": concrete });
@@ -91,10 +111,24 @@ function writeNegativeGraphs() {
   });
 }
 
-beforeAll(() => {
+function wrapperSource(graph: string, entry: string) {
+  const concrete = concreteModules[graph] ?? "common";
+  const duplicate = graph === "duplicate"
+    ? 'import * as duplicate from "./jsx-runtime.mjs";\nif (duplicate.Fragment2 !== Fragment) throw new Error("duplicate alias mismatch");\n'
+    : "";
+  const duplicateUpdate = graph === "duplicate"
+    ? 'if (duplicate.Fragment2 !== updated) throw new Error("duplicate alias is not live");\n'
+    : "";
+  return `import * as selected from "./${entry}.mjs";\nimport * as server from "./server.mjs";\nimport { Fragment, setFragment } from "./${concrete}.mjs";\nif (server.Fragment !== Fragment) throw new Error("Fragment namespace mismatch");\nif (Fragment !== Symbol.for("astro:fragment")) throw new Error("Fragment concrete identity mismatch");\n${duplicate}if (typeof selected.isVNode === "function" && selected.isVNode({ ["astro:jsx"]: true }) !== true) throw new Error("isVNode import mismatch");\nif (typeof selected.renderJSX === "function" && selected.renderJSX({ ["astro:jsx"]: true }) !== true) throw new Error("renderJSX import mismatch");\nconst updated = { live: true };\nsetFragment(updated);\nif (server.Fragment !== updated || Fragment !== updated) throw new Error("Fragment binding is not live");\n${duplicateUpdate}`;
+}
+
+function prepareNativeProbe() {
   writeValidGraphs();
   writeAdjacentGraphs();
   writeNegativeGraphs();
+  forEachEveryValidEntry((graph, entry) => {
+    writeFileSync(join(scratch, graph, `check-${entry}.mjs`), wrapperSource(graph, entry));
+  });
   const cargoHome = join(scratch, "cargo-home");
   mkdirSync(cargoHome);
   const sharedCargo = process.env.CARGO_HOME;
@@ -104,6 +138,7 @@ beforeAll(() => {
   writeFileSync(join(scratch, "Cargo.toml"), manifest);
   mkdirSync(join(scratch, "src"));
   writeFileSync(join(scratch, "src/main.rs"), readFileSync(new URL("fixtures/astro-circular-reexport/module-probe.rs", import.meta.url)));
+  console.log(JSON.stringify({ prerequisite: "offline-quickjs", scratch, cargoBuildJobs: process.env.CARGO_BUILD_JOBS ?? "default" }));
   const result = spawnSync("cargo", ["build", "--offline", "--manifest-path", join(scratch, "Cargo.toml")], {
     cwd: root,
     env: { ...process.env, CARGO_HOME: cargoHome, CARGO_NET_OFFLINE: "true", CARGO_TARGET_DIR: join(scratch, "target") },
@@ -113,9 +148,15 @@ beforeAll(() => {
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-});
+}
 
 afterAll(cleanup);
+try {
+  prepareNativeProbe();
+} catch (error) {
+  cleanup();
+  throw error;
+}
 
 function observe(command: string, entry: string) {
   const result = spawnSync(command, [entry], { encoding: "utf8", timeout: 30_000 });
@@ -127,8 +168,9 @@ function observe(command: string, entry: string) {
   };
 }
 
-function quickJs(graph: string, entry = "server") {
-  return observe(probe, join(scratch, graph, `${entry}.mjs`));
+function quickJs(graph: string, entry = "server", wrapped = false) {
+  const module = wrapped ? `check-${entry}` : entry;
+  return observe(probe, join(scratch, graph, `${module}.mjs`));
 }
 
 function expectPass(result: ReturnType<typeof quickJs>) {
@@ -146,12 +188,12 @@ function expectBoundedFailure(graph: string, entry: string, pattern: RegExp) {
   expect(result.output).toMatch(pattern);
 }
 
-test("QuickJS resolves two-plus-hop cycles and duplicate aliases from every entry", () => {
-  forEachValidEntry((graph, entry) => expectPass(quickJs(graph, entry)));
+test("QuickJS resolves live two-plus-hop bindings and duplicate aliases from every entry", () => {
+  forEachValidEntry((graph, entry) => expectPass(quickJs(graph, entry, true)));
 });
 
-test("QuickJS preserves one-hop, direct, local and acyclic contracts", () => {
-  for (const graph of ["minimal", "direct", "local", "acyclic"]) expectPass(quickJs(graph));
+test("QuickJS preserves one-hop, direct, local and acyclic binding contracts", () => {
+  forEachAdjacentEntry((graph, entry) => expectPass(quickJs(graph, entry, true)));
 });
 
 test("genuine unresolved cycles fail boundedly with a circular diagnostic", () => {
@@ -162,10 +204,10 @@ test("circular evaluation preserves TDZ ReferenceError", () => {
   for (const entry of ["server", "jsx-runtime"]) expectBoundedFailure("tdz", entry, /ReferenceError/);
 });
 
-test("Node and Bun accept every valid graph and entry", () => {
+test("Node and Bun accept every valid graph and entry with live bindings", () => {
   for (const runtime of ["node", "bun"]) {
-    forEachValidEntry((graph, entry) => {
-      const result = observe(runtime, join(scratch, graph, `${entry}.mjs`));
+    forEachEveryValidEntry((graph, entry) => {
+      const result = observe(runtime, join(scratch, graph, `check-${entry}.mjs`));
       expect(result.error).toBe("");
       expect(result.signal).toBeNull();
       expect(result.status, result.output).toBe(0);
