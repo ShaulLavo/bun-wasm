@@ -27,6 +27,7 @@ function originalSyntax(text: string): string {
     [/\n  let execveWarned = false;\n/g, "\n", 1],
     [/\n    execve\(\) \{[\s\S]*?\n    \},/g, "", 1],
     [/    noDeprecation: false,\n/g, "", 1],
+    [/      if \(name === "DeprecationWarning" && process\.noDeprecation\) return;\n/g, "", 1],
     [/const processBase\s*=/g, "const process =", 1],
     [/\bprocessBase\b/g, "process", 5],
     [/const streamBase\s*=/g, "const stream =", 2],
