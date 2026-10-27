@@ -3,6 +3,20 @@ declare namespace BunWasm {
   interface AssertionDetail {
     message?: unknown; actual?: unknown; expected?: unknown; operator?: unknown; stack?: unknown;
   }
+  interface AssertionCallRecord {
+    thisArg: unknown;
+    arguments: readonly unknown[];
+  }
+  interface AssertionCallTracker {
+    calls(fn?: Function | number, expected?: number): Function;
+    getCalls(tracked: Function): readonly AssertionCallRecord[];
+    reset(tracked?: Function): void;
+    report(): AssertionDetail[];
+    verify(): void;
+  }
+  interface AssertionCallTrackerConstructor {
+    new(): AssertionCallTracker;
+  }
   interface AssertionOptions {
     actual?: unknown; expected?: unknown; message?: unknown; operator?: string; stackStartFn?: Function; details?: readonly AssertionDetail[];
   }
@@ -10,6 +24,7 @@ declare namespace BunWasm {
   interface UtilityModule {
     parseArgs(config?: unknown): ParseArgsResult;
     bunDeepEquals(a: unknown, b: unknown, strict?: boolean): boolean;
+    deprecate<Fn extends Function>(fn: Fn, msg: string, code?: string): Fn;
     isDeepStrictEqual(a: unknown, b: unknown): boolean;
     types: { isRegExp(value: unknown): value is RegExp; isNativeError(value: unknown): value is Error };
   }

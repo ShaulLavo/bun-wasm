@@ -17,7 +17,52 @@ const originals = {
   util: "72229e61f5716247725a2c3caf6c861a28e1f659fa3ed509f21e41113e428bcf",
 };
 
+function restoreCallTrackerDelta(text: string): string {
+  const source = ts.createSourceFile("assert.js", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const statements: ts.Statement[] = [];
+  function collectStatements(node: ts.Node): void {
+    if (ts.isStatement(node)) statements.push(node);
+    ts.forEachChild(node, collectStatements);
+  }
+  collectStatements(source);
+  function named(statement: ts.Statement, name: string) {
+    if (ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) return statement.name?.text === name;
+    if (!ts.isVariableStatement(statement)) return false;
+    const declarations = statement.declarationList.declarations;
+    return declarations.length === 1 && declarations[0]!.name.getText(source) === name;
+  }
+  function footer(statement: ts.Statement, prefix: string) {
+    return ts.isExpressionStatement(statement) && statement.getText(source).startsWith(prefix);
+  }
+  const declarations = statements.filter(statement =>
+    named(statement, "CallTrackerContext") || named(statement, "validateExpectedCalls") || named(statement, "noop") ||
+    named(statement, "CallTracker") || named(statement, "defineCallTracker") || named(statement, "callTrackerDescriptor") ||
+    footer(statement, "Object.defineProperty(assert, \"CallTracker\"") || footer(statement, "Object.defineProperty(strict, \"CallTracker\""),
+  );
+  if (declarations.length !== 8) throw new Error(`Expected eight CallTracker statements, found ${declarations.length}`);
+  const orderedNames = ["CallTrackerContext", "validateExpectedCalls", "noop", "CallTracker", "defineCallTracker"];
+  for (let index = 0; index < orderedNames.length; index++) {
+    if (!named(declarations[index]!, orderedNames[index]!)) throw new Error(`Unexpected CallTracker declaration at ${index}`);
+    if (declarations[index]!.getStart(source) >= declarations[index + 1]!.getStart(source)) throw new Error("CallTracker declarations are out of order");
+  }
+  if (!named(declarations[5]!, "callTrackerDescriptor")) throw new Error("Missing shared CallTracker descriptor");
+  if (!footer(declarations[6]!, "Object.defineProperty(assert, \"CallTracker\"") || !footer(declarations[7]!, "Object.defineProperty(strict, \"CallTracker\"")) {
+    throw new Error("CallTracker footer shape mismatch");
+  }
+  const innerFail = statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === "innerFail");
+  if (!innerFail || declarations[4]!.getStart(source) >= innerFail.getStart(source)) throw new Error("CallTracker must precede innerFail");
+  const returnStatement = statements.at(-1);
+  if (!returnStatement || !ts.isReturnStatement(returnStatement) || declarations[7]!.end > returnStatement.getStart(source)) {
+    throw new Error("CallTracker footer must precede the assert return");
+  }
+  for (const statement of declarations.toSorted((left, right) => right.getStart(source) - left.getStart(source))) {
+    text = text.slice(0, statement.getStart(source)) + text.slice(statement.end);
+  }
+  return text;
+}
+
 function restoreAssertionDetails(text: string): string {
+  text = restoreCallTrackerDelta(text);
   const source = ts.createSourceFile("assert.js", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const helpers: ts.FunctionDeclaration[] = [];
   function visit(node: ts.Node): void {
@@ -71,6 +116,17 @@ for (const [name, hash] of Object.entries(originals)) {
     expect(checkPositions(readFileSync(path, "utf8"), emitted)).toBeGreaterThan(1000);
   });
 }
+
+test("CallTracker AST restoration still rejects unrelated source mutations", () => {
+  const path = join(runtime, "assert.ts");
+  const output = join(scratch, "assert.js");
+  const result = Bun.spawnSync(["node", join(root, "scripts/transpile-runtime.ts"), path, output]);
+  expect(result.exitCode).toBe(0);
+  const restored = restoreAssertionDetails(readFileSync(output, "utf8"));
+  const changed = restored.replace("function innerOk(", "function innerOkChanged(");
+  expect(changed).not.toBe(restored);
+  expect(astHash(changed)).not.toBe(originals.assert);
+});
 
 const probe = join(scratch, "probe.ts");
 const config = join(scratch, "tsconfig.json");

@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/assert-calltracker.test.ts",
+  "localRuntime": true
+}
