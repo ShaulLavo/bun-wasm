@@ -291,6 +291,9 @@ declare namespace BunWasm {
     isNative(): boolean;
     isConstructor(): boolean;
     isToplevel(): boolean;
+    isAsync(): boolean;
+    isPromiseAll(): boolean;
+    getPromiseIndex(): number | null;
   }
   interface Native {
     bunBuiltinNames(): string[];

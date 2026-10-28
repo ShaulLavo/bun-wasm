@@ -1,0 +1,8 @@
+isToplevel function
+isAsync function
+isPromiseAll function
+getPromiseIndex function
+sloppy named false,false,false,
+program true
+resumed leaf false,false,false,
+async frames are awaiting callers true

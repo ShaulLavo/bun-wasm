@@ -155,9 +155,10 @@ export class NodeProcessBroker {
     const publications = new PipePublicationRegistry({ wake: state.wake });
     publications.registerProcess(state.pid);
     this.root.data = { registry: publications.handle() };
-    this.input = new PipeController({ registry: publications, wake: state.wake });
+    this.input = new PipeController({ registry: publications, wake: state.wake, relay: "manual" });
     const inputReader = this.input.retain(state.pid, "read");
     this.inputWriter = this.input.retain(state.pid, "write");
+    this.pipes.attach(inputReader.handle());
     this.root.resources.push({ kind: "pipe", endpoint: inputReader.handle() });
     this.root.bindings.push({ fd: 0, reference: 0, rightsBase: (1n << 1n) | (1n << 27n), rightsInheriting: 0n });
     this.supervisor.createRoot({ pid: state.pid, job: state.job, ...state.signals });
