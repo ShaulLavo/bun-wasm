@@ -4,11 +4,42 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import release from "./waffle-release-inputs.json";
 import { browserBuildConfig, resolveRuntimePackage } from "./browser-build";
+import { pinnedBashWeb, verifiedGuests } from "./bash-web-guests";
 import { PreparationFlow } from "../tests/shell-product/prepare-flow";
 import { stageWaffle, waffleCommits, waffleSourceRoot } from "../tests/shell-product/waffle-stage";
 
 const shellCommit = "a".repeat(40);
 const gitPeer = (commit: string) => `git+https://github.com/ShaulLavo/waffle.git#${commit}`;
+
+test("the ordinary Shell producer, public product selection and both apps pin the same Bash source", async () => {
+  const root = resolve(import.meta.dir, "..");
+  const producer = await readFile(join(root, "scripts/build-bash-web-shell.sh"), "utf8");
+  const commit = pinnedBashWeb(join(root, "web"));
+  expect(/^commit=([a-f0-9]{40})$/m.exec(producer)?.[1]).toBe(commit);
+  expect(pinnedBashWeb(join(root, "sandbox"))).toBe(commit);
+  expect(waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: commit }, release.url).shellCommit).toBe(commit);
+});
+
+test("Shell receipt validation rejects stale, partial and changed unit guest fixtures", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bw-shell-receipt-unit-"));
+  const bytes = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+  const commit = "a".repeat(40);
+  try {
+    expect(verifiedGuests(root, commit)).toBeUndefined();
+    await Bun.write(join(root, "bash-web-shell.wasm"), bytes);
+    await Bun.write(join(root, "bash-web-env.wasm"), bytes);
+    expect(() => verifiedGuests(root, commit)).toThrow("no bash-web-guests.json");
+    const write = Bun.spawnSync([process.execPath, join(import.meta.dir, "bash-web-guests.ts"), "write", root, commit, "unit-fixture-toolchain"]);
+    expect(write.exitCode).toBe(0);
+    expect(verifiedGuests(root, commit)?.map(guest => guest.program)).toEqual(["shell-engine.wasm", "env.wasm"]);
+    expect(() => verifiedGuests(root, "b".repeat(40))).toThrow("but the consumer pins");
+    await Bun.write(join(root, "bash-web-shell.wasm"), new Uint8Array([1]));
+    expect(() => verifiedGuests(root, commit)).toThrow("does not match bash-web-guests.json");
+    await Bun.write(join(root, "bash-web-shell.wasm"), bytes);
+    await rm(join(root, "bash-web-env.wasm"));
+    expect(() => verifiedGuests(root, commit)).toThrow("does not match bash-web-guests.json");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test("the checked archive peer retains source identity without requiring a Git install pin", () => {
   const selected = waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: shellCommit }, release.url);
