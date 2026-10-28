@@ -3,7 +3,7 @@
 //! Rust owns the module loader, the event loop and the native primitives
 //! (files, clocks, randomness, hashing, URL parsing, networking). The public
 //! Bun/Node/Web APIs are JS polyfills in `src/js/`, built on the `native`
-//! object from [`natives`]. The JavaScript engine sits behind the [`Engine`]
+//! object from [`natives`]. The JavaScript engine sits behind the `Engine`
 //! trait in the linked engine program; the core itself remains engine-free.
 
 #![cfg_attr(target_os = "wasi", feature(wasi_ext))]
@@ -21,7 +21,6 @@ mod crypto;
 pub(crate) mod data;
 mod directory;
 mod encoding;
-mod engine;
 #[cfg(feature = "engine-host")]
 pub mod engine_host;
 mod glob;

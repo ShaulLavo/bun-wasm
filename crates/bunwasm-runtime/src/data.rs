@@ -237,12 +237,6 @@ impl<'a> Args<'a> {
             _ => true,
         }
     }
-    pub fn opt_bool(&self, i: usize) -> Option<bool> {
-        match self.get(i) {
-            Val::Undefined | Val::Null => None,
-            _ => Some(self.bool(i)),
-        }
-    }
     pub fn array(&self, i: usize) -> Option<&'a [Val]> {
         match self.get(i) {
             Val::Array(items) => Some(items),

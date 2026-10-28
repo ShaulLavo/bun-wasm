@@ -1,7 +1,7 @@
 //! Module sources: reading, transpiling and classifying files, the
 //! CommonJS wrapper, the ESM prologue, wrapper modules for non-ES modules,
 //! and the embedded JS polyfills. Engine-agnostic; the engine-facing glue is
-//! the [`ModuleHost`](crate::engine::ModuleHost) implementation in lib.rs.
+//! the linked engine program's `ModuleHost` implementation.
 //!
 //! Every non-ESM module (built-ins, CommonJS, JSON, text) is exposed to ESM
 //! importers through a tiny generated wrapper module that re-exports the keys

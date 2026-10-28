@@ -199,7 +199,7 @@ fn invalid_calls_cannot_invoke_the_native() {
         Status::BadCall
     );
     assert_eq!(
-        dispatch.dispatch(dispatch.op(), 1, &vec![0]).status,
+        dispatch.dispatch(dispatch.op(), 1, &[0]).status,
         Status::BadCall
     );
     assert_eq!(
