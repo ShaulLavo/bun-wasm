@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
@@ -519,6 +519,7 @@ for (const useRunner of [false, true]) test(`transpiler example scratch uses ${u
     await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), "export {};\n");
     await writeFile(join(bin, "cargo"), '#!/usr/bin/env bash\nprintf "stopped before compilation\\n"\nexit 42\n', { mode: 0o755 });
     await writeFile(join(bin, "mktemp"), '#!/usr/bin/env bash\nset -eu\nallocated=$("$REAL_MKTEMP" "$@")\nprintf "%s" "$allocated" > "$ALLOCATION_TRACE"\nprintf "%s\\n" "$allocated"\n', { mode: 0o755 });
+    await writeFile(join(bin, "wasmtime"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const realMktemp = Bun.which("mktemp");
     if (!realMktemp) throw new Error("mktemp is required for the portable allocation control");
     const result = Bun.spawnSync(["bash", "scripts/test-transpiler-example.sh"], { cwd: root, env: {
@@ -531,5 +532,34 @@ for (const useRunner of [false, true]) test(`transpiler example scratch uses ${u
     const selected = useRunner ? runner : temporary;
     expect(dirname(allocation)).toBe(selected);
     expect(await readdir(selected)).toEqual([]);
+  });
+});
+
+
+test.each(["wasmtime", "node"])("transpiler example rejects missing %s before sysroot setup or compilation", async missing => {
+  await withReceiptFixture(async options => {
+    const root = options.repository;
+    const bin = join(root, "private/cargo/bin");
+    const setupTrace = join(root, "private/sysroot-called");
+    const compileTrace = join(root, "private/compiler-called");
+    await mkdir(bin, { recursive: true });
+    await copyFile(new URL("../../env.sh", import.meta.url), join(root, "env.sh"));
+    await copyFile(new URL("../../scripts/test-transpiler-example.sh", import.meta.url), join(root, "scripts/test-transpiler-example.sh"));
+    await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), 'await Bun.write(process.env.SETUP_TRACE!, "called");\n');
+    await writeFile(join(bin, "cargo"), '#!/bin/sh\nprintf called > "$COMPILE_TRACE"\nexit 42\n', { mode: 0o755 });
+    for (const name of ["bun", "dirname", "mktemp", "diff", "rm", "node"]) {
+      if (name === missing) continue;
+      const command = Bun.which(name);
+      if (!command) throw new Error(`Required fixture tool ${name} is missing`);
+      await symlink(command, join(bin, name));
+    }
+    if (missing !== "wasmtime") await writeFile(join(bin, "wasmtime"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const result = Bun.spawnSync(["/bin/bash", "scripts/test-transpiler-example.sh"], { cwd: root, env: {
+      ...process.env, PATH: bin, CARGO_HOME: dirname(bin), WASM_TOOLS: join(root, "private/no-tools"), WASI_SDK_PATH: join(root, "private/no-sdk"), SETUP_TRACE: setupTrace, COMPILE_TRACE: compileTrace,
+    }, timeout: 10_000 });
+    expect(result.exitCode).toBe(127);
+    expect(result.stderr.toString()).toContain(`transpiler example requires '${missing}' on PATH`);
+    expect(await Bun.file(setupTrace).exists()).toBe(false);
+    expect(await Bun.file(compileTrace).exists()).toBe(false);
   });
 });

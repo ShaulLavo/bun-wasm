@@ -88,7 +88,7 @@ test("split producers keep the common core target separate from the JSC side cac
 test("each setup cache has one immediate save after its successful producer", () => {
   for (const [id, producer] of [
     ["rustup-cache", "dtolnay/rust-toolchain@nightly"], ["sdk", "Install pinned WASI SDK"],
-    ["binaryen-cache", "Install pinned Binaryen"], ["sources-cache", "Prepare pinned upstream sources"],
+    ["binaryen-cache", "Install pinned Binaryen"], ["wasmtime-cache", "Install pinned Wasmtime"], ["sources-cache", "Prepare pinned upstream sources"],
   ] satisfies [string, string][]) {
     const restore = byId(id);
     const output = named(`Save completed ${id} setup`);

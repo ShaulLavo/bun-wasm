@@ -610,7 +610,7 @@ test("Rust build caches follow host tool versions, not the runner image", () => 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
-  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(9);
+  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(10);
   expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-hit != 'true'");
   expect(rust).not.toContain("github.run_id");
   expect(rust).not.toContain("github.run_attempt");
@@ -759,8 +759,7 @@ test("split producer wasm-tools setup is pinned, cached and unconditional before
   }
 });
 
-function runWasmToolsSetup(contents?: string) {
-  const script = wasmToolsSetup();
+function runPinnedCliSetup(archiveName: string, script: string, contents?: string) {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-validator-"));
   try {
     const bin = join(directory, "bin");
@@ -772,7 +771,7 @@ function runWasmToolsSetup(contents?: string) {
     writeFileSync(githubPath, "");
     writeFileSync(join(bin, "curl"), '#!/bin/sh\necho curl >> "$TRACE"\nexit 23\n', { mode: 0o700 });
     writeFileSync(join(bin, "tar"), '#!/bin/sh\necho tar >> "$TRACE"\nexit 29\n', { mode: 0o700 });
-    if (contents !== undefined) writeFileSync(join(tools, wasmToolsArchive), contents);
+    if (contents !== undefined) writeFileSync(join(tools, archiveName), contents);
     const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-euo", "pipefail", "-c", script], {
       env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, WASM_TOOLS: tools, GITHUB_PATH: githubPath, TRACE: trace }, encoding: "utf8",
     });
@@ -783,7 +782,7 @@ function runWasmToolsSetup(contents?: string) {
 }
 
 test("wasm-tools cold download failure stops before extraction or PATH publication", () => {
-  const result = runWasmToolsSetup();
+  const result = runPinnedCliSetup(wasmToolsArchive, wasmToolsSetup());
   expect(result.status).toBe(23);
   expect(result.calls).toBe("curl\n");
   expect(result.files).toEqual([]);
@@ -792,7 +791,7 @@ test("wasm-tools cold download failure stops before extraction or PATH publicati
 
 for (const contents of ["corrupt cached validator", ""]) {
   test(`wasm-tools ${contents ? "corrupt" : "empty"} cache hit fails checksum before extraction or execution`, () => {
-    const result = runWasmToolsSetup(contents);
+    const result = runPinnedCliSetup(wasmToolsArchive, wasmToolsSetup(), contents);
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("FAILED");
     expect(result.calls).toBe("");
@@ -800,6 +799,44 @@ for (const contents of ["corrupt cached validator", ""]) {
     expect(result.path).toBe("");
   });
 }
+
+const wasmtimeArchive = "wasmtime-v49.0.3-x86_64-linux.tar.xz";
+function wasmtimeSetup(): string {
+  return workflowString(workflowField(nativeWorkflowStep("name", "Install pinned Wasmtime"), "run"));
+}
+
+test("Wasmtime is pinned and cached, then fixture commands are checked before native compilation", () => {
+  const step = nativeWorkflowStep("name", "Install pinned Wasmtime");
+  expect(step).not.toHaveProperty("if");
+  const cache = workflowField(nativeWorkflowStep("id", "wasmtime-cache"), "with");
+  expect(workflowField(cache, "path")).toBe("${{ env.WASM_TOOLS }}/" + wasmtimeArchive);
+  expect(workflowField(cache, "key")).toBe("wasmtime-49.0.3-${{ runner.os }}-${{ runner.arch }}");
+  const script = wasmtimeSetup();
+  expect(script).toContain(`https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/${wasmtimeArchive}`);
+  expect(script).toContain("4001225413f208345b980525f31c4080e1873808b38d0ddc7918497340667fbb");
+  expect(script.indexOf("sha256sum --check")).toBeLessThan(script.indexOf("tar -xJf"));
+  expect(script.indexOf("--version")).toBeLessThan(script.indexOf('>> "$GITHUB_PATH"'));
+  expect(workflowField(nativeWorkflowStep("name", "Check transpiler example command prerequisites"), "run")).toBe("bash scripts/test-transpiler-example.sh --check-tools");
+  expect(rust.indexOf("name: Check transpiler example command prerequisites")).toBeLessThan(rust.indexOf(`name: ${prebuildStepName}`));
+  expect(readFileSync(join(import.meta.dir, "build.sh"), "utf8")).toContain('"$root/scripts/test-transpiler-example.sh"');
+});
+
+test("Wasmtime download failure cannot extract or publish PATH", () => {
+  const result = runPinnedCliSetup(wasmtimeArchive, wasmtimeSetup());
+  expect(result.status).toBe(23);
+  expect(result.calls).toBe("curl\n");
+  expect(result.files).toEqual([]);
+  expect(result.path).toBe("");
+});
+
+for (const contents of ["corrupt cached Wasmtime", ""]) test(`Wasmtime ${contents ? "corrupt" : "empty"} cache fails before extraction`, () => {
+  const result = runPinnedCliSetup(wasmtimeArchive, wasmtimeSetup(), contents);
+  expect(result.status).toBe(1);
+  expect(result.stdout).toContain("FAILED");
+  expect(result.calls).toBe("");
+  expect(result.files).toEqual([wasmtimeArchive]);
+  expect(result.path).toBe("");
+});
 
 function nativeCacheContract(id: string, saveName: string) {
   const restore = nativeWorkflowStep("id", id);
