@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { Buffer } from "node:buffer";
 import type { Duplex } from "node:stream";
+import type { Socket } from "node:net";
 import type { ClientRequest, IncomingMessage, ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -21,7 +22,7 @@ interface Http {
 }
 interface Networking {
   nodeHttp(protocol: string): Http;
-  nodeNet(): { Connection: new (handle: number) => Connection; connect(options: object): Duplex };
+  nodeNet(): { Connection: new (handle: number) => Connection; Socket: new () => Socket; connect(options: object): Duplex };
 }
 
 function drain(response: IncomingMessage, chunks: Buffer[]) {
@@ -128,9 +129,18 @@ function fixture() {
   }
   function server() {
     const connection = new (net.nodeNet().Connection)(8);
-    const response = new http.ServerResponse(connection, { method: "GET", httpVersion: "1.1" }, false, () => {});
+    const socket = new (net.nodeNet().Socket)();
+    Reflect.set(socket, "_conn", connection);
+    Reflect.set(socket, "_phase", "open");
+    Reflect.set(connection, "onClose", () => socket.destroy());
+    let completions = 0;
+    const response = new http.ServerResponse(connection, { method: "GET", httpVersion: "1.1" }, false, () => { completions++; });
+    response.socket = socket;
+    const socketClosed = () => Reflect.get(response, "_emitClose").call(response);
+    Reflect.set(response, "_socketClosed", socketClosed);
+    socket.once("close", socketClosed);
     response.sendDate = false;
-    return { connection, response };
+    return { connection, response, socket, completions: () => completions };
   }
   return { http, request, server, packets, closed, writes, pump, flush, advance, timers,
     block(value: boolean) { blocked = value; }, reads: () => reads,
@@ -401,3 +411,47 @@ test("ServerResponse implicit headers support compression response wrappers", as
     expect(wire).toBe(`${header}5\r\nhello\r\n0\r\n\r\n`);
   } finally { connection.destroy(); state.flush(); }
 });
+
+for (const withError of [false, true]) {
+  test(`ServerResponse.destroy(${withError ? "error" : ""}) cancels queued writes and releases the transport`, async () => {
+    const state = fixture();
+    const { connection, response, socket, completions } = state.server();
+    const error = withError ? new Error("cancelled response") : undefined;
+    const writes: unknown[] = [];
+    const ends: unknown[] = [];
+    const errors: unknown[] = [];
+    const events: string[] = [];
+    socket.on("error", value => errors.push(value));
+    response.on("error", () => events.push("error"));
+    response.on("finish", () => events.push("finish"));
+    response.on("drain", () => events.push("drain"));
+    response.on("close", () => events.push("close"));
+    state.block(true);
+    try {
+      response.write(Buffer.alloc(65536), value => writes.push(value));
+      response.end((value?: Error) => ends.push(value));
+      expect(response.destroy(error)).toBe(response);
+      expect(response.destroyed).toBe(true);
+      expect(socket.destroyed).toBe(true);
+      expect(connection.closed).toBe(true);
+      expect(response.destroy(new Error("ignored"))).toBe(response);
+      await state.pump();
+      expect(state.closed).toEqual([8]);
+      expect(state.writes).toEqual([]);
+      expect(writes).toHaveLength(1);
+      expect(ends).toHaveLength(1);
+      if (error) { expect(writes[0]).toBe(error); expect(ends[0]).toBe(error); }
+      else expect(writes[0]).toHaveProperty("code", "ERR_STREAM_DESTROYED");
+      expect(errors).toEqual(error ? [error] : []);
+      expect(events).toEqual(["close"]);
+      expect(response.writableFinished).toBe(false);
+      expect(response.writableLength).toBe(0);
+      expect(socket.listenerCount("close")).toBe(0);
+      expect(state.timers.size).toBe(0);
+      expect(completions()).toBe(1);
+      state.block(false);
+      await state.pump();
+      expect(state.writes).toEqual([]);
+    } finally { connection.destroy(); await state.pump(); }
+  });
+}
