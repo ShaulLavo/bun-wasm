@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -48,22 +48,22 @@ test("parseEnv constructs own data properties for prototype-like keys", () => {
   expect(actual.constructor).toBe("value");
 });
 
-test("the browser's generic builtin wrapper links Vite's published node:util import", async () => {
+test("the browser's generic builtin wrapper links Vite's published node:util import", () => {
   const host = readFileSync(join(root, "web/src/engine-host.js"), "utf8");
   const start = host.indexOf("function wrapperSource(key, value) {");
   if (start < 0) throw new Error("Missing browser builtin wrapper");
-  const wrapper: unknown = runInNewContext(`(${host.slice(start)})`);
-  if (typeof wrapper !== "function") throw new TypeError("Expected browser builtin wrapper");
-  const source = wrapper("node:util", utility);
-  const builtin = `data:text/javascript,${encodeURIComponent(source)}`;
-  const published = `import { format, formatWithOptions, inspect, isDeepStrictEqual, parseEnv, promisify, stripVTControlCharacters } from ${JSON.stringify(builtin)};
-export const loaded = [format, formatWithOptions, inspect, isDeepStrictEqual, parseEnv, promisify, stripVTControlCharacters].every(value => typeof value === "function");`;
-  const previous = Object.getOwnPropertyDescriptor(globalThis, "__bunwasm_wrap");
-  Object.defineProperty(globalThis, "__bunwasm_wrap", { configurable: true, value: () => ({ value: utility, default: utility }) });
-  try {
-    expect((await import(`data:text/javascript,${encodeURIComponent(published)}`)).loaded).toBe(true);
-  } finally {
-    if (previous) Object.defineProperty(globalThis, "__bunwasm_wrap", previous);
-    else Reflect.deleteProperty(globalThis, "__bunwasm_wrap");
-  }
+  const probe = join(scratch, "published-import.ts");
+  writeFileSync(probe, `
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
+const utility = runInNewContext(readFileSync(${JSON.stringify(output)}, "utf8"))({ native: {} });
+const wrapper = runInNewContext(${JSON.stringify(`(${host.slice(start)})`)});
+Reflect.set(globalThis, "__bunwasm_wrap", () => ({ value: utility, default: utility }));
+const builtin = "data:text/javascript," + encodeURIComponent(wrapper("node:util", utility));
+const published = 'import { format, formatWithOptions, inspect, isDeepStrictEqual, parseEnv, promisify, stripVTControlCharacters } from ' + JSON.stringify(builtin) + '; export const loaded = [format, formatWithOptions, inspect, isDeepStrictEqual, parseEnv, promisify, stripVTControlCharacters].every(value => typeof value === "function");';
+console.log((await import("data:text/javascript," + encodeURIComponent(published))).loaded);
+`);
+  const loaded = Bun.spawnSync(["node", "--no-warnings", probe], { stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+  expect(loaded.exitCode, loaded.stderr.toString()).toBe(0);
+  expect(loaded.stdout.toString()).toBe("true\n");
 });
