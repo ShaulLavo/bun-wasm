@@ -91,7 +91,9 @@ test("playground server exiting during the page assertion also fails", async () 
     return source.includes("shell.lastExit") ? 0 : true;
   } };
   const preview = { on() {}, exposeBinding: async () => ({ dispose: async () => {} }), addInitScript: async () => ({ dispose: async () => {} }), evaluate: async () => {}, goto: async () => ({ ok: () => true, fromServiceWorker: () => true }), locator: () => ({ filter: () => ({ waitFor: async () => {} }) }), close: async () => {} };
-  const result = await serverCommand({ page, context: { newPage: async () => preview }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run .matrix-command.ts server.ts\nuser@bun:~$" });
+  const probe = { context: () => ({ newCDPSession: async () => ({ send: async () => {} }) }), goto: async () => ({ ok: () => true, status: () => 200 }), close: async () => {} };
+  const pages = [preview, probe];
+  const result = await serverCommand({ page, context: { newPage: async () => pages.shift() }, command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } }, options: { timeout: 1000 }, terminalText: async () => "user@bun:~$ bun run .matrix-command.ts server.ts\nuser@bun:~$" });
   expect(result).toMatchObject({ status: "fail", exit: 0 });
 });
 

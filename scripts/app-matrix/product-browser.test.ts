@@ -1,8 +1,9 @@
 import { createContext, runInContext, type Context } from "node:vm";
 import { expect, test } from "bun:test";
-import { completeObservations, observeProductTraffic, productObservations, type ProductPage } from "./product-browser";
+import { completeObservations, observeProductTraffic, productObservations, waitForPreviewReady, type ProductPage } from "./product-browser";
 import type { ProductCheck } from "./product-types";
 import { fullstackApps } from "./product-fullstack";
+import { serverCommand } from "./browser.mjs";
 import type { Page } from "../../web/node_modules/playwright";
 
 interface FixtureOptions {
@@ -520,4 +521,107 @@ test("empty update and generic Next envelopes do not qualify HMR", async () => {
     expect(rows[0]?.status).toBe("fail");
     await traffic.close();
   }
+});
+
+
+interface ReadinessResponse {
+  status: number;
+  body: string;
+}
+
+function readinessResponse({ status, body }: ReadinessResponse) {
+  return { ok: () => status >= 200 && status < 300, status: () => status, text: async () => body, headers: () => ({}), fromServiceWorker: () => true };
+}
+
+/** A probe page double: one scripted response per navigation, the last one repeating. */
+function readinessProbe(responses: readonly ReadinessResponse[], log: string[] = []) {
+  let navigations = 0;
+  const probe = {
+    get navigations() { return navigations; },
+    context: () => ({ newCDPSession: async () => ({ send: async (method: string, params: { value: boolean }) => { log.push(`${method}:${params.value}`); } }) }),
+    async goto(_url: string, options: { timeout: number; waitUntil: "commit" }) {
+      log.push(`goto:${options.waitUntil}`);
+      const response = responses[navigations] ?? responses.at(-1);
+      navigations++;
+      if (!response) throw new Error("Missing readiness response");
+      return readinessResponse(response);
+    },
+    close: async () => { log.push("probe-close"); },
+  };
+  return probe;
+}
+
+test("waits for a listening server's transient HTTP 503 and closes the probe before one page navigation", async () => {
+  const log: string[] = [];
+  const probe = readinessProbe([{ status: 503, body: "server is starting" }, { status: 200, body: "ready" }], log);
+  const preview = {
+    on() {},
+    exposeBinding: async () => ({ dispose: async () => {} }),
+    addInitScript: async () => ({ dispose: async () => {} }),
+    evaluate: async () => {},
+    goto: async () => { log.push("page-navigation"); return readinessResponse({ status: 200, body: "ready" }); },
+    locator: () => ({ filter: () => ({ waitFor: async () => {} }) }),
+    screenshot: async () => {},
+    close: async () => {},
+  };
+  const page = {
+    evaluate: async (fn: () => unknown, text?: string) => {
+      if (text) return;
+      const source = fn.toString();
+      if (source.includes("serving:")) return { done: false, serving: true };
+      if (source.includes("previews.ready")) return "ready";
+      if (source.includes("previews.url")) return "http://127.0.0.1/preview";
+      if (source.includes("lastExit")) return 130;
+      if (source.includes("__matrixCommand")) return false;
+      return 0;
+    },
+    click: async () => {},
+    keyboard: { press: async () => {} },
+    waitForFunction: async () => {},
+  };
+  const pages = [preview, probe];
+  const result = await serverCommand({
+    page,
+    context: { newPage: async () => pages.shift() },
+    command: { name: "dev", args: ["run", "dev"], check: { kind: "http", text: "ready" } },
+    app: { id: "readiness-fixture" },
+    engine: "browser",
+    options: { timeout: 1_000, output: process.env.TMPDIR ?? "/tmp" },
+    terminalText: async () => "",
+  });
+  expect(result.status).toBe("pass");
+  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit", "goto:commit", "probe-close", "page-navigation"]);
+});
+
+test("a fast HTTP 2xx readiness response needs one script-disabled probe navigation", async () => {
+  const log: string[] = [];
+  const probe = readinessProbe([{ status: 200, body: "ready" }], log);
+  await waitForPreviewReady(probe, "http://local/", Date.now() + 1_000);
+  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit"]);
+});
+
+test("persistent HTTP 503 readiness failure retains the last response body at the deadline", async () => {
+  const probe = readinessProbe([{ status: 503, body: "first" }, { status: 503, body: "Nuxt dev server is starting..." }]);
+  const started = performance.now();
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 150)).rejects.toThrow("last HTTP 503: Nuxt dev server is starting...");
+  expect(performance.now() - started).toBeLessThan(400);
+  expect(probe.navigations).toBeGreaterThan(1);
+});
+
+test("an unexpected HTTP status fails without a retry", async () => {
+  const probe = readinessProbe([{ status: 500, body: "server crashed" }, { status: 200, body: "ready" }]);
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 1_000)).rejects.toThrow("Preview HTTP 500: server crashed");
+  expect(probe.navigations).toBe(1);
+});
+
+test("preserves a non-deadline readiness navigation error", async () => {
+  const transportError = new Error("net::ERR_FAILED");
+  const probe = { ...readinessProbe([]), goto: async () => { throw transportError; } };
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 1_000)).rejects.toBe(transportError);
+});
+
+test("readiness never starts a navigation after the shared deadline", async () => {
+  const probe = readinessProbe([{ status: 503, body: "still starting" }]);
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() - 1)).rejects.toThrow("not HTTP-ready before the deadline");
+  expect(probe.navigations).toBe(0);
 });

@@ -7,7 +7,7 @@ import { boundedCleanup, closeOwnedBrowser, closeOwnedContext, HarnessCleanupErr
 import { browserDiagnostics, redactDiagnosticText } from "./browser-diagnostics.ts";
 import { verifyBrowserServer, stoppedPreviewError } from "./server-browser.ts";
 import { observeHmr } from "./hmr.ts";
-import { observeProductTraffic, observeNativeProductTraffic, productObservations } from "./product-browser.ts";
+import { observeProductTraffic, observeNativeProductTraffic, productObservations, waitForPreviewReady } from "./product-browser.ts";
 import { failure, stageOutput } from "./classify.ts";
 import { BlockedBrowserNetworkError } from "./product-campaign.ts";
 import { browserRegistryRoute } from "./registry-request.ts";
@@ -50,6 +50,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
     globalThis.__matrixCommand = globalThis.playground.shell.submit(text).finally(() => { globalThis.__matrixDone = true; });
   }, text);
   const deadline = Date.now() + options.timeout;
+  const remaining = () => Math.max(1, deadline - Date.now());
   const output = async () => stageOutput(await terminalText(page), text);
   while (Date.now() < deadline) {
     const state = await page.evaluate(() => ({ done: globalThis.__matrixDone, serving: globalThis.playground.previews.serves(3137) }));
@@ -85,16 +86,20 @@ export async function serverCommand({ page, context, command, app, engine, optio
     const previewState = await page.evaluate(() => globalThis.playground.previews.ready);
     if (previewState !== "ready") throw new Error(`Preview service worker is ${previewState}`);
     url = await page.evaluate(() => globalThis.playground.previews.url(3137));
+    const probe = await context.newPage();
+    try { await waitForPreviewReady(probe, url, deadline); }
+    finally { await release("probe-close", () => probe.close()); }
+    timings.httpReadyMs = since(started);
     const loading = performance.now();
-    const response = await preview.goto(url, { timeout: options.timeout });
+    const response = await preview.goto(url, { timeout: remaining() });
     if (!response?.ok()) throw new Error(`Preview HTTP ${response?.status()}`);
     const check = command.check;
     if (options.previewOrigins) {
       if (response.fromServiceWorker() || new URL(url).pathname !== "/" || new URL(url).origin === new URL(page.url()).origin) throw new Error("Root preview did not use its dedicated host origin");
     } else if (!response.fromServiceWorker()) throw new Error("Preview response bypassed the service worker");
-    await preview.locator(check.kind === "http" ? "body" : check.selector).filter({ hasText: check.text }).waitFor({ timeout: options.timeout });
+    await preview.locator(check.kind === "http" ? "body" : check.selector).filter({ hasText: check.text }).waitFor({ timeout: remaining() });
     timings.pageLoadMs = since(loading);
-    const contract = check.framework ? await verifyBrowserServer(preview, url, check.framework, options.timeout, join(options.output, `${app.id}-${engine}-requests.json`), options.previewOrigins ? "root" : "mounted") : "";
+    const contract = check.framework ? await verifyBrowserServer(preview, url, check.framework, remaining(), join(options.output, `${app.id}-${engine}-requests.json`), options.previewOrigins ? "root" : "mounted") : "";
     if (errors.length) throw new Error(errors.join("\n"));
     if (await page.evaluate(() => globalThis.__matrixDone)) {
       checked = earlyServerExit({ code: await page.evaluate(() => globalThis.playground.shell.lastExit), output: await output() }, command.name);

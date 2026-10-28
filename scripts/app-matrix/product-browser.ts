@@ -22,6 +22,71 @@ export interface ProductPage {
   locator(selector: string): Locator;
   goto(url: string, options: { timeout: number }): Promise<Response | null>;
 }
+
+interface ScriptControlSession {
+  send(method: "Emulation.setScriptExecutionDisabled", params: { value: true }): Promise<unknown>;
+}
+/** A page in the preview's own browser context, so the probe shares its service worker, routing and redirects. */
+export interface PreviewProbePage<Self> {
+  context(): { newCDPSession(page: Self): Promise<ScriptControlSession> };
+  goto(url: string, options: { timeout: number; waitUntil: "commit" }): Promise<Response | null>;
+}
+
+type PreviewBodyResult = { kind: "body"; body: string } | { kind: "deadline" };
+type PreviewProbeOutcome = { kind: "ready" } | { kind: "starting"; body: string } | { kind: "deadline" };
+
+async function readPreviewResponseBody(response: Response, deadline: number): Promise<PreviewBodyResult> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return { kind: "deadline" };
+  const deadlineToken = {};
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const body = await Promise.race([
+      response.text(),
+      new Promise<string>((_, reject) => { timer = setTimeout(() => reject(deadlineToken), remaining); }),
+    ]);
+    return { kind: "body", body };
+  } catch (error) {
+    if (error === deadlineToken) return { kind: "deadline" };
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function probePreview<Probe extends PreviewProbePage<Probe>>(probe: Probe, url: string, deadline: number): Promise<PreviewProbeOutcome> {
+  let response: Response | null;
+  try { response = await probe.goto(url, { timeout: Math.max(1, deadline - Date.now()), waitUntil: "commit" }); }
+  catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") return { kind: "deadline" };
+    throw error;
+  }
+  if (!response) throw new Error(`No response for preview ${url}`);
+  if (response.ok()) return { kind: "ready" };
+  const body = await readPreviewResponseBody(response, deadline);
+  if (body.kind === "deadline") return body;
+  if (response.status() === 503) return { kind: "starting", body: body.body };
+  throw new Error(`Preview HTTP ${response.status()}: ${body.body}`);
+}
+
+/**
+ * Navigates a script-disabled probe page until the preview stops answering HTTP 503. The probe
+ * never runs the loading page's or the application's scripts; the caller closes it before the
+ * application navigation.
+ */
+export async function waitForPreviewReady<Probe extends PreviewProbePage<Probe>>(probe: Probe, url: string, deadline: number): Promise<void> {
+  const session = await probe.context().newCDPSession(probe);
+  await session.send("Emulation.setScriptExecutionDisabled", { value: true });
+  let last503: string | undefined;
+  while (Date.now() < deadline) {
+    const outcome = await probePreview(probe, url, deadline);
+    if (outcome.kind === "ready") return;
+    if (outcome.kind === "starting") last503 = outcome.body;
+    if (outcome.kind === "deadline" || Date.now() >= deadline) break;
+    await new Promise(resolve => setTimeout(resolve, Math.min(100, deadline - Date.now())));
+  }
+  throw new Error(`Preview was not HTTP-ready before the deadline: ${last503 === undefined ? "no complete response" : `last HTTP 503: ${last503 || "empty body"}`}`);
+}
 export interface GuestSource {
   read(path: string): Promise<string | null>;
   write(path: string, contents: string): Promise<void>;
