@@ -1009,7 +1009,7 @@ fn executable_symlinks_resolve_in_guest_namespace_without_erasing_components() {
 }
 
 #[test]
-fn only_executable_regular_files_run_as_shebang_scripts() {
+fn only_regular_files_run_as_shebang_scripts() {
     use std::os::unix::fs::PermissionsExt;
     let mut p = processes();
     let root = std::env::temp_dir().join(format!("bun-wasm-shebang-modes-{}", std::process::id()));
@@ -1026,7 +1026,7 @@ fn only_executable_regular_files_run_as_shebang_scripts() {
         .dirs
         .push((root.clone(), "/scripts".into()));
     for (path, expected) in [
-        ("/scripts/plain", ACCES),
+        ("/scripts/plain", 0),
         ("/scripts/fifo", ACCES),
         ("/scripts/runs", 0),
     ] {

@@ -164,8 +164,9 @@ pub struct Resolved {
 const SHEBANG_BYTES: u64 = 256;
 const SHEBANG_DEPTH: usize = 4;
 
-/// The interpreter and optional argument of a regular `#!` file, following symlinks. As in
-/// Linux execve, only an executable regular file qualifies; a FIFO or device is never opened.
+/// The interpreter and optional argument of a regular `#!` file, following symlinks. A FIFO or
+/// device is never opened. Like Waffle's registry, there are no execute bits to check: a WASI
+/// guest cannot set them, so a bin that Bun's installer writes is an ordinary 0644 file.
 fn script(
     executable: &str,
     cwd: &str,
@@ -174,7 +175,7 @@ fn script(
     let (path, _) = walk(executable, cwd, dirs).ok()?;
     let file = host(&path, dirs)?;
     let metadata = fs::metadata(&file).ok()?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+    if !metadata.is_file() {
         return None;
     }
     let mut head = Vec::new();
