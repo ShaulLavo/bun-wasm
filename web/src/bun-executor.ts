@@ -10,6 +10,7 @@ import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net
 import { createLookupClient, type LookupClient } from "./net/lookup.js";
 import { exportSharedObjects, type SharedObjectService } from "./shared-objects/service.js";
 import type { BunSharedConnection, BunSharedNativeHost } from "./shared-objects/protocol.js";
+import { attachBunTerminal, type BunTerminal } from "./bun-terminal.js";
 
 export type Engine = "quickjs" | "jsc" | "browser" | "hermes";
 
@@ -86,6 +87,7 @@ export interface BunExecutorHost extends BunSharedNativeHost {
 export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globalThis as unknown as BunExecutorHost): WorkerExecutor<RunRequest> {
   let netHost: NetHost | null = null;
   let sharedObjects: SharedObjectService | undefined;
+  let terminal: BunTerminal | undefined;
   const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
   const stackKib = smallStackKib()?.[req.engine];
   const env = stackKib && !("BUN_WASM_STACK_KIB" in req.env) ? { ...req.env, BUN_WASM_STACK_KIB: stackKib } : req.env;
@@ -100,6 +102,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     ...linked,
     hostCallFd: HOST_CALL_FD,
     setup({ checkActive }) {
+      terminal = attachBunTerminal(req, checkActive);
       if (!req.sharedObjects) return;
       if (req.engine !== "browser" || req.adapter === "preview1") throw new TypeError("Shared objects require the browser Bun engine");
       if (sharedObjects) throw new Error("Shared-object setup already completed");
@@ -109,6 +112,8 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       catch (error) { sharedObjects.close(); throw error; }
     },
     env: () => env,
+    resolveTerminal: target => terminal?.resolve(target),
+    spawnData: () => terminal?.spawnData() ?? {},
     // Bun's own fatal-unwind type, which the engine interruption probes recognize.
     signalError(signal): never { throw new DefaultSignal(signal); },
     terminalSignal: error => error instanceof DefaultSignal ? error.signal : undefined,
@@ -126,7 +131,10 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     },
     beforeFinish() {
       try { linked.beforeFinish?.(); }
-      finally { finishHostServices(sharedObjects, lookupClient, req.lookupPort); }
+      finally {
+        try { terminal?.dispose(); }
+        finally { finishHostServices(sharedObjects, lookupClient, req.lookupPort); }
+      }
     },
     run({ instance, checkActive, finish, runtimeState }, exited) {
       const ready = instance.exports.bunwasm_ready as (() => number) | undefined;
