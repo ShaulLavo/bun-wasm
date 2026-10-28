@@ -11,7 +11,7 @@
 | `quickjs/quickjs.c`, WebAssembly.Memory buffers | Add a `wasm_memory` ArrayBuffer flag, `JS_bunwasm_NewWasmMemoryBuffer` over bytes QuickJS never frees, and `JS_bunwasm_DetachWasmMemoryBuffer`. Flagged buffers refuse `transfer()` and report themselves non-detachable. | The WebAssembly polyfill must copy the whole guest memory across every call and import callback, which exhausts the 512 MiB guest memory for esbuild-wasm. Without the flag, user code could transfer the buffer away from the memory that owns its bytes. |
 | `build.rs` | Add rerun tracking for `quickjs` and `quickjs.bind.h`. | Local C changes can leave Cargo using a stale engine until another input invalidates it. This hook supports our fork. |
 
-No existing binding source or C header is modified. Our Rust engine declares the added functions. The vendored tree keeps Linux x86_64 and wasm32-wasip1 bindings and the C files needed by the library, dropping other targets, shell programs, tests, build tooling, and package metadata. It adds the license copy. These packaging choices do not change retained upstream implementations. Every other retained source file matches the published crate.
+No existing binding source is modified. The one C header change is recorded in [QuickJS memory accounting on WASI](quickjs-wasi-gc-accounting.md). Our Rust engine declares the added functions. The vendored tree keeps Linux x86_64 and wasm32-wasip1 bindings and the C files needed by the library, dropping other targets, shell programs, tests, build tooling, and package metadata. It adds the license copy. These packaging choices do not change retained upstream implementations. Every other retained source file matches the published crate.
 
 
 ## Classification
