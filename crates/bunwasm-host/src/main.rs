@@ -337,7 +337,10 @@ fn run_module_instance(
         wasi.preopened_dir(host, guest, DirPerms::all(), FilePerms::all())
             .with_context(|| format!("preopening {}", host.display()))?;
     }
-    let cwd = env.iter().find(|(key, _)| key == "PWD").map_or_else(|| "/".into(), |(_, value)| value.clone());
+    let cwd = env
+        .iter()
+        .find(|(key, _)| key == "PWD")
+        .map_or_else(|| "/".into(), |(_, value)| value.clone());
     let net = net::Net::new();
     let memory_limit = stdio.memory_limit;
     let processes = process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());

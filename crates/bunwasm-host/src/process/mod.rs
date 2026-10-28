@@ -792,8 +792,10 @@ impl Processes {
                 .all(|child| child.result.is_some()))
     }
 
+    /// Flags: 0 waits, 1 polls, 2 is Waffle's CLEANUP wait, which a pending handled signal does
+    /// not interrupt and which cannot wait for the caller's own job.
     pub fn wait_job(&self, job: i32, flags: i32) -> Result<FinalOutcome, i32> {
-        if flags != 0 && flags != 1 {
+        if !(0..=2).contains(&flags) || (flags == 2 && job == self.job_of(0)) {
             return Err(INVAL);
         }
         loop {
@@ -826,7 +828,12 @@ impl Processes {
             if flags == 1 {
                 return Err(AGAIN);
             }
-            if self.cancel.interrupted() {
+            let stopped = if flags == 2 {
+                self.cancel.check().is_err()
+            } else {
+                self.cancel.interrupted()
+            };
+            if stopped {
                 return Err(INTR);
             }
             // Signals use their own wake state; rescan them within 10ms without

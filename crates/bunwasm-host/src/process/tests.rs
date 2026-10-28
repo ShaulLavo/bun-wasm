@@ -227,6 +227,18 @@ fn spawn_rejects_unhandable_filesystem_fd_without_partial_child() {
 }
 
 #[test]
+fn cleanup_wait_collects_a_child_job_but_never_the_callers_own() {
+    let mut processes = processes();
+    let pid = processes.spawn(&request("/bin/bun", serde_json::json!([])));
+    let job = processes.job_of(pid);
+    assert_eq!(processes.wait_job(processes.job_of(0), 2), Err(INVAL));
+    assert_eq!(processes.wait_job(job, 3), Err(INVAL));
+    assert_eq!(completed(&processes, pid), FinalOutcome::Exit(0));
+    assert_eq!(processes.wait_job(job, 2), Ok(FinalOutcome::Exit(0)));
+    assert_eq!(processes.wait_job(job, 2), Err(CHILD));
+}
+
+#[test]
 fn spawn_retains_pipe_end_before_return_and_closes_it_before_wait() {
     let mut processes = processes();
     let [read, write] = processes.pipe().unwrap();
