@@ -54,18 +54,23 @@ function cell(rows: readonly ProductResultRow[], stages: readonly string[]): str
 }
 
 export function productScoreboard(rows: readonly ProductResultRow[], projects: readonly { id: string; commands: readonly { name: string; check: { kind: string; hmr?: unknown } }[] }[]): string {
-  const measured = rows.filter(row => row.engine === "browser" && row.host === "playground");
-  const lines = ["| Project | Install | Dev/page | Hot edit | Build/tool | Start/preview |", "| --- | --- | --- | --- | --- | --- |"];
+  const measured = rows.filter(row => row.host === "playground");
+  const engines = new Set(measured.map(row => row.engine));
+  if (!engines.size) engines.add("browser");
+  const showEngine = engines.size > 1 || !engines.has("browser");
+  const lines = [`| Project |${showEngine ? " Engine |" : ""} Install | Dev/page | Hot edit | Build/tool | Start/preview |`, `| --- |${showEngine ? " --- |" : ""} --- | --- | --- | --- | --- |`];
   for (const project of projects) {
-    const app = measured.filter(row => row.app === project.id);
-    const invalid = app.some(row => row.stage === networkGuardStage);
     const commands = project.commands.map(command => command.name);
     const development = commands.filter(name => name === "dev");
     const hot = project.commands.filter(command => command.name === "dev" && command.check.hmr).map(command => `${command.name}:hmr`);
     const build = commands.filter(name => !["dev", "start", "preview"].includes(name));
     const serve = commands.filter(name => name === "start" || name === "preview");
-    const cells = [["install"], development, hot, build, serve].map(stages => stages.length ? invalid ? "Measurement error" : cell(app, stages) : "Not applicable");
-    lines.push(`| ${project.id} | ${cells.join(" | ")} |`);
+    for (const engine of engines) {
+      const app = measured.filter(row => row.app === project.id && row.engine === engine);
+      const invalid = app.some(row => row.stage === networkGuardStage);
+      const cells = [["install"], development, hot, build, serve].map(stages => stages.length ? invalid ? "Measurement error" : cell(app, stages) : "Not applicable");
+      lines.push(`| ${project.id} |${showEngine ? ` ${engine} |` : ""} ${cells.join(" | ")} |`);
+    }
   }
   return lines.join("\n") + "\n";
 }
