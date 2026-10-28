@@ -20,11 +20,7 @@ pub enum Val {
 }
 
 /// Releases an owned tree without recursing through its descendants' drop glue.
-#[cfg(any(
-    feature = "engine-split",
-    feature = "engine-jsc",
-    not(feature = "engine-host")
-))]
+#[cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 pub(crate) fn drop_tree(value: Val) {
     let mut pending = vec![value];
     while let Some(value) = pending.pop() {
@@ -239,12 +235,6 @@ impl<'a> Args<'a> {
             Val::Num(n) => *n != 0.0,
             Val::Undefined | Val::Null => false,
             _ => true,
-        }
-    }
-    pub fn opt_bool(&self, i: usize) -> Option<bool> {
-        match self.get(i) {
-            Val::Undefined | Val::Null => None,
-            _ => Some(self.bool(i)),
         }
     }
     pub fn array(&self, i: usize) -> Option<&'a [Val]> {

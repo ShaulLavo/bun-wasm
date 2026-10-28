@@ -7,7 +7,7 @@ use wasmi::{
 };
 
 use crate::{
-    engine::{NativeError, NativeResult, Record, Val},
+    data::{NativeError, NativeResult, Record, Val},
     natives::Table,
 };
 

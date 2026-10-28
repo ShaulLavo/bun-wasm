@@ -1,57 +1,16 @@
-use std::alloc::{GlobalAlloc, Layout};
-use std::ffi::c_void;
-
-struct CoreAllocator;
-
-unsafe extern "C" {
-    fn malloc(size: usize) -> *mut c_void;
-    fn free(ptr: *mut c_void);
-    fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void;
-    fn posix_memalign(out: *mut *mut c_void, align: usize, size: usize) -> i32;
-    fn bun_core_alloc(bytes: u32, align: u32) -> u32;
-    fn bun_core_free(ptr: u32, bytes: u32, align: u32);
-    fn bun_core_dispatch(frame: u32) -> u32;
-}
-
-unsafe impl GlobalAlloc for CoreAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if layout.align() <= 16 {
-            return unsafe { malloc(layout.size()).cast() };
-        }
-        let mut ptr = std::ptr::null_mut();
-        if unsafe { posix_memalign(&mut ptr, layout.align(), layout.size()) } != 0 {
-            return std::ptr::null_mut();
-        }
-        ptr.cast()
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-        unsafe { free(ptr.cast()) };
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        if layout.align() <= 16 {
-            return unsafe { realloc(ptr.cast(), size).cast() };
-        }
-        let new_layout = unsafe { Layout::from_size_align_unchecked(size, layout.align()) };
-        let next = unsafe { self.alloc(new_layout) };
-        if next.is_null() {
-            return next;
-        }
-        unsafe { std::ptr::copy_nonoverlapping(ptr, next, layout.size().min(size)) };
-        unsafe { self.dealloc(ptr, layout) };
-        next
-    }
-}
+mod allocator;
+mod transport;
 
 #[global_allocator]
-static ALLOCATOR: CoreAllocator = CoreAllocator;
+static ALLOCATOR: allocator::CoreAllocator = allocator::CoreAllocator;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn quickjs_link_smoke() -> i32 {
     let runtime = rquickjs::Runtime::new().expect("QuickJS runtime");
     runtime.set_max_stack_size(32 * 1024);
-    runtime.set_interrupt_handler(Some(Box::new(|| unsafe { core_checkpoint() != 0 })));
+    runtime.set_interrupt_handler(Some(Box::new(|| unsafe {
+        transport::core_checkpoint() != 0
+    })));
     let context = rquickjs::Context::full(&runtime).expect("QuickJS context");
     context.with(|ctx| {
         let native = rquickjs::Function::new(ctx.clone(), |value: i32| data_echo(value))
@@ -65,7 +24,6 @@ pub extern "C" fn quickjs_link_smoke() -> i32 {
 
 unsafe extern "C" {
     fn core_stack_reenter(callback: usize, depth: u32) -> i32;
-    fn core_checkpoint() -> u32;
 }
 
 #[unsafe(no_mangle)]
@@ -87,7 +45,7 @@ pub extern "C" fn quickjs_stack_reenter(depth: u32) -> i32 {
 /// bytes until it is freed or reallocated with the same layout.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn quickjs_rust_alloc(bytes: usize, align: usize) -> *mut u8 {
-    let Ok(layout) = Layout::from_size_align(bytes, align) else {
+    let Ok(layout) = std::alloc::Layout::from_size_align(bytes, align) else {
         return std::ptr::null_mut();
     };
     unsafe { std::alloc::alloc(layout) }
@@ -99,7 +57,7 @@ pub unsafe extern "C" fn quickjs_rust_alloc(bytes: usize, align: usize) -> *mut 
 /// after this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn quickjs_rust_free(ptr: *mut u8, bytes: usize, align: usize) {
-    let layout = Layout::from_size_align(bytes, align).expect("original layout");
+    let layout = std::alloc::Layout::from_size_align(bytes, align).expect("original layout");
     unsafe { std::alloc::dealloc(ptr, layout) };
 }
 
@@ -116,32 +74,13 @@ pub unsafe extern "C" fn quickjs_rust_realloc(
     align: usize,
     next: usize,
 ) -> *mut u8 {
-    let layout = Layout::from_size_align(bytes, align).expect("original layout");
+    let layout = std::alloc::Layout::from_size_align(bytes, align).expect("original layout");
     unsafe { std::alloc::realloc(ptr, layout, next) }
 }
 
-struct TransportBuffer {
-    pointer: u32,
-    bytes: u32,
-}
-
-impl TransportBuffer {
-    fn new(bytes: u32) -> Self {
-        let pointer = unsafe { bun_core_alloc(bytes, 8) };
-        assert_ne!(pointer, 0, "transport allocation");
-        Self { pointer, bytes }
-    }
-}
-
-impl Drop for TransportBuffer {
-    fn drop(&mut self) {
-        unsafe { bun_core_free(self.pointer, self.bytes, 8) };
-    }
-}
-
 fn data_echo(value: i32) -> i32 {
-    let request = TransportBuffer::new(14);
-    let frame = TransportBuffer::new(24);
+    let request = transport::TransportBuffer::new(14);
+    let frame = transport::TransportBuffer::new(24);
     let mut bytes = [0u8; 14];
     bytes[0] = 7;
     bytes[1..5].copy_from_slice(&1u32.to_le_bytes());
@@ -154,10 +93,14 @@ fn data_echo(value: i32) -> i32 {
     unsafe {
         std::ptr::copy_nonoverlapping(words.as_ptr(), frame.pointer as *mut u32, words.len())
     };
-    assert_eq!(unsafe { bun_core_dispatch(frame.pointer) }, 0, "dispatch");
+    assert_eq!(
+        unsafe { transport::bun_core_dispatch(frame.pointer) },
+        0,
+        "dispatch"
+    );
     let reply_pointer = unsafe { (frame.pointer as *const u32).add(4).read() };
     let reply_bytes = unsafe { (frame.pointer as *const u32).add(5).read() };
-    let reply = TransportBuffer {
+    let reply = transport::TransportBuffer {
         pointer: reply_pointer,
         bytes: reply_bytes,
     };
@@ -171,12 +114,14 @@ fn data_echo(value: i32) -> i32 {
 pub extern "C" fn quickjs_interrupt_smoke(regexp: u32) -> i32 {
     let runtime = rquickjs::Runtime::new().expect("QuickJS runtime");
     runtime.set_max_stack_size(32 * 1024);
-    runtime.set_interrupt_handler(Some(Box::new(|| unsafe { core_checkpoint() != 0 })));
+    runtime.set_interrupt_handler(Some(Box::new(|| unsafe {
+        transport::core_checkpoint() != 0
+    })));
     let count = std::rc::Rc::new(std::cell::Cell::new(0));
     let polls = count.clone();
     runtime.set_interrupt_handler(Some(Box::new(move || {
         polls.set(polls.get() + 1);
-        let interrupted = unsafe { core_checkpoint() != 0 };
+        let interrupted = unsafe { transport::core_checkpoint() != 0 };
         interrupted || polls.get() >= 8
     })));
     let context = rquickjs::Context::full(&runtime).expect("QuickJS context");
@@ -203,7 +148,9 @@ pub extern "C" fn quickjs_interrupt_smoke(regexp: u32) -> i32 {
 pub extern "C" fn quickjs_stack_guard_smoke() -> i32 {
     let runtime = rquickjs::Runtime::new().expect("QuickJS runtime");
     runtime.set_max_stack_size(32 * 1024);
-    runtime.set_interrupt_handler(Some(Box::new(|| unsafe { core_checkpoint() != 0 })));
+    runtime.set_interrupt_handler(Some(Box::new(|| unsafe {
+        transport::core_checkpoint() != 0
+    })));
     let context = rquickjs::Context::full(&runtime).expect("QuickJS context");
     context.with(|ctx| ctx.eval::<i32, _>(
         "try { (function recur(){ return recur() })() } catch(e) { e instanceof RangeError ? 1 : 0 }"
@@ -308,7 +255,7 @@ pub extern "C" fn quickjs_run(session: u32) -> i32 {
         42,
         "side constructors once"
     );
-    driver::run(session)
+    driver::run::<vm::QuickJs>(session)
 }
 
 #[cfg(test)]

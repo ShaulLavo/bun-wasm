@@ -4,7 +4,8 @@ import type { WASI } from "node:wasi";
 import { Wasi } from "waffle/core";
 import { MemFS } from "waffle/fs/memory";
 import { instantiateLinkPlan, prepareLinkPlan, type LinkPlanSource, type LinkedGroup } from "waffle/link";
-import { quickjsProgramSource } from "../../src/quickjs-program.ts";
+import { engineLinkPlan } from "../../src/quickjs-program.ts";
+import { programKind, programProfile } from "../../src/engine-kind.ts";
 
 export interface NodeProgram {
   readonly module: WebAssembly.Module;
@@ -14,9 +15,10 @@ export interface NodeProgram {
 export async function loadNodeProgram(path: string): Promise<NodeProgram> {
   const bytes = readFileSync(path);
   const module = await WebAssembly.compile(bytes);
-  if (!WebAssembly.Module.exports(module).some(entry => entry.name === "bun_core_bind_engine")) return { module };
-  const side = readFileSync(join(dirname(path), "quickjs.wasm"));
-  const plan = await prepareLinkPlan(await quickjsProgramSource(bytes, side));
+  const kind = programKind(module);
+  if (kind === "single") return { module };
+  const side = readFileSync(join(dirname(path), programProfile(kind).side));
+  const plan = await prepareLinkPlan(await engineLinkPlan({ kind, core: bytes, side }));
   return { module: plan.entryModule, linkPlan: plan.toSource() };
 }
 
@@ -28,10 +30,10 @@ class NodeLinkWasi extends Wasi {
     super({ args: [], env: {}, fs: new MemFS(), preopens: {}, stdout() {}, stderr() {}, sleep() {} });
     this.nativeImports = nativeImports;
   }
-  override imports(module: WebAssembly.Module, bindings?: Parameters<Wasi["imports"]>[1]): WebAssembly.Imports {
+  override imports(module: WebAssembly.Module, bindings?: WebAssembly.Imports): WebAssembly.Imports {
     const imports: WebAssembly.Imports = {};
     for (const entry of WebAssembly.Module.imports(module)) {
-      const namespace = entry.module === "env" || entry.module === "GOT.mem" ? bindings?.[entry.module] : this.nativeImports[entry.module];
+      const namespace = entry.module === "env" || entry.module === "GOT.mem" || entry.module === "GOT.func" ? bindings?.[entry.module] : this.nativeImports[entry.module];
       const value = namespace?.[entry.name];
       if (value === undefined) throw new TypeError(`unsupported import ${entry.module}.${entry.name} (${entry.kind})`);
       (imports[entry.module] ??= {})[entry.name] = value;

@@ -2,7 +2,7 @@
 
 Class **Host feature**, **original adapters** in `src/js/net.js`,
 `src/js/http_common.ts`, `src/js/http_body.ts`, `src/js/http_agent.ts`,
-`src/js/http_response.ts`, `src/js/fetch_body.ts`,
+`src/js/http_response.ts`, `src/js/http_server_response.ts`, `src/js/fetch_body.ts`,
 `src/js/body_streams.ts`,
 byte-stream metadata in `src/js/web.js`, socket-close
 completion in `src/js/node_net.js`, and the `node:http` registry
@@ -105,7 +105,37 @@ The caller-supplied connection path retains caller ownership of TLS setup.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [Server response destruction](#server-response-destruction) | Host feature | Original typed response cancellation over the existing socket lifecycle. |
 | Request body copying in `web.js` and `body_streams.ts` | Host feature | Original reader-backed ownership transfer and inherited redirect state. |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming bodies, response cancellation independent of transport disposal before and during writer ownership, Agent pool, client inactivity timer ownership and upgrade response adapters shared by all engines. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+
+### Server response destruction
+
+Class **Host feature**, **original adapter** in
+`crates/bunwasm-runtime/src/js/http_server_response.ts`, with prototype wiring and
+HTTP socket error forwarding in `src/js/net.js`. No Bun or Node implementation is
+copied. Behavioral references are native Bun 1.4.4 and Node 26.12.1's `node:http`
+`ServerResponse.destroy`, corresponding to Bun `src/js/node/http.ts` at the pinned
+revision above and Node `lib/_http_outgoing.js` at tag `v26.12.1`.
+
+`destroy(error?)` returns the response itself and marks it destroyed immediately.
+It delegates cancellation to the existing Socket and Connection lifecycle, which
+closes the host handle, removes I/O waiters and timers, and settles queued writes.
+The first error reaches the socket and HTTP server's `clientError` event, not a
+response `error` event. Socket close emits response close once. Destruction settles
+the adapter's request completion without reusing the connection. End completion
+already queued before cancellation cannot emit a successful finish afterward.
+The existing end-completion method moved into the typed helper for this guard.
+Late writes return false with `ERR_STREAM_DESTROYED` without committing headers;
+accepted writes cannot emit drain after destruction.
+
+`scripts/net-http-flow.test.ts` covers blocked write/end cancellation, exact error
+and return identities, repeated destruction, falsy optional errors, queued end
+completion, and the actual HTTP server connection cleanup. Node and Bun differ
+when native writes have already completed: Bun can finish a small response
+synchronously before a later destroy. The queued-cancellation guard follows Node;
+it does not undo a finish already delivered. These source tests are not a rebuilt
+guest or a Next.js application acceptance result.

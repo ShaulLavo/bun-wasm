@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Loader, engine::NativeError};
+use crate::{Loader, data::NativeError};
 use sha2::{Digest, Sha256};
 
 struct JsonParser;

@@ -1,7 +1,7 @@
 //! Module sources: reading, transpiling and classifying files, the
 //! CommonJS wrapper, the ESM prologue, wrapper modules for non-ES modules,
 //! and the embedded JS polyfills. Engine-agnostic; the engine-facing glue is
-//! the [`ModuleHost`](crate::engine::ModuleHost) implementation in lib.rs.
+//! the linked engine program's `ModuleHost` implementation.
 //!
 //! Every non-ESM module (built-ins, CommonJS, JSON, text) is exposed to ESM
 //! importers through a tiny generated wrapper module that re-exports the keys
@@ -14,7 +14,7 @@ use std::io::Read as _;
 use std::rc::Rc;
 
 use crate::State;
-use crate::engine::NativeError;
+use crate::data::NativeError;
 use crate::resolve::Kind;
 use crate::transpiler::Loader as SourceLoader;
 
@@ -108,7 +108,7 @@ pub fn resolve_error(
     kind: Kind,
     notes: Vec<crate::resolve::ResolveNote>,
 ) -> NativeError {
-    use crate::engine::{Record, Val};
+    use crate::data::{Record, Val};
     // require() and import report different codes, like Node and Bun.
     let code = if spec.starts_with("node:") {
         "ERR_UNKNOWN_BUILTIN_MODULE"
@@ -568,7 +568,7 @@ pub fn polyfill_source(name: &str) -> Option<&'static str> {
     POLYFILLS.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
 }
 
-#[cfg(any(feature = "engine-split", feature = "engine-jsc"))]
+#[cfg(feature = "engine-split")]
 fn is_plain_identifier(key: &str) -> bool {
     !key.is_empty()
         && key
@@ -576,7 +576,7 @@ fn is_plain_identifier(key: &str) -> bool {
             .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
-#[cfg(any(feature = "engine-split", feature = "engine-jsc"))]
+#[cfg(feature = "engine-split")]
 /// Wrapper ESM source re-exporting `import.meta.m` (default) and its keys.
 pub fn wrapper_source(keys: &[String]) -> String {
     let mut src =

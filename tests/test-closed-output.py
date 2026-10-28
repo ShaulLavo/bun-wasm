@@ -39,7 +39,8 @@ def command(directory: Path, script: str) -> list[str]:
             "--wasm", str(args.wasm.resolve()), "--dir", f"{directory}::/",
             "--env", "PWD=/", "--", "run", f"/{script}",
         ]
-    launcher = Path(os.environ["CARGO_TARGET_DIR"]) / "release/bun-wasm"
+    # The same launcher scripts/test.sh selects.
+    launcher = Path(os.environ.get("BUN_WASM_LAUNCHER") or Path(os.environ["CARGO_TARGET_DIR"]) / "release/bun-wasm")
     return [
         str(launcher), "--wasm", str(args.wasm.resolve()),
         "--engine", f"{args.engine}={args.wasm.resolve()}",

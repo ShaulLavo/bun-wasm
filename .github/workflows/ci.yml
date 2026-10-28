@@ -124,6 +124,10 @@ jobs:
         with:
           path: ${{ env.RUSTUP_HOME }}
           key: ${{ steps.rustup-cache.outputs.cache-primary-key }}
+      - name: Blocking owned Rust formatting
+        run: |
+          source env.sh
+          bun scripts/quality-rust.ts --format-only
       - name: Install native build tools
         run: |
           if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
@@ -211,6 +215,43 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasm-tools-bin"
           mv "$stage/wasm-tools" "$WASM_TOOLS/wasm-tools-bin/wasm-tools"
           echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
+      - uses: actions/cache/restore@v4
+        id: wasmtime-cache
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
+          key: wasmtime-49.0.3-${{ runner.os }}-${{ runner.arch }}
+      - name: Install pinned Wasmtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$WASM_TOOLS"
+          archive="$WASM_TOOLS/wasmtime-v49.0.3-x86_64-linux.tar.xz"
+          stage=$(mktemp -d "$WASM_TOOLS/.wasmtime-XXXXXX")
+          trap 'rm -rf -- "$stage"' EXIT
+          input="$archive"
+          if [[ ! -f "$input" ]]; then
+            input="$stage/archive.tar.xz"
+            curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
+              https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/wasmtime-v49.0.3-x86_64-linux.tar.xz \
+              -o "$input"
+          fi
+          echo "4001225413f208345b980525f31c4080e1873808b38d0ddc7918497340667fbb  $input" | sha256sum --check
+          if [[ "$input" != "$archive" ]]; then mv "$input" "$archive"; fi
+          tar -xJf "$archive" --strip-components=1 -C "$stage"
+          test "$("$stage/wasmtime" --version)" = "wasmtime 49.0.3 (f96eabaa1 2026-10-14)"
+          "$stage/wasmtime" run --help > "$stage/run-help"
+          grep -q -- '--dir' "$stage/run-help"
+          mkdir -p "$WASM_TOOLS/wasmtime"
+          mv "$stage/wasmtime" "$WASM_TOOLS/wasmtime/wasmtime"
+          echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
+      - name: Save completed wasmtime-cache setup
+        if: steps.wasmtime-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
+          key: ${{ steps.wasmtime-cache.outputs.cache-primary-key }}
+      - name: Check transpiler example command prerequisites
+        run: bash scripts/test-transpiler-example.sh --check-tools
       - uses: actions/cache/restore@v4
         with:
           path: ~/.bun/install/cache
@@ -306,6 +347,13 @@ jobs:
           key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', '.github/workflows/ci.yml') }}
           restore-keys: |
             native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-
+      - name: Prepare pinned Rust standard-library dependencies
+        run: |
+          source env.sh
+          guest_environment=$(bun scripts/guest-build-receipt.ts environment)
+          eval "$guest_environment"
+          sysroot=$("$RUSTC" --print sysroot)
+          "$GUEST_CARGO" fetch --locked --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml" --target wasm32-wasip1
       - name: Install pinned Rust dependency checker
         run: |
           source env.sh
@@ -317,7 +365,7 @@ jobs:
       - name: Configure private JSC build paths
         run: |
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
-          echo "JSC_CARGO_TARGET_DIR=$RUNNER_TEMP/jsc/target" >> "$GITHUB_ENV"
+          echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
       - name: Identify JSC prebuild inputs
         id: jsc-inputs
         env:
@@ -339,10 +387,10 @@ jobs:
         if: needs.quality.outputs.jsc == 'true'
         id: jsc-cargo-cache
         with:
-          path: ${{ runner.temp }}/jsc/target
-          key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts') }}
+          path: ${{ runner.temp }}/jsc/engine
+          key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/build-engine-jsc.sh', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build.sh', 'scripts/quickjs-core-exports.txt', 'scripts/src/engine-explicit-init.ts', 'scripts/src/engine-init.c', 'scripts/guest-core-receipt.ts', 'scripts/guest-engine-receipt.ts', 'scripts/guest-build-receipt.ts', 'scripts/jsc-embedding.ts', 'tests/linker/**', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts') }}
           restore-keys: |
-            jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
+            jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
       - name: Build or verify the JSC prebuild
         id: jsc-producer
         shell: bash
@@ -405,7 +453,8 @@ jobs:
         run: |
           run_native_checks() {
             source env.sh
-            bun run quality --native
+            bun scripts/quality-rust.ts --checks-only
+            bun run quality:wasi
             # The WASI lint probe rewrites a source file; restore its time before the next build.
             bun scripts/quality-input-times.ts
             source env.sh
@@ -433,9 +482,14 @@ jobs:
           key: bash-web-shell-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ hashFiles('scripts/build-bash-web-shell.sh', '.cargo/**', 'rust-toolchain.toml', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'bun.lock') }}
       - name: Install the Web host dependencies
         run: bun install --cwd web --frozen-lockfile
-      # The JSC guest owns its Cargo target and its dist/bun-jsc.wasm outputs. It builds
-      # at the lowest priority while the QuickJS core and host-engine guests build; timed
-      # checks start only after it finishes.
+      - name: Build the common engine core once
+        run: |
+          source env.sh
+          export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
+          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh
+      # Each side reuses the completed common core and owns its target and outputs.
+      # JSC builds at low priority beside QuickJS and host-engine work; timed checks
+      # start only after the background producer finishes.
       - name: Start the JSC Cargo guest build
         if: needs.quality.outputs.jsc == 'true'
         env:
@@ -444,7 +498,7 @@ jobs:
         run: |
           state="$RUNNER_TEMP/jsc-guest"
           mkdir "$state"
-          setsid nice -n 19 bash -c 'start=$SECONDS; source env.sh && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; echo "$status" > "$1/status"' \
+          setsid nice -n 19 bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; echo "$status" > "$1/status"' \
             jsc-guest "$state" > "$state/build.log" 2>&1 < /dev/null &
           echo "$!" > "$state/pid"
       - name: Build native fixtures after the cache checkpoint
@@ -452,21 +506,10 @@ jobs:
           source env.sh
           export WASI_SDK="$WASI_SDK_PATH"
           cargo build --release --locked -j 2 -p bunwasm-host
-          guest_environment=$(bun scripts/guest-build-receipt.ts environment)
-          eval "$guest_environment"
-          trap 'rm -f -- "${guest_inputs:-}"' EXIT
           trap 'exit 130' INT
           trap 'exit 143' TERM
-          guest_inputs=$(mktemp "${TMPDIR}/bun-wasm-guest-inputs-XXXXXX")
-          bun scripts/guest-build-receipt.ts inputs quickjs > "$guest_inputs"
-          export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-quickjs"
-          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh
-          mkdir -p dist
-          cp "$BUN_CORE_BUILD_DIR/bun-core.wasm" dist/bun.wasm
-          cp "$BUN_CORE_BUILD_DIR/quickjs.wasm" dist/quickjs.wasm
-          bun scripts/guest-build-receipt.ts write dist/bun.wasm "$guest_inputs"
-          rm -f -- "$guest_inputs"
-          guest_inputs=
+          export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
+          CARGO_BUILD_JOBS=2 bash scripts/build.sh
       - name: Build one host-engine guest for real-browser source cache acceptance
         run: |
           source env.sh
@@ -502,8 +545,8 @@ jobs:
         if: needs.quality.outputs.jsc == 'true' && steps.jsc-cargo-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || steps.jsc-cargo-cache.outputs.cache-matched-key == '')
         uses: actions/cache/save@v4
         with:
-          path: ${{ runner.temp }}/jsc/target
-          key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts') }}
+          path: ${{ runner.temp }}/jsc/engine
+          key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/build-engine-jsc.sh', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build.sh', 'scripts/quickjs-core-exports.txt', 'scripts/src/engine-explicit-init.ts', 'scripts/src/engine-init.c', 'scripts/guest-core-receipt.ts', 'scripts/guest-engine-receipt.ts', 'scripts/guest-build-receipt.ts', 'scripts/jsc-embedding.ts', 'tests/linker/**', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts') }}
 
       - name: Blocking JSC embedding and allocation checks
         if: needs.quality.outputs.jsc == 'true'
@@ -515,6 +558,8 @@ jobs:
           path: |
             dist/bun-jsc.wasm.build.json
             dist/bun-jsc.wasm.embedding.json
+            dist/jsc-engine.wasm.engine.json
+            ${{ runner.temp }}/jsc/engine/engine-link.map
           if-no-files-found: error
 
       - name: Blocking native fixture checks
@@ -564,6 +609,7 @@ jobs:
           name: web-guest-fixture-receipts
           path: |
             dist/*.wasm.build.json
+            dist/*.wasm.engine.json
             dist/web-guests-*.log
             ${{ runner.temp }}/jsc-prebuild.log
           if-no-files-found: error

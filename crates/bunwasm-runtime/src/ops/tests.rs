@@ -155,11 +155,11 @@ fn dispatch_deep_request() {
         observed.set(observed.get() + 1);
         Ok(Val::Undefined)
     });
-    let reply = dispatch.dispatch(dispatch.op(), 1, encoded);
+    let reply = dispatch.dispatch(dispatch.op(), 1, &encoded);
     assert_eq!(reply.status, Status::Ok);
     assert_eq!(calls.get(), 1);
 
-    let rejected = dispatch.dispatch(dispatch.op(), 1, deep_object());
+    let rejected = dispatch.dispatch(dispatch.op(), 1, &deep_object());
     assert_eq!(rejected.status, Status::BadCall);
     assert_eq!(calls.get(), 1);
 
@@ -187,25 +187,23 @@ fn invalid_calls_cannot_invoke_the_native() {
         Ok(Val::Undefined)
     });
     assert_eq!(
-        dispatch.dispatch(0, 1, request(vec![])).status,
+        dispatch.dispatch(0, 1, &request(vec![])).status,
         Status::BadCall
     );
     assert_eq!(
-        dispatch.dispatch(dispatch.op(), 0, request(vec![])).status,
+        dispatch.dispatch(dispatch.op(), 0, &request(vec![])).status,
         Status::BadCall
     );
     assert_eq!(
-        dispatch.dispatch(dispatch.op(), 2, request(vec![])).status,
+        dispatch.dispatch(dispatch.op(), 2, &request(vec![])).status,
         Status::BadCall
     );
     assert_eq!(
-        dispatch.dispatch(dispatch.op(), 1, vec![0]).status,
+        dispatch.dispatch(dispatch.op(), 1, &[0]).status,
         Status::BadCall
     );
     assert_eq!(
-        dispatch
-            .dispatch(dispatch.op(), 1, vec![7, 1, 0, 0, 0])
-            .status,
+        dispatch.dispatch(dispatch.op(), 1, &[7, 1, 0, 0, 0]).status,
         Status::BadCall
     );
     assert_eq!(calls.get(), 0);
@@ -216,9 +214,9 @@ fn invalid_calls_cannot_invoke_the_native() {
 #[test]
 fn replies_keep_independent_owned_storage_across_later_calls() {
     let dispatch = dispatcher(|args| Ok(args.get(0).clone()));
-    let first = dispatch.dispatch(dispatch.op(), 1, request(vec![Val::Bytes(vec![3; 4096])]));
+    let first = dispatch.dispatch(dispatch.op(), 1, &request(vec![Val::Bytes(vec![3; 4096])]));
     let expected = first.bytes.clone();
-    let second = dispatch.dispatch(dispatch.op(), 1, request(vec![Val::Str("second".into())]));
+    let second = dispatch.dispatch(dispatch.op(), 1, &request(vec![Val::Str("second".into())]));
     assert_eq!(first.bytes, expected);
     assert_eq!(first.into_result().unwrap(), Val::Bytes(vec![3; 4096]));
     assert_eq!(second.into_result().unwrap(), Val::Str("second".into()));
@@ -233,7 +231,7 @@ fn native_errors_remain_data_with_ordered_duplicate_properties() {
             .prop("errno", -5)
             .prop("code", "again"))
     });
-    let reply = dispatch.dispatch(dispatch.op(), 1, request(vec![]));
+    let reply = dispatch.dispatch(dispatch.op(), 1, &request(vec![]));
     assert_eq!(reply.status, Status::NativeError);
     let error = reply.into_result().unwrap_err();
     assert_eq!(error.kind, ErrorKind::TypeError);

@@ -1,10 +1,11 @@
 import { quickjsPair } from "./quickjs-plan-fixture";
 import { expect, test } from "bun:test";
-import { BunWasmAssetError, loadBunWasm, prepareQuickjsProgram, programLinkPlan, type BunWasmAsset } from "../../src/assets.js";
+import { BunWasmAssetError, loadBunWasm, prepareProgram, prepareQuickjsProgram, programLinkPlan, type BunWasmAsset } from "../../src/assets.js";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const hash = new Bun.CryptoHasher("sha256").update(wasm).digest("hex");
-const asset: BunWasmAsset = { url: "https://example.test/immutable/bun.wasm", bytes: wasm.length, sha256: hash };
+const file = { url: "https://example.test/immutable/bun.wasm", bytes: wasm.length, sha256: hash };
+const asset = { kind: "single", core: file } satisfies BunWasmAsset;
 const respond = (body: Uint8Array) => async () => new Response(new Uint8Array(body));
 
 test("verifies an immutable guest before compiling", async () => {
@@ -20,7 +21,7 @@ test("rejects changed guest bytes with the same byte count", async () => {
 test("rejects wrong guest length, HTTP failures and invalid descriptors", async () => {
   await expect(loadBunWasm({ asset, fetch: respond(wasm.slice(1)) })).rejects.toThrow("byte count mismatch");
   await expect(loadBunWasm({ asset, fetch: async () => new Response(null, { status: 404 }) })).rejects.toThrow("HTTP 404");
-  await expect(loadBunWasm({ asset: { ...asset, sha256: "bad" }, fetch: respond(wasm) })).rejects.toBeInstanceOf(BunWasmAssetError);
+  await expect(loadBunWasm({ asset: { ...asset, core: { ...file, sha256: "bad" } }, fetch: respond(wasm) })).rejects.toBeInstanceOf(BunWasmAssetError);
 });
 
 test("verifies decompressed bytes, not the gzip representation", async () => {
@@ -38,22 +39,23 @@ test("snapshots descriptor integrity before invoking fetch", async () => {
   changed[changed.length - 1] = 66;
   expect(WebAssembly.validate(original)).toBe(true);
   expect(WebAssembly.validate(changed)).toBe(true);
-  const mutable = {
-    url: asset.url,
+  const mutableFile = {
+    url: file.url,
     bytes: original.length,
     sha256: new Bun.CryptoHasher("sha256").update(original).digest("hex"),
   };
+  const mutable = { kind: "single", core: mutableFile } satisfies BunWasmAsset;
   await expect(loadBunWasm({ asset: mutable, fetch: async () => {
-    mutable.sha256 = new Bun.CryptoHasher("sha256").update(changed).digest("hex");
-    mutable.bytes = changed.length;
+    mutableFile.sha256 = new Bun.CryptoHasher("sha256").update(changed).digest("hex");
+    mutableFile.bytes = changed.length;
     return new Response(changed);
   } })).rejects.toThrow("SHA-256 mismatch");
 });
 
 test("snapshots the declared byte count before invoking fetch", async () => {
-  const mutable = { ...asset };
+  const mutable = { kind: "single", core: { ...file } } satisfies BunWasmAsset;
   await expect(loadBunWasm({ asset: mutable, fetch: async () => {
-    mutable.bytes = wasm.length + 1;
+    mutable.core.bytes = wasm.length + 1;
     return new Response(wasm);
   } })).resolves.toBeInstanceOf(WebAssembly.Module);
 });
@@ -111,21 +113,29 @@ test("URL override keeps integrity checks", async () => {
 });
 
 test("checks the paired side before preparing a QuickJS program", async () => {
-  const paired = { ...asset, quickjs: { ...asset, url: "https://example.test/immutable/quickjs.wasm", sha256: "0".repeat(64) } };
+  const paired = { kind: "quickjs", core: file, side: { ...file, url: "https://example.test/immutable/quickjs.wasm", sha256: "0".repeat(64) } } satisfies BunWasmAsset;
   const requested: string[] = [];
   await expect(loadBunWasm({ asset: paired, fetch: async url => {
     requested.push(url);
     return new Response(wasm);
   } })).rejects.toThrow("SHA-256 mismatch");
-  expect(requested).toEqual([asset.url, paired.quickjs.url]);
+  expect(requested).toEqual([file.url, paired.side.url]);
 });
 
 test("snapshots paired metadata before the core fetch callback", async () => {
-  const paired = { ...asset, quickjs: { ...asset, url: "https://example.test/immutable/quickjs.wasm", sha256: "0".repeat(64) } };
+  const paired = { kind: "quickjs", core: file, side: { ...file, url: "https://example.test/immutable/quickjs.wasm", sha256: "0".repeat(64) } } satisfies BunWasmAsset;
   await expect(loadBunWasm({ asset: paired, fetch: async () => {
-    paired.quickjs.sha256 = hash;
+    paired.side.sha256 = hash;
     return new Response(wasm);
   } })).rejects.toThrow("SHA-256 mismatch");
+});
+
+test("brands a verified but wrong paired side as an invalid asset", async () => {
+  const { core } = quickjsPair();
+  const { side } = quickjsPair("jsc");
+  const describe = (url: string, bytes: Uint8Array) => ({ url, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex") });
+  const paired = { kind: "quickjs", core: describe("https://example.test/core", core), side: describe("https://example.test/side", side) } satisfies BunWasmAsset;
+  await expect(loadBunWasm({ asset: paired, fetch: async url => new Response(url === paired.core.url ? core : side) })).rejects.toBeInstanceOf(BunWasmAssetError);
 });
 
 test("distinct valid QuickJS sides retain distinct Waffle program associations", async () => {
@@ -138,8 +148,7 @@ test("distinct valid QuickJS sides retain distinct Waffle program associations",
   expect(await prepareQuickjsProgram(core, side)).toBe(first);
   expect(programLinkPlan(first)?.libraries[0]?.source).toEqual(side);
   expect(programLinkPlan(second)?.libraries[0]?.source).toEqual(sideB);
-  const digest = await crypto.subtle.digest("SHA-256", side);
-  expect(WebAssembly.Module.customSections(first, "bun-wasm-quickjs")).toEqual([digest]);
+  expect(WebAssembly.Module.customSections(first, "bun-wasm-pair")).toHaveLength(1);
   expect(WebAssembly.Module.exports(first)).toEqual(WebAssembly.Module.exports(new WebAssembly.Module(core)));
   const ordinary = new WebAssembly.Module(wasm);
   expect(programLinkPlan(ordinary)).toBeUndefined();
@@ -159,12 +168,37 @@ test("paired preparation snapshots both inputs before asynchronous hashing", asy
 test("prepares the verified pair and rejects its naked core override", async () => {
   const { core, side } = quickjsPair();
   const describe = (url: string, bytes: Uint8Array) => ({ url, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex") });
-  const paired = { ...describe("https://example.test/bun.wasm", core), quickjs: describe("https://example.test/quickjs.wasm", side) };
-  const module = await loadBunWasm({ asset: paired, fetch: async url => new Response(url === paired.url ? core : side) });
+  const paired = { kind: "quickjs", core: describe("https://example.test/bun.wasm", core), side: describe("https://example.test/quickjs.wasm", side) } satisfies BunWasmAsset;
+  const module = await loadBunWasm({ asset: paired, fetch: async url => new Response(url === paired.core.url ? core : side) });
   const plan = programLinkPlan(module);
   expect(plan?.core.source.slice(0, core.length)).toEqual(core);
   expect(plan?.core.source.length).toBeGreaterThan(core.length);
   expect(plan?.libraries[0]?.source).toEqual(side);
   expect(await loadBunWasm({ module })).toBe(module);
   await expect(loadBunWasm({ module: new WebAssembly.Module(core) })).rejects.toThrow("matching prepared side module");
+});
+
+for (const kind of ["quickjs", "jsc"] as const) test(`${kind} preparation rejects wrong side and snapshots caller buffers`, async () => {
+  const { core, side } = quickjsPair(kind);
+  const other = quickjsPair(kind === "jsc" ? "quickjs" : "jsc");
+  await expect(prepareProgram({ kind, core, side: other.side })).rejects.toThrow("initializer/RUN");
+  await expect(prepareProgram({ kind: kind === "jsc" ? "quickjs" : "jsc", core, side })).rejects.toThrow("core declaration");
+  const expectedCore = core.slice(), expectedSide = side.slice();
+  const pending = prepareProgram({ kind, core, side });
+  core.fill(0); side.fill(0);
+  const module = await pending;
+  expect(programLinkPlan(module)?.core.source.slice(0, expectedCore.length)).toEqual(expectedCore);
+  expect(programLinkPlan(module)?.libraries[0]?.source).toEqual(expectedSide);
+});
+
+test("paired preparation never compiles synchronously, which browser main threads refuse for large modules", async () => {
+  const { core, side } = quickjsPair("jsc");
+  const Module = WebAssembly.Module;
+  const refused = new Proxy(Module, { construct() { throw new RangeError("WebAssembly.Compile is disallowed on the main thread"); } });
+  Reflect.set(WebAssembly, "Module", refused);
+  try {
+    expect(programLinkPlan(await prepareProgram({ kind: "jsc", core, side }))?.libraries[0]?.source).toEqual(side);
+  } finally {
+    Reflect.set(WebAssembly, "Module", Module);
+  }
 });

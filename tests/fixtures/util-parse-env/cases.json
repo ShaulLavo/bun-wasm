@@ -1,0 +1,69 @@
+[
+  {
+    "name": "empty and comments",
+    "source": "# comment\n\n",
+    "expected": {}
+  },
+  {
+    "name": "whitespace, comments, exports and duplicates",
+    "source": "  A = first # discarded\r\nexport B=second\nEMPTY=\nA=last\n",
+    "expected": {
+      "A": "last",
+      "B": "second",
+      "EMPTY": ""
+    }
+  },
+  {
+    "name": "quotes and embedded comment",
+    "source": "A='single # quoted'\nB=\"double # quoted\"\nC=`backtick # quoted`\n",
+    "expected": {
+      "A": "single # quoted",
+      "B": "double # quoted",
+      "C": "backtick # quoted"
+    }
+  },
+  {
+    "name": "multiline quotes and double-quote escapes",
+    "source": "A=\"first\nsecond\"\nB=\"line\\nreturn\"\nC='literal\\n'\n",
+    "expected": {
+      "A": "first\nsecond",
+      "B": "line\nreturn",
+      "C": "literal\\n"
+    }
+  },
+  {
+    "name": "no environment expansion",
+    "source": "A=alpha\nB=$A\nC=${A}\nD=\"$A ${A}\"\n",
+    "expected": {
+      "A": "alpha",
+      "B": "$A",
+      "C": "${A}",
+      "D": "$A ${A}"
+    }
+  },
+  {
+    "name": "unicode values",
+    "source": "UNICODE=café 🦊\nNBSP=\" \"\n",
+    "expected": {
+      "NBSP": " ",
+      "UNICODE": "café 🦊"
+    }
+  },
+  {
+    "name": "special keys are own data",
+    "source": "__proto__=safe\nconstructor=own\ntoString=value\n0=numeric\n",
+    "expected": {
+      "0": "numeric",
+      "__proto__": "safe",
+      "constructor": "own",
+      "toString": "value"
+    }
+  },
+  {
+    "name": "separate calls do not read process environment",
+    "source": "B=${HOME}\n",
+    "expected": {
+      "B": "${HOME}"
+    }
+  }
+]

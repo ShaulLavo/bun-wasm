@@ -30,8 +30,8 @@ path is used. `tests/linker/quickjs/path-repro.sh` checks byte-identical fixture
 archives from two checkout paths and verifies the actionable missing-source
 failure.
 
-The build first fetches the selected compiler's standard-library dependencies
-with its own `library/Cargo.lock`, `--locked` and target `wasm32-wasip1`.
+The build prepares the selected compiler's cached standard-library dependencies
+with its own `library/Cargo.lock`, `--locked --offline` and target `wasm32-wasip1`.
 This includes std-only crates such as `wasip1` that a workspace fetch does not
 prepare. Preparation failure stops the producer before compilation.
 The PIC build then uses unchanged `--locked --offline` and
@@ -80,12 +80,11 @@ relocations, constructors and registration. `_start` calls the real CLI without
 repeating constructors. Volatile counters check the schedule. The original
 8 MiB stack and 512 MiB memory maximum remain unchanged.
 
-Build fresh matching bytes with `BUN_CORE_BUILD_DIR` pointing to a private
-output directory, then run the ordinary-worker CLI fixture:
+Build a complete tagged QuickJS pair with `BUN_CORE_BUILD_DIR` pointing to a
+private output directory:
 
 ```sh
-scripts/build-bun-core.sh
-bun test tests/linker/quickjs/cli.test.ts
+scripts/build.sh
 ```
 
 The fixture uses accepted Waffle revision
@@ -103,9 +102,10 @@ The VM implementation moved from `bunwasm-runtime/src/engine_quickjs.rs` at
 rquickjs rooting, the six patched helper declarations, pending jobs, stack
 budgets and interruption policy. `program.rs`, `loader.rs` and
 `value_natives.rs` hold the existing generic VM-local algorithms. JSC compiles
-those same sources with its direct State adapter, preventing two event-loop
-implementations. The split adapter uses plain source, metadata and data-native
-operations. No Engine method, callback, promise or live VM handle crosses the
+those same sources with its VM-local adapter through the shared driver,
+preventing two event-loop implementations. The move and source-only proof limits
+are recorded in [JSC engine program](jsc-engine-program.md). The split adapter
+uses plain source, metadata and data-native operations. No Engine method, callback, promise or live VM handle crosses the
 transport. Core keeps source caching, resolution, transpilation and host waits.
 
 The original runtime adapter is this repository's code, not copied upstream
@@ -121,6 +121,7 @@ the linked QuickJS records above. No second monolithic QuickJS path remains.
 | `scripts/build-bun-core.sh`, `scripts/quickjs-core-exports.txt` | Port | Original VM-free production-core producer and explicit libc/GOT export list. |
 | `scripts/build-engine-quickjs.sh` | Port | Original PIC Rust/C shared-library build with no engine libc or heap-growth owner. |
 | `tests/linker/quickjs/**` | Port | Original raw linked-VM fixtures, section-preserving initializer conversion, and real core-libc checks. Data/ops source stays owned by its existing modules and is included by path. |
+| `crates/bunwasm-host/src/linked.rs`, `crates/bunwasm-host/src/linked_relay.rs` | Port | Original native paired-loader adapters following Waffle `98225a017ff379d746b3ec3178524d2b9ac0d6cd`, `link/group.ts`, `link/plan.ts`, and `link/relay.ts`. Wasm encoding uses wasm-encoder instead of copied TypeScript byte encoders. |
 
 [Ledger scope and pinned revisions](scope.md).
 
@@ -128,8 +129,9 @@ the linked QuickJS records above. No second monolithic QuickJS path remains.
 
 The standard QuickJS build emits `dist/bun.wasm` and `dist/quickjs.wasm` together.
 The core build receipt records both byte identities under the same source snapshot.
-The native launcher loads the sibling side whenever a core exports
-`bun_core_bind_engine`. A missing side is an admission error, not a monolith fallback.
+The native launcher requires the authoritative `bun-wasm-engine` declaration
+and bind export, then selects the fixed sibling side. A missing side is an
+admission error, not a monolith fallback.
 
 `crates/bunwasm-host/src/linked.rs` is an original native adapter for the WASM
 `dylink.0` memory/table profile used by Waffle at
@@ -137,10 +139,23 @@ The native launcher loads the sibling side whenever a core exports
 It uses Wasmparser's existing locked parser, not copied parser code. It reserves side
 storage with the core allocator, shares the core table and mutable stack global,
 binds GOT addresses, then initializes and registers the actual QuickJS driver.
-Core constructors run once before side initialization. The existing process host
+Core constructors run once before side initialization.
+`GOT.mem` addresses follow Waffle `98225a017ff379d746b3ec3178524d2b9ac0d6cd`'s `link/group.ts` rule: data symbols
+are nonzero and inside core memory, while `__stack_low` and `__stack_high` may sit
+at either edge (a stack-first core has `__stack_low` at 0). `GOT.func` cells hold
+the core function's existing table slot, or one appended slot, so function
+addresses compare equal across the pair. `crates/bunwasm-host/src/linked_relay.rs`
+is an original port of that revision's `link/relay.ts` and same-side binding: an
+`env` or `GOT.func` import that the core does not export binds only to a defined
+side export of the same type, through a reserved table slot and a
+`call_indirect` relay. The slots are filled after instantiation, before
+relocation and constructors. The JSC side needs this for 128 of its own
+definitions. The existing process host
 still owns cancellation, child admission, host slots, WASI and final cleanup.
 The association retains the compiled core image and its side, so admitted child
-Module clones use the same pair. JSC and tools keep their single-module CRT.
+Module clones use the same pair. Tools keep their single-module CRT. JSC uses
+the paired source contract in
+[JSC engine program](jsc-engine-program.md).
 
 ## Node fixture paired startup
 
@@ -153,8 +168,9 @@ memory before the command wrapper initializes the shared plan and calls the
 core entry. The linker remains the only initializer schedule.
 
 Missing or invalid side modules fail before guest entry. Each finish or startup
-failure disposes the linked group and bridge descriptors. Ordinary JSC, browser
-and tools modules retain their single-module startup. The focused fixture runs
+failure disposes the linked group and bridge descriptors. Browser and tools
+modules retain their single-module startup. JSC uses its
+fixed paired profile, with real-pair startup still unproved. The focused fixture runs
 the actual Node host with a child process, a promise and a timer. It also checks
 missing and mismatched side rejection. No provider source is changed.
 
@@ -175,3 +191,32 @@ The descriptor CLI detects marked split cores and describes both adjacent inputs
 Default browser URLs require both build fingerprints; explicit custom URLs use
 their adjacent pair without comparing against an unrelated local build manifest.
 Tool selection replaces both the selected Module and its prepared plan.
+
+
+## Shared producer source
+
+The common-core producer now emits one optimized, tag-free `bun-core.wasm`
+with a verified core receipt. It never invokes an engine producer. Both command
+wrappers reuse that core and add the selected `bun-wasm-engine` section before
+writing the final pair receipt. The existing export list path remains
+`scripts/quickjs-core-exports.txt`; its contents now serve the common core.
+Additional JSC imports require the separately released real-link gate.
+
+The QuickJS producer invokes the selected `GUEST_CARGO` and SDK compiler/linker.
+Its initializer converter and constructor fixture now live in the explicitly
+inventoried `scripts/src/engine-explicit-init.ts` and `scripts/src/engine-init.c`.
+The old fixture paths are thin wrappers. QuickJS initializer and constructor
+export names remain unchanged. JSC uses the same converter with its fixed
+initializer profile, retaining one converter implementation.
+
+Qualified engine receipts bind the finalized side to its consumed input digest
+and original source snapshot. Exact compatibility permits reuse without another
+compile or link. The alternate QuickJS smoke exports remain a fixture mode and
+never produce a qualified engine receipt. Smoke mode refuses an output directory
+that already holds a production engine receipt.
+
+| Source | Class | Change |
+| --- | --- | --- |
+| `scripts/build-bun-core.sh`, `scripts/build.sh`, `crates/bunwasm-cli/build.rs` | Port | Original shared core producer, verified reuse, and common split command entry. |
+| `scripts/build-engine-quickjs.sh` | Port | Selected tool invocation and qualified engine-origin guards; unchanged production RUN and initializer names. |
+| `scripts/src/engine-explicit-init.ts`, `scripts/src/engine-init.c`, `tests/linker/quickjs/explicit-init.ts`, `tests/linker/quickjs/engine-init.c` | Port | One shared original converter and constructor fixture with stable QuickJS wrappers. |

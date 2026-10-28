@@ -5,7 +5,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 mkdir -p "$JSC_OBJ"
 bash "$REPO/scripts/check-wasi-cmake-cache.sh" "$JSC_OBJ" "$JSC_TOOLCHAIN_FILE"
 build_shim
-flags="-include $JSC_CONFIG_SHIM_DIR/wasi-compat.h -msimd128 -DSIMDE_FLOAT16_API=1 \
+flags="-fPIC -include $JSC_CONFIG_SHIM_DIR/wasi-compat.h -msimd128 -DSIMDE_FLOAT16_API=1 \
 -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_GETPID"
 # The jsc shell's link. 512 MiB: the cap bun-wasm links with (Bun's string pointer tags).
 ldflags="-lwasi-emulated-mman -lwasi-emulated-signal -lwasi-emulated-process-clocks -lwasi-emulated-getpid \
@@ -15,6 +15,7 @@ $CAGE cmake -G Ninja "$WEBKIT_DIR" \
   -DCMAKE_TOOLCHAIN_FILE="$JSC_TOOLCHAIN_FILE" \
   -DPORT=JSCOnly \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_C_FLAGS_RELEASE="-O2 -DNDEBUG=1" \
   -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG=1" \
   -DENABLE_STATIC_JSC=ON \

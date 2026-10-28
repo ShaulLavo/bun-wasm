@@ -58,8 +58,8 @@ export async function serverCommand({ page, context, command, app, engine, optio
     await page.waitForTimeout(100);
   }
   const preview = await context.newPage();
+  const previewDiagnostics = browserDiagnostics(preview);
   const traffic = options.previewOrigins ? await observeNativeProductTraffic(preview) : await observeProductTraffic(preview);
-  const diagnostics = browserDiagnostics(preview);
   const errors = [];
   preview.on("pageerror", error => errors.push(redactDiagnosticText(String(error))));
   let checked;
@@ -108,14 +108,14 @@ export async function serverCommand({ page, context, command, app, engine, optio
     let diagnostic = "";
     captured = true;
     await release("terminal-capture", async () => { diagnostic = await output(); });
-    checked = { status: "fail", ...failure(`${diagnostic}\n${String(error)}`, command.name), productError: String(error), timings };
+    checked = { status: "fail", ...failure(`${diagnostic}\n${String(error)}`, command.name), productError: String(error), timings, browserDiagnostics: previewDiagnostics() };
   } finally {
     if (!captured) await release("terminal-capture", () => terminalText(page));
     await release("server-stop", () => stopMatrixServer(page));
     if (!cleanupFailures.length && checked?.status === "pass" && (command.check.framework || options.previewOrigins)) {
       await release("stopped-preview", verifyStopped, options.timeout);
     }
-    await release("browser-diagnostics", () => writeFileSync(join(options.output, `${app.id}-${engine}-${command.name}-browser.json`), JSON.stringify({ errors, ...diagnostics() }, null, 2) + "\n"));
+    await release("browser-diagnostics", () => writeFileSync(join(options.output, `${app.id}-${engine}-${command.name}-browser.json`), JSON.stringify({ errors, ...previewDiagnostics() }, null, 2) + "\n"));
     await release("traffic-close", () => traffic.close());
     await release("preview-close", () => preview.close());
   }
@@ -129,6 +129,12 @@ export async function readGuest(page, path) {
     const bytes = await globalThis.playground.fs.readFile(`/home/user/${path}`);
     return bytes ? new TextDecoder().decode(bytes) : null;
   }, path);
+}
+
+/** The playground holds an engine load error until a command runs; one command prints it in the terminal. */
+async function engineLoadFailure(page, engine, status, diagnostics, run) {
+  const probe = await run(page, "bun --version", 30_000).catch(error => ({ output: `engine error probe failed: ${error}` }));
+  return new Error(`Playground engine ${engine} failed to load: ${status}\n${probe.output}\n${JSON.stringify(diagnostics())}`);
 }
 
 export async function browserHost({ root, options, launch, stop }) {
@@ -214,10 +220,12 @@ export async function browserHost({ root, options, launch, stop }) {
       await context.route("**/*", route => browserRegistryRoute(route, registry, external));
       const base = await serve();
       const loading = performance.now();
+      const diagnostics = browserDiagnostics(page);
       const playgroundURL = new URL(base);
       playgroundURL.searchParams.set("engine", engine);
       await page.goto(playgroundURL.href);
-      if (!(await ready(page)).includes("ready")) throw new Error(`Playground engine ${engine} failed to load`);
+      const status = await ready(page);
+      if (!status.includes("ready")) throw await engineLoadFailure(page, engine, status, diagnostics, run);
       const engineReadyMs = since(loading);
       if (options.previewOrigins) await page.evaluate(observePreviewPaths);
       await page.evaluate(resetBrowserProject);

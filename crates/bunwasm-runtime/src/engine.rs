@@ -4,8 +4,8 @@
 //! polyfills in src/js) is engine-agnostic; an [`Engine`] provides values,
 //! functions, calls, script and module evaluation (with a per-file
 //! resolve/load hook, [`ModuleHost`]), microtasks, promise state and errors.
-//! QuickJS-ng lives in bunwasm-engine-quickjs; JavaScriptCore
-//! (src/engine_jsc.rs) is behind the `engine-jsc` feature.
+//! QuickJS-ng and JavaScriptCore compile this source into their linked
+//! engine programs.
 //!
 //! Most natives exchange plain data ([`Val`]): strings, numbers, bytes,
 //! arrays and records. Only the few natives that inspect JS values
@@ -29,6 +29,9 @@ pub enum PromiseState {
 
 /// The runtime's side of module loading, called by the engine's loader.
 pub trait ModuleHost<E: Engine> {
+    /// Report an immediate uncaught engine value through the owning driver.
+    fn uncaught(&self, engine: &E, error: &E::Value);
+
     /// Whether the host supplies CPU-bound process-signal checkpoints.
     /// Engines without a signal host do not install an interrupt callback.
     fn has_interrupt_handler(&self) -> bool {

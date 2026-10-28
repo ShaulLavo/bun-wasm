@@ -1395,6 +1395,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-engine-jsc"
+version = "0.0.53"
+dependencies = [
+ "bunwasm-jsc",
+]
+
+[[package]]
 name = "bunwasm-engine-quickjs"
 version = "0.0.53"
 dependencies = [
@@ -1433,6 +1440,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "wasm-encoder",
  "wasmparser 0.240.0",
  "wasmtime",
  "wasmtime-wasi",
@@ -1466,6 +1474,7 @@ dependencies = [
  "aes-kw",
  "bun_brotli_sys",
  "bun_core",
+ "bun_dotenv",
  "bun_glob",
  "bun_node_path",
  "bun_paths",
@@ -1475,7 +1484,6 @@ dependencies = [
  "bun_zstd",
  "bunwasm-crypto-sys",
  "bunwasm-glue",
- "bunwasm-jsc",
  "bunwasm-posix",
  "bunwasm-semver",
  "bytemuck",

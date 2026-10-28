@@ -136,20 +136,22 @@ fn object_keys(obj: JSValueRef) -> Vec<String> {
     if !exc.is_null() || arr.is_null() {
         return Vec::new();
     }
-    array_items(arr)
-        .into_iter()
-        .filter_map(to_rust_string)
+    let items = array_items(arr);
+    items
+        .iter()
+        .filter_map(|item| to_rust_string(item.raw()))
         .collect()
 }
 
-fn array_items(arr: JSValueRef) -> Vec<JSValueRef> {
-    let obj = arr as JSObjectRef;
+fn array_items(arr: JSValueRef) -> Vec<JsVal> {
+    let arr = JsVal::new(arr);
+    let obj = arr.object();
     let len = get_raw(obj, "length")
         .map(|v| unsafe { JSValueToNumber(ctx(), v, ptr::null_mut()) })
         .unwrap_or(0.0) as u32;
     // SAFETY: valid array object.
     (0..len)
-        .map(|i| unsafe { JSObjectGetPropertyAtIndex(ctx(), obj, i, ptr::null_mut()) })
+        .map(|i| JsVal::new(unsafe { JSObjectGetPropertyAtIndex(ctx(), obj, i, ptr::null_mut()) }))
         .collect()
 }
 
@@ -177,7 +179,8 @@ fn to_val(v: JSValueRef) -> Val {
                 .map_or(Val::Undefined, Val::Bytes);
         }
         if JSValueIsArray(c, v) {
-            return Val::Array(array_items(v).into_iter().map(to_val).collect());
+            let items = array_items(v);
+            return Val::Array(items.iter().map(|item| to_val(item.raw())).collect());
         }
         if JSObjectIsFunction(c, v as JSObjectRef) {
             return Val::Undefined;
@@ -335,6 +338,17 @@ fn cstr(p: *const c_char) -> String {
     unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
 }
 
+#[unsafe(no_mangle)]
+extern "C" fn bunjsc_host_uncaught(context: JSContextRef, value: JSValueRef) {
+    assert_eq!(
+        context,
+        ctx(),
+        "uncaught value belongs to the active context"
+    );
+    let value = JsVal::new(value);
+    with_host(|host| host.uncaught(&Jsc, &value));
+}
+
 // Called at saved C-loop trap points. This only polls fatal host cancellation;
 // handled signals stay pending and guest JavaScript must never run from here.
 #[unsafe(no_mangle)]
@@ -433,6 +447,8 @@ impl Engine for Jsc {
             // adapter enables polling only at saved interpreter trap points.
             unsafe { bunjsc_set_interrupt_handler(c, true) };
         }
+        #[cfg(test)]
+        install_regression_natives(&Jsc);
         Jsc
     }
 
@@ -715,4 +731,26 @@ impl Engine for Jsc {
             .set("arrayBuffers", 0)
             .into()
     }
+}
+
+#[cfg(test)]
+fn install_regression_natives(engine: &Jsc) {
+    let global = JsVal::new(unsafe { JSContextGetGlobalObject(ctx()) });
+    let convert = engine.new_function(
+        "__jsc_test_convert",
+        Rc::new(|engine, args| {
+            let value = args.first().expect("conversion argument");
+            Ok(engine.value_from(engine.to_val(value)))
+        }),
+    );
+    assert!(engine.set(&global, "__jsc_test_convert", convert).is_ok());
+    let report = engine.new_function(
+        "__jsc_test_report",
+        Rc::new(|engine, args| {
+            let value = args.first().expect("report argument");
+            unsafe { bunjsc_report_unhandled_error(ctx(), value.raw()) };
+            Ok(engine.undefined())
+        }),
+    );
+    assert!(engine.set(&global, "__jsc_test_report", report).is_ok());
 }

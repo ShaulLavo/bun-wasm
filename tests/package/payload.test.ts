@@ -5,6 +5,7 @@ import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } f
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { build } from "vite";
+import { quickjsPair } from "./quickjs-plan-fixture";
 
 const execute = promisify(execFile);
 
@@ -49,15 +50,13 @@ test("packed package includes a working public worker, no demo or guest binaries
     expect((await readdir(join(scratch, "output/assets"))).some(name => name.startsWith("worker-entry-") && name.endsWith(".js"))).toBe(true);
     const index = await readFile(join(scratch, "package/dist/package/index.js"), "utf8");
     expect(index).not.toContain("waffle.runtime.owner");
-    const { stdout } = await execute("node", ["--input-type=module", "-e", `
-      const p = await import('bun-wasm');
-      const asset = await import('bun-wasm/asset');
-      if (typeof p.installBunAdapters !== 'function') process.exit(1);
-      try { await asset.loadBunWasm({ asset: { url: 'https://example.test', sha256: 'invalid', bytes: 8 } }); }
-      catch (error) { if (!(error instanceof p.BunWasmAssetError)) process.exit(2); }
-      console.log('ok');
-    `], { cwd: scratch, timeout: 10_000 });
-    expect(stdout.trim()).toBe("ok");
+    await writeFile(join(scratch, "core.wasm"), quickjsPair().core);
+    await writeFile(join(scratch, "wrong-side.wasm"), quickjsPair("jsc").side);
+    await copyFile(join(import.meta.dir, "fixtures/paired-asset-brand.ts"), join(scratch, "paired-asset-brand.ts"));
+    for (const runtime of ["node", process.execPath]) {
+      const { stdout } = await execute(runtime, ["paired-asset-brand.ts", "core.wasm", "wrong-side.wasm"], { cwd: scratch, timeout: 10_000 });
+      expect(stdout.trim()).toBe("paired asset errors ok");
+    }
     const { stdout: bunPaths } = await execute(process.execPath, ["--eval", "console.log(import.meta.resolve('bun-wasm')); console.log(import.meta.resolve('bun-wasm/asset')); const asset = await import('bun-wasm/asset'); if (typeof asset.prepareQuickjsProgram !== 'function') throw Error('missing paired program loader')"], { cwd: scratch, timeout: 10_000 });
     expect(bunPaths).toContain("/src/index.ts");
     expect(bunPaths).toContain("/src/assets.ts");

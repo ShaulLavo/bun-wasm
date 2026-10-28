@@ -56,7 +56,11 @@ if (await copyWasm(wasmSource, "bun.wasm")) {
     throw new Error(`QuickJS core requires its matching side module: ${quickjsSource}`);
   }
 }
-await copyWasm(resolve(here, process.env.JSC_WASM ?? "../dist/bun-jsc.wasm"), "bun-jsc.wasm");
+const jscSource = resolve(here, process.env.JSC_WASM ?? "../dist/bun-jsc.wasm");
+if (await copyWasm(jscSource, "bun-jsc.wasm")) {
+  const side = join(dirname(jscSource), "jsc-engine.wasm");
+  if (!(await copyWasm(side, "jsc-engine.wasm"))) throw new Error(`JSC core requires its matching side module: ${side}`);
+}
 await copyWasm(resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun-browser.wasm"), "bun-browser.wasm");
 
 await copyWasm(resolve(here, process.env.BUN_TOOLS_WASM ?? "../dist/bun-tools.wasm"), "bun-tools.wasm");

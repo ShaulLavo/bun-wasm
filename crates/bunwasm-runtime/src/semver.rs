@@ -1,6 +1,6 @@
 use bunwasm_semver::{CallFrame, JSGlobalObject, JSValue, JsError};
 
-use crate::engine::{NativeError, Val};
+use crate::data::{NativeError, Val};
 use crate::natives::Table;
 
 pub fn install(table: &mut Table) {

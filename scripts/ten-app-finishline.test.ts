@@ -54,7 +54,7 @@ async function guestFixture(directory: string) {
   const artifact = join(directory, "guest.wasm");
   const accepted = join(directory, "receipt.txt");
   await writeFile(artifact, bytes);
-  await writeFile(`${artifact}.build.json`, JSON.stringify({ bunHead: source.head, bunTree: source.tree, sysrootReceiptSha256: input.sha256, sourceManifest: manifest, sourceManifestSha256: hash(JSON.stringify(manifest)), artifactSha256: digest, artifactBytes: bytes.length }));
+  await writeFile(`${artifact}.build.json`, JSON.stringify({ bunHead: source.head, bunTree: source.tree, sysrootReceiptSha256: input.sha256, sourceManifest: manifest, sourceManifestSha256: hash(JSON.stringify(manifest)), program: { kind: "single", core: { artifactSha256: digest, artifactBytes: bytes.length } } }));
   await writeFile(accepted, `source_commit=${source.head}\nsource_tree=${source.tree}\nguest_sha256=${digest}\nguest_bytes=${bytes.length}\ndate=2026-10-27\nfeatures=control\ntarget=wasm32-wasip1\n`);
   return { artifact, accepted, digest, source, bytes };
 }

@@ -180,9 +180,18 @@ impl Resolver {
             let range = self.overrides.target(&name, &range).to_owned();
             self.add(&name, &range, vec![name.clone()], optional)?;
         }
-        while let Some(key) = self.pending.pop_front() {
+        let mut pending_peers = VecDeque::new();
+        loop {
+            while let Some(key) = self.pending.pop_front() {
+                let package = self.packages[&key].clone();
+                self.children(&package, false)?;
+                pending_peers.push_back(key);
+            }
+            let Some(key) = pending_peers.pop_front() else {
+                break;
+            };
             let package = self.packages[&key].clone();
-            self.children(&package)?;
+            self.children(&package, true)?;
         }
         self.select_platform(manifest)?;
         self.responses.clear();
@@ -282,12 +291,15 @@ impl Resolver {
         None
     }
 
-    fn children(&mut self, parent: &Package) -> Result<()> {
+    fn children(&mut self, parent: &Package, peers: bool) -> Result<()> {
         for (name, (range, optional, peer)) in dependencies(
             &parent.meta,
             self.production,
             parent.local.as_ref().is_some_and(|p| p.workspace),
         ) {
+            if peer != peers {
+                continue;
+            }
             let range = self
                 .overrides
                 .replacement(&name, &range)

@@ -8,11 +8,11 @@ import { memoryViews } from "waffle/core";
 import { HOST_CALL_FD } from "../src/net/trampoline";
 import { Wasi } from "waffle/core";
 import { instantiateLinkPlan, prepareLinkPlan } from "waffle/link";
-import { quickjsLinkPlan } from "../../src/quickjs-program.ts";
+import { engineLinkPlan } from "../../src/quickjs-program.ts";
 
 const wasm = new URL("../../dist/bun.wasm", import.meta.url);
 async function memoryGrowth(fallback: boolean) {
-  const plan = await prepareLinkPlan(quickjsLinkPlan(readFileSync(wasm), readFileSync(new URL("quickjs.wasm", wasm))));
+  const plan = await prepareLinkPlan(await engineLinkPlan({ kind: "quickjs", core: readFileSync(wasm), side: readFileSync(new URL("quickjs.wasm", wasm)) }));
   const module = plan.entryModule;
   // The guest imports runtime_proc directly; this test never calls it.
   const runtimeProc = Object.fromEntries(WebAssembly.Module.imports(module).filter(entry => entry.module === "runtime_proc").map(entry => [entry.name, () => 0]));

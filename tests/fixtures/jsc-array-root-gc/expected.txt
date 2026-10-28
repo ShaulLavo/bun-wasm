@@ -1,0 +1,1 @@
+captured second value survives getter GC

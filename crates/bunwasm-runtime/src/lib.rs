@@ -3,8 +3,8 @@
 //! Rust owns the module loader, the event loop and the native primitives
 //! (files, clocks, randomness, hashing, URL parsing, networking). The public
 //! Bun/Node/Web APIs are JS polyfills in `src/js/`, built on the `native`
-//! object from [`natives`]. The JavaScript engine sits behind the [`Engine`]
-//! trait: QuickJS-ng by default, JavaScriptCore with the `engine-jsc` feature.
+//! object from [`natives`]. The JavaScript engine sits behind the `Engine`
+//! trait in the linked engine program; the core itself remains engine-free.
 
 #![cfg_attr(target_os = "wasi", feature(wasi_ext))]
 #![feature(io_error_more)]
@@ -21,11 +21,8 @@ mod crypto;
 pub(crate) mod data;
 mod directory;
 mod encoding;
-pub mod engine;
 #[cfg(feature = "engine-host")]
 pub mod engine_host;
-#[cfg(feature = "engine-jsc")]
-mod engine_natives;
 mod glob;
 pub mod host;
 mod html_rewriter;
@@ -34,12 +31,9 @@ pub mod install;
 mod modules;
 mod natives;
 mod node_path;
-#[cfg(any(
-    feature = "engine-split",
-    feature = "engine-jsc",
-    not(feature = "engine-host")
-))]
+#[cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 pub(crate) mod ops;
+mod parse_env;
 mod resolve;
 mod semver;
 mod sourcemap;
@@ -50,28 +44,18 @@ mod wasm;
 mod x509;
 mod zlib_ffi;
 
-#[cfg(feature = "engine-jsc")]
-mod engine_jsc;
 #[cfg(feature = "engine-split")]
 mod split;
 #[cfg(feature = "engine-split")]
 mod split_api;
-#[cfg(not(any(
-    feature = "engine-split",
-    feature = "engine-jsc",
-    feature = "engine-host"
-)))]
-compile_error!("bunwasm-runtime needs an engine: feature engine-split, engine-jsc or engine-host");
+#[cfg(not(any(feature = "engine-split", feature = "engine-host")))]
+compile_error!("bunwasm-runtime needs an engine: feature engine-split or engine-host");
 
-pub use engine::{Engine, ModuleHost, NativeError, PromiseState, Val};
+pub use data::{NativeError, Val};
 pub use transpiler::{
     BuildArtifact, BuildRequest, BuildResult, DevServerFile, DevServerResult, Loader,
     PassthroughTranspiler, Transpiled, Transpiler,
 };
-
-/// The engine this build uses.
-#[cfg(feature = "engine-jsc")]
-pub type ActiveEngine = engine_jsc::Jsc;
 
 /// Bun version this runtime reports (from vendor/bun/package.json).
 pub const BUN_VERSION: &str = env!("BUNWASM_BUN_VERSION");
@@ -231,132 +215,12 @@ impl State {
     pub(crate) fn exit(&self, code: i32) -> ! {
         self.directories.borrow_mut().close_all();
         self.flush();
-        // Skip engine teardown: values are still rooted (and JSC's VM
-        // teardown aborts); the process is going away anyway.
+        // The linked engine program remains rooted until process exit.
         std::process::exit(code)
     }
 }
 
-#[cfg(feature = "engine-jsc")]
-type ModuleHandoffs<V> = RefCell<HashMap<String, (V, V)>>;
-
-#[cfg(feature = "engine-jsc")]
-/// The runtime's engine-facing half: the `internal` object the bootstrap
-/// returned, pending wrapper-module handoffs, and the module host.
-pub(crate) struct Core<E: Engine> {
-    pub(crate) state: Rc<State>,
-    internal: RefCell<Option<E::Value>>,
-    /// Exports objects of wrapper modules, until their `import.meta` is set.
-    handoffs: ModuleHandoffs<E::Value>,
-}
-
-#[cfg(feature = "engine-jsc")]
-#[path = "../../bunwasm-engine-quickjs/src/loader.rs"]
-mod engine_loader;
-#[cfg(feature = "engine-jsc")]
-#[path = "../../bunwasm-engine-quickjs/src/program.rs"]
-mod program;
-
-#[cfg(feature = "engine-jsc")]
-impl<E: Engine> Core<E> {
-    fn bootstrap(self: &Rc<Self>, e: &E) -> Result<E::Value, E::Value> {
-        engine_natives::bootstrap(e, self)
-    }
-    fn eval_source(&self, code: &str) -> Result<(String, String), NativeError> {
-        Ok(modules::eval_entry(&self.state, code))
-    }
-    fn take_tick(&self) -> bool {
-        self.state.tick_pending.replace(false)
-    }
-    fn flush(&self) {
-        self.state.flush();
-    }
-    fn write_error(&self, text: &str) {
-        let _ = self.state.write_stderr(text.as_bytes());
-    }
-    fn exit(&self, code: i32) -> ! {
-        self.state.exit(code)
-    }
-    fn idle(&self, ms: i32) {
-        host::idle(ms);
-    }
-    fn poll(&self, ms: i32) {
-        if host::poll(ms) == host::UNSUPPORTED {
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-    }
-    pub(crate) fn compile_cjs(&self, path: &str) -> Result<(String, i32), NativeError> {
-        let (code, _) = self.state.load_source(path)?;
-        Ok(modules::cjs_wrapper(&code))
-    }
-    pub(crate) fn polyfill(&self, name: &str) -> Result<String, NativeError> {
-        modules::polyfill_source(name)
-            .map(str::to_owned)
-            .ok_or_else(|| NativeError::error(format!("bun-wasm: missing internal module {name}")))
-    }
-    pub(crate) fn resolve_module(
-        &self,
-        specifier: &str,
-        referrer: &str,
-    ) -> Result<String, NativeError> {
-        let from = if referrer.is_empty() || resolve::builtin_name(referrer).is_some() {
-            format!("{}/", self.state.cwd())
-        } else {
-            referrer.to_owned()
-        };
-        match self
-            .state
-            .resolver
-            .resolve(specifier, &from, resolve::Kind::Import)
-        {
-            Ok(resolve::Resolved::Builtin(name) | resolve::Resolved::File(name)) => Ok(name),
-            Err(message) => Err(modules::resolve_error(
-                &message,
-                specifier,
-                &from,
-                resolve::Kind::Import,
-                self.state.resolver.notes(),
-            )),
-        }
-    }
-    pub(crate) fn module_source(&self, name: &str) -> Result<(String, String), NativeError> {
-        if resolve::builtin_name(name).is_some() {
-            return Ok(("builtin".into(), String::new()));
-        }
-        let (code, format) = self.state.load_source(name)?;
-        let source = if format == modules::Format::Esm {
-            modules::esm_source(&self.state, name, &code)
-        } else {
-            code.to_string()
-        };
-        Ok((format.name().into(), source))
-    }
-    pub(crate) fn wrapper_source(&self, keys: Vec<String>) -> Result<String, NativeError> {
-        Ok(modules::wrapper_source(&keys))
-    }
-    pub(crate) fn is_main(&self, name: &str) -> Result<bool, NativeError> {
-        Ok(*self.state.main.borrow() == name)
-    }
-    pub(crate) fn has_interrupt_handler(&self) -> bool {
-        host::PROCESS_ABI
-    }
-    pub(crate) fn interrupt(&self) -> bool {
-        host::signal(0, 4) < 0
-    }
-}
-
-/// Run a program to completion; returns the process exit code. With the
-/// host engine (`engine-host`) this only sets the program up: the host runs
-/// it after `_start` returns (see [`host_engine_ready`]).
-#[cfg(feature = "engine-jsc")]
-pub fn run(options: Options) -> i32 {
-    run_with::<ActiveEngine>(options)
-}
-
-#[cfg(all(
-    feature = "engine-host",
-    not(any(feature = "engine-split", feature = "engine-jsc"))
-))]
+#[cfg(all(feature = "engine-host", not(feature = "engine-split")))]
 pub fn run(options: Options) -> i32 {
     let Options {
         entry,
@@ -426,36 +290,4 @@ fn new_state(
         *state.main_arg.borrow_mut() = arg.clone();
     }
     (state, main_path)
-}
-
-#[cfg(feature = "engine-jsc")]
-fn run_with<E: Engine>(options: Options) -> i32 {
-    let Options {
-        entry,
-        args,
-        conditions,
-        exec_argv,
-        transpiler,
-    } = options;
-    let (state, main_path) = new_state(&entry, &args, &conditions, &exec_argv, transpiler);
-    let options = Options {
-        entry,
-        args,
-        conditions: Vec::new(),
-        exec_argv: Vec::new(),
-        transpiler: Box::new(PassthroughTranspiler),
-    };
-
-    let core = Rc::new(Core::<E> {
-        state: state.clone(),
-        internal: RefCell::new(None),
-        handoffs: RefCell::new(HashMap::new()),
-    });
-    let engine = E::new(core.clone());
-    let code = program::run_in_engine(&engine, &core, &options.entry, &main_path);
-    state.directories.borrow_mut().close_all();
-    state.flush();
-    // Skip teardown (see State::exit).
-    std::mem::forget(engine);
-    code
 }
