@@ -220,83 +220,54 @@ function hydrationGate(buttonDisabled = true) {
   };
 }
 
-function svelteDevCheck() {
-  const app = fullstackApps.find(app => app.id === "fullstack-sveltekit");
-  if (!app) throw new Error("Missing SvelteKit fixture");
+function hydratedDevCheck(id: string) {
+  const app = fullstackApps.find(app => app.id === id);
+  if (!app) throw new Error(`Missing ${id} fixture`);
   const check = app.commands.find(command => command.name === "dev")?.check;
-  if (check?.kind !== "page") throw new Error("Missing SvelteKit dev page check");
+  if (check?.kind !== "page") throw new Error(`Missing ${id} dev page check`);
   return { app, check };
 }
 
-test("SvelteKit delays the first edit until its declared hydrated selector is ready", async () => {
-  const { check } = svelteDevCheck();
-  const hydration = hydrationGate();
-  const run = fixture({ hydration, updateMessage: JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/src/routes/+page.svelte" }] }) });
-  const traffic = await observeProductTraffic(run.page);
-  await run.open();
-  try {
-    const pending = productObservations(run.page, "http://local/", { ...check, hmr: hmrCheck().hmr, probes: [] }, run.source, traffic, 1000);
+for (const fixture of [
+  { id: "fullstack-sveltekit", name: "SvelteKit", source: "src/routes/+page.svelte" },
+  { id: "fullstack-tanstack-start", name: "TanStack", source: "src/routes/index.tsx" },
+]) {
+  test(`${fixture.name} delays the first source edit until client hydration`, async () => {
+    const { check } = hydratedDevCheck(fixture.id);
+    const hydration = hydrationGate();
+    const run = fixtureWithHydration(hydration);
+    const traffic = await observeProductTraffic(run.page);
+    await run.open();
+    try {
+      const pending = productObservations(run.page, "http://local/", { ...check, hmr: hmrCheck().hmr, probes: [] }, run.source, traffic, 1000);
+      await hydration.waiting;
+      expect(run.writes).toEqual([]);
+      hydration.hydrate();
+      const rows = await pending;
+      expect(rows[0]?.status).toBe("pass");
+      expect(rows[0]?.assertion).toContain("vite:update");
+      expect(run.writes).toEqual(["changed", "original"]);
+    } finally { hydration.hydrate(); await traffic.close(); }
+  });
+
+  test(`${fixture.name} actions cannot click an SSR button before client hydration`, async () => {
+    const { app, check } = hydratedDevCheck(fixture.id);
+    const hydration = hydrationGate(app.files[fixture.source]?.includes('id="increment" disabled={!hydrated}'));
+    const run = fixtureWithHydration(hydration, null);
+    const pending = productObservations(run.page, "http://local/", { ...check, hmr: undefined, probes: [
+      { kind: "action", id: "client-interaction", path: "/", button: "#increment", selector: "#count", text: "action-result" },
+    ] }, run.source, { beginEdit: async () => {}, count: async () => 0, evidenceSince: async () => [] }, 1000);
     await hydration.waiting;
-    expect(run.writes).toEqual([]);
     hydration.hydrate();
     const rows = await pending;
     expect(rows[0]?.status).toBe("pass");
-    expect(rows[0]?.assertion).toContain("vite:update");
-    expect(run.writes).toEqual(["changed", "original"]);
-  } finally { hydration.hydrate(); await traffic.close(); }
-});
-
-test("SvelteKit awaits a disabled button's click actionability after a fresh navigation", async () => {
-  const { app, check } = svelteDevCheck();
-  const hydration = hydrationGate(app.files["src/routes/+page.svelte"]?.includes('id="increment" disabled={!hydrated}'));
-  const run = fixture({ hydration, updateMessage: null });
-  const pending = productObservations(run.page, "http://local/", { ...check, hmr: undefined, probes: [
-    { kind: "action", id: "client-interaction", path: "/", button: "#increment", selector: "#count", text: "action-result" },
-  ] }, run.source, { beginEdit: async () => {}, count: async () => 0, evidenceSince: async () => [] }, 1000);
-  await hydration.waiting;
-  hydration.hydrate();
-  const rows = await pending;
-  expect(rows[0]?.status).toBe("pass");
-  expect(run.visits).toEqual(["http://local/"]);
-});
-
-function tanstackDevCheck() {
-  const app = fullstackApps.find(app => app.id === "fullstack-tanstack-start");
-  if (!app) throw new Error("Missing TanStack fixture");
-  const check = app.commands.find(command => command.name === "dev")?.check;
-  if (check?.kind !== "page") throw new Error("Missing TanStack dev page check");
-  return { app, check };
+    expect(run.visits).toEqual(["http://local/"]);
+  });
 }
 
-test("TanStack delays the first source edit until client hydration", async () => {
-  const { check } = tanstackDevCheck();
-  const hydration = hydrationGate();
-  const run = fixture({ hydration, updateMessage: JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/page.tsx" }] }) });
-  const traffic = await observeProductTraffic(run.page);
-  await run.open();
-  try {
-    const pending = productObservations(run.page, "http://local/", { ...check, hmr: hmrCheck().hmr, probes: [] }, run.source, traffic, 1000);
-    await hydration.waiting;
-    expect(run.writes).toEqual([]);
-    hydration.hydrate();
-    const rows = await pending;
-    expect(rows[0]?.status).toBe("pass");
-    expect(run.writes).toEqual(["changed", "original"]);
-  } finally { hydration.hydrate(); await traffic.close(); }
-});
-
-test("TanStack actions cannot click an SSR button before client hydration", async () => {
-  const { app, check } = tanstackDevCheck();
-  const hydration = hydrationGate(app.files["src/routes/index.tsx"]?.includes('id="increment" disabled={!hydrated}'));
-  const run = fixture({ hydration, updateMessage: null });
-  const pending = productObservations(run.page, "http://local/", { ...check, hmr: undefined, probes: [
-    { kind: "action", id: "client-interaction", path: "/", button: "#increment", selector: "#count", text: "action-result" },
-  ] }, run.source, { beginEdit: async () => {}, count: async () => 0, evidenceSince: async () => [] }, 1000);
-  await hydration.waiting;
-  hydration.hydrate();
-  const rows = await pending;
-  expect(rows[0]?.status).toBe("pass");
-});
+function fixtureWithHydration(hydration: ReturnType<typeof hydrationGate>, updateMessage: string | null = JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/page.tsx" }] })) {
+  return fixture({ hydration, updateMessage });
+}
 
 test("HMR restoration completes before a later probe navigates", async () => {
   const restoration = hydrationGate();

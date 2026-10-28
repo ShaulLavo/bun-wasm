@@ -242,24 +242,24 @@ async function hotEdit(page: ProductPage, source: GuestSource, selector: string,
   await traffic.beginEdit();
   const before = await traffic.count();
   let verified = false;
+  let evidence: readonly TrafficEvidence[];
   try {
     await source.write(edit.path, original.replace(edit.search, edit.replacement));
     await page.locator(selector).filter({ hasText: edit.replacement }).waitFor({ timeout: Math.max(1, deadline - Date.now()) });
-    const evidence = await editEvidence(traffic, before, deadline);
+    evidence = await editEvidence(traffic, before, deadline);
     if (!evidence.length) throw new Error("Edited content appeared without a development WebSocket update (recognized Vite or Next HMR message)");
     verified = true;
-    return `Guest source edit rendered ${JSON.stringify(edit.replacement)} without a manual page reload after ${evidence.map(item => `${item.framework}:${item.event}`).join(", ")}`;
   } finally {
-    if (verified) await traffic.beginEdit();
-    const rollback = verified ? await traffic.count() : 0;
-    await source.write(edit.path, original);
-    if (verified) {
-      await page.locator(selector).filter({ hasText: edit.replacement }).waitFor({ state: "hidden", timeout: Math.max(1, deadline - Date.now()) });
-      await page.locator(selector).filter({ hasText: edit.search }).waitFor({ timeout: Math.max(1, deadline - Date.now()) });
-      const restored = await editEvidence(traffic, rollback, deadline);
-      if (!restored.length) throw new Error("Restored source appeared without a development WebSocket update (recognized Vite or Next HMR message)");
-    }
+    if (!verified) await source.write(edit.path, original);
   }
+  await traffic.beginEdit();
+  const rollback = await traffic.count();
+  await source.write(edit.path, original);
+  await page.locator(selector).filter({ hasText: edit.replacement }).waitFor({ state: "hidden", timeout: Math.max(1, deadline - Date.now()) });
+  await page.locator(selector).filter({ hasText: edit.search }).waitFor({ timeout: Math.max(1, deadline - Date.now()) });
+  const restored = await editEvidence(traffic, rollback, deadline);
+  if (!restored.length) throw new Error("Restored source appeared without a development WebSocket update (recognized Vite or Next HMR message)");
+  return `Guest source edit rendered ${JSON.stringify(edit.replacement)} without a manual page reload after ${evidence.map(item => `${item.framework}:${item.event}`).join(", ")}`;
 }
 
 async function featureProbe(page: ProductPage, base: string, probe: FeatureProbe, timeout: number): Promise<string> {
