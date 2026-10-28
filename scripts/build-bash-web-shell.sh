@@ -4,8 +4,11 @@
 # toolchain and patched WASI sysroot. bash-web publishes no prebuilt guests, so this is their only
 # producer here: the native launcher runs them (--shell dist/bash-web-shell.wasm --env-utility
 # dist/bash-web-env.wasm) and the web and sandbox builds ship them (scripts/browser-build.ts), checked
-# against dist/bash-web-guests.json. Build paths are remapped and symbol names stripped, so the bytes
-# do not depend on where CARGO_TARGET_DIR is.
+# against dist/bash-web-guests.json, which records what was built. Build paths are remapped and
+# symbol names stripped, so the shell's bytes do not depend on where it is built. env's still do:
+# its uutils crate sits outside bash-web's shell workspace, and Cargo hashes such a path
+# dependency's absolute location into the crate metadata. Consumers trust the receipt that
+# comes with the files, not a hash computed elsewhere.
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=/dev/null
@@ -23,8 +26,7 @@ clang="$WASI_SDK_PATH/bin/clang"
 flags=(-C link-self-contained=no -C linker-flavor=gcc -C "linker=$clang" -C link-arg=--target=wasm32-wasip1
   -C "link-arg=--sysroot=$BUN_WASM_SYSROOT" -C link-arg=-Wl,--max-memory=268435456
   "--remap-path-prefix=$source_dir=/bash-web" "--remap-path-prefix=$CARGO_HOME=/cargo"
-  # Cargo hashes a path dependency's absolute path into LLVM's symbol suffixes, so the name section
-  # would differ per checkout location; the guests ship without it.
+  # The name section carries LLVM symbol suffixes derived from those paths; the guests ship without it.
   -C strip=symbols)
 toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' "$root/rust-toolchain.toml")
 target="$CARGO_TARGET_DIR/bash-web-shell"

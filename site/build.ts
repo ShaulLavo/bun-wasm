@@ -8,7 +8,8 @@ const root = resolve(import.meta.dir, "..");
 const out = join(import.meta.dir, "dist");
 
 async function run(app: string, cmd: string[]): Promise<void> {
-  const proc = Bun.spawn(cmd, { cwd: join(root, app), stdout: "inherit", stderr: "inherit" });
+  // Bun.spawn does not pass later process.env changes on by itself (BASH_WEB_GUESTS below).
+  const proc = Bun.spawn(cmd, { cwd: join(root, app), env: process.env, stdout: "inherit", stderr: "inherit" });
   if ((await proc.exited) !== 0) throw new Error(`${app}: ${cmd.join(" ")} failed`);
 }
 
