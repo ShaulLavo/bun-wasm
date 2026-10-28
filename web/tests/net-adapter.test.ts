@@ -1,4 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
+import { createRuntimeNetwork } from "../node_modules/waffle/browser/net/runtime.ts";
 import { NetHost as RuntimeNetHost } from "waffle/browser/net/host";
 import { AGAIN, BADF, Kind, type NetRequest, UNSUPPORTED } from "waffle/browser/net/protocol";
 import { createRing, RingWriter } from "waffle/browser/net/ring";
@@ -239,7 +242,7 @@ test("paired DNS slots share runtime lookup handles, pending state and sized rea
     expect(slots.lookup_head!(handle, 65536, length - 1)).toBe(length);
     expect(bytes.subarray(65536, 65536 + length)).toEqual(new Uint8Array(length).fill(0x7f));
     expect(slots.lookup_head!(handle, 65536, length)).toBe(length);
-    expect(JSON.parse(decode(bytes.subarray(65536, 65536 + length)))).toEqual([{ address: "127.0.0.1", family: 4 }]);
+    expect(JSON.parse(decode(bytes.subarray(65536, 65536 + length)))).toEqual({ addresses: [{ address: "127.0.0.1", family: 4 }] });
     expect(slots.lookup_head!(handle, 65536, length)).toBe(length);
     expect(slots.close!(handle)).toBe(0);
     expect(slots.lookup_head!(handle, 65536, length)).toBe(BADF);
@@ -285,4 +288,51 @@ test("network request guard accepts lookup options and refuses malformed lookup 
     ]) expect(() => dispatchBunNetwork(helper, { type: "net", req })).toThrow("Invalid Bun network request");
     expect(() => dispatchBunNetwork(helper, { type: "net", req: { type: "lookup", id: 1, hostname: "localhost", options: { family: 4, hints: 0 } } })).not.toThrow();
   } finally { helper.dispose(); await runtime.dispose(); }
+});
+
+
+test("the exact guest lookup factory decodes the real runtime helper result and closes once", async () => {
+  const owner = createRuntimeNetwork(() => {});
+  const ring = createRing();
+  const helper = createBunNetworkHelper(owner.network, ring);
+  const host = new NetHost(ring, req => dispatchBunNetwork(helper, { type: "net", req }));
+  const memory = new WebAssembly.Memory({ initial: 1, maximum: 3 });
+  host.attach(memory);
+  const slots = host.slots();
+  const hostname = encode("localhost");
+  new Uint8Array(memory.buffer).set(hostname, 123);
+  const waiters = new Set<{ step(): boolean }>();
+  const closed: number[] = [];
+  const native = {
+    hostCaps: Object.fromEntries(Object.keys(slots).map(name => [name, true])),
+    hostLookupStart: () => slots.lookup_start!(123, hostname.length, 4, 0),
+    hostLookupHead(handle: number) {
+      const size = slots.lookup_head!(handle, 65536, 0);
+      if (size < 0) return size;
+      expect(slots.lookup_head!(handle, 65536, size - 1)).toBe(size);
+      expect(slots.lookup_head!(handle, 65536, size)).toBe(size);
+      return decode(new Uint8Array(memory.buffer, 65536, size));
+    },
+    hostClose(handle: number) { closed.push(handle); return slots.close!(handle); },
+  };
+  const net = {
+    addWaiter<T extends { step(): boolean }>(waiter: T): T { waiters.add(waiter); return waiter; },
+    removeWaiter(waiter: { step(): boolean }) { waiters.delete(waiter); },
+  };
+  try {
+    const source = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/host_lookup.ts", import.meta.url), "utf8");
+    const factory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`), { Array, Error, JSON, Object, Promise, TypeError });
+    factory({ native, require: () => net }).install();
+    const lookup = Reflect.get(native, "hostLookup");
+    if (typeof lookup !== "function") throw new Error("Guest factory did not install hostname lookup");
+    const completion: Promise<unknown> = lookup("localhost", 4, 0);
+    memory.grow(1);
+    await until(() => {
+      for (const waiter of Array.from(waiters)) waiter.step();
+      return waiters.size === 0;
+    });
+    await expect(completion).resolves.toEqual([{ address: "127.0.0.1", family: 4 }]);
+    expect(closed).toHaveLength(1);
+    expect(slots.lookup_head!(closed[0]!, 65536, 0)).toBe(BADF);
+  } finally { helper.dispose(); owner.dispose(); }
 });

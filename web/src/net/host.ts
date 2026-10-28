@@ -60,7 +60,11 @@ export class NetHost {
         if (family !== 0 && family !== 4 && family !== 6) return UNSUPPORTED;
         return this.host.lookupStart(this.text(hostPtr, hostLen), { family, hints });
       },
-      lookup_head: (handle, ptr, cap) => this.writeResult(this.host.lookupHead(handle), ptr, cap),
+      lookup_head: (handle, ptr, cap) => {
+        const result = this.host.lookupHead(handle);
+        if (typeof result === "number") return result;
+        return this.writeResult(`{"addresses":${decoder.decode(result)}}`, ptr, cap);
+      },
     };
   }
 

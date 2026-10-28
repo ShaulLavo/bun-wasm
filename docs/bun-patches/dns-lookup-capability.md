@@ -76,7 +76,9 @@ leaves an existing Promise provider authoritative.
 The paired WASI adapter in `web/src/net/host.ts` maps existing ABI2 slots14/15
 onto public `NetHost.lookupStart` and `lookupHead`. Hostname pointers are decoded
 through the existing fixed-copy boundary; results use the existing repeatable
-sized-write protocol. `web/src/net/helper.ts` validates the new lookup request
+sized-write protocol. Successful public lookup arrays are enclosed in the guest's
+`{ addresses: [...] }` response shape; signed pending/error codes pass through.
+`web/src/net/helper.ts` validates the new lookup request
 shape before forwarding it to the borrowed runtime helper. Waffle owns address
 policy, handles, pending/error state, shared-ring polling, cancellation and late
 completion suppression. No additional resolver, handle namespace or Promise-only
