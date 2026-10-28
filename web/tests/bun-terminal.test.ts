@@ -40,6 +40,8 @@ test("stdin reads the foreground terminal's keys; stdout and stderr keep the def
     expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe("1+2\r");
     expect(terminal!.resolve(1)).toBeUndefined();
     expect(terminal!.resolve(2)).toBeUndefined();
+    // Closing another inherited descriptor's endpoint leaves mode changes working.
+    terminal!.resolve(0)!.close?.();
     expect(terminal!.setRawMode(false)).toBeUndefined();
     expect(input.push(new TextEncoder().encode("ab\r"))).toBe(3);
     expect(stdin.tryRead?.([bytes])).toBe(3);

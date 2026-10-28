@@ -38,20 +38,20 @@ export function attachBunTerminal(request: RuntimeWorkerRequest, checkActive: ()
     throw new TypeError("Terminal metadata needs both terminalContext and a terminalInput SharedArrayBuffer");
   const policy = createTerminalInputPolicy({ input: attachTerminalInput(input) });
   const attachment = attachTerminal({ context: data.terminalContext, process, checkActive, policy });
+  // Each inherited descriptor owns its endpoint, which its description closes. Mode changes use
+  // one more endpoint that only the attachment owns, so closing any descriptor cannot cut them off.
+  let controls: ReturnType<typeof terminalControls>;
   try {
     const ready = attachment.ready();
     if (ready.kind === "error") throw new Error(`Terminal attachment failed: ${ready.code}`);
+    controls = terminalControls(attachment.resolve(0));
   } catch (error) {
     attachment.dispose();
     throw error;
   }
-  // Each inherited descriptor owns its endpoint (its description closes it); any one of them
-  // carries the session's mode controls.
-  let stdin: Stream | undefined;
   return {
-    resolve: target => target === 0 ? stdin = attachment.resolve(0) : undefined,
+    resolve: target => target === 0 ? attachment.resolve(0) : undefined,
     setRawMode(raw) {
-      const controls = terminalControls(stdin);
       if (!controls) return "CLOSED";
       const snapshot = controls.snapshot();
       if (snapshot.kind === "error") return snapshot.code;
