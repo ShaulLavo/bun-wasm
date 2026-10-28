@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { acceptGuestPublication, acceptedPublicationArtifact, snapshotPublicationInputs, verifyPublicationInputs, verifyPublicationReport, type PublicationSnapshot } from "../../scripts/guest-acceptance.ts";
 import { decodeGuest, describeGuest } from "../../scripts/guest-artifact.ts";
-import { fixtureReceipt } from "./guest-receipt-fixture.ts";
+import { fixtureReceipt, receiptCliSources } from "./guest-receipt-fixture.ts";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const descriptor = describeGuest(wasm);
@@ -186,7 +186,7 @@ test("real CLI resolves its default dist inside a checkout path containing space
   await fixture(async directory => {
     const root = join(directory, "checkout with spaces # encoded"), dist = join(root, "dist");
     await mkdir(join(root, "scripts"), { recursive: true }); await mkdir(dist);
-    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts", "guest-build-receipt.ts", "guest-source-manifest.ts"]) {
+    for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts"].concat(receiptCliSources)) {
       await copyFile(fileURLToPath(new URL(`../../scripts/${name}`, import.meta.url)), join(root, "scripts", name));
     }
     const input = join(dist, "bun.wasm"); await writeFile(input, wasm);

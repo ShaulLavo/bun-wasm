@@ -22,7 +22,8 @@ import { DescriptorTable } from "waffle/core/descriptors";
 
 function workerJobFixture() {
   const live = new Set<object>();
-  const jobs = new WorkerJobs(live);
+  const idle = new Set<object>();
+  const jobs = new WorkerJobs(live, worker => idle.has(worker));
   function worker(transport: WorkerProcessTransport, adapter: string | undefined = "bun") {
     const handle = { transport };
     live.add(handle);
@@ -67,8 +68,44 @@ function workerJobFixture() {
     confirmWorkerProcessJob(child.transport);
     expect(client(parent.transport).wait(parent.transport.pid, child.transport.pid)?.status).toBe(0);
   }
-  return { live, jobs, root, filesystem, baseline, spawn, reserve, launch, admit, collect };
+  return { live, idle, jobs, root, filesystem, baseline, spawn, reserve, launch, admit, collect };
 }
+
+test("idle pool workers are excluded only while the actual ownership query remains positive", () => {
+  const probe = workerJobFixture();
+  const idle = {};
+  probe.live.add(idle);
+  probe.idle.add(idle);
+  const baseline = probe.jobs.baseline(23);
+  expect(baseline.baseline.has(idle)).toBe(false);
+  const dev = probe.spawn(probe.root);
+  const foreground = probe.jobs.foreground(baseline);
+  probe.live.delete(dev);
+  expect(() => probe.jobs.stopped(baseline, foreground)).not.toThrow();
+  probe.idle.delete(idle);
+  expect(() => probe.jobs.foreground(baseline)).toThrow("no captured process ownership");
+  expect(() => probe.jobs.stopped(baseline, foreground)).toThrow("no captured process ownership");
+});
+
+test("a worker leased after baseline must have an admitted process and physically stop", () => {
+  const probe = workerJobFixture();
+  const worker = {};
+  probe.live.add(worker);
+  probe.idle.add(worker);
+  const baseline = probe.jobs.baseline(23);
+  const reservation = probe.reserve(probe.root);
+  probe.idle.delete(worker);
+  probe.jobs.observe(worker, { runtimeProcess: reservation.transport, adapter: "bun" });
+  probe.admit(reservation.transport, reservation.request, "launched");
+  const foreground = probe.jobs.foreground(baseline);
+  expect(() => probe.jobs.stopped(baseline, foreground)).toThrow("not physically stopped");
+  probe.live.delete(worker);
+  expect(() => probe.jobs.stopped(baseline, foreground)).not.toThrow();
+  probe.live.add(worker);
+  expect(() => probe.jobs.stopped(baseline, foreground)).toThrow("not physically stopped");
+  probe.idle.add(worker);
+  expect(() => probe.jobs.stopped(baseline, foreground)).toThrow("already received a process request");
+});
 
 test("Ctrl-C physical worker proof allows a positively owned independent job created during interrupt", () => {
   const probe = workerJobFixture();
@@ -114,7 +151,7 @@ test("Ctrl-C tracks positive requested ownership even when runtime assignment is
   const requested = workerProcessState(dev.transport).job;
   const state = workerProcessState(wrong.transport);
   const live = new Set<object>([probe.root, probe.filesystem]);
-  const broken = new WorkerJobs(live);
+  const broken = new WorkerJobs(live, () => false);
   broken.observe(probe.root, { runtimeProcess: probe.root.transport });
   const baseline = broken.baseline(23);
   broken.observe(dev, { runtimeProcess: dev.transport, adapter: "bun" });

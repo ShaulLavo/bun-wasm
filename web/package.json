@@ -30,15 +30,12 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "codemirror": "^6.0.2",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#d3050e73914b7ed4cd72010f72047cce383e2f29"
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.91/waffle-0.0.91.tgz"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "playwright": "^1.64.1",
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2"
-  },
-  "trustedDependencies": [
-    "waffle"
-  ]
+  }
 }
