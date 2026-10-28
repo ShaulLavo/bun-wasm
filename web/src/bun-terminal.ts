@@ -12,7 +12,7 @@ import {
 } from "waffle/browser/runtime-terminals";
 import type { RuntimeWorkerRequest } from "waffle/browser/worker";
 
-export interface TerminalMetadata {
+interface TerminalMetadata {
   readonly terminalContext: TerminalContext;
   readonly terminalInput: SharedArrayBuffer;
 }
