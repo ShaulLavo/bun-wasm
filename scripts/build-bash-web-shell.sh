@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build bash-web's shell guest (shell-runtime.wasm) for the native launcher's package-script
-# fixtures: bunwasm-host --shell dist/bash-web-shell.wasm. The browser gets the shell from the
-# bash-web package instead. Uses this repository's toolchain and patched WASI sysroot.
+# Build bash-web's shell guest (shell-runtime.wasm) and its env utility for the native launcher's
+# package-script fixtures: bunwasm-host --shell dist/bash-web-shell.wasm --env-utility
+# dist/bash-web-env.wasm. The browser gets both from the bash-web package instead. Uses this repository's toolchain and patched WASI sysroot.
 set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=/dev/null
@@ -23,7 +23,10 @@ target="$CARGO_TARGET_DIR/bash-web-shell"
 (cd "$source_dir" && RUSTUP_TOOLCHAIN="$toolchain" CARGO_TARGET_DIR="$target" \
   CARGO_ENCODED_RUSTFLAGS="$(IFS=$'\x1f'; echo "${flags[*]}")" CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS= \
   cargo build --locked --release --target wasm32-wasip1 --manifest-path shell/Cargo.toml \
-  -j "${JOBS:-2}" -p shell-engine --bin shell-runtime)
+  -j "${JOBS:-2}" -p shell-engine --bin shell-runtime -p shell-utilities --bin env)
 mkdir -p "$root/dist"
 cp "$target/wasm32-wasip1/release/shell-runtime.wasm" "$root/dist/bash-web-shell.wasm"
-printf 'dist/bash-web-shell.wasm: %s bytes (bash-web %s)\n' "$(stat -c %s "$root/dist/bash-web-shell.wasm")" "$commit"
+cp "$target/wasm32-wasip1/release/env.wasm" "$root/dist/bash-web-env.wasm"
+for guest in shell env; do
+  printf 'dist/bash-web-%s.wasm: %s bytes (bash-web %s)\n' "$guest" "$(stat -c %s "$root/dist/bash-web-$guest.wasm")" "$commit"
+done

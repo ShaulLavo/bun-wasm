@@ -429,7 +429,8 @@ jobs:
           path: |
             ${{ env.CARGO_TARGET_DIR }}/bash-web-source
             ${{ env.CARGO_TARGET_DIR }}/bash-web-shell
-          key: bash-web-shell-v1-${{ runner.os }}-${{ hashFiles('scripts/build-bash-web-shell.sh', 'rust-toolchain.toml', 'scripts/build-wasi-sysroot.ts') }}
+          # Cargo does not see sysroot or C toolchain changes, so every build input is in the key.
+          key: bash-web-shell-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ hashFiles('scripts/build-bash-web-shell.sh', '.cargo/**', 'rust-toolchain.toml', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'bun.lock') }}
       - name: Install the Web host dependencies
         run: bun install --cwd web --frozen-lockfile
       # The JSC guest owns its Cargo target and its dist/bun-jsc.wasm outputs. It builds

@@ -36,6 +36,11 @@ try {
   const binary = run("bin-script", ["tail"]);
   assert.equal(binary.exitCode, 0, binary.stderr.toString());
   assert.equal(binary.stdout.toString().trim(), "installed baked|tail");
+  // An npm bin's usual `#!/usr/bin/env node` line runs through the env utility.
+  writeFileSync("node_modules/.bin/envtool", '#!/usr/bin/env node\nconsole.log("env", process.argv.slice(2).join("|"));', { mode: 0o755 });
+  const viaEnv = run("env-bin", ["tail"]);
+  assert.equal(viaEnv.exitCode, 0, viaEnv.stderr.toString());
+  assert.equal(viaEnv.stdout.toString().trim(), "env baked|tail");
   const entry = run("tool");
   assert.equal(entry.exitCode, 0, entry.stderr.toString());
   assert.equal(entry.stdout.toString().trim(), "local");

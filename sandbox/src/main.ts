@@ -96,11 +96,17 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 let startup: "starting" | "ready" | "failed" = "starting";
 const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${template}` } });
 const fs = runtime.filesystem;
-// Package scripts, Bun.$ and bun exec run in bash-web's shell. Like the process service, it is
-// installed with the first command, not at page startup.
+// Package scripts, Bun.$ and bun exec run in bash-web's shell, and package bins' `#!/usr/bin/env node`
+// lines in its env utility. Like the process service, both are registered with the first command,
+// not at page startup; each guest is fetched only when it first runs.
 let shellCommands: Promise<unknown> | undefined;
-const installShell = () => shellCommands ??= import("bash-web").then(({ installShellCommands }) =>
-  installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: new URL("./shell-worker.js", location.href) }));
+const shellWorker = () => new URL("./shell-worker.js", location.href);
+const installShell = () => shellCommands ??= Promise.all([
+  import("bash-web").then(({ installShellCommands }) =>
+    installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: shellWorker() })),
+  import("bash-web/utilities/env").then(({ installEnv }) =>
+    installEnv(runtime, { wasmUrl: new URL("./programs/env.wasm", location.href), workerUrl: shellWorker() })),
+]);
 function showStartupFailure(error: unknown): void {
   startup = "failed";
   setStatus(error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error), "error");

@@ -11,6 +11,7 @@ use super::{ACCES, IO, NOENT, NOTDIR};
 
 pub const DEFAULT_PATHS: [&str; 3] = ["/bin/bun", "/bin/node", "/bin/nodejs"];
 pub const SHELL_PATHS: [&str; 2] = ["/bin/sh", "/bin/bash"];
+pub const ENV_PATHS: [&str; 2] = ["/bin/env", "/usr/bin/env"];
 pub const ENGINE_PATHS: [(&str, [&str; 3]); 2] = [
     (
         "quickjs",

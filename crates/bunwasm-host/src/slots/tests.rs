@@ -51,6 +51,7 @@ impl Fixture {
                 limits: StoreLimitsBuilder::new().build(),
                 functions: Vec::new(),
                 cancel,
+                cwd: "/work/app".into(),
             },
         );
         store.set_epoch_deadline(1);
@@ -1082,4 +1083,16 @@ fn fd_kind_tracks_pipes_files_remaps_and_closed_descriptors_without_consuming() 
     assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", read), 0);
     assert_eq!(f.call("runtime_proc", "fd_kind", read), process::BADF);
     assert_eq!(f.call("runtime_proc", "fd_kind", duplicate), 1);
+}
+
+#[test]
+fn cwd_reports_the_full_length_and_writes_only_when_it_fits() {
+    let mut f = Fixture::new();
+    assert_eq!(f.call("runtime_proc", "cwd", (1024, 0)), 9);
+    assert_eq!(f.call("runtime_proc", "cwd", (1024, 4)), 9);
+    assert_eq!(f.bytes(1024, 4), &[0; 4]);
+    assert_eq!(f.call("runtime_proc", "cwd", (1024, 64)), 9);
+    assert_eq!(f.bytes(1024, 9), b"/work/app");
+    assert_eq!(f.call("runtime_proc", "cwd", (65536, 0)), 9);
+    assert_eq!(f.call("runtime_proc", "cwd", (65530, 9)), process::FAULT);
 }

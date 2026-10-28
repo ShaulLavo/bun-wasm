@@ -179,6 +179,11 @@ impl Runtime {
             .register(&executables::SHELL_PATHS, module)?;
         Ok(())
     }
+    /// bash-web's env utility at /bin/env and /usr/bin/env, for `#!/usr/bin/env node` bins.
+    pub fn register_env(&self, module: &wasmtime::Module) -> anyhow::Result<()> {
+        self.executables.register(&executables::ENV_PATHS, module)?;
+        Ok(())
+    }
     pub fn module_for<'a>(
         &'a self,
         argv: &[String],

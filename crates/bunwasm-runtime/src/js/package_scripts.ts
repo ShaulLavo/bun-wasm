@@ -134,17 +134,56 @@
     }
     return out;
   }
-  function packageManagerCommand(rest: string): { text: string; length: number } | undefined {
-    if (rest.startsWith("npm run ")) return { text: "bun run ", length: "npm run ".length };
+  type Rewrite = { text: string; length: number };
+  function packageManagerCommand(rest: string): Rewrite | undefined {
+    if (rest.startsWith("npm run ")) {
+      const workspaces = npmRunInWorkspaces(rest.slice("npm run ".length));
+      if (!workspaces) return { text: "bun run ", length: "npm run ".length };
+      return { text: "bun run" + workspaces.text, length: "npm run ".length + workspaces.length };
+    }
     if (rest.startsWith("npx ")) return { text: "bun x ", length: "npx ".length };
     if (rest.startsWith("pnpm run ")) return { text: "bun run ", length: "pnpm run ".length };
     if (rest.startsWith("pnpm dlx ")) return { text: "bun x ", length: "pnpm dlx ".length };
     if (rest.startsWith("pnpx ")) return { text: "bun x ", length: "pnpx ".length };
     if (!rest.startsWith("yarn ")) return;
     const command = /^yarn (\S+) /.exec(rest)?.[1];
-    if (!command || command === "npm" || command.startsWith("-")) return;
+    if (!command) return;
+    // Yarn 2's `yarn npm` and `yarn --flag` are copied through untouched.
+    if (command === "npm") return { text: "yarn npm ", length: "yarn npm ".length };
+    if (command.startsWith("-")) return { text: `yarn ${command}`, length: "yarn ".length + command.length };
     if (command === "run") return { text: "bun run", length: "yarn run".length };
     if (!yarnCommands.has(command)) return { text: `bun run ${command}`, length: "yarn ".length + command.length };
+  }
+
+  // Bun's append_npm_run_in_workspaces: npm takes `-w`/`--workspaces` anywhere, `bun run` only in
+  // front. Rewrites the arguments up to the first command separator, or nothing.
+  function npmRunInWorkspaces(args: string): Rewrite | undefined {
+    const end = args.search(/[;&|\r\n]/);
+    const command = (end < 0 ? args : args.slice(0, end)).trimEnd();
+    if (/['"()$`\\#]/.test(command)) return;
+    const tokens = command.split(/[ \t]+/).filter(Boolean);
+    let flags = "";
+    let rest = "";
+    let selects = false;
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index]!;
+      if (token === "--workspaces" || token === "--ws") { selects = true; flags += " --workspaces"; continue; }
+      if (token === "--if-present") { flags += " --if-present"; continue; }
+      if (token === "--") { rest += " " + tokens.slice(index).join(" "); break; }
+      const named = token === "-w" || token === "--workspace";
+      const workspace = named ? tokens[++index] ?? "" : workspaceValue(token);
+      if (workspace === undefined) { rest += " " + token; continue; }
+      // Neither the next flag nor a word with a redirect glued to it.
+      if (!workspace || workspace.startsWith("-") || /[<>]/.test(workspace)) return;
+      selects = true;
+      // npm also takes the workspace's folder; `--filter` tells a path from a name by the dot.
+      flags += " --filter=" + (workspace.includes("/") && !/^[@./]/.test(workspace) ? "./" : "") + workspace;
+    }
+    return selects ? { text: flags + rest, length: command.length } : undefined;
+  }
+  function workspaceValue(token: string): string | undefined {
+    if (token.startsWith("--workspace=")) return token.slice("--workspace=".length);
+    if (token.startsWith("-w=")) return token.slice("-w=".length);
   }
 
   // Bun's escape for passthrough arguments appended to the script.
@@ -172,6 +211,8 @@
     if (!silent && signal !== null && signal !== "SIGINT") process.stderr.write(`error: script "${name}" was terminated by signal ${signal}\n`);
     if (!silent && signal === null && code !== 2) process.stderr.write(`error: script "${name}" exited with code ${code}\n`);
     process.exitCode = code;
+    // As Bun does, die by the script's own signal, SIGINT included, rather than exiting normally.
+    if (signal !== null) process.kill(process.pid, signal);
     return false;
   }
 

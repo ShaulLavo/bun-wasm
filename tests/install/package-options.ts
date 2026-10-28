@@ -41,7 +41,7 @@ async function run(directory: string, args: string[], code = 0, path?: string) {
   assert.ok(executable, "Set BUN_WASM_LAUNCHER for embedded engines");
   const guest = ["--wasm", wasm, "--dir", `${directory}::/`, "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache"].concat(path === undefined ? [] : ["--env", `PATH=${path}`], ["--"], args);
   // Package scripts run in bash-web's shell guest (scripts/build-bash-web-shell.sh).
-  const argv = native ? args : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(guest) : ["--shell", resolve(root, "dist/bash-web-shell.wasm")].concat(guest);
+  const argv = native ? args : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(guest) : ["--shell", resolve(root, "dist/bash-web-shell.wasm"), "--env-utility", resolve(root, "dist/bash-web-env.wasm")].concat(guest);
   const env: NodeJS.ProcessEnv = { ...process.env, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(directory, "cache") };
   delete env.PATH;
   if (path !== undefined) env.PATH = path;

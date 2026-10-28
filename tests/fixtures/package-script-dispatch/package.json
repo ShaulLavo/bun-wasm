@@ -23,6 +23,7 @@
     "shell-syntax": "printf '%s\\n' one && echo \"two $npm_lifecycle_event\" | bun ./upper.ts; false || echo three",
     "prehooked": "echo pre",
     "hooked": "echo main",
-    "posthooked": "echo post"
+    "posthooked": "echo post",
+    "env-bin": "envtool baked"
   }
 }

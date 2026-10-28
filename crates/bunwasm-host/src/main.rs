@@ -33,6 +33,7 @@ with networking. Launcher options must come before the bun arguments:
   --wasm PATH         bun.wasm to run
   --engine NAME=PATH  register quickjs or jsc at /opt/bun/NAME/bin (repeatable)
   --shell PATH        register bash-web's shell guest at /bin/sh and /bin/bash
+  --env-utility PATH  register bash-web's env utility at /bin/env and /usr/bin/env
   --dir HOST[::GUEST] preopen a directory (repeatable); without any --dir
                       the current directory is preopened at its own path
   --env K=V           set a guest environment variable (repeatable)
@@ -54,6 +55,8 @@ pub struct Host {
     pub limits: StoreLimits,
     pub functions: Vec<wasmtime::Func>,
     pub cancel: Arc<process::Cancellation>,
+    /// The initial cwd `runtime_proc.cwd` reports: the process request's, carried as `PWD`.
+    pub cwd: String,
 }
 
 #[derive(Default)]
@@ -61,6 +64,7 @@ struct Options {
     wasm: Option<PathBuf>,
     engines: Vec<(String, PathBuf)>,
     shell: Option<PathBuf>,
+    env_utility: Option<PathBuf>,
     dirs: Vec<(PathBuf, String)>,
     env: Vec<(String, String)>,
     inherit_env: bool,
@@ -98,6 +102,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options> {
                 options.engines.push((name.to_string(), path.into()));
             }
             "--shell" => options.shell = Some(value("--shell")?.into()),
+            "--env-utility" => options.env_utility = Some(value("--env-utility")?.into()),
             "--dir" => {
                 let spec = value("--dir")?;
                 let (host, guest) = spec.split_once("::").unwrap_or((&spec, &spec));
@@ -249,6 +254,11 @@ fn run(options: Options) -> Result<i32> {
             .with_context(|| format!("loading shell {}", path.display()))?;
         runtime.register_shell(&module)?;
     }
+    if let Some(path) = &options.env_utility {
+        let module = Module::from_file(&engine, path)
+            .with_context(|| format!("loading env utility {}", path.display()))?;
+        runtime.register_env(&module)?;
+    }
     let thread_stack = host_stack()? + (8 << 20);
     Arc::get_mut(&mut runtime).unwrap().thread_stack = thread_stack;
     let running = Arc::new(AtomicBool::new(true));
@@ -327,6 +337,7 @@ fn run_module_instance(
         wasi.preopened_dir(host, guest, DirPerms::all(), FilePerms::all())
             .with_context(|| format!("preopening {}", host.display()))?;
     }
+    let cwd = env.iter().find(|(key, _)| key == "PWD").map_or_else(|| "/".into(), |(_, value)| value.clone());
     let net = net::Net::new();
     let memory_limit = stdio.memory_limit;
     let processes = process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
@@ -335,6 +346,7 @@ fn run_module_instance(
         net,
         functions: Vec::new(),
         cancel: cancel.clone(),
+        cwd,
         processes,
         limits: StoreLimitsBuilder::new()
             .memory_size(memory_limit)

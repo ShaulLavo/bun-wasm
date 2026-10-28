@@ -97,8 +97,9 @@ if [[ $build == 1 && $update == 0 && $engine != browser ]]; then
 fi
 # Package scripts, Bun.$ and bun exec run in bash-web's shell at /bin/sh and /bin/bash.
 shell_wasm="${BUN_WASM_SHELL:-$root/dist/bash-web-shell.wasm}"
-if [[ $update == 0 && $engine != browser && ! -f "$shell_wasm" ]]; then
-  echo "missing $shell_wasm; run scripts/build-bash-web-shell.sh"
+env_wasm="${BUN_WASM_ENV_UTILITY:-$root/dist/bash-web-env.wasm}"
+if [[ $update == 0 && $engine != browser && ! ( -f "$shell_wasm" && -f "$env_wasm" ) ]]; then
+  echo "missing $shell_wasm or $env_wasm; run scripts/build-bash-web-shell.sh"
   exit 1
 fi
 
@@ -234,7 +235,7 @@ for name in "${names[@]}"; do
       --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   else
-    (cd "$work" && timeout 60 "$launcher" --wasm "$wasm" --engine "$engine=$wasm" --shell "$shell_wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$work::/" --env PWD=/ --env HOME=/ \
+    (cd "$work" && timeout 60 "$launcher" --wasm "$wasm" --engine "$engine=$wasm" --shell "$shell_wasm" --env-utility "$env_wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$work::/" --env PWD=/ --env HOME=/ \
       --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   fi

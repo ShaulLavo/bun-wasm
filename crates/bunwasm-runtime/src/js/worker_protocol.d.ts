@@ -89,8 +89,10 @@ declare namespace BunWasm {
     execPath: string;
     exitCode?: number;
     noDeprecation?: boolean;
+    readonly pid: number;
     cwd(): string;
     exit(code?: number): never;
+    kill(pid: number, signal?: string | number): boolean;
     on(event: string, callback: EventListener): unknown;
   }
   interface Native {

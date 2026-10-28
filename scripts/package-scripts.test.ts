@@ -18,10 +18,12 @@ function project(scripts: Record<string, string>, check: (cwd: string) => Promis
 }
 function runtime(cwd: string, name: string, args: string[] = [], options: { exits?: Record<string, Exit>; execArgv?: string[] } = {}) {
   const spawned: { argv: string[]; event: string | undefined; script: string | undefined }[] = [];
+  const raised: string[] = [];
   let stderr = "";
   const env: Record<string, string | undefined> = { PATH: "/bin" };
   const guest = {
     cwd: () => cwd, argv: ["bun", name].concat(args), execPath: "/bin/bun", execArgv: options.execArgv ?? [], env, exitCode: undefined as number | undefined,
+    pid: 7, kill(pid: number, signal: string) { if (pid === 7) raised.push(signal); },
     stderr: { isTTY: false, write: (chunk: string) => { stderr += chunk; } },
   };
   const scripts = factory({
@@ -49,7 +51,7 @@ function runtime(cwd: string, name: string, args: string[] = [], options: { exit
       throw new Error(`Unexpected module ${module}`);
     },
   });
-  return { scripts, spawned, guest, stderr: () => stderr };
+  return { scripts, spawned, guest, raised, stderr: () => stderr };
 }
 
 test("a package script runs in the system shell with pre and post hooks and escaped arguments", () => project({ prebuild: "echo pre", build: "vite build", postbuild: "echo post" }, async cwd => {
@@ -75,11 +77,12 @@ test("a failing script stops the run with Bun's message and its exit code", () =
     ["killed", { code: 143, signal: "SIGTERM" }, 'error: script "killed" was terminated by signal SIGTERM\n'],
     ["interrupted", { code: 130, signal: "SIGINT" }, ""],
   ] as const) {
-    const { scripts, spawned, guest, stderr } = runtime(cwd, name, [], { exits: { [name]: exit } });
+    const { scripts, spawned, guest, raised, stderr } = runtime(cwd, name, [], { exits: { [name]: exit } });
     await scripts.run(scripts.resolve(path.join(cwd, name)));
     expect(spawned.map(child => child.event)).toEqual([name]);
     expect(stderr().split("\n").slice(1).join("\n")).toBe(message);
     expect(guest.exitCode).toBe(exit.code);
+    expect(raised).toEqual("signal" in exit ? [exit.signal] : []);
   }
 }));
 
@@ -105,6 +108,15 @@ test("npm, yarn and pnpm invocations become bun, as Bun's lifecycle script runne
     ["tsc &&npm run test", "tsc &&npm run test"],
     ['echo "npm run x"', 'echo "bun run x"'],
     ["mynpm run x", "mynpm run x"],
+    ["npm run --workspace foo build", "bun run --filter=foo build"],
+    ["npm run build -w packages/a && echo done", "bun run --filter=./packages/a build && echo done"],
+    ["npm run build --workspaces --if-present", "bun run --workspaces --if-present build"],
+    ["npm run test --workspace=@scope/a -- --watch -w x", "bun run --filter=@scope/a test -- --watch -w x"],
+    ["npm run build -w", "bun run build -w"],
+    ["npm run build -w \"a b\"", "bun run build -w \"a b\""],
+    ["npm run build --if-present", "bun run build --if-present"],
+    ["yarn npm run x", "yarn npm run x"],
+    ["yarn --cwd a run x", "yarn --cwd a run x"],
   ];
   for (const [script, rewritten] of cases) {
     writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ scripts: { go: script } }));

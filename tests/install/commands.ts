@@ -36,7 +36,7 @@ async function run(cwd: string, ...args: string[]) {
   const executable = engine === "native" ? process.env.NATIVE_BUN || "bun" : engine === "browser" ? process.execPath : process.env.BUN_WASM_LAUNCHER!;
   const nativeArgs = args[0] === "x" ? ["x", "--bun"].concat(args.slice(1)) : args;
   // Package scripts run in bash-web's shell guest (scripts/build-bash-web-shell.sh).
-  const argv = engine === "native" ? nativeArgs : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(options, args) : ["--shell", resolve(root, "dist/bash-web-shell.wasm")].concat(options, args);
+  const argv = engine === "native" ? nativeArgs : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(options, args) : ["--shell", resolve(root, "dist/bash-web-shell.wasm"), "--env-utility", resolve(root, "dist/bash-web-env.wasm")].concat(options, args);
   const child = spawn(executable, argv, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
   children.add(child);
   let stdout = "", stderr = "";

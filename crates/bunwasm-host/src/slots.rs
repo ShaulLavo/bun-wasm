@@ -562,6 +562,24 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
             })
         },
     )?;
+    // Waffle's process-identity import: the full byte count, written only when it fits.
+    linker.func_wrap(
+        "runtime_proc",
+        "cwd",
+        |mut caller: Caller<'_, Host>, ptr: i32, len: i32| -> Result<i32> {
+            caller.data().cancel.check()?;
+            with_memory(&mut caller, |memory, host| {
+                let Some(range) = proc_range(memory, ptr, len) else {
+                    return Ok(crate::process::FAULT);
+                };
+                let cwd = host.cwd.as_bytes();
+                if cwd.len() <= range.len() {
+                    memory[range.start..range.start + cwd.len()].copy_from_slice(cwd);
+                }
+                Ok(cwd.len() as i32)
+            })
+        },
+    )?;
     linker.func_wrap(
         "runtime_proc",
         "access_take",
