@@ -202,6 +202,18 @@ writing the final pair receipt. The existing export list path remains
 `scripts/quickjs-core-exports.txt`; its contents now serve the common core.
 Additional JSC imports require the separately released real-link gate.
 
+The direct common-core producer uses the same retained-output preparation as
+both composing wrappers. It validates artifact bytes, receipt provenance and
+recipe/profile before comparing stable current inputs. A compatible artifact
+keeps its original receipt. Only an intact output with changed consumed inputs
+is retired before an ordinary rebuild; partial, corrupt or unsupported outputs
+remain fatal and untouched. Native Cargo exact cache keys include the common
+core's preparation and released-input inventory, while the compatible restore
+prefix retains native compilation work. Changing the public runtime's package
+metadata can change the core receipt even when the libc builder and sysroot stay
+identical. The direct CI producer must prepare that transition before reuse.
+
+
 The QuickJS producer invokes the selected `GUEST_CARGO` and SDK compiler/linker.
 Its initializer converter and constructor fixture now live in the explicitly
 inventoried `scripts/src/engine-explicit-init.ts` and `scripts/src/engine-init.c`.

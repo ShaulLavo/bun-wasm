@@ -27,8 +27,9 @@ trap 'exit 143' TERM
 profile_file=$(mktemp "$TMPDIR/bun-core-profile-XXXXXX")
 inputs=$(mktemp "$TMPDIR/bun-core-inputs-XXXXXX")
 printf '%s\n' "$profile" > "$profile_file"
-bun "$root/scripts/guest-core-receipt.ts" inputs "$profile_file" > "$inputs"
 core="$out/bun-core.wasm"
+bun "$root/scripts/guest-core-receipt.ts" prepare-core "$profile_file" "$core"
+bun "$root/scripts/guest-core-receipt.ts" inputs "$profile_file" > "$inputs"
 if [[ -e "$core" || -e "$core.core.json" ]]; then
   bun "$root/scripts/guest-core-receipt.ts" verify "$core" "$inputs"
   printf 'common core: verified reuse %s\n' "$core"
