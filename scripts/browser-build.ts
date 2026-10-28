@@ -1,3 +1,4 @@
+import { baseProgramAssets } from "./base-program-build";
 import { relative, join, resolve, isAbsolute, dirname } from "node:path";
 import { existsSync, realpathSync, readFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
@@ -91,7 +92,7 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
     splitting: options.splitting ?? true,
     minify: true, sourcemap: "linked", metafile: true,
     naming: { entry: "[name].[ext]", chunk: "chunks/[name]-[hash].[ext]", asset: "[name]-[hash].[ext]" },
-    plugins: [{
+    plugins: [baseProgramAssets(main), {
       name: "consumer-runtime-package",
       setup(build) {
         // Shared web sources still use the app's installation. Explicit package

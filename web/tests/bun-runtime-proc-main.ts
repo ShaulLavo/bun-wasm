@@ -57,6 +57,7 @@ async function until(condition: () => boolean, label: string) {
 }
 let runtime: Runtime | undefined;
 let installation: Awaited<ReturnType<typeof installBunAdapters>> | undefined;
+let baseInstallation: import("../src/browser-programs").BrowserPrograms | undefined;
 let rootWorker: Worker | undefined;
 let rootConnection: ReturnType<Runtime["filesystem"]["fork"]> | undefined;
 let result: Record<string, unknown> | undefined;
@@ -78,6 +79,15 @@ try {
     await runtime.filesystem.writeFile(path, await response.text());
   }
   await runtime.filesystem.flush();
+  if (scenario?.basePrograms) {
+    const { BrowserPrograms } = await import("../src/browser-programs");
+    baseInstallation = new BrowserPrograms(runtime, {
+      worker: new URL("./preview1-worker.js", location.href),
+      shellWorker: new URL("./shell-worker.js", location.href),
+      shell: new URL("./programs/shell-engine.wasm", location.href),
+    });
+    equal((await baseInstallation.ready()).path, "/usr/local/bin:/usr/bin:/bin", "app base PATH");
+  }
   const service: ProcessService = await runtime.processes();
   const supervisor = await service.ready();
   supervisor.onChildExit(event => confirmedExits.push({ pid: event.pid, parentPid: event.parentPid, job: event.job,
@@ -158,6 +168,7 @@ try {
     await until(() => busyWorkers() === 1, "only page filesystem worker remains after guest completion");
     installation?.dispose(); installation?.dispose(); installation = undefined;
     await runtime!.dispose(); runtime = undefined;
+    await baseInstallation?.dispose(); baseInstallation = undefined;
   }
   await until(() => workers.size === 0, "external Runtime disposal stopped every owned worker");
   equal(errors.length, 0, "worker errors");
@@ -165,7 +176,7 @@ try {
 } catch (error) {
   result = { ok: false, ...diagnostics(), error: error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error) };
 } finally {
-  try { installation?.dispose(); await runtime?.dispose(); }
+  try { installation?.dispose(); await runtime?.dispose(); await baseInstallation?.dispose(); }
   catch (error) { result = { ...result, ok: false, teardownError: String(error) }; }
   rootConnection?.port.close();
   const forcedWorkers = workers.size;

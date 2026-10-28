@@ -12,6 +12,7 @@ import { decode } from "../../web/src/fs";
 import type { BunNetworkOptions, RuntimeNetworkHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
 import { createRuntime } from "waffle";
+import { BrowserPrograms } from "../../web/src/browser-programs";
 import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "../../web/src/shared-fs";
 import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../../web/src/engine-loader";
 import type { Run } from "../../web/src/runner";
@@ -96,17 +97,15 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 let startup: "starting" | "ready" | "failed" = "starting";
 const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${template}` } });
 const fs = runtime.filesystem;
-// Package scripts, Bun.$ and bun exec run in bash-web's shell, and package bins' `#!/usr/bin/env node`
-// lines in its env utility. Like the process service, both are registered with the first command,
-// not at page startup; each guest is fetched only when it first runs.
-let shellCommands: Promise<unknown> | undefined;
-const shellWorker = () => new URL("./shell-worker.js", location.href);
-const installShell = () => shellCommands ??= Promise.all([
-  import("bash-web").then(({ installShellCommands }) =>
-    installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: shellWorker() })),
-  import("bash-web/utilities/env").then(({ installEnv }) =>
-    installEnv(runtime, { wasmUrl: new URL("./programs/env.wasm", location.href), workerUrl: shellWorker() })),
-]);
+const browserPrograms = new BrowserPrograms(runtime, {
+  worker: new URL("./preview1-worker.js", location.href),
+  shell: new URL("./programs/shell-engine.wasm", location.href),
+  shellWorker: new URL("./shell-worker.js", location.href),
+});
+addEventListener("pagehide", (event: PageTransitionEvent) => {
+  if (event.persisted) return;
+  void Promise.all([runtime.dispose(), browserPrograms.dispose()]).catch(console.error);
+});
 function showStartupFailure(error: unknown): void {
   startup = "failed";
   setStatus(error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error), "error");
@@ -270,11 +269,13 @@ async function startDevServer(): Promise<void> {
   setStatus("starting worker…");
   setServerState("starting", "starting dev server…");
   term.write(`\x1b[2m$\x1b[0m bun ./index.html \x1b[2m(${ENGINES[engine].name})\x1b[0m\r\n`);
+  const programs = await browserPrograms.ready();
+  if (revision !== serverRevision) return;
   const env: Record<string, string> = {
     HOME,
     PWD: APP,
     USER: "user",
-    PATH: "/usr/local/bin:/usr/bin:/bin",
+    PATH: programs.path,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
     COLUMNS: String(term.cols),
@@ -284,7 +285,7 @@ async function startDevServer(): Promise<void> {
     BUN_WASM_STARTUP: "1",
   };
   const started = performance.now();
-  const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes(), installShell()]);
+  const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes()]);
   if (revision !== serverRevision) return;
   const output = new StartupOutput((text) => term.write(text), startupRecord);
   serverTiming = { started, visibleStart };
