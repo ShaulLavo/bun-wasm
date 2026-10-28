@@ -104,8 +104,12 @@ function fixture(options: FixtureOptions): Fixture {
   const visits: string[] = [];
   const locator = (selector: string, wanted = "") => ({
     filter: ({ hasText }: { hasText: string }) => locator(selector, hasText),
-    async waitFor() {
-      if (restoring && wanted === "original") await options.restoration?.wait();
+    async waitFor({ state }: { state?: "hidden" } = {}) {
+      if (restoring && (state === "hidden" || (wanted === "original" && !visible.includes(wanted)))) await options.restoration?.wait();
+      if (state === "hidden") {
+        if (visible.includes(wanted)) throw new Error("Edited DOM is still visible");
+        return;
+      }
       if (selector.includes('[data-hydrated="true"]')) await options.hydration?.wait();
       if ((options.domFailure && wanted === "changed") || !visible.includes(wanted)) throw new Error("DOM did not update");
     },
@@ -165,10 +169,7 @@ function fixture(options: FixtureOptions): Fixture {
     },
   };
   const emit = (payload: string) => evaluate(context, `globalThis.__previewControllerPort?.postMessage({ kind: 'message', payload: ${JSON.stringify(payload)} });`);
-  const finishRestoration = () => {
-    visible = "original";
-    if (options.updateMessage) emit(options.updateMessage);
-  };
+  const finishRestoration = () => { visible = "original"; };
   const sourceAdapter = {
     async read() { return source; },
     async write(_path: string, contents: string) {
@@ -178,6 +179,7 @@ function fixture(options: FixtureOptions): Fixture {
       source = contents;
       if (contents === "original" && options.restoration) {
         restoring = true;
+        if (options.updateMessage) emit(options.updateMessage);
         void options.restoration.wait().then(finishRestoration);
         return;
       }
@@ -302,7 +304,7 @@ test("HMR restoration completes before a later probe navigates", async () => {
   const traffic = await observeProductTraffic(run.page);
   await run.open();
   try {
-    const pending = productObservations(run.page, "http://local/", { ...hmrCheck(), probes: [
+    const pending = productObservations(run.page, "http://local/", { ...hmrCheck(), hmr: { path: "page.tsx", search: "original", replacement: "original changed" }, probes: [
       { kind: "route", id: "route", path: "/query", selector: "h1", text: "route-result" },
     ] }, run.source, traffic, 1000);
     await restoration.waiting;
