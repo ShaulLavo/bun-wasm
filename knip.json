@@ -11,6 +11,7 @@
         "scripts/app-matrix/isolate.mjs",
         "scripts/bench/error-construction.js",
         "tests/package/fixtures/vite-main.ts",
+        "tests/package/fixtures/paired-asset-brand.ts",
         "scripts/**/*.test.ts",
         "scripts/fixtures/crypto-host-native-control.ts",
         "scripts/fixtures/event-rejections-control.ts",
