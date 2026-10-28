@@ -34,6 +34,7 @@ pub mod install;
 mod modules;
 mod natives;
 mod node_path;
+mod parse_env;
 #[cfg(any(
     feature = "engine-split",
     feature = "engine-jsc",

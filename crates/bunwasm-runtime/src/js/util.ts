@@ -1453,6 +1453,11 @@
   // Legacy helpers and module object
   // ---------------------------------------------------------------------------
 
+  function parseEnv(content: unknown): Record<string, string> {
+    if (typeof content !== "string") throw invalidArgType("content", "of type string", content);
+    return internal.native.parseEnv(content);
+  }
+
   function isError(e: unknown) {
     return isNativeError(e) || objectToString.call(e) === "[object Error]" || e instanceof Error;
   }
@@ -1505,6 +1510,7 @@
     isUndefined: (arg: unknown) => arg === undefined,
     log,
     parseArgs,
+    parseEnv,
     promisify,
     stripVTControlCharacters,
     styleText,

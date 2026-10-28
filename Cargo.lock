@@ -1466,6 +1466,7 @@ dependencies = [
  "aes-kw",
  "bun_brotli_sys",
  "bun_core",
+ "bun_dotenv",
  "bun_glob",
  "bun_node_path",
  "bun_paths",
