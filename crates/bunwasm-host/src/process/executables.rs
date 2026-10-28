@@ -59,6 +59,7 @@ impl Executables {
             entries: Mutex::default(),
         };
         fs::create_dir_all(executables.root.join("opt/bun"))?;
+        fs::create_dir_all(executables.root.join("usr/bin"))?;
         executables.register(&DEFAULT_PATHS, module)?;
         Ok(executables)
     }
@@ -77,9 +78,10 @@ impl Executables {
         Ok(())
     }
 
-    pub fn mounts(&self) -> [(PathBuf, String); 2] {
+    pub fn mounts(&self) -> [(PathBuf, String); 3] {
         [
             (self.root.join("bin"), "/bin".into()),
+            (self.root.join("usr/bin"), "/usr/bin".into()),
             (self.root.join("opt/bun"), "/opt/bun".into()),
         ]
     }
