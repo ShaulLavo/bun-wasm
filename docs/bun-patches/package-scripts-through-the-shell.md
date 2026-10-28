@@ -1,0 +1,15 @@
+# Package scripts through the system shell
+
+| Local source | Classification | Upstream source |
+| --- | --- | --- |
+| `crates/bunwasm-runtime/src/js/package_scripts.ts` `run`/`runScript`: pre and post hooks, `$ script` lines on stderr, `[bash\|sh] -c` with escaped passthrough arguments, failure messages and exit codes, `--silent` | Adapted upstream implementation | Bun `src/runtime/cli/run_command.rs` (`run_package_script_foreground_with_shell_path` and the `bun run` script path) at `9510e74152073d850a18758ca41114d8f214ffa6`, SHA-256 `d2da381fc17ee55bb18e3667060f978d4df1e8891fe78026ab0d4c51cd380f5f` |
+| `package_scripts.ts` `replacePackageManagerRun` and `yarnCommands` | Adapted upstream implementation | Bun `src/install/lifecycle_script_runner.rs` (`replace_package_manager_run`, `YARN_COMMANDS`) at the same revision, SHA-256 `9b83104697628d3881495b3ba259cfb73d6c6a026b5f39983b9da494bc25dcd2` |
+| `crates/bunwasm-host` `--shell` registration and `executables.rs` `#!` resolution | Original adapter | Linux `execve` shebang rules: one optional interpreter argument, the script path as given, nesting up to 4 (`ELOOP`), `ENOENT` for a missing interpreter |
+| `scripts/build-bash-web-shell.sh` | Original adapter | Builds bash-web's shell guest with bun-wasm's toolchain for native fixtures |
+| `tests/shell-product/worker-jobs.ts` caller-fatal jobs and idle pool workers | Original adapter | None |
+
+`bun run <script>` used to run scripts through a small parser of its own. It now does what native Bun does: it finds the system shell (`bash`, then `sh`; `findShell` in `bun_shell.ts`) and runs `shell -c "<script> <escaped args>"` with inherited standard streams, after `npm run`, `npx`, `yarn <script>`, `pnpm run`, `pnpm dlx` and `pnpx` in the script are rewritten to `bun run` and `bun x`. `pre<name>` and `post<name>` run around it. Each command is echoed on stderr as `$ command` (colored on a terminal) unless `--silent` is given. A failing script stops the chain with `error: script "<name>" exited with code N`, except for code 2, or `was terminated by signal SIG…`, as Bun prints them, and the process exits with the script's code. `PATH` starts with every `node_modules/.bin` from the package directory up. A name that is not a script still runs a source file first, then an installed package binary.
+
+In the browser the system shell is bash-web, registered by `installShellCommands` at `/bin/sh` and `/bin/bash`; package binaries such as Vite run through Waffle's `#!` support and bash-web's `env`. Without job control, bash-web keeps a script's commands in the shell's own job, as POSIX keeps them in its process group, so Ctrl-C on `bun run dev` reaches the server. The native launcher (`bunwasm-host --shell`) runs bash-web's shell guest the same way for the native fixtures.
+
+`scripts/package-scripts.test.ts` runs the real module with a recording spawn: hooks, argument escaping, failure messages, `--silent`, the package-manager rewrites and the file and binary fallbacks. The browser proofs are the `bun-scripts` stage of the `bun-shell` mode and the maintained `vite-dev-ctrl-c` mode of `web/tests/browser-shell-product.ts`.
