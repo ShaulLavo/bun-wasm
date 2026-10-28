@@ -242,8 +242,9 @@ await import('./node_modules/@react-router/serve/bin.js');
   {
     id: "fullstack-solidstart", family: "fullstack",
     dependencies: {
-      "@solidjs/start": "1.1.7", "@solidjs/router": "0.15.3", "@solidjs/meta": "0.29.4",
-      "solid-js": "1.9.9", vinxi: "0.5.8", vite: "6.3.6", nitropack: "2.12.6", typescript: "5.9.3",
+      // solidjs/templates solid-start-v1/basic at b180403c1006d374fbf38df2b28c81718272da95 (pnpm-lock.yaml).
+      "@solidjs/start": "1.3.2", "@solidjs/router": "0.15.4", "@solidjs/meta": "0.29.4",
+      "solid-js": "1.9.11", vinxi: "0.5.11", vite: "7.3.1", nitropack: "2.13.1", typescript: "5.9.3",
     },
     features: ["ssr-query", "query-dom", "client-interaction"],
     files: {
