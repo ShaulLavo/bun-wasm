@@ -119,6 +119,7 @@ function httpFixture(protocol: "http" | "tcp" = "http") {
     pumpIo: () => false, ioPending: () => 0,
   };
   Object.assign(modules, {
+    http_server_response: load("http_server_response.ts")(internal),
     node_net_server: load("node_net_server.ts")(internal),
     node_net: load("node_net.js")(internal),
   });

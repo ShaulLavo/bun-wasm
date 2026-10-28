@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { Buffer } from "node:buffer";
 import type { Duplex } from "node:stream";
 import type { Socket } from "node:net";
-import type { ClientRequest, IncomingMessage, ServerResponse } from "node:http";
+import type { ClientRequest, IncomingMessage, ServerResponse, Server } from "node:http";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { createRequire } from "node:module";
@@ -17,6 +17,7 @@ interface Connection {
   destroy(error?: Error): void;
 }
 interface Http {
+  createServer(handler: (request: IncomingMessage, response: ServerResponse) => void): Server;
   request(options: object, callback?: (response: IncomingMessage) => void): ClientRequest;
   ServerResponse: new (connection: Connection, request: object, keepAlive: boolean, done: () => void) => ServerResponse;
 }
@@ -97,8 +98,9 @@ function fixture() {
     nextTick(callback: () => void) { ticks.push(callback); },
     toUint8: (value: Uint8Array) => value,
     concatBytes: (parts: Uint8Array[]) => Buffer.concat(parts),
-    pumpIo: () => false,
+    pumpIo: () => false, ioPending: () => 0,
   };
+  modules.http_server_response = load("http_server_response")(internal);
   modules.fetch_lifetime = load("fetch_lifetime")(internal);
   modules.node_net_onread = load("node_net_onread")(internal);
   core = load("node_stream_core", "js")(internal).Stream;
@@ -135,14 +137,14 @@ function fixture() {
     Reflect.set(connection, "onClose", () => socket.destroy());
     let completions = 0;
     const response = new http.ServerResponse(connection, { method: "GET", httpVersion: "1.1" }, false, () => { completions++; });
-    response.socket = socket;
-    const socketClosed = () => Reflect.get(response, "_emitClose").call(response);
+    Reflect.set(response, "socket", socket);
+    const socketClosed = () => { if (!response.writableFinished) Reflect.get(response, "_emitClose").call(response); };
     Reflect.set(response, "_socketClosed", socketClosed);
     socket.once("close", socketClosed);
     response.sendDate = false;
     return { connection, response, socket, completions: () => completions };
   }
-  return { http, request, server, packets, closed, writes, pump, flush, advance, timers,
+  return { http, request, server, packets, closed, writes, pump, flush, advance, timers, pending: () => internal.ioPending(),
     block(value: boolean) { blocked = value; }, reads: () => reads,
     socket() { const socket = new (net.nodeNet().Connection)(9); return socket; },
   };
@@ -448,10 +450,100 @@ for (const withError of [false, true]) {
       expect(response.writableLength).toBe(0);
       expect(socket.listenerCount("close")).toBe(0);
       expect(state.timers.size).toBe(0);
+      expect(state.pending()).toBe(0);
       expect(completions()).toBe(1);
       state.block(false);
       await state.pump();
       expect(state.writes).toEqual([]);
+    } finally { connection.destroy(); await state.pump(); }
+  });
+}
+
+test("ServerResponse.destroy cancels an end whose transport callback is already queued", async () => {
+  const state = fixture();
+  const { connection, response, socket } = state.server();
+  const error = new Error("cancelled before finish");
+  const events: string[] = [];
+  const ends: unknown[] = [];
+  socket.on("error", () => {});
+  response.on("finish", () => events.push("finish"));
+  response.on("close", () => events.push("close"));
+  try {
+    response.end("accepted", (value?: Error) => ends.push(value));
+    response.destroy(error);
+    await state.pump();
+    expect(ends).toEqual([error]);
+    expect(events).toEqual(["close"]);
+    expect(response.writableFinished).toBe(false);
+    expect(state.closed).toEqual([8]);
+    expect(state.pending()).toBe(0);
+  } finally { connection.destroy(); await state.pump(); }
+});
+
+for (const endFirst of [false, true]) {
+test(`HTTP server destruction ${endFirst ? "after end" : "before end"} reports clientError and releases its connection`, async () => {
+  const state = fixture();
+  const error = new Error("abort response");
+  const errors: unknown[] = [];
+  const events: string[] = [];
+  const server = state.http.createServer((_request, response) => {
+    response.on("error", () => events.push("response-error"));
+    response.on("close", () => events.push("close"));
+    if (endFirst) response.end("accepted");
+    expect(response.destroy(error)).toBe(response);
+  });
+  server.on("clientError", value => errors.push(value));
+  const connection = state.socket();
+  try {
+    Reflect.get(server, "_onConnection").call(server, connection);
+    state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"));
+    await state.pump();
+    expect(events).toEqual(["close"]);
+    expect(errors).toEqual([error]);
+    expect(Reflect.get(server, "_connections").size).toBe(0);
+    expect(Reflect.get(connection, "busy")).toBe(false);
+    expect(state.closed).toEqual([9]);
+    if (!endFirst) expect(state.writes).toEqual([]);
+    expect(state.pending()).toBe(0);
+  } finally { connection.destroy(); await state.pump(); }
+});
+}
+
+for (const reason of [null, false, 0, ""]) {
+  test(`ServerResponse.destroy(${JSON.stringify(reason)}) follows socket falsy-error semantics`, async () => {
+    const state = fixture();
+    const { connection, response, socket } = state.server();
+    const events: string[] = [];
+    socket.on("error", () => events.push("socket-error"));
+    response.on("close", () => events.push("close"));
+    try {
+      expect(Reflect.apply(response.destroy, response, [reason])).toBe(response);
+      expect(response.destroyed).toBe(true);
+      expect(response.finished).toBe(false);
+      expect(response.writableEnded).toBe(false);
+      await state.pump();
+      expect(events).toEqual(["close"]);
+      expect(state.closed).toEqual([8]);
+      expect(state.pending()).toBe(0);
+    } finally { connection.destroy(); await state.pump(); }
+  });
+}
+
+for (const thrown of [undefined, null, false, 0, ""]) {
+  test(`response close preserves a thrown ${String(thrown)} after transport cleanup`, async () => {
+    const state = fixture();
+    const { connection, response } = state.server();
+    let caught = false;
+    let actual: unknown;
+    response.on("close", () => { throw thrown; });
+    try {
+      response.destroy();
+      try { state.flush(); } catch (value) { caught = true; actual = value; }
+      expect(caught).toBe(true);
+      expect(actual).toBe(thrown);
+      expect(state.closed).toEqual([8]);
+      expect(state.pending()).toBe(0);
+      expect(response.closed).toBe(true);
     } finally { connection.destroy(); await state.pump(); }
   });
 }
