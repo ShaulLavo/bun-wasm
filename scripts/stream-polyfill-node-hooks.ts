@@ -57,8 +57,85 @@ if (Object.values(counts).some(count => count !== 1)) throw new Error(`Stream co
 if (readerLockErrors !== 2) throw new Error(`Reader lock errors changed: ${readerLockErrors}`);
 const result = transformed.transformed[0];
 if (!result) throw new Error("Missing transformed streams source");
-const body = ts.createPrinter({ removeComments: true }).printFile(result);
+const body = directStreams(ts.createPrinter({ removeComments: true }).printFile(result));
 transformed.dispose();
+
+// The converted source dictionary named by the constructor's `"bytes" === dictionary.type` check.
+function bytesDictionary(node: ts.IfStatement): ts.Expression | undefined {
+  let condition = node.expression;
+  while (ts.isBinaryExpression(condition) && condition.operatorToken.kind === ts.SyntaxKind.CommaToken) condition = condition.right;
+  if (!ts.isBinaryExpression(condition) || condition.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken) return;
+  if (!ts.isStringLiteral(condition.left) || condition.left.text !== "bytes" || !ts.isPropertyAccessExpression(condition.right) || condition.right.name.text !== "type") return;
+  return condition.right.expression;
+}
+// Visits a ReadableStream constructor body. Once the bytes check names the
+// converted dictionary, `setup` may rewrite each later expression statement.
+type SetupRewrite = (node: ts.ExpressionStatement, dictionary: ts.Expression) => ts.Node | undefined;
+function constructorVisitor(context: ts.TransformationContext, setup: SetupRewrite): ts.Visitor {
+  let dictionary: ts.Expression | undefined;
+  const visit: ts.Visitor = child => {
+    if (ts.isIfStatement(child) && !dictionary) dictionary = bytesDictionary(child);
+    const rewritten = dictionary && ts.isExpressionStatement(child) ? setup(child, dictionary) : undefined;
+    return rewritten ?? ts.visitEachChild(child, visit, context);
+  };
+  return visit;
+}
+
+// Bun's `type: "direct"` sources: accept the type, then give the default
+// controller setup the runtime's direct source, a zero watermark and unit sizes.
+function directStreams(text: string): string {
+  const tree = ts.createSourceFile("ponyfill.mjs", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const applied = { type: 0, underlying: 0, setup: 0 };
+  const output = ts.transform(tree, [context => {
+    const f = context.factory;
+    const direct = (dictionary: ts.Expression) => f.createStrictEquality(f.createPropertyAccessExpression(dictionary, "type"), f.createStringLiteral("direct"));
+    function typeCheck(node: ts.IfStatement): ts.Node | undefined {
+      const condition = node.expression;
+      if (!ts.isBinaryExpression(condition) || condition.operatorToken.kind !== ts.SyntaxKind.ExclamationEqualsEqualsToken) return;
+      if (!ts.isStringLiteral(condition.left) || condition.left.text !== "bytes" || !node.thenStatement.getText(tree).includes("valid enumeration value for ReadableStreamType")) return;
+      const assigned = ts.isParenthesizedExpression(condition.right) ? condition.right.expression : condition.right;
+      if (!ts.isBinaryExpression(assigned) || !ts.isIdentifier(assigned.left)) throw new Error("Unexpected ReadableStreamType conversion");
+      applied.type++;
+      const accepted = f.createLogicalAnd(condition, f.createStrictInequality(f.createStringLiteral("direct"), assigned.left));
+      return f.updateIfStatement(node, accepted, node.thenStatement, node.elseStatement);
+    }
+    function setupCall(node: ts.ExpressionStatement, dictionary: ts.Expression): ts.Node | undefined {
+      const call = ts.isPrefixUnaryExpression(node.expression) ? node.expression.operand : undefined;
+      if (!call || !ts.isCallExpression(call) || !ts.isFunctionExpression(call.expression) || call.arguments.length !== 4) return;
+      const [self, source, mark, size] = call.arguments;
+      if (!self || self.kind !== ts.SyntaxKind.ThisKeyword || !source || !mark || !size || source.getText(tree) !== dictionary.getText(tree) || !ts.isCallExpression(mark)) return;
+      const strategy = mark.arguments[0];
+      if (!strategy) return;
+      applied.setup++;
+      const runtimeSource = f.createCallExpression(f.createIdentifier("__bunDirectSource"), undefined, [f.createIdentifier("__bunDirectUnderlying"), f.createPropertyAccessExpression(strategy, "highWaterMark")]);
+      const args = [self,
+        f.createConditionalExpression(direct(dictionary), undefined, runtimeSource, undefined, source),
+        f.createConditionalExpression(direct(dictionary), undefined, f.createNumericLiteral(0), undefined, mark),
+        f.createConditionalExpression(direct(dictionary), undefined, f.createIdentifier("__bunDirectSize"), undefined, size)];
+      return f.updateExpressionStatement(node, f.updatePrefixUnaryExpression(node.expression as ts.PrefixUnaryExpression, f.updateCallExpression(call, call.expression, call.typeArguments, args)));
+    }
+    function readableConstructor(node: ts.ConstructorDeclaration): ts.Node {
+      const raw = node.parameters[0]?.name;
+      if (!raw || !ts.isIdentifier(raw) || !node.body) throw new Error("Unexpected ReadableStream constructor");
+      const body = ts.visitEachChild(node.body, constructorVisitor(context, setupCall), context);
+      applied.underlying++;
+      const statements: ts.Statement[] = [f.createVariableStatement(undefined, f.createVariableDeclarationList([f.createVariableDeclaration("__bunDirectUnderlying", undefined, undefined, raw)], ts.NodeFlags.Const))];
+      return f.updateConstructorDeclaration(node, node.modifiers, node.parameters, f.updateBlock(body, statements.concat(body.statements)));
+    }
+    const visit: ts.Visitor = node => {
+      if (ts.isIfStatement(node)) return typeCheck(node) ?? ts.visitEachChild(node, visit, context);
+      if (ts.isConstructorDeclaration(node) && ts.isClassDeclaration(node.parent) && node.parent.name?.text === "ReadableStream") return readableConstructor(node);
+      return ts.visitEachChild(node, visit, context);
+    };
+    return node => ts.visitEachChild(node, visit, context);
+  }]);
+  if (Object.values(applied).some(count => count !== 1)) throw new Error(`Direct stream hooks changed: ${JSON.stringify(applied)}`);
+  const printed = output.transformed[0];
+  if (!printed) throw new Error("Missing direct streams source");
+  const directText = ts.createPrinter({ removeComments: true }).printFile(printed);
+  output.dispose();
+  return directText;
+}
 const hooks = `function __bunNodeInvalidState(message) {
   return Object.assign(new TypeError(message), { code: "ERR_INVALID_STATE" });
 }
@@ -71,6 +148,11 @@ function __bunNodeStreamInit(stream) {
 }
 function __bunNodeStreamClose(stream) { __bunNodeStreamRecords.get(stream).resolve(); }
 function __bunNodeStreamError(stream, reason) { __bunNodeStreamRecords.get(stream).reject(reason); }
+function __bunDirectSource(source, highWaterMark) {
+  if (Number.isNaN(highWaterMark) || highWaterMark < 0) throw new RangeError("Invalid direct stream highWaterMark");
+  return internal.require("direct_stream").directSource(source, highWaterMark || 65536, () => {});
+}
+function __bunDirectSize() { return 1; }
 `;
 const expose = `for (const Ctor of [ReadableStream, WritableStream]) {
   Object.defineProperty(Ctor.prototype, Symbol.for("nodejs.webstream.isClosedPromise"), {

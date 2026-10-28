@@ -35,6 +35,7 @@ beforeAll(async () => {
   mkdirSync(out);
   symlinkSync(join(root, "scripts"), join(scratch, "scripts"));
   symlinkSync(join(root, "vendor"), join(scratch, "vendor"));
+  symlinkSync(join(root, "web"), join(scratch, "web"));
   const harness = join(scratch, "embed.rs");
   writeFileSync(harness, `
 #[path = ${JSON.stringify(join(root, "crates/bunwasm-runtime/build/polyfills.rs"))}]
@@ -102,7 +103,9 @@ test("embeds the converted runtime factories under their original names", async 
   expect(table).not.toContain(source);
   expect(result.stderr.match(/runtime-js launch phase=strip /g)).toHaveLength(1);
   expect(result.stderr.match(/runtime-js launch phase=compact /g)).toHaveLength(1);
-  expect(result.stderr.match(/runtime-js phase=wrap /g)).toHaveLength(1);
+  expect(result.stderr.match(/runtime-js phase=bun_wrap /g)).toHaveLength(1);
+  expect(result.stderr.match(/runtime-js phase=direct_stream /g)).toHaveLength(1);
+  expect(table).toContain('("direct_stream", include_str!(');
   expect(table).toContain('("glob", include_str!(');
   expect(table).toContain('("bun_builtin_globals", include_str!(');
   // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.

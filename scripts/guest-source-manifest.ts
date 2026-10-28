@@ -135,7 +135,7 @@ async function verifySysrootInputs(options: SourceOptions, groups: readonly Inpu
 export async function captureSourceManifest(options: SourceOptions): Promise<SourceManifest> {
   const { repository, build, sysroot, sdk, waffle, boringssl, rustTargetLib } = options;
   const source = { head: git(repository, "rev-parse", "HEAD"), tree: git(repository, "rev-parse", "HEAD^{tree}") };
-  const groups = [await committedGroup("repository", repository, ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "package.json", "bun.lock", "crates", "third_party", "scripts", "patches", "jsc"])];
+  const groups = [await committedGroup("repository", repository, ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "package.json", "bun.lock", "crates", "third_party", "scripts", "patches", "jsc", "web/src/native-direct-stream.ts"])];
   const bun = join(repository, "vendor/bun");
   await committedGroup("bun", bun, ["src", "Cargo.toml", "Cargo.lock"], "within-repository");
   groups.push(await group("bun", bun, ["src", "Cargo.toml", "Cargo.lock", "build/debug/codegen", "vendor/lolhtml", "vendor/rust-argon2"]));
