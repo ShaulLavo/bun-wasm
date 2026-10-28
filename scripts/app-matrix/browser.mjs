@@ -4,14 +4,16 @@ import { pathToFileURL } from "node:url";
 import { projectFiles } from "./apps.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
 import { boundedCleanup, closeOwnedBrowser, closeOwnedContext, HarnessCleanupError, withCleanupFailures } from "./cleanup.ts";
-import { browserDiagnostics } from "./browser-diagnostics.ts";
+import { browserDiagnostics, redactDiagnosticText } from "./browser-diagnostics.ts";
 import { verifyBrowserServer, stoppedPreviewError } from "./server-browser.ts";
 import { observeHmr } from "./hmr.ts";
-import { observeProductTraffic, productObservations } from "./product-browser.ts";
+import { observeProductTraffic, observeNativeProductTraffic, productObservations } from "./product-browser.ts";
 import { failure, stageOutput } from "./classify.ts";
 import { BlockedBrowserNetworkError } from "./product-campaign.ts";
 import { browserRegistryRoute } from "./registry-request.ts";
+import { observePreviewPaths, readPreviewPaths, readPreviewPorts } from "./preview-paths.ts";
 import { browserCommand, browserLauncher, resetBrowserProject } from "./browser-environment.ts";
+import { stopMatrixServer } from "./keyboard-stop.ts";
 
 export function earlyServerExit(command, stage) {
   const classified = failure(command.output, stage);
@@ -28,9 +30,20 @@ function guestSource(page) {
   };
 }
 
+async function recordPreviewPaths({ enabled, owner, preview, url, since, output, observations }) {
+  if (!enabled) return;
+  const browserPath = await preview.evaluate(() => location.pathname);
+  const forwarded = (await owner.evaluate(readPreviewPaths)).filter(entry => entry.sequence > since && entry.port === 3137 && entry.method === "GET" && new URL(entry.target, url).pathname === "/");
+  writeFileSync(output, JSON.stringify({ browserPath, forwarded }, null, 2) + "\n");
+  if (browserPath !== "/" || !forwarded.length) throw new Error("Root preview caller/server paths did not agree");
+  observations.push({ stage: "root-paths", status: "pass", assertion: `Caller pathname /; actual forwarded server request targets: ${forwarded.map(entry => entry.target).join(", ")}` });
+}
+
 export async function serverCommand({ page, context, command, app, engine, options, terminalText }) {
   const text = browserCommand(command.args.map(arg => arg.replaceAll("{port}", "3137"))).join(" ");
   const started = performance.now();
+  const portBaseline = options.previewOrigins ? await page.evaluate(readPreviewPorts) : [];
+  const pathStart = options.previewOrigins ? (await page.evaluate(readPreviewPaths)).at(-1)?.sequence ?? 0 : 0;
   const timings = {};
   await page.evaluate(text => {
     globalThis.__matrixDone = false;
@@ -46,9 +59,9 @@ export async function serverCommand({ page, context, command, app, engine, optio
   }
   const preview = await context.newPage();
   const previewDiagnostics = browserDiagnostics(preview);
-  const traffic = await observeProductTraffic(preview);
+  const traffic = options.previewOrigins ? await observeNativeProductTraffic(preview) : await observeProductTraffic(preview);
   const errors = [];
-  preview.on("pageerror", error => errors.push(String(error)));
+  preview.on("pageerror", error => errors.push(redactDiagnosticText(String(error))));
   let checked;
   let url;
   let captured = false;
@@ -59,9 +72,14 @@ export async function serverCommand({ page, context, command, app, engine, optio
     if (failed) cleanupFailures.push(failed);
   };
   const verifyStopped = async () => {
-    const error = await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`));
+    const error = await stoppedPreviewError(preview, url, options.timeout, join(options.output, `${app.id}-${engine}-stopped.json`), options.previewOrigins ? "root" : "mounted");
     if (error) checked = { status: "fail", ...failure(error, command.name) };
-    else checked.assertion += "; guest stop removes preview listener (502)";
+    else {
+      const ports = options.previewOrigins ? await page.evaluate(readPreviewPorts) : [];
+      const leftover = ports.filter(port => !portBaseline.includes(port));
+      if (leftover.length) throw new Error(`Guest stop retained virtual preview ports: ${leftover.join(", ")}`);
+      checked.assertion += "; guest stop removes preview listeners";
+    }
   };
   try {
     const previewState = await page.evaluate(() => globalThis.playground.previews.ready);
@@ -71,17 +89,20 @@ export async function serverCommand({ page, context, command, app, engine, optio
     const response = await preview.goto(url, { timeout: options.timeout });
     if (!response?.ok()) throw new Error(`Preview HTTP ${response?.status()}`);
     const check = command.check;
-    if (!response.fromServiceWorker()) throw new Error("Preview response bypassed the service worker");
+    if (options.previewOrigins) {
+      if (response.fromServiceWorker() || new URL(url).pathname !== "/" || new URL(url).origin === new URL(page.url()).origin) throw new Error("Root preview did not use its dedicated host origin");
+    } else if (!response.fromServiceWorker()) throw new Error("Preview response bypassed the service worker");
     await preview.locator(check.kind === "http" ? "body" : check.selector).filter({ hasText: check.text }).waitFor({ timeout: options.timeout });
     timings.pageLoadMs = since(loading);
-    const contract = check.framework ? await verifyBrowserServer(preview, url, check.framework, options.timeout, join(options.output, `${app.id}-${engine}-requests.json`)) : "";
+    const contract = check.framework ? await verifyBrowserServer(preview, url, check.framework, options.timeout, join(options.output, `${app.id}-${engine}-requests.json`), options.previewOrigins ? "root" : "mounted") : "";
     if (errors.length) throw new Error(errors.join("\n"));
     if (await page.evaluate(() => globalThis.__matrixDone)) {
       checked = earlyServerExit({ code: await page.evaluate(() => globalThis.playground.shell.lastExit), output: await output() }, command.name);
     } else {
       await preview.screenshot({ path: join(options.output, `${app.id}-${engine}-playground-${command.name}.png`) });
       const observations = await productObservations(preview, url, check, guestSource(page), traffic, options.timeout);
-      checked = { status: "pass", assertion: `Service-worker preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations, timings };
+      await recordPreviewPaths({ enabled: options.previewOrigins, owner: page, preview, url, since: pathStart, output: join(options.output, `${app.id}-${engine}-${command.name}-paths.json`), observations });
+      checked = { status: "pass", assertion: `${options.previewOrigins ? "Root-origin" : "Service-worker"} preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations, timings };
     }
   } catch (error) {
     let diagnostic = "";
@@ -90,10 +111,11 @@ export async function serverCommand({ page, context, command, app, engine, optio
     checked = { status: "fail", ...failure(`${diagnostic}\n${String(error)}`, command.name), productError: String(error), timings, browserDiagnostics: previewDiagnostics() };
   } finally {
     if (!captured) await release("terminal-capture", () => terminalText(page));
-    await release("server-stop", () => page.evaluate(async () => { globalThis.playground.shell.input("\x03"); await globalThis.__matrixCommand; }));
-    if (!cleanupFailures.length && checked?.status === "pass" && command.check.framework) {
+    await release("server-stop", () => stopMatrixServer(page));
+    if (!cleanupFailures.length && checked?.status === "pass" && (command.check.framework || options.previewOrigins)) {
       await release("stopped-preview", verifyStopped, options.timeout);
     }
+    await release("browser-diagnostics", () => writeFileSync(join(options.output, `${app.id}-${engine}-${command.name}-browser.json`), JSON.stringify({ errors, ...previewDiagnostics() }, null, 2) + "\n"));
     await release("traffic-close", () => traffic.close());
     await release("preview-close", () => preview.close());
   }
@@ -136,10 +158,10 @@ export async function browserHost({ root, options, launch, stop }) {
   async function serve() {
     if (base) return base;
     const logfile = join(options.output, "playground-server.log");
-    server = launch(["bun", join(root, "web/serve.ts")], root, logfile, { PORT: "0" });
+    server = launch(["bun", join(root, "web/serve.ts")], root, logfile, { PORT: "0", PREVIEW_ORIGINS: options.previewOrigins ? "1" : "0" });
     for (let i = 0; i < 200; i++) {
       const match = readFileSync(logfile, "utf8").match(/at (http:\/\/\S+)/);
-      if (match) { base = match[1]; return base; }
+      if (match) { base = options.previewOrigins ? `${match[1]}?root-previews` : match[1]; return base; }
       if (server.child.exitCode !== null) throw new Error("Playground server exited");
       await new Promise(resolve => setTimeout(resolve, 50));
     }
@@ -153,7 +175,7 @@ export async function browserHost({ root, options, launch, stop }) {
     const deadline = Date.now() + timeout;
     const remaining = () => Math.max(1, deadline - Date.now());
     const errors = [];
-    page.on("pageerror", error => errors.push(String(error)));
+    page.on("pageerror", error => errors.push(redactDiagnosticText(String(error))));
     let checked;
     let productError;
     try {
@@ -199,10 +221,13 @@ export async function browserHost({ root, options, launch, stop }) {
       const base = await serve();
       const loading = performance.now();
       const diagnostics = browserDiagnostics(page);
-      await page.goto(`${base}?engine=${engine}`);
+      const playgroundURL = new URL(base);
+      playgroundURL.searchParams.set("engine", engine);
+      await page.goto(playgroundURL.href);
       const status = await ready(page);
       if (!status.includes("ready")) throw await engineLoadFailure(page, engine, status, diagnostics, run);
       const engineReadyMs = since(loading);
+      if (options.previewOrigins) await page.evaluate(observePreviewPaths);
       await page.evaluate(resetBrowserProject);
       for (const [path, contents] of Object.entries(projectFiles(app, registry))) await writeFile(page, `/home/user/${path}`, contents);
       await writeFile(page, "/home/user/.matrix-command.ts", browserLauncher);

@@ -77,21 +77,18 @@
     "bench:engines": "bun scripts/bench-engines.ts"
   },
   "peerDependencies": {
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#8a6b0fb75021b961e9e270ac57f09cde2c2b7127"
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.91/waffle-0.0.91.tgz"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#8a6b0fb75021b961e9e270ac57f09cde2c2b7127",
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.91/waffle-0.0.91.tgz",
     "jscpd": "5.4.1",
     "knip": "6.41.0",
     "oxlint": "1.88.0",
     "wrangler": "4.151.0",
     "playwright": "1.64.1"
-  },
-  "trustedDependencies": [
-    "waffle"
-  ]
+  }
 }

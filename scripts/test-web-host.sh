@@ -6,14 +6,10 @@ phase="${1:-all}"
 case "$phase" in --setup|--unit|--browser|all) ;; *) echo "usage: $0 [--setup|--unit|--browser]" >&2; exit 2 ;; esac
 
 if [[ "$phase" != --browser ]]; then
-  # Keep unrelated root lifecycles suppressed; prepare only the selected Waffle below.
+  # Release archives already contain prepared Node modules and network assets.
   (cd "$root" && bun install --frozen-lockfile --ignore-scripts)
-  # Both applications consume Waffle as the exact Git dependency recorded in their locks.
-  (cd "$root/web" && bun install --frozen-lockfile)
-  (cd "$root/sandbox" && bun install --frozen-lockfile)
-  # Reuse the consuming app's exact-input network bytes, never compile them twice.
-  cp "$root/web/node_modules/waffle/browser/net/"network.{wasm,input-hash,sha256} "$root/node_modules/waffle/browser/net/"
-  (cd "$root" && WAFFLE_NETWORK_PREBUILT=1 bun node_modules/waffle/prepare.ts)
+  (cd "$root/web" && bun install --frozen-lockfile --ignore-scripts)
+  (cd "$root/sandbox" && bun install --frozen-lockfile --ignore-scripts)
   [[ "$phase" != --setup ]] || exit 0
   (
     cd "$root/web"

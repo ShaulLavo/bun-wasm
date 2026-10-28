@@ -25,7 +25,7 @@ export class WorkerJobs<W extends object> {
   private readonly identities = new Map<W, ProcessWorker | Error>();
   private readonly admissions = new Map<number, Admission>();
   private sequence = 0;
-  constructor(private readonly live: ReadonlySet<W>) {}
+  constructor(private readonly live: ReadonlySet<W>, private readonly isIdleWorker: (worker: W) => boolean) {}
 
   admission(event: ProcessAdmissionEvent, record?: Pick<ProcessRecord, "request" | "rootPid">) {
     let entry = this.admissions.get(event.pid);
@@ -47,6 +47,12 @@ export class WorkerJobs<W extends object> {
     }
   }
 
+  private idle(worker: W): boolean {
+    if (!this.isIdleWorker(worker)) return false;
+    if (this.identities.has(worker)) throw new Error("Idle worker already received a process request");
+    return true;
+  }
+
   private identity(worker: W) {
     const identity = this.identities.get(worker);
     if (identity instanceof Error) throw identity;
@@ -61,7 +67,7 @@ export class WorkerJobs<W extends object> {
   baseline(rootPid: number): Scope<W> {
     const root = this.process(rootPid);
     if (!root || root instanceof Error || root.rootPid !== rootPid || root.parentPid !== 0) throw new Error("Interactive root worker ownership missing");
-    return { baseline: new Set(this.live), root, after: this.sequence };
+    return { baseline: new Set(Array.from(this.live).filter(worker => !this.idle(worker))), root, after: this.sequence };
   }
 
   command(scope: Scope<W>): Scope<W> { return { ...scope, after: this.sequence }; }
@@ -101,7 +107,7 @@ export class WorkerJobs<W extends object> {
   foreground(scope: Scope<W>) {
     const jobs = new Set<number>();
     for (const worker of this.live) {
-      if (scope.baseline.has(worker)) continue;
+      if (scope.baseline.has(worker) || this.idle(worker)) continue;
       const entry = this.member(worker, scope);
       if (entry.sequence > scope.after && this.cohort(entry, scope) === "foreground") jobs.add(entry.job);
     }
@@ -120,7 +126,7 @@ export class WorkerJobs<W extends object> {
       if (cohort === "foreground" && !["launched", "rejected", "skipped"].includes(entry.stage)) throw new Error(`Unresolved foreground launch PID ${entry.pid}`);
     }
     for (const worker of this.live) {
-      if (scope.baseline.has(worker)) continue;
+      if (scope.baseline.has(worker) || this.idle(worker)) continue;
       const entry = this.member(worker, scope);
       const identity = this.identity(worker);
       if (this.cohort(entry, scope) === "foreground" || foreground.has(entry.job)) throw new Error(`Foreground worker PID ${entry.pid} job ${entry.job} not physically stopped before prompt`);

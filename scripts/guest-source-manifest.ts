@@ -2,6 +2,7 @@ import { programKindForBuild } from "../src/engine-kind.ts";
 import { realpathSync } from "node:fs";
 import { lstat, readdir, readFile, readlink, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { waffleNativeDirectory } from "./waffle-release-inputs";
 
 export const guestBuilds = {
   browser: { artifact: "bun-browser.wasm", package: "bunwasm-cli", features: ["engine-host", "bun-transpiler", "bun-build"], optimizer: "required" },
@@ -177,7 +178,7 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
       "Allowlisted start/end snapshots detect persistent drift, not changes restored between snapshots, an observed compiler dependency graph or proof of execution.",
       "Cargo registry/git cache source bytes are not inventoried; Cargo.lock records resolutions and registry checksums.",
       "Ambient environment, user/global Cargo configuration, host shared libraries and intermediate build-cache provenance are not inventoried.",
-      "Waffle browser runtime is not compiled into this guest; only its installed libc builder and patch are inventoried.",
+      "Waffle browser runtime is not compiled into this guest; only its checksum-verified released-source libc builder and patch are inventoried.",
       "JSC/tools prebuild archives, compiler flags and input stamp identify linked inputs; direct tools Yarr sources are inventoried, but remaining WebKit/ICU headers and full prebuild source closure are not. JSC embedding receipt remains separate.",
     ],
   };
@@ -282,7 +283,7 @@ export function sourceOptions(repository: string, sysroot: string, build: GuestB
   }
   return {
     repository, sysroot, build, sdk, tools,
-    waffle: resolve(realpathSync(Bun.resolveSync("waffle/package.json", repository)), ".."),
+    waffle: waffleNativeDirectory(),
     boringssl: process.env.BUNWASM_BORINGSSL_SOURCE ?? join(repository, "vendor/boringssl"),
     rustTargetLib: run([rust.rustc, "--print", "target-libdir", "--target", "wasm32-wasip1"], repository),
     rustSourceLib: programKindForBuild(build) === "single" ? undefined : join(run([rust.rustc, "--print", "sysroot"], repository), "lib/rustlib/src/rust/library"),

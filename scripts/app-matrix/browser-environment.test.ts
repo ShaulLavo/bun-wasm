@@ -51,12 +51,13 @@ test("the browser runner installs and uses the environment launcher and registry
 });
 
 test("server rows record elapsed ready and page-load times", async () => {
-  const page = { evaluate: async (fn: { toString(): string }, text?: string) => {
+  const page = { click: async () => {}, keyboard: { press: async () => {} }, waitForFunction: async () => {}, evaluate: async (fn: { toString(): string }, text?: string) => {
     if (text) return;
     const source = fn.toString();
     if (source.includes("serving:")) return { done: false, serving: true };
     if (source.includes("previews.ready")) return "ready";
     if (source.includes("previews.url")) return "http://127.0.0.1/preview";
+    if (source.includes("__matrixCommand")) return 130;
     return false;
   } };
   const disposable = async () => ({ dispose: async () => {} });
@@ -269,4 +270,17 @@ test("the browser clears fixture sources after readiness and before project over
   expect(reset).toBeGreaterThan(guard);
   expect(write).toBeGreaterThan(reset);
   expect(install).toBeGreaterThan(write);
+});
+
+
+test("browser routing retains the complete loopback range for dedicated preview origins", async () => {
+  for (const url of ["http://127.23.45.67:3137/", "http://127.255.255.254/", "http://[::1]:3137/"]) {
+    const result = await replayControl(url);
+    expect(result.continued).toBe(true);
+    expect(result.aborted).toBe(false);
+    expect(result.requests).toEqual([]);
+  }
+  const foreign = await replayControl("http://128.0.0.1:3137/");
+  expect(foreign.continued).toBe(false);
+  expect(foreign.aborted).toBe(true);
 });
