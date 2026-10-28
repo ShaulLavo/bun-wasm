@@ -62,23 +62,18 @@ test("server rows record elapsed ready and page-load times", async () => {
   } };
   const disposable = async () => ({ dispose: async () => {} });
   const preview = {
-    on() {}, exposeBinding: disposable, addInitScript: disposable,
-    evaluate: async (fn: (arg: unknown) => unknown, arg: unknown) => {
-      if (arg === undefined) return;
-      const previous = globalThis.fetch;
-      globalThis.fetch = Object.assign(async () => new Response("matrix", { status: 200 }), { preconnect: previous.preconnect });
-      try { return await fn(arg); }
-      finally { globalThis.fetch = previous; }
-    },
-    goto: async () => ({ ok: () => true, status: () => 200, text: async () => "matrix", fromServiceWorker: () => true }),
+    on() {}, exposeBinding: disposable, addInitScript: disposable, evaluate: async () => {},
+    goto: async () => ({ ok: () => true, fromServiceWorker: () => true }),
     locator: () => ({ filter: () => ({ waitFor: async () => {} }) }),
     screenshot: async () => {}, close: async () => {},
   };
+  const probe = { context: () => ({ newCDPSession: async () => ({ send: async () => {} }) }), goto: async () => ({ ok: () => true, status: () => 200 }), close: async () => {} };
+  const pages = [preview, probe];
   let clock = 0;
   const now = spyOn(performance, "now").mockImplementation(() => clock += 100);
   try {
     const result = await serverCommand({
-      page, context: { newPage: async () => preview }, app: { id: "timing-fixture" }, engine: "hermes",
+      page, context: { newPage: async () => pages.shift() }, app: { id: "timing-fixture" }, engine: "hermes",
       command: { name: "start", args: ["run", "server.ts"], check: { kind: "http", text: "matrix" } },
       options: { timeout: 1000, output: tmpdir() }, terminalText: async () => "",
     });

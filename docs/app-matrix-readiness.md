@@ -5,11 +5,13 @@ The fullstack fixture owns that knowledge. The browser driver uses declared DOM 
 HTML actionability, rather than framework internals, delays, repeated clicks or global flags.
 
 A listening preview port is not an HTTP-ready application. Before the one page navigation, the browser
-runner opens a probe page at the preview root, then probes the response through that actual preview
-origin. It retries only HTTP 503 responses,
-using the existing absolute command deadline. A non-503 failure or a transport error fails immediately.
-If 503 continues until the deadline, the runner reports the last response body. After a successful
-probe, the runner navigates once.
+runner opens a probe page in the preview's own browser context and turns off its script execution, so
+neither the loading page nor the application runs there. The probe navigates to the preview URL the same
+way the application page will: through the mounted service worker or the root preview origin, the
+context's network routing and ordinary redirects. It retries only HTTP 503 responses, within the
+existing absolute command deadline, which also bounds response headers and bodies. A non-503 failure or
+a navigation error fails immediately with its original error. If 503 continues until the deadline, the
+runner reports the last complete 503 body. The runner closes the probe, then navigates once.
 
 TanStack Start and SvelteKit publish `data-hydrated="true"` on the marker after their client mount
 lifecycle runs. Their page selector includes that attribute, so the first source edit cannot race

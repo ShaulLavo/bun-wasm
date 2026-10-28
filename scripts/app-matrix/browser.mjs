@@ -65,7 +65,6 @@ export async function serverCommand({ page, context, command, app, engine, optio
   preview.on("pageerror", error => errors.push(redactDiagnosticText(String(error))));
   let checked;
   let url;
-  let probe;
   let captured = false;
   const cleanupFailures = [];
   const cleanupTimeout = options.cleanupTimeout ?? 10_000;
@@ -87,8 +86,9 @@ export async function serverCommand({ page, context, command, app, engine, optio
     const previewState = await page.evaluate(() => globalThis.playground.previews.ready);
     if (previewState !== "ready") throw new Error(`Preview service worker is ${previewState}`);
     url = await page.evaluate(() => globalThis.playground.previews.url(3137));
-    probe = await context.newPage();
-    await waitForPreviewReady(probe, url, deadline);
+    const probe = await context.newPage();
+    try { await waitForPreviewReady(probe, url, deadline); }
+    finally { await release("probe-close", () => probe.close()); }
     timings.httpReadyMs = since(started);
     const loading = performance.now();
     const response = await preview.goto(url, { timeout: remaining() });
@@ -121,7 +121,6 @@ export async function serverCommand({ page, context, command, app, engine, optio
       await release("stopped-preview", verifyStopped, options.timeout);
     }
     await release("browser-diagnostics", () => writeFileSync(join(options.output, `${app.id}-${engine}-${command.name}-browser.json`), JSON.stringify({ errors, ...previewDiagnostics() }, null, 2) + "\n"));
-    await release("probe-close", () => probe && probe !== preview ? probe.close() : undefined);
     await release("traffic-close", () => traffic.close());
     await release("preview-close", () => preview.close());
   }

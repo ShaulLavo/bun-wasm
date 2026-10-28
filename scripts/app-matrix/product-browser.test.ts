@@ -159,9 +159,7 @@ function fixture(options: FixtureOptions): Fixture {
       });
       return { async dispose() { bindings.delete(name); delete context[name]; } };
     },
-    async evaluate<T, Arg = undefined>(pageFunction: (arg: Arg) => T | Promise<T>, arg?: Arg) {
-      return runInContext(`(${pageFunction.toString()})(${arg === undefined ? "undefined" : JSON.stringify(arg)})`, context);
-    },
+    async evaluate<T>(pageFunction: () => T) { return runInContext(`(${pageFunction.toString()})()`, context); },
     locator,
     async goto(url) {
       visits.push(url);
@@ -526,39 +524,42 @@ test("empty update and generic Next envelopes do not qualify HMR", async () => {
 });
 
 
-test("waits for a listening server's transient HTTP 503 before one page navigation", async () => {
-  const probeStatuses = [503, 200];
-  let probeIndex = 0;
-  let probeNavigations = 0;
-  let pageNavigations = 0;
-  const response = (status: number, body: string) => ({
-    ok: () => status >= 200 && status < 300,
-    status: () => status,
-    text: async () => body,
-    headers: () => ({}),
-    fromServiceWorker: () => true,
-  });
-  const evaluate = async (fn: (arg?: unknown) => unknown, arg?: unknown) => {
-    if (arg === undefined) return undefined;
-    const previous = globalThis.fetch;
-    globalThis.fetch = Object.assign(async () => {
-      const status = probeStatuses[probeIndex++] ?? 200;
-      return new Response(status === 503 ? "server is starting" : "ready", { status });
-    }, { preconnect: previous.preconnect });
-    try { return await fn(arg); }
-    finally { globalThis.fetch = previous; }
-  };
+interface ReadinessResponse {
+  status: number;
+  body: string;
+}
+
+function readinessResponse({ status, body }: ReadinessResponse) {
+  return { ok: () => status >= 200 && status < 300, status: () => status, text: async () => body, headers: () => ({}), fromServiceWorker: () => true };
+}
+
+/** A probe page double: one scripted response per navigation, the last one repeating. */
+function readinessProbe(responses: readonly ReadinessResponse[], log: string[] = []) {
+  let navigations = 0;
   const probe = {
-    evaluate,
-    goto: async () => { probeNavigations++; return response(503, "server is starting"); },
-    close: async () => {},
+    get navigations() { return navigations; },
+    context: () => ({ newCDPSession: async () => ({ send: async (method: string, params: { value: boolean }) => { log.push(`${method}:${params.value}`); } }) }),
+    async goto(_url: string, options: { timeout: number; waitUntil: "commit" }) {
+      log.push(`goto:${options.waitUntil}`);
+      const response = responses[navigations] ?? responses.at(-1);
+      navigations++;
+      if (!response) throw new Error("Missing readiness response");
+      return readinessResponse(response);
+    },
+    close: async () => { log.push("probe-close"); },
   };
+  return probe;
+}
+
+test("waits for a listening server's transient HTTP 503 and closes the probe before one page navigation", async () => {
+  const log: string[] = [];
+  const probe = readinessProbe([{ status: 503, body: "server is starting" }, { status: 200, body: "ready" }], log);
   const preview = {
     on() {},
     exposeBinding: async () => ({ dispose: async () => {} }),
     addInitScript: async () => ({ dispose: async () => {} }),
-    evaluate,
-    goto: async () => { pageNavigations++; return response(200, "ready"); },
+    evaluate: async () => {},
+    goto: async () => { log.push("page-navigation"); return readinessResponse({ status: 200, body: "ready" }); },
     locator: () => ({ filter: () => ({ waitFor: async () => {} }) }),
     screenshot: async () => {},
     close: async () => {},
@@ -578,121 +579,43 @@ test("waits for a listening server's transient HTTP 503 before one page navigati
     keyboard: { press: async () => {} },
     waitForFunction: async () => {},
   };
-  let created = 0;
+  const pages = [preview, probe];
   const result = await serverCommand({
     page,
-    context: { newPage: async () => { created++; return created === 1 ? preview : probe; } },
+    context: { newPage: async () => pages.shift() },
     command: { name: "dev", args: ["run", "dev"], check: { kind: "http", text: "ready" } },
     app: { id: "readiness-fixture" },
     engine: "browser",
-    options: { timeout: 1_000, output: "/tmp" },
+    options: { timeout: 1_000, output: process.env.TMPDIR ?? "/tmp" },
     terminalText: async () => "",
   });
   expect(result.status).toBe("pass");
-  expect(probeIndex).toBe(2);
-  expect(probeNavigations).toBe(1);
-  expect(pageNavigations).toBe(1);
+  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit", "goto:commit", "probe-close", "page-navigation"]);
 });
 
-interface ReadinessResponse {
-  status: number;
-  body: string;
-}
-
-function readinessPage(navigation: ReadinessResponse, responses: readonly ReadinessResponse[]) {
-  let calls = 0;
-  const page = {
-    get calls() { return calls; },
-    async goto() {
-      return {
-        ok: () => navigation.status >= 200 && navigation.status < 300,
-        status: () => navigation.status,
-        text: async () => navigation.body,
-        headers: () => ({}),
-      };
-    },
-    async evaluate<T, Arg>(fn: (arg: Arg) => T | Promise<T>, arg: Arg): Promise<Awaited<T>> {
-      const previous = globalThis.fetch;
-      globalThis.fetch = Object.assign(async (_input: Parameters<typeof fetch>[0], _init: Parameters<typeof fetch>[1]) => {
-        const response = responses[calls] ?? responses.at(-1);
-        if (!response) throw new Error("Missing readiness response");
-        calls++;
-        return new Response(response.body, { status: response.status });
-      }, { preconnect: previous.preconnect });
-      try { return await fn(arg); }
-      finally { globalThis.fetch = previous; }
-    },
-  };
-  return page;
-}
-
-test("a fast HTTP 200 readiness response performs one navigation probe", async () => {
-  const page = readinessPage({ status: 200, body: "ready" }, []);
-  await waitForPreviewReady(page, "http://local/", Date.now() + 1_000);
-  expect(page.calls).toBe(0);
+test("a fast HTTP 2xx readiness response needs one script-disabled probe navigation", async () => {
+  const log: string[] = [];
+  const probe = readinessProbe([{ status: 200, body: "ready" }], log);
+  await waitForPreviewReady(probe, "http://local/", Date.now() + 1_000);
+  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit"]);
 });
 
-test("persistent HTTP 503 readiness failure retains the last response body", async () => {
-  const page = readinessPage({ status: 503, body: "Nuxt dev server is starting..." }, [{ status: 503, body: "Nuxt dev server is starting..." }]);
+test("persistent HTTP 503 readiness failure retains the last response body at the deadline", async () => {
+  const probe = readinessProbe([{ status: 503, body: "first" }, { status: 503, body: "Nuxt dev server is starting..." }]);
   const started = performance.now();
-  await expect(waitForPreviewReady(page, "http://local/", Date.now() + 20)).rejects.toThrow("Nuxt dev server is starting...");
-  expect(performance.now() - started).toBeLessThan(200);
-  expect(page.calls).toBe(1);
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 150)).rejects.toThrow("last HTTP 503: Nuxt dev server is starting...");
+  expect(performance.now() - started).toBeLessThan(400);
+  expect(probe.navigations).toBeGreaterThan(1);
 });
 
 test("an unexpected HTTP status fails without a retry", async () => {
-  const page = readinessPage({ status: 500, body: "server crashed" }, [{ status: 200, body: "ready" }]);
-  await expect(waitForPreviewReady(page, "http://local/", Date.now() + 1_000)).rejects.toThrow("Preview HTTP 500: server crashed");
-  expect(page.calls).toBe(0);
+  const probe = readinessProbe([{ status: 500, body: "server crashed" }, { status: 200, body: "ready" }]);
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 1_000)).rejects.toThrow("Preview HTTP 500: server crashed");
+  expect(probe.navigations).toBe(1);
 });
 
-test("bounds the initial response body read by the shared deadline", async () => {
-  const response = { ok: () => false, status: () => 503, text: async () => new Promise<string>(() => {}), headers: () => ({}) };
-  const page = {
-    goto: async () => response,
-    evaluate: async () => { throw new Error("readiness probe must not start"); },
-  };
-  const started = performance.now();
-  await expect(waitForPreviewReady(page, "http://local/", Date.now() + 20)).rejects.toThrow("response body unavailable");
-  expect(performance.now() - started).toBeLessThan(200);
-});
-
-test("aborts an in-flight readiness body at the shared deadline and retains the last 503 body", async () => {
-  let fetchCalls = 0;
-  const page = {
-    goto: async () => ({ ok: () => false, status: () => 503, text: async () => "last 503 body", headers: () => ({}) }),
-    async evaluate<T, Arg>(fn: (arg: Arg) => T | Promise<T>, arg: Arg): Promise<Awaited<T>> {
-      const previous = globalThis.fetch;
-      globalThis.fetch = Object.assign(async (_input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
-        fetchCalls++;
-        const signal = init?.signal;
-        const body = new ReadableStream<Uint8Array>({
-          start(controller) {
-            signal?.addEventListener("abort", () => controller.error(signal.reason), { once: true });
-          },
-        });
-        return new Response(body, { status: 503 });
-      }, { preconnect: previous.preconnect });
-      try { return await fn(arg); }
-      finally { globalThis.fetch = previous; }
-    },
-  };
-  const started = performance.now();
-  await expect(waitForPreviewReady(page, "http://local/", Date.now() + 50)).rejects.toThrow("last 503 body");
-  expect(performance.now() - started).toBeLessThan(254);
-  expect(fetchCalls).toBe(1);
-});
-
-test("preserves a non-deadline readiness transport error", async () => {
-  const transportError = new Error("loopback transport failed");
-  const page = {
-    goto: async () => ({ ok: () => false, status: () => 503, text: async () => "last 503 body", headers: () => ({}) }),
-    async evaluate<T, Arg>(fn: (arg: Arg) => T | Promise<T>, arg: Arg): Promise<Awaited<T>> {
-      const previous = globalThis.fetch;
-      globalThis.fetch = Object.assign(async () => { throw transportError; }, { preconnect: previous.preconnect });
-      try { return await fn(arg); }
-      finally { globalThis.fetch = previous; }
-    },
-  };
-  await expect(waitForPreviewReady(page, "http://local/", Date.now() + 1_000)).rejects.toBe(transportError);
+test("preserves a non-deadline readiness navigation error", async () => {
+  const transportError = new Error("net::ERR_FAILED");
+  const probe = { ...readinessProbe([]), goto: async () => { throw transportError; } };
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 1_000)).rejects.toBe(transportError);
 });

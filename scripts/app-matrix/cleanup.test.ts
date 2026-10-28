@@ -12,6 +12,11 @@ import { completeObservations } from "./product-browser";
 import { checkCommand, checkInstall } from "./checks.mjs";
 
 const pending = () => new Promise<never>(() => {});
+const readyProbe = () => ({
+  context: () => ({ newCDPSession: async () => ({ send: async () => {} }) }),
+  goto: async () => ({ ok: () => true, status: () => 200 }),
+  close: async () => {},
+});
 const fixtureDirectories: string[] = [];
 afterEach(() => { for (const directory of fixtureDirectories) rmSync(directory, { recursive: true, force: true }); fixtureDirectories.length = 0; });
 
@@ -23,16 +28,12 @@ function fixture(stop: () => Promise<unknown>, productError = new Error("page.go
     on() {},
     exposeBinding: async () => ({ dispose: async () => { releases.push("binding"); } }),
     addInitScript: async () => ({ dispose: async () => { releases.push("script"); } }),
-    evaluate: async (fn: (arg: unknown) => unknown, arg: unknown) => {
-      if (arg === undefined) return;
-      const previous = globalThis.fetch;
-      globalThis.fetch = Object.assign(async () => new Response("matrix", { status: 200 }), { preconnect: previous.preconnect });
-      try { return await fn(arg); }
-      finally { globalThis.fetch = previous; }
-    },
+    evaluate: async () => {},
     goto: async (_url: string, options: { timeout: number }) => { expect(options.timeout).toBeLessThanOrEqual(90_000); throw productError; },
     close: async () => { releases.push("preview"); },
   };
+  const probe = { ...readyProbe(), close: async () => { releases.push("probe"); } };
+  const pages = [preview, probe];
   const page = {
     click: async (selector: string) => { expect(selector).toBe(".xterm"); releases.push("focus"); },
     keyboard: { press: async (key: string) => { expect(key).toBe("Control+c"); expect(releases.at(-1)).toBe("focus"); releases.push("keyboard"); await stop(); } },
@@ -49,12 +50,12 @@ function fixture(stop: () => Promise<unknown>, productError = new Error("page.go
     },
   };
   const input = {
-    page, context: { newPage: async () => preview },
+    page, context: { newPage: async () => pages.shift() },
     command: { name: "dev", args: ["run", "dev"], check: { kind: "page", text: "matrix" } },
     app: { id: "next" }, engine: "browser", options: { timeout: 90_000, cleanupTimeout: 20, output },
     terminalText: async () => "user@bun:~$ bun run .matrix-command.ts dev\noriginal product output\n",
   };
-  return { input, releases };
+  return { input, releases, preview };
 }
 
 async function within<T>(promise: Promise<T>): Promise<T> {
@@ -110,10 +111,8 @@ test("unresponsive terminal capture does not replace the original navigation err
 });
 
 test("traffic cleanup deadline still reaches preview close", async () => {
-  const { input, releases } = fixture(async () => {});
-  const preview = await input.context.newPage();
-  const readinessEvaluate = preview.evaluate;
-  preview.evaluate = async (fn, arg) => arg === undefined ? pending() : readinessEvaluate(fn, arg);
+  const { input, releases, preview } = fixture(async () => {});
+  preview.evaluate = pending;
   const result = await within(serverCommand(input));
   expect("harnessCleanup" in result && result.harnessCleanup).toEqual([expect.objectContaining({ operation: "traffic-close", timedOut: true })]);
   expect(releases).toContain("preview");
@@ -174,8 +173,7 @@ test("failed force kill is reported instead of claiming browser cleanup", async 
 });
 
 test("closed product page and stuck preview close retain separate diagnostics", async () => {
-  const { input } = fixture(async () => { throw new Error("Target page, context or browser has been closed"); }, new Error("page.goto: navigation interrupted"));
-  const preview = await input.context.newPage();
+  const { input, preview } = fixture(async () => { throw new Error("Target page, context or browser has been closed"); }, new Error("page.goto: navigation interrupted"));
   preview.close = pending;
   const result = await within(serverCommand(input));
   expect("productError" in result && result.productError).toBe("Error: page.goto: navigation interrupted");
