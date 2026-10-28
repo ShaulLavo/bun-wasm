@@ -17,6 +17,10 @@ async function build(app: string): Promise<void> {
   await run(app, ["bun", "run", "build"]);
 }
 
+// The deployed site always ships bash-web's shell and env guests, built at the apps' pin.
+const guests = Bun.spawn(["bash", "scripts/build-bash-web-shell.sh"], { cwd: root, stdout: "inherit", stderr: "inherit" });
+if ((await guests.exited) !== 0) throw new Error("scripts/build-bash-web-shell.sh failed");
+process.env.BASH_WEB_GUESTS = "required";
 await build("sandbox");
 await build("web");
 rmSync(out, { recursive: true, force: true });
