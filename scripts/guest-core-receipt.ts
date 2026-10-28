@@ -161,6 +161,9 @@ if (import.meta.main) {
   if (!sysroot) throw new Error("Set BUN_WASM_SYSROOT");
   const [command, path, argument, output] = process.argv.slice(2);
   if (command === "inputs" && path) console.log(JSON.stringify(await captureProgramInputs(sourceOptions(root, sysroot, "browser"), "core", await Bun.file(path).json())));
+  else if (command === "prepare-core" && path && argument) await prepareProgramOutputs([
+    { artifact: argument, scope: "core", selection: coreSelection(await Bun.file(path).json()), options: sourceOptions(root, sysroot, "browser") },
+  ]);
   else if (command === "prepare" && (path === "quickjs" || path === "quickjs-minimal" || path === "jsc") && argument && output) await prepareComposedOutputs(root, sysroot, path, argument, output);
   else if (command === "write" && path && argument) await writeProgramReceipt(root, sysroot, path, argument);
   else if (command === "verify" && path && argument) {
@@ -173,5 +176,5 @@ if (import.meta.main) {
     const bytes = await Bun.file(path).bytes();
     verifyProgramReceipt(bytes, receipt, expected);
     await Bun.write(output, tagProgramCore(bytes, argument));
-  } else throw new Error("Usage: guest-core-receipt.ts inputs PROFILE_JSON_FILE | prepare BUILD CORE SIDE | write CORE SNAPSHOT | verify CORE SNAPSHOT | tag CORE quickjs|jsc OUTPUT");
+  } else throw new Error("Usage: guest-core-receipt.ts inputs PROFILE_JSON_FILE | prepare-core PROFILE_JSON_FILE CORE | prepare BUILD CORE SIDE | write CORE SNAPSHOT | verify CORE SNAPSHOT | tag CORE quickjs|jsc OUTPUT");
 }

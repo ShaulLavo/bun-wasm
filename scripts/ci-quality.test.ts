@@ -993,6 +993,20 @@ function assertProducerMutation(contract: ReturnType<typeof nativeCacheContract>
   expect(saved.startsWith(expandNativeKey(contract.prefix, changed))).toBe(compatible);
 }
 
+test("common-core preparation and release inputs refine native cache identity without discarding compatible Cargo work", () => {
+  const contract = nativeCacheContract("native-cargo-cache", "Save the refined native Cargo cache once per input revision");
+  const inputs = nativeCacheInputs(contract.primary);
+  const saved = expandNativeKey(contract.save, inputs);
+  for (const path of ["scripts/build-bun-core.sh", "scripts/guest-core-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/waffle-release-inputs.json", "scripts/waffle-release-inputs.ts"]) {
+    const changed = new Map(inputs);
+    changed.set(path, Buffer.concat([readFileSync(new URL(`../${path}`, import.meta.url)), Buffer.from("\nchanged core input\n")]));
+    const requested = expandNativeKey(contract.primary, changed);
+    expect(requested).not.toBe(saved);
+    expect(expandNativeKey(contract.save, changed)).toBe(requested);
+    expect(saved.startsWith(expandNativeKey(contract.prefix, changed))).toBe(true);
+  }
+});
+
 test("native v4 fallback still excludes incompatible environment and toolchain inputs", () => {
   const { primary, prefix } = nativeCacheContract("native-cache", "Save the native quality checkpoint");
   const inputs = nativeCacheInputs(primary);

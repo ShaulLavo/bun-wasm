@@ -7,6 +7,7 @@ import { parseProgramReceipt, record } from "../../scripts/guest-core-receipt.ts
 import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture } from "./guest-receipt-fixture.ts";
 import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { appendCustomSection, ENGINE_SECTION, programKind } from "../../src/engine-kind.ts";
+import waffleRelease from "../../scripts/waffle-release-inputs.json";
 
 const workflow = await readFile(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
 
@@ -353,7 +354,9 @@ fi
   fixture.env.JSC_ENGINE_BUILD_DIR = join(root, "private/jsc-engine");
   fixture.env.CAGE = "";
   const paths = { core: join(root, "private/target/split-common/bun-core.wasm"), quickjs: join(root, "private/target/split-common/quickjs/engine.wasm"), jsc: join(root, "private/jsc-engine/engine.wasm") };
-  const run = (kind: "quickjs" | "jsc") => Bun.spawnSync(["bash", join(root, kind === "jsc" ? "scripts/build-bun-jsc.sh" : "scripts/build.sh")], { cwd: root, env: fixture.env });
+  fixture.env.BUN_CORE_BUILD_DIR = dirname(paths.core);
+  const scripts = { core: "build-bun-core.sh", quickjs: "build.sh", jsc: "build-bun-jsc.sh" };
+  const run = (kind: keyof typeof scripts) => Bun.spawnSync(["bash", join(root, "scripts", scripts[kind])], { cwd: root, env: fixture.env });
   const builds = async () => (await readFile(join(root, "private/recipe-builds.log"), "utf8")).trim().split("\n");
   return { core, side, temporary, paths, run, builds };
 }
@@ -399,6 +402,50 @@ async function finalFiles(paths: { core: string; quickjs: string; jsc: string })
   const files = [paths.core, `${paths.core}.core.json`, paths.quickjs, `${paths.quickjs}.engine.json`, paths.jsc, `${paths.jsc}.engine.json`];
   return Promise.all(files.map(async path => ({ path, bytes: await Bun.file(path).exists() ? hash(await readFile(path)) : null })));
 }
+
+test("direct common-core producer reuses the same origin once for both engine wrappers", async () => {
+  await withCliReceiptFixture(async fixture => {
+    const recipe = await quickjsWrapperFixture(fixture, 0);
+    succeeded(recipe.run("core"));
+    const origin = await readFile(`${recipe.paths.core}.core.json`, "utf8");
+    await committedDelta(fixture.root, "README.md");
+    succeeded(recipe.run("core"));
+    succeeded(recipe.run("quickjs"));
+    succeeded(recipe.run("jsc"));
+    expect(await recipe.builds()).toEqual(["core", "quickjs", "jsc"]);
+    expect(await readFile(`${recipe.paths.core}.core.json`, "utf8")).toBe(origin);
+    expect(await readdir(recipe.temporary)).toEqual([]);
+  });
+}, 15_000);
+
+test("direct common-core producer prepares a changed release identity before strict reuse", async () => {
+  await withCliReceiptFixture(async fixture => {
+    const recipe = await quickjsWrapperFixture(fixture, 0);
+    succeeded(recipe.run("core"));
+    const receiptPath = `${recipe.paths.core}.core.json`;
+    const origin = parseProgramReceipt(await Bun.file(receiptPath).json());
+    const native = join(fixture.env.WASM_TOOLS!, "waffle-native", waffleRelease.sourceCommit, waffleRelease.packagePath);
+    const builder = join(native, "scripts/build-wasi-libc.sh");
+    const builderBefore = await readFile(builder);
+    const sysroot = join(fixture.env.BUN_WASM_SYSROOT!, "bun-wasm-sysroot.json");
+    const sysrootBefore = await readFile(sysroot);
+    await writeFile(join(native, "package.json"), JSON.stringify({ version: "changed-release-fixture" }));
+    const refreshed = recipe.run("core");
+    succeeded(refreshed);
+    expect(refreshed.stdout.toString()).not.toContain("verified reuse");
+    const current = parseProgramReceipt(await Bun.file(receiptPath).json());
+    expect(current.inputs.contentSha256).not.toBe(origin.inputs.contentSha256);
+    expect(current.inputs.source).toEqual(origin.inputs.source);
+    expect(await readFile(builder)).toEqual(builderBefore);
+    expect(await readFile(sysroot)).toEqual(sysrootBefore);
+    succeeded(recipe.run("core"));
+    succeeded(recipe.run("quickjs"));
+    succeeded(recipe.run("jsc"));
+    expect(await recipe.builds()).toEqual(["core", "core", "quickjs", "jsc"]);
+    expect(await readFile(receiptPath, "utf8")).toBe(JSON.stringify(current, null, 2) + "\n");
+    expect(await readdir(recipe.temporary)).toEqual([]);
+  });
+}, 20_000);
 
 test("real wrappers retain engines across a core delta and rebuild only each changed engine", async () => {
   await withCliReceiptFixture(async fixture => {
@@ -482,12 +529,17 @@ test("wrapper preparation refuses start/end source drift before retiring valid s
   });
 }, 15_000);
 
-for (const damage of ["corrupt", "partial", "profile"]) test(`core ${damage} plus source delta fails closed in composing caller`, async () => {
+for (const caller of ["core", "quickjs"] as const) for (const damage of ["corrupt", "partial", "profile", "schema", "provenance"]) test(`core ${damage} plus source delta fails closed in ${caller} caller`, async () => {
   await withCliReceiptFixture(async fixture => {
     const recipe = await quickjsWrapperFixture(fixture, 0);
     succeeded(recipe.run("quickjs"));
     if (damage === "corrupt") await writeFile(recipe.paths.core, "corrupt core");
     if (damage === "partial") await rm(`${recipe.paths.core}.core.json`);
+    if (damage === "schema" || damage === "provenance") {
+      const path = `${recipe.paths.core}.core.json`;
+      const receipt = parseProgramReceipt(await Bun.file(path).json());
+      await writeFile(path, JSON.stringify(damage === "schema" ? { ...receipt, schema: 2 } : { ...receipt, inputs: { ...receipt.inputs, source: { ...receipt.inputs.source, head: "unrecorded" } } }));
+    }
     if (damage === "profile") {
       const path = `${recipe.paths.core}.core.json`;
       const receipt = parseProgramReceipt(await Bun.file(path).json());
@@ -498,7 +550,7 @@ for (const damage of ["corrupt", "partial", "profile"]) test(`core ${damage} plu
     await committedDelta(fixture.root, "crates/fixture/src/lib.rs");
     const files = await finalFiles(recipe.paths);
     const builds = await recipe.builds();
-    expect(recipe.run("quickjs").exitCode).not.toBe(0);
+    expect(recipe.run(caller).exitCode).not.toBe(0);
     expect(await finalFiles(recipe.paths)).toEqual(files);
     expect(await recipe.builds()).toEqual(builds);
   });
