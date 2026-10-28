@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-export const RECEIPT = "bash-web-guests.json";
+const RECEIPT = "bash-web-guests.json";
 /** Program name the browser serves (programs/<name>) → the file in dist. */
 const GUESTS = { "shell-engine.wasm": "bash-web-shell.wasm", "env.wasm": "bash-web-env.wasm" } as const;
 type Program = keyof typeof GUESTS;
@@ -24,7 +24,7 @@ function describe(dist: string, program: Program) {
   return { file, bytes: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
 
-export function writeReceipt(dist: string, bashWeb: string, rustToolchain: string): Receipt {
+function writeReceipt(dist: string, bashWeb: string, rustToolchain: string): Receipt {
   const guests = Object.fromEntries(Object.keys(GUESTS).map(program => [program, describe(dist, program as Program)])) as Receipt["guests"];
   const receipt: Receipt = { bashWeb, rustToolchain, guests };
   writeFileSync(join(dist, RECEIPT), JSON.stringify(receipt, null, 2) + "\n");
