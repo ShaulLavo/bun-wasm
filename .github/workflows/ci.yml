@@ -124,6 +124,10 @@ jobs:
         with:
           path: ${{ env.RUSTUP_HOME }}
           key: ${{ steps.rustup-cache.outputs.cache-primary-key }}
+      - name: Blocking owned Rust formatting
+        run: |
+          source env.sh
+          bun scripts/quality-rust.ts --format-only
       - name: Install native build tools
         run: |
           if command -v cmake && command -v ninja && command -v nasm && command -v clang && command -v pkg-config &&
@@ -449,7 +453,8 @@ jobs:
         run: |
           run_native_checks() {
             source env.sh
-            bun run quality --native
+            bun scripts/quality-rust.ts --checks-only
+            bun run quality:wasi
             # The WASI lint probe rewrites a source file; restore its time before the next build.
             bun scripts/quality-input-times.ts
             source env.sh

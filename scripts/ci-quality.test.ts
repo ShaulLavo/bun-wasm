@@ -28,9 +28,20 @@ test("native checks share one conditional job and the cached target directory", 
   expect(rust).toContain("${{ env.CARGO_HOME }}/registry");
   expect(rust).toContain("restore-keys: |\n            native-v");
   expect(rust).not.toContain("Swatinem/rust-cache");
-  expect(rust).toContain("bun run quality --native");
+  expect(rust).toContain("bun scripts/quality-rust.ts --checks-only");
   expect(rust.match(/cargo test /g)).toHaveLength(1);
   expect(rust).toContain("--lib modules::tests::host_");
+});
+
+test("owned Rust formatting blocks before native setup and has no late duplicate", () => {
+  const format = rust.indexOf("bun scripts/quality-rust.ts --format-only");
+  expect(format).toBeGreaterThan(rust.indexOf("Save completed rustup-cache setup"));
+  expect(format).toBeLessThan(rust.indexOf("Install native build tools"));
+  expect(format).toBeLessThan(rust.indexOf("Build or verify the JSC prebuild"));
+  expect(rust.match(/quality-rust\.ts --format-only/g)).toHaveLength(1);
+  expect(rust.match(/quality-rust\.ts --checks-only/g)).toHaveLength(1);
+  expect(rust).not.toContain("bun run quality --native");
+  expect(rust).toContain("bun run quality:wasi");
 });
 
 test("native fixture smoke selects the typed runtime behavior without another build", () => {
@@ -107,7 +118,7 @@ test("cached build inputs are compared before the native gate", () => {
   expect(inputTimes).toBeGreaterThan(rust.indexOf("name: Prepare pinned upstream sources"));
   expect(inputTimes).toBeGreaterThan(rust.indexOf("id: native-cache"));
   expect(inputTimes).toBeGreaterThan(rust.indexOf("name: Build patched WASI sysroot"));
-  expect(rust.indexOf("bun scripts/quality-input-times.ts")).toBeLessThan(rust.indexOf("bun run quality --native"));
+  expect(rust.indexOf("bun scripts/quality-input-times.ts")).toBeLessThan(rust.indexOf("bun scripts/quality-rust.ts --checks-only"));
 });
 
 test("the full-key native fallback rejects incompatible toolchain and preflight inputs", () => {
@@ -577,7 +588,7 @@ test("package preparation builds once, and non-package installs skip lifecycle b
 });
 
 test("the WASI lint probe cannot dirty release build timestamps", () => {
-  const gates = rust.indexOf("bun run quality --native");
+  const gates = rust.indexOf("bun scripts/quality-rust.ts --checks-only");
   const restore = rust.indexOf("bun scripts/quality-input-times.ts", gates);
   expect(restore).toBeGreaterThan(gates);
   expect(restore).toBeLessThan(rust.indexOf("cargo test --locked --release", gates));
@@ -1019,7 +1030,7 @@ test("ordered producers keep every blocking native command and save JSC before n
   }
   const native = nativeScript() + ["Build native fixtures after the cache checkpoint", "Blocking native fixture checks"]
     .map(name => workflowString(workflowField(nativeWorkflowStep("name", name), "run"))).join("");
-  const commands = ["bun run quality --native", "bun scripts/quality-input-times.ts", "cargo test --locked", "cargo build --release --locked -j 2 -p bunwasm-host", "CARGO_BUILD_JOBS=2 bash scripts/build.sh", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts", "bun tests/install/root-overrides.ts"];
+  const commands = ["bun scripts/quality-rust.ts --checks-only", "bun run quality:wasi", "bun scripts/quality-input-times.ts", "cargo test --locked", "cargo build --release --locked -j 2 -p bunwasm-host", "CARGO_BUILD_JOBS=2 bash scripts/build.sh", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts", "bun tests/install/root-overrides.ts"];
   const positions = commands.map(command => native.indexOf(command));
   expect(positions).toEqual(positions.toSorted((a, b) => a - b));
   for (const command of commands) expect(native.split(command)).toHaveLength(2);

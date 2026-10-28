@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { captureProgramInputs, parseProgramInputs, verifyProgramReceipt } from "../../scripts/guest-core-receipt";
 import { artifactIdentity } from "../../scripts/guest-build-receipt";
@@ -92,3 +92,54 @@ for (const path of ["scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.t
     });
   });
 }
+
+
+test.each(["-I", "-isystem", "-iquote"])("absent JSC compiler search path %s is bound and later headers invalidate identity", async flag => {
+  await withReceiptFixture(async options => {
+    const build = options.jscBuild!;
+    const missing = join(build, "webkit/Source/JavaScriptCore/bindings");
+    const database = join(build, "build/jsc/compile_commands.json");
+    const command = `clang++ ${flag}${flag === "-I" ? "" : " "}${missing}`;
+    await writeFile(database, JSON.stringify([{ directory: join(build, "build/jsc"), file: "/fixture/jsc.cpp", command }]));
+    const selected = { ...options, build: "jsc" } as const;
+    const before = await captureProgramInputs(selected, "jsc");
+    expect(JSON.stringify(before.content)).toContain("prebuild:webkit/Source/JavaScriptCore/bindings");
+    await mkdir(missing, { recursive: true });
+    await writeFile(join(missing, "appeared.h"), "new header\n");
+    const appeared = await captureProgramInputs(selected, "jsc");
+    expect(appeared.contentSha256).not.toBe(before.contentSha256);
+    expect(JSON.stringify(appeared.content)).toContain("bindings/appeared.h");
+    await writeFile(join(missing, "appeared.h"), "changed header\n");
+    expect((await captureProgramInputs(selected, "jsc")).contentSha256).not.toBe(appeared.contentSha256);
+  });
+});
+
+test.each(["outside", "symlink", "forced", "dangling"])("JSC header capture rejects missing %s inputs without eliding roots or required files", async kind => {
+  await withReceiptFixture(async options => {
+    const build = options.jscBuild!;
+    let path = join(options.repository, "private/missing-headers");
+    if (kind === "forced") path = join(build, "inputs/required.h");
+    if (kind === "symlink" || kind === "dangling") {
+      const link = join(build, "inputs/escape");
+      await symlink(join(options.repository, kind === "symlink" ? "private" : "private/missing-target"), link);
+      path = join(link, "missing");
+    }
+    const command = `clang++ ${kind === "forced" ? "-include " : "-I"}${path}`;
+    await writeFile(join(build, "build/jsc/compile_commands.json"), JSON.stringify([{ directory: join(build, "build/jsc"), file: "/fixture/jsc.cpp", command }]));
+    const capture = captureProgramInputs({ ...options, build: "jsc" }, "jsc");
+    if (kind === "outside" || kind === "symlink") await expect(capture).rejects.toThrow("header input escapes inventoried roots");
+    else await expect(capture).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+test("JSC compiler search-path permission failures remain fatal", async () => {
+  await withReceiptFixture(async options => {
+    const build = options.jscBuild!;
+    const closed = join(build, "inputs/closed");
+    await mkdir(closed);
+    await writeFile(join(build, "build/jsc/compile_commands.json"), JSON.stringify([{ directory: join(build, "build/jsc"), file: "/fixture/jsc.cpp", command: `clang++ -I${closed}/missing` }]));
+    await chmod(closed, 0);
+    try { await expect(captureProgramInputs({ ...options, build: "jsc" }, "jsc")).rejects.toMatchObject({ code: "EACCES" }); }
+    finally { await chmod(closed, 0o700); }
+  });
+});

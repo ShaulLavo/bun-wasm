@@ -74,10 +74,10 @@ impl Programs {
     pub fn load(&mut self, engine: &Engine, path: &Path) -> Result<Module> {
         let core_bytes =
             std::fs::read(path).with_context(|| format!("loading {}", path.display()))?;
-        let has_bind = core_bind_is_function(&Module::new(engine, &core_bytes)?)?;
-        let kind = parse_program_kind(&core_bytes, has_bind)?;
         let core = Module::new(engine, &core_bytes)
             .with_context(|| format!("loading {}", path.display()))?;
+        let has_bind = core_bind_is_function(&core)?;
+        let kind = parse_program_kind(&core_bytes, has_bind)?;
         let Some(kind) = kind else {
             return Ok(core);
         };

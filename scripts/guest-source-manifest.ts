@@ -160,12 +160,16 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
     groups.push(await group("rust-build-std", options.rustSourceLib, ["."]));
   }
   await verifySysrootInputs(options, groups);
+  const absentHeaderSearchPaths: string[] = [];
   if (build === "jsc" || build === "tools") {
     if (!options.jscBuild) throw new Error("JSC build requires JSC_BUILD_DIR");
     const paths = ["build/jsc/.bunwasm-inputs", "build/jsc/compile_commands.json", "inputs/wasi-jsc.cmake", "inputs/shim/wasi-compat.h", "build/jsc/lib/libJavaScriptCore.a", "build/jsc/lib/libWTF.a", "build/jsc/lib/libbmalloc.a", "icu/prefix/lib/libicuuc.a", "icu/prefix/lib/libicui18n.a", "icu/prefix/lib/libicudata.a", "shim/libwasi-compat.a"];
     if (build === "tools") paths.push("webkit/Source/JavaScriptCore/yarr", "webkit/Source/JavaScriptCore/runtime/OptionsList.h", "build/jsc/JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp");
     const headers = scope === "jsc" ? await jscHeaderPaths(options) : undefined;
-    if (headers) paths.push(".bunwasm-artifacts", "build/jsc/CMakeCache.txt", "build/jsc/cmakeconfig.h", ...headers.prebuild);
+    if (headers) {
+      paths.push(".bunwasm-artifacts", "build/jsc/CMakeCache.txt", "build/jsc/cmakeconfig.h", ...headers.prebuild);
+      absentHeaderSearchPaths.push(...headers.absent);
+    }
     groups.push(await group("jsc-prebuild", options.jscBuild, Array.from(new Set(paths)).sort()));
     if (headers?.sdk.length) groups.push(await group("jsc-helper-sdk-headers", sdk, Array.from(new Set(headers.sdk)).sort()));
     if (headers?.sysroot.length) groups.push(await group("jsc-helper-sysroot-headers", sysroot, Array.from(new Set(headers.sysroot)).sort(), [sdk]));
@@ -180,7 +184,9 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
       "Ambient environment, user/global Cargo configuration, host shared libraries and intermediate build-cache provenance are not inventoried.",
       "Waffle browser runtime is not compiled into this guest; only its checksum-verified released-source libc builder and patch are inventoried.",
       "JSC/tools prebuild archives, compiler flags and input stamp identify linked inputs; direct tools Yarr sources are inventoried, but remaining WebKit/ICU headers and full prebuild source closure are not. JSC embedding receipt remains separate.",
-    ],
+    ].concat(absentHeaderSearchPaths.length ? [
+      `JSC compiler search paths absent at capture (bound by this snapshot): ${JSON.stringify(absentHeaderSearchPaths.sort())}`,
+    ] : []),
   };
 }
 
@@ -195,7 +201,8 @@ function scopedRepositoryPaths(scope: ProgramInputScope): string[] {
 }
 
 type HeaderRoot = "prebuild" | "sdk" | "sysroot";
-async function jscHeaderPaths(options: SourceOptions): Promise<Record<HeaderRoot, string[]>> {
+type HeaderPaths = Record<HeaderRoot, string[]> & { absent: string[] };
+async function jscHeaderPaths(options: SourceOptions): Promise<HeaderPaths> {
   const build = options.jscBuild;
   if (!build) throw new Error("Missing JSC prebuild root");
   const database: unknown = JSON.parse(await readFile(join(build, "build/jsc/compile_commands.json"), "utf8"));
@@ -203,25 +210,53 @@ async function jscHeaderPaths(options: SourceOptions): Promise<Record<HeaderRoot
   const entry: unknown = database.find(row => row && typeof row === "object" && "file" in row && typeof row.file === "string" && row.file.endsWith("/jsc.cpp"));
   if (!entry || typeof entry !== "object" || !("command" in entry) || typeof entry.command !== "string" || !("directory" in entry) || typeof entry.directory !== "string") throw new Error("Missing JSC helper compilation profile");
   const words = entry.command.split(/\s+/);
-  const paths: Record<HeaderRoot, string[]> = { prebuild: [], sdk: [], sysroot: [] };
+  const paths: HeaderPaths = { prebuild: [], sdk: [], sysroot: [], absent: [] };
   for (let index = 1; index < words.length; index++) {
     const word = words[index]!;
-    const path = ["-I", "-isystem", "-iquote", "-include"].includes(word) ? words[++index] : /^-I.+/.test(word) ? word.slice(2) : undefined;
+    const separate = ["-I", "-isystem", "-iquote", "-include"].includes(word);
+    const path = separate ? words[++index] : /^-I.+/.test(word) ? word.slice(2) : undefined;
+    if (!path && separate) throw new Error(`Missing JSC compiler input for ${word}`);
     if (!path) continue;
-    const checked = await checkedHeaderPath(path, entry.directory, options);
-    paths[checked.root].push(checked.path);
+    const checked = await checkedHeaderPath(path, entry.directory, options, word !== "-include");
+    if (checked.absent) paths.absent.push(`${checked.root}:${checked.path}`);
+    else paths[checked.root].push(checked.path);
   }
   return paths;
 }
 
-async function checkedHeaderPath(path: string, directory: string, options: SourceOptions): Promise<{ root: HeaderRoot; path: string }> {
-  const absolute = await realpath(resolve(directory, path));
+function missingPath(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+async function canonicalAbsentSearchPath(path: string): Promise<string> {
+  let ancestor = path;
+  while (true) {
+    let exists = false;
+    try { await lstat(ancestor); exists = true; }
+    catch (error) { if (!missingPath(error)) throw error; }
+    if (exists) return resolve(await realpath(ancestor), relative(ancestor, path));
+    const parent = dirname(ancestor);
+    if (parent === ancestor) throw new Error(`No existing ancestor for compiler search path ${path}`);
+    ancestor = parent;
+  }
+}
+
+async function checkedHeaderPath(path: string, directory: string, options: SourceOptions, search: boolean): Promise<{ root: HeaderRoot; path: string; absent: boolean }> {
+  const input = resolve(directory, path);
+  let absolute: string;
+  let absent = false;
+  try { absolute = await realpath(input); }
+  catch (error) {
+    if (!search || !missingPath(error)) throw error;
+    absolute = await canonicalAbsentSearchPath(input);
+    absent = true;
+  }
   const prebuild = options.jscBuild;
   if (!prebuild) throw new Error("Missing JSC prebuild root");
   const roots: readonly [HeaderRoot, string][] = [["prebuild", prebuild], ["sysroot", options.sysroot], ["sdk", options.sdk]];
   for (const [name, path] of roots) {
     const root = await realpath(path);
-    if (inside(root, absolute)) return { root: name, path: relative(root, absolute) };
+    if (inside(root, absolute)) return { root: name, path: relative(root, absolute), absent };
   }
   throw new Error(`JSC helper header input escapes inventoried roots: ${path}`);
 }
