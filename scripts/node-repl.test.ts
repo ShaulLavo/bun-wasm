@@ -8,7 +8,8 @@ const source = fs.readFileSync(new URL("../crates/bunwasm-runtime/src/js/node_re
 const factorySource = new Bun.Transpiler({ loader: "ts" }).transformSync("globalThis.factory = " + source);
 
 function session(terminal: boolean) {
-  const stdin = Object.assign(new EventEmitter(), { isTTY: terminal, pause() {} });
+  const modes: boolean[] = [];
+  const stdin = Object.assign(new EventEmitter(), { isTTY: terminal, pause() {}, setRawMode(raw: boolean) { modes.push(raw); } });
   let output = "";
   let errors = "";
   const process = Object.assign(new EventEmitter(), {
@@ -25,7 +26,7 @@ function session(terminal: boolean) {
   });
   const server = repl.start();
   const exited = new Promise<void>(resolve => server.on("exit", resolve));
-  return { stdin, process, context, server, exited, output: () => output, errors: () => errors };
+  return { stdin, modes, process, context, server, exited, output: () => output, errors: () => errors };
 }
 const settle = () => new Promise(resolve => setTimeout(resolve, 20));
 
@@ -82,4 +83,13 @@ test("a failing dot command reports its error and the REPL keeps going", async (
   await repl.exited;
   expect(repl.output()).toBe("4\n");
   expect(repl.errors()).toContain("nonexistent-bun-wasm-dir");
+});
+
+test("a terminal is in raw mode while the REPL runs and back in cooked mode after it closes", async () => {
+  const repl = session(true);
+  expect(repl.modes).toEqual([true]);
+  repl.stdin.emit("data", ".exit\r");
+  await repl.exited;
+  expect(repl.modes).toEqual([true, false]);
+  expect(session(false).modes).toEqual([]);
 });

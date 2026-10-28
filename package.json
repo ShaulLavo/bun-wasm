@@ -44,6 +44,7 @@
     "web/src/crypto-host.js",
     "web/src/crypto-inputs.js",
     "web/src/default-signal.ts",
+    "web/src/bun-terminal.ts",
     "web/src/promise-reactions.ts",
     "web/src/buffer-transfer.ts",
     "web/src/shared-objects",

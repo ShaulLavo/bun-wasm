@@ -14,6 +14,9 @@ export interface EngineHostOptions {
    * modules get `moduleUrls` URLs.
    */
   modules?: { url(key: string): string; put(url: string, source: string): void | Promise<void> };
+  /** The attached terminal session's input mode, when this process reads keyboard input. Returns
+   * Waffle's failure code, or undefined once the mode changed. */
+  terminal?: { setRawMode(raw: boolean): string | undefined };
   /** The fetch exposed to user code (without it, fetch rejects). */
   fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   /**

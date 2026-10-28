@@ -49,7 +49,14 @@
     const stream = Object.assign(new Readable({ read, destroy, highWaterMark: 65536 }), {
       fd: 0,
       isTTY: native.isatty(0),
-      setRawMode() { return stream; },
+      isRaw: false,
+      // Without a terminal session (piped input, or a host that has none) this changes nothing.
+      setRawMode(raw: boolean) {
+        const failure = native.terminalSetRawMode?.(Boolean(raw));
+        if (failure) throw Object.assign(new Error(`setRawMode ${failure}`), { code: "EIO", syscall: "setRawMode" });
+        if (native.terminalSetRawMode) stream.isRaw = Boolean(raw);
+        return stream;
+      },
       ref() { referenced = true; updateReference(); return stream; },
       unref() { referenced = false; updateReference(); return stream; },
     });

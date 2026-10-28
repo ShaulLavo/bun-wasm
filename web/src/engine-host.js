@@ -289,6 +289,8 @@ class ExitSignal {
  *   networking: the bun_wasm ABI (docs/host-abi.md) as the JS functions net.js
  *   calls (hostListen, hostRead, …), which slots they cover, and a way to be
  *   told when any handle may have changed
+ * @param {{setRawMode(raw: boolean): string | undefined}} [o.terminal]  the attached terminal
+ *   session's input mode, when this process reads keyboard input
  * @param {Int32Array} [o.processWake]  the process wake word that pipe and child changes publish on;
  *   the loop waits on it while the program waits on I/O
  * @param {import("./shared-objects/service").SharedObjectService} [o.sharedObjects] private backing transport
@@ -406,6 +408,7 @@ class EngineHost {
       if (native.hostLookup) native.hostLookup = trackLookup(native.hostLookup, promise => this.track(promise));
       net.onNews(() => this.schedule(0));
     }
+    if (this.o.terminal) native.terminalSetRawMode = raw => this.o.terminal.setRawMode(raw);
     native.engine = "host";
     this.installSubtleCrypto();
     native.subtleCrypto = nativeSubtleCrypto;
