@@ -1,0 +1,2 @@
+worker replied 42
+child exit 0
