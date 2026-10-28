@@ -33,7 +33,7 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
         publicRequests.push(request.headers);
         const url = new URL(request.url);
         if ((url.pathname === "/socket" || url.pathname === "/_build/")) { if (server.upgrade(request, { data: undefined, headers: request.headers.get("sec-websocket-protocol") ? { "sec-websocket-protocol": request.headers.get("sec-websocket-protocol")!.split(",")[0]!.trim() } : {} })) return; return new Response(null, { status: 426 }); }
-        if (url.pathname === "/server-cookie") return new Response("cookie", { headers: { "set-cookie": "server_fixture=1; Path=/; SameSite=Strict" } });
+        if (url.pathname === "/server-cookie") return new Response("cookie", { headers: [["set-cookie", "server_fixture=1; Path=/; SameSite=Strict"], ["set-cookie", "server_second_fixture=2; Path=/; SameSite=Strict"]] });
         if (url.pathname === "/headers") return Response.json({ originPresent: request.headers.has("origin"), cookiePresent: request.headers.has("cookie") });
         if (url.pathname === "/extra-http") return new Response(await request.text(), { status: 201, headers: { "access-control-allow-origin": request.headers.get("origin") ?? "null" } });
         if (url.pathname === "/echo") return new Response(await request.text(), { status: 201, headers: { ...isolation, "x-echo": request.headers.get("x-echo") ?? "" } });
@@ -122,11 +122,14 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
     await root.evaluate(() => { document.cookie = "owner_fixture=private; Path=/; SameSite=Strict"; });
     const receivedHeaders = await root.evaluate(async () => (await fetch("/headers", { method: "POST" })).json());
     const receivedCookie = await root.evaluate(async () => { await fetch("/server-cookie"); return document.cookie.includes("server_fixture="); });
+    const receivedSecondCookie = await root.evaluate(() => document.cookie.includes("server_second_fixture="));
     const responseCookieConstructor = await page.evaluate(() => new Response("fixture", { headers: { "set-cookie": "unregistered_fixture=1" } }).headers.has("set-cookie"));
-    console.log(JSON.stringify({ headerWitness: { nativeHost: incomingHeaders, nativeApp: receivedHeaders, receivedCookie, responseCookieConstructor } }));
+    console.log(JSON.stringify({ headerWitness: { nativeHost: incomingHeaders, nativeApp: receivedHeaders, receivedCookie, receivedSecondCookie, responseCookieConstructor } }));
     expect(incomingHeaders).toEqual([{ port: 3137, originPresent: true, cookiePresent: true }]);
     expect(receivedHeaders).toEqual({ originPresent: true, cookiePresent: true });
     expect(receivedCookie).toBe(true);
+    expect(receivedSecondCookie).toBe(true);
+    expect(responseCookieConstructor).toBe(false);
     const sibling = await context.newPage();
     await sibling.goto(other);
     expect(await sibling.evaluate(() => document.cookie)).not.toContain("owner_fixture");
@@ -154,6 +157,14 @@ test("real page-owned Waffle relay serves a native HTTP/WebSocket app and revoke
       socket.onmessage = event => { resolve(String(event.data)); socket.close(); };
       socket.onerror = () => reject(new Error("Owned extra virtual port rejected"));
     }))).toBe("owned-extra-port");
+    expect(await root.evaluate(() => new Promise<string>((resolve, reject) => {
+      const url = new URL("/_build/?token=unit-fixture", location.origin);
+      url.protocol = "ws:"; url.port = "49153";
+      const socket = new WebSocket(url, "fixture-hmr");
+      socket.onopen = () => socket.send("owned-root-host-secondary");
+      socket.onmessage = event => { resolve(String(event.data)); socket.close(); };
+      socket.onerror = () => reject(new Error("Owned root hostname secondary port refused"));
+    }))).toBe("owned-root-host-secondary");
     expect(await root.evaluate(async () => {
       const response = await fetch("http://127.0.0.1:49153/extra-http", { method: "POST", body: "owned-extra-http" });
       return [response.status, await response.text()];
