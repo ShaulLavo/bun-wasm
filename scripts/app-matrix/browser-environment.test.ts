@@ -51,12 +51,13 @@ test("the browser runner installs and uses the environment launcher and registry
 });
 
 test("server rows record elapsed ready and page-load times", async () => {
-  const page = { evaluate: async (fn: { toString(): string }, text?: string) => {
+  const page = { click: async () => {}, keyboard: { press: async () => {} }, waitForFunction: async () => {}, evaluate: async (fn: { toString(): string }, text?: string) => {
     if (text) return;
     const source = fn.toString();
     if (source.includes("serving:")) return { done: false, serving: true };
     if (source.includes("previews.ready")) return "ready";
     if (source.includes("previews.url")) return "http://127.0.0.1/preview";
+    if (source.includes("__matrixCommand")) return 130;
     return false;
   } };
   const disposable = async () => ({ dispose: async () => {} });

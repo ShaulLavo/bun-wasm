@@ -103,3 +103,7 @@ would falsely report missing updates. Native mode does not patch browser events,
 constructors or URLs, and a real-browser regression rejects synthetic events as
 native traffic. Persisted path observations omit query strings, and browser
 error diagnostics redact token query values.
+
+The app matrix stops its server through the maintained terminal focus and real
+browser keyboard Ctrl-C helper. It waits for shell idle and command completion,
+accepts normal handled exit or status 130, and retains the listener-removal checks.

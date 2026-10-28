@@ -13,6 +13,7 @@ import { BlockedBrowserNetworkError } from "./product-campaign.ts";
 import { browserRegistryRoute } from "./registry-request.ts";
 import { observePreviewPaths, readPreviewPaths, readPreviewPorts } from "./preview-paths.ts";
 import { browserCommand, browserLauncher, resetBrowserProject } from "./browser-environment.ts";
+import { stopMatrixServer } from "./keyboard-stop.ts";
 
 export function earlyServerExit(command, stage) {
   const classified = failure(command.output, stage);
@@ -110,7 +111,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
     checked = { status: "fail", ...failure(`${diagnostic}\n${String(error)}`, command.name), productError: String(error), timings };
   } finally {
     if (!captured) await release("terminal-capture", () => terminalText(page));
-    await release("server-stop", () => page.evaluate(async () => { globalThis.playground.shell.input("\x03"); await globalThis.__matrixCommand; }));
+    await release("server-stop", () => stopMatrixServer(page));
     if (!cleanupFailures.length && checked?.status === "pass" && (command.check.framework || options.previewOrigins)) {
       await release("stopped-preview", verifyStopped, options.timeout);
     }
