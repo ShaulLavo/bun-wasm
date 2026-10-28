@@ -348,18 +348,18 @@ fn inherited_fd_three_replaces_the_preopen_without_relocation_or_revival() {
         f.call("wasi_snapshot_preview1", "fd_prestat_get", (3, 256)),
         -process::BADF
     );
-    for fd in [4, 5] {
+    for fd in [4, 5, 6] {
         assert_eq!(
             f.call("wasi_snapshot_preview1", "fd_prestat_get", (fd, 256)),
             0
         );
     }
     assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_prestat_get", (6, 256)),
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (7, 256)),
         -process::BADF
     );
     f.write(1024, b"Cargo.toml");
-    for fd in [3, 6] {
+    for fd in [3, 7] {
         assert_eq!(
             f.call(
                 "wasi_snapshot_preview1",
@@ -387,7 +387,7 @@ fn inherited_fd_three_replaces_the_preopen_without_relocation_or_revival() {
         process::PIPE
     );
     assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_prestat_get", (6, 256)),
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (7, 256)),
         -process::BADF
     );
 }
@@ -400,7 +400,7 @@ fn engine_preopens_form_a_contiguous_libc_scan_ending_at_ebadf() {
     }
     // wasi-libc's actual scan accepts success, stops at BADF, and aborts on
     // every other errno. Check names too, not merely successful descriptors.
-    for (fd, expected) in [(3, "/"), (4, "/bin"), (5, "/opt/bun")] {
+    for (fd, expected) in [(3, "/"), (4, "/bin"), (5, "/opt/bun"), (6, "/usr/bin")] {
         assert_eq!(
             f.call("wasi_snapshot_preview1", "fd_prestat_get", (fd, 256)),
             0
@@ -417,7 +417,7 @@ fn engine_preopens_form_a_contiguous_libc_scan_ending_at_ebadf() {
         assert_eq!(f.bytes(512, len as usize), expected.as_bytes());
     }
     assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_prestat_get", (6, 256)),
+        f.call("wasi_snapshot_preview1", "fd_prestat_get", (7, 256)),
         -process::BADF
     );
     // Open non-preopen descriptors also return BADF, exactly as in Waffle.
@@ -434,11 +434,11 @@ fn renumber_files_and_streams_replaces_the_destination_without_hidden_entries() 
     let [read, write] = f.pipe();
     let file = f.open_manifest(3);
     assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_renumber", (read, 7)),
+        f.call("wasi_snapshot_preview1", "fd_renumber", (read, 9)),
         0
     );
     assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_renumber", (file, 7)),
+        f.call("wasi_snapshot_preview1", "fd_renumber", (file, 9)),
         0
     );
     assert_eq!(
@@ -447,11 +447,11 @@ fn renumber_files_and_streams_replaces_the_destination_without_hidden_entries() 
     );
     f.iovec(2048, 8);
     assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_read", (7, 32, 1, 48)),
+        f.call("wasi_snapshot_preview1", "fd_read", (9, 32, 1, 48)),
         0
     );
     assert_eq!(f.bytes(2048, 8), b"[package");
-    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 7), 0);
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 9), 0);
     let [read, _write] = f.pipe();
     assert_eq!(
         f.call("wasi_snapshot_preview1", "fd_renumber", (read, 3)),

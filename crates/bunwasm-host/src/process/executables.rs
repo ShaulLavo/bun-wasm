@@ -81,8 +81,8 @@ impl Executables {
     pub fn mounts(&self) -> [(PathBuf, String); 3] {
         [
             (self.root.join("bin"), "/bin".into()),
-            (self.root.join("usr/bin"), "/usr/bin".into()),
             (self.root.join("opt/bun"), "/opt/bun".into()),
+            (self.root.join("usr/bin"), "/usr/bin".into()),
         ]
     }
 
@@ -164,15 +164,21 @@ pub struct Resolved {
 const SHEBANG_BYTES: u64 = 256;
 const SHEBANG_DEPTH: usize = 4;
 
-/// The interpreter and optional argument of a regular `#!` file, following symlinks.
+/// The interpreter and optional argument of a regular `#!` file, following symlinks. As in
+/// Linux execve, only an executable regular file qualifies; a FIFO or device is never opened.
 fn script(
     executable: &str,
     cwd: &str,
     dirs: &[(PathBuf, String)],
 ) -> Option<(String, Option<String>)> {
     let (path, _) = walk(executable, cwd, dirs).ok()?;
+    let file = host(&path, dirs)?;
+    let metadata = fs::metadata(&file).ok()?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+        return None;
+    }
     let mut head = Vec::new();
-    File::open(host(&path, dirs)?)
+    File::open(file)
         .ok()?
         .take(SHEBANG_BYTES)
         .read_to_end(&mut head)

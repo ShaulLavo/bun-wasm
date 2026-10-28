@@ -6,8 +6,8 @@
 #include <wasi/libc.h>
 
 int main(void) {
-  const char *names[] = {"/", "/bin", "/opt/bun"};
-  for (unsigned fd = 3; fd < 6; ++fd) {
+  const char *names[] = {"/", "/bin", "/opt/bun", "/usr/bin"};
+  for (unsigned fd = 3; fd < 7; ++fd) {
     __wasi_prestat_t pre;
     char name[32] = {0};
     if (__wasi_fd_prestat_get(fd, &pre) != 0 ||
@@ -19,7 +19,7 @@ int main(void) {
       return 1;
   }
   __wasi_prestat_t end;
-  if (__wasi_fd_prestat_get(6, &end) != __WASI_ERRNO_BADF)
+  if (__wasi_fd_prestat_get(7, &end) != __WASI_ERRNO_BADF)
     return 2;
 
   // This is the real library scan, not a locally reimplemented substitute.
