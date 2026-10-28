@@ -47,3 +47,23 @@ test("parseEnv constructs own data properties for prototype-like keys", () => {
   expect(actual.__proto__).toBe("safe");
   expect(actual.constructor).toBe("value");
 });
+
+test("the browser's generic builtin wrapper links Vite's published node:util import", async () => {
+  const host = readFileSync(join(root, "web/src/engine-host.js"), "utf8");
+  const start = host.indexOf("function wrapperSource(key, value) {");
+  if (start < 0) throw new Error("Missing browser builtin wrapper");
+  const wrapper: unknown = runInNewContext(`(${host.slice(start)})`);
+  if (typeof wrapper !== "function") throw new TypeError("Expected browser builtin wrapper");
+  const source = wrapper("node:util", utility);
+  const builtin = `data:text/javascript,${encodeURIComponent(source)}`;
+  const published = `import { format, formatWithOptions, inspect, isDeepStrictEqual, parseEnv, promisify, stripVTControlCharacters } from ${JSON.stringify(builtin)};
+export const loaded = [format, formatWithOptions, inspect, isDeepStrictEqual, parseEnv, promisify, stripVTControlCharacters].every(value => typeof value === "function");`;
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "__bunwasm_wrap");
+  Object.defineProperty(globalThis, "__bunwasm_wrap", { configurable: true, value: () => ({ value: utility, default: utility }) });
+  try {
+    expect((await import(`data:text/javascript,${encodeURIComponent(published)}`)).loaded).toBe(true);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "__bunwasm_wrap", previous);
+    else Reflect.deleteProperty(globalThis, "__bunwasm_wrap");
+  }
+});
