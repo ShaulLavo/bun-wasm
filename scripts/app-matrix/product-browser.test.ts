@@ -13,6 +13,7 @@ interface FixtureOptions {
   bindingDelay?: number;
   initialVisible?: string;
   hydration?: ReturnType<typeof hydrationGate>;
+  restoration?: ReturnType<typeof hydrationGate>;
 }
 
 interface Fixture {
@@ -96,6 +97,7 @@ function fixture(options: FixtureOptions): Fixture {
   let visible = options.initialVisible ?? "original";
   let source = "original";
   let documentReplacements = 0;
+  let restoring = false;
   const initScripts: Array<() => void> = [];
   const bindings = new Map<string, (source: unknown, value: unknown) => void>();
   const writes: string[] = [];
@@ -103,6 +105,7 @@ function fixture(options: FixtureOptions): Fixture {
   const locator = (selector: string, wanted = "") => ({
     filter: ({ hasText }: { hasText: string }) => locator(selector, hasText),
     async waitFor() {
+      if (restoring && wanted === "original") await options.restoration?.wait();
       if (selector.includes('[data-hydrated="true"]')) await options.hydration?.wait();
       if ((options.domFailure && wanted === "changed") || !visible.includes(wanted)) throw new Error("DOM did not update");
     },
@@ -162,6 +165,10 @@ function fixture(options: FixtureOptions): Fixture {
     },
   };
   const emit = (payload: string) => evaluate(context, `globalThis.__previewControllerPort?.postMessage({ kind: 'message', payload: ${JSON.stringify(payload)} });`);
+  const finishRestoration = () => {
+    visible = "original";
+    if (options.updateMessage) emit(options.updateMessage);
+  };
   const sourceAdapter = {
     async read() { return source; },
     async write(_path: string, contents: string) {
@@ -169,11 +176,15 @@ function fixture(options: FixtureOptions): Fixture {
       if (options.hydration && !options.hydration.isReady()) throw new Error("Source edit preceded hydration");
       writes.push(contents);
       source = contents;
+      if (contents === "original" && options.restoration) {
+        restoring = true;
+        void options.restoration.wait().then(finishRestoration);
+        return;
+      }
       visible = contents;
-      if (contents !== "changed") return;
       if (options.updateMessage) emit(options.updateMessage);
       else evaluate(context, "globalThis.__previewControllerPort?.postMessage({ kind: 'ping' });");
-      if (options.replaceDocumentOnUpdate) replaceDocument();
+      if (contents === "changed" && options.replaceDocumentOnUpdate) replaceDocument();
     },
   };
   return {
@@ -245,6 +256,62 @@ test("SvelteKit awaits a disabled button's click actionability after a fresh nav
   const rows = await pending;
   expect(rows[0]?.status).toBe("pass");
   expect(run.visits).toEqual(["http://local/"]);
+});
+
+function tanstackDevCheck() {
+  const app = fullstackApps.find(app => app.id === "fullstack-tanstack-start");
+  if (!app) throw new Error("Missing TanStack fixture");
+  const check = app.commands.find(command => command.name === "dev")?.check;
+  if (check?.kind !== "page") throw new Error("Missing TanStack dev page check");
+  return { app, check };
+}
+
+test("TanStack delays the first source edit until client hydration", async () => {
+  const { check } = tanstackDevCheck();
+  const hydration = hydrationGate();
+  const run = fixture({ hydration, updateMessage: JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/page.tsx" }] }) });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  try {
+    const pending = productObservations(run.page, "http://local/", { ...check, hmr: hmrCheck().hmr, probes: [] }, run.source, traffic, 1000);
+    await hydration.waiting;
+    expect(run.writes).toEqual([]);
+    hydration.hydrate();
+    const rows = await pending;
+    expect(rows[0]?.status).toBe("pass");
+    expect(run.writes).toEqual(["changed", "original"]);
+  } finally { hydration.hydrate(); await traffic.close(); }
+});
+
+test("TanStack actions cannot click an SSR button before client hydration", async () => {
+  const { app, check } = tanstackDevCheck();
+  const hydration = hydrationGate(app.files["src/routes/index.tsx"]?.includes('id="increment" disabled={!hydrated}'));
+  const run = fixture({ hydration, updateMessage: null });
+  const pending = productObservations(run.page, "http://local/", { ...check, hmr: undefined, probes: [
+    { kind: "action", id: "client-interaction", path: "/", button: "#increment", selector: "#count", text: "action-result" },
+  ] }, run.source, { beginEdit: async () => {}, count: async () => 0, evidenceSince: async () => [] }, 1000);
+  await hydration.waiting;
+  hydration.hydrate();
+  const rows = await pending;
+  expect(rows[0]?.status).toBe("pass");
+});
+
+test("HMR restoration completes before a later probe navigates", async () => {
+  const restoration = hydrationGate();
+  const run = fixture({ restoration, updateMessage: JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/page.tsx" }] }) });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  try {
+    const pending = productObservations(run.page, "http://local/", { ...hmrCheck(), probes: [
+      { kind: "route", id: "route", path: "/query", selector: "h1", text: "route-result" },
+    ] }, run.source, traffic, 1000);
+    await restoration.waiting;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(run.visits).toEqual(["http://local/__preview/3137/"]);
+    restoration.hydrate();
+    const rows = await pending;
+    expect(rows.map(row => row.status)).toEqual(["pass", "pass"]);
+  } finally { restoration.hydrate(); await traffic.close(); }
 });
 
 test("observes preview WebSocket messages over MessagePort after the edit boundary", async () => {
