@@ -7,6 +7,7 @@ import {
   attachTerminal,
   attachTerminalInput,
   createTerminalInputPolicy,
+  terminalControls,
   type TerminalContext,
 } from "waffle/browser/runtime-terminals";
 import type { RuntimeWorkerRequest } from "waffle/browser/worker";
@@ -21,6 +22,9 @@ export interface BunTerminal {
   resolve(target: 0 | 1 | 2): Stream | undefined;
   /** What this process's own children inherit. */
   spawnData(): TerminalMetadata;
+  /** Waffle's failure code, or undefined once the session's input mode changed. The shell
+   * restores the mode when the job ends. */
+  setRawMode(raw: boolean): string | undefined;
   dispose(): void;
 }
 
@@ -41,8 +45,19 @@ export function attachBunTerminal(request: RuntimeWorkerRequest, checkActive: ()
     attachment.dispose();
     throw error;
   }
+  // Each inherited descriptor owns its endpoint (its description closes it); any one of them
+  // carries the session's mode controls.
+  let stdin: Stream | undefined;
   return {
-    resolve: target => target === 0 ? attachment.resolve(0) : undefined,
+    resolve: target => target === 0 ? stdin = attachment.resolve(0) : undefined,
+    setRawMode(raw) {
+      const controls = terminalControls(stdin);
+      if (!controls) return "CLOSED";
+      const snapshot = controls.snapshot();
+      if (snapshot.kind === "error") return snapshot.code;
+      const changed = controls.setMode({ expected: snapshot.value.selection, mode: raw ? "raw" : "cooked" });
+      return changed.kind === "error" ? changed.code : undefined;
+    },
     spawnData: () => ({ terminalContext: attachment.inherit(), terminalInput: input }),
     dispose: () => attachment.dispose(),
   };

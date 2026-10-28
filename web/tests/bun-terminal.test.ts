@@ -40,6 +40,11 @@ test("stdin reads the foreground terminal's keys; stdout and stderr keep the def
     expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe("1+2\r");
     expect(terminal!.resolve(1)).toBeUndefined();
     expect(terminal!.resolve(2)).toBeUndefined();
+    expect(terminal!.setRawMode(false)).toBeUndefined();
+    expect(input.push(new TextEncoder().encode("ab\r"))).toBe(3);
+    expect(stdin.tryRead?.([bytes])).toBe(3);
+    expect(new TextDecoder().decode(bytes.subarray(0, 3))).toBe("ab\n");
+    expect(terminal!.setRawMode(true)).toBeUndefined();
     const inherited = terminal!.spawnData();
     expect(inherited.terminalInput).toBe(input.buffer);
     expect(inherited.terminalContext).toBeDefined();
