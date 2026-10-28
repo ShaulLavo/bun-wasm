@@ -104,7 +104,8 @@ export default defineConfig({ plugins: [sveltekit()] });
   },
   {
     id: "fullstack-nuxt", family: "fullstack",
-    dependencies: { nuxt: "3.19.3", "@nuxt/cli": "3.29.0", vue: "3.5.22", nitropack: "2.12.6", typescript: "5.9.3" },
+    // nitropack 2.13.1 is in nuxt 3.19.3's ^2.12.6 range and rewrites readAsset's import.meta.url (nitrojs/nitro 50c61c89).
+    dependencies: { nuxt: "3.19.3", "@nuxt/cli": "3.29.0", vue: "3.5.22", nitropack: "2.13.1", typescript: "5.9.3" },
     features: ["ssr-query", "query-dom", "client-interaction"],
     files: {
       "nuxt.config.ts": `export default defineNuxtConfig({
