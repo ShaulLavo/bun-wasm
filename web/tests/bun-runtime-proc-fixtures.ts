@@ -11,6 +11,7 @@ interface BunRuntimeCommand {
 }
 export interface BunRuntimeScenario {
   name: string;
+  basePrograms?: boolean;
   fileURLs?: Readonly<Record<string, string>>;
   commands: BunRuntimeCommand[];
   pipe?: "pipeline" | "input" | "signal";
@@ -86,7 +87,7 @@ export function bunRuntimeProcFixture(scenario: BunRuntimeScenario): Uint8Array<
   for (const [index, command] of scenario.commands.entries()) {
     const spec: Omit<SpawnRequest, "fds"> & { fds: BunRuntimeCommand["fds"] } = {
       executable: command.executable ?? "/bin/bun", argv: ["bun", "-e", command.source],
-      env: { PWD: "/home/user", PATH: "/bin:/usr/bin" }, cwd: "/home/user", job: 0,
+      env: { PWD: "/home/user", PATH: scenario.basePrograms ? "/usr/local/bin:/usr/bin:/bin" : "/bin:/usr/bin" }, cwd: "/home/user", job: 0,
       fds: command.fds ?? [{ child: 0, parent: 0 }, { child: 1, parent: 1 }, { child: 2, parent: 2 }],
     };
     const json = encodeDescriptorMarkers(spec, pointer, body);
@@ -205,7 +206,22 @@ const mainScenarios: BunRuntimeScenario[] = [
   { name: "start-failed", commands: [{ executable: "/bin/broken-bun", source: "", kind: 2, status: 29 }], stdout: "external-root-ok\n" },
   { name: "preopen-root", commands: [{ source: `console.log(await Bun.file('preopen-data').text());` }], stdout: "ROOT_PREOPEN_OK\nexternal-root-ok\n" },
 ];
-export const bunRuntimeProcScenarios: readonly BunRuntimeScenario[] = mainScenarios.concat([[3], [3, 4], [3, 5], [3, 1000000]].map<BunRuntimeScenario>(inherited => ({
+const baseScenario: BunRuntimeScenario = {
+  name: "base-programs",
+  basePrograms: true,
+  commands: [{ source: `
+    if (Bun.which("cat") !== "/usr/bin/cat") throw new Error("base PATH lookup failed");
+    await Bun.write("/home/user/base-input", "base-spawn-ok\\n");
+    const child = Bun.spawn(["cat", "/home/user/base-input"], { stdout: "pipe", stderr: "pipe" });
+    const output = await new Response(child.stdout).text();
+    const error = await new Response(child.stderr).text();
+    if (await child.exited !== 0 || error) throw new Error("base spawn failed: " + error);
+    process.stdout.write(output);
+  ` }],
+  stdout: "base-spawn-ok\nexternal-root-ok\n",
+};
+
+export const bunRuntimeProcScenarios: readonly BunRuntimeScenario[] = mainScenarios.concat([baseScenario], [[3], [3, 4], [3, 5], [3, 1000000]].map<BunRuntimeScenario>(inherited => ({
   name: `preopen-inherited-${inherited.join("-")}`,
   commands: [{ source: `console.log(await Bun.file('preopen-data').text());`,
     fds: ordinary.concat(inherited.map(fd => ({ child: fd, parent: 1 }))) }], stdout: "ROOT_PREOPEN_OK\nexternal-root-ok\n",

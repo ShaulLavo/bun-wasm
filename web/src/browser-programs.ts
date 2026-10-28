@@ -1,6 +1,4 @@
 import type { Runtime } from "waffle";
-import { installBase } from "waffle-base";
-import { installShellCommands } from "bash-web";
 import { programLauncher } from "./program-launcher";
 
 interface ProgramUrls {
@@ -10,6 +8,7 @@ interface ProgramUrls {
 }
 
 async function install(runtime: Runtime, urls: ProgramUrls) {
+  const [{ installBase }, { installShellCommands }] = await Promise.all([import("waffle-base"), import("bash-web")]);
   const base = await installBase(runtime, { launcher: programLauncher(urls.worker) });
   try {
     const shell = await installShellCommands(runtime, { wasmUrl: urls.shell, workerUrl: urls.shellWorker });
@@ -41,7 +40,7 @@ export class BrowserPrograms {
     });
   }
 
-  /** The page stops its runtime first, so package disposal cannot wait on a live guest. */
+  /** The page starts runtime shutdown before awaiting this fence on its guests. */
   dispose(): Promise<void> {
     this.closed = true;
     return this.installation?.then(installed => installed.dispose(), () => {}) ?? Promise.resolve();

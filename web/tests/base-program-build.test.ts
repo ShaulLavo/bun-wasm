@@ -17,6 +17,22 @@ async function buildAssets(root: string) {
   return out;
 }
 
+async function verifyAssets(out: string, server: ReturnType<typeof Bun.serve>, requests: () => number) {
+  Object.defineProperty(globalThis, "location", { configurable: true, value: { href: new URL("/nested/app/", server.url).href } });
+  const bundled: unknown = await import(join(out, "entry.js"));
+  expect(requests()).toBe(0);
+  if (!bundled || typeof bundled !== "object" || !("urls" in bundled) || !Array.isArray(bundled.urls)) throw new Error("Missing bundled base URLs");
+  expect(bundled.urls).toHaveLength(23);
+  for (const url of bundled.urls) {
+    if (typeof url !== "string") throw new Error("Invalid base asset URL");
+    expect(new URL(url).pathname).toStartWith("/nested/app/programs/base/");
+    const response = await fetch(url);
+    expect(response.status).toBe(200);
+    expect((await response.bytes()).subarray(0, 4)).toEqual(new Uint8Array([0, 97, 115, 109]));
+  }
+  expect(requests()).toBe(23);
+}
+
 test("packed base assets remain lazy and resolve under the app path after bundling", async () => {
   const root = await mkdtemp(join(tmpdir(), "bun-base-assets-"));
   const location = Object.getOwnPropertyDescriptor(globalThis, "location");
@@ -29,19 +45,7 @@ test("packed base assets remain lazy and resolve under the app path after bundli
       return new Response(Bun.file(join(out, path.replace(/^\/nested\/app\//, ""))));
     } });
     try {
-      Object.defineProperty(globalThis, "location", { configurable: true, value: { href: new URL("/nested/app/", server.url).href } });
-      const bundled: unknown = await import(join(out, "entry.js"));
-      expect(requests).toBe(0);
-      if (!bundled || typeof bundled !== "object" || !("urls" in bundled) || !Array.isArray(bundled.urls)) throw new Error("Missing bundled base URLs");
-      expect(bundled.urls).toHaveLength(23);
-      for (const url of bundled.urls) {
-        if (typeof url !== "string") throw new Error("Invalid base asset URL");
-        expect(new URL(url).pathname).toStartWith("/nested/app/programs/base/");
-        const response = await fetch(url);
-        expect(response.status).toBe(200);
-        expect((await response.bytes()).subarray(0, 4)).toEqual(new Uint8Array([0, 97, 115, 109]));
-      }
-      expect(requests).toBe(23);
+      await verifyAssets(out, server, () => requests);
     } finally { await server.stop(true); }
   } finally {
     if (location) Object.defineProperty(globalThis, "location", location);

@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { realpath } from "node:fs/promises";
+import { dirname } from "node:path";
 import { createRuntime, type Runtime } from "waffle";
 import { basePrograms } from "waffle-base";
 import { DescriptorTable, type Stream } from "waffle/core/descriptors";
@@ -57,8 +59,30 @@ async function consumerRoot(runtime: Runtime) {
   };
 }
 
+async function disposePrograms(runtime: Runtime, programs: BrowserPrograms) {
+  try { await runtime.dispose(); }
+  finally { await programs.dispose(); }
+}
+function restoreHost(fetch: typeof globalThis.fetch, worker: typeof globalThis.Worker, workers: Set<Worker>) {
+  const remaining = workers.size;
+  for (const owned of workers) owned.terminate();
+  globalThis.fetch = fetch;
+  globalThis.Worker = worker;
+  expect(remaining).toBe(0);
+}
+
 async function withPrograms(run: (runtime: Runtime, programs: BrowserPrograms, fetches: string[]) => Promise<void>) {
   const originalFetch = globalThis.fetch;
+  const originalWorker = globalThis.Worker;
+  const workers = new Set<Worker>();
+  globalThis.Worker = new Proxy(originalWorker, { construct(target, args) {
+    const worker: unknown = Reflect.construct(target, args);
+    if (!(worker instanceof originalWorker)) throw new Error("Invalid native Worker");
+    workers.add(worker);
+    const terminate = worker.terminate.bind(worker);
+    worker.terminate = () => { try { return terminate(); } finally { workers.delete(worker); } };
+    return worker;
+  } });
   const fetches: string[] = [];
   globalThis.fetch = new Proxy(originalFetch, { apply(target, receiver, args) {
     fetches.push(String(args[0]));
@@ -68,9 +92,9 @@ async function withPrograms(run: (runtime: Runtime, programs: BrowserPrograms, f
   const programs = new BrowserPrograms(runtime, urls);
   try { await run(runtime, programs, fetches); }
   finally {
-    try { await runtime.dispose(); }
-    finally { await programs.dispose(); globalThis.fetch = originalFetch; }
+    await disposePrograms(runtime, programs).finally(() => restoreHost(originalFetch, originalWorker, workers));
   }
+
 }
 
 test("one app install publishes PATH metadata without guest downloads; which and cat execute on its runtime", async () => {
@@ -105,9 +129,31 @@ test("conflicting caller programs fail instead of pretending base is installed",
   await withPrograms(async (runtime, programs) => {
     await runtime.filesystem.mkdirp("/usr/bin");
     await runtime.filesystem.writeFile("/usr/bin/cat", "caller owned");
-    await expect(programs.ready()).rejects.toThrow("another entry already exists");
+    const failed = await programs.ready().then(() => () => {}, error => () => { throw error; });
+    expect(failed).toThrow("another entry already exists");
     expect(new TextDecoder().decode(await runtime.filesystem.readFile("/usr/bin/cat"))).toBe("caller owned");
     expect(await runtime.filesystem.lookup("/usr/bin/env")).toBeUndefined();
     expect(await runtime.filesystem.lookup("/bin/sh")).toBeUndefined();
   });
+});
+
+
+test("closing during installation removes its markers and refuses a late ready result", async () => {
+  await withPrograms(async (runtime, programs) => {
+    const pending = programs.ready();
+    const stopped = programs.dispose();
+    const failed = await pending.then(() => () => {}, error => () => { throw error; });
+    expect(failed).toThrow("closed during installation");
+    await stopped;
+    expect(await runtime.filesystem.lookup("/usr/bin/cat")).toBeUndefined();
+    expect(await runtime.filesystem.lookup("/bin/sh")).toBeUndefined();
+  });
+});
+
+test("base families and Bun resolve one physical Waffle package", async () => {
+  const expected = await realpath(Bun.resolveSync("waffle/package.json", import.meta.dir));
+  for (const name of ["waffle-base", "waffle-coreutils", "waffle-findutils", "waffle-grep", "waffle-ripgrep", "waffle-sed"]) {
+    const entry = Bun.resolveSync(name, import.meta.dir);
+    expect(await realpath(Bun.resolveSync("waffle/package.json", dirname(entry)))).toBe(expected);
+  }
 });

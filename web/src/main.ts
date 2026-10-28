@@ -76,6 +76,11 @@ newFileButton.disabled = true;
 engineSelect.disabled = true;
 fileSelect.disabled = true;
 const runtime = createRuntime({ filesystem: { mode, name: "bun-wasm-workspace" } });
+const browserPrograms = new BrowserPrograms(runtime, {
+  worker: new URL("./preview1-worker.js", location.href),
+  shell: new URL("./programs/shell-engine.wasm", location.href),
+  shellWorker: new URL("./shell-worker.js", location.href),
+});
 const sharedObjects = installRuntimeSharedObjects(runtime);
 addEventListener("pagehide", (event: PageTransitionEvent) => { if (!event.persisted) sharedObjects.close(); });
 const fs = runtime.filesystem;
@@ -115,14 +120,10 @@ try {
 
 // ---------- bun.wasm ----------
 
-const browserPrograms = new BrowserPrograms(runtime, {
-  worker: new URL("./preview1-worker.js", location.href),
-  shell: new URL("./programs/shell-engine.wasm", location.href),
-  shellWorker: new URL("./shell-worker.js", location.href),
-});
+
 addEventListener("pagehide", (event: PageTransitionEvent) => {
   if (event.persisted) return;
-  void runtime.dispose().finally(() => browserPrograms.dispose()).catch(console.error);
+  void Promise.all([runtime.dispose(), browserPrograms.dispose()]).catch(console.error);
 });
 
 let wasm: { module: WebAssembly.Module; size: number } | { error: string } | null = null;
