@@ -122,7 +122,7 @@ const browserPrograms = new BrowserPrograms(runtime, {
 });
 addEventListener("pagehide", (event: PageTransitionEvent) => {
   if (event.persisted) return;
-  void runtime.dispose().then(() => browserPrograms.dispose()).catch(console.error);
+  void runtime.dispose().finally(() => browserPrograms.dispose()).catch(console.error);
 });
 
 let wasm: { module: WebAssembly.Module; size: number } | { error: string } | null = null;

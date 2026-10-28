@@ -104,7 +104,7 @@ const browserPrograms = new BrowserPrograms(runtime, {
 });
 addEventListener("pagehide", (event: PageTransitionEvent) => {
   if (event.persisted) return;
-  void runtime.dispose().then(() => browserPrograms.dispose()).catch(console.error);
+  void runtime.dispose().finally(() => browserPrograms.dispose()).catch(console.error);
 });
 function showStartupFailure(error: unknown): void {
   startup = "failed";
