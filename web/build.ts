@@ -1,7 +1,7 @@
 // Builds the playground into web/dist as plain static files.
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
 // BUN_TOOLS_WASM overrides ../dist/bun-tools.wasm; HERMES_WASM overrides the opt-in ../dist/bun-hermes.wasm.
-// BASH_WEB_SHELL_WASM and BASH_WEB_ENV_WASM override ../dist/bash-web-shell.wasm and ../dist/bash-web-env.wasm (scripts/build-bash-web-shell.sh).
+// bash-web guests come from scripts/build-bash-web-shell.sh (BASH_WEB_GUESTS_DIR overrides ../dist).
 // (Not BUN_JSC_WASM: Bun refuses to start when a BUN_JSC_* variable is not a JSC option.)
 import { existsSync, rmSync, statSync } from "node:fs";
 import { previewWebsocketScript } from "./preview-build";
