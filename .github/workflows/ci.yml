@@ -423,6 +423,14 @@ jobs:
             ${{ env.CARGO_HOME }}/bin/cargo-machete
             ${{ env.CARGO_TARGET_DIR }}
           key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', '.github/workflows/ci.yml') }}
+      - name: Restore the bash-web shell guest build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}/bash-web-source
+            ${{ env.CARGO_TARGET_DIR }}/bash-web-shell
+          # Cargo does not see sysroot or C toolchain changes, so every build input is in the key.
+          key: bash-web-shell-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ hashFiles('scripts/build-bash-web-shell.sh', '.cargo/**', 'rust-toolchain.toml', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'bun.lock') }}
       - name: Install the Web host dependencies
         run: bun install --cwd web --frozen-lockfile
       # The JSC guest owns its Cargo target and its dist/bun-jsc.wasm outputs. It builds
@@ -515,6 +523,7 @@ jobs:
           export WASI_SDK="$WASI_SDK_PATH"
           guest_environment=$(bun scripts/guest-build-receipt.ts environment)
           eval "$guest_environment"
+          JOBS=2 bash scripts/build-bash-web-shell.sh
           bun scripts/test-checks.ts native
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/root-overrides.ts

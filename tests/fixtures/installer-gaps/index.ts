@@ -102,7 +102,8 @@ const cases: Record<string, () => Promise<void>> = {
     check((await run(cwd, "run", "fixture-cli", "direct")).trim() === "fixture-1.1.0 direct", "direct binary");
     rmSync(join(cwd, "node_modules/.bin/fixture-cli"));
     check((await run(cwd, "run", "fixture-cli", "manifest")).trim() === "fixture-1.1.0 manifest", "direct manifest binary");
-    check((await run(cwd, "run", "dev", "manifest")).trim() === "fixture-1.1.0 two words|manifest", "package script manifest binary");
+    // A script runs in the system shell, which finds binaries on PATH only: without the .bin link,
+    // native Bun's `bun run dev` fails with "command not found" too.
     check((await run(cwd, "x", "--no-install", "fixture-cli", "manifest")).trim() === "fixture-1.1.0 manifest", "bun x installed manifest");
     symlinkSync("../fixture-cli/cli.ts", join(cwd, "node_modules/.bin/constructor"));
     check((await run(cwd, "run", "constructor", "proto")).trim() === "fixture-1.1.0 proto", "inherited script property masked a binary");

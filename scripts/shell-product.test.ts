@@ -44,7 +44,7 @@ function workerJobFixture() {
     const state = workerProcessState(transport);
     jobs.admission({ pid: state.pid, parentPid: state.parentPid, job: state.job, stage }, { request, rootPid: state.rootPid });
   }
-  function reserve(parent: typeof root, job = 0) {
+  function reserve(parent: typeof root, job = 0, jobLifetime?: "caller-fatal") {
     let child: WorkerProcessTransport | undefined;
     let request: SpawnRequest | undefined;
     const parentClient = client(parent.transport, message => {
@@ -53,7 +53,7 @@ function workerJobFixture() {
       request = message.request;
       admit(child, request);
     });
-    parentClient.spawn(parentClient.pid, { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/", job, fds: [] });
+    parentClient.spawn(parentClient.pid, { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/", job, fds: [], ...(jobLifetime ? { jobLifetime } : {}) });
     if (!child || !request) throw new Error("Expected real shared-directory spawn");
     return { transport: child, request };
   }
@@ -119,6 +119,20 @@ test("Ctrl-C physical worker proof allows a positively owned independent job cre
   probe.live.delete(child);
   expect(probe.live.size).toBe(3);
   expect(() => probe.jobs.stopped(probe.baseline, foreground)).not.toThrow();
+});
+
+test("a caller-fatal job that env starts for node belongs to its caller's foreground cohort", () => {
+  for (const stopsNode of [true, false]) {
+    const probe = workerJobFixture();
+    const shell = probe.launch(probe.reserve(probe.root), "bash-web:utility:sh");
+    const env = probe.launch(probe.reserve(shell, workerProcessState(shell.transport).job), "bash-web:utility:env");
+    const node = probe.launch(probe.reserve(env, 0, "caller-fatal"));
+    const foreground = probe.jobs.foreground(probe.baseline);
+    expect(foreground.has(workerProcessState(node.transport).job)).toBe(true);
+    for (const worker of stopsNode ? [shell, env, node] : [shell, env]) probe.live.delete(worker);
+    if (stopsNode) expect(() => probe.jobs.stopped(probe.baseline, foreground)).not.toThrow();
+    else expect(() => probe.jobs.stopped(probe.baseline, foreground)).toThrow("not physically stopped");
+  }
 });
 
 test("Ctrl-C rejects every live foreground member even when a legitimate independent job also survives", () => {
@@ -446,7 +460,7 @@ test("bun-shell mode selects the shell command stages without app installs", () 
   const selected = selectProductRun("bun-shell");
   expect(selected.mode).toBe("bun-shell");
   expect(selected.fixtures.map(fixture => fixture.id)).toEqual(["bun-shell"]);
-  expect(selected.stages).toEqual(["bun-exec", "bun-shell-api", "bun-init", "bun-create", "bun-repl"]);
+  expect(selected.stages).toEqual(["bun-exec", "bun-shell-api", "bun-init", "bun-create", "bun-repl", "bun-scripts"]);
   expect(selected.stages.some(stage => (stages as readonly string[]).includes(stage))).toBe(false);
 });
 

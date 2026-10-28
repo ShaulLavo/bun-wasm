@@ -4,7 +4,7 @@ import { workerProcessDirectoryId, workerProcessState } from "waffle/proc/worker
 
 type ProcessWorker = Pick<ReturnType<typeof workerProcessState>, "pid" | "parentPid" | "rootPid" | "job" | "jobOwner" | "jobLeaderPid"> & { directory: string; adapter: unknown };
 type Scope<W> = { baseline: ReadonlySet<W>; root: ProcessWorker; after: number };
-type Admission = Pick<ProcessAdmissionEvent, "pid" | "parentPid" | "job"> & { stage: ProcessAdmissionEvent["stage"]; sequence: number; request?: { job: number; rootPid: number | undefined } };
+type Admission = Pick<ProcessAdmissionEvent, "pid" | "parentPid" | "job"> & { stage: ProcessAdmissionEvent["stage"]; sequence: number; request?: { job: number; jobLifetime?: "independent" | "caller-fatal"; rootPid: number | undefined } };
 
 function processWorker(message: unknown): ProcessWorker | undefined {
   if (!message || typeof message !== "object" || !("runtimeProcess" in message) || message.runtimeProcess === undefined) return;
@@ -20,9 +20,16 @@ function processWorker(message: unknown): ProcessWorker | undefined {
   return { directory: workerProcessDirectoryId(transport), pid, parentPid, rootPid, job, jobOwner, jobLeaderPid, adapter: "adapter" in message ? message.adapter : undefined };
 }
 
+function describe(message: unknown) {
+  if (!message || typeof message !== "object") return typeof message;
+  return Object.entries(message).map(([key, value]) => key === "type" ? `type=${String(value)}` : key).join(",");
+}
+
 /** Cache request intent and startup scalars before shared rows can be collected. */
 export class WorkerJobs<W extends object> {
   private readonly identities = new Map<W, ProcessWorker | Error>();
+  /** The first message of a worker that never carried a process transport, for diagnostics. */
+  private readonly unidentified = new Map<W, string>();
   private readonly admissions = new Map<number, Admission>();
   private sequence = 0;
   constructor(private readonly live: ReadonlySet<W>, private readonly isIdleWorker: (worker: W) => boolean) {}
@@ -34,7 +41,7 @@ export class WorkerJobs<W extends object> {
       this.admissions.set(event.pid, entry);
     }
     entry.stage = event.stage;
-    if (!entry.request && record?.request) entry.request = { job: record.request.job, rootPid: record.rootPid };
+    if (!entry.request && record?.request) entry.request = { job: record.request.job, jobLifetime: record.request.jobLifetime, rootPid: record.rootPid };
   }
 
   observe(worker: W, message: unknown) {
@@ -42,6 +49,7 @@ export class WorkerJobs<W extends object> {
     try {
       const identity = processWorker(message);
       if (identity) this.identities.set(worker, identity);
+      else if (!this.unidentified.has(worker)) this.unidentified.set(worker, describe(message));
     } catch (error) {
       this.identities.set(worker, error instanceof Error ? error : new Error(String(error)));
     }
@@ -56,7 +64,7 @@ export class WorkerJobs<W extends object> {
   private identity(worker: W) {
     const identity = this.identities.get(worker);
     if (identity instanceof Error) throw identity;
-    if (!identity) throw new Error("Live worker has no captured process ownership");
+    if (!identity) throw new Error(`Live worker has no captured process ownership (first message: ${this.unidentified.get(worker) ?? "none"})`);
     return identity;
   }
 
@@ -97,6 +105,12 @@ export class WorkerJobs<W extends object> {
     if (Array.from(this.admissions.values()).some(value => value.sequence < entry.sequence && value.job === entry.job && value.request && value.request.job <= 0)) throw new Error("New job reused an observed job identity");
     if (entry.parentPid === scope.root.pid && request.job === 0) return "foreground";
     if (entry.parentPid === scope.root.pid && request.job === -1) return "independent";
+    // A caller-fatal job (env running its command) lives and dies with its caller: same cohort.
+    if (request.jobLifetime === "caller-fatal") {
+      const owner = this.admissions.get(caller.pid);
+      if (!owner) throw new Error("Caller-fatal job caller has no admitted ownership");
+      return this.cohort(owner, scope, seen);
+    }
     if (caller.adapter !== "bun" || request.job !== 0) throw new Error("Independent job has no explicit Bun detach request");
     const parent = this.admissions.get(caller.pid);
     if (!parent) throw new Error("Independent job caller has no admitted ownership");

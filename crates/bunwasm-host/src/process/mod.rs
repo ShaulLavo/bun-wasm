@@ -173,6 +173,17 @@ impl Runtime {
         self.executables.register(paths, module)?;
         Ok(())
     }
+    /// bash-web's shell guest at /bin/sh and /bin/bash, for package scripts, Bun.$ and bun exec.
+    pub fn register_shell(&self, module: &wasmtime::Module) -> anyhow::Result<()> {
+        self.executables
+            .register(&executables::SHELL_PATHS, module)?;
+        Ok(())
+    }
+    /// bash-web's env utility at /bin/env and /usr/bin/env, for `#!/usr/bin/env node` bins.
+    pub fn register_env(&self, module: &wasmtime::Module) -> anyhow::Result<()> {
+        self.executables.register(&executables::ENV_PATHS, module)?;
+        Ok(())
+    }
     pub fn module_for<'a>(
         &'a self,
         argv: &[String],
@@ -362,10 +373,7 @@ impl Processes {
         let thread = std::thread::Builder::new()
             .name("bun-wasm-access".into())
             .spawn(move || {
-                let result = runtime
-                    .executables
-                    .check(&path, &cwd, &runtime.dirs)
-                    .map_or_else(|error| error, |_| 0);
+                let result = runtime.executables.access(&path, &cwd, &runtime.dirs);
                 let mut state = slot.lock().unwrap();
                 if matches!(*state, AccessState::Pending) {
                     *state = AccessState::Complete(result);
@@ -551,7 +559,12 @@ impl Processes {
         let startup = self
             .runtime
             .executables
-            .check(&request.executable, &request.cwd, &self.runtime.dirs)
+            .resolve(
+                &request.executable,
+                &request.cwd,
+                &self.runtime.dirs,
+                request.argv.clone(),
+            )
             .map_err(|errno| match errno {
                 NOENT | ACCES | NOTDIR | -45 | -48 | AGAIN | IO => errno,
                 PERM => ACCES,
@@ -623,7 +636,11 @@ impl Processes {
                         drop(fds);
                         cancellation.select(FinalOutcome::StartFailed(-errno))
                     }
-                    Ok((module, executable)) => {
+                    Ok(executables::Resolved {
+                        module,
+                        path: executable,
+                        argv,
+                    }) => {
                         let stdio = Stdio {
                             fds,
                             pid,
@@ -633,7 +650,7 @@ impl Processes {
                             crate::run_module_instance(
                                 runtime.clone(),
                                 &module,
-                                request.argv,
+                                argv,
                                 {
                                     let mut env = request.env;
                                     env.insert("BUNWASM_EXEC_PATH".into(), executable);
@@ -775,8 +792,10 @@ impl Processes {
                 .all(|child| child.result.is_some()))
     }
 
+    /// Flags: 0 waits, 1 polls, 2 is Waffle's CLEANUP wait, which a pending handled signal does
+    /// not interrupt and which cannot wait for the caller's own job.
     pub fn wait_job(&self, job: i32, flags: i32) -> Result<FinalOutcome, i32> {
-        if flags != 0 && flags != 1 {
+        if !(0..=2).contains(&flags) || (flags == 2 && job == self.job_of(0)) {
             return Err(INVAL);
         }
         loop {
@@ -809,7 +828,12 @@ impl Processes {
             if flags == 1 {
                 return Err(AGAIN);
             }
-            if self.cancel.interrupted() {
+            let stopped = if flags == 2 {
+                self.cancel.check().is_err()
+            } else {
+                self.cancel.interrupted()
+            };
+            if stopped {
                 return Err(INTR);
             }
             // Signals use their own wake state; rescan them within 10ms without

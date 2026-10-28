@@ -25,7 +25,7 @@ const nextFixture = fixture(nextApps, "next-15-app");
 export const fixtures = [viteFixture, nextFixture];
 export type { Fixture };
 export const stages = ["install", "install-and-dev-dom", "ctrl-c-1", "restart-2-dom", "ctrl-c-2", "restart-3-dom", "ctrl-c-3", "build-tail", "bun-x-grep", "redirect", "and-or-status", "cwd", "port-3001-dom", "ctrl-c-port"] as const;
-export const bunShellStages = ["bun-exec", "bun-shell-api", "bun-init", "bun-create", "bun-repl"] as const;
+export const bunShellStages = ["bun-exec", "bun-shell-api", "bun-init", "bun-create", "bun-repl", "bun-scripts"] as const;
 export type Stage = (typeof stages)[number] | (typeof bunShellStages)[number];
 export type Row = { app: string; stage: Stage | "setup" | "session" | "network" | "cleanup"; status: "pass" | "fail" | "blocked"; detail: string };
 

@@ -96,6 +96,17 @@ function setSaveState(text: string, kind: "" | "ok" | "error" = ""): void {
 let startup: "starting" | "ready" | "failed" = "starting";
 const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${template}` } });
 const fs = runtime.filesystem;
+// Package scripts, Bun.$ and bun exec run in bash-web's shell, and package bins' `#!/usr/bin/env node`
+// lines in its env utility. Like the process service, both are registered with the first command,
+// not at page startup; each guest is fetched only when it first runs.
+let shellCommands: Promise<unknown> | undefined;
+const shellWorker = () => new URL("./shell-worker.js", location.href);
+const installShell = () => shellCommands ??= Promise.all([
+  import("bash-web").then(({ installShellCommands }) =>
+    installShellCommands(runtime, { wasmUrl: new URL("./programs/shell-engine.wasm", location.href), workerUrl: shellWorker() })),
+  import("bash-web/utilities/env").then(({ installEnv }) =>
+    installEnv(runtime, { wasmUrl: new URL("./programs/env.wasm", location.href), workerUrl: shellWorker() })),
+]);
 function showStartupFailure(error: unknown): void {
   startup = "failed";
   setStatus(error instanceof Error && "code" in error ? `${String(error.code)}: ${error.message}` : String(error), "error");
@@ -273,7 +284,7 @@ async function startDevServer(): Promise<void> {
     BUN_WASM_STARTUP: "1",
   };
   const started = performance.now();
-  const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes()]);
+  const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes(), installShell()]);
   if (revision !== serverRevision) return;
   const output = new StartupOutput((text) => term.write(text), startupRecord);
   serverTiming = { started, visibleStart };

@@ -227,6 +227,18 @@ fn spawn_rejects_unhandable_filesystem_fd_without_partial_child() {
 }
 
 #[test]
+fn cleanup_wait_collects_a_child_job_but_never_the_callers_own() {
+    let mut processes = processes();
+    let pid = processes.spawn(&request("/bin/bun", serde_json::json!([])));
+    let job = processes.job_of(pid);
+    assert_eq!(processes.wait_job(processes.job_of(0), 2), Err(INVAL));
+    assert_eq!(processes.wait_job(job, 3), Err(INVAL));
+    assert_eq!(completed(&processes, pid), FinalOutcome::Exit(0));
+    assert_eq!(processes.wait_job(job, 2), Ok(FinalOutcome::Exit(0)));
+    assert_eq!(processes.wait_job(job, 2), Err(CHILD));
+}
+
+#[test]
 fn spawn_retains_pipe_end_before_return_and_closes_it_before_wait() {
     let mut processes = processes();
     let [read, write] = processes.pipe().unwrap();
@@ -420,7 +432,7 @@ fn blocking_job_wait_and_poll_leave_handled_signals_pending() {
     );
     assert_eq!(processes.cancel.signal(0, 0), 15);
     assert_eq!(processes.wait_job(1, 1), Err(AGAIN));
-    assert_eq!(processes.wait_job(1, 2), Err(INVAL));
+    assert_eq!(processes.wait_job(1, 3), Err(INVAL));
 }
 
 #[test]
@@ -994,6 +1006,34 @@ fn executable_symlinks_resolve_in_guest_namespace_without_erasing_components() {
         let id = p.access_start(path, "/", 1);
         assert_eq!(access_result(&mut p, id), expected, "{path}");
     }
+}
+
+#[test]
+fn only_regular_files_run_as_shebang_scripts() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut p = processes();
+    let root = std::env::temp_dir().join(format!("bun-wasm-shebang-modes-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for (name, mode) in [("plain", 0o644), ("runs", 0o755)] {
+        std::fs::write(root.join(name), "#!/bin/bun\n").unwrap();
+        std::fs::set_permissions(root.join(name), std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    // Opening a FIFO would block until a writer connects.
+    let fifo = std::ffi::CString::new(root.join("fifo").to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o755) }, 0);
+    Arc::get_mut(&mut p.runtime)
+        .unwrap()
+        .dirs
+        .push((root.clone(), "/scripts".into()));
+    for (path, expected) in [
+        ("/scripts/plain", 0),
+        ("/scripts/fifo", ACCES),
+        ("/scripts/runs", 0),
+    ] {
+        let id = p.access_start(path, "/", 1);
+        assert_eq!(access_result(&mut p, id), expected, "{path}");
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 mod poll_wake;

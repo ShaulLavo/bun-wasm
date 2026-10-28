@@ -16,13 +16,14 @@
     "cli-flags": "bun --no-install --smol run -p \"21 * 2\"",
     "node-file": "node test tail",
     "node-alias-file": "node inspect tail",
-    "cycle-a": "bun run cycle-b",
-    "cycle-b": "bun run cycle-a",
-    "implicit-a": "bun implicit-b",
-    "implicit-b": "bun implicit-a",
     "nodejs-file": "nodejs ./app.ts",
     "nodejs-eval": "nodejs -e \"console.log(42)\"",
     "nodejs-named-file": "nodejs test tail",
-    "nodejs-exit": "nodejs -e \"process.exit(17)\""
+    "nodejs-exit": "nodejs -e \"process.exit(17)\"",
+    "shell-syntax": "printf '%s\\n' one && echo \"two $npm_lifecycle_event\" | bun ./upper.ts; false || echo three",
+    "prehooked": "echo pre",
+    "hooked": "echo main",
+    "posthooked": "echo post",
+    "env-bin": "envtool baked"
   }
 }

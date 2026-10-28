@@ -1,56 +1,10 @@
+// `bun run <script>` runs package.json scripts in the system shell (bash-web's /bin/sh), the way
+// Bun's run_command.rs does with its system shell (docs/bun-patches/package-scripts-through-the-shell.md).
 (function (internal: BunWasm.Internal) {
   "use strict";
   const native = internal.native;
   const process = internal.require("process");
   const path = internal.require("path");
-
-  function variable(source: string, quote: string): { value: string; length: number; keepEmpty: boolean } | undefined {
-    const match = /^(?:\{([A-Za-z_]\w*)(?:(:-|-)([^{}]*))?\}|([A-Za-z_]\w*))/.exec(source);
-    if (!match) {
-      if (source.startsWith("{")) throw new SyntaxError("Unsupported parameter expansion in package script");
-      if (source.startsWith("(")) throw new SyntaxError("Command substitution in package scripts is not supported in bun-wasm");
-      return;
-    }
-    const value: string | undefined = process.env[match[1] || match[4]];
-    const missing = value === undefined || (match[2] === ":-" && value === "");
-    const fallback = match[3] === undefined ? [] : words(match[3], true, quote);
-    return { value: missing ? fallback.join("") : value, length: match[0].length, keepEmpty: missing && fallback.length > 0 };
-  }
-
-  function escapedCharacter(source: string, index: number, quote: string): string {
-    if (index === source.length) throw new SyntaxError("Trailing escape in package script");
-    const char = source[index];
-    if (char === "\n") return "";
-    return quote === '"' && !/[\\$`"]/.test(char) ? "\\" + char : char;
-  }
-
-  function words(source: string, preserveWhitespace = false, initialQuote = ""): string[] {
-    const result: string[] = [];
-    let word = "";
-    let quote = initialQuote;
-    let started = false;
-    for (let index = 0; index < source.length; index++) {
-      const char = source[index];
-      if (char === "\\" && quote !== "'") {
-        const escaped = escapedCharacter(source, ++index, quote);
-        word += escaped; started ||= escaped.length > 0; continue;
-      }
-      if (char === quote) { quote = ""; continue; }
-      if ((char === "'" || char === '"') && !quote) { quote = char; started = true; continue; }
-      if (char === "`" && quote !== "'") throw new SyntaxError("Command substitution in package scripts is not supported in bun-wasm");
-      if (!quote && /[|&;<>\n]/.test(char)) throw new Error("Shell operators in package scripts are not supported in bun-wasm");
-      if (!quote && !preserveWhitespace && /\s/.test(char)) {
-        started && result.push(word);
-        word = ""; started = false; continue;
-      }
-      const expanded = char === "$" && quote !== "'" ? variable(source.slice(index + 1), quote) : undefined;
-      if (expanded) { word += expanded.value; index += expanded.length; started ||= expanded.value.length > 0 || expanded.keepEmpty || quote !== ""; continue; }
-      word += char; started = true;
-    }
-    if (quote !== initialQuote) throw new SyntaxError("Unclosed quote in package script");
-    if (started) result.push(word);
-    return result;
-  }
 
   function script(cwd: string, name: string): string | undefined {
     const manifest = path.resolve(cwd, "package.json");
@@ -134,102 +88,145 @@
     } catch {}
   }
 
-  function commandFile(cwd: string, name: string): string {
-    const bare = !/[/\\]/.test(name);
-    const candidates = bare
-      ? (process.env.PATH || "").split(":").map(directory => path.resolve(cwd, directory, name))
-      : [path.resolve(cwd, name)];
-    for (const file of candidates) {
-      const directory = path.dirname(file);
-      const bin = bare && directory.endsWith("/node_modules/.bin") ? moduleBinary(path.dirname(directory), name) : undefined;
-      if (bin) return bin;
-      if (native.exists(file) && (native.stat(file).mode & 0o170000) === 0o100000) return file;
-    }
-    throw Object.assign(new Error(`Command not found: ${name}`), { code: "ENOENT" });
-  }
-
-  // These are CLI commands, never implicit script aliases. The CLI still owns their parsing.
-  const commands = new Set([
-    "help", "lint", "fmt", "test", "build", "bun", "install", "i", "ci", "add", "a", "remove", "rm", "r", "uninstall", "pm", "update", "up", "x", "bunx",
-    "create", "c", "init", "upgrade", "link", "unlink", "outdated", "publish", "patch", "patch-commit", "repl", "info", "why", "audit", "completions", "getcompletes", "discord", "exec", "dedupe", "prune", "check", "deploy", "cloud", "config", "use", "auth", "login", "logout",
-  ]);
-  const noOpFlags = new Set(["--bun", "--smol", "--silent", "--no-install"]);
-
-  function aliasArguments(argv: readonly string[], cwd: string): string[] | undefined {
-    if (path.basename(argv[0]) !== "bun") return;
-    let offset = 1;
-    while (noOpFlags.has(argv[offset])) offset++;
-    if (argv[offset] === "run") {
-      offset++;
-      while (noOpFlags.has(argv[offset])) offset++;
-      if (argv[offset] === "--") offset++;
-      return argv.slice(offset);
-    }
-    if (argv[offset] === "--") return argv.slice(offset + 1);
-    if (commands.has(argv[offset]) || argv[offset]?.startsWith("-") || sourceFile(cwd, argv[offset])) return;
-    return argv.slice(offset);
-  }
-
-  function scriptArguments(command: string, name: string): string[] {
-    const argv = words(command);
-    while (argv.length && /^[A-Za-z_][\w]*=/.test(argv[0])) {
-      const entry = argv.shift();
-      if (entry === undefined) break;
-      const equals = entry.indexOf("=");
-      process.env[entry.slice(0, equals)] = entry.slice(equals + 1);
-    }
-    if (!argv[0]) throw new Error(`Package script ${name} has no executable`);
-    process.env.npm_lifecycle_event = name;
-    process.env.npm_lifecycle_script = command;
-    process.env.npm_execpath = process.execPath;
-    return argv;
+  function scripts(cwd: string): Record<string, unknown> {
+    const manifest = path.resolve(cwd, "package.json");
+    if (!native.exists(manifest)) return {};
+    const value: unknown = JSON.parse(native.readFileUtf8(manifest));
+    if (!value || typeof value !== "object" || !("scripts" in value) || !value.scripts || typeof value.scripts !== "object") return {};
+    return value.scripts as Record<string, unknown>;
   }
 
   function resolve(requested: string): string | BunWasm.ScriptRuntimeCommand {
     const cwd = process.cwd();
-    let name = native.mainArg();
-    let args = process.argv.slice(2);
-    let file = requested;
-    const visited = new Set<string>();
+    const name = native.mainArg();
     const bins: string[] = [];
     for (let directory = cwd;; directory = path.dirname(directory)) {
       bins.push(path.resolve(directory, "node_modules", ".bin"));
       if (path.dirname(directory) === directory) break;
     }
     process.env.PATH = bins.concat(process.env.PATH ?? "/bin:/usr/bin").join(":");
-    for (;;) {
-      const command = name && !name.includes("/") ? script(cwd, name) : undefined;
-      if (command === undefined) {
-        file = sourceFile(cwd, name || requested) || binary(cwd, name) || path.resolve(cwd, name || requested);
-        break;
-      }
-      if (visited.has(name)) throw new Error(`Package script alias cycle: ${Array.from(visited).concat(name).join(" -> ")}`);
-      visited.add(name);
-      const argv = scriptArguments(command, name);
-      const alias = aliasArguments(argv, cwd);
-      const target = alias?.[0];
-      if (alias && target && !target.includes("/") && script(cwd, target) !== undefined) {
-        name = target;
-        args = alias.slice(1).concat(args);
-        continue;
-      }
-      if (["bun", "node", "nodejs"].includes(path.basename(argv[0]))) return { kind: "runtime", argv: argv.concat(args) };
-      file = commandFile(cwd, argv[0]);
-      args = argv.slice(1).concat(args);
-      break;
-    }
-    file = dereference(file);
-    process.argv.splice(1, process.argv.length - 1, file, ...args);
+    if (name && !name.includes("/") && script(cwd, name) !== undefined) return { kind: "script", name, args: process.argv.slice(2) };
+    const file = dereference(sourceFile(cwd, name || requested) || binary(cwd, name) || path.resolve(cwd, name || requested));
+    process.argv.splice(1, process.argv.length - 1, file, ...process.argv.slice(2));
     native.setMainPath(file);
     internal.mainPath = file;
     return file;
   }
 
+  // Bun's lifecycle_script_runner.rs replace_package_manager_run: npm/yarn/pnpm run and npx become bun.
+  const yarnCommands = new Set(["access", "add", "audit", "autoclean", "bin", "cache", "check", "config", "create", "dedupe", "dlx", "exec", "explain", "generate-lock-entry", "generateLockEntry", "global", "help", "import", "info", "init", "install", "licenses", "link", "list", "login", "logout", "node", "npm", "outdated", "owner", "pack", "patch", "plugin", "policies", "publish", "rebuild", "remove", "run", "set", "tag", "team", "unlink", "unplug", "up", "upgrade", "upgrade-interactive", "upgradeInteractive", "version", "versions", "why", "workspace", "workspaces"]);
+  function replacePackageManagerRun(script: string): string {
+    let out = "";
+    let delimiter = " ";
+    for (let index = 0; index < script.length;) {
+      const rest = script.slice(index);
+      const char = script[index];
+      const replaced = delimiter ? packageManagerCommand(rest) : undefined;
+      if (replaced) {
+        out += replaced.text;
+        index += replaced.length;
+        delimiter = "";
+        continue;
+      }
+      delimiter = char === " " || char === "\"" || char === "'" ? char : "";
+      out += char;
+      index++;
+    }
+    return out;
+  }
+  type Rewrite = { text: string; length: number };
+  function packageManagerCommand(rest: string): Rewrite | undefined {
+    if (rest.startsWith("npm run ")) {
+      const workspaces = npmRunInWorkspaces(rest.slice("npm run ".length));
+      if (!workspaces) return { text: "bun run ", length: "npm run ".length };
+      return { text: "bun run" + workspaces.text, length: "npm run ".length + workspaces.length };
+    }
+    if (rest.startsWith("npx ")) return { text: "bun x ", length: "npx ".length };
+    if (rest.startsWith("pnpm run ")) return { text: "bun run ", length: "pnpm run ".length };
+    if (rest.startsWith("pnpm dlx ")) return { text: "bun x ", length: "pnpm dlx ".length };
+    if (rest.startsWith("pnpx ")) return { text: "bun x ", length: "pnpx ".length };
+    if (!rest.startsWith("yarn ")) return;
+    const command = /^yarn (\S+) /.exec(rest)?.[1];
+    if (!command) return;
+    // Yarn 2's `yarn npm` and `yarn --flag` are copied through untouched.
+    if (command === "npm") return { text: "yarn npm ", length: "yarn npm ".length };
+    if (command.startsWith("-")) return { text: `yarn ${command}`, length: "yarn ".length + command.length };
+    if (command === "run") return { text: "bun run", length: "yarn run".length };
+    if (!yarnCommands.has(command)) return { text: `bun run ${command}`, length: "yarn ".length + command.length };
+  }
+
+  // Bun's append_npm_run_in_workspaces: npm takes `-w`/`--workspaces` anywhere, `bun run` only in
+  // front. Rewrites the arguments up to the first command separator, or nothing.
+  function npmRunInWorkspaces(args: string): Rewrite | undefined {
+    const end = args.search(/[;&|\r\n]/);
+    const command = (end < 0 ? args : args.slice(0, end)).trimEnd();
+    if (/['"()$`\\#]/.test(command)) return;
+    const tokens = command.split(/[ \t]+/).filter(Boolean);
+    let flags = "";
+    let rest = "";
+    let selects = false;
+    for (let index = 0; index < tokens.length; index++) {
+      const token = tokens[index]!;
+      if (token === "--workspaces" || token === "--ws") { selects = true; flags += " --workspaces"; continue; }
+      if (token === "--if-present") { flags += " --if-present"; continue; }
+      if (token === "--") { rest += " " + tokens.slice(index).join(" "); break; }
+      const named = token === "-w" || token === "--workspace";
+      const workspace = named ? tokens[++index] ?? "" : workspaceValue(token);
+      if (workspace === undefined) { rest += " " + token; continue; }
+      // Neither the next flag nor a word with a redirect glued to it.
+      if (!workspace || workspace.startsWith("-") || /[<>]/.test(workspace)) return;
+      selects = true;
+      // npm also takes the workspace's folder; `--filter` tells a path from a name by the dot.
+      flags += " --filter=" + (workspace.includes("/") && !/^[@./]/.test(workspace) ? "./" : "") + workspace;
+    }
+    return selects ? { text: flags + rest, length: command.length } : undefined;
+  }
+  function workspaceValue(token: string): string | undefined {
+    if (token.startsWith("--workspace=")) return token.slice("--workspace=".length);
+    if (token.startsWith("-w=")) return token.slice("-w=".length);
+  }
+
+  // Bun's escape for passthrough arguments appended to the script.
+  function quote(arg: string): string {
+    return internal.require("bun_shell").escape(arg);
+  }
+
+  function announce(script: string) {
+    const colors = Boolean((process as unknown as { stderr: { isTTY?: boolean } }).stderr.isTTY);
+    process.stderr.write(colors ? `\x1b[0m\x1b[2m\x1b[35m$\x1b[0m \x1b[2m\x1b[1m${script}\x1b[0m\n` : `$ ${script}\n`);
+  }
+
+  /** Bun's run_package_script_foreground with the system shell. Returns false when the run must stop. */
+  async function runScript(name: string, original: string, args: readonly string[], silent: boolean): Promise<boolean> {
+    process.env.npm_lifecycle_event = name;
+    process.env.npm_lifecycle_script = original;
+    const script = [replacePackageManagerRun(original)].concat(args.map(quote)).join(" ");
+    if (!silent) announce(script);
+    const cwd = process.cwd();
+    const shell = internal.require("bun_shell").findShell(process.env, cwd);
+    const child = internal.require("spawn").spawn([shell, "-c", script], { cwd, env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    const code = await child.exited;
+    if (code === 0) return true;
+    const signal = child.signalCode;
+    if (!silent && signal !== null && signal !== "SIGINT") process.stderr.write(`error: script "${name}" was terminated by signal ${signal}\n`);
+    if (!silent && signal === null && code !== 2) process.stderr.write(`error: script "${name}" exited with code ${code}\n`);
+    process.exitCode = code;
+    // As Bun does, die by the script's own signal, SIGINT included, rather than exiting normally.
+    if (signal !== null) process.kill(process.pid, signal);
+    return false;
+  }
+
+  /** pre<name>, <name> with the passthrough arguments, then post<name>, stopping at the first failure. */
   async function run(command: BunWasm.ScriptRuntimeCommand): Promise<void> {
-    const child = internal.require("spawn").spawn(command.argv, {
-      cwd: process.cwd(), env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit",
-    });
-    process.exitCode = await child.exited;
+    const cwd = process.cwd();
+    const silent = process.execArgv.includes("--silent");
+    process.env.npm_execpath = process.execPath;
+    const table = scripts(cwd);
+    for (const [name, args] of [["pre" + command.name, []], [command.name, command.args], ["post" + command.name, []]] as const) {
+      const body = table[name];
+      if (typeof body !== "string") continue;
+      if (!await runScript(name, body, args, silent)) return;
+    }
   }
   function spawnArguments(argv: string[], directory: unknown): string[] {
     if (["bunx", "/bunx"].includes(argv[0])) return ["bun", "x"].concat(argv.slice(1));
