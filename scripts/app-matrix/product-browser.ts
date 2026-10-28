@@ -78,15 +78,14 @@ export async function waitForPreviewReady<Probe extends PreviewProbePage<Probe>>
   const session = await probe.context().newCDPSession(probe);
   await session.send("Emulation.setScriptExecutionDisabled", { value: true });
   let last503: string | undefined;
-  while (true) {
+  while (Date.now() < deadline) {
     const outcome = await probePreview(probe, url, deadline);
     if (outcome.kind === "ready") return;
     if (outcome.kind === "starting") last503 = outcome.body;
-    if (outcome.kind === "deadline" || Date.now() >= deadline) {
-      throw new Error(`Preview was not HTTP-ready before the deadline: ${last503 === undefined ? "no complete response" : `last HTTP 503: ${last503 || "empty body"}`}`);
-    }
+    if (outcome.kind === "deadline" || Date.now() >= deadline) break;
     await new Promise(resolve => setTimeout(resolve, Math.min(100, deadline - Date.now())));
   }
+  throw new Error(`Preview was not HTTP-ready before the deadline: ${last503 === undefined ? "no complete response" : `last HTTP 503: ${last503 || "empty body"}`}`);
 }
 export interface GuestSource {
   read(path: string): Promise<string | null>;

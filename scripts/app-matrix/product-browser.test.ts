@@ -619,3 +619,9 @@ test("preserves a non-deadline readiness navigation error", async () => {
   const probe = { ...readinessProbe([]), goto: async () => { throw transportError; } };
   await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 1_000)).rejects.toBe(transportError);
 });
+
+test("readiness never starts a navigation after the shared deadline", async () => {
+  const probe = readinessProbe([{ status: 503, body: "still starting" }]);
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() - 1)).rejects.toThrow("not HTTP-ready before the deadline");
+  expect(probe.navigations).toBe(0);
+});
