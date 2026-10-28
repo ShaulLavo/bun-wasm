@@ -32174,6 +32174,7 @@ static JSValue js_async_module_execution_rejected(JSContext *ctx, JSValueConst t
     module->eval_has_exception = true;
     module->eval_exception = js_dup(error);
     module->status = JS_MODULE_STATUS_EVALUATED;
+    module->async_evaluation = false; /* bun-wasm: as in upstream QuickJS */
 
     for(i = 0; i < module->async_parent_modules_count; i++) {
         JSModuleDef *m = module->async_parent_modules[i];
@@ -32240,6 +32241,9 @@ static JSValue js_async_module_execution_fulfilled(JSContext *ctx, JSValueConst 
                 JS_FreeValue(ctx, m_obj);
                 JS_FreeValue(ctx, error);
             } else {
+                /* bun-wasm: finished, as in the spec and upstream QuickJS
+                   2fd48bf; a later importer must not wait for it again. */
+                m->async_evaluation = false;
                 js_set_module_evaluated(ctx, m);
             }
         }
