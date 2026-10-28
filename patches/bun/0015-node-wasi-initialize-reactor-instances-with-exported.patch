@@ -1,0 +1,65 @@
+From c5e0ef9773c2dd704dca7ab1c84d5fddd8ba7da9 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Wed, 28 Oct 2026 00:55:26 +0200
+Subject: [PATCH] node:wasi initialize reactor instances with exported memory
+
+---
+ src/js/node/wasi.ts | 27 ++++++++++++++++++++++++++-
+ 1 file changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/src/js/node/wasi.ts b/src/js/node/wasi.ts
+index f0f65b97..1c2611c0 100644
+--- a/src/js/node/wasi.ts
++++ b/src/js/node/wasi.ts
+@@ -584,10 +584,12 @@ class WASI {
+   declare FD_MAP: Map<number, WASIFileDescriptor>;
+   declare wasiImport: Record<string, (...args: any[]) => any>;
+   declare stdinBuffer: Buffer | undefined;
++  declare started: boolean;
+ 
+   constructor(wasiConfig: WASIConfig = {}) {
+     const defaultConfig = getDefaults();
+     this.lastStdin = 0;
++    this.started = false;
+     this.sleep = wasiConfig.sleep || defaultConfig.sleep;
+     this.getStdin = wasiConfig.getStdin;
+     this.sendStdout = wasiConfig.sendStdout;
+@@ -1720,7 +1722,13 @@ class WASI {
+   setMemory(memory) {
+     this.memory = memory;
+   }
+-  start(instance, memory) {
++  bindInstance(instance, memory) {
++    if (this.started) {
++      throw Object.assign(new Error("WASI instance has already started"), { code: "ERR_WASI_ALREADY_STARTED" });
++    }
++    if (instance === null || typeof instance !== "object") {
++      throw new TypeError("instance must be an Object");
++    }
+     const exports2 = instance.exports;
+     if (exports2 === null || typeof exports2 !== "object") {
+       throw new Error(`instance.exports must be an Object. Received ${exports2}.`);
+@@ -1732,6 +1740,23 @@ class WASI {
+       }
+     }
+     this.setMemory(memory);
++    this.started = true;
++    return exports2;
++  }
++  initialize(instance) {
++    const exports2 = this.bindInstance(instance);
++    if (exports2._start !== undefined) {
++      throw new TypeError("instance.exports._start must be undefined for a WASI reactor");
++    }
++    const initialize = exports2._initialize;
++    if (initialize === undefined) return;
++    if (typeof initialize !== "function") {
++      throw new TypeError("instance.exports._initialize must be a function");
++    }
++    initialize();
++  }
++  start(instance, memory) {
++    const exports2 = this.bindInstance(instance, memory);
+     if (exports2._start) {
+       exports2._start();
+     }

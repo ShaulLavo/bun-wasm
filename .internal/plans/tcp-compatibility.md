@@ -146,3 +146,26 @@ and file-change observations if it fails. Inspect the same-size edit in
 `checkHtmlEntry`, the helper's changeFile ring delivery and the worker's file
 update callback. No cause is established; preserve the 15-second assertion
 and the file-size control rather than increasing the timeout.
+
+## Canceled TCP startup in a shared pump snapshot
+
+Status: Approved, follow-up after the accepted PR307 bind-reference change.
+
+Independent review at `072f0a9d9b274d50165d84976a6beb5b014baf8e`
+reproduced a pre-existing race in `src/js/node_net.js:278-283`. A pump snapshot
+contains startup waiters for two TCP servers. In the first server's listening
+callback, close and rebind the second server; make its replacement bind ready
+synchronously. The canceled old second waiter still reads `this._listener`,
+clears the replacement `_starting`, and emits `listening`. The replacement waiter
+later emits it again. TCP reports two second-server listening events; the HTTP
+helper reports one. Both cases close all simulated handles and return referenced
+I/O to zero. The same failure occurs on the parent production sources, so this
+is not introduced by PR307 and does not alter its immutable accepted bytes.
+
+Exact retained reproducer and parent comparison:
+`/work/reports/bun-wasm/app-failure-wave-20261027/review-307/snapshot.ts`,
+`snapshot-parent.log`, and `RESULT.md`. Run the review's source-factory probe
+through the canonical light runner with a disposable source snapshot, preserving
+its parent-source switch. Give TCP the existing HTTP helper's distinct startup
+identity and announcing guard; retain this two-server snapshot as a regression.
+Do not weaken the pending-bind reference or accepting-listener unref contract.

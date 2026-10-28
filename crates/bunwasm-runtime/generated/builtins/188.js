@@ -234,7 +234,7 @@ function getDefaults() {
 class WASI {
     constructor(wasiConfig = {}) {
         let defaultConfig = getDefaults();
-        this.lastStdin = 0, this.sleep = wasiConfig.sleep || defaultConfig.sleep, this.getStdin = wasiConfig.getStdin, this.sendStdout = wasiConfig.sendStdout, this.sendStderr = wasiConfig.sendStderr;
+        this.lastStdin = 0, this.started = !1, this.sleep = wasiConfig.sleep || defaultConfig.sleep, this.getStdin = wasiConfig.getStdin, this.sendStdout = wasiConfig.sendStdout, this.sendStderr = wasiConfig.sendStderr;
         let preopens = wasiConfig.preopens ?? defaultConfig.preopens;
         this.env = wasiConfig.env ?? defaultConfig.env;
         let args = wasiConfig.args ?? defaultConfig.args;
@@ -1008,7 +1008,11 @@ class WASI {
     setMemory(memory) {
         this.memory = memory;
     }
-    start(instance, memory) {
+    bindInstance(instance, memory) {
+        if (this.started)
+            throw Object.assign(Error("WASI instance has already started"), { code: "ERR_WASI_ALREADY_STARTED" });
+        if (instance === null || typeof instance !== "object")
+            intrinsics.throwTypeError("instance must be an Object");
         let exports2 = instance.exports;
         if (exports2 === null || typeof exports2 !== "object")
             throw Error(`instance.exports must be an Object. Received ${exports2}.`);
@@ -1016,7 +1020,22 @@ class WASI {
             if (memory = exports2.memory, !(memory instanceof WebAssembly.Memory))
                 throw Error(`instance.exports.memory must be a WebAssembly.Memory. Recceived ${memory}.`);
         }
-        if (this.setMemory(memory), exports2._start)
+        return this.setMemory(memory), this.started = !0, exports2;
+    }
+    initialize(instance) {
+        let exports2 = this.bindInstance(instance);
+        if (exports2._start !== intrinsics.undefined)
+            intrinsics.throwTypeError("instance.exports._start must be undefined for a WASI reactor");
+        let initialize = exports2._initialize;
+        if (initialize === intrinsics.undefined)
+            return;
+        if (typeof initialize !== "function")
+            intrinsics.throwTypeError("instance.exports._initialize must be a function");
+        initialize();
+    }
+    start(instance, memory) {
+        let exports2 = this.bindInstance(instance, memory);
+        if (exports2._start)
             exports2._start();
     }
     getImports(module2) {

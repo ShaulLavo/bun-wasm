@@ -19,6 +19,7 @@
         "scripts/migrations/*.ts",
         "scripts/bench-module-preparation.ts",
         "scripts/bun-suite-small-causes.ts",
+        "scripts/discover-solid-watch-import.ts",
         "scripts/check-await-observer.ts",
         "scripts/check-quickjs-async-context.ts",
         "scripts/crypto-review-vectors.mjs",

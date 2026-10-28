@@ -201,6 +201,24 @@ test("HTTP close and relisten in the listen callback has one startup and no leak
   expect(state.internal.ioPending()).toBe(0);
 });
 
+test("TCP close and relisten in the listen callback has one startup and no leaked waiter", () => {
+  const state = httpFixture("tcp");
+  state.server.listen(1234, () => { state.server.close(); state.server.listen(2345); });
+  state.ready([]);
+  state.pump();
+  state.pump();
+  expect(state.events).toEqual(["listening"]);
+  expect(state.internal.ioPending()).toBe(2);
+  state.ready([]);
+  state.pump();
+  state.pump();
+  expect(state.events).toEqual(["listening", "listening"]);
+  expect(state.internal.ioPending()).toBe(1);
+  state.server.close();
+  state.pump();
+  expect(state.internal.ioPending()).toBe(0);
+});
+
 test("HTTP close after a callback relisten leaves no waiter keeping the guest alive", () => {
   const state = httpFixture();
   state.server.listen(1234, () => { state.server.close(); state.server.listen(2345); });
@@ -241,6 +259,44 @@ test("a nested I/O pump in the listen callback cannot announce the same startup 
   state.pump();
   expect(state.internal.ioPending()).toBe(0);
 });
+
+test("a nested I/O pump in the TCP listen callback cannot announce the same startup twice", () => {
+  const state = httpFixture("tcp");
+  state.server.listen(1234, () => state.pump());
+  state.ready([]);
+  state.pump();
+  state.pump();
+  expect(state.events).toEqual(["listening"]);
+  state.server.close();
+  state.pump();
+  expect(state.internal.ioPending()).toBe(0);
+});
+
+function checkSiblingReplacement(protocol: "http" | "tcp") {
+  const state = httpFixture(protocol);
+  const second = new state.server.constructor();
+  const events: string[] = [];
+  second.on("listening", () => events.push("second-listening"));
+  const listen = state.internal.native.hostListen;
+  state.internal.native.hostListen = () => {
+    const handle = listen();
+    state.ready([]);
+    return handle;
+  };
+  state.server.listen(1234, () => { second.close(); second.unref().listen(2345); });
+  second.unref().listen(3456);
+  state.pump();
+  state.pump();
+  expect(events).toEqual(["second-listening"]);
+  second.close();
+  state.server.close();
+  state.pump();
+  expect(state.internal.ioPending()).toBe(0);
+}
+
+for (const protocol of ["tcp", "http"] as const) {
+  test(`a canceled ${protocol} startup cannot announce a sibling's replacement`, () => checkSiblingReplacement(protocol));
+}
 
 function checkUnreferencedProbe(protocol: "http" | "tcp") {
   const state = httpFixture(protocol);

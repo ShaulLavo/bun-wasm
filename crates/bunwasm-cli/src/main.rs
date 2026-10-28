@@ -17,6 +17,10 @@ Commands:
   remove    <package>           Remove dependencies
   update    [package]           Update dependencies
   x         <package>           Execute a package binary
+  exec      <script>             Run a shell script
+  init      [folder]             Start an empty Bun project
+  create    <template> [dest]    Create a project from a create-<template> package
+  repl                           Start a JavaScript and TypeScript REPL
   pm ls                          List installed dependencies
   <file>                         Same as `bun run <file>`
   -e, --eval <code>              Evaluate JavaScript source code
@@ -28,7 +32,7 @@ Flags:
   -h, --help                     Display this menu and exit
       --conditions <condition>   Add a package-export resolution condition
 
-Not available in bun.wasm: x, create, upgrade.
+Not available in bun.wasm: upgrade.
 ";
 
 fn transpiler() -> Box<dyn Transpiler> {

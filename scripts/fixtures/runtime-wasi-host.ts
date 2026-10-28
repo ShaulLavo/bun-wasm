@@ -73,10 +73,12 @@ type Wasi = {
   wasiImport: Record<string, WebAssembly.ImportValue>;
   FD_MAP: Map<number, { real: number }>;
   start(instance: WebAssembly.Instance): void;
+  initialize(instance: WebAssembly.Instance): void;
 };
 function isWasi(value: unknown): value is Wasi {
   const candidate = record(value);
   if (!(candidate.FD_MAP instanceof Map) || typeof candidate.start !== "function") return false;
+  if (typeof candidate.initialize !== "function") return false;
   const imports = record(candidate.wasiImport);
   const entries: [unknown, unknown][] = Array.from(candidate.FD_MAP);
   return Object.values(imports).every(value => typeof value === "function")
@@ -133,6 +135,48 @@ function moduleBytes() {
   ));
 }
 const module = new WebAssembly.Module(moduleBytes());
+function reactorModule() {
+  const body = [0, 0x41, 0, 0x41, 4, 0x10, 0, 0x1a, 0x0b];
+  return new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0].concat(
+    section(1, [2, 0x60, 2, 0x7f, 0x7f, 1, 0x7f, 0x60, 0, 0]),
+    section(2, [1].concat(text("wasi_snapshot_preview1"), text("args_sizes_get"), [0, 0])),
+    section(3, [1, 1]), section(5, [1, 0, 1]),
+    section(7, [2].concat(text("memory"), [2, 0], text("_initialize"), [0, 1])),
+    section(10, [1].concat(u32(body.length), body)),
+  )));
+}
+function checkReactor() {
+  const api = wasi({ args: ["reactor", "é"], preopens: {} });
+  const instance = new WebAssembly.Instance(reactorModule(), { wasi_snapshot_preview1: api.wasiImport });
+  const memory = instance.exports.memory;
+  assert.ok(memory instanceof WebAssembly.Memory);
+  const view = new DataView(memory.buffer);
+  assert.equal(view.getUint32(0, true), 0);
+  assert.equal(api.initialize(instance), undefined);
+  assert.equal(view.getUint32(0, true), 2);
+  assert.equal(view.getUint32(4, true), 11);
+  assert.throws(() => api.initialize(instance), { code: "ERR_WASI_ALREADY_STARTED" });
+  assert.throws(() => api.start(instance), { code: "ERR_WASI_ALREADY_STARTED" });
+  const started = wasi({ preopens: {} });
+  started.start(new WebAssembly.Instance(module, { wasi_snapshot_preview1: started.wasiImport }));
+  assert.throws(() => started.initialize(instance), { code: "ERR_WASI_ALREADY_STARTED" });
+  const withoutInitializer = wasi({ preopens: {} });
+  withoutInitializer.initialize(new WebAssembly.Instance(module, { wasi_snapshot_preview1: withoutInitializer.wasiImport }));
+  const invalid = (exports: unknown) => () => {
+    const api = wasi({ preopens: {} });
+    Reflect.apply(api.initialize, api, [{ exports }]);
+  };
+  assert.throws(invalid({ memory, _start() { throw new Error("must not run command"); } }), TypeError);
+  assert.throws(invalid({ memory, _initialize: 1 }), TypeError);
+  assert.throws(invalid({}), /memory/);
+  assert.throws(invalid(null), /exports/);
+  const throwing = wasi({ preopens: {} });
+  const failure = new Error("reactor failure");
+  const throwingInstance = { exports: { memory, _initialize() { throw failure; } } };
+  assert.throws(() => Reflect.apply(throwing.initialize, throwing, [throwingInstance]), failure);
+  assert.throws(() => Reflect.apply(throwing.initialize, throwing, [throwingInstance]), { code: "ERR_WASI_ALREADY_STARTED" });
+  console.log("PASS Bun WASI reactor initialization: actual import, optional initializer, validation, one lifecycle");
+}
 const scratch = fs.mkdtempSync(path.join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-wasi-host-"));
 const handles: Wasi[] = [];
 function closeWasi(api: Wasi) {
@@ -141,6 +185,7 @@ function closeWasi(api: Wasi) {
   }
 }
 try {
+  checkReactor();
   const api = wasi({ args: ["runner", "é"], env: { TEST: "✓" }, preopens: { "/sandbox": scratch } });
   handles.push(api);
   const instance = new WebAssembly.Instance(module, { wasi_snapshot_preview1: api.wasiImport });
