@@ -80,7 +80,12 @@ selects its runtime through its registered browser Origin, then that runtime's
 fixed port grant. The same rule covers HTTP requests with an Origin header.
 Other owners and unregistered ports fail before dispatch. Shared native listeners
 retain separate owner/socket leases and close after the final owner releases them.
-Native port conflicts fail without touching a pre-existing listener. No package
+Native port conflicts fail without touching a pre-existing listener. The same
+fixed-port listeners are also bound on each currently allocated owner loopback
+hostname, so a native client using its page hostname and another registered port
+reaches that owner. Registration in either order adds the missing host/port pairs.
+Closing a root releases its hostname aliases; closing a port releases all aliases
+for that port. Foreign owner Origins remain rejected before dispatch. No package
 configuration, application URL rewriting, history patch or service-worker opener
 is needed. This specifically covers generic extra server ports as well as the
 primary port.
@@ -90,7 +95,8 @@ request line sent into each virtual server connection. Original bytes, headers
 and bodies are forwarded unchanged. Root-mode app results retain caller pathname
 and those server request targets as independent path-agreement evidence.
 
-The literal-port pool has its own 256-socket/64-per-port limit. Pending first-grant
+The virtual-port pool is bounded to 512 native listeners, 256 sockets in total and
+64 sockets per listener. Pending first-grant
 requests count toward the shared exchange budget. They wait for that authenticated
 grant or revocation rather than racing startup. A reused native connection cannot
 switch runtime owners. Loopback aliases retain the browser's ordinary cookie
