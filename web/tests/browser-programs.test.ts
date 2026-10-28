@@ -59,9 +59,9 @@ async function consumerRoot(runtime: Runtime) {
   };
 }
 
-async function disposePrograms(runtime: Runtime, programs: BrowserPrograms) {
-  try { await runtime.dispose(); }
-  finally { await programs.dispose(); }
+async function disposePrograms(runtime: Runtime | undefined, programs: BrowserPrograms | undefined) {
+  try { await runtime?.dispose(); }
+  finally { await programs?.dispose(); }
 }
 function restoreHost(fetch: typeof globalThis.fetch, worker: typeof globalThis.Worker, workers: Set<Worker>) {
   const remaining = workers.size;
@@ -88,9 +88,13 @@ async function withPrograms(run: (runtime: Runtime, programs: BrowserPrograms, f
     fetches.push(String(args[0]));
     return Reflect.apply(target, receiver, args);
   } });
-  const runtime = createRuntime({ filesystem: { mode: "memory", workerURL: new URL(import.meta.resolve("waffle/browser/fs-worker")) } });
-  const programs = new BrowserPrograms(runtime, urls);
-  try { await run(runtime, programs, fetches); }
+  let runtime: Runtime | undefined;
+  let programs: BrowserPrograms | undefined;
+  try {
+    runtime = createRuntime({ filesystem: { mode: "memory", workerURL: new URL(import.meta.resolve("waffle/browser/fs-worker")) } });
+    programs = new BrowserPrograms(runtime, urls);
+    await run(runtime, programs, fetches);
+  }
   finally {
     await disposePrograms(runtime, programs).finally(() => restoreHost(originalFetch, originalWorker, workers));
   }
@@ -152,8 +156,21 @@ test("closing during installation removes its markers and refuses a late ready r
 
 test("base families and Bun resolve one physical Waffle package", async () => {
   const expected = await realpath(Bun.resolveSync("waffle/package.json", import.meta.dir));
-  for (const name of ["waffle-base", "waffle-coreutils", "waffle-findutils", "waffle-grep", "waffle-ripgrep", "waffle-sed"]) {
+  for (const name of ["waffle-base", "waffle-coreutils", "waffle-findutils", "waffle-grep", "waffle-ripgrep", "waffle-sed", "bash-web"]) {
     const entry = Bun.resolveSync(name, import.meta.dir);
     expect(await realpath(Bun.resolveSync("waffle/package.json", dirname(entry)))).toBe(expected);
   }
+});
+
+
+test("a shell registration conflict rolls back the app's base installation", async () => {
+  await withPrograms(async (runtime, programs) => {
+    await runtime.filesystem.mkdirp("/bin");
+    await runtime.filesystem.writeFile("/bin/sh", "caller shell");
+    const failed = await programs.ready().then(() => () => {}, error => () => { throw error; });
+    expect(failed).toThrow();
+    expect(new TextDecoder().decode(await runtime.filesystem.readFile("/bin/sh"))).toBe("caller shell");
+    expect(await runtime.filesystem.lookup("/usr/bin/cat")).toBeUndefined();
+    expect(await runtime.filesystem.lookup("/usr/bin/env")).toBeUndefined();
+  });
 });
