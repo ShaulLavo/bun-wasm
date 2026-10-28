@@ -502,6 +502,24 @@ fn process_functions(store: &mut Store<Host>) -> Vec<Func> {
     ]
 }
 
+/// bash-web's shell guest imports two small namespaces besides runtime_proc. On this host it is
+/// never the terminal owner: it reads its inherited stdio, reports 80 columns and owns no phase.
+/// The native filesystem has no Waffle inode metadata, so the permission query answers ENOTSUP
+/// (docs/host-abi.md "Inode permission query" allows it) and the shell treats access as unknown.
+pub fn add_shell_imports(linker: &mut Linker<Host>) -> Result<()> {
+    linker.func_wrap("shell_terminal", "inherited_fd", |index: i32| -> i32 {
+        if (0..3).contains(&index) { index } else { -1 }
+    })?;
+    linker.func_wrap("shell_terminal", "columns", || -> i32 { 80 })?;
+    linker.func_wrap("shell_terminal", "phase", |_: i32| {})?;
+    linker.func_wrap(
+        "runtime_fs",
+        "path_permissions_get",
+        |_: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { 58 },
+    )?;
+    Ok(())
+}
+
 /// Register direct process imports and the networking-only WASI trampoline.
 pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()> {
     for (name, function) in PROCESS_NAMES.into_iter().zip(process_functions(store)) {
@@ -541,6 +559,24 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
                     return Ok(crate::process::INVAL);
                 };
                 Ok(host.processes.access_start(path, cwd, mode))
+            })
+        },
+    )?;
+    // Waffle's process-identity import: the full byte count, written only when it fits.
+    linker.func_wrap(
+        "runtime_proc",
+        "cwd",
+        |mut caller: Caller<'_, Host>, ptr: i32, len: i32| -> Result<i32> {
+            caller.data().cancel.check()?;
+            with_memory(&mut caller, |memory, host| {
+                let Some(range) = proc_range(memory, ptr, len) else {
+                    return Ok(crate::process::FAULT);
+                };
+                let cwd = host.cwd.as_bytes();
+                if cwd.len() <= range.len() {
+                    memory[range.start..range.start + cwd.len()].copy_from_slice(cwd);
+                }
+                Ok(cwd.len() as i32)
             })
         },
     )?;

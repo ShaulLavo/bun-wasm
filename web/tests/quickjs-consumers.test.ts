@@ -1,7 +1,7 @@
 import { programProfile } from "../../src/engine-kind";
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { loadNodeProgram } from "../scripts/node-linked";
@@ -17,10 +17,12 @@ async function scratch() {
 
 async function stagedAssets(root: string, project: "web" | "sandbox" = "sandbox", env: Record<string, string> = {}) {
   const source = await Bun.file(new URL(`../../${project}/build.ts`, import.meta.url)).text();
-  const end = project === "sandbox" ? source.indexOf("// ---------- the starter project") : source.indexOf('await Bun.write(join(out, "engine-builds.json")');
-  const engineBlock = source.slice(source.indexOf("const engineBuilds:"), end);
+  const start = source.indexOf("const engineBuilds:");
+  const end = project === "sandbox" ? source.indexOf("// ---------- the starter project") : source.indexOf("await buildShellAssets(");
+  if (start < 0 || end <= start) throw new Error(`${project} engine staging boundary missing`);
+  const engineBlock = source.slice(start, end);
   const writeManifest = source.split("\n").find(line => line.startsWith('await Bun.write(join(out, "engine-builds.json")'));
-  if (!writeManifest) throw new Error("sandbox manifest writer missing");
+  if (!writeManifest) throw new Error(`${project} engine manifest writer missing`);
   const body = new Bun.Transpiler({ loader: "ts" }).transformSync(`${engineBlock}\n${writeManifest}`);
   const run = new Function("Bun", "existsSync", "statSync", "dirname", "join", "resolve", "here", "out", "process", "wasmSource", `return (async () => { ${body} })();`);
   const here = join(root, project), out = join(root, "output");
@@ -89,4 +91,11 @@ for (const project of ["web", "sandbox"] as const) test(`${project} stages the J
   expect(JSON.parse(await readFile(join(out, "engine-builds.json"), "utf8"))).toEqual({ "bun-jsc.wasm": digest(core), "jsc-engine.wasm": digest(side) });
   await rm(join(selected, "jsc-engine.wasm"));
   await expect(stagedAssets(root, project, env)).rejects.toThrow("matching side module");
+});
+
+for (const project of ["web", "sandbox"] as const) test(`${project} engine staging permits missing optional guests`, async () => {
+  const root = await scratch();
+  const out = await stagedAssets(root, project);
+  expect(JSON.parse(await readFile(join(out, "engine-builds.json"), "utf8"))).toEqual({});
+  expect(await readdir(out)).toEqual(["engine-builds.json"]);
 });

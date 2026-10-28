@@ -190,6 +190,16 @@ async function runBunShell(fixture: Fixture) {
     await command(`printf '%s\\n' '1 + 2' 'const answer: number = 40' 'answer + 2' "await Promise.resolve('awaited')" '.exit' | bun repl | cat`),
     ["3", "40", "42", '"awaited"'],
   ));
+  // package.json scripts through bash-web: hooks, &&, pipes, lifecycle env, a #!/usr/bin/env node
+  // bin with arguments, npm run rewriting, and a failing script's status.
+  await stage(fixture, "bun-scripts", async () => {
+    const chain = requireLines(await command("bun run chain"), ["PRE", "ONE", "TWO", "EVENT:chain", "POST"]);
+    const bin = requireLines(await command("bun run bin 'two words'"), ["BIN first|two words"]);
+    const alias = requireLines(await command("bun run alias x"), ["BIN first|x"]);
+    const failed = requireLines(await command("bun run fails; echo SCRIPT_STATUS:$?"), ["before", "SCRIPT_STATUS:7"]);
+    assert.ok(failed.includes('error: script "fails" exited with code 7'), failed);
+    return [chain, bin, alias, failed].join("\n");
+  });
 }
 async function runApp(fixture: Fixture) {
   assert.ok(page && mirror);

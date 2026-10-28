@@ -1,0 +1,16 @@
+[130] user@bun:~$ bun run .matrix-command.ts node_modules/vite/bin/vite.js build
+vite v7.1.12 building SSR bundle for production...
+✓ 179 modules transformed.
+✗ Build failed in 13.57s
+error during build:
+Unexpected early exit. This happens when Promises returned by plugins cannot resolve. Unfinished hook action(s) on exit:
+(vite-plugin-sveltekit-compile) writeBundle
+    at handleBeforeExit (/home/user/node_modules/rollup/dist/es/shared/node-entry.js:24046:32)
+    at apply (native)
+    at onceWrapper (bun-wasm:events:186:26)
+    at apply (native)
+    at callListeners (bun-wasm:events:236:37)
+    at emit (bun-wasm:events:272:5)
+    at emitBeforeExit (bun-wasm:bootstrap:834:13)
+
+[1] user@bun:~$

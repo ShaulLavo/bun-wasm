@@ -707,9 +707,10 @@ fn parse_command_with_flags(
                 return Command::Run(Entry::File(file), rest.collect(), conditions, exec_argv);
             }
             // Flags native Bun accepts that change nothing here.
-            "--bun" | "--silent" | "--smol" | "--no-install" => continue,
+            "--bun" | "--smol" | "--no-install" => continue,
             // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
             // are accepted and kept in process.execArgv, so forked children receive them too.
+            // `bun run --silent` reaches package scripts this way and hides their `$ command` lines.
             flag if flag.starts_with('-') => exec_argv.push(flag.to_owned()),
             file => {
                 return Command::Run(

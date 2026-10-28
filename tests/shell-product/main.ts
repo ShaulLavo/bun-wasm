@@ -1,6 +1,7 @@
 import { createShell, installShellCommands, SharedBridge, control, runtimeSnapshot, type Shell } from "bash-web";
 import { installCat } from "bash-web/utilities/cat";
 import { installGrep } from "bash-web/utilities/grep";
+import { installEnv } from "bash-web/utilities/env";
 import { installBunAdapters, type BunAdapterInstallation, type RuntimeNetworkHelper } from "bun-wasm";
 import { createRuntime, type ProcessService, type RuntimeSupervisor } from "waffle";
 import { PreviewRouter } from "waffle/browser/preview";
@@ -143,6 +144,8 @@ async function setup() {
   await installShellCommands(runtime, { wasmUrl: "./programs/shell-engine.wasm", workerUrl: "./shell-worker.js" });
   await installCat(runtime, { wasmUrl: "./programs/cat.wasm", workerUrl: "./shell-worker.js" });
   await installGrep(runtime, { wasmUrl: "./programs/grep.wasm", workerUrl: "./shell-worker.js" });
+  // /usr/bin/env runs `#!/usr/bin/env node` package bins.
+  await installEnv(runtime, { wasmUrl: "./programs/env.wasm", workerUrl: "./shell-worker.js" });
   const capabilities: unknown = await (await fetch("./capabilities.json")).json();
   if (capabilities && typeof capabilities === "object" && "tail" in capabilities && capabilities.tail === true) await registerTail();
   const service = await runtime.processes();

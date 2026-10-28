@@ -2,10 +2,10 @@
 // service worker from web/src, each engine's wasm (gzipped), and the React and vanilla template sources.
 // The React template includes the dependency sources Bun bundles in the browser.
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
-// BUN_TOOLS_WASM overrides ../dist/bun-tools.wasm.
+// BUN_TOOLS_WASM overrides ../dist/bun-tools.wasm; BASH_WEB_SHELL_WASM and BASH_WEB_ENV_WASM override ../dist/bash-web-shell.wasm and ../dist/bash-web-env.wasm.
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { previewWebsocketScript } from "../web/preview-build";
-import { buildBrowserEntries, buildClassicWorker } from "../scripts/browser-build";
+import { buildBrowserEntries, buildClassicWorker, buildShellAssets } from "../scripts/browser-build";
 import { dirname, join, relative, resolve } from "node:path";
 
 const here = import.meta.dir;
@@ -130,6 +130,7 @@ await Bun.write(join(out, "template-vanilla.json"), vanillaBytes);
 
 await Bun.write(join(out, "engine-builds.json"), JSON.stringify(engineBuilds));
 const index = await Bun.file(join(here, "index.html")).text();
+await buildShellAssets(here, out);
 await Bun.write(join(out, "index.html"), index.replace("<head>", `<head><script>globalThis.__bunwasmBuilds=${JSON.stringify(engineBuilds)}</script>`));
 
 for (const output of page.outputs.concat(sw.outputs)) console.log(`${output.path.slice(out.length + 1)}  ${(output.size / 1024).toFixed(0)} KB`);

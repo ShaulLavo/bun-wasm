@@ -1,1 +1,1 @@
-package scripts preserve runtime commands, argv, environment, PATH and exit status
+package scripts run in bash-web with runtime commands, argv, environment, PATH and exit status

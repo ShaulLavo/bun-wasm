@@ -586,7 +586,10 @@ test("Rust build caches follow host tool versions, not the runner image", () => 
   const step = rust.indexOf("name: Identify host build tools");
   expect(step).toBeGreaterThan(rust.indexOf("name: Install native build tools"));
   expect(step).toBeLessThan(rust.indexOf("id: sysroot-cache"));
-  expect(rust.match(/steps\.host-tools\.outputs\.hash/g)).toHaveLength(14);
+  expect(rust.match(/steps\.host-tools\.outputs\.hash/g)).toHaveLength(15);
+  // Cargo does not see sysroot or C toolchain changes, so the shell guest's key carries them.
+  const shellKey = rust.split("\n").find(line => line.includes("key: bash-web-shell-"))!;
+  for (const input of ["runner.arch", "steps.host-tools.outputs.hash", "'scripts/build-wasi-sysroot.ts'", "'bun.lock'"]) expect(shellKey).toContain(input);
 });
 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
