@@ -40,6 +40,7 @@ mod node_path;
     not(feature = "engine-host")
 ))]
 pub(crate) mod ops;
+mod parse_env;
 mod resolve;
 mod semver;
 mod sourcemap;

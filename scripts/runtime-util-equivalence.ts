@@ -55,8 +55,26 @@ function constructorReceiver(node: ts.NewExpression): ts.Identifier {
 
 interface Edit { start: number; end: number; text: string }
 
-// Only these two reviewed extractions may differ from the approved original AST.
+function restoreParseEnv(text: string): string {
+  const source = parseRuntime(text);
+  const matches: ts.Node[] = [];
+  function visit(node: ts.Node): void {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === "parseEnv") matches.push(node);
+    if (ts.isShorthandPropertyAssignment(node) && node.name.text === "parseEnv") matches.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  if (matches.length !== 2) throw new Error("Expected parseEnv function and utility export");
+  for (const node of matches.toSorted((left, right) => right.getStart(source) - left.getStart(source))) {
+    const end = ts.isShorthandPropertyAssignment(node) && text[node.end] === "," ? node.end + 1 : node.end;
+    text = text.slice(0, node.getStart(source)) + text.slice(end);
+  }
+  return text;
+}
+
+// Restore the two reviewed extractions and the separately tested parseEnv addition.
 export function restoreDestinations(text: string): string {
+  text = restoreParseEnv(text);
   const source = parseRuntime(text);
   const capture = declarations(source, "ConstructorSet");
   const array = declarations(source, "constructors");

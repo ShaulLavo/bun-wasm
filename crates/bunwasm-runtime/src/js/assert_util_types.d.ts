@@ -1,4 +1,5 @@
 declare namespace BunWasm {
+  interface Native { parseEnv(content: string): [string, string][] }
   interface UtilityError extends Error { code?: string; reason?: unknown }
   interface AssertionDetail {
     message?: unknown; actual?: unknown; expected?: unknown; operator?: unknown; stack?: unknown;
@@ -22,6 +23,7 @@ declare namespace BunWasm {
   }
   type AssertionDiff = [operation: "nop" | "insert" | "delete", line: string];
   interface UtilityModule {
+    parseEnv(content: string): Record<string, string>;
     parseArgs(config?: unknown): ParseArgsResult;
     bunDeepEquals(a: unknown, b: unknown, strict?: boolean): boolean;
     deprecate<Fn extends Function>(fn: Fn, msg: string, code?: string): Fn;
