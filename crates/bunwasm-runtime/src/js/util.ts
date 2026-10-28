@@ -1455,7 +1455,7 @@
 
   function parseEnv(content: unknown): Record<string, string> {
     if (typeof content !== "string") throw invalidArgType("content", "of type string", content);
-    return internal.native.parseEnv(content);
+    return Object.fromEntries(internal.native.parseEnv(content));
   }
 
   function isError(e: unknown) {

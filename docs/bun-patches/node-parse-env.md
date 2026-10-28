@@ -18,7 +18,9 @@ Bun revision `9510e74152073d850a18758ca41114d8f214ffa6`,
 
 The Rust adapter retains that parser call and map-to-object conversion. It replaces
 JSC arguments and values with `Args`, `NativeError` and `Val`, and converts the
-owned UTF-8 keys and values into engine-neutral strings. The existing pinned
+owned UTF-8 keys and values into engine-neutral string-entry pairs. The public
+adapter uses `Object.fromEntries` so names such as `__proto__` remain own data
+properties without relying on host object-decoder assignment. The existing pinned
 parser is reused unchanged, with later definitions overwriting earlier ones and
 variable expansion disabled. It reads no files and does not modify process.env.
 No package-specific code, fallback parser, engine branch or new host ABI is added.

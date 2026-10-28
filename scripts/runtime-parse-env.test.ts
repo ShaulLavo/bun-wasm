@@ -14,18 +14,19 @@ const factory: unknown = runInNewContext(readFileSync(output, "utf8"), { TypeErr
 if (typeof factory !== "function") throw new TypeError("Expected utility factory");
 const inputs: string[] = [];
 const result = { VALUE: "literal $OTHER" };
-const util: unknown = factory({ native: { parseEnv(content: string) { inputs.push(content); return result; } } });
+const util: unknown = factory({ native: { parseEnv(content: string) { inputs.push(content); return Object.entries(result); } } });
 if (!util || typeof util !== "object") throw new TypeError("Expected utility module");
+const utility = util;
 
 function parseEnv(content: unknown): unknown {
-  const parse: unknown = Reflect.get(util, "parseEnv");
+  const parse: unknown = Reflect.get(utility, "parseEnv");
   if (typeof parse !== "function") throw new TypeError("Missing node:util parseEnv export");
   return parse(content);
 }
 
 test("node:util exposes parseEnv and delegates strings unchanged to the native parser", () => {
   const content = 'VALUE="literal $OTHER"\r\n';
-  expect(parseEnv(content)).toBe(result);
+  expect(parseEnv(content)).toEqual(result);
   expect(inputs).toEqual([content]);
 });
 
@@ -33,4 +34,16 @@ test.each([undefined, null, 1, true, {}, new String("A=1")])("parseEnv rejects n
   const previous = inputs.length;
   expect(() => parseEnv(content)).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }));
   expect(inputs.length).toBe(previous);
+});
+
+test("parseEnv constructs own data properties for prototype-like keys", () => {
+  if (typeof factory !== "function") throw new TypeError("Expected utility factory");
+  const module: unknown = factory({ native: { parseEnv: () => [["__proto__", "safe"], ["constructor", "value"]] } });
+  if (!module || typeof module !== "object") throw new TypeError("Expected utility module");
+  const parse: unknown = Reflect.get(module, "parseEnv");
+  if (typeof parse !== "function") throw new TypeError("Missing parseEnv export");
+  const actual = parse("__proto__=safe\nconstructor=value");
+  expect(Object.hasOwn(actual, "__proto__")).toBe(true);
+  expect(actual.__proto__).toBe("safe");
+  expect(actual.constructor).toBe("value");
 });

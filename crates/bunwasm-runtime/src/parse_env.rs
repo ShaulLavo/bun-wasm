@@ -12,18 +12,18 @@ fn parse(content: &str) -> NativeResult {
     loader
         .load_from_string::<true, false>(content.as_bytes())
         .map_err(|_| NativeError::error("Out of memory"))?;
-    let fields = loader
+    let entries = loader
         .map
         .map
         .iter()
         .map(|(key, entry)| {
-            (
-                String::from_utf8_lossy(key).into_owned(),
+            Val::Array(vec![
+                Val::Str(String::from_utf8_lossy(key).into_owned()),
                 Val::Str(String::from_utf8_lossy(&entry.value).into_owned()),
-            )
+            ])
         })
         .collect();
-    Ok(Val::Object(fields))
+    Ok(Val::Array(entries))
 }
 
 #[cfg(test)]
@@ -39,16 +39,29 @@ mod tests {
         for case in cases.as_array().unwrap() {
             let actual = parse(case["source"].as_str().unwrap()).unwrap();
             let expected = case["expected"].as_object().unwrap();
-            let Val::Object(fields) = actual else {
-                panic!("expected object")
+            let Val::Array(entries) = actual else {
+                panic!("expected entries")
             };
-            let fields: std::collections::BTreeMap<_, _> = fields.into_iter().collect();
+            let fields: std::collections::BTreeMap<_, _> = entries.into_iter().map(entry).collect();
             let expected = expected
                 .iter()
                 .map(|(key, value)| (key.clone(), Val::Str(value.as_str().unwrap().to_owned())))
                 .collect();
             assert_eq!(fields, expected, "{}", case["name"]);
         }
+    }
+
+    fn entry(value: Val) -> (String, Val) {
+        let Val::Array(pair) = value else {
+            panic!("expected pair")
+        };
+        let mut pair = pair.into_iter();
+        let Some(Val::Str(key)) = pair.next() else {
+            panic!("expected key")
+        };
+        let value = pair.next().expect("expected value");
+        assert_eq!(pair.next(), None);
+        (key, value)
     }
 
     #[test]
