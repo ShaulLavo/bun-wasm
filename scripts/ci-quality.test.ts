@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { discoverChecks, automaticChecks, checkCommand, selectChecks } from "./test-checks";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { qualityGates } from "./quality";
+import { rustTestPackages } from "./rust-test-packages";
 import { inBatches, missingPackages, parseArchives, planArchives, prefetchArchive } from "../web/scripts/ci-browser-deps";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -60,7 +61,21 @@ test("Rust tests are compiled and run once, with Clippy covering test targets", 
   const script = readFileSync(new URL("./quality-rust.ts", import.meta.url), "utf8");
   expect(script.match(/"cargo", "test"/g)).toHaveLength(1);
   expect(script).toContain('"--all-targets", "--release", "--no-deps"');
-  expect(script).toContain('"test", "--locked", "--workspace", "--release", "-p", "wasmi_core"');
+  expect(script).toContain('["cargo", "test", "--locked", "--release"].concat(rustTestPackages(metadata)');
+  expect(script).toContain('["metadata", "--locked", "--no-deps", "--format-version", "1"]');
+});
+
+test("Rust tests select every workspace member and the patched crates without --workspace", () => {
+  const metadata = {
+    packages: [
+      { id: "path+file:///repo/crates/bunwasm-runtime#0.0.53", name: "bunwasm-runtime" },
+      { id: "path+file:///repo/crates/bunwasm-cli#0.0.53", name: "bunwasm-cli" },
+    ],
+    workspace_members: ["path+file:///repo/crates/bunwasm-runtime#0.0.53", "path+file:///repo/crates/bunwasm-cli#0.0.53"],
+  };
+  expect(rustTestPackages(metadata)).toEqual(["-p", "bunwasm-cli", "-p", "bunwasm-runtime", "-p", "wasmi_core"]);
+  expect(rustTestPackages(metadata)).not.toContain("--workspace");
+  expect(() => rustTestPackages({ packages: [], workspace_members: ["missing"] })).toThrow("workspace members");
 });
 
 test("local quality retains all gates and rejects invalid selections", () => {

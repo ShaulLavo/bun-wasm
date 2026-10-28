@@ -4,7 +4,7 @@ import { discoverChecks } from "./test-checks";
 const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".cargo/", "tests/fixtures/node-misc/", "tests/fixtures/source-cache/", "tests/fixtures/webassembly/", "tests/wasm-tables/", "tests/install/", "web/guest-tests/"];
 const nativeFiles = new Set([
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
-  "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
+  "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
   "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/test.sh",
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "scripts/ci-changes.ts", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",

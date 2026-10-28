@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { run } from "./quality-command";
+import { rustTestPackages } from "./rust-test-packages";
 
 // rustfmt follows #[path] modules into vendor/bun unless skip_children is set.
 // Every owned file, including new untracked files, is still passed explicitly.
@@ -15,7 +16,7 @@ const env = { ...process.env };
 delete env.CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS;
 const jobs = process.env.QUALITY_RUST_JOBS ?? "1";
 run(["cargo", "clippy", "--locked", "--workspace", "--all-targets", "--release", "--no-deps", "-j", jobs, "--", "-D", "warnings"], env);
-// Path-patched third_party crates are not workspace members; select the ones whose local
-// changes carry tests in the same single compile and run.
-run(["cargo", "test", "--locked", "--workspace", "--release", "-p", "wasmi_core", "-j", jobs], env);
+// Every workspace member plus the path-patched crates with local tests, in one compile and run.
+const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--locked", "--no-deps", "--format-version", "1"], { encoding: "utf8", env, maxBuffer: 64 * 1024 * 1024 }));
+run(["cargo", "test", "--locked", "--release"].concat(rustTestPackages(metadata), ["-j", jobs]), env);
 run(["cargo", "machete", "crates"], env);
