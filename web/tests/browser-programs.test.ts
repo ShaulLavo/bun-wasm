@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createRuntime, type Runtime } from "waffle";
 import { basePrograms } from "waffle-base";
@@ -13,6 +14,21 @@ const urls = {
   shellWorker: new URL("https://example.test/shell-worker.js"),
   shell: new URL("https://example.test/programs/shell-engine.wasm"),
 };
+
+async function packageRoot(entry: string): Promise<string> {
+  let directory = dirname(entry);
+  while (!(await Bun.file(join(directory, "package.json")).exists())) {
+    const parent = dirname(directory);
+    if (parent === directory) throw new Error(`Package metadata missing for ${entry}`);
+    directory = parent;
+  }
+  return directory;
+}
+
+async function physicalRuntime(name: string, scope = import.meta.dir): Promise<string> {
+  const root = await packageRoot(Bun.resolveSync(name, scope));
+  return realpath(Bun.resolveSync("waffle/package.json", join(root, "package.json")));
+}
 
 async function consumerRoot(runtime: Runtime) {
   const service = await runtime.processes();
@@ -155,18 +171,21 @@ test("closing during installation removes its markers and refuses a late ready r
 
 test("base families and Bun resolve one physical Waffle package", async () => {
   const expected = "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.93/waffle-0.0.93.tgz";
-  for (const name of ["waffle-base", "waffle-coreutils", "waffle-findutils", "waffle-grep", "waffle-ripgrep", "waffle-sed", "bash-web"]) {
-    const entry = Bun.resolveSync(name, import.meta.dir);
-    let directory = dirname(entry);
-    while (!(await Bun.file(join(directory, "package.json")).exists())) {
-      const parent = dirname(directory);
-      if (parent === directory) throw new Error(`Package metadata missing for ${name}`);
-      directory = parent;
-    }
-    const metadata: unknown = await Bun.file(join(directory, "package.json")).json();
-    expect(metadata && typeof metadata === "object" ? Reflect.get(Reflect.get(metadata, "peerDependencies") ?? {}, "waffle") : undefined).toBe(expected);
-  }
+  const physical = await physicalRuntime("waffle");
+  const baseEntry = Bun.resolveSync("waffle-base", import.meta.dir);
+  const baseRoot = await packageRoot(baseEntry);
+  await assertPackageRuntime("waffle-base", import.meta.dir, physical, expected);
+  for (const name of ["waffle-coreutils", "waffle-findutils", "waffle-grep", "waffle-ripgrep", "waffle-sed"])
+    await assertPackageRuntime(name, join(baseRoot, "package.json"), physical, expected);
+  await assertPackageRuntime("bash-web", import.meta.dir, physical, expected);
 });
+
+async function assertPackageRuntime(name: string, scope: string, physical: string, expectedPeer: string) {
+  const root = await packageRoot(Bun.resolveSync(name, scope));
+  const metadata: unknown = await Bun.file(join(root, "package.json")).json();
+  expect(await physicalRuntime(name, scope)).toBe(physical);
+  expect(metadata && typeof metadata === "object" ? Reflect.get(Reflect.get(metadata, "peerDependencies") ?? {}, "waffle") : undefined).toBe(expectedPeer);
+}
 
 
 test("a shell registration conflict rolls back the app's base installation", async () => {

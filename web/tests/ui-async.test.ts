@@ -296,10 +296,6 @@ test("persisted pagehide keeps shared-object installation for the next command",
   const code = source.slice(source.indexOf("const runtime = createRuntime"), source.indexOf("const fs = runtime.filesystem"));
   let pagehide: ((event: { persisted: boolean }) => void) | undefined;
   const state = { closed: false };
-  class BrowserProgramsFixture {
-    constructor(_runtime: unknown, _urls: unknown) {}
-    dispose() { return Promise.resolve(); }
-  }
   const startup = new Function("createRuntime", "installRuntimeSharedObjects", "BrowserPrograms", "location", "addEventListener", "state", "mode", `${transpiler.transformSync(code)}; return () => { if (state.closed) throw new Error("installation closed"); return "command-ready"; };`)(
     () => ({ filesystem: {} }),
     () => ({ close() { state.closed = true; } }),
