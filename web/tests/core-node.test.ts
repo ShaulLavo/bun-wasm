@@ -8,6 +8,15 @@ test('plain Node can consume the JS memory helper through the existing host adap
   expect(result.status).toBe(0);
 });
 
+test('plain Node imports paired program and asset TypeScript sources without a resolver hook', () => {
+  const program = new URL('../../src/quickjs-program.ts', import.meta.url).href;
+  const assets = new URL('../../src/assets.ts', import.meta.url).href;
+  const source = `const program = await import(${JSON.stringify(program)}); const assets = await import(${JSON.stringify(assets)}); if (typeof program.engineLinkPlan !== "function" || typeof assets.prepareProgram !== "function") throw new Error("Missing source entry");`;
+  const result = spawnSync('node', ['--input-type=module', '-e', source], { encoding: 'utf8' });
+  expect(result.stderr).toBe('');
+  expect(result.status).toBe(0);
+});
+
 test('module-preparation benchmark links its actual Node host before creating fixtures', () => {
   const result = spawnSync('node', [new URL('../../scripts/bench-module-preparation.mjs', import.meta.url).pathname, '--check'], { encoding: 'utf8' });
   expect(result.status).toBe(0);
