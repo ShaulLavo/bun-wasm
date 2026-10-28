@@ -59,8 +59,8 @@ function gitMetadata(repository: string, revision: string): unknown {
 export function waffleSourceRoot(repository: string, commit: string, gitPeer = false): "" | "packages/waffle" {
   fullCommit(commit, "Waffle source commit");
   const root = gitMetadata(repository, `${commit}:package.json`);
-  if (isRecord(root) && root.name === "waffle" && root.private !== true) return "";
-  assert.ok(!gitPeer, "A private workspace Git root is not an installable Waffle peer; use the published release archive");
+  if (isRecord(root) && root.name === "waffle" && root.private !== true && root.workspaces === undefined) return "";
+  assert.ok(!gitPeer, "A monorepo Git root is not an installable Waffle peer; use the published release archive");
   const child = gitMetadata(repository, `${commit}:packages/waffle/package.json`);
   assert.ok(isRecord(child) && child.name === "waffle" && child.private !== true, "Invalid Waffle source package");
   return "packages/waffle";

@@ -68,6 +68,19 @@ test("real Git staging selects historical roots and monorepo children with space
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("a public monorepo root cannot impersonate the historical package root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bw-sp-workspace-"));
+  try {
+    const f = await sourceFixture(root, true);
+    await Bun.write(join(f.repository, "package.json"), JSON.stringify({ name: "waffle", version: release.version, private: false, workspaces: ["packages/*"] }));
+    git(f.repository, "add", ".");
+    git(f.repository, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "public workspace root");
+    const commit = git(f.repository, "rev-parse", "HEAD");
+    expect(waffleSourceRoot(f.repository, commit)).toBe("packages/waffle");
+    expect(() => waffleSourceRoot(f.repository, commit, true)).toThrow("not an installable Waffle peer");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 async function checkInstalledRelease(root: string) {
   const modules = join(root, "node_modules");
   await mkdir(modules);
