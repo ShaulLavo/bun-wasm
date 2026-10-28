@@ -107,6 +107,16 @@ test("embedded debug and backpressure EAGAIN text is not a diagnostic", () => {
   for (const output of outputs) expect(firstError(output)).toBe("No diagnostic before exit or deadline");
 });
 
+test("Svelte Rollup early exit retains its raw build diagnostic", () => {
+  const log = readFileSync(new URL("./review-evidence/svelte-quickjs-build.log", import.meta.url), "utf8");
+  const output = stageOutput(log, "bun run .matrix-command.ts node_modules/vite/bin/vite.js build");
+  expect(output).toContain("(vite-plugin-sveltekit-compile) writeBundle");
+  expect(failure(output, "build")).toEqual({
+    category: "d",
+    blocker: "build: Unexpected early exit. This happens when Promises returned by plugins cannot resolve. Unfinished hook action(s) on exit:",
+  });
+});
+
 test("only matching QuickJS failures get category f, retaining extra fields and pass order", () => {
   const failed: Readonly<ComparisonRow & { blocker: string; metadata: { code: number } }> = Object.freeze({
     app: "prettier", host: "native", stage: "check", engine: "quickjs", status: "fail", category: "c",
