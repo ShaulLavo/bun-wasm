@@ -241,16 +241,16 @@ async function hotEdit(page: ProductPage, source: GuestSource, selector: string,
   if (await page.locator(selector).filter({ hasText: edit.replacement }).count()) throw new Error("HMR replacement text is already visible before the edit");
   await traffic.beginEdit();
   const before = await traffic.count();
-  let verified = false;
   let evidence: readonly TrafficEvidence[];
   try {
     await source.write(edit.path, original.replace(edit.search, edit.replacement));
     await page.locator(selector).filter({ hasText: edit.replacement }).waitFor({ timeout: Math.max(1, deadline - Date.now()) });
     evidence = await editEvidence(traffic, before, deadline);
     if (!evidence.length) throw new Error("Edited content appeared without a development WebSocket update (recognized Vite or Next HMR message)");
-    verified = true;
-  } finally {
-    if (!verified) await source.write(edit.path, original);
+  } catch (error) {
+    try { await source.write(edit.path, original); }
+    catch { /* Cleanup must not replace the original forward failure. */ }
+    throw error;
   }
   await traffic.beginEdit();
   const rollback = await traffic.count();

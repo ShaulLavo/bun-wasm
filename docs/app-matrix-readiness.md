@@ -19,7 +19,9 @@ traffic observer for rollback. Later probes start only after that successful lif
 The rollback check cannot use only a substring match for the original text: an edited marker can
 contain the original marker. It explicitly waits for the edited marker to be hidden.
 
-If the forward edit fails, its failure is retained and the source is still restored. That cleanup
+If the forward edit fails, restoration is attempted without replacing that original failure, even
+when the restoration write also rejects. A rollback failure after verified forward HMR still fails
+the case. That cleanup
 write does not turn a missing HMR message into a pass or grant another timeout. SSR-query, DOM and
 interaction observations keep their existing assertions and navigation order.
 

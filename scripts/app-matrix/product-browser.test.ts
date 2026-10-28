@@ -348,6 +348,67 @@ test("restores the guest source when the DOM assertion fails", async () => {
   await traffic.close();
 });
 
+test("a rejecting restore does not replace missing forward WebSocket evidence", async () => {
+  const run = fixture({ updateMessage: null });
+  const traffic = await observeProductTraffic(run.page);
+  let restores = 0;
+  const source = {
+    read: run.source.read,
+    async write(path: string, contents: string) {
+      if (contents !== "original") return run.source.write(path, contents);
+      restores++;
+      throw new Error("restore write failed");
+    },
+  };
+  await run.open();
+  const rows = await productObservations(run.page, "http://local/", hmrCheck(), source, traffic, 20);
+  expect(rows[0]?.status).toBe("fail");
+  expect(rows[0]?.blocker).toContain("Edited content appeared without a development WebSocket update");
+  expect(rows[0]?.blocker).not.toContain("restore write failed");
+  expect(restores).toBe(1);
+  await traffic.close();
+});
+
+const originalForwardError = new Error("forward error");
+originalForwardError.toString = () => "original Error identity";
+for (const thrown of [originalForwardError, false, 0, null, undefined]) {
+  test(`forward rejection ${String(thrown)} survives a rejecting restore`, async () => {
+    const run = fixture({ updateMessage: null });
+    const traffic = await observeProductTraffic(run.page);
+    let restores = 0;
+    const source = {
+      read: run.source.read,
+      async write(_path: string, contents: string) {
+        if (contents !== "original") throw thrown;
+        restores++;
+        throw new Error("restore write failed");
+      },
+    };
+    await run.open();
+    const rows = await productObservations(run.page, "http://local/", hmrCheck(), source, traffic, 1000);
+    expect(rows[0]?.blocker).toBe(String(thrown));
+    expect(restores).toBe(1);
+    await traffic.close();
+  });
+}
+
+test("a rejecting rollback still fails after forward HMR passed", async () => {
+  const run = fixture({ updateMessage: JSON.stringify({ type: "full-reload" }) });
+  const traffic = await observeProductTraffic(run.page);
+  const source = {
+    read: run.source.read,
+    async write(path: string, contents: string) {
+      if (contents === "original") throw new Error("successful edit rollback failed");
+      await run.source.write(path, contents);
+    },
+  };
+  await run.open();
+  const rows = await productObservations(run.page, "http://local/", hmrCheck(), source, traffic, 1000);
+  expect(rows[0]?.status).toBe("fail");
+  expect(rows[0]?.blocker).toContain("successful edit rollback failed");
+  await traffic.close();
+});
+
 test("preserves message arrival ordering, receiver behavior, exceptions, and cleanup", async () => {
   const run = fixture({ updateMessage: JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/src/App.tsx" }] }) });
   const traffic = await observeProductTraffic(run.page);
