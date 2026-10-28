@@ -48,6 +48,8 @@
       this.#colors = options.useColors ?? Boolean(process.stdout.isTTY);
       this.#transpiler = new Bun.Transpiler({ loader: "tsx", replMode: true });
       for (const [name, command] of Object.entries(builtinCommands)) this.commands[name] = command;
+      // Like Node's REPL, a terminal is put in raw mode: the editor echoes and handles keys itself.
+      if (this.#terminal) this.#input.setRawMode?.(true);
       this.#input.on("data", this.#onData);
       this.#input.on("end", this.#onEnd);
       process.on("SIGINT", this.#onInterrupt);
@@ -74,6 +76,7 @@
       this.#input.off("data", this.#onData);
       this.#input.off("end", this.#onEnd);
       process.off("SIGINT", this.#onInterrupt);
+      if (this.#terminal) this.#input.setRawMode?.(false);
       this.#input.pause();
       this.emit("exit");
       this.emit("close");

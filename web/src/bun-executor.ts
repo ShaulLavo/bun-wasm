@@ -150,7 +150,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
         instance, moduleUrls: "blob",
         modules: req.moduleCache ? moduleStore(req.moduleCache, host.location) : undefined,
         fetch: (input, init) => { checkActive(); return nativeFetch(input, init); },
-        sharedObjects, net, processWake: runtimeState?.wake, onExit: code => finish({ code }),
+        sharedObjects, net, terminal, processWake: runtimeState?.wake, onExit: code => finish({ code }),
       });
     },
   };
