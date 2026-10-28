@@ -171,3 +171,15 @@ prerelease. The published `@napi-rs/wasm-runtime@1.2.5` peer range
 `^1.7.1 || ^2.0.0-alpha.4` provides the regression case: native Bun selects
 emnapi 1.11.3, while numeric maximum selection had chosen 2.0.0-beta.2. No
 upstream implementation, package pin or loader workaround is copied or added.
+
+The original resolver visits required transitive dependencies before choosing
+missing peer dependencies. A broad peer can reuse a compatible version required
+elsewhere instead of selecting a newer root version first and forcing the
+required version into a nested install. After adding an automatic peer, its
+required children run before the next peer choice. Root declarations retain
+their existing priority. The matcher, published dependency declarations,
+platform filtering, optional-peer omission and conflicting required-version
+placement are unchanged. Generic production Resolver tests cover this ordering,
+peer-only graphs, root priority, cycles and determinism. A native Bun 1.4.4
+lockfile-only control supplies the generic placement reference. No upstream
+implementation is copied, and no package name, pin or loader exception is added.
