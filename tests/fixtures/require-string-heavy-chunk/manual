@@ -1,0 +1,1 @@
+Native Bun commits memory lazily, so its RSS growth is not wasm32 linear-memory growth; expected.txt records the guest contract.

@@ -1,0 +1,44 @@
+From 8e97fb9ca74bdec381085421bb49058612bdbfeb Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Wed, 28 Oct 2026 03:36:30 +0200
+Subject: [PATCH 16/16] wasm: cap source-sized symbol pre-reservations on
+ wasm32
+
+The parser reserved one symbol per 16 source bytes for the module scope's
+member table, the symbol list and the use map. A 5.6 MiB webpack dev chunk
+that is mostly string literals reserved a 13 MiB member table plus a symbol
+list and use map of similar size inside a 512 MiB wasm32 guest, where every
+reservation is committed linear memory. On WASI the hint is capped and the
+tables grow with the symbols actually declared.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/js_parser/p.rs | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/src/js_parser/p.rs b/src/js_parser/p.rs
+index f9800763..34889e62 100644
+--- a/src/js_parser/p.rs
++++ b/src/js_parser/p.rs
+@@ -9707,6 +9707,13 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         // `source.len() / 16` hint (≈ one symbol per 16 source bytes) covers
+         // the vast majority of real files in a single allocation.
+         let estimated_symbol_count = source.contents.len() / 16;
++        // bun-wasm: wasm32 linear memory stays below 512 MiB (string pointer tags use the top
++        // address bits) and every reservation is committed. String-heavy generated files (webpack
++        // dev chunks) hold far fewer symbols than one per 16 bytes, so their size-proportional
++        // member table, symbol list and use map were mostly empty yet tens of MiB; past this cap
++        // the tables grow as symbols are actually declared.
++        #[cfg(target_os = "wasi")]
++        let estimated_symbol_count = estimated_symbol_count.min(WASI_SYMBOL_HINT_CAP);
+ 
+         // ~one scope per 64 source bytes covers most files without regrowth.
+         let mut scope_order =
+@@ -10460,3 +10467,7 @@ fn record_destructured_aliases(
+     }
+     Some(rest_ref)
+ }
++
++/// bun-wasm: largest symbol-count pre-reservation a wasm32 parse makes from the source length.
++#[cfg(target_os = "wasi")]
++const WASI_SYMBOL_HINT_CAP: usize = 1 << 14;
