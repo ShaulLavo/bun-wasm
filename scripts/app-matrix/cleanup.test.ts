@@ -23,8 +23,14 @@ function fixture(stop: () => Promise<unknown>, productError = new Error("page.go
     on() {},
     exposeBinding: async () => ({ dispose: async () => { releases.push("binding"); } }),
     addInitScript: async () => ({ dispose: async () => { releases.push("script"); } }),
-    evaluate: async () => {},
-    goto: async (_url: string, options: { timeout: number }) => { expect(options.timeout).toBe(90_000); throw productError; },
+    evaluate: async (fn: (arg: unknown) => unknown, arg: unknown) => {
+      if (arg === undefined) return;
+      const previous = globalThis.fetch;
+      globalThis.fetch = Object.assign(async () => new Response("matrix", { status: 200 }), { preconnect: previous.preconnect });
+      try { return await fn(arg); }
+      finally { globalThis.fetch = previous; }
+    },
+    goto: async (_url: string, options: { timeout: number }) => { expect(options.timeout).toBeLessThanOrEqual(90_000); throw productError; },
     close: async () => { releases.push("preview"); },
   };
   const page = {
@@ -106,7 +112,8 @@ test("unresponsive terminal capture does not replace the original navigation err
 test("traffic cleanup deadline still reaches preview close", async () => {
   const { input, releases } = fixture(async () => {});
   const preview = await input.context.newPage();
-  preview.evaluate = pending;
+  const readinessEvaluate = preview.evaluate;
+  preview.evaluate = async (fn, arg) => arg === undefined ? pending() : readinessEvaluate(fn, arg);
   const result = await within(serverCommand(input));
   expect("harnessCleanup" in result && result.harnessCleanup).toEqual([expect.objectContaining({ operation: "traffic-close", timedOut: true })]);
   expect(releases).toContain("preview");

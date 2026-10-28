@@ -18,9 +18,74 @@ interface Disposable {
 export interface ProductPage {
   addInitScript(script: () => void): Promise<Disposable>;
   exposeBinding(name: string, callback: (source: unknown, value: unknown) => void): Promise<Disposable>;
-  evaluate<T>(pageFunction: () => T): Promise<T>;
+  evaluate<T, Arg = undefined>(pageFunction: (arg: Arg) => T | Promise<T>, arg?: Arg): Promise<Awaited<T>>;
   locator(selector: string): Locator;
   goto(url: string, options: { timeout: number }): Promise<Response | null>;
+}
+
+interface PreviewProbeResult {
+  status: number;
+  body: string;
+  deadline: boolean;
+}
+
+async function probePreviewUntilReady({ url, deadline, last503Body }: { url: string; deadline: number; last503Body: string }): Promise<PreviewProbeResult> {
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), remaining);
+    let status = 503;
+    try {
+      const response = await fetch(url, { cache: "no-store", redirect: "error", signal: controller.signal });
+      status = response.status;
+      const body = await response.text();
+      if (status !== 503) return { status, body, deadline: false };
+      last503Body = body;
+      if (Date.now() >= deadline) return { status: 503, body: last503Body, deadline: true };
+    } catch (error) {
+      if (controller.signal.aborted && Date.now() >= deadline) return { status, body: status === 503 ? last503Body : "", deadline: true };
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+    await new Promise(resolve => setTimeout(resolve, Math.min(100, deadline - Date.now())));
+  }
+  return { status: 503, body: last503Body, deadline: true };
+}
+
+type PreviewBodyResult = { kind: "body"; body: string } | { kind: "deadline" };
+
+async function readPreviewResponseBody(response: Response, deadline: number): Promise<PreviewBodyResult> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return { kind: "deadline" };
+  const deadlineToken = {};
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const body = await Promise.race([
+      response.text(),
+      new Promise<string>((_, reject) => { timer = setTimeout(() => reject(deadlineToken), remaining); }),
+    ]);
+    return { kind: "body", body };
+  } catch (error) {
+    if (error === deadlineToken) return { kind: "deadline" };
+    throw error;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function waitForPreviewReady(page: Pick<ProductPage, "evaluate" | "goto">, url: string, deadline: number): Promise<void> {
+  const response = await page.goto(url, { timeout: Math.max(1, deadline - Date.now()) });
+  if (!response) throw new Error(`No response for preview ${url}`);
+  const body = await readPreviewResponseBody(response, deadline);
+  if (body.kind === "deadline") throw new Error(`Preview HTTP ${response.status()} before readiness deadline: response body unavailable`);
+  if (response.status() === 503) {
+    const result = await page.evaluate(probePreviewUntilReady, { url, deadline, last503Body: body.body });
+    if (result.deadline) throw new Error(`Preview HTTP ${result.status} before readiness deadline: ${result.body || "response body unavailable"}`);
+    if (result.status < 200 || result.status >= 300) throw new Error(`Preview HTTP ${result.status}: ${result.body}`);
+    return;
+  }
+  if (!response.ok()) throw new Error(`Preview HTTP ${response.status()}: ${body.body}`);
 }
 export interface GuestSource {
   read(path: string): Promise<string | null>;

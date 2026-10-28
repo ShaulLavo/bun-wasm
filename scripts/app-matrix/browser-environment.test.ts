@@ -62,8 +62,15 @@ test("server rows record elapsed ready and page-load times", async () => {
   } };
   const disposable = async () => ({ dispose: async () => {} });
   const preview = {
-    on() {}, exposeBinding: disposable, addInitScript: disposable, evaluate: async () => {},
-    goto: async () => ({ ok: () => true, fromServiceWorker: () => true }),
+    on() {}, exposeBinding: disposable, addInitScript: disposable,
+    evaluate: async (fn: (arg: unknown) => unknown, arg: unknown) => {
+      if (arg === undefined) return;
+      const previous = globalThis.fetch;
+      globalThis.fetch = Object.assign(async () => new Response("matrix", { status: 200 }), { preconnect: previous.preconnect });
+      try { return await fn(arg); }
+      finally { globalThis.fetch = previous; }
+    },
+    goto: async () => ({ ok: () => true, status: () => 200, text: async () => "matrix", fromServiceWorker: () => true }),
     locator: () => ({ filter: () => ({ waitFor: async () => {} }) }),
     screenshot: async () => {}, close: async () => {},
   };
