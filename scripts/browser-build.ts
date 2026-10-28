@@ -2,6 +2,7 @@ import { relative, join, resolve, isAbsolute, dirname } from "node:path";
 import { existsSync, realpathSync, readFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { pinnedBashWeb, verifiedGuests } from "./bash-web-guests";
 
 const runtimeName = "waffle";
 
@@ -194,20 +195,23 @@ export function buildClassicWorker(entrypoint: string, outdir: string, define?: 
 
 /**
  * bash-web's shell at /bin/sh and /bin/bash for package scripts, Bun.$ and bun exec, and its env
- * utility for `#!/usr/bin/env` bins: the worker, bundled from the consumer's installed bash-web, and
- * the guests from scripts/build-bash-web-shell.sh (BASH_WEB_SHELL_WASM and BASH_WEB_ENV_WASM
- * override them). bash-web's loaders fetch the guests themselves, so they ship raw.
+ * utility for `#!/usr/bin/env` bins. The worker is bundled from the consumer's installed bash-web.
+ * bash-web publishes no prebuilt guests, so they come from scripts/build-bash-web-shell.sh in
+ * BASH_WEB_GUESTS_DIR (default ../dist), checked against its receipt and the consumer's bash-web pin.
+ * A stale or partial set always fails. A missing set fails when BASH_WEB_GUESTS=required (site
+ * deploys); test builds without guests only skip the shell. bash-web's loaders fetch the guests
+ * themselves, so they ship raw.
  */
 export async function buildShellAssets(consumer: string, outdir: string) {
   const worker = await Bun.build({ entrypoints: [join(consumer, "node_modules/bash-web/src/runtime/worker.ts")], outdir, naming: "shell-worker.js", target: "browser", format: "esm", minify: true });
   if (!worker.success) throw new AggregateError(worker.logs, "bash-web shell worker build failed");
-  const guests = [
-    { source: process.env.BASH_WEB_SHELL_WASM ?? "../dist/bash-web-shell.wasm", output: "shell-engine.wasm", missing: "package scripts, Bun.$ and bun exec will not run" },
-    { source: process.env.BASH_WEB_ENV_WASM ?? "../dist/bash-web-env.wasm", output: "env.wasm", missing: "`#!/usr/bin/env` package bins will not run" },
-  ];
-  for (const { source, output, missing } of guests) {
-    const guest = resolve(consumer, source);
-    if (existsSync(guest)) await Bun.write(join(outdir, "programs", output), Bun.file(guest));
-    else console.warn(`${output}: ${guest} not found; ${missing}.`);
+  const dist = resolve(consumer, process.env.BASH_WEB_GUESTS_DIR ?? "../dist");
+  const guests = verifiedGuests(dist, pinnedBashWeb(consumer));
+  if (guests) {
+    for (const { program, path } of guests) await Bun.write(join(outdir, "programs", program), Bun.file(path));
+    return;
   }
+  const missing = `no bash-web guests in ${dist}; run scripts/build-bash-web-shell.sh`;
+  if (process.env.BASH_WEB_GUESTS === "required") throw new Error(missing);
+  console.warn(`${missing}. Package scripts, Bun.$, bun exec and #!/usr/bin/env bins will not run.`);
 }
