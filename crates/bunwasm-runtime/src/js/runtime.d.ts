@@ -17,6 +17,9 @@ declare namespace BunWasm {
     hostLocalAddr(handle: number): string | number;
     hostLookupStart?(hostname: string, family: 0 | 4 | 6, hints: number): number;
     hostLookupHead?(handle: number): string | number;
+    /** Browser host only: switch the attached terminal session between raw and cooked input.
+     * Returns a Waffle terminal failure code, or undefined when the mode changed. */
+    terminalSetRawMode?(raw: boolean): string | undefined;
     hostLookup?: (hostname: string, family: 0 | 4 | 6, hints: number) => Promise<Array<{ address: string; family: 4 | 6 }>>;
     hostClose(handle: number): number;
     registerObjectModule(name: string): string;
@@ -393,7 +396,8 @@ declare namespace BunWasm {
   }
   interface ProcessReader extends NodeReadable {
     fd: number; isTTY: boolean; readable: boolean;
-    setRawMode(): ProcessReader;
+    isRaw: boolean;
+    setRawMode(raw: boolean): ProcessReader;
     ref(): ProcessReader; unref(): ProcessReader;
     [Symbol.asyncIterator](): AsyncGenerator<string | BufferBytes>;
   }

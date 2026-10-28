@@ -15,8 +15,8 @@ order state and the Bun-facing adapter. Minimal registration in
 `crates/bunwasm-runtime/src/js/builtins.js` and `bun.js` maps Bun's resolver flags to
 Waffle's `hints` option.
 
-The backing capability is public Waffle 0.0.94 at revision
-`ee12381b23a6b5a72b6a3b149e84b0d1458fce67`, specifically
+The shared-ring capability introduced in public Waffle 0.0.94 is consumed here
+through public 0.0.95 at revision `9bc224595a4f8b650fc19b2c18f39c1d484ee090`, specifically
 `browser/net/runtime.ts` and `browser/net/address.ts`. After `await runtime.network()`,
 `network.lookup(name, { family, hints })` is synchronous, side-effect free and returns
 fresh ordered records. Waffle owns virtual localhost policy and structured

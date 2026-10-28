@@ -21,15 +21,16 @@ test("Bun worker captures host messaging, events and native fetch before guest r
     addEventListener() { expect(this).toBe(scope); events.push("add"); },
     removeEventListener() { expect(this).toBe(scope); events.push("remove"); },
     fetch() { expect(this).toBe(scope); return Promise.resolve(new Response("native")); },
-    onmessage: undefined as unknown as (event: { data: RunRequest }) => void,
+    onmessage: undefined as unknown as (event: { data: RunRequest }) => Promise<void>,
   };
   const request = {} as RunRequest;
   runInNewContext(source, {
     self: scope,
+    hasTerminalMetadata: () => false,
     createBunExecutor(data: RunRequest, host: typeof captured) { expect(data).toBe(request); captured = host; return {}; },
     bootstrap(data: RunRequest, _executor: unknown, host: typeof captured) { expect(data).toBe(request); expect(host).toBe(captured); },
   });
-  scope.onmessage({ data: request });
+  await scope.onmessage({ data: request });
   const replaced = () => { throw new Error("guest replacement was called"); };
   Object.assign(scope, { postMessage: replaced, fetch: replaced, addEventListener: replaced, removeEventListener: replaced });
   captured.postMessage({ type: "exit", code: 0 });

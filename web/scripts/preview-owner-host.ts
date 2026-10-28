@@ -148,7 +148,9 @@ export class OwnerSession implements SocketAliasOwner {
     this.routes.delete(id);
     clearTimeout(route.timer);
     route.lifetime.abort();
-    await (await route.binding).close();
+    const binding = await route.binding;
+    await binding.close();
+    await this.aliases.releaseHost(new URL(binding.origin).hostname, this);
     await this.aliases.release(route.port, this);
   }
   ownsOrigin(origin: string): boolean {
@@ -181,7 +183,31 @@ export class OwnerSession implements SocketAliasOwner {
   private async bindRoute(port: number, lifetime: AbortController, endpoint: Parameters<LoopbackPreviewOrigins["bind"]>[2]) {
     await this.aliases.reserve(port, this);
     if (this.closing || lifetime.signal.aborted) throw new Error("Preview owner closed during socket setup");
-    return this.origins.bind(this, port, endpoint);
+    const binding = await this.origins.bind(this, port, endpoint);
+    try {
+      await this.bindAliases(port, binding.origin);
+      if (this.closing || lifetime.signal.aborted) throw new Error("Preview owner closed during alias setup");
+      return binding;
+    } catch (error) {
+      await binding.close();
+      await this.aliases.releaseHost(new URL(binding.origin).hostname, this);
+      await this.aliases.release(port, this);
+      throw error;
+    }
+  }
+  private async bindAliases(port: number, origin: string): Promise<void> {
+    await this.bindOriginAliases(port, origin);
+    for (const route of this.routes.values()) {
+      if (route.stage.kind === "pending") continue;
+      await this.bindOriginAliases(route.port, route.stage.kind === "reserved" ? route.stage.origin : route.stage.authorization.origin);
+    }
+  }
+  private async bindOriginAliases(rootPort: number, origin: string): Promise<void> {
+    const url = new URL(origin);
+    for (const route of this.routes.values()) {
+      if (route.port === rootPort && url.port === String(rootPort)) continue;
+      await this.aliases.reserve(route.port, this, url.hostname);
+    }
   }
   private exchange(route: Route, open: PreviewHostOpen, output: Exchange["output"], fail: () => void): string {
     if (this.exchanges.size >= MAX_EXCHANGES || this.budget.active >= MAX_EXCHANGES) throw new Error("Preview exchange limit");
