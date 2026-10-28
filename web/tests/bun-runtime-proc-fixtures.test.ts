@@ -62,7 +62,7 @@ for (const scenario of bunRuntimeProcScenarios) test(`external generic root fixt
   for (const [index, request] of requests.entries()) {
     const command = scenario.commands[index]!;
     expect(request).toEqual({ executable: command.executable ?? "/bin/bun", argv: ["bun", "-e", command.source],
-      env: { PWD: "/home/user", PATH: "/bin:/usr/bin" }, cwd: "/home/user", job: 0,
+      env: { PWD: "/home/user", PATH: scenario.basePrograms ? "/usr/local/bin:/usr/bin:/bin" : "/bin:/usr/bin" }, cwd: "/home/user", job: 0,
       fds: (command.fds ?? [{ child: 0, parent: 0 }, { child: 1, parent: 1 }, { child: 2, parent: 2 }]).map(binding => ({
         child: binding.child, parent: binding.parent === "reader" ? 123 : binding.parent === "writer" ? 456 : binding.parent,
       })),

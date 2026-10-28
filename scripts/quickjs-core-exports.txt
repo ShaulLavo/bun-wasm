@@ -56,6 +56,7 @@ write
 core_checkpoint
 bun_core_alloc
 posix_memalign
+malloc_usable_size
 bun_core_dispatch
 bun_core_free
 stdout

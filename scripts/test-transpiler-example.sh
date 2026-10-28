@@ -4,7 +4,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$root/env.sh"
 bun "$root/scripts/build-wasi-sysroot.ts"
 cd "$root"
-scratch="$(mktemp -d /work/tmp/bun-wasm-transpiler-example-XXXXXX)"
+scratch="$(mktemp -d "${RUNNER_TEMP:-$TMPDIR}/bun-wasm-transpiler-example-XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 trap 'exit 130' INT TERM
 cargo build -j "${JOBS:-8}" --release --target wasm32-wasip1 -p bunwasm-transpiler --examples

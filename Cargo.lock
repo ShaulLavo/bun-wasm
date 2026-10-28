@@ -4510,8 +4510,6 @@ dependencies = [
 [[package]]
 name = "wasmi_core"
 version = "0.46.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "909e4dcf38f60274b2d098802371e232d92c2c612b0b47a0016ec5234a3f425d"
 dependencies = [
  "downcast-rs",
  "libm",

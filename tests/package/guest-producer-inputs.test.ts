@@ -503,3 +503,33 @@ for (const damage of ["corrupt", "partial", "profile"]) test(`core ${damage} plu
     expect(await recipe.builds()).toEqual(builds);
   });
 }, 15_000);
+
+
+for (const useRunner of [false, true]) test(`transpiler example scratch uses ${useRunner ? "RUNNER_TEMP" : "TMPDIR"} and cleans up before compilation failure`, async () => {
+  await withReceiptFixture(async options => {
+    const root = options.repository;
+    const runner = join(root, "private/runner");
+    const temporary = join(root, "private/tmp");
+    const cargoHome = join(root, "private/cargo");
+    const bin = join(cargoHome, "bin");
+    const trace = join(root, "private/allocation");
+    await Promise.all([runner, temporary, bin].map(path => mkdir(path, { recursive: true })));
+    await copyFile(new URL("../../env.sh", import.meta.url), join(root, "env.sh"));
+    await copyFile(new URL("../../scripts/test-transpiler-example.sh", import.meta.url), join(root, "scripts/test-transpiler-example.sh"));
+    await writeFile(join(root, "scripts/build-wasi-sysroot.ts"), "export {};\n");
+    await writeFile(join(bin, "cargo"), '#!/usr/bin/env bash\nprintf "stopped before compilation\\n"\nexit 42\n', { mode: 0o755 });
+    await writeFile(join(bin, "mktemp"), '#!/usr/bin/env bash\nset -eu\nallocated=$("$REAL_MKTEMP" "$@")\nprintf "%s" "$allocated" > "$ALLOCATION_TRACE"\nprintf "%s\\n" "$allocated"\n', { mode: 0o755 });
+    const realMktemp = Bun.which("mktemp");
+    if (!realMktemp) throw new Error("mktemp is required for the portable allocation control");
+    const result = Bun.spawnSync(["bash", "scripts/test-transpiler-example.sh"], { cwd: root, env: {
+      ...process.env, CARGO_HOME: cargoHome, TMPDIR: temporary, RUNNER_TEMP: useRunner ? runner : "", REAL_MKTEMP: realMktemp, ALLOCATION_TRACE: trace,
+    }, timeout: 10_000 });
+    expect(result.stderr.toString()).toBe("");
+    expect(result.stdout.toString()).toContain("stopped before compilation");
+    expect(result.exitCode).toBe(42);
+    const allocation = await readFile(trace, "utf8");
+    const selected = useRunner ? runner : temporary;
+    expect(dirname(allocation)).toBe(selected);
+    expect(await readdir(selected)).toEqual([]);
+  });
+});
