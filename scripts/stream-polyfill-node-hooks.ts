@@ -60,6 +60,27 @@ if (!result) throw new Error("Missing transformed streams source");
 const body = directStreams(ts.createPrinter({ removeComments: true }).printFile(result));
 transformed.dispose();
 
+// The converted source dictionary named by the constructor's `"bytes" === dictionary.type` check.
+function bytesDictionary(node: ts.IfStatement): ts.Expression | undefined {
+  let condition = node.expression;
+  while (ts.isBinaryExpression(condition) && condition.operatorToken.kind === ts.SyntaxKind.CommaToken) condition = condition.right;
+  if (!ts.isBinaryExpression(condition) || condition.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken) return;
+  if (!ts.isStringLiteral(condition.left) || condition.left.text !== "bytes" || !ts.isPropertyAccessExpression(condition.right) || condition.right.name.text !== "type") return;
+  return condition.right.expression;
+}
+// Visits a ReadableStream constructor body. Once the bytes check names the
+// converted dictionary, `setup` may rewrite each later expression statement.
+type SetupRewrite = (node: ts.ExpressionStatement, dictionary: ts.Expression) => ts.Node | undefined;
+function constructorVisitor(context: ts.TransformationContext, setup: SetupRewrite): ts.Visitor {
+  let dictionary: ts.Expression | undefined;
+  const visit: ts.Visitor = child => {
+    if (ts.isIfStatement(child) && !dictionary) dictionary = bytesDictionary(child);
+    const rewritten = dictionary && ts.isExpressionStatement(child) ? setup(child, dictionary) : undefined;
+    return rewritten ?? ts.visitEachChild(child, visit, context);
+  };
+  return visit;
+}
+
 // Bun's `type: "direct"` sources: accept the type, then give the default
 // controller setup the runtime's direct source, a zero watermark and unit sizes.
 function directStreams(text: string): string {
@@ -93,23 +114,10 @@ function directStreams(text: string): string {
         f.createConditionalExpression(direct(dictionary), undefined, f.createIdentifier("__bunDirectSize"), undefined, size)];
       return f.updateExpressionStatement(node, f.updatePrefixUnaryExpression(node.expression as ts.PrefixUnaryExpression, f.updateCallExpression(call, call.expression, call.typeArguments, args)));
     }
-    function bytesDictionary(node: ts.IfStatement): ts.Expression | undefined {
-      let condition = node.expression;
-      while (ts.isBinaryExpression(condition) && condition.operatorToken.kind === ts.SyntaxKind.CommaToken) condition = condition.right;
-      if (!ts.isBinaryExpression(condition) || condition.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken) return;
-      if (!ts.isStringLiteral(condition.left) || condition.left.text !== "bytes" || !ts.isPropertyAccessExpression(condition.right) || condition.right.name.text !== "type") return;
-      return condition.right.expression;
-    }
     function readableConstructor(node: ts.ConstructorDeclaration): ts.Node {
       const raw = node.parameters[0]?.name;
       if (!raw || !ts.isIdentifier(raw) || !node.body) throw new Error("Unexpected ReadableStream constructor");
-      let dictionary: ts.Expression | undefined;
-      const inner: ts.Visitor = child => {
-        if (ts.isIfStatement(child) && !dictionary) dictionary = bytesDictionary(child);
-        if (dictionary && ts.isExpressionStatement(child)) return setupCall(child, dictionary) ?? ts.visitEachChild(child, inner, context);
-        return ts.visitEachChild(child, inner, context);
-      };
-      const body = ts.visitEachChild(node.body, inner, context);
+      const body = ts.visitEachChild(node.body, constructorVisitor(context, setupCall), context);
       applied.underlying++;
       const statements: ts.Statement[] = [f.createVariableStatement(undefined, f.createVariableDeclarationList([f.createVariableDeclaration("__bunDirectUnderlying", undefined, undefined, raw)], ts.NodeFlags.Const))];
       return f.updateConstructorDeclaration(node, node.modifiers, node.parameters, f.updateBlock(body, statements.concat(body.statements)));

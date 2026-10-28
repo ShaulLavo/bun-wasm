@@ -16,6 +16,23 @@ function bytes(value: unknown): Uint8Array {
   throw new TypeError("write() expects a string, ArrayBufferView, or ArrayBuffer");
 }
 
+// Calls a thenable's `then` as a promise resolve job does, with a throw as rejection.
+function callThen(then: Function, value: object, resolve: (value: unknown) => void, reject: (reason: unknown) => void) {
+  try { Reflect.apply(then, value, [resolve, reject]); }
+  catch (error) { reject(error); }
+}
+// Settlement of a promise-like pull result, reading its `then` once. Undefined
+// for a synchronous result, including a non-thenable object.
+function settlement(result: unknown): Promise<unknown> | undefined {
+  if (result === null || typeof result !== "object" && typeof result !== "function") return;
+  let then: unknown;
+  try { then = Reflect.get(result, "then", result); }
+  catch (error) { return Promise.reject(error); }
+  if (typeof then !== "function") return;
+  const method = then;
+  return new Promise((resolve, reject) => queueMicrotask(() => callThen(method, result, resolve, reject)));
+}
+
 function directSource(source: object, highWaterMark: number, onController: (controller: object, error: (reason: unknown) => void) => void): UnderlyingDefaultSource<Uint8Array> {
   const pull = method(source, "pull");
   const cancel = method(source, "cancel");
@@ -129,10 +146,12 @@ function directSource(source: object, highWaterMark: number, onController: (cont
     schedule();
     // Delivery can release a read before an async producer finishes. Keep its lock
     // until settlement, but do not repull a synchronous producer with no output.
-    Promise.resolve(result).then(() => {
-      if (result instanceof Promise) pulled();
-      else pulling = false;
-    }, error => { pulling = false; fail(error); });
+    const pending = settlement(result);
+    if (!pending) {
+      void Promise.resolve().then(() => { pulling = false; });
+      return;
+    }
+    pending.then(pulled, error => { pulling = false; fail(error); });
   }
   return {
     start(value) { controller = value; onController(value, fail); },
@@ -150,7 +169,10 @@ function directSource(source: object, highWaterMark: number, onController: (cont
       length = 0;
       settlePressure(false);
       settleDemand();
-      return Promise.resolve(cancel?.(reason)).then(() => {});
+      let result;
+      try { result = cancel?.(reason); }
+      catch (error) { return Promise.reject(error); }
+      return Promise.resolve(result).then(() => {});
     },
   };
 }

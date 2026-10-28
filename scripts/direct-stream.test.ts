@@ -88,3 +88,47 @@ test("other stream types keep the polyfill's conversion", () => {
   expect(new Portable({ type: "bytes" })).toBeInstanceOf(Portable);
   expect(new Portable({ start(controller) { controller.close(); } })).toBeInstanceOf(Portable);
 });
+
+type Sink = { write(chunk: unknown): unknown; end(): void };
+const settle = (promise: Promise<unknown>) => promise.then(() => "fulfilled", (reason: unknown) => reason);
+
+test("a throwing source cancel rejects the cancel promise with the exact value", async () => {
+  for (const thrown of [{ exact: "failure" }, false]) {
+    const stream = new Portable({ type: "direct", pull() {}, cancel() { throw thrown; } } as unknown as UnderlyingDefaultSource);
+    let result: Promise<void> | undefined;
+    expect(() => { result = stream.getReader().cancel("requested"); }).not.toThrow();
+    expect(await settle(result!)).toBe(thrown);
+  }
+});
+
+test("a thenable pull result resumes queued reads after it settles", async () => {
+  let pulls = 0;
+  let thenReads = 0;
+  const stream = new Portable({
+    type: "direct",
+    pull(controller: Sink) {
+      controller.write(String(++pulls));
+      if (pulls === 2) controller.end();
+      return { get then() { thenReads++; return (resolve: () => void) => queueMicrotask(resolve); } };
+    },
+  } as unknown as UnderlyingDefaultSource);
+  const reader = stream.getReader();
+  const values = await Promise.all([reader.read(), reader.read(), reader.read()]);
+  expect(values.map(value => value.done ? "done" : new TextDecoder().decode(value.value))).toEqual(["1", "2", "done"]);
+  expect([pulls, thenReads]).toEqual([2, 2]);
+
+  const rejected = new Portable({ type: "direct", pull() { return { then(_: unknown, reject: (reason: unknown) => void) { reject(false); } }; } } as unknown as UnderlyingDefaultSource);
+  expect(await settle(rejected.getReader().read())).toBe(false);
+});
+
+test("a synchronous producer without output is not pulled again", async () => {
+  for (const returned of [undefined, {}]) {
+    let pulls = 0;
+    const stream = new Portable({ type: "direct", pull() { pulls++; return returned; } } as unknown as UnderlyingDefaultSource);
+    const reader = stream.getReader();
+    void reader.read();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(pulls).toBe(1);
+    await reader.cancel();
+  }
+});
