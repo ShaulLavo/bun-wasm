@@ -10,7 +10,7 @@ import { HOST_CALL_FD, installHostSlots, installHostSlotsViaImport } from "./net
 import { createLookupClient, type LookupClient } from "./net/lookup.js";
 import { exportSharedObjects, type SharedObjectService } from "./shared-objects/service.js";
 import type { BunSharedConnection, BunSharedNativeHost } from "./shared-objects/protocol.js";
-import { attachBunTerminal, type BunTerminal } from "./bun-terminal.js";
+import type { BunTerminal } from "./bun-terminal.js";
 
 export type Engine = "quickjs" | "jsc" | "browser" | "hermes";
 
@@ -84,7 +84,16 @@ export interface BunExecutorHost extends BunSharedNativeHost {
  * imports the `runtime_proc` ABI directly. This adds Bun's networking slots, the browser engine
  * host and the engine stack budgets.
  */
-export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globalThis as unknown as BunExecutorHost): WorkerExecutor<RunRequest> {
+/** Whether a spawn carries the shell's terminal session (bun-terminal.ts), so worker.ts loads it first. */
+export function hasTerminalMetadata(req: RunRequest): boolean {
+  const data = req.runtimeProcess?.data;
+  return typeof data === "object" && data !== null && ("terminalContext" in data || "terminalInput" in data);
+}
+
+/** bun-terminal.ts as worker.ts loaded it: only for a spawn with terminal metadata, like Waffle's own terminal module. */
+export type TerminalModule = typeof import("./bun-terminal.js") | Error | undefined;
+
+export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globalThis as unknown as BunExecutorHost, terminalModule: TerminalModule = undefined): WorkerExecutor<RunRequest> {
   let netHost: NetHost | null = null;
   let sharedObjects: SharedObjectService | undefined;
   let terminal: BunTerminal | undefined;
@@ -102,7 +111,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     ...linked,
     hostCallFd: HOST_CALL_FD,
     setup({ checkActive }) {
-      terminal = attachBunTerminal(req, checkActive);
+      terminal = attach(req, terminalModule, checkActive);
       if (!req.sharedObjects) return;
       if (req.engine !== "browser" || req.adapter === "preview1") throw new TypeError("Shared objects require the browser Bun engine");
       if (sharedObjects) throw new Error("Shared-object setup already completed");
@@ -154,6 +163,14 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       });
     },
   };
+}
+
+// A start fails when its terminal module did not load; absent metadata keeps ordinary stdin.
+function attach(req: RunRequest, terminalModule: TerminalModule, checkActive: () => void): BunTerminal | undefined {
+  if (terminalModule instanceof Error) throw terminalModule;
+  if (terminalModule) return terminalModule.attachBunTerminal(req, checkActive);
+  if (hasTerminalMetadata(req)) throw new TypeError("Terminal metadata arrived without its terminal module");
+  return undefined;
 }
 
 function finishHostServices(sharedObjects: SharedObjectService | undefined, lookupClient: LookupClient | undefined, lookupPort: MessagePort | undefined) {
