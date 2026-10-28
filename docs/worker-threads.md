@@ -52,6 +52,27 @@ native Bun 1.4.2. Node 26.7.0 instead returns the queued broadcast message. Refe
 counts keep a listening port or open broadcast channel alive until it is closed or
 unreferenced. Broadcast channels communicate across guests through the root broker.
 
+With browser shared objects, a channel whose ends live in different guests gets its
+own shared lane (`web/src/shared-objects/lane.ts`): two single-writer rings of 1 MiB,
+one per direction, moved with the port when it is transferred.
+
+- Frame visibility: when `postMessage` returns, the complete packet is in the ring that
+  the peer's current owner reads, in order. A reply posted before `Atomics.notify` is
+  therefore seen by a caller woken from `Atomics.wait`, as esbuild's `transformSync`
+  needs.
+- Decoding: a packet decodes once every SharedArrayBuffer it names is attached on the
+  receiving side. One the receiver already holds is immediate. One published with this
+  packet attaches through the receiver's event loop, a platform limit for a receiver
+  blocked in `Atomics.wait`. Until then that packet, and those after it, stay queued in
+  order. They are delivered once, with the shared identity preserved. esbuild's fresh
+  request SharedArrayBuffer attaches this way on its service worker, which isn't blocked.
+- Rejection: a message is rejected with `DataCloneError` before anything detaches when
+  the ring is full (the receiver hasn't read 1 MiB of earlier messages), the frame is
+  larger than a ring, or the peer has closed or been retired.
+- Custody: ports carried over a lane stay in the custody of the lane's destination port
+  until restored. The sender exiting first doesn't retire them, and closing that port
+  releases them.
+
 `setEnvironmentData` stores values by key identity within a guest. Workers inherit
 a cloned snapshot at construction. A value of `undefined` deletes an entry.
 `markAsUntransferable` permanently marks an object. Both structured clone and port

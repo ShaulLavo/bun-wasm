@@ -11,7 +11,8 @@ const service = exportSharedObjects(request.owner, { postMessage(message, transf
   const ports = transfer.map(port => { assert(port instanceof NativeMessagePort); return port; });
   host.postMessage(message, ports);
 } });
-const sharedObjects = bindSharedObjectHost(service, { active: () => true, pending() {}, wake() {} });
+// Without channel lanes: this covers the broker route that lanes fall back to.
+const sharedObjects = bindSharedObjectHost({ ...service, lanes: undefined }, { active: () => true, pending() {}, wake() {} });
 const runtime = sourcePorts({ sharedObjects });
 const owned = new Set<SourcePort>();
 let source: SourcePort | undefined, reply: SourcePort | undefined;

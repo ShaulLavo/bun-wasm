@@ -10,13 +10,21 @@ capability, not Nuxt acceptance or shared-memory support in the Wasmi interprete
 
 | Source | Class | Local change |
 | --- | --- | --- |
-| Bun `src/js/node/wasi.ts` | Port | Include the existing generated factory as module 188. No WASI implementation changes. |
+| Bun `src/js/node/wasi.ts` | Patch and port | Include the generated factory as module 188; add reactor initialization and a shared one-time startup guard. |
 | Builtin registration, constants hook, and selection policy | Original adapter | Route `node:wasi` to the factory, supply existing filesystem constants lazily, and retain existing adapters for unselected public dependencies. |
 
-The source comes from Bun relevant-source revision
-`9510e74152073d850a18758ca41114d8f214ffa6`, in the pinned patched checkout
-`2c7a5e6823e94e1ec92be4c4b49480964230b225`. Its SHA256 is
-`9c07eb223e2d9b1700fec1f243ac2bcddf72de39616e568ecb3850ca0b8c186f`.
+The source comes from pinned Bun revision
+`9510e74152073d850a18758ca41114d8f214ffa6`, with the checked-in Bun patch series.
+`0015-node-wasi-initialize-reactor-instances-with-exported.patch` adds
+`WASI.initialize(instance)`. It binds exported memory before calling an optional
+`_initialize`, rejects command modules exporting `_start`, and shares a one-time
+startup guard with `start`. This is needed by WASI reactor loaders, including
+the unmodified Oxc 0.94.0 fallback with stable emnapi 1.11.3. The previous source
+and native Bun 1.4.4 both throw `wasi.initialize is not a function` there.
+
+The catalog records the patched source SHA256 and preprocessed source SHA256.
+Headers and the catalog name the pinned upstream revision, so rebuilding the
+same patches with a different Git committer timestamp produces identical output.
 The standard generator lowers Bun's intrinsic references and exports into the
 existing factory format. The generated file retains the upstream source and
 revision header. Bun's license remains in the generated builtin directory.
@@ -28,8 +36,9 @@ public dependencies stop before traversal. This matches the loader's existing
 fallback for `bun`, `node:*`, and `bun:*`. Unknown module, native module, and
 architecture checks remain unchanged.
 
-Only generated module 188 and its registry row are added. Existing modules 22,
-167, and 168, the catalog, and bindings remain byte-identical. The constants hook
+Only generated module 188 and its catalog row change for reactor support.
+Existing modules 22, 167, 168, registry and bindings remain byte-identical.
+The constants hook
 adds 84 compact bytes to the loader, from 3,376 to 3,460, within its unchanged
 4,092-byte bound. The syntax check removes only the explicitly asserted hook
 before comparing every original executable token.
@@ -42,9 +51,14 @@ environment, random, file-open, file-write, file-read, and file-close operations
 It checks exact UTF-8 bytes, native file contents, descriptor closure, and EBADF.
 The control closes its descriptors and removes its scratch directory on failure
 or success. It also verifies that the constants hook remains lazy and only
-generated module 188 loads.
+generated module 188 loads. A real reactor calls a WASI import from `_initialize`,
+proving memory was bound before initialization. Additional controls cover the
+optional initializer, invalid exports, initializer exceptions, and repeated or
+mixed `start`/`initialize` calls.
 
 Focused generator tests exercise excluded public dependencies, explicit public
 selection, internal closure, and the existing guards. Interpreter threads,
-shared-memory behavior, package-specific emnapi initialization, and application
-execution are separate gates.
+shared-memory behavior and application execution are separate gates. The exact
+published Oxc fallback also parses valid TypeScript and reports invalid syntax
+with this generated WASI source on native host WebAssembly. This does not claim
+a rebuilt guest or Nuxt application acceptance.

@@ -98,7 +98,6 @@
     grow(delta: unknown) {
       const state = memoryState(this);
       const amount = count(delta);
-      flushMemory(state);
       let old: number;
       try { old = native.growMemory(state.resource, amount); }
       catch (error) { throw new RangeError(message(error)); }
@@ -161,7 +160,6 @@
     if (!state) throw new TypeError('Expected a WebAssembly.Memory');
     return state;
   }
-  function flushMemory(memory: MemoryState) { native.writeMemory(memory.resource, byteView(memory.buffer)); }
   function sync(action: (state: MemoryState) => void) {
     for (const [resource, reference] of memoryResources) {
       const state = reference.deref();
@@ -177,20 +175,20 @@
     memories.set(resource, reference);
     memoryCleanup.register(memory, { resource, reference });
   }
+  // The buffer views the store's bytes in place. Only growth can move them, so after
+  // every call, resume or grow that might have grown a memory, the old buffer and all
+  // its views are detached before user code runs again.
   function refreshMemory(memory: MemoryState) {
-    const { bytes: data, generation } = native.readMemory(memory.resource);
-    if (memory.generation !== generation || memory.buffer.byteLength !== data.byteLength) {
-      memoryBufferStates.delete(memory.buffer);
-      memory.buffer.transfer(0);
-      memory.buffer = new ArrayBuffer(data.byteLength);
-      memoryBufferStates.set(memory.buffer, memory);
-      memoryBuffers.add(memory.buffer);
-      memory.generation = generation;
-    }
-    new Uint8Array(memory.buffer).set(data);
+    const { generation } = native.memorySpan(memory.resource);
+    if (memory.generation === generation) return;
+    const previous = memory.generation === undefined ? undefined : memory.buffer;
+    memoryBufferStates.delete(memory.buffer);
+    memory.buffer = internal.native.wasmMemoryBuffer(memory.resource, previous);
+    memory.generation = generation;
+    memoryBufferStates.set(memory.buffer, memory);
+    memoryBuffers.add(memory.buffer);
   }
   function execute(action: () => BunWasm.WasmCall) {
-    sync(flushMemory);
     try { return action(); }
     catch (error) {
       if (error instanceof TypeError) throw error;
@@ -269,7 +267,6 @@
     constructor(module: Module, imports: Imports = {}) {
       const info = description(module);
       const bindings = info.imports.map(item => binding(item, imports[item.module]?.[item.name]));
-      sync(flushMemory);
       let id: number;
       try { id = native.instantiate(info.id, bindings); }
       catch (error) { throw new LinkError(message(error)); }

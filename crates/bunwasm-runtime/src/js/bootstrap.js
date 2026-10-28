@@ -765,14 +765,22 @@
     if (!process || process._exiting) return;
     process._exiting = true;
     internal.cancelIoWaiters();
-    try {
-      process.emit("exit", code);
-    } catch (err) {
+    function reportExitError(err) {
       // An exception inside an exit handler is itself fatal.
       if (internal.workerError) internal.workerError(err);
       process.exitCode = 1;
       if (!internal.workerError) printError(err);
+    }
+    try {
+      process.emit("exit", code);
+    } catch (err) {
+      reportExitError(err);
     } finally {
+      try {
+        internal.finalizeWorkerChildren?.();
+      } catch (err) {
+        reportExitError(err);
+      }
       internal.cancelIoWaiters();
       if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
       native.closeAllDirs();

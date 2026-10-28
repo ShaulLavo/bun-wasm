@@ -391,6 +391,30 @@ void bunjsc_detach_buffer(JSContextRef ctx, JSValueRef value)
     buffer->impl()->detach(global->vm());
 }
 
+// A WebAssembly.Memory buffer over bytes another owner keeps alive. makeWasmMemory
+// pins it, so transfer() and structured transfer refuse it, as for JSC's own wasm memories.
+JSValueRef bunjsc_wasm_memory_buffer(JSContextRef ctx, uint8_t* data, size_t length)
+{
+    JSGlobalObject* global = toJS(ctx);
+    VM& vm = global->vm();
+    JSLockHolder lock(vm);
+    auto buffer = ArrayBuffer::createFromBytes({ data, length }, createSharedTask<void(void*)>([](void*) { }));
+    buffer->makeWasmMemory();
+    return toRef(global, JSArrayBuffer::create(vm, global->arrayBufferStructure(ArrayBufferSharingMode::Default), WTF::move(buffer)));
+}
+
+// ArrayBuffer::detach accepts pinned wasm memories; it empties every view of the buffer.
+bool bunjsc_detach_wasm_memory_buffer(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    auto* buffer = dynamicDowncast<JSArrayBuffer>(toJS(global, value));
+    if (!buffer || !buffer->impl()->isWasmMemory())
+        return false;
+    buffer->impl()->detach(global->vm());
+    return true;
+}
+
 // The async context (AsyncLocalStorage frame): JSGlobalObject's
 // m_asyncContextData field 0, which Bun's JSC captures in promise reactions
 // and restores when they run, the same mechanism Bun's own ALS uses.

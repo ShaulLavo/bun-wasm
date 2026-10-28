@@ -873,6 +873,7 @@
   }
 
   const { watch, FSWatcher } = internal.require("fs_watch")({ statSync, lstatSync, readdirSync, toPath, absolute });
+  promises.watch = (path, options) => internal.require("fs_promises_watch")(watch, toPath)(path, options);
   const fs = Object.assign({}, sync, callbackApi, {
     promises,
     constants,

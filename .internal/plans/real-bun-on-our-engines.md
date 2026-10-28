@@ -464,6 +464,14 @@ lazy matcher failures, recorded separately below. All listener tests pass.
 Evidence is in `/work/reports/wave-20261022/bun-wasm/real-bun-followups/` and
 `/work/reports/machine-fleet/remote-gate/real-bun-listener-final-20261023T064132Z-1r84crw0/`.
 
+The PR307 review later exposed a pre-existing TCP-only stale-startup race: a
+sibling server's listen callback could close and synchronously rebind a second
+server before its canceled waiter ran from the same pump snapshot. The TCP
+waiter now uses the HTTP helper's token identity and announcing-phase guards.
+Focused tests cover sibling replacement, callback close/relisten and nested
+pumps for both protocols. This source-only follow-up adds no timer, retry,
+host capability or guest acceptance claim.
+
 The 12-file fake-timer after measurement passes 42 tests on QuickJS and JSC.
 Browser passes 41, with one 2-second timeout in
 `js/bun/test/test-timers.test.ts`, test

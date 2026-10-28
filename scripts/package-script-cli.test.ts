@@ -36,7 +36,13 @@ test("CLI dispatch distinguishes Node files, Bun commands, run aliases and eval 
             Command::Run(_, _, conditions, exec_argv) if conditions == args(&["custom"]) && exec_argv == args(&["--conditions=custom"])));
         }
         assert!(matches!(parse(args(&["-e"]), "node"), Command::Exit(1)));
-        assert!(matches!(parse(args(&["--unknown"]), "bun"), Command::Exit(1)));
+        assert!(matches!(parse(args(&["--unknown"]), "bun"), Command::Exit(0)));
+        assert!(matches!(parse(args(&["--enable-source-maps", "app.js", "--host", "h"]), "bun"),
+          Command::Run(Entry::File(file), values, _, exec_argv) if file.ends_with("app.js") && values == args(&["--host", "h"]) && exec_argv == args(&["--enable-source-maps"])));
+        assert!(matches!(parse(args(&["--enable-source-maps", "--no-warnings", "app.js"]), "/bin/node"),
+          Command::Run(Entry::File(file), _, _, exec_argv) if file.ends_with("app.js") && exec_argv == args(&["--enable-source-maps", "--no-warnings"])));
+        assert!(matches!(parse(args(&["--max-old-space-size=100", "-e", "1"]), "bun"),
+          Command::Run(Entry::Eval(code), _, _, exec_argv) if code == "1" && exec_argv == args(&["--max-old-space-size=100"])));
       }
     `;
     const input = join(scratch, "parser.rs");

@@ -192,6 +192,16 @@ pub(crate) fn bootstrap<E: Engine>(
     constants: Vec<(String, Val)>,
 ) -> Result<E::Value, E::Value> {
     let native = e.new_object();
+    let memory_span = functions
+        .iter()
+        .find(|(name, _)| name == "wasm.memorySpan")
+        .map(|(_, function)| function.clone())
+        .ok_or_else(|| e.error_value(&NativeError::error("missing wasm.memorySpan")))?;
+    e.set(
+        &native,
+        "wasmMemoryBuffer",
+        e.new_function("wasmMemoryBuffer", wasm_memory_buffer(memory_span)),
+    )?;
     let mut groups = std::collections::HashMap::new();
     for (name, function) in functions {
         install(e, &native, &mut groups, &name, function)?;
@@ -208,6 +218,53 @@ pub(crate) fn bootstrap<E: Engine>(
     e.set(&native, "engine", e.value_from(e.name().into()))?;
     let factory = load_polyfill(e, core, "bootstrap")?;
     e.call(&factory, &e.undefined(), &[native])
+}
+
+/// `wasmMemoryBuffer(resource, previous)`: detach `previous`, the buffer of an older
+/// generation, then view the memory's current bytes. The span comes from core for this
+/// session's memory resource; JavaScript never supplies an address.
+fn wasm_memory_buffer<E: Engine>(memory_span: ValueFn<E>) -> ValueFn<E> {
+    Rc::new(move |e: &E, args: &[E::Value]| {
+        let previous = arg(e, args, 1);
+        if !e.is_undefined(&previous) && !e.detach_wasm_memory_buffer(&previous) {
+            return Err(e.error_value(&NativeError::type_error(
+                "Expected a WebAssembly.Memory buffer",
+            )));
+        }
+        let span = memory_span(e, &[arg(e, args, 0)])?;
+        let (data, length) = checked_span(&e.to_val(&span)).map_err(|err| e.error_value(&err))?;
+        // SAFETY: the bytes lie inside this process's linear memory. Core's store keeps
+        // them until the session ends and moves them only by growth, after which the
+        // WebAssembly polyfill detaches this buffer before user code runs.
+        Ok(unsafe { e.wasm_memory_buffer(data, length) })
+    })
+}
+
+fn checked_span(span: &Val) -> Result<(*mut u8, usize), NativeError> {
+    let invalid = || NativeError::error("invalid WebAssembly memory span");
+    let Val::Object(fields) = span else {
+        return Err(invalid());
+    };
+    let field = |key: &str| match fields.iter().find(|(name, _)| name == key) {
+        Some((_, Val::Num(value))) if *value >= 0.0 && value.fract() == 0.0 => Ok(*value as u64),
+        _ => Err(invalid()),
+    };
+    let (pointer, length) = (field("pointer")?, field("length")?);
+    let end = pointer.checked_add(length).ok_or_else(invalid)?;
+    if pointer == 0 || !length.is_multiple_of(65_536) || end > linear_memory_bytes() {
+        return Err(invalid());
+    }
+    Ok((pointer as usize as *mut u8, length as usize))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn linear_memory_bytes() -> u64 {
+    core::arch::wasm32::memory_size(0) as u64 * 65_536
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn linear_memory_bytes() -> u64 {
+    u64::MAX
 }
 
 fn install<E: Engine>(

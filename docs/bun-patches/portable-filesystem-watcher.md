@@ -16,7 +16,8 @@ original callback directly, matching Node v22.14.0 `lib/fs.js` `watch()` and
 `lib/internal/fs/watchers.js` EventEmitter dispatch. No Node source is copied.
 The fixture checks raw listener identity, single registration, `once`, `off`,
 removal by the original callback, and callback receiver on both overloads.
-`watchFile` and the promise-based watcher remain unsupported. `watchFile` has a
+The [promise-based watcher](fs-promises-watch.md) wraps this existing callback
+watcher. `watchFile` remains unsupported and has a
 separate stat-sampling contract; a future event-driven `watch` backend must not
 change that contract.
 

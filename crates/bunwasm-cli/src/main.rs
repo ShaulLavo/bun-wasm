@@ -17,6 +17,10 @@ Commands:
   remove    <package>           Remove dependencies
   update    [package]           Update dependencies
   x         <package>           Execute a package binary
+  exec      <script>             Run a shell script
+  init      [folder]             Start an empty Bun project
+  create    <template> [dest]    Create a project from a create-<template> package
+  repl                           Start a JavaScript and TypeScript REPL
   pm ls                          List installed dependencies
   <file>                         Same as `bun run <file>`
   -e, --eval <code>              Evaluate JavaScript source code
@@ -28,7 +32,7 @@ Flags:
   -h, --help                     Display this menu and exit
       --conditions <condition>   Add a package-export resolution condition
 
-Not available in bun.wasm: x, create, upgrade.
+Not available in bun.wasm: upgrade.
 ";
 
 fn transpiler() -> Box<dyn Transpiler> {
@@ -704,7 +708,9 @@ fn parse_command_with_flags(
             }
             // Flags native Bun accepts that change nothing here.
             "--bun" | "--silent" | "--smol" | "--no-install" => continue,
-            flag if flag.starts_with('-') => return usage_error(&format!("unknown flag {flag}")),
+            // Like native Bun, other runtime flags (Node's --enable-source-maps, --no-warnings, ...)
+            // are accepted and kept in process.execArgv, so forked children receive them too.
+            flag if flag.starts_with('-') => exec_argv.push(flag.to_owned()),
             file => {
                 return Command::Run(
                     Entry::File(direct_file(file)),

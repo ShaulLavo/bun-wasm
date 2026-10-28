@@ -5020,8 +5020,8 @@
       "name": "node:wasi",
       "file": "node/wasi.js",
       "upstream": "node/wasi.ts",
-      "sourceSha256": "9c07eb223e2d9b1700fec1f243ac2bcddf72de39616e568ecb3850ca0b8c186f",
-      "sha256": "3251ae4bfe4183e75f796710e7acc787560a39bfb89016cf798d5fc5bfd229ed",
+      "sourceSha256": "6062adab5e6aae9fa8c4e4c8153d0b4e8c09c7ec3a01c6110f571f052f3f0bf3",
+      "sha256": "0bf349fe74921d7d30373084270ce0b77140b5bc0bed5ddbef5a8e77646f9c70",
       "intrinsics": [
         "Buffer",
         "String",
@@ -5030,7 +5030,9 @@
         "createInternalModuleById",
         "getInternalField",
         "internalModuleRegistry",
-        "processBindingConstants"
+        "processBindingConstants",
+        "throwTypeError",
+        "undefined"
       ],
       "privateNames": [],
       "dependencies": [
