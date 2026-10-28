@@ -23,11 +23,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const flags = new Map();
 for (const arg of process.argv.slice(2)) {
   const [key, value = "true"] = arg.split(/=(.*)/s);
-  if (!/^--(apps|engines|hosts|cache|output|launcher|timeout|record|reference|strict|product|guest-receipt|help)$/.test(key)) throw new Error(`Unknown option ${key}; use --help`);
+  if (!/^--(apps|engines|hosts|cache|output|launcher|timeout|record|reference|strict|product|guest-receipt|preview-origins|help)$/.test(key)) throw new Error(`Unknown option ${key}; use --help`);
   flags.set(key.slice(2), value);
 }
 if (flags.has("help")) {
-  console.log("scripts/app-matrix.sh [--product] [--record] [--reference] [--strict] --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-app-matrix/run [--apps=hono,drizzle] [--engines=quickjs,jsc,browser,hermes] [--hosts=native,playground] [--timeout=90] [--launcher=PATH]\nDefault is offline replay. --record permits missing npm records to be downloaded. App failures are census results unless --strict is set; missing cache records or host artifacts exit nonzero.");
+  console.log("scripts/app-matrix.sh [--product] [--record] [--reference] [--strict] --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-app-matrix/run [--apps=hono,drizzle] [--engines=quickjs,jsc,browser,hermes] [--hosts=native,playground] [--preview-origins] [--timeout=90] [--launcher=PATH]\nDefault is offline replay. --record permits missing npm records to be downloaded. App failures are census results unless --strict is set; missing cache records or host artifacts exit nonzero.");
   process.exit(0);
 }
 const apps = flags.has("product") ? (await import("./product.ts")).productApps : legacyApps;
@@ -39,6 +39,7 @@ const options = {
   hosts: (flags.get("hosts") ?? (flags.has("product") ? "playground" : "native,playground")).split(","),
   timeout: Number(flags.get("timeout") ?? 90) * 1000,
   guestReceipt: flags.get("guest-receipt"),
+  previewOrigins: flags.has("preview-origins"),
   strict: flags.has("strict"), product: flags.has("product"), record: flags.has("record"), reference: flags.has("reference"),
 };
 if (!Number.isFinite(options.timeout) || options.timeout < 1000) throw new Error("--timeout must be at least one second");
@@ -293,7 +294,7 @@ try {
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "cleanup.ts", "browser-environment.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "cleanup.ts", "browser-environment.ts", "preview-paths.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
   if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.map(engine => [wasmName[engine], artifacts[engine].sha256]).concat(artifacts.quickjs ? [["quickjs.wasm", artifacts.quickjs.side.sha256]] : [])));
   mirror = await registry({ directory: options.cache, record: options.record });

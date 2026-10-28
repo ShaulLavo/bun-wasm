@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { browserHost, earlyServerExit, serverCommand } from "./browser.mjs";
 import { createContext, runInContext } from "node:vm";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -12,9 +12,13 @@ import { completeObservations } from "./product-browser";
 import { checkCommand, checkInstall } from "./checks.mjs";
 
 const pending = () => new Promise<never>(() => {});
+const fixtureDirectories: string[] = [];
+afterEach(() => { for (const directory of fixtureDirectories) rmSync(directory, { recursive: true, force: true }); fixtureDirectories.length = 0; });
 
-function fixture(stop: () => Promise<unknown>, productError = new Error("page.goto: Timeout 90000ms exceeded")) {
+function fixture(stop: () => Promise<unknown>, productError = new Error("page.goto: Timeout 90000ms exceeded"), exit = 130) {
   const releases: string[] = [];
+  const output = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-cleanup-fixture-"));
+  fixtureDirectories.push(output);
   const preview = {
     on() {},
     exposeBinding: async () => ({ dispose: async () => { releases.push("binding"); } }),
@@ -24,10 +28,14 @@ function fixture(stop: () => Promise<unknown>, productError = new Error("page.go
     close: async () => { releases.push("preview"); },
   };
   const page = {
+    click: async (selector: string) => { expect(selector).toBe(".xterm"); releases.push("focus"); },
+    keyboard: { press: async (key: string) => { expect(key).toBe("Control+c"); expect(releases.at(-1)).toBe("focus"); releases.push("keyboard"); await stop(); } },
+    waitForFunction: async (expression: string) => { expect(expression).toBe("globalThis.playground.shell.running === false"); releases.push("idle"); },
     evaluate: async (fn: () => unknown, text?: string) => {
       if (text) return;
       const source = String(fn);
-      if (source.includes("shell.input")) return stop();
+      if (source.includes("shell.input")) throw new Error("Direct shell input bypassed the keyboard");
+      if (source.includes("__matrixCommand")) return exit;
       if (source.includes("serving:")) return { done: false, serving: true };
       if (source.includes("previews.ready")) return "ready";
       if (source.includes("previews.url")) return "http://localhost/preview";
@@ -37,7 +45,7 @@ function fixture(stop: () => Promise<unknown>, productError = new Error("page.go
   const input = {
     page, context: { newPage: async () => preview },
     command: { name: "dev", args: ["run", "dev"], check: { kind: "page", text: "matrix" } },
-    app: { id: "next" }, engine: "browser", options: { timeout: 90_000, cleanupTimeout: 20, output: "/unused" },
+    app: { id: "next" }, engine: "browser", options: { timeout: 90_000, cleanupTimeout: 20, output },
     terminalText: async () => "user@bun:~$ bun run .matrix-command.ts dev\noriginal product output\n",
   };
   return { input, releases };
@@ -58,6 +66,21 @@ test("stuck Ctrl-C does not swallow the original product timeout or prevent prev
   expect(result.status).toBe("fail");
   expect("blocker" in result && result.blocker).toContain("page.goto: Timeout 90000ms exceeded");
   expect("harnessCleanup" in result && result.harnessCleanup).toEqual([expect.objectContaining({ operation: "server-stop", timedOut: true })]);
+  expect(releases).toContain("preview");
+});
+
+test("matrix stop focuses the terminal, presses Ctrl-C and awaits idle before releasing the preview", async () => {
+  const { input, releases } = fixture(async () => {});
+  const result = await within(serverCommand(input));
+  expect("harnessCleanup" in result && result.harnessCleanup).toBeFalsy();
+  expect(releases.filter(item => ["focus", "keyboard", "idle", "preview"].includes(item))).toEqual(["focus", "keyboard", "idle", "preview"]);
+});
+
+test("matrix stop rejects an unexpected exit status without hiding the product failure", async () => {
+  const { input, releases } = fixture(async () => {}, new Error("page.goto: fixture failure"), 1);
+  const result = await within(serverCommand(input));
+  expect("blocker" in result && result.blocker).toContain("page.goto");
+  expect("harnessCleanup" in result && result.harnessCleanup).toEqual([expect.objectContaining({ operation: "server-stop", error: "Error: Keyboard Ctrl-C exited 1" })]);
   expect(releases).toContain("preview");
 });
 

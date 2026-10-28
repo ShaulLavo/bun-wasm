@@ -16,10 +16,10 @@ export function browserDiagnostics(page: Page) {
   const pending = new Map<Request, string>();
   const events: Event[] = [];
   function record(event: Event) {
-    events.push(event);
+    events.push("url" in event ? { ...event, url: diagnosticURL(event.url) } : { ...event, text: redactDiagnosticText(event.text) });
     if (events.length > 20) events.shift();
   }
-  page.on("request", request => pending.set(request, request.url()));
+  page.on("request", request => pending.set(request, diagnosticURL(request.url())));
   page.on("requestfinished", request => pending.delete(request));
   page.on("requestfailed", request => {
     pending.delete(request);
@@ -32,4 +32,13 @@ export function browserDiagnostics(page: Page) {
     if (message.type() === "error") record({ kind: "console-error", text: message.text() });
   });
   return () => ({ pending: Array.from(pending.values()), events: events.slice() });
+}
+
+
+function diagnosticURL(input: string): string {
+  try { const url = new URL(input); url.search = ""; url.hash = ""; return url.href; }
+  catch { return redactDiagnosticText(input); }
+}
+export function redactDiagnosticText(input: string): string {
+  return input.replace(/([?&](?:token|access_token|auth|authorization|secret|api_key|key)=)[^&#\s"'<>]+/gi, "$1[redacted]");
 }

@@ -5,12 +5,16 @@
 // response by n milliseconds, to measure what network round trips cost a remote user.
 import { existsSync, readFileSync } from "node:fs";
 import { join, normalize, resolve } from "node:path";
+import { PreviewOwnerHost } from "./scripts/preview-owner-host";
 
 const root = process.env.ROOT ? resolve(process.env.ROOT) : join(import.meta.dir, "dist");
 const isolate = process.env.ISOLATE !== "0";
 const port = Number(process.env.PORT ?? 4173);
 const latency = Number(process.env.LATENCY_MS ?? 0);
 const cacheRules = readCacheRules(join(root, "_headers"));
+const previewOwner = new PreviewOwnerHost();
+const rootPreviews = process.env.PREVIEW_ORIGINS === "1";
+if (rootPreviews && (process.env.HOST ?? "127.0.0.1") !== "127.0.0.1") throw new Error("Root previews require a loopback host");
 
 /** The Cache-Control rules of a Cloudflare _headers file: a path pattern with at most one splat. */
 function readCacheRules(path: string): { pattern: RegExp; value: string }[] {
@@ -38,9 +42,11 @@ function cacheControl(pathname: string): string {
 const server = Bun.serve({
   port,
   hostname: process.env.HOST ?? "127.0.0.1",
-  async fetch(req) {
-    if (latency > 0) await Bun.sleep(latency);
+  websocket: previewOwner.websocket,
+  async fetch(req, server) {
     const url = new URL(req.url);
+    if (rootPreviews && previewOwner.handles(url.pathname)) return previewOwner.fetch(req, server);
+    if (latency > 0) await Bun.sleep(latency);
     let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");
     if (path.endsWith("/")) path += "index.html";
     const headers: Record<string, string> = { "cache-control": cacheControl(url.pathname) };
@@ -71,3 +77,10 @@ const server = Bun.serve({
   },
 });
 console.log(`serving ${root} at ${server.url} (${isolate ? "cross-origin isolated" : "not isolated"})`);
+
+
+let stopping: Promise<void> | undefined;
+function stop(): Promise<void> {
+  return stopping ??= (async () => { await previewOwner.close(); await server.stop(true); })();
+}
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => { void stop().finally(() => process.exit()); });

@@ -17,7 +17,7 @@ type BrowserRegistryRoute = Pick<Route, "fetch" | "fulfill" | "continue" | "abor
 
 export async function browserRegistryRoute(route: BrowserRegistryRoute, registry: string, external: string[]): Promise<void> {
   const url = new URL(route.request().url());
-  if (["127.0.0.1", "localhost"].includes(url.hostname) || ["data:", "blob:"].includes(url.protocol)) return route.continue();
+  if ((["localhost", "[::1]"].includes(url.hostname) || /^127\.(?:[0-9]+\.){2}[0-9]+$/.test(url.hostname)) || ["data:", "blob:"].includes(url.protocol)) return route.continue();
   const replay = registryReplayUrl(url.href, registry);
   if (replay && route.request().method() === "GET" && await fulfillRegistryReplay(route, replay)) return;
   external.push(url.href);

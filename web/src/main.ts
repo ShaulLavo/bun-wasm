@@ -15,6 +15,7 @@ import { createRuntime } from "waffle";
 import { getVfsDescriptor, WORKSPACE_TAKEN_OVER, UNSAVED_CHANGES_LOST } from "./shared-fs";
 import type { BunNetworkOptions } from "./net/helper";
 import { Previews } from "./preview";
+import { HostedPreviews } from "./hosted-previews";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope } from "./engine-loader";
 import type { Run } from "./runner";
 import { type Output, Shell } from "./shell";
@@ -56,7 +57,7 @@ engineSelect.addEventListener("change", () => {
 });
 
 // Networking needs SharedArrayBuffer: without cross-origin isolation bun.wasm gets no fetch slots.
-const previews = new Previews();
+const previews = params.has("root-previews") ? new HostedPreviews(() => runtime) : new Previews();
 const network: BunNetworkOptions = {
   listening: (port, helper) => { previews.register(port, helper); void previews.ready.then(state => term.write(previewLine(port, state))); },
   stopped: (port, helper) => previews.unregister(port, helper),
@@ -187,7 +188,7 @@ async function runBun(args: string[], cwd: string, io: Output): Promise<number> 
 }
 
 function previewLine(port: number, state: string): string {
-  if (state !== "ready") return `\x1b[2m[preview] port ${port}: previews need a service worker (${state} here)\x1b[0m\r\n`;
+  if (state !== "ready") return `\x1b[2m[preview] port ${port}: preview transport is ${state}\x1b[0m\r\n`;
   const url = previews.url(port);
   // OSC 8 hyperlink; the terminal's linkHandler opens it in a new tab.
   return `\x1b[2m[preview]\x1b[0m \x1b]8;;${url}\x07\x1b[4;36m${url}\x1b[0m\x1b]8;;\x07 \x1b[2m(Ctrl-C stops the server)\x1b[0m\r\n`;
@@ -246,7 +247,8 @@ const shell = new Shell(term, {
 
 function networkInfo(): string {
   if (!isolated && engine === "browser") return "the browser's own fetch (CORS applies); no Bun.serve previews (needs cross-origin isolation)";
-  return isolated ? "fetch via the page; Bun.serve previews at ./__preview/<port>/" : "off (needs cross-origin isolation)";
+  if (!isolated) return "off (needs cross-origin isolation)";
+  return params.has("root-previews") ? "fetch via the page; Bun.serve previews at their own origins" : "fetch via the page; Bun.serve previews at ./__preview/<port>/";
 }
 
 // ---------- editor ----------
