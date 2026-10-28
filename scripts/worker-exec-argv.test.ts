@@ -7,11 +7,11 @@ import * as path from "node:path";
 const source = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${readFileSync(
   new URL("../crates/bunwasm-runtime/src/js/worker_threads.ts", import.meta.url), "utf8")}`);
 
-function workerModule(env: Record<string, string> = {}, execArgv: string[] = []) {
+function workerModule(env: Record<string, string> = {}, execArgv: string[] = [], execPath = "bun") {
   const preloads: string[] = [];
   const launches: { argv: string[]; env: Record<string, string> }[] = [];
   const stop = new Error("captured spawn");
-  const process = { env: { ...env }, execArgv, execPath: "bun", cwd: () => "/", noDeprecation: false };
+  const process = { env: { ...env }, execArgv, execPath, cwd: () => "/", noDeprecation: false };
   let port: unknown;
   const modules = {
     process, path, events: EventEmitter, structured_clone: { structuredClone }, net: {},
@@ -60,11 +60,21 @@ for (const { execArgv, conditions, preloads } of operandCases) {
   });
 }
 
-test("file workers pass conditions before run and leave application operands after the file", () => {
+test("file workers pass conditions before the -- file operand and leave application operands after the file", () => {
   const parent = workerModule();
   const launch = parent.launch({ eval: false, execArgv: ["--conditions", "vitest"], argv: ["--conditions=app"] }, "./vitest-worker.js");
-  expect(launch.argv).toEqual(["bun", "--conditions", "vitest", "run", "/vitest-worker.js", "--conditions=app"]);
+  expect(launch.argv).toEqual(["bun", "--conditions", "vitest", "--", "/vitest-worker.js", "--conditions=app"]);
   expect(JSON.parse(launch.env.BUNWASM_WORKER_INIT!).argv).toEqual(["bun", "/vitest-worker.js", "--conditions=app"]);
+});
+
+// A process started as `node` reads every operand as a file, so `run` would name a module there.
+test("file workers of a node-started process mark the file with -- rather than run", () => {
+  const node = "/opt/bun/quickjs/bin/node";
+  const parent = workerModule({}, [], node);
+  const launch = parent.launch({ eval: false, execArgv: [] }, "./worker.cjs");
+  expect(launch.argv).toEqual([node, "--", "/worker.cjs"]);
+  expect(launch.argv).not.toContain("run");
+  expect(JSON.parse(launch.env.BUNWASM_WORKER_INIT!).argv).toEqual([node, "/worker.cjs"]);
 });
 
 test("worker conditions inherit, explicitly replace and isolate parent and sibling execArgv", () => {
