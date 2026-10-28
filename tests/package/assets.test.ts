@@ -130,6 +130,14 @@ test("snapshots paired metadata before the core fetch callback", async () => {
   } })).rejects.toThrow("SHA-256 mismatch");
 });
 
+test("brands a verified but wrong paired side as an invalid asset", async () => {
+  const { core } = quickjsPair();
+  const { side } = quickjsPair("jsc");
+  const describe = (url: string, bytes: Uint8Array) => ({ url, bytes: bytes.length, sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex") });
+  const paired = { kind: "quickjs", core: describe("https://example.test/core", core), side: describe("https://example.test/side", side) } satisfies BunWasmAsset;
+  await expect(loadBunWasm({ asset: paired, fetch: async url => new Response(url === paired.core.url ? core : side) })).rejects.toBeInstanceOf(BunWasmAssetError);
+});
+
 test("distinct valid QuickJS sides retain distinct Waffle program associations", async () => {
   const { core, side } = quickjsPair();
   const sideB = Uint8Array.from(Array.from(side).concat([0, 2, 1, 120]));

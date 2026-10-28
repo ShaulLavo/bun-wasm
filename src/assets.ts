@@ -175,9 +175,16 @@ export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<W
     if (programKind(module) !== "single") throw new BunWasmAssetError("Paired core requires its matching prepared side module");
     return module;
   }
-  const plan = await prepareLinkPlan(await engineLinkPlan(files));
-  programs.set(plan.entryModule, plan.toSource());
-  return plan.entryModule;
+  try {
+    const plan = await prepareLinkPlan(await engineLinkPlan(files));
+    programs.set(plan.entryModule, plan.toSource());
+    return plan.entryModule;
+  } catch (error) {
+    if (error instanceof TypeError || error instanceof WebAssembly.CompileError) {
+      throw new BunWasmAssetError(error.message);
+    }
+    throw error;
+  }
 }
 
 /** Existing explicit QuickJS callers use the same strict preparation owner. */
