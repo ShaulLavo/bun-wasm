@@ -170,14 +170,15 @@ test("closing during installation removes its markers and refuses a late ready r
 });
 
 test("base families and Bun resolve one physical Waffle package", async () => {
-  const expected = "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.93/waffle-0.0.93.tgz";
+  const expected = "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.95/waffle-0.0.95.tgz";
   const physical = await physicalRuntime("waffle");
   const baseEntry = Bun.resolveSync("waffle-base", import.meta.dir);
   const baseRoot = await packageRoot(baseEntry);
   await assertPackageRuntime("waffle-base", import.meta.dir, physical, expected);
   for (const name of ["waffle-coreutils", "waffle-findutils", "waffle-grep", "waffle-ripgrep", "waffle-sed"])
     await assertPackageRuntime(name, join(baseRoot, "package.json"), physical, expected);
-  await assertPackageRuntime("bash-web", import.meta.dir, physical, expected);
+  // The Bash source pin is unchanged; its published peer and actual runtime identity are distinct checks.
+  await assertPackageRuntime("bash-web", import.meta.dir, physical, "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.93/waffle-0.0.93.tgz");
 });
 
 async function assertPackageRuntime(name: string, scope: string, physical: string, expectedPeer: string) {

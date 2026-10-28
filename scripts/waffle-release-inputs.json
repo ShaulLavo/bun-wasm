@@ -1,28 +1,28 @@
 {
-  "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.93/waffle-0.0.93.tgz",
-  "sha256": "901243b1969de48b70c6adb5a7897e7c3d679b28e689c33149df5b8b433d9262",
-  "bytes": 1832351,
-  "version": "0.0.93",
-  "sourceCommit": "d1036edf756b1e6f3d9b999f9f470595e573b3d2",
+  "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.95/waffle-0.0.95.tgz",
+  "sha256": "6eb73113bfd090966b920f3612c8ba921ead0f59148d29c5ed8ad8784166c96f",
+  "bytes": 1849700,
+  "version": "0.0.95",
+  "sourceCommit": "9bc224595a4f8b650fc19b2c18f39c1d484ee090",
   "packagePath": "packages/waffle",
   "files": {
-    "package.json": "2c3e3ef98c60f1f03f7f38d3c0fb29fe703b709a465ed645b4f4e4bb053dda40",
+    "package.json": "4adfc4962195abcd5f20eba0023dd2c149f3ccfe80451c3d2a5b5320b94e1fdd",
     "scripts/build-wasi-libc.sh": "85d6a1e6793390fe6c8c36762168f673cfe8fc7ecd5abc6daf27c05d82f7cf0e",
     "patches/wasi-libc/preopen-scan.patch": "856730a158d7fdaa08a787c572883a57baaf09a4d967b366c9d198a9c98de302"
   },
   "programs": {
-    "tag": "programs-v0.0.2",
-    "sourceCommit": "d3584f30eeeaa6541f9b56a8319cef5f3c4cdba2",
+    "tag": "programs-v0.0.3",
+    "sourceCommit": "9bc224595a4f8b650fc19b2c18f39c1d484ee090",
     "manifest": {
-      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.2/program-release.json",
-      "bytes": 586614,
-      "sha256": "454b0d50c2e3af6ab9b12cd0011bf1d50b58a986234e8f1c0d87d6da85d74196"
+      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.3/program-release.json",
+      "bytes": 29231,
+      "sha256": "97c31f379ac44b8511fc71bed3cb8fe2ac46e027ffd0a88ff4bb8b771c6f4d01"
     },
     "base": {
-      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.2/waffle-base-0.0.2.tgz",
-      "version": "0.0.2",
-      "bytes": 1595,
-      "sha256": "5f3856b09c7695206e68dde4e358bcc5344ae96279d9df0af41645d92793917f",
+      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.3/waffle-base-0.0.3.tgz",
+      "version": "0.0.3",
+      "bytes": 1596,
+      "sha256": "538b74506e6448c62e74418dd82f322aa75302625182ad197b49c6727614ab95",
       "sourceDirectory": "packages/base",
       "sourceTree": "9f89f8366eceb054ed40ae919420678ca514b3d4"
     }

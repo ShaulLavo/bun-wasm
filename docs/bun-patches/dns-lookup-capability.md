@@ -15,15 +15,15 @@ order state and the Bun-facing adapter. Minimal registration in
 `crates/bunwasm-runtime/src/js/builtins.js` and `bun.js` maps Bun's resolver flags to
 Waffle's `hints` option.
 
-The backing capability is the prepared Waffle package at the pinned revision
-`c1cb67c300439af24335d0b2ec481bfb52f79a01`, specifically
+The shared-ring capability introduced in public Waffle 0.0.94 is consumed here
+through public 0.0.95 at revision `9bc224595a4f8b650fc19b2c18f39c1d484ee090`, specifically
 `browser/net/runtime.ts` and `browser/net/address.ts`. After `await runtime.network()`,
 `network.lookup(name, { family, hints })` is synchronous, side-effect free and returns
 fresh ordered records. Waffle owns virtual localhost policy and structured
 `ENOTSUP`/`ENOTFOUND` lookup errors; it does not perform OS DNS, fetch, sockets or
 process activation.
 
-The browser runner bridges that capability through `web/src/net/lookup.ts` using a
+The browser-native engine bridges that capability through `web/src/net/lookup.ts` using a
 root `MessageChannel` or per-launch `BroadcastChannel`. Minimal registration in
 `web/src/engine-host.js` wraps lookup with the TypeScript `trackLookup` helper, using
 the existing engine pending-work accounting and completion wake for success and
@@ -73,10 +73,15 @@ blocked-Wasm Promise/message bridge. The adapter validates the complete
 capability set, closes exactly once, preserves structured resolver fields and
 leaves an existing Promise provider authoritative.
 
-The browser raw lookup slots remain absent because this unit does not add a
-Waffle transport/ring operation or claim compiled-browser DNS. The existing
-browser-engine Promise provider and its startup, completion, pending-work and
-cleanup ownership remain unchanged. `web/src/net/host.ts` derives capability
-flags from implemented slot functions so appended names cannot advertise an
-unavailable browser operation; `web/src/net/trampoline.ts` still carries the
-lockstep metadata and arities for hosts that do implement the slots.
+The paired WASI adapter in `web/src/net/host.ts` maps existing ABI2 slots14/15
+onto public `NetHost.lookupStart` and `lookupHead`. Hostname pointers are decoded
+through the existing fixed-copy boundary; results use the existing repeatable
+sized-write protocol. Successful public lookup arrays are enclosed in the guest's
+`{ addresses: [...] }` response shape; signed pending/error codes pass through.
+`web/src/net/helper.ts` validates the new lookup request
+shape before forwarding it to the borrowed runtime helper. Waffle owns address
+policy, handles, pending/error state, shared-ring polling, cancellation and late
+completion suppression. No additional resolver, handle namespace or Promise-only
+transport is added. The browser-native Promise provider remains authoritative
+and unchanged. Focused adapter/protocol/lifetime controls do not establish
+compiled-browser DNS or Astro acceptance.

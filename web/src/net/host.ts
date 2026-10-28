@@ -56,6 +56,15 @@ export class NetHost {
       peer_addr: (handle, ptr, cap) => this.writeResult(this.host.peerAddr(handle), ptr, cap),
       shutdown: (handle) => this.host.shutdown(handle),
       local_addr: (handle, ptr, cap) => this.writeResult(this.host.localAddr(handle), ptr, cap),
+      lookup_start: (hostPtr, hostLen, family, hints) => {
+        if (family !== 0 && family !== 4 && family !== 6) return UNSUPPORTED;
+        return this.host.lookupStart(this.text(hostPtr, hostLen), { family, hints });
+      },
+      lookup_head: (handle, ptr, cap) => {
+        const result = this.host.lookupHead(handle);
+        if (typeof result === "number") return result;
+        return this.writeResult(`{"addresses":${decoder.decode(result)}}`, ptr, cap);
+      },
     };
   }
 
