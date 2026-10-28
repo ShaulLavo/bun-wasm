@@ -11,15 +11,15 @@ import { appendCustomSection, ENGINE_SECTION, programKind } from "../../src/engi
 const workflow = await readFile(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
 
 function quickjsNativeProducerFragment(): string {
-  const step = workflow.split("      - name: Build native fixtures after the cache checkpoint\n")[1]?.split("\n      - ")[0];
-  const native = step?.match(/^        run: \|\n([^]*)$/m)?.[1];
-  if (!native) throw new Error("Missing native fixture producer workflow fragment");
-  const start = native.indexOf('          export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"');
+  const parsed: unknown = Bun.YAML.parse(workflow);
+  const steps = workflowField(workflowField(workflowField(parsed, "jobs"), "rust"), "steps");
+  if (!Array.isArray(steps)) throw new Error("Expected native workflow steps");
+  const step = steps.find(step => typeof step === "object" && step !== null && "name" in step && step.name === "Build native fixtures after the cache checkpoint");
+  const native = workflowField(step, "run");
+  if (typeof native !== "string") throw new Error("Missing native fixture producer workflow fragment");
+  const start = native.indexOf('export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"');
   if (start < 0) throw new Error("Missing split producer core directory command");
-  const end = native.indexOf("\n          bun scripts/test-checks.ts native", start);
-  if (end < 0) throw new Error("Missing split producer test boundary");
-  return ["set -euo pipefail", "source env.sh", native.slice(start, end)]
-    .join("\n").replace(/^ {10}/gm, "");
+  return ["set -euo pipefail", "source env.sh", native.slice(start)].join("\n");
 }
 
 function workflowField(value: unknown, key: string): unknown {
@@ -96,6 +96,19 @@ async function executable(path: string, source: string) {
   await writeFile(path, `#!/bin/sh\n${source}\n`);
   await chmod(path, 0o700);
 }
+
+test("hermetic receipt validator checks actual Wasm bytes without a native toolchain", async () => {
+  await withCliReceiptFixture(async fixture => {
+    const validator = join(fixture.root, "sdk/bin/wasm-tools");
+    const validate = (path: string) => Bun.spawnSync([validator, "validate", path], { cwd: fixture.root, env: fixture.env });
+    expect(validate(fixture.artifact).exitCode).toBe(0);
+    const invalid = join(fixture.root, "private/invalid.wasm");
+    await writeFile(invalid, new Uint8Array([0, 97, 115, 109, 0]));
+    const rejected = validate(invalid);
+    expect(rejected.exitCode).toBe(1);
+    expect(rejected.stderr.toString()).toContain("Invalid fixture Wasm");
+  });
+});
 
 async function snapshot(fixture: Parameters<typeof receiptCli>[0]) {
   const started = receiptCli(fixture, "inputs", "browser");
@@ -318,7 +331,6 @@ case "\${0##*/}" in
   wasm-opt)
     while [ "$1" != -o ]; do shift; done
     cp private/common-core.wasm "$2"; exit 0;;
-  wasm-tools) exit 0;;
 esac
 printf 'fixture tool 1\n'
 `);

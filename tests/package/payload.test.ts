@@ -53,7 +53,7 @@ test("packed package includes a working public worker, no demo or guest binaries
       const p = await import('bun-wasm');
       const asset = await import('bun-wasm/asset');
       if (typeof p.installBunAdapters !== 'function') process.exit(1);
-      try { await asset.loadBunWasm({ asset: { url: 'https://example.test', sha256: 'invalid', bytes: 8 } }); }
+      try { await asset.loadBunWasm({ asset: { kind: 'single', core: { url: 'https://example.test', sha256: 'invalid', bytes: 8 } } }); process.exit(3); }
       catch (error) { if (!(error instanceof p.BunWasmAssetError)) process.exit(2); }
       console.log('ok');
     `], { cwd: scratch, timeout: 10_000 });

@@ -1,8 +1,8 @@
 import { prepareLinkPlan, type LinkPlanSource } from "waffle/link";
-import { engineLinkPlan } from "./quickjs-program.js";
-import { parseProgramFiles, programKind, type ProgramFiles } from "./engine-kind.js";
-import { BUN_WASM_ASSET } from "./guest-asset.generated.js";
-export { BUN_WASM_ASSET } from "./guest-asset.generated.js";
+import { engineLinkPlan } from "./quickjs-program.ts";
+import { parseProgramFiles, programKind, type ProgramFiles } from "./engine-kind.ts";
+import { BUN_WASM_ASSET } from "./guest-asset.generated.ts";
+export { BUN_WASM_ASSET } from "./guest-asset.generated.ts";
 
 /** Immutable guest metadata. The SHA-256 and byte count cover decompressed Wasm bytes. */
 export interface BunWasmFile {

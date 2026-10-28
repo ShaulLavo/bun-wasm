@@ -45,7 +45,7 @@ function init(root: string) {
   fixtureGit(root, "config", "user.email", "fixture@example.invalid");
 }
 
-export async function withReceiptFixture(run: (options: SourceOptions, artifact: string) => Promise<void>) {
+export async function withReceiptFixture<T>(run: (options: SourceOptions, artifact: string) => Promise<T>): Promise<T> {
   const root = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-guest-receipt-"));
   try {
     const vendor = join(root, "vendor/bun");
@@ -99,7 +99,7 @@ checksum = "${"2".repeat(64)}"
     await writeFile(artifact, wasm);
     await writeFile(join(root, "dist/quickjs.wasm"), wasm);
     const tools = Object.fromEntries(["rustc", "cargo", "bun", "node", "rust-lld", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"].map(name => [name, join(root, "fake-tool")]));
-    await run({ repository: root, sysroot: join(root, "sysroot"), sdk: join(root, "sdk"), waffle: join(root, "waffle"), boringssl: join(root, "vendor/boringssl"), rustTargetLib: join(root, "rustlib"), rustSourceLib: join(root, "rust-src"), tools, build: "browser", jscBuild: join(root, "jsc-build") }, artifact);
+    return await run({ repository: root, sysroot: join(root, "sysroot"), sdk: join(root, "sdk"), waffle: join(root, "waffle"), boringssl: join(root, "vendor/boringssl"), rustTargetLib: join(root, "rustlib"), rustSourceLib: join(root, "rust-src"), tools, build: "browser", jscBuild: join(root, "jsc-build") }, artifact);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -113,8 +113,8 @@ async function executable(path: string, source: string) {
 
 
 type CliFixture = { root: string; artifact: string; cli: string; env: NodeJS.ProcessEnv; node: string; rustc: string; linker: string };
-export async function withCliReceiptFixture(action: (fixture: CliFixture) => Promise<void>) {
-  await withReceiptFixture(async (options, artifact) => {
+export async function withCliReceiptFixture<T>(action: (fixture: CliFixture) => Promise<T>): Promise<T> {
+  return withReceiptFixture(async (options, artifact) => {
     const root = options.repository;
     for (const name of ["guest-build-receipt.ts", "guest-source-manifest.ts", "guest-core-receipt.ts", "guest-engine-receipt.ts"]) await copyFile(new URL(`../../scripts/${name}`, import.meta.url), join(root, "scripts", name));
     await mkdir(join(root, "src"));
@@ -132,13 +132,22 @@ export async function withCliReceiptFixture(action: (fixture: CliFixture) => Pro
     await executable(join(bin, "rustup"), `if [ "$2" = rustc ]; then echo ${JSON.stringify(rustc)}; else echo ${JSON.stringify(join(root, "fake-tool"))}; fi`);
     await executable(join(bin, "node"), `exec ${JSON.stringify(node)} "$@"`);
     for (const name of ["cargo", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"]) await symlink(join(root, "fake-tool"), join(bin, name));
+    const validator = join(root, "private/validate-wasm.ts");
+    await writeFile(validator, `const [command, path, ...rest] = process.argv.slice(2);
+if (command === "--version" && !path) console.log("fixture Wasm validator 1");
+else if (command === "validate" && path && rest.length === 0) {
+  if (!WebAssembly.validate(await Bun.file(path).bytes())) { console.error("Invalid fixture Wasm"); process.exitCode = 1; }
+} else throw new Error("Expected validate FILE");
+`);
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    await executable(join(bin, "wasm-tools"), `exec ${quote(process.execPath)} ${quote(validator)} "$@"`);
     await mkdir(join(root, "node_modules"));
     await symlink(options.waffle, join(root, "node_modules/waffle"));
     await mkdir(join(root, "private/toolchain/lib/rustlib/src/rust/library"), { recursive: true });
     await copyFile(join(options.rustSourceLib!, "Cargo.toml"), join(root, "private/toolchain/lib/rustlib/src/rust/library/Cargo.toml"));
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, BUN_WASM_SYSROOT: options.sysroot, WASI_SDK_PATH: options.sdk, WASI_SDK: options.sdk };
     for (const name of ["GUEST_CARGO", "BUN_CODEGEN_DIR", "BUNWASM_JS_OVERRIDE_DIR", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_TARGET_WASM32_WASIP1_LINKER"]) delete env[name];
-    await action({ root, artifact, cli: join(root, "scripts/guest-build-receipt.ts"), env, node, rustc, linker });
+    return await action({ root, artifact, cli: join(root, "scripts/guest-build-receipt.ts"), env, node, rustc, linker });
   });
 }
 

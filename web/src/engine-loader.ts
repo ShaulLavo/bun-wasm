@@ -1,5 +1,5 @@
-import { programKind, programProfile, type PairedEngine } from "../../src/engine-kind.js";
-import { prepareProgram } from "../../src/assets.js";
+import { programKind, programProfile, type PairedEngine } from "../../src/engine-kind.ts";
+import { prepareProgram } from "../../src/assets.ts";
 // Engine metadata and downloads are usable before the execution/process graph loads.
 import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";

@@ -1,5 +1,5 @@
 import type { LinkPlanSource } from "waffle/link";
-import { appendCustomSection, programKind, programProfile, verifyProgramSide, type PairedProgramFiles } from "./engine-kind.js";
+import { appendCustomSection, programKind, programProfile, verifyProgramSide, type PairedProgramFiles } from "./engine-kind.ts";
 
 /** Snapshot both inputs before hashing; the cache association owns kind and both exact bytes. */
 export async function engineLinkPlan(files: PairedProgramFiles<Uint8Array>): Promise<LinkPlanSource> {
