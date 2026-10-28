@@ -736,10 +736,12 @@
     }
     const path = internal.require("path").resolve(process.cwd(), filename);
     if (!options._web && !/\.(?:[cm]?[jt]s|[jt]sx)$/.test(path)) throw Object.assign(new TypeError("Unsupported worker file extension"), { code: "ERR_WORKER_UNSUPPORTED_EXTENSION" });
-    return { argv: ["run", path], name: path };
+    // `--` marks a file operand for both executables a process can be started as: `bun`, and
+    // `node` (whose operands are always files, so `run` would be a module name there).
+    return { argv: ["--", path], name: path };
   }
   function webEntry(target: { argv: string[]; name: string }, web: BunWasm.WebWorkerOptions) {
-    if (target.argv[0] === "run") return target;
+    if (target.argv[0] === "--") return target;
     const preloads = web.preload.map(path => `await import(${JSON.stringify(path)});`).join("\n");
     return { argv: ["-e", preloads + "\n;import.meta.__bunwasm_workerEntry?.();\n" + target.argv[1]], name: target.name };
   }
