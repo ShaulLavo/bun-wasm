@@ -48,6 +48,9 @@ fn init_failed(message: &str) -> NativeError {
     NativeError::error(message).prop("code", "ERR_ZLIB_INITIALIZATION_FAILED")
 }
 
+/// The output space [`Handle::write_into`] starts with. Larger rooms grow by doubling.
+const FIRST_PIECE: usize = 1 << 20;
+
 /// Grows `output` by `size` zeroed bytes without aborting when memory runs out.
 fn grow(output: &mut Vec<u8>, size: usize) -> Result<(), NativeError> {
     output.try_reserve(size).map_err(|_| out_of_memory())?;
@@ -854,6 +857,50 @@ impl Handle {
         }
     }
 
+    /// [`Handle::write`] into `room` bytes of output space appended to `output`, with the
+    /// same result, but the space is allocated only as the codec fills it. Callers may ask
+    /// for far more than a write produces (webpack's cache streams pass a 100 MiB
+    /// `chunkSize`), and linear memory would hold all of it. A codec handed a full buffer
+    /// is called again with more, as node:zlib does. Returns the input and room left over.
+    pub fn write_into(
+        &mut self,
+        input: &[u8],
+        flush: i32,
+        room: usize,
+        output: &mut Vec<u8>,
+    ) -> Result<(usize, usize), NativeError> {
+        let start = output.len();
+        let mut input = input;
+        let mut piece = if self.resumable(flush) {
+            room.min(FIRST_PIECE)
+        } else {
+            room
+        };
+        loop {
+            let at = output.len();
+            grow(output, piece)?;
+            let (available_in, available_out) = self.write(input, flush, &mut output[at..])?;
+            output.truncate(at + piece - available_out);
+            input = &input[input.len() - available_in..];
+            let used = output.len() - start;
+            if available_out != 0 || used == room {
+                return Ok((input.len(), room - used));
+            }
+            piece = used.min(room - used);
+        }
+    }
+
+    /// Whether a call that filled its buffer can continue in a second call. zlib's
+    /// `Z_BLOCK` and `Z_TREES` stop at a block boundary and Brotli emits metadata
+    /// once per call, so those keep one buffer of the full size.
+    fn resumable(&self, flush: i32) -> bool {
+        match self.backend {
+            Backend::Zlib(_) => flush <= z::Z_FINISH,
+            Backend::Brotli(_) => flush != 3,
+            Backend::Zstd(_) => true,
+        }
+    }
+
     /// node:zlib's `params(level, strategy)`, after the caller's sync flush.
     pub fn params(&mut self, level: i32, strategy: i32) -> Result<(), NativeError> {
         let Backend::Zlib(codec) = &mut self.backend else {
@@ -893,10 +940,7 @@ pub fn convert(
     let mut output = Vec::new();
     let mut input = input;
     loop {
-        let start = output.len();
-        grow(&mut output, chunk)?;
-        let (available_in, available_out) = handle.write(input, flush, &mut output[start..])?;
-        output.truncate(start + chunk - available_out);
+        let (available_in, available_out) = handle.write_into(input, flush, chunk, &mut output)?;
         if output.len() > limit {
             return Err(too_large(limit));
         }
