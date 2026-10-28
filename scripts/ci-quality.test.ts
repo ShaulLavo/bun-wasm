@@ -60,7 +60,7 @@ test("Rust tests are compiled and run once, with Clippy covering test targets", 
   const script = readFileSync(new URL("./quality-rust.ts", import.meta.url), "utf8");
   expect(script.match(/"cargo", "test"/g)).toHaveLength(1);
   expect(script).toContain('"--all-targets", "--release", "--no-deps"');
-  expect(script).toContain('"test", "--locked", "--workspace", "--release"');
+  expect(script).toContain('"test", "--locked", "--workspace", "--release", "-p", "wasmi_core"');
 });
 
 test("local quality retains all gates and rejects invalid selections", () => {

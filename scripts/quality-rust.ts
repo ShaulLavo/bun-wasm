@@ -15,5 +15,7 @@ const env = { ...process.env };
 delete env.CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS;
 const jobs = process.env.QUALITY_RUST_JOBS ?? "1";
 run(["cargo", "clippy", "--locked", "--workspace", "--all-targets", "--release", "--no-deps", "-j", jobs, "--", "-D", "warnings"], env);
-run(["cargo", "test", "--locked", "--workspace", "--release", "-j", jobs], env);
+// Path-patched third_party crates are not workspace members; select the ones whose local
+// changes carry tests in the same single compile and run.
+run(["cargo", "test", "--locked", "--workspace", "--release", "-p", "wasmi_core", "-j", jobs], env);
 run(["cargo", "machete", "crates"], env);

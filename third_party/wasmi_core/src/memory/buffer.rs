@@ -137,12 +137,14 @@ impl ByteBuffer {
         // WebAssembly.Memory with twice its size reserved, and a reallocation needs the old and
         // the doubled block at once, so inside the 512 MiB wasm32 guest a memory stopped growing
         // at 160 MiB (esbuild's Go runtime ran out of memory at a 67 MiB heap).
-        if vec.try_reserve_exact(additional).is_err() {
-            return Err(MemoryError::OutOfSystemMemory);
-        };
-        vec.resize(new_size, 0x00_u8);
+        let reserved = vec.try_reserve_exact(additional);
+        if reserved.is_ok() {
+            vec.resize(new_size, 0x00_u8);
+        }
+        // bun-wasm: hand the allocation back on failure too. Upstream returned early and dropped
+        // `vec`, freeing the buffer this `ByteBuffer` still points to (and frees again on drop).
         (self.ptr, self.len, self.capacity) = vec_into_raw_parts(vec);
-        Ok(())
+        reserved.map_err(|_| MemoryError::OutOfSystemMemory)
     }
 
     /// Grow the byte buffer to the given `new_size` when backed by a `&'static [u8]`.
@@ -289,5 +291,24 @@ mod bun_wasm_tests {
             assert_eq!(buffer.capacity, size);
             assert!(buffer.data()[size - STEP..].iter().all(|byte| *byte == 0));
         }
+    }
+
+    /// bun-wasm: a refused growth leaves the buffer owning its unchanged allocation.
+    /// `usize::MAX` overflows the capacity calculation, so the reservation fails without
+    /// allocating.
+    #[test]
+    fn failed_vec_growth_keeps_ownership() {
+        let mut buffer = ByteBuffer::new(16).unwrap();
+        buffer.data_mut()[3] = 9;
+        let before = (buffer.ptr, buffer.len, buffer.capacity);
+        assert!(matches!(
+            buffer.grow(usize::MAX),
+            Err(super::MemoryError::OutOfSystemMemory)
+        ));
+        assert_eq!((buffer.ptr, buffer.len, buffer.capacity), before);
+        assert_eq!(buffer.data()[3], 9);
+        buffer.grow(32).unwrap();
+        assert_eq!(&buffer.data()[..4], &[0, 0, 0, 9]);
+        assert!(buffer.data()[16..].iter().all(|byte| *byte == 0));
     }
 }
