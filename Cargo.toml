@@ -27,5 +27,7 @@ libc = { path = "third_party/libc" }
 rquickjs-sys = { path = "third_party/rquickjs-sys" }
 # Memory identity and successful-growth generations for the WebAssembly JS API.
 wasmi = { path = "third_party/wasmi" }
+# Exact linear-memory reservations inside the 512 MiB wasm32 guest.
+wasmi_core = { path = "third_party/wasmi_core" }
 
 tar = { path = "third_party/tar" }
