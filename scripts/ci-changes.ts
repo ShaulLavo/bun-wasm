@@ -9,6 +9,8 @@ const nativeFiles = new Set([
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "scripts/ci-changes.ts", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
+  // Embedded in bun.wasm as the runtime module `direct_stream`.
+  "web/src/native-direct-stream.ts",
 ]);
 const nativeCheckDirectories = discoverChecks().filter(check => check.owner === "native").map(check => `${check.path}/`);
 const nativeCheckManifests = /^checks\/(?:native|runtime)-[a-z0-9-]+\.json$/;

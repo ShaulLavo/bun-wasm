@@ -30,6 +30,18 @@ async function pinnedFile(path: string, url: string, sha256: string, download: D
   } finally { await rm(stage, { recursive: true, force: true }); }
 }
 
+export async function prepareWaffleReleaseArchive(
+  peer: string,
+  archive: string,
+  download: Download = fetch,
+  selected: Release = release,
+): Promise<string> {
+  if (peer !== selected.url) throw new Error("Waffle release pin does not match its checked source inputs");
+  await pinnedFile(archive, selected.url, selected.sha256, download);
+  if (Bun.file(archive).size !== selected.bytes) throw new Error("Waffle release archive size mismatch");
+  return archive;
+}
+
 export async function prepareWaffleNativeInputs(
   repository: string,
   directory: string,
@@ -42,8 +54,7 @@ export async function prepareWaffleNativeInputs(
   const metadata = await Bun.file(join(installed, "package.json")).json();
   if (metadata.name !== "waffle" || metadata.version !== selected.version) throw new Error("Installed Waffle identity does not match the pinned release");
   const archive = join(dirname(directory), "runtime.tgz");
-  await pinnedFile(archive, selected.url, selected.sha256, download);
-  if (Bun.file(archive).size !== selected.bytes) throw new Error("Waffle release archive size mismatch");
+  await prepareWaffleReleaseArchive(manifest.devDependencies.waffle, archive, download, selected);
   if (hash(await Bun.file(join(installed, "scripts/build-wasi-libc.sh")).bytes()) !== selected.files["scripts/build-wasi-libc.sh"])
     throw new Error("Installed Waffle builder differs from its released source");
   for (const [path, sha256] of Object.entries(selected.files)) {

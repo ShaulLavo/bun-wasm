@@ -743,6 +743,8 @@ test("actual preparation caller restores Bun from the packed archive without edi
     expect((await stat(join(installed, "launcher.ts"))).ino).not.toBe((await stat(join(cached, "launcher.ts"))).ino);
     await writeFile(join(installed, "launcher.ts"), "private caller edit");
     expect(await readFile(join(cached, "launcher.ts"), "utf8")).toBe('import "./missing-diagnostic.js";\n');
+    await writeFile(join(shell, "package.json"), JSON.stringify({ peerDependencies: { waffle: waffle + "different" } }));
+    await expect(runInNewContext(script, { ...preparation, assert, Bun, join, destination, temporary, archive, waffle, flow })).rejects.toThrow("Reject mismatched public Shell before any fixture build");
   } finally { await rm(directory, { recursive: true, force: true }); }
   expect(existsSync(directory)).toBe(false);
 });
@@ -1002,8 +1004,9 @@ test("Waffle host source defaults to the explicit package peer and requires full
   const wafflePeerCommit = "c1cb67c300439af24335d0b2ec481bfb52f79a01";
   const waffleHostCommit = "e177e356cb9c32cac0a7baf3a85ec33849b5c409";
   const environment = { SHELL_PRODUCT_SHELL_COMMIT: shellCommit, SHELL_PRODUCT_WAFFLE_COMMIT: wafflePeerCommit };
-  expect(waffleCommits(environment)).toEqual({ shellCommit, wafflePeerCommit, waffleHostCommit: wafflePeerCommit });
-  expect(waffleCommits({ ...environment, SHELL_PRODUCT_WAFFLE_HOST_COMMIT: waffleHostCommit })).toEqual({ shellCommit, wafflePeerCommit, waffleHostCommit });
+  const wafflePeer = `git+https://github.com/ShaulLavo/waffle.git#${wafflePeerCommit}`;
+  expect(waffleCommits(environment)).toEqual({ wafflePeer, shellCommit, wafflePeerCommit, waffleHostCommit: wafflePeerCommit });
+  expect(waffleCommits({ ...environment, SHELL_PRODUCT_WAFFLE_HOST_COMMIT: waffleHostCommit })).toEqual({ wafflePeer, shellCommit, wafflePeerCommit, waffleHostCommit });
   for (const name of ["SHELL_PRODUCT_SHELL_COMMIT", "SHELL_PRODUCT_WAFFLE_COMMIT", "SHELL_PRODUCT_WAFFLE_HOST_COMMIT"] as const) {
     expect(() => waffleCommits({ ...environment, [name]: "main" })).toThrow(`Set full ${name}`);
   }
@@ -1012,6 +1015,7 @@ test("Waffle host source defaults to the explicit package peer and requires full
 test("Retained Waffle selection checks Shell, peer, host, and network provenance", async () => {
   const directory = await mkdtemp(join(tmpdir(), "bw-sp-selection-"));
   const commits = {
+    wafflePeer: "git+https://github.com/ShaulLavo/waffle.git#c1cb67c300439af24335d0b2ec481bfb52f79a01",
     shellCommit: "a".repeat(40),
     wafflePeerCommit: "c1cb67c300439af24335d0b2ec481bfb52f79a01",
     waffleHostCommit: "e177e356cb9c32cac0a7baf3a85ec33849b5c409",

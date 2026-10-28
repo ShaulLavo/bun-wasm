@@ -832,4 +832,22 @@ mod tests {
             }
         });
     }
+
+    #[test]
+    fn parser_lookahead_leaves_no_exception() {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            // The arrow-function lookahead reads `/ v,` after the `else` keyword
+            // as a regexp, which fails at the line end (@vercel/nft static-eval).
+            let source =
+                "var l = { else: 6 }, v = 2;\n(\n  { else: l.else / v,\n    then: 1 }\n).else";
+            let value = ctx.eval::<Value, _>(source).unwrap();
+            assert_eq!(to_val(&value), Val::Num(3.0));
+            assert!(
+                !ctx.has_exception(),
+                "a failed parser lookahead left its SyntaxError pending"
+            );
+        });
+    }
 }

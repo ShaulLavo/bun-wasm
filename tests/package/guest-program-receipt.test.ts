@@ -70,7 +70,7 @@ test("input and final-byte changes cannot be relabeled as reusable output", asyn
   });
 });
 
-for (const path of ["scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake"]) {
+for (const path of ["scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "scripts/generate-direct-stream.ts", "web/src/native-direct-stream.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake"]) {
   test(`core compatibility inventories consumed input ${path}`, async () => {
     await withReceiptFixture(async options => {
       const file = join(options.repository, path);
