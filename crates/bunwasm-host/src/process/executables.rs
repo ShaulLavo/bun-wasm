@@ -231,17 +231,7 @@ fn walk(
         }
         if let Entry::Symlink(target) = entry(&path, dirs)? {
             links += 1;
-            if links > 40 {
-                return Err(-32);
-            } // WASI ELOOP.
-            path.pop();
-            if target.is_absolute() {
-                path = PathBuf::from("/");
-            }
-            let target = target.to_str().ok_or(IO)?;
-            for part in target.split('/').rev() {
-                remaining.push_front(part.to_owned());
-            }
+            follow(&mut path, &target, &mut remaining, links)?;
         }
     }
     if matches!(entry(&path, dirs)?, Entry::Directory) {
@@ -259,6 +249,27 @@ fn walk(
         }
     }
     Ok((path, lexical))
+}
+
+/// Replace a symlink's own component with its target's components, relative to its directory.
+fn follow(
+    path: &mut PathBuf,
+    target: &Path,
+    remaining: &mut VecDeque<String>,
+    links: usize,
+) -> Result<(), i32> {
+    if links > 40 {
+        return Err(-32); // WASI ELOOP.
+    }
+    path.pop();
+    if target.is_absolute() {
+        *path = PathBuf::from("/");
+    }
+    let target = target.to_str().ok_or(IO)?;
+    for part in target.split('/').rev() {
+        remaining.push_front(part.to_owned());
+    }
+    Ok(())
 }
 
 impl Drop for Executables {
