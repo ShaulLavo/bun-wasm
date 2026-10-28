@@ -105,6 +105,7 @@ The caller-supplied connection path retains caller ownership of TLS setup.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
+| [Server response destruction](#server-response-destruction) | Host feature | Original typed response cancellation over the existing socket lifecycle. |
 | Request body copying in `web.js` and `body_streams.ts` | Host feature | Original reader-backed ownership transfer and inherited redirect state. |
 | [HTTP request and response framing](#http-framing) | Host feature | Original header state, validation, streaming bodies, response cancellation independent of transport disposal before and during writer ownership, Agent pool, client inactivity timer ownership and upgrade response adapters shared by all engines. |
 
@@ -128,6 +129,8 @@ response `error` event. Socket close emits response close once. Destruction sett
 the adapter's request completion without reusing the connection. End completion
 already queued before cancellation cannot emit a successful finish afterward.
 The existing end-completion method moved into the typed helper for this guard.
+Late writes return false with `ERR_STREAM_DESTROYED` without committing headers;
+accepted writes cannot emit drain after destruction.
 
 `scripts/net-http-flow.test.ts` covers blocked write/end cancellation, exact error
 and return identities, repeated destruction, falsy optional errors, queued end

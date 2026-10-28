@@ -972,6 +972,7 @@
           if (typeof callback === "function") internal.nextTick(() => callback(error));
           return false;
         }
+        if (this.destroyed) return this._writeDestroyed(callback);
         this._flushHeaders(true);
         let bytes = new Uint8Array(0);
         if (!this._bodyless && chunk !== undefined && chunk !== null) {
@@ -1084,7 +1085,7 @@
         this._pendingWrites--;
         if (typeof callback === "function") callback(error);
         if (this._pendingWrites !== 0) return;
-        const drain = this._needDrain && !error;
+        const drain = this._needDrain && !error && !this.destroyed;
         this._needDrain = false;
         if (drain) this.emit("drain");
       }

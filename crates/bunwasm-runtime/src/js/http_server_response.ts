@@ -44,5 +44,11 @@
     this._emitClose();
   }
 
-  return { destroy, _completeEnd: completeEnd };
+  function writeDestroyed(callback?: Callback): false {
+    const error = Object.assign(new Error("Cannot call write after a stream was destroyed"), { code: "ERR_STREAM_DESTROYED" });
+    if (typeof callback === "function") internal.nextTick(() => callback(error));
+    return false;
+  }
+
+  return { destroy, _completeEnd: completeEnd, _writeDestroyed: writeDestroyed };
 })

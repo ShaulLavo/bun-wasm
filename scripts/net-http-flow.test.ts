@@ -547,3 +547,45 @@ for (const thrown of [undefined, null, false, 0, ""]) {
     } finally { connection.destroy(); await state.pump(); }
   });
 }
+
+
+test("writes after response destruction reject without reviving headers or drain", async () => {
+  const state = fixture();
+  const { connection, response, socket } = state.server();
+  const error = new Error("abort");
+  const writes: unknown[] = [];
+  const events: string[] = [];
+  socket.on("error", () => {});
+  response.on("drain", () => events.push("drain"));
+  try {
+    response.destroy(error);
+    expect(response.write("late", value => writes.push(value))).toBe(false);
+    expect(response.headersSent).toBe(false);
+    await state.pump();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).not.toBe(error);
+    expect(writes[0]).toHaveProperty("code", "ERR_STREAM_DESTROYED");
+    expect(events).toEqual([]);
+    expect(state.writes).toEqual([]);
+    expect(state.pending()).toBe(0);
+  } finally { connection.destroy(); await state.pump(); }
+});
+
+test("accepted write callbacks do not emit drain after response destruction", async () => {
+  const state = fixture();
+  const { connection, response } = state.server();
+  const events: string[] = [];
+  response.on("drain", () => events.push("drain"));
+  state.block(true);
+  try {
+    expect(response.write(Buffer.alloc(65536))).toBe(false);
+    state.block(false);
+    Reflect.get(connection, "flush").call(connection);
+    response.destroy();
+    await state.pump();
+    expect(events).toEqual([]);
+    expect(response.writableLength).toBe(0);
+    expect(state.closed).toEqual([8]);
+    expect(state.pending()).toBe(0);
+  } finally { connection.destroy(); await state.pump(); }
+});
