@@ -1,7 +1,8 @@
 import { prepareLinkPlan, type LinkPlanSource } from "waffle/link";
-import { quickjsProgramSource } from "./quickjs-program.js";
-import { BUN_WASM_ASSET } from "./guest-asset.generated.js";
-export { BUN_WASM_ASSET } from "./guest-asset.generated.js";
+import { engineLinkPlan } from "./quickjs-program.ts";
+import { parseProgramFiles, programKind, type ProgramFiles } from "./engine-kind.ts";
+import { BUN_WASM_ASSET } from "./guest-asset.generated.ts";
+export { BUN_WASM_ASSET } from "./guest-asset.generated.ts";
 
 /** Immutable guest metadata. The SHA-256 and byte count cover decompressed Wasm bytes. */
 export interface BunWasmFile {
@@ -10,8 +11,17 @@ export interface BunWasmFile {
   readonly bytes: number;
 }
 
-export interface BunWasmAsset extends BunWasmFile {
-  readonly quickjs?: BunWasmFile;
+export type BunWasmAsset = ProgramFiles<BunWasmFile>;
+
+export function parseBunWasmAsset(value: unknown): BunWasmAsset {
+  return parseProgramFiles(value, file => {
+    if (!file || typeof file !== "object" || !("url" in file) || typeof file.url !== "string"
+      || !("sha256" in file) || typeof file.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(file.sha256)
+      || !("bytes" in file) || typeof file.bytes !== "number" || !Number.isSafeInteger(file.bytes) || file.bytes < 8) {
+      throw new BunWasmAssetError("Guest descriptor requires a URL, SHA-256 hash and a valid byte count");
+    }
+    return { url: file.url, sha256: file.sha256, bytes: file.bytes };
+  });
 }
 
 export class BunWasmAssetError extends Error {
@@ -159,16 +169,33 @@ async function readLimited(stream: ReadableStream<Uint8Array<ArrayBuffer>>, limi
 
 const programs = new WeakMap<WebAssembly.Module, LinkPlanSource>();
 
-export async function prepareQuickjsProgram(core: Uint8Array, quickjs: Uint8Array): Promise<WebAssembly.Module> {
-  const plan = await prepareLinkPlan(await quickjsProgramSource(core, quickjs));
-  programs.set(plan.entryModule, plan.toSource());
-  return plan.entryModule;
+export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<WebAssembly.Module> {
+  if (files.kind === "single") {
+    const module = await WebAssembly.compile(Uint8Array.from(files.core));
+    if (programKind(module) !== "single") throw new BunWasmAssetError("Paired core requires its matching prepared side module");
+    return module;
+  }
+  try {
+    const plan = await prepareLinkPlan(await engineLinkPlan(files));
+    programs.set(plan.entryModule, plan.toSource());
+    return plan.entryModule;
+  } catch (error) {
+    if (error instanceof TypeError || error instanceof WebAssembly.CompileError) {
+      throw new BunWasmAssetError(error.message);
+    }
+    throw error;
+  }
+}
+
+/** Existing explicit QuickJS callers use the same strict preparation owner. */
+export function prepareQuickjsProgram(core: Uint8Array, side: Uint8Array): Promise<WebAssembly.Module> {
+  return prepareProgram({ kind: "quickjs", core, side });
 }
 
 export function programLinkPlan(module: WebAssembly.Module): LinkPlanSource | undefined {
   const plan = programs.get(module);
-  if (!plan && WebAssembly.Module.exports(module).some(entry => entry.name === "bun_core_bind_engine")) {
-    throw new BunWasmAssetError("QuickJS core requires its matching prepared side module");
+  if (!plan && programKind(module) !== "single") {
+    throw new BunWasmAssetError("Paired core requires its matching prepared side module");
   }
   return plan;
 }
@@ -180,14 +207,12 @@ export async function loadBunWasm(options: LoadBunWasmOptions = {}): Promise<Web
   }
   const asset = options.asset ?? BUN_WASM_ASSET;
   if (!asset) throw new BunWasmAssetError("No matching Bun guest has been published; provide asset or module");
-  const core = { url: options.wasmUrl?.toString() ?? asset.url, sha256: asset.sha256, bytes: asset.bytes };
-  const side = asset.quickjs ? { ...asset.quickjs } : undefined;
+  const files = parseBunWasmAsset(asset);
+  const core = { ...files.core, url: options.wasmUrl?.toString() ?? files.core.url };
   const fetch = options.fetch ?? globalThis.fetch;
   const bytes = await loadFile(core, fetch);
-  if (side) return prepareQuickjsProgram(bytes, await loadFile(side, fetch));
-  const module = await WebAssembly.compile(bytes);
-  programLinkPlan(module);
-  return module;
+  if (files.kind !== "single") return prepareProgram({ kind: files.kind, core: bytes, side: await loadFile(files.side, fetch) });
+  return prepareProgram({ kind: "single", core: bytes });
 }
 
 /** Verify before compilation so a changed CDN response cannot execute as the expected guest. */

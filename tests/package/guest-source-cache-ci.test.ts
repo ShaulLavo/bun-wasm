@@ -1,3 +1,4 @@
+import { quickjsPair } from "./quickjs-plan-fixture";
 import { expect, test } from "bun:test";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -41,7 +42,7 @@ test("source-cache CLI receipts bind synthetic artifact identity without claimin
     verifyGuestBuildReceipt(bytes, receipt);
     expect(receipt.sourceManifest.build).toBe("source-cache-browser");
     expect(receipt.sourceManifest.tools.some((tool: { name: string }) => tool.name === "wasm-opt")).toBe(false);
-    expect(receipt.artifactBytes).toBe(bytes.byteLength);
+    expect(receipt.program.core.artifactBytes).toBe(bytes.byteLength);
     expect(() => verifyGuestBuildReceipt(bytes.subarray(1), receipt)).toThrow("does not match artifact bytes");
   });
 });
@@ -87,14 +88,15 @@ for (const build of ["browser", "jsc", "tools"] as const) test(`${build} still r
     expect(started.stderr.toString()).toContain("Missing guest tool: wasm-opt");
     expect(await Bun.file(`${fixture.artifact}.build.json`).exists()).toBe(false);
   });
-  const receipt = fixtureReceipt(wasm, build);
-  verifyGuestBuildReceipt(wasm, receipt);
+  const bytes = build === "jsc" ? quickjsPair("jsc").core : wasm;
+  const receipt = fixtureReceipt(bytes, build);
+  verifyGuestBuildReceipt(bytes, receipt);
   const sourceManifest = { ...receipt.sourceManifest, tools: receipt.sourceManifest.tools.filter(tool => tool.name !== "wasm-opt") };
   const missingOptimizer = { ...receipt, sourceManifest, sourceManifestSha256: hash(JSON.stringify(sourceManifest)) };
-  expect(() => verifyGuestBuildReceipt(wasm, missingOptimizer)).toThrow("Missing guest optimizer identity");
+  expect(() => verifyGuestBuildReceipt(bytes, missingOptimizer)).toThrow("Missing guest optimizer identity");
 });
 
-for (const build of ["quickjs", "quickjs-minimal"] as const) test(`${build} keeps optional optimizer resolution`, async () => {
+for (const build of ["quickjs", "quickjs-minimal"] as const) test(`${build} requires the common core optimizer identity`, async () => {
   await withCliReceiptFixture(async fixture => {
     const available = receiptCli(fixture, "inputs", build);
     expect(available.stderr.toString()).toBe("");
@@ -102,8 +104,7 @@ for (const build of ["quickjs", "quickjs-minimal"] as const) test(`${build} keep
     expect(JSON.parse(available.stdout.toString()).sourceManifest.tools.some((tool: { name: string }) => tool.name === "wasm-opt")).toBe(true);
     await withoutOptimizer(fixture);
     const absent = receiptCli(fixture, "inputs", build);
-    expect(absent.stderr.toString()).toBe("");
-    expect(absent.exitCode).toBe(0);
-    expect(JSON.parse(absent.stdout.toString()).sourceManifest.tools.some((tool: { name: string }) => tool.name === "wasm-opt")).toBe(false);
+    expect(absent.exitCode).not.toBe(0);
+    expect(absent.stderr.toString()).toContain("Missing guest tool: wasm-opt");
   });
 });

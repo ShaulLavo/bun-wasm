@@ -500,3 +500,110 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCo
  }
 
  ArrayBufferContents::ArrayBufferContents(void* data, size_t sizeInBytes, std::optional<size_t> maxByteLength, ArrayBufferDestructorFunction&& destructor)
+diff --git a/Source/JavaScriptCore/heap/Collector.cpp b/Source/JavaScriptCore/heap/Collector.cpp
+--- a/Source/JavaScriptCore/heap/Collector.cpp
++++ b/Source/JavaScriptCore/heap/Collector.cpp
+@@ -227,2 +227,6 @@
+     m_lastGrantedTicket++;
++#if OS(WASI)
++    RELEASE_ASSERT_WITH_MESSAGE(!m_threadIsWorking, "WASI single-agent GC cannot use a collector worker");
++    RELEASE_ASSERT_WITH_MESSAGE(m_heap.m_worldState.load() & Heap::mutatorHasConnBit, "WASI single-agent GC request must retain the mutator conn");
++#endif
+     if (!(m_heap.m_worldState.load() & Heap::mutatorHasConnBit))
+diff --git a/Source/JavaScriptCore/heap/Heap.cpp b/Source/JavaScriptCore/heap/Heap.cpp
+--- a/Source/JavaScriptCore/heap/Heap.cpp
++++ b/Source/JavaScriptCore/heap/Heap.cpp
+@@ -1821,2 +1821,20 @@
+
++#if OS(WASI)
++    bool inlineCycle = m_mutatorState == MutatorState::Collecting
++        || m_collector->m_currentPhase != CollectorPhase::NotRunning
++        || m_collector->m_nextPhase != CollectorPhase::NotRunning;
++    if (inlineCycle) {
++        if (synchronousness != Async) [[unlikely]] {
++            dataLogLn("WASI_SINGLE_AGENT_GC_SYNC_REENTRY");
++            RELEASE_ASSERT_NOT_REACHED();
++        }
++        m_collector->requestCollection(request);
++        return;
++    }
++    // Allocation-triggered async requests enter under AllocatingScope; the existing
++    // CollectingScope saves and restores that state around inline collection.
++    RELEASE_ASSERT_WITH_MESSAGE(m_mutatorState == MutatorState::Running
++        || (synchronousness == Async && m_mutatorState == MutatorState::Allocating),
++        "WASI single-agent GC requires a running or asynchronously allocating mutator");
++#endif
+     stopIfNecessary();
+@@ -1826,2 +1844,6 @@
+         waitForCollection(ticket);
++#if OS(WASI)
++    else
++        stopIfNecessary();
++#endif
+ }
+@@ -1839,2 +1861,8 @@
+         collectAsync(request);
++#if OS(WASI)
++        if (m_mutatorState == MutatorState::Collecting
++            || m_collector->m_currentPhase != CollectorPhase::NotRunning
++            || m_collector->m_nextPhase != CollectorPhase::NotRunning)
++            return;
++#endif
+         stopIfNecessary();
+@@ -2106,2 +2134,13 @@
+ {
++#if OS(WASI)
++    if (m_collector->hasOutstandingRequest()) [[unlikely]] {
++        dataLogLn("WASI_SINGLE_AGENT_GC_RELEASE_PENDING");
++        RELEASE_ASSERT_NOT_REACHED();
++    }
++    if (m_collector->m_currentPhase != CollectorPhase::NotRunning
++        || m_collector->m_nextPhase != CollectorPhase::NotRunning) [[unlikely]] {
++        dataLogLn("WASI_SINGLE_AGENT_GC_RELEASE_TRANSITION");
++        RELEASE_ASSERT_NOT_REACHED();
++    }
++#endif
+     for (;;) {
+@@ -2161,2 +2200,5 @@
+     Locker locker { *m_collector->m_threadLock };
++#if OS(WASI)
++    RELEASE_ASSERT_WITH_MESSAGE(!m_collector->hasOutstandingRequestWithLock(), "WASI single-agent GC cannot relinquish a pending conn");
++#endif
+     if (m_collector->hasOutstandingRequestWithLock()) {
+diff --git a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
+--- a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
++++ b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
+@@ -415,2 +415,9 @@
+ {
++#if OS(WASI)
++    UNUSED_PARAM(context);
++    UNUSED_PARAM(stackSpec);
++    UNUSED_PARAM(qos);
++    UNUSED_PARAM(schedulingPolicy);
++    RELEASE_ASSERT_WITH_MESSAGE(false, "WASI single-agent engine has no thread lifecycle");
++#else
+     pthread_t threadHandle;
+@@ -458,2 +465,3 @@
+     return true;
++#endif
+ }
+@@ -583,2 +591,5 @@
+ {
++#if OS(WASI)
++    RELEASE_ASSERT_WITH_MESSAGE(false, "WASI single-agent engine has no thread lifecycle");
++#else
+     pthread_t handle;
+@@ -605,2 +616,3 @@
+     return joinResult;
++#endif
+ }
+@@ -609,2 +621,5 @@
+ {
++#if OS(WASI)
++    RELEASE_ASSERT_WITH_MESSAGE(false, "WASI single-agent engine has no thread lifecycle");
++#else
+     Locker locker { m_mutex };
+@@ -616,2 +631,3 @@
+         didBecomeDetached();
++#endif
+ }

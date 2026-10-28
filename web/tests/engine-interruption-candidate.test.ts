@@ -9,13 +9,14 @@ const begin = source.indexOf("async function loadCandidate(");
 const end = source.indexOf("\nvoid (async () =>", begin);
 expect(begin).toBeGreaterThan(0); expect(end).toBeGreaterThan(begin);
 const javascript = new Bun.Transpiler({ loader: "ts" }).transformSync(source.slice(begin, end));
-const dependencies = `import { prepareQuickjsProgram } from ${JSON.stringify(new URL("../../src/assets.ts", import.meta.url).href)};\nconst truth = (value, message) => { if (!value) throw new Error(message); };\n`;
+const dependencies = `import { programKind, programProfile } from ${JSON.stringify(new URL("../../src/engine-kind.ts", import.meta.url).href)};\nimport { prepareProgram } from ${JSON.stringify(new URL("../../src/assets.ts", import.meta.url).href)};\nconst truth = (value, message) => { if (!value) throw new Error(message); };\n`;
 const { loadCandidate }: { loadCandidate(engine: Engine, name: string): Promise<{ module: WebAssembly.Module; hash: string; artifacts: { engine: Engine; name: string; sha256: string; bytes: number }[] }> } = await import(`data:text/javascript;base64,${Buffer.from(dependencies + javascript + "\nexport { loadCandidate };").toString("base64")}`);
 
-test("candidate artifact block prepares three engines from four files", async () => {
+test("candidate artifact block prepares three engines from five files", async () => {
   const { core, side } = quickjsPair();
+  const jscPair = quickjsPair("jsc");
   const single = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
-  const files = new Map([["/bun.wasm", core], ["/quickjs.wasm", side], ["/bun-jsc.wasm", single], ["/bun-browser.wasm", single]]);
+  const files = new Map([["/bun.wasm", core], ["/quickjs.wasm", side], ["/bun-jsc.wasm", jscPair.core], ["/jsc-engine.wasm", jscPair.side], ["/bun-browser.wasm", single]]);
   const original = globalThis.fetch;
   const requests: string[] = [];
   try {
@@ -30,11 +31,13 @@ test("candidate artifact block prepares three engines from four files", async ()
     const browser = await loadCandidate("browser", "bun-browser.wasm");
     const artifacts = quickjs.artifacts.concat(jsc.artifacts, browser.artifacts);
     expect(requests).toEqual(Array.from(files.keys()));
-    expect(artifacts.map(file => file.name)).toEqual(["bun.wasm", "quickjs.wasm", "bun-jsc.wasm", "bun-browser.wasm"]);
-    expect(artifacts.map(file => file.engine)).toEqual(["quickjs", "quickjs", "jsc", "browser"]);
+    expect(artifacts.map(file => file.name)).toEqual(["bun.wasm", "quickjs.wasm", "bun-jsc.wasm", "jsc-engine.wasm", "bun-browser.wasm"]);
+    expect(artifacts.map(file => file.engine)).toEqual(["quickjs", "quickjs", "jsc", "jsc", "browser"]);
     expect(programLinkPlan(quickjs.module)?.libraries[0]?.source).toEqual(side);
-    expect(programLinkPlan(jsc.module)).toBeUndefined();
+    expect(programLinkPlan(jsc.module)?.libraries[0]?.source).toEqual(jscPair.side);
     expect(programLinkPlan(browser.module)).toBeUndefined();
+    files.delete("/jsc-engine.wasm");
+    await expect(loadCandidate("jsc", "bun-jsc.wasm")).rejects.toThrow("jsc-engine.wasm: HTTP 404");
     files.delete("/quickjs.wasm");
     await expect(loadCandidate("quickjs", "bun.wasm")).rejects.toThrow("quickjs.wasm: HTTP 404");
   } finally { globalThis.fetch = original; }

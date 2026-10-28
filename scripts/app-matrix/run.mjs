@@ -273,18 +273,27 @@ try {
   const git = await capture(["git", "rev-parse", "HEAD"], root, join(options.output, "revision.log"));
   if (git.code !== 0) throw new Error(`Cannot record source revision: ${git.output}`);
   revision = git.output.trim();
+  const { programKind, programProfile, verifyProgramSide } = await import("../../src/engine-kind.ts");
   artifacts = Object.fromEntries(options.engines.map(engine => {
-    const path = join(scratch, wasmName[engine]);
-    copyFileSync(join(root, "dist", wasmName[engine]), path);
-    const bytes = readFileSync(path);
-    return [engine, { path, bytes: bytes.byteLength, sha256: sha256(bytes) }];
+    const name = wasmName[engine];
+    const core = readFileSync(join(root, "dist", name));
+    const kind = programKind(new WebAssembly.Module(core));
+    const expected = engine === "quickjs" || engine === "jsc" ? engine : "single";
+    if (kind !== expected) throw new Error(`Selected ${engine} core declares ${kind}`);
+    const stage = (name, bytes) => {
+      const path = join(scratch, name);
+      const identity = { path, bytes: bytes.byteLength, sha256: sha256(bytes) };
+      writeFileSync(path, bytes);
+      const staged = readFileSync(path);
+      if (staged.byteLength !== identity.bytes || sha256(staged) !== identity.sha256) throw new Error(`Staged artifact identity mismatch: ${name}`);
+      return identity;
+    };
+    if (kind === "single") return [engine, stage(name, core)];
+    const sideName = programProfile(kind).side;
+    const side = readFileSync(join(root, "dist", sideName));
+    verifyProgramSide(kind, new WebAssembly.Module(side));
+    return [engine, { ...stage(name, core), side: { name: sideName, ...stage(sideName, side) } }];
   }));
-  if (artifacts.quickjs) {
-    const path = join(scratch, "quickjs.wasm");
-    copyFileSync(join(root, "dist/quickjs.wasm"), path);
-    const bytes = readFileSync(path);
-    artifacts.quickjs.side = { path, bytes: bytes.byteLength, sha256: sha256(bytes) };
-  }
   if (options.guestReceipt) {
     if (!artifacts.browser) throw new Error("--guest-receipt requires the browser engine");
     runtimeSource = guestProvenance(readFileSync(options.guestReceipt, "utf8"), artifacts.browser);
@@ -296,7 +305,7 @@ try {
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
   runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "cleanup.ts", "browser-environment.ts", "preview-paths.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
-  if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.map(engine => [wasmName[engine], artifacts[engine].sha256]).concat(artifacts.quickjs ? [["quickjs.wasm", artifacts.quickjs.side.sha256]] : [])));
+  if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.flatMap(engine => [[wasmName[engine], artifacts[engine].sha256]].concat(artifacts[engine].side ? [[artifacts[engine].side.name, artifacts[engine].side.sha256]] : []))));
   mirror = await registry({ directory: options.cache, record: options.record });
   const { browserHost } = await import("./browser.mjs");
   browserSession = await browserHost({ root, scratch, options, launch, stop });
@@ -321,7 +330,7 @@ try {
       runtime_source: runtimeSource,
       catalog: options.product ? selected.map(app => ({ id: app.id, family: app.family, features: app.features, stages: app.commands.map(command => command.name) })) : undefined,
       artifacts: Object.fromEntries(Object.entries(artifacts).map(([engine, artifact]) => [engine, artifact.sha256])),
-      companions: artifacts.quickjs ? { quickjs: { name: "quickjs.wasm", bytes: artifacts.quickjs.side.bytes, sha256: artifacts.quickjs.side.sha256 } } : {},
+      companions: Object.fromEntries(Object.entries(artifacts).filter(([, artifact]) => artifact.side).map(([engine, artifact]) => [engine, { name: artifact.side.name, bytes: artifact.side.bytes, sha256: artifact.side.sha256 }])),
       runner_sources: runnerSources,
       playground_builds: playgroundBuilds,
       launcher_sha256: launcherDigest,

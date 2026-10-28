@@ -87,8 +87,8 @@ fn main() {
     for lib in ["c++", "c++abi", "wasi-emulated-process-clocks"] {
         println!("cargo:rustc-link-lib=static={lib}");
     }
-    // The binary links the patched sysroot's crt1-command.o itself (crates/bunwasm-cli/build.rs under
-    // engine-jsc): link args from a dependency's build script don't reach it.
+    // The engine side retains these native members, never CRT or libc. Their PIC
+    // suitability (including noeh C++ and process clocks) needs the real link gate.
 }
 
 /// helpers.cpp uses JSC internals, so it is compiled exactly like the jsc shell (jsc.cpp):
@@ -105,23 +105,31 @@ fn compile_helpers(sdk: &Path, sysroot: &Path, obj: &Path, manifest: &Path, out:
     let mut flags = Vec::new();
     let mut words = command.split_whitespace().skip(1);
     while let Some(w) = words.next() {
-        match w {
-            "-o" | "-c" | "-MF" | "-MT" | "--sysroot" => {
-                words.next();
-            }
-            "-include" | "-isystem" | "-iquote" | "-I" => {
-                flags.extend([w.to_owned(), words.next().unwrap().to_owned()])
-            }
-            "-MD" => {}
-            w if w.starts_with("--sysroot=") => {}
-            w if w.starts_with('-') => flags.push(w.replace("\\\"", "\"")),
-            _ => {}
+        if ["-o", "-c", "-MF", "-MT", "--sysroot"].contains(&w) {
+            words.next();
+            continue;
         }
+        if ["-include", "-isystem", "-iquote", "-I"].contains(&w) {
+            flags.extend([w.to_owned(), words.next().unwrap().to_owned()]);
+            continue;
+        }
+        if [
+            "-MD", "-fPIE", "-fpie", "-fPIC", "-fpic", "-fno-pic", "-fno-PIC", "-fno-pie",
+            "-fno-PIE",
+        ]
+        .contains(&w)
+            || w.starts_with("--sysroot=")
+            || !w.starts_with('-')
+        {
+            continue;
+        }
+        flags.push(w.replace("\\\"", "\""));
     }
     let src = manifest.join("cpp/helpers.cpp");
     let o = out.join("helpers.o");
     let status = Command::new(sdk.join("bin/clang++"))
         .args(&flags)
+        .arg("-fPIC")
         .arg(format!("--sysroot={}", sysroot.display()))
         .arg("-c")
         .arg(&src)

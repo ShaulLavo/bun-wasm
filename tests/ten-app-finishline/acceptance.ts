@@ -19,7 +19,7 @@ export async function acceptedGuest(environment: NodeJS.ProcessEnv) {
   const bytes = await Bun.file(artifact).bytes();
   const sidecar: unknown = await Bun.file(`${artifact}.build.json`).json();
   verifyGuestBuildReceipt(bytes, sidecar);
-  const provenance = guestProvenance(await readFile(accepted, "utf8"), { sha256: sidecar.artifactSha256, bytes: sidecar.artifactBytes });
+  const provenance = guestProvenance(await readFile(accepted, "utf8"), { sha256: sidecar.program.core.artifactSha256, bytes: sidecar.program.core.artifactBytes });
   assert.deepEqual(sidecar.sourceManifest.source, { head: provenance.source_commit, tree: provenance.source_tree }, "Accepted guest source differs from build receipt");
   return { bytes, artifact, accepted, source: provenance.source_commit, provenance };
 }

@@ -3,11 +3,15 @@ use std::path::Path;
 use anyhow::{Context, Result, bail, ensure};
 use wasmparser::{Dylink0Subsection, KnownCustom, MemInfo, Parser, Payload};
 use wasmtime::{
-    Engine, Extern, Global, GlobalType, Instance, Linker, Module, Mutability, Ref, Store, Val,
-    ValType,
+    Engine, Extern, ExternType, Func, Global, GlobalType, Instance, Linker, Module, Mutability,
+    Ref, Store, Table, Val, ValType,
 };
 
 use crate::Host;
+
+#[path = "linked_relay.rs"]
+mod relay;
+use relay::{SelfPlan, SelfSlots};
 
 #[derive(Default)]
 pub struct Programs(Vec<Program>);
@@ -16,24 +20,80 @@ struct Program {
     core: Module,
     library: Module,
     layout: MemInfo,
+    kind: ProgramKind,
+    self_plan: SelfPlan,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProgramKind {
+    QuickJs,
+    Jsc,
+}
+
+impl ProgramKind {
+    fn companion(self) -> &'static str {
+        match self {
+            Self::QuickJs => "quickjs.wasm",
+            Self::Jsc => "jsc-engine.wasm",
+        }
+    }
+
+    fn initializers(self) -> &'static [&'static str] {
+        match self {
+            Self::QuickJs => &[
+                "quickjs_initialize_memory",
+                "quickjs_apply_data_relocs",
+                "quickjs_call_ctors",
+                "quickjs_register",
+            ],
+            Self::Jsc => &[
+                "jsc_initialize_memory",
+                "jsc_apply_data_relocs",
+                "jsc_call_ctors",
+                "jsc_register",
+            ],
+        }
+    }
+
+    fn run(self) -> &'static str {
+        match self {
+            Self::QuickJs => "quickjs_run",
+            Self::Jsc => "jsc_run",
+        }
+    }
+
+    fn other_profile(self) -> ProgramKind {
+        match self {
+            Self::QuickJs => Self::Jsc,
+            Self::Jsc => Self::QuickJs,
+        }
+    }
 }
 
 impl Programs {
     pub fn load(&mut self, engine: &Engine, path: &Path) -> Result<Module> {
-        let core = Module::from_file(engine, path)
+        let core_bytes =
+            std::fs::read(path).with_context(|| format!("loading {}", path.display()))?;
+        let core = Module::new(engine, &core_bytes)
             .with_context(|| format!("loading {}", path.display()))?;
-        if core.get_export("bun_core_bind_engine").is_none() {
+        let has_bind = core_bind_is_function(&core)?;
+        let kind = parse_program_kind(&core_bytes, has_bind)?;
+        let Some(kind) = kind else {
             return Ok(core);
-        }
-        let path = path.with_file_name("quickjs.wasm");
+        };
+        let path = path.with_file_name(kind.companion());
         let bytes = std::fs::read(&path)
-            .with_context(|| format!("loading paired QuickJS {}", path.display()))?;
+            .with_context(|| format!("loading paired {:?} engine {}", kind, path.display()))?;
         let layout = layout(&bytes)?;
-        let library = Module::new(engine, bytes)?;
+        let library = Module::new(engine, &bytes)?;
+        validate_profile(kind, &library)?;
+        let self_plan = SelfPlan::new(engine, &core, &library, &bytes)?;
         self.0.push(Program {
             core: core.clone(),
             library,
             layout,
+            kind,
+            self_plan,
         });
         Ok(core)
     }
@@ -59,19 +119,94 @@ impl Programs {
     }
 }
 
+fn core_bind_is_function(core: &Module) -> Result<bool> {
+    match core.get_export("bun_core_bind_engine") {
+        None => Ok(false),
+        Some(ExternType::Func(_)) => Ok(true),
+        Some(_) => bail!("bun_core_bind_engine must be a function"),
+    }
+}
+
+fn parse_program_kind(bytes: &[u8], has_bind: bool) -> Result<Option<ProgramKind>> {
+    let mut tag = None;
+    for payload in Parser::new(0).parse_all(bytes) {
+        let Payload::CustomSection(section) = payload? else {
+            continue;
+        };
+        if section.name() != "bun-wasm-engine" {
+            continue;
+        }
+        ensure!(tag.is_none(), "duplicate bun-wasm-engine section");
+        let kind = match section.data() {
+            b"quickjs" => ProgramKind::QuickJs,
+            b"jsc" => ProgramKind::Jsc,
+            _ => bail!("invalid bun-wasm-engine payload"),
+        };
+        tag = Some(kind);
+    }
+    match (has_bind, tag) {
+        (true, Some(kind)) => Ok(Some(kind)),
+        (true, None) => bail!("engine bind export requires bun-wasm-engine section"),
+        (false, Some(_)) => bail!("single module cannot declare bun-wasm-engine"),
+        (false, None) => Ok(None),
+    }
+}
+
+fn validate_profile(kind: ProgramKind, side: &Module) -> Result<()> {
+    for name in kind.initializers().iter().copied() {
+        ensure!(
+            function_signature(side, name, &[], &[]),
+            "paired {:?} side is missing initializer function {name}",
+            kind
+        );
+    }
+    ensure!(
+        function_signature(side, kind.run(), &[ValType::I32], &[ValType::I32]),
+        "paired {:?} side has invalid RUN function {}",
+        kind,
+        kind.run()
+    );
+    let other = kind.other_profile();
+    for name in other.initializers().iter().copied().chain([other.run()]) {
+        ensure!(
+            side.get_export(name).is_none(),
+            "paired {:?} side exports wrong profile symbol {name}",
+            kind
+        );
+    }
+    Ok(())
+}
+
+fn function_signature(
+    module: &Module,
+    name: &str,
+    params: &[ValType],
+    results: &[ValType],
+) -> bool {
+    let Some(ExternType::Func(function)) = module.get_export(name) else {
+        return false;
+    };
+    same_types(function.params(), params) && same_types(function.results(), results)
+}
+
+// wasmtime's ValType is neither Copy nor PartialEq; ValType::eq compares structurally.
+fn same_types(actual: impl ExactSizeIterator<Item = ValType>, expected: &[ValType]) -> bool {
+    actual.len() == expected.len() && actual.zip(expected).all(|(a, b)| ValType::eq(&a, b))
+}
+
 fn layout(bytes: &[u8]) -> Result<MemInfo> {
     let mut info = None;
     for payload in Parser::new(0).parse_all(bytes) {
         match payload? {
-            Payload::StartSection { .. } => bail!("QuickJS must use explicit initialization"),
+            Payload::StartSection { .. } => bail!("paired engine must use explicit initialization"),
             Payload::CustomSection(section) => read_layout(section.as_known(), &mut info)?,
             _ => {}
         }
     }
-    let info = info.context("QuickJS has no dylink.0 memory layout")?;
+    let info = info.context("paired engine has no dylink.0 memory layout")?;
     ensure!(
         info.memory_alignment <= 31 && info.table_alignment <= 31,
-        "QuickJS alignment exceeds wasm32"
+        "paired engine alignment exceeds wasm32"
     );
     Ok(info)
 }
@@ -89,10 +224,13 @@ fn read_layout(section: KnownCustom<'_>, info: &mut Option<MemInfo>) -> Result<(
 fn read_layout_item(section: Dylink0Subsection<'_>, info: &mut Option<MemInfo>) -> Result<()> {
     match section {
         Dylink0Subsection::MemInfo(layout) => {
-            ensure!(info.replace(layout).is_none(), "duplicate QuickJS layout");
+            ensure!(
+                info.replace(layout).is_none(),
+                "duplicate paired engine layout"
+            );
         }
         Dylink0Subsection::Needed(names) if names.is_empty() => {}
-        _ => bail!("unsupported QuickJS dylink subsection"),
+        _ => bail!("unsupported paired engine dylink subsection"),
     }
     Ok(())
 }
@@ -134,15 +272,12 @@ impl Program {
         );
         let growth = table_end - table.size(&*store);
         table.grow(&mut *store, growth, Ref::Func(None))?;
+        let slots = self.self_plan.reserve(store, table)?;
         let mut imports = linker.clone();
-        self.imports(core, &mut imports, store, base, table_base as u32)?;
+        self.imports(core, &mut imports, store, base, table_base as u32, &slots)?;
         let side = imports.instantiate(&mut *store, &self.library)?;
-        for name in [
-            "quickjs_initialize_memory",
-            "quickjs_apply_data_relocs",
-            "quickjs_call_ctors",
-            "quickjs_register",
-        ] {
+        self.self_plan.bind(store, table, &slots, side)?;
+        for name in self.kind.initializers().iter().copied() {
             side.get_typed_func::<(), ()>(&mut *store, name)?
                 .call(&mut *store, ())
                 .with_context(|| format!("initializing {name}"))?;
@@ -157,16 +292,17 @@ impl Program {
         store: &mut Store<Host>,
         memory: u32,
         table: u32,
+        slots: &SelfSlots,
     ) -> Result<()> {
         for import in self.library.imports() {
             let name = import.name();
+            let own = self.self_plan.slot(name);
             let value = match (import.module(), name) {
                 ("env", "__memory_base") => address_global(store, memory, Mutability::Const)?,
                 ("env", "__table_base") => address_global(store, table, Mutability::Const)?,
-                ("env", name) => core
-                    .get_export(&mut *store, name)
-                    .with_context(|| format!("missing core export {name}"))?,
+                ("env", name) => env_export(core, store, name, own, slots)?,
                 ("GOT.mem", name) => got_address(core, store, name)?,
+                ("GOT.func", name) => function_cell(core, store, name, own, slots)?,
                 ("wasi_snapshot_preview1", _) => continue,
                 (namespace, _) => bail!("unsupported side import {namespace}.{name}"),
             };
@@ -176,7 +312,34 @@ impl Program {
     }
 }
 
-fn address_global(store: &mut Store<Host>, value: u32, mutability: Mutability) -> Result<Extern> {
+fn env_export(
+    core: Instance,
+    store: &mut Store<Host>,
+    name: &str,
+    own: Option<u32>,
+    slots: &SelfSlots,
+) -> Result<Extern> {
+    match (core.get_export(&mut *store, name), own) {
+        (Some(export), _) => Ok(export),
+        (None, Some(slot)) => slots.relay(store, slot),
+        (None, None) => bail!("missing core export {name}"),
+    }
+}
+
+fn function_cell(
+    core: Instance,
+    store: &mut Store<Host>,
+    name: &str,
+    own: Option<u32>,
+    slots: &SelfSlots,
+) -> Result<Extern> {
+    match own {
+        Some(slot) => address_global(store, slots.address(slot), Mutability::Var),
+        None => got_function(core, store, name),
+    }
+}
+
+fn address_global<T>(store: &mut Store<T>, value: u32, mutability: Mutability) -> Result<Extern> {
     Ok(Global::new(
         store,
         GlobalType::new(ValType::I32, mutability),
@@ -201,8 +364,202 @@ fn got_address(core: Instance, store: &mut Store<Host>, name: &str) -> Result<Ex
         .get_memory(&mut *store, "memory")
         .context("core memory")?;
     ensure!(
-        value != 0 && (value as usize) < memory.data_size(&*store),
-        "GOT address outside core memory"
+        data_address(name, value, memory.data_size(&*store)),
+        "GOT.mem.{name} address is outside core memory"
     );
     address_global(store, value, Mutability::Var)
+}
+
+/// Data symbols are nonzero addresses inside memory. The linker's stack bounds may sit at
+/// either edge: a stack-first core has `__stack_low` at 0.
+fn data_address(name: &str, address: u32, memory_size: usize) -> bool {
+    let address = address as usize;
+    if matches!(name, "__stack_low" | "__stack_high") {
+        return address <= memory_size;
+    }
+    address != 0 && address < memory_size
+}
+
+/// The table slot of a core function, so the side's `&f` equals the core's. A function not
+/// yet in the table gets one new slot.
+fn got_function<T>(core: Instance, store: &mut Store<T>, name: &str) -> Result<Extern> {
+    let function = core
+        .get_func(&mut *store, name)
+        .with_context(|| format!("GOT.func.{name} requires a core function export"))?;
+    let table = core
+        .get_table(&mut *store, "__indirect_function_table")
+        .context("core table")?;
+    let slot = match table_slot(store, table, function) {
+        Some(slot) => slot,
+        None => table.grow(&mut *store, 1, Ref::Func(Some(function)))?,
+    };
+    let slot = u32::try_from(slot).context("GOT.func slot exceeds wasm32")?;
+    address_global(store, slot, Mutability::Var)
+}
+
+fn table_slot<T>(store: &mut Store<T>, table: Table, function: Func) -> Option<u64> {
+    let target = function.to_raw(&mut *store);
+    (0..table.size(&*store)).find(|&slot| match table.get(&mut *store, slot) {
+        Some(Ref::Func(Some(entry))) => entry.to_raw(&mut *store) == target,
+        _ => false,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wasm_custom(name: &[u8], data: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.push(name.len() as u8);
+        payload.extend_from_slice(name);
+        payload.extend_from_slice(data);
+        vec![
+            0x00,
+            0x61,
+            0x73,
+            0x6d,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            payload.len() as u8,
+        ]
+        .into_iter()
+        .chain(payload)
+        .collect()
+    }
+
+    #[test]
+    fn engine_tag_requires_bind_export() {
+        let bytes = wasm_custom(b"bun-wasm-engine", b"jsc");
+        assert!(parse_program_kind(&bytes, false).is_err());
+        assert_eq!(
+            parse_program_kind(&bytes, true).unwrap(),
+            Some(ProgramKind::Jsc)
+        );
+    }
+
+    #[test]
+    fn engine_tag_rejects_duplicates_and_unknown_payloads() {
+        let duplicate: Vec<u8> = {
+            let first = wasm_custom(b"bun-wasm-engine", b"quickjs");
+            let second = wasm_custom(b"bun-wasm-engine", b"quickjs");
+            first[..8]
+                .iter()
+                .copied()
+                .chain(
+                    first[8..]
+                        .iter()
+                        .copied()
+                        .chain(second[8..].iter().copied()),
+                )
+                .collect()
+        };
+        assert!(parse_program_kind(&duplicate, true).is_err());
+
+        let invalid = wasm_custom(b"bun-wasm-engine", b"other");
+        assert!(parse_program_kind(&invalid, true).is_err());
+    }
+
+    #[test]
+    fn stack_bounds_may_sit_at_either_memory_edge() {
+        let size = 3 * 65_536;
+        assert!(data_address("__stack_low", 0, size));
+        assert!(data_address("__stack_high", size as u32, size));
+        assert!(!data_address("__stack_high", size as u32 + 1, size));
+        assert!(data_address("errno", 1024, size));
+        assert!(!data_address("errno", 0, size));
+        assert!(!data_address("errno", size as u32, size));
+    }
+
+    /// A core with `tabled` already at table slot 1, `loose` in no slot, and a global.
+    fn function_core() -> Vec<u8> {
+        use wasm_encoder::{
+            CodeSection, ConstExpr, ElementSection, Elements, ExportKind, ExportSection, Function,
+            FunctionSection, GlobalSection, GlobalType, Instruction, RefType, TableSection,
+            TableType, TypeSection, ValType,
+        };
+        let mut types = TypeSection::new();
+        types.ty().function([], []);
+        let mut functions = FunctionSection::new();
+        functions.function(0).function(0);
+        let mut tables = TableSection::new();
+        tables.table(TableType {
+            element_type: RefType::FUNCREF,
+            table64: false,
+            minimum: 2,
+            maximum: None,
+            shared: false,
+        });
+        let mut globals = GlobalSection::new();
+        let ty = GlobalType {
+            val_type: ValType::I32,
+            mutable: false,
+            shared: false,
+        };
+        globals.global(ty, &ConstExpr::i32_const(16));
+        let mut exports = ExportSection::new();
+        exports
+            .export("__indirect_function_table", ExportKind::Table, 0)
+            .export("tabled", ExportKind::Func, 0)
+            .export("loose", ExportKind::Func, 1)
+            .export("value", ExportKind::Global, 0);
+        let mut elements = ElementSection::new();
+        elements.active(
+            Some(0),
+            &ConstExpr::i32_const(1),
+            Elements::Functions([0].as_slice().into()),
+        );
+        let mut code = CodeSection::new();
+        for _ in 0..2 {
+            let mut body = Function::new([]);
+            body.instruction(&Instruction::End);
+            code.function(&body);
+        }
+        let mut module = wasm_encoder::Module::new();
+        module
+            .section(&types)
+            .section(&functions)
+            .section(&tables)
+            .section(&globals)
+            .section(&exports)
+            .section(&elements)
+            .section(&code);
+        module.finish()
+    }
+
+    fn got_slot(core: Instance, store: &mut Store<()>, name: &str) -> Result<i32> {
+        let Extern::Global(global) = got_function(core, store, name)? else {
+            bail!("GOT.func cell is not a global");
+        };
+        Ok(global.get(&mut *store).unwrap_i32())
+    }
+
+    #[test]
+    fn function_cells_reuse_the_core_table_slot() {
+        let engine = Engine::default();
+        let module = Module::new(&engine, function_core()).unwrap();
+        let mut store = Store::new(&engine, ());
+        let core = Instance::new(&mut store, &module, &[]).unwrap();
+        let table = core
+            .get_table(&mut store, "__indirect_function_table")
+            .unwrap();
+        assert_eq!(got_slot(core, &mut store, "tabled").unwrap(), 1);
+        assert_eq!(table.size(&store), 2);
+        assert_eq!(got_slot(core, &mut store, "loose").unwrap(), 2);
+        assert_eq!(got_slot(core, &mut store, "loose").unwrap(), 2);
+        assert_eq!(table.size(&store), 3);
+        assert!(got_slot(core, &mut store, "value").is_err());
+        assert!(got_slot(core, &mut store, "missing").is_err());
+    }
+
+    #[test]
+    fn profiles_have_fixed_companion_and_entry_names() {
+        assert_eq!(ProgramKind::QuickJs.companion(), "quickjs.wasm");
+        assert_eq!(ProgramKind::Jsc.companion(), "jsc-engine.wasm");
+        assert_eq!(ProgramKind::Jsc.run(), "jsc_run");
+        assert!(ProgramKind::Jsc.initializers().contains(&"jsc_register"));
+    }
 }

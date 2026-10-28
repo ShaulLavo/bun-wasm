@@ -3,9 +3,14 @@ use crate::data::NativeResult;
 
 impl Reply {
     pub fn into_result(self) -> NativeResult {
-        match self.status {
-            Status::Ok => codec::decode(&self.bytes).map_err(transport_error),
-            Status::NativeError => decode_error(&self.bytes).and_then(Err),
+        Self::decode(self.status, &self.bytes)
+    }
+
+    /// Decodes reply bytes where they are, such as the core's reply allocation.
+    pub fn decode(status: Status, bytes: &[u8]) -> NativeResult {
+        match status {
+            Status::Ok => codec::decode(bytes).map_err(transport_error),
+            Status::NativeError => decode_error(bytes).and_then(Err),
             Status::BadCall => Err(NativeError::error("invalid core data call")),
             Status::ResourceLimit => Err(NativeError::error("core data allocation failed")),
         }

@@ -1,3 +1,4 @@
+import { programKind, programProfile, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -54,7 +55,7 @@ interface Report {
   date: string;
   method: string;
   environment: Record<string, unknown>;
-  engines: Array<EngineBuild & { bytes: number; sha256: string }>;
+  engines: Array<EngineBuild & { program: ProgramFiles<{ path: string; bytes: number; sha256: string }> }>;
   launcher: { path: string; bytes: number; sha256: string };
   samples: Sample[];
   summaries: Summary[];
@@ -181,6 +182,17 @@ async function artifact(path: string): Promise<{ bytes: number; sha256: string }
   return { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
 
+export async function engineArtifacts(path: string): Promise<ProgramFiles<{ path: string; bytes: number; sha256: string }>> {
+  const bytes = await readFile(path);
+  const kind = programKind(new WebAssembly.Module(bytes));
+  const core = { path, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+  if (kind === "single") return { kind, core };
+  const sidePath = join(dirname(path), programProfile(kind).side);
+  const sideBytes = await readFile(sidePath);
+  verifyProgramSide(kind, new WebAssembly.Module(sideBytes));
+  return { kind, core, side: { path: sidePath, bytes: sideBytes.length, sha256: createHash("sha256").update(sideBytes).digest("hex") } };
+}
+
 async function persist(report: Report, output?: string): Promise<void> {
   if (!output) return;
   await mkdir(dirname(output), { recursive: true });
@@ -292,7 +304,7 @@ async function main(): Promise<void> {
     await Bun.write(join(fixtureDir, "hello.ts"), await Bun.file(join(root, "tests/bench/hello.ts")).text());
     await Bun.write(join(fixtureDir, "micro.js"), await Bun.file(join(root, "tests/bench/micro.js")).text());
     report.environment.largeBundle = await bundleLargeWorkload(fixtureDir);
-    report.engines = await Promise.all(engines.map(async engine => ({ ...engine, ...await artifact(engine.path) })));
+    report.engines = await Promise.all(engines.map(async engine => ({ ...engine, program: await engineArtifacts(engine.path) })));
     const adapter = nativeLauncherAdapter(launcher);
     for (const engine of engines) await prepareEngine(engine, adapter, fixtureDir, scratch);
     await persist(report, output);

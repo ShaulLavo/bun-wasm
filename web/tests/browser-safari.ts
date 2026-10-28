@@ -65,8 +65,8 @@ async function checkBun(driver: Driver, origin: string, scenario: string) {
   const result = await driver.result("bunRuntimeProcResult");
   const observed = await observations(driver);
   assert.ok(Array.isArray(observed.requests)); assert.ok(Array.isArray(observed.pageErrors)); assert.ok(Array.isArray(observed.consoleErrors));
-  const guestRequests = observed.requests.filter(url => url === asset.url || String(url).endsWith("/bun-guest.wasm"));
-  const expected = scenario === "generic-control" || published && scenario === "start-failed" ? [] : [published ? asset.url : `${origin}/bun-runtime-proc/bun-guest.wasm`];
+  const guestRequests = observed.requests.filter(url => url === asset.core.url || String(url).endsWith("/bun-guest.wasm"));
+  const expected = scenario === "generic-control" || published && scenario === "start-failed" ? [] : [published ? asset.core.url : `${origin}/bun-runtime-proc/bun-guest.wasm`];
   assert.deepEqual(guestRequests, expected, "guest request count matches eager local or lazy published loading");
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(object(result.cleanup).activeWorkers, 0);

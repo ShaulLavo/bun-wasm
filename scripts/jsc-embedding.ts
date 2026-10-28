@@ -1,8 +1,9 @@
+import { programKind, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { verifyGuestBuildReceipt } from "./guest-build-receipt";
+import { dirname, join, resolve } from "node:path";
+import { artifactIdentity, verifyGuestBuildReceipt, verifyGuestCompanions } from "./guest-build-receipt";
 
 const root = resolve(import.meta.dir, "..");
 const fixtures = ["tests/fixtures/astro-http2-response", "tests/fixtures/shared-array-buffer", "tests/jsc-embedding/growable-memory"];
@@ -26,8 +27,14 @@ function inputs() {
   };
 }
 
-export function verifyEmbeddingReceipt(value: unknown, expected: ReturnType<typeof inputs>, bytes: Uint8Array): void {
-  const receipt = { ...expected, artifactSha256: hash(bytes), artifactBytes: bytes.byteLength };
+function embeddingProgram(bytes: ProgramFiles<Uint8Array>) {
+  if (bytes.kind !== "jsc" || programKind(new WebAssembly.Module(Uint8Array.from(bytes.core))) !== "jsc") throw new Error("JSC embedding requires the declared JSC pair");
+  verifyProgramSide("jsc", new WebAssembly.Module(Uint8Array.from(bytes.side)));
+  return { kind: "jsc", core: artifactIdentity(bytes.core), side: artifactIdentity(bytes.side) };
+}
+
+export function verifyEmbeddingReceipt(value: unknown, expected: ReturnType<typeof inputs>, bytes: ProgramFiles<Uint8Array>): void {
+  const receipt = { ...expected, program: embeddingProgram(bytes) };
   if (JSON.stringify(value) !== JSON.stringify(receipt)) throw new Error("JSC embedding source/prebuild/artifact receipt mismatch");
 }
 
@@ -63,13 +70,17 @@ if (import.meta.main) {
     console.log(JSON.stringify(current));
   } else if (command === "write" && artifactName && snapshot) {
     if (JSON.stringify(current) !== snapshot) throw new Error("JSC embedding inputs changed during build");
-    const bytes = await Bun.file(artifactName).bytes();
-    await Bun.write(`${artifactName}.embedding.json`, JSON.stringify({ ...current, artifactSha256: hash(bytes), artifactBytes: bytes.byteLength }));
+    const core = await Bun.file(artifactName).bytes();
+    const side = await Bun.file(join(dirname(artifactName), "jsc-engine.wasm")).bytes();
+    await Bun.write(`${artifactName}.embedding.json`, JSON.stringify({ ...current, program: embeddingProgram({ kind: "jsc", core, side }) }));
   } else if (command === "test" && artifactName) {
     const artifact = resolve(artifactName);
     const bytes = await Bun.file(artifact).bytes();
-    verifyEmbeddingReceipt(await Bun.file(`${artifact}.embedding.json`).json(), current, bytes);
-    verifyGuestBuildReceipt(bytes, await Bun.file(`${artifact}.build.json`).json());
+    const side = await Bun.file(join(dirname(artifact), "jsc-engine.wasm")).bytes();
+    verifyEmbeddingReceipt(await Bun.file(`${artifact}.embedding.json`).json(), current, { kind: "jsc", core: bytes, side });
+    const receipt: unknown = await Bun.file(`${artifact}.build.json`).json();
+    verifyGuestBuildReceipt(bytes, receipt);
+    await verifyGuestCompanions(receipt, dirname(artifact));
     console.log(`JSC source ${current.sourceHead}; guest sha256 ${hash(bytes)}`);
     testFixtures(artifact);
   } else {

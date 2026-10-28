@@ -1,0 +1,12 @@
+[package]
+name = "bunwasm-engine-jsc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "JavaScriptCore linked engine program for bun-wasm"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+bunwasm-jsc = { path = "../bunwasm-jsc" }

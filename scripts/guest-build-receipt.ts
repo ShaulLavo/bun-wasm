@@ -1,3 +1,5 @@
+import { captureProgramInputs, parseProgramReceipt, verifyProgramReceipt, type ProgramBuildReceipt } from "./guest-core-receipt.ts";
+import { parseProgramFiles, programKind, programKindForBuild, programProfile, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
 import { basename, dirname, join, resolve } from "node:path";
 import { captureSourceManifest, git, guestBuilds, guestToolEnvironment, hash, run, sourceOptions, type GuestBuild, type SourceManifest, type SourceOptions } from "./guest-source-manifest.ts";
 
@@ -11,10 +13,25 @@ export interface GuestBuildInputs {
   readonly sourceManifestSha256: string;
 }
 
-export interface GuestBuildReceipt extends GuestBuildInputs {
+export interface ArtifactIdentity {
   readonly artifactSha256: string;
   readonly artifactBytes: number;
-  readonly quickjs?: { readonly artifactSha256: string; readonly artifactBytes: number };
+}
+type SingleProgram = Extract<ProgramFiles<ArtifactIdentity>, { kind: "single" }>;
+type PairedProgram = Exclude<ProgramFiles<ArtifactIdentity>, { kind: "single" }>;
+type ReceiptProgram = { readonly program: SingleProgram } | {
+  readonly program: PairedProgram;
+  readonly engineOrigin: ProgramBuildReceipt;
+  readonly engineInputSha256: string;
+};
+export type GuestBuildReceipt = GuestBuildInputs & ReceiptProgram;
+export function artifactIdentity(bytes: Uint8Array): ArtifactIdentity {
+  return { artifactSha256: hash(bytes), artifactBytes: bytes.byteLength };
+}
+export function parseArtifactIdentity(value: unknown): ArtifactIdentity {
+  if (!record(value) || !digest(value.artifactSha256, 64) || typeof value.artifactSha256 !== "string"
+    || typeof value.artifactBytes !== "number" || !Number.isSafeInteger(value.artifactBytes) || value.artifactBytes < 8) throw new Error("Invalid program artifact identity");
+  return { artifactSha256: value.artifactSha256, artifactBytes: value.artifactBytes };
 }
 
 async function readInputs(options: SourceOptions): Promise<GuestBuildInputs> {
@@ -42,29 +59,47 @@ export async function writeGuestBuildReceipt(options: SourceOptions, artifact: s
   if (!unchanged) throw new Error("Guest source or toolchain changed during the build");
   if (basename(artifact) !== guestBuilds[inputs.sourceManifest.build].artifact) throw new Error("Guest artifact name does not match selected build");
   const bytes = await Bun.file(artifact).bytes();
-  const quickjs = await quickjsIdentity(options.build, dirname(artifact));
-  const receipt = { ...inputs, artifactSha256: hash(bytes), artifactBytes: bytes.byteLength, ...quickjs };
+  const fields = await receiptProgram(options, bytes, dirname(artifact));
+  const receipt = { ...inputs, ...fields };
   verifyGuestBuildReceipt(bytes, receipt);
   await Bun.write(`${artifact}.build.json`, JSON.stringify(receipt, null, 2) + "\n");
   return receipt;
 }
 
-function splitBuild(build: GuestBuild): boolean {
-  return build === "quickjs" || build === "quickjs-minimal";
+async function programIdentity(build: GuestBuild, bytes: Uint8Array, directory: string): Promise<ProgramFiles<ArtifactIdentity>> {
+  const kind = programKindForBuild(build);
+  if (programKind(new WebAssembly.Module(Uint8Array.from(bytes))) !== kind) throw new Error("Guest build does not match core engine declaration");
+  const core = artifactIdentity(bytes);
+  if (kind === "single") return { kind, core };
+  const side = await Bun.file(join(directory, programProfile(kind).side)).bytes();
+  verifyProgramSide(kind, new WebAssembly.Module(side));
+  return { kind, core, side: artifactIdentity(side) };
 }
 
-async function quickjsIdentity(build: GuestBuild, directory: string) {
-  if (!splitBuild(build)) return {};
-  const bytes = await Bun.file(join(directory, "quickjs.wasm")).bytes();
-  if (!WebAssembly.validate(bytes)) throw new Error("Invalid paired QuickJS module");
-  return { quickjs: { artifactSha256: hash(bytes), artifactBytes: bytes.byteLength } };
+async function receiptProgram(options: SourceOptions, bytes: Uint8Array, directory: string): Promise<ReceiptProgram> {
+  const program = await programIdentity(options.build, bytes, directory);
+  if (program.kind === "single") return { program };
+  const sidePath = join(directory, programProfile(program.kind).side);
+  const current = await captureProgramInputs(options, program.kind);
+  const engineOrigin = verifyProgramReceipt(await Bun.file(sidePath).bytes(), await Bun.file(`${sidePath}.engine.json`).json(), current);
+  return { program, engineOrigin, engineInputSha256: current.contentSha256 };
+}
+
+export function requiredGuestCompanions(receipt: GuestBuildReceipt): readonly { name: string; identity: ArtifactIdentity }[] {
+  const { program } = receipt;
+  if (program.kind === "single") return [];
+  return [{ name: programProfile(program.kind).side, identity: program.side }];
 }
 
 export async function verifyGuestCompanions(receipt: GuestBuildReceipt, directory: string): Promise<void> {
-  if (!splitBuild(receipt.sourceManifest.build)) return;
-  const identity = await quickjsIdentity(receipt.sourceManifest.build, directory);
-  if (identity.quickjs?.artifactSha256 !== receipt.quickjs?.artifactSha256
-    || identity.quickjs?.artifactBytes !== receipt.quickjs?.artifactBytes) throw new Error("Guest receipt does not match paired QuickJS bytes");
+  const { program } = receipt;
+  if (program.kind === "single") return;
+  const side = await Bun.file(join(directory, programProfile(program.kind).side)).bytes();
+  verifyProgramSide(program.kind, new WebAssembly.Module(side));
+  if (!("engineOrigin" in receipt)) throw new Error("Missing engine origin receipt");
+  verifyProgramReceipt(side, receipt.engineOrigin, receipt.engineOrigin.inputs);
+  const identity = artifactIdentity(side);
+  if (identity.artifactSha256 !== program.side.artifactSha256 || identity.artifactBytes !== program.side.artifactBytes) throw new Error("Guest receipt does not match paired engine bytes");
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -89,6 +124,7 @@ function verifyManifest(value: unknown): asserts value is SourceManifest {
   if (!Array.isArray(value.groups) || !value.groups.every(group => record(group) && typeof group.name === "string" && validFiles(group.files))) throw new Error("Invalid guest source manifest files");
   const required = ["repository", "bun", "waffle-libc", "sysroot", "sdk", "rust-target", "boringssl"];
   if (value.build === "jsc" || value.build === "tools") required.push("jsc-prebuild");
+  if (programKindForBuild(value.build) !== "single") required.push("rust-build-std");
   const names = value.groups.map(group => group.name);
   if (new Set(names).size !== names.length || required.some(name => !names.includes(name))) throw new Error("Missing guest source manifest group");
   if (!Array.isArray(value.tools) || !value.tools.every(tool => record(tool) && typeof tool.name === "string" && typeof tool.path === "string" && tool.path.length > 0 && digest(tool.sha256, 64) && typeof tool.version === "string" && tool.version.length > 0)) throw new Error("Invalid guest source manifest tools");
@@ -104,17 +140,23 @@ function isGuestBuild(value: unknown): value is GuestBuild {
 
 export function verifyGuestBuildReceipt(bytes: Uint8Array, value: unknown): asserts value is GuestBuildReceipt {
   if (!record(value)) throw new Error("Invalid guest build receipt");
-  for (const [field, length] of [["bunHead", 40], ["bunTree", 40], ["sysrootReceiptSha256", 64], ["artifactSha256", 64], ["sourceManifestSha256", 64]] as const) {
+  for (const [field, length] of [["bunHead", 40], ["bunTree", 40], ["sysrootReceiptSha256", 64], ["sourceManifestSha256", 64]] as const) {
     if (!digest(value[field], length)) throw new Error(`Invalid guest build receipt: ${field}`);
   }
   verifyManifest(value.sourceManifest);
   if (hash(JSON.stringify(value.sourceManifest)) !== value.sourceManifestSha256) throw new Error("Guest source manifest digest mismatch");
   const sysroot = value.sourceManifest.groups.find(group => group.name === "sysroot");
   if (sysroot?.files.find(file => file.path === "bun-wasm-sysroot.json")?.sha256 !== value.sysrootReceiptSha256) throw new Error("Guest sysroot receipt differs from source manifest");
-  if (splitBuild(value.sourceManifest.build) && (!record(value.quickjs)
-    || !digest(value.quickjs.artifactSha256, 64) || !Number.isSafeInteger(value.quickjs.artifactBytes)
-    || Number(value.quickjs.artifactBytes) <= 0)) throw new Error("Missing paired QuickJS identity");
-  if (value.artifactBytes !== bytes.byteLength || value.artifactSha256 !== hash(bytes)) throw new Error("Guest build receipt does not match artifact bytes");
+  if ("quickjs" in value || "artifactSha256" in value || "artifactBytes" in value) throw new Error("Legacy guest receipt fields are not supported");
+  const program = parseProgramFiles(value.program, parseArtifactIdentity);
+  if (program.core.artifactBytes !== bytes.byteLength || program.core.artifactSha256 !== hash(bytes)) throw new Error("Guest build receipt does not match artifact bytes");
+  if (program.kind !== programKindForBuild(value.sourceManifest.build)
+    || program.kind !== programKind(new WebAssembly.Module(Uint8Array.from(bytes)))) throw new Error("Guest build/program engine mismatch");
+  if (program.kind !== "single") {
+    const origin = parseProgramReceipt(value.engineOrigin);
+    if (origin.inputs.scope !== program.kind || origin.inputs.contentSha256 !== value.engineInputSha256
+      || origin.artifact.artifactSha256 !== program.side.artifactSha256 || origin.artifact.artifactBytes !== program.side.artifactBytes) throw new Error("Guest engine origin/input identity mismatch");
+  } else if ("engineOrigin" in value || "engineInputSha256" in value) throw new Error("Single module cannot have engine provenance");
 }
 
 if (import.meta.main) {
@@ -130,8 +172,9 @@ if (import.meta.main) {
     const bytes = await Bun.file(argument).bytes();
     if (!record(inputs)) throw new Error("Invalid guest build inputs");
     verifyManifest(inputs.sourceManifest);
-    const quickjs = await quickjsIdentity(inputs.sourceManifest.build, dirname(argument));
-    const receipt = { ...inputs, artifactSha256: hash(bytes), artifactBytes: bytes.byteLength, ...quickjs };
+    const options = sourceOptions(root, sysroot, inputs.sourceManifest.build);
+    const fields = await receiptProgram(options, bytes, dirname(argument));
+    const receipt = { ...inputs, ...fields };
     verifyGuestBuildReceipt(bytes, receipt);
     await writeGuestBuildReceipt(sourceOptions(root, sysroot, receipt.sourceManifest.build), argument, receipt);
   } else {

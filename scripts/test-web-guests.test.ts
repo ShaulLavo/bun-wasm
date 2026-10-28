@@ -1,9 +1,10 @@
+import { quickjsPair } from "../tests/package/quickjs-plan-fixture";
+import { fixtureReceipt, wasm } from "../tests/package/guest-receipt-fixture";
 import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
-import { hash } from "./guest-source-manifest";
 import { prepareWebGuestFixtures, webGuestArtifacts, webGuestEngines } from "./test-web-guests";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -36,39 +37,16 @@ test("preparation rejects missing tools and mismatched or corrupted receipt byte
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-guest-receipts-"));
   try {
     mkdirSync(join(directory, "dist"));
-    // Parser-only bytes, never passed to the execution runner or used as a tools guest.
-    const bytes = new TextEncoder().encode("receipt validation fixture");
-    const sourceManifest = {
-      schema: 1,
-      build: "quickjs",
-      source: { head: "d".repeat(40), tree: "e".repeat(40) },
-      groups: ["repository", "bun", "waffle-libc", "sysroot", "sdk", "rust-target", "boringssl"].map(name => ({
-        name,
-        files: [{
-          path: name === "sysroot" ? "bun-wasm-sysroot.json" : "fixture.txt",
-          sha256: hash("fixture"),
-          bytes: 7,
-        }],
-      })),
-      tools: ["rustc", "cargo", "bun", "node", "rust-lld", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja"].map(name => ({
-        name, path: `/fixture/${name}`, sha256: hash(name), version: "fixture only",
-      })),
-      omissions: ["Synthetic receipt for the fixture validation path only."],
-    };
-    const receipt = {
-      bunHead: "a".repeat(40), bunTree: "b".repeat(40), sysrootReceiptSha256: hash("fixture"),
-      sourceManifest, sourceManifestSha256: hash(JSON.stringify(sourceManifest)),
-      artifactSha256: hash(bytes), artifactBytes: bytes.length,
-      quickjs: { artifactSha256: hash(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), artifactBytes: 8 },
-    };
+    const { core: bytes, side } = quickjsPair();
+    const receipt = fixtureReceipt(bytes, "quickjs", side);
     const guest = join(directory, "dist/bun.wasm");
     writeFileSync(guest, bytes);
-    writeFileSync(join(directory, "dist/quickjs.wasm"), new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+    writeFileSync(join(directory, "dist/quickjs.wasm"), side);
     writeFileSync(`${guest}.build.json`, JSON.stringify(receipt));
     await expect(prepareWebGuestFixtures(directory, "quickjs")).rejects.toThrow("dist/bun-tools.wasm");
     const tools = join(directory, "dist/bun-tools.wasm");
-    writeFileSync(tools, bytes);
-    writeFileSync(`${tools}.build.json`, JSON.stringify({ ...receipt, bunTree: "d".repeat(40) }));
+    writeFileSync(tools, wasm);
+    writeFileSync(`${tools}.build.json`, JSON.stringify({ ...fixtureReceipt(wasm, "tools"), bunTree: "d".repeat(40) }));
     await expect(prepareWebGuestFixtures(directory, "quickjs")).rejects.toThrow("fixture mismatch: bunTree");
     writeFileSync(tools, "corrupted receipt fixture");
     await expect(prepareWebGuestFixtures(directory, "quickjs")).rejects.toThrow("does not match artifact bytes");
@@ -121,7 +99,9 @@ test("the existing native producer owns each guest group once, after completed c
     expect(rust.indexOf(command)).toBeGreaterThan(0);
   }
   expect(rust).toContain('TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2');
-  expect(rust).toContain('guest-build-receipt.ts write dist/bun.wasm "$guest_inputs"');
+  expect(rust.split("CARGO_BUILD_JOBS=2 bash scripts/build.sh")).toHaveLength(2);
+  const wrapper = readFileSync(new URL("./build.sh", import.meta.url), "utf8");
+  expect(wrapper).toContain('guest-build-receipt.ts" write "$root/dist/bun.wasm" "$guest_inputs"');
   expect(rust).toContain("ln -s source-cache-browser/bun-browser.wasm dist/bun-browser.wasm");
   expect(rust).toContain("ln -s source-cache-browser/bun-browser.wasm.build.json dist/bun-browser.wasm.build.json");
   expect(rust).toContain("name: web-guest-fixture-receipts");
@@ -192,4 +172,17 @@ test("the completed prebuild is saved before native checks and every later guest
   expect(names.indexOf("Save the JSC prebuild cache once per input revision")).toBeLessThan(names.indexOf("Blocking native quality checks"));
   expect(rust).toContain("dist/web-guests-*.log\n            ${{ runner.temp }}/jsc-prebuild.log");
   expect(rust).toContain("if: always()\n        with:\n          name: web-guest-fixture-receipts");
+});
+
+test("fixture preflight rejects a valid receipt for the wrong requested primary", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-wrong-engine-"));
+  try {
+    mkdirSync(join(directory, "dist"));
+    const { core, side } = quickjsPair();
+    const path = join(directory, "dist/bun-browser.wasm");
+    writeFileSync(path, core);
+    writeFileSync(join(directory, "dist/quickjs.wasm"), side);
+    writeFileSync(`${path}.build.json`, JSON.stringify(fixtureReceipt(core, "quickjs", side)));
+    await expect(prepareWebGuestFixtures(directory, "browser")).rejects.toThrow("Web guest engine mismatch");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

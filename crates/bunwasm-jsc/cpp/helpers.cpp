@@ -47,9 +47,17 @@ char* bunjsc_host_resolve(const char* specifier, const char* referrer, JSValueRe
 char* bunjsc_host_fetch(const char* key, JSValueRef* exception);
 void bunjsc_host_init_meta(JSValueRef meta, const char* key, JSValueRef* exception);
 void bunjsc_host_free(char*);
+void bunjsc_host_uncaught(JSContextRef, JSValueRef);
 // Polls fatal host cancellation without entering JS or consuming handled signals.
 // True requests native, uncatchable termination after the callback has returned.
 bool bunjsc_host_interrupt();
+}
+
+extern "C" void Bun__reportUnhandledError(JSGlobalObject* globalObject, EncodedJSValue encoded)
+{
+    JSLockHolder lock(globalObject->vm());
+    JSValue value = JSValue::decode(encoded);
+    bunjsc_host_uncaught(toRef(globalObject), toRef(globalObject, value));
 }
 
 static std::string utf8(const String& s)
@@ -186,7 +194,23 @@ JSGlobalContextRef bunjsc_create_context()
 {
     // Native Bun enables the SharedArrayBuffer constructor (ZigGlobalObject.cpp). Its storage
     // stays in this guest; the worker codec refuses to send it to another one.
-    JSC::initialize([] { JSC::Options::useSharedArrayBuffer() = true; });
+    JSC::initialize([] {
+        // Shared guest memory is capped at 512 MiB; WASI physical-page sysconf
+        // is unsupported and wraps into a larger, incorrect RAM estimate.
+        JSC::Options::forceRAMSize() = 512 * MB;
+        JSC::Options::useSharedArrayBuffer() = true;
+        JSC::Options::numberOfGCMarkers() = 1;
+        JSC::Options::useWarmUpMarkedBlocks() = false;
+        JSC::Options::useConcurrentGC() = false;
+        JSC::Options::useConcurrentJIT() = false;
+        JSC::Options::usePollingTraps() = true;
+        JSC::Options::collectContinuously() = false;
+        JSC::Options::useSamplingProfiler() = false;
+        JSC::Options::useICStats() = false;
+        JSC::Options::useSuperSampler() = false;
+        JSC::Options::useTextMarkers() = false;
+        JSC::Options::useProfiler() = false;
+    });
     Ref<VM> vm = VM::createContextGroup();
     JSLockHolder locker(vm.ptr());
     // The default method table (private to JSGlobalObject), read off a plain global object,
@@ -277,6 +301,13 @@ bool bunjsc_drain_microtasks(JSContextRef ctx)
     vm.deferredWorkTimer->doWork(vm);
     thread.setCurrentAtomStringTable(previousTable);
     return pending;
+}
+
+void bunjsc_report_unhandled_error(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* globalObject = toJS(ctx);
+    JSLockHolder lock(globalObject->vm());
+    Bun__reportUnhandledError(globalObject, JSValue::encode(toJS(globalObject, value)));
 }
 
 void bunjsc_collect_garbage(JSContextRef ctx)

@@ -97,8 +97,8 @@ mod bun_transpiler {
             &self,
             source: &[u8],
             format: &str,
-        ) -> Result<String, bunwasm_runtime::engine::NativeError> {
-            use bunwasm_runtime::engine::NativeError;
+        ) -> Result<String, bunwasm_runtime::NativeError> {
+            use bunwasm_runtime::NativeError;
             use bunwasm_transpiler::data::Error;
             bunwasm_transpiler::data::parse(source, format).map_err(|e| match e {
                 Error::Syntax(message) => NativeError::syntax_error(message),

@@ -117,7 +117,7 @@ or engine-integration acceptance follows from this source/native result.
 
 ## Engine buffer adapters
 
-The original JSC adapters in `crates/bunwasm-runtime/src/engine_jsc.rs` and
+The original JSC adapters in `crates/bunwasm-engine-jsc/src/vm.rs` and
 `crates/bunwasm-jsc/{cpp/helpers.cpp,src/sys.rs}` call WebKit's
 `ArrayBuffer::createFromBytes`, `makeWasmMemory`, `isWasmMemory`, and `detach`.
 Their upstream reference is Bun's WebKit fork at

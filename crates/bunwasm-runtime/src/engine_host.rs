@@ -23,7 +23,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::engine::{Args, DataFn, NativeError, Record, Val};
+use crate::data::{Args, DataFn, NativeError, Record, Val};
 use crate::modules;
 use crate::natives::Table;
 use crate::resolve::{self, Kind, Resolved};
@@ -200,10 +200,10 @@ fn set_result(v: &Val) {
 
 fn error_val(err: &NativeError) -> Val {
     let kind = match err.kind {
-        crate::engine::ErrorKind::Error => "Error",
-        crate::engine::ErrorKind::TypeError => "TypeError",
-        crate::engine::ErrorKind::RangeError => "RangeError",
-        crate::engine::ErrorKind::SyntaxError => "SyntaxError",
+        crate::data::ErrorKind::Error => "Error",
+        crate::data::ErrorKind::TypeError => "TypeError",
+        crate::data::ErrorKind::RangeError => "RangeError",
+        crate::data::ErrorKind::SyntaxError => "SyntaxError",
     };
     Record::new()
         .set("kind", kind)

@@ -7,7 +7,7 @@
 //! first), paths are absolute strings, and failures throw Node-style errors
 //! (`code`, `errno`, `syscall`, `path`). The natives that need engine values
 //! (module loading, promise and proxy introspection) are in
-//! engine_natives.rs.
+//! Engine-independent data-native definitions.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -21,7 +21,7 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::State;
-use crate::engine::{Args, DataFn, NativeError, NativeResult, Record, Val};
+use crate::data::{Args, DataFn, NativeError, NativeResult, Record, Val};
 use crate::modules;
 use crate::resolve::{self, Kind, Resolved};
 
@@ -2049,7 +2049,7 @@ mod builtin_tests {
                 call(&table, "bunBuiltinSource", &[invalid])
                     .unwrap_err()
                     .kind,
-                crate::engine::ErrorKind::TypeError
+                crate::data::ErrorKind::TypeError
             );
         }
     }

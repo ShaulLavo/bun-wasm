@@ -260,12 +260,14 @@ test("fixture admission removes all seeded and stale project files, not runtime 
 
 test("the browser clears fixture sources after readiness and before project overlay or install", () => {
   const source = readFileSync(new URL("./browser.mjs", import.meta.url), "utf8");
-  const ready = source.indexOf("if (!(await ready(page)).includes");
-  const reset = source.indexOf("await page.evaluate(resetBrowserProject)", ready);
+  const ready = source.indexOf("const status = await ready(page);");
+  const guard = source.indexOf('if (!status.includes("ready")) throw', ready);
+  const reset = source.indexOf("await page.evaluate(resetBrowserProject)", guard);
   const write = source.indexOf("Object.entries(projectFiles(app, registry))", ready);
   const install = source.indexOf('await run(page, "bun install"', ready);
   expect(ready).toBeGreaterThanOrEqual(0);
-  expect(reset).toBeGreaterThan(ready);
+  expect(guard).toBeGreaterThan(ready);
+  expect(reset).toBeGreaterThan(guard);
   expect(write).toBeGreaterThan(reset);
   expect(install).toBeGreaterThan(write);
 });

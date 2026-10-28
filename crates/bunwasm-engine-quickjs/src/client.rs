@@ -1,5 +1,8 @@
 use crate::data::{NativeError, NativeResult, Val, codec, drop_tree};
-use crate::{TransportBuffer, bun_core_dispatch, ops};
+use crate::ops;
+use crate::transport::{
+    TransportBuffer, bun_core_dispatch, bun_core_exit, bun_core_idle, bun_core_poll,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct CoreClient {
@@ -25,16 +28,32 @@ impl CoreClient {
         let status = match unsafe { bun_core_dispatch(frame.pointer) } {
             0 => ops::Status::Ok,
             1 => ops::Status::NativeError,
+            3 => ops::Status::ResourceLimit,
             status => panic!("terminal core transport failure {status}"),
         };
-        let reply = TransportBuffer {
-            pointer: unsafe { (frame.pointer as *const u32).add(4).read() },
-            bytes: unsafe { (frame.pointer as *const u32).add(5).read() },
+        let pointer = unsafe { (frame.pointer as *const u32).add(4).read() };
+        let bytes = unsafe { (frame.pointer as *const u32).add(5).read() };
+        if status == ops::Status::ResourceLimit {
+            // Core failed to allocate the request copy or the reply and wrote no reply.
+            assert!(
+                pointer == 0 && bytes == 0,
+                "core resource limit with a reply"
+            );
+            return ops::Reply {
+                status,
+                bytes: Vec::new(),
+            }
+            .into_result();
+        }
+        let reply = TransportBuffer { pointer, bytes };
+        // Decode the reply where core wrote it; copying it out would hold the payload twice.
+        let bytes: &[u8] = if reply.bytes == 0 {
+            &[]
+        } else {
+            // SAFETY: core allocated reply.bytes initialized bytes at reply.pointer for this reply.
+            unsafe { std::slice::from_raw_parts(reply.pointer as *const u8, reply.bytes as usize) }
         };
-        let bytes = unsafe {
-            std::slice::from_raw_parts(reply.pointer as *const u8, reply.bytes as usize).to_vec()
-        };
-        ops::Reply { status, bytes }.into_result()
+        ops::Reply::decode(status, bytes)
     }
 
     pub(crate) fn native(self, id: u32, args: Vec<Val>) -> NativeResult {
@@ -197,16 +216,10 @@ impl CoreClient {
     }
 
     pub(crate) fn interrupt(self) -> bool {
-        unsafe { crate::core_checkpoint() != 0 }
+        unsafe { crate::transport::core_checkpoint() != 0 }
     }
 
     pub(crate) fn exit(self, code: i32) -> ! {
         unsafe { bun_core_exit(code) }
     }
-}
-
-unsafe extern "C" {
-    fn bun_core_idle(ms: i32);
-    fn bun_core_poll(ms: i32) -> i32;
-    fn bun_core_exit(code: i32) -> !;
 }

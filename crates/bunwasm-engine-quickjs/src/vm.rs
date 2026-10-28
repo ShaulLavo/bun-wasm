@@ -640,12 +640,33 @@ fn unerase<'js>(v: V) -> Value<'js> {
 mod tests {
     use super::*;
 
+    enum InterruptMode {
+        Continue,
+        Terminate,
+        OneShot(Rc<std::cell::Cell<bool>>),
+    }
+
     struct InterruptHost {
         polls: std::cell::Cell<u32>,
-        terminate: bool,
+        mode: InterruptMode,
+    }
+
+    impl InterruptHost {
+        fn new(mode: InterruptMode) -> Self {
+            Self {
+                polls: std::cell::Cell::new(0),
+                mode,
+            }
+        }
     }
 
     impl ModuleHost<QuickJs> for InterruptHost {
+        fn uncaught(&self, engine: &QuickJs, error: &V) {
+            panic!(
+                "unexpected uncaught interrupt-test error: {:?}",
+                engine.to_val(error)
+            );
+        }
         fn resolve(&self, _: &QuickJs, _: &str, _: &str) -> Result<String, V> {
             unreachable!()
         }
@@ -660,16 +681,17 @@ mod tests {
         }
         fn interrupt(&self) -> bool {
             self.polls.set(self.polls.get() + 1);
-            self.terminate
+            match &self.mode {
+                InterruptMode::Continue => false,
+                InterruptMode::Terminate => true,
+                InterruptMode::OneShot(armed) => armed.replace(false),
+            }
         }
     }
 
     #[test]
     fn cpu_bound_script_polls_and_resumes_without_js_dispatch() {
-        let host = Rc::new(InterruptHost {
-            polls: std::cell::Cell::new(0),
-            terminate: false,
-        });
+        let host = Rc::new(InterruptHost::new(InterruptMode::Continue));
         let engine = QuickJs::new(host.clone());
         let value = engine
             .eval_script(
@@ -690,10 +712,7 @@ mod tests {
 
     #[test]
     fn cpu_bound_interrupt_bypasses_catch_and_finally() {
-        let host = Rc::new(InterruptHost {
-            polls: std::cell::Cell::new(0),
-            terminate: true,
-        });
+        let host = Rc::new(InterruptHost::new(InterruptMode::Terminate));
         let engine = QuickJs::new(host.clone());
         let result = engine.eval_script("globalThis.caught = false; globalThis.finalized = false; try { while (true) {} } catch { caught = true; } finally { finalized = true; }", "loop", 1);
         assert!(result.is_err());
@@ -711,36 +730,11 @@ mod tests {
 
     #[test]
     fn cpu_bound_one_shot_interrupt_bypasses_nested_catch_finally_and_continuation() {
-        struct OneShotInterruptHost {
-            polls: std::cell::Cell<u32>,
-            armed: std::cell::Cell<bool>,
-        }
-        impl ModuleHost<QuickJs> for OneShotInterruptHost {
-            fn resolve(&self, _: &QuickJs, _: &str, _: &str) -> Result<String, V> {
-                unreachable!()
-            }
-            fn load(&self, _: &QuickJs, _: &str) -> Result<String, V> {
-                unreachable!()
-            }
-            fn init_meta(&self, _: &QuickJs, _: &str, _: &V) -> Result<(), V> {
-                Ok(())
-            }
-            fn has_interrupt_handler(&self) -> bool {
-                true
-            }
-            fn interrupt(&self) -> bool {
-                self.polls.set(self.polls.get() + 1);
-                self.armed.replace(false)
-            }
-        }
-
         // Cover both direct evaluation and Rust entering a JS function, as the
         // CommonJS module wrapper does. The host returns true exactly once.
         for call_from_rust in [false, true] {
-            let host = Rc::new(OneShotInterruptHost {
-                polls: std::cell::Cell::new(0),
-                armed: std::cell::Cell::new(false),
-            });
+            let armed = Rc::new(std::cell::Cell::new(false));
+            let host = Rc::new(InterruptHost::new(InterruptMode::OneShot(armed.clone())));
             let engine = QuickJs::new(host.clone());
             engine.eval_script(r#"
                 globalThis.markers = { innerCatch: 0, innerFinally: 0, outerCatch: 0, outerFinally: 0, after: 0 };
@@ -756,7 +750,7 @@ mod tests {
                     markers.after++;
                 }
             "#, "nested-interrupt", 1).unwrap();
-            host.armed.set(true);
+            armed.set(true);
             let result = if call_from_rust {
                 let function = engine
                     .ctx()
@@ -772,7 +766,7 @@ mod tests {
                 "one native true return must unwind the current entry"
             );
             assert!(host.polls.get() > 0);
-            assert!(!host.armed.get(), "native interrupt request was consumed");
+            assert!(!armed.get(), "native interrupt request was consumed");
             let markers = engine.ctx().globals().get::<_, V>("markers").unwrap();
             for key in [
                 "innerCatch",

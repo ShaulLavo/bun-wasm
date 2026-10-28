@@ -3,13 +3,12 @@ name = "bunwasm-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Bun-compatible JS runtime for wasm32-wasip1, on QuickJS-ng or JavaScriptCore behind an Engine trait"
+description = "Bun-compatible JS runtime for wasm32-wasip1 with a linked engine program"
 
 [features]
 default = ["engine-split"]
-# The JS engine (exactly one): QuickJS-ng, or Bun's JavaScriptCore.
+# The linked engine program supplies the VM; the core owns process and data services.
 engine-split = []
-engine-jsc = ["dep:bunwasm-jsc"]
 # The host's own JS engine (browser/Node): see docs/engine-browser.md.
 engine-host = []
 
@@ -24,7 +23,6 @@ bun_node_path = { path = "../../vendor/bun/src/node_path" }
 bytemuck = "1"
 bun_core = { path = "../../vendor/bun/src/bun_core" }
 bun_paths = { path = "../../vendor/bun/src/paths" }
-bunwasm-jsc = { path = "../bunwasm-jsc", optional = true }
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
 bun_zstd = { path = "../../vendor/bun/src/zstd" }
 zstd-sys = { version = "=2.0.16", default-features = false, features = ["no_asm"] }

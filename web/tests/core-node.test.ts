@@ -8,6 +8,15 @@ test('plain Node can consume the JS memory helper through the existing host adap
   expect(result.status).toBe(0);
 });
 
+test('plain Node imports paired program and asset TypeScript sources without a resolver hook', () => {
+  const program = new URL('../../src/quickjs-program.ts', import.meta.url).href;
+  const assets = new URL('../../src/assets.ts', import.meta.url).href;
+  const source = `const program = await import(${JSON.stringify(program)}); const assets = await import(${JSON.stringify(assets)}); if (typeof program.engineLinkPlan !== "function" || typeof assets.prepareProgram !== "function") throw new Error("Missing source entry");`;
+  const result = spawnSync('node', ['--input-type=module', '-e', source], { encoding: 'utf8' });
+  expect(result.stderr).toBe('');
+  expect(result.status).toBe(0);
+});
+
 test('module-preparation benchmark links its actual Node host before creating fixtures', () => {
   const result = spawnSync('node', [new URL('../../scripts/bench-module-preparation.mjs', import.meta.url).pathname, '--check'], { encoding: 'utf8' });
   expect(result.status).toBe(0);
@@ -37,7 +46,7 @@ test('unbundled headless hosts load with their installed runtime package', async
   try {
     for (const path of ['web/package.json',
       'web/src/crypto-inputs.js', 'web/src/crypto-host.js', 'web/src/content-modules.ts', 'web/src/promise-reactions.ts',
-      'web/src/tool-command.ts', 'web/scripts/node-host.mjs', 'web/scripts/node-host.ts', 'web/scripts/async-context.ts', 'web/scripts/node-worker.ts', 'web/scripts/node-linked.ts', 'src/quickjs-program.ts', 'web/scripts/node-signals.ts', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-process.ts', 'web/scripts/node-install-net.mjs', 'web/src/net/trampoline.ts', 'web/src/net/lookup.ts', 'web/src/net/package-fetch.ts', 'web/src/buffer-transfer.ts', 'web/src/engine-host.js', 'web/src/script-evaluation.ts', 'web/src/shared-objects/host.ts', 'web/src/shared-objects/protocol.ts', 'web/src/native-stream-state.ts', 'web/src/native-direct-stream.ts']) {
+      'web/src/tool-command.ts', 'web/scripts/node-host.mjs', 'web/scripts/node-host.ts', 'web/scripts/async-context.ts', 'web/scripts/node-worker.ts', 'web/scripts/node-linked.ts', 'src/quickjs-program.ts', 'src/engine-kind.ts', 'web/scripts/node-signals.ts', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-process.ts', 'web/scripts/node-install-net.mjs', 'web/src/net/trampoline.ts', 'web/src/net/lookup.ts', 'web/src/net/package-fetch.ts', 'web/src/buffer-transfer.ts', 'web/src/engine-host.js', 'web/src/script-evaluation.ts', 'web/src/shared-objects/host.ts', 'web/src/shared-objects/protocol.ts', 'web/src/native-stream-state.ts', 'web/src/native-direct-stream.ts']) {
       const target = join(dir, path);
       await mkdir(dirname(target), { recursive: true });
       await copyFile(new URL(`../../${path}`, import.meta.url), target);

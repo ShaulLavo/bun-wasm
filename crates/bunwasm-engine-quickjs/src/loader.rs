@@ -2,6 +2,10 @@ use crate::Core;
 use crate::engine::{Engine, ModuleHost, Val};
 
 impl<E: Engine> ModuleHost<E> for Core<E> {
+    fn uncaught(&self, engine: &E, error: &E::Value) {
+        Core::uncaught(self, engine, error.clone());
+    }
+
     fn has_interrupt_handler(&self) -> bool {
         Core::has_interrupt_handler(self)
     }

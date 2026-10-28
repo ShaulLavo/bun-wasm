@@ -443,14 +443,14 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
   });
 }
 
-test("paired executor initializes the shared side once and releases its table range", async () => {
+for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializes the shared side once and releases its table range`, async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareQuickjsProgram, programLinkPlan } = await import("../../src/assets");
-  const { core, side } = quickjsPair();
-  const module = await prepareQuickjsProgram(core, side);
+  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { core, side } = quickjsPair(kind);
+  const module = await prepareProgram({ kind, core, side });
   const connection = createFilesystemConnection();
   const messages: WorkerMessage[] = [];
-  const request: RunRequest = { engine: "quickjs", module: structuredClone(module), linkPlan: programLinkPlan(module),
+  const request: RunRequest = { engine: kind, module: structuredClone(module), linkPlan: programLinkPlan(module),
     args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, moduleCache: null, slots: "off" };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage(message) { messages.push(message); }, async fetch() { throw new Error("unexpected fetch"); } };
@@ -476,7 +476,7 @@ test("paired executor initializes the shared side once and releases its table ra
     expect(instantiatedModules).toHaveLength(2);
     expect(instantiatedModules[0]).toBe(local.entryModule);
     expect(instantiatedModules[0]).not.toBe(request.module);
-    expect(WebAssembly.Module.exports(instantiatedModules[1]!).some(entry => entry.name === "quickjs_run")).toBe(true);
+    expect(WebAssembly.Module.exports(instantiatedModules[1]!).some(entry => entry.name === `${kind}_run`)).toBe(true);
     expect(value()).toBe(42);
     expect(ctors.value).toBe(1);
     expect(table.length).toBe(2);
@@ -553,18 +553,22 @@ for (const mode of ["send-failure", "revoked-after-export", "engine-failure"] as
 
 const keepFixtureReference = () => {};
 
-async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lookup") {
+async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lookup", kind: "quickjs" | "jsc") {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
-  const { prepareQuickjsProgram, programLinkPlan } = await import("../../src/assets");
-  const { core, side } = quickjsPair();
-  const module = await prepareQuickjsProgram(core, side);
+  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const { core, side } = quickjsPair(kind);
+  const module = await prepareProgram({ kind, core, side });
   const connection = createFilesystemConnection(), lookup = new MessageChannel();
-  const broker = createSharedObjectBroker(), route = broker.register();
-  const request: RunRequest = { engine: "browser", adapter: "bun", module, linkPlan: programLinkPlan(module),
+  const broker = createSharedObjectBroker(), route = kind === "quickjs" ? broker.register() : undefined;
+  const request: RunRequest = { engine: kind === "jsc" ? "jsc" : "browser", adapter: "bun", module, linkPlan: programLinkPlan(module),
     args: ["bun"], env: {}, filesystem: connection.client, trace: false, net: null, moduleCache: null,
-    slots: "off", sharedObjects: { owner: route.id }, lookupPort: lookup.port2 };
+    slots: "off", sharedObjects: route ? { owner: route.id } : undefined, lookupPort: lookup.port2 };
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
-    postMessage(message) { if (message.type === "bun-shared-connect") route.attach(message.port); },
+    postMessage(message) {
+      if (message.type !== "bun-shared-connect") return;
+      if (!route) throw new Error("JSC must not acquire a browser engine-host service");
+      route.attach(message.port);
+    },
     async fetch() { throw new Error("unexpected fetch"); } };
   const executor = createBunExecutor(request, host);
   const originalClose = MessagePort.prototype.close;
@@ -588,19 +592,20 @@ async function assertComposedCleanup(failure: "none" | "linked" | "shared" | "lo
     restoreClose = () => close.mockRestore();
     if (failure === "none") expect(() => executor.beforeFinish?.()).not.toThrow();
     else expect(() => executor.beforeFinish?.()).toThrow(expected);
-    expect(released).toEqual(["shared", "lookup", "lookup"]);
+    expect(released).toEqual(kind === "jsc" ? ["lookup", "lookup"] : ["shared", "lookup", "lookup"]);
     await new Promise(resolve => setTimeout(resolve, 5));
     expect(broker.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
   } finally {
     linkedFinishFailure = undefined;
     restoreClose();
     executor.beforeFinish?.();
-    route.close(); broker.dispose();
+    route?.close(); broker.dispose();
     lookup.port1.close(); lookup.port2.close();
     connection.client.port.close(); connection.server.port.close();
   }
 }
 
-for (const failure of ["none", "linked", "shared", "lookup"] as const) {
-  test(`composed executor releases linked, shared and both lookup owners after ${failure} failure`, () => assertComposedCleanup(failure));
+for (const kind of ["quickjs", "jsc"] as const) {
+  const failures = kind === "jsc" ? ["none", "linked", "lookup"] as const : ["none", "linked", "shared", "lookup"] as const;
+  for (const failure of failures) test(`${kind} composed executor releases all owners after ${failure} failure`, () => assertComposedCleanup(failure, kind));
 }

@@ -1,6 +1,7 @@
+import { mapProgramFiles, programKind, programProfile, verifyProgramSide } from "../src/engine-kind.ts";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -8,9 +9,9 @@ import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
   GUEST_BUCKET, GUEST_CACHE_CONTROL, GUEST_ORIGIN,
-  describeGuest, verifyGuest, writeGuestDescriptor,
+  decodeGuest, parseGuestDescriptor, readGuestArtifact, verifyGuest, writeGuestDescriptor,
 } from "./guest-artifact.ts";
-import type { GuestArtifact, GuestDescriptor, GuestFile } from "./guest-artifact.ts";
+import type { GuestArtifact, GuestDescriptor, GuestFile, GuestFileDescriptor } from "./guest-artifact.ts";
 
 import { acceptGuestPublication } from "./guest-acceptance.ts";
 
@@ -19,12 +20,12 @@ export type GuestFetch = (input: string | URL | Request, init?: RequestInit) => 
 export interface GuestPublisher {
   /** Read from authenticated storage, not a potentially cached public URL. Null means absent. */
   read(key: string): Promise<Uint8Array | null>;
-  upload(artifact: GuestArtifact): Promise<void>;
+  upload(artifact: GuestFile): Promise<void>;
   fetch: GuestFetch;
 }
 
 /** Verify what a browser receives, including transparent HTTP gzip decoding. */
-export async function verifyPublicGuest(descriptor: GuestDescriptor, fetch: GuestFetch): Promise<void> {
+export async function verifyPublicGuest(descriptor: GuestFileDescriptor, fetch: GuestFetch): Promise<void> {
   const origin = "https://example.com";
   const response = await fetch(descriptor.url, {
     headers: { Origin: origin },
@@ -58,19 +59,22 @@ async function publishFile(file: GuestFile, name: string, publisher: GuestPublis
 }
 
 export async function publishGuest(artifact: GuestArtifact, publisher: GuestPublisher): Promise<GuestDescriptor> {
-  const core = snapshotFile(artifact);
-  const quickjs = artifact.quickjs && snapshotFile(artifact.quickjs);
-  const descriptor: GuestDescriptor = { ...core.descriptor, ...(quickjs ? { quickjs: quickjs.descriptor } : {}) };
-  const expected = artifact.descriptor.quickjs;
-  if (expected?.url !== quickjs?.descriptor.url || expected?.sha256 !== quickjs?.descriptor.sha256
-    || expected?.bytes !== quickjs?.descriptor.bytes) {
-    throw new Error("Guest descriptor does not match paired QuickJS identity");
+  const descriptor = parseGuestDescriptor(artifact.descriptor);
+  const files = mapProgramFiles(artifact.files, snapshotFile);
+  if (files.kind !== descriptor.kind) throw new Error("Guest descriptor does not match program kind");
+  const coreName = files.kind === "single" ? "bun.wasm" : programProfile(files.kind).core;
+  const core = files.core;
+  if (JSON.stringify(core.descriptor) !== JSON.stringify(descriptor.core)) throw new Error("Guest descriptor does not match core identity");
+  verifyGuest(core.gzip, descriptor.core);
+  if (core.key !== `${descriptor.core.sha256}/${coreName}.gz`) throw new Error("Guest key does not match its SHA-256");
+  if (programKind(new WebAssembly.Module(Uint8Array.from(decodeGuest(core.gzip)))) !== files.kind) throw new Error("Guest core engine declaration mismatch");
+  if (files.kind !== "single" && descriptor.kind !== "single") {
+    if (JSON.stringify(files.side.descriptor) !== JSON.stringify(descriptor.side)) throw new Error("Guest descriptor does not match paired engine identity");
+    verifyGuest(files.side.gzip, descriptor.side);
+    verifyProgramSide(files.kind, new WebAssembly.Module(Uint8Array.from(decodeGuest(files.side.gzip))));
+    await publishFile(files.side, programProfile(files.kind).side, publisher);
   }
-  // Validate the complete pair before a callback can change the caller's buffers.
-  verifyGuest(core.gzip, core.descriptor);
-  if (core.key !== `${descriptor.sha256}/bun.wasm.gz`) throw new Error("Guest key does not match its SHA-256");
-  if (quickjs) await publishFile(quickjs, "quickjs.wasm", publisher);
-  await publishFile(core, "bun.wasm", publisher);
+  await publishFile(core, coreName, publisher);
   return descriptor;
 }
 
@@ -125,7 +129,7 @@ if (import.meta.main) {
   if (!accountId || !/^[a-f0-9]{32}$/.test(accountId)) throw new Error("Set CLOUDFLARE_ACCOUNT_ID or --account-id to the target account's ID");
   if (!token) throw new Error("Set CLOUDFLARE_API_TOKEN in the environment (never pass a token as an argument)");
   if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(values.bucket!)) throw new Error("Invalid R2 bucket name");
-  const requested = describeGuest(await readFile(positionals[0]!), values.origin);
+  const requested = (await readGuestArtifact(positionals[0]!, values.origin)).descriptor;
   const scratchRoot = process.env.TMPDIR ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
   const scratch = await mkdtemp(join(scratchRoot, "bun-wasm-guest-publish-"));
   const controller = new AbortController();

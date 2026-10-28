@@ -7,7 +7,7 @@ use bytemuck::cast_slice;
 #[cfg(windows)]
 use bytemuck::cast_slice_mut;
 
-use crate::engine::{Args, NativeError, NativeResult, Record, Val};
+use crate::data::{Args, NativeError, NativeResult, Record, Val};
 use crate::natives::Table;
 
 use path::{CHAR_BACKWARD_SLASH, CHAR_FORWARD_SLASH};

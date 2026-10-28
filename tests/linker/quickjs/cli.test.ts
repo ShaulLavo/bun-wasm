@@ -9,9 +9,9 @@ import { prepareQuickjsProgram, programLinkPlan } from "../../../src/assets.ts";
 import { createWorkerProcessTransport } from "waffle/proc";
 
 async function runCLI(args: string[], files: Readonly<Record<string, Uint8Array | string>>) {
-  const directory = process.env.BUN_CORE_BUILD_DIR;
-  assert(directory, "BUN_CORE_BUILD_DIR must name matching newly built production artifacts");
-  const core = new Uint8Array(await readFile(join(directory, "bun-core.wasm")));
+  const directory = process.env.BUN_PROGRAM_DIR;
+  assert(directory, "BUN_PROGRAM_DIR must name matching published tagged production artifacts");
+  const core = new Uint8Array(await readFile(join(directory, "bun.wasm")));
   const engine = new Uint8Array(await readFile(join(directory, "quickjs.wasm")));
   const module = await prepareQuickjsProgram(core, engine);
   const linkPlan = programLinkPlan(module);

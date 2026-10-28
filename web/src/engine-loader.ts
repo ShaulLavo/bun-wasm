@@ -1,4 +1,5 @@
-import { prepareQuickjsProgram } from "../../src/assets.js";
+import { programKind, programProfile, type PairedEngine } from "../../src/engine-kind.ts";
+import { prepareProgram } from "../../src/assets.ts";
 // Engine metadata and downloads are usable before the execution/process graph loads.
 import { activated } from "./preview";
 import { assetBuild, cachedEngine, cacheEngine, evictEngine } from "./startup-cache";
@@ -33,9 +34,11 @@ export class WasmMissing extends Error {}
 export async function loadWasm(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string | null }> {
   const requested = new URL(url, location.href);
   const name = requested.pathname;
-  const custom = !Object.values(ENGINES).some(engine => new URL(engine.wasm, location.href).href === requested.href);
-  if (name.endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
-  if (name.endsWith("bun.wasm") || name.endsWith("bun.wasm.gz")) return loadQuickjs(url, progress);
+  if (name.replace(/\.gz$/, "").endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
+  for (const kind of ["quickjs", "jsc"] as const) {
+    const standard = new URL(ENGINES[kind].wasm, location.href);
+    if (requested.origin === standard.origin && requested.pathname.replace(/\.gz$/, "") === standard.pathname) return loadPaired(url, kind, progress);
+  }
   progress("loading bun.wasm…");
   const build = assetBuild(url);
   const key = new URL(url, location.href).href;
@@ -44,14 +47,15 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   if (cached) {
     progress("compiling cached bun.wasm…");
     const started = performance.now();
-    try {
-      size = Number(cached.headers.get("content-length"));
-      const module = await WebAssembly.compileStreaming(cached);
+    const compiled = await compileCached(cached, key);
+    if (compiled) {
+      const { bytes, module } = compiled;
+      size = bytes.length;
       performance.mark("bunwasm:engine-cache-hit");
       measureStartup("compile", started, { cached: true });
+      const kind = programKind(module);
+      if (kind !== "single") return loadProgramSide(url, kind, { bytes, build }, progress, false);
       return { module, size, build };
-    } catch {
-      await evictEngine(key);
     }
   }
   progress("downloading bun.wasm…");
@@ -89,7 +93,7 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   body = body.pipeThrough(new TransformStream<Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>>({
     transform(chunk, controller) {
       size += chunk.length;
-      if (build || custom) chunks.push(chunk);
+      chunks.push(chunk);
       controller.enqueue(chunk);
     },
     flush() {
@@ -102,34 +106,44 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   const response = new Response(body, { headers: { "content-type": "application/wasm" } });
   const module = await WebAssembly.compileStreaming(response);
   measureStartup("compile", compiling, { streaming: true });
-  if (WebAssembly.Module.exports(module).some(entry => entry.name === "bun_core_bind_engine")) {
+  const kind = programKind(module);
+  if (kind !== "single") {
     const bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
-    return loadQuickjsSide(url, { bytes, build: null }, progress, false);
+    return loadProgramSide(url, kind, { bytes, build: null }, progress, false);
   }
   const engine = { module, size };
   if (build) setTimeout(() => void cacheIfExpected(key, build, chunks, size), 0);
   return { ...engine, build };
 }
 
-async function loadQuickjs(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string | null }> {
-  const requested = new URL(url, location.href);
-  const standard = new URL(ENGINES.quickjs.wasm, location.href);
-  const verifyBuild = requested.origin === standard.origin && requested.pathname.replace(/\.gz$/, "") === standard.pathname;
-  const core = await loadVerifiedFile(url, "bun.wasm", progress, verifyBuild);
-  return loadQuickjsSide(url, core, progress, verifyBuild);
+async function compileCached(response: Response, key: string) {
+  try {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return { bytes, module: await WebAssembly.compile(bytes) };
+  } catch {
+    await evictEngine(key);
+    return null;
+  }
 }
 
-async function loadQuickjsSide(url: string, core: { bytes: Uint8Array<ArrayBuffer>; build: string | null }, progress: (text: string) => void, verifyBuild: boolean) {
-  const side = new URL("quickjs.wasm", new URL(url, location.href));
-  const quickjs = await loadVerifiedFile(side.href, "quickjs.wasm", progress, verifyBuild);
-  const module = await prepareQuickjsProgram(core.bytes, quickjs.bytes);
-  return { module, size: core.bytes.length + quickjs.bytes.length, build: core.build };
+async function loadPaired(url: string, expected: PairedEngine, progress: (text: string) => void) {
+  const core = await loadVerifiedFile(url, programProfile(expected).core, progress);
+  // Preparation compiles asynchronously and rejects a core that declares another engine.
+  return loadProgramSide(url, expected, core, progress, true);
+}
+
+async function loadProgramSide(url: string, kind: PairedEngine, core: { bytes: Uint8Array<ArrayBuffer>; build: string | null }, progress: (text: string) => void, verifyBuild: boolean) {
+  const profile = programProfile(kind);
+  const sideUrl = new URL(profile.side, new URL(url, location.href));
+  const side = await loadVerifiedFile(sideUrl.href, profile.side, progress, verifyBuild);
+  const module = await prepareProgram({ kind, core: core.bytes, side: side.bytes });
+  return { module, size: core.bytes.length + side.bytes.length, build: core.build };
 }
 
 async function loadVerifiedTools(url: string, progress: (text: string) => void): Promise<{ module: WebAssembly.Module; size: number; build: string }> {
   const { bytes, build } = await loadVerifiedFile(url, "bun-tools.wasm", progress);
   if (build === null) throw new Error("bun-tools.wasm: build manifest fingerprint is missing");
-  return { module: await WebAssembly.compile(bytes), size: bytes.length, build };
+  return { module: await prepareProgram({ kind: "single", core: bytes }), size: bytes.length, build };
 }
 
 async function loadVerifiedFile(url: string, name: string, progress: (text: string) => void, verifyBuild = true): Promise<{ bytes: Uint8Array<ArrayBuffer>; build: string | null }> {

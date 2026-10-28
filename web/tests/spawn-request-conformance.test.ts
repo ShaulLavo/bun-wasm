@@ -58,3 +58,9 @@ test("integral number lexemes in descriptor bindings are accepted as sent", () =
   expect(host.spawn(raw)).toBe(77);
   expect(host.decoded[0]!.fds.map(({ child, parent }) => [Object.is(child, -0) ? 0 : child, Object.is(parent, -0) ? 0 : parent])).toEqual([[1, 1], [0, 0]]);
 });
+
+test("spawn JSON rejects a relative cwd before service lookup", () => {
+  const host = decoder();
+  expect(host.spawn(JSON.stringify({ executable: "bun", argv: [], env: {}, cwd: "relative", job: 42, fds: [] }))).toBe(-28);
+  expect(host.decoded).toEqual([]);
+});

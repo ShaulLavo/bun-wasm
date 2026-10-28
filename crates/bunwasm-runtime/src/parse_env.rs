@@ -1,6 +1,6 @@
 //! Node's string-only dotenv API over Bun's existing Rust parser.
 
-use crate::engine::{NativeError, NativeResult, Val};
+use crate::data::{NativeError, NativeResult, Val};
 use crate::natives::Table;
 
 pub fn install(table: &mut Table) {
@@ -71,9 +71,9 @@ mod tests {
         let (name, function) = &table.functions[0];
         assert_eq!(*name, "parseEnv");
         assert_eq!(
-            function(crate::engine::Args(&[Val::Str("A=1".into())])).unwrap(),
+            function(crate::data::Args(&[Val::Str("A=1".into())])).unwrap(),
             parse("A=1").unwrap()
         );
-        assert!(function(crate::engine::Args(&[Val::Null])).is_err());
+        assert!(function(crate::data::Args(&[Val::Null])).is_err());
     }
 }

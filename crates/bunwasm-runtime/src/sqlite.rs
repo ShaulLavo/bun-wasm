@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use libsqlite3_sys as ffi;
 
-use crate::engine::{Args, NativeError, NativeResult, Val};
+use crate::data::{Args, NativeError, NativeResult, Val};
 use crate::natives::Table;
 
 type Result<T> = std::result::Result<T, NativeError>;

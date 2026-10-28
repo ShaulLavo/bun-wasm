@@ -10,11 +10,10 @@ name = "bun"
 path = "src/main.rs"
 
 [features]
-default = ["engine-quickjs", "bun-transpiler", "bun-build"]
-# The JS engine: QuickJS-ng (bun.wasm) or Bun's JavaScriptCore (bun-jsc.wasm,
-# scripts/build-bun-jsc.sh). Pick exactly one.
-engine-quickjs = ["bunwasm-runtime/engine-split"]
-engine-jsc = ["bunwasm-runtime/engine-jsc"]
+default = ["engine-split", "bun-transpiler", "bun-build"]
+# The command core is engine-independent; QuickJS or JavaScriptCore is linked
+# as the selected side program by its producer.
+engine-split = ["bunwasm-runtime/engine-split"]
 # The host's JS engine (bun-browser.wasm, scripts/build-bun-browser.sh).
 engine-host = ["bunwasm-runtime/engine-host", "bun-transpiler"]
 # Bun's real transpiler (crates/bunwasm-transpiler) for .ts/.tsx/.jsx/.toml.

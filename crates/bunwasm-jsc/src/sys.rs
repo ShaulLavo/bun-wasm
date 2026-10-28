@@ -242,6 +242,7 @@ unsafe extern "C" {
     pub fn bunjsc_enter(ctx: JSContextRef);
     pub fn bunjsc_drain_microtasks(ctx: JSContextRef) -> bool;
     pub fn bunjsc_collect_garbage(ctx: JSContextRef);
+    pub fn bunjsc_report_unhandled_error(ctx: JSContextRef, value: JSValueRef);
     pub fn bunjsc_is_error(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_is_detachable_buffer(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_detach_buffer(ctx: JSContextRef, value: JSValueRef);
