@@ -18,13 +18,22 @@ per-write logic of Bun's `src/runtime/node/zlib/Native{Zlib,Brotli,Zstd}.rs`
 caller-sized buffer, gzip member and UNZIP detection, dictionary loading, and
 Node's error messages, codes and errnos. Local change: Node's `unexpected end of
 file` (`Z_BUF_ERROR`) for an unfinished Zstd frame at `ZSTD_e_end`, which Bun
-omits (it returns empty output). `WebCoder` ports
+omits (it returns empty output). Local change: a write's output buffer starts at
+1 MiB and doubles while the codec fills it, up to the caller's `chunkSize`, instead
+of being allocated at full size. Node and Bun write into one JavaScript buffer per
+stream; here every write would allocate it in linear memory, and webpack's cache
+streams ask for 100 MiB. A full piece leads to another codec call, as node:zlib does
+at a full buffer, so a flush that ends exactly on a piece boundary can add the empty
+block Node adds at a chunk boundary, and a large Zstd `ZSTD_e_end` write no longer
+has room for Zstd's single-pass bound, so it compresses block by block: the same
+content in slightly different bytes. Writes of up to 1 MiB make one call as before;
+zlib's `Z_BLOCK`/`Z_TREES` and Brotli metadata always do. `WebCoder` ports
 `src/runtime/webcore/CompressionStreamCoder.rs`: steps bounded by
 `max(highWaterMark, chunk length)`, trailing-junk and Zstd frame checks, and the
 error mapping. Its off-thread path and native sink delivery are not ported. The
 contexts call Bun's unchanged FFI declarations in `vendor/bun/src/zstd/lib.rs` and
 `vendor/bun/src/brotli_sys/`, and zlib through the original declarations in
-`src/zlib_ffi.rs`. Output bytes therefore match Bun's; Node's Chromium zlib differs
+`src/zlib_ffi.rs`. Output bytes for writes of up to 1 MiB therefore match Bun's; Node's Chromium zlib differs
 from both on larger inputs and after full flushes, while headers, flush markers and
 small-input bytes match all three (tests/fixtures/compression-review).
 
