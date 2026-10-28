@@ -3,7 +3,8 @@ import { NetHost as RuntimeNetHost } from "waffle/browser/net/host";
 import { AGAIN, BADF, Kind, type NetRequest, UNSUPPORTED } from "waffle/browser/net/protocol";
 import { createRing, RingWriter } from "waffle/browser/net/ring";
 import { NetHost } from "../src/net/host";
-import { NetHelper } from "../src/net/helper";
+import { NetHelper, createBunNetworkHelper, dispatchBunNetwork } from "../src/net/helper";
+import { processRuntimeFixture } from "./process-runtime-fixture";
 
 const encode = (value: string) => new TextEncoder().encode(value);
 const decode = (value: Uint8Array) => new TextDecoder().decode(value);
@@ -177,8 +178,8 @@ test("Bun browser-native names and capability flags remain in the adapter", () =
   expect(Object.keys(net.caps).some(name => name.startsWith("proc_") || name.startsWith("child_") || name === "spawn")).toBe(false);
   expect(net.caps.fetch).toBe(true);
   expect(net.caps.connect).toBe(true);
-  expect(net.caps.lookup_start).toBe(false);
-  expect(net.caps.lookup_head).toBe(false);
+  expect(net.caps.lookup_start).toBe(true);
+  expect(net.caps.lookup_head).toBe(true);
   expect(net.natives.hostLookup).toBeUndefined();
   expect(typeof net.onNews).toBe("function");
 });
@@ -212,4 +213,76 @@ test("Bun helper keeps installer cache policy outside the generic runtime", asyn
     if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches);
     else Reflect.deleteProperty(globalThis, "caches");
   }
+});
+
+
+test("paired DNS slots share runtime lookup handles, pending state and sized reads after memory growth", async () => {
+  const runtime = processRuntimeFixture({});
+  const ring = createRing();
+  const helper = createBunNetworkHelper(await runtime.network(), ring);
+  const host = new NetHost(ring, req => dispatchBunNetwork(helper, { type: "net", req }), undefined, { shared: true });
+  const memory = new WebAssembly.Memory({ initial: 1, maximum: 3 });
+  host.attach(memory);
+  const slots = host.slots();
+  const hostname = encode("localhost");
+  new Uint8Array(memory.buffer).set(hostname, 123);
+  try {
+    const handle = slots.lookup_start!(123, hostname.length, 4, 0);
+    expect(handle).toBeGreaterThan(0);
+    expect(slots.lookup_head!(handle, 1000, 0)).toBe(AGAIN);
+    await until(() => slots.lookup_head!(handle, 1000, 0) !== AGAIN);
+    memory.grow(1);
+    const bytes = new Uint8Array(memory.buffer);
+    const length = slots.lookup_head!(handle, 65536, 0);
+    expect(length).toBeGreaterThan(0);
+    bytes.fill(0x7f, 65536, 65536 + length);
+    expect(slots.lookup_head!(handle, 65536, length - 1)).toBe(length);
+    expect(bytes.subarray(65536, 65536 + length)).toEqual(new Uint8Array(length).fill(0x7f));
+    expect(slots.lookup_head!(handle, 65536, length)).toBe(length);
+    expect(JSON.parse(decode(bytes.subarray(65536, 65536 + length)))).toEqual([{ address: "127.0.0.1", family: 4 }]);
+    expect(slots.lookup_head!(handle, 65536, length)).toBe(length);
+    expect(slots.close!(handle)).toBe(0);
+    expect(slots.lookup_head!(handle, 65536, length)).toBe(BADF);
+    expect(slots.lookup_start!(123, hostname.length, 7, 0)).toBe(UNSUPPORTED);
+  } finally { helper.dispose(); await runtime.dispose(); }
+});
+
+test("paired DNS preserves runtime errors and suppresses a closed pending lookup", async () => {
+  const runtime = processRuntimeFixture({});
+  const ring = createRing();
+  const helper = createBunNetworkHelper(await runtime.network(), ring);
+  const host = new NetHost(ring, req => dispatchBunNetwork(helper, { type: "net", req }));
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  host.attach(memory);
+  const slots = host.slots();
+  const hostname = encode("unsupported.example");
+  const bytes = new Uint8Array(memory.buffer);
+  bytes.set(hostname, 16);
+  try {
+    const failed = slots.lookup_start!(16, hostname.length, 0, 0);
+    await until(() => slots.lookup_head!(failed, 1000, 0) !== AGAIN);
+    expect(slots.lookup_head!(failed, 1000, 0)).toBe(-1);
+    const size = slots.error!(failed, 1000, 4096);
+    expect(JSON.parse(decode(bytes.subarray(1000, 1000 + size)))).toMatchObject({ code: "ENOTSUP", syscall: "getaddrinfo", hostname: "unsupported.example" });
+    expect(slots.close!(failed)).toBe(0);
+    const cancelled = slots.lookup_start!(16, hostname.length, 0, 0);
+    expect(slots.close!(cancelled)).toBe(0);
+    await Bun.sleep(0);
+    expect(slots.lookup_head!(cancelled, 1000, 4096)).toBe(BADF);
+    expect(slots.error!(cancelled, 1000, 4096)).toBe(BADF);
+  } finally { helper.dispose(); await runtime.dispose(); }
+});
+
+test("network request guard accepts lookup options and refuses malformed lookup messages", async () => {
+  const runtime = processRuntimeFixture({});
+  const helper = createBunNetworkHelper(await runtime.network(), createRing());
+  try {
+    for (const req of [
+      { type: "lookup", id: 1, hostname: 1, options: {} },
+      { type: "lookup", id: 1, hostname: "localhost", options: null },
+      { type: "lookup", id: 1, hostname: "localhost", options: { family: 7 } },
+      { type: "lookup", id: 1, hostname: "localhost", options: { hints: NaN } },
+    ]) expect(() => dispatchBunNetwork(helper, { type: "net", req })).toThrow("Invalid Bun network request");
+    expect(() => dispatchBunNetwork(helper, { type: "net", req: { type: "lookup", id: 1, hostname: "localhost", options: { family: 4, hints: 0 } } })).not.toThrow();
+  } finally { helper.dispose(); await runtime.dispose(); }
 });

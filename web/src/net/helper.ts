@@ -49,11 +49,21 @@ function isNetRequest(value: unknown): value is NetRequest {
     case "close":
     case "shutdown": return true;
     case "fetch": return validFetch(value);
+    case "lookup": return validLookup(value);
     default: return false;
   }
 }
 const validPort = (value: object): boolean => "port" in value && typeof value.port === "number" && Number.isInteger(value.port) && value.port >= 0 && value.port <= 65535;
 const validReply = (value: object): boolean => "reply" in value && value.reply instanceof SharedArrayBuffer && value.reply.byteLength === 12;
+function validLookup(value: object): boolean {
+  if (!("hostname" in value) || typeof value.hostname !== "string" || !("options" in value)) return false;
+  const options = value.options;
+  if (!options || typeof options !== "object") return false;
+  const family = "family" in options ? options.family : undefined;
+  const hints = "hints" in options ? options.hints : undefined;
+  return (family === undefined || family === 0 || family === 4 || family === 6)
+    && (hints === undefined || typeof hints === "number" && Number.isSafeInteger(hints));
+}
 function validFetch(value: object): boolean {
   if (!("method" in value) || typeof value.method !== "string" || !("url" in value) || typeof value.url !== "string") return false;
   if (!("body" in value) || value.body !== null && !(value.body instanceof Uint8Array)) return false;
