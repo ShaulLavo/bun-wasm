@@ -3,6 +3,9 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { guestBuilds, hash, type GuestBuild, type SourceOptions } from "../../scripts/guest-source-manifest.ts";
 import type { GuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
+import waffleRelease from "../../scripts/waffle-release-inputs.json";
+
+export const receiptCliSources = ["guest-build-receipt.ts", "guest-source-manifest.ts", "waffle-release-inputs.ts", "waffle-release-inputs.json"];
 
 export const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild, quickjs = wasm): GuestBuildReceipt {
@@ -82,8 +85,8 @@ type CliFixture = { root: string; artifact: string; cli: string; env: NodeJS.Pro
 export async function withCliReceiptFixture(action: (fixture: CliFixture) => Promise<void>) {
   await withReceiptFixture(async (options, artifact) => {
     const root = options.repository;
-    for (const name of ["guest-build-receipt.ts", "guest-source-manifest.ts"]) await copyFile(new URL(`../../scripts/${name}`, import.meta.url), join(root, "scripts", name));
-    await writeFile(join(root, ".gitignore"), (await readFile(join(root, ".gitignore"), "utf8")) + "node_modules/\n");
+    for (const name of receiptCliSources) await copyFile(new URL(`../../scripts/${name}`, import.meta.url), join(root, "scripts", name));
+    await writeFile(join(root, ".gitignore"), (await readFile(join(root, ".gitignore"), "utf8")) + "node_modules/\nnative-tools/\n");
     fixtureGit(root, "add", "scripts", ".gitignore");
     fixtureGit(root, "commit", "-m", "synthetic CLI probes, no compilation");
     const bin = join(options.sdk, "bin");
@@ -98,7 +101,13 @@ export async function withCliReceiptFixture(action: (fixture: CliFixture) => Pro
     for (const name of ["cargo", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"]) await symlink(join(root, "fake-tool"), join(bin, name));
     await mkdir(join(root, "node_modules"));
     await symlink(options.waffle, join(root, "node_modules/waffle"));
-    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, BUN_WASM_SYSROOT: options.sysroot, WASI_SDK_PATH: options.sdk, WASI_SDK: options.sdk };
+    const nativeTools = join(root, "native-tools");
+    const nativeWaffle = join(nativeTools, "waffle-native", waffleRelease.sourceCommit, waffleRelease.packagePath);
+    for (const path of Object.keys(waffleRelease.files)) {
+      await mkdir(dirname(join(nativeWaffle, path)), { recursive: true });
+      await copyFile(join(options.waffle, path), join(nativeWaffle, path));
+    }
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, BUN_WASM_SYSROOT: options.sysroot, WASM_TOOLS: nativeTools, WASI_SDK_PATH: options.sdk, WASI_SDK: options.sdk };
     for (const name of ["BUN_CODEGEN_DIR", "BUNWASM_JS_OVERRIDE_DIR", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_TARGET_WASM32_WASIP1_LINKER"]) delete env[name];
     await action({ root, artifact, cli: join(root, "scripts/guest-build-receipt.ts"), env, node, rustc, linker });
   });
