@@ -222,13 +222,7 @@ fn walk(
         if !matches!(entry(&path, dirs)?, Entry::Directory) {
             return Err(NOTDIR);
         }
-        match component.as_str() {
-            ".." => {
-                path.pop();
-            }
-            "" | "." => {}
-            part => path.push(part),
-        }
+        push_component(&mut path, &component);
         if let Entry::Symlink(target) = entry(&path, dirs)? {
             links += 1;
             follow(&mut path, &target, &mut remaining, links)?;
@@ -240,15 +234,18 @@ fn walk(
     // Only after walking every original component, so missing/.. still fails.
     let mut lexical = PathBuf::from("/");
     for component in absolute.split('/') {
-        match component {
-            ".." => {
-                lexical.pop();
-            }
-            "" | "." => {}
-            part => lexical.push(part),
-        }
+        push_component(&mut lexical, component);
     }
     Ok((path, lexical))
+}
+
+/// Apply one path component: `..` pops, empty and `.` are no-ops, anything else is pushed.
+fn push_component(path: &mut PathBuf, component: &str) {
+    match component {
+        ".." => drop(path.pop()),
+        "" | "." => {}
+        part => path.push(part),
+    }
 }
 
 /// Replace a symlink's own component with its target's components, relative to its directory.
