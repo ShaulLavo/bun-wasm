@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io::Write;
 use std::rc::Rc;
 
 use crate::client::CoreClient;
@@ -57,7 +58,8 @@ impl<E: Engine> Core<E> {
     }
     pub(crate) fn write_error(&self, text: &str) {
         self.flush();
-        eprint!("{text}");
+        // A closed stderr must not replace the primary failure with a panic.
+        let _ = std::io::stderr().lock().write_all(text.as_bytes());
     }
     pub(crate) fn exit(&self, code: i32) -> ! {
         self.client.exit(code)
