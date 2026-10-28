@@ -29,8 +29,10 @@ async function sourceFixture(root: string, child: boolean) {
   const repository = join(root, child ? "monorepo # source" : "historical # source");
   const packageRoot = child ? join(repository, "packages/waffle") : repository;
   await mkdir(join(packageRoot, "tooling"), { recursive: true });
-  await Bun.write(join(repository, "package.json"), JSON.stringify({ name: "waffle-workspace", private: true }));
-  await Bun.write(join(packageRoot, "package.json"), JSON.stringify({ name: "waffle", version: release.version }));
+  await Bun.write(join(repository, "package.json"), JSON.stringify({ name: "waffle-monorepo", private: true, workspaces: ["packages/*"] }));
+  await Bun.write(join(packageRoot, "package.json"), JSON.stringify({ name: "waffle", version: release.version, private: child }));
+  await Bun.write(join(packageRoot, "scripts/build-wasi-libc.sh"), "selected child builder");
+  await Bun.write(join(packageRoot, "patches/wasi-libc/preopen-scan.patch"), "selected child patch");
   await Bun.write(join(packageRoot, "prepare.ts"), 'await Bun.write("prepared.txt", "canonical package root");');
   await Bun.write(join(packageRoot, "tooling/build-network.ts"), 'if (process.env.WAFFLE_NETWORK_PREBUILT !== "1" || !await Bun.file("browser/net/network.wasm").exists()) throw new Error("Unverified network");');
   git(repository, "init", "--quiet");
@@ -44,18 +46,23 @@ async function checkSourceVariant(root: string, child: boolean, prepared: string
   expect(waffleSourceRoot(f.repository, f.commit)).toBe(child ? "packages/waffle" : "");
   if (child) expect(() => waffleSourceRoot(f.repository, f.commit, true)).toThrow("not an installable Waffle peer");
   else expect(waffleSourceRoot(f.repository, f.commit, true)).toBe("");
+  await Bun.write(join(f.packageRoot, "package.json"), JSON.stringify({ name: "uncommitted-wrong-package" }));
   const destination = join(root, child ? "child # installed" : "old # installed");
   await stageWaffle(flow, { repository: f.repository, commit: f.commit, archive: join(root, "source # archive.tar"), destination, prepared, env: process.env });
   expect(await readFile(join(destination, "prepared.txt"), "utf8")).toBe("canonical package root");
   expect(await Bun.file(join(destination, "packages/waffle/package.json")).exists()).toBe(false);
+  expect(await Bun.file(join(destination, "package.json")).json()).toEqual({ name: "waffle", version: release.version, private: child });
+  expect(await readFile(join(destination, "scripts/build-wasi-libc.sh"), "utf8")).toBe("selected child builder");
+  expect(await readFile(join(destination, "patches/wasi-libc/preopen-scan.patch"), "utf8")).toBe("selected child patch");
   await Bun.write(join(f.packageRoot, "package.json"), JSON.stringify({ name: "wrong-package" }));
   git(f.repository, "add", ".");
   git(f.repository, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "invalid package");
   expect(() => waffleSourceRoot(f.repository, git(f.repository, "rev-parse", "HEAD"))).toThrow();
   expect(() => waffleSourceRoot(f.repository, "f".repeat(40))).toThrow("Missing Waffle source manifest");
+  expect(waffleSourceRoot(f.repository, f.commit)).toBe(child ? "packages/waffle" : "");
 }
 
-test("real Git staging selects historical roots and monorepo children with spaces and hashes", async () => {
+test("real Git staging selects public historical roots and private monorepo children at the exact commit", async () => {
   const root = await mkdtemp(join(tmpdir(), "bw-sp-source-"));
   const flow = new PreparationFlow();
   try {
@@ -77,6 +84,32 @@ test("a public monorepo root cannot impersonate the historical package root", as
     git(f.repository, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "public workspace root");
     const commit = git(f.repository, "rev-parse", "HEAD");
     expect(waffleSourceRoot(f.repository, commit)).toBe("packages/waffle");
+    expect(() => waffleSourceRoot(f.repository, commit, true)).toThrow("not an installable Waffle peer");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a child workspace named waffle is not a source package", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bw-sp-child-workspace-"));
+  try {
+    const f = await sourceFixture(root, true);
+    await Bun.write(join(f.packageRoot, "package.json"), JSON.stringify({ name: "waffle", workspaces: ["packages/*"] }));
+    git(f.repository, "add", ".");
+    git(f.repository, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "child workspace");
+    const commit = git(f.repository, "rev-parse", "HEAD");
+    expect(() => waffleSourceRoot(f.repository, commit)).toThrow("Invalid Waffle source package");
+    expect(() => waffleSourceRoot(f.repository, commit, true)).toThrow("not an installable Waffle peer");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a private repository root is not an installable peer or a child source package", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bw-sp-private-root-"));
+  try {
+    const f = await sourceFixture(root, false);
+    await Bun.write(join(f.packageRoot, "package.json"), JSON.stringify({ name: "waffle", private: true }));
+    git(f.repository, "add", ".");
+    git(f.repository, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "private root");
+    const commit = git(f.repository, "rev-parse", "HEAD");
+    expect(() => waffleSourceRoot(f.repository, commit)).toThrow("Missing Waffle source manifest");
     expect(() => waffleSourceRoot(f.repository, commit, true)).toThrow("not an installable Waffle peer");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
