@@ -2,7 +2,7 @@
 
 Class **Port**, with an original local build wrapper and native runtime adapter. The libc input is
 not copied into this repository. The original `scripts/waffle-release-inputs.ts` adapter binds
-runtime archive `waffle-v0.0.90` to reviewed source `3767f358bc5e8e40fc1dc361c5611b60f023c569`.
+runtime archive `waffle-v0.0.91` to reviewed source `62d08fcb8091bc4d31220f8250b943ea858d6e15`.
 The checked `scripts/waffle-release-inputs.json` records its HTTPS archive URL, SHA-256/size,
 source commit, `packages/waffle` directory and the hashes of its package metadata, libc builder
 and patch. The adapter verifies the archive and installed builder, then caches those three

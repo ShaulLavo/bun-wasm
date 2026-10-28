@@ -14,7 +14,7 @@
         "@xterm/addon-fit": "^0.11.0",
         "@xterm/xterm": "^6.0.0",
         "codemirror": "^6.0.2",
-        "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.90/waffle-0.0.90.tgz",
+        "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.91/waffle-0.0.91.tgz",
       },
       "devDependencies": {
         "@types/bun": "^1.4.3",
@@ -128,7 +128,7 @@
 
     "w3c-keyname": ["w3c-keyname@2.2.8", "", {}, "sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ=="],
 
-    "waffle": ["waffle@https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.90/waffle-0.0.90.tgz", { "hasInstallScript": true }, "sha512-bmv0bD+UljPIBY/TFm+So5+WgnlhQOGndrkgrzHlZruJ1ACawZUZQYgknLgrjdN6kakrCfXy1fm2vc7EpiVLUg=="],
+    "waffle": ["waffle@https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.91/waffle-0.0.91.tgz", { "hasInstallScript": true }, "sha512-X7joZbA9WEylRTt+3i4Ff0xBhSGVvOtIvXpHtth0i9WgT48Ivv3Apunn4l/BJ1ZNxenMdGZuGPLLadu9YPV1jw=="],
 
     "@types/node/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
   }
