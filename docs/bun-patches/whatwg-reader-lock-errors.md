@@ -19,6 +19,14 @@ or read scheduling.
 `scripts/vendor-streams.py` regenerates the bundled artifact and retains the
 upstream MIT license under `third_party/streams/`.
 
+`scripts/stream-polyfill-node-hooks.ts` also accepts Bun's `type: "direct"`. The type conversion allows
+`"direct"` besides `"bytes"`, and the `ReadableStream` constructor's default
+controller setup receives the runtime's `direct_stream` source, a zero
+high-water mark and unit chunk sizes for that type. Strategy and dictionary
+conversion order are unchanged. Each of the three rewrites must apply exactly
+once. The generated factory takes the runtime's `internal` to load that module;
+see [native-host direct streams](native-direct-stream.md).
+
 
 ## Classification
 
@@ -26,5 +34,6 @@ upstream MIT license under `third_party/streams/`.
 | --- | --- | --- |
 | [Embedded WHATWG Streams](#whatwg-reader-lock-errors) | Port | Pinned portable streams with Bun reader-lock error text. |
 | [Streams AST hooks](#whatwg-reader-lock-errors) | Host feature | Original generator adapter preserves Node completion hooks and error codes. |
+| [Streams direct type](#whatwg-reader-lock-errors) | Host feature | Original generator adapter gives `type: "direct"` the runtime's direct source. |
 
 [Ledger scope and pinned revisions](scope.md).

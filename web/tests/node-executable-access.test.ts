@@ -85,10 +85,13 @@ test("Node admission follows guest symlinks and rechecks live files and registra
   try {
     const bin = f.broker.preopens["/bin"]!;
     symlinkSync("/bin/node", join(bin, "alias"));
-    // Canonical-target admission does not register the link's distinct path.
+    expect(await f.query("/bin/alias")).toBe(0);
+    expect(await f.spawn("/bin/alias")).toMatchObject({ status: 3 });
+    expect(await f.query("node", "/bin")).toBe(0);
+    f.broker.registry.unregister("/bin/node");
     expect(await f.query("/bin/alias")).toBe(-2);
     expect(await f.spawn("/bin/alias")).toMatchObject({ error: "EACCES" });
-    expect(await f.query("node", "/bin")).toBe(0);
+    f.broker.registry.register("/bin/node", { module, adapter: "bun" });
     f.broker.registry.unregister("/bin/bun");
     expect(await f.query("/bin/bun")).toBe(-2);
     expect(await f.spawn("/bin/bun")).toMatchObject({ error: "EACCES" });

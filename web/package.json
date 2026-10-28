@@ -29,9 +29,9 @@
     "@codemirror/view": "^6.43.14",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#6dd5852d1926bc3b701859d644104519154f4da5",
+    "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#18cb6af0e5fbbddad5b62843c04a1256e6a1c7a3",
     "codemirror": "^6.0.2",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.91/waffle-0.0.91.tgz"
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.93/waffle-0.0.93.tgz"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

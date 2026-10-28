@@ -57,30 +57,46 @@ pub fn embed(manifest: &Path, out: &Path) {
     fs::create_dir_all(out.join("runtime-js")).expect("create transpiled runtime directory");
     transpile_batch(&ordinary, &transpiler, false);
     transpile_batch(&compact, &transpiler, true);
-    let runtime = manifest.join("../../vendor/bun/src/runtime.js");
-    let generator = manifest.join("../../scripts/generate-bun-wrap.ts");
-    println!("cargo:rerun-if-changed={}", runtime.display());
+    generate(
+        &mut table,
+        "bun_wrap",
+        &manifest.join("../../scripts/generate-bun-wrap.ts"),
+        &manifest.join("../../vendor/bun/src/runtime.js"),
+        out,
+    );
+    generate(
+        &mut table,
+        "direct_stream",
+        &manifest.join("../../scripts/generate-direct-stream.ts"),
+        &manifest.join("../../web/src/native-direct-stream.ts"),
+        out,
+    );
+    table.push_str("];\n");
+    fs::write(out.join("polyfills.rs"), table).unwrap();
+}
+
+/// Adds runtime module `name`, written by a Node generator script from `input`.
+fn generate(table: &mut String, name: &str, generator: &Path, input: &Path, out: &Path) {
+    println!("cargo:rerun-if-changed={}", input.display());
     println!("cargo:rerun-if-changed={}", generator.display());
-    let destination = out.join("bun-wrap.js");
-    eprintln!("runtime-js phase=wrap source={}", runtime.display());
+    let destination = out.join(format!("{name}.js"));
+    eprintln!("runtime-js phase={name} source={}", input.display());
     let output = Command::new("node")
         .arg(generator)
-        .arg(runtime)
+        .arg(input)
         .arg(&destination)
         .output()
-        .expect("generate bun:wrap");
+        .unwrap_or_else(|error| panic!("generate {name}: {error}"));
     assert!(
         output.status.success(),
-        "runtime-js phase=wrap status={} stderr={}",
+        "runtime-js phase={name} status={} stderr={}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
     table.push_str(&format!(
-        "    (\"bun_wrap\", include_str!({:?})),\n",
+        "    ({name:?}, include_str!({:?})),\n",
         destination.display().to_string()
     ));
-    table.push_str("];\n");
-    fs::write(out.join("polyfills.rs"), table).unwrap();
 }
 
 fn transpile_batch(files: &[(PathBuf, PathBuf)], script: &Path, compact: bool) {

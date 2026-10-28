@@ -3,6 +3,7 @@
 | Class | Local source | Upstream contract | Change |
 | --- | --- | --- | --- |
 | Host feature | `web/src/native-direct-stream.ts`, constructor dispatch in `native-stream-state.ts` | Bun direct streams and ReactDOM 19.1.1's Bun renderer | Original adapter from measured native behavior. No upstream implementation copied. |
+| Host feature | Runtime module `direct_stream`, generated from `web/src/native-direct-stream.ts` by `scripts/generate-direct-stream.ts` | Same | The same `directSource` behind the portable engines' streams polyfill. |
 
 Bun is pinned to `9510e74152073d850a18758ca41114d8f214ffa6`.
 Its direct controller lives in `src/jsc/bindings/webcore/streams/JSDirectStreamController.cpp`
@@ -29,3 +30,15 @@ and exact React Unicode, large output, Suspense, and cancellation controls were
 retained in the October 26, 2026 product-matrix report. Browser tests exercise
 this adapter through the real runtime factory loader. They do not establish
 an application pass or qualify a guest artifact.
+
+QuickJS and JSC in wasm use the generated streams polyfill instead of a native
+`ReadableStream`, and rejected `type: "direct"`. Production TanStack Start servers
+built with Nitro's `bun` preset failed at ReactDOM's first render. The build
+writes the host's `directSource` into the runtime module `direct_stream`. The
+polyfill constructor uses it with its own default controller (see
+[WHATWG reader lock errors](whatwg-reader-lock-errors.md)), so both hosts share
+one implementation. The polyfill has already converted the strategy and reads
+`pull` and `cancel` during its dictionary conversion; `directSource` reads
+`pull`, `cancel` and `close` once more when it is created. `scripts/direct-stream.test.ts`
+runs the generated polyfill and module under Bun for writes, pressure, cancel,
+producer errors and the other stream types.
