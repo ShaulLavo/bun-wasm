@@ -3,8 +3,9 @@
 Class **Port**. `third_party/wasmi` copies the published Wasmi 0.46.0 crate,
 upstream `crates/wasmi` at revision `50ac76771d631f642e8c4c61bf44c99546024461`
 from `wasmi-labs/wasmi`. The MIT and Apache license files come from that revision.
-Cargo uses this local crate through `[patch.crates-io]`; Wasmi Core and its other
-dependencies remain published crates.
+Cargo uses this local crate through `[patch.crates-io]`. Wasmi Core is a local copy too
+([exact memory growth](wasmi-core-exact-memory-growth.md)); its other dependencies remain
+published crates.
 
 Local changes are limited to these files:
 
