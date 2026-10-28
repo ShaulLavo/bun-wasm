@@ -146,6 +146,8 @@ else if (command === "validate" && path && rest.length === 0) {
     await executable(join(bin, "wasm-tools"), `exec ${quote(process.execPath)} ${quote(validator)} "$@"`);
     await mkdir(join(root, "node_modules"));
     await symlink(options.waffle, join(root, "node_modules/waffle"));
+    await mkdir(join(root, "private/toolchain/lib/rustlib/src/rust/library"), { recursive: true });
+    await copyFile(join(options.rustSourceLib!, "Cargo.toml"), join(root, "private/toolchain/lib/rustlib/src/rust/library/Cargo.toml"));
     const nativeTools = join(root, "native-tools");
     const nativeWaffle = join(nativeTools, "waffle-native", waffleRelease.sourceCommit, waffleRelease.packagePath);
     for (const path of Object.keys(waffleRelease.files)) {
@@ -154,7 +156,7 @@ else if (command === "validate" && path && rest.length === 0) {
     }
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}`, BUN_WASM_SYSROOT: options.sysroot, WASM_TOOLS: nativeTools, WASI_SDK_PATH: options.sdk, WASI_SDK: options.sdk };
     for (const name of ["GUEST_CARGO", "BUN_CODEGEN_DIR", "BUNWASM_JS_OVERRIDE_DIR", "RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "CARGO_TARGET_WASM32_WASIP1_LINKER"]) delete env[name];
-    await action({ root, artifact, cli: join(root, "scripts/guest-build-receipt.ts"), env, node, rustc, linker });
+    return await action({ root, artifact, cli: join(root, "scripts/guest-build-receipt.ts"), env, node, rustc, linker });
   });
 }
 
