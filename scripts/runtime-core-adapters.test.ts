@@ -102,8 +102,9 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
 }
 
 // Hashes pin the original emitted syntax; stack descriptors and the WASI constants hook have explicit deltas.
+// The stack_trace hash also covers the call-site predicates React's stack collector calls.
 const originalTokens = {
-  stack_trace: "1c0bfeba4929071f482d8549bfeee92ddea666bc8fda938c6cd50eaabb468f0a",
+  stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",
   bun_builtins: "58e3de8a4232bc992b2b483d817198d6f020bedafc8220c3a1903d4f360f3bbe",
 };
 const originalEmbeddedBytes = { stack_trace: 4330, bun_builtins: 4092 };
