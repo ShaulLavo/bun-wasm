@@ -2,7 +2,7 @@ import type { FeatureProbe, ProductCheck, SourceEdit } from "./product-types";
 
 interface Locator {
   filter(options: { hasText: string }): Locator;
-  waitFor(options: { timeout: number }): Promise<void>;
+  waitFor(options: { timeout: number; state?: "hidden" }): Promise<void>;
   click(options: { timeout: number }): Promise<void>;
   count(): Promise<number>;
 }
@@ -241,13 +241,25 @@ async function hotEdit(page: ProductPage, source: GuestSource, selector: string,
   if (await page.locator(selector).filter({ hasText: edit.replacement }).count()) throw new Error("HMR replacement text is already visible before the edit");
   await traffic.beginEdit();
   const before = await traffic.count();
+  let evidence: readonly TrafficEvidence[];
   try {
     await source.write(edit.path, original.replace(edit.search, edit.replacement));
     await page.locator(selector).filter({ hasText: edit.replacement }).waitFor({ timeout: Math.max(1, deadline - Date.now()) });
-    const evidence = await editEvidence(traffic, before, deadline);
+    evidence = await editEvidence(traffic, before, deadline);
     if (!evidence.length) throw new Error("Edited content appeared without a development WebSocket update (recognized Vite or Next HMR message)");
-    return `Guest source edit rendered ${JSON.stringify(edit.replacement)} without a manual page reload after ${evidence.map(item => `${item.framework}:${item.event}`).join(", ")}`;
-  } finally { await source.write(edit.path, original); }
+  } catch (error) {
+    try { await source.write(edit.path, original); }
+    catch { /* Cleanup must not replace the original forward failure. */ }
+    throw error;
+  }
+  await traffic.beginEdit();
+  const rollback = await traffic.count();
+  await source.write(edit.path, original);
+  await page.locator(selector).filter({ hasText: edit.replacement }).waitFor({ state: "hidden", timeout: Math.max(1, deadline - Date.now()) });
+  await page.locator(selector).filter({ hasText: edit.search }).waitFor({ timeout: Math.max(1, deadline - Date.now()) });
+  const restored = await editEvidence(traffic, rollback, deadline);
+  if (!restored.length) throw new Error("Restored source appeared without a development WebSocket update (recognized Vite or Next HMR message)");
+  return `Guest source edit rendered ${JSON.stringify(edit.replacement)} without a manual page reload after ${evidence.map(item => `${item.framework}:${item.event}`).join(", ")}`;
 }
 
 async function featureProbe(page: ProductPage, base: string, probe: FeatureProbe, timeout: number): Promise<string> {

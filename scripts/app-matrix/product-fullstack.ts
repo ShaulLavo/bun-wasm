@@ -311,7 +311,7 @@ function Root() {
   return <html lang="en"><head><meta charSet="utf-8" /><HeadContent /></head><body><Outlet /><Scripts /></body></html>;
 }
 `,
-      "src/routes/index.tsx": `import { useState } from 'react';
+      "src/routes/index.tsx": `import { useEffect, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 export const Route = createFileRoute('/')({
   loader: ({ location }) => ({ value: new URLSearchParams(location.searchStr).get('value') ?? 'initial' }),
@@ -320,13 +320,15 @@ export const Route = createFileRoute('/')({
 function Home() {
   const data = Route.useLoaderData();
   const [count, setCount] = useState(0);
-  return <main><h1 id="product-marker">${productMarker}</h1><p id="server-value">{data.value}</p><button id="increment" onClick={() => setCount(count + 1)}>Increment</button><output id="count">{count}</output></main>;
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => { setHydrated(true); }, []);
+  return <main><h1 id="product-marker" data-hydrated={hydrated}>${productMarker}</h1><p id="server-value">{data.value}</p><button id="increment" disabled={!hydrated} onClick={() => setCount(count + 1)}>Increment</button><output id="count">{count}</output></main>;
 }
 `,
       "start.ts": productionLauncher("./.output/server/index.mjs"),
     },
     commands: lifecycle({
-      source: "src/routes/index.tsx", dev: [viteBin, "--host", "127.0.0.1", "--port", "{port}", "--strictPort"],
+      source: "src/routes/index.tsx", selector: '#product-marker[data-hydrated="true"]', dev: [viteBin, "--host", "127.0.0.1", "--port", "{port}", "--strictPort"],
       build: [viteBin, "build"], output: [".output/server/index.mjs", ".output/nitro.json"], start: ["start.ts", "{port}"],
     }),
   },

@@ -14,6 +14,12 @@ object graphs and transferable buffers and ports. `worker_channel.ts` frames
 control messages over two private host pipes. `worker_stdio.ts` adapts the existing
 subprocess streams to Node streams. These are original TypeScript implementations.
 
+A file worker's guest is started as `<execPath> -- <file>`. `--` marks a file operand
+both for `bun` and for a process started as `node`, whose operands are always files
+(`crates/bunwasm-cli/src/main.rs`). The former `run <file>` form made such a worker
+load a module named `run`. A spawned `node` child calling esbuild-wasm's `transformSync`
+then waited forever for its file worker. `tests/fixtures/worker-node-executable` covers it.
+
 The original Rust adapters in `crates/bunwasm-host/src/process/` give each worker
 its own Wasmtime instance and control pipes. The original Node host adapter in
 `web/scripts/node-host.ts` starts another physical Node worker. The browser host

@@ -29,6 +29,7 @@ function fixture(refuse = false) {
     native, web: {}, builtinFactories: {}, require: (name: string) => modules[name],
     builtin: () => ({ Readable, Writable }), nextTick: (callback: () => void) => ticks.push(callback),
   };
+  modules.http_server_response = load("http_server_response")(internal);
   const net = load("net", "js")(internal);
   const server: Server = net.nodeHttp("http:").createServer();
   return { server, calls, ticks, drain() { while (ticks.length) ticks.shift()?.(); } };

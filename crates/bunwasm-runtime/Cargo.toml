@@ -14,6 +14,7 @@ engine-host = []
 
 [dependencies]
 bunwasm-crypto-sys = { path = "../bunwasm-crypto-sys" }
+bun_dotenv = { path = "../../vendor/bun/src/dotenv" }
 bun_glob = { path = "../../vendor/bun/src/glob" }
 bun_semver = { path = "../../vendor/bun/src/semver" }
 bunwasm-semver = { path = "../bunwasm-semver" }

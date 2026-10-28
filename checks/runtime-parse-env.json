@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/runtime-parse-env.test.ts",
+  "localRuntime": true
+}

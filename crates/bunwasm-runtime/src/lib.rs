@@ -33,6 +33,7 @@ mod natives;
 mod node_path;
 #[cfg(any(feature = "engine-split", not(feature = "engine-host")))]
 pub(crate) mod ops;
+mod parse_env;
 mod resolve;
 mod semver;
 mod sourcemap;

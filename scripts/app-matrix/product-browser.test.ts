@@ -13,6 +13,7 @@ interface FixtureOptions {
   bindingDelay?: number;
   initialVisible?: string;
   hydration?: ReturnType<typeof hydrationGate>;
+  restoration?: ReturnType<typeof hydrationGate>;
 }
 
 interface Fixture {
@@ -96,13 +97,19 @@ function fixture(options: FixtureOptions): Fixture {
   let visible = options.initialVisible ?? "original";
   let source = "original";
   let documentReplacements = 0;
+  let restoring = false;
   const initScripts: Array<() => void> = [];
   const bindings = new Map<string, (source: unknown, value: unknown) => void>();
   const writes: string[] = [];
   const visits: string[] = [];
   const locator = (selector: string, wanted = "") => ({
     filter: ({ hasText }: { hasText: string }) => locator(selector, hasText),
-    async waitFor() {
+    async waitFor({ state }: { state?: "hidden" } = {}) {
+      if (restoring && (state === "hidden" || (wanted === "original" && !visible.includes(wanted)))) await options.restoration?.wait();
+      if (state === "hidden") {
+        if (visible.includes(wanted)) throw new Error("Edited DOM is still visible");
+        return;
+      }
       if (selector.includes('[data-hydrated="true"]')) await options.hydration?.wait();
       if ((options.domFailure && wanted === "changed") || !visible.includes(wanted)) throw new Error("DOM did not update");
     },
@@ -162,6 +169,7 @@ function fixture(options: FixtureOptions): Fixture {
     },
   };
   const emit = (payload: string) => evaluate(context, `globalThis.__previewControllerPort?.postMessage({ kind: 'message', payload: ${JSON.stringify(payload)} });`);
+  const finishRestoration = () => { visible = "original"; };
   const sourceAdapter = {
     async read() { return source; },
     async write(_path: string, contents: string) {
@@ -169,11 +177,16 @@ function fixture(options: FixtureOptions): Fixture {
       if (options.hydration && !options.hydration.isReady()) throw new Error("Source edit preceded hydration");
       writes.push(contents);
       source = contents;
+      if (contents === "original" && options.restoration) {
+        restoring = true;
+        if (options.updateMessage) emit(options.updateMessage);
+        void options.restoration.wait().then(finishRestoration);
+        return;
+      }
       visible = contents;
-      if (contents !== "changed") return;
       if (options.updateMessage) emit(options.updateMessage);
       else evaluate(context, "globalThis.__previewControllerPort?.postMessage({ kind: 'ping' });");
-      if (options.replaceDocumentOnUpdate) replaceDocument();
+      if (contents === "changed" && options.replaceDocumentOnUpdate) replaceDocument();
     },
   };
   return {
@@ -207,44 +220,71 @@ function hydrationGate(buttonDisabled = true) {
   };
 }
 
-function svelteDevCheck() {
-  const app = fullstackApps.find(app => app.id === "fullstack-sveltekit");
-  if (!app) throw new Error("Missing SvelteKit fixture");
+function hydratedDevCheck(id: string) {
+  const app = fullstackApps.find(app => app.id === id);
+  if (!app) throw new Error(`Missing ${id} fixture`);
   const check = app.commands.find(command => command.name === "dev")?.check;
-  if (check?.kind !== "page") throw new Error("Missing SvelteKit dev page check");
+  if (check?.kind !== "page") throw new Error(`Missing ${id} dev page check`);
   return { app, check };
 }
 
-test("SvelteKit delays the first edit until its declared hydrated selector is ready", async () => {
-  const { check } = svelteDevCheck();
-  const hydration = hydrationGate();
-  const run = fixture({ hydration, updateMessage: JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/src/routes/+page.svelte" }] }) });
-  const traffic = await observeProductTraffic(run.page);
-  await run.open();
-  try {
-    const pending = productObservations(run.page, "http://local/", { ...check, hmr: hmrCheck().hmr, probes: [] }, run.source, traffic, 1000);
+for (const fixture of [
+  { id: "fullstack-sveltekit", name: "SvelteKit", source: "src/routes/+page.svelte" },
+  { id: "fullstack-tanstack-start", name: "TanStack", source: "src/routes/index.tsx" },
+]) {
+  test(`${fixture.name} delays the first source edit until client hydration`, async () => {
+    const { check } = hydratedDevCheck(fixture.id);
+    const hydration = hydrationGate();
+    const run = fixtureWithHydration(hydration);
+    const traffic = await observeProductTraffic(run.page);
+    await run.open();
+    try {
+      const pending = productObservations(run.page, "http://local/", { ...check, hmr: hmrCheck().hmr, probes: [] }, run.source, traffic, 1000);
+      await hydration.waiting;
+      expect(run.writes).toEqual([]);
+      hydration.hydrate();
+      const rows = await pending;
+      expect(rows[0]?.status).toBe("pass");
+      expect(rows[0]?.assertion).toContain("vite:update");
+      expect(run.writes).toEqual(["changed", "original"]);
+    } finally { hydration.hydrate(); await traffic.close(); }
+  });
+
+  test(`${fixture.name} actions cannot click an SSR button before client hydration`, async () => {
+    const { app, check } = hydratedDevCheck(fixture.id);
+    const hydration = hydrationGate(app.files[fixture.source]?.includes('id="increment" disabled={!hydrated}'));
+    const run = fixtureWithHydration(hydration, null);
+    const pending = productObservations(run.page, "http://local/", { ...check, hmr: undefined, probes: [
+      { kind: "action", id: "client-interaction", path: "/", button: "#increment", selector: "#count", text: "action-result" },
+    ] }, run.source, { beginEdit: async () => {}, count: async () => 0, evidenceSince: async () => [] }, 1000);
     await hydration.waiting;
-    expect(run.writes).toEqual([]);
     hydration.hydrate();
     const rows = await pending;
     expect(rows[0]?.status).toBe("pass");
-    expect(rows[0]?.assertion).toContain("vite:update");
-    expect(run.writes).toEqual(["changed", "original"]);
-  } finally { hydration.hydrate(); await traffic.close(); }
-});
+    expect(run.visits).toEqual(["http://local/"]);
+  });
+}
 
-test("SvelteKit awaits a disabled button's click actionability after a fresh navigation", async () => {
-  const { app, check } = svelteDevCheck();
-  const hydration = hydrationGate(app.files["src/routes/+page.svelte"]?.includes('id="increment" disabled={!hydrated}'));
-  const run = fixture({ hydration, updateMessage: null });
-  const pending = productObservations(run.page, "http://local/", { ...check, hmr: undefined, probes: [
-    { kind: "action", id: "client-interaction", path: "/", button: "#increment", selector: "#count", text: "action-result" },
-  ] }, run.source, { beginEdit: async () => {}, count: async () => 0, evidenceSince: async () => [] }, 1000);
-  await hydration.waiting;
-  hydration.hydrate();
-  const rows = await pending;
-  expect(rows[0]?.status).toBe("pass");
-  expect(run.visits).toEqual(["http://local/"]);
+function fixtureWithHydration(hydration: ReturnType<typeof hydrationGate>, updateMessage: string | null = JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/page.tsx" }] })) {
+  return fixture({ hydration, updateMessage });
+}
+
+test("HMR restoration completes before a later probe navigates", async () => {
+  const restoration = hydrationGate();
+  const run = fixture({ restoration, updateMessage: JSON.stringify({ type: "update", updates: [{ type: "js-update", path: "/page.tsx" }] }) });
+  const traffic = await observeProductTraffic(run.page);
+  await run.open();
+  try {
+    const pending = productObservations(run.page, "http://local/", { ...hmrCheck(), hmr: { path: "page.tsx", search: "original", replacement: "original changed" }, probes: [
+      { kind: "route", id: "route", path: "/query", selector: "h1", text: "route-result" },
+    ] }, run.source, traffic, 1000);
+    await restoration.waiting;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(run.visits).toEqual(["http://local/__preview/3137/"]);
+    restoration.hydrate();
+    const rows = await pending;
+    expect(rows.map(row => row.status)).toEqual(["pass", "pass"]);
+  } finally { restoration.hydrate(); await traffic.close(); }
 });
 
 test("observes preview WebSocket messages over MessagePort after the edit boundary", async () => {
@@ -305,6 +345,67 @@ test("restores the guest source when the DOM assertion fails", async () => {
   expect(rows[0]?.status).toBe("fail");
   expect(run.writes).toEqual(["changed", "original"]);
   expect(run.current()).toBe("original");
+  await traffic.close();
+});
+
+test("a rejecting restore does not replace missing forward WebSocket evidence", async () => {
+  const run = fixture({ updateMessage: null });
+  const traffic = await observeProductTraffic(run.page);
+  let restores = 0;
+  const source = {
+    read: run.source.read,
+    async write(path: string, contents: string) {
+      if (contents !== "original") return run.source.write(path, contents);
+      restores++;
+      throw new Error("restore write failed");
+    },
+  };
+  await run.open();
+  const rows = await productObservations(run.page, "http://local/", hmrCheck(), source, traffic, 20);
+  expect(rows[0]?.status).toBe("fail");
+  expect(rows[0]?.blocker).toContain("Edited content appeared without a development WebSocket update");
+  expect(rows[0]?.blocker).not.toContain("restore write failed");
+  expect(restores).toBe(1);
+  await traffic.close();
+});
+
+const originalForwardError = new Error("forward error");
+originalForwardError.toString = () => "original Error identity";
+for (const thrown of [originalForwardError, false, 0, null, undefined]) {
+  test(`forward rejection ${String(thrown)} survives a rejecting restore`, async () => {
+    const run = fixture({ updateMessage: null });
+    const traffic = await observeProductTraffic(run.page);
+    let restores = 0;
+    const source = {
+      read: run.source.read,
+      async write(_path: string, contents: string) {
+        if (contents !== "original") throw thrown;
+        restores++;
+        throw new Error("restore write failed");
+      },
+    };
+    await run.open();
+    const rows = await productObservations(run.page, "http://local/", hmrCheck(), source, traffic, 1000);
+    expect(rows[0]?.blocker).toBe(String(thrown));
+    expect(restores).toBe(1);
+    await traffic.close();
+  });
+}
+
+test("a rejecting rollback still fails after forward HMR passed", async () => {
+  const run = fixture({ updateMessage: JSON.stringify({ type: "full-reload" }) });
+  const traffic = await observeProductTraffic(run.page);
+  const source = {
+    read: run.source.read,
+    async write(path: string, contents: string) {
+      if (contents === "original") throw new Error("successful edit rollback failed");
+      await run.source.write(path, contents);
+    },
+  };
+  await run.open();
+  const rows = await productObservations(run.page, "http://local/", hmrCheck(), source, traffic, 1000);
+  expect(rows[0]?.status).toBe("fail");
+  expect(rows[0]?.blocker).toContain("successful edit rollback failed");
   await traffic.close();
 });
 

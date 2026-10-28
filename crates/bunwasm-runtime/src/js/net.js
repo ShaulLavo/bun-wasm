@@ -972,6 +972,7 @@
           if (typeof callback === "function") internal.nextTick(() => callback(error));
           return false;
         }
+        if (this.destroyed) return this._writeDestroyed(callback);
         this._flushHeaders(true);
         let bytes = new Uint8Array(0);
         if (!this._bodyless && chunk !== undefined && chunk !== null) {
@@ -999,18 +1000,6 @@
         this.finished = true;
         this._finishBody(error => this._completeEnd(callback, error));
         return this;
-      }
-      _completeEnd(callback, error) {
-        if (this.socket) this.socket.removeListener("close", this._socketClosed);
-        if (error) {
-          if (typeof callback === "function") callback(error);
-          this._emitClose();
-          return;
-        }
-        this.writableFinished = true;
-        if (typeof callback === "function") callback();
-        this.emit("finish");
-        this._emitClose();
       }
       _emitClose() {
         if (this.closed) return;
@@ -1096,7 +1085,7 @@
         this._pendingWrites--;
         if (typeof callback === "function") callback(error);
         if (this._pendingWrites !== 0) return;
-        const drain = this._needDrain && !error;
+        const drain = this._needDrain && !error && !this.destroyed;
         this._needDrain = false;
         if (drain) this.emit("drain");
       }
@@ -1117,6 +1106,8 @@
         });
       }
     }
+
+    Object.assign(ServerResponse.prototype, internal.require("http_server_response"));
 
     class Server extends EventEmitter {
       constructor(options, handler) {
@@ -1157,6 +1148,7 @@
         socket._updatePeer();
         socket.encrypted = protocol === "https:";
         conn.onClose = () => socket.destroy();
+        socket.on("error", error => this.emit("clientError", error, socket));
         trackServerConnection(this, conn);
         this.emit("connection", socket);
         serveHttp(conn, (request, c, keepAlive) => this._request(request, c, keepAlive, socket), (head, c, keepAlive) => this._request(head, c, keepAlive, socket, true));
@@ -1184,7 +1176,7 @@
           const res = new ServerResponse(conn, req, keepAlive, resolve);
           res.socket = res.connection = socket;
           res._uniqueHeaders = this._options.uniqueHeaders;
-          res._socketClosed = () => { if (!res.finished) res._emitClose(); };
+          res._socketClosed = () => { if (!res.writableFinished) res._emitClose(); };
           socket.once("close", res._socketClosed);
           if (header(request.headers, "expect")?.toLowerCase() === "100-continue") {
             if (this.listenerCount("checkContinue")) this.emit("checkContinue", req, res);

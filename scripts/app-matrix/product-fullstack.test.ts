@@ -52,9 +52,10 @@ for (const fixture of fullstackApps) {
     expect(source.split(edit.search)).toHaveLength(2);
     expect(edit.search).toBe(productMarker);
     expect(edit.replacement).toBe(`${productMarker} updated`);
-    const hydrated = fixture.id === "fullstack-sveltekit" ? ' data-hydrated={hydrated}' : "";
+    const clientReady = ["fullstack-sveltekit", "fullstack-tanstack-start"].includes(fixture.id);
+    const hydrated = clientReady ? ' data-hydrated={hydrated}' : "";
     expect(source.replace(edit.search, edit.replacement)).toContain(`<h1 id="product-marker"${hydrated}>${edit.replacement}</h1>`);
-    expect(dev.check.selector).toBe(fixture.id === "fullstack-sveltekit" ? '#product-marker[data-hydrated="true"]' : "#product-marker");
+    expect(dev.check.selector).toBe(clientReady ? '#product-marker[data-hydrated="true"]' : "#product-marker");
     expect(dev.args).toContain("{port}");
   });
 
