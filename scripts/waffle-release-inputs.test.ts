@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import release from "./waffle-release-inputs.json";
-import { prepareWaffleNativeInputs } from "./waffle-release-inputs";
+import { prepareWaffleNativeInputs, prepareWaffleReleaseArchive } from "./waffle-release-inputs";
 
 const encode = (text: string) => new TextEncoder().encode(text);
 const digest = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
@@ -76,5 +76,16 @@ test("an unselected dependency or installed builder fails before source preparat
     await writeFile(join(f.installed, "scripts/build-wasi-libc.sh"), "different builder");
     await expect(prepareWaffleNativeInputs(f.repository, f.directory, f.download, f.selected)).rejects.toThrow("builder differs");
     expect(await Bun.file(join(f.directory, "scripts/build-wasi-libc.sh")).exists()).toBe(false);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("archive-only staging rejects a different peer and enforces the release byte count", async () => {
+  const f = await fixture();
+  try {
+    const archive = join(f.root, "archive # with spaces.tgz");
+    await expect(prepareWaffleReleaseArchive(f.selected.url + "#different", archive, f.download, f.selected)).rejects.toThrow("release pin");
+    expect(f.requests).toEqual([]);
+    await expect(prepareWaffleReleaseArchive(f.selected.url, archive, f.download, { ...f.selected, bytes: f.selected.bytes + 1 })).rejects.toThrow("archive size");
+    expect(await prepareWaffleReleaseArchive(f.selected.url, archive, f.download, f.selected)).toBe(archive);
   } finally { await rm(f.root, { recursive: true, force: true }); }
 });

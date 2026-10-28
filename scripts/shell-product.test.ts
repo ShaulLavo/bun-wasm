@@ -729,6 +729,8 @@ test("actual preparation caller restores Bun from the packed archive without edi
     expect((await stat(join(installed, "launcher.ts"))).ino).not.toBe((await stat(join(cached, "launcher.ts"))).ino);
     await writeFile(join(installed, "launcher.ts"), "private caller edit");
     expect(await readFile(join(cached, "launcher.ts"), "utf8")).toBe('import "./missing-diagnostic.js";\n');
+    await writeFile(join(shell, "package.json"), JSON.stringify({ peerDependencies: { waffle: waffle + "different" } }));
+    await expect(runInNewContext(script, { ...preparation, assert, Bun, join, destination, temporary, archive, waffle, flow })).rejects.toThrow("Reject mismatched public Shell before any fixture build");
   } finally { await rm(directory, { recursive: true, force: true }); }
   expect(existsSync(directory)).toBe(false);
 });

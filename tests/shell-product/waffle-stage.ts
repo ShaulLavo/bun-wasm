@@ -43,10 +43,10 @@ function wafflePeer(value: unknown): string {
 }
 export function waffleCommits(environment: NodeJS.ProcessEnv, peer?: string): WaffleCommits {
   const shellCommit = fullCommit(environment.SHELL_PRODUCT_SHELL_COMMIT, "SHELL_PRODUCT_SHELL_COMMIT");
-  const requested = environment.SHELL_PRODUCT_WAFFLE_COMMIT;
+  const requested = environment.SHELL_PRODUCT_WAFFLE_COMMIT === undefined ? undefined : fullCommit(environment.SHELL_PRODUCT_WAFFLE_COMMIT, "SHELL_PRODUCT_WAFFLE_COMMIT");
   const selectedPeer = wafflePeer(peer ?? (requested ? `git+https://github.com/ShaulLavo/waffle.git#${requested}` : release.url));
   const wafflePeerCommit = selectedPeer === release.url ? release.sourceCommit : selectedPeer.slice(selectedPeer.lastIndexOf("#") + 1);
-  if (requested) assert.equal(fullCommit(requested, "SHELL_PRODUCT_WAFFLE_COMMIT"), wafflePeerCommit, "Requested Waffle commit must match the exact package peer source");
+  if (requested) assert.equal(requested, wafflePeerCommit, "Requested Waffle commit must match the exact package peer source");
   const waffleHostCommit = fullCommit(environment.SHELL_PRODUCT_WAFFLE_HOST_COMMIT ?? wafflePeerCommit, "SHELL_PRODUCT_WAFFLE_HOST_COMMIT");
   return { wafflePeer: selectedPeer, shellCommit, wafflePeerCommit, waffleHostCommit };
 }

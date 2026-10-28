@@ -25,7 +25,8 @@ export PATH=$HOME/.local/share/mise/shims:$PATH
 source env.sh
 export SHELL_PRODUCT_INSTALL=/absolute/prepared-consumer
 export SHELL_PRODUCT_SHELL_COMMIT=<full-shell-commit>
-export SHELL_PRODUCT_WAFFLE_COMMIT=<full-shared-waffle-commit>
+# The checked Waffle release peer comes from this checkout.
+# SHELL_PRODUCT_WAFFLE_COMMIT may assert its exact source commit.
 export SHELL_PRODUCT_GUEST=/absolute/producer/bun-browser.wasm
 export SHELL_PRODUCT_RECEIPT=/absolute/producer/receipt.txt
 export SHELL_PRODUCT_REGISTRY=/absolute/read-only-registry-replay
@@ -36,15 +37,20 @@ bun /work/platform-production/heavy/current/run.js --class browser shell-product
   bun web/tests/browser-shell-product.ts
 ```
 
-`SHELL_PRODUCT_WAFFLE_COMMIT` always names the package peer retained in
-`bun.lock`. `SHELL_PRODUCT_WAFFLE_HOST_COMMIT` names the Git source archived into
-the physical runtime package. It defaults to the explicit package peer for
-ordinary same-ref preparation. Both commands require full lowercase commits.
+The Bun package selects the exact Waffle peer. Published archives must match
+`scripts/waffle-release-inputs.json`, including SHA-256, byte size and source
+commit. Shell must declare the identical peer. `SHELL_PRODUCT_WAFFLE_COMMIT`,
+when set, asserts that source commit. Historical Git peers require a full commit
+whose repository root is an installable Waffle package; private workspace roots
+are rejected. New runtime pins use published child-package archives.
+
+`SHELL_PRODUCT_WAFFLE_HOST_COMMIT` optionally selects a different source tree
+for a host variant. Preparation resolves its package root explicitly, either the
+historical repository root or `packages/waffle` in the monorepo. This never
+changes the installed peer identity or qualifies adoption of that host variant.
 Preparation retains `.shell-product-host.json` beside `bun.lock`, recording the
-Shell, peer, host, and network input selections. The browser checks that record
-against the requested refs and installed network input before bundling. A host
-ref different from the package peer is an explicit host variant. It does not
-change package pins or qualify package-consumer adoption at the host ref.
+exact peer URL, Shell, peer source, host and network inputs. The browser checks
+that record and both consumers' physical runtime resolution before bundling.
 
 `PLAYWRIGHT` can select an already installed driver. Without it, the driver is
 loaded from the prepared consumer. `SHELL_PRODUCT_TIMEOUT_MS` sets each command,
@@ -153,7 +159,10 @@ peers, and builds only Shell's necessary guests. After installation, it replaces
 checking Bun's peer. Cached installed files are not authoritative. Removing the
 old consumer entries before extraction breaks cache hardlinks, so private caller
 edits cannot change the shared package cache. The cache itself stays untouched.
-It archives the selected host commit from `SHELL_PRODUCT_WAFFLE_REPOSITORY`, a
+Ordinary release preparation verifies and extracts the packed runtime directly,
+without rebuilding it or requiring a Waffle checkout. For a source host variant
+or a historical Git peer, it archives the actual package subtree from
+`SHELL_PRODUCT_WAFFLE_REPOSITORY`, a
 read-only local Git repository, into the owned Waffle package directory. Only
 `network.wasm`, `network.sha256`, and `network.input-hash` are borrowed. The
 selected tree's `tooling/build-network.ts --verify` checks network source inputs
@@ -165,9 +174,10 @@ use the installation's own Cargo target. Failed or interrupted preparation
 sets cancellation before stopping its process groups, refuses new subprocesses,
 waits for the main flow to finish, then removes the owned installation.
 
-Set the inputs above, `SHELL_PRODUCT_WAFFLE_REPOSITORY` to the read-only local
-Waffle Git repository, and `SHELL_PRODUCT_PREPARED_WAFFLE` to the read-only package
-containing the three network files. Choose an empty `SHELL_PRODUCT_INSTALL` under
+Set the inputs above. Only source variants also need
+`SHELL_PRODUCT_WAFFLE_REPOSITORY` pointing to the read-only Waffle Git repository
+and `SHELL_PRODUCT_PREPARED_WAFFLE` pointing to the read-only package containing
+the three network files. Choose an empty `SHELL_PRODUCT_INSTALL` under
 `/work/tmp`, then run through the host's canonical build queue:
 
 ```sh
