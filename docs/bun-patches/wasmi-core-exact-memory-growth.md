@@ -13,6 +13,13 @@ Local changes are limited to `src/memory/buffer.rs`:
   amortized doubling (`try_reserve`).
 - A unit test asserts that sixteen 4 MiB growths each leave the capacity equal to the length,
   with the added bytes zeroed.
+- A refused growth hands the allocation back to the `ByteBuffer`. Upstream returned early and
+  dropped the temporary `Vec`, freeing the buffer it still pointed to and freeing it again on
+  drop. A unit test grows by `usize::MAX` (a capacity overflow, so nothing is allocated) and
+  checks the buffer keeps its pointer, length, capacity and bytes.
+
+These tests run in the single Rust test command (`scripts/quality-rust.ts` selects
+`-p wasmi_core`), since path-patched crates are not workspace members.
 
 Every WebAssembly memory a guest program creates is a Vec inside the bun.wasm linear memory,
 which must stay below 512 MiB because Bun's string pointer tags use the top three address bits
