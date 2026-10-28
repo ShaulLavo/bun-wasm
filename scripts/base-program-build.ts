@@ -7,8 +7,9 @@ export function baseProgramAssets(consumerEntry: string): Bun.BunPlugin {
     name: "base-program-assets",
     setup(build) {
       const families = new Map<string, string>();
-      build.onResolve({ filter: /^waffle-(coreutils|findutils|grep|ripgrep|sed)$/ }, ({ path }) => {
-        const entry = Bun.resolveSync(path, dirname(consumerEntry));
+      build.onResolve({ filter: /^waffle-(coreutils|findutils|grep|ripgrep|sed)$/ }, ({ path, importer }) => {
+        const scope = importer ? dirname(importer) : dirname(consumerEntry);
+        const entry = Bun.resolveSync(path, scope);
         families.set(entry, path);
         return { path: entry };
       });

@@ -8,6 +8,12 @@ const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 
+class BrowserProgramsFixture {
+  constructor(_runtime: unknown, _urls: unknown) {}
+  dispose() { return Promise.resolve(); }
+}
+const browserLocation = { href: "https://example.test/" };
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
@@ -272,8 +278,8 @@ test("playground only seeds examples in a new home, preserving changes and delet
     },
     async flush() { checkpoints++; },
   };
-  const startup = new Function("createRuntime", "installRuntimeSharedObjects", "HOME", "examples", "mode", `return (async () => { ${transpiler.transformSync(code)} })();`);
-  const start = () => startup(() => ({ filesystem: fs }), () => ({ close() {} }), "/home/user", { "index.ts": "example", "deleted.ts": "delete me" }, "fast");
+  const startup = new Function("createRuntime", "installRuntimeSharedObjects", "BrowserPrograms", "location", "HOME", "examples", "mode", `return (async () => { ${transpiler.transformSync(code)} })();`);
+  const start = () => startup(() => ({ filesystem: fs }), () => ({ close() {} }), BrowserProgramsFixture, browserLocation, "/home/user", { "index.ts": "example", "deleted.ts": "delete me" }, "fast");
   await start();
   expect(files.get("/home/user/index.ts")).toBe("example");
   expect(checkpoints).toBe(1);
@@ -290,9 +296,15 @@ test("persisted pagehide keeps shared-object installation for the next command",
   const code = source.slice(source.indexOf("const runtime = createRuntime"), source.indexOf("const fs = runtime.filesystem"));
   let pagehide: ((event: { persisted: boolean }) => void) | undefined;
   const state = { closed: false };
-  const startup = new Function("createRuntime", "installRuntimeSharedObjects", "addEventListener", "state", "mode", `${transpiler.transformSync(code)}; return () => { if (state.closed) throw new Error("installation closed"); return "command-ready"; };`)(
+  class BrowserProgramsFixture {
+    constructor(_runtime: unknown, _urls: unknown) {}
+    dispose() { return Promise.resolve(); }
+  }
+  const startup = new Function("createRuntime", "installRuntimeSharedObjects", "BrowserPrograms", "location", "addEventListener", "state", "mode", `${transpiler.transformSync(code)}; return () => { if (state.closed) throw new Error("installation closed"); return "command-ready"; };`)(
     () => ({ filesystem: {} }),
     () => ({ close() { state.closed = true; } }),
+    BrowserProgramsFixture,
+    browserLocation,
     (_type: string, listener: (event: { persisted: boolean }) => void) => { pagehide = listener; },
     state,
     "fast",
@@ -367,7 +379,7 @@ for (const app of ["web", "sandbox"] as const) {
     const workspace = app === "web" ? "/home/user" : "/home/user/app";
     const sources = { "index.html": "page", "first.ts": "first file", "second.ts": "second file" };
     const env = {
-      createRuntime: () => ({ filesystem: fs }), installRuntimeSharedObjects: () => ({ close() {} }), fs, HOME: workspace, APP: workspace, examples: sources, mode: "fast",
+      createRuntime: () => ({ filesystem: fs }), installRuntimeSharedObjects: () => ({ close() {} }), BrowserPrograms: BrowserProgramsFixture, location: browserLocation, fs, HOME: workspace, APP: workspace, examples: sources, mode: "fast",
       setStatus() {}, templateFile: "template.json", measureStartup() {},
       abs: (path: string) => `${workspace}/${path}`,
       fetch: async () => ({ ok: true, text: async () => JSON.stringify({ files: sources }) }),

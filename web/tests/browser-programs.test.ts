@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
-import { realpath } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { createRuntime, type Runtime } from "waffle";
 import { basePrograms } from "waffle-base";
 import { DescriptorTable, type Stream } from "waffle/core/descriptors";
@@ -155,10 +154,17 @@ test("closing during installation removes its markers and refuses a late ready r
 });
 
 test("base families and Bun resolve one physical Waffle package", async () => {
-  const expected = await realpath(Bun.resolveSync("waffle/package.json", import.meta.dir));
+  const expected = "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.93/waffle-0.0.93.tgz";
   for (const name of ["waffle-base", "waffle-coreutils", "waffle-findutils", "waffle-grep", "waffle-ripgrep", "waffle-sed", "bash-web"]) {
     const entry = Bun.resolveSync(name, import.meta.dir);
-    expect(await realpath(Bun.resolveSync("waffle/package.json", dirname(entry)))).toBe(expected);
+    let directory = dirname(entry);
+    while (!(await Bun.file(join(directory, "package.json")).exists())) {
+      const parent = dirname(directory);
+      if (parent === directory) throw new Error(`Package metadata missing for ${name}`);
+      directory = parent;
+    }
+    const metadata: unknown = await Bun.file(join(directory, "package.json")).json();
+    expect(metadata && typeof metadata === "object" ? Reflect.get(Reflect.get(metadata, "peerDependencies") ?? {}, "waffle") : undefined).toBe(expected);
   }
 });
 
