@@ -1,5 +1,5 @@
 /** Path-patched crates whose local changes carry tests. They are not workspace members. */
-export const patchedTestPackages = ["wasmi_core"] as const;
+const patchedTestPackages = ["wasmi_core"] as const;
 
 interface Metadata {
   packages: { id: string; name: string }[];
