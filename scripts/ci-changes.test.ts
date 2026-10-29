@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { changedPaths, needsJsc, needsRust } from "./ci-changes";
+import { changedPaths, needsJsc, needsRust, needsSharedSysroot } from "./ci-changes";
 
 test.each([
   "checks/native-console.json", "checks/runtime-leaf.json", "scripts/test-checks.ts", "tests/fixtures/console-format/index.js",
@@ -17,8 +17,21 @@ test.each([
   "scripts/quality-wasi-probe.ts", "scripts/quality.ts", "scripts/ci-changes.ts", "package.json", "bun.lock",
   ".github/workflows/ci.yml", "scripts/build.sh", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/transpile-runtime.ts",
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
+  "scripts/check-quickjs-memory-telemetry.ts", "scripts/fixtures/quickjs-memory-telemetry.c",
 ])("native input %s retains every Rust gate", path => {
   expect(needsRust([path])).toBe(true);
+});
+
+test.each([
+  ".github/workflows/ci.yml", "scripts/build-wasi-sysroot.ts", "scripts/build-shared-wasi-libc.sh",
+  "scripts/test-shared-sysroot.sh", "scripts/shared-sysroot-proof.ts", "scripts/shared-sysroot-native.ts",
+  "tests/fixtures/shared-sysroot/member.c", "patches/wasi-libc/group-grow.patch",
+])("shared sysroot input %s selects the path-filtered proof gate", path => {
+  expect(needsSharedSysroot([path])).toBe(true);
+});
+
+test.each(["src/index.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts"])("unrelated input %s skips the shared sysroot gate", path => {
+  expect(needsSharedSysroot([path])).toBe(false);
 });
 
 test.each(["scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json"])("Waffle native release input %s selects both engine gates", path => {
@@ -82,10 +95,14 @@ beforeAll(() => {
   javascript = git(["rev-parse", "HEAD"]);
 });
 
-function select(start: string, end: string, event = "pull_request"): string {
+function selectionOutput(start: string, end: string, event = "pull_request"): string {
   return execFileSync("bun", [join(import.meta.dir, "ci-changes.ts"), start, end], {
     cwd: fixture, encoding: "utf8", env: { ...process.env, GITHUB_EVENT_NAME: event }, stdio: ["ignore", "pipe", "pipe"],
   }).trim();
+}
+
+function select(start: string, end: string, event = "pull_request"): string {
+  return selectionOutput(start, end, event).split("\n").slice(0, 2).join("\n");
 }
 
 test("real PR diff catches a native file renamed into JavaScript", () => {
@@ -116,6 +133,13 @@ for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-req
     expect(select(base, commitInput(path), event)).toBe(`rust=true\njsc=${needsJsc([path])}`);
   });
 }
+
+test.each(["pull_request", "push"])("shared proof changes select only the dedicated job through a real %s diff", event => {
+  expect(selectionOutput(base, commitInput("scripts/shared-sysroot-proof.ts"), event))
+    .toBe("rust=false\njsc=false\nshared=true");
+  expect(selectionOutput(base, commitInput("docs/code-quality.md"), event))
+    .toBe("rust=false\njsc=false\nshared=false");
+});
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const quality = workflow.split("\n  quality:\n")[1]!.split("\n  rust:\n")[0]!;

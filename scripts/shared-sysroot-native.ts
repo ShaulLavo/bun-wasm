@@ -41,8 +41,29 @@ function environment(base: number, stackHigh: number, tableSize: number, id: num
         local.get $addr i32.const 1 i64.const 1000000 memory.atomic.wait32 drop
         br $again
       end)
-    (func (export "pause")
-      i32.const 132 i32.const 0 i64.const 50000000 memory.atomic.wait32 drop)
+    (func (export "signal") (param $addr i32)
+      local.get $addr i32.const 1 i32.atomic.store
+      local.get $addr i32.const 1 memory.atomic.notify drop)
+    (func (export "ready") (param $addr i32) (local $attempt i32)
+      loop $again
+        local.get $addr i32.atomic.load i32.const 1 i32.eq if return end
+        local.get $attempt i32.const 1 i32.add local.tee $attempt
+        i32.const 5000 i32.ge_u if unreachable end
+        local.get $addr i32.const 0 i64.const 1000000 memory.atomic.wait32 drop
+        br $again
+      end)
+    (func (export "wake_waiter") (result i32) (local $attempt i32)
+      loop $again
+        i32.const 64 i32.const 1 memory.atomic.notify
+        if i32.const 1 return end
+        local.get $attempt i32.const 1 i32.add local.tee $attempt
+        i32.const 5000 i32.ge_u if unreachable end
+        i32.const 132 i32.const 0 i64.const 1000000 memory.atomic.wait32 drop
+        br $again
+      end
+      unreachable)
+    (func (export "delay_before_wait") (result i32)
+      i32.const 132 i32.const 0 i64.const 250000000 memory.atomic.wait32)
   )`;
 }
 
@@ -60,22 +81,29 @@ function member(bytes: string, id: number, base: number, dataPages: number, tabl
     (invoke $env "deny" (i32.const 1))
     (assert_return (invoke $member "member_growth_failure") (i32.const 1))
     (invoke $env "deny" (i32.const 0))
-    (invoke $env "barrier" (i32.const 128))
+    (invoke $env "barrier" (i32.const 256))
     (assert_return (invoke $member "member_churn" (i32.const ${id}) (i32.const 8)) (i32.const 0))
     (assert_return (invoke $member "member_churn" (i32.const ${id}) (i32.const 1)) (i32.const 0))
     (assert_return (invoke $member "member_counter") (i32.const ${7 + id}))
     (assert_return (invoke $member "member_call_op" (i32.const 7)) (i32.const ${id === 1 ? 14 : 21}))`;
   const wait = id === 1
-    ? `(assert_return (invoke $member "member_wait32" (i32.const 64) (i32.const 0) (i64.const 5000000000)) (i32.const 0))
-       (assert_return (invoke $member "member_load" (i32.const 64)) (i32.const 1))
-       (assert_return (invoke $member "member_wait32" (i32.const 64) (i32.const 0) (i64.const 0)) (i32.const 1))
-       (assert_return (invoke $member "member_wait32" (i32.const 64) (i32.const 1) (i64.const 1000000)) (i32.const 2))`
-    : `(invoke $env "pause")
-       (assert_return (invoke $member "member_add" (i32.const 64) (i32.const 1)) (i32.const 0))
-       (assert_return (invoke $member "member_notify" (i32.const 64) (i32.const 1)) (i32.const 1))`;
+    ? `(invoke $env "signal" (i32.const 128))
+       (assert_return (invoke $env "delay_before_wait") (i32.const 2))
+       (assert_return (invoke $member "member_wait32" (i32.const 64) (i32.const 0) (i64.const 5000000000)) (i32.const 0))
+       (assert_return (invoke $member "member_load" (i32.const 64)) (i32.const 0))
+       (invoke $env "signal" (i32.const 136))
+       (invoke $env "ready" (i32.const 140))
+       (assert_return (invoke $member "member_load" (i32.const 68)) (i32.const 1))
+       (assert_return (invoke $member "member_wait32" (i32.const 68) (i32.const 0) (i64.const 0)) (i32.const 1))
+       (assert_return (invoke $member "member_wait32" (i32.const 68) (i32.const 1) (i64.const 1000000)) (i32.const 2))`
+    : `(invoke $env "ready" (i32.const 128))
+       (assert_return (invoke $env "wake_waiter") (i32.const 1))
+       (invoke $env "ready" (i32.const 136))
+       (assert_return (invoke $member "member_add" (i32.const 68) (i32.const 1)) (i32.const 0))
+       (invoke $env "signal" (i32.const 140))`;
   return `(thread $t${id} (shared (module $group))
     ${body}
-    (invoke $env "barrier" (i32.const 136))
+    (invoke $env "barrier" (i32.const 320))
     ${wait}
   )`;
 }

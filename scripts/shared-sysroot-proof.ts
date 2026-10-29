@@ -5,6 +5,10 @@ import { Worker, isMainThread, parentPort, workerData } from "node:worker_thread
 import { writeNativeProof } from "./shared-sysroot-native.ts";
 
 const PAGE = 65536;
+const GUEST = { gate: 64, value: 68 } as const;
+const CONTROL = { churn: 0, postChurn: 1, intent: 2, wakeAck: 3, valueReady: 4 } as const;
+const DELAY_BEFORE_WAIT_MS = 250;
+const HANDSHAKE_TIMEOUT_MS = 5000;
 type Range = { owner: number; start: number; end: number };
 
 function u32(bytes: Uint8Array, cursor: { offset: number }): number {
@@ -76,7 +80,7 @@ async function main() {
       assert(previous && next && previous.end <= next.start, "member reservations overlap");
     }
     console.log(JSON.stringify({ pass: true, host: "node", pages: memory.buffer.byteLength / PAGE, ranges: ranges.length,
-      checks: ["real-dlmalloc", "all-blocks-owned", "no-overlap", "private-data", "data-relocations", "private-tables", "private-stacks", "private-break", "ENOMEM", "concurrent-churn", "free-reuse", "wait-notify", "not-equal", "timed-out"] }));
+      checks: ["real-dlmalloc", "all-blocks-owned", "no-overlap", "private-data", "data-relocations", "private-tables", "private-stacks", "private-break", "ENOMEM", "concurrent-churn", "free-reuse", "wait-notify", "delayed-waiter-250ms", "not-equal", "timed-out"] }));
   } finally {
     await Promise.all(workers.map(worker => worker.terminate()));
   }
@@ -153,34 +157,58 @@ function member() {
   denyGrowth = true;
   assert.equal(call("member_growth_failure"), 1);
   denyGrowth = false;
-  barrier(ctl, 0);
+  barrier(ctl, CONTROL.churn);
   assert.equal(call("member_churn", id, 8), 0);
   const growthAfterChurn = growthCalls;
   assert.equal(call("member_churn", id, 1), 0);
   assert.equal(growthCalls, growthAfterChurn, "free blocks were not reused");
   assert.equal(call("member_counter"), 7 + id);
   assert.equal(call("member_call_op", 7), id === 1 ? 14 : 21);
-  barrier(ctl, 1);
+  barrier(ctl, CONTROL.postChurn);
   futex(call, ctl, id);
   console.log(JSON.stringify({ id, base, counterAddr, errnoAddr, stackLow, stackAddr, tableBase, growthCalls, blocks, churn: 0 }));
   assert(parentPort);
   parentPort.postMessage(ranges.map(chunk => [chunk.owner, chunk.start, chunk.end]));
 }
 
-function futex(call: (name: string, ...args: (number | bigint)[]) => number, ctl: Int32Array, id: number) {
+function waitForControl(ctl: Int32Array, index: number): void {
+  const deadline = performance.now() + HANDSHAKE_TIMEOUT_MS;
+  while (Atomics.load(ctl, index) !== 1) {
+    const remaining = deadline - performance.now();
+    assert(remaining > 0, `handshake control ${index} timed out`);
+    Atomics.wait(ctl, index, 0, remaining);
+  }
+}
+
+function notifyUntilWoken(call: (name: string, ...args: (number | bigint)[]) => number, ctl: Int32Array): void {
+  const deadline = performance.now() + HANDSHAKE_TIMEOUT_MS;
+  while (call("member_notify", GUEST.gate, 1) === 0) {
+    assert(performance.now() < deadline, "guest waiter was not observed before handshake deadline");
+    Atomics.wait(ctl, 7, 0, 1);
+  }
+}
+
+function futex(call: (name: string, ...args: (number | bigint)[]) => number, ctl: Int32Array, id: number): void {
   if (id === 2) {
-    while (!Atomics.load(ctl, 2)) Atomics.wait(ctl, 2, 0, 10000);
-    Atomics.wait(ctl, 3, 0, 50);
-    call("member_add", 64, 1);
-    assert.equal(call("member_notify", 64, 1), 1);
+    waitForControl(ctl, CONTROL.intent);
+    notifyUntilWoken(call, ctl);
+    waitForControl(ctl, CONTROL.wakeAck);
+    assert.equal(call("member_add", GUEST.value, 1), 0);
+    Atomics.store(ctl, CONTROL.valueReady, 1);
+    Atomics.notify(ctl, CONTROL.valueReady);
     return;
   }
-  Atomics.store(ctl, 2, 1);
-  Atomics.notify(ctl, 2);
-  assert.equal(call("member_wait32", 64, 0, 5_000_000_000n), 0);
-  assert.equal(call("member_load", 64), 1);
-  assert.equal(call("member_wait32", 64, 0, 0n), 1);
-  assert.equal(call("member_wait32", 64, 1, 1_000_000n), 2);
+  Atomics.store(ctl, CONTROL.intent, 1);
+  Atomics.notify(ctl, CONTROL.intent);
+  Atomics.wait(ctl, 7, 0, DELAY_BEFORE_WAIT_MS);
+  assert.equal(call("member_wait32", GUEST.gate, 0, 5_000_000_000n), 0);
+  assert.equal(call("member_load", GUEST.gate), 0);
+  Atomics.store(ctl, CONTROL.wakeAck, 1);
+  Atomics.notify(ctl, CONTROL.wakeAck);
+  waitForControl(ctl, CONTROL.valueReady);
+  assert.equal(call("member_load", GUEST.value), 1);
+  assert.equal(call("member_wait32", GUEST.value, 0, 0n), 1);
+  assert.equal(call("member_wait32", GUEST.value, 1, 1_000_000n), 2);
 }
 
 if (isMainThread) await main();

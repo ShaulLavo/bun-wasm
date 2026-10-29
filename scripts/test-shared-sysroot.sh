@@ -22,4 +22,4 @@ wasm-tools print "$output/member.wasm" > "$output/member.wat"
 timeout --kill-after=2s 90s node "$root/scripts/shared-sysroot-proof.ts" "$output/member.wasm"
 node "$root/scripts/shared-sysroot-proof.ts" "$output/member.wasm" "$output/member.wast"
 timeout --kill-after=2s 90s wasmtime wast "$output/member.wast"
-printf '{"pass":true,"host":"wasmtime-wast","members":2,"allocator":"dlmalloc"}\n'
+printf '{"pass":true,"host":"wasmtime-wast","members":2,"allocator":"dlmalloc","delayedWaiterMs":250}\n'
