@@ -328,7 +328,7 @@ void bunjsc_refresh_memory_telemetry(JSContextRef ctx)
     snapshot.arrayBufferBytes = vm.heap.arrayBufferSize();
     if (vm.heap.lastCollectionScope())
         snapshot.heapAfterLastCollection = vm.heap.sizeAfterLastCollection();
-    if (vm.heap.lastFullGCLength().value() > 0) {
+    if (vm.heap.hasCompletedFullCollection()) {
         snapshot.heapBeforeLastFullCollection = vm.heap.sizeBeforeLastFullCollection();
         snapshot.heapAfterLastFullCollection = vm.heap.sizeAfterLastFullCollection();
     }
