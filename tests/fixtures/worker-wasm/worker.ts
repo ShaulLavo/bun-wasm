@@ -39,6 +39,7 @@ const handler = new MessageHandler({
     Atomics.store(shared, 5, 99);
     return instantiateNapiModuleSync(wasmModule, {
       childThread: true,
+      postMessage(message) { port.postMessage(message); },
       wasi: new WASI({ version: "preview1", args: [], env: {}, preopens: {} }),
       overwriteImports(imports) { return { ...imports, env: { ...imports.env, memory: wasmMemory } }; },
     });
