@@ -6,7 +6,7 @@ readonly revision=2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13
 readonly archive_sha256=f25ccd526235f7b351f9b49451b75fdd8e23250b9ad8fc9f8f2a19f517a4892f
 readonly repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 readonly waffle=${2:?Expected pinned Waffle native inputs directory}
-readonly flags="-fPIC -matomics -mbulk-memory -mmutable-globals -DMORECORE_CONTIGUOUS=0"
+readonly flags="-fPIC -matomics -mbulk-memory -mmutable-globals -DMORECORE_CONTIGUOUS=0 -DBUN_WASM_GROUP_HEAP=1"
 readonly sdk=${WASI_SDK_PATH:-/work/cache/wasi-sdk-34.0-x86_64-linux}
 readonly scratch=${WASI_LIBC_SCRATCH_ROOT:-/work/tmp}
 

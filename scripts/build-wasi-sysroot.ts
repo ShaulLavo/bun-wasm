@@ -54,7 +54,7 @@ export async function wasiSysrootInputs(options: Omit<SysrootOptions, "output">)
       profile: "shared-pic",
       sharedBuilderSha256: await hash(join(root, "scripts/build-shared-wasi-libc.sh")),
       groupGrowPatchSha256: await hash(join(root, "patches/wasi-libc/group-grow.patch")),
-      flags: "-fPIC -matomics -mbulk-memory -mmutable-globals -DMORECORE_CONTIGUOUS=0",
+      flags: "-fPIC -matomics -mbulk-memory -mmutable-globals -DMORECORE_CONTIGUOUS=0 -DBUN_WASM_GROUP_HEAP=1",
       growthImport: "runtime_shm.group_grow",
     } : {}),
   };

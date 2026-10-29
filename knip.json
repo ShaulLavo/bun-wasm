@@ -31,6 +31,7 @@
         "scripts/refresh-compatibility-docs.ts",
         "scripts/group-suite-category-d.ts",
         "scripts/run-with-timeout.mts",
+        "scripts/shared-sysroot-proof.ts",
         "scripts/runtime-size.ts",
         "scripts/test-*.mjs",
         "scripts/transpile-runtime.ts",

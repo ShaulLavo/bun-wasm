@@ -6,16 +6,18 @@ The explicit shared-PIC sysroot compiles wasi-libc revision `2e6fb9d8ee0cdf9e431
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| `patches/wasi-libc/group-grow.patch`, upstream `libc-bottom-half/sources/sbrk.c` | Port | Import `runtime_shm.group_grow` and keep a private break for each relocated libc image. |
+| `patches/wasi-libc/group-grow.patch`, upstream `libc-bottom-half/sources/sbrk.c` and `dlmalloc/src/malloc.c` | Port | Import `runtime_shm.group_grow` and keep a private break for each relocated libc image. |
 | `scripts/build-shared-wasi-libc.sh`, from Waffle `packages/waffle/scripts/build-wasi-libc.sh` | Port | Adapt the pinned builder for PIC and atomics, apply the growth patch, and retain compile commands. |
 | `scripts/build-wasi-sysroot.ts`, shared-PIC variant | Host feature | Extend the producer receipt and key with the explicit profile, flags, growth import and local patch and builder hashes. |
-| `tests/fixtures/shared-sysroot/member.c`, `scripts/shared-sysroot-proof.ts`, `scripts/test-shared-sysroot.sh` | Host feature | Original libc allocator, relocated image and wait/notify proof. Based on the owner's design prototype, without its libc stand-ins. |
+| `tests/fixtures/shared-sysroot/member.c`, `scripts/shared-sysroot-proof.ts`, `scripts/shared-sysroot-native.ts`, `scripts/test-shared-sysroot.sh` | Host feature | Original libc allocator, relocated image and wait/notify proof. Based on the owner's design prototype, without its libc stand-ins. |
 
 ## Upstream and local changes
 
 The wasi-libc archive SHA-256 is `f25ccd526235f7b351f9b49451b75fdd8e23250b9ad8fc9f8f2a19f517a4892f`. The builder derives from Waffle revision `9bc224595a4f8b650fc19b2c18f39c1d484ee090`, builder SHA-256 `85d6a1e6793390fe6c8c36762168f673cfe8fc7ecd5abc6daf27c05d82f7cf0e`. The Waffle preopen patch SHA-256 is `856730a158d7fdaa08a787c572883a57baaf09a4d967b366c9d198a9c98de302`.
 
 `sbrk` uses the host import for positive page increments. All negative host results map to ENOMEM. A private static tracks the end of that image's latest successful chunk. Stock `sbrk(0)` reads the whole memory size, which would expose another member's chunks as allocator space. The local break prevents that race and permits the host to recycle chunks below the high-water mark.
+
+The build sets `BUN_WASM_GROUP_HEAP=1` to omit wasi-libc's initial allocator optimization over linker-owned `__heap_base`/`__heap_end`. A group has no such unused linear-memory tail. Only that initialization optimization is gated; the allocation algorithms stay unchanged.
 
 The build sets `MORECORE_CONTIGUOUS=0` to use dlmalloc's existing noncontiguous segment handling. It does not replace dlmalloc or enable the pthread target. The allocator globals and errno remain in each member's relocated data. Core libc ownership and engine imports are unchanged.
 

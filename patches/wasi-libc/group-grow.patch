@@ -40,3 +40,32 @@
 +  member_break = ((uintptr_t)old + pages) * PAGESIZE;
 +  return (void *)((uintptr_t)old * PAGESIZE);
  }
+--- a/dlmalloc/src/malloc.c
++++ b/dlmalloc/src/malloc.c
+@@ -4560,7 +4560,7 @@
+ 
+ #if !ONLY_MSPACES
+ 
+-#if __wasilibc_unmodified_upstream // Forward declaration of try_init_allocator.
++#if __wasilibc_unmodified_upstream || defined(BUN_WASM_GROUP_HEAP) // No linker-owned initial heap in a group.
+ #else
+ static void try_init_allocator(void);
+ #endif
+@@ -4594,7 +4594,7 @@
+ #endif
+ 
+   if (!PREACTION(gm)) {
+-#if __wasilibc_unmodified_upstream // Try to initialize the allocator.
++#if __wasilibc_unmodified_upstream || defined(BUN_WASM_GROUP_HEAP) // Grow only through member-owned chunks.
+ #else
+     if (!is_initialized(gm)) {
+       try_init_allocator();
+@@ -5209,7 +5209,7 @@
+ }
+ #endif /* MALLOC_INSPECT_ALL */
+ 
+-#ifdef __wasilibc_unmodified_upstream // Define a function that initializes the initial state of dlmalloc.
++#if defined(__wasilibc_unmodified_upstream) || defined(BUN_WASM_GROUP_HEAP)
+ #else
+ /* ------------------ Exported try_init_allocator -------------------- */
+ 

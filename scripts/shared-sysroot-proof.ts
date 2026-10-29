@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 
+import { writeNativeProof } from "./shared-sysroot-native.ts";
+
 const PAGE = 65536;
 type Range = { owner: number; start: number; end: number };
 
@@ -58,7 +60,10 @@ async function receive(worker: Worker): Promise<Range[]> {
 async function main() {
   const path = process.argv[2];
   assert(path, "Expected member.wasm path");
-  const module = await WebAssembly.compile(readFileSync(path));
+  const bytes = readFileSync(path);
+  const module = await WebAssembly.compile(bytes);
+  const wast = process.argv[3];
+  if (wast) { writeNativeProof(wast, bytes, imageInfo(module)); return; }
   const memory = new WebAssembly.Memory({ initial: 2, maximum: 4096, shared: true });
   const control = new SharedArrayBuffer(32);
   const workers = [1, 2].map(id => new Worker(new URL(import.meta.url), { workerData: { id, memory, control, module } }));
@@ -94,9 +99,10 @@ function member() {
   const ctl = new Int32Array(control);
   const info = imageInfo(module);
   const ranges: Range[] = [];
+  const sharedMemory = memory, owner = id;
   function reserve(pages: number): number {
-    const start = memory.grow(pages + 1) * PAGE;
-    ranges.push({ owner: id, start, end: start + pages * PAGE });
+    const start = sharedMemory.grow(pages + 1) * PAGE;
+    ranges.push({ owner, start, end: start + pages * PAGE });
     return start;
   }
   const base = reserve(Math.ceil(info.size / PAGE));
