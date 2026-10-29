@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { playwright, ready, run, session, writeFile } from "./playground.mjs";
 const fixtures = new URL("../../tests/async-context-runtime/", import.meta.url);
 const files = ["prepare-probe.ts", "prepare-transforms.ts", "prepare-cache.ts", "prepare-parent-loop.ts", "eval-callsite.mjs"];
-const sources = await Promise.all(files.map(async name => [name, await readFile(new URL(name, fixtures), "utf8")]));
+const sources = await Promise.all(files.map(async (name): Promise<[string, string]> => [name, await readFile(new URL(name, fixtures), "utf8")]));
 const wanted = process.argv.slice(2).length ? process.argv.slice(2) : ["chromium", "webkit"];
 const s = session("bun-wasm-prep-");
 const cases: [string, string][] = [
