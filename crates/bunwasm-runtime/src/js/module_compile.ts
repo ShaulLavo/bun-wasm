@@ -19,6 +19,7 @@
       if (error instanceof NativeSyntaxError) error.stack = `${filename}\n${error.stack}`;
       throw error;
     }
-    return internal.native.evalScript(`(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {\n\n${source}\n})`, filename, -1);
+    const wrapper = `(function __bunwasm_cjs__(exports, require, module, __filename, __dirname) {\n\n${source}\n})`;
+    return internal.native.evalScript(internal.prepareText(wrapper, "wrapper", "module-compile", filename), filename, -1);
   };
 })

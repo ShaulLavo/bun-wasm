@@ -89,6 +89,22 @@ mod bun_transpiler {
             bunwasm_transpiler::public_transpile(source, options, action, loader)
         }
 
+        fn prepare_source(&self, source: &str, goal: &str) -> Result<String, String> {
+            Ok(bunwasm_transpiler::prepare::prepare(source, goal).to_string())
+        }
+
+        fn prepare_function(
+            &self,
+            args: &[String],
+            kind: &str,
+            hooks: bool,
+        ) -> Result<String, String> {
+            Ok(bunwasm_transpiler::prepare::function(args, kind, hooks)
+                .into_iter()
+                .collect::<serde_json::Value>()
+                .to_string())
+        }
+
         fn function_imports(&self, args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, String> {
             bunwasm_transpiler::function_imports(args, kind)
         }
@@ -139,8 +155,8 @@ mod bun_transpiler {
                 Loader::Jsonc => BunLoader::Jsonc,
                 Loader::Text => BunLoader::Text,
             };
-            let preserve_source =
-                loader == BunLoader::Js && !(AWAIT_HOOKS && source.contains("await"));
+            let preserve_source = loader == BunLoader::Js
+                && !(AWAIT_HOOKS && (source.contains("await") || source.contains("eval")));
             // These extensions decide the format before parser classification in
             // State::detect_format, so unchanged JS only needs semantic imports.
             if preserve_source && (path.ends_with(".mjs") || path.ends_with(".cjs")) {

@@ -1,0 +1,336 @@
+From a922e4bb66c3bbfb64b43adb4b91af76e5165891 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 29 Oct 2026 11:23:02 +0200
+Subject: [PATCH] wasm: collect runtime source splices and prepare eval
+ arguments
+
+---
+ src/js_parser/lexer.rs              |  3 +++
+ src/js_parser/lib.rs                | 38 +++++++++++++++++++++++++++++
+ src/js_parser/parse/mod.rs          | 23 +++++++++++++++++
+ src/js_parser/parse/parse_fn.rs     | 10 ++++++++
+ src/js_parser/parse/parse_prefix.rs |  4 +++
+ src/js_parser/parse/parse_stmt.rs   | 14 +++++++++++
+ src/js_parser/parse/parse_suffix.rs | 12 +++++++++
+ src/js_printer/lib.rs               |  7 +++++-
+ 8 files changed, 110 insertions(+), 1 deletion(-)
+
+diff --git a/src/js_parser/lexer.rs b/src/js_parser/lexer.rs
+index 063d2206..6f66d780 100644
+--- a/src/js_parser/lexer.rs
++++ b/src/js_parser/lexer.rs
+@@ -206,6 +206,7 @@ pub struct Lexer<'a> {
+     pub current: usize,
+     pub(crate) start: usize,
+     pub end: usize,
++    pub prev_token_end: usize,
+     pub(crate) approximate_newline_count: usize,
+     pub(crate) previous_backslash_quote_in_jsx: Range,
+     pub token: T,
+@@ -1258,6 +1259,7 @@ impl<'a> Lexer<'a> {
+     /// `parse_string_literal::<QUOTE>`) stay `#[inline]`/`#[inline(always)]` so
+     /// they merge *into* this body.
+     pub fn next(&mut self) -> Result<(), Error> {
++        self.prev_token_end = self.end;
+         self.has_newline_before = self.end == 0;
+         self.has_pure_comment_before = false;
+         self.prev_token_was_await_keyword = false;
+@@ -2258,6 +2260,7 @@ impl<'a> Lexer<'a> {
+             current: 0,
+             start: 0,
+             end: 0,
++            prev_token_end: 0,
+             approximate_newline_count: 0,
+             previous_backslash_quote_in_jsx: Range::NONE,
+             token: T::TEndOfFile,
+diff --git a/src/js_parser/lib.rs b/src/js_parser/lib.rs
+index 045bf990..da9b84f2 100644
+--- a/src/js_parser/lib.rs
++++ b/src/js_parser/lib.rs
+@@ -799,3 +799,41 @@ fn bunwasm_dynamic_import(loc: bun_ast::Loc) {
+         }
+     });
+ }
++
++/// Original-source spans from the parse pass. No AST rewriting is performed.
++#[derive(Clone, Debug)]
++pub enum BunwasmSplice {
++    Await { start: usize, operand: usize, end: usize },
++    Yield { start: usize, operand: usize, end: usize, asynchronous: bool },
++    Function { start: usize, end: usize, asynchronous: bool },
++    Prologue { start: usize, end: usize },
++    Try(usize),
++    Handler(usize),
++    Loop { start: usize, iterable: usize, iterable_end: usize, body: usize, end: usize, block: bool },
++    Label { start: usize, body: usize },
++    Eval { start: usize, end: usize, spread: bool },
++    Argument { call: usize, start: usize, end: usize, spread: bool },
++    AwaitUsing,
++}
++
++pub fn with_bunwasm_splices<T>(f: impl FnOnce() -> T) -> (T, Vec<BunwasmSplice>) {
++    struct Restore(Option<Vec<BunwasmSplice>>);
++    impl Drop for Restore {
++        fn drop(&mut self) {
++            BUNWASM_SPLICES.with(|slot| { slot.replace(self.0.take()); });
++        }
++    }
++    let previous = BUNWASM_SPLICES.with(|slot| slot.replace(Some(Vec::new())));
++    let _restore = Restore(previous);
++    let result = f();
++    let records = BUNWASM_SPLICES.with(|slot| slot.take().unwrap_or_default());
++    (result, records)
++}
++thread_local! {
++    static BUNWASM_SPLICES: core::cell::RefCell<Option<Vec<BunwasmSplice>>> = const { core::cell::RefCell::new(None) };
++}
++fn bunwasm_splice(record: BunwasmSplice) {
++    BUNWASM_SPLICES.with_borrow_mut(|slot| {
++        if let Some(records) = slot { records.push(record); }
++    });
++}
+diff --git a/src/js_parser/parse/mod.rs b/src/js_parser/parse/mod.rs
+index 8e3392db..c2cde165 100644
+--- a/src/js_parser/parse/mod.rs
++++ b/src/js_parser/parse/mod.rs
+@@ -112,7 +112,12 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             }
+             // After "*" the operand is parsed whatever follows.
+             if is_star || p.is_start_of_expression_or_shift_assign() {
++                let operand = p.lexer.start;
+                 value = Some(p.parse_expr(Level::Yield)?);
++                crate::bunwasm_splice(crate::BunwasmSplice::Yield {
++                    start: loc.start as usize, operand, end: p.lexer.prev_token_end,
++                    asynchronous: p.fn_or_arrow_data_parse.allow_await == AwaitOrYield::AllowExpr,
++                });
+             }
+         }
+ 
+@@ -362,6 +367,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+     fn parse_call_args_inner(&mut self) -> Result<ExprListLoc, Error> {
+         let p = self;
+         let mut args: smallvec::SmallVec<[Expr; 4]> = smallvec::SmallVec::new();
++        let call = p.lexer.start;
+         p.lexer.expect(T::TOpenParen)?;
+ 
+         while p.lexer.token != T::TCloseParen {
+@@ -371,7 +377,13 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                 // p.mark_syntax_feature(compat.rest_argument, p.lexer.range());
+                 p.lexer.next()?;
+             }
++            let argument_start = p.lexer.start;
+             let mut arg = p.parse_expr(Level::Comma)?;
++            if args.is_empty() {
++                crate::bunwasm_splice(crate::BunwasmSplice::Argument {
++                    call, start: argument_start, end: p.lexer.prev_token_end, spread: is_spread,
++                });
++            }
+             if is_spread {
+                 arg = p.new_expr(E::Spread { value: arg }, loc);
+             }
+@@ -910,6 +922,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+ 
+             p.lexer.next()?;
+ 
++            let operand = p.lexer.start;
+             let raw2 = p.lexer.raw();
+             let mut value = if p.lexer.token == T::TIdentifier && raw2 == b"using" {
+                 'value: {
+@@ -966,6 +979,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                 p.lexer.unexpected()?;
+             }
+             p.parse_suffix(&mut value, Level::Prefix, None, EFlags::None)?;
++            crate::bunwasm_splice(crate::BunwasmSplice::Await {
++                start: token_range.loc.start as usize, operand, end: p.lexer.prev_token_end,
++            });
+             let mut expr = p.new_expr(E::Await { value }, token_range.loc);
+             p.parse_suffix(&mut expr, Level::Lowest, None, EFlags::None)?;
+             return Ok(ExprOrLetStmt {
+@@ -1479,6 +1495,8 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         let mut return_without_semicolon_start: i32 = -1;
+         opts.lexical_decl = LexicalDecl::AllowAll;
+         let mut is_directive_prologue = true;
++        let prologue_start = p.lexer.start;
++        let mut prologue_end = prologue_start;
+ 
+         loop {
+             for comment in p.lexer.comments_to_preserve_before.iter() {
+@@ -1494,6 +1512,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             let mut current_opts = opts;
+             let mut stmt = p.parse_stmt(&mut current_opts)?;
+ 
++            if is_directive_prologue {
++                prologue_end = stmt.loc.start as usize;
++            }
+             // Skip TypeScript types entirely
+             if Self::IS_TYPESCRIPT_ENABLED {
+                 if let js_ast::stmt::Data::STypeScript(_) = stmt.data {
+@@ -1538,6 +1559,8 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                 }
+             }
+ 
++            if is_directive_prologue { prologue_end = p.lexer.start; }
++            crate::bunwasm_splice(crate::BunwasmSplice::Prologue { start: prologue_start, end: prologue_end });
+             if !skip {
+                 stmts.push(stmt);
+             }
+diff --git a/src/js_parser/parse/parse_fn.rs b/src/js_parser/parse/parse_fn.rs
+index 6555dfa0..dac1abfb 100644
+--- a/src/js_parser/parse/parse_fn.rs
++++ b/src/js_parser/parse/parse_fn.rs
+@@ -501,8 +501,13 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         }
+ 
+         p.lexer.expect(T::TOpenBrace)?;
++        let body_start = p.lexer.start;
+         let mut opts = ParseStatementOptions::default();
+         let stmts = p.parse_stmts_up_to(T::TCloseBrace, &mut opts)?;
++        crate::bunwasm_splice(crate::BunwasmSplice::Function {
++            start: body_start, end: p.lexer.start,
++            asynchronous: data.allow_await == AwaitOrYield::AllowExpr,
++        });
+         p.lexer.next()?;
+ 
+         if pushed_scope_for_function_body {
+@@ -576,6 +581,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         let old_fn_or_arrow_data = p.fn_or_arrow_data_parse.clone();
+ 
+         p.fn_or_arrow_data_parse = data.clone();
++        let body_start = p.lexer.start;
+         let expr = match p.parse_expr(Level::Comma) {
+             Ok(e) => e,
+             Err(err) => {
+@@ -585,6 +591,10 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                 return Err(err);
+             }
+         };
++        crate::bunwasm_splice(crate::BunwasmSplice::Function {
++            start: body_start, end: p.lexer.prev_token_end,
++            asynchronous: data.allow_await == AwaitOrYield::AllowExpr,
++        });
+         p.fn_or_arrow_data_parse = old_fn_or_arrow_data;
+ 
+         let ret_stmt = p.s(S::Return { value: Some(expr) }, expr.loc);
+diff --git a/src/js_parser/parse/parse_prefix.rs b/src/js_parser/parse/parse_prefix.rs
+index 0b0a3204..7aad335b 100644
+--- a/src/js_parser/parse/parse_prefix.rs
++++ b/src/js_parser/parse/parse_prefix.rs
+@@ -178,7 +178,11 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                                 name_range;
+                         }
+ 
++                        let operand = p.lexer.start;
+                         let value = p.parse_expr(Level::Prefix)?;
++                        crate::bunwasm_splice(crate::BunwasmSplice::Await {
++                            start: loc.start as usize, operand, end: p.lexer.prev_token_end,
++                        });
+                         if p.lexer.token == T::TAsteriskAsterisk {
+                             p.lexer.unexpected()?;
+                             return Err(crate::Error::SyntaxError);
+diff --git a/src/js_parser/parse/parse_stmt.rs b/src/js_parser/parse/parse_stmt.rs
+index 5298b27d..201bb653 100644
+--- a/src/js_parser/parse/parse_stmt.rs
++++ b/src/js_parser/parse/parse_stmt.rs
+@@ -406,6 +406,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+ 
+     #[inline(never)]
+     fn t_try(p: &mut Self, _: &mut ParseStatementOptions, loc: bun_ast::Loc) -> Result<Stmt> {
++        crate::bunwasm_splice(crate::BunwasmSplice::Try(loc.start as usize));
+         p.lexer.next()?;
+         let body_loc = p.lexer.loc();
+         p.lexer.expect(T::TOpenBrace)?;
+@@ -447,6 +448,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             }
+ 
+             let catch_body_loc = p.lexer.loc();
++            crate::bunwasm_splice(crate::BunwasmSplice::Handler(p.lexer.end));
+             p.lexer.expect(T::TOpenBrace)?;
+ 
+             let _ = p.push_scope_for_parse_pass(js_ast::scope::Kind::Block, catch_body_loc)?;
+@@ -466,6 +468,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             let finally_loc = p.lexer.loc();
+             let _ = p.push_scope_for_parse_pass(js_ast::scope::Kind::Block, finally_loc)?;
+             p.lexer.expect(T::TFinally)?;
++            crate::bunwasm_splice(crate::BunwasmSplice::Handler(p.lexer.end));
+             p.lexer.expect(T::TOpenBrace)?;
+             let stmts = p.parse_stmts_up_to(T::TCloseBrace, &mut stmt_opts)?;
+             p.lexer.next()?;
+@@ -655,10 +658,20 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+ 
+                 p.forbid_initializers(decls_ptr.slice(), "of", false)?;
+                 p.lexer.next()?;
++                let iterable = p.lexer.start;
+                 let value = p.parse_expr(Level::Comma)?;
++                let iterable_end = p.lexer.prev_token_end;
+                 p.lexer.expect(T::TCloseParen)?;
++                let body_start = p.lexer.start;
++                let block = p.lexer.token == T::TOpenBrace;
+                 let mut stmt_opts = ParseStatementOptions::default();
+                 let body = p.parse_stmt(&mut stmt_opts)?;
++                if is_for_await {
++                    crate::bunwasm_splice(crate::BunwasmSplice::Loop {
++                        start: loc.start as usize, iterable, iterable_end,
++                        body: body_start, end: p.lexer.prev_token_end, block,
++                    });
++                }
+                 return Ok(p.s(
+                     S::ForOf {
+                         is_await: is_for_await,
+@@ -1701,6 +1714,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+         let stmt_result = p.parse_stmt(&mut nested_opts);
+         p.pop_scope();
+         let stmt = stmt_result?;
++        crate::bunwasm_splice(crate::BunwasmSplice::Label { start: loc.start as usize, body: stmt.loc.start as usize });
+         Ok(p.s(S::Label { name: _name, stmt }, loc))
+     }
+ 
+diff --git a/src/js_parser/parse/parse_suffix.rs b/src/js_parser/parse/parse_suffix.rs
+index 76c1603f..c77c564b 100644
+--- a/src/js_parser/parse/parse_suffix.rs
++++ b/src/js_parser/parse/parse_suffix.rs
+@@ -384,7 +384,19 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             return Ok(Continuation::Done);
+         }
+ 
++        let eval_target = match &left.data {
++            js_ast::ExprData::EIdentifier(e) => p.load_name_from_ref(e.ref_) == b"eval",
++            js_ast::ExprData::EBinary(e) if e.op == js_ast::op::Code::BinComma => match &e.right.data {
++                js_ast::ExprData::EIdentifier(e) => p.load_name_from_ref(e.ref_) == b"eval",
++                _ => false,
++            },
++            _ => false,
++        };
++        let open = p.lexer.start;
+         let list_loc = p.parse_call_args()?;
++        if eval_target && old_optional_chain.is_none() {
++            crate::bunwasm_splice(crate::BunwasmSplice::Eval { start: open, end: list_loc.loc.start as usize, spread: false });
++        }
+         let loc = left.loc;
+         let target = *left;
+         *left = p.new_expr(
+diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
+index d84ed54d..2b120a13 100644
+--- a/src/js_printer/lib.rs
++++ b/src/js_printer/lib.rs
+@@ -3681,7 +3681,12 @@ pub(crate) mod __gated_printer {
+                     let args = e.args.slice();
+ 
+                     if !args.is_empty() {
++                        let prepare_eval = bunwasm_await_hooks()
++                            && (e.is_direct_eval || is_unbound_eval)
++                            && !matches!(args[0].data, ExprData::ESpread(_));
++                        if prepare_eval { self.print(b"__bunwasm_evalArg(eval, "); }
+                         self.print_expr(args[0], Level::Comma, ExprFlag::none());
++                        if prepare_eval { self.print(b")"); }
+                         for arg in &args[1..] {
+                             self.print(b",");
+                             self.print_space();
+@@ -7916,7 +7921,7 @@ fn bunwasm_import(start: usize, end: usize, specifier: Option<&[u8]>) {
+ pub static BUNWASM_AWAIT_HOOKS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+ 
+ /// Version of the shapes above; the runtime keys cached hooked text on it.
+-pub const BUNWASM_HOOKS_VERSION: u32 = 3;
++pub const BUNWASM_HOOKS_VERSION: u32 = 4;
+ 
+ #[inline]
+ fn bunwasm_await_hooks() -> bool {

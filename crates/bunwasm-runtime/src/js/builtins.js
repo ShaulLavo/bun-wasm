@@ -268,7 +268,7 @@
         this.filename = typeof options === "string" ? options : options.filename || "evalmachine.<anonymous>";
       }
       runInThisContext() {
-        return native.evalScript(this.code, this.filename);
+        return native.evalScript(internal.prepareText(this.code, "script", "vm-script", this.filename), this.filename);
       }
       runInContext(context) {
         return runWith(this.code, context, this.filename);
@@ -284,7 +284,7 @@
         Object.defineProperty(context, "globalThis", { value: context, writable: true, configurable: true });
       }
       const runner = native.evalScript(`(function (__ctx, __code) { with (__ctx) { return eval(__code); } })`, filename);
-      return runner(context, String(code));
+      return runner(context, internal.prepareText(String(code), "eval", "vm-context", filename));
     }
     return {
       Script,
@@ -293,7 +293,7 @@
       runInNewContext: (code, context, options) => new Script(code, options).runInNewContext(context),
       createContext: (context = {}) => context,
       isContext: (value) => value !== null && typeof value === "object",
-      compileFunction: (code, params = []) => native.evalScript(`(function (${params.join(", ")}) {\n${code}\n})`),
+      compileFunction: (code, params = [], options = {}) => native.evalScript(internal.prepareText(`(function (${params.join(", ")}) {\n${code}\n})`, "wrapper", "vm-compileFunction", options.filename), options.filename),
     };
   }
 
@@ -754,6 +754,7 @@
     }),
     "bun:internal-for-testing": () => ({
       isASANEnabled: () => false,
+      preparation: () => internal.preparation,
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
       directoryCount: () => native.directoryCount(),
     }),

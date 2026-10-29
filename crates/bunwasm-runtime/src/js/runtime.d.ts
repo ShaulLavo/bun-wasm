@@ -1,6 +1,29 @@
 declare namespace BunWasm {
   type FunctionKind = "normal" | "async" | "generator" | "async-generator";
+  type PrepareGoal = "script" | "eval" | "wrapper";
+  interface PreparedSource {
+    version: number;
+    edits: number[];
+    columns: number[];
+    fallback: string | null;
+    spreadEval: number;
+    unhookedAwaitUsing: number;
+  }
+  interface Internal {
+    mainPath: string;
+    prepareText(source: string, goal: PrepareGoal, origin: string, name?: string): string;
+    prepareFunctionArgs(args: string[], kind: FunctionKind, name?: string): string[];
+    preparedColumns: Map<string, Int32Array>;
+    preparation: {
+      version: number; realm: string; counters: Record<string, number>;
+      correctPosition(name: string, line: number, column: number): number;
+      cacheBytes(): number; columnBytes(): number;
+    };
+  }
   interface Native {
+    readonly prepareVersion: number;
+    prepareSource(source: string, goal: PrepareGoal): string;
+    prepareFunction(args: readonly string[], kind: FunctionKind, hooks: boolean): string;
     functionImports(args: readonly string[], kind: FunctionKind): number[][];
     resolve(specifier: string, referrer: string, require: boolean): string;
     importModule(path: string): Promise<unknown>;
@@ -465,3 +488,5 @@ declare namespace BunWasm {
 }
 
 interface String { toWellFormed(): string }
+
+declare var __bunwasm_contextHooks: boolean;

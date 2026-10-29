@@ -91,6 +91,7 @@
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
     if (line !== null && file && !internal.mappedCallSites?.has(site)) {
+      col = internal.preparation?.correctPosition(file, line, col) ?? col;
       const mapped = native.mapPosition(file, line, col);
       if (mapped) [line, col] = mapped;
       if (isV8) col = pastNew(file, line, col);
@@ -888,6 +889,7 @@
   defineLazyGlobal("HTMLRewriter", () => internal.require("html_rewriter").HTMLRewriter);
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
+  internal.require("source_prepare");
   internal.require("function");
   internal.fakeTimers = internal.require("fake_timers");
   // Networking factories require the installed web globals.

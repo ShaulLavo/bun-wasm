@@ -1008,6 +1008,30 @@ fn install_modules(t: &mut Table, state: &Rc<State>) {
             .map_err(NativeError::syntax_error)
     });
     let st = state.clone();
+    t.add("prepareSource", move |a| {
+        st.transpiler
+            .prepare_source(a.str(0)?, a.str(1)?)
+            .map(Val::from)
+            .map_err(NativeError::syntax_error)
+    });
+    let st = state.clone();
+    t.add("prepareFunction", move |a| {
+        let args = a
+            .array(0)
+            .ok_or_else(|| NativeError::type_error("expected function arguments"))?;
+        let strings = args
+            .iter()
+            .map(|value| match value {
+                Val::Str(value) => Ok(value.clone()),
+                _ => Err(NativeError::type_error("expected source string")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        st.transpiler
+            .prepare_function(&strings, a.str(1)?, a.bool(2))
+            .map(Val::from)
+            .map_err(NativeError::syntax_error)
+    });
+    let st = state.clone();
     t.add("functionImports", move |a| {
         let args = a
             .array(0)

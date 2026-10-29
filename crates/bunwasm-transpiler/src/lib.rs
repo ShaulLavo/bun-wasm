@@ -6,6 +6,7 @@
 use std::{borrow::Cow, cell::RefCell};
 
 pub mod data;
+pub mod prepare;
 
 use bun_alloc::Arena;
 use bun_ast::Loader as BunLoader;

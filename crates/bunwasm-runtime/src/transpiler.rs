@@ -92,6 +92,19 @@ pub trait Transpiler {
         Err("Bun.Transpiler needs Bun's parser, which this bun.wasm was built without".to_owned())
     }
 
+    fn prepare_source(&self, _source: &str, _goal: &str) -> Result<String, String> {
+        Err("source preparation needs Bun's parser".to_owned())
+    }
+
+    fn prepare_function(
+        &self,
+        _args: &[String],
+        _kind: &str,
+        _hooks: bool,
+    ) -> Result<String, String> {
+        Err("function preparation needs Bun's parser".to_owned())
+    }
+
     fn function_imports(&self, _args: &[String], _kind: &str) -> Result<Vec<Vec<usize>>, String> {
         Err("generated imports need Bun's parser".to_owned())
     }

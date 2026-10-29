@@ -700,6 +700,7 @@ class EngineHost {
   installContextHooks(hidden) {
     const host = this;
     const id = (value) => value;
+    hidden("__bunwasm_contextHooks", !this.o.asyncContext);
     // A native continuation provider already scopes every job, including raw
     // eval. Its post-getter frame must not be replaced with the printer's
     // earlier frame, so every hook is inert.
