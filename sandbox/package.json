@@ -17,10 +17,10 @@
     "@codemirror/view": "^6.43.14",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#72c18745d536df42edf0555f22c10c73a0a837d9",
+    "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#460462baaaa76113e20cff4107bbf28fba1f7358",
     "codemirror": "^6.0.2",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.98/waffle-0.0.98.tgz",
-    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.6/waffle-base-0.0.6.tgz"
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.99/waffle-0.0.99.tgz",
+    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.7/waffle-base-0.0.7.tgz"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

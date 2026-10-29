@@ -1,6 +1,5 @@
 import { control, createShell, SharedBridge, TerminalNewlines, type Shell as RuntimeShell } from "bash-web";
 import type { Runtime } from "waffle";
-import { waitStatus } from "waffle/proc/wait-status";
 
 type SessionState = "starting" | "ready" | "running" | "exited" | "failed";
 
@@ -16,10 +15,9 @@ type SessionOptions = {
   onState(state: SessionState, detail?: string): void;
 };
 
-const PROMPT_MARKER = "\x1b]133;A\x07";
 const PASTE_LIMIT = 262144;
 const CHUNK = 65536;
-const PHASES: readonly SessionState[] = ["starting", "ready", "running", "exited"];
+type Prompt = Awaited<ReturnType<RuntimeShell["waitForPrompt"]>>;
 
 /** Connects a terminal view to one interactive shell over the shared terminal bridge. */
 export class Shell {
@@ -34,19 +32,12 @@ export class Shell {
   private queuedBytes = 0;
   private pendingDiscard = false;
   private phase = -1;
-  private completion?: { stage: "typing" | "executing" | "prompt"; resolve(): void; reject(error: Error): void };
-  private readonly startup = Promise.withResolvers<void>();
-  private readonly decoder = new TextDecoder();
-  private promptTail = "";
-  private prompts = 0;
+  private receipt?: Prompt;
+  private submissions = Promise.resolve();
+  private pendingSubmissions = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
-  private exitCode = 0;
-  private unobserveExit = () => {};
-
-  private constructor(private readonly options: SessionOptions) {
-    void this.startup.promise.catch(() => {});
-  }
+  private constructor(private readonly options: SessionOptions) {}
 
   static async create(options: SessionOptions): Promise<Shell> {
     const session = new Shell(options);
@@ -58,23 +49,23 @@ export class Shell {
         terminal: session.bridge,
         signal: session.admission.signal,
         cwd: options.cwd,
-        env: { ...options.env, PS1: PROMPT_MARKER + (options.env.PS1 ?? "$ ") },
+        env: options.env,
         wasmUrl: options.wasmUrl,
         workerUrl: options.workerUrl,
       }));
       if (session.disposed) throw new Error("Shell startup was cancelled.");
       session.shell = shell;
-      const supervisor = await (await options.runtime.processes()).ready();
-      session.unobserveExit = supervisor.onChildExit(({ parentPid, result }) => {
-        if (parentPid === shell.process.pid) session.exitCode = waitStatus(result);
-      });
       void shell.done.then((result) => {
         if (session.disposed) return;
         if (result.error) session.failureMessage = result.error;
         session.bridge.signal();
       });
       session.pump();
-      await session.startup.promise;
+      session.receipt = await shell.waitForPrompt({ signal: session.admission.signal });
+      options.onState("ready");
+      void session.observePrompts(shell).catch(error => {
+        if (!session.disposed) session.failureMessage = String(error);
+      });
       return session;
     } catch (error) {
       await session.dispose();
@@ -83,18 +74,28 @@ export class Shell {
   }
 
   get running(): boolean {
-    return this.completion !== undefined || this.phase === 2;
+    return this.pendingSubmissions > 0 || Atomics.load(this.bridge.state, control.phase) === 2;
   }
 
   get lastExit(): number {
-    return this.exitCode;
+    return this.receipt?.status ?? 0;
   }
 
   submit(command: string): Promise<void> {
-    if (this.disposed || this.running) return Promise.reject(new Error("Shell is not ready"));
-    const done = new Promise<void>((resolve, reject) => { this.completion = { stage: "typing", resolve, reject }; });
+    if (this.disposed) return Promise.reject(new Error("Shell is closed"));
+    this.pendingSubmissions++;
+    const submitted = this.submissions.then(() => this.submitOne(command));
+    this.submissions = submitted.catch(() => {});
+    return submitted.finally(() => { this.pendingSubmissions--; });
+  }
+
+  private async submitOne(command: string): Promise<void> {
+    const shell = this.shell;
+    if (!shell || this.disposed) throw new Error("Shell is closed");
+    if (Atomics.load(this.bridge.state, control.phase) === 2) throw new Error("Shell is running a foreground command");
+    const ready = await shell.waitForPrompt({ signal: this.admission.signal });
     this.input(new TextEncoder().encode(`\x05\x15${command}\r`));
-    return done;
+    this.receipt = await shell.waitForPrompt({ after: ready.generation, signal: this.admission.signal });
   }
 
   input(data: string | Uint8Array): void {
@@ -130,13 +131,9 @@ export class Shell {
   dispose(): Promise<void> {
     if (this.disposal) return this.disposal;
     this.disposed = true;
-    this.startup.reject(new Error(this.failureMessage));
-    this.completion?.reject(new Error(this.failureMessage));
-    this.completion = undefined;
     this.admission.abort(new Error("Shell startup was cancelled."));
     clearTimeout(this.timer);
     this.bridge.close();
-    this.unobserveExit();
     this.queued = [];
     this.queuedBytes = 0;
     this.pendingDiscard = false;
@@ -170,22 +167,12 @@ export class Shell {
     return Atomics.load(this.bridge.state, control.outputWrite) !== Atomics.load(this.bridge.state, control.outputRead);
   }
 
-  private observePrompts(bytes: Uint8Array): boolean {
-    const text = this.promptTail + this.decoder.decode(bytes, { stream: true });
-    const count = text.split(PROMPT_MARKER).length - 1;
-    this.prompts += count;
-    this.promptTail = text.slice(1 - PROMPT_MARKER.length);
-    const completion = this.completion;
-    if (!completion) return count > 0;
-    let from = 0;
-    if (completion.stage === "typing") {
-      const newline = text.indexOf("\n");
-      if (newline < 0) return count > 0;
-      completion.stage = "executing";
-      from = newline + 1;
+  private async observePrompts(shell: RuntimeShell): Promise<void> {
+    while (!this.disposed) {
+      const next = await shell.waitForPrompt({ after: this.receipt?.generation ?? 0n, signal: this.admission.signal });
+      this.receipt = next;
+      this.options.onState("ready");
     }
-    if (text.includes(PROMPT_MARKER, from)) completion.stage = "prompt";
-    return count > 0;
   }
 
   private pump(): void {
@@ -193,7 +180,6 @@ export class Shell {
     const sequence = Atomics.load(this.bridge.state, control.wake);
     this.flushInput();
     const output = this.bridge.drain();
-    const prompt = this.observePrompts(output);
     if (output.length) this.newlines.write(output, (chunk) => this.options.onOutput(chunk));
     const phase = Atomics.load(this.bridge.state, control.phase);
     const pending = this.outputPending();
@@ -206,16 +192,12 @@ export class Shell {
       void this.dispose();
       return;
     }
-    if ((phase !== this.phase || prompt) && !this.bridge.cancelled()) {
+    if (phase !== this.phase) {
       this.phase = phase;
-      this.options.onState(PHASES[phase] ?? "failed");
-    }
-    if (phase === 1 && this.prompts > 0) this.startup.resolve();
-    if (phase === 1 && this.completion && this.completion.stage === "prompt") {
-      this.completion.resolve();
-      this.completion = undefined;
+      if (phase === 2) this.options.onState("running");
     }
     if (phase === 3 && !pending) {
+      this.options.onState("exited");
       void this.dispose();
       return;
     }

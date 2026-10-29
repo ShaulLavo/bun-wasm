@@ -6,9 +6,13 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=/dev/null
 source "$root/env.sh"
-commit=72c18745d536df42edf0555f22c10c73a0a837d9
+commit=460462baaaa76113e20cff4107bbf28fba1f7358
 source_dir="${BASH_WEB_SOURCE:-$CARGO_TARGET_DIR/bash-web-source}"
 if [[ "$(git -C "$source_dir" rev-parse HEAD 2>/dev/null)" != "$commit" ]]; then
+  if [[ -n "${BASH_WEB_SOURCE:-}" ]]; then
+    echo "Provided bash-web source does not match pinned commit $commit: $source_dir" >&2
+    exit 1
+  fi
   rm -rf "$source_dir"
   git init -q "$source_dir"
   git -C "$source_dir" fetch -q --depth 1 https://github.com/ShaulLavo/bash-web.git "$commit"

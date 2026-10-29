@@ -21,7 +21,6 @@ import { HostedPreviews } from "./hosted-previews";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope } from "./engine-loader";
 import { Shell } from "./shell";
 import { ENGINE_BIN } from "../../src/executable-paths";
-import { bunLauncher } from "./bun-launcher";
 import { commandChunks } from "./startup-cache";
 import { enableTerminalCopy } from "./terminal-copy";
 import { linkLocalUrls } from "./terminal-links";
@@ -394,10 +393,13 @@ const [programs, scoped, wasm] = await Promise.all([browserPrograms.ready(), mod
 if (!wasm || "error" in wasm) throw new Error(wasm?.error ?? "bun.wasm unavailable");
 const module = wasm.module;
 const bin = ENGINE_BIN[engine];
-const removeAdapter = runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, {
-  runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
-  loadTools: () => fetchWasm("bun-tools.wasm", () => {}).then(loaded => loaded.module),
-}));
+const removeAdapter = runtime.registerAdapter(`bun:${engine}`, async (context, service) => {
+  const { bunLauncher } = await import("./bun-launcher");
+  return bunLauncher(engine, {
+    runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
+    loadTools: () => fetchWasm("bun-tools.wasm", () => {}).then(loaded => loaded.module),
+  })(context, service);
+});
 const removePrograms: Array<() => void> = [];
 for (const name of ["bun", "node", "nodejs"]) {
   const path = `${bin}/${name}`;
@@ -445,11 +447,8 @@ if (!fs.ownershipLost) {
 pageSetUp();
 if (startup === "ready") whenIdle(warmFirstCommand);
 
-// The first command would otherwise load the runner, Waffle's process and network services and
-// then the worker's chunks one after another, each a network round trip. Put them in the HTTP
-// cache while the page is idle. Only fetch: importing or initializing here could leave a failure
-// behind (a rejected module or service) that a later command would inherit. A failed fetch leaves
-// nothing, and the command loads the file itself.
+// Prefetch the lazy Bun launcher and worker chunks for the first Bun command.
+// Fetch only: importing here would turn deferred execution setup into startup work.
 function warmFirstCommand(): void {
   for (const chunk of commandChunks()) void fetch(chunk, { priority: "low" }).then(response => response.arrayBuffer()).catch(() => {});
 }

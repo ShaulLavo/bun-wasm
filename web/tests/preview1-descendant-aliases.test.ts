@@ -6,7 +6,7 @@ import { WorkerPipeHost } from "waffle/proc/worker-pipes";
 import type { PipeEndpoint } from "waffle/proc/pipes";
 import type { RuntimeWorkerRequest } from "waffle/browser/worker";
 import { SubprocessBroker } from "../src/subprocess-broker";
-import { processRuntimeFixture } from "./process-runtime-fixture";
+import { processRuntimeFixture, fixtureFilesystemConnection } from "./process-runtime-fixture";
 
 async function until(condition: () => boolean): Promise<void> {
   for (let turn = 0; turn < 100; turn++) { if (condition()) return; await new Promise(resolve => setTimeout(resolve, 0)); }
@@ -31,7 +31,7 @@ test("explicit recursive Preview1 programs retain inherited writers across ordin
   }
   globalThis.Worker = FakeWorker as unknown as typeof Worker;
   const runtime = processRuntimeFixture({
-    connect(identity) { const channel = new MessageChannel(); ports.push(channel.port1, channel.port2); return { ...identity, port: channel.port1 }; },
+    connect(identity) { const channel = new MessageChannel(); ports.push(channel.port1, channel.port2); return fixtureFilesystemConnection(identity, channel.port1); },
     revoke() {}, reap() {}, async quiesce() {},
   });
   const root = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });

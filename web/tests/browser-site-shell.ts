@@ -1,11 +1,21 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
+import { checkDelayedStop, checkRootSignals } from "./shell-stop-check";
+import { pinnedBashWeb } from "../../scripts/bash-web-guests";
 
 const port = Number(process.env.SITE_SHELL_PORT);
 assert.ok(Number.isInteger(port) && port > 1024 && port < 65536, "SITE_SHELL_PORT must be an explicit free port");
-const root = resolve(import.meta.dir, "../../site/dist");
+const repository = resolve(import.meta.dir, "../..");
+const root = resolve(repository, "site/dist");
+const sourceHead = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repository }).stdout.toString().trim();
+const sourceDirty = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: repository }).stdout.length !== 0;
 const output = process.env.SITE_SHELL_EVIDENCE;
+const shellGuest = Bun.file(resolve(root, "playground/programs/shell-engine.wasm"));
+const shellIdentity = {
+  commit: pinnedBashWeb(resolve(repository, "web")), bytes: shellGuest.size,
+  sha256: new Bun.CryptoHasher("sha256").update(await shellGuest.bytes()).digest("hex"),
+};
 let browser: Browser | undefined;
 let launching: Promise<Browser> | undefined;
 let server: ReturnType<typeof Bun.spawn> | undefined;
@@ -35,6 +45,7 @@ async function ready(page: Page): Promise<void> {
   await page.waitForFunction(() => !Reflect.get(globalThis, "playground").shell.running && !document.querySelector<HTMLButtonElement>("#run")?.disabled);
 }
 async function exercise(page: Page, engine: string) {
+  const base = `http://127.0.0.1:${port}/playground/`;
   await page.goto(`http://127.0.0.1:${port}/playground/?mode=memory&engine=${engine}`);
   await page.waitForFunction(() => !!Reflect.get(globalThis, "playground"));
   await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
@@ -50,6 +61,10 @@ async function exercise(page: Page, engine: string) {
     const { shell } = Reflect.get(globalThis, "playground");
     await shell.submit("bun -e 'process.exit(7)'");
     if (shell.lastExit !== 7) throw new Error(`Expected exit 7, got ${shell.lastExit}`);
+    await shell.submit("false");
+    if (shell.lastExit !== 1) throw new Error(`Expected builtin false status 1, got ${shell.lastExit}`);
+    await shell.submit("echo BUILTIN_RECOVERED");
+    if (shell.lastExit !== 0) throw new Error(`Expected builtin echo status 0, got ${shell.lastExit}`);
   });
   await command(page, "bun -e 'console.log(\"TTY_\" + process.stdin.isTTY)'");
   await contains(page, "TTY_true");
@@ -101,7 +116,11 @@ async function exercise(page: Page, engine: string) {
     await Bun.write(`${output}/${engine}-transcript.txt`, transcript);
     await page.screenshot({ path: `${output}/${engine}-keyboard-repl.png`, fullPage: true });
   }
-  return { engine, ok: true, transcript };
+  const builds: unknown = await page.evaluate(() => Reflect.get(globalThis, "__bunwasmBuilds"));
+  console.log(JSON.stringify({ partial: true, engine, check: "keyboard-repl-builtin", sourceHead, sourceDirty, shellIdentity, builds, transcript }));
+  assert.equal(await checkDelayedStop(page, base, "chromium", engine), true);
+  await checkRootSignals(page, base, "chromium", engine);
+  return { engine, ok: true, sourceHead, sourceDirty, shellIdentity, builds, transcript };
 }
 async function reportFailure(page: Page, engine: string): Promise<void> {
   if (output) await page.screenshot({ path: `${output}/${engine}-failure.png`, fullPage: true });
@@ -114,6 +133,7 @@ try {
     await Bun.sleep(50);
   }
   browser = await (launching = chromium.launch({ headless: true }));
+  const failures: unknown[] = [];
   for (const engine of process.argv.slice(2).length ? process.argv.slice(2) : ["browser"]) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const page = await context.newPage();
@@ -121,9 +141,10 @@ try {
     try { console.log(JSON.stringify(await exercise(page, engine))); }
     catch (error) {
       await reportFailure(page, engine);
-      throw error;
+      failures.push(error);
     } finally { await context.close(); }
   }
+  if (failures.length) throw new AggregateError(failures, "Site shell acceptance failed");
 } finally {
   clearTimeout(deadline);
   await cleanup();

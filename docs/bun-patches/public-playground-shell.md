@@ -2,8 +2,8 @@
 
 | Area | Classification | Source | Local change | Reason |
 | --- | --- | --- | --- | --- |
-| `web/src/shell.ts`, `web/src/main.ts` | Original Bun consumer adapter | bash-web public shell/bridge API at `72c18745d536df42edf0555f22c10c73a0a837d9`; existing private playground `src/session.ts` and `src/main.ts` integration | Connect xterm input, resize, output, signals and shell state to the page-owned Waffle runtime | Bun REPL and child processes need a live terminal instead of output-only runs |
-| Staged `env.wasm` | Host feature, unchanged upstream artifact | Waffle `packages/coreutils/dist/env.wasm`, `programs-v0.0.6`, source `066c17936f6db39a92ec5ced0201e9f01106eea7` | Copy to the native launcher guest path; no implementation changes | bash-web delegates external programs to the released Waffle families |
+| `web/src/shell.ts`, `web/src/main.ts` | Original Bun consumer adapter | bash-web public shell/bridge API at `460462baaaa76113e20cff4107bbf28fba1f7358 (draft diagnosis; final pin awaits reviewed merge)`; existing private playground `src/session.ts` and `src/main.ts` integration | Connect xterm input, resize, output, signals and shell state to the page-owned Waffle runtime | Bun REPL and child processes need a live terminal instead of output-only runs |
+| Staged `env.wasm` | Host feature, unchanged upstream artifact | Waffle `packages/coreutils/dist/env.wasm`, `programs-v0.0.7`, source `63ddc5da0699d6e3ca449eaecb0bc35069c664d9` | Copy to the native launcher guest path; no implementation changes | bash-web delegates external programs to the released Waffle families |
 
 This replaces the playground's local command parser and line editor with
 bash-web's real interactive shell. The page still owns exactly one Waffle runtime,
@@ -20,7 +20,7 @@ shell `cd` does not change which file it runs.
 
 The earlier bash-web pin sent `shellTerminal` and `terminalAdmission`, while
 Bun accepts `terminalContext` and `terminalInput`. This consumer pins the accepted
-Bash72, Waffle 0.0.98 and base-program 0.0.6 tuple together. The shell guest
+the prompt-status API, Waffle 0.0.99 and base-program 0.0.7 tuple together. The shell guest
 builder uses the same shell revision as both browser applications.
 
 The new shell revision delegates `env` to the published Waffle coreutils family.
@@ -29,12 +29,16 @@ family `env.wasm`; the existing receipt still hashes both staged guests.
 `scripts/waffle-release-inputs.json` records the published runtime/program
 archives and unchanged libc builder/patch hashes for the selected tuple.
 
-The adapter prefixes the prompt with the standard OSC 133 A marker. Startup
-waits for the first real prompt, and host `submit()` completes only after the
-next prompt. Shared phase observations alone can miss an entire fast command
-or observe an empty input ring before execution starts. This tracks terminal
-prompt boundaries without parsing shell commands.
+The consumer awaits bash-web's authoritative `waitForPrompt()` receipt for
+startup and each serialized host submission. Receipt generations make a prompt
+published before the waiter safe. Status comes from the shell, including builtins;
+there is no prompt parsing, injected status command or child-exit inference.
+Normal terminal input and accepted-prefix retries carry the command and Enter.
 
-Prompt redraws during editing do not complete a submission. The consumer first
-observes the submitted line ending, then the next prompt marker. Host submission
-uses ordinary End and kill-line keys to replace an unfinished draft.
+The interactive shell starts during page setup, while the Bun launcher loads on
+the first Bun child launch. The graph gate checks contributing bundle inputs
+with normalized paths, requires that lazy launcher to be reachable from the page,
+and keeps Bun execution and process-service implementations out of initial JS.
+
+An explicitly supplied Bash source path must already match the selected commit.
+The producer rejects a mismatch without replacing that caller-owned checkout.
