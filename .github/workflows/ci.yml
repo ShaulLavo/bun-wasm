@@ -272,7 +272,7 @@ jobs:
           bash scripts/sync-bun.sh
           bash scripts/sync-crypto.sh
       - name: Save completed sources-cache setup
-        if: steps.sources-cache.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sources-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -443,7 +443,7 @@ jobs:
           [[ "$(cat "$jsc_completion")" == verified ]]
           echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
       - name: Save the JSC prebuild cache once per input revision
-        if: ${{ !cancelled() && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/jsc/prebuild
@@ -466,7 +466,7 @@ jobs:
           run_native_checks
           echo "native-ready=true" >> "$GITHUB_OUTPUT"
       - name: Save the native quality checkpoint
-        if: ${{ !cancelled() && steps.native-producers.outputs.native-ready == 'true' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-producers.outputs.native-ready == 'true' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: |
@@ -476,7 +476,8 @@ jobs:
             ${{ env.CARGO_TARGET_DIR }}
           key: native-v4-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'env.sh', 'scripts/build-wasi-sysroot.ts', 'jsc/wasi-jsc.cmake', 'scripts/check-cmake-cache.cmake', 'scripts/check-wasi-cmake-cache.sh', 'scripts/ci-binaryen.ts') }}-${{ hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts') }}-${{ hashFiles('scripts/build-bun-tools.sh', '.github/workflows/ci.yml') }}
       - name: Restore the bash-web shell guest build
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
+        id: shell-cache
         with:
           path: |
             ${{ env.CARGO_TARGET_DIR }}/bash-web-source
@@ -562,7 +563,7 @@ jobs:
           cat "$state/build.log"
           test "$(cat "$state/status")" = 0
       - name: Save the JSC Cargo cache once per input revision
-        if: needs.quality.outputs.jsc == 'true' && steps.jsc-cargo-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || steps.jsc-cargo-cache.outputs.cache-matched-key == '')
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.jsc == 'true' && steps.jsc-cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/jsc/engine
@@ -593,14 +594,21 @@ jobs:
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/package-options.ts
           BUN_WASM_LAUNCHER="$CARGO_TARGET_DIR/release/bun-wasm" bun tests/install/root-overrides.ts
 
+      - name: Save the completed bash-web shell guest build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shell-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.CARGO_TARGET_DIR }}/bash-web-source
+            ${{ env.CARGO_TARGET_DIR }}/bash-web-shell
+          key: ${{ steps.shell-cache.outputs.cache-primary-key }}
       - name: Build the single tools fixture in the existing native target
         run: |
           source env.sh
           TOOLS_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" JOBS=2 bash scripts/build-bun-tools.sh
-      # Pull requests save a Cargo snapshot only when nothing compatible was restored.
-      # Every push would otherwise add 1.4 GB and evict main's entries from the 10 GB quota.
+      # PR-scoped archives cannot be shared with other PRs and evict main's warm builds.
       - name: Save the refined native Cargo cache once per input revision
-        if: steps.native-cargo-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || steps.native-cargo-cache.outputs.cache-matched-key == '')
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |

@@ -32,6 +32,7 @@ function repository() {
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(result.stderr);
     return { output: result.stdout.trim().split("\n").slice(0, 2).join("\n"), inputs: result.stderr.trim() };
+    return { output: result.stdout.trim(), inputs: result.stderr.trim() };
   }
   git(["init", "-q"]);
   write("base.txt", "fixture\n");

@@ -102,6 +102,8 @@ export function needsHermes(paths: readonly string[]): boolean {
 
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {
   return needsHermes(paths) || needsJsc(paths) || paths.some(path => nativeInput(path, checkInputs));
+export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {
+  return needsJsc(paths) || paths.some(path => nativeInput(path, checkInputs));
 }
 
 export function changedPaths(base: string, head: string, pullRequest: boolean): string[] {
@@ -136,4 +138,5 @@ if (import.meta.main) {
   const native = nativeChanges(paths, base, head, ancestor);
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
   console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}\nshared=${needsSharedSysroot(paths)}\nhermes=${needsHermes(native)}`);
+  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}`);
 }
