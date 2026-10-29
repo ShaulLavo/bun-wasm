@@ -1,0 +1,8 @@
+main start
+lazy evaluated
+lazy value lazy lazy default
+again lazy
+broken evaluated
+broken rejected broken module
+broken again broken module
+computed lazy

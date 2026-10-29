@@ -1,0 +1,2 @@
+main.mjs dep.mjs
+true object

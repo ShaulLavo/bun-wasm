@@ -117,6 +117,8 @@ test("core rejects a VM dependency before compilation and rejects incompatible r
   fixture((_root, shell, log) => {
     expect(shell("scripts/build-bun-core.sh", { RECIPE_DEPENDENCY: "└── bunwasm-jsc v0.0.0" }).exitCode).not.toBe(0);
     expect(log()).not.toContain("selected-cargo|build");
+    expect(shell("scripts/build-bun-core.sh", { RECIPE_DEPENDENCY: "└── bunwasm-hermes v0.0.0" }).exitCode).not.toBe(0);
+    expect(log()).not.toContain("selected-cargo|build");
     success(shell("scripts/build-bun-core.sh"));
     expect(shell("scripts/build-bun-core.sh", { REJECT_RECEIPT: "1" }).exitCode).not.toBe(0);
     expect(log().match(/^selected-cargo\|build /gm)?.length).toBe(1);
