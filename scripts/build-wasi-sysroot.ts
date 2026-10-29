@@ -1,4 +1,4 @@
-// Consumer-owned sysroot: Waffle owns the only wasi-libc source patch and builder.
+// The default sysroot uses Waffle's pinned builder. shared-pic is explicit and private.
 import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,7 @@ export interface SysrootOptions {
   readonly waffle: string;
   readonly sdk: string;
   readonly output: string;
+  readonly profile?: "shared-pic";
 }
 
 export async function wasiSysrootInputs(options: Omit<SysrootOptions, "output">) {
@@ -49,6 +50,13 @@ export async function wasiSysrootInputs(options: Omit<SysrootOptions, "output">)
     builderSha256: await hash(builder),
     patchSha256: await hash(join(waffle, "patches/wasi-libc/preopen-scan.patch")),
     tools, sdkOverlays, environment,
+    ...(options.profile === "shared-pic" ? {
+      profile: "shared-pic",
+      sharedBuilderSha256: await hash(join(root, "scripts/build-shared-wasi-libc.sh")),
+      groupGrowPatchSha256: await hash(join(root, "patches/wasi-libc/group-grow.patch")),
+      flags: "-fPIC -matomics -mbulk-memory -mmutable-globals -DMORECORE_CONTIGUOUS=0",
+      growthImport: "runtime_shm.group_grow",
+    } : {}),
   };
 }
 
@@ -91,7 +99,10 @@ export async function buildWasiSysroot(options: SysrootOptions): Promise<void> {
     // Stage on the destination filesystem so publication cannot cross mounts (EXDEV).
     stage = await mkdtemp(join(dirname(output), ".bun-wasm-sysroot-"));
     const built = join(stage, "sysroot");
-    child = Bun.spawn(["bash", builder, built], {
+    const command = options.profile === "shared-pic"
+      ? ["bash", join(root, "scripts/build-shared-wasi-libc.sh"), built, waffle]
+      : ["bash", builder, built];
+    child = Bun.spawn(command, {
       cwd: root, stdin: "ignore", stdout: "inherit", stderr: "inherit",
       env: { ...process.env, WASI_SDK_PATH: sdk, WASI_LIBC_SCRATCH_ROOT: stage },
     });
@@ -123,11 +134,14 @@ if (import.meta.main) {
   const sdk = process.env.WASI_SDK_PATH;
   const output = process.env.BUN_WASM_SYSROOT;
   if (!sdk || !output) throw new Error("Source env.sh before building the guest sysroot");
+  const profile = process.argv.includes("--shared-pic") ? "shared-pic" : undefined;
+  if (profile && (!process.env.BUN_WASM_SHARED_SYSROOT || output !== process.env.BUN_WASM_SHARED_SYSROOT))
+    throw new Error("shared-pic requires explicit BUN_WASM_SHARED_SYSROOT matching BUN_WASM_SYSROOT; use a private output");
   const waffle = await releasedWaffleNativeInputs(root);
   if (process.argv.includes("--inputs")) {
-    const inputs = await wasiSysrootInputs({ waffle, sdk });
+    const inputs = await wasiSysrootInputs({ waffle, sdk, profile });
     console.log(new Bun.CryptoHasher("sha256").update(JSON.stringify(inputs)).digest("hex"));
   } else {
-    await buildWasiSysroot({ waffle, sdk, output });
+    await buildWasiSysroot({ waffle, sdk, output, profile });
   }
 }

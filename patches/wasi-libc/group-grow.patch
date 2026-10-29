@@ -1,0 +1,42 @@
+--- a/libc-bottom-half/sources/sbrk.c
++++ b/libc-bottom-half/sources/sbrk.c
+@@ -3,12 +3,17 @@
+ #include <stdlib.h>
+ #include <unistd.h>
+ 
++__attribute__((__import_module__("runtime_shm"), __import_name__("group_grow")))
++extern int32_t group_grow(uint32_t pages);
++
++// Each relocated libc image owns its break, including when other members grow.
++static uintptr_t member_break;
++
+ // Bare-bones implementation of sbrk.
+ void *sbrk(intptr_t increment) {
+-  // sbrk(0) returns the current memory size.
++  // dlmalloc must see only the end of its own last chunk.
+   if (increment == 0) {
+-    // The wasm spec doesn't guarantee that memory.grow of 0 always succeeds.
+-    return (void *)(__builtin_wasm_memory_size(0) * PAGESIZE);
++    return (void *)member_break;
+   }
+ 
+   // We only support page-size increments.
+@@ -21,13 +26,14 @@
+     abort();
+   }
+ 
+-  uintptr_t old =
+-      __builtin_wasm_memory_grow(0, (uintptr_t)increment / PAGESIZE);
++  uint32_t pages = (uintptr_t)increment / PAGESIZE;
++  int32_t old = group_grow(pages);
+ 
+-  if (old == SIZE_MAX) {
++  if (old < 0) {
+     errno = ENOMEM;
+     return (void *)-1;
+   }
+ 
+-  return (void *)(old * PAGESIZE);
++  member_break = ((uintptr_t)old + pages) * PAGESIZE;
++  return (void *)((uintptr_t)old * PAGESIZE);
+ }
