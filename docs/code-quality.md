@@ -139,7 +139,7 @@ private executor is configured.
   `process-bench-baseline.ts` compiles against a frozen Git snapshot in the benchmark
   runner. Its retired imports are deliberately unresolved in the current tree; it
   stays linted and clone-scanned, but is excluded from the current-API type project.
-- jscpd 5.4.1 checks owned TS, JS and Rust together. Exact scans use mild token
+- jscpd 5.4.1 checks owned TS, TSX, JS and Rust together. Exact scans use mild token
   matching, at least 100 tokens and 10 lines. Structural function comparison uses
   `--similarity 0.8` and at least 40 AST nodes. The larger node floor avoids
   trivial getter/forwarder matches. jscpd itself omits test functions from its
@@ -216,6 +216,14 @@ scanner count to 196. The migration preserves the original runtime AST and token
 positions instead of extracting shared code. `scripts/runtime-assert-util.test.ts`
 pins that proof, and the typed-adapter copy probe still rejects new duplication.
 This remains a separate one-for-one format migration, not room for a different clone.
+
+The site's two pages are separate Remix 3 apps. A component shared between
+`sandbox/` and `web/` would bundle a second copy of the Remix runtime, whose
+mixins and scheduler don't work across copies, so each page keeps its own small
+components. Two clones follow from that and are recorded: the terminal Copy
+button (`887d24fd0e8ffb40`, 15 lines) and the root component that subscribes to
+its page model (`ddf8b787e21c239b`, 15 lines, structural). The copy action itself
+is shared plain TypeScript in `web/src/terminal-copy.ts`.
 
 Integrating the already-converted events module with typed util also migrates the
 existing 12-line events/util error-formatting clone from `33ad45a23a9c5c95` to
