@@ -82,7 +82,7 @@ export async function checkPipelineReader(page: Page, base: string, browser: str
   await page.goto(`${base}?mode=memory&engine=${engine}`);
   assert.match(await ready(page), /ready/);
   await writeFile(page, "/home/user/pipe-left.ts", 'process.on("SIGINT", () => { console.error("PIPE_LEFT_EXIT0"); process.exit(0); }); setInterval(() => {}, 1000); console.error("PIPE_LEFT_READY");');
-  await writeFile(page, "/home/user/pipe-right.ts", 'process.on("SIGINT", () => console.error("PIPE_RIGHT_HANDLED")); process.stdin.setEncoding("utf8"); process.stdin.once("data", data => { console.log("PIPE_READER:" + data.trim()); process.exit(0); }); setInterval(() => {}, 1000); console.error("PIPE_RIGHT_READY");');
+  await writeFile(page, "/home/user/pipe-right.ts", 'process.on("SIGINT", () => console.error("PIPE_RIGHT_HANDLED")); process.stdin.setEncoding("utf8"); let input = ""; process.stdin.on("data", data => { input += data; if (!input.includes(String.fromCharCode(10)) && !input.includes(String.fromCharCode(13))) return; console.log("PIPE_READER:" + input.trim()); process.exit(0); }); setInterval(() => {}, 1000); console.error("PIPE_RIGHT_READY");');
   await page.evaluate(async () => {
     const { runtime } = Reflect.get(globalThis, "playground");
     const supervisor = await (await runtime.processes()).ready();
@@ -93,6 +93,7 @@ export async function checkPipelineReader(page: Page, base: string, browser: str
     const { shell } = Reflect.get(globalThis, "playground");
     return shell.submit("exec 9<&0; bun run pipe-left.ts | bun run pipe-right.ts <&9").then(() => shell.lastExit);
   });
+  void done.catch(() => {});
   await waitForMarker(page, "PIPE_LEFT_READY");
   await waitForMarker(page, "PIPE_RIGHT_READY");
   await page.click(".xterm");
