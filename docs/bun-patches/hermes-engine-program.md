@@ -26,3 +26,13 @@ and `importName`, including virtual eval sources, live bindings, and top-level a
 The core still owns parsing and source maps. User scripts lower dynamic imports
 through the core and receive Hermes's `"show source"` directive on their first line,
 unless `BUN_WASM_HERMES_SHOW_SOURCE=0`. No upstream implementation is added here.
+
+`tests/hermes/pair.ts` and `proof.ts` are original proof adapters. The pair
+composer verifies separate origin receipts and the exact shared module source
+contract. The runner uses the original J1 module source fixtures through the real
+host loader and selects existing discovered native checks. New TypeScript fixtures
+cover imported top-level await, module-cache and rejection identity, script dynamic
+imports, metadata, AsyncLocalStorage, source error lines, and memory semantics.
+The CPU-interrupt fixture adapts this repository's J3 guest-child probe and adds
+explicit child cleanup. It compares the same guest signal path on QuickJS and
+Hermes; it does not test native launcher OS-signal forwarding.

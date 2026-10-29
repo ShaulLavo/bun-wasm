@@ -16,12 +16,14 @@ function argument(index: number): string {
 const launcher = argument(2), core = argument(3), report = argument(4);
 const nodeOnly = process.argv.includes("--node-only");
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-hermes-j4-proof-"));
+const env = { ...process.env, BUN_WASM_CACHE_DIR: process.env.BUN_WASM_CACHE_DIR ?? join(scratch, "compiled") };
 const proofs: Proof[] = [];
+const sourceTraces: { name: string; actual: Output; expected: Output }[] = [];
 function cleanup(): void { rmSync(scratch, { recursive: true, force: true }); }
 process.once("SIGINT", () => { cleanup(); process.exit(130); });
 process.once("SIGTERM", () => { cleanup(); process.exit(143); });
 function run(command: string, args: string[], cwd = root): Output {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", timeout: 60_000, maxBuffer: 4 * 1024 * 1024, killSignal: "SIGKILL" });
+  const result = spawnSync(command, args, { cwd, env, encoding: "utf8", timeout: 60_000, maxBuffer: 4 * 1024 * 1024, killSignal: "SIGKILL" });
   return { status: result.status, signal: result.signal, stdout: result.stdout ?? "", stderr: (result.stderr ?? "") + (result.error?.message ?? "") };
 }
 function record(name: string, actual: Output, expected: Output): void {
@@ -49,6 +51,18 @@ function modules(): void {
     record(`node/${name}`, node(["--input-type=module", "-e", source]), expected);
     if (!nodeOnly) record(`pair/${name}`, guest(["-e", source]), expected);
   }
+}
+function sourceLines(file: string): void {
+  const path = join(root, "tests/hermes", file);
+  const expected = node([path]);
+  const actual = nodeOnly ? expected : guest(["run", path]);
+  sourceTraces.push({ name: file, actual, expected });
+  function location(output: Output): Output {
+    const line = /source-lines\.(?:mts|cts):(\d+):\d+/.exec(output.stderr)?.[1];
+    return { ...output, stderr: line === undefined ? output.stderr : `source line ${line}` };
+  }
+  if (expected.status !== 1 || !expected.stderr.includes("mapped")) throw new Error(`Invalid Node source-line control: ${file}`);
+  record(file, location(actual), location(expected));
 }
 function virtualEval(): void {
   const file = join(root, "tests/hermes/tla/awaited.mts");
@@ -84,16 +98,18 @@ function interruption(): void {
 function digest(path: string): string { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
 try {
   modules();
-  for (const file of ["tla/main.mts", "dynamic-import.cts", "require-esm.cts", "async-context.ts", "tla/source-lines.mts", "source-lines.cts"]) {
+  for (const file of ["tla/main.mts", "dynamic-import.cts", "require-esm.cts", "async-context.ts"]) {
     againstNode(file, join(root, "tests/hermes", file));
   }
+  sourceLines("tla/source-lines.mts");
+  sourceLines("source-lines.cts");
   virtualEval();
   againstNode("G5/semantics", join(root, "tests/hermes/semantics.cts"), 7);
   if (!nodeOnly) { nativeFixtures(); interruption(); }
 } finally {
   cleanup();
   const identity = nodeOnly ? null : { core: { path: resolve(core), sha256: digest(core) }, side: { path: join(resolve(core, ".."), "hermes-engine.wasm"), sha256: digest(join(resolve(core, ".."), "hermes-engine.wasm")) } };
-  writeFileSync(report, JSON.stringify({ identity, proofs, cleanup: { scratch, removed: !existsSync(scratch) } }, null, 2) + "\n");
+  writeFileSync(report, JSON.stringify({ identity, proofs, sourceTraces, cleanup: { scratch, removed: !existsSync(scratch) } }, null, 2) + "\n");
 }
 const failed = proofs.filter(proof => !proof.pass);
 console.log(`${proofs.length - failed.length}/${proofs.length} passed`);
