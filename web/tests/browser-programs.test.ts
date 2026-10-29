@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { createRuntime, type Runtime } from "waffle";
 import { basePrograms } from "waffle-base";
 import { DescriptorTable, type Stream } from "waffle/core/descriptors";
+import { RIGHT_FD_WRITE, RIGHT_POLL_FD_READWRITE } from "../node_modules/waffle/core/rights";
 import { createWorkerProcessTransport, WorkerProcessClient, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
 import { createWorkerPipeCodec } from "waffle/proc/worker-pipes";
@@ -42,7 +43,7 @@ async function consumerRoot(runtime: Runtime) {
     return chunks.reduce((total, bytes) => total + bytes.length, 0);
   };
   const terminal: Stream = { kind: "terminal", read: () => 0, write, tryWrite: write, readiness: () => ({ readable: true, writable: true, hangup: false }) };
-  descriptors.openAt(1, terminal, 64n, 0n);
+  descriptors.openAt(1, terminal, RIGHT_FD_WRITE | RIGHT_POLL_FD_READWRITE, 0n);
   descriptors.inherit(2, descriptors.get(1)!);
   const notices: WorkerProcessMessage[] = [];
   const client = new WorkerProcessClient({
@@ -122,7 +123,7 @@ test("one app install publishes PATH metadata without guest downloads; which and
     expect(programs.ready()).toBe(first);
     const installed = await first;
     expect(installed.path).toBe("/usr/local/bin:/usr/bin:/bin");
-    expect(basePrograms).toHaveLength(23);
+    expect(basePrograms).toHaveLength(24);
     for (const program of basePrograms) expect((await runtime.filesystem.lookup(program.path))?.kind).toBe("file");
     expect(fetches).toEqual([]);
     const root = await consumerRoot(runtime);
@@ -170,14 +171,14 @@ test("closing during installation removes its markers and refuses a late ready r
 });
 
 test("base families and Bun resolve one physical Waffle package", async () => {
-  const expected = "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.95/waffle-0.0.95.tgz";
+  const expected = "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.99/waffle-0.0.99.tgz";
   const physical = await physicalRuntime("waffle");
   const baseEntry = Bun.resolveSync("waffle-base", import.meta.dir);
   const baseRoot = await packageRoot(baseEntry);
   await assertPackageRuntime("waffle-base", import.meta.dir, physical, expected);
   for (const name of ["waffle-coreutils", "waffle-findutils", "waffle-grep", "waffle-ripgrep", "waffle-sed"])
     await assertPackageRuntime(name, join(baseRoot, "package.json"), physical, expected);
-  // The Bash source pin is unchanged; its published peer and actual runtime identity are distinct checks.
+  // The merged Bash source pin declares its historical Waffle peer; its physical runtime resolves to this release.
   await assertPackageRuntime("bash-web", import.meta.dir, physical, "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.93/waffle-0.0.93.tgz");
 });
 
