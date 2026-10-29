@@ -136,10 +136,17 @@ impl Fixture {
 
 #[test]
 fn network_slots_have_no_child_or_signal_transport() {
-    assert_eq!(SLOT_NAMES.len(), 16);
+    assert_eq!(SLOT_NAMES.len(), 18);
     assert_eq!(
         &SLOT_NAMES[12..],
-        &["shutdown", "local_addr", "lookup_start", "lookup_head"]
+        &[
+            "shutdown",
+            "local_addr",
+            "lookup_start",
+            "lookup_head",
+            "listen_path",
+            "connect_path"
+        ]
     );
     assert!(
         SLOT_NAMES

@@ -1,7 +1,8 @@
 import { programProfile } from "../../src/engine-kind";
 import { TaggedCells, controlLoad } from "waffle/proc/control";
 import type { RootProcessOptions } from "waffle/proc";
-import { processRuntimeFixture, fixtureFilesystemConnection } from "./process-runtime-fixture";
+import { fixtureFilesystemConnection } from "./process-runtime-fixture";
+import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { startRun } from "../src/runner";
 import { ENGINES, type Engine } from "../src/engine-loader";

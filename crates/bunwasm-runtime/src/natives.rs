@@ -1532,6 +1532,12 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
     t.add("hostListen", |a| {
         Ok(host::listen(a.str(0)?, a.i32(1)?).into())
     });
+    t.add("hostListenPath", |a| {
+        Ok(host::listen_path(a.str(0)?, a.i32(1)?).into())
+    });
+    t.add("hostConnectPath", |a| {
+        Ok(host::connect_path(a.str(0)?).into())
+    });
     t.add("hostLocalPort", |a| Ok(host::local_port(a.i32(0)?).into()));
     t.add("hostAccept", |a| Ok(host::accept(a.i32(0)?).into()));
     t.add("hostConnect", |a| {

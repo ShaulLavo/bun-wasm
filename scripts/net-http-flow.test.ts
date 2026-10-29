@@ -101,6 +101,7 @@ function fixture() {
     concatBytes: (parts: Uint8Array[]) => Buffer.concat(parts),
     pumpIo: () => false, ioPending: () => 0,
   };
+  modules.net_path = load("net_path")(internal);
   modules.http_server_response = load("http_server_response")(internal);
   modules.fetch_lifetime = load("fetch_lifetime")(internal);
   modules.node_net_onread = load("node_net_onread")(internal);
