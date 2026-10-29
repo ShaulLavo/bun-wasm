@@ -1,9 +1,11 @@
 use std::cmp::Ordering;
+use std::str::FromStr;
 
 use icu_collator::options::{AlternateHandling, CaseLevel, CollatorOptions, MaxVariable, Strength};
 use icu_collator::preferences::{CollationCaseFirst, CollationNumericOrdering, CollationType};
 use icu_collator::{Collator, CollatorPreferences};
 use icu_locale_core::Locale;
+use icu_locale_core::extensions::unicode::Value;
 
 use crate::data::{Args, NativeError, NativeResult};
 use crate::natives::Table;
@@ -28,6 +30,13 @@ fn case_first(value: &str) -> Result<CollationCaseFirst, NativeError> {
             "Invalid collation caseFirst: {value}"
         ))),
     }
+}
+
+fn collation_type(input: &str) -> Result<CollationType, NativeError> {
+    let value = Value::from_str(input)
+        .map_err(|error| NativeError::error(format!("Invalid collation value: {error}")))?;
+    CollationType::try_from(&value)
+        .map_err(|error| NativeError::error(format!("Invalid collation type: {error}")))
 }
 
 fn compare(a: Args<'_>) -> NativeResult {
@@ -59,11 +68,7 @@ fn compare(a: Args<'_>) -> NativeResult {
     });
     preferences.case_first = Some(case_first(a.str(3)?)?);
     if a.str(5)? != "default" {
-        preferences.collation_type = Some(
-            a.str(5)?
-                .parse::<CollationType>()
-                .map_err(|error| NativeError::error(format!("Invalid collation type: {error}")))?,
-        );
+        preferences.collation_type = Some(collation_type(a.str(5)?)?);
     }
     let collator = Collator::try_new(preferences, options)
         .map_err(|error| NativeError::error(format!("Unable to create collator: {error}")))?;
