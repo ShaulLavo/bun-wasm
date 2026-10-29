@@ -12,6 +12,7 @@
   ],
   "format": [
     "typescript",
+    "tsx",
     "javascript",
     "rust"
   ],
