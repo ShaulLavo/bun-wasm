@@ -64,4 +64,12 @@ assert.ok(preparation.counters.spreadEval > 0);
 assert.ok(preparation.counters.fallbacks > 0);
 assert.ok(preparation.cacheBytes() <= 16 * 1024 * 1024);
 assert.ok(preparation.columnBytes() <= 16 * 1024 * 1024);
+const mappedCall = 'async function mappedCall() { await 0; throw new Error("mapped"); } mappedCall();\n//# sourceURL=prepare-stack.js';
+try {
+  await eval(prepare(mappedCall));
+  assert.fail("expected mapped rejection");
+} catch (error) {
+  assert.ok(error instanceof Error);
+  assert.ok(error.stack?.includes(`prepare-stack.js:1:${mappedCall.indexOf('new Error') + 1}`), error.stack);
+}
 console.log("PREPARE_TRANSFORMS_OK");

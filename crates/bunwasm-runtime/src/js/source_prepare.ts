@@ -75,15 +75,16 @@
   function register(name: string | undefined, table: number[]): void {
     if (!name) return;
     const old = columns.get(name);
-    columnBytes -= old?.columns.byteLength ?? 0;
+    columnBytes -= old ? old.columns.byteLength + name.length * 2 : 0;
     columns.delete(name);
+    if (table.length === 0) return;
     const value = Int32Array.from(table);
     columns.set(name, { version, columns: value });
-    columnBytes += value.byteLength;
+    columnBytes += value.byteLength + name.length * 2;
     while (columnBytes > budget || columns.size > 4096) {
       const first = columns.keys().next().value;
       if (first === undefined) break;
-      columnBytes -= columns.get(first)!.columns.byteLength;
+      columnBytes -= columns.get(first)!.columns.byteLength + first.length * 2;
       columns.delete(first);
     }
   }
@@ -109,7 +110,7 @@
       column += inserted.length;
       previous = at + edits[index + 1];
     }
-    register(sourceName(source, name), table);
+    if (edits.length > 0 || !value.alreadyPrepared) register(sourceName(source, name), table);
     return result + source.slice(previous);
   }
   function trace(origin: string, name: string | undefined, size: number, prepared: Prepared[], hit: boolean, start: number, goal: string): void {

@@ -289,6 +289,16 @@ fn parse(source: &str) -> Result<(Vec<Span>, Vec<usize>), String> {
     Ok((spans, imports))
 }
 
+fn already_prepared(source: &str, spans: &[Span]) -> bool {
+    spans.iter().any(|span| match *span {
+        Span::Await { start, .. } | Span::Yield { start, .. } => already_hooked(source, start),
+        Span::Argument { start, end, .. } => source[start..end]
+            .trim_start()
+            .starts_with("__bunwasm_evalArg("),
+        _ => false,
+    })
+}
+
 fn result(
     source: &str,
     mut edits: Edits,
@@ -322,7 +332,7 @@ fn result(
         columns.extend([line as i32, (column + *inserted) as i32, length as i32]);
         *inserted += length;
     }
-    json!({ "version": PREPARE_VERSION, "edits": triples, "columns": columns, "fallback": fallback,
+    json!({ "version": PREPARE_VERSION, "alreadyPrepared": already_prepared(source, spans), "edits": triples, "columns": columns, "fallback": fallback,
         "spreadEval": spans.iter().filter(|span| matches!(span, Span::Argument { call, spread: true, .. } if spans.iter().any(|site| matches!(site, Span::Eval { start, .. } if start == call)))).count(),
         "unhookedAwaitUsing": spans.iter().filter(|span| matches!(span, Span::AwaitUsing)).count() })
 }

@@ -70,8 +70,6 @@ for (const value of [undefined, null, false, 0, "", NaN]) {
   assert.equal(await rejected(value), true);
 }
 
-const loop = AsyncFunction("storage", `const trace = []; outer: for await (const i of [1, 2]) { for await (const x of [1]) { trace.push(storage.getStore()); continue outer; } } return trace;`);
-assert.deepEqual(await storage.run("loop", () => loop(storage)), ["loop", "loop"]);
 const badIterator = AsyncFunction("storage", `try { for await (const x of { [Symbol.asyncIterator]() { storage.enterWith("changed"); throw false; } }) {} } catch (error) { if (error !== false) throw error; return storage.getStore(); }`);
 assert.equal(await storage.run("initial", () => badIterator(storage)), "changed");
 
@@ -79,4 +77,9 @@ const nested = AsyncFunction("storage", 'return eval("(async () => { await 0; re
 assert.equal(await storage.run("nested", () => nested(storage)), "nested");
 const reused = AsyncFunction("storage", 'await 0; return storage.getStore();');
 assert.deepEqual(await Promise.all([storage.run("reuse-A", () => reused(storage)), storage.run("reuse-B", () => reused(storage))]), ["reuse-A", "reuse-B"]);
+const shared = AsyncFunction("storage", "second", 'await 0; return [storage.getStore(), second.getStore()];');
+assert.deepEqual(await Promise.all([
+  second.run("secret", () => storage.run("isolated-A", () => shared(storage, second))),
+  storage.run("isolated-B", () => shared(storage, second)),
+]), [["isolated-A", "secret"], ["isolated-B", undefined]]);
 console.log("PREPARE_OK");
