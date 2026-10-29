@@ -1,3 +1,4 @@
+import { terminalOutputFixture } from "./terminal-output-fixture";
 import { expect, test } from "bun:test";
 import { createRuntime, type Runtime } from "waffle";
 import { FilesystemService } from "waffle/fs/service";
@@ -105,7 +106,9 @@ test("generic engine scope reaches real launchRuntime with the process transport
     expect(child.signalState.byteOffset).toBe(state.signals.signalState.byteOffset);
     expect(request.runtimeProcess!.bindings.map(binding => binding.fd)).toEqual([0, 1, 2]);
     const text = new TextEncoder();
-    worker.onmessage!({ data: { type: "stderr", data: text.encode("ready\n") } } as MessageEvent<WorkerMessage>);
+    const terminal = terminalOutputFixture(request, data => worker.onmessage!({ data } as MessageEvent<WorkerMessage>));
+    terminal.write(2, text.encode("ready\n"));
+    terminal.flush();
     expect(child.stderr).toBe("ready\n");
     worker.onmessage!({ data: { type: "exit", code: 23 } } as MessageEvent<WorkerMessage>);
     expect((await owned.outcome(child)).code).toBe(23);
