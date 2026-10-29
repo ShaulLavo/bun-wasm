@@ -199,6 +199,7 @@ async function semantics(log: (key: string, value: unknown) => void) {
   }
   log("rejectedCtorReads", rejCtor);
   log("forAwaitProtocol", await forAwaitProtocol());
+  log("forAwaitSyncProtocol", await forAwaitSyncProtocol());
   log("order", await jobOrder(reason));
 }
 
@@ -231,6 +232,46 @@ function protocolIterable(trace: string[]) {
 async function forAwaitProtocol() {
   const trace: string[] = [];
   for await (const v of protocolIterable(trace)) {
+    trace.push(`body${v}`);
+    if (v === 1) break;
+  }
+  return trace.join(",");
+}
+
+function syncProtocolIterable(trace: string[]) {
+  let i = 0;
+  const iterator = {
+    get next() {
+      trace.push("next-get");
+      return () => {
+        trace.push("next");
+        return { done: i >= 2, value: Promise.resolve(i++) };
+      };
+    },
+    get return() {
+      trace.push("return-get");
+      return () => {
+        trace.push("return");
+        return { done: true, value: undefined };
+      };
+    },
+  };
+  return {
+    get [Symbol.asyncIterator]() {
+      trace.push("async-iter");
+      return undefined;
+    },
+    get [Symbol.iterator]() {
+      trace.push("iter");
+      return () => iterator;
+    },
+  };
+}
+
+// A sync iterable adapted by the engine: same reads, calls and values.
+async function forAwaitSyncProtocol() {
+  const trace: string[] = [];
+  for await (const v of syncProtocolIterable(trace)) {
     trace.push(`body${v}`);
     if (v === 1) break;
   }
@@ -419,10 +460,126 @@ async function p5() {
   await als.run("req", () => forAwaitCases(note));
 }
 
+// P6: for await iterator methods that throw synchronously keep the frame they
+// set, and exits to an enclosing label leave in the frame of the iterator's
+// closing, not a stale one (independent review of PR 359).
+function throwingIterable() {
+  return {
+    [Symbol.asyncIterator](): AsyncIterator<number> {
+      als.enterWith("iterator-entered");
+      throw new Error("sync");
+    },
+  };
+}
+
+function throwingNext() {
+  let i = 0;
+  return {
+    [Symbol.asyncIterator]() { return this; },
+    next(): Promise<IteratorResult<number>> {
+      als.enterWith(`next-entered-${i++}`);
+      throw new Error("sync");
+    },
+  };
+}
+
+function throwingReturn() {
+  return {
+    [Symbol.asyncIterator]() { return this; },
+    next: () => Promise.resolve({ value: 1, done: false }),
+    return(): Promise<IteratorResult<number>> {
+      als.enterWith("return-entered");
+      throw new Error("sync");
+    },
+  };
+}
+
+function slowIterator(rejectReturn = false) {
+  const tick = () => new Promise<void>(ok => setTimeout(ok, 1));
+  return {
+    [Symbol.asyncIterator]() { return this; },
+    async next() { await tick(); return { value: 1, done: false }; },
+    async return(): Promise<IteratorResult<number>> {
+      await tick();
+      if (rejectReturn) throw { id: "close" };
+      return { value: 0, done: true };
+    },
+  };
+}
+
+async function syncIteratorFailures(note: (phase: string) => void) {
+  try {
+    for await (const _ of throwingIterable()) note("iterable.body");
+  } catch {
+    note("iterable.catch");
+  }
+  try {
+    for await (const _ of throwingNext()) note("next.body");
+  } catch {
+    note("next.catch");
+  }
+  try {
+    for await (const _ of throwingReturn()) break;
+  } catch {
+    note("return.catch");
+  }
+}
+
+async function abruptThenThrow(note: (phase: string) => void) {
+  try {
+    outer: while (true) {
+      for await (const _ of [1]) break outer;
+    }
+    als.enterWith("after-loop");
+    throw new Error("sync");
+  } catch {
+    note("abrupt.catch");
+  }
+}
+
+async function breakBlock(note: (phase: string) => void) {
+  block: {
+    for await (const _ of slowIterator()) break block;
+  }
+  note("break-block.after");
+}
+
+async function continueSync(note: (phase: string) => void) {
+  outer: for (let i = 0; i < 2; i++) {
+    note(`continue.top${i}`);
+    for await (const _ of slowIterator()) continue outer;
+  }
+  note("continue.after");
+}
+
+async function breakSync(note: (phase: string) => void) {
+  outer: while (true) {
+    for await (const _ of slowIterator()) break outer;
+  }
+  note("break-sync.after");
+}
+
+async function rejectedClose(note: (phase: string) => void) {
+  try {
+    for await (const _ of slowIterator(true)) break;
+  } catch (error) {
+    note(`rejected-close.catch ${idOf(error)}`);
+  }
+}
+
+async function p6() {
+  const note = (phase: string) => print(`P6 ${phase}=${store()}`);
+  await als.run("initial", () => syncIteratorFailures(note));
+  for (const [frame, run] of [["abrupt", abruptThenThrow], ["block", breakBlock], ["continue", continueSync], ["break", breakSync], ["close", rejectedClose]] as const) {
+    await als.run(frame, () => run(note));
+  }
+}
+
 await p1();
 await p2();
 await p4();
 await p5();
+await p6();
 
 // Module top level: it awaits and has handlers, so it is hooked like an
 // async function body. Another request interleaves with its rejection.

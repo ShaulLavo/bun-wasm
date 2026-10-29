@@ -1,4 +1,4 @@
-From 316f1b182dc6808d3c3f571d3c3d8174320275bf Mon Sep 17 00:00:00 2001
+From 9031854313cf16a8ec112bfe20309fe82b5777f6 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 09:15:42 +0300
 Subject: [PATCH 08/16] wasm: optional await hooks in the printer for a host
@@ -21,23 +21,28 @@ An async body without its own `try` or `for await` prints `await x` as
   `catch` and `finally` block, which re-enters that frame;
 - async generator `yield x` as `__bunwasm_id(yield __bunwasm_id(x,
   __bunwasm_s = __bunwasm_capture()), __bunwasm_s = 0)`;
-- `for await` in a block holding `let __bunwasm_c`, with the iterable in
-  `__bunwasm_id` and the body in a try/finally that records the frame of
-  the next implicit await on every exit. Only the outermost label opens
-  the block, so labeled `continue` still targets the loop.
+- `for await` as `{ let __bunwasm_c; try { for await (... of __bunwasm_c =
+  __bunwasm_iterate(y)) { try { __bunwasm_entered(__bunwasm_c); body }
+  finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } } } finally
+  { __bunwasm_exited(__bunwasm_c); } }`. The runtime's iterator record
+  notes the frame only once `next()`/`return()` returned, so a method that
+  throws synchronously leaves nothing pending, and the outer finally runs
+  after the iterator closed on every exit, labeled ones included. Only the
+  outermost label opens the block, so labeled `continue` still targets the
+  loop.
 
-BUNWASM_HOOKS_VERSION (2) versions these shapes.
+BUNWASM_HOOKS_VERSION (3) versions these shapes.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- src/js_printer/lib.rs | 331 ++++++++++++++++++++++++++++++++++++++++--
- 1 file changed, 321 insertions(+), 10 deletions(-)
+ src/js_printer/lib.rs | 343 ++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 333 insertions(+), 10 deletions(-)
 
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index 0e71d390..9621892d 100644
+index 0e71d390..14a59011 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
-@@ -1631,6 +1631,61 @@ pub(crate) mod __gated_printer {
+@@ -1631,6 +1631,59 @@ pub(crate) mod __gated_printer {
      pub(crate) fn slice_of<'a, T>(p: js_ast::StoreSlice<T>) -> &'a [T] {
          p.slice()
      }
@@ -75,9 +80,7 @@ index 0e71d390..9621892d 100644
 +                StmtData::SWith(s) => pending.push(s.body),
 +                StmtData::SLabel(s) => pending.push(s.stmt),
 +                StmtData::SSwitch(s) => {
-+                    for case in slice_of(s.cases) {
-+                        pending.extend_from_slice(slice_of(case.body));
-+                    }
++                    pending.extend(slice_of(s.cases).iter().flat_map(|case| slice_of(case.body).iter().copied()))
 +                }
 +                _ => {}
 +            }
@@ -99,35 +102,41 @@ index 0e71d390..9621892d 100644
      /// `EnumSet<T>` field-style mutation helper.
      #[inline(always)]
      fn set_flag<T: enumset::EnumSetType>(set: &mut enumset::EnumSet<T>, flag: T, on: bool) {
-@@ -2136,6 +2191,101 @@ pub(crate) mod __gated_printer {
+@@ -2136,6 +2189,107 @@ pub(crate) mod __gated_printer {
              }
          }
  
 +        /// bun-wasm `for await` hooks (see BUNWASM_AWAIT_HOOKS): open a block
-+        /// holding the context at the loop's start.
++        /// holding the loop's record (`__bunwasm_iterate`), and a `try` whose
++        /// `finally` runs after the iterator closed on every exit.
 +        fn print_bunwasm_loop_start(&mut self) {
 +            self.print_indent();
 +            self.print(b"{");
 +            self.print_space();
-+            self.print(b"let __bunwasm_c = __bunwasm_capture();");
++            self.print(b"let __bunwasm_c;");
++            self.print_space();
++            self.print(b"try {");
 +            self.print_newline();
 +        }
 +
-+        /// Restore that context after the loop and close the block.
++        /// Re-enter the frame of the loop's last pending `next()` or `return()`
++        /// await, if one completed or rejected, and close the block.
 +        fn print_bunwasm_loop_end(&mut self) {
 +            self.print_indent();
-+            self.print(b"__bunwasm_resume(__bunwasm_c, 0);");
-+            self.print_newline();
-+            self.print_indent();
-+            self.print(b"__bunwasm_s = 0;");
++            self.print(b"} finally {");
++            self.print_space();
++            self.print(b"__bunwasm_exited(__bunwasm_c);");
++            self.print_space();
++            self.print(b"}");
 +            self.print_newline();
 +            self.print_indent();
 +            self.print(b"}");
 +            self.print_newline();
 +        }
 +
-+        /// A hooked `for await` body: every exit records the frame its next
-+        /// implicit await (`next()` or `return()`) suspends in.
++        /// A hooked `for await` body: it starts in the frame its `next()` was
++        /// called in, and a rejected await inside it re-enters its own frame
++        /// before the loop closes the iterator.
 +        fn print_bunwasm_loop_body(&mut self, body: Stmt) {
 +            let single = [body];
 +            let stmts: &[Stmt] = match &body.data {
@@ -141,13 +150,13 @@ index 0e71d390..9621892d 100644
 +            self.print_indent();
 +            self.print(b"try");
 +            self.print_space();
-+            self.print_block_with_hook(body.loc, &[], b"__bunwasm_resume(__bunwasm_c, __bunwasm_s = 0);", stmts);
++            self.print_block_with_hook(body.loc, &[], b"__bunwasm_entered(__bunwasm_c);", stmts);
 +            self.print_space();
 +            self.print(b"finally");
 +            self.print_space();
 +            self.print(b"{");
 +            self.print_space();
-+            self.print(b"__bunwasm_s = __bunwasm_c = __bunwasm_capture();");
++            self.print(b"__bunwasm_caught(__bunwasm_s, __bunwasm_s = 0);");
 +            self.print_space();
 +            self.print(b"}");
 +            self.print_newline();
@@ -201,7 +210,7 @@ index 0e71d390..9621892d 100644
          pub(crate) fn print_body(&mut self, stmt: Stmt) {
              match &stmt.data {
                  StmtData::SBlock(block) => {
-@@ -2502,6 +2652,12 @@ pub(crate) mod __gated_printer {
+@@ -2502,6 +2656,12 @@ pub(crate) mod __gated_printer {
          }
  
          pub(crate) fn print_func(&mut self, func: &G::Fn) {
@@ -214,7 +223,7 @@ index 0e71d390..9621892d 100644
              self.print_fn_args(
                  Some(func.open_parens_loc),
                  slice_of(func.args),
-@@ -2509,7 +2665,7 @@ pub(crate) mod __gated_printer {
+@@ -2509,7 +2669,7 @@ pub(crate) mod __gated_printer {
                  false,
              );
              self.print_space();
@@ -223,7 +232,7 @@ index 0e71d390..9621892d 100644
          }
  
          pub(crate) fn print_class(&mut self, class: &G::Class) {
-@@ -2534,6 +2690,7 @@ pub(crate) mod __gated_printer {
+@@ -2534,6 +2694,7 @@ pub(crate) mod __gated_printer {
                      self.print(b"static");
                      self.print_space();
                      let csb = item.class_static_block_ref().unwrap();
@@ -231,7 +240,7 @@ index 0e71d390..9621892d 100644
                      self.print_block(csb.loc, csb.stmts.slice(), None);
                      self.print_newline();
                      continue;
-@@ -3810,6 +3967,7 @@ pub(crate) mod __gated_printer {
+@@ -3810,6 +3971,7 @@ pub(crate) mod __gated_printer {
                          self.print_space();
                      }
  
@@ -239,7 +248,7 @@ index 0e71d390..9621892d 100644
                      self.print_fn_args(
                          if e.is_async { None } else { Some(expr.loc) },
                          &e.args,
-@@ -3830,7 +3988,7 @@ pub(crate) mod __gated_printer {
+@@ -3830,7 +3992,7 @@ pub(crate) mod __gated_printer {
                      }
  
                      if !was_printed {
@@ -248,7 +257,7 @@ index 0e71d390..9621892d 100644
                      }
  
                      if wrap {
-@@ -4375,9 +4533,30 @@ pub(crate) mod __gated_printer {
+@@ -4375,9 +4537,30 @@ pub(crate) mod __gated_printer {
  
                      self.print_space_before_identifier();
                      self.add_source_mapping(expr.loc);
@@ -282,7 +291,7 @@ index 0e71d390..9621892d 100644
  
                      if wrap {
                          self.print(b")");
-@@ -4391,6 +4570,14 @@ pub(crate) mod __gated_printer {
+@@ -4391,6 +4574,14 @@ pub(crate) mod __gated_printer {
  
                      self.print_space_before_identifier();
                      self.add_source_mapping(expr.loc);
@@ -297,7 +306,7 @@ index 0e71d390..9621892d 100644
                      self.print(b"yield");
  
                      if let Some(val) = &e.value {
-@@ -4398,7 +4585,13 @@ pub(crate) mod __gated_printer {
+@@ -4398,7 +4589,13 @@ pub(crate) mod __gated_printer {
                              self.print(b"*");
                          }
                          self.print_space();
@@ -312,7 +321,7 @@ index 0e71d390..9621892d 100644
                      }
  
                      if wrap {
-@@ -5886,6 +6079,14 @@ pub(crate) mod __gated_printer {
+@@ -5886,6 +6083,14 @@ pub(crate) mod __gated_printer {
                      self.print_body(s.body);
                  }
                  StmtData::SForOf(s) => {
@@ -327,16 +336,18 @@ index 0e71d390..9621892d 100644
                      self.print_indent();
                      self.print_space_before_identifier();
                      self.add_source_mapping(stmt.loc);
-@@ -5901,9 +6102,23 @@ pub(crate) mod __gated_printer {
+@@ -5901,9 +6106,25 @@ pub(crate) mod __gated_printer {
                      self.print_space_before_identifier();
                      self.print(b"of");
                      self.print_space();
 -                    self.print_expr(s.value, Level::Comma, ExprFlag::none());
 +                    if hooks {
-+                        // The first `next()` suspends in the loop's frame.
-+                        self.print(b"__bunwasm_id(");
++                        // The loop iterates a record that gets the iterator
++                        // with the same reads and calls, and notes the frame
++                        // each time `next()` or `return()` returns.
++                        self.print(b"__bunwasm_c = __bunwasm_iterate(");
 +                        self.print_expr(s.value, Level::Comma, ExprFlag::none());
-+                        self.print(b", __bunwasm_s = __bunwasm_c)");
++                        self.print(b")");
 +                    } else {
 +                        self.print_expr(s.value, Level::Comma, ExprFlag::none());
 +                    }
@@ -353,7 +364,7 @@ index 0e71d390..9621892d 100644
                  }
                  StmtData::SWhile(s) => {
                      self.print_indent();
-@@ -5933,9 +6148,25 @@ pub(crate) mod __gated_printer {
+@@ -5933,9 +6154,25 @@ pub(crate) mod __gated_printer {
                      }
                      self.print_space_before_identifier();
                      self.add_source_mapping(stmt.loc);
@@ -379,7 +390,7 @@ index 0e71d390..9621892d 100644
                  }
                  StmtData::STry(s) => {
                      self.print_indent();
-@@ -5956,14 +6187,14 @@ pub(crate) mod __gated_printer {
+@@ -5956,14 +6193,14 @@ pub(crate) mod __gated_printer {
                              self.print(b")");
                          }
                          self.print_space();
@@ -396,7 +407,7 @@ index 0e71d390..9621892d 100644
                      }
  
                      self.print_newline();
-@@ -7581,6 +7812,66 @@ pub type BufferPrinter = Writer<BufferWriter>;
+@@ -7581,6 +7818,72 @@ pub type BufferPrinter = Writer<BufferWriter>;
  // Format / GenerateSourceMap
  // ───────────────────────────────────────────────────────────────────────────
  
@@ -413,7 +424,13 @@ index 0e71d390..9621892d 100644
 +/// - `await x` -> `__bunwasm_resumed(await __bunwasm_id(x, __bunwasm_s = __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0)`
 +/// - `catch (e) {` / `finally {` -> `… { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0);`
 +/// - `yield x` (async generator) -> `__bunwasm_id(yield __bunwasm_id(x, __bunwasm_s = __bunwasm_capture()), __bunwasm_s = 0)`
-+/// - `for await (… of y) body` -> `{ let __bunwasm_c = __bunwasm_capture(); for await (… of __bunwasm_id(y, __bunwasm_s = __bunwasm_c)) { try { __bunwasm_resume(__bunwasm_c, __bunwasm_s = 0); body } finally { __bunwasm_s = __bunwasm_c = __bunwasm_capture(); } } __bunwasm_resume(__bunwasm_c, 0); __bunwasm_s = 0; }`
++/// - `for await (… of y) body` -> `{ let __bunwasm_c; try { for await (… of __bunwasm_c = __bunwasm_iterate(y)) { try { __bunwasm_entered(__bunwasm_c); body } finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } } } finally { __bunwasm_exited(__bunwasm_c); } }`
++///
++/// `__bunwasm_iterate` gets the iterator itself, with the same reads and calls,
++/// and records the frame only once `next()` or `return()` has returned, right
++/// before the implicit await: an iterator method that throws synchronously
++/// leaves nothing pending. The outer `finally` runs after the iterator closed
++/// on every exit, labeled `break`/`continue` included.
 +///
 +/// Every other async body keeps `__bunwasm_resume(__bunwasm_capture(), await x)`:
 +/// a rejection leaves it without running more of its code. Bump
@@ -421,7 +438,7 @@ index 0e71d390..9621892d 100644
 +pub static BUNWASM_AWAIT_HOOKS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 +
 +/// Version of the shapes above; the runtime keys cached hooked text on it.
-+pub const BUNWASM_HOOKS_VERSION: u32 = 2;
++pub const BUNWASM_HOOKS_VERSION: u32 = 3;
 +
 +#[inline]
 +fn bunwasm_await_hooks() -> bool {
@@ -463,7 +480,7 @@ index 0e71d390..9621892d 100644
  #[derive(Clone, Copy, PartialEq, Eq)]
  pub enum Format {
      Esm,
-@@ -7843,8 +8134,28 @@ pub fn print_ast<'a, W: WriterTrait, const ASCII_ONLY: bool, const GENERATE_SOUR
+@@ -7843,8 +8146,28 @@ pub fn print_ast<'a, W: WriterTrait, const ASCII_ONLY: bool, const GENERATE_SOUR
          }
      }
  

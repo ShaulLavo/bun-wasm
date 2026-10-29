@@ -47,6 +47,46 @@ const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const nativeDateNow = globalThis.Date.now.bind(globalThis.Date);
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
+
+// A `for await` loop's iterator record, made by `__bunwasm_iterate` with the
+// reads and calls of GetIterator(iterable, async) and given to the loop in
+// place of the iterable; a sync iterable stays sync, so the engine still
+// adapts it. It notes the frame once `next()` or `return()` has returned,
+// right before the loop's implicit await suspends: an iterator method that
+// throws synchronously leaves nothing pending. A frame already pending (a
+// sync iterator closed because its value rejected) is kept.
+const noFrame = Symbol("no frame");
+function iteratorMethod(iterable, key) {
+  const method = iterable[key];
+  if (method === undefined || method === null) return undefined;
+  if (typeof method !== "function") throw new TypeError(`${String(key)} is not a function`);
+  return method;
+}
+function forAwaitRecord(iterable, frame) {
+  const asyncMethod = iteratorMethod(iterable, Symbol.asyncIterator);
+  const key = asyncMethod ? Symbol.asyncIterator : Symbol.iterator;
+  const method = asyncMethod ?? iteratorMethod(iterable, Symbol.iterator);
+  if (method === undefined) throw new TypeError("object is not async iterable");
+  const iterator = Reflect.apply(method, iterable, []);
+  if ((typeof iterator !== "object" || iterator === null) && typeof iterator !== "function") {
+    throw new TypeError(`Result of the ${String(key)} method is not an object`);
+  }
+  const next = iterator.next;
+  const suspending = (result) => {
+    if (record.pending === noFrame) record.pending = frame();
+    return result;
+  };
+  const record = {
+    pending: noFrame,
+    next: () => suspending(Reflect.apply(next, iterator, [])),
+    get return() {
+      const close = iterator.return;
+      if (typeof close !== "function") return close;
+      return () => suspending(Reflect.apply(close, iterator, []));
+    },
+  };
+  return Object.defineProperty(Object.setPrototypeOf(record, null), key, { value: () => record });
+}
 const nativeGc = typeof globalThis.gc === "function" ? globalThis.gc.bind(globalThis) : null;
 const nativeAtomicsLoad = Atomics.load;
 const nativeWaitAsync = typeof Atomics.waitAsync === "function" ? Atomics.waitAsync : null;
@@ -669,6 +709,9 @@ class EngineHost {
       hidden("__bunwasm_resumed", id);
       hidden("__bunwasm_caught", () => {});
       hidden("__bunwasm_id", id);
+      hidden("__bunwasm_iterate", id);
+      hidden("__bunwasm_entered", () => {});
+      hidden("__bunwasm_exited", () => {});
       return;
     }
     const enter = (saved) => {
@@ -699,6 +742,21 @@ class EngineHost {
       if (saved !== 0 && syncGeneratorResume === 0) enter(saved);
     });
     hidden("__bunwasm_id", id);
+    // `for await`: `{ let c; try { for await (… of c = __bunwasm_iterate(y)) {
+    // try { __bunwasm_entered(c); … } finally { __bunwasm_caught(s, s = 0); } } }
+    // finally { __bunwasm_exited(c); } }`. The body starts in the frame its
+    // `next()` was called in; the loop leaves, after the iterator closed, in
+    // the frame of its last `next()` or `return()`.
+    const reenter = (record) => {
+      const saved = record.pending;
+      record.pending = noFrame;
+      if (saved !== noFrame) enter(saved);
+    };
+    hidden("__bunwasm_iterate", (iterable) => forAwaitRecord(iterable, () => host.asyncContext));
+    hidden("__bunwasm_entered", reenter);
+    hidden("__bunwasm_exited", (record) => {
+      if (record !== undefined) reenter(record);
+    });
     const asyncGeneratorPrototype = Object.getPrototypeOf(Object.getPrototypeOf((async function* () {})()));
     const nativeThrow = asyncGeneratorPrototype.throw;
     const { throw: wrapped } = {
