@@ -87,25 +87,18 @@ fn span(ptr: u32, len: u32, memory_len: usize) -> Result<Range<usize>, Status> {
     Ok(ptr as usize..end as usize)
 }
 
+/// A dispatched call's status and reply value. The transport encodes the value straight into
+/// memory it owns; a call that failed before producing a value carries none.
 pub(crate) struct Reply {
     pub status: Status,
-    pub bytes: Vec<u8>,
+    pub value: Option<Val>,
 }
 
 impl Reply {
-    fn encoded(status: Status, value: Val) -> Self {
-        let reply = match codec::encode(&value) {
-            Ok(bytes) => Self { status, bytes },
-            Err(error) => Self::failed(error_status(error)),
-        };
-        drop_tree(value);
-        reply
-    }
-
     fn failed(status: Status) -> Self {
         Self {
             status,
-            bytes: Vec::new(),
+            value: None,
         }
     }
 }
@@ -151,9 +144,13 @@ impl Dispatcher {
         };
         let result = function(Args(&args));
         drop_tree(Val::Array(args));
-        match result {
-            Ok(value) => Reply::encoded(Status::Ok, value),
-            Err(error) => Reply::encoded(Status::NativeError, error_value(error)),
+        let (status, value) = match result {
+            Ok(value) => (Status::Ok, value),
+            Err(error) => (Status::NativeError, error_value(error)),
+        };
+        Reply {
+            status,
+            value: Some(value),
         }
     }
 }
@@ -188,6 +185,11 @@ fn error_value(error: NativeError) -> Val {
 #[cfg(test)]
 #[path = "ops/tests.rs"]
 mod tests;
+
+// Engine crates include this module without the core crate's allocation tracker.
+#[cfg(all(test, feature = "engine-split"))]
+#[path = "ops/memory_tests.rs"]
+mod memory_tests;
 
 #[path = "ops/abi.rs"]
 pub(crate) mod abi;
