@@ -61,16 +61,68 @@ fn assert_graph(resolver: &Resolver) {
 }
 
 fn lock(resolver: &Resolver, manifest: &Value) -> Value {
-    let mut locked = json!({"workspaces": {"": manifest}, "packages": {}});
-    for (key, package) in &resolver.packages {
-        locked["packages"][key] = json!([
-            format!("{}@{}", package.name, package.version),
-            package.tarball,
-            lock_info(&package.meta),
-            package.integrity
-        ]);
+    let mut locked = test_support::lock_snapshot(manifest, resolver);
+    if resolver
+        .overrides
+        .metadata
+        .as_object()
+        .is_some_and(|rules| !rules.is_empty())
+    {
+        locked["overrides"] = resolver.overrides.metadata.clone();
     }
     locked
+}
+
+fn version_selector(resolver: Resolver, mut manifest: Value) -> (Resolver, Value) {
+    manifest["overrides"] = json!({format!("{RUNTIME}@1.2.6"): "1.2.6"});
+    (resolver, manifest)
+}
+
+fn assert_selected_override(resolver: &Resolver) {
+    let binding = &resolver.packages[BINDING];
+    let key = resolver.dependency_key(binding, RUNTIME).unwrap();
+    assert_eq!(resolver.packages[&key].version, "1.2.6");
+    assert_eq!(binding.meta["dependencies"][RUNTIME], "~1.2.5");
+}
+
+#[test]
+fn version_selector_matches_the_original_published_edge() {
+    let (resolver, manifest) = fixture();
+    let (mut resolver, manifest) = version_selector(resolver, manifest);
+    let rules = Overrides::new(&manifest, &json!({})).unwrap();
+    assert_eq!(rules.target(RUNTIME, "~1.2.5"), "1.2.6");
+    resolver.resolve(&manifest, false).unwrap();
+    assert_selected_override(&resolver);
+}
+
+#[test]
+fn version_selector_replays_its_selected_runtime_without_registry() {
+    let (resolver, manifest) = fixture();
+    let (mut resolver, manifest) = version_selector(resolver, manifest);
+    resolver.resolve(&manifest, false).unwrap();
+    let locked = lock(&resolver, &manifest);
+    let mut replay = Resolver::new(resolver.registry, locked.clone(), false);
+    replay.resolve(&manifest, false).unwrap();
+    assert_selected_override(&replay);
+    assert!(replay.overrides.changed.is_empty());
+    assert_eq!(lock(&replay, &manifest), locked);
+    assert!(replay.packuments.is_empty());
+}
+
+#[test]
+fn added_version_selector_matches_a_previously_corrected_lock() {
+    let (mut resolver, manifest) = fixture();
+    resolver.resolve(&manifest, false).unwrap();
+    let locked = lock(&resolver, &manifest);
+    assert_eq!(
+        locked["packages"][BINDING][2]["dependencies"][RUNTIME],
+        "1.2.5"
+    );
+    let (resolver, manifest) = fixture();
+    let (mut resolver, manifest) = version_selector(resolver, manifest);
+    resolver.locked = locked;
+    resolver.resolve(&manifest, false).unwrap();
+    assert_selected_override(&resolver);
 }
 
 #[test]
