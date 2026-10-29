@@ -195,6 +195,9 @@ fn run_event_loop<E: Engine>(e: &E, core: &Core<E>, main: Option<E::Value>, test
         // runTimers returns: 0 = another turn is ready, >0 = ms until the
         // next timer, <0 = nothing left keeping the loop alive.
         let next = core.turn_number(e, "runTimers");
+        // Publish this turn's buffered stdout, as the browser engine's pump does. A loop that
+        // always has more work never reaches the idle flushes below.
+        core.flush();
         if next == 0.0 {
             continue;
         }
