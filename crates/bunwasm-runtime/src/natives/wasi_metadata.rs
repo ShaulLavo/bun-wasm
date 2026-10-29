@@ -1,5 +1,10 @@
 pub(crate) fn mode(file_type: u32) -> u32 {
-    file_type
+    let permissions = match file_type & 0o170000 {
+        0o040000 => 0o755,
+        0o120000 => 0o777,
+        _ => 0o644,
+    };
+    file_type | permissions
 }
 
 #[cfg(test)]
