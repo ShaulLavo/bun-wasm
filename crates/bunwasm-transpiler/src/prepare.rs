@@ -32,6 +32,7 @@ struct Body {
     end: usize,
     asynchronous: bool,
     suspension_handlers: bool,
+    prepared: bool,
 }
 
 #[derive(Default)]
@@ -107,10 +108,16 @@ fn collect(source: &str, spans: &[Span], imports: &[usize]) -> Edits {
             _ => None,
         })
         .collect();
+    for body in &mut bodies {
+        let at = *prologues.get(&body.start).unwrap_or(&body.start);
+        body.prepared = source[at..body.end]
+            .trim_start()
+            .starts_with("let __bunwasm_s = 0;");
+    }
     let mut edits = Edits::default();
     for body in bodies.iter().filter(|body| body.suspension_handlers) {
         // Already prepared functions retain their own activation local.
-        if source[body.start..body.end].contains("let __bunwasm_s = 0;") {
+        if body.prepared {
             continue;
         }
         edits.at(*prologues.get(&body.start).unwrap_or(&body.start), 5);
@@ -123,6 +130,20 @@ fn collect(source: &str, spans: &[Span], imports: &[usize]) -> Edits {
 }
 
 fn collect_span(edits: &mut Edits, source: &str, spans: &[Span], bodies: &[Body], span: &Span) {
+    let at = match *span {
+        Span::Await { start, .. }
+        | Span::Yield { start, .. }
+        | Span::Loop { start, .. }
+        | Span::Eval { start, .. } => Some(start),
+        Span::Handler(at) => Some(at),
+        _ => None,
+    };
+    if at
+        .and_then(|at| owner(bodies, at))
+        .is_some_and(|index| bodies[index].prepared)
+    {
+        return;
+    }
     match *span {
         Span::Await {
             start,
@@ -199,7 +220,7 @@ fn loop_edits(
         return;
     }
     while let Some(outer) = spans.iter().find_map(|span| match span {
-        Span::Label { start: outer, body } if *body == start => Some(*outer),
+        Span::Label { start: outer, body } if *body == start && *outer < start => Some(*outer),
         _ => None,
     }) {
         start = outer;
@@ -296,7 +317,7 @@ fn result(
         *inserted += length;
     }
     json!({ "version": PREPARE_VERSION, "edits": triples, "columns": columns, "fallback": fallback,
-        "spreadEval": spans.iter().filter(|span| matches!(span, Span::Argument { spread: true, .. })).count(),
+        "spreadEval": spans.iter().filter(|span| matches!(span, Span::Argument { call, spread: true, .. } if spans.iter().any(|site| matches!(site, Span::Eval { start, .. } if start == call)))).count(),
         "unhookedAwaitUsing": spans.iter().filter(|span| matches!(span, Span::AwaitUsing)).count() })
 }
 

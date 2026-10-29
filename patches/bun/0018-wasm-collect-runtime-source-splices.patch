@@ -90,7 +90,7 @@ index 045bf990..da9b84f2 100644
 +    });
 +}
 diff --git a/src/js_parser/parse/mod.rs b/src/js_parser/parse/mod.rs
-index 8e3392db..c2cde165 100644
+index 8e3392db..b26b4e19 100644
 --- a/src/js_parser/parse/mod.rs
 +++ b/src/js_parser/parse/mod.rs
 @@ -112,7 +112,12 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
@@ -136,7 +136,15 @@ index 8e3392db..c2cde165 100644
              let raw2 = p.lexer.raw();
              let mut value = if p.lexer.token == T::TIdentifier && raw2 == b"using" {
                  'value: {
-@@ -966,6 +979,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -934,6 +947,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                             );
+                         } else if !opts.is_for_loop_init {
+                             p.require_initializers(js_ast::LocalKind::KAwaitUsing, decls.slice())?;
++                            crate::bunwasm_splice(crate::BunwasmSplice::AwaitUsing);
+                         }
+                         return Ok(ExprOrLetStmt {
+                             stmt_or_expr: js_ast::StmtOrExpr::Stmt(p.s(
+@@ -966,6 +980,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
                  p.lexer.unexpected()?;
              }
              p.parse_suffix(&mut value, Level::Prefix, None, EFlags::None)?;
@@ -146,7 +154,7 @@ index 8e3392db..c2cde165 100644
              let mut expr = p.new_expr(E::Await { value }, token_range.loc);
              p.parse_suffix(&mut expr, Level::Lowest, None, EFlags::None)?;
              return Ok(ExprOrLetStmt {
-@@ -1479,6 +1495,8 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -1479,6 +1496,8 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
          let mut return_without_semicolon_start: i32 = -1;
          opts.lexical_decl = LexicalDecl::AllowAll;
          let mut is_directive_prologue = true;
@@ -155,7 +163,7 @@ index 8e3392db..c2cde165 100644
  
          loop {
              for comment in p.lexer.comments_to_preserve_before.iter() {
-@@ -1494,6 +1512,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -1494,6 +1513,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
              let mut current_opts = opts;
              let mut stmt = p.parse_stmt(&mut current_opts)?;
  
@@ -165,15 +173,22 @@ index 8e3392db..c2cde165 100644
              // Skip TypeScript types entirely
              if Self::IS_TYPESCRIPT_ENABLED {
                  if let js_ast::stmt::Data::STypeScript(_) = stmt.data {
-@@ -1538,6 +1559,8 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -1538,6 +1560,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
                  }
              }
  
 +            if is_directive_prologue { prologue_end = p.lexer.start; }
-+            crate::bunwasm_splice(crate::BunwasmSplice::Prologue { start: prologue_start, end: prologue_end });
              if !skip {
                  stmts.push(stmt);
              }
+@@ -1567,6 +1590,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             }
+         }
+ 
++        crate::bunwasm_splice(crate::BunwasmSplice::Prologue { start: prologue_start, end: prologue_end });
+         Ok(stmts)
+     }
+ 
 diff --git a/src/js_parser/parse/parse_fn.rs b/src/js_parser/parse/parse_fn.rs
 index 6555dfa0..dac1abfb 100644
 --- a/src/js_parser/parse/parse_fn.rs
@@ -227,6 +242,22 @@ index 0b0a3204..7aad335b 100644
                          if p.lexer.token == T::TAsteriskAsterisk {
                              p.lexer.unexpected()?;
                              return Err(crate::Error::SyntaxError);
+diff --git a/src/js_parser/parse/parse_property.rs b/src/js_parser/parse/parse_property.rs
+index a0a597a0..576b86ae 100644
+--- a/src/js_parser/parse/parse_property.rs
++++ b/src/js_parser/parse/parse_property.rs
+@@ -507,7 +507,11 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+ 
+                             let _ = p.push_scope_for_parse_pass(ScopeKind::ClassStaticInit, loc)?;
+                             let mut _parse_opts = ParseStatementOptions::default();
++                            let body_start = p.lexer.start;
+                             let stmts = p.parse_stmts_up_to(T::TCloseBrace, &mut _parse_opts)?;
++                            crate::bunwasm_splice(crate::BunwasmSplice::Function {
++                                start: body_start, end: p.lexer.start, asynchronous: false,
++                            });
+ 
+                             p.pop_scope();
+ 
 diff --git a/src/js_parser/parse/parse_stmt.rs b/src/js_parser/parse/parse_stmt.rs
 index 5298b27d..201bb653 100644
 --- a/src/js_parser/parse/parse_stmt.rs

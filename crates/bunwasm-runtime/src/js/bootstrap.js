@@ -91,7 +91,6 @@
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
     if (line !== null && file && !internal.mappedCallSites?.has(site)) {
-      col = internal.preparation?.correctPosition(file, line, col) ?? col;
       const mapped = native.mapPosition(file, line, col);
       if (mapped) [line, col] = mapped;
       if (isV8) col = pastNew(file, line, col);
@@ -547,7 +546,7 @@
 
   function nodeModulePaths(dir) {
     const paths = [];
-    let current = dir;
+    let current = dir.startsWith("/") ? dir : internal.require("node_path").posix.resolve(native.cwd(), dir);
     for (;;) {
       if (basename(current) !== "node_modules") paths.push((current === "/" ? "" : current) + "/node_modules");
       if (current === "/") break;

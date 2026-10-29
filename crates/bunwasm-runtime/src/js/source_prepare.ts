@@ -4,11 +4,16 @@
   const native = internal.native;
   const hooks = native.engine === "host" && native.contextHooks;
   const version = native.engine === "host" ? native.prepareVersion : 4;
-  const realm = `${process.pid}/${process.env?.BUNWASM_THREAD_ID || "0"}`;
+  function threadId(): number {
+    const config: unknown = JSON.parse(process.env?.BUNWASM_WORKER_INIT || "null");
+    if (!config || typeof config !== "object" || !("route" in config) || !Array.isArray(config.route)) return 0;
+    return config.route.reduce((parent: number, counter: number) => (parent + counter) * (parent + counter + 1) / 2 + counter + 1, 0);
+  }
+  const realm = `${process.pid}/${threadId()}`;
   const budget = 16 * 1024 * 1024;
   const maxEntry = 4 * 1024 * 1024;
   const cache = new Map<string, { bytes: number; values: Prepared[] }>();
-  const columns = new Map<string, Int32Array>();
+  const columns = native.engine === "host" ? native.preparedColumns : new Map<string, BunWasm.PreparedColumns>();
   const counters = { prepared: 0, skippedByAbsence: 0, cacheHits: 0, fallbacks: 0, unhookedAwaitUsing: 0, spreadEval: 0 };
   let bytes = 0;
   let columnBytes = 0;
@@ -62,19 +67,19 @@
   function register(name: string | undefined, table: number[]): void {
     if (!name) return;
     const old = columns.get(name);
-    columnBytes -= old?.byteLength ?? 0;
+    columnBytes -= old?.columns.byteLength ?? 0;
     columns.delete(name);
     const value = Int32Array.from(table);
-    columns.set(name, value);
+    columns.set(name, { version, columns: value });
     columnBytes += value.byteLength;
     while (columnBytes > budget || columns.size > 4096) {
       const first = columns.keys().next().value;
       if (first === undefined) break;
-      columnBytes -= columns.get(first)!.byteLength;
+      columnBytes -= columns.get(first)!.columns.byteLength;
       columns.delete(first);
     }
   }
-  function apply(source: string, value: Prepared, name?: string): string {
+  function apply(source: string, value: Prepared, name?: string, lineOffset = 0): string {
     const edits = value.edits;
     const table: number[] = [];
     let result = "";
@@ -91,7 +96,7 @@
       line += lines.length - 1;
       column = lines.length === 1 ? column + unchanged.length : lines.at(-1)!.length + 1;
       const inserted = edits[index + 2] === 16 ? replacement : text[edits[index + 2]];
-      table.push(line, column, inserted.length - edits[index + 1]);
+      table.push(line + lineOffset, column, inserted.length - edits[index + 1]);
       result += unchanged + inserted;
       column += inserted.length;
       previous = at + edits[index + 1];
@@ -99,22 +104,22 @@
     register(sourceName(source, name), table);
     return result + source.slice(previous);
   }
-  function trace(origin: string, name: string | undefined, size: number, prepared: Prepared[], hit: boolean, start: number): void {
+  function trace(origin: string, name: string | undefined, size: number, prepared: Prepared[], hit: boolean, start: number, goal: string): void {
     counters.prepared++;
     counters.fallbacks += prepared.filter(value => value.fallback !== null).length;
     counters.spreadEval += prepared.reduce((total, value) => total + value.spreadEval, 0);
     counters.unhookedAwaitUsing += prepared.reduce((total, value) => total + value.unhookedAwaitUsing, 0);
     if (process.env?.BUN_WASM_PREPARE_TRACE !== "1") return;
-    console.error("BUNWASM_PREPARE " + JSON.stringify({ version, realm, mapPolicy: "c1", origin, name, bytes: size * 2,
+    console.error("BUNWASM_PREPARE " + JSON.stringify({ version, realm, goal, mapPolicy: "c1", origin, name, bytes: size * 2,
       edits: prepared.reduce((total, value) => total + value.edits.length / 3, 0), milliseconds: performance.now() - start,
       cacheHit: hit, fallback: prepared.map(value => value.fallback) }));
   }
   function prepareText(source: string, goal: BunWasm.PrepareGoal, origin: string, name?: string): string {
     if (!hooks) return source;
-    if (!hasWork(source)) { counters.skippedByAbsence++; return source; }
+    if (!hasWork(source)) { counters.skippedByAbsence++; register(sourceName(source, name), []); return source; }
     const start = performance.now();
     const prepared = records(source, goal, () => [JSON.parse(native.prepareSource(parseable(source), goal))]);
-    trace(origin, name, source.length, prepared.values, prepared.hit, start);
+    trace(origin, name, source.length, prepared.values, prepared.hit, start, goal);
     return apply(source, prepared.values[0], name);
   }
   function prepareFunctionArgs(args: string[], kind: BunWasm.FunctionKind, name?: string): string[] {
@@ -122,11 +127,11 @@
     const start = performance.now();
     const goal = `function:${kind}:${args.map(value => value.length).join(",")}:${hooks ? "hooks" : "imports"}`;
     const prepared = records(args.join(""), goal, () => JSON.parse(native.prepareFunction(args.map(parseable), kind, hooks)));
-    trace(kind === "normal" ? "function" : `${kind}-function`, name, args.join("").length, prepared.values, prepared.hit, start);
-    return args.map((source, index) => apply(source, prepared.values[index], index === args.length - 1 ? name : undefined));
+    trace(kind === "normal" ? "function" : `${kind}-function`, name, args.join("").length, prepared.values, prepared.hit, start, goal);
+    return args.map((source, index) => apply(source, prepared.values[index], index === args.length - 1 ? name : undefined, index === args.length - 1 ? 2 : 0));
   }
   function correctPosition(name: string, line: number, column: number): number {
-    const table = columns.get(name);
+    const table = columns.get(name)?.columns;
     if (!table) return column;
     let correction = 0;
     for (let index = 0; index < table.length; index += 3) {

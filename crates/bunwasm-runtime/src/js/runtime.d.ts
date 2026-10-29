@@ -9,11 +9,12 @@ declare namespace BunWasm {
     spreadEval: number;
     unhookedAwaitUsing: number;
   }
+  interface PreparedColumns { version: number; columns: Int32Array; }
   interface Internal {
     mainPath: string;
     prepareText(source: string, goal: PrepareGoal, origin: string, name?: string): string;
     prepareFunctionArgs(args: string[], kind: FunctionKind, name?: string): string[];
-    preparedColumns: Map<string, Int32Array>;
+    preparedColumns: Map<string, PreparedColumns>;
     preparation: {
       version: number; realm: string; counters: Record<string, number>;
       correctPosition(name: string, line: number, column: number): number;
@@ -23,9 +24,9 @@ declare namespace BunWasm {
   interface Native {
     readonly prepareVersion: number;
     readonly contextHooks: boolean;
+    readonly preparedColumns: Map<string, PreparedColumns>;
     prepareSource(source: string, goal: PrepareGoal): string;
     prepareFunction(args: readonly string[], kind: FunctionKind, hooks: boolean): string;
-    functionImports(args: readonly string[], kind: FunctionKind): number[][];
     resolve(specifier: string, referrer: string, require: boolean): string;
     importModule(path: string): Promise<unknown>;
     utf8Encode(value: string): Uint8Array<ArrayBuffer>;

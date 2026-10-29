@@ -105,10 +105,6 @@ pub trait Transpiler {
         Err("function preparation needs Bun's parser".to_owned())
     }
 
-    fn function_imports(&self, _args: &[String], _kind: &str) -> Result<Vec<Vec<usize>>, String> {
-        Err("generated imports need Bun's parser".to_owned())
-    }
-
     /// Version of the async-context hooks printed into transpiled code for
     /// the browser engine, or 0 when none are. Cached printed text is keyed
     /// on it.

@@ -755,6 +755,7 @@
     "bun:internal-for-testing": () => ({
       isASANEnabled: () => false,
       preparation: () => internal.preparation,
+      prepareSource: (...args) => internal.prepareText(...args),
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
       directoryCount: () => native.directoryCount(),
     }),

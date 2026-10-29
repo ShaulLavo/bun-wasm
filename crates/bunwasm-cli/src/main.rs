@@ -100,11 +100,14 @@ mod bun_transpiler {
             hooks: bool,
         ) -> Result<String, String> {
             let values = bunwasm_transpiler::prepare::function(args, kind, hooks);
-            Ok(format!("[{}]", values.into_iter().map(|value| value.to_string()).collect::<Vec<_>>().join(",")))
-        }
-
-        fn function_imports(&self, args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, String> {
-            bunwasm_transpiler::function_imports(args, kind)
+            Ok(format!(
+                "[{}]",
+                values
+                    .into_iter()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ))
         }
 
         fn hooks_version(&self) -> u32 {
