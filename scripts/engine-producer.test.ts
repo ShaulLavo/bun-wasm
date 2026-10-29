@@ -203,7 +203,7 @@ test("WebKit configure refuses a memory maximum above 2 GiB before configuring a
     writeFileSync(join(root, "crates/bunwasm-cli/max-memory.txt"), "2147549184\n");
     const result = shell("jsc/configure.sh");
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr.toString()).toContain("max-memory.txt must be a page multiple in (0, 2 GiB]");
+    expect(result.stderr?.toString()).toContain("max-memory.txt must be a page multiple in (0, 2 GiB]");
     expect(log().split("\n").filter(line => /^(clang|llvm-ar|cmake)\|/.test(line))).toEqual([]);
   });
 });
