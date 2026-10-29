@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import type { Page } from "playwright";
+import type { Page, BrowserServer } from "playwright";
 import { playwright, ready, run, session, terminalText, writeFile } from "../../web/tests/playground.mjs";
 import { stopShell } from "../../web/tests/stop-shell";
 import { resetBrowserProject } from "./browser-environment";
@@ -15,6 +15,9 @@ import { nextRegistry } from "../../web/tests/next-framework-registry";
 import { readGuest } from "./browser.mjs";
 import { browserRegistryRoute } from "./registry-request";
 import { editCycle, compileErrorRecovery } from "./next-acceptance-edits";
+import { closeOwnedBrowser, boundedCleanup } from "./cleanup";
+import { requestProbe } from "./next-acceptance-http";
+import { runAcceptancePhase } from "./next-acceptance-phase";
 import { routeCases, runRouteCase, overlappingRequests } from "./next-acceptance-cases";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
 import { verifyAcceptanceAssets } from "./next-acceptance-assets";
@@ -61,6 +64,8 @@ let devProcessId: number | null = null;
 let droppedSamples = 0;
 let browserVersion = "not launched";
 let owner: Page | undefined;
+let browserServer: BrowserServer | undefined;
+let samplingStopped = false;
 let assets: Record<string, string> = {};
 let cleanup = "pending";
 const failedAllocations: { bytes: number | null; category: string; evidence: string }[] = [];
@@ -86,14 +91,14 @@ function save() {
     parameters: { cycles, timeoutMs: timeout, idleMs: idle, minHeadroomMiB: minHeadroom, maxGrowthMiB: maxGrowth, phases: Array.from(phases) },
     completedCycles, devProcessId, droppedSamples, samplerErrors, failedAllocations, rebuilds, rows, samples,
     network: { mode: mirror ? "registry replay" : "live npm (diagnostic)", external, mirror: mirror?.snapshot() }, cleanup,
-    acceptance: rows.length > 0 && rows.every(row => row.status === "pass") && cleanup === "pass",
+    acceptance: rows.length > 0 && rows.every(row => row.status === "pass") && cleanup === "pass" && !samplerErrors.length && !droppedSamples,
   };
   writeFileSync(join(output, "run.json"), JSON.stringify(report, null, 2) + "\n");
   writeFileSync(join(output, "results.md"), resultTable(rows));
 }
 
 async function sample(phase: string) {
-  if (!owner) return;
+  if (!owner || samplingStopped) return;
   const counters = hook ? parseMemory(await boundedSample(hook({ page: owner, phase, engine }))) : emptyMemory;
   if (samples.length >= 8192) { droppedSamples++; return; }
   samples.push({ ...counters, phase, engine, time: Date.now() });
@@ -109,8 +114,13 @@ async function boundarySample(phase: string) {
 async function boundedSample(operation: Promise<unknown>): Promise<unknown> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Memory hook exceeded 5s")), 5000); })]);
+    return await Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(stopSampling, 5000, reject); })]);
   } finally { clearTimeout(timer); }
+}
+
+function stopSampling(reject: (error: Error) => void) {
+  samplingStopped = true;
+  reject(new Error("Memory hook exceeded 5s; further sampling stopped"));
 }
 
 async function measured(operation: () => Promise<void>, phase: string) {
@@ -131,21 +141,27 @@ function recordSamplerError(error: unknown) {
   if (samplerErrors.length < 64) samplerErrors.push(String(error));
 }
 
-async function phase(name: string, operation: () => Promise<void>, prerequisite?: string): Promise<boolean> {
+async function cancelPhase() {
+  if (browserServer) await closeOwnedBrowser(browserServer, 1000);
+}
+
+async function phase(name: string, operation: () => Promise<void>, prerequisite?: string, budgetMs = timeout + 5000): Promise<boolean> {
   const previous = prerequisite ? rows.find(row => row.phase === prerequisite) : undefined;
   if (prerequisite && previous?.status !== "pass") return record(name, { status: "blocked", reason: `Requires ${prerequisite}: ${previous?.status ?? "missing"}` });
-  const started = performance.now();
-  try {
-    await measured(operation, name);
-    return record(name, { status: "pass", detail: "Assertions passed" }, started);
-  } catch (error) { return record(name, { status: "fail", reason: String(error) }, started); }
+  const result = await runAcceptancePhase({ phase: name, engine, observedEngine, timeoutMs: budgetMs,
+    operation: () => measured(operation, name), cancel: cancelPhase, record: row => persistResult({ ...row, observedEngine }) });
+  return result.status === "pass";
+}
+
+function persistResult(row: PhaseResult) {
+  rows.push(row);
+  save();
+  process.stdout.write(`${engine} ${row.phase}: ${row.status}\n`);
 }
 
 function record(name: string, outcome: Outcome, started = performance.now()): boolean {
   const row = { phase: name, engine, observedEngine, durationMs: Math.round(performance.now() - started), ...outcome };
-  rows.push(row);
-  save();
-  process.stdout.write(`${engine} ${name}: ${row.status}\n`);
+  persistResult(row);
   return row.status === "pass";
 }
 
@@ -218,7 +234,7 @@ async function serverCases(owner: Page, page: Page, base: string, mode: "start" 
     try { await waitForPreviewReady(probe, base, Date.now() + timeout); }
     finally { await probe.close(); }
   }, mode);
-  for (const name of routeCases) await phase(`${mode}:${name}`, async () => { await alive(owner); await runRouteCase(name, page, base); await alive(owner); }, `${mode}:http-ready`);
+  for (const name of routeCases) await phase(`${mode}:${name}`, async () => { await alive(owner); await runRouteCase(name, page, base, timeout); await alive(owner); }, `${mode}:http-ready`);
   if (mode !== "dev") return;
   const warmed = routeCases.every(name => rows.find(row => row.phase === `dev:${name}`)?.status === "pass");
   record("dev:warm", warmed ? { status: "pass", detail: "Every route compiled and checked" } : { status: "blocked", reason: "Warm-up requires all route probes" });
@@ -227,10 +243,10 @@ async function serverCases(owner: Page, page: Page, base: string, mode: "start" 
   await phase("dev:edits", async () => {
     for (let index = 0; index < cycles; index++) await cycle(owner, page, base, source, traffic, index);
     assert.ok(completedCycles >= 30, `${completedCycles}/30 cycles; smoke run cannot pass`);
-  }, "dev:process");
-  await phase("dev:compile-recovery", () => compileErrorRecovery(page, base, source), "dev:warm");
-  await phase("dev:application-recovery", () => runRouteCase("application-error", page, base), "dev:warm");
-  await phase("dev:overlap-after-errors", () => overlappingRequests(page, base, "after-errors"), "dev:compile-recovery");
+  }, "dev:process", Math.max(1, cycles) * (timeout * 3 + idle + 5000));
+  await phase("dev:compile-recovery", () => compileErrorRecovery(page, base, source, timeout), "dev:warm");
+  await phase("dev:application-recovery", () => runRouteCase("application-error", page, base, timeout), "dev:warm");
+  await phase("dev:overlap-after-errors", () => overlappingRequests(page, base, "after-errors", timeout), "dev:compile-recovery");
   await phase("dev:navigation", async () => {
     await page.goto(new URL("dynamic", base).href);
     await page.getByRole("link", { name: "Home", exact: true }).click();
@@ -241,11 +257,8 @@ async function serverCases(owner: Page, page: Page, base: string, mode: "start" 
 }
 
 async function serverPid(page: Page, base: string): Promise<number> {
-  const observed: unknown = await page.evaluate(async base => {
-    const response = await fetch(new URL("api/context", base));
-    if (!response.ok) throw new Error(`Process identity HTTP ${response.status}`);
-    return response.json();
-  }, base);
+  const response = await requestProbe(page, { url: new URL("api/context", base).href, deadline: Date.now() + timeout });
+  const observed: unknown = JSON.parse(response.body);
   assert.ok(observed && typeof observed === "object" && "pid" in observed && typeof observed.pid === "number" && Number.isSafeInteger(observed.pid) && observed.pid > 0, "Next response must identify the serving process");
   return observed.pid;
 }
@@ -256,7 +269,7 @@ async function cycle(owner: Page, page: Page, base: string, source: GuestSource,
     assert.equal(await serverPid(page, base), devProcessId, "Same warmed Next process before edit");
     await boundarySample(`cycle:${index}:before`);
     rebuilds.push(await editCycle(page, base, source, traffic, index, timeout, boundarySample));
-    await overlappingRequests(page, base, `hmr-${index}`);
+    await overlappingRequests(page, base, `hmr-${index}`, timeout);
     await page.waitForTimeout(idle);
     await boundarySample(`cycle:${index}:idle`);
     assert.equal(await serverPid(page, base), devProcessId, "Same warmed Next process after edit/revert");
@@ -288,7 +301,10 @@ async function main() {
     mirror = { ...replay, errors: [], snapshot: () => ({ entries, sha256: registryHash, requests: replay.requests.length, misses: replay.misses, errors: [] }) };
   }
   const match = await task.start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { ROOT: webRoot, PORT: "0", PREVIEW_ORIGINS: "1" });
-  const browser = await task.launch(playwright.chromium);
+  const browser = await task.launch({ launch: async () => {
+    browserServer = await playwright.chromium.launchServer();
+    return playwright.chromium.connect(browserServer.wsEndpoint());
+  } });
   browserVersion = browser.version();
   const context = await browser.newContext({ serviceWorkers: "allow" });
   if (mirror) await context.route("**/*", route => browserRegistryRoute(route, mirror!.base, external));
@@ -319,13 +335,17 @@ async function main() {
 try { await main(); }
 catch (error) { record("runner", { status: "fail", reason: String(error) }); }
 finally {
-  if (owner && !owner.isClosed()) await terminalText(owner).then(text => {
+  if (owner && !owner.isClosed()) await boundedCleanup("terminal-capture", () => terminalText(owner!).then(text => {
     writeFileSync(join(output, "terminal.log"), text);
     for (const match of text.matchAll(/memory allocation of (\d+) bytes failed/g)) failedAllocations.push({ bytes: Number(match[1]), category: "allocator; attribution unavailable", evidence: match[0] });
     if (/MemoryExhaustion|out of memory|OOM/i.test(text) && !failedAllocations.length) failedAllocations.push({ bytes: null, category: "unattributed memory failure", evidence: "See terminal.log" });
-  }).catch(recordSamplerError);
-  const released = await Promise.allSettled([task.cleanup(), mirror?.close()]);
+  }), 2000).then(failure => { if (failure) recordSamplerError(failure.error); });
+  const released = await Promise.allSettled([
+    browserServer && closeOwnedBrowser(browserServer, 1000),
+    boundedCleanup("session", () => task.cleanup(), 5000).then(failure => { if (failure) throw new Error(failure.error); }),
+    boundedCleanup("registry", () => mirror?.close(), 2000).then(failure => { if (failure) throw new Error(failure.error); }),
+  ]);
   cleanup = released.every(result => result.status === "fulfilled") ? "pass" : released.flatMap(result => result.status === "rejected" ? [String(result.reason)] : []).join("; ");
   save();
 }
-if (rows.some(row => row.status !== "pass") || cleanup !== "pass") process.exitCode = 1;
+if (rows.some(row => row.status !== "pass") || cleanup !== "pass" || samplerErrors.length || droppedSamples) process.exitCode = 1;

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { Page } from "playwright";
+import { requestProbe } from "./next-acceptance-http";
 
 export const routeCases = ["static", "dynamic", "get-post", "suspense", "stream-cancel", "action", "redirect", "missing", "application-error", "client", "overlap"] as const;
 export type RouteCase = typeof routeCases[number];
@@ -10,26 +11,30 @@ async function navigate(page: Page, base: string, path: string, status = 200) {
   return response;
 }
 
-export async function overlappingRequests(page: Page, base: string, marker: string) {
+export async function overlappingRequests(page: Page, base: string, marker: string, timeout = 60000) {
+  const deadline = Date.now() + timeout;
   await navigate(page, base, "");
-  const results = await page.evaluate(async ({ base, marker }) => {
-    const request = async (index: number) => {
-      const value = `${marker}-${index}`;
-      document.cookie = `next-marker-${value}=${value}; path=/`;
-      const path = index % 3 === 0 ? "dynamic" : "api/context?fail=1";
-      const post = index % 3 === 2;
-      const response = await fetch(new URL(path, base), {
-        method: post ? "POST" : "GET", headers: { "x-next-marker": value, "content-type": "application/json" },
-        ...(post ? { body: JSON.stringify({ marker: value }) } : {}),
-      });
-      return { marker: value, status: response.status, expectedStatus: post ? 201 : 200, text: await response.text() };
-    };
-    return Promise.all(Array.from({ length: 6 }, (_, index) => request(index)));
-  }, { base, marker });
-  await page.evaluate(marker => {
-    for (let index = 0; index < 6; index++) document.cookie = `next-marker-${marker}-${index}=; max-age=0; path=/`;
-  }, marker);
-  for (const result of results) verifyContext(result, result.marker);
+  const markers = Array.from({ length: 6 }, (_, index) => `${marker}-${index}`);
+  await page.evaluate(markers => {
+    for (const value of markers) document.cookie = `next-marker-${value}=${value}; path=/`;
+  }, markers);
+  const requests = markers.map(async (value, index) => {
+    const post = index % 3 === 2;
+    const path = index % 3 === 0 ? "dynamic" : "api/context?fail=1";
+    const response = await requestProbe(page, { url: new URL(path, base).href, deadline,
+      method: post ? "POST" : "GET", headers: { "x-next-marker": value, "content-type": "application/json" },
+      body: post ? JSON.stringify({ marker: value }) : null, expectedStatus: post ? 201 : 200 });
+    return { marker: value, status: response.status, expectedStatus: post ? 201 : 200, text: response.body };
+  });
+  try {
+    const results = await Promise.all(requests);
+    for (const result of results) verifyContext(result, result.marker);
+  } finally {
+    await Promise.allSettled(requests);
+    await page.evaluate(markers => {
+      for (const value of markers) document.cookie = `next-marker-${value}=; max-age=0; path=/`;
+    }, markers);
+  }
 }
 
 function verifyContext(response: { status: number; expectedStatus: number; text: string }, marker: string) {
@@ -38,10 +43,10 @@ function verifyContext(response: { status: number; expectedStatus: number; text:
   for (const field of ["header", "cookie", "after", "cookieAfter"]) assert.ok(normalized.includes(`"${field}":"${marker}"`), `${field} lost after await: ${normalized.slice(0, 1000)}`);
 }
 
-export async function runRouteCase(name: RouteCase, page: Page, base: string) {
-  if (name === "overlap") return overlappingRequests(page, base, `overlap-${Date.now()}`);
-  if (name === "get-post") return getPost(page, base);
-  if (name === "stream-cancel") return stream(page, base);
+export async function runRouteCase(name: RouteCase, page: Page, base: string, timeout = 60000) {
+  if (name === "overlap") return overlappingRequests(page, base, `overlap-${Date.now()}`, timeout);
+  if (name === "get-post") return getPost(page, base, timeout);
+  if (name === "stream-cancel") return stream(page, base, timeout);
   if (name === "static") { await navigate(page, base, ""); await page.getByRole("heading", { name: "NEXT-01 static", exact: true }).waitFor(); return; }
   if (name === "dynamic") { await navigate(page, base, "dynamic"); await page.locator("[data-context]").waitFor(); return; }
   if (name === "suspense") {
@@ -69,37 +74,29 @@ export async function runRouteCase(name: RouteCase, page: Page, base: string) {
   await page.getByRole("button", { name: "Count: 1", exact: true }).waitFor();
 }
 
-async function getPost(page: Page, base: string) {
+async function getPost(page: Page, base: string, timeout: number) {
+  const deadline = Date.now() + timeout;
   await navigate(page, base, "");
-  const result = await page.evaluate(async base => {
-    const get = await fetch(new URL("api/context", base));
-    const post = await fetch(new URL("api/context", base), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ value: "NEXT-01 posted" }) });
-    return { get: get.status, post: post.status, body: await post.json() };
-  }, base);
-  assert.equal(result.get, 200); assert.equal(result.post, 201);
-  assert.deepEqual(result.body.body, { value: "NEXT-01 posted" });
+  await requestProbe(page, { url: new URL("api/context", base).href, deadline });
+  const post = await requestProbe(page, { url: new URL("api/context", base).href, deadline,
+    method: "POST", expectedStatus: 201, headers: { "content-type": "application/json" }, body: JSON.stringify({ value: "NEXT-01 posted" }) });
+  const result: unknown = JSON.parse(post.body);
+  assert.ok(result && typeof result === "object" && "body" in result);
+  assert.deepEqual(result.body, { value: "NEXT-01 posted" });
 }
 
-async function stream(page: Page, base: string) {
+async function stream(page: Page, base: string, timeout: number) {
+  const deadline = Date.now() + timeout;
   await navigate(page, base, "");
-  const result = await page.evaluate(async base => {
-    const read = async (cancel: boolean) => {
-      const response = await fetch(new URL("api/stream", base));
-      const reader = response.body!.getReader();
-      const start = performance.now();
-      const first = await reader.read();
-      const firstMs = performance.now() - start;
-      const early = new TextDecoder().decode(first.value);
-      if (cancel) await reader.cancel();
-      if (cancel) return { early, late: "", firstMs, gapMs: 0 };
-      const last = await reader.read();
-      return { early, late: new TextDecoder().decode(last.value), firstMs, gapMs: performance.now() - start - firstMs };
-    };
-    return { complete: await read(false), cancelled: await read(true), after: (await fetch(new URL("api/context", base))).status };
-  }, base);
-  assert.equal(result.complete.early, "NEXT-01 early\n");
-  assert.equal(result.complete.late, "NEXT-01 late\n");
-  assert.ok(result.complete.gapMs >= 200, "stream chunks arrived together");
-  assert.equal(result.cancelled.early, "NEXT-01 early\n");
-  assert.equal(result.after, 200, "server recovered after cancellation");
+  const complete = await requestProbe(page, { url: new URL("api/stream", base).href, deadline });
+  assert.equal(complete.kind, "complete", "Stream must reach EOF");
+  assert.equal(complete.body, "NEXT-01 early\nNEXT-01 late\n");
+  assert.equal(complete.chunks[0]?.text, "NEXT-01 early\n");
+  const first = complete.chunks[0];
+  const last = complete.chunks.at(-1);
+  assert.ok(first && last && last.timeMs - first.timeMs >= 200, "stream chunks arrived together");
+  const cancelled = await requestProbe(page, { url: new URL("api/stream", base).href, deadline, mode: "cancel-after-first" });
+  assert.equal(cancelled.kind, "cancelled");
+  assert.equal(cancelled.body, "NEXT-01 early\n");
+  await requestProbe(page, { url: new URL("api/context", base).href, deadline });
 }

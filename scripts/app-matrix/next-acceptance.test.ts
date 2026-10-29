@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript-api";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
@@ -79,7 +80,7 @@ test("every engine stages the same TS-authored config as native ESM", async () =
 
 
 test("real launcher preserves exact dev/build/start argv", () => {
-  const scratch = mkdtempSync("/work/tmp/bun-wasm-next01-argv-");
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-next01-argv-"));
   try {
     const bin = join(scratch, "node_modules/next/dist/bin/next");
     mkdirSync(join(scratch, "node_modules/next/dist/bin"), { recursive: true });

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import type { Page } from "playwright";
+import { requestProbe } from "./next-acceptance-http";
 import type { GuestSource, ProductTraffic } from "./product-browser";
 
 const edits = [
@@ -56,20 +57,26 @@ async function verifyEdit(page: Page, selector: string, value: string, timeout: 
   }, { selector, value }, { timeout });
 }
 
-export async function compileErrorRecovery(page: Page, base: string, source: GuestSource) {
+export async function compileErrorRecovery(page: Page, base: string, source: GuestSource, timeout = 60000) {
   const path = "app/dynamic/page.tsx";
   const original = await source.read(path);
   assert.ok(original);
   try {
     await source.write(path, original + "\nexport const broken = ;\n");
-    await page.waitForFunction(async url => {
-      const response = await fetch(url);
-      const body = await response.text();
-      return response.status === 500 && /broken|Unexpected token|Parsing ecmascript/i.test(body);
-    }, new URL("dynamic", base).href, { timeout: 60000 });
+    await waitCompileError(page, new URL("dynamic", base).href, Date.now() + timeout);
   } finally { await source.write(path, original); }
   await page.goto(new URL("dynamic", base).href);
   await page.getByRole("heading", { name: "server-original", exact: true }).waitFor();
   await page.getByRole("link", { name: "Home", exact: true }).click();
   await page.getByRole("heading", { name: "NEXT-01 static", exact: true }).waitFor();
+}
+
+
+async function waitCompileError(page: Page, url: string, deadline: number) {
+  while (Date.now() < deadline) {
+    const response = await requestProbe(page, { url, deadline, expectedStatus: null });
+    if (response.status === 500 && /broken|Unexpected token|Parsing ecmascript/i.test(response.body)) return;
+    await page.waitForTimeout(50);
+  }
+  throw new Error("Compile-error response deadline exceeded");
 }
