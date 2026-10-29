@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsSharedSysroot } from "./ci-changes";
@@ -70,6 +70,41 @@ test("shared setup publishes the same private paths before the first cache resto
       `BUN_WASM_SYSROOT=${scratch}/bun-wasm-shared-sysroot`,
       `TMPDIR=${scratch}`,
     ]);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+function minimalMapHost(bin: string): string {
+  mkdirSync(bin);
+  for (const command of ["bash", "dirname", "grep"]) {
+    const executable = Bun.which(command);
+    assert(executable);
+    symlinkSync(realpathSync(executable), join(bin, command));
+  }
+  return join(bin, "bash");
+}
+
+test("real member map checks work without ripgrep and reject either missing libc member", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-shared-map-"));
+  try {
+    const bin = join(scratch, "bin"), bash = minimalMapHost(bin);
+    const env = { ...process.env, PATH: bin };
+    expect(spawnSync(bash, ["-c", "command -v rg"], { env }).status).toBe(1);
+    const original = readFileSync(new URL("./fixtures/shared-sysroot-member.map", import.meta.url), "utf8");
+    const script = new URL("./test-shared-sysroot.sh", import.meta.url).pathname;
+    const cases = [
+      { name: "real", map: original, status: 0 },
+      { name: "missing-allocator", map: original.split("\n").filter(line => !line.includes("libc.a(dlmalloc.c.obj)")).join("\n"), status: 1 },
+      { name: "missing-sbrk", map: original.split("\n").filter(line => !line.includes("libc.a(sbrk.c.obj)")).join("\n"), status: 1 },
+    ];
+    for (const item of cases) {
+      const map = join(scratch, `${item.name}.map`);
+      writeFileSync(map, item.map);
+      const result = spawnSync(bash, [script, "--check-map", map], { env, encoding: "utf8", timeout: 3000 });
+      expect(result.status, item.name).toBe(item.status);
+      expect(result.stderr, item.name).toBe("");
+    }
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }

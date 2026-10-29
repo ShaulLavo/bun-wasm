@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
+check_libc_map() {
+  grep -Fq 'libc.a(dlmalloc.c.obj):(dlmalloc)' "$1" &&
+    grep -Fq 'libc.a(sbrk.c.obj):(sbrk)' "$1"
+}
+if [[ ${1-} == --check-map ]]; then
+  check_libc_map "${2:?Usage: test-shared-sysroot.sh --check-map MEMBER_MAP}"
+  exit
+fi
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 : "${BUN_WASM_SHARED_SYSROOT:?Set the private shared sysroot}"
 : "${WASI_SDK_PATH:?Source env.sh first}"
@@ -15,8 +23,7 @@ mkdir -p "$output"
   --export=__wasm_call_ctors \
   -L "$BUN_WASM_SHARED_SYSROOT/lib/wasm32-wasip1" "$output/member.o" -lc \
   --Map="$output/member.map" -o "$output/member.wasm"
-rg --quiet 'libc\.a\(dlmalloc\.c\.obj\):\(dlmalloc\)' "$output/member.map"
-rg --quiet 'libc\.a\(sbrk\.c\.obj\):\(sbrk\)' "$output/member.map"
+check_libc_map "$output/member.map"
 sha256sum "$BUN_WASM_SHARED_SYSROOT/lib/wasm32-wasip1/libc.a" "$output/member.wasm" > "$output/digests.txt"
 wasm-tools print "$output/member.wasm" > "$output/member.wat"
 timeout --kill-after=2s 90s node "$root/scripts/shared-sysroot-proof.ts" "$output/member.wasm"
