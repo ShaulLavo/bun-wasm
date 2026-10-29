@@ -120,7 +120,8 @@
   "ignoreBinaries": [
     "unshare",
     "ss",
-    "build.mjs"
+    "build.mjs",
+    "c++"
   ],
   "ignoreUnresolved": [
     "./space # \u00fc.mjs"
