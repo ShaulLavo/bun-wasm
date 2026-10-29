@@ -62,6 +62,10 @@
     return records;
   }
 
+  function invalidListener() {
+    return Object.assign(new TypeError('The "listener" argument must be of type function'), { code: "ERR_INVALID_ARG_TYPE" });
+  }
+
   function filenameEncoding(value: unknown): string | undefined {
     if (value == null || value === "") return undefined;
     if (typeof value === "string" && (value === "buffer" || Buffer.isEncoding(value))) return value;
@@ -100,24 +104,33 @@
 
       constructor(path: string, settings: Options, listener?: Listener) {
         super();
+        // Validate everything that can throw before the watch exists.
+        if (listener && typeof listener !== "function") throw invalidListener();
         fs.statSync(path);
         const id = native.fsWatchOpen(path, Boolean(settings.recursive));
         if (id < 0) throw watchError(-id, path, true);
         this.#id = id;
         this.#path = path;
         this.#options = settings;
-        if (listener) this.on("change", listener);
-        internal.require("net");
         // No subscriptions(): the idle loop then sleeps in the network host poll, whose
         // notification set wakes on filesystem commits (runtime_proc.poll cannot).
-        this.#waiter = internal.addIoWaiter({
+        this.#waiter = {
           ref: settings.persistent !== false,
           watch: true,
           step: () => this.#step(),
           fail: (error: unknown) => this.#fail(error),
-        });
-        if (settings.signal?.aborted) internal.nextTick(this.#abort);
-        else settings.signal?.addEventListener("abort", this.#abort, { once: true });
+        };
+        try {
+          if (listener) this.on("change", listener);
+          internal.require("net");
+          internal.addIoWaiter(this.#waiter);
+          if (settings.signal?.aborted) internal.nextTick(this.#abort);
+          else settings.signal?.addEventListener("abort", this.#abort, { once: true });
+        } catch (error) {
+          // No watcher reaches the caller, so nothing else could release the watch.
+          this.#release();
+          throw error;
+        }
       }
 
       #step(): boolean | "progress" {
@@ -145,12 +158,16 @@
         this.emit("error", error);
       }
 
-      close() {
-        if (this.#closed) return;
+      #release() {
         this.#closed = true;
         internal.removeIoWaiter(this.#waiter);
         native.fsWatchClose(this.#id);
         this.#options.signal?.removeEventListener("abort", this.#abort);
+      }
+
+      close() {
+        if (this.#closed) return;
+        this.#release();
         internal.nextTick(() => this.emit("close"));
       }
       ref() { if (!this.#closed) this.#waiter.ref = true; return this; }

@@ -247,3 +247,19 @@ test("a throwing change listener becomes an error event and releases the watch",
   world.pump();
   expect([errors, world.closed, world.pending()]).toEqual([[failure], [40], 0]);
 });
+
+test("an invalid listener throws before any watch is opened", () => {
+  const world = fixture();
+  expect(() => world.module.watch("/app", {}, 42 as unknown as Listener)).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_TYPE" }));
+  expect([world.opened, world.closed, world.pending()]).toEqual([[], [], 0]);
+});
+
+test("a construction failure after registration releases the watch and its waiter", () => {
+  const world = fixture();
+  const signal = new AbortController().signal;
+  const failure = new Error("abort listener registry is full");
+  Object.defineProperty(signal, "addEventListener", { value() { throw failure; } });
+  expect(() => world.module.watch("/app", { signal })).toThrow(failure);
+  expect(world.opened.map(({ id }) => id)).toEqual(world.closed);
+  expect([world.closed.length, world.pending()]).toEqual([1, 0]);
+});
