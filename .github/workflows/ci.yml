@@ -278,6 +278,10 @@ jobs:
             vendor/bun
             vendor/boringssl
           key: ${{ steps.sources-cache.outputs.cache-primary-key }}
+      - name: Blocking EncodedSlice address regression
+        run: |
+          source env.sh
+          bun scripts/check-encoded-slice.ts
       - name: Identify sysroot build inputs
         id: sysroot-inputs
         run: |

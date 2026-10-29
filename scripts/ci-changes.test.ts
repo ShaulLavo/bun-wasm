@@ -143,6 +143,27 @@ test.each(["pull_request", "push"])("shared proof changes select only the dedica
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const quality = workflow.split("\n  quality:\n")[1]!.split("\n  rust:\n")[0]!;
+
+for (const path of ["scripts/check-encoded-slice.ts", "tests/encoded-slice/probe.rs"]) {
+  test.each(["pull_request", "push"])(`${path} selects the blocking EncodedSlice native proof for %s`, event => {
+    expect(needsRust([path])).toBe(true);
+    expect(needsJsc([path])).toBe(false);
+    expect(select(base, commitInput(path), event)).toBe("rust=true\njsc=false");
+  });
+}
+
+test("the EncodedSlice proof blocks native CI once after existing tool and vendor setup", () => {
+  const rust = workflow.split("\n  rust:\n")[1]!.split("\n  package:\n")[0]!;
+  const name = "      - name: Blocking EncodedSlice address regression";
+  const step = rust.split(name)[1]?.split("\n      - ")[0];
+  expect(step?.trim()).toBe("run: |\n          source env.sh\n          bun scripts/check-encoded-slice.ts");
+  expect(workflow.match(/bun scripts\/check-encoded-slice\.ts/g)).toHaveLength(1);
+  for (const prerequisite of ["targets: wasm32-wasip1", "name: Install pinned Wasmtime", "name: Prepare pinned upstream sources"]) {
+    expect(rust.indexOf(prerequisite)).toBeGreaterThan(-1);
+    expect(rust.indexOf(name)).toBeGreaterThan(rust.indexOf(prerequisite));
+  }
+  expect(rust).not.toMatch(/^    continue-on-error:/m);
+});
 for (const path of [
   "scripts/cmake-cache.test.ts", "scripts/run-with-timeout.mts", "jsc/configure.sh", "jsc/build.sh", "jsc/common.sh",
   "scripts/real-runtime-network-tls.sh", "jsc/shim/wasi-compat.h", "jsc/shim/wasi-compat.c", "jsc/shim/madvise.c",

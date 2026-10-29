@@ -12,19 +12,16 @@ pub(crate) struct CoreClient {
 impl CoreClient {
     pub(crate) fn call(self, op: u32, args: Vec<Val>) -> NativeResult {
         let args = Val::Array(args);
-        let bytes = codec::encode(&args).map_err(|_| NativeError::error("encode core request"));
+        let request = request(&args);
         drop_tree(args);
-        let bytes = bytes?;
-        let request = TransportBuffer::new(u32::try_from(bytes.len()).expect("request size"));
-        let frame = TransportBuffer::new(24);
-        unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), request.pointer as *mut u8, bytes.len());
-        }
+        let request = request?;
+        let Some(frame) = TransportBuffer::new(24) else {
+            return allocation_failed();
+        };
         let words = [op, self.session, request.pointer, request.bytes, 0, 0];
         unsafe {
             std::ptr::copy_nonoverlapping(words.as_ptr(), frame.pointer as *mut u32, words.len());
         }
-        drop(bytes);
         let status = match unsafe { bun_core_dispatch(frame.pointer) } {
             0 => ops::Status::Ok,
             1 => ops::Status::NativeError,
@@ -39,11 +36,7 @@ impl CoreClient {
                 pointer == 0 && bytes == 0,
                 "core resource limit with a reply"
             );
-            return ops::Reply {
-                status,
-                bytes: Vec::new(),
-            }
-            .into_result();
+            return allocation_failed();
         }
         let reply = TransportBuffer { pointer, bytes };
         // Decode the reply where core wrote it; copying it out would hold the payload twice.
@@ -59,6 +52,27 @@ impl CoreClient {
     pub(crate) fn native(self, id: u32, args: Vec<Val>) -> NativeResult {
         self.call(ops::DATA_NATIVE.checked_add(id).expect("native op"), args)
     }
+}
+
+/// Encodes the request straight into core-owned memory of exactly its encoded length, so the
+/// only copies alive are the argument values and this one request.
+fn request(args: &Val) -> Result<TransportBuffer, NativeError> {
+    let encode_error = |_| NativeError::error("encode core request");
+    let len = codec::encoded_len(args).map_err(encode_error)?;
+    let Some(request) = TransportBuffer::new(u32::try_from(len).expect("request size")) else {
+        return allocation_failed();
+    };
+    // SAFETY: core allocated request.bytes initialized bytes at request.pointer for this call
+    // alone, and core reads them only after dispatch.
+    let bytes = unsafe {
+        std::slice::from_raw_parts_mut(request.pointer as *mut u8, request.bytes as usize)
+    };
+    codec::encode_into(args, bytes).map_err(encode_error)?;
+    Ok(request)
+}
+
+fn allocation_failed<T>() -> Result<T, NativeError> {
+    Err(NativeError::error("core data allocation failed"))
 }
 
 pub(crate) struct NativeTable {

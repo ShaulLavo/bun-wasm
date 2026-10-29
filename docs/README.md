@@ -23,7 +23,7 @@ Start with [Getting started](getting-started.md). Everything else is one click f
 Status and measurements:
 
 - [Compatibility](compatibility.md): commands, engines, real apps, Bun's test suite.
-- [Limits](limits.md): memory, stack, threads, processes, network, filesystem, browsers.
+- [Limits](limits.md), [Memory ceiling](memory-ceiling.md): memory, stack, threads, processes, network, filesystem, browsers.
 
 Interfaces:
 
