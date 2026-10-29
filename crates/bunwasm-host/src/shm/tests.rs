@@ -213,6 +213,22 @@ fn escaped_memory_lease_retains_charge_until_raw_users_and_lease_drop() {
 }
 
 #[test]
+fn last_lease_drop_during_reconciliation_releases_after_unlock() {
+    let budget = GroupBackingBudget::new(u64::from(PAGE_BYTES));
+    let group =
+        MemoryGroup::new(&Engine::default(), GroupPolicy::default(), budget.clone()).unwrap();
+    let lease = group.memory_lease();
+    drop(group);
+    let lease = Arc::new(Mutex::new(Some(lease)));
+    let dropped = lease.clone();
+    budget.set_reconcile_hook(move || {
+        dropped.lock().unwrap().take();
+    });
+    assert_eq!(budget.committed_bytes(), 0);
+    assert!(lease.lock().unwrap().is_none());
+}
+
+#[test]
 fn a_new_group_reconciles_growth_in_every_owned_group() {
     let budget = GroupBackingBudget::new(2 * u64::from(PAGE_BYTES));
     let first =
