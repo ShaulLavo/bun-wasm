@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import * as streams from "node:stream/web";
+import { netAddressSource } from "./net-address-source";
 
 const runtime = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 const cleanups: (() => void)[] = [];
@@ -15,7 +16,7 @@ function fixture() {
   const context = { TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, SharedArrayBuffer, DataView, URL, URLSearchParams, ReadableStream, process, setTimeout, clearTimeout, performance };
   const load = (file: string) => {
     const source = readFileSync(new URL(file, runtime), "utf8");
-    const code = file.endsWith(".ts") ? new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`) : source;
+    const code = file === "net_address.ts" ? netAddressSource() : file.endsWith(".ts") ? new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`) : source;
     return runInNewContext(code, context);
   };
   const reads: (Uint8Array | number)[] = [];
@@ -68,8 +69,7 @@ function fixture() {
     concatBytes: (chunks: readonly Uint8Array[]) => new Uint8Array(Buffer.concat(chunks)),
     require(name: string): unknown {
       if (name in modules) return modules[name];
-      const file = name === "net_address" ? `${name}.js` : `${name}.ts`;
-      return modules[name] = load(file)(internal);
+      return modules[name] = load(`${name}.ts`)(internal);
     },
   };
   load("web.js")(internal);

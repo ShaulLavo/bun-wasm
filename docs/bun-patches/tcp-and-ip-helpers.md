@@ -10,10 +10,12 @@ readable end, socket close and server close. Native Bun 1.4.2 and Node 26.7.0
 supply the controls;
 unchanged main and the response-streaming guest both fail before the correction.
 
-The IP regular expressions in `crates/bunwasm-runtime/src/js/net_address.js` come
+The IP regular expressions in `crates/bunwasm-runtime/src/js/net_address.ts` come
 from Bun `src/js/internal/net/isIP.ts` at
-`4ceda2c2868d3a7703c7737ddd9de7244ec384df`. The port removes TypeScript annotations
-and the module export wrapper. The predicates themselves are unchanged.
+`4ceda2c2868d3a7703c7737ddd9de7244ec384df`. The adaptation keeps TypeScript
+annotations in local source and replaces the module export wrapper with a runtime
+factory. The runtime stripper erases those annotations during embedding. The
+predicates themselves are unchanged.
 
 The other address helpers, `node_net.js`, `bun_tcp.js`, and the changes to
 `net.js`, the Rust host and the browser hosts are original adapters. They share
@@ -38,7 +40,7 @@ The upstream comparisons are recorded in [TCP support](../tcp.md).
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`crates/bunwasm-runtime/src/js/net_address.js`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
+| [`crates/bunwasm-runtime/src/js/net_address.ts`, IP predicates](#tcp-and-ip-helpers) | Port | Adapt Bun's engine independent IPv4 and IPv6 predicates. |
 | [TCP adapters and HTTP upgrade sockets](#tcp-and-ip-helpers) | Host feature | Original adapters add duplex sockets, empty-EOF completion, write-side shutdown and bounded native handle allocation over the existing host ABI. |
 
 [Ledger scope and pinned revisions](scope.md).

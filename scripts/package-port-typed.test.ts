@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
+import { netAddressSource } from "./net-address-source";
 
 const root = resolve(import.meta.dir, "..");
 const runtime = join(root, "crates/bunwasm-runtime/src/js");
@@ -29,7 +30,7 @@ test("Node's actual runtime stripper emits the typed validator as a strict facto
   expect(text.split("\n").length).toBe(source.split("\n").length);
   expect(text).toContain('"use strict";');
   const ports = runInNewContext(text)();
-  const address = runInNewContext(readFileSync(join(runtime, "net_address.js"), "utf8"))({ require: () => ports });
+  const address = runInNewContext(netAddressSource())({ require: () => ports });
   expect(address.port).toBe(ports.port);
   expect(address.error).toBe(ports.error);
   expect(ports.httpPort("0")).toBe(0);

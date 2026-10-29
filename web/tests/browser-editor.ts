@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { chromium, firefox, webkit, type Page } from "playwright";
+import { terminalText } from "./playground.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const engine = process.argv[2] ?? "chromium";
@@ -46,20 +47,25 @@ async function filesystemInfoCheck(base: string, mode: "memory" | "fast" | null)
       const fs = window.playground!.fs;
       return { mode: fs.vfs.mode, persistent: fs.vfs.persistent };
     }), { mode: mode ?? "fast", persistent: mode !== "memory" });
-    const input = page.locator(".xterm-helper-textarea");
-    await input.pressSequentially("help > /tmp/filesystem-info.txt");
-    await input.press("Enter");
-    await page.waitForFunction(async () => {
-      const fs = window.playground?.fs;
-      if (!fs || !await fs.lookup("/tmp/filesystem-info.txt")) return false;
-      return new TextDecoder().decode(await fs.readFile("/tmp/filesystem-info.txt")).includes("filesystem:");
-    });
-    const output = await page.evaluate(async () => new TextDecoder().decode(await window.playground!.fs.readFile("/tmp/filesystem-info.txt")));
+    const output = await terminalText(page);
     const storage = mode === "memory" ? "memory-only browser storage" : "persistent browser storage";
     const durability = mode === "memory" ? "do not survive" : "survive";
     assert.ok(output.includes(`filesystem: ${storage}, preopened at /, cwd /home/user; editor saves ${durability} reload`), output);
     if (mode === "memory") assert.doesNotMatch(output, /persistent browser storage|editor saves survive reload/);
-    console.log(`ok ${engine} playground: ${mode ?? "default fast"} shell help reports ${storage}; editor saves ${durability} reload`);
+    if (process.env.FILESYSTEM_INFO_SCREENSHOT) await page.screenshot({ path: `${process.env.FILESYSTEM_INFO_SCREENSHOT}-${mode ?? "default"}.png`, fullPage: true });
+    const initial = await page.locator("#editor .cm-content").innerText();
+    const saved = `console.log('editor durability ${mode ?? "default"}');`;
+    await page.locator("#editor .cm-content").fill(saved);
+    await page.evaluate(async () => {
+      const editor = Reflect.get(window.playground!, "editor");
+      if (!editor || typeof editor.save !== "function") throw new Error("The real editor save capability is missing");
+      await editor.save();
+    });
+    assert.equal(await page.evaluate(async () => new TextDecoder().decode(await window.playground!.fs.readFile("/home/user/index.ts"))), saved);
+    await page.reload();
+    await page.waitForFunction(() => !!window.playground);
+    assert.equal(await page.locator("#editor .cm-content").innerText(), mode === "memory" ? initial : saved);
+    console.log(`ok ${engine} playground: ${mode ?? "default fast"} welcome reports ${storage}; real editor saves ${durability} reload`);
   } finally { await context.close(); }
 }
 
@@ -248,14 +254,18 @@ try {
             filesystemOwners++;
             return { path: join(root, "web/tests/fixtures/startup-filesystem.ts") };
           });
-          // Only the engine and preview host are replaced; editor/startup/save code ships unchanged.
+          // Execution is disabled at explicit engine/Shell seams. Runtime, filesystem,
+          // editor/startup/save and the page's information producer remain real.
           build.onLoad({ filter: /\/web\/src\/engine-loader\.ts$/ }, () => ({ loader: "ts", contents: `
             export const ENGINES = Object.fromEntries(["browser", "quickjs", "jsc"].map(key => [key, { name: key, wasm: "not-built.wasm" }]));
             export class WasmMissing extends Error {}
             export const isEngine = (key) => Object.hasOwn(ENGINES, key);
-            export async function loadWasm() { throw new WasmMissing("Artifact-free editor test"); }
+            ${app === "web" ? `export { loadEditorEngine as loadWasm } from ${JSON.stringify(join(root, "web/tests/fixtures/editor-execution.ts"))};` : 'export async function loadWasm() { throw new WasmMissing("Artifact-free editor test"); }'}
             export async function registerModuleScope() { return false; }
             export const mb = (size) => String(size);
+          ` }));
+          if (app === "web") build.onLoad({ filter: /\/web\/src\/shell\.ts$/ }, () => ({ loader: "ts", contents: `
+            export { EditorOnlyShell as Shell } from ${JSON.stringify(join(root, "web/tests/fixtures/editor-execution.ts"))};
           ` }));
           build.onLoad({ filter: /\/web\/src\/runner\.ts$/ }, () => ({ loader: "ts", contents: `
             export function startRun() { throw new Error("This test must not start a guest"); }
@@ -424,6 +434,8 @@ try {
   assert.deepEqual(errors, []);
   console.log(`${engine} ${browser.version()}: durable saves, reload, seed/reset recovery, complete mobile startup errors, newest writer wins and displaced edits remain visible passed`);
   }
+  assert.equal(requests.some(path => path.endsWith("/shell-worker.js") || /\/(?:bun(?:-[a-z]+)?|quickjs|jsc-engine|shell-engine)\.wasm(?:\.gz)?$/.test(path)), false,
+    "The editor gate must not fetch or execute engine/shell guests");
 } finally {
   clearTimeout(timeout);
   await cleanup();
