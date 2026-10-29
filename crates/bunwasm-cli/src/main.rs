@@ -174,6 +174,15 @@ mod bun_transpiler {
             })
         }
 
+        fn register(&self, source: &str, path: &str) -> Result<Transpiled, String> {
+            let out = bunwasm_transpiler::register(source, path, BunLoader::Js)?;
+            Ok(Transpiled {
+                code: out.code,
+                mappings: (!out.mappings.is_empty()).then_some(out.mappings),
+                ..Default::default()
+            })
+        }
+
         fn module_imports(
             &self,
             source: &str,

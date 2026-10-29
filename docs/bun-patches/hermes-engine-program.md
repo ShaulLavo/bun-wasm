@@ -16,8 +16,23 @@ are recorded separately ([Hermes on WASI](hermes-wasi.md),
 | `crates/bunwasm-host/src/linked.rs`, `src/engine-kind.ts`, `scripts/src/engine-explicit-init.ts`, `scripts/guest-{core,engine,build}-receipt.ts`, `scripts/guest-source-manifest.ts`, `scripts/test.sh` | Host feature | The third paired kind `hermes`: section tag, companion `hermes-engine.wasm`, initializer and RUN names, receipt scope, and the `hermes-prebuild` input group (`$HERMES_BUILD_DIR/wasi/lib/libhermesvm_bunwasm.a` and its compile commands). Opt-in: nothing builds or registers it by default. |
 | `scripts/build-engine-hermes.sh`, `scripts/build-bun-hermes.sh`, `scripts/hermes-import-delta.ts` | Host feature | The JSC build recipe without pointer spilling or `jsc/finalize.sh` (Hermes roots precisely), plus two checks: no exception tags in the side, and every `env`/`GOT` import is a core export or a side definition. |
 
-## Interim limits
+## Registration modules
 
-Until the record loader lands (design section 3), `eval_module` runs module-free `bun -e` code as a
-script and `import_module` throws. The first proof scripts in `tests/hermes/` are `.cts`, because the
-repository's `"type": "module"` makes syntax-free `.ts` files ES modules.
+The original Hermes adapter now consumes the shared registration loader through
+`ModuleHost::record_loader_source`, `load_record`, and `lower_script`. Native
+`resolve`, `load`, and `initMeta` functions pass resolved names and rooted values
+without the wrapper-module handoff. A process-rooted loader serves `importModule`
+and `importName`, including virtual eval sources, live bindings, and top-level await.
+The core still owns parsing and source maps. User scripts lower dynamic imports
+through the core and receive Hermes's `"show source"` directive on their first line,
+unless `BUN_WASM_HERMES_SHOW_SOURCE=0`. No upstream implementation is added here.
+
+`tests/hermes/pair.ts` and `proof.ts` are original proof adapters. The pair
+composer verifies separate origin receipts and the exact shared module source
+contract. The runner uses the original J1 module source fixtures through the real
+host loader and selects existing discovered native checks. New TypeScript fixtures
+cover imported top-level await, module-cache and rejection identity, script dynamic
+imports, metadata, AsyncLocalStorage, source error lines, and memory semantics.
+The CPU-interrupt fixture adapts this repository's J3 guest-child probe and adds
+explicit child cleanup. It compares the same guest signal path on QuickJS and
+Hermes; it does not test native launcher OS-signal forwarding.

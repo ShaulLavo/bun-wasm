@@ -1,0 +1,10 @@
+{
+ "modules": {
+  "/a.mjs": "({r:[],i:[],x:[],s:[],a:true,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"a start\");\n(yield new Promise((resolve) => setTimeout(resolve, 20)));\nconsole.log(\"a end\");\n\n}})",
+  "/b.mjs": "({r:[],i:[],x:[],s:[],a:true,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"b start\");\n(yield new Promise((resolve) => setTimeout(resolve, 5)));\nconsole.log(\"b end\");\n\n}})",
+  "/c.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"c sync\");\nPromise.resolve().then(() => console.log(\"c job\"));\n\n}})",
+  "/d.mjs": "({r:[\"./b.mjs\"],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"ready\":()=>ready});yield;yield;console.log(\"d after b\");\nconst ready = \"d ready\";\n\n}})",
+  "/main.mjs": "({r:[\"./a.mjs\",\"./b.mjs\",\"./c.mjs\",\"./d.mjs\"],i:[[3,\"ready\"]],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;var __bunwasm_ns3_0=__bunwasm_m.n[3];yield;console.log(\"main\", __bunwasm_ns3_0.ready);\n\n}})"
+ },
+ "cjs": {}
+}
