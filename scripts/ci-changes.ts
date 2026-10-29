@@ -102,6 +102,7 @@ export function needsHermes(paths: readonly string[]): boolean {
 
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {
   return needsHermes(paths) || needsJsc(paths) || paths.some(path => nativeInput(path, checkInputs));
+}
 
 export function changedPaths(base: string, head: string, pullRequest: boolean): string[] {
   if (!/^[0-9a-f]{40}$/.test(base) || !/^[0-9a-f]{40}$/.test(head)) throw new Error("Expected full base and head commit IDs");
