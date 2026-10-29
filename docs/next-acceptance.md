@@ -27,6 +27,8 @@ bun web/tests/next-framework-registry.ts /work/tmp/bun-wasm-next-registry exampl
 # --registry-extra /work/tmp/bun-wasm-next-registry
 ```
 
+Add `--registry-overlay /absolute/recorded-advisory-overlay` with `--registry-extra` to replay the exact recorded advisory POST through the shared Next registry helper. The overlay option requires the supplement option. Unknown POST bodies and paths still fail replay. `network.mirror.inputs` records the absolute path, SHA-256 and entry count of the borrowed, supplemental and overlay indexes. The combined registry hash includes all supplied index bytes, and its entry count counts unique keys across those indexes. No registry cache is changed. See [recorded advisory replay](next-advisory-replay.md) for the authentic fixture and recording rules.
+
 `--registry DIRECTORY` instead replays a complete app-matrix registry recording. These two options are mutually exclusive. Replay fails on a missing object or blocked external request. Remove the supplemental directory after its consumer runs finish. A run without replay is labeled a live npm diagnostic.
 
 ## Use the shared config
@@ -42,6 +44,10 @@ This is a Next-supported ESM config. It does not prove the guest's separate Type
 The full run installs with `--frozen-lockfile`, builds, checks `.next/BUILD_ID`, starts production, and checks every public URL. It then starts one dev server, warms all routes, and runs 30 edit/revert cycles. Cycles rotate client code on `/`, server code on `/dynamic`, and CSS on `/`. They repeatedly edit the same already-compiled routes. Each edit and restoration is checked before and after a reload, and each cycle also checks overlapping marked SSR, GET and POST requests. Compile-error recovery, application-error recovery, streaming cancellation, Server Actions and client navigation have separate cells. The dev server stays alive throughout. After route warm-up, the context endpoint records the serving process PID; each edit/revert cycle verifies that PID before and after the update.
 
 Evaluated HTTP probes carry the configured deadline into a browser-side AbortController. It covers response headers and the entire body, including EOF. A stream requires HTTP 200, both timed payloads, and EOF; intentional cancellation is a separate request. Every exit aborts unfinished requests and cancels/releases acquired readers. This also applies to overlapping SSR/API reads, PID reads and compile-error polling.
+
+Production build commands have a 300-second budget. Other commands, server startup, routes and edit probes keep their 180-second default. `--build-timeout-ms` overrides only the production build budget; `--timeout-ms` overrides the other operations. Both accept integer milliseconds from 1000 through 900000. Neither option changes the other. The build allowance follows the measured QuickJS completion time of 190–200 seconds, compared with 7.7 seconds on native Node. The former 180-second build bound interrupted legitimate build tracing. This is an acceptance execution change; progress-output buffering is separate runtime work.
+
+`run.json` records the selected `parameters.timeoutMs` and `parameters.buildTimeoutMs`. Each phase row records its actual `budgetMs` watchdog deadline in JSON and the `Watchdog ms` column in Markdown. Rows recorded without running a watchdog use `null` and `n/a`. The build watchdog defaults to 305000 ms, including the existing five-second allowance.
 
 A phase watchdog allows five additional seconds for sampling/teardown beyond the configured probe budget. If browser work ignores its own deadline, the watchdog closes the owned browser, with a forced process kill if graceful close stalls, before persisting the failed phase. The full edit-session watchdog scales with its cycle count. Terminal capture, session and registry cleanup also have deadlines. Browser loss fails later operations; it cannot produce a pass.
 

@@ -1,6 +1,9 @@
 use serde_json::Value;
 
-pub(super) fn adapt(meta: &mut Value) {
+use super::Overrides;
+
+pub(super) fn adapt(meta: &mut Value, overrides: &Overrides) {
+    rolldown_runtime(meta, overrides);
     let name = meta["name"].as_str().unwrap_or_default();
     let Some(backend) = binding(name) else {
         return;
@@ -26,6 +29,29 @@ pub(super) fn adapt(meta: &mut Value) {
         .as_object_mut()
         .unwrap()
         .remove(backend);
+}
+
+fn rolldown_runtime(meta: &mut Value, overrides: &Overrides) {
+    if meta["name"] != "@rolldown/binding-wasm32-wasi"
+        || meta["version"] != "1.2.15"
+        || !matches!(
+            meta["dependencies"]["@napi-rs/wasm-runtime"].as_str(),
+            Some("~1.2.5" | "1.2.5")
+        )
+        || meta["dependencies"]["@emnapi/core"] != "2.0.0-alpha.5"
+        || meta["dependencies"]["@emnapi/runtime"] != "2.0.0-alpha.5"
+    {
+        return;
+    }
+    let range = if overrides
+        .replacement("@napi-rs/wasm-runtime", "~1.2.5")
+        .is_some()
+    {
+        "~1.2.5"
+    } else {
+        "1.2.5"
+    };
+    meta["dependencies"]["@napi-rs/wasm-runtime"] = range.into();
 }
 
 fn binding(name: &str) -> Option<&'static str> {
