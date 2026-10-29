@@ -1058,6 +1058,13 @@ jobs:
           echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
+      - uses: actions/cache/restore@v4
+        id: binaryen-cache
+        with:
+          path: ${{ env.WASM_TOOLS }}/binaryen-version_133-x86_64-linux.tar.gz
+          key: binaryen-133-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-binaryen.ts') }}
+      - name: Install pinned Binaryen
+        run: bun scripts/ci-binaryen.ts
       - uses: actions/cache@v4
         id: wasm-tools-cache
         with:
@@ -1144,9 +1151,9 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ${{ env.HERMES_ENGINE_BUILD_DIR }}/target
-          key: hermes-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'hermes/**', 'crates/**', 'scripts/src/engine-*', 'scripts/build-engine-hermes.sh', 'scripts/guest-*.ts', 'scripts/build-wasi-sysroot.ts', 'scripts/waffle-release-inputs.*', 'env.sh', 'bun.lock') }}
+          key: hermes-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.hermes-sysroot-inputs.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'hermes/**', 'crates/**', 'scripts/src/engine-*', 'scripts/build-engine-hermes.sh', 'scripts/guest-*.ts', 'scripts/build-wasi-sysroot.ts', 'scripts/waffle-release-inputs.*', 'env.sh', 'bun.lock') }}
           restore-keys: |
-            hermes-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-
+            hermes-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.hermes-sysroot-inputs.outputs.hash }}-
       - name: Build only the Hermes side and admit the existing core
         run: |
           source env.sh
@@ -1166,7 +1173,15 @@ jobs:
         run: |
           source env.sh
           bash tests/hermes/run.sh "$RUNNER_TEMP/hermes-inputs/bun-wasm" dist/bun-hermes.wasm
-      - name: Blocking Hermes actual Node package and imported-module smoke
+      - name: Blocking Hermes native imported-module smoke
+        run: |
+          source env.sh
+          errors=$(mktemp "$RUNNER_TEMP/hermes-module-stderr-XXXXXX")
+          trap 'rm -f -- "$errors"' EXIT
+          output=$("$RUNNER_TEMP/hermes-inputs/bun-wasm" --wasm dist/bun-hermes.wasm -- run tests/hermes/hosts/module.mts 2>"$errors")
+          test "$output" = 'Hermes module 42'
+          test ! -s "$errors"
+      - name: Blocking Hermes actual Node and Bun package imported-module smoke
         run: |
           source env.sh
           bun scripts/hermes-hosts.ts dist/bun-hermes.wasm "$RUNNER_TEMP/hermes-hosts.json" --node-only

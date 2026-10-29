@@ -238,3 +238,12 @@ for (const path of ["crates/bunwasm-host/src/linked.rs", "crates/bunwasm-engine-
     expect(select(base, commitInput(path), event)).toBe("rust=true\njsc=false");
   });
 }
+
+for (const event of ["pull_request", "push"]) {
+  test(`Hermes paths select its blocking job through an actual ${event} diff`, () => {
+    const selected = selectionOutput(base, commitInput("hermes/build.sh"), event);
+    expect(selected).toBe("rust=true\njsc=false\nshared=false\nhermes=true");
+    expect(selectionOutput(base, commitInput("docs/hermes-engine.md"), event))
+      .toBe("rust=false\njsc=false\nshared=false\nhermes=false");
+  });
+}

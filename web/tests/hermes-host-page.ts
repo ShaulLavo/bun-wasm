@@ -21,7 +21,8 @@ try {
     await runtime.filesystem.writeFile(`/home/user/${file.path}`, file.source);
   }
   await runtime.filesystem.flush();
-  for (const path of ["hello.cts", "module.mts"]) {
+  const paths = new URL(location.href).searchParams.has("metadata") ? ["metadata.mts"] : ["hello.cts", "module.mts"];
+  for (const path of paths) {
     let stdout = "", stderr = "";
     const decoder = new TextDecoder();
     run = startRun({ engine: "hermes", module, args: ["run", `/home/user/${path}`], env: { PWD: "/home/user" }, runtime, moduleScope: false }, {

@@ -18,7 +18,9 @@ const hostCases = [
 ] as const;
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-async function verifyHermesHosts(corePath: string, browsers: boolean) {
+type HostCase = { readonly path: string; readonly stdout: string };
+async function verifyHermesHosts(corePath: string, browsers: boolean, metadataOnly: boolean) {
+  const cases: readonly HostCase[] = metadataOnly ? [{ path: "metadata.mts", stdout: "Hermes main true\n" }] : hostCases;
   const core = readFileSync(corePath);
   const sidePath = join(dirname(corePath), programProfile("hermes").side);
   const side = readFileSync(sidePath);
@@ -30,16 +32,16 @@ async function verifyHermesHosts(corePath: string, browsers: boolean) {
     fetch: async url => new Response(url.endsWith("hermes-engine.wasm") ? side : core),
   });
   assert.equal(programKind(module), "hermes");
-  const native = await nativeSmoke(corePath);
-  const browser = browsers ? await browserSmoke(identity) : null;
+  const native = await nativeSmoke(corePath, cases);
+  const browser = browsers ? await browserSmoke(identity, cases, metadataOnly) : null;
   return { identity, packageHost: { runtime: "bun", version: Bun.version, engine: programKind(module) }, native, browser };
 }
 
-async function nativeSmoke(corePath: string) {
+async function nativeSmoke(corePath: string, cases: readonly HostCase[]) {
   const scratch = await mkdtemp(join(tmpdir(), "bw-h5-node-"));
   const env = { ...process.env, BUN_WASM_SCRATCH_ROOT: scratch };
   try {
-    const results = ["node", process.execPath].flatMap(executable => hostCases.map(test => runNativeCase(executable, test, corePath, env)));
+    const results = ["node", process.execPath].flatMap(executable => cases.map(test => runNativeCase(executable, test, corePath, env)));
     assert.deepEqual(readdirSync(scratch), [], "Node/Bun fixture hosts released their private executable mounts");
     return results;
   } finally {
@@ -49,7 +51,7 @@ async function nativeSmoke(corePath: string) {
   }
 }
 
-function runNativeCase(executable: string, test: typeof hostCases[number], corePath: string, env: NodeJS.ProcessEnv) {
+function runNativeCase(executable: string, test: HostCase, corePath: string, env: NodeJS.ProcessEnv) {
   const actual = spawnSync(executable, ["--disable-warning=ExperimentalWarning", join(repository, "web/scripts/node-host.ts"),
     "--wasm", corePath, "--", "run", join(fixtures, test.path)], { encoding: "utf8", timeout: 60_000, env });
   assert.equal(actual.error, undefined);
@@ -61,7 +63,7 @@ function runNativeCase(executable: string, test: typeof hostCases[number], coreP
     path: test.path, status: actual.status, stdout: actual.stdout, stderr: actual.stderr };
 }
 
-async function browserSmoke(identity: { core: { path: string; sha256: string }; side: { path: string; sha256: string } }) {
+async function browserSmoke(identity: { core: { path: string; sha256: string }; side: { path: string; sha256: string } }, cases: readonly HostCase[], metadataOnly: boolean) {
   const scratch = await mkdtemp(join(tmpdir(), "bw-h5-"));
   let browser: Browser | undefined;
   let server: ReturnType<typeof Bun.serve> | undefined;
@@ -78,7 +80,7 @@ async function browserSmoke(identity: { core: { path: string; sha256: string }; 
     await buildBrowserEntries([join(repository, "web/tests/hermes-host-page.ts"), join(repository, "web/src/worker.ts"), join(repository, "web/src/fs-worker.ts")], scratch, { runtimeWorker: true });
     await Bun.write(join(scratch, "index.html"), '<!doctype html><script type="module" src="./hermes-host-page.js"></script>');
     await Bun.write(join(scratch, "engine-builds.json"), JSON.stringify({ "bun-hermes.wasm": identity.core.sha256, "hermes-engine.wasm": identity.side.sha256 }));
-    await Bun.write(join(scratch, "fixture.json"), JSON.stringify(await Promise.all(["hello.cts", "module.mts", "dependency.mts"].map(async path => ({ path, source: await Bun.file(join(fixtures, path)).text() })))));
+    await Bun.write(join(scratch, "fixture.json"), JSON.stringify(await Promise.all(["hello.cts", "module.mts", "dependency.mts", "metadata.mts"].map(async path => ({ path, source: await Bun.file(join(fixtures, path)).text() })))));
     const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp", "Cache-Control": "no-store" };
     server = Bun.serve({ hostname: "127.0.0.1", port: 0, reusePort: false, fetch(request) {
       const name = new URL(request.url).pathname;
@@ -91,14 +93,15 @@ async function browserSmoke(identity: { core: { path: string; sha256: string }; 
     const page = await browser.newPage();
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    await page.goto(`http://127.0.0.1:${port}/?engine=hermes`);
+    await page.goto(`http://127.0.0.1:${port}/?engine=hermes${metadataOnly ? "&metadata=1" : ""}`);
     await page.waitForFunction(() => Reflect.get(globalThis, "hermesHostResult"), undefined, { timeout: 90_000 });
     const result = await page.evaluate(() => Reflect.get(globalThis, "hermesHostResult"));
     assert.equal(result.failure, undefined, JSON.stringify(result));
     assert.equal(result.engine, "hermes");
     assert.equal(result.disposed, true);
-    assert.deepEqual(result.results, hostCases.map(test => ({ path: test.path, outcome: { code: 0 }, stdout: test.stdout, stderr: "" })));
+    assert.deepEqual(result.results, cases.map(test => ({ path: test.path, outcome: { code: 0 }, stdout: test.stdout, stderr: "" })));
     const memory = await page.evaluate(() => Reflect.get(globalThis, "hermesHostMemory"));
+    assert.equal(memory.length, cases.length);
     for (const snapshot of memory) {
       assert.equal(snapshot.engine, "hermes");
       assert.equal(snapshot.jsHeapBytes, null);
@@ -118,8 +121,8 @@ async function browserSmoke(identity: { core: { path: string; sha256: string }; 
 
 if (import.meta.main) {
   const [core, output, option] = process.argv.slice(2);
-  if (!core || !output || (option !== undefined && option !== "--node-only")) throw new Error("Usage: hermes-hosts.ts CORE OUTPUT [--node-only]");
-  const result = await verifyHermesHosts(resolve(core), option !== "--node-only");
+  if (!core || !output || (option !== undefined && option !== "--node-only" && option !== "--metadata-only")) throw new Error("Usage: hermes-hosts.ts CORE OUTPUT [--node-only|--metadata-only]");
+  const result = await verifyHermesHosts(resolve(core), option !== "--node-only", option === "--metadata-only");
   await Bun.write(output, JSON.stringify(result, null, 2) + "\n");
   console.log(JSON.stringify(result));
 }
