@@ -135,8 +135,16 @@
     trace(origin, name, source.length, prepared.values, prepared.hit, start, goal);
     return apply(source, prepared.values[0], name);
   }
+  function constructorSource(args: string[], name: string | undefined, table: number[]): string[] {
+    if (native.engine !== "host" || args.length === 0) return args;
+    const display = sourceName(args[args.length - 1], name) ?? "<anonymous>";
+    if (native.preparedSourceName(display) !== undefined) return args;
+    const identity = native.preparedSourceURL(version, display, table, name ?? display);
+    args[args.length - 1] += `\n//# sourceURL=${identity}`;
+    return args;
+  }
   function prepareFunctionArgs(args: string[], kind: BunWasm.FunctionKind, name?: string): string[] {
-    if (!args.some(value => hooks ? hasWork(value) : value.includes("import"))) return args;
+    if (!args.some(value => hooks ? hasWork(value) : value.includes("import"))) return constructorSource(args, name, []);
     const start = performance.now();
     const goal = `function:${kind}:${args.map(value => value.length).join(",")}:${hooks ? "hooks" : "imports"}`;
     const prepared = records(args.join(""), goal, () => parseFunctionRecords(native.prepareFunction(args.map(parseable), kind, hooks)));
@@ -149,15 +157,12 @@
       else if (index > 0) advance(mapping, ",");
       result.push(apply(source, prepared.values[index], name, mapping));
     }
-    if (mapping.columns.length > 0 && native.engine === "host") {
-      const display = sourceName(args[args.length - 1], name) ?? "<anonymous>";
-      const identity = native.preparedSourceURL(version, display, mapping.columns, name ?? display);
-      result[result.length - 1] += `\n//# sourceURL=${identity}`;
-    } else if (prepared.values.some(value => value.edits.length > 0 || !value.alreadyPrepared)) {
+    if (native.engine !== "host" && prepared.values.some(value => value.edits.length > 0 || !value.alreadyPrepared)) {
       register(sourceName(args[args.length - 1], name), mapping.columns);
     }
-    return result;
+    return constructorSource(result, name, mapping.columns);
   }
+
   function correctPosition(name: string, line: number, column: number): number {
     if (native.engine === "host") return native.correctPreparedColumn(name, line, column);
     const table = columns.get(name)?.columns;

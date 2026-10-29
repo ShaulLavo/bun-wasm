@@ -30,6 +30,10 @@ assert.notEqual(identity(second), firstID);
 assert.ok(first.toString().includes('//# sourceURL=live-shared.js'));
 assert.equal(corrected(), original);
 assert.equal(await frame(), before);
+const plain = AsyncFunction('throw new Error("plain");\n//# sourceURL=live-shared.js');
+assert.notEqual(identity(plain), firstID);
+assert.equal(corrected(), original);
+assert.equal(await frame(), before);
 for (let index = 0; index < 40; index++) {
   testing.prepareSource(`async function hmr() { await ${index}; await 0; }`, "eval", "live-map", "live-shared.js");
 }

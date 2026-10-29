@@ -17,9 +17,7 @@
     const strings = Array.from(args, value => `${value}`);
     const origin = callerSourceOrigin();
     const path = origin?.startsWith("file:") ? internal.require("node_url").fileURLToPath(origin) : origin;
-    const result = internal.prepareFunctionArgs(strings, kind, path ?? undefined);
-    if (native.engine === "host" && result.length > 0 && path && !/\/\/[#@]\s*sourceURL=/.test(result[result.length - 1])) result[result.length - 1] += `\n//# sourceURL=${path}`;
-    return result;
+    return internal.prepareFunctionArgs(strings, kind, path ?? undefined);
   }
 
   function constructor(Native: Function, kind: BunWasm.FunctionKind) {
