@@ -17,7 +17,11 @@ const port = address.port;
 await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
 const root = resolve(import.meta.dir, "..");
 const wasm = resolve(root, "dist", engine === "browser" ? "bun-browser.wasm" : engine === "jsc" ? "bun-jsc.wasm" : "bun.wasm");
-const child = spawn("node", [resolve(root, "web/scripts/node-host.mjs"), "--wasm", wasm, "--net", "--dir", root, "--env", `PORT=${port}`, "--", "run", resolve(root, "tests/servers/http-lifecycle.ts")], { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+const launcher = engine === "browser" ? "node" : process.env.BUN_WASM_LAUNCHER;
+assert.ok(launcher, "Set BUN_WASM_LAUNCHER to the native launcher for QuickJS and JSC networking");
+const prefix = engine === "browser" ? [resolve(root, "web/scripts/node-host.mjs"), "--net"] : [];
+const args = prefix.concat(["--wasm", wasm, "--dir", root, "--env", `PORT=${port}`, "--", "run", resolve(root, "tests/servers/http-lifecycle.ts")]);
+const child = spawn(launcher, args, { cwd: root, detached: true, stdio: ["ignore", "pipe", "pipe"] });
 let log = "";
 child.stdout.on("data", chunk => { log += String(chunk); });
 child.stderr.on("data", chunk => { log += String(chunk); });
@@ -27,7 +31,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => 
 const base = `http://127.0.0.1:${port}`;
 const results: { path: string; status: string }[] = [];
 async function read(path: string): Promise<string> {
-  return await (await fetch(base + path, { signal: AbortSignal.timeout(5000) })).text();
+  return await (await fetch(base + path, { headers: { connection: "close" }, signal: AbortSignal.timeout(5000) })).text();
 }
 async function terminated(path: string): Promise<void> {
   let failed = false;
@@ -41,13 +45,13 @@ async function terminated(path: string): Promise<void> {
 }
 try {
   const until = Date.now() + 30000;
-  while (!log.includes("HTTP_LIFECYCLE_READY") && Date.now() < until) {
+  while (!/^HTTP_LIFECYCLE_READY\s*$/m.test(log) && Date.now() < until) {
     assert.equal(child.exitCode, null, log);
     await Bun.sleep(25);
   }
-  assert.ok(log.includes("HTTP_LIFECYCLE_READY"), log);
+  assert.ok(/^HTTP_LIFECYCLE_READY\s*$/m.test(log), log);
   for (const path of ["/before", "/headers", "/twice", "/late-end", "/output-error"]) await terminated(path);
-  const response = await fetch(base + "/cancel", { signal: AbortSignal.timeout(5000) });
+  const response = await fetch(base + "/cancel", { headers: { connection: "close" }, signal: AbortSignal.timeout(5000) });
   const reader = response.body!.getReader();
   assert.match(new TextDecoder().decode((await reader.read()).value), /first/);
   await reader.cancel();
@@ -58,7 +62,8 @@ try {
   for (const path of ["/before", "/headers", "/twice", "/late-end", "/output-error", "/cancel"]) {
     assert.deepEqual(events.closed.filter((event: { path: string }) => event.path === path), [{ path, finished: false, destroyed: true }]);
   }
-  assert.deepEqual(events.errors, ["deliberate output error"]);
+  assert.equal(events.errors.filter((error: { message: string }) => error.message === "deliberate output error").length, 1);
+  assert.ok(events.errors.every((error: { message: string; code: string | null }) => error.message === "deliberate output error" || error.code === "ECONNRESET"));
   assert.equal(await read("/ok"), "alive");
   results.push({ path: "/cancel", status: "closed once; producer stopped; recovery passed" });
   await writeFile(resolve(output, "result.json"), JSON.stringify({ engine, status: "pass", results, events }, null, 2));

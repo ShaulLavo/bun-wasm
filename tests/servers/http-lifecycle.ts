@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 
 const closed: { path: string; finished: boolean; destroyed: boolean }[] = [];
-const errors: string[] = [];
+const errors: { message: string; code: string | null }[] = [];
 let producers = 0;
 
 function recordClose(path: string, response: ServerResponse): void {
@@ -37,5 +37,5 @@ const server = createServer((request, response) => {
   response.statusCode = 404;
   response.end("missing");
 });
-server.on("clientError", error => errors.push(error.message));
+server.on("clientError", error => errors.push({ message: error.message, code: "code" in error && typeof error.code === "string" ? error.code : null }));
 server.listen(Number(process.env.PORT), "127.0.0.1", () => console.log("HTTP_LIFECYCLE_READY"));
