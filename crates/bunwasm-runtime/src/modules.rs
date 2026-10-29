@@ -320,6 +320,7 @@ fn read_stdin() -> std::io::Result<Vec<u8>> {
 }
 
 impl State {
+    #[cfg(feature = "engine-split")]
     pub fn module_record(&self, name: &str, code: &str) -> Result<String, NativeError> {
         let source = esm_source(self, name, code);
         let out = self
@@ -337,6 +338,7 @@ impl State {
         Ok(out.code)
     }
 
+    #[cfg(feature = "engine-split")]
     pub fn lower_script(&self, source: &str, filename: &str) -> Result<String, NativeError> {
         if !source.contains("import") {
             return Ok(source.to_owned());
@@ -692,8 +694,10 @@ mod tests {
         assert_eq!(positions.original_position(2, 1), (4, 6));
     }
 
+    #[cfg(feature = "engine-split")]
     struct RecordTranspiler;
 
+    #[cfg(feature = "engine-split")]
     impl crate::Transpiler for RecordTranspiler {
         fn transpile(&self, source: &str, _: &str, _: SourceLoader) -> Result<String, String> {
             Ok(source.to_owned())
@@ -723,6 +727,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "engine-split")]
     #[test]
     fn module_records_use_the_native_module_prologue_and_remember_map() {
         let state = State::new(Vec::new(), Box::new(RecordTranspiler));
@@ -734,6 +739,7 @@ mod tests {
         assert!(state.positions.borrow()["/m.mjs"].record.is_some());
     }
 
+    #[cfg(feature = "engine-split")]
     #[test]
     fn script_import_rewrite_keeps_arguments_newlines_and_unicode() {
         let state = State::new(Vec::new(), Box::new(RecordTranspiler));
