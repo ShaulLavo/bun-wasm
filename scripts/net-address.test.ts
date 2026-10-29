@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { netAddressSource } from "./net-address-source";
 
@@ -46,6 +49,36 @@ function thrownBy(callback: () => unknown): unknown {
   try { callback(); } catch (error) { return error; }
   throw new Error("Expected an error");
 }
+
+function checkActualFactoryTypes() {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-net-address-types-"));
+  try {
+    const runtime = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
+    const text = readFileSync(new URL("net_address.ts", runtime), "utf8").replace("(function (internal:", "const factory = (function (internal:");
+    const probe = join(scratch, "type-probe.ts");
+    writeFileSync(probe, `${text};
+declare const ports: BunWasm.NetPort;
+const address = factory({ require: () => ports });
+address._normalizeArgs([undefined]);
+address._normalizeArgs([null]);
+address._normalizeArgs([3137, (error: Error | null) => {}]);
+`);
+    const config = join(scratch, "tsconfig.json");
+    writeFileSync(config, JSON.stringify({
+      extends: new URL("../crates/bunwasm-runtime/tsconfig.json", import.meta.url).pathname,
+      include: [], files: [new URL("net_port_types.d.ts", runtime).pathname, probe],
+    }));
+    const result = Bun.spawnSync([join(import.meta.dir, "../node_modules/.bin/tsc"), "-p", config], { stdout: "pipe", stderr: "pipe" });
+    return { status: result.exitCode, output: result.stdout.toString() + result.stderr.toString() };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+test("the actual factory accepts nullish arguments and parameterized callbacks at compile time", () => {
+  const result = checkActualFactoryTypes();
+  expect(result.status, result.output).toBe(0);
+});
 
 test("IPv4 predicates accept only four uncompressed decimal segments", () => {
   for (const value of ["0.0.0.0", "127.0.0.1", "255.255.255.255"]) {

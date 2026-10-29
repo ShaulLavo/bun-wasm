@@ -140,10 +140,10 @@ function isIP(s: string): 0 | Family {
     }
   }
   const normalized = Symbol("normalizedArgs");
-  type NormalizeCallback = ((...args: unknown[]) => unknown) & { [normalized]?: boolean };
+  type NormalizeCallback = ((...args: never[]) => unknown) & { [normalized]?: boolean };
   type NormalizeOptions = { host?: unknown; path?: unknown; port?: unknown; [normalized]?: boolean };
-  type NormalizedArgs = [NormalizeOptions, NormalizeCallback | null] & { host?: unknown; [normalized]?: boolean };
-  type NormalizePrimitive = (string | number | boolean | bigint | symbol | null | undefined) & { [normalized]?: boolean };
+  type NormalizedArgs = [NormalizeOptions, NormalizeValue] & { host?: unknown; [normalized]?: boolean };
+  type NormalizePrimitive = ((string | number | boolean | bigint | symbol) & { [normalized]?: boolean }) | null | undefined;
   type NormalizeValue = NormalizeOptions | NormalizeCallback | NormalizedArgs | NormalizePrimitive;
   type NormalizeInput = NormalizeValue[] & { [normalized]?: boolean };
   function _normalizeArgs(args: NormalizeInput): NormalizeInput | NormalizeValue {
@@ -155,7 +155,7 @@ function isIP(s: string): 0 | Family {
       options = typeof options === "string" && Number.isNaN(Number(options)) ? { path: options } : { port: options };
       if (typeof args[1] === "string") options.host = args[1];
     }
-    const result: NormalizedArgs = [options, typeof args[args.length - 1] === "function" ? args[args.length - 1] as NormalizeCallback : null];
+    const result: NormalizedArgs = [options, typeof args[args.length - 1] === "function" ? args[args.length - 1] : null];
     result[normalized] = true;
     return result;
   }
