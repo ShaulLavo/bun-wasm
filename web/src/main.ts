@@ -18,8 +18,9 @@ import type { BunNetworkOptions } from "./net/helper";
 import { Previews } from "./preview";
 import { HostedPreviews } from "./hosted-previews";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope } from "./engine-loader";
-import type { Run } from "./runner";
-import { type Output, Shell } from "./shell";
+import { Shell } from "./shell";
+import { ENGINE_BIN } from "../../src/executable-paths";
+import { bunLauncher } from "./bun-launcher";
 import { commandChunks } from "./startup-cache";
 import { enableTerminalCopy } from "./terminal-copy";
 import { linkLocalUrls } from "./terminal-links";
@@ -45,8 +46,6 @@ const engineName = engines[engine].name;
 const wasmUrl = params.get("wasm") ?? engines[engine].wasm;
 const trace = params.has("trace");
 const mode = getVfsDescriptor(params.get("mode") ?? "fast").mode;
-const isolated = globalThis.crossOriginIsolated === true;
-const sleepMode = isolated ? "Atomics.wait (cross-origin isolated)" : "busy-wait (page is not cross-origin isolated)";
 
 engineSelect.value = engine;
 engineSelect.addEventListener("change", () => {
@@ -145,71 +144,25 @@ async function loadWasm(): Promise<void> {
   try {
     const loaded = await fetchWasm(wasmUrl, (text) => setStatus(text));
     wasm = loaded;
-    await pageReady;
-    setStatus(`bun.wasm ready · ${engineName} · ${mb(loaded.size)}`, "ok");
+    void pageReady.then(() => setStatus(`bun.wasm ready · ${engineName} · ${mb(loaded.size)}`, "ok"));
   } catch (err) {
     const missing = err instanceof WasmMissing;
     const error = missing
       ? `${wasmUrl} is not in this build. Build it with ${engines[engine].script} (dist/${engines[engine].wasm}), then rebuild web/.`
       : `could not load bun.wasm: ${String(err)}`;
     wasm = { error };
-    await pageReady;
-    setStatus(missing ? "bun.wasm missing" : "bun.wasm failed to load", "error");
+    void pageReady.then(() => setStatus(missing ? "bun.wasm missing" : "bun.wasm failed to load", "error"));
   }
 }
 
 // Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
 const moduleScope: Promise<boolean> = registerModuleScope();
 
-let current: Run | null = null;
-
-async function runBun(args: string[], cwd: string, io: Output): Promise<number> {
-  const [{ startRun }, , , programs] = await Promise.all([import("./runner"), wasmReady, runtime.processes(), browserPrograms.ready()]);
-  if (!wasm || "error" in wasm) {
-    io.err(`\x1b[31m${wasm?.error ?? "bun.wasm unavailable"}\x1b[0m\r\n`);
-    return 127;
-  }
-  const env: Record<string, string> = {
-    HOME,
-    PWD: cwd,
-    USER: "user",
-    PATH: programs.path,
-    TERM: "xterm-256color",
-    COLORTERM: "truecolor",
-    COLUMNS: String(term.cols),
-    LINES: String(term.rows),
-    TMPDIR: "/tmp",
-  };
-  const scoped = await moduleScope;
-  runButton.disabled = true;
-  try {
-    await fs.drain();
-    const run = startRun({ engine, module: wasm.module, args, env, runtime, moduleScope: scoped, trace, network }, {
-      stdout: (data) => io.out(data),
-      stderr: (data) => io.err(data),
-    });
-    current = run;
-    const result = await run.done;
-    if (result.error) io.err(`\x1b[31m${result.error}\x1b[0m\r\n`);
-    await editor.syncFromFs();
-    return result.code;
-  } finally {
-    current = null;
-    runButton.disabled = false;
-  }
-}
-
 function previewLine(port: number, state: string): string {
   if (state !== "ready") return `\x1b[2m[preview] port ${port}: preview transport is ${state}\x1b[0m\r\n`;
   const url = previews.url(port);
   // OSC 8 hyperlink; the terminal's linkHandler opens it in a new tab.
   return `\x1b[2m[preview]\x1b[0m \x1b]8;;${url}\x07\x1b[4;36m${url}\x1b[0m\x1b]8;;\x07 \x1b[2m(Ctrl-C stops the server)\x1b[0m\r\n`;
-}
-
-function kill(): void {
-  if (!current) return;
-  term.write("^C\r\n");
-  current.kill();
 }
 
 // ---------- terminal ----------
@@ -239,29 +192,6 @@ function openLink(uri: string): void {
 }
 
 linkLocalUrls(term, previews);
-
-const shell = new Shell(term, {
-  fs,
-  runBun,
-  kill,
-  changed: () => editor.syncFromFs(),
-  open: (path) => editor.open(path),
-  info: () => [
-    `bun.wasm: ${wasm && "module" in wasm ? `${wasmUrl}, ${mb(wasm.size)}` : (wasm?.error ?? "loading")}`,
-    `sleeps: ${sleepMode}`,
-    `engine: ${engineName}`,
-    `network: ${networkInfo()}`,
-    fs.vfs.persistent
-      ? `filesystem: persistent browser storage, preopened at /, cwd ${HOME}; editor saves survive reload`
-      : `filesystem: memory-only browser storage, preopened at /, cwd ${HOME}; editor saves do not survive reload`,
-  ],
-});
-
-function networkInfo(): string {
-  if (!isolated && engine === "browser") return "the browser's own fetch (CORS applies); no Bun.serve previews (needs cross-origin isolation)";
-  if (!isolated) return "off (needs cross-origin isolation)";
-  return params.has("root-previews") ? "fetch via the page; Bun.serve previews at their own origins" : "fetch via the page; Bun.serve previews at ./__preview/<port>/";
-}
 
 // ---------- editor ----------
 
@@ -422,10 +352,9 @@ async function runCurrent(): Promise<void> {
   try {
     const path = editor.path;
     await editor.save();
-    const rel = path.startsWith(`${shell.cwd}/`) ? path.slice(shell.cwd.length + 1) : path;
-    const quoted = `'${rel.replace(/'/g, "'\\''")}'`;
+    const quoted = `'${path.replace(/'/g, "'\\''")}'`;
     // Test files run under Bun's test runner, like `bun test <file>` would.
-    const command = /\.(test|spec)\.[cm]?[jt]sx?$/.test(rel) ? "test" : "run";
+    const command = /\.(test|spec)\.[cm]?[jt]sx?$/.test(path) ? "test" : "run";
     await shell.submit(`bun ${command} ${quoted}`);
   } finally {
     runPending = false;
@@ -456,11 +385,55 @@ if (vv) {
   onViewport();
 }
 
-shell.start([
+for (const line of [
   "\x1b[1mBun in your browser\x1b[0m: bun.wasm (wasm32-wasip1) in a Web Worker.",
-  `Type \x1b[32mhelp\x1b[0m, try \x1b[32mbun run index.ts\x1b[0m, or press Run.`,
+  "Try \x1b[32mbun repl\x1b[0m, \x1b[32mbun run index.ts\x1b[0m, or press Run.",
   "",
-]);
+]) term.writeln(line);
+
+const [programs, scoped] = await Promise.all([browserPrograms.ready(), moduleScope, wasmReady]);
+if (!wasm || "error" in wasm) throw new Error(wasm?.error ?? "bun.wasm unavailable");
+const module = wasm.module;
+const bin = ENGINE_BIN[engine];
+const removeAdapter = runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, {
+  runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
+  loadTools: () => fetchWasm("bun-tools.wasm", () => {}).then(loaded => loaded.module),
+}));
+const removePrograms: Array<() => void> = [];
+for (const name of ["bun", "node", "nodejs"]) {
+  const path = `${bin}/${name}`;
+  removePrograms.push(runtime.registerProgram(path, { adapter: `bun:${engine}`, cooperative: true, module: () => module }));
+  await fs.mkdirp(bin);
+  await fs.writeFile(path, "bun-wasm registered executable\n");
+}
+await fs.flush();
+const shell = await Shell.create({
+  runtime, cwd: HOME,
+  env: { HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "\\[\\e[32m\\]user@bun\\[\\e[0m\\]:\\[\\e[34m\\]\\w\\[\\e[0m\\]$ " },
+  cols: term.cols, rows: term.rows,
+  wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
+  workerUrl: new URL("./shell-worker.js", location.href),
+  onOutput: bytes => term.write(bytes),
+  onState(state, detail) {
+    runButton.disabled = state !== "ready";
+    if (state === "ready") void editor.syncFromFs().catch(reportError);
+    if (state === "failed" || state === "exited") {
+      startup = "failed";
+      reportError(detail ?? "Shell exited. Reload to start another session.");
+      runButton.textContent = "Reload";
+      runButton.disabled = false;
+    }
+  },
+});
+term.onData(data => shell.input(data));
+term.onResize(({ cols, rows }) => shell.resize(cols, rows));
+addEventListener("pagehide", (event: PageTransitionEvent) => {
+  if (event.persisted) return;
+  void shell.dispose().finally(() => {
+    for (const remove of removePrograms) remove();
+    removeAdapter();
+  }).catch(console.error);
+});
 
 Object.assign(globalThis, { playground: { fs, shell, term, editor, previews } });
 if (!fs.ownershipLost) {
