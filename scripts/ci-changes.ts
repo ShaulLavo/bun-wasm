@@ -85,8 +85,8 @@ function manifestInputs(ref: string): string | undefined {
   return JSON.stringify(Object.entries(manifest).filter(([key]) => key !== "version"));
 }
 
-function nativeChanges(paths: readonly string[], base: string, head: string): string[] {
-  const checkInputs = nativeCheckInputsAt(base).concat(nativeCheckInputsAt(head));
+function nativeChanges(paths: readonly string[], base: string, head: string, ancestor: string): string[] {
+  const checkInputs = Array.from(new Set([base, head, ancestor])).flatMap(nativeCheckInputsAt);
   if (!paths.includes("package.json")) return paths.filter(path => needsRust([path], checkInputs));
   const before = manifestInputs(base);
   const after = manifestInputs(head);
@@ -97,9 +97,9 @@ if (import.meta.main) {
   const [base, head] = process.argv.slice(2);
   if (!base || !head) throw new Error("Usage: ci-changes.ts <base-sha> <head-sha>");
   const paths = changedPaths(base, head, process.env.GITHUB_EVENT_NAME === "pull_request");
-  const comparisonBase = process.env.GITHUB_EVENT_NAME === "pull_request" && !/^0+$/.test(base)
+  const ancestor = process.env.GITHUB_EVENT_NAME === "pull_request" && !/^0+$/.test(base)
     ? execFileSync("git", ["merge-base", base, head], { encoding: "utf8" }).trim() : base;
-  const native = nativeChanges(paths, comparisonBase, head);
+  const native = nativeChanges(paths, base, head, ancestor);
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
   console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}`);
 }

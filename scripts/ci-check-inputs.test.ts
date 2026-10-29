@@ -14,7 +14,7 @@ function repository() {
   const directory = join(scratch, String(serial++));
   mkdirSync(directory);
   function git(args: readonly string[]) {
-    return execFileSync("git", ["-C", directory, "-c", "user.name=CI test", "-c", "user.email=ci@localhost"].concat(args), { encoding: "utf8" }).trim();
+    return execFileSync("git", ["-C", directory, "-c", "user.name=CI test", "-c", "user.email=ci@localhost"].concat(args), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   }
   function write(path: string, value: string) {
     mkdirSync(join(directory, path, ".."), { recursive: true });

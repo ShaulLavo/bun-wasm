@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
 import { parseCheck } from "./test-checks";
 
@@ -11,22 +11,36 @@ export function matchesCheckInput(path: string, inputs: readonly string[]): bool
   return inputs.some(input => input.endsWith("/") ? path.startsWith(input) : path === input);
 }
 
+function treeEntry(entry: string) {
+  const separator = entry.indexOf("\t");
+  const [mode, kind, object] = entry.slice(0, separator).split(" ");
+  if (separator < 0 || !mode || !kind || !object) throw new Error("Invalid Git tree entry");
+  return { mode, kind, object, path: entry.slice(separator + 1) };
+}
+
 export function nativeCheckInputsAt(ref: string): string[] {
   if (/^0{40}$/.test(ref)) return [];
-  const result = spawnSync("git", ["grep", "--no-color", "--no-textconv", "--no-column", "--full-name", "--no-line-number", "--null", "-e", "", ref, "--", "checks/"], { encoding: "utf8" });
-  if (result.error) throw result.error;
-  if (result.status === 1) return [];
-  if (result.status !== 0) throw new Error(`Cannot read check inputs at ${ref}: ${result.stderr}`);
-  const manifests = new Map<string, string[]>();
-  for (const line of result.stdout.trimEnd().split("\n")) {
-    const separator = line.indexOf("\0");
-    const path = line.slice(ref.length + 1, separator);
-    if (separator < 0 || !/^checks\/[a-z0-9-]+\.json$/.test(path)) throw new Error(`Unsafe check manifest at ${ref}: ${path}`);
-    manifests.set(path, (manifests.get(path) ?? []).concat([line.slice(separator + 1)]));
+  const tree = execFileSync("git", ["ls-tree", "-r", "-t", "-z", "--full-tree", ref, "--", "checks"], { encoding: "utf8" });
+  const [directory, ...manifests] = tree.split("\0").filter(Boolean).map(treeEntry);
+  if (!directory) return [];
+  if (directory.path !== "checks" || directory.mode !== "040000" || directory.kind !== "tree") throw new Error(`Unsafe check directory at ${ref}`);
+  if (manifests.length === 0) throw new Error(`Missing check manifests at ${ref}`);
+  for (const manifest of manifests) {
+    const regular = manifest.kind === "blob" && (manifest.mode === "100644" || manifest.mode === "100755");
+    if (!regular || !/^checks\/[a-z0-9-]+\.json$/.test(manifest.path)) throw new Error(`Unsafe check manifest at ${ref}: ${manifest.path}`);
   }
-  return Array.from(manifests).flatMap(([path, lines]) => {
-    const check = parseCheck(JSON.parse(lines.join("\n")), basename(path));
+  const blobs = execFileSync("git", ["cat-file", "--batch"], { input: manifests.map(manifest => manifest.object).join("\n") + "\n" });
+  let offset = 0;
+  return manifests.flatMap(manifest => {
+    const end = blobs.indexOf(10, offset);
+    if (end < 0) throw new Error(`Missing check blob at ${ref}: ${manifest.path}`);
+    const [object, kind, size] = blobs.toString("utf8", offset, end).split(" ");
+    const length = Number(size);
+    const start = end + 1;
+    if (object !== manifest.object || kind !== "blob" || !Number.isSafeInteger(length) || length < 0 || blobs[start + length] !== 10) throw new Error(`Invalid check blob at ${ref}: ${manifest.path}`);
+    const check = parseCheck(JSON.parse(blobs.toString("utf8", start, start + length)), basename(manifest.path));
+    offset = start + length + 1;
     const inputs = checkInputPaths(check);
-    return inputs.length ? inputs.concat([path]) : [];
+    return inputs.length ? inputs.concat([manifest.path]) : [];
   });
 }
