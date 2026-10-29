@@ -30,8 +30,9 @@ none, then malloc, calloc, realloc, aligned_alloc, and posix_memalign.
 Reading the record neither allocates nor enters a VM. A trap before an allocator
 returns cannot establish an allocation failure and must not be reported as one.
 
-The host reads JSC ABI 1 with exactly 24 u64 fields and QuickJS ABI 1 with
-exactly 12. It preserves each engine's accounting semantics. JSC's GC-accounted
+The host reads JSC ABI 1 with exactly 24 u64 fields, QuickJS ABI 1 with
+exactly 12, and [Hermes ABI 1](hermes-memory-telemetry.md) with exactly eight.
+It preserves each engine's accounting semantics. JSC's GC-accounted
 ArrayBuffer estimate is separate from the unavailable exact backing-store
 aggregate. SWC remains null until independently attributed. These values overlap
 allocator bytes and must not be added to them.

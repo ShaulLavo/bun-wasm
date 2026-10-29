@@ -66,6 +66,18 @@ function engineReadout(engine: TelemetryEngine, memory: WebAssembly.Memory, expo
         arrayBufferBytes: count(data[5]), arrayBufferCount: count(data[6]), countersValid: count(data[11]) },
     };
   }
+  if (engine === "hermes") {
+    const data = read(memory, exports, "hermes_memory_telemetry", 64);
+    if (!data) return null;
+    const valid = data[6] === 1n;
+    const heap = valid ? count(data[3]) : null;
+    return {
+      failure: null, heap, buffers: null,
+      counters: { refreshSequence: count(data[2]), heapUsedBytes: heap,
+        heapCapacityBytes: valid ? count(data[4]) : null, externalBytes: valid ? count(data[5]) : null,
+        countersValid: count(data[6]), refreshDisabled: count(data[7]) },
+    };
+  }
   if (engine !== "jsc") return null;
   const data = read(memory, exports, "jsc_memory_telemetry", 192);
   if (!data) return null;
@@ -113,7 +125,7 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
         jsHeapBytes: data?.heap ?? null, arrayBufferBytes: data?.buffers ?? null,
         failedAllocation: data?.failure ?? allocatorFailure, allocatorFailure, engineFailure: data?.failure ?? null,
         engineCounters: data?.counters ?? {},
-        notes: "Allocator counts outstanding libc usable bytes, including padding, from successful outer allocation calls. Realloc internal temporary peaks are not observed. VM counters overlap allocator bytes. JSC heap and ArrayBuffer counters are GC-accounted estimates; exact JSC backing stores and SWC bytes are unknown. Cached engine counters reflect the last normal refresh. No forced GC.",
+        notes: "Allocator counts outstanding libc usable bytes, including padding, from successful outer allocation calls. Realloc internal temporary peaks are not observed. VM counters overlap allocator bytes. JSC heap and ArrayBuffer counters are GC-accounted estimates; exact JSC backing stores and SWC bytes are unknown. Hermes heap includes allocated objects that may be unreachable; external bytes are GC-accounted, not an exact ArrayBuffer census. Cached engine counters reflect the last normal refresh. No forced GC.",
       };
     },
     finish() { terminal = true; return this.sample(false); },

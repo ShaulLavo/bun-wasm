@@ -26,6 +26,22 @@ pub struct Config {
 pub const EVAL_OPTIMIZE: u32 = 1;
 pub const EVAL_LAZY: u32 = 2;
 
+/// ABI 1: eight little-endian u64 fields. Unknown byte counts are u64::MAX.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MemoryTelemetry {
+    pub abi_version: u64,
+    pub byte_size: u64,
+    pub refresh_sequence: u64,
+    pub heap_used: u64,
+    pub heap_capacity: u64,
+    pub external: u64,
+    pub counters_valid: u64,
+    pub refresh_disabled: u64,
+}
+
+const _: () = assert!(core::mem::size_of::<MemoryTelemetry>() == 64);
+
 /// `bh_kind` results.
 pub mod kind {
     pub const UNDEFINED: i32 = 0;
@@ -107,4 +123,26 @@ unsafe extern "C" {
     pub fn bh_is_external(v: Handle) -> bool;
     pub fn bh_gc();
     pub fn bh_heap_info(used: *mut f64, size: *mut f64, external: *mut f64);
+    pub fn bh_memory_telemetry() -> *const MemoryTelemetry;
+    pub fn bh_refresh_memory_telemetry() -> *const MemoryTelemetry;
+    pub fn bh_stop_memory_telemetry();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MemoryTelemetry;
+
+    #[test]
+    fn telemetry_layout() {
+        assert_eq!(core::mem::size_of::<MemoryTelemetry>(), 64);
+        assert_eq!(core::mem::align_of::<MemoryTelemetry>(), 8);
+        assert_eq!(core::mem::offset_of!(MemoryTelemetry, abi_version), 0);
+        assert_eq!(core::mem::offset_of!(MemoryTelemetry, byte_size), 8);
+        assert_eq!(core::mem::offset_of!(MemoryTelemetry, refresh_sequence), 16);
+        assert_eq!(core::mem::offset_of!(MemoryTelemetry, heap_used), 24);
+        assert_eq!(core::mem::offset_of!(MemoryTelemetry, heap_capacity), 32);
+        assert_eq!(core::mem::offset_of!(MemoryTelemetry, external), 40);
+        assert_eq!(core::mem::offset_of!(MemoryTelemetry, counters_valid), 48);
+        assert_eq!(core::mem::offset_of!(MemoryTelemetry, refresh_disabled), 56);
+    }
 }

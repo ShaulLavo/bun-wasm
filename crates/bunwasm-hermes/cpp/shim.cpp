@@ -27,6 +27,7 @@
 #include "hermes/VM/Runtime.h"
 #include "hermes/VM/StringPrimitive.h"
 #include "hermes/VM/StringView.h"
+#include "memory-telemetry.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -122,6 +123,7 @@ struct State {
 };
 
 State *state;
+BhMemoryTelemetryCache memoryTelemetry;
 
 vm::Runtime &rt() {
   return *state->rt;
@@ -249,6 +251,7 @@ uintptr_t bunhermes_stack_high() { return state->stackHigh; }
 
 void bh_init(const bh_config *options) {
   llvh::install_fatal_error_handler([](void *, const std::string &message, bool) {
+    memoryTelemetry.stop();
     bunhermes_host_fatal(message.data(), message.size());
     abort();
   });
@@ -702,6 +705,22 @@ void bh_heap_info(double *used, double *size, double *external) {
   *used = (double)info.allocatedBytes;
   *size = (double)info.heapSize;
   *external = (double)info.externalBytes;
+}
+
+const BhMemoryTelemetry *bh_memory_telemetry() {
+  return memoryTelemetry.cached();
+}
+
+const BhMemoryTelemetry *bh_refresh_memory_telemetry() {
+  return memoryTelemetry.refresh(state && state->rt, [] {
+    vm::GCBase::HeapInfo info;
+    rt().getHeap().getHeapInfo(info);
+    return info;
+  });
+}
+
+void bh_stop_memory_telemetry() {
+  memoryTelemetry.stop();
 }
 
 } // extern "C"
