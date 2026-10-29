@@ -3,6 +3,7 @@
 | Area | Classification | Source | Local change | Reason |
 | --- | --- | --- | --- | --- |
 | `web/src/shell.ts`, `web/src/main.ts` | Original Bun consumer adapter | bash-web public shell/bridge API at `0bf41ec6d7f149c77ec2ad00a97b5b9928b4a2e0 (merged PR176; CI run 40886275313)`; existing private playground `src/session.ts` and `src/main.ts` integration | Connect xterm input, resize, output, signals and shell state to the page-owned Waffle runtime | Bun REPL and child processes need a live terminal instead of output-only runs |
+| `crates/bunwasm-host/src/slots.rs::add_shell_imports` | Original native shell ABI adapter | bash-web `shell_terminal` imports at the same merged source | Bind rows and the two-argument phase/status notification to inherited native stdio with fixed 80x24 geometry | The current shell must instantiate for native package scripts; phase notifications do not own native process cancellation |
 | Staged `env.wasm` | Host feature, unchanged upstream artifact | Waffle `packages/coreutils/dist/env.wasm`, `programs-v0.0.7`, source `63ddc5da0699d6e3ca449eaecb0bc35069c664d9` | Copy to the native launcher guest path; no implementation changes | bash-web delegates external programs to the released Waffle families |
 
 This replaces the playground's local command parser and line editor with
@@ -50,3 +51,10 @@ The merged Bash CI handoff supplies the exact source archive, runtime guest and
 worker files. Its retained workers are copied unchanged; the page host bundles
 the matching installed source. Consumer staging verifies the original native
 checksum receipt before writing the app's guest receipt.
+
+The native host supplies the same current terminal import signatures, including
+`rows() -> i32` and `phase(i32, i32)`. Its fixed geometry extends the existing
+80-column contract to 24 rows. Phase/status notifications are advisory on this
+host; the shell's actual process exit reports status. A compiled Wasm regression
+calls ready/running notifications with statuses 7, 130 and 0, checks geometry and
+confirms that notifications neither cancel the native process nor change stdin.

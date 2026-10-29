@@ -3,6 +3,67 @@ use crate::process::{self, Cancellation, FinalOutcome, Runtime, Stdio};
 use std::sync::Arc;
 use wasmtime::{Config, Engine, Memory, MemoryType, Module, StoreLimitsBuilder, WasmParams};
 
+#[test]
+fn bash_0bf_terminal_geometry_and_phase_status_contract() {
+    use wasm_encoder::{
+        CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
+        ImportSection, Instruction, TypeSection, ValType,
+    };
+
+    // WAT: imports columns/rows () -> i32 and phase (i32, i32) -> ().
+    // observe(phase, status) calls phase, then returns columns and rows.
+    let mut types = TypeSection::new();
+    types.ty().function([], [ValType::I32]);
+    types.ty().function([ValType::I32, ValType::I32], []);
+    types
+        .ty()
+        .function([ValType::I32, ValType::I32], [ValType::I32, ValType::I32]);
+    let mut imports = ImportSection::new();
+    imports.import("shell_terminal", "columns", EntityType::Function(0));
+    imports.import("shell_terminal", "rows", EntityType::Function(0));
+    imports.import("shell_terminal", "phase", EntityType::Function(1));
+    let mut functions = FunctionSection::new();
+    functions.function(2);
+    let mut exports = ExportSection::new();
+    exports.export("observe", ExportKind::Func, 3);
+    let mut observe = Function::new([]);
+    for instruction in [
+        Instruction::LocalGet(0),
+        Instruction::LocalGet(1),
+        Instruction::Call(2),
+        Instruction::Call(0),
+        Instruction::Call(1),
+        Instruction::End,
+    ] {
+        observe.instruction(&instruction);
+    }
+    let mut code = CodeSection::new();
+    code.function(&observe);
+    let mut binary = wasm_encoder::Module::new();
+    binary
+        .section(&types)
+        .section(&imports)
+        .section(&functions)
+        .section(&exports)
+        .section(&code);
+
+    let mut f = Fixture::new();
+    add_shell_imports(&mut f.linker).unwrap();
+    let module = Module::new(f.store.engine(), binary.finish()).unwrap();
+    let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+    let observe = instance
+        .get_typed_func::<(i32, i32), (i32, i32)>(&mut f.store, "observe")
+        .unwrap();
+    for notification in [(1, 7), (2, 130), (1, 0)] {
+        assert_eq!(observe.call(&mut f.store, notification).unwrap(), (80, 24));
+        assert!(
+            f.store.data().cancel.check().is_ok(),
+            "A terminal phase/status notification must not cancel the native process"
+        );
+        assert_eq!(f.call("shell_terminal", "inherited_fd", 0), 0);
+    }
+}
+
 struct Fixture {
     store: Store<Host>,
     linker: Linker<Host>,
