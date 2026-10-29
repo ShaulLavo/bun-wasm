@@ -12,7 +12,7 @@ English, German, and Hebrew locale packs cover numbers, dates, plurals, lists, a
 
 Dates support the Gregorian and ISO 8601 calendars. The bundle includes FormatJS's complete IANA timezone data, with daylight transitions through 2100. The default timezone is UTC because a WASI guest has no host-local timezone contract. Named zones and explicit UTC offsets work without native engine support.
 
-`DisplayNames`, `DurationFormat`, and non-Gregorian calendar packages are not bundled. There is no consumer for them yet.
+`DisplayNames`, `DurationFormat`, and non-Gregorian calendar packages are not bundled. There is no consumer for them yet. `DateTimeFormat` accepts `Date` and numeric inputs, but not Temporal objects. The previous fallback had the same Temporal limitation.
 
 QuickJS and JavaScriptCore execute the same generated code and data. Native browser output can differ because browsers choose their own ICU and CLDR versions.
 
