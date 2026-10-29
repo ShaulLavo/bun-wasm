@@ -15,6 +15,7 @@ import { networkGuardStage, runProductBrowserCase } from "./product-campaign.ts"
 import { guestProvenance, verifyPlaygroundBuilds } from "./product-provenance.ts";
 import { memorySampler } from "./memory.ts";
 import { boundedCleanup, HarnessCleanupError } from "./cleanup.ts";
+import { guestCommand as buildGuestCommand } from "./guest-command.ts";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
 if (interfaces.some(line => line.split(":")[0].trim() !== "lo")) throw new Error("Use scripts/app-matrix.sh in its loopback-only network namespace");
@@ -130,12 +131,9 @@ async function freePort() {
 }
 
 function guestCommand(engine, project, args, port) {
-  const env = { PWD: "/", HOME: "/", TMPDIR: "/tmp", PORT: String(port), NO_COLOR: "1", CI: "1", NEXT_TELEMETRY_DISABLED: "1", ASTRO_TELEMETRY_DISABLED: "1", PRISMA_HIDE_UPDATE_MESSAGE: "1", PRISMA_ENGINES_MIRROR: `${mirror.base}/blocked-prisma-engines`, BUN_INSTALL_CACHE_DIR: "/.cache", BUN_WASM_TRACE_EXIT: "1" };
-  const dirs = ["--dir", `${project}::/`];
-  const vars = Object.entries(env).flatMap(([key, value]) => ["--env", `${key}=${value}`]);
   const wasm = artifacts[engine].path;
   const host = engine === "browser" ? ["node", "--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net", "--wasm", wasm] : [launcher, "--wasm", wasm];
-  return host.concat(dirs, vars, ["--"], args);
+  return buildGuestCommand({ host, project, args, port, registry: mirror.base });
 }
 
 function record(app, engine, host, stage, command, result) {
