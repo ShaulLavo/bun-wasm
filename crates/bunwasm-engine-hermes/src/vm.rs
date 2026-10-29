@@ -134,7 +134,14 @@ fn global() -> HVal {
 fn get(obj: &HVal, key: &str) -> Result<HVal, HVal> {
     let mut out = 0;
     // SAFETY: valid handle and key buffer.
-    let ok = unsafe { sys::bh_get(obj.raw(), key.as_ptr().cast::<c_char>(), key.len(), &mut out) };
+    let ok = unsafe {
+        sys::bh_get(
+            obj.raw(),
+            key.as_ptr().cast::<c_char>(),
+            key.len(),
+            &mut out,
+        )
+    };
     checked(ok, out)
 }
 
@@ -251,7 +258,11 @@ fn to_val(v: &HVal) -> Val {
         kind::BIGINT => {
             let mut n = 0;
             let lossless = unsafe { sys::bh_get_bigint(v.raw(), &mut n) };
-            if lossless { Val::BigInt(n) } else { Val::Undefined }
+            if lossless {
+                Val::BigInt(n)
+            } else {
+                Val::Undefined
+            }
         }
         kind::UINT8ARRAY | kind::ARRAYBUFFER | kind::TYPED_ARRAY | kind::DATA_VIEW => {
             Val::Bytes(bytes(v))
@@ -304,7 +315,11 @@ fn define_hidden(obj: &HVal, key: &str, value: HVal) {
     ]));
     let _ = set(&descriptor, "value", &value);
     let define = intrinsic(|i| &i.define_property);
-    let _ = call(&define, &undefined(), &[obj.clone(), string(key), descriptor]);
+    let _ = call(
+        &define,
+        &undefined(),
+        &[obj.clone(), string(key), descriptor],
+    );
 }
 
 /// Every native function: the shim passes owned handles for `this` and the arguments and
