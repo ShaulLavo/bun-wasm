@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { netAddressSource } from "./net-address-source";
 
 const runtime = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 const netSource = readFileSync(new URL("net.js", runtime), "utf8");
 const context = { TextEncoder, Error, TypeError };
 const portSource = readFileSync(new URL("net_port.ts", runtime), "utf8");
 const ports = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${portSource}`), context)();
-const address = runInNewContext(readFileSync(new URL("net_address.js", runtime), "utf8"), context)({ require: () => ports });
+const address = runInNewContext(netAddressSource(), context)({ require: () => ports });
 const hostnameSource = readFileSync(new URL("net_hostname.ts", runtime), "utf8");
 const hostnameFactory = runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${hostnameSource}`), context);
 const hostname: (value: unknown, allowBrackets?: boolean) => string = hostnameFactory({

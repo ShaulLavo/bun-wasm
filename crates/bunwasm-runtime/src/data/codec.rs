@@ -25,14 +25,53 @@ fn append(out: &mut Vec<u8>, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn length(out: &mut Vec<u8>, len: usize) -> Result<()> {
-    let len = u32::try_from(len).map_err(|_| CodecError::Invalid("length exceeds u32"))?;
-    append(out, &len.to_le_bytes())
+/// Where one encoding pass puts its bytes. Measuring and filling share a single walk, so the
+/// length a caller allocates is the length the fill writes.
+trait Sink {
+    fn put(&mut self, bytes: &[u8]) -> Result<()>;
 }
 
-fn string(out: &mut Vec<u8>, text: &str) -> Result<()> {
+/// Counts encoded bytes. A total that no allocation can hold is the same allocation failure
+/// that growing a `Vec` past `isize::MAX` reports.
+struct Measure(usize);
+
+impl Sink for Measure {
+    fn put(&mut self, bytes: &[u8]) -> Result<()> {
+        self.0 = self
+            .0
+            .checked_add(bytes.len())
+            .filter(|&len| len <= isize::MAX as usize)
+            .ok_or(CodecError::Allocation)?;
+        Ok(())
+    }
+}
+
+struct Fill<'a> {
+    out: &'a mut [u8],
+    pos: usize,
+}
+
+impl Sink for Fill<'_> {
+    fn put(&mut self, bytes: &[u8]) -> Result<()> {
+        let end = self.pos + bytes.len();
+        let slot = self
+            .out
+            .get_mut(self.pos..end)
+            .ok_or(CodecError::Invalid("encoding exceeds destination"))?;
+        slot.copy_from_slice(bytes);
+        self.pos = end;
+        Ok(())
+    }
+}
+
+fn length(out: &mut impl Sink, len: usize) -> Result<()> {
+    let len = u32::try_from(len).map_err(|_| CodecError::Invalid("length exceeds u32"))?;
+    out.put(&len.to_le_bytes())
+}
+
+fn string(out: &mut impl Sink, text: &str) -> Result<()> {
     length(out, text.len())?;
-    append(out, text.as_bytes())
+    out.put(text.as_bytes())
 }
 
 enum Part<'a> {
@@ -40,30 +79,58 @@ enum Part<'a> {
     Key(&'a str),
 }
 
-pub(crate) fn encode(value: &Val) -> Result<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut pending = Vec::new();
-    push(&mut pending, Part::Value(value))?;
-    while let Some(part) = pending.pop() {
-        encode_part(part, &mut pending, &mut out)?;
+/// The exact number of bytes `encode_into` writes for `value`.
+pub(crate) fn encoded_len(value: &Val) -> Result<usize> {
+    let mut measure = Measure(0);
+    walk(value, &mut measure)?;
+    Ok(measure.0)
+}
+
+/// Encodes `value` into `out`, which must be exactly `encoded_len(value)` bytes long.
+pub(crate) fn encode_into(value: &Val, out: &mut [u8]) -> Result<()> {
+    let mut fill = Fill { out, pos: 0 };
+    walk(value, &mut fill)?;
+    if fill.pos != fill.out.len() {
+        return Err(CodecError::Invalid("encoding shorter than destination"));
     }
+    Ok(())
+}
+
+/// One allocation of exactly the encoded length.
+#[cfg(test)]
+pub(crate) fn encode(value: &Val) -> Result<Vec<u8>> {
+    let len = encoded_len(value)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len)
+        .map_err(|_| CodecError::Allocation)?;
+    out.resize(len, 0);
+    encode_into(value, &mut out)?;
     Ok(out)
 }
 
-fn encode_part<'a>(part: Part<'a>, pending: &mut Vec<Part<'a>>, out: &mut Vec<u8>) -> Result<()> {
+fn walk(value: &Val, out: &mut impl Sink) -> Result<()> {
+    let mut pending = Vec::new();
+    push(&mut pending, Part::Value(value))?;
+    while let Some(part) = pending.pop() {
+        encode_part(part, &mut pending, out)?;
+    }
+    Ok(())
+}
+
+fn encode_part<'a>(part: Part<'a>, pending: &mut Vec<Part<'a>>, out: &mut impl Sink) -> Result<()> {
     let value = match part {
         Part::Key(key) => return string(out, key),
         Part::Value(value) => value,
     };
-    push(out, tag(value))?;
+    out.put(&[tag(value)])?;
     match value {
-        Val::Num(n) => append(out, &n.to_le_bytes()),
-        Val::BigInt(n) => append(out, &n.to_le_bytes()),
-        Val::BigUint(n) => append(out, &n.to_le_bytes()),
+        Val::Num(n) => out.put(&n.to_le_bytes()),
+        Val::BigInt(n) => out.put(&n.to_le_bytes()),
+        Val::BigUint(n) => out.put(&n.to_le_bytes()),
         Val::Str(s) => string(out, s),
         Val::Bytes(bytes) => {
             length(out, bytes.len())?;
-            append(out, bytes)
+            out.put(bytes)
         }
         Val::Array(items) => encode_array(items, pending, out),
         Val::Object(fields) => encode_object(fields, pending, out),
@@ -90,7 +157,7 @@ fn tag(value: &Val) -> u8 {
 fn encode_array<'a>(
     items: &'a [Val],
     pending: &mut Vec<Part<'a>>,
-    out: &mut Vec<u8>,
+    out: &mut impl Sink,
 ) -> Result<()> {
     length(out, items.len())?;
     for item in items.iter().rev() {
@@ -102,7 +169,7 @@ fn encode_array<'a>(
 fn encode_object<'a>(
     fields: &'a [(String, Val)],
     pending: &mut Vec<Part<'a>>,
-    out: &mut Vec<u8>,
+    out: &mut impl Sink,
 ) -> Result<()> {
     length(out, fields.len())?;
     for (key, value) in fields.iter().rev() {
@@ -290,4 +357,56 @@ fn read_container(
     }
     push(stack, container)?;
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measured_total_fails_like_an_unallocatable_vec() {
+        let mut measure = Measure(isize::MAX as usize - 1);
+        assert_eq!(measure.put(&[0]), Ok(()));
+        assert_eq!(measure.put(&[0]), Err(CodecError::Allocation));
+        let mut measure = Measure(usize::MAX);
+        assert_eq!(measure.put(&[0]), Err(CodecError::Allocation));
+    }
+
+    #[test]
+    fn lengths_beyond_u32_stay_invalid_in_both_passes() {
+        let len = u32::MAX as usize + 1;
+        assert_eq!(
+            length(&mut Measure(0), len),
+            Err(CodecError::Invalid("length exceeds u32"))
+        );
+        let mut out = [0; 4];
+        let mut fill = Fill {
+            out: &mut out,
+            pos: 0,
+        };
+        assert_eq!(
+            length(&mut fill, len),
+            Err(CodecError::Invalid("length exceeds u32"))
+        );
+        assert_eq!(fill.pos, 0);
+    }
+
+    #[test]
+    fn fill_never_writes_past_its_destination() {
+        let mut out = [9; 3];
+        let mut fill = Fill {
+            out: &mut out,
+            pos: 0,
+        };
+        assert_eq!(
+            fill.put(&[1, 2, 3, 4]),
+            Err(CodecError::Invalid("encoding exceeds destination"))
+        );
+        assert_eq!(fill.put(&[1, 2]), Ok(()));
+        assert_eq!(
+            fill.put(&[3, 4]),
+            Err(CodecError::Invalid("encoding exceeds destination"))
+        );
+        assert_eq!(out, [1, 2, 9]);
+    }
 }

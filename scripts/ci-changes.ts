@@ -12,6 +12,7 @@ const nativeFiles = new Set([
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
   "tests/memory-telemetry.test.ts",
   "scripts/check-quickjs-memory-telemetry.ts", "scripts/fixtures/quickjs-memory-telemetry.c",
+  "scripts/check-encoded-slice.ts", "tests/encoded-slice/probe.rs",
   // Embedded in bun.wasm as the runtime module `direct_stream`.
   "web/src/native-direct-stream.ts",
 ]);

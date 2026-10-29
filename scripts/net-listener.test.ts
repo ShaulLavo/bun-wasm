@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { Readable, Writable, Duplex, getDefaultHighWaterMark } from "node:stream";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { netAddressSource } from "./net-address-source";
 
 interface Waiter { ref: boolean; step(): boolean }
 interface Server {
@@ -90,7 +91,8 @@ function httpFixture(protocol: "http" | "tcp" = "http") {
   const events: string[] = [];
   const load = (name: string) => {
     const text = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}`, import.meta.url), "utf8");
-    return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${text}`), { TextEncoder });
+    const code = name === "net_address.ts" ? netAddressSource() : new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${text}`);
+    return runInNewContext(code, { TextEncoder });
   };
   const native = {
     hostListen() { listeners.set(++listener, { ready: false, open: true, connections: [] }); return listener; },
@@ -105,7 +107,7 @@ function httpFixture(protocol: "http" | "tcp" = "http") {
     hostClose(handle: number) { const state = listeners.get(handle); if (state) state.open = false; return 0; },
   };
   const ports = load("net_port.ts")();
-  const addressModules = { net_address: load("net_address.js")({ require: () => ports }) };
+  const addressModules = { net_address: load("net_address.ts")({ require: () => ports }) };
   const modules = {
     events: EventEmitter, buffer: { Buffer }, net_port: ports, net_address: addressModules.net_address, net_listener: factory({ native }),
     net_hostname: load("net_hostname.ts")({ require: (name: keyof typeof addressModules) => addressModules[name] }),
