@@ -23,7 +23,7 @@ async function checkEngine(driver: Driver, origin: string, engine: string) {
   const interrupted = object(await driver.evaluate("const p=globalThis.playground;await globalThis.safariShellSubmission;await new Promise(r=>setTimeout(r,100));return {running:p.shell.running,status:p.shell.lastExit,terminal:globalThis.safariShellText()};"));
   assert.equal(interrupted.status, 130, `${engine}: one Ctrl+C must return 130`);
   assert.equal(interrupted.running, false);
-  assert.match(String(interrupted.terminal), /\[130\].*user@bun/);
+  assert.match(String(interrupted.terminal).trimEnd(), /(?:^|\n)user@bun:~\$$/);
   const recovered = object(await driver.evaluate("const p=globalThis.playground;await p.shell.submit('echo SHELL_\"RECOVERED\"');await new Promise(r=>setTimeout(r,100));return {status:p.shell.lastExit,text:globalThis.safariShellText()};"));
   assert.equal(recovered.status, 0); assert.match(String(recovered.text), /SHELL_RECOVERED/);
   return { engine, ready, ...interrupted, recovered };

@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { getDefaultHighWaterMark, setDefaultHighWaterMark } from "node:stream";
 import { runInNewContext } from "node:vm";
+import { netAddressSource } from "../../scripts/net-address-source";
 
 type ServerState = EventEmitter & {
   _options: Record<string, unknown>;
@@ -30,6 +31,7 @@ function fixture() {
   class Duplex { constructor() { held(); } }
   const stream = { Duplex, getDefaultHighWaterMark() { defaultReads++; return getDefaultHighWaterMark(false); } };
   function factory(name: string) {
+    if (name === "net_address") return runInNewContext(netAddressSource());
     const extension = ["node_net_server", "net_port"].includes(name) ? "ts" : "js";
     const source = readFileSync(new URL(`../../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url), "utf8");
     const text = extension === "ts" ? new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`) : source;

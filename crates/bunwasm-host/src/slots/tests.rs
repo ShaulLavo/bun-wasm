@@ -4,6 +4,119 @@ use crate::process::{self, Cancellation, FinalOutcome, Runtime, Stdio};
 use std::sync::Arc;
 use wasmtime::{Config, Engine, Memory, MemoryType, Module, StoreLimitsBuilder, WasmParams};
 
+#[test]
+fn bash_0bf_terminal_geometry_and_phase_status_contract() {
+    use wasm_encoder::{
+        CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
+        ImportSection, Instruction, TypeSection, ValType,
+    };
+
+    // WAT: imports columns/rows () -> i32 and phase (i32, i32) -> ().
+    // observe(phase, status) calls phase, then returns columns and rows.
+    let mut types = TypeSection::new();
+    types.ty().function([], [ValType::I32]);
+    types.ty().function([ValType::I32, ValType::I32], []);
+    types
+        .ty()
+        .function([ValType::I32, ValType::I32], [ValType::I32, ValType::I32]);
+    let mut imports = ImportSection::new();
+    imports.import("shell_terminal", "columns", EntityType::Function(0));
+    imports.import("shell_terminal", "rows", EntityType::Function(0));
+    imports.import("shell_terminal", "phase", EntityType::Function(1));
+    let mut functions = FunctionSection::new();
+    functions.function(2);
+    let mut exports = ExportSection::new();
+    exports.export("observe", ExportKind::Func, 3);
+    let mut observe = Function::new([]);
+    for instruction in [
+        Instruction::LocalGet(0),
+        Instruction::LocalGet(1),
+        Instruction::Call(2),
+        Instruction::Call(0),
+        Instruction::Call(1),
+        Instruction::End,
+    ] {
+        observe.instruction(&instruction);
+    }
+    let mut code = CodeSection::new();
+    code.function(&observe);
+    let mut binary = wasm_encoder::Module::new();
+    binary
+        .section(&types)
+        .section(&imports)
+        .section(&functions)
+        .section(&exports)
+        .section(&code);
+
+    let mut f = Fixture::new();
+    add_shell_imports(&mut f.linker).unwrap();
+    let module = Module::new(f.store.engine(), binary.finish()).unwrap();
+    let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+    let observe = instance
+        .get_typed_func::<(i32, i32), (i32, i32)>(&mut f.store, "observe")
+        .unwrap();
+    for notification in [(1, 7), (2, 130), (1, 0)] {
+        assert_eq!(observe.call(&mut f.store, notification).unwrap(), (80, 24));
+        assert!(
+            f.store.data().cancel.check().is_ok(),
+            "A terminal phase/status notification must not cancel the native process"
+        );
+        assert_eq!(f.call("shell_terminal", "inherited_fd", 0), 0);
+    }
+}
+
+#[test]
+fn runtime_proc_inherited_fds_are_a_stable_launch_snapshot() {
+    use wasm_encoder::{
+        EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,
+    };
+
+    let mut types = TypeSection::new();
+    types.ty().function([ValType::I32], [ValType::I32]);
+    let mut imports = ImportSection::new();
+    imports.import("runtime_proc", "inherited_fd", EntityType::Function(0));
+    let mut exports = ExportSection::new();
+    exports.export("inherited_fd", ExportKind::Func, 0);
+    let mut binary = wasm_encoder::Module::new();
+    binary.section(&types).section(&imports).section(&exports);
+    let binary = binary.finish();
+
+    let mut sparse = Stdio::inherited();
+    let input = sparse.fds.remove(&0).unwrap();
+    let output = sparse.fds.remove(&1).unwrap();
+    sparse.fds.insert(17, input);
+    sparse.fds.insert(i32::MAX, output);
+    for (stdio, expected) in [(Stdio::inherited(), [0, 1, 2]), (sparse, [2, 17, i32::MAX])] {
+        let mut f = Fixture::with_stdio(stdio);
+        let module = Module::new(f.store.engine(), &binary).unwrap();
+        let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+        let inherited = instance
+            .get_typed_func::<i32, i32>(&mut f.store, "inherited_fd")
+            .unwrap();
+        let before =
+            [0, 1, 2, 3, -1, i32::MAX].map(|index| inherited.call(&mut f.store, index).unwrap());
+        assert_eq!(
+            before,
+            [
+                expected[0],
+                expected[1],
+                expected[2],
+                process::NOENT,
+                process::NOENT,
+                process::NOENT
+            ]
+        );
+        assert_eq!(f.store.data_mut().processes.close(expected[0]), 0);
+        assert_eq!(f.store.data_mut().processes.renumber(expected[1], 23), 0);
+        let after =
+            [0, 1, 2, 3, -1, i32::MAX].map(|index| inherited.call(&mut f.store, index).unwrap());
+        assert_eq!(
+            after, before,
+            "closing and renumbering descriptors must not change launch bindings"
+        );
+    }
+}
+
 struct Fixture {
     store: Store<Host>,
     linker: Linker<Host>,
@@ -20,6 +133,13 @@ impl Fixture {
     fn new() -> Self {
         Self::at(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
     }
+    fn with_stdio(stdio: Stdio) -> Self {
+        Self::with_memory_and_stdio(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+            false,
+            stdio,
+        )
+    }
     /// The same imports over a memory group's shared memory.
     fn shared() -> Self {
         Self::with_memory(std::path::Path::new(env!("CARGO_MANIFEST_DIR")), true)
@@ -32,6 +152,9 @@ impl Fixture {
         Self::with_memory(directory, false)
     }
     fn with_memory(directory: &std::path::Path, shared: bool) -> Self {
+        Self::with_memory_and_stdio(directory, shared, Stdio::inherited())
+    }
+    fn with_memory_and_stdio(directory: &std::path::Path, shared: bool, stdio: Stdio) -> Self {
         let mut config = Config::new();
         config.epoch_interruption(true);
         let engine = Engine::new(&config).unwrap();
@@ -40,7 +163,6 @@ impl Fixture {
             Runtime::new(engine.clone(), module, vec![(directory.into(), "/".into())]).unwrap();
         let net = crate::net::Net::new();
         let cancel = Arc::new(Cancellation::default());
-        let stdio = Stdio::inherited();
         let mut wasi = wasmtime_wasi::WasiCtxBuilder::new();
         stdio.install(&mut wasi, cancel.clone());
         for (host, guest) in &runtime.dirs {
