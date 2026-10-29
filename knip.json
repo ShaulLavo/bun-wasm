@@ -129,6 +129,7 @@
   },
   "ignoreBinaries": [
     "unshare",
+    "rustc",
     "ss",
     "build.mjs",
     "^c\\+\\+$"
