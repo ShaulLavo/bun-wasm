@@ -34,6 +34,8 @@
 #include "TopExceptionScope.h"
 #include "SourceProvider.h"
 #include "VM.h"
+#include "Options.h"
+#include "WASIMemoryTelemetry.h"
 #include <wtf/URL.h>
 #include <string>
 
@@ -308,6 +310,37 @@ void bunjsc_report_unhandled_error(JSContextRef ctx, JSValueRef value)
     JSGlobalObject* globalObject = toJS(ctx);
     JSLockHolder lock(globalObject->vm());
     Bun__reportUnhandledError(globalObject, JSValue::encode(toJS(globalObject, value)));
+}
+
+BunjscMemoryTelemetry* bunjsc_memory_telemetry()
+{
+    return bunjsc_cached_memory_telemetry();
+}
+
+void bunjsc_refresh_memory_telemetry(JSContextRef ctx)
+{
+    VM& vm = toJS(ctx)->vm();
+    JSLockHolder lock(vm);
+    auto& snapshot = *bunjsc_memory_telemetry();
+    snapshot.heapUsed = vm.heap.size();
+    snapshot.heapTotal = vm.heap.capacity();
+    snapshot.extraMemory = vm.heap.extraMemorySize();
+    snapshot.arrayBufferBytes = vm.heap.arrayBufferSize();
+    if (vm.heap.lastCollectionScope())
+        snapshot.heapAfterLastCollection = vm.heap.sizeAfterLastCollection();
+    if (vm.heap.lastFullGCLength().value() > 0) {
+        snapshot.heapBeforeLastFullCollection = vm.heap.sizeBeforeLastFullCollection();
+        snapshot.heapAfterLastFullCollection = vm.heap.sizeAfterLastFullCollection();
+    }
+    snapshot.totalBytesAllocated = vm.heap.totalBytesAllocated();
+    snapshot.allocationBudgetThisCycle = vm.heap.allocationBudgetThisCycle();
+    snapshot.gcMaxHeapSize = Options::gcMaxHeapSize();
+    snapshot.smallHeapSize = Options::smallHeapSize();
+    snapshot.largeHeapSize = Options::largeHeapSize();
+    snapshot.gcEnabled = Options::useGC();
+    snapshot.generationalGcEnabled = Options::useGenerationalGC();
+    snapshot.concurrentGcEnabled = Options::useConcurrentGC();
+    ++snapshot.snapshotSequence;
 }
 
 void bunjsc_collect_garbage(JSContextRef ctx)
