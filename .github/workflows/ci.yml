@@ -811,3 +811,11 @@ jobs:
           BUN_WASM_RUNTIME_PROC_PORT: "4187"
           TMPDIR: ${{ runner.temp }}
         run: bun ../scripts/run-with-timeout.mts 300 bun tests/bun-runtime-proc-browser.ts ${{ matrix.browser }}
+      - name: Native Wasm module and shared-memory worker transfer
+        if: needs.rust.result == 'success'
+        env:
+          BUN_WASM_TRANSFER_ARTIFACT: ${{ github.workspace }}/dist/source-cache-browser/bun-browser.wasm
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          bun install --cwd ../tests/fixtures/worker-wasm --frozen-lockfile --ignore-scripts
+          bun ../scripts/run-with-timeout.mts 120 bun tests/browser-wasm-transfer.ts ${{ matrix.browser }}

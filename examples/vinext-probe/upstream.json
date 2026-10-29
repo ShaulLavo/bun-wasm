@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/cloudflare/vinext",
+  "commit": "db25840435a63a55191d7349a3985ba2d4f9370f",
+  "example": "examples/pages-router-cloudflare",
+  "adaptations": [
+    "Retain only SSR home and client counter.",
+    "Remove links to omitted pages and Next-only type import.",
+    "Use documented Node config without Cloudflare plugin.",
+    "Change page title and heading for the probe.",
+    "No styled-jsx or Next SWC."
+  ],
+  "packages": {
+    "vinext": "1.4.0",
+    "vite": "8.3.4",
+    "@vitejs/plugin-react": "6.1.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}
