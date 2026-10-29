@@ -13,11 +13,15 @@ const rss = () => process.memoryUsage().rss;
 
 const target = Buffer.allocUnsafeSlow(size + 5);
 const fd = fs.openSync("large.bin", "r");
+// Use up the free heap left by the write, so a full-size temporary has to grow memory.
+const fillers: Buffer[] = [];
+for (const start = rss(); rss() === start;) fillers.push(Buffer.alloc(MiB));
 const before = rss();
 const positional = fs.readSync(fd, target, 0, size + 5, 0);
 const growth = rss() - before;
 console.log("positional read stops at end of file", positional === size && target.subarray(0, size).equals(data));
 console.log("read growth under 8 MiB", growth < 8 * MiB);
+fillers.length = 0;
 const cursor = Buffer.alloc(3 * MiB);
 console.log("cursor reads continue", fs.readSync(fd, cursor, 0, cursor.length, null) === cursor.length && cursor.equals(data.subarray(0, cursor.length)));
 console.log("cursor reads advance", fs.readSync(fd, cursor, 0, cursor.length, null) === cursor.length && cursor.equals(data.subarray(cursor.length, 2 * cursor.length)));
