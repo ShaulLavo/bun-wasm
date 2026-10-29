@@ -1,4 +1,4 @@
-const child = Bun.spawn([process.execPath, "-e", 'console.log("ready"); for (;;) {}'], {
+const child = Bun.spawn([process.execPath, "-e", 'require("node:fs").writeSync(1, "ready\\n"); for (;;) {}'], {
   stdout: "pipe", stderr: "pipe", timeout: 20_000, killSignal: "SIGKILL",
 });
 const reader = child.stdout.getReader();

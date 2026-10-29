@@ -15,6 +15,7 @@ function argument(index: number): string {
 }
 const launcher = argument(2), core = argument(3), report = argument(4);
 const nodeOnly = process.argv.includes("--node-only");
+const integrationOnly = process.argv.includes("--integration-only");
 const scratch = mkdtempSync(join(process.env.TMPDIR ?? "/work/tmp", "bun-wasm-hermes-j4-proof-"));
 const env = { ...process.env, BUN_WASM_CACHE_DIR: process.env.BUN_WASM_CACHE_DIR ?? join(scratch, "compiled") };
 const proofs: Proof[] = [];
@@ -36,7 +37,7 @@ function node(args: string[], cwd = root): Output {
   return run("node", ["--disable-warning=ExperimentalWarning"].concat(args), cwd);
 }
 function guest(args: string[], extra: string[] = [], cwd = root): Output {
-  return run(launcher, ["--wasm", resolve(core), "--engine", `hermes=${resolve(core)}`].concat(extra, ["--"], args), cwd);
+  return run(launcher, ["--wasm", resolve(core)].concat(extra, ["--"], args), cwd);
 }
 function againstNode(name: string, file: string, status = 0): void {
   const expected = node([file]);
@@ -66,7 +67,7 @@ function sourceLines(file: string): void {
 }
 function virtualEval(): void {
   const file = join(root, "tests/hermes/tla/awaited.mts");
-  const source = `const ns = await import(${JSON.stringify(file)}); console.log("virtual eval", ns.answer, import.meta.url.endsWith("/[eval]"));`;
+  const source = `const ns = await import(${JSON.stringify(file)}); console.log("virtual eval", ns.answer, decodeURIComponent(import.meta.url).endsWith("/[eval]"));`;
   const expected = { status: 0, signal: null, stdout: "virtual eval 42 true\n", stderr: "" };
   const nodeControl = node(["--input-type=module", "-e", source]);
   // Node names eval sources [eval1], while the core uses the registered virtual [eval].
@@ -92,20 +93,23 @@ function interruption(): void {
   const expected = { status: 0, signal: null, stdout: "child ready\ninterrupt 143 SIGTERM false true\n", stderr: "" };
   const quickjsIndex = process.argv.indexOf("--quickjs");
   const quickjs = quickjsIndex < 0 ? undefined : process.argv[quickjsIndex + 1];
-  if (quickjs) record("G5/quickjs-interrupt", run(launcher, ["--wasm", resolve(quickjs), "--engine", `quickjs=${resolve(quickjs)}`, "--", "run", file]), expected);
+  if (quickjs) record("G5/quickjs-interrupt", run(launcher, ["--wasm", resolve(quickjs), "--", "run", file]), expected);
   record("G5/hermes-interrupt", guest(["run", file]), expected);
 }
 function digest(path: string): string { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
 try {
-  modules();
-  for (const file of ["tla/main.mts", "dynamic-import.cts", "require-esm.cts", "async-context.ts"]) {
+  if (!integrationOnly) modules();
+  for (const file of ["tla/main.mts", "dynamic-import.cts", "require-esm.cts", "async-context.ts", "metadata-main.mts"]) {
     againstNode(file, join(root, "tests/hermes", file));
   }
   sourceLines("tla/source-lines.mts");
   sourceLines("source-lines.cts");
   virtualEval();
   againstNode("G5/semantics", join(root, "tests/hermes/semantics.cts"), 7);
-  if (!nodeOnly) { nativeFixtures(); interruption(); }
+  if (!nodeOnly) {
+    if (!integrationOnly) nativeFixtures();
+    if (!process.argv.includes("--skip-interrupt")) interruption();
+  }
 } finally {
   cleanup();
   const identity = nodeOnly ? null : { core: { path: resolve(core), sha256: digest(core) }, side: { path: join(resolve(core, ".."), "hermes-engine.wasm"), sha256: digest(join(resolve(core, ".."), "hermes-engine.wasm")) } };
