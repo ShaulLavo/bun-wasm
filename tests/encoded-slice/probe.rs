@@ -263,22 +263,32 @@ mod high_memory {
         }
     }
 
+    fn place_iovec(buffer: usize, len: usize) {
+        let words = [buffer as u32, len as u32];
+        place(
+            IOVEC,
+            &[words[0].to_le_bytes(), words[1].to_le_bytes()].concat(),
+        );
+    }
+
     /// The host reads an iovec and its buffer above the boundary and writes its count there.
     fn host_write() {
         let text = EncodedSlice::utf8(place(WRITE, WRITTEN));
-        let iovec = [text.untagged_ptr().addr() as u32, text.len as u32];
-        place(IOVEC, &[iovec[0].to_le_bytes(), iovec[1].to_le_bytes()].concat());
+        place_iovec(text.untagged_ptr().addr(), text.len);
         // SAFETY: every address names grown memory owned by this probe.
         let errno = unsafe { fd_write(1, IOVEC, 1, RESULT) };
         assert_eq!(errno, 0, "fd_write from {WRITE:#x}");
         let count = unsafe { at(RESULT).cast::<u32>().read() };
-        assert_eq!(count as usize, WRITTEN.len(), "fd_write count at {RESULT:#x}");
+        assert_eq!(
+            count as usize,
+            WRITTEN.len(),
+            "fd_write count at {RESULT:#x}"
+        );
     }
 
     /// The host writes stdin into a buffer above the boundary; Bun's string reads it back.
     fn host_read() {
-        let iovec = [READ as u32, 64];
-        place(IOVEC, &[iovec[0].to_le_bytes(), iovec[1].to_le_bytes()].concat());
+        place_iovec(READ, 64);
         // SAFETY: as above.
         let errno = unsafe { fd_read(0, IOVEC, 1, RESULT) };
         assert_eq!(errno, 0, "fd_read into {READ:#x}");
@@ -305,7 +315,11 @@ mod high_memory {
         let top = place(MAXIMUM - 4, b"top!");
         same(EncodedSlice::latin1(top), MAXIMUM - 4, b"top!");
         assert_eq!(memory_size(0) * PAGE, MAXIMUM);
-        assert_eq!(memory_grow(0, 1), usize::MAX, "memory grew past the maximum");
+        assert_eq!(
+            memory_grow(0, 1),
+            usize::MAX,
+            "memory grew past the maximum"
+        );
         println!(
             "PASS: real Latin-1, UTF-8 and UTF-16 strings at {LATIN1:#x}..{:#x}, host fd_write/fd_read above 512 MiB, maximum {MAXIMUM:#x}",
             MAXIMUM - 1
