@@ -901,6 +901,54 @@ mod tests {
         });
     }
 
+    fn alive_after_gc(script: &str, check: &str) -> String {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| ctx.eval::<(), _>(script).unwrap());
+        runtime.run_gc();
+        context.with(|ctx| ctx.eval::<String, _>(check).unwrap())
+    }
+
+    #[test]
+    fn weak_map_value_dies_with_its_map() {
+        // webpack keys each compilation's ModuleGraph WeakMap by long-lived
+        // dependencies; the value reaches the graph that owns the map.
+        let alive = alive_after_gc(
+            "globalThis.dependency = {}; globalThis.graphs = [];
+             for (let generation = 0; generation < 5; generation++) {
+               const graph = { dependencyMap: new WeakMap(), payload: new Array(1000).fill(generation) };
+               graph.dependencyMap.set(dependency, { condition: () => graph });
+               graphs.push(new WeakRef(graph));
+             }",
+            "String(graphs.filter(ref => ref.deref()).length)",
+        );
+        assert_eq!(
+            alive, "0",
+            "old graphs stayed alive through their own WeakMap"
+        );
+    }
+
+    #[test]
+    fn weak_map_values_follow_ephemeron_reachability() {
+        let result = alive_after_gc(
+            "globalThis.cases = [];
+             const check = (name, value, expected) => cases.push([name, new WeakRef(value), expected]);
+             globalThis.both = { key: {}, map: new WeakMap() };
+             { const value = { tag: 1 }; both.map.set(both.key, value); check('key and map live', value, true); }
+             globalThis.selfMap = { key: {}, map: new WeakMap() };
+             { const value = { map: selfMap.map }; selfMap.map.set(selfMap.key, value); check('value reaches a live map', value, true); }
+             globalThis.liveKey = {};
+             { const map = new WeakMap(); const value = { map }; map.set(liveKey, value); check('map only through its value', value, false); }
+             globalThis.chain = { root: {}, first: new WeakMap(), second: new WeakMap() };
+             { const middle = {}; const value = { tag: 4 }; chain.first.set(chain.root, middle); chain.second.set(middle, value); check('chained entries', value, true); }
+             globalThis.deadKeyMap = new WeakMap();
+             { const key = {}; const value = { key }; deadKeyMap.set(key, value); check('key only through its value', value, false); }",
+            "cases.filter(([, ref, expected]) => (ref.deref() !== undefined) !== expected).map(([name]) => name).join(',') +
+             '|' + [both.map.get(both.key).tag, selfMap.map.has(selfMap.key), chain.second.get(chain.first.get(chain.root)).tag].join(',')",
+        );
+        assert_eq!(result, "|1,true,4");
+    }
+
     #[test]
     fn parser_lookahead_leaves_no_exception() {
         let runtime = Runtime::new().unwrap();

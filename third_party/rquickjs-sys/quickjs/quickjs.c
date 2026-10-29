@@ -350,6 +350,8 @@ struct JSRuntime {
     struct list_head gc_zero_ref_count_list;
     struct list_head tmp_obj_list; /* used during GC */
     JSGCPhaseEnum gc_phase : 8;
+    /* bun-wasm: which cycle-collector pass is marking WeakMap values */
+    uint8_t weak_value_pass;
     size_t malloc_gc_threshold;
 #ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
     struct list_head string_list; /* list of JSString.link */
@@ -648,6 +650,8 @@ typedef struct JSWeakRefRecord {
 typedef struct JSMapRecord {
     int ref_count; /* used during enumeration to avoid freeing the record */
     bool empty; /* true if the record is deleted */
+    /* bun-wasm: a WeakMap value's reference was restored in this GC */
+    bool gc_restored;
     struct JSMapState *map;
     struct list_head link;
     struct list_head hash_link;
@@ -663,6 +667,7 @@ typedef struct JSMapState {
     uint32_t hash_size; /* must be a power of two */
     uint32_t record_count_threshold; /* count at which a hash table
                                         resize is needed */
+    struct JSObject *owner; /* bun-wasm: the WeakMap/WeakSet object */
 } JSMapState;
 
 enum
@@ -7261,19 +7266,89 @@ void JS_MarkValue(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     }
 }
 
+/* bun-wasm: a WeakMap entry is an ephemeron. Its value stays alive only
+   while both the key and the map are alive. QuickJS marked the value as a
+   child of the key alone, so a value that reaches its own map (webpack's
+   per-compilation ModuleGraph keyed by long-lived dependencies) kept every
+   old map and everything it reaches alive for the key's lifetime.
+
+   The decref pass still attributes the record's reference to the key. The
+   scan pass restores it, making the value live, only once both key and map
+   are known live; whichever of the two is scanned second does it. The
+   restore pass gives back the remaining references of entries with a dead
+   key or map so that gc_free_cycles sees consistent counts. */
+#define WEAK_VALUE_PASS_NONE 0
+#define WEAK_VALUE_PASS_DECREF 1
+#define WEAK_VALUE_PASS_SCAN 2
+#define WEAK_VALUE_PASS_RESTORE 3
+
+static bool weak_map_owner_live(JSMapState *s)
+{
+    return JS_REF_COUNT(&s->owner->header) > 0;
+}
+
 static void mark_weak_map_value(JSRuntime *rt, JSWeakRefRecord *first_weak_ref, JS_MarkFunc *mark_func) {
     JSWeakRefRecord *wr;
     JSMapRecord *mr;
     JSMapState *s;
 
     for (wr = first_weak_ref; wr != NULL; wr = wr->next_weak_ref) {
-        if (wr->kind == JS_WEAK_REF_KIND_MAP) {
-            mr = wr->u.map_record;
-            s = mr->map;
-            assert(s->is_weak);
-            assert(!mr->empty); /* no iterator on WeakMap/WeakSet */
-            JS_MarkValue(rt, mr->value, mark_func);
+        if (wr->kind != JS_WEAK_REF_KIND_MAP)
+            continue;
+        mr = wr->u.map_record;
+        s = mr->map;
+        assert(s->is_weak);
+        assert(!mr->empty); /* no iterator on WeakMap/WeakSet */
+        switch (rt->weak_value_pass) {
+        case WEAK_VALUE_PASS_DECREF:
+            mr->gc_restored = false;
+            break;
+        case WEAK_VALUE_PASS_SCAN: /* the key is live */
+            if (mr->gc_restored || !weak_map_owner_live(s))
+                continue;
+            mr->gc_restored = true;
+            break;
+        case WEAK_VALUE_PASS_RESTORE: /* the key is dead */
+            if (mr->gc_restored)
+                continue;
+            mr->gc_restored = true;
+            break;
         }
+        JS_MarkValue(rt, mr->value, mark_func);
+    }
+}
+
+/* The map side of the scan and restore passes (see mark_weak_map_value).
+   `key_live` tells whether the record's key object is live in this pass. */
+static void mark_weak_map_records(JSRuntime *rt, JSGCObjectHeader *gp,
+                                  bool restore, JS_MarkFunc *mark_func)
+{
+    JSObject *p = (JSObject *)gp;
+    JSMapState *s;
+    struct list_head *el;
+    JSMapRecord *mr;
+    bool key_live;
+
+    if (JS_GC_TYPE(gp) != JS_GC_OBJ_TYPE_JS_OBJECT ||
+        (p->class_id != JS_CLASS_WEAKMAP && p->class_id != JS_CLASS_WEAKSET))
+        return;
+    s = p->u.map_state;
+    if (!s)
+        return;
+    list_for_each(el, &s->records) {
+        mr = list_entry(el, JSMapRecord, link);
+        /* Symbol keys are not GC objects: their values were never decreffed. */
+        if (mr->empty || mr->gc_restored || JS_VALUE_GET_TAG(mr->key) != JS_TAG_OBJECT)
+            continue;
+        /* After the scan, live objects have mark 0 and dead ones mark 1. */
+        if (restore)
+            key_live = JS_GC_MARK(&JS_VALUE_GET_OBJ(mr->key)->header) == 0;
+        else
+            key_live = JS_REF_COUNT(&JS_VALUE_GET_OBJ(mr->key)->header) > 0;
+        if (!key_live)
+            continue;
+        mr->gc_restored = true;
+        JS_MarkValue(rt, mr->value, mark_func);
     }
 }
 
@@ -7405,6 +7480,7 @@ static void gc_decref(JSRuntime *rt)
     /* decrement the refcount of all the children of all the GC
        objects and move the GC objects with zero refcount to
        tmp_obj_list */
+    rt->weak_value_pass = WEAK_VALUE_PASS_DECREF;
     list_for_each_safe(el, el1, &rt->gc_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
         assert(JS_GC_MARK(p) == 0);
@@ -7440,18 +7516,23 @@ static void gc_scan(JSRuntime *rt)
     JSGCObjectHeader *p;
 
     /* keep the objects with a refcount > 0 and their children. */
+    rt->weak_value_pass = WEAK_VALUE_PASS_SCAN;
     list_for_each(el, &rt->gc_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
         assert(JS_REF_COUNT(p) > 0);
         JS_GC_MARK(p) = 0; /* reset the mark for the next GC call */
         mark_children(rt, p, gc_scan_incref_child);
+        mark_weak_map_records(rt, p, false, gc_scan_incref_child);
     }
 
     /* restore the refcount of the objects to be deleted. */
+    rt->weak_value_pass = WEAK_VALUE_PASS_RESTORE;
     list_for_each(el, &rt->tmp_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
         mark_children(rt, p, gc_scan_incref_child2);
+        mark_weak_map_records(rt, p, true, gc_scan_incref_child2);
     }
+    rt->weak_value_pass = WEAK_VALUE_PASS_NONE;
 }
 
 static void gc_free_cycles(JSRuntime *rt)
@@ -53364,6 +53445,7 @@ static JSValue js_map_constructor(JSContext *ctx, JSValueConst new_target,
         goto fail;
     init_list_head(&s->records);
     s->is_weak = is_weak;
+    s->owner = JS_VALUE_GET_OBJ(obj);
     JS_SetOpaqueInternal(obj, s);
     s->hash_size = 1;
     s->hash_table = js_malloc(ctx, sizeof(s->hash_table[0]) * s->hash_size);
