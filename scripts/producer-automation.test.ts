@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { quickjsPair, sharedQuickjsPair } from "../tests/package/quickjs-plan-fixture.ts";
 import { ENGINE_SECTION } from "../src/engine-kind.ts";
 import { hash } from "./guest-source-manifest.ts";
-import { workerProofLabels } from "./producer-closure.ts";
+import { hermesConsumerReceipt, workerProofLabels } from "./producer-closure.ts";
 
 const repository = join(import.meta.dir, "..");
 const source = `import {execFileSync} from "node:child_process";
@@ -51,12 +51,14 @@ function fixture(run: (root: string, output: string, invoke: (command: string, p
     const pass = workerProofLabels.map(label => `PASS ${label}`).join("\n");
     put("scripts/native-cargo.sh", `#!/bin/sh\nprintf 'launcher\\n' >> "$FIXTURE_LOG"\nmkdir -p "$CARGO_TARGET_DIR/release"\ncp "${root}/scripts/launcher-fixture.sh" "$CARGO_TARGET_DIR/release/bun-wasm"\n`, 0o700);
     put("scripts/launcher-fixture.sh", `#!/bin/sh\ncase "$*" in *worker-alias.ts*) cat <<'PROOF'\n${pass}\nPROOF\n;; *) echo 'paired-smoke 42';; esac\n`, 0o700);
-    put("tests/shared-group/worker-alias.ts", "// Synthetic fixture: never executed by these routing tests.\n"); put("crates/bunwasm-hermes/cpp/shim.cpp", "shim fixture");
+    put("tests/shared-group/worker-alias.ts", "// Synthetic fixture: never executed by these routing tests.\n"); put("crates/bunwasm-hermes/cpp/shim.cpp", '#include "memory-telemetry.h"\n'); put("crates/bunwasm-hermes/cpp/memory-telemetry.h", "header fixture");
     put(".gitignore", "dist/\nweb/dist/\n");
     execFileSync("git", ["init", "-q"], { cwd: root }); execFileSync("git", ["add", "."], { cwd: root });
     execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "synthetic source"], { cwd: root });
     const native = join(scratch, "native"); mkdirSync(join(native, "wasi/lib"), { recursive: true }); writeFileSync(join(native, "wasi/lib/libhermesvm_bunwasm.a"), "archive fixture");
-    const nativeReceipt = join(scratch, "vm.json"); writeFileSync(nativeReceipt, JSON.stringify({ sha256: hash("archive fixture"), bytes: 15, shimSha256: hash("shim fixture") }));
+    const dependencies = ["shim.cpp", "memory-telemetry.h"].map(name => join(root, "crates/bunwasm-hermes/cpp", name));
+    writeFileSync(join(native, "wasi/shim-dependencies.txt"), `shim.cpp.o: #deps 2, deps mtime 1 (VALID)\n${dependencies.map(path => `    ${path}`).join("\n")}\n\n`);
+    const nativeReceipt = join(scratch, "vm.json"); writeFileSync(nativeReceipt, JSON.stringify({ sha256: hash("archive fixture"), bytes: 15, ...hermesConsumerReceipt(root, native) }));
     const shell = join(scratch, "shell"); mkdirSync(shell); for (const name of ["bash-web-shell.wasm", "bash-web-env.wasm", "bash-web-guests.json"]) writeFileSync(join(shell, name), "synthetic");
     const log = join(scratch, "commands.log");
     const invoke = (command: string, profile = "split", overrides: Record<string, string> = {}) => Bun.spawnSync([process.execPath, join(root, "scripts/engine-producer.ts"), command, profile], { cwd: root, env: { ...process.env, BUN_EXE: process.execPath, BUN_WASM_ENGINE_ROOT: output, BUN_WASM_SYSROOT: "/fixture", BUN_WASM_SHARED_SYSROOT: "/fixture", HERMES_BUILD_DIR: native, HERMES_VM_RECEIPT: nativeReceipt, BASH_WEB_GUESTS_DIR: shell, FIXTURE_LOG: log, ...overrides } });
@@ -91,9 +93,9 @@ test("canonical split producer routes one core then three sides and records test
   });
 });
 
-test("a changed native heap shim refuses the prior VM generation before any recipe", () => {
+test.each(["shim.cpp", "memory-telemetry.h"])("a changed native %s refuses the prior VM generation before any recipe", name => {
   fixture((root, output, invoke) => {
-    writeFileSync(join(root, "crates/bunwasm-hermes/cpp/shim.cpp"), "future changed heap shim");
+    writeFileSync(join(root, "crates/bunwasm-hermes/cpp", name), "future changed heap input");
     execFileSync("git", ["add", "."], { cwd: root });
     execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "changed shim"], { cwd: root });
     const result = invoke("build");

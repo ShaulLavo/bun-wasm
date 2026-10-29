@@ -1,8 +1,11 @@
-import { accessSync, constants, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { hash } from "./guest-source-manifest.ts";
+import { accessSync, constants, readFileSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { programProfile, type PairedEngine } from "../src/engine-kind.ts";
 import type { ProgramProfile } from "./src/program-profile.ts";
+
+const hash = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 
 export interface ProducerSource { readonly head: string; readonly tree: string }
 interface LauncherReceipt {
@@ -58,11 +61,76 @@ export function verifyLauncher(path: string, value: unknown, source: ProducerSou
   return expected;
 }
 
+const shimPath = "crates/bunwasm-hermes/cpp/shim.cpp";
+const dependencyPath = "wasi/shim-dependencies.txt";
+
+interface CompilerDependencies { readonly target: string; readonly paths: string[]; readonly valid: boolean }
+
+function compilerDependencyRecord(block: string, directory: string): CompilerDependencies {
+  const [header, ...lines] = block.split("\n");
+  const match = /^(.+): #deps ([0-9]+), deps mtime [0-9]+ \((VALID|STALE)\)$/.exec(header ?? "");
+  if (!match || lines.length !== Number(match[2])) throw new Error("Invalid compiler dependency metadata");
+  const paths = lines.map(line => {
+    if (!line.startsWith("    ") || line.length === 4) throw new Error("Invalid compiler dependency path");
+    return resolve(directory, line.slice(4));
+  });
+  return { target: resolve(directory, match[1] ?? ""), paths, valid: match[3] === "VALID" };
+}
+
+function compilerDependencies(text: string, directory: string, shim: string): CompilerDependencies {
+  const records = text.trim().split(/\n\s*\n/).map(block => compilerDependencyRecord(block, directory));
+  const matches = records.filter(record => record.paths.includes(shim));
+  if (matches.length !== 1) throw new Error("Expected exactly one shim compiler dependency record");
+  const record = matches[0];
+  if (!record || !record.valid || new Set(record.paths).size !== record.paths.length) throw new Error("Stale or repeated shim compiler dependency record");
+  return record;
+}
+
+function consumerInput(path: string, repository: string, build: string) {
+  const canonical = realpathSync(path);
+  if (canonical !== path) throw new Error(`Compiler dependency path differs from its real path: ${path}`);
+  const bytes = readFileSync(path);
+  const repositoryPath = relative(repository, path);
+  const buildPath = relative(build, path);
+  if (insideRoot(repositoryPath)) return { root: "repository", path: repositoryPath, sha256: hash(bytes), bytes: bytes.length };
+  if (insideRoot(buildPath)) return { root: "build", path: buildPath, sha256: hash(bytes), bytes: bytes.length };
+  return { root: "absolute", path, sha256: hash(bytes), bytes: bytes.length };
+}
+
+function insideRoot(path: string): boolean {
+  return path !== ".." && !path.startsWith("../") && !isAbsolute(path);
+}
+
+/** Called only by the original native generation, after the compiler has finished. */
+export function hermesConsumerReceipt(repository: string, build: string) {
+  repository = realpathSync(repository);
+  build = realpathSync(build);
+  const shimSource = join(repository, shimPath);
+  const metadata = readFileSync(join(build, dependencyPath));
+  const dependencies = compilerDependencies(metadata.toString("utf8"), join(build, "wasi"), shimSource);
+  const inputs = dependencies.paths.sort().map(path => consumerInput(path, repository, build));
+  return {
+    shimSource,
+    shimSha256: hash(readFileSync(shimSource)),
+    consumerInputs: {
+      schema: 1,
+      roots: { repository, build },
+      dependencyMetadata: { path: dependencyPath, sha256: hash(metadata), bytes: metadata.length },
+      target: dependencies.target,
+      inputs,
+    },
+  };
+}
+
 /** A native archive is never refreshed here; its owner must supply a matching generation. */
 export function verifyHermesLibrary(repository: string, build: string, receiptPath: string): void {
   const value: unknown = JSON.parse(readFileSync(receiptPath, "utf8"));
-  if (!value || typeof value !== "object" || !("sha256" in value) || !("bytes" in value) || !("shimSha256" in value)) throw new Error("Hermes VM receipt must identify archive bytes and shim source");
+  if (!value || typeof value !== "object" || !("sha256" in value) || !("bytes" in value) || !("shimSha256" in value)
+    || !("shimSource" in value) || !("consumerInputs" in value)) throw new Error("Hermes VM receipt must identify archive bytes and compiler consumer inputs; a new matching native generation is required");
   const bytes = readFileSync(join(build, "wasi/lib/libhermesvm_bunwasm.a"));
-  const shim = readFileSync(join(repository, "crates/bunwasm-hermes/cpp/shim.cpp"));
-  if (value.sha256 !== hash(bytes) || value.bytes !== bytes.byteLength || value.shimSha256 !== hash(shim)) throw new Error("Hermes archive or shim changed; a new matching native generation is required");
+  let current: ReturnType<typeof hermesConsumerReceipt>;
+  try { current = hermesConsumerReceipt(repository, build); }
+  catch (error) { throw new Error("Hermes compiler consumer inputs unavailable; a new matching native generation is required", { cause: error }); }
+  if (value.sha256 !== hash(bytes) || value.bytes !== bytes.byteLength || value.shimSha256 !== current.shimSha256
+    || value.shimSource !== current.shimSource || !isDeepStrictEqual(value.consumerInputs, current.consumerInputs)) throw new Error("Hermes archive or compiler consumer inputs changed; a new matching native generation is required");
 }
