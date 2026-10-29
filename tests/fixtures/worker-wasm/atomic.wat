@@ -18,5 +18,18 @@
     local.get $arg
     i32.atomic.store)
   (table (export "__indirect_function_table") 1 funcref)
+  (global $heap (mut i32) (i32.const 1024))
+  (func (export "malloc") (param $size i32) (result i32) (local $old i32)
+    global.get $heap
+    local.tee $old
+    local.get $size
+    i32.add
+    i32.const 7
+    i32.add
+    i32.const -8
+    i32.and
+    global.set $heap
+    local.get $old)
+  (func (export "free") (param i32))
   (func (export "_initialize"))
   (func (export "napi_register_wasm_v1") (param i32 i32) (result i32) local.get 1))
