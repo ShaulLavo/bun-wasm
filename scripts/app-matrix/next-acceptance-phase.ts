@@ -34,7 +34,7 @@ async function boundedOperation(phase: Phase) {
 /** Cancellation owns the operation's resources and must settle only after they are released. */
 export async function runAcceptancePhase(phase: Phase): Promise<PhaseResult> {
   const started = performance.now();
-  const identity = { phase: phase.phase, engine: phase.engine, observedEngine: phase.observedEngine };
+  const identity = { phase: phase.phase, engine: phase.engine, observedEngine: phase.observedEngine, budgetMs: phase.timeoutMs };
   let result: PhaseResult;
   try {
     await boundedOperation(phase);
