@@ -833,6 +833,74 @@ mod tests {
         });
     }
 
+    fn function_bytes(runtime: &Runtime) -> i64 {
+        runtime.run_gc();
+        runtime.memory_usage().js_func_size
+    }
+
+    #[test]
+    fn nested_functions_share_one_source_copy() {
+        // A module wrapper around nested functions, like a webpack chunk: each
+        // level used to keep a private copy of its whole text for toString.
+        let depth = 24;
+        let body = format!("var padding = {:?};", "x".repeat(16 * 1024));
+        let mut source = String::new();
+        for level in 0..depth {
+            source.push_str(&format!("function level{level}() {{ {body} return "));
+        }
+        source.push_str("1;");
+        for _ in 0..depth {
+            source.push_str(" }");
+        }
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        let before = function_bytes(&runtime);
+        context.with(|ctx| {
+            ctx.eval::<(), _>(format!(
+                "globalThis.keep = (function () {{ {source}\n return level0; }})();"
+            ))
+            .unwrap();
+        });
+        let retained = function_bytes(&runtime) - before;
+        assert!(
+            retained < 2 * source.len() as i64,
+            "{depth} nested functions retained {retained} bytes of function data for {} source bytes",
+            source.len()
+        );
+        context.with(|ctx| {
+            let text: String = ctx.eval("String(keep)").unwrap();
+            assert!(text.starts_with("function level0() {") && text.ends_with(" }"));
+            let inner: String = ctx
+                .eval("String(new Function('return ' + String(keep))()())")
+                .unwrap();
+            assert!(inner.starts_with("function level1() {"));
+        });
+    }
+
+    #[test]
+    fn function_source_survives_its_parse_input() {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            ctx.eval::<(), _>(
+                "globalThis.fns = [eval('(x => x)'), new Function('a', 'return a'), \
+                 eval('(class A { m() { return () => 1; } })'), eval('({ get g() { return 1; } })')];",
+            )
+            .unwrap();
+        });
+        // Collect the eval inputs and strings before reading the sources back.
+        runtime.run_gc();
+        context.with(|ctx| {
+            let text: String = ctx
+                .eval("[String(fns[0]), String(fns[1]), String(fns[2]), String(new fns[2]().m()), String(Object.getOwnPropertyDescriptor(fns[3], 'g').get)].join('|')")
+                .unwrap();
+            assert_eq!(
+                text,
+                "x => x|function anonymous(a\n) {\nreturn a\n}|class A { m() { return () => 1; } }|() => 1|get g() { return 1; }"
+            );
+        });
+    }
+
     #[test]
     fn parser_lookahead_leaves_no_exception() {
         let runtime = Runtime::new().unwrap();

@@ -892,7 +892,17 @@ typedef struct JSFunctionBytecode {
     int pc2line_len;
     uint8_t *pc2line_buf;
     char *source;
+    /* bun-wasm: when set, `source` points into this text shared by every
+       function of one parse instead of owning a private copy */
+    struct JSSharedSource *source_owner;
 } JSFunctionBytecode;
+
+/* bun-wasm: the source span of one parse, shared by its functions */
+typedef struct JSSharedSource {
+    int ref_count;
+    int len;
+    char buf[];
+} JSSharedSource;
 
 typedef struct JSBoundFunction {
     JSValue func_obj;
@@ -7568,7 +7578,10 @@ static void compute_bytecode_size(JSFunctionBytecode *b, JSMemoryUsage_helper *h
         hp->js_func_code_size += b->byte_code_len;
     }
     memory_used_count++;
-    js_func_size += b->source_len + 1;
+    if (b->source_owner)
+        js_func_size += (b->source_owner->len + 1) / b->source_owner->ref_count;
+    else
+        js_func_size += b->source_len + 1;
     if (b->pc2line_len) {
         memory_used_count++;
         hp->js_func_pc2line_count += 1;
@@ -22380,8 +22393,11 @@ typedef struct JSFunctionDef {
     int col_num;
     DynBuf pc2line;
 
-    char *source;  /* raw source, utf-8 encoded */
+    /* raw source, utf-8 encoded. bun-wasm: borrowed from the parse input
+       until js_share_function_sources() points it into source_owner */
+    char *source;
     int source_len;
+    JSSharedSource *source_owner;
 
     JSModuleDef *module; /* != NULL when parsing a module */
 } JSFunctionDef;
@@ -25974,11 +25990,8 @@ static __exception int js_parse_class(JSParseState *s, bool is_class_expr,
     put_u32(fd->byte_code.buf + ctor_cpool_offset, ctor_fd->parent_cpool_idx);
 
     /* store the class source code in the constructor. */
-    js_free(ctx, ctor_fd->source);
     ctor_fd->source_len = s->buf_ptr - class_start_ptr;
-    ctor_fd->source = js_strndup(ctx, (const char *)class_start_ptr, ctor_fd->source_len);
-    if (!ctor_fd->source)
-        goto fail;
+    ctor_fd->source = (char *)class_start_ptr;
 
     /* consume the '}' */
     if (next_token(s))
@@ -33109,6 +33122,62 @@ static void free_bytecode_atoms(JSRuntime *rt,
 
 #ifndef QJS_DISABLE_PARSER
 
+static void js_shared_source_free(JSRuntime *rt, JSSharedSource *text)
+{
+    if (text && --text->ref_count == 0)
+        js_free_rt(rt, text);
+}
+
+static void js_source_span(JSFunctionDef *fd, const char **lo, const char **hi)
+{
+    struct list_head *el;
+
+    if (fd->source) {
+        if (!*lo || fd->source < *lo)
+            *lo = fd->source;
+        if (!*hi || fd->source + fd->source_len > *hi)
+            *hi = fd->source + fd->source_len;
+    }
+    list_for_each(el, &fd->child_list)
+        js_source_span(list_entry(el, JSFunctionDef, link), lo, hi);
+}
+
+static void js_source_attach(JSFunctionDef *fd, const char *lo, JSSharedSource *text)
+{
+    struct list_head *el;
+
+    if (fd->source) {
+        fd->source = text->buf + (fd->source - lo);
+        fd->source_owner = text;
+        text->ref_count++;
+    }
+    list_for_each(el, &fd->child_list)
+        js_source_attach(list_entry(el, JSFunctionDef, link), lo, text);
+}
+
+/* bun-wasm: QuickJS kept a private copy of every function's text for
+   Function.prototype.toString, so nested functions stored their source once
+   per enclosing level. Copy the span covering all functions of this parse
+   once instead; each bytecode keeps a reference. */
+static int js_share_function_sources(JSContext *ctx, JSFunctionDef *fd)
+{
+    const char *lo = NULL, *hi = NULL;
+    JSSharedSource *text;
+
+    js_source_span(fd, &lo, &hi);
+    if (!lo)
+        return 0;
+    text = js_malloc(ctx, sizeof(*text) + (hi - lo) + 1);
+    if (!text)
+        return -1;
+    text->ref_count = 0;
+    text->len = hi - lo;
+    memcpy(text->buf, lo, hi - lo);
+    text->buf[hi - lo] = '\0';
+    js_source_attach(fd, lo, text);
+    return 0;
+}
+
 static void js_free_function_def(JSContext *ctx, JSFunctionDef *fd)
 {
     int i;
@@ -33162,7 +33231,7 @@ static void js_free_function_def(JSContext *ctx, JSFunctionDef *fd)
     JS_FreeAtom(ctx, fd->filename);
     dbuf_free(&fd->pc2line);
 
-    js_free(ctx, fd->source);
+    js_shared_source_free(ctx->rt, fd->source_owner);
 
     if (fd->parent) {
         /* remove in parent list */
@@ -37155,6 +37224,8 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
     b->pc2line_len = fd->pc2line.size;
     b->source = fd->source;
     b->source_len = fd->source_len;
+    b->source_owner = fd->source_owner;
+    fd->source_owner = NULL;
 
     if (fd->scopes != fd->def_scope_array)
         js_free(ctx, fd->scopes);
@@ -37227,7 +37298,10 @@ static void free_function_bytecode(JSRuntime *rt, JSFunctionBytecode *b)
     JS_FreeAtomRT(rt, b->func_name);
     JS_FreeAtomRT(rt, b->filename);
     js_free_rt(rt, b->pc2line_buf);
-    js_free_rt(rt, b->source);
+    if (b->source_owner)
+        js_shared_source_free(rt, b->source_owner);
+    else
+        js_free_rt(rt, b->source);
 
     remove_gc_object(&b->header);
     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && JS_REF_COUNT(b) != 0) {
@@ -37827,9 +37901,7 @@ static __exception int js_parse_function_decl2(JSParseState *s,
             /* the end of the function source code is after the last
                 token of the function source stored into s->last_ptr */
             fd->source_len = s->last_ptr - ptr;
-            fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
-            if (!fd->source)
-                goto fail;
+            fd->source = (char *)ptr;
 
             goto done;
         }
@@ -37865,9 +37937,7 @@ static __exception int js_parse_function_decl2(JSParseState *s,
 
         /* save the function source code */
         fd->source_len = s->buf_ptr - ptr;
-        fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
-        if (!fd->source)
-            goto fail;
+        fd->source = (char *)ptr;
 
         if (next_token(s)) {
             /* consume the '}' */
@@ -38272,6 +38342,8 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     fd->body_scope = fd->scope_level;
 
     err = js_parse_program(s);
+    if (!err)
+        err = js_share_function_sources(ctx, fd);
     if (err) {
     fail:
         free_token(s, &s->token);
