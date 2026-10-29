@@ -44,6 +44,7 @@ unsafe extern "C" {
     // The core's stack bounds (one shared stack), imported through GOT.mem.
     static __stack_low: u8;
     static __stack_high: u8;
+    static mut errno: i32;
 }
 
 /// Built-ins captured at startup, before user code can replace them.
@@ -368,6 +369,16 @@ extern "C" fn bunhermes_host_fatal(message: *const c_char, len: usize) -> ! {
     let _ = stderr.write_all(b"\n");
     // SAFETY: the core's exit never returns.
     unsafe { crate::transport::bun_core_exit(134) }
+}
+
+/// The core alone moves the heap break. llvh's `Process::GetMallocUsage` asks `sbrk(0)` for an
+/// estimate; refusing every call keeps the side from importing the core's `sbrk`.
+#[unsafe(no_mangle)]
+extern "C" fn sbrk(_increment: isize) -> *mut u8 {
+    const ENOMEM: i32 = 48;
+    // SAFETY: the core's errno, imported through GOT.mem; single-threaded.
+    unsafe { errno = ENOMEM };
+    usize::MAX as *mut u8
 }
 
 fn drop_dead_natives() {
