@@ -28,6 +28,7 @@ pub mod host;
 mod html_rewriter;
 pub mod init;
 pub mod install;
+mod intl;
 mod modules;
 mod natives;
 mod node_path;
