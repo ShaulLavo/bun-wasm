@@ -34,6 +34,9 @@ interface Settings {
   preopens: Record<string, string>;
   env: Record<string, string>;
   args: string[];
+  /** `native`: Node's AsyncLocalStorage carries guest frames. `hooks`: the printed
+   * async-context hooks do, as in a browser (docs/engine-browser.md). */
+  context: "native" | "hooks";
 }
 interface GuestData {
   module: WebAssembly.Module;
@@ -44,7 +47,7 @@ interface GuestData {
 }
 function settings(): Settings {
   const argv = nodeProcess.argv.slice(2);
-  const result: Settings = { wasmPath: resolve(import.meta.dirname, "../../dist/bun-browser.wasm"), engines: {}, stackMb: STACK_MB, withNet: false, preopens: {}, env: {}, args: [] };
+  const result: Settings = { wasmPath: resolve(import.meta.dirname, "../../dist/bun-browser.wasm"), engines: {}, stackMb: STACK_MB, withNet: false, preopens: {}, env: {}, args: [], context: "native" };
   let i = 0;
   for (; i < argv.length; i++) {
     const arg = argv[i];
@@ -56,6 +59,11 @@ function settings(): Settings {
       result.engines[engine] = resolve(value.slice(equal + 1));
     }
     else if (arg === "--net") result.withNet = true;
+    else if (arg === "--context" || arg.startsWith("--context=")) {
+      const value = arg === "--context" ? argv[++i] : arg.slice("--context=".length);
+      if (value !== "native" && value !== "hooks") throw new Error("--context requires native or hooks");
+      result.context = value;
+    }
     else if (arg === "--stack-mb") result.stackMb = Number(argv[++i]);
     else if (arg === "--dir") {
       const [host, guest = host] = argv[++i]!.split("::");
@@ -186,7 +194,7 @@ async function run(data: GuestData) {
     const { createNodeNet } = await import("./node-net.mjs");
     const { startEngineHost } = await import("../src/engine-host.js");
     await startEngineHost({ instance, moduleUrls: "data", modules, fetch: nodeFetch,
-      asyncContext: createNodeAsyncContext(),
+      asyncContext: config.context === "native" ? createNodeAsyncContext() : undefined,
       net: processHost.engineNet(config.withNet ? createNodeNet({ net, http, https, zlib }) : undefined),
       processWake: processHost.client.wake,
       onExit: finish,

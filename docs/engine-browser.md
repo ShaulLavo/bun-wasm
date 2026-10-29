@@ -160,7 +160,11 @@ The host engine exposes neither, so the browser engine reconstructs both:
   - Promises settled elsewhere (`new Promise`, async functions, runtime APIs) print as `<pending>`.
 - **AsyncLocalStorage across `await`:**
   - For this build, Bun's printer (patch `0008`) prints `await x` as `__bunwasm_resume(__bunwasm_capture(), await x)`. Arguments evaluate in order, so the context is captured before the suspension and restored when the function resumes.
-  - `for await` loops get the same hooks: `{ const c = capture(); for await (…) { resume(c); … } resume(c); }`.
+  - A rejected `await` throws before `resume` runs, so an async body whose own statements hold a `try` or a `for await` (an *S body*, including a module top level that awaits) gets a different shape. It declares `let __bunwasm_s = 0;` after its directives. Its awaits become `__bunwasm_resumed(await __bunwasm_id(x, __bunwasm_s = __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0)`, which awaits `x` itself (no extra `then` or `constructor` reads, no extra jobs) and leaves the captured frame in `__bunwasm_s` when `x` rejects. Every `catch` and `finally` block starts with `__bunwasm_caught(__bunwasm_s, __bunwasm_s = 0)`, which re-enters that frame. A synchronous throw finds `__bunwasm_s === 0` and keeps the current frame.
+  - Async generator `yield x` in an S body is printed as `__bunwasm_id(yield __bunwasm_id(x, __bunwasm_s = __bunwasm_capture()), __bunwasm_s = 0)`. `%AsyncGeneratorPrototype%.throw` is wrapped so the handlers it runs synchronously keep the caller's frame; the wrapper keeps `name` and `length`, but its `toString()` is no longer native code.
+  - `for await` keeps `__bunwasm_s` equal to the frame of its pending implicit await: `{ let __bunwasm_c = __bunwasm_capture(); for await (… of __bunwasm_id(y, __bunwasm_s = __bunwasm_c)) { try { __bunwasm_resume(__bunwasm_c, __bunwasm_s = 0); … } finally { __bunwasm_s = __bunwasm_c = __bunwasm_capture(); } } __bunwasm_resume(__bunwasm_c, 0); __bunwasm_s = 0; }`. Labels stay on the loop.
+  - `__bunwasm_s`, `__bunwasm_c` and the other `__bunwasm_*` names are reserved in printed code. The shapes have a version (`describe().prepareVersion`), which keys the runtime's cached printed sources.
+  - Known gaps, measured against Node by `tests/async-context-rejection`: a rejection out of `yield*` caught in the delegating generator sees the frame at delegation start (G1); an async generator's `finally` after `return()` from another frame sees its last `yield`'s frame (G2); destructuring or defaults in `catch (pattern)` run before the hook (G5); `await using` is not hooked (G6); a rejected `return x` in an async generator reaches its handlers without a hook.
   - Plain `.js` files that contain `await` go through the transpiler in this build so that they get the hooks, and their stacks stay source-mapped.
   - `then` callbacks, timers, ticks and immediates carry their own context.
   - The TC39 AsyncContext proposal (`AsyncContext.Variable`) would make the hooks unnecessary. It was at stage 2 at the time of writing and no engine we target ships it, even behind a flag.
@@ -173,6 +177,8 @@ The host engine exposes neither, so the browser engine reconstructs both:
 - `node:wasi` with the fixture dir preopened as `/`;
 - `startEngineHost` with module hooks serving the program's ES modules;
 - with `--net` (fixtures marked `host`): real sockets and an HTTP client (`node-net.mjs`); otherwise Node's `fetch` as the host fetch.
+
+`--context hooks` (`node-host.mjs --context hooks`) leaves out Node's native `AsyncLocalStorage` slot, so AsyncLocalStorage depends on the printed hooks exactly as in a browser.
 
 Node is the closest headless stand-in for a worker: it has V8, ES modules from `data:` URLs, `MessageChannel`, `fetch` and `process` events. Bun can't host it, because its `Bun` global is not configurable and the polyfills must replace it.
 
@@ -189,7 +195,7 @@ These follow from running on a standard JS engine without engine hooks. Every fi
 | what | browser engine |
 |---|---|
 | Promise state | Known only for promises settled where the host sees it (see above). Others print as `<pending>`, and `Bun.peek` returns them unchanged. |
-| AsyncLocalStorage | Carried across `await` by the transpiler hooks. Code that skips the transpiler (`eval`, `new Function`) and native jobs (see above) are not covered. |
+| AsyncLocalStorage | Carried across `await`, rejected awaits, async generators and `for await` by the transpiler hooks, with the gaps listed above. Code that skips the transpiler (`eval`, `new Function`) and native jobs (see above) are not covered. |
 | `require()` of an ES module | A converted CommonJS copy, separate from the ES module instance if the file is also imported. |
 | Import cycles | Need the module store (a service worker in the browser). Without it, a cycle is an error. |
 | Proxy detection, Map/Set iterator entries in `console.log` | Inspection prints less, e.g. a Proxy prints as its target. |

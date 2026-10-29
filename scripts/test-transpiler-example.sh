@@ -30,4 +30,9 @@ assert.equal(map.version, 3);
 assert.ok(map.mappings.length > 0);
 assert.ok(map.sourcesContent[0].includes(': number'));
 JS
-echo 'transpiler examples: compile, generated code and source map pass'
+# The browser engine's async-context hooks (vendor patch 0008), printed exactly.
+hooks="$root/tests/transpiler-hooks"
+wasmtime run --dir "$hooks::/" "$example" --await-hooks /input.mjs > "$scratch/hooks.mjs"
+diff -u "$hooks/expected.mjs" "$scratch/hooks.mjs"
+node --check "$scratch/hooks.mjs"
+echo 'transpiler examples: compile, generated code, source map and await hooks pass'

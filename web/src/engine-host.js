@@ -645,28 +645,73 @@ class EngineHost {
       ),
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));
-    // AsyncLocalStorage across `await`: the transpiler prints `await x` as
-    // `__bunwasm_resume(__bunwasm_capture(), await x)` for this engine.
-    // A resumed context would stay set for whatever runs after the function
-    // suspends again or returns; jobs the host wraps (then callbacks, timers,
-    // ticks) set their own, and a microtask puts the previous one back if
-    // nothing changed it meanwhile.
-    // A native continuation provider already scopes every job, including raw eval.
-    // Its post-getter frame must not be replaced with the printer's earlier frame.
-    hidden("__bunwasm_capture", () => host.o.asyncContext ? undefined : host.asyncContext);
-    hidden("__bunwasm_resume", (saved, value) => {
-      if (host.o.asyncContext) return value;
-      const ambient = host.asyncContext;
-      if (ambient !== saved) {
-        host.asyncContext = saved;
-        nativeQueueMicrotask(() => {
-          if (host.asyncContext === saved) host.asyncContext = ambient;
-        });
-      }
-      return value;
-    });
+    this.installContextHooks(hidden);
     // Without a networking host, user code gets the host's own fetch.
     if (this.o.fetch && !this.native.hostCaps.fetch) this.installFetch(this.o.fetch);
+  }
+
+  // AsyncLocalStorage across suspensions. For this engine the transpiler
+  // prints hooks around `await`, async generator `yield`, `for await`, and the
+  // `catch` and `finally` blocks that can observe a rejected await (vendor
+  // patch 0008, docs/engine-browser.md). A resumed frame would stay set for
+  // whatever runs after the function suspends again or returns; jobs the host
+  // wraps (then callbacks, timers, ticks) set their own, and a microtask puts
+  // the previous one back if nothing changed it meanwhile.
+  installContextHooks(hidden) {
+    const host = this;
+    const id = (value) => value;
+    // A native continuation provider already scopes every job, including raw
+    // eval. Its post-getter frame must not be replaced with the printer's
+    // earlier frame, so every hook is inert.
+    if (this.o.asyncContext) {
+      hidden("__bunwasm_capture", () => undefined);
+      hidden("__bunwasm_resume", (_saved, value) => value);
+      hidden("__bunwasm_resumed", id);
+      hidden("__bunwasm_caught", () => {});
+      hidden("__bunwasm_id", id);
+      return;
+    }
+    const enter = (saved) => {
+      const ambient = host.asyncContext;
+      if (ambient === saved) return;
+      host.asyncContext = saved;
+      nativeQueueMicrotask(() => {
+        if (host.asyncContext === saved) host.asyncContext = ambient;
+      });
+    };
+    // `__bunwasm_resume(__bunwasm_capture(), await x)` in a function without
+    // handlers; `__bunwasm_resumed(await __bunwasm_id(x, s = capture()), s, s = 0)`
+    // in one whose `catch`/`finally` blocks start with `__bunwasm_caught(s, s = 0)`.
+    // `s` is 0 while no suspension is pending, else the frame it began in.
+    hidden("__bunwasm_capture", () => host.asyncContext);
+    hidden("__bunwasm_resume", (saved, value) => {
+      enter(saved);
+      return value;
+    });
+    hidden("__bunwasm_resumed", (value, saved) => {
+      enter(saved);
+      return value;
+    });
+    // A generator's throw() runs its handlers synchronously in the caller's
+    // frame, not the one its pending `yield` captured.
+    let syncGeneratorResume = 0;
+    hidden("__bunwasm_caught", (saved) => {
+      if (saved !== 0 && syncGeneratorResume === 0) enter(saved);
+    });
+    hidden("__bunwasm_id", id);
+    const asyncGeneratorPrototype = Object.getPrototypeOf(Object.getPrototypeOf((async function* () {})()));
+    const nativeThrow = asyncGeneratorPrototype.throw;
+    const { throw: wrapped } = {
+      throw(value) {
+        syncGeneratorResume++;
+        try {
+          return nativeThrow.call(this, value);
+        } finally {
+          syncGeneratorResume--;
+        }
+      },
+    };
+    Object.defineProperty(asyncGeneratorPrototype, "throw", { value: wrapped });
   }
 
   // User code gets the host's real fetch, adapted to the runtime's Response.
