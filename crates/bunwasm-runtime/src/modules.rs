@@ -513,9 +513,10 @@ impl State {
 
     /// Forget what was cached for `path` when its content changed since.
     /// Dev servers rewrite their output in place (webpack's server chunks),
-    /// and `delete require.cache[path]` then expects the new code.
+    /// and `delete require.cache[path]` then expects the new code. The key
+    /// includes the printed hooks' version, like every cache of hooked text.
     fn revalidate(&self, path: &str, raw: &[u8]) {
-        let digest = bun_wyhash::hash(raw);
+        let digest = bun_wyhash::hash_with_seed(u64::from(self.transpiler.hooks_version()), raw);
         let previous = self
             .source_digests
             .borrow_mut()
