@@ -386,6 +386,18 @@
   function outputRoom(self: ZlibBase, offset: number) {
     return Math.min(self._chunkSize - offset, kOutputRoom);
   }
+  // Input per codec call, for the same reason: every call copies its input to
+  // the native codec. Webpack writes serialized cache sections of 20 MiB and
+  // more into one gzip stream. Earlier pieces are processed without a flush
+  // (0 in every codec), the last one with the caller's flush, so the codec sees
+  // the same stream as one call with the whole chunk.
+  const kInputPiece = 1 << 20;
+  function inputPiece(chunk: Uint8Array, inOff: number) {
+    return Math.min(chunk.byteLength - inOff, kInputPiece);
+  }
+  function pieceFlush(chunk: Uint8Array, inOff: number, inLen: number, flushFlag: number) {
+    return inOff + inLen < chunk.byteLength ? 0 : flushFlag;
+  }
 
   const kFlushBuffers: Uint8Array[] = [];
   for (const flag of kFlushFlagList) {
@@ -393,7 +405,7 @@
   }
 
   function processChunkSync(self: ZlibBase, chunk: Uint8Array, flushFlag: number) {
-    let availInBefore = chunk.byteLength;
+    let availInBefore = inputPiece(chunk, 0);
     let availOutBefore = outputRoom(self, self._outOffset);
     let inOff = 0;
     let availOutAfter: number;
@@ -409,7 +421,7 @@
     self.on("error", (er: unknown) => { error = er; });
     if (!handle) throw new TypeError("Cannot read properties of null (reading 'writeSync')");
     for (;;) {
-      handle.writeSync(flushFlag, chunk, inOff, availInBefore, availOutBefore);
+      handle.writeSync(pieceFlush(chunk, inOff, availInBefore, flushFlag), chunk, inOff, availInBefore, availOutBefore);
       if (error) throw error;
       else if (self[kError]) throw self[kError];
       availOutAfter = state[0];
@@ -434,7 +446,12 @@
         // Not actually done. Reprocess with the input left over.
         inOff += inDelta;
         availInBefore = availInAfter;
+      } else if (availInAfter === 0 && inOff + inDelta < chunk.byteLength) {
+        inOff += inDelta;
+        availInBefore = inputPiece(chunk, inOff);
+        availOutBefore = outputRoom(self, offset);
       } else {
+        availInAfter += chunk.byteLength - inOff - availInBefore;
         break;
       }
     }
@@ -454,10 +471,10 @@
     handle.buffer = chunk;
     handle.cb = cb;
     handle.availOutBefore = outputRoom(self, self._outOffset);
-    handle.availInBefore = chunk.byteLength;
+    handle.availInBefore = inputPiece(chunk, 0);
     handle.inOff = 0;
     handle.flushFlag = flushFlag;
-    handle.write(flushFlag, chunk, 0, handle.availInBefore, handle.availOutBefore);
+    handle.write(pieceFlush(chunk, 0, handle.availInBefore, flushFlag), chunk, 0, handle.availInBefore, handle.availOutBefore);
   }
 
   function processCallback(this: Handle) {
@@ -489,11 +506,13 @@
     // Exhausted the output buffer, or used all the input: start a new one.
     if (availOutAfter === 0 || self._outOffset >= self._chunkSize) self._outOffset = 0;
     if (availOutAfter === 0) handle.availOutBefore = outputRoom(self, self._outOffset);
-    if (availOutAfter === 0) {
+    const nextPiece = availOutAfter !== 0 && availInAfter === 0 && handle.inOff + inDelta < handle.buffer!.byteLength;
+    if (availOutAfter === 0 || nextPiece) {
       // Not actually done. Reprocess the rest once the consumer has room.
       handle.inOff += inDelta;
-      handle.availInBefore = availInAfter;
-      const again = () => handle.write(handle.flushFlag, handle.buffer!, handle.inOff, handle.availInBefore, handle.availOutBefore);
+      handle.availInBefore = nextPiece ? inputPiece(handle.buffer!, handle.inOff) : availInAfter;
+      if (nextPiece) handle.availOutBefore = outputRoom(self, self._outOffset);
+      const again = () => handle.write(pieceFlush(handle.buffer!, handle.inOff, handle.availInBefore, handle.flushFlag), handle.buffer!, handle.inOff, handle.availInBefore, handle.availOutBefore);
       if (!streamBufferIsFull) {
         again();
       } else {

@@ -79,7 +79,7 @@ Archives reuse `tar` 0.4.46 with default features disabled and the
 [WASI extraction port](tar-wasi-extraction.md#tar-wasi-extraction). Other libarchive formats are not added.
 
 
-Local change to the port: each codec call is offered at most 1 MiB of output room (`kOutputRoom` in `zlib.ts`). A filled room counts as a full chunk, so the stream continues exactly as it does when a `chunkSize` buffer fills; data events are at most 1 MiB. Webpack's persistent cache opens its gzip streams with a 100 MiB `chunkSize`, and one doubling output buffer per call needed a 32 MiB contiguous block that a fragmented 512 MiB guest heap could not supply during a Next.js dev server's idle cache store.
+Local change to the port: each codec call is offered at most 1 MiB of output room and 1 MiB of input (`kOutputRoom` and `kInputPiece` in `zlib.ts`). Input pieces before the last are processed with flush 0 (no flush in every codec) and the last with the caller's flush, so the codec sees the same stream as one call with the whole chunk. A filled room counts as a full chunk, so the stream continues exactly as it does when a `chunkSize` buffer fills; data events are at most 1 MiB. Webpack's persistent cache opens its gzip streams with a 100 MiB `chunkSize`, and one doubling output buffer per call needed a 32 MiB contiguous block, and a 21 MiB serialized section crossed to the native codec as one copy; a fragmented 512 MiB guest heap could not supply either during a Next.js dev server's idle cache store.
 
 ## Classification
 

@@ -47,3 +47,23 @@ const recompressed = await new Promise<Buffer[]>((resolve, reject) => {
   gzip.end(data);
 });
 console.log("gzip round trip", zlib.gunzipSync(Buffer.concat(recompressed)).equals(data));
+const sample = data.subarray(0, 3 * MiB + 7);
+const streamed = await new Promise<Buffer>((resolve, reject) => {
+  const parts: Buffer[] = [];
+  const deflate = zlib.createDeflate();
+  deflate.on("data", chunk => parts.push(chunk));
+  deflate.on("end", () => resolve(Buffer.concat(parts)));
+  deflate.on("error", reject);
+  deflate.end(sample);
+});
+console.log("one large deflate write matches deflateSync", streamed.equals(zlib.deflateSync(sample)));
+const brotli = await new Promise<Buffer>((resolve, reject) => {
+  const parts: Buffer[] = [];
+  const encoder = zlib.createBrotliCompress({ params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 1 } });
+  encoder.on("data", chunk => parts.push(chunk));
+  encoder.on("end", () => resolve(Buffer.concat(parts)));
+  encoder.on("error", reject);
+  encoder.end(sample);
+});
+console.log("brotli round trip", zlib.brotliDecompressSync(brotli).equals(sample));
+console.log("sync inflate of a large input", zlib.inflateSync(zlib.deflateSync(sample)).equals(sample));

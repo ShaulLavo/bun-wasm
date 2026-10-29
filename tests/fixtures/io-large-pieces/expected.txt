@@ -6,3 +6,6 @@ callback read true
 gunzip round trip true
 gunzip pieces at most 1 MiB true
 gzip round trip true
+one large deflate write matches deflateSync true
+brotli round trip true
+sync inflate of a large input true
