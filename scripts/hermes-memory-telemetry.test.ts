@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createMemoryReader } from "../web/src/memory-telemetry.ts";
 import { createMemoryChannel, createMemoryPublisher, memoryChannelReady, readMemoryChannel, requestMemoryChannel } from "../web/src/memory-channel.ts";
 import { selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
+import { checkCommand, discoverChecks, selectChecks } from "./test-checks.ts";
+import { checkInputPaths } from "./ci-check-inputs.ts";
+import { needsRust } from "./ci-changes.ts";
 
 const unknown = 0xffffffffffffffffn;
 const root = resolve(import.meta.dir, "..");
@@ -141,19 +142,33 @@ test("Hermes values aggregate only for a complete explicit root and preserve raw
   expect(result.processes.map(process => process.id)).toEqual(["unrelated", "hermes-child", "hermes-root"]);
 });
 
-test("Hermes native cache and Rust agree on the exact ABI without linking or building a VM", () => {
-  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-hermes-telemetry-"));
-  try {
-    const binary = join(directory, "cache-test");
-    execFileSync("c++", ["-std=c++17", "-Wall", "-Wextra", "-Werror", "-fno-exceptions", "-fno-rtti",
-      "-I", join(root, "crates/bunwasm-hermes/cpp"), join(root, "crates/bunwasm-hermes/tests/memory-telemetry.cpp"), "-o", binary]);
-    expect(execFileSync(binary, { encoding: "utf8" })).toContain("64 bytes, 1000 allocation-free cached reads; synthetic inputs only");
-    const layout = join(directory, "rust-layout-test");
-    execFileSync("rustc", ["--edition=2024", "--test", join(root, "crates/bunwasm-hermes/src/lib.rs"), "-o", layout]);
-    expect(execFileSync(layout, { encoding: "utf8" })).toContain("1 passed; 0 failed");
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
+test("Hermes host checks and compiler controls each retain one provisioned blocking owner", () => {
+  const host = "scripts/hermes-memory-telemetry.test.ts";
+  const native = "scripts/hermes-memory-telemetry-native.test.ts";
+  expect(discoverChecks().filter(check => check.path === host)).toEqual([
+    { owner: "quality", path: host, localRuntime: false, batch: "default" },
+  ]);
+  expect(discoverChecks().filter(check => check.path === native)).toEqual([
+    { owner: "runtime", path: native, localRuntime: false, batch: "default" },
+  ]);
+  expect(selectChecks("quality")).toContain(host);
+  expect(selectChecks("quality")).not.toContain(native);
+  expect(selectChecks("runtime").filter(path => path === native)).toHaveLength(1);
+  expect(selectChecks("local-runtime")).not.toContain(native);
+  expect(checkCommand("runtime", [native])).toEqual(["bun", "test", join(root, native)]);
+  expect(checkInputPaths({ owner: "runtime", path: native, localRuntime: false, batch: "default" })).toEqual([native]);
+  expect(needsRust([native])).toBe(true);
+  expect(needsRust(["checks/runtime-hermes-memory-telemetry-native.json"])).toBe(true);
+  const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const fixtures = workflow.indexOf("name: Blocking native fixture checks");
+  for (const setup of ["uses: dtolnay/rust-toolchain@nightly", "name: Install native build tools"]) {
+    const provision = workflow.indexOf(setup);
+    expect(provision).toBeGreaterThan(-1);
+    expect(fixtures).toBeGreaterThan(provision);
   }
+  expect(workflow.match(/bun scripts\/test-checks\.ts native\n/g)).toHaveLength(1);
+  const preflight = readFileSync(join(root, "scripts/check-runtime.sh"), "utf8");
+  expect(preflight.match(/bun "\$root\/scripts\/test-checks\.ts" runtime\n/g)).toHaveLength(1);
 });
 
 test("Hermes exports retain cached and guarded refresh entry points and latch fatal/return paths", () => {

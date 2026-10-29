@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | `crates/bunwasm-hermes/cpp/{memory-telemetry.h,shim.cpp}`, `src/lib.rs` | Host feature | Original cache and C/Rust ABI adapter around Hermes `include/hermes/VM/GCBase.h` and `lib/VM/gcs/HadesGC.cpp` at `c36356f416ee19bb0d54c2e7ecb3c5fb0538a065`. Calls the existing `getHeapInfo` API. No upstream implementation is copied or patched. |
 | `crates/bunwasm-engine-hermes/src/{lib,vm}.rs`, `scripts/build-engine-hermes.sh` | Host feature | Original side exports, process memory readout and terminal refresh latch. Uses the existing QuickJS/JSC cached/refresh export convention. |
-| `web/src/memory-telemetry.ts`, `scripts/hermes-memory-telemetry.test.ts`, `crates/bunwasm-hermes/tests/memory-telemetry.cpp` | Host feature | Original Hermes decoder and bounded ABI, lifecycle and export controls. The C++ cache control uses explicitly synthetic input, without a VM. |
+| `web/src/memory-telemetry.ts`, `scripts/hermes-memory-telemetry{,-native}.test.ts`, `crates/bunwasm-hermes/tests/memory-telemetry.cpp` | Host feature | Original Hermes decoder and bounded ABI, lifecycle and export controls. The C++ cache control uses explicitly synthetic input, without a VM. |
 
 ## ABI 1
 
@@ -69,9 +69,13 @@ process limits do not become shared headroom.
 
 `source env.sh && bun test scripts/hermes-memory-telemetry.test.ts` checks the
 host decoder, cached/normal refresh separation, exact layout, nullable fields,
-failure and terminal paths. It compiles a small C++ cache control and the Rust
-layout test. These prove ABI and adapter behavior with synthetic data. They do
-not establish live Hermes allocation movement or a produced Wasm export table.
+failure and terminal paths. Its quality owner needs no native compiler.
+`scripts/hermes-memory-telemetry-native.test.ts` compiles the small C++ cache
+control under the existing `runtime` owner in the provisioned native job.
+The Rust layout unit test belongs to the existing blocking native Cargo pass;
+no script recompiles or reruns it. These prove ABI and adapter behavior with
+synthetic data. They do not establish live Hermes allocation movement or a
+produced Wasm export table.
 
 Artifact qualification requires the canonical producer to compile this shim
 into a current Hermes VM archive, retain both side exports and issue a matched
