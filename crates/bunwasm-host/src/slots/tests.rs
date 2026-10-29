@@ -64,6 +64,58 @@ fn bash_0bf_terminal_geometry_and_phase_status_contract() {
     }
 }
 
+#[test]
+fn runtime_proc_inherited_fds_are_a_stable_launch_snapshot() {
+    use wasm_encoder::{
+        EntityType, ExportKind, ExportSection, ImportSection, TypeSection, ValType,
+    };
+
+    let mut types = TypeSection::new();
+    types.ty().function([ValType::I32], [ValType::I32]);
+    let mut imports = ImportSection::new();
+    imports.import("runtime_proc", "inherited_fd", EntityType::Function(0));
+    let mut exports = ExportSection::new();
+    exports.export("inherited_fd", ExportKind::Func, 0);
+    let mut binary = wasm_encoder::Module::new();
+    binary.section(&types).section(&imports).section(&exports);
+    let binary = binary.finish();
+
+    let mut sparse = Stdio::inherited();
+    let input = sparse.fds.remove(&0).unwrap();
+    let output = sparse.fds.remove(&1).unwrap();
+    sparse.fds.insert(17, input);
+    sparse.fds.insert(i32::MAX, output);
+    for (stdio, expected) in [(Stdio::inherited(), [0, 1, 2]), (sparse, [2, 17, i32::MAX])] {
+        let mut f = Fixture::with_stdio(stdio);
+        let module = Module::new(f.store.engine(), &binary).unwrap();
+        let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
+        let inherited = instance
+            .get_typed_func::<i32, i32>(&mut f.store, "inherited_fd")
+            .unwrap();
+        let before =
+            [0, 1, 2, 3, -1, i32::MAX].map(|index| inherited.call(&mut f.store, index).unwrap());
+        assert_eq!(
+            before,
+            [
+                expected[0],
+                expected[1],
+                expected[2],
+                process::NOENT,
+                process::NOENT,
+                process::NOENT
+            ]
+        );
+        assert_eq!(f.store.data_mut().processes.close(expected[0]), 0);
+        assert_eq!(f.store.data_mut().processes.renumber(expected[1], 23), 0);
+        let after =
+            [0, 1, 2, 3, -1, i32::MAX].map(|index| inherited.call(&mut f.store, index).unwrap());
+        assert_eq!(
+            after, before,
+            "closing and renumbering descriptors must not change launch bindings"
+        );
+    }
+}
+
 struct Fixture {
     store: Store<Host>,
     linker: Linker<Host>,
@@ -78,7 +130,13 @@ impl Fixture {
     fn new() -> Self {
         Self::at(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
     }
+    fn with_stdio(stdio: Stdio) -> Self {
+        Self::at_with_stdio(std::path::Path::new(env!("CARGO_MANIFEST_DIR")), stdio)
+    }
     fn at(directory: &std::path::Path) -> Self {
+        Self::at_with_stdio(directory, Stdio::inherited())
+    }
+    fn at_with_stdio(directory: &std::path::Path, stdio: Stdio) -> Self {
         let mut config = Config::new();
         config.epoch_interruption(true);
         let engine = Engine::new(&config).unwrap();
@@ -87,7 +145,6 @@ impl Fixture {
             Runtime::new(engine.clone(), module, vec![(directory.into(), "/".into())]).unwrap();
         let net = crate::net::Net::new();
         let cancel = Arc::new(Cancellation::default());
-        let stdio = Stdio::inherited();
         let mut wasi = wasmtime_wasi::WasiCtxBuilder::new();
         stdio.install(&mut wasi, cancel.clone());
         for (host, guest) in &runtime.dirs {

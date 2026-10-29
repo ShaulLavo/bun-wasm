@@ -4,7 +4,8 @@
 | --- | --- | --- | --- | --- |
 | `web/src/shell.ts`, `web/src/main.ts` | Original Bun consumer adapter | bash-web public shell/bridge API at `0bf41ec6d7f149c77ec2ad00a97b5b9928b4a2e0 (merged PR176; CI run 40886275313)`; existing private playground `src/session.ts` and `src/main.ts` integration | Connect xterm input, resize, output, signals and shell state to the page-owned Waffle runtime | Bun REPL and child processes need a live terminal instead of output-only runs |
 | `crates/bunwasm-host/src/slots.rs::add_shell_imports` | Original native shell ABI adapter | bash-web `shell_terminal` imports at the same merged source | Bind rows and the two-argument phase/status notification to inherited native stdio with fixed 80x24 geometry | The current shell must instantiate for native package scripts; phase notifications do not own native process cancellation |
-| Staged `env.wasm` | Host feature, unchanged upstream artifact | Waffle `packages/coreutils/dist/env.wasm`, `programs-v0.0.7`, source `63ddc5da0699d6e3ca449eaecb0bc35069c664d9` | Copy to the native launcher guest path; no implementation changes | bash-web delegates external programs to the released Waffle families |
+| `crates/bunwasm-host/src/process/mod.rs`, `slots.rs::add_import` | Original native process ABI adapter | Waffle `docs/host-abi.md` and `packages/waffle/browser/worker.ts` at `ea051e5e9061bcd2bfed6faf363be0f21d211acc` (`waffle-v0.0.100`, `programs-v0.0.8`) | Capture sorted launch descriptors and expose `runtime_proc.inherited_fd` with the specified `-ENOENT` terminator | The released env utility forwards real inherited descriptors to npm-bin shebang commands |
+| Staged `env.wasm` | Host feature, unchanged upstream artifact | Waffle `packages/coreutils/dist/env.wasm`, `programs-v0.0.8`, source `ea051e5e9061bcd2bfed6faf363be0f21d211acc` | Copy to the native launcher guest path; no implementation changes | bash-web delegates external programs to the released Waffle families |
 
 This replaces the playground's local command parser and line editor with
 bash-web's real interactive shell. The page still owns exactly one Waffle runtime,
@@ -63,3 +64,10 @@ The native host supplies the same current terminal import signatures, including
 host; the shell's actual process exit reports status. A compiled Wasm regression
 calls ready/running notifications with statuses 7, 130 and 0, checks geometry and
 confirms that notifications neither cancel the native process nor change stdin.
+
+The native process host supplies the released env utility's
+`runtime_proc.inherited_fd(index: u32) -> i32` import. It snapshots launch
+bindings in ascending descriptor order, excludes private preopens and returns
+`-ENOENT` after the list ends. Later descriptor closes and allocations do not
+change that snapshot. The real Wasm regression checks stdio and sparse launch
+bindings, including the maximum signed descriptor, before and after those changes.

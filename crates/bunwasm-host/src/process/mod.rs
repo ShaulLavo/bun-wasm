@@ -283,6 +283,7 @@ pub struct Processes {
     runtime: Arc<Runtime>,
     pub pid: i32,
     fds: Descriptors,
+    inherited: Vec<i32>,
     next: u32,
     notify: Arc<Notify>,
     cancel: Arc<Cancellation>,
@@ -325,6 +326,8 @@ impl Processes {
         for endpoint in stdio.fds.values() {
             endpoint.observe(&notify);
         }
+        let mut inherited: Vec<i32> = stdio.fds.keys().copied().collect();
+        inherited.sort_unstable();
         let next = stdio
             .fds
             .keys()
@@ -336,6 +339,7 @@ impl Processes {
             runtime,
             pid: stdio.pid,
             fds: stdio.fds,
+            inherited,
             next,
             notify,
             cancel,
@@ -464,6 +468,10 @@ impl Processes {
             return Err(NOTCAPABLE);
         }
         Ok(endpoint.readiness(write, &self.notify))
+    }
+
+    pub fn inherited_fd(&self, index: u32) -> i32 {
+        self.inherited.get(index as usize).copied().unwrap_or(NOENT)
     }
 
     pub fn owns(&self, fd: i32) -> bool {

@@ -530,6 +530,14 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
     }
     linker.func_wrap(
         "runtime_proc",
+        "inherited_fd",
+        |caller: Caller<'_, Host>, index: u32| -> Result<i32> {
+            caller.data().cancel.check()?;
+            Ok(caller.data().processes.inherited_fd(index))
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_proc",
         "start_status",
         |caller: Caller<'_, Host>, pid: i32| -> Result<i32> {
             caller.data().cancel.check()?;
