@@ -63,6 +63,7 @@
     "prepare": "bun prepare.ts",
     "check": "tsc -p tsconfig.package.json",
     "test": "bun test ./tests/package/*.test.ts",
+    "test:http:lifecycle": "bun scripts/http-response-lifecycle.ts",
     "generate-guest": "bun scripts/guest-artifact.ts",
     "publish-guest": "bun scripts/publish-guest.ts",
     "quality": "bun scripts/quality.ts",
@@ -78,15 +79,15 @@
     "bench:engines": "bun scripts/bench-engines.ts"
   },
   "peerDependencies": {
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.95/waffle-0.0.95.tgz",
-    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.3/waffle-base-0.0.3.tgz"
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.100/waffle-0.0.100.tgz",
+    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.8/waffle-base-0.0.8.tgz"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.95/waffle-0.0.95.tgz",
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.100/waffle-0.0.100.tgz",
     "jscpd": "5.4.1",
     "knip": "6.41.0",
     "oxlint": "1.88.0",

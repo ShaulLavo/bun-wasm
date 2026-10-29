@@ -475,7 +475,7 @@
       pending = null;
       if (active) active.receive(request.body, request.trailers);
       Promise.resolve()
-        .then(() => active ? active.response : handleRequest(request, conn, keepAlive))
+        .then(() => conn.closed ? false : active ? active.response : handleRequest(request, conn, keepAlive))
         .catch((err) => {
           internal.printError(err);
           conn.write(encoder.encode("HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"));
@@ -500,9 +500,13 @@
       buffer = buffer.length ? internal.concatBytes([buffer, chunk]) : chunk;
       next();
     };
+    function endActive() {
+      if (busy && !conn.upgraded) conn.end();
+    }
     conn.onEnd = () => {
       ended = true;
-      if (!busy) next();
+      if (busy) internal.realTimers.setImmediate(endActive);
+      else next();
     };
     conn.onError = () => {};
     conn.startReading();
@@ -989,6 +993,7 @@
         }
         if (typeof encoding === "function") callback = encoding;
         if (this.writableEnded) return this;
+        if (this.destroyed) return this._endDestroyed();
         const bytes = chunk === undefined || chunk === null ? new Uint8Array(0) : typeof chunk === "string" ? Buffer.from(chunk, typeof encoding === "string" ? encoding : "utf8") : internal.toUint8(chunk);
         if (!this.headersSent) {
           this._flushHeaders(false, this._bodyless ? 0 : bytes.length);
@@ -1001,12 +1006,6 @@
         this.finished = true;
         this._finishBody(error => this._completeEnd(callback, error));
         return this;
-      }
-      _emitClose() {
-        if (this.closed) return;
-        this.closed = true;
-        this.destroyed = true;
-        this.emit("close");
       }
       flushHeaders() {
         this._flushHeaders(true);
@@ -1103,7 +1102,7 @@
         this._conn.write(new Uint8Array(0), error => {
           if (error) { callback(error); this._emitClose(); return; }
           callback();
-          this._done(this._keepAlive && !connectionText.toLowerCase().includes("close"));
+          if (this.writableFinished) this._done(this._keepAlive && !connectionText.toLowerCase().includes("close"));
         });
       }
     }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { outcomeWord } from "waffle/proc/outcome";
-import { networkPathScopeFixture, processRuntimeFixture } from "./process-runtime-fixture";
+import { networkPathScopeFixture, socketDirectoryFixture, processRuntimeFixture } from "./process-runtime-fixture";
 import type { ProcessService, RuntimeProcessContext } from "waffle";
 import { bunLauncher } from "../src/bun-launcher";
 import type { RunRequest } from "../src/bun-executor";
@@ -10,7 +10,7 @@ test("Bun child launches receive a per-process networking ring", async () => {
   const context = { identity: { pid: 1, parentPid: 0, host: null }, outcome: outcomeWord(), registerRevocation: () => () => {}, module, interruptible: false, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
   let request: RunRequest | undefined;
   const service = { networkPathScope: networkPathScopeFixture, launchWorker(_context: unknown, options: { request: RunRequest }) { request = options.request; return { terminate() {} }; } } as unknown as ProcessService;
-  const options = { workerUrl: "https://example.test/worker.js", runtime: processRuntimeFixture({}) };
+  const options = { workerUrl: "https://example.test/worker.js", runtime: processRuntimeFixture({ directoryHandle: socketDirectoryFixture }) };
   try {
     await bunLauncher("browser", options)(context, service);
     expect(request?.net).toBeInstanceOf(SharedArrayBuffer);
@@ -24,7 +24,7 @@ import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, typ
 import { claimOutcome } from "waffle/proc/outcome";
 
 test("borrowed sessions share ports, duplex bytes, half-close and release only their owner", async () => {
-  const runtime = processRuntimeFixture({});
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   const network = await runtime.network();
   const stopped: number[] = [];
   const make = () => {
@@ -60,7 +60,7 @@ test("borrowed sessions share ports, duplex bytes, half-close and release only t
 });
 
 test("separate network owners isolate ports and release pending accepts without foreign harm", async () => {
-  const first = processRuntimeFixture({}), second = processRuntimeFixture({});
+  const first = processRuntimeFixture({ directoryHandle: socketDirectoryFixture }), second = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   const make = async (runtime: ReturnType<typeof processRuntimeFixture>) => {
     const ring = createRing();
     const helper = createBunNetworkHelper(await runtime.network(), ring);
@@ -80,7 +80,7 @@ test("separate network owners isolate ports and release pending accepts without 
 });
 
 test("injected fetch is used without replacing standalone installer policy", async () => {
-  const runtime = processRuntimeFixture({});
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   const ring = createRing();
   const calls: string[] = [];
   const helper = createBunNetworkHelper(await runtime.network(), ring, { fetch: async url => { calls.push(url); return new Response("policy body"); } });
@@ -95,7 +95,7 @@ test("injected fetch is used without replacing standalone installer policy", asy
 });
 
 test("child launch revocation during activation allocates no session", async () => {
-  const runtime = processRuntimeFixture({});
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   const capability = await runtime.network();
   const gate = Promise.withResolvers<typeof capability>();
   let allocations = 0, revoke = () => {};
@@ -112,7 +112,7 @@ test("child launch revocation during activation allocates no session", async () 
 });
 
 test("child helper lives until physical cleanup, not its logical outcome or adapter lifetime", async () => {
-  const runtime = processRuntimeFixture({});
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   const context = { identity: { pid: 1, parentPid: 0, host: null }, module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), outcome: outcomeWord(), registerRevocation: () => () => {}, request: { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
   const stopped: number[] = [];
   let helper: RuntimeNetworkHelper | undefined;
@@ -135,7 +135,7 @@ test("child helper lives until physical cleanup, not its logical outcome or adap
 });
 
 for (const phase of ["before launch", "during tools load"] as const) test(`revoked child never activates networking ${phase}`, async () => {
-  const runtime = processRuntimeFixture({});
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   const capability = await runtime.network();
   const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   const loading = Promise.withResolvers<WebAssembly.Module>();
@@ -154,7 +154,7 @@ for (const phase of ["before launch", "during tools load"] as const) test(`revok
 });
 
 test("Runtime-borrowed helpers retain the default installer tarball cache policy", async () => {
-  const runtime = processRuntimeFixture({});
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   const originalCaches = Object.getOwnPropertyDescriptor(globalThis, "caches");
   const originalFetch = globalThis.fetch;
   const opened: string[] = [];

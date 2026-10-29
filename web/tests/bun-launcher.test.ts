@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { networkPathScopeFixture, processRuntimeFixture } from "./process-runtime-fixture";
+import { networkPathScopeFixture, socketDirectoryFixture, processRuntimeFixture } from "./process-runtime-fixture";
 import { outcomeWord } from "waffle/proc/outcome";
 import type { ProcessService, RuntimeProcessContext } from "waffle";
 import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
@@ -11,7 +11,7 @@ function service(launches: Launch[]): ProcessService {
   return { networkPathScope: networkPathScopeFixture, launchWorker(_context: unknown, options: Launch) { launches.push(options); if (options.cleanup) activeCleanups.push(options.cleanup); return { terminate() {} }; } } as unknown as ProcessService;
 }
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-const runtime = processRuntimeFixture({});
+const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
 const context = { identity: { pid: 1, parentPid: 0, host: null }, outcome: outcomeWord(), registerRevocation: () => () => {}, module, interruptible: false, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { A: "1" }, cwd: "/work" } } as unknown as RuntimeProcessContext;
 
 const location = Object.getOwnPropertyDescriptor(globalThis, "location");

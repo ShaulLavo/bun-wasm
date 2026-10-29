@@ -5,7 +5,7 @@ import { createSharedObjects } from "../src/shared-objects/service";
 import { bindSharedObjectHost } from "../src/shared-objects/host";
 import { installRuntimeSharedObjects, runtimeSharedObjectRoute, type SharedObjectRoute } from "../src/shared-objects/runtime";
 import { bunLauncher } from "../src/bun-launcher";
-import { networkPathScopeFixture, processRuntimeFixture } from "./process-runtime-fixture";
+import { networkPathScopeFixture, socketDirectoryFixture, processRuntimeFixture } from "./process-runtime-fixture";
 import type { Runtime, RuntimeProcessContext, ProcessService } from "waffle";
 import type { RunRequest } from "../src/bun-executor";
 import type { SharedObjects } from "../src/shared-objects/protocol";
@@ -35,7 +35,7 @@ function host(service?: ReturnType<typeof createSharedObjects>) {
   return { value, wakeups, exits, api: value.valueNatives().sharedObjects as SharedObjects | undefined };
 }
 function fixtureRuntime() {
-  const runtime = processRuntimeFixture({});
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   cleanup.add(() => runtime.dispose());
   return runtime;
 }

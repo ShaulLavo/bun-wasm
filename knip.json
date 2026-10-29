@@ -5,6 +5,8 @@
       "entry": [
         "scripts/app-matrix/run.mjs",
         "scripts/app-matrix/reclassify.mjs",
+        "scripts/app-matrix/next-acceptance.ts",
+        "scripts/app-matrix/next-acceptance-reference.ts",
         "scripts/app-matrix/*.test.{ts,mjs}",
         "tests/package/*.test.ts",
         "tests/check-worker-regressions.ts",
@@ -19,6 +21,7 @@
         "scripts/fixtures/runtime-js-child.ts",
         "scripts/migrations/*.ts",
         "scripts/bench-module-preparation.ts",
+        "scripts/engine-comparison.ts",
         "scripts/bun-suite-small-causes.ts",
         "scripts/discover-solid-watch-import.ts",
         "scripts/check-await-observer.ts",

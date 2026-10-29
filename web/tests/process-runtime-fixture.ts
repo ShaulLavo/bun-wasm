@@ -3,6 +3,7 @@ import { NetHelper, NetNamespace } from "waffle/browser/net/helper";
 import type { RuntimeNetwork } from "waffle";
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
 import { MemFS } from "waffle/fs/memory";
+import { connectFilesystemIdentity, type FilesystemIdentity } from "waffle/fs";
 import { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessIdentityAllocator } from "waffle/proc/identity";
 import { ProcessTable } from "waffle/proc/table";
@@ -22,9 +23,8 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
   let filesystem: RuntimeFilesystem = {
     vfs: getVfsDescriptor("memory"), state: { status: "ready" }, workspace: undefined, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
     revoke: unused, reap: unused, quiesce: unused, drain: unused, flush: unused,
-    lookup: unused, readFile: unused, listFiles: unused,
-    mkdirp: unused, writeFile: unused, remove: unused, move: unused,
-    directoryHandle: async () => ({ handle: 1, release() {} }), ...overrides,
+    lookup: unused, readFile: unused, listFiles: unused, directoryHandle: unused,
+    mkdirp: unused, writeFile: unused, remove: unused, move: unused, ...overrides,
   };
   const identities = new ProcessIdentityAllocator();
   const files = new MemFS();
@@ -90,7 +90,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
           },
         });
         if (disposed) broker.suspend();
-        service = Object.assign(broker, { networkPathScope: networkPathScopeFixture });
+        service = broker;
         return service;
       });
     },
@@ -130,7 +130,17 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
   };
 }
 
-
 export function networkPathScopeFixture(_context: unknown, directory: number) {
   return { filesystem: createFilesystemIdentity(), directory };
+}
+
+export async function socketDirectoryFixture() {
+  return { handle: 1, release() {} };
+}
+
+export function fixtureFilesystemConnection(identity: FilesystemIdentity, port: MessagePort) {
+  const { client, server } = connectFilesystemIdentity(identity);
+  client.port.close();
+  server.port.close();
+  return { ...client, port };
 }
