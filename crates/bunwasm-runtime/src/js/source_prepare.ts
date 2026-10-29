@@ -2,7 +2,7 @@
   "use strict";
   type Prepared = BunWasm.PreparedSource;
   const native = internal.native;
-  const hooks = native.engine === "host" && globalThis.__bunwasm_contextHooks;
+  const hooks = native.engine === "host" && native.contextHooks;
   const version = native.engine === "host" ? native.prepareVersion : 4;
   const realm = `${process.pid}/${process.env?.BUNWASM_THREAD_ID || "0"}`;
   const budget = 16 * 1024 * 1024;

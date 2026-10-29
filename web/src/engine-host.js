@@ -481,6 +481,7 @@ class EngineHost {
     const host = this;
     const shared = this.o?.sharedObjects;
     return {
+      contextHooks: !host.o.asyncContext,
       ...createScriptEvaluation((code, filename) => host.evalAt(code, filename), mapPosition),
       sharedObjects: shared ? bindSharedObjectHost(shared, {
         active: () => !host.exited,
@@ -700,7 +701,6 @@ class EngineHost {
   installContextHooks(hidden) {
     const host = this;
     const id = (value) => value;
-    hidden("__bunwasm_contextHooks", !this.o.asyncContext);
     // A native continuation provider already scopes every job, including raw
     // eval. Its post-getter frame must not be replaced with the printer's
     // earlier frame, so every hook is inert.

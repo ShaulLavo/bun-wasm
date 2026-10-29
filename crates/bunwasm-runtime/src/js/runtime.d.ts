@@ -22,6 +22,7 @@ declare namespace BunWasm {
   }
   interface Native {
     readonly prepareVersion: number;
+    readonly contextHooks: boolean;
     prepareSource(source: string, goal: PrepareGoal): string;
     prepareFunction(args: readonly string[], kind: FunctionKind, hooks: boolean): string;
     functionImports(args: readonly string[], kind: FunctionKind): number[][];
@@ -489,4 +490,3 @@ declare namespace BunWasm {
 
 interface String { toWellFormed(): string }
 
-declare var __bunwasm_contextHooks: boolean;
