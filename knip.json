@@ -4,6 +4,8 @@
     ".": {
       "entry": [
         "scripts/app-matrix/run.mjs",
+        "scripts/app-matrix/vinext-probe.ts",
+        "scripts/fixtures/vinext-probe-control.ts",
         "scripts/app-matrix/reclassify.mjs",
         "scripts/app-matrix/next-acceptance.ts",
         "scripts/app-matrix/next-acceptance-reference.ts",
@@ -80,6 +82,7 @@
         "tests/runtime-proc-browser-main.ts",
         "tests/fixtures/{filesystem-lifecycle,safari-driver-listener,startup-filesystem}.ts",
         "tests/bun-runtime-proc-main.ts",
+        "tests/wasm-transfer-page.ts",
         "tests/safari-{observers,open-descriptor-worker}.ts",
         "tests/worker-bootstrap-browser.ts",
         "tests/worker-bootstrap-browser-main.ts"
@@ -120,7 +123,8 @@
   "ignoreBinaries": [
     "unshare",
     "ss",
-    "build.mjs"
+    "build.mjs",
+    "^c\\+\\+$"
   ],
   "ignoreUnresolved": [
     "./space # \u00fc.mjs"

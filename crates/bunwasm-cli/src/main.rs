@@ -93,6 +93,14 @@ mod bun_transpiler {
             bunwasm_transpiler::function_imports(args, kind)
         }
 
+        fn hooks_version(&self) -> u32 {
+            if AWAIT_HOOKS {
+                bunwasm_transpiler::HOOKS_VERSION
+            } else {
+                0
+            }
+        }
+
         fn parse_data(
             &self,
             source: &[u8],
