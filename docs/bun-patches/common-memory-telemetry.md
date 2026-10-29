@@ -56,11 +56,12 @@ boundaries preserve cached failures before engine destruction. Initializer
 failure uses a core-only reader established before constructors run.
 
 Each process carries its page-runtime job identity as a command identity.
-Active memory aggregation excludes terminal children, while failure selection
-and provenance keep every retained process from the selected command. A failed
-child therefore remains visible while its parent lives. Failures from older
-commands are excluded. Independent process limits are not summed into a
-fictional shared headroom budget.
+Command order, timestamps and active/terminal state do not establish process
+ancestry. The hook preserves the complete raw actor list and observed failures.
+Without a caller root and complete authoritative runtime inventory, aggregate
+capacity, allocator/heap counters and headroom remain null. Failed children and
+unrelated commands stay visible as separate raw facts. See the
+[attribution contract](../guides/memory-attribution.md) for root validation.
 
 
 ## Linked-group lifecycle reference
@@ -71,4 +72,4 @@ initialization, and group disposal. The local changes retain access to side
 instances for telemetry, establish an allocator-only reader before constructor
 execution, and publish cached terminal data before disposal. Linking and memory
 reservation remain Waffle's public implementation. The shared cells, schema,
-allocator wrappers, and command selection are original adapters.
+allocator wrappers, and root attribution are original adapters.

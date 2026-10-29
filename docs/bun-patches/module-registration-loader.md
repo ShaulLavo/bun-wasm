@@ -17,5 +17,6 @@ Known differences from native modules remain. Namespace properties are accessors
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | `crates/bunwasm-transpiler/src/register.rs`, `crates/bunwasm-runtime/src/js/esm_loader.ts`, and the paired source-preparation hooks | Host feature | Original adapters for live module bindings, cycles, top-level await, dynamic imports, and source maps on script engines. |
+| `scripts/esm-loader-*.ts`, `tests/fixtures/esm-loader/`, and the `transpile --register` example | Host feature | Original test harness and record regeneration tools restored from the coherent J1 handoff `2a12f721f58b7a4f461dd039c4ee50a5696ce9ad`; CI discovers the loader tests through `checks/quality-esm-loader.json`. |
 
 [Ledger scope and pinned revisions](scope.md).
