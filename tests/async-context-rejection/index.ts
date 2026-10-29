@@ -567,10 +567,62 @@ async function rejectedClose(note: (phase: string) => void) {
   }
 }
 
+// A sync iterable is adapted by the engine: closing it awaits even without a
+// `return` method, and a throwing `next()`/`return()` becomes a rejection the
+// loop awaits (CTX-02b parent parity probe).
+function syncThrowingNext() {
+  return {
+    [Symbol.iterator]() { return this; },
+    next(): IteratorResult<number> {
+      als.enterWith("sync-next-entered");
+      throw new Error("sync");
+    },
+  };
+}
+
+function syncThrowingReturn() {
+  return {
+    [Symbol.iterator]() { return this; },
+    next: () => ({ value: 1, done: false }),
+    return(): IteratorResult<number> {
+      als.enterWith("sync-return-entered");
+      throw new Error("sync");
+    },
+  };
+}
+
+async function nestedContinue(note: (phase: string) => void) {
+  outer: for await (const i of [1, 2]) {
+    for await (const _ of [1]) {
+      note(`nested.body${i}`);
+      continue outer;
+    }
+  }
+  note("nested.after");
+}
+
+async function syncBreak(note: (phase: string) => void) {
+  for await (const _ of [1, 2]) break;
+  note("sync-break.after");
+}
+
+async function syncIterableFailures(note: (phase: string) => void) {
+  try {
+    for await (const _ of syncThrowingNext()) note("sync-next.body");
+  } catch {
+    note("sync-next.catch");
+  }
+  try {
+    for await (const _ of syncThrowingReturn()) break;
+  } catch {
+    note("sync-return.catch");
+  }
+}
+
 async function p6() {
   const note = (phase: string) => print(`P6 ${phase}=${store()}`);
   await als.run("initial", () => syncIteratorFailures(note));
-  for (const [frame, run] of [["abrupt", abruptThenThrow], ["block", breakBlock], ["continue", continueSync], ["break", breakSync], ["close", rejectedClose]] as const) {
+  for (const [frame, run] of [["abrupt", abruptThenThrow], ["block", breakBlock], ["continue", continueSync], ["break", breakSync], ["close", rejectedClose], ["nested", nestedContinue], ["sync-break", syncBreak], ["sync", syncIterableFailures]] as const) {
     await als.run(frame, () => run(note));
   }
 }

@@ -52,9 +52,12 @@ const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
 // reads and calls of GetIterator(iterable, async) and given to the loop in
 // place of the iterable; a sync iterable stays sync, so the engine still
 // adapts it. It notes the frame once `next()` or `return()` has returned,
-// right before the loop's implicit await suspends: an iterator method that
-// throws synchronously leaves nothing pending. A frame already pending (a
-// sync iterator closed because its value rejected) is kept.
+// right before the loop's implicit await suspends: an async iterator method
+// that throws synchronously leaves nothing pending. The engine's adapter for
+// a sync iterator turns such a throw into a rejection the loop awaits, and
+// awaits on close even without `return`, so a sync record notes the frame in
+// those cases too. A frame already pending (a sync iterator closed because
+// its value rejected) is kept.
 const noFrame = Symbol("no frame");
 function iteratorMethod(iterable, key) {
   const method = iterable[key];
@@ -72,17 +75,30 @@ function forAwaitRecord(iterable, frame) {
     throw new TypeError(`Result of the ${String(key)} method is not an object`);
   }
   const next = iterator.next;
-  const suspending = (result) => {
+  const sync = key === Symbol.iterator;
+  const note = () => {
     if (record.pending === noFrame) record.pending = frame();
-    return result;
+  };
+  const call = (method) => {
+    if (!sync) {
+      const result = Reflect.apply(method, iterator, []);
+      note();
+      return result;
+    }
+    try {
+      return Reflect.apply(method, iterator, []);
+    } finally {
+      note();
+    }
   };
   const record = {
     pending: noFrame,
-    next: () => suspending(Reflect.apply(next, iterator, [])),
+    next: () => call(next),
     get return() {
       const close = iterator.return;
-      if (typeof close !== "function") return close;
-      return () => suspending(Reflect.apply(close, iterator, []));
+      if (typeof close === "function") return () => call(close);
+      if (sync) note();
+      return close;
     },
   };
   return Object.defineProperty(Object.setPrototypeOf(record, null), key, { value: () => record });
