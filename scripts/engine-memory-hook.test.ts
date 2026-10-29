@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { beginMemorySnapshot, createMemoryReader, emptyCounters, endMemorySnapshot, recordMemorySnapshot, retainedMemorySnapshots } from "../web/src/memory-telemetry.ts";
-import { aggregate } from "./app-matrix/engine-memory-hook.ts";
+import { createMemoryChannel, createMemoryPublisher, memoryChannelReady, observeMemoryImports, readMemoryChannel, requestMemoryChannel } from "../web/src/memory-channel.ts";
+import { aggregate, selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
 
 function fixture(engine: "jsc" | "quickjs") {
   const memory = new WebAssembly.Memory({ initial: 1 });
@@ -103,4 +104,52 @@ test("an unsampled live process stays unknown rather than inheriting a previous 
   expect(initial?.allocatorLiveBytes).toBeNull();
   endMemorySnapshot(id);
   expect(retainedMemorySnapshots().find(snapshot => snapshot.id === id)?.terminal).toBe(true);
+});
+
+test("a current command keeps a failed child while its parent stays live and excludes an older command", () => {
+  const f = fixture("quickjs");
+  const parent = { ...f.reader.sample(), id: "parent", commandId: "current", commandStartedAt: 2, terminal: false };
+  const failure = { bytes: 629145600, category: "quickjs.arrayBuffer" };
+  const child = { ...parent, id: "child", terminal: true, failedAllocation: failure, engineFailure: failure };
+  const stale = { ...child, id: "old-child", commandId: "old", commandStartedAt: 1, failedAllocation: { bytes: 9, category: "old" } };
+  const value = selectMemorySnapshots([stale, child, parent], "quickjs");
+  expect(value.failedAllocation).toEqual(failure);
+  expect(value.failureProcessId).toBe("child");
+  expect(value.processes.map(process => process.id)).toEqual(["child", "parent"]);
+  expect(value.allocatorLiveBytes).toBe(parent.allocatorLiveBytes);
+  expect(aggregate([parent, parent]).memoryLimitBytes).toBeNull();
+});
+
+test("shared telemetry refreshes only at a normal boundary and preserves cached failure after runtime destruction", () => {
+  const f = fixture("quickjs");
+  const channel = createMemoryChannel();
+  const publisher = createMemoryPublisher(channel, f.reader);
+  const generation = requestMemoryChannel(channel, true);
+  publisher.capture(false);
+  expect(f.refreshes()).toBe(0);
+  expect(memoryChannelReady(channel, generation, true)).toBe(false);
+  publisher.capture(true);
+  expect(f.refreshes()).toBe(1);
+  expect(memoryChannelReady(channel, generation, true)).toBe(true);
+  f.put(256, 8, 629145600n); f.put(256, 9, 4n);
+  publisher.capture(false, true);
+  f.put(256, 4, 0xffffffffffffffffn); f.put(256, 9, 0n);
+  const terminal = publisher.finish();
+  expect(terminal?.engineFailure).toEqual({ bytes: 629145600, category: "quickjs.arrayBuffer" });
+  expect(terminal?.jsHeapBytes).toBe(3000);
+  expect(f.refreshes()).toBe(1);
+  const read: unknown = readMemoryChannel(channel);
+  expect(read).toEqual(terminal);
+});
+
+test("host import observation distinguishes the two event-loop waits from arbitrary host calls", () => {
+  const calls: [boolean, boolean][] = [];
+  const imports = { env: { bun_core_idle: () => 0, other: () => 0 }, wasi_snapshot_preview1: { fd_write: () => 0 } };
+  const observed = observeMemoryImports(imports, (normal, force) => { calls.push([normal, force]); }, true);
+  for (const [namespace, name] of [["env", "bun_core_idle"], ["env", "other"], ["wasi_snapshot_preview1", "fd_write"]]) {
+    const call = observed[namespace!]?.[name!];
+    if (typeof call !== "function") throw new Error("missing observed import");
+    call();
+  }
+  expect(calls).toEqual([[true, false], [false, false], [false, true]]);
 });

@@ -1,5 +1,6 @@
 import { prepareLinkPlan, instantiateLinkPlan, type LinkedGroup, type LinkPlanSource } from "waffle/link";
-import { createMemoryReader, type MemorySnapshot } from "./memory-telemetry.js";
+import { createMemoryPublisher, observeMemoryImports } from "./memory-channel.js";
+import { createMemoryReader, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
 import { startEngineHost } from "./engine-host.js";
@@ -17,7 +18,7 @@ export type Engine = "quickjs" | "jsc" | "browser" | "hermes";
 
 export interface RunRequest extends RuntimeWorkerRequest {
   engine: Engine;
-  memoryTelemetryId?: string;
+  memoryTelemetry?: MemoryTelemetryTransport;
   linkPlan?: LinkPlanSource;
   adapter?: "bun" | "preview1";
   trace: boolean;
@@ -188,6 +189,7 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
   const request = { ...req, linkPlan: req.linkPlan };
   let group: LinkedGroup | undefined;
   let reader: ReturnType<typeof createMemoryReader> | undefined;
+  let publisher: ReturnType<typeof createMemoryPublisher> | undefined;
   let finished = false;
   return {
     async instantiate(imports, context) {
@@ -196,20 +198,26 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
       const plan = await prepareLinkPlan(request.linkPlan);
       context.checkActive();
       if (finished) throw new Error("link executor finished during admission");
-      const linked = instantiateLinkPlan(plan, {
-        wasi: context.wasi, coreImports: imports, checkActive: context.checkActive, bindMemory: context.bindMemory,
-      });
-      try { context.checkActive(); }
-      catch (error) { linked.dispose(); throw error; }
+      const capture = (normal: boolean, force: boolean) => { if (normal) context.checkActive(); publisher?.capture(normal, force); };
+      const originalImports = context.wasi.imports;
+      context.wasi.imports = (module, bindings) => observeMemoryImports(originalImports.call(context.wasi, module, bindings), capture, true);
+      let linked: LinkedGroup;
+      try {
+        linked = instantiateLinkPlan(plan, { wasi: context.wasi,
+          coreImports: observeMemoryImports(imports, capture, false), checkActive: context.checkActive, bindMemory: context.bindMemory });
+      } finally { context.wasi.imports = originalImports; }
       group = linked;
+      reader = createMemoryReader(req.engine, linked.entry, undefined, req.memoryTelemetry);
+      if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
+      context.checkActive();
       return linked.entry;
     },
     initialize(context) {
       context.checkActive();
       if (!group || finished) throw new Error("link group is unavailable");
       group.initialize();
-      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, req.memoryTelemetryId);
-      Reflect.set(globalThis, "__bunMemoryTelemetry", (refresh = false) => reader?.sample(refresh));
+      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, req.memoryTelemetry);
+      if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
     },
     beforeFinish() {
       if (finished) return;
@@ -217,9 +225,10 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
       const owned = group;
       group = undefined;
       try {
-        if (reader) host.postMessage({ type: "bun-memory", snapshot: reader.finish() });
+        const snapshot = publisher ? publisher.finish() : reader?.finish();
+        if (snapshot) host.postMessage({ type: "bun-memory", snapshot });
       } finally {
-        Reflect.deleteProperty(globalThis, "__bunMemoryTelemetry");
+        publisher = undefined;
         reader = undefined;
         owned?.dispose();
       }

@@ -1,3 +1,4 @@
+import { createMemoryChannel, memoryChannelReady, readMemoryChannel, requestMemoryChannel } from "./memory-channel.js";
 export type TelemetryEngine = "quickjs" | "jsc" | "browser" | "hermes";
 export interface FailedAllocation { bytes: number | null; category: string }
 export interface MemoryCounters {
@@ -11,11 +12,12 @@ export interface MemoryCounters {
   failedAllocation: FailedAllocation | null;
   notes: string;
 }
-export interface MemorySnapshot extends MemoryCounters {
+export interface MemoryIdentity { id: string; commandId: string; commandStartedAt: number }
+export type MemoryTelemetryTransport = MemoryIdentity & { buffer: SharedArrayBuffer };
+export interface MemorySnapshot extends MemoryCounters, MemoryIdentity {
   engine: TelemetryEngine;
   time: number;
   terminal: boolean;
-  id: string;
   allocatorFailure: FailedAllocation | null;
   engineFailure: FailedAllocation | null;
   engineCounters: Record<string, number | null>;
@@ -79,7 +81,10 @@ function engineReadout(engine: TelemetryEngine, memory: WebAssembly.Memory, expo
   };
 }
 
-export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side?: WebAssembly.Instance, id: string = crypto.randomUUID()) {
+export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side?: WebAssembly.Instance, identity?: MemoryIdentity) {
+  const id = identity?.id ?? crypto.randomUUID();
+  const provenance = identity ? { id, commandId: identity.commandId, commandStartedAt: identity.commandStartedAt }
+    : { id, commandId: id, commandStartedAt: Date.now() };
   const memory = core.exports.memory;
   if (!(memory instanceof WebAssembly.Memory)) throw new TypeError("Missing telemetry memory");
   let terminal = false;
@@ -100,7 +105,7 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
         data = engineReadout(engine, memory, side?.exports ?? {});
       }
       return {
-        ...emptyCounters, engine, id, terminal, time: Date.now(),
+        ...emptyCounters, ...provenance, engine, terminal, time: Date.now(),
         wasmCapacityBytes: memory.buffer.byteLength,
         memoryLimitBytes: allocator ? 536870912 : null,
         allocatorLiveBytes: allocator ? count(allocator[2]) : null,
@@ -116,12 +121,31 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
 }
 
 const retained = new Map<string, MemorySnapshot>();
-export function beginMemorySnapshot(engine: TelemetryEngine, id: string): void {
-  retained.set(id, { ...emptyCounters, id, engine, time: Date.now(), terminal: false,
+const channels = new Map<string, SharedArrayBuffer>();
+const runtimes = new WeakMap<object, string>();
+const commandTimes = new Map<string, number>();
+export function memoryCommandId(runtime: object, job: number): string {
+  const identity = runtimes.get(runtime) ?? crypto.randomUUID();
+  runtimes.set(runtime, identity);
+  return `${identity}:${job}`;
+}
+export function beginMemorySnapshot(engine: TelemetryEngine, id: string, commandId = id): MemoryTelemetryTransport | undefined {
+  const commandStartedAt = commandTimes.get(commandId) ?? Date.now();
+  commandTimes.set(commandId, commandStartedAt);
+  const identity = { id, commandId, commandStartedAt };
+  retained.set(id, { ...emptyCounters, ...identity, engine, time: Date.now(), terminal: false,
     allocatorFailure: null, engineFailure: null, engineCounters: {} });
   trimTerminalSnapshots();
+  if (typeof SharedArrayBuffer !== "function") return;
+  const channel = createMemoryChannel();
+  channels.set(id, channel);
+  return { ...identity, buffer: channel };
 }
 export function endMemorySnapshot(id: string): void {
+  const channel = channels.get(id);
+  const cached: unknown = channel ? readMemoryChannel(channel) : null;
+  if (cached && typeof cached === "object" && isMemorySnapshot(cached)) retained.set(id, cached);
+  channels.delete(id);
   const snapshot = retained.get(id);
   if (snapshot) retained.set(id, { ...snapshot, terminal: true, time: Date.now() });
   trimTerminalSnapshots();
@@ -140,15 +164,20 @@ export function recordMemorySnapshot(message: unknown): boolean {
 }
 
 function trimTerminalSnapshots(): void {
+  const activeCommands = new Set(Array.from(retained.values()).filter(snapshot => !snapshot.terminal).map(snapshot => snapshot.commandId));
   for (const [id, snapshot] of retained) {
     if (retained.size <= 128) return;
-    if (snapshot.terminal) retained.delete(id);
+    if (!snapshot.terminal || snapshot.failedAllocation && activeCommands.has(snapshot.commandId)) continue;
+    retained.delete(id);
+    if (!Array.from(retained.values()).some(value => value.commandId === snapshot.commandId)) commandTimes.delete(snapshot.commandId);
   }
 }
 export function retainedMemorySnapshots(): readonly MemorySnapshot[] { return Array.from(retained.values()); }
 
 function isMemorySnapshot(value: object): value is MemorySnapshot {
-  const stringKeys = ["id", "notes"];
+  const stringKeys = ["id", "notes", "commandId"];
+  const startedAt: unknown = Reflect.get(value, "commandStartedAt");
+  if (typeof startedAt !== "number" || !isCounter(startedAt)) return false;
   const byteKeys = ["wasmCapacityBytes", "memoryLimitBytes", "allocatorLiveBytes", "allocatorPeakBytes", "jsHeapBytes", "arrayBufferBytes", "swcBytes"];
   if (!stringKeys.every(key => typeof Reflect.get(value, key) === "string")) return false;
   if (!byteKeys.every(key => isCounter(Reflect.get(value, key)))) return false;
@@ -168,4 +197,22 @@ function isFailure(value: unknown): value is FailedAllocation | null {
   return typeof value === "object" && "bytes" in value && isCounter(value.bytes)
     && "category" in value && typeof value.category === "string";
 }
-Reflect.set(globalThis, "__bunMemorySnapshots", retainedMemorySnapshots);
+export async function requestMemorySnapshots(engine: TelemetryEngine, refresh: boolean): Promise<readonly MemorySnapshot[]> {
+  const requested = Array.from(channels, ([id, channel]) => ({ id, channel }))
+    .filter(entry => retained.get(entry.id)?.engine === engine)
+    .map(entry => ({ ...entry, generation: requestMemoryChannel(entry.channel, refresh) }));
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (requested.every(entry => memoryChannelReady(entry.channel, entry.generation, refresh) || retained.get(entry.id)?.terminal)) break;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  for (const entry of requested) {
+    const value: unknown = readMemoryChannel(entry.channel);
+    if (!value || typeof value !== "object" || !isMemorySnapshot(value)) continue;
+    if (value.id !== entry.id || value.engine !== engine) throw new TypeError("Memory channel identity mismatch");
+    const normal = memoryChannelReady(entry.channel, entry.generation, refresh);
+    retained.set(entry.id, normal || !refresh ? value : { ...value, jsHeapBytes: null, arrayBufferBytes: null,
+      notes: "Normal phase refresh not acknowledged. Engine counters are unavailable for this phase. " + value.notes });
+  }
+  return retainedMemorySnapshots();
+}
+Reflect.set(globalThis, "__bunMemorySnapshots", requestMemorySnapshots);

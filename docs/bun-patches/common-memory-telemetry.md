@@ -41,3 +41,23 @@ terminal cleanup permanently disables refresh for that process. Terminal
 snapshots use cached getters before linked-group disposal. The Next hook reads
 host diagnostics, never process.memoryUsage or other JS on a faulted guest,
 and never requests GC. Counter and process identities remain in its result.
+
+
+## Shared browser transport
+
+A fixed 8 KiB shared frame per process carries host snapshots to the page.
+The page requests a generation and can read it while the worker remains in its
+synchronous Wasm event loop. It never evaluates code in that worker.
+Existing host imports copy cached counters on request. The two existing side
+imports `bun_core_idle` and `bun_core_poll` are called only after the shared
+engine driver has returned from JavaScript; only these boundaries can satisfy
+a normal refresh request. Other imports never refresh the VM. Output and exit
+boundaries preserve cached failures before engine destruction. Initializer
+failure uses a core-only reader established before constructors run.
+
+Each process carries its page-runtime job identity as a command identity.
+Active memory aggregation excludes terminal children, while failure selection
+and provenance keep every retained process from the selected command. A failed
+child therefore remains visible while its parent lives. Failures from older
+commands are excluded. Independent process limits are not summed into a
+fictional shared headroom budget.

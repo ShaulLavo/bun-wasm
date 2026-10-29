@@ -1,4 +1,4 @@
-import { beginMemorySnapshot, endMemorySnapshot, recordMemorySnapshot } from "./memory-telemetry.js";
+import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
 import { programLinkPlan } from "../../src/assets.js";
 import { bunEnvironment } from "../../src/executable-paths.js";
 // Page-side launchers: one Waffle worker per Bun or preview1 process. The service owns admission,
@@ -92,11 +92,11 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     dispatch = message => dispatchBunNetwork(session, message);
     moduleCache = engine === "browser" && scopedWorker(options.workerUrl) ? `bunwasm-m-${crypto.randomUUID()}` : null;
     if (engine === "browser") sharedRoute = runtimeSharedObjectRoute(options.runtime);
-    beginMemorySnapshot(engine, memoryTelemetryId);
+    const memoryTelemetry = beginMemorySnapshot(engine, memoryTelemetryId, memoryCommandId(options.runtime, context.job));
     return service.launchWorker<RunRequest>(context, {
       workerUrl: options.workerUrl,
       request: {
-        engine, memoryTelemetryId, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
+        engine, memoryTelemetry, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
         args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
         trace: false, net: ring, moduleCache, lookupChannel: lookupChannel?.name,
         sharedObjects: sharedRoute ? { owner: sharedRoute.owner } : undefined,

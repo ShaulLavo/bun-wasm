@@ -1,37 +1,35 @@
 import type { Page } from "playwright";
 import { emptyCounters, type MemoryCounters, type MemorySnapshot, type TelemetryEngine } from "../../web/src/memory-telemetry.ts";
 
-export async function sample({ page, phase, engine }: { page: Page; phase: string; engine: TelemetryEngine }): Promise<MemoryCounters & { processes: unknown[] }> {
+export async function sample({ page, phase, engine }: { page: Page; phase: string; engine: TelemetryEngine }): Promise<ReturnType<typeof selectMemorySnapshots>> {
   const refresh = !/fail|error|trap|oom|terminal/i.test(phase);
-  const workers = await Promise.all(page.workers().map(async worker => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([worker.evaluate(refresh => {
-        const getter: unknown = Reflect.get(globalThis, "__bunMemoryTelemetry");
-        return typeof getter === "function" ? getter(refresh) : null;
-      }, refresh), new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 1000); })]);
-    } catch { return null; }
-    finally { clearTimeout(timer); }
-  }));
-  const retained: unknown = await page.evaluate(() => {
+  const retained: unknown = await page.evaluate(async ({ engine, refresh }) => {
     const getter: unknown = Reflect.get(globalThis, "__bunMemorySnapshots");
-    return typeof getter === "function" ? getter() : [];
-  });
-  const records: unknown[] = Array.isArray(retained) ? retained : [];
-  const all = records.concat(workers.filter(value => value !== null));
-  const snapshots = all.filter(isSnapshot).filter(snapshot => snapshot.engine === engine);
-  const unique = new Map(snapshots.map(snapshot => [snapshot.id, snapshot]));
-  const active = Array.from(unique.values()).filter(snapshot => !snapshot.terminal);
-  const selected = active.length ? active : Array.from(unique.values()).sort((a, b) => b.time - a.time).slice(0, 1);
-  const counters = aggregate(selected);
-  return { ...counters, processes: selected };
+    return typeof getter === "function" ? await getter(engine, refresh) : [];
+  }, { engine, refresh });
+  const all: unknown[] = Array.isArray(retained) ? retained : [];
+  return selectMemorySnapshots(all, engine);
 }
 
-type HookSnapshot = MemoryCounters & Pick<MemorySnapshot, "id" | "engine" | "terminal" | "time">;
+export function selectMemorySnapshots(all: readonly unknown[], engine: TelemetryEngine) {
+  const snapshots = all.filter(isSnapshot).filter(snapshot => snapshot.engine === engine);
+  const unique = Array.from(new Map(snapshots.map(snapshot => [snapshot.id, snapshot])).values());
+  const latest = unique.toSorted((a, b) => b.commandStartedAt - a.commandStartedAt)[0];
+  const command = unique.filter(snapshot => snapshot.commandId === latest?.commandId);
+  const active = command.filter(snapshot => !snapshot.terminal);
+  const selected = active.length ? active : command.toSorted((a, b) => b.time - a.time).slice(0, 1);
+  const counters = aggregate(selected);
+  const failed = command.find(snapshot => snapshot.failedAllocation !== null);
+  return { ...counters, failedAllocation: failed?.failedAllocation ?? null,
+    failureProcessId: failed?.id ?? null, processes: command };
+}
+
+type HookSnapshot = MemoryCounters & Pick<MemorySnapshot, "id" | "commandId" | "commandStartedAt" | "engine" | "terminal" | "time">;
 function isSnapshot(value: unknown): value is HookSnapshot {
   if (value === null || typeof value !== "object") return false;
   if (!("id" in value) || typeof value.id !== "string" || !("engine" in value) || typeof value.engine !== "string") return false;
   if (!("terminal" in value) || typeof value.terminal !== "boolean" || !("time" in value) || typeof value.time !== "number") return false;
+  if (!("commandId" in value) || typeof value.commandId !== "string" || !("commandStartedAt" in value) || typeof value.commandStartedAt !== "number" || !counter(value.commandStartedAt)) return false;
   const keys = ["wasmCapacityBytes", "memoryLimitBytes", "allocatorLiveBytes", "allocatorPeakBytes", "jsHeapBytes", "arrayBufferBytes", "swcBytes"];
   if (!keys.every(key => counter(Reflect.get(value, key)))) return false;
   if (!("failedAllocation" in value) || !("notes" in value) || typeof value.notes !== "string") return false;
@@ -50,10 +48,10 @@ export function aggregate(snapshots: readonly MemoryCounters[]): MemoryCounters 
     return snapshots.reduce((bytes, snapshot) => bytes + (snapshot[key] ?? 0), 0);
   };
   return {
-    wasmCapacityBytes: sum("wasmCapacityBytes"), memoryLimitBytes: sum("memoryLimitBytes"),
+    wasmCapacityBytes: sum("wasmCapacityBytes"), memoryLimitBytes: snapshots.length === 1 ? snapshots[0]!.memoryLimitBytes : null,
     allocatorLiveBytes: sum("allocatorLiveBytes"), allocatorPeakBytes: sum("allocatorPeakBytes"),
     jsHeapBytes: sum("jsHeapBytes"), arrayBufferBytes: sum("arrayBufferBytes"), swcBytes: sum("swcBytes"),
     failedAllocation: snapshots.find(snapshot => snapshot.failedAllocation)?.failedAllocation ?? null,
-    notes: "Active processes summed once by identity. Peak is a sum of per-process high-water marks, not a simultaneous peak. With no live process the latest terminal snapshot is returned. Unknowns propagate. " + snapshots[0]!.notes,
+    notes: "Active processes summed once by identity. Independent process limits do not form one shared headroom budget; multiple active processes make the scalar limit unknown. Peak is a sum of per-process high-water marks, not a simultaneous peak. With no live process the latest terminal snapshot is returned. Unknowns propagate. " + snapshots[0]!.notes,
   };
 }

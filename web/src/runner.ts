@@ -1,4 +1,4 @@
-import { beginMemorySnapshot, endMemorySnapshot, recordMemorySnapshot } from "./memory-telemetry.js";
+import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
 import { programLinkPlan } from "../../src/assets.js";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
@@ -118,7 +118,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   try {
     request = {
       engine: options.engine,
-      memoryTelemetryId,
       adapter: options.adapter,
       runtimeProcess: options.runtimeProcess,
       module: options.module,
@@ -325,7 +324,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   let interrupted = false;
   let prepared = false;
   const pendingKills: (2 | 9 | 15)[] = [];
-  if (!finished) beginMemorySnapshot(options.engine, memoryTelemetryId);
   void (async () => {
     if (finished || options.runtime.disposed) return;
     // The runtime's pool usually has this worker started already, so the command doesn't wait
@@ -368,6 +366,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
     if (!preparationStopped() && worker) {
       const transfers = [request.filesystem.port].concat(request.lookupPort ? [request.lookupPort] : []);
+      request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob));
       worker.postMessage(request, transfers);
       watchOutcome();
     }

@@ -68,6 +68,10 @@ async function compose(engine: PairedEngine): Promise<void> {
   copyFileSync(join(output, engine, "engine.wasm"), join(output, "dist", profile.side));
   copyFileSync(join(output, engine, "engine.wasm.engine.json"), join(output, "dist", `${profile.side}.engine.json`));
   await writeGuestBuildReceipt(options, path, captured);
+  if (engine === "jsc") {
+    const snapshot = execFileSync(process.execPath, [join(repository, "scripts/jsc-embedding.ts"), "inputs"], { cwd: repository, env: environment, encoding: "utf8" }).trim();
+    execFileSync(process.execPath, [join(repository, "scripts/jsc-embedding.ts"), "write", path, snapshot], { cwd: repository, env: environment, stdio: "inherit" });
+  }
 }
 function programSmoke(): void {
   const text = 'console.log("paired-smoke",40+2); const before=process.memoryUsage(); globalThis.bytes=new Uint8Array(1048576); const after=process.memoryUsage(); console.log(JSON.stringify({before,after}));';
@@ -123,10 +127,13 @@ async function build(): Promise<void> {
   state("web-build"); webBuild();
   rmSync(join(output, "web"), { recursive: true, force: true });
   cpSync(join(repository, "web/dist"), join(output, "web"), { recursive: true });
+  state("hook-controls");
+  const controls = execFileSync(process.execPath, ["test", "./scripts/engine-memory-hook.test.ts", "./web/tests/bun-executor.test.ts"], { cwd: repository, env: environment, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  writeFileSync(join(output, "hook-controls.log"), controls);
   state("hook-smoke");
   execFileSync(process.execPath, [join(repository, "scripts/verify-engine-memory-browser.ts"), output], { cwd: repository, env: environment, stdio: "inherit" });
   if (JSON.stringify(sourceIdentity()) !== JSON.stringify(source)) throw new Error("Producer source changed during validation");
-  const files = await identities(["core/bun-core.wasm", "core/bun-core.wasm.core.json", "quickjs/engine.wasm", "quickjs/engine.wasm.engine.json", "jsc/engine.wasm", "jsc/engine.wasm.engine.json", "dist/bun.wasm", "dist/bun.wasm.build.json", "dist/quickjs.wasm", "dist/quickjs.wasm.engine.json", "dist/bun-jsc.wasm", "dist/bun-jsc.wasm.build.json", "dist/jsc-engine.wasm", "dist/jsc-engine.wasm.engine.json", "dist/bash-web-shell.wasm", "dist/bash-web-env.wasm", "dist/bash-web-guests.json", "hook-smoke.json"].concat(webFiles(join(output, "web"), "web")));
+  const files = await identities(["core/bun-core.wasm", "core/bun-core.wasm.core.json", "quickjs/engine.wasm", "quickjs/engine.wasm.engine.json", "jsc/engine.wasm", "jsc/engine.wasm.engine.json", "dist/bun.wasm", "dist/bun.wasm.build.json", "dist/quickjs.wasm", "dist/quickjs.wasm.engine.json", "dist/bun-jsc.wasm", "dist/bun-jsc.wasm.build.json", "dist/bun-jsc.wasm.embedding.json", "dist/jsc-engine.wasm", "dist/jsc-engine.wasm.engine.json", "dist/bash-web-shell.wasm", "dist/bash-web-env.wasm", "dist/bash-web-guests.json", "hook-smoke.json", "hook-controls.log"].concat(webFiles(join(output, "web"), "web")));
   writeFileSync(join(output, "manifest.json"), JSON.stringify({ schema: 1, status: "reusable", source, nativePrebuild: prebuild,
     inputs: current.map(input => ({ scope: input.scope, contentSha256: input.contentSha256 })),
     inputOrigins: JSON.parse(readFileSync(join(output, "inputs/programs.json"), "utf8")), files,
