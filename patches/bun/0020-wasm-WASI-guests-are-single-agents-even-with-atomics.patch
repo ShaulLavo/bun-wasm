@@ -1,0 +1,135 @@
+From d052f0a93e117f20d1171d6488d59dc6ae9ea87d Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 29 Oct 2026 23:59:35 +0200
+Subject: [PATCH 20/20] wasm: WASI guests are single agents even with atomics
+
+bun-wasm's memory-group members are built with wasm atomics so they can
+share one memory, but each is still one agent with no threads. Select
+the single-agent futex and the inline thread pool on every WASI guest
+instead of only when atomics are absent. A member would otherwise
+compile the threaded futex, whose memory.atomic.wait32 intrinsic is an
+unstable library feature, and its pool would spawn threads it cannot
+have and leave queued tasks unrun.
+
+The threaded wasm futex is kept for wasm32 targets with atomics outside
+WASI. Native and atomics-free WASI builds select exactly what they did.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/threading/Futex.rs      | 30 +++++++++++++++++++++++-------
+ src/threading/ThreadPool.rs | 25 ++++++++++++++++++++-----
+ 2 files changed, 43 insertions(+), 12 deletions(-)
+
+diff --git a/src/threading/Futex.rs b/src/threading/Futex.rs
+index 080481f3..c759300d 100644
+--- a/src/threading/Futex.rs
++++ b/src/threading/Futex.rs
+@@ -87,9 +87,16 @@ use linux_impl as imp;
+     target_arch = "wasm32",
+ )))]
+ use unsupported_impl as imp;
+-#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
++#[cfg(all(
++    target_arch = "wasm32",
++    target_feature = "atomics",
++    not(target_os = "wasi")
++))]
+ use wasm_impl as imp;
+-#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
++#[cfg(all(
++    target_arch = "wasm32",
++    any(target_os = "wasi", not(target_feature = "atomics"))
++))]
+ use wasm_single_thread_impl as imp;
+ #[cfg(windows)]
+ use windows_impl as imp;
+@@ -462,10 +469,15 @@ mod freebsd_impl {
+     }
+ }
+ 
+-/// Single-threaded wasm (wasm32-wasip1 without `atomics`): there is no other
+-/// thread to change `*ptr`, so a wait either returns at once or sleeps out its
+-/// timeout. Waiting forever on the expected value would be a deadlock.
+-#[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
++/// Single-threaded wasm: wasm32 without `atomics`, or any WASI guest. A WASI
++/// guest is one agent even with `atomics` (bun-wasm's memory-group members use
++/// them only for the group's shared memory), so no other thread changes `*ptr`:
++/// a wait either returns at once or sleeps out its timeout. Waiting forever on
++/// the expected value would be a deadlock.
++#[cfg(all(
++    target_arch = "wasm32",
++    any(target_os = "wasi", not(target_feature = "atomics"))
++))]
+ mod wasm_single_thread_impl {
+     use super::*;
+ 
+@@ -489,7 +501,11 @@ mod wasm_single_thread_impl {
+     pub(super) fn wake(_ptr: *const AtomicU32, _max_waiters: u32) {}
+ }
+ 
+-#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
++#[cfg(all(
++    target_arch = "wasm32",
++    target_feature = "atomics",
++    not(target_os = "wasi")
++))]
+ mod wasm_impl {
+     use super::*;
+ 
+diff --git a/src/threading/ThreadPool.rs b/src/threading/ThreadPool.rs
+index ec98a9df..8f52ecc2 100644
+--- a/src/threading/ThreadPool.rs
++++ b/src/threading/ThreadPool.rs
+@@ -697,16 +697,25 @@ impl ThreadPool {
+         } else {
+             self.run_queue.push(&list);
+         }
+-        #[cfg(not(all(target_arch = "wasm32", not(target_feature = "atomics"))))]
++        #[cfg(not(all(
++            target_arch = "wasm32",
++            any(target_os = "wasi", not(target_feature = "atomics"))
++        )))]
+         self.force_spawn();
+-        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
++        #[cfg(all(
++            target_arch = "wasm32",
++            any(target_os = "wasi", not(target_feature = "atomics"))
++        ))]
+         self.run_inline();
+     }
+ 
+     /// Single-threaded wasm has no workers: the scheduling thread runs what it
+     /// queued before `schedule` returns. Tasks that schedule more on the same
+     /// pool land in its queue and run in the outer loop instead of recursing.
+-    #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
++    #[cfg(all(
++        target_arch = "wasm32",
++        any(target_os = "wasi", not(target_feature = "atomics"))
++    ))]
+     fn run_inline(&self) {
+         std::thread_local! {
+             static DRAINING: core::cell::RefCell<Vec<usize>> = const { core::cell::RefCell::new(Vec::new()) };
+@@ -745,7 +754,10 @@ impl ThreadPool {
+         self.sync.load(Ordering::Relaxed).spawned() > 0
+     }
+ 
+-    #[cfg(not(all(target_arch = "wasm32", not(target_feature = "atomics"))))]
++    #[cfg(not(all(
++        target_arch = "wasm32",
++        any(target_os = "wasi", not(target_feature = "atomics"))
++    )))]
+     fn force_spawn(&self) {
+         // Try to notify a thread
+         let is_waking = false;
+@@ -821,7 +833,10 @@ impl ThreadPool {
+     /// Warm the thread pool up to the given number of threads.
+     /// https://www.youtube.com/watch?v=ys3qcbO5KWw
+     pub fn warm(&self, count: u16) {
+-        #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
++        #[cfg(all(
++            target_arch = "wasm32",
++            any(target_os = "wasi", not(target_feature = "atomics"))
++        ))]
+         if true {
+             let _ = count;
+             return;
