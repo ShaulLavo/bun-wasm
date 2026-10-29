@@ -48,6 +48,7 @@ impl Fixture {
                 memory: None,
                 trace: false,
                 processes,
+                shm: None,
                 limits: StoreLimitsBuilder::new().build(),
                 functions: Vec::new(),
                 cancel,
