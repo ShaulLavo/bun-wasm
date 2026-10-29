@@ -1,7 +1,6 @@
 // Headless Node fixture host. Guests always execute in workers; the main thread owns the
 // responsive Waffle process supervisor, descriptor transfers, and shared-pipe relays.
 import { writeSync } from "node:fs";
-import { registerHooks } from "node:module";
 import * as http from "node:http";
 import * as https from "node:https";
 import * as net from "node:net";
@@ -156,7 +155,7 @@ async function run(data: GuestData) {
       postMessage: message => parentPort!.postMessage(message), finish,
     });
     const wasi = new WASI({ version: "preview1", args: request?.argv ?? ["bun"].concat(args), env: processHost.env, preopens: config.preopens, returnOnExit: true });
-    const imports = wasi.getImportObject() as NodeWasiImports;
+    const imports: NodeWasiImports = { wasi_snapshot_preview1: wasi.wasiImport };
     let instance: WebAssembly.Instance;
     if (config.withNet) cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
     const host = processHost.install(imports, () => instance, cliFetch?.call);
@@ -179,6 +178,7 @@ async function run(data: GuestData) {
     await globalThis.fetch("data:,").catch(() => {});
     const nodeFetch = globalThis.fetch.bind(globalThis);
     const prefix = "bunwasm:/m/", sources = new Map<string, string>();
+    const { registerHooks } = await import("node:module");
     registerHooks({
       resolve: (specifier, context, next) => specifier.startsWith(prefix) ? { url: specifier, shortCircuit: true } : next(specifier, context),
       load: (url, context, next) => url.startsWith(prefix) ? { format: "module", source: sources.get(url)!, shortCircuit: true } : next(url, context),

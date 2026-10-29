@@ -136,9 +136,9 @@ for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-req
 
 test.each(["pull_request", "push"])("shared proof changes select only the dedicated job through a real %s diff", event => {
   expect(selectionOutput(base, commitInput("scripts/shared-sysroot-proof.ts"), event))
-    .toBe("rust=false\njsc=false\nshared=true");
+    .toBe("rust=false\njsc=false\nshared=true\nhermes=false");
   expect(selectionOutput(base, commitInput("docs/code-quality.md"), event))
-    .toBe("rust=false\njsc=false\nshared=false");
+    .toBe("rust=false\njsc=false\nshared=false\nhermes=false");
 });
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");

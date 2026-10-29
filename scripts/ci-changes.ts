@@ -81,8 +81,27 @@ export function needsJsc(paths: readonly string[]): boolean {
   return paths.some(path => sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
 }
 
+const hermesDirectories = ["hermes/", "crates/bunwasm-hermes/", "crates/bunwasm-engine-hermes/", "tests/hermes/"];
+const hermesFiles = new Set([
+  "scripts/build-bun-hermes.sh", "scripts/build-engine-hermes.sh", "scripts/hermes-import-delta.ts",
+  "scripts/hermes-hosts.ts", "scripts/hermes-hosts.test.ts", "scripts/hermes-ci.test.ts", "checks/quality-hermes-ci.json", "checks/quality-hermes-hosts.json",
+  "crates/bunwasm-host/src/linked.rs", "crates/bunwasm-host/src/linked_relay.rs",
+  "src/bun-adapter.ts", "src/executable-paths.ts", "web/src/bun-executor.ts", "web/src/bun-launcher.ts", "web/build.ts",
+  "scripts/build-bun-core.sh", "scripts/quickjs-core-exports.txt", "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c",
+  "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-build-receipt.ts",
+  "scripts/sync-bun.sh", "scripts/sync-crypto.sh", "scripts/build-wasi-sysroot.ts", "scripts/ci-changes.ts", ".github/workflows/ci.yml",
+  "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts", "scripts/app-matrix/run.mjs",
+  "env.sh", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "package.json", "bun.lock", "web/bun.lock", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json",
+]);
+const sharedDriverFiles = new Set(["driver.rs", "program.rs", "loader.rs", "natives.rs", "value_natives.rs", "client.rs", "transport.rs", "allocator.rs", "side_modules.rs"].map(name => `crates/bunwasm-engine-quickjs/src/${name}`));
+
+export function needsHermes(paths: readonly string[]): boolean {
+  return paths.some(path => hermesDirectories.some(root => path.startsWith(root)) || hermesFiles.has(path)
+    || sharedDriverFiles.has(path) || sharedWebGuestInput(path));
+}
+
 export function needsRust(paths: readonly string[], checkInputs: readonly string[] = nativeCheckInputs): boolean {
-  return needsJsc(paths) || paths.some(path => nativeInput(path, checkInputs));
+  return needsHermes(paths) || needsJsc(paths) || paths.some(path => nativeInput(path, checkInputs));
 }
 
 export function changedPaths(base: string, head: string, pullRequest: boolean): string[] {
@@ -116,5 +135,5 @@ if (import.meta.main) {
     ? execFileSync("git", ["merge-base", base, head], { encoding: "utf8" }).trim() : base;
   const native = nativeChanges(paths, base, head, ancestor);
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
-  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}\nshared=${needsSharedSysroot(paths)}`);
+  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}\nshared=${needsSharedSysroot(paths)}\nhermes=${needsHermes(native)}`);
 }
