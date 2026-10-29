@@ -77,6 +77,8 @@ JSON stores bytes; human summaries use MiB. The memory gate needs 30 completed c
 
 These checks describe this bounded session. They do not establish Next's minimum working set or prove every future workload stays bounded.
 
+For the separate method/body-aware advisory overlay, see [advisory replay](next-advisory-replay.md).
+
 ## Verify the fixture and probes
 
 ```sh

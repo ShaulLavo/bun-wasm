@@ -1,0 +1,7 @@
+{
+  "POST /-/npm/v1/security/advisories/bulk fe029cba1e1259e3a09d1d275a3032a5a5a1ca1d903e859e79578b0aaa0f8b9c": {
+    "status": 200,
+    "type": "application/octet-stream",
+    "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  }
+}
