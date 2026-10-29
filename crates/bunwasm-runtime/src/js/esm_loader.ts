@@ -24,7 +24,7 @@ type RegistrationApi = {
 };
 (function (native: {
   resolve(specifier: string, referrer: string): string;
-  load(name: string): { record: ModuleRecord } | { namespace: object; default: unknown };
+  load(name: string): { record: ModuleRecord } | { namespace: unknown; default: unknown };
   initMeta(name: string, meta: object): void;
 }) {
   "use strict";
@@ -143,11 +143,12 @@ type RegistrationApi = {
 
   // Register `name` from its record source and load what it imports. New
   // modules are appended to `added` so a failed load can forget them.
-  function syntheticRecord(namespace: object, defaultValue: unknown): ModuleRecord {
+  function syntheticRecord(namespace: unknown, defaultValue: unknown): ModuleRecord {
     const getters: Record<string, Getter> = Object.create(null);
-    for (const key of Object.keys(namespace)) {
+    const source = namespace !== null && (typeof namespace === "object" || typeof namespace === "function") ? namespace : {};
+    for (const key of Object.keys(source)) {
       if (key === "default" || key === "__esModule") continue;
-      const value = Reflect.get(namespace, key);
+      const value = Reflect.get(source, key);
       getters[key] = () => value;
     }
     getters.default = () => defaultValue;
