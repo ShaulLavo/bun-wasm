@@ -667,13 +667,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      WASM_TOOLS: ${{ runner.temp }}/wasm-tools
-      BUN_WASM_SHARED_SYSROOT: ${{ runner.temp }}/bun-wasm-shared-sysroot
-      BUN_WASM_SYSROOT: ${{ runner.temp }}/bun-wasm-shared-sysroot
-      TMPDIR: ${{ runner.temp }}
       WASI_LIBC_JOBS: "2"
     steps:
       - uses: actions/checkout@v4
+      - name: Configure private shared sysroot paths
+        run: |
+          echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
+          echo "BUN_WASM_SHARED_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
+          echo "BUN_WASM_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
