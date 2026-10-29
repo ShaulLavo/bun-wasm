@@ -84,6 +84,7 @@
         "tests/runtime-proc-browser-main.ts",
         "tests/fixtures/{filesystem-lifecycle,safari-driver-listener,startup-filesystem}.ts",
         "tests/bun-runtime-proc-main.ts",
+        "tests/wasm-transfer-page.ts",
         "tests/safari-{observers,open-descriptor-worker}.ts",
         "tests/worker-bootstrap-browser.ts",
         "tests/worker-bootstrap-browser-main.ts"
