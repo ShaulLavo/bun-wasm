@@ -16,7 +16,7 @@ function emit(name: string): string {
   return readFileSync(output, "utf8");
 }
 
-test("actual stream factories accept legal nullish and typed callback inputs", () => {
+test("actual stream factories accept real Node exports and nullish call shapes", () => {
   const directory = join(root, "crates/bunwasm-runtime/src/js");
   const bindings = readFileSync(join(directory, "node_stream_bindings.ts"), "utf8")
     .replace("(function (internal:", "const bindingsFactory = (function (internal:");
@@ -24,24 +24,42 @@ test("actual stream factories accept legal nullish and typed callback inputs", (
     .replace("(function (internal:", "const internalsFactory = (function (internal:");
   const probe = join(scratch, "type-probe.ts");
   writeFileSync(probe, `${bindings}\n${internals}\n
+import { Readable, Writable, Duplex, finished } from "node:stream";
+import { promisify } from "node:util";
 declare const bindingsInternal: Parameters<typeof bindingsFactory>[0];
-type StreamBundle = Parameters<ReturnType<typeof bindingsFactory>["create"]>[0];
-declare const bundle: StreamBundle;
+const eos = Object.assign(finished, { kEosNodeSynchronousCallback: Symbol("sync") });
+const bundle = {
+  Stream: { Readable, Writable, Duplex },
+  errors: { codes: { ERR_INVALID_ARG_TYPE: TypeError } },
+  validators: { validateBoolean(value: unknown) { return typeof value === "boolean"; } },
+  utils: { isDestroyed(node: { destroyed: boolean }) { return node.destroyed; } },
+  eos,
+  util: { normalizeEncoding: (value: string) => value },
+};
 const bindings = bindingsFactory(bindingsInternal).create(bundle);
-type TerminalNode = Parameters<typeof bindings.withDestroyHook>[0];
-declare const node: TerminalNode;
 const callback = (error: Error | null | undefined) => { void error; };
-const wrapped = bindings.withDestroyHook(node, { destroy: null }, callback);
+bindings.observeTerminalWritable(new Writable());
+const wrapped = bindings.withDestroyHook(new Writable(), { destroy: null }, callback);
 wrapped(null);
 wrapped(undefined);
 wrapped();
-bindings.withDestroyHook(node, {}, callback);
-bindings.withDestroyHook(node, { destroy(error, done) { done(error); } }, callback);
-bindings.observeTerminalWritable(node);
+bindings.withDestroyHook(new Readable({ read() {} }), {}, callback);
+bindings.withDestroyHook(new Writable(), { destroy(error, done) { done(error); } }, callback);
 bindings.PromisePrototypeThen(Promise.resolve("text"), value => value.length, null);
 bindings.PromisePrototypeThen(Promise.resolve("text"), null, undefined);
+bindings.PromisePrototypeThen(Promise.resolve("text"), value => value.length);
+bindings.PromisePrototypeThen(Promise.resolve("text"));
+bindings.PromisePrototypeThen(Promise.resolve("text"), null, (error: Error) => error.message);
 bindings.SafePromisePrototypeFinally(Promise.resolve(1), null);
 bindings.SafePromisePrototypeFinally(Promise.resolve(1), undefined);
+bindings.SafePromisePrototypeFinally(Promise.resolve(1));
+promisify(bindings.eos);
+bindings.eos(new Writable(), () => undefined);
+const ReadableConstructor: typeof Readable = bindings.Readable;
+const ErrorConstructor: typeof TypeError = bindings.ERR_INVALID_ARG_TYPE;
+const encoding: string = bindings.normalizeEncoding("utf8");
+bindings.validateBoolean(true);
+bindings.isDestroyed(new Writable());
 const resolvers = bindings.PromiseWithResolvers<string>();
 resolvers.resolve("done");
 resolvers.resolve(Promise.resolve("done"));
@@ -51,6 +69,9 @@ bindings.ArrayPrototypeFilter([1, 2], value => value > 1);
 bindings.isReadableStream(null);
 bindings.isWritableStream(undefined);
 bindings.TypedArrayPrototypeGetBuffer(new Uint8Array());
+void ReadableConstructor;
+void ErrorConstructor;
+void encoding;
 
 declare const internalsInternal: Parameters<typeof internalsFactory>[0];
 const internals = internalsFactory(internalsInternal);
@@ -70,6 +91,7 @@ void state;
   const config = join(scratch, "tsconfig.json");
   writeFileSync(config, JSON.stringify({
     extends: join(root, "crates/bunwasm-runtime/tsconfig.json"),
+    compilerOptions: { types: ["node"], typeRoots: [join(root, "node_modules/@types")], skipLibCheck: true },
     include: [],
     files: [join(directory, "runtime.d.ts"), probe],
   }));

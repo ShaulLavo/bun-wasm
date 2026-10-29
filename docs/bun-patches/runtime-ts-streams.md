@@ -48,8 +48,9 @@ runtime syntax stay unchanged.
 
 `scripts/test-native-stream-interop.mjs` now loads the binding through Node's
 strip-mode TypeScript emission. `scripts/stream-bindings.test.ts` generates
-compile-time probes from the actual factories and checks nullish options,
-typed callbacks, portable state, brands, promise helpers, and listener cleanup.
+compile-time probes from the actual factories and checks real Node readable and
+writable objects, flattened callable exports, nullish options, typed callbacks,
+portable state, brands, promise helpers, and listener cleanup.
 The existing runtime and quality manifests own these checks. Emission and
 byte-equivalence evidence is under
 `/work/reports/wave-20261029/bun/typescript-stream-bindings/`.

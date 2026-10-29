@@ -21,12 +21,13 @@
     destroyed: boolean;
     writableEnded: boolean;
     writableFinished: boolean;
-    on(event: string, listener: (...args: never[]) => void): TerminalWritable;
-    once(event: string, listener: (...args: never[]) => void): TerminalWritable;
-    removeListener(event: string, listener: (...args: never[]) => void): unknown;
+    on(event: string, listener: (...args: unknown[]) => void): TerminalWritable;
+    once(event: string, listener: (...args: unknown[]) => void): TerminalWritable;
+    removeListener(event: string, listener: (...args: unknown[]) => void): unknown;
   };
   type DestroyCallback = { invoke(error?: unknown): void }["invoke"];
-  type DestroyHook = { invoke(this: TerminalWritable, error: unknown, callback: DestroyCallback): void }["invoke"];
+  type DestroyReceiver = object;
+  type DestroyHook = { invoke(this: DestroyReceiver, error: unknown, callback: DestroyCallback): void }["invoke"];
   type DestroyOptions = { destroy?: DestroyHook | null };
   type StreamBundle = {
     Stream: object;
@@ -92,7 +93,7 @@
     node.on("error", error).once("close", cleanup).once("finish", finish);
   }
 
-  function withDestroyHook(node: TerminalWritable, options: DestroyOptions, callback: DestroyCallback): DestroyCallback {
+  function withDestroyHook(node: DestroyReceiver, options: DestroyOptions, callback: DestroyCallback): DestroyCallback {
     const hook = options.destroy;
     if (typeof hook !== "function") return callback;
     return error => {
@@ -101,12 +102,14 @@
     };
   }
 
-  type StreamBindings = BunWasm.StreamGlobals & StreamBundle & {
+  type PromiseRejection<Result> = { handle(reason: unknown): Result | PromiseLike<Result> }["handle"];
+  type StreamBindings<Bundle extends StreamBundle> = BunWasm.StreamGlobals & Bundle & Bundle["Stream"] & Bundle["errors"] & Bundle["errors"]["codes"] & Bundle["validators"] & Bundle["utils"] & {
     Buffer: BunWasm.BufferConstructor;
     TextEncoder: typeof TextEncoder;
-    kEosNodeSynchronousCallback: unknown;
+    eos: Bundle["eos"];
+    kEosNodeSynchronousCallback: Bundle["eos"]["kEosNodeSynchronousCallback"];
     kEmptyObject: object;
-    normalizeEncoding: unknown;
+    normalizeEncoding: Bundle["util"]["normalizeEncoding"];
     isAnyArrayBuffer(value: unknown): boolean;
     isReadableStream(value: unknown): boolean;
     isWritableStream(value: unknown): boolean;
@@ -114,11 +117,11 @@
     SafeSet: SetConstructor;
     ArrayPrototypeFilter: <T>(array: T[], callback: (value: T, index: number, array: T[]) => unknown) => T[];
     ObjectKeys: ObjectConstructor["keys"];
-    PromisePrototypeThen: <T, TResult1 = T, TResult2 = never>(promise: Promise<T>, resolve: ((value: T) => TResult1 | PromiseLike<TResult1>) | null | undefined, reject: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined) => Promise<TResult1 | TResult2>;
+    PromisePrototypeThen: <T, TResult1 = T, TResult2 = never>(promise: Promise<T>, resolve?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null, reject?: PromiseRejection<TResult2> | null) => Promise<TResult1 | TResult2>;
     PromiseResolve: PromiseConstructor["resolve"];
     PromiseWithResolvers: <T>() => { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void; reject: (reason?: unknown) => void };
     SafePromiseAllReturnVoid: <T, U>(items: Iterable<T>, callback: (value: T, index: number) => U) => Promise<void>;
-    SafePromisePrototypeFinally: <T>(promise: Promise<T>, callback: (() => void) | null | undefined) => Promise<T>;
+    SafePromisePrototypeFinally: <T>(promise: Promise<T>, callback?: (() => void) | null) => Promise<T>;
     StringPrototypeStartsWith(text: string, prefix: string): boolean;
     TypedArrayPrototypeGetBuffer(value: object): unknown;
     TypedArrayPrototypeGetByteOffset(value: object): unknown;
@@ -131,7 +134,7 @@
   };
 
   return {
-    create(bundle: StreamBundle): StreamBindings {
+    create<Bundle extends StreamBundle>(bundle: Bundle): StreamBindings<Bundle> {
       installWebState(streams.ReadableStream, true);
       installWebState(streams.WritableStream, false);
       const typed: object = Object.getPrototypeOf(Uint8Array.prototype);
@@ -151,7 +154,7 @@
         SafeSet: Set,
         ArrayPrototypeFilter: <T>(array: T[], callback: (value: T, index: number, array: T[]) => unknown) => array.filter(callback),
         ObjectKeys: Object.keys,
-        PromisePrototypeThen: <T, TResult1 = T, TResult2 = never>(promise: Promise<T>, resolve: ((value: T) => TResult1 | PromiseLike<TResult1>) | null | undefined, reject: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined) => promise.then(resolve, reject),
+        PromisePrototypeThen: <T, TResult1 = T, TResult2 = never>(promise: Promise<T>, resolve?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null, reject?: PromiseRejection<TResult2> | null) => promise.then(resolve, reject),
         PromiseResolve: Promise.resolve.bind(Promise),
         PromiseWithResolvers<T>() {
           let resolve!: (value: T | PromiseLike<T>) => void;
@@ -160,7 +163,7 @@
           return { promise, resolve, reject };
         },
         SafePromiseAllReturnVoid: <T, U>(items: Iterable<T>, callback: (value: T, index: number) => U) => Promise.all(Array.from(items, callback)).then(() => {}),
-        SafePromisePrototypeFinally: <T>(promise: Promise<T>, callback: (() => void) | null | undefined) => promise.finally(callback),
+        SafePromisePrototypeFinally: <T>(promise: Promise<T>, callback?: (() => void) | null) => promise.finally(callback),
         StringPrototypeStartsWith: (text: string, prefix: string) => text.startsWith(prefix),
         TypedArrayPrototypeGetBuffer: get("buffer"),
         TypedArrayPrototypeGetByteOffset: get("byteOffset"),
