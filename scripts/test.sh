@@ -31,10 +31,12 @@
 # `--update` runs native Bun in the scratch copy, where absolute paths would
 # land on the real filesystem.
 #
-#   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc] [name...]
+#   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc] [--context native|hooks] [name...]
 #     --engine jsc      run dist/bun-jsc.wasm (JavaScriptCore; scripts/build-bun-jsc.sh)
 #     --engine browser  run dist/bun-browser.wasm with Node's V8 as the host engine
 #                       (web/scripts/node-host.mjs; docs/engine-browser.md)
+#     --context hooks   with --engine browser: carry AsyncLocalStorage with the printed
+#                       hooks instead of Node's, as a browser does
 #     --update   regenerate expected.txt with native `bun` (review the diff!)
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -45,6 +47,7 @@ source "$root/env.sh"
 build=1
 update=0
 engine=quickjs
+context=native
 names=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,6 +55,8 @@ while [[ $# -gt 0 ]]; do
     --update) update=1 ;;
     --engine) engine="$2"; shift ;;
     --engine=*) engine="${1#--engine=}" ;;
+    --context) context="$2"; shift ;;
+    --context=*) context="${1#--context=}" ;;
     *) names+=("$1") ;;
   esac
   shift
@@ -62,6 +67,11 @@ case "$engine" in
   jsc) wasm="$root/dist/bun-jsc.wasm"; build_script="$root/scripts/build-bun-jsc.sh" ;;
   browser) wasm="$root/dist/bun-browser.wasm"; build_script="$root/scripts/build-bun-browser.sh" ;;
   *) echo "unknown engine $engine (quickjs, jsc or browser)"; exit 2 ;;
+esac
+case "$context" in
+  native) ;;
+  hooks) [[ $engine == browser ]] || { echo "--context hooks needs --engine browser"; exit 2; } ;;
+  *) echo "unknown context $context (native or hooks)"; exit 2 ;;
 esac
 
 scratch="$(mktemp -d "$TMPDIR/bun-wasm-runtime-test-XXXXXX")"
@@ -139,6 +149,15 @@ pass=0
 fail=0
 failed=()
 for name in "${names[@]}"; do
+  if [[ $update == 0 && "$name" == http-response-lifecycle ]]; then
+    if BUN_WASM_LAUNCHER="$launcher" bun "$root/scripts/http-response-lifecycle.ts" "$engine" "$scratch/http-response-lifecycle"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      failed+=("$name")
+    fi
+    continue
+  fi
   if [[ $update == 0 && "$name" == worker-review ]]; then
     if node "$root/tests/check-worker-regressions.ts" --engine "$engine" --wasm "$wasm"; then
       pass=$((pass + 1))
@@ -231,7 +250,7 @@ for name in "${names[@]}"; do
     [[ $is_host == 1 ]] && net_flag=(--net)
     gc_flags=()
     [[ ! -f "$src/expose-gc" ]] || gc_flags=(--expose-gc)
-    (cd "$work" && timeout 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" "${net_flag[@]}" --dir "$work::/" \
+    (cd "$work" && timeout 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --context "$context" "${net_flag[@]}" --dir "$work::/" \
       --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   else

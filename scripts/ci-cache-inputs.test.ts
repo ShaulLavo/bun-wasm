@@ -94,7 +94,8 @@ test("each setup cache has one immediate save after its successful producer", ()
     const output = named(`Save completed ${id} setup`);
     const build = step(id === "rustup-cache" ? "uses" : "name", producer);
     expect(stepList.indexOf(output)).toBe(stepList.indexOf(build) + 1);
-    expect(field(output, "if")).toBe(`steps.${id}.outputs.cache-hit != 'true'`);
+    const scope = id === "sources-cache" ? "github.event_name == 'push' && github.ref == 'refs/heads/main' && " : "";
+    expect(field(output, "if")).toBe(`${scope}steps.${id}.outputs.cache-hit != 'true'`);
     expect(field(field(output, "with"), "key")).toBe(`\${{ steps.${id}.outputs.cache-primary-key }}`);
     expect(field(field(output, "with"), "path")).toBe(field(field(restore, "with"), "path"));
   }

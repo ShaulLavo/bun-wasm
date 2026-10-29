@@ -58,7 +58,7 @@ test("native fixture smoke selects the typed runtime behavior without another bu
 
 test("every migrated selection retains one blocking owner and the original local runtime set", () => {
   expect(proveCheckMigration().deduplicated).toHaveLength(7);
-  expect(selectChecks("cmake")).toEqual(["scripts/cmake-cache.test.ts"]);
+  expect(selectChecks("cmake")).toEqual(["scripts/cmake-cache.test.ts", "scripts/jsc-memory-telemetry.test.ts"]);
   const checks = discoverChecks().map(check => check.path).concat(automaticChecks().map(check => check.path));
   expect(new Set(checks).size).toBe(checks.length);
   expect(selectChecks("quality")).toContain("scripts/runtime-ts-small.test.ts");
@@ -331,7 +331,7 @@ test("old Cargo-first keys cannot use the new compatibility prefix, and fallback
   expect(oldSaved.startsWith(fixtureCacheKey(old.prefix, changedCacheFile("Cargo.lock")))).toBe(false);
   expect(oldSaved.startsWith(fixtureCacheKey(keys.prefix, nativeCacheFiles))).toBe(false);
   expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == ''");
-  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-hit != 'true'");
+  expect(rust).toContain("steps.native-cargo-cache.outputs.cache-hit != 'true'");
   expect(rust).toContain("steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'");
 });
 
@@ -621,8 +621,8 @@ test("Rust build caches follow host tool versions, not the runner image", () => 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
-  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(10);
-  expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-hit != 'true'");
+  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(11);
+  expect(rust).toContain("steps.native-cargo-cache.outputs.cache-hit != 'true'");
   expect(rust).not.toContain("github.run_id");
   expect(rust).not.toContain("github.run_attempt");
   const sdkKey = rust.split("\n").find(line => line.includes("key: wasi-sdk-"))!;
@@ -875,7 +875,7 @@ function cacheCondition(condition: string, outputs: Readonly<Record<string, stri
 }
 
 function comparison(clause: string, outputs: Readonly<Record<string, string>>): boolean {
-  const match = /^(steps\.[\w-]+\.outputs\.[\w-]+|needs\.quality\.outputs\.jsc|github\.event_name) (==|!=) '([^']*)'$/.exec(clause);
+  const match = /^(steps\.[\w-]+\.outputs\.[\w-]+|needs\.quality\.outputs\.jsc|github\.(?:event_name|ref)) (==|!=) '([^']*)'$/.exec(clause);
   if (!match || !(match[1]! in outputs)) throw new Error(`Unsupported cache condition: ${clause}`);
   return match[2] === "==" ? outputs[match[1]!] === match[3] : outputs[match[1]!] !== match[3];
 }
@@ -902,6 +902,7 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
       "steps.jsc-cargo-cache.outputs.cache-hit": "false",
       "steps.jsc-cargo-cache.outputs.cache-matched-key": "",
       "github.event_name": "push",
+      "github.ref": "refs/heads/main",
       "needs.quality.outputs.jsc": "true",
       "steps.native-producers.outputs.native-ready": "true",
       "steps.jsc-producer.outputs.jsc-ready": "true",
@@ -912,10 +913,9 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
     const incomplete = { ...outputs, "steps.native-producers.outputs.native-ready": "", "steps.jsc-producer.outputs.jsc-ready": "" };
     expect(saves.map(condition => cacheCondition(condition, incomplete, false))).toEqual([false, false, false, false]);
     assertJscSaveSelection(saves.slice(0, 2), outputs);
-    // Pull requests keep cold seeds but skip re-saving a compatible restore.
     const pullRequest = { ...outputs, "github.event_name": "pull_request" };
-    expect(cacheCondition(saves[2]!, pullRequest, true)).toBe(expected[1]! && v2 === "miss");
-    expect(cacheCondition(saves[1]!, pullRequest, true)).toBe(true);
+    expect(cacheCondition(saves[2]!, pullRequest, true)).toBe(false);
+    expect(cacheCondition(saves[1]!, pullRequest, true)).toBe(false);
     expect(cacheCondition(saves[1]!, { ...pullRequest, "steps.jsc-cargo-cache.outputs.cache-matched-key": "saved-prefix" }, true)).toBe(false);
     expect(cacheCondition(saves[1]!, { ...outputs, "steps.jsc-cargo-cache.outputs.cache-matched-key": "saved-prefix" }, true)).toBe(true);
   }
@@ -964,8 +964,8 @@ function expandNativeKey(template: string, inputs: ReadonlyMap<string, Buffer>):
 }
 
 for (const { id, saveName, condition, workflowCompatible } of [
-  { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", condition: "steps.native-cargo-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || steps.native-cargo-cache.outputs.cache-matched-key == '')", workflowCompatible: true },
-  { id: "native-cache", saveName: "Save the native quality checkpoint", condition: "${{ !cancelled() && steps.native-producers.outputs.native-ready == 'true' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}", workflowCompatible: true },
+  { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", condition: "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-cargo-cache.outputs.cache-hit != 'true'", workflowCompatible: true },
+  { id: "native-cache", saveName: "Save the native quality checkpoint", condition: "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-producers.outputs.native-ready == 'true' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}", workflowCompatible: true },
 ]) {
   test(`${id} distinguishes tools builders and producers with its own guarded save`, () => {
     const contract = nativeCacheContract(id, saveName);

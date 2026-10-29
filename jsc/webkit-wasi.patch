@@ -607,3 +607,177 @@ diff --git a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp b/Source/WTF/wtf/posix/Thre
          didBecomeDetached();
 +#endif
  }
+diff --git a/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h b/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h
+new file mode 100644
+--- /dev/null
++++ b/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h
+@@ -0,0 +1,94 @@
++#pragma once
++
++#include <cstdint>
++#include <limits>
++
++constexpr uint64_t bunjscUnknownMemory = std::numeric_limits<uint64_t>::max();
++
++// Every field is a little-endian u64 in the shared wasm memory.
++struct BunjscMemoryTelemetry {
++    uint64_t abiVersion { 1 };
++    uint64_t byteLength { sizeof(BunjscMemoryTelemetry) };
++    uint64_t snapshotSequence { 0 };
++    uint64_t heapUsed { bunjscUnknownMemory };
++    uint64_t heapTotal { bunjscUnknownMemory };
++    uint64_t extraMemory { bunjscUnknownMemory };
++    uint64_t arrayBufferBytes { bunjscUnknownMemory };
++    uint64_t heapAfterLastCollection { bunjscUnknownMemory };
++    uint64_t heapBeforeLastFullCollection { bunjscUnknownMemory };
++    uint64_t heapAfterLastFullCollection { bunjscUnknownMemory };
++    uint64_t totalBytesAllocated { bunjscUnknownMemory };
++    uint64_t gcMaxHeapSize { bunjscUnknownMemory };
++    uint64_t smallHeapSize { bunjscUnknownMemory };
++    uint64_t largeHeapSize { bunjscUnknownMemory };
++    uint64_t gcEnabled { bunjscUnknownMemory };
++    uint64_t generationalGcEnabled { bunjscUnknownMemory };
++    uint64_t concurrentGcEnabled { bunjscUnknownMemory };
++    uint64_t allocationSequence { 0 };
++    uint64_t activeAllocationBytes { bunjscUnknownMemory };
++    uint64_t activeAllocationCategory { 0 };
++    uint64_t failedAllocationBytes { bunjscUnknownMemory };
++    uint64_t failedAllocationCategory { 0 };
++    uint64_t failedAllocationSequence { 0 };
++    uint64_t allocationBudgetThisCycle { bunjscUnknownMemory };
++};
++
++inline constinit BunjscMemoryTelemetry bunjscTelemetry;
++inline constinit uint32_t bunjscAllocationDepth { 0 };
++
++inline BunjscMemoryTelemetry* bunjsc_cached_memory_telemetry()
++{
++    return &bunjscTelemetry;
++}
++
++extern "C" inline void bunjsc_telemetry_allocation_begin(uint64_t bytes, uint32_t category)
++{
++    if (bunjscAllocationDepth++)
++        return;
++    ++bunjscTelemetry.allocationSequence;
++    bunjscTelemetry.activeAllocationBytes = bytes;
++    bunjscTelemetry.activeAllocationCategory = category;
++}
++
++extern "C" inline void bunjsc_telemetry_allocation_end(bool failed)
++{
++    if (failed && bunjscTelemetry.failedAllocationSequence != bunjscTelemetry.allocationSequence) {
++        bunjscTelemetry.failedAllocationBytes = bunjscTelemetry.activeAllocationBytes;
++        bunjscTelemetry.failedAllocationCategory = bunjscTelemetry.activeAllocationCategory;
++        bunjscTelemetry.failedAllocationSequence = bunjscTelemetry.allocationSequence;
++    }
++    if (--bunjscAllocationDepth)
++        return;
++    bunjscTelemetry.activeAllocationBytes = bunjscUnknownMemory;
++    bunjscTelemetry.activeAllocationCategory = 0;
++}
++
++namespace JSC {
++
++// The destructor runs before the caller constructs its OOM exception.
++class WASIMemoryAllocationScope {
++public:
++    enum Category : uint32_t { TypedArray = 1, ArrayBuffer = 2 };
++    enum class FailurePolicy { ReportFailure, ObserveOnly };
++
++    WASIMemoryAllocationScope(uint64_t bytes, Category category, FailurePolicy policy = FailurePolicy::ReportFailure)
++        : m_failed(policy == FailurePolicy::ReportFailure)
++    {
++        bunjsc_telemetry_allocation_begin(bytes, category);
++    }
++
++    WASIMemoryAllocationScope(const WASIMemoryAllocationScope&) = delete;
++    WASIMemoryAllocationScope& operator=(const WASIMemoryAllocationScope&) = delete;
++
++    ~WASIMemoryAllocationScope()
++    {
++        bunjsc_telemetry_allocation_end(m_failed);
++    }
++
++    void succeed() { m_failed = false; }
++
++private:
++    bool m_failed;
++};
++
++} // namespace JSC
+diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp b/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
+--- a/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
++++ b/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
+@@ -36,2 +36,6 @@
+
++#if OS(WASI)
++#include "WASIMemoryTelemetry.h"
++#endif
++
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+@@ -66,2 +70,5 @@
+     ASSERT(!isResizableOrGrowableSharedTypedArrayIncludingDataView(structure->classInfoForCells()));
++#if OS(WASI)
++    WASIMemoryAllocationScope allocation(static_cast<uint64_t>(length) * elementSize, WASIMemoryAllocationScope::TypedArray);
++#endif
+
+@@ -78,2 +85,5 @@
+         m_mode = FastTypedArray;
++#if OS(WASI)
++        allocation.succeed();
++#endif
+
+@@ -106,2 +116,5 @@
+     m_mode = OversizeTypedArray;
++#if OS(WASI)
++    allocation.succeed();
++#endif
+ }
+diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+--- a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
++++ b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+@@ -43,2 +43,6 @@
+
++#if OS(WASI)
++#include "WASIMemoryTelemetry.h"
++#endif
++
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+@@ -208,2 +213,5 @@
+ {
++#if OS(WASI)
++    WASIMemoryAllocationScope allocation(static_cast<uint64_t>(numElements) * elementByteSize, WASIMemoryAllocationScope::ArrayBuffer);
++#endif
+     CheckedSize sizeInBytes = numElements;
+@@ -235,2 +243,5 @@
+     m_destructor = ArrayBuffer::primitiveGigacageDestructor();
++#if OS(WASI)
++    allocation.succeed();
++#endif
+ }
+diff --git a/Source/JavaScriptCore/heap/Heap.h b/Source/JavaScriptCore/heap/Heap.h
+--- a/Source/JavaScriptCore/heap/Heap.h
++++ b/Source/JavaScriptCore/heap/Heap.h
+@@ -400,2 +400,5 @@
+     size_t sizeAfterLastCollection() const { return m_sizeAfterLastCollect; }
++#if OS(WASI)
++    bool hasCompletedFullCollection() const { return static_cast<bool>(m_lastFullGCEndTime); }
++#endif
+     // Everything the mutator has allocated (cells and reported extra memory), the current cycle included. Mutator thread only.
+diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
+--- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
++++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
+@@ -42,2 +42,5 @@
+ #include <wtf/text/MakeString.h>
++#if OS(WASI)
++#include "WASIMemoryTelemetry.h"
++#endif
+
+@@ -58,2 +61,6 @@
+ {
++#if OS(WASI)
++    WASIMemoryAllocationScope request(static_cast<uint64_t>(length) * sizeof(typename Adaptor::Type),
++        WASIMemoryAllocationScope::TypedArray, WASIMemoryAllocationScope::FailurePolicy::ObserveOnly);
++#endif
+     VM& vm = globalObject->vm();
