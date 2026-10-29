@@ -657,9 +657,29 @@ test("a disconnected request does not start a response after its socket has clos
   const connection = state.socket();
   try {
     Reflect.get(server, "_onConnection").call(server, connection);
-    state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"), 0);
+    state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"));
+    Reflect.get(connection, "pumpRead").call(connection);
+    connection.destroy();
     await state.pump();
     expect(requests).toBe(0);
+    expect(Reflect.get(connection, "busy")).toBe(false);
+    expect(Reflect.get(server, "_connections").size).toBe(0);
+    expect(state.pending()).toBe(0);
+  } finally { connection.destroy(); await state.pump(); }
+});
+
+
+test("HTTP half-close still serves a synchronous complete response", async () => {
+  const state = fixture();
+  let response: ServerResponse | undefined;
+  const server = state.http.createServer((_request, current) => { response = current; current.end("complete"); });
+  const connection = state.socket();
+  try {
+    Reflect.get(server, "_onConnection").call(server, connection);
+    state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"), 0);
+    await state.pump();
+    expect(response?.writableFinished).toBe(true);
+    expect(Buffer.concat(state.writes).toString()).toContain("complete");
     expect(Reflect.get(connection, "busy")).toBe(false);
     expect(Reflect.get(server, "_connections").size).toBe(0);
     expect(state.pending()).toBe(0);

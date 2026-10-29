@@ -500,9 +500,12 @@
       buffer = buffer.length ? internal.concatBytes([buffer, chunk]) : chunk;
       next();
     };
+    function endActive() {
+      if (busy && !conn.upgraded) conn.end();
+    }
     conn.onEnd = () => {
       ended = true;
-      if (busy && !conn.upgraded) conn.destroy();
+      if (busy) Promise.resolve().then(endActive);
       else next();
     };
     conn.onError = () => {};
