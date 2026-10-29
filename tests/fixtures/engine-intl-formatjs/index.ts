@@ -11,6 +11,8 @@ const parts = new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR
 console.log("parts", parts.map(part => part.type).join(","));
 console.log("supported", Intl.NumberFormat.supportedLocalesOf(["en-US", "de-DE"]).join(","));
 console.log("collation", new Intl.Collator("en").compare("ä", "z"), new Intl.Collator("sv").compare("ä", "z"));
+console.log("collationOptions", new Intl.Collator("en", { numeric: true }).compare("item2", "item10"),
+  new Intl.Collator("en", { sensitivity: "base" }).compare("a", "ä"));
 console.log("timezone", new Intl.DateTimeFormat("en-US", {
   timeZone: "Asia/Jerusalem",
   hour: "numeric",

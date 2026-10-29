@@ -3,7 +3,6 @@ import { Locale } from "@formatjs/intl-locale";
 import { PluralRules } from "@formatjs/intl-pluralrules";
 import { NumberFormat } from "@formatjs/intl-numberformat";
 import { DateTimeFormat } from "@formatjs/intl-datetimeformat";
-import { Collator } from "@formatjs/intl-collator";
 import { Segmenter } from "@formatjs/intl-segmenter";
 import ListFormat from "@formatjs/intl-listformat";
 import RelativeTimeFormat from "@formatjs/intl-relativetimeformat";
@@ -15,7 +14,6 @@ export const intl = {
   PluralRules,
   NumberFormat,
   DateTimeFormat,
-  Collator,
   Segmenter,
   ListFormat,
   RelativeTimeFormat,

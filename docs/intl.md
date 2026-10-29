@@ -8,7 +8,9 @@ Bootstrap checks German number formatting and Hebrew dual plurals on non-host en
 
 The bundle supplies `NumberFormat`, `DateTimeFormat`, `PluralRules`, `Collator`, `Segmenter`, `ListFormat`, `RelativeTimeFormat`, `Locale`, `getCanonicalLocales`, and `supportedValuesOf`.
 
-English, German, and Hebrew locale packs cover numbers, dates, plurals, lists, and relative times. Other requested locales fall back to English for these APIs. `supportedLocalesOf` reports the loaded packs. The collation package includes its Unicode collation algorithm data and locale tailorings. Segmentation uses the package's Unicode rules.
+English, German, and Hebrew locale packs cover numbers, dates, plurals, lists, and relative times. Other requested locales fall back to English for these APIs. `supportedLocalesOf` reports the loaded packs. Segmentation uses the FormatJS package's Unicode rules.
+
+ICU4X 2.4.0 implements collation with Unicode collation data and locale tailorings. The adapter supports sensitivity, numeric ordering, case-first, punctuation handling, and collation extensions. ICU4X falls back to its root data for unknown locales. Search usage is not included in this data build and throws `RangeError`.
 
 Dates support the Gregorian and ISO 8601 calendars. The bundle includes FormatJS's complete IANA timezone data, with daylight transitions through 2100. The default timezone is UTC because a WASI guest has no host-local timezone contract. Named zones and explicit UTC offsets work without native engine support.
 

@@ -1,4 +1,5 @@
 import { intl } from "./namespace";
+import { createCollator, type IntlInternal } from "./collator";
 
 import "@formatjs/intl-pluralrules/locale-data/en.js";
 import "@formatjs/intl-pluralrules/locale-data/de.js";
@@ -17,4 +18,9 @@ import "@formatjs/intl-relativetimeformat/locale-data/en.js";
 import "@formatjs/intl-relativetimeformat/locale-data/de.js";
 import "@formatjs/intl-relativetimeformat/locale-data/he.js";
 
-export { intl };
+export function createIntl(internal: IntlInternal) {
+  const completeIntl = Object.assign({}, intl, { Collator: createCollator(internal) });
+  Object.defineProperty(completeIntl, Symbol.toStringTag, { value: "Intl", configurable: true });
+  Object.defineProperty(globalThis, "Intl", { value: completeIntl, writable: true, configurable: true, enumerable: false });
+  return completeIntl;
+}

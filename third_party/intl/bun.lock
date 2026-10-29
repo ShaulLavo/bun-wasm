@@ -4,7 +4,6 @@
   "workspaces": {
     "": {
       "dependencies": {
-        "@formatjs/intl-collator": "0.2.9",
         "@formatjs/intl-datetimeformat": "7.8.2",
         "@formatjs/intl-getcanonicallocales": "3.2.12",
         "@formatjs/intl-listformat": "8.3.15",
@@ -21,8 +20,6 @@
     "@formatjs/bigdecimal": ["@formatjs/bigdecimal@0.2.7", "", {}, "sha512-B4+XY/e4u5v261r3a37Kq2ax91gPZSKGyVpx8X5dygAggLlUz+6MeBpmAhaBFGB8WQ4JB1qD+QtKHk9aJkEb9Q=="],
 
     "@formatjs/fast-memoize": ["@formatjs/fast-memoize@3.1.7", "", {}, "sha512-zXfhLpvA6T7+efdt9JLbBwZ00tT7NsBMDVnDu8rpHeNNv8KfRZAMo2gkG0k9lK/Nzc//3kJ9pImsfuJxk3KhUA=="],
-
-    "@formatjs/intl-collator": ["@formatjs/intl-collator@0.2.9", "", { "dependencies": { "@formatjs/intl-localematcher": "0.9.0" } }, "sha512-e2/Usk7R4FPZ0yCz9nDaCmo/DgOfvJoMXCwFtYjKBbUXeD/Gccv5j9XctDcx41sYh3uNV9BiWSWNjbRZfOvCRQ=="],
 
     "@formatjs/intl-datetimeformat": ["@formatjs/intl-datetimeformat@7.8.2", "", { "dependencies": { "@formatjs/bigdecimal": "0.2.7", "@formatjs/intl-localematcher": "0.9.0" } }, "sha512-5iCy2mXr6cpEd4N87HLVbN2zRz71dRLMmI8hMY9IgAVaob5fsVocEah6T4w3pPUVYz/aDO2TFGXErPY3JAEUsQ=="],
 

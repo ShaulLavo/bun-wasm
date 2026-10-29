@@ -4,6 +4,7 @@ he-IL {"number":"1,234,567.5","date":"יום חמישי, 29 בפברואר 2024"
 parts integer,group,integer,group,integer,decimal,fraction,literal,currency
 supported en-US,de-DE
 collation -1 1
+collationOptions -1 0
 timezone 03:00:00
 prototype 1.234,5 29.2.2024
 list rot, grün und blau
