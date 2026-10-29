@@ -179,7 +179,7 @@ test("base families and Bun resolve one physical Waffle package", async () => {
   for (const name of ["waffle-coreutils", "waffle-findutils", "waffle-grep", "waffle-ripgrep", "waffle-sed"])
     await assertPackageRuntime(name, join(baseRoot, "package.json"), physical, expected);
   // The merged Bash source pin declares its historical Waffle peer; its physical runtime resolves to this release.
-  await assertPackageRuntime("bash-web", import.meta.dir, physical, "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.93/waffle-0.0.93.tgz");
+  await assertPackageRuntime("bash-web", import.meta.dir, physical, "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.99/waffle-0.0.99.tgz");
 });
 
 async function assertPackageRuntime(name: string, scope: string, physical: string, expectedPeer: string) {
