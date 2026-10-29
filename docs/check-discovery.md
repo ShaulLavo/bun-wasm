@@ -19,7 +19,12 @@ Web manifests also retain the three original subprocess batches with ordered
 `batch` labels. A failed batch stops the runner; later batches never run.
 
 `localRuntime` retains the former local `check-runtime.sh` selection. It does not
-add a second CI owner. Seven overlapping probes belong to Web CI only; Web also
+add a second CI owner. The `runtime` owner runs in the compiled native fixture
+job. Use `web` with `localRuntime: true` for source-only Node or Bun checks that
+also belong in the local runtime preflight. Their Web gate stays blocking without
+building native guests. The native selector reads registered harness paths and
+fixture directories from both comparison snapshots, including removed inputs.
+Seven overlapping probes belong to Web CI only; Web also
 owns the runtime type project. The native fixture runner sets `BUN_WASM_CI_CHECKS=1`
 so `test.sh` runs only Rust-owned probes, without repeating those Web checks.
 Local fixture commands still run their original complete runtime preflight.
