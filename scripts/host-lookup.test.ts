@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import * as hostStreams from "node:stream/web";
 import { createContext, runInContext, runInNewContext } from "node:vm";
+import { netAddressSource } from "./net-address-source";
 
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/host_lookup.ts", import.meta.url), "utf8");
 const context = { Array, Error, JSON, Object, Promise, TypeError };
@@ -61,6 +62,7 @@ function bootstrapFixture(caps: Record<string, boolean> = completeCaps, provider
       loaded.push(name);
       const typed = new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url);
       const path = existsSync(typed) ? typed : new URL(`../crates/bunwasm-runtime/src/js/${name}.js`, import.meta.url);
+      if (name === "net_address") return runInContext(netAddressSource(), realm, { filename: path.pathname });
       const text = readFileSync(path, "utf8");
       const code = path.pathname.endsWith(".ts") ? new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${text}`) : text;
       return runInContext(code, realm, { filename: path.pathname });

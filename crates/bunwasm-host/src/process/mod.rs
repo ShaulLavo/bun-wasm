@@ -283,10 +283,13 @@ pub struct Processes {
     runtime: Arc<Runtime>,
     pub pid: i32,
     fds: Descriptors,
+    inherited: Vec<i32>,
     next: u32,
     notify: Arc<Notify>,
     cancel: Arc<Cancellation>,
     access: HashMap<i32, Arc<Mutex<AccessState>>>,
+    /// The memory group this process is a member of; its workers join it.
+    memory_group: Option<crate::shm::MemoryGroup>,
 }
 
 enum AccessState {
@@ -325,6 +328,8 @@ impl Processes {
         for endpoint in stdio.fds.values() {
             endpoint.observe(&notify);
         }
+        let mut inherited: Vec<i32> = stdio.fds.keys().copied().collect();
+        inherited.sort_unstable();
         let next = stdio
             .fds
             .keys()
@@ -336,11 +341,18 @@ impl Processes {
             runtime,
             pid: stdio.pid,
             fds: stdio.fds,
+            inherited,
             next,
             notify,
             cancel,
             access: HashMap::new(),
+            memory_group: None,
         }
+    }
+
+    /// Record the memory group this process joined, so the workers it spawns join it too.
+    pub fn join_memory_group(&mut self, group: Option<crate::shm::MemoryGroup>) {
+        self.memory_group = group;
     }
 
     /// Native metadata work runs off the import stack, with caller-owned,
@@ -469,6 +481,10 @@ impl Processes {
             return Err(NOTCAPABLE);
         }
         Ok(endpoint.readiness(write, &self.notify))
+    }
+
+    pub fn inherited_fd(&self, index: u32) -> i32 {
+        self.inherited.get(index as usize).copied().unwrap_or(NOENT)
     }
 
     pub fn owns(&self, fd: i32) -> bool {
@@ -611,6 +627,16 @@ impl Processes {
         };
         let pid = state.next;
         state.next = next;
+        // A group member's worker reserves its slot before its thread exists (W1).
+        let admission = match &startup {
+            Ok(resolved) => self.runtime.linked.worker_admission(
+                self.memory_group.as_ref(),
+                request.worker.is_some(),
+                &resolved.module,
+                pid as u32,
+            )?,
+            Err(_) => None,
+        };
         let job = if request.job > 0.0 {
             request.job as i32
         } else {
@@ -663,6 +689,7 @@ impl Processes {
                                 },
                                 stdio,
                                 cancellation.clone(),
+                                admission,
                             )
                         }))
                         .unwrap_or_else(|_| {

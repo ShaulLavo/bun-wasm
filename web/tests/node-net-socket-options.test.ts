@@ -4,10 +4,12 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import * as util from "node:util";
 import { runInNewContext } from "node:vm";
+import { netAddressSource } from "../../scripts/net-address-source";
 
 const runtime = new URL("../../crates/bunwasm-runtime/src/js/", import.meta.url);
 
 function factory(name: string, extension = "js") {
+  if (name === "net_address") return runInNewContext(netAddressSource(), { Buffer, AbortController, AbortSignal });
   const source = readFileSync(new URL(`${name}.${extension}`, runtime), "utf8");
   const text = extension === "ts" ? new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`) : source;
   return runInNewContext(text, { Buffer, AbortController, AbortSignal });

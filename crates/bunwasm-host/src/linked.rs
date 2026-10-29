@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -8,13 +9,24 @@ use wasmtime::{
 };
 
 use crate::Host;
+use crate::guest::GuestMemory;
+use crate::shm::{GroupBackingBudget, MemberLease, MemoryGroup};
 
 #[path = "linked_relay.rs"]
 mod relay;
 use relay::{SelfPlan, SelfSlots};
+#[path = "linked_group.rs"]
+mod group;
+#[path = "linked_preview1.rs"]
+mod preview1;
+pub use group::{Admission, MemberImage};
 
 #[derive(Default)]
-pub struct Programs(Vec<Program>);
+pub struct Programs {
+    programs: Vec<Program>,
+    /// One runtime-wide committed-backing budget shared by every memory group (W3).
+    budget: GroupBackingBudget,
+}
 
 struct Program {
     core: Module,
@@ -22,6 +34,8 @@ struct Program {
     layout: MemInfo,
     kind: ProgramKind,
     self_plan: SelfPlan,
+    /// A shared-group core's layout and base-relative exports.
+    group: Option<group::CoreLayout>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,44 +100,149 @@ impl Programs {
             .with_context(|| format!("loading {}", path.display()))?;
         let has_bind = core_bind_is_function(&core)?;
         let kind = parse_program_kind(&core_bytes, has_bind)?;
+        let profile = group::admit(&core_bytes, true)
+            .with_context(|| format!("admitting {}", path.display()))?;
         let Some(kind) = kind else {
+            ensure!(
+                profile == group::Profile::Split,
+                "a memory group image runs only as a member of a linked program"
+            );
             return Ok(core);
         };
         let path = path.with_file_name(kind.companion());
         let bytes = std::fs::read(&path)
             .with_context(|| format!("loading paired {:?} engine {}", kind, path.display()))?;
+        let side = group::admit(&bytes, false)
+            .with_context(|| format!("admitting paired {:?} engine {}", kind, path.display()))?;
+        ensure!(
+            side == profile,
+            "paired {kind:?} engine profile {side:?} does not match core profile {profile:?}"
+        );
+        // Only the QuickJS pair is qualified for shared groups; JSC and Hermes inputs have no atomics.
+        ensure!(
+            profile == group::Profile::Split || kind == ProgramKind::QuickJs,
+            "a {kind:?} pair is not qualified for the shared-group profile"
+        );
+        let group = match profile {
+            group::Profile::Split => None,
+            group::Profile::SharedGroup => Some(&core_bytes),
+        };
         let layout = layout(&bytes)?;
         let library = Module::new(engine, &bytes)?;
+        let group = group
+            .map(|bytes| group::CoreLayout::read(engine, bytes, &core, &library))
+            .transpose()?;
         validate_profile(kind, &library)?;
         let self_plan = SelfPlan::new(engine, &core, &library, &bytes)?;
-        self.0.push(Program {
+        self.programs.push(Program {
             core: core.clone(),
             library,
             layout,
             kind,
             self_plan,
+            group,
         });
         Ok(core)
+    }
+
+    /// Executable admission clones Modules. Keep the original image alive with its pair.
+    fn program(&self, module: &Module) -> Option<&Program> {
+        self.programs
+            .iter()
+            .find(|program| program.core.image_range() == module.image_range())
+    }
+
+    /// Whether `module` is the core of an admitted shared-group program.
+    pub fn is_group(&self, module: &Module) -> bool {
+        self.program(module)
+            .is_some_and(|program| program.group.is_some())
+    }
+
+    /// The slot a worker of a group member reserves in its parent's group before its thread
+    /// starts (`EAGAIN` when the group is full); `None` for every other spawn.
+    pub fn worker_admission(
+        &self,
+        parent: Option<&MemoryGroup>,
+        worker: bool,
+        module: &Module,
+        pid: u32,
+    ) -> Result<Option<Admission>, i32> {
+        group::worker_admission(parent, worker, self.is_group(module), pid)
+    }
+
+    /// The membership of a process about to run `module`: its inherited slot, the first slot of
+    /// a new group on the runtime-wide budget, or none for a split program.
+    pub fn member(
+        &self,
+        module: &Module,
+        pid: u32,
+        admission: Option<Admission>,
+    ) -> Result<Option<MemberLease>> {
+        group::member(
+            module.engine(),
+            &self.budget,
+            self.is_group(module),
+            pid,
+            admission,
+        )
+    }
+
+    /// Instantiate a program's core. A shared-group core is a member image: its data and stack
+    /// are carved through the member lease in `Host::shm`, and its memory is initialized here.
+    ///
+    /// # Safety
+    ///
+    /// For a group program, the caller keeps a lease of the member's group backing
+    /// (`MemberLease::group().memory_lease()`) alive until `store` and every instance in it
+    /// have dropped. Wasmtime drops a Store's data before its instances, so the lease held in
+    /// `Host` is not enough on its own.
+    pub unsafe fn instantiate(
+        &self,
+        module: &Module,
+        linker: &mut Linker<Host>,
+        store: &mut Store<Host>,
+    ) -> Result<(Instance, Option<MemberImage>)> {
+        let Some(core) = self
+            .program(module)
+            .and_then(|program| program.group.as_ref())
+        else {
+            return Ok((linker.instantiate(&mut *store, module)?, None));
+        };
+        let lease = store
+            .data()
+            .shm
+            .as_ref()
+            .context("a memory group program needs a member lease")?;
+        let placement = group::carve(lease, &core.layout)?;
+        let memory = lease.group().memory_lease();
+        // Preview1 reaches the member's memory only through its view, for the core and side.
+        // SAFETY: both admissions are covered by this function's contract.
+        unsafe { core.preview1.bind(store, linker, &memory) }?;
+        let (instance, image) = unsafe {
+            group::instantiate_core(store, linker, module, &core.layout, &memory, &placement)
+        }?;
+        Ok((instance, Some(image)))
     }
 
     pub fn initialize(
         &self,
         module: &Module,
         core: Instance,
+        member: Option<&MemberImage>,
         linker: &Linker<Host>,
         store: &mut Store<Host>,
     ) -> Result<()> {
-        // Executable admission clones Modules. Keep the original image alive with its pair.
-        let program = self
-            .0
-            .iter()
-            .find(|program| program.core.image_range() == module.image_range());
-        let Some(program) = program else {
+        let Some(program) = self.program(module) else {
             return Ok(());
         };
         core.get_typed_func::<(), ()>(&mut *store, "__wasm_call_ctors")?
             .call(&mut *store, ())?;
-        program.initialize(core, linker, store)
+        let image = match (member, &program.group) {
+            (None, None) => CoreImage::split(core, store)?,
+            (Some(member), Some(group)) => CoreImage::member(core, member, &group.relative),
+            _ => bail!("program core and member image disagree on the memory group profile"),
+        };
+        program.initialize(&image, linker, store)
     }
 }
 
@@ -248,19 +367,15 @@ fn read_layout_item(section: Dylink0Subsection<'_>, info: &mut Option<MemInfo>) 
 impl Program {
     fn initialize(
         &self,
-        core: Instance,
+        core: &CoreImage<'_>,
         linker: &Linker<Host>,
         store: &mut Store<Host>,
     ) -> Result<()> {
-        let memory = core
-            .get_memory(&mut *store, "memory")
-            .context("core memory")?;
-        let table = core
-            .get_table(&mut *store, "__indirect_function_table")
-            .context("core table")?;
+        let table = core.table;
         let size = self.layout.memory_size.max(1);
         let alignment = 1_u32 << self.layout.memory_alignment;
         let base = core
+            .instance
             .get_typed_func::<(u32, u32), u32>(&mut *store, "bun_core_alloc")?
             .call(&mut *store, (size, alignment))?;
         ensure!(
@@ -269,10 +384,17 @@ impl Program {
         );
         let end = u64::from(base) + u64::from(size);
         ensure!(
-            end <= memory.data_size(&*store) as u64,
+            end <= core.memory.len(&*store) as u64,
             "side reservation exceeds core memory"
         );
-        memory.data_mut(&mut *store)[base as usize..end as usize].fill(0);
+        let reservation = base as usize..end as usize;
+        let zeroed = reservation.len();
+        core.memory
+            .fill(&mut *store, reservation, |bytes, _| {
+                bytes.fill(0);
+                zeroed as i32
+            })
+            .context("side reservation")?;
         let alignment = 1_u64 << self.layout.table_alignment;
         let table_base = table.size(&*store).max(1).div_ceil(alignment) * alignment;
         let table_end = table_base + u64::from(self.layout.table_size.max(1));
@@ -297,7 +419,7 @@ impl Program {
 
     fn imports(
         &self,
-        core: Instance,
+        core: &CoreImage<'_>,
         linker: &mut Linker<Host>,
         store: &mut Store<Host>,
         memory: u32,
@@ -310,7 +432,7 @@ impl Program {
             let value = match (import.module(), name) {
                 ("env", "__memory_base") => address_global(store, memory, Mutability::Const)?,
                 ("env", "__table_base") => address_global(store, table, Mutability::Const)?,
-                ("env", name) => env_export(core, store, name, own, slots)?,
+                ("env", name) => env_value(core, store, name, own, slots)?,
                 ("GOT.mem", name) => got_address(core, store, name)?,
                 ("GOT.func", name) => function_cell(core, store, name, own, slots)?,
                 ("wasi_snapshot_preview1", _) => continue,
@@ -319,6 +441,75 @@ impl Program {
             linker.define(&*store, import.module(), name, value)?;
         }
         Ok(())
+    }
+}
+
+/// The core a side links into: its memory and table, plus a member image's own stack pointer
+/// and the base that rebases its relative data exports.
+struct CoreImage<'a> {
+    instance: Instance,
+    memory: GuestMemory,
+    table: Table,
+    stack_pointer: Option<Global>,
+    base: u32,
+    relative: Option<&'a HashSet<String>>,
+}
+
+impl<'a> CoreImage<'a> {
+    fn split(instance: Instance, store: &mut Store<Host>) -> Result<Self> {
+        let memory = instance
+            .get_memory(&mut *store, "memory")
+            .context("core memory")?;
+        let table = instance
+            .get_table(&mut *store, "__indirect_function_table")
+            .context("core table")?;
+        Ok(Self {
+            instance,
+            memory: GuestMemory::Private(memory),
+            table,
+            stack_pointer: None,
+            base: 0,
+            relative: None,
+        })
+    }
+
+    fn member(instance: Instance, member: &MemberImage, relative: &'a HashSet<String>) -> Self {
+        Self {
+            instance,
+            memory: GuestMemory::Shared(member.memory.clone()),
+            table: member.table,
+            stack_pointer: Some(member.stack_pointer),
+            base: member.memory_base,
+            relative: Some(relative),
+        }
+    }
+
+    /// The address a core data export names. A member's constant exports are base-relative.
+    fn data_address(&self, name: &str, value: u32) -> u32 {
+        let relative = self.relative.is_some_and(|names| names.contains(name));
+        if relative {
+            value.wrapping_add(self.base)
+        } else {
+            value
+        }
+    }
+}
+
+/// The member's own memory, table and stack pointer; everything else comes from the core.
+fn env_value(
+    core: &CoreImage<'_>,
+    store: &mut Store<Host>,
+    name: &str,
+    own: Option<u32>,
+    slots: &SelfSlots,
+) -> Result<Extern> {
+    match (name, core.stack_pointer) {
+        // SAFETY: a member image exists only through `Programs::instantiate`, whose caller keeps
+        // the group backing alive past this Store and its side instance.
+        ("memory", _) => Ok(unsafe { core.memory.export_for_admission() }),
+        ("__indirect_function_table", _) => Ok(core.table.into()),
+        ("__stack_pointer", Some(stack_pointer)) => Ok(stack_pointer.into()),
+        _ => env_export(core.instance, store, name, own, slots),
     }
 }
 
@@ -337,7 +528,7 @@ fn env_export(
 }
 
 fn function_cell(
-    core: Instance,
+    core: &CoreImage<'_>,
     store: &mut Store<Host>,
     name: &str,
     own: Option<u32>,
@@ -345,7 +536,7 @@ fn function_cell(
 ) -> Result<Extern> {
     match own {
         Some(slot) => address_global(store, slots.address(slot), Mutability::Var),
-        None => got_function(core, store, name),
+        None => got_function(core.instance, store, name, core.table),
     }
 }
 
@@ -358,8 +549,9 @@ fn address_global<T>(store: &mut Store<T>, value: u32, mutability: Mutability) -
     .into())
 }
 
-fn got_address(core: Instance, store: &mut Store<Host>, name: &str) -> Result<Extern> {
+fn got_address<T>(core: &CoreImage<'_>, store: &mut Store<T>, name: &str) -> Result<Extern> {
     let symbol = core
+        .instance
         .get_global(&mut *store, name)
         .with_context(|| format!("missing core GOT address {name}"))?;
     ensure!(
@@ -370,11 +562,9 @@ fn got_address(core: Instance, store: &mut Store<Host>, name: &str) -> Result<Ex
         .get(&mut *store)
         .i32()
         .context("GOT address must be i32")? as u32;
-    let memory = core
-        .get_memory(&mut *store, "memory")
-        .context("core memory")?;
+    let value = core.data_address(name, value);
     ensure!(
-        data_address(name, value, memory.data_size(&*store)),
+        data_address(name, value, core.memory.len(&*store)),
         "GOT.mem.{name} address is outside core memory"
     );
     address_global(store, value, Mutability::Var)
@@ -392,13 +582,15 @@ fn data_address(name: &str, address: u32, memory_size: usize) -> bool {
 
 /// The table slot of a core function, so the side's `&f` equals the core's. A function not
 /// yet in the table gets one new slot.
-fn got_function<T>(core: Instance, store: &mut Store<T>, name: &str) -> Result<Extern> {
+fn got_function<T>(
+    core: Instance,
+    store: &mut Store<T>,
+    name: &str,
+    table: Table,
+) -> Result<Extern> {
     let function = core
         .get_func(&mut *store, name)
         .with_context(|| format!("GOT.func.{name} requires a core function export"))?;
-    let table = core
-        .get_table(&mut *store, "__indirect_function_table")
-        .context("core table")?;
     let slot = match table_slot(store, table, function) {
         Some(slot) => slot,
         None => table.grow(&mut *store, 1, Ref::Func(Some(function)))?,
@@ -541,7 +733,10 @@ mod tests {
     }
 
     fn got_slot(core: Instance, store: &mut Store<()>, name: &str) -> Result<i32> {
-        let Extern::Global(global) = got_function(core, store, name)? else {
+        let table = core
+            .get_table(&mut *store, "__indirect_function_table")
+            .unwrap();
+        let Extern::Global(global) = got_function(core, store, name, table)? else {
             bail!("GOT.func cell is not a global");
         };
         Ok(global.get(&mut *store).unwrap_i32())

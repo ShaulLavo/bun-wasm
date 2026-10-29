@@ -2,10 +2,6 @@ use super::*;
 use crate::data::NativeResult;
 
 impl Reply {
-    pub fn into_result(self) -> NativeResult {
-        Self::decode(self.status, &self.bytes)
-    }
-
     /// Decodes reply bytes where they are, such as the core's reply allocation.
     pub fn decode(status: Status, bytes: &[u8]) -> NativeResult {
         match status {
