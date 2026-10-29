@@ -61,3 +61,14 @@ and provenance keep every retained process from the selected command. A failed
 child therefore remains visible while its parent lives. Failures from older
 commands are excluded. Independent process limits are not summed into a
 fictional shared headroom budget.
+
+
+## Linked-group lifecycle reference
+
+The executor's link lifecycle is adapted from Waffle `link/worker.ts` at the
+pinned `waffle-v0.0.95` release. It keeps Waffle's preparation, active checks,
+initialization, and group disposal. The local changes retain access to side
+instances for telemetry, establish an allocator-only reader before constructor
+execution, and publish cached terminal data before disposal. Linking and memory
+reservation remain Waffle's public implementation. The shared cells, schema,
+allocator wrappers, and command selection are original adapters.
