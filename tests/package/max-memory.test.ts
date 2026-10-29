@@ -55,8 +55,9 @@ test("every consumer reads the authority", () => {
 });
 
 test("no consumer keeps its own capacity number", () => {
-  // The bash-web shell is a separate program with its own smaller memory, not a Bun guest.
-  expect(tracked("--max-memory=[0-9]")).toEqual(["scripts/build-bash-web-shell.sh"]);
+  // Separate programs with their own smaller memory, not Bun guests: the bash-web shell and
+  // the shared sysroot's synthetic C proof member.
+  expect(tracked("--max-memory=[0-9]")).toEqual(["scripts/build-bash-web-shell.sh", "scripts/test-shared-sysroot.sh"]);
   expect(tracked("forceRAMSize\\(\\) = [0-9]")).toEqual([]);
   expect(tracked("536870912|512 << 20|MAX_PAGES: u64 = [0-9]|SHARED_GROUP_MAX_PAGES")
     .filter(path => !path.startsWith("third_party/") && !path.startsWith(".internal/"))).toEqual([]);
