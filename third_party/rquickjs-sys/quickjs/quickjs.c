@@ -350,6 +350,8 @@ struct JSRuntime {
     struct list_head gc_zero_ref_count_list;
     struct list_head tmp_obj_list; /* used during GC */
     JSGCPhaseEnum gc_phase : 8;
+    /* bun-wasm: which cycle-collector pass is marking WeakMap values */
+    uint8_t weak_value_pass;
     size_t malloc_gc_threshold;
 #ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
     struct list_head string_list; /* list of JSString.link */
@@ -648,6 +650,8 @@ typedef struct JSWeakRefRecord {
 typedef struct JSMapRecord {
     int ref_count; /* used during enumeration to avoid freeing the record */
     bool empty; /* true if the record is deleted */
+    /* bun-wasm: a WeakMap value's reference was restored in this GC */
+    bool gc_restored;
     struct JSMapState *map;
     struct list_head link;
     struct list_head hash_link;
@@ -663,6 +667,7 @@ typedef struct JSMapState {
     uint32_t hash_size; /* must be a power of two */
     uint32_t record_count_threshold; /* count at which a hash table
                                         resize is needed */
+    struct JSObject *owner; /* bun-wasm: the WeakMap/WeakSet object */
 } JSMapState;
 
 enum
@@ -892,7 +897,17 @@ typedef struct JSFunctionBytecode {
     int pc2line_len;
     uint8_t *pc2line_buf;
     char *source;
+    /* bun-wasm: when set, `source` points into this text shared by every
+       function of one parse instead of owning a private copy */
+    struct JSSharedSource *source_owner;
 } JSFunctionBytecode;
+
+/* bun-wasm: the source span of one parse, shared by its functions */
+typedef struct JSSharedSource {
+    int ref_count;
+    int len;
+    char buf[];
+} JSSharedSource;
 
 typedef struct JSBoundFunction {
     JSValue func_obj;
@@ -7251,19 +7266,89 @@ void JS_MarkValue(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     }
 }
 
+/* bun-wasm: a WeakMap entry is an ephemeron. Its value stays alive only
+   while both the key and the map are alive. QuickJS marked the value as a
+   child of the key alone, so a value that reaches its own map (webpack's
+   per-compilation ModuleGraph keyed by long-lived dependencies) kept every
+   old map and everything it reaches alive for the key's lifetime.
+
+   The decref pass still attributes the record's reference to the key. The
+   scan pass restores it, making the value live, only once both key and map
+   are known live; whichever of the two is scanned second does it. The
+   restore pass gives back the remaining references of entries with a dead
+   key or map so that gc_free_cycles sees consistent counts. */
+#define WEAK_VALUE_PASS_NONE 0
+#define WEAK_VALUE_PASS_DECREF 1
+#define WEAK_VALUE_PASS_SCAN 2
+#define WEAK_VALUE_PASS_RESTORE 3
+
+static bool weak_map_owner_live(JSMapState *s)
+{
+    return JS_REF_COUNT(&s->owner->header) > 0;
+}
+
 static void mark_weak_map_value(JSRuntime *rt, JSWeakRefRecord *first_weak_ref, JS_MarkFunc *mark_func) {
     JSWeakRefRecord *wr;
     JSMapRecord *mr;
     JSMapState *s;
 
     for (wr = first_weak_ref; wr != NULL; wr = wr->next_weak_ref) {
-        if (wr->kind == JS_WEAK_REF_KIND_MAP) {
-            mr = wr->u.map_record;
-            s = mr->map;
-            assert(s->is_weak);
-            assert(!mr->empty); /* no iterator on WeakMap/WeakSet */
-            JS_MarkValue(rt, mr->value, mark_func);
+        if (wr->kind != JS_WEAK_REF_KIND_MAP)
+            continue;
+        mr = wr->u.map_record;
+        s = mr->map;
+        assert(s->is_weak);
+        assert(!mr->empty); /* no iterator on WeakMap/WeakSet */
+        switch (rt->weak_value_pass) {
+        case WEAK_VALUE_PASS_DECREF:
+            mr->gc_restored = false;
+            break;
+        case WEAK_VALUE_PASS_SCAN: /* the key is live */
+            if (mr->gc_restored || !weak_map_owner_live(s))
+                continue;
+            mr->gc_restored = true;
+            break;
+        case WEAK_VALUE_PASS_RESTORE: /* the key is dead */
+            if (mr->gc_restored)
+                continue;
+            mr->gc_restored = true;
+            break;
         }
+        JS_MarkValue(rt, mr->value, mark_func);
+    }
+}
+
+/* The map side of the scan and restore passes (see mark_weak_map_value).
+   `key_live` tells whether the record's key object is live in this pass. */
+static void mark_weak_map_records(JSRuntime *rt, JSGCObjectHeader *gp,
+                                  bool restore, JS_MarkFunc *mark_func)
+{
+    JSObject *p = (JSObject *)gp;
+    JSMapState *s;
+    struct list_head *el;
+    JSMapRecord *mr;
+    bool key_live;
+
+    if (JS_GC_TYPE(gp) != JS_GC_OBJ_TYPE_JS_OBJECT ||
+        (p->class_id != JS_CLASS_WEAKMAP && p->class_id != JS_CLASS_WEAKSET))
+        return;
+    s = p->u.map_state;
+    if (!s)
+        return;
+    list_for_each(el, &s->records) {
+        mr = list_entry(el, JSMapRecord, link);
+        /* Symbol keys are not GC objects: their values were never decreffed. */
+        if (mr->empty || mr->gc_restored || JS_VALUE_GET_TAG(mr->key) != JS_TAG_OBJECT)
+            continue;
+        /* After the scan, live objects have mark 0 and dead ones mark 1. */
+        if (restore)
+            key_live = JS_GC_MARK(&JS_VALUE_GET_OBJ(mr->key)->header) == 0;
+        else
+            key_live = JS_REF_COUNT(&JS_VALUE_GET_OBJ(mr->key)->header) > 0;
+        if (!key_live)
+            continue;
+        mr->gc_restored = true;
+        JS_MarkValue(rt, mr->value, mark_func);
     }
 }
 
@@ -7395,6 +7480,7 @@ static void gc_decref(JSRuntime *rt)
     /* decrement the refcount of all the children of all the GC
        objects and move the GC objects with zero refcount to
        tmp_obj_list */
+    rt->weak_value_pass = WEAK_VALUE_PASS_DECREF;
     list_for_each_safe(el, el1, &rt->gc_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
         assert(JS_GC_MARK(p) == 0);
@@ -7430,18 +7516,23 @@ static void gc_scan(JSRuntime *rt)
     JSGCObjectHeader *p;
 
     /* keep the objects with a refcount > 0 and their children. */
+    rt->weak_value_pass = WEAK_VALUE_PASS_SCAN;
     list_for_each(el, &rt->gc_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
         assert(JS_REF_COUNT(p) > 0);
         JS_GC_MARK(p) = 0; /* reset the mark for the next GC call */
         mark_children(rt, p, gc_scan_incref_child);
+        mark_weak_map_records(rt, p, false, gc_scan_incref_child);
     }
 
     /* restore the refcount of the objects to be deleted. */
+    rt->weak_value_pass = WEAK_VALUE_PASS_RESTORE;
     list_for_each(el, &rt->tmp_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
         mark_children(rt, p, gc_scan_incref_child2);
+        mark_weak_map_records(rt, p, true, gc_scan_incref_child2);
     }
+    rt->weak_value_pass = WEAK_VALUE_PASS_NONE;
 }
 
 static void gc_free_cycles(JSRuntime *rt)
@@ -7568,7 +7659,10 @@ static void compute_bytecode_size(JSFunctionBytecode *b, JSMemoryUsage_helper *h
         hp->js_func_code_size += b->byte_code_len;
     }
     memory_used_count++;
-    js_func_size += b->source_len + 1;
+    if (b->source_owner)
+        js_func_size += (b->source_owner->len + 1) / b->source_owner->ref_count;
+    else
+        js_func_size += b->source_len + 1;
     if (b->pc2line_len) {
         memory_used_count++;
         hp->js_func_pc2line_count += 1;
@@ -22380,8 +22474,11 @@ typedef struct JSFunctionDef {
     int col_num;
     DynBuf pc2line;
 
-    char *source;  /* raw source, utf-8 encoded */
+    /* raw source, utf-8 encoded. bun-wasm: borrowed from the parse input
+       until js_share_function_sources() points it into source_owner */
+    char *source;
     int source_len;
+    JSSharedSource *source_owner;
 
     JSModuleDef *module; /* != NULL when parsing a module */
 } JSFunctionDef;
@@ -25974,11 +26071,8 @@ static __exception int js_parse_class(JSParseState *s, bool is_class_expr,
     put_u32(fd->byte_code.buf + ctor_cpool_offset, ctor_fd->parent_cpool_idx);
 
     /* store the class source code in the constructor. */
-    js_free(ctx, ctor_fd->source);
     ctor_fd->source_len = s->buf_ptr - class_start_ptr;
-    ctor_fd->source = js_strndup(ctx, (const char *)class_start_ptr, ctor_fd->source_len);
-    if (!ctor_fd->source)
-        goto fail;
+    ctor_fd->source = (char *)class_start_ptr;
 
     /* consume the '}' */
     if (next_token(s))
@@ -33109,6 +33203,62 @@ static void free_bytecode_atoms(JSRuntime *rt,
 
 #ifndef QJS_DISABLE_PARSER
 
+static void js_shared_source_free(JSRuntime *rt, JSSharedSource *text)
+{
+    if (text && --text->ref_count == 0)
+        js_free_rt(rt, text);
+}
+
+static void js_source_span(JSFunctionDef *fd, const char **lo, const char **hi)
+{
+    struct list_head *el;
+
+    if (fd->source) {
+        if (!*lo || fd->source < *lo)
+            *lo = fd->source;
+        if (!*hi || fd->source + fd->source_len > *hi)
+            *hi = fd->source + fd->source_len;
+    }
+    list_for_each(el, &fd->child_list)
+        js_source_span(list_entry(el, JSFunctionDef, link), lo, hi);
+}
+
+static void js_source_attach(JSFunctionDef *fd, const char *lo, JSSharedSource *text)
+{
+    struct list_head *el;
+
+    if (fd->source) {
+        fd->source = text->buf + (fd->source - lo);
+        fd->source_owner = text;
+        text->ref_count++;
+    }
+    list_for_each(el, &fd->child_list)
+        js_source_attach(list_entry(el, JSFunctionDef, link), lo, text);
+}
+
+/* bun-wasm: QuickJS kept a private copy of every function's text for
+   Function.prototype.toString, so nested functions stored their source once
+   per enclosing level. Copy the span covering all functions of this parse
+   once instead; each bytecode keeps a reference. */
+static int js_share_function_sources(JSContext *ctx, JSFunctionDef *fd)
+{
+    const char *lo = NULL, *hi = NULL;
+    JSSharedSource *text;
+
+    js_source_span(fd, &lo, &hi);
+    if (!lo)
+        return 0;
+    text = js_malloc(ctx, sizeof(*text) + (hi - lo) + 1);
+    if (!text)
+        return -1;
+    text->ref_count = 0;
+    text->len = hi - lo;
+    memcpy(text->buf, lo, hi - lo);
+    text->buf[hi - lo] = '\0';
+    js_source_attach(fd, lo, text);
+    return 0;
+}
+
 static void js_free_function_def(JSContext *ctx, JSFunctionDef *fd)
 {
     int i;
@@ -33162,7 +33312,7 @@ static void js_free_function_def(JSContext *ctx, JSFunctionDef *fd)
     JS_FreeAtom(ctx, fd->filename);
     dbuf_free(&fd->pc2line);
 
-    js_free(ctx, fd->source);
+    js_shared_source_free(ctx->rt, fd->source_owner);
 
     if (fd->parent) {
         /* remove in parent list */
@@ -37155,6 +37305,8 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
     b->pc2line_len = fd->pc2line.size;
     b->source = fd->source;
     b->source_len = fd->source_len;
+    b->source_owner = fd->source_owner;
+    fd->source_owner = NULL;
 
     if (fd->scopes != fd->def_scope_array)
         js_free(ctx, fd->scopes);
@@ -37227,7 +37379,10 @@ static void free_function_bytecode(JSRuntime *rt, JSFunctionBytecode *b)
     JS_FreeAtomRT(rt, b->func_name);
     JS_FreeAtomRT(rt, b->filename);
     js_free_rt(rt, b->pc2line_buf);
-    js_free_rt(rt, b->source);
+    if (b->source_owner)
+        js_shared_source_free(rt, b->source_owner);
+    else
+        js_free_rt(rt, b->source);
 
     remove_gc_object(&b->header);
     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && JS_REF_COUNT(b) != 0) {
@@ -37827,9 +37982,7 @@ static __exception int js_parse_function_decl2(JSParseState *s,
             /* the end of the function source code is after the last
                 token of the function source stored into s->last_ptr */
             fd->source_len = s->last_ptr - ptr;
-            fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
-            if (!fd->source)
-                goto fail;
+            fd->source = (char *)ptr;
 
             goto done;
         }
@@ -37865,9 +38018,7 @@ static __exception int js_parse_function_decl2(JSParseState *s,
 
         /* save the function source code */
         fd->source_len = s->buf_ptr - ptr;
-        fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
-        if (!fd->source)
-            goto fail;
+        fd->source = (char *)ptr;
 
         if (next_token(s)) {
             /* consume the '}' */
@@ -38272,6 +38423,8 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     fd->body_scope = fd->scope_level;
 
     err = js_parse_program(s);
+    if (!err)
+        err = js_share_function_sources(ctx, fd);
     if (err) {
     fail:
         free_token(s, &s->token);
@@ -53292,6 +53445,7 @@ static JSValue js_map_constructor(JSContext *ctx, JSValueConst new_target,
         goto fail;
     init_list_head(&s->records);
     s->is_weak = is_weak;
+    s->owner = JS_VALUE_GET_OBJ(obj);
     JS_SetOpaqueInternal(obj, s);
     s->hash_size = 1;
     s->hash_table = js_malloc(ctx, sizeof(s->hash_table[0]) * s->hash_size);

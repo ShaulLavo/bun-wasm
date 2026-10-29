@@ -1,0 +1,7 @@
+{
+ "modules": {
+  "/dep.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"whoIsThis\":()=>whoIsThis,\"sloppyThis\":()=>sloppyThis});yield;yield;function whoIsThis() {\n  return this;\n}\nconst sloppyThis = Function(\"return this\");\n\n}})",
+  "/main.mjs": "({r:[\"./dep.mjs\"],i:[[0,\"whoIsThis\"],[0,\"sloppyThis\"]],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0];yield;console.log(\"top-level this is nullish\", !0);\nconsole.log(\"import call this\", (0, __bunwasm_ns0_0.whoIsThis)());\nconsole.log(\"sloppy call gets global\", (0, __bunwasm_ns0_0.sloppyThis)() === globalThis);\n\n}})"
+ },
+ "cjs": {}
+}

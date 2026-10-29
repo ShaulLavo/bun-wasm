@@ -35,7 +35,7 @@ async function verifyAssets(out: string, server: ReturnType<typeof Bun.serve>, r
   const bundled: unknown = await import(join(out, "entry.js"));
   expect(requests()).toBe(0);
   if (!bundled || typeof bundled !== "object" || !("urls" in bundled) || !Array.isArray(bundled.urls)) throw new Error("Missing bundled base URLs");
-  expect(bundled.urls).toHaveLength(23);
+  expect(bundled.urls).toHaveLength(24);
   for (const url of bundled.urls) {
     if (typeof url !== "string") throw new Error("Invalid base asset URL");
     expect(new URL(url).pathname).toStartWith("/nested/app/programs/base/");
@@ -43,7 +43,7 @@ async function verifyAssets(out: string, server: ReturnType<typeof Bun.serve>, r
     expect(response.status).toBe(200);
     expect((await response.bytes()).subarray(0, 4)).toEqual(new Uint8Array([0, 97, 115, 109]));
   }
-  expect(requests()).toBe(23);
+  expect(requests()).toBe(24);
 }
 
 test("packed base assets remain lazy and resolve under the app path after bundling", async () => {
@@ -74,7 +74,7 @@ test("transitive base families resolve from the isolated package scope", async (
     const { out } = await buildTransitiveBaseAssets(root);
     Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "https://example.test/" } });
     const bundled: unknown = await import(join(out, "entry.js"));
-    expect(bundled).toMatchObject({ count: 23 });
+    expect(bundled).toMatchObject({ count: 24 });
     expect(await Bun.file(join(out, "programs/base/waffle-coreutils/dist/cat.wasm")).exists()).toBe(true);
   } finally {
     if (previousLocation) Object.defineProperty(globalThis, "location", previousLocation);
