@@ -4,7 +4,7 @@
   type RawPrepared = Omit<Prepared, "edits" | "columns"> & { edits: number[]; columns: number[] };
   const native = internal.native;
   const hooks = native.engine === "host" && native.contextHooks;
-  const version = native.engine === "host" ? native.prepareVersion : 4;
+  const version = native.engine === "host" ? native.prepareVersion : 5;
   function threadId(): number {
     const config: unknown = JSON.parse(process.env?.BUNWASM_WORKER_INIT || "null");
     if (!config || typeof config !== "object" || !("route" in config) || !Array.isArray(config.route)) return 0;
@@ -30,7 +30,7 @@
     "} finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } }", "__bunwasm_evalArg(eval, ", "", ", \"eval-indirect\")",
   ];
   function hasWork(source: string): boolean {
-    return source.includes("await") || source.includes("eval") || source.includes("import");
+    return source.includes("await") || source.includes("yield") || source.includes("eval") || source.includes("\\u") || source.includes("import");
   }
   function parseable(source: string): string {
     return source.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, value => value.length === 1 ? "\uFFFD" : value);
@@ -149,12 +149,17 @@
       else if (index > 0) advance(mapping, ",");
       result.push(apply(source, prepared.values[index], name, mapping));
     }
-    if (prepared.values.some(value => value.edits.length > 0 || !value.alreadyPrepared)) {
+    if (mapping.columns.length > 0 && native.engine === "host") {
+      const display = sourceName(args[args.length - 1], name) ?? "<anonymous>";
+      const identity = native.preparedSourceURL(version, display, mapping.columns, name ?? display);
+      result[result.length - 1] += `\n//# sourceURL=${identity}`;
+    } else if (prepared.values.some(value => value.edits.length > 0 || !value.alreadyPrepared)) {
       register(sourceName(args[args.length - 1], name), mapping.columns);
     }
     return result;
   }
   function correctPosition(name: string, line: number, column: number): number {
+    if (native.engine === "host") return native.correctPreparedColumn(name, line, column);
     const table = columns.get(name)?.columns;
     if (!table) return column;
     let correction = 0;

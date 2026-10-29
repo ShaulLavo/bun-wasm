@@ -26,6 +26,10 @@ declare namespace BunWasm {
     readonly prepareVersion: number;
     readonly contextHooks: boolean;
     readonly preparedColumns: Map<string, PreparedColumns>;
+    preparedSourceURL(version: number, name: string, columns: readonly number[], origin: string): string;
+    preparedSourceName(filename: unknown): string | undefined;
+    preparedSourceOrigin(filename: unknown): string | undefined;
+    correctPreparedColumn(filename: string, line: number, column: number): number;
     prepareSource(source: string, goal: PrepareGoal): string;
     prepareFunction(args: readonly string[], kind: FunctionKind, hooks: boolean): string;
     resolve(specifier: string, referrer: string, require: boolean): string;

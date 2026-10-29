@@ -74,3 +74,21 @@ test("real Host evaluator isolates offsets, reuses filenames, and preserves ordi
   expect(native.mapPosition("/second.cjs", 5, 7)).toEqual([3, 7]);
   expect(calls).toEqual(["/ordinary.cjs", "/first.cjs"]);
 });
+
+test("generated source identities keep live constructor columns independent of named maps", () => {
+  const evaluator = productionHostEvaluation(() => { throw new Error("generated frames must not use caller file mappings"); });
+  const first = evaluator.preparedSourceURL(5, "/same-caller.ts", [3, 1, 39], "/creator.ts");
+  const second = evaluator.preparedSourceURL(5, "/same-caller.ts", [3, 1, 45], "/creator.ts");
+  expect(first).not.toBe(second);
+  expect(first.startsWith("/same-caller.ts#")).toBe(true);
+  expect(evaluator.preparedSourceName(first)).toBe("/same-caller.ts");
+  expect(evaluator.preparedSourceOrigin(first)).toBe("/creator.ts");
+  expect(evaluator.mapPosition(first, 3, 55)).toEqual([3, 16]);
+  evaluator.preparedColumns.set("/same-caller.ts", { version: 5, columns: Int32Array.of(3, 1, 45) });
+  expect(evaluator.mapPosition(first, 3, 55)).toEqual([3, 16]);
+  const originalURL = "https://example.test/debug/original.js";
+  const mappedURL = evaluator.preparedSourceURL(5, originalURL, [3, 1, 39], "/creator.ts");
+  expect(new URL("original.js.map", mappedURL).href).toBe(new URL("original.js.map", originalURL).href);
+  evaluator.preparedColumns.clear();
+  expect(evaluator.mapPosition(first, 3, 55)).toEqual([3, 16]);
+});

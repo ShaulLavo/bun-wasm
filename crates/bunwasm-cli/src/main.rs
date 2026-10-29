@@ -157,7 +157,11 @@ mod bun_transpiler {
                 Loader::Text => BunLoader::Text,
             };
             let preserve_source = loader == BunLoader::Js
-                && !(AWAIT_HOOKS && (source.contains("await") || source.contains("eval")));
+                && !(AWAIT_HOOKS
+                    && (source.contains("await")
+                        || source.contains("yield")
+                        || source.contains("eval")
+                        || source.contains("\\u")));
             // These extensions decide the format before parser classification in
             // State::detect_format, so unchanged JS only needs semantic imports.
             if preserve_source && (path.ends_with(".mjs") || path.ends_with(".cjs")) {

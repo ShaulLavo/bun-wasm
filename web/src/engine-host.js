@@ -416,6 +416,8 @@ class EngineHost {
     // worker bundle it lives in) are internal, like the polyfills.
     internal.displayName = (file, evalFrame = false) => {
       if (typeof file !== "string") return file;
+      const generated = native.preparedSourceName(file);
+      if (generated !== undefined) return generated;
       const path = this.paths.get(file);
       if (path) return path;
       if (evalFrame) return file;

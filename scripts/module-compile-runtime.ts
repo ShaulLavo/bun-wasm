@@ -29,7 +29,7 @@ function hostEvaluation(context: ReturnType<typeof createContext>, mapPosition: 
   const methods = host.slice(start, end);
   const evaluator: { valueNatives(mapPosition: ScriptEvaluation["mapPosition"]): ScriptEvaluation } = runInContext(`new (class { o = {}; ${methods} })`, context);
   const natives = evaluator.valueNatives(mapPosition);
-  return { evalScript: natives.evalScript, mapPosition: natives.mapPosition, preparedColumns: natives.preparedColumns, correctPreparedColumn: natives.correctPreparedColumn };
+  return { evalScript: natives.evalScript, mapPosition: natives.mapPosition, preparedColumns: natives.preparedColumns, correctPreparedColumn: natives.correctPreparedColumn, preparedSourceURL: natives.preparedSourceURL, preparedSourceName: natives.preparedSourceName, preparedSourceOrigin: natives.preparedSourceOrigin };
 }
 
 function runtimeContext() {
@@ -51,11 +51,16 @@ function productionRuntime(filename: string, compiledWrapper?: string, realHost 
   const builtins = runInContext(source("builtins.js"), context);
   const emittedFactory = process.env.BUNWASM_MODULE_COMPILE_FACTORY;
   if (!emittedFactory) throw new Error("Missing production-erased module_compile factory");
+  const mapping = createScriptEvaluation((code, file) => runInContext(code, context, { filename: file }), () => null);
   const runtime = bootstrap({
     engine: "host",
     contextHooks: false,
-    prepareVersion: 4,
-    preparedColumns: new Map(),
+    prepareVersion: 5,
+    preparedColumns: mapping.preparedColumns,
+    preparedSourceURL: mapping.preparedSourceURL,
+    preparedSourceName: mapping.preparedSourceName,
+    preparedSourceOrigin: mapping.preparedSourceOrigin,
+    correctPreparedColumn: mapping.correctPreparedColumn,
     mapPosition: () => null,
     mainPath: () => filename,
     moduleFormat: (file: string) => file.endsWith(".json") ? "json" : "cjs",

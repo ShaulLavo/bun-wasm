@@ -172,7 +172,7 @@ test("converted Function adapter preserves construction and module origins", asy
     native: {
       engine: "quickjs",
       prepareFunction: (strings: string[]) => JSON.stringify(strings.map(source => ({
-        version: 4, alreadyPrepared: false, edits: source.includes("import") ? [source.indexOf("import"), 6, 16] : [],
+        version: 5, alreadyPrepared: false, edits: source.includes("import") ? [source.indexOf("import"), 6, 16] : [],
         columns: [], fallback: null, spreadEval: 0, unhookedAwaitUsing: 0,
       }))),
       resolve(...args: unknown[]) { resolutions.push(args); return "/loaded.ts"; },

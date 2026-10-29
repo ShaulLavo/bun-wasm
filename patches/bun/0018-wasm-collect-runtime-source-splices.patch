@@ -1,6 +1,6 @@
-From 465c70b19a80ff8cc2b8192823c7e30c2bf28b6a Mon Sep 17 00:00:00 2001
+From d803f38a9765af09495eb667eaecba0105f3a5d5 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
-Date: Thu, 29 Oct 2026 12:06:34 +0200
+Date: Thu, 29 Oct 2026 14:01:56 +0200
 Subject: [PATCH] wasm: collect runtime source splices and prepare eval
  arguments
 
@@ -368,7 +368,7 @@ index 76c1603f..ada55198 100644
          let target = *left;
          *left = p.new_expr(
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index d84ed54d..3eb16fd2 100644
+index d84ed54d..5a87c8ad 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
 @@ -3681,7 +3681,12 @@ pub(crate) mod __gated_printer {
@@ -389,7 +389,7 @@ index d84ed54d..3eb16fd2 100644
  
  /// Version of the shapes above; the runtime keys cached hooked text on it.
 -pub const BUNWASM_HOOKS_VERSION: u32 = 3;
-+pub const BUNWASM_HOOKS_VERSION: u32 = 4;
++pub const BUNWASM_HOOKS_VERSION: u32 = 5;
  
  #[inline]
  fn bunwasm_await_hooks() -> bool {

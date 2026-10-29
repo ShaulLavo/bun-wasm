@@ -3,7 +3,7 @@ use bun_js_parser::BunwasmSplice as Span;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-pub const PREPARE_VERSION: u32 = 4;
+pub const PREPARE_VERSION: u32 = 5;
 
 // Shared with source_prepare.ts. Every insertion is newline-free.
 pub const TEXT: &[&str] = &[

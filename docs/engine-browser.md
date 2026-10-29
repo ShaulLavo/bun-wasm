@@ -195,7 +195,7 @@ These follow from running on a standard JS engine without engine hooks. Every fi
 | what | browser engine |
 |---|---|
 | Promise state | Known only for promises settled where the host sees it (see above). Others print as `<pending>`, and `Bun.peek` returns them unchanged. |
-| AsyncLocalStorage | Carried across `await`, rejected awaits, async generators and `for await` by the transpiler hooks, with the gaps listed above. Code that skips the transpiler (`eval`, `new Function`) and native jobs (see above) are not covered. |
+| AsyncLocalStorage | Carried across `await`, rejected awaits, async generators and `for await` by the transpiler hooks, with the gaps listed above. Runtime-built constructor/eval/vm/module code is prepared as described below; unwrapped native job entry remains separate. |
 | `require()` of an ES module | A converted CommonJS copy, separate from the ES module instance if the file is also imported. |
 | Import cycles | Need the module store (a service worker in the browser). Without it, a cycle is an error. |
 | Proxy detection, Map/Set iterator entries in `console.log` | Inspection prints less, e.g. a Proxy prints as its target. |
@@ -218,10 +218,16 @@ The text cache key contains the guest preparation version, process/thread realm,
 parse goal with constructor argument lengths, map policy, and source payload.
 Only edit and column vectors are cached, never functions or request stores.
 The cache is bounded to 16 MiB and skips entries over 4 MiB. Named column tables
-replace prior entries after HMR and are bounded separately. `sourceURL` and
+replace prior entries after HMR and are bounded separately. Constructors use
+unique self-contained sourceURL fragments instead of mutable caller-name tables.
+Their metadata stays with live generated code, including nested closures and error
+frames, without retaining functions in the cache. The original explicit name and
+caller provenance are retained; relative source-map URLs keep their original base.
+`sourceURL` and
 `sourceMappingURL` comments survive unchanged. Lines stay exact. The runtime's
 stack formatter corrects inserted columns before existing source-map offsets.
-A debugger, or an app that replaces `Error.prepareStackTrace`, sees raw shifted
+A debugger, or an app that replaces `Error.prepareStackTrace`, may see the
+generated source identity and raw shifted
 columns on lines containing hooks. WebKit currently omits coordinates entirely
 for the tested async direct-eval frame, even without preparation. Its prepared
 frame matches that native control; the column table itself remains available.

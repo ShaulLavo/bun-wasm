@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import vm from "node:vm";
 import Module from "node:module";
+import { readFileSync } from "node:fs";
 import { evaluate } from "./eval-callsite.mjs";
+import { escapedCallsite } from "./escaped-callsite.mjs";
+import { rejectedValue } from "./yield-callsite.mjs";
 
 const storage = new AsyncLocalStorage<string>();
 const second = new AsyncLocalStorage<string>();
@@ -97,4 +100,23 @@ NewTarget.prototype = Object.create(AsyncFunction.prototype);
 const constructed = Reflect.construct(AsyncFunction, ["await 0; return 29"], NewTarget);
 assert.equal(Object.getPrototypeOf(constructed), NewTarget.prototype);
 assert.equal(await constructed(), 29);
+const yieldBody = 'try { yield value; } catch (error) { note(error); }';
+const yieldOnly = AsyncGeneratorFunction("value", "note", yieldBody);
+const nestedYield = Function(`return async function* (value, note) { ${yieldBody} }`)();
+for (const generate of [yieldOnly, nestedYield, rejectedValue]) {
+  const rows: string[][] = [];
+  await Promise.all(["A", "B"].map(name => storage.run(name, async () => {
+    await generate(Promise.reject(name), (reason: string) => rows.push([name, reason, storage.getStore()])).next();
+  })));
+  assert.deepEqual(rows.sort(), [["A", "A", "A"], ["B", "B", "B"]]);
+}
+const rawEscaped = readFileSync(new URL("./escaped-callsite.mjs", import.meta.url), "utf8");
+assert.ok(!rawEscaped.includes("eval") && !rawEscaped.includes("await") && !rawEscaped.includes("yield"));
+const escaped = Function("code", "als", "return e\\u0076al(code)");
+const codePoint = Function("code", "als", "return \\u{65}val(code)");
+for (const evaluate of [escaped, codePoint, escapedCallsite]) {
+  const values = await Promise.all(["A", "B"].map(name => storage.run(name, () =>
+    evaluate("(async () => { await 0; return als.getStore(); })()", storage))));
+  assert.deepEqual(values, ["A", "B"]);
+}
 console.log("PREPARE_OK");

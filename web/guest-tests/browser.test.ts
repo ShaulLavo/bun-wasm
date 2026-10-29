@@ -57,7 +57,7 @@ test("browser guest prepares runtime-built constructors, lexical eval, wrappers 
     expect(child.stdout).toBe("PREPARE_OK\n");
     expect(child.stderr).toBe("");
   }
-  for (const [fixtureName, expected] of [["prepare-transforms", "PREPARE_TRANSFORMS_OK"], ["prepare-cache", "PREPARE_CACHE_OK"], ["prepare-parent-loop", '{"dynamicRows":["loop","loop"],"printedRows":["loop","loop"]}']]) {
+  for (const [fixtureName, expected] of [["prepare-transforms", "PREPARE_TRANSFORMS_OK"], ["prepare-live-map", "PREPARE_LIVE_MAP_OK"], ["prepare-cache", "PREPARE_CACHE_OK"], ["prepare-parent-loop", '{"dynamicRows":["loop","loop"],"printedRows":["loop","loop"]}']]) {
     const transformed = spawnSync("node", ["--no-warnings", resolve(root, "web/scripts/node-host.mjs"), "--wasm", wasm,
       "--context", "hooks", "--dir", `${fixture}::/`, "--env", "PWD=/", "--env", "HOME=/", "--", "run", `/${fixtureName}.ts`],
     { cwd: root, encoding: "utf8", timeout: 30000 });
