@@ -12,6 +12,11 @@ filesystem, base-program installation and Bun launchers. bash-web owns parsing,
 line editing, job control and terminal inheritance. Waffle owns processes,
 descriptors, stdin, signals and network services.
 
+The page's welcome text reports filesystem storage and save durability from the
+actual VFS persistence descriptor. This remains discoverable without redefining
+Bash's `help`. The artifact-free editor gate replaces only engine/Shell execution
+at build time; real runtime, filesystem, editor and page information code remain.
+
 The session follows the existing private playground's bridge pump and bounded
 input queue. xterm stays the public playground's terminal. `TerminalNewlines`
 comes from bash-web. No upstream shell or OS implementation is copied or patched.

@@ -382,9 +382,12 @@ if (vv) {
   onViewport();
 }
 
+const storage = fs.vfs.persistent ? "persistent browser storage" : "memory-only browser storage";
+const durability = fs.vfs.persistent ? "survive" : "do not survive";
 for (const line of [
   "\x1b[1mBun in your browser\x1b[0m: bun.wasm (wasm32-wasip1) in a Web Worker.",
   "Try \x1b[32mbun repl\x1b[0m, \x1b[32mbun run index.ts\x1b[0m, or press Run.",
+  `filesystem: ${storage}, preopened at /, cwd ${HOME}; editor saves ${durability} reload`,
   "",
 ]) term.writeln(line);
 

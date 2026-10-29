@@ -80,7 +80,7 @@
         "tests/persistence-browser-{main,worker}.ts",
         "tests/process-{bench-baseline,browser-main}.ts",
         "tests/runtime-proc-browser-main.ts",
-        "tests/fixtures/{filesystem-lifecycle,safari-driver-listener,startup-filesystem}.ts",
+        "tests/fixtures/{editor-execution,filesystem-lifecycle,safari-driver-listener,startup-filesystem}.ts",
         "tests/bun-runtime-proc-main.ts",
         "tests/wasm-transfer-page.ts",
         "tests/safari-{observers,open-descriptor-worker}.ts",
