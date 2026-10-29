@@ -12,6 +12,7 @@ Use an existing playground build, including matching `bun.wasm` and
 source env.sh
 extra=$(mktemp -d /work/tmp/bun-wasm-vinext-registry-XXXXXX)
 trap 'rm -rf "$extra"' EXIT
+export TMPDIR="$extra"
 bun web/tests/next-framework-registry.ts "$extra" examples/vinext-probe/bun.lock
 bun /work/platform-production/heavy/current/run.js --class browser vinext-probe -- \
   bun scripts/app-matrix/vinext-probe.ts \
