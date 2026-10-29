@@ -14,7 +14,7 @@ export async function sample({ page, phase, engine }: { page: Page; phase: strin
 export function selectMemorySnapshots(all: readonly unknown[], engine: TelemetryEngine) {
   const snapshots = all.filter(isSnapshot).filter(snapshot => snapshot.engine === engine);
   const unique = Array.from(new Map(snapshots.map(snapshot => [snapshot.id, snapshot])).values());
-  const latest = unique.toSorted((a, b) => b.commandStartedAt - a.commandStartedAt)[0];
+  const latest = unique.toSorted((a, b) => b.commandSequence - a.commandSequence)[0];
   const command = unique.filter(snapshot => snapshot.commandId === latest?.commandId);
   const active = command.filter(snapshot => !snapshot.terminal);
   const selected = active.length ? active : command.toSorted((a, b) => b.time - a.time).slice(0, 1);
@@ -24,12 +24,13 @@ export function selectMemorySnapshots(all: readonly unknown[], engine: Telemetry
     failureProcessId: failed?.id ?? null, processes: command };
 }
 
-type HookSnapshot = MemoryCounters & Pick<MemorySnapshot, "id" | "commandId" | "commandStartedAt" | "engine" | "terminal" | "time">;
+type HookSnapshot = MemoryCounters & Pick<MemorySnapshot, "id" | "commandId" | "commandStartedAt" | "commandSequence" | "engine" | "terminal" | "time">;
 function isSnapshot(value: unknown): value is HookSnapshot {
   if (value === null || typeof value !== "object") return false;
   if (!("id" in value) || typeof value.id !== "string" || !("engine" in value) || typeof value.engine !== "string") return false;
   if (!("terminal" in value) || typeof value.terminal !== "boolean" || !("time" in value) || typeof value.time !== "number") return false;
   if (!("commandId" in value) || typeof value.commandId !== "string" || !("commandStartedAt" in value) || typeof value.commandStartedAt !== "number" || !counter(value.commandStartedAt)) return false;
+  if (!("commandSequence" in value) || typeof value.commandSequence !== "number" || !counter(value.commandSequence)) return false;
   const keys = ["wasmCapacityBytes", "memoryLimitBytes", "allocatorLiveBytes", "allocatorPeakBytes", "jsHeapBytes", "arrayBufferBytes", "swcBytes"];
   if (!keys.every(key => counter(Reflect.get(value, key)))) return false;
   if (!("failedAllocation" in value) || !("notes" in value) || typeof value.notes !== "string") return false;

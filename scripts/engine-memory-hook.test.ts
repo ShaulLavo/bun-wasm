@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { beginMemorySnapshot, createMemoryReader, emptyCounters, endMemorySnapshot, recordMemorySnapshot, retainedMemorySnapshots } from "../web/src/memory-telemetry.ts";
 import { createMemoryChannel, createMemoryPublisher, memoryChannelReady, observeMemoryImports, readMemoryChannel, requestMemoryChannel } from "../web/src/memory-channel.ts";
 import { aggregate, selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
@@ -108,10 +108,10 @@ test("an unsampled live process stays unknown rather than inheriting a previous 
 
 test("a current command keeps a failed child while its parent stays live and excludes an older command", () => {
   const f = fixture("quickjs");
-  const parent = { ...f.reader.sample(), id: "parent", commandId: "current", commandStartedAt: 2, terminal: false };
+  const parent = { ...f.reader.sample(), id: "parent", commandId: "current", commandStartedAt: 2, commandSequence: 2, terminal: false };
   const failure = { bytes: 629145600, category: "quickjs.arrayBuffer" };
   const child = { ...parent, id: "child", terminal: true, failedAllocation: failure, engineFailure: failure };
-  const stale = { ...child, id: "old-child", commandId: "old", commandStartedAt: 1, failedAllocation: { bytes: 9, category: "old" } };
+  const stale = { ...child, id: "old-child", commandId: "old", commandStartedAt: 1, commandSequence: 1, failedAllocation: { bytes: 9, category: "old" } };
   const value = selectMemorySnapshots([stale, child, parent], "quickjs");
   expect(value.failedAllocation).toEqual(failure);
   expect(value.failureProcessId).toBe("child");
@@ -153,4 +153,52 @@ test("host import observation distinguishes the two event-loop waits from arbitr
     call();
   }
   expect(calls).toEqual([[true, false], [false, false], [false, true]]);
+});
+
+test("a late shared frame cannot resurrect a process ended while a phase sample awaits", async () => {
+  const f = fixture("quickjs");
+  const id = crypto.randomUUID();
+  const transport = beginMemorySnapshot("quickjs", id);
+  if (!transport) throw new Error("missing shared transport");
+  const publisher = createMemoryPublisher(transport.buffer, createMemoryReader("quickjs", f.core, f.side, transport));
+  publisher.capture(false, true);
+  const getter: unknown = Reflect.get(globalThis, "__bunMemorySnapshots");
+  if (typeof getter !== "function") throw new Error("missing host sampler");
+  const pending: unknown = getter("quickjs", true);
+  endMemorySnapshot(id);
+  await pending;
+  expect(retainedMemorySnapshots().find(snapshot => snapshot.id === id)?.terminal).toBe(true);
+  expect(f.refreshes()).toBe(0);
+});
+
+test("a late frame cannot replace a new command record using the same diagnostic id", async () => {
+  const f = fixture("quickjs");
+  const id = crypto.randomUUID();
+  const transport = beginMemorySnapshot("quickjs", id, "old-record");
+  if (!transport) throw new Error("missing shared transport");
+  createMemoryPublisher(transport.buffer, createMemoryReader("quickjs", f.core, f.side, transport)).capture(false, true);
+  const getter: unknown = Reflect.get(globalThis, "__bunMemorySnapshots");
+  if (typeof getter !== "function") throw new Error("missing host sampler");
+  const pending: unknown = getter("quickjs", true);
+  beginMemorySnapshot("quickjs", id, "new-record");
+  await pending;
+  expect(retainedMemorySnapshots().find(snapshot => snapshot.id === id)?.commandId).toBe("new-record");
+  endMemorySnapshot(id);
+});
+
+test("command ordering remains correct when wall-clock timestamps tie", () => {
+  const clock = spyOn(Date, "now").mockReturnValue(1234);
+  const f = fixture("quickjs");
+  const old = beginMemorySnapshot("quickjs", crypto.randomUUID());
+  const currentId = crypto.randomUUID();
+  try {
+    if (!old) throw new Error("missing shared transport");
+    const oldSnapshot = createMemoryReader("quickjs", f.core, f.side, old).finish();
+    recordMemorySnapshot({ type: "bun-memory", snapshot: { ...oldSnapshot, failedAllocation: { bytes: 1, category: "old" } } });
+    endMemorySnapshot(old.id);
+    beginMemorySnapshot("quickjs", currentId);
+    const selected = selectMemorySnapshots(retainedMemorySnapshots(), "quickjs");
+    expect(selected.failedAllocation).toBeNull();
+    expect(selected.processes.map(process => process.id)).toEqual([currentId]);
+  } finally { clock.mockRestore(); endMemorySnapshot(currentId); }
 });

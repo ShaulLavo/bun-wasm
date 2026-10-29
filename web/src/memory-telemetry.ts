@@ -12,7 +12,7 @@ export interface MemoryCounters {
   failedAllocation: FailedAllocation | null;
   notes: string;
 }
-export interface MemoryIdentity { id: string; commandId: string; commandStartedAt: number }
+export interface MemoryIdentity { id: string; commandId: string; commandStartedAt: number; commandSequence: number }
 export type MemoryTelemetryTransport = MemoryIdentity & { buffer: SharedArrayBuffer };
 export interface MemorySnapshot extends MemoryCounters, MemoryIdentity {
   engine: TelemetryEngine;
@@ -83,8 +83,8 @@ function engineReadout(engine: TelemetryEngine, memory: WebAssembly.Memory, expo
 
 export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side?: WebAssembly.Instance, identity?: MemoryIdentity) {
   const id = identity?.id ?? crypto.randomUUID();
-  const provenance = identity ? { id, commandId: identity.commandId, commandStartedAt: identity.commandStartedAt }
-    : { id, commandId: id, commandStartedAt: Date.now() };
+  const provenance = identity ? { id, commandId: identity.commandId, commandStartedAt: identity.commandStartedAt, commandSequence: identity.commandSequence }
+    : { id, commandId: id, commandStartedAt: Date.now(), commandSequence: 0 };
   const memory = core.exports.memory;
   if (!(memory instanceof WebAssembly.Memory)) throw new TypeError("Missing telemetry memory");
   let terminal = false;
@@ -124,6 +124,8 @@ const retained = new Map<string, MemorySnapshot>();
 const channels = new Map<string, SharedArrayBuffer>();
 const runtimes = new WeakMap<object, string>();
 const commandTimes = new Map<string, number>();
+const commandOrders = new Map<string, number>();
+let commandSequence = 0;
 export function memoryCommandId(runtime: object, job: number): string {
   const identity = runtimes.get(runtime) ?? crypto.randomUUID();
   runtimes.set(runtime, identity);
@@ -132,7 +134,9 @@ export function memoryCommandId(runtime: object, job: number): string {
 export function beginMemorySnapshot(engine: TelemetryEngine, id: string, commandId = id): MemoryTelemetryTransport | undefined {
   const commandStartedAt = commandTimes.get(commandId) ?? Date.now();
   commandTimes.set(commandId, commandStartedAt);
-  const identity = { id, commandId, commandStartedAt };
+  const order = commandOrders.get(commandId) ?? ++commandSequence;
+  commandOrders.set(commandId, order);
+  const identity = { id, commandId, commandStartedAt, commandSequence: order };
   retained.set(id, { ...emptyCounters, ...identity, engine, time: Date.now(), terminal: false,
     allocatorFailure: null, engineFailure: null, engineCounters: {} });
   trimTerminalSnapshots();
@@ -169,13 +173,17 @@ function trimTerminalSnapshots(): void {
     if (retained.size <= 128) return;
     if (!snapshot.terminal || snapshot.failedAllocation && activeCommands.has(snapshot.commandId)) continue;
     retained.delete(id);
-    if (!Array.from(retained.values()).some(value => value.commandId === snapshot.commandId)) commandTimes.delete(snapshot.commandId);
+    if (!Array.from(retained.values()).some(value => value.commandId === snapshot.commandId)) {
+      commandTimes.delete(snapshot.commandId); commandOrders.delete(snapshot.commandId);
+    }
   }
 }
 export function retainedMemorySnapshots(): readonly MemorySnapshot[] { return Array.from(retained.values()); }
 
 function isMemorySnapshot(value: object): value is MemorySnapshot {
   const stringKeys = ["id", "notes", "commandId"];
+  const order: unknown = Reflect.get(value, "commandSequence");
+  if (typeof order !== "number" || !isCounter(order)) return false;
   const startedAt: unknown = Reflect.get(value, "commandStartedAt");
   if (typeof startedAt !== "number" || !isCounter(startedAt)) return false;
   const byteKeys = ["wasmCapacityBytes", "memoryLimitBytes", "allocatorLiveBytes", "allocatorPeakBytes", "jsHeapBytes", "arrayBufferBytes", "swcBytes"];
@@ -198,14 +206,16 @@ function isFailure(value: unknown): value is FailedAllocation | null {
     && "category" in value && typeof value.category === "string";
 }
 async function requestMemorySnapshots(engine: TelemetryEngine, refresh: boolean): Promise<readonly MemorySnapshot[]> {
-  const requested = Array.from(channels, ([id, channel]) => ({ id, channel }))
-    .filter(entry => retained.get(entry.id)?.engine === engine)
+  const requested = Array.from(channels, ([id, channel]) => ({ id, channel, commandId: retained.get(id)?.commandId }))
+    .filter(entry => retained.get(entry.id)?.engine === engine && !retained.get(entry.id)?.terminal)
     .map(entry => ({ ...entry, generation: requestMemoryChannel(entry.channel, refresh) }));
   for (let attempt = 0; attempt < 40; attempt++) {
     if (requested.every(entry => memoryChannelReady(entry.channel, entry.generation, refresh) || retained.get(entry.id)?.terminal)) break;
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   for (const entry of requested) {
+    const record = retained.get(entry.id);
+    if (!record || record.terminal || record.commandId !== entry.commandId || channels.get(entry.id) !== entry.channel) continue;
     const value: unknown = readMemoryChannel(entry.channel);
     if (!value || typeof value !== "object" || !isMemorySnapshot(value)) {
       const previous = retained.get(entry.id);
