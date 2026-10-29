@@ -24,7 +24,10 @@ growth. A failed grow keeps the current buffer and bytes.
 Wasmi 0.46.0 cannot represent shared memories or atomic instructions. The
 constructor explicitly refuses `shared: true`; it never substitutes an unshared
 buffer. Wasmi retains native modules, instances, and memory allocations until
-runtime teardown. Dropping the runtime drops the Store and all its buffers.
+runtime teardown. The engine validates every module eagerly and translates each
+function body on first use with `CompilationMode::LazyTranslation`. Uncalled
+functions do not retain translated bytecode. Dropping the runtime drops the
+Store and all its buffers.
 JavaScript garbage collection does not reclaim individual native allocations.
 Per-memory reclamation needs a separate Store ownership or allocator design.
 These capabilities do not establish Nuxt or emnapi application acceptance.
@@ -37,6 +40,6 @@ executes the real published parser and hashes through the recorded registry.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters, including standalone and imported unshared memory. |
+| [Rollup distribution and WebAssembly adapters](#rollup-webassembly-distribution) | Host feature | Select an unchanged official wasm distribution and execute it through original interpreter adapters, including standalone and imported unshared memory and lazy function translation after eager validation. |
 
 [Ledger scope and pinned revisions](scope.md).

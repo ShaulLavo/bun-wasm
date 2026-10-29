@@ -67,7 +67,7 @@ function encodeExport(entry: { name: string; kind: number; index: number }): Buf
 }
 
 
-export function convertEngineInitializers(bytes: Uint8Array, engine: "quickjs" | "jsc"): Uint8Array<ArrayBuffer> {
+export function convertEngineInitializers(bytes: Uint8Array, engine: "quickjs" | "jsc" | "hermes"): Uint8Array<ArrayBuffer> {
     const input = Buffer.from(bytes);
     const before = sections(input);
     const start = before.find((entry) => entry.id === 8);
@@ -78,7 +78,8 @@ export function convertEngineInitializers(bytes: Uint8Array, engine: "quickjs" |
     assert(original.some((entry) => entry.name === "__wasm_apply_data_relocs" && entry.kind === 0));
     assert(original.some((entry) => entry.name === "__wasm_call_ctors" && entry.kind === 0));
     assert(!original.some((entry) => ["quickjs_initialize_memory", "quickjs_apply_data_relocs", "quickjs_call_ctors",
-        "jsc_initialize_memory", "jsc_apply_data_relocs", "jsc_call_ctors"].includes(entry.name)), "side is already converted or has contradictory initializers");
+        "jsc_initialize_memory", "jsc_apply_data_relocs", "jsc_call_ctors",
+        "hermes_initialize_memory", "hermes_apply_data_relocs", "hermes_call_ctors"].includes(entry.name)), "side is already converted or has contradictory initializers");
     const imports = WebAssembly.Module.imports(new WebAssembly.Module(input));
     const memories = imports.filter((entry) => entry.kind === "memory");
     assert.deepEqual(memories, [{ module: "env", name: "memory", kind: "memory" }], "sole core-owned memory import");
@@ -117,6 +118,6 @@ export function convertEngineInitializers(bytes: Uint8Array, engine: "quickjs" |
 
 if (import.meta.main) {
     const [engine, input, output] = process.argv.slice(2);
-    assert((engine === "quickjs" || engine === "jsc") && input && output, "usage: engine-explicit-init.ts quickjs|jsc input.wasm output.wasm");
+    assert((engine === "quickjs" || engine === "jsc" || engine === "hermes") && input && output, "usage: engine-explicit-init.ts quickjs|jsc|hermes input.wasm output.wasm");
     writeFileSync(output, convertEngineInitializers(readFileSync(input), engine));
 }

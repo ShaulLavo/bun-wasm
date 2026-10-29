@@ -7,6 +7,7 @@ mod tool_args;
 mod linked;
 mod net;
 mod process;
+mod shm;
 mod slots;
 
 use std::path::{Path, PathBuf};
@@ -52,6 +53,8 @@ pub struct Host {
     pub memory: Option<wasmtime::Memory>,
     pub trace: bool,
     pub processes: process::Processes,
+    /// J3 installs the lease together with the group's imported shared memory.
+    pub shm: Option<shm::MemberLease>,
     pub limits: StoreLimits,
     pub functions: Vec<wasmtime::Func>,
     pub cancel: Arc<process::Cancellation>,
@@ -351,6 +354,7 @@ fn run_module_instance(
         cancel: cancel.clone(),
         cwd,
         processes,
+        shm: None,
         limits: StoreLimitsBuilder::new()
             .memory_size(memory_limit)
             // One guest and bounded memory-sharing preview1 delegation adapters.
@@ -382,6 +386,7 @@ fn run_module_instance(
     linker.allow_shadowing(false);
     slots::add_import(&mut linker, &mut store)?;
     slots::add_shell_imports(&mut linker)?;
+    shm::add_imports(&mut linker)?;
     let selected = runtime.module_for(&argv, module)?;
     let instance = linker.instantiate(&mut store, selected)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");

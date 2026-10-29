@@ -537,7 +537,7 @@ impl Resolver {
         }
         let mut meta = versions[version].clone();
         next_swc::adapt(&mut meta);
-        wasm_packages::adapt(&mut meta);
+        wasm_packages::adapt(&mut meta, &self.overrides);
         let tarball = io::source_url(
             meta["dist"]["tarball"]
                 .as_str()
@@ -696,7 +696,7 @@ impl Resolver {
         meta["name"] = resolved_name.into();
         meta["version"] = version.into();
         next_swc::adapt(&mut meta);
-        wasm_packages::adapt(&mut meta);
+        wasm_packages::adapt(&mut meta, &self.overrides);
         Some(Package {
             name: resolved_name.into(),
             version: version.into(),
@@ -897,6 +897,9 @@ mod peer_selection_tests;
 
 #[cfg(test)]
 mod wasm_packages_tests;
+
+#[cfg(test)]
+mod wasm_peer_graph_tests;
 
 #[cfg(test)]
 mod test_support;

@@ -6,6 +6,7 @@
 use std::{borrow::Cow, cell::RefCell};
 
 pub mod data;
+mod register;
 
 use bun_alloc::Arena;
 use bun_ast::Loader as BunLoader;
@@ -177,7 +178,11 @@ pub fn public_transpile(
         loader,
         None,
         false,
-        action != "transform",
+        if action == "transform" {
+            Pass::Print
+        } else {
+            Pass::Scan
+        },
     )?;
     if action == "scanImports" {
         let scan: serde_json::Value = serde_json::from_str(&out.code).map_err(|e| e.to_string())?;
@@ -373,7 +378,7 @@ pub fn transpile_with_source_map(
     loader: Loader,
     preserve_source: bool,
 ) -> Result<Transpiled, String> {
-    let mut collector = ChunkCollector(None);
+    let mut collector = ChunkCollector(None, 0);
     let (out, imports) = bun_js_printer::with_bunwasm_imports(|| {
         with_state(|state| {
             run(
@@ -409,10 +414,13 @@ pub fn with_dynamic_import_referrer<T>(from: &str, f: impl FnOnce() -> T) -> T {
     bun_js_printer::with_bunwasm_import_referrer(from, f)
 }
 
-/// Runs `f` with Bun's printer emitting the bun-wasm `await` hooks
-/// (`__bunwasm_resume(__bunwasm_capture(), await x)`, see
+/// Version of the shapes [`with_await_hooks`] prints.
+pub const HOOKS_VERSION: u32 = bun_js_printer::BUNWASM_HOOKS_VERSION;
+
+/// Runs `f` with Bun's printer emitting the bun-wasm async-context hooks
+/// (`await`, `catch`/`finally`, async generator `yield` and `for await`; see
 /// `bun_js_printer::BUNWASM_AWAIT_HOOKS`) when `on`. For the browser engine,
-/// which carries AsyncLocalStorage across `await` with them.
+/// which carries AsyncLocalStorage across suspensions with them.
 pub fn with_await_hooks<T>(on: bool, f: impl FnOnce() -> T) -> T {
     use std::sync::atomic::Ordering;
     let hooks = &bun_js_printer::BUNWASM_AWAIT_HOOKS;
@@ -448,7 +456,7 @@ pub fn source_map_json(path: &str, source: &str, mappings: &str) -> String {
     )
 }
 
-struct ChunkCollector(Option<bun_sourcemap::Chunk>);
+struct ChunkCollector(Option<bun_sourcemap::Chunk>, usize);
 
 impl bun_js_printer::OnSourceMapChunk for ChunkCollector {
     fn on_source_map_chunk(
@@ -485,7 +493,58 @@ fn run(
         loader,
         source_map,
         preserve_source,
-        false,
+        Pass::Print,
+    )
+}
+
+/// Which output [`run_with_scan`] produces from the parsed module.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    Print,
+    /// Imports and exports as JSON (`Bun.Transpiler#scan`).
+    Scan,
+    /// A registration record (see [`register()`]).
+    Register,
+}
+
+/// The ES module `source` as a registration record: a script expression for
+/// engines without native ES modules, linked and evaluated by the runtime's
+/// `esm_loader.ts`. See `register.rs` for the format.
+pub fn register(source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
+    let mut collector = ChunkCollector(None, 0);
+    let mut out = with_state(|state| {
+        run_with_scan(
+            state,
+            source,
+            path,
+            loader,
+            Some(&mut collector),
+            false,
+            Pass::Register,
+        )
+    })?;
+    let mappings = collector
+        .0
+        .map(|chunk| String::from_utf8_lossy(chunk.buffer.list.as_slice()).into_owned())
+        .unwrap_or_default();
+    out.mappings = shift_record_mappings(&mappings, collector.1);
+    Ok(out)
+}
+
+fn shift_record_mappings(mappings: &str, columns: usize) -> String {
+    if mappings.is_empty() || mappings.starts_with(';') {
+        return mappings.to_owned();
+    }
+    let first = bun_sourcemap::vlq::decode(mappings.as_bytes(), 0);
+    let column = first
+        .value
+        .checked_add(i32::try_from(columns).expect("record header size"))
+        .expect("record column");
+    let encoded = bun_sourcemap::VLQ::encode(column);
+    format!(
+        "{}{}",
+        std::str::from_utf8(encoded.slice()).unwrap(),
+        &mappings[first.start..]
     )
 }
 
@@ -512,9 +571,9 @@ fn run_with_scan(
     source: &str,
     path: &str,
     loader: Loader,
-    source_map: Option<&mut ChunkCollector>,
+    mut source_map: Option<&mut ChunkCollector>,
     preserve_source: bool,
-    scan: bool,
+    pass: Pass,
 ) -> Result<Transpiled, String> {
     let arena = Arena::new();
     let mut ast_alloc = bun_ast::ASTMemoryAllocator::borrowing(&arena);
@@ -586,7 +645,7 @@ fn run_with_scan(
     }
     let mut parsed = parsed.expect("checked above");
     let module_kind = module_kind(&parsed.ast, loader);
-    if scan {
+    if pass == Pass::Scan {
         let code = scan_json(
             &mut parsed.ast,
             state
@@ -620,13 +679,15 @@ fn run_with_scan(
             module_kind,
         });
     }
+    let registered =
+        (pass == Pass::Register).then(|| register::prepare(&mut parsed.ast, arena_ref));
     let mut printer = bun_js_printer::BufferPrinter::init(bun_js_printer::BufferWriter::init());
     let format = if state.public_api {
         bun_bundler::transpiler::PrintFormat::EsmAscii
     } else {
         bun_bundler::transpiler::PrintFormat::Esm
     };
-    let printed = match source_map {
+    let print = || match source_map.as_deref_mut() {
         Some(collector) => state.transpiler.print_with_source_map(
             &arena,
             parsed,
@@ -637,9 +698,22 @@ fn run_with_scan(
         ),
         None => state.transpiler.print(&arena, parsed, &mut printer, format),
     };
+    let printed = if registered.is_some() {
+        bun_js_printer::with_bunwasm_register(print)
+    } else {
+        print()
+    };
     restore(&mut state.transpiler, &mut state.log);
     printed.map_err(|e| format!("failed to print {path}: {e:?}"))?;
-    let code = String::from_utf8(printer.ctx.written().to_vec()).map_err(|e| e.to_string())?;
+    let mut code = String::from_utf8(printer.ctx.written().to_vec()).map_err(|e| e.to_string())?;
+    if let Some(module) = &registered {
+        let record = register::assemble(module, &code);
+        if let Some(collector) = source_map {
+            collector.1 =
+                record.encode_utf16().count() - code.encode_utf16().count() - "\n}})".len();
+        }
+        code = record;
+    }
     Ok(Transpiled {
         code,
         mappings: String::new(),
