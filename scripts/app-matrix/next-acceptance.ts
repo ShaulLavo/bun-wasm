@@ -57,6 +57,7 @@ const external: string[] = [];
 const rebuilds: Awaited<ReturnType<typeof editCycle>>[] = [];
 let observedEngine = "not loaded";
 let completedCycles = 0;
+let devProcessId: number | null = null;
 let droppedSamples = 0;
 let browserVersion = "not launched";
 let owner: Page | undefined;
@@ -81,7 +82,7 @@ function save() {
     fixture: { path: "examples/next-acceptance", sourceRevision, sha256: digest(JSON.stringify(sources)), lockSha256: digest(sources["bun.lock"] ?? ""), stagedSha256: digest(JSON.stringify(staged.files)), config: staged.config, dependencies: JSON.parse(sources["package.json"] ?? "{}").dependencies },
     runtime: { revision: values["runtime-revision"], revisionSource: "caller supplied; compare to producer receipt", assets, webRoot, receipt: values["runtime-receipt"] ? resolve(values["runtime-receipt"]) : null },
     parameters: { cycles, timeoutMs: timeout, idleMs: idle, minHeadroomMiB: minHeadroom, maxGrowthMiB: maxGrowth, phases: Array.from(phases) },
-    completedCycles, droppedSamples, samplerErrors, failedAllocations, rebuilds, rows, samples,
+    completedCycles, devProcessId, droppedSamples, samplerErrors, failedAllocations, rebuilds, rows, samples,
     network: { mode: mirror ? "registry replay" : "live npm (diagnostic)", external, mirror: mirror?.snapshot() }, cleanup,
     acceptance: rows.length > 0 && rows.every(row => row.status === "pass") && cleanup === "pass",
   };
@@ -219,11 +220,12 @@ async function serverCases(owner: Page, page: Page, base: string, mode: "start" 
   if (mode !== "dev") return;
   const warmed = routeCases.every(name => rows.find(row => row.phase === `dev:${name}`)?.status === "pass");
   record("dev:warm", warmed ? { status: "pass", detail: "Every route compiled and checked" } : { status: "blocked", reason: "Warm-up requires all route probes" });
+  await phase("dev:process", async () => { devProcessId = await serverPid(page, base); }, "dev:warm");
   await phase("dev:warm-memory", async () => { await page.waitForTimeout(idle); await boundarySample("warm:idle"); }, "dev:warm");
   await phase("dev:edits", async () => {
     for (let index = 0; index < cycles; index++) await cycle(owner, page, base, source, traffic, index);
     assert.ok(completedCycles >= 30, `${completedCycles}/30 cycles; smoke run cannot pass`);
-  }, "dev:warm");
+  }, "dev:process");
   await phase("dev:compile-recovery", () => compileErrorRecovery(page, base, source), "dev:warm");
   await phase("dev:application-recovery", () => runRouteCase("application-error", page, base), "dev:warm");
   await phase("dev:overlap-after-errors", () => overlappingRequests(page, base, "after-errors"), "dev:compile-recovery");
@@ -236,14 +238,26 @@ async function serverCases(owner: Page, page: Page, base: string, mode: "start" 
   record("dev:bounded-memory", samplerErrors.length || droppedSamples ? { status: "blocked", reason: `Sampler errors ${samplerErrors.length}; dropped ${droppedSamples}` } : memoryGate(samples, completedCycles, minHeadroom, maxGrowth));
 }
 
+async function serverPid(page: Page, base: string): Promise<number> {
+  const observed: unknown = await page.evaluate(async base => {
+    const response = await fetch(new URL("api/context", base));
+    if (!response.ok) throw new Error(`Process identity HTTP ${response.status}`);
+    return response.json();
+  }, base);
+  assert.ok(observed && typeof observed === "object" && "pid" in observed && typeof observed.pid === "number" && Number.isSafeInteger(observed.pid) && observed.pid > 0, "Next response must identify the serving process");
+  return observed.pid;
+}
+
 async function cycle(owner: Page, page: Page, base: string, source: GuestSource, traffic: Awaited<ReturnType<typeof observeNativeProductTraffic>>, index: number) {
   const passed = await phase(`dev:cycle:${index}`, async () => {
     await alive(owner);
+    assert.equal(await serverPid(page, base), devProcessId, "Same warmed Next process before edit");
     await boundarySample(`cycle:${index}:before`);
     rebuilds.push(await editCycle(page, base, source, traffic, index, timeout, boundarySample));
     await overlappingRequests(page, base, `hmr-${index}`);
     await page.waitForTimeout(idle);
     await boundarySample(`cycle:${index}:idle`);
+    assert.equal(await serverPid(page, base), devProcessId, "Same warmed Next process after edit/revert");
     await alive(owner);
   });
   if (!passed) throw new Error(`Edit/revert cycle ${index} failed; retained ${completedCycles} complete cycles`);

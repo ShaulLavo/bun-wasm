@@ -12,5 +12,5 @@ export async function context(fail = false) {
   } finally {
     await Promise.resolve();
   }
-  return { header, cookie, after: (await headers()).get("x-next-marker") ?? "none", cookieAfter: (await cookies()).get("next-marker-" + header)?.value ?? (await cookies()).get("next-marker")?.value ?? "none" };
+  return { pid: process.pid, header, cookie, after: (await headers()).get("x-next-marker") ?? "none", cookieAfter: (await cookies()).get("next-marker-" + header)?.value ?? (await cookies()).get("next-marker")?.value ?? "none" };
 }
