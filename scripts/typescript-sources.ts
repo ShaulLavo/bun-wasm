@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const inventoryPath = "scripts/typescript-source-legacy.txt";
+const runtimeInputPath = "scripts/typescript-source-runtime-inputs.txt";
 const javascriptPath = /\.(?:cjs|js|mjs)$/;
 const generatedDirectories = [
   "crates/bunwasm-build/generated/",
@@ -13,25 +14,6 @@ const generatedFiles = new Set([
   "third_party/streams/entry.js",
   "third_party/temporal/entry.js",
 ]);
-const runtimeInputDirectories = [
-  "docs/app-matrix/repros/",
-  "tests/bench/",
-  "tests/build/",
-  "tests/builtins/",
-  "tests/fixtures/",
-  "tests/transpiler-hooks/",
-];
-const runtimeInputFiles = new Set([
-  ".internal/bun-test-suite/repro-open-server.test.js",
-  "scripts/bench/error-construction.js",
-  "tests/esbuild/browser.mjs",
-  "tests/esbuild/check.cjs",
-  "tests/esbuild/sync.cjs",
-  "tests/esbuild/watch.cjs",
-  "tests/net-ws.mjs",
-  "tests/servers/websocket.js",
-  "tests/stack-depth.js",
-]);
 
 export type SourceViolation = {
   kind: "inventory-growth" | "new-source" | "stale-inventory";
@@ -41,38 +23,49 @@ export type SourceViolation = {
 interface SourceAuditInput {
   paths: readonly string[];
   legacy: readonly string[];
+  runtimeInputs?: readonly string[];
   baselineLegacy?: readonly string[];
 }
 
-export function parseLegacyInventory(source: string): string[] {
+function parseInventory(source: string, label: string): string[] {
   const paths = source.split("\n").filter(Boolean);
   const sorted = paths.toSorted();
   if (new Set(paths).size !== paths.length || paths.some((path, index) => path !== sorted[index])) {
-    throw new Error("Legacy JavaScript inventory must be sorted and unique");
+    throw new Error(`${label} must be sorted and unique`);
   }
-  if (paths.some(path => !javascriptPath.test(path))) throw new Error("Legacy inventory entries must be JavaScript paths");
+  if (paths.some(path => !javascriptPath.test(path))) throw new Error(`${label} entries must be JavaScript paths`);
   return paths;
+}
+
+export function parseLegacyInventory(source: string): string[] {
+  return parseInventory(source, "Legacy JavaScript inventory");
+}
+
+export function parseRuntimeInputInventory(source: string): string[] {
+  return parseInventory(source, "Runtime JavaScript input inventory");
 }
 
 function underAnyDirectory(path: string, directories: readonly string[]): boolean {
   return directories.some(directory => path.startsWith(directory));
 }
 
-function isEstablishedSource(path: string, legacy: ReadonlySet<string>): boolean {
-  if (generatedFiles.has(path) || runtimeInputFiles.has(path)) return true;
-  if (underAnyDirectory(path, generatedDirectories) || underAnyDirectory(path, runtimeInputDirectories)) return true;
+function isEstablishedSource(path: string, legacy: ReadonlySet<string>, runtimeInputs: ReadonlySet<string>): boolean {
+  if (generatedFiles.has(path) || runtimeInputs.has(path)) return true;
+  if (underAnyDirectory(path, generatedDirectories)) return true;
   return legacy.has(path);
 }
 
 export function auditSourcePaths(input: SourceAuditInput): SourceViolation[] {
   const paths = new Set(input.paths);
   const legacy = new Set(input.legacy);
+  const runtimeInputs = new Set(input.runtimeInputs);
   const baselineLegacy = input.baselineLegacy === undefined ? undefined : new Set(input.baselineLegacy);
   const violations: SourceViolation[] = [];
-  for (const path of input.paths.filter(path => javascriptPath.test(path) && !isEstablishedSource(path, legacy))) {
+  for (const path of input.paths.filter(path => javascriptPath.test(path) && !isEstablishedSource(path, legacy, runtimeInputs))) {
     violations.push({ kind: "new-source", path });
   }
   for (const path of input.legacy.filter(path => !paths.has(path))) violations.push({ kind: "stale-inventory", path });
+  for (const path of input.runtimeInputs?.filter(path => !paths.has(path)) ?? []) violations.push({ kind: "stale-inventory", path });
   if (baselineLegacy === undefined) return violations;
   for (const path of input.legacy.filter(path => !baselineLegacy.has(path))) violations.push({ kind: "inventory-growth", path });
   return violations;
@@ -110,7 +103,8 @@ export function auditRepository(root: string): SourceViolation[] {
   const output = requiredGitOutput(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
   const paths = output.split("\0").filter(path => path && existsSync(join(root, path)));
   const legacy = parseLegacyInventory(readFileSync(join(root, inventoryPath), "utf8"));
-  return auditSourcePaths({ paths, legacy, baselineLegacy: baselineInventory(root) });
+  const runtimeInputs = parseRuntimeInputInventory(readFileSync(join(root, runtimeInputPath), "utf8"));
+  return auditSourcePaths({ paths, legacy, runtimeInputs, baselineLegacy: baselineInventory(root) });
 }
 
 function violationMessage(violation: SourceViolation): string {

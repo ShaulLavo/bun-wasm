@@ -48,6 +48,7 @@ scripts/test-html-server.mjs
 scripts/test-native-stream-interop.mjs
 scripts/test-websocket.mjs
 scripts/vendor-node-streams.mjs
+tests/esbuild/browser.mjs
 tests/esbuild/run.mjs
 tests/install/registry.mjs
 tests/install/run.mjs
