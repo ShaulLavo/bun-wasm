@@ -52,6 +52,44 @@ test("Hermes VM and side caches follow the compiler, sysroot, library and shared
   expect(hermes).toContain('tar -xzf "$RUNNER_TEMP/hermes-inputs/cargo-sources.tar.gz"');
 });
 
+function cacheSaveConditions(): Array<{ name: string; condition: string }> {
+  const parsed: unknown = Bun.YAML.parse(workflow);
+  if (!parsed || typeof parsed !== "object" || !("jobs" in parsed)) throw Error("Missing workflow jobs");
+  const jobs = parsed.jobs;
+  if (!jobs || typeof jobs !== "object" || !("hermes" in jobs)) throw Error("Missing Hermes job");
+  const job = jobs.hermes;
+  if (!job || typeof job !== "object" || !("steps" in job) || !Array.isArray(job.steps)) throw Error("Missing Hermes steps");
+  return job.steps.flatMap((step: unknown) => {
+    if (!step || typeof step !== "object" || !("name" in step) || !("uses" in step) || step.uses !== "actions/cache/save@v4") return [];
+    if (typeof step.name !== "string" || !("if" in step) || typeof step.if !== "string") throw Error("Invalid Hermes cache save");
+    return [{ name: step.name, condition: step.if }];
+  });
+}
+
+function allowSave(condition: string, state: { event: string; ref: string; hit: string; success: boolean; cancelled: boolean }): boolean {
+  const expression = condition.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+    .replace(/success\(\)/g, String(state.success)).replace(/cancelled\(\)/g, String(state.cancelled))
+    .replace(/github\.event_name/g, JSON.stringify(state.event)).replace(/github\.ref/g, JSON.stringify(state.ref))
+    .replace(/steps\.[\w-]+\.outputs\.cache-hit/g, JSON.stringify(state.hit));
+  const result: unknown = new Function(`return (${expression})`)();
+  if (typeof result !== "boolean") throw Error("Cache save condition is not boolean");
+  return result;
+}
+
+test("Hermes VM and side saves are explicit successful main-push misses", () => {
+  const saves = cacheSaveConditions();
+  expect(saves.map(save => save.name)).toEqual(["Save Hermes VM cache", "Save Hermes side cache"]);
+  expect(hermes).not.toMatch(/^ +uses: actions\/cache@v4$/m);
+  const main = { event: "push", ref: "refs/heads/main", hit: "false", success: true, cancelled: false };
+  const cases = [
+    [main, true], [{ ...main, hit: "" }, true], [{ ...main, hit: "true" }, false],
+    [{ ...main, event: "pull_request", ref: "refs/pull/374/merge" }, false],
+    [{ ...main, event: "pull_request", ref: "refs/pull/374/merge", hit: "" }, false],
+    [{ ...main, ref: "refs/heads/feature" }, false], [{ ...main, cancelled: true }, false], [{ ...main, success: false }, false],
+  ] as const;
+  for (const save of saves) for (const [state, expected] of cases) expect(allowSave(save.condition, state), `${save.name} ${state.event} ${state.ref} ${state.hit}`).toBe(expected);
+});
+
 test("workflow shell steps parse without execution", () => {
   const parsed: unknown = Bun.YAML.parse(workflow);
   if (!parsed || typeof parsed !== "object" || !("jobs" in parsed) || !parsed.jobs || typeof parsed.jobs !== "object" || !("hermes" in parsed.jobs)) throw Error("Missing Hermes job");

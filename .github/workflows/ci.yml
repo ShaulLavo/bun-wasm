@@ -1153,12 +1153,15 @@ jobs:
           else
             node hermes/check-build.ts "$HERMES_BUILD_DIR"
           fi
-      - uses: actions/cache/save@v4
-        if: steps.hermes-vm-cache.outputs.cache-hit != 'true'
+      - name: Save Hermes VM cache
+        uses: actions/cache/save@v4
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.hermes-vm-cache.outputs.cache-hit != 'true' }}
         with:
           path: ${{ env.HERMES_BUILD_DIR }}
           key: ${{ steps.hermes-vm-cache.outputs.cache-primary-key }}
-      - uses: actions/cache@v4
+      - name: Restore Hermes side cache
+        uses: actions/cache/restore@v4
+        id: hermes-side-cache
         with:
           path: ${{ env.HERMES_ENGINE_BUILD_DIR }}/target
           key: hermes-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.hermes-sysroot-inputs.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'hermes/**', 'crates/**', 'scripts/src/engine-*', 'scripts/build-engine-hermes.sh', 'scripts/guest-*.ts', 'scripts/build-wasi-sysroot.ts', 'scripts/waffle-release-inputs.*', 'env.sh', 'bun.lock') }}
@@ -1195,3 +1198,9 @@ jobs:
         run: |
           source env.sh
           bun scripts/hermes-hosts.ts dist/bun-hermes.wasm "$RUNNER_TEMP/hermes-hosts.json" --node-only
+      - name: Save Hermes side cache
+        uses: actions/cache/save@v4
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.hermes-side-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: ${{ env.HERMES_ENGINE_BUILD_DIR }}/target
+          key: ${{ steps.hermes-side-cache.outputs.cache-primary-key }}
