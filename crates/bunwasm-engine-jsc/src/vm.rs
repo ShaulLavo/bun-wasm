@@ -31,6 +31,29 @@ fn ctx() -> JSContextRef {
     CTX.with(Cell::get)
 }
 
+/// Returns cached bytes only. Safe to call after a failed JS allocation or trap.
+#[unsafe(no_mangle)]
+pub extern "C" fn jsc_memory_telemetry() -> *const BunjscMemoryTelemetry {
+    unsafe { bunjsc_memory_telemetry() }
+}
+
+/// Samples the live VM. Call only at a normal execution boundary, before failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn jsc_memory_telemetry_refresh() -> *const BunjscMemoryTelemetry {
+    let context = ctx();
+    if !context.is_null() {
+        unsafe { bunjsc_refresh_memory_telemetry(context) };
+    }
+    jsc_memory_telemetry()
+}
+
+fn memory_counter(bytes: u64) -> Val {
+    if bytes == u64::MAX {
+        return Val::Null;
+    }
+    Val::Num(bytes as f64)
+}
+
 /// A protected JS value: kept alive (and not collected) while it exists.
 pub struct JsVal(JSValueRef);
 
@@ -719,16 +742,13 @@ impl Engine for Jsc {
     }
 
     fn memory_usage(&self) -> Val {
-        #[cfg(target_arch = "wasm32")]
-        let bytes = (core::arch::wasm32::memory_size(0) * 65536) as f64;
-        #[cfg(not(target_arch = "wasm32"))]
-        let bytes = 0.0;
+        let snapshot = unsafe { *jsc_memory_telemetry_refresh() };
         crate::engine::Record::new()
-            .set("rss", bytes)
-            .set("heapTotal", bytes)
-            .set("heapUsed", bytes)
-            .set("external", 0)
-            .set("arrayBuffers", 0)
+            .set("rss", Val::Null)
+            .set("heapTotal", memory_counter(snapshot.heap_total))
+            .set("heapUsed", memory_counter(snapshot.heap_used))
+            .set("external", memory_counter(snapshot.extra_memory))
+            .set("arrayBuffers", memory_counter(snapshot.array_buffer_bytes))
             .into()
     }
 }

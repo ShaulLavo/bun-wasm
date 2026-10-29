@@ -46,6 +46,8 @@ including mixed offset views and callback identity. The external root retains
 its final cursor check and owns all opened descriptors.
 
 
+`readSync` and callback `read` of more than 1 MiB on a positively identified regular file use the same piecewise path: 1 MiB native reads written into the destination, stopping at the first short read or EOF, with explicit positions advancing by committed bytes. Each native read returns a fresh copy, so one full-size read needed two more contiguous blocks of the whole size beside the destination; webpack's cache reads a whole pack file (10.5 MiB in a Next.js dev server) this way. Other descriptors keep one read.
+
 ## Classification
 
 | Patch or source | Class | Change |
