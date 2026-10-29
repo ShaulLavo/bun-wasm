@@ -168,6 +168,17 @@ impl CoreClient {
         pair(self.source("module", name)?)
     }
 
+    pub(crate) fn module_record(self, name: &str) -> Result<(String, String), NativeError> {
+        pair(self.source("record", name)?)
+    }
+
+    pub(crate) fn lower_script(self, source: &str, filename: &str) -> Result<String, NativeError> {
+        string(self.call(
+            crate::split_api::LOWER_SCRIPT,
+            vec![source.into(), filename.into()],
+        )?)
+    }
+
     pub(crate) fn cjs_source(self, name: &str) -> Result<(String, i32), NativeError> {
         let Val::Array(values) = self.source("cjs", name)? else {
             return Err(malformed());

@@ -51,7 +51,7 @@ if [[ -e "$core" || -e "$core.core.json" ]]; then
   exit 0
 fi
 "$GUEST_CARGO" tree --locked --offline -p bunwasm-cli --target wasm32-wasip1 "${features[@]}" > "$out/core-dependencies.txt"
-if grep -Eq 'rquickjs|(^|[[:space:]])bunwasm-jsc[[:space:]]' "$out/core-dependencies.txt"; then
+if grep -Eq 'rquickjs|(^|[[:space:]])bunwasm-(jsc|hermes)[[:space:]]' "$out/core-dependencies.txt"; then
   echo 'core dependency graph contains a JavaScript VM' >&2
   exit 1
 fi

@@ -9,6 +9,7 @@ export async function engineLinkPlan(files: PairedProgramFiles<Uint8Array>): Pro
   if (programKind(core) !== input.kind) throw new TypeError("Program kind does not match core declaration");
   verifyProgramSide(input.kind, side);
   const group = sharedGroupPair(core, input.side);
+  if (group && input.kind !== "quickjs") throw new TypeError(`A ${input.kind} pair is not qualified for the shared-group profile`);
   const digests = await Promise.all([input.core, input.side].map(bytes => crypto.subtle.digest("SHA-256", bytes)));
   const kind = new TextEncoder().encode(input.kind);
   const identity = Uint8Array.from(Array.from(kind).concat([0], Array.from(new Uint8Array(digests[0]!)), Array.from(new Uint8Array(digests[1]!))));

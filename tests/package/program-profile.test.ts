@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureProgramInputs, inputProfile, verifyProgramReceipt, type ProgramInputSnapshot } from "../../scripts/guest-core-receipt.ts";
+import { captureProgramInputs, engineEnvironment, inputProfile, verifyProgramReceipt, type ProgramInputSnapshot } from "../../scripts/guest-core-receipt.ts";
 import { artifactIdentity } from "../../scripts/guest-build-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
 import { parseProgramProfile, selectedCxxMembers, sharedGroupEnvironment, targetFeatures, verifySharedSysroot, verifySplitSysroot } from "../../scripts/src/program-profile.ts";
@@ -163,3 +163,11 @@ for (const [kind, path] of [["core", "scripts/src/engine-explicit-init.ts"], ["c
     });
   });
 }
+
+test("only the QuickJS engine is qualified for the shared-group profile", () => {
+  expect(engineEnvironment("quickjs", "/sysroot", "shared-group").BUN_WASM_PROGRAM_PROFILE).toBe("shared-group");
+  for (const engine of ["jsc", "hermes"] as const) {
+    expect(() => engineEnvironment(engine, "/sysroot", "shared-group")).toThrow(/not qualified/);
+    expect(engineEnvironment(engine, "/sysroot").BUN_WASM_PROGRAM_PROFILE).toBeUndefined();
+  }
+});
