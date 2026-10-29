@@ -39,6 +39,7 @@
         "scripts/guest-core-receipt.ts",
         "scripts/guest-engine-receipt.ts",
         "scripts/hermes-import-delta.ts",
+        "scripts/hermes-hosts.ts",
         "scripts/measure-suite-dependencies.ts",
         "scripts/refresh-compatibility-docs.ts",
         "scripts/group-suite-category-d.ts",
