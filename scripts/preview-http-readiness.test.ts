@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { waitForPreviewReady } from "./app-matrix/product-browser";
 import { browserRegistryRoute } from "./app-matrix/registry-request";
+import { boundedCleanup } from "./app-matrix/cleanup";
 
 // Real Chromium against loopback servers: the probe page must reach the preview the way the
 // application page will (same context, routing, service worker and redirects) without running it.
@@ -71,11 +72,36 @@ test("a non-503 HTTP failure is reported without a retry", async () => {
   });
 }, 20_000);
 
+async function closeDeadlineProbe(origin: string): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    const terminal = await context.newPage();
+    await terminal.setContent("terminal remains usable");
+    await context.newPage();
+    const probe = await context.newPage();
+    await probe.goto(origin, { waitUntil: "commit" });
+    await expect(waitForPreviewReady(probe, origin, Date.now() + 5)).rejects.toThrow("not HTTP-ready before the deadline");
+    expect(await boundedCleanup("probe-close", () => probe.close(), 2_000)).toBeNull();
+    expect(context.pages()).toHaveLength(2);
+    expect(await terminal.locator("body").textContent()).toBe("terminal remains usable");
+  } finally { await context.close(); }
+}
+
+test("a readiness deadline crossing a reload commit leaves the probe closable with other pages open", async () => {
+  await withServer(async () => { await Bun.sleep(0); return html("still starting", 503); }, async origin => {
+    for (let iteration = 0; iteration < 32; iteration++) await closeDeadlineProbe(origin);
+  });
+}, 20_000);
+
 test("stalled response headers stop at the shared deadline", async () => {
   await withServer(() => new Promise<Response>(() => {}), async (origin, context) => {
+    const probe = await context.newPage();
+    let canceled = false;
+    probe.on("requestfailed", request => { canceled = request.failure()?.errorText === "net::ERR_ABORTED"; });
     const started = performance.now();
-    await expect(waitForPreviewReady(await context.newPage(), `${origin}/`, Date.now() + 1_000)).rejects.toThrow("not HTTP-ready before the deadline: no complete response");
+    await expect(waitForPreviewReady(probe, `${origin}/`, Date.now() + 1_000)).rejects.toThrow("not HTTP-ready before the deadline: no complete response");
     expect(performance.now() - started).toBeLessThan(2_000);
+    expect(canceled).toBe(true);
   });
 }, 20_000);
 
@@ -86,8 +112,9 @@ test("a stalled 503 body stops at the shared deadline and keeps the last complet
     const body = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("<!doctype html>partial")); } });
     return new Response(body, { status: 503, headers: { "content-type": "text/html" } });
   }, async (origin, context) => {
+    const probe = await context.newPage();
     const started = performance.now();
-    await expect(waitForPreviewReady(await context.newPage(), `${origin}/`, Date.now() + 2_000)).rejects.toThrow("last HTTP 503: <!doctype html>Loading: prior 503");
+    await expect(waitForPreviewReady(probe, `${origin}/`, Date.now() + 2_000)).rejects.toThrow("last HTTP 503: <!doctype html>Loading: prior 503");
     expect(performance.now() - started).toBeLessThan(3_000);
   });
 }, 20_000);
