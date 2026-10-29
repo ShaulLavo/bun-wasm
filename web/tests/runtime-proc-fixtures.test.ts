@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { SpawnRequest } from "waffle/proc/types";
+import { attachTerminalOutput, createTerminalOutput, TerminalOutputBudget } from "../node_modules/waffle/browser/terminal-output";
 import { runtimeProcFixture, runtimeProcJobWaitFixture } from "./runtime-proc-fixtures";
 
 test("failed spawn reports its exact negative return and request without changing stage48", () => {
@@ -87,10 +88,15 @@ for (const executable of ["/bin/bun", "/fixtures/runtime-proc"]) test(`parent fi
   expect(reads).toBe(7); expect(waits).toBe(2); expect(polls).toBe(6);
 });
 
-test("child fixture closes its inherited alias, waits for stdin EOF and exits with status 23", () => {
+for (const bounded of [false, true]) test(`child fixture preserves every byte and exit23 with ${bounded ? "bounded terminal credit" : "immediate writes"}`, () => {
   let memory: WebAssembly.Memory;
-  let reads = 0, polls = 0;
+  let reads = 0, polls = 0, outputPolls = 0, blockedWrites = 0, shortWrites = 0;
   const closed: number[] = [], writes: string[] = [];
+  const terminal = { 1: "", 2: "" };
+  const budget = new TerminalOutputBudget(16), reader = createTerminalOutput(16);
+  budget.readers.add(reader);
+  const writer = attachTerminalOutput(reader.buffer, { checkActive() {}, interrupted: () => false, doorbell() {} });
+  const deliver = (target: 1 | 2, bytes: Uint8Array) => { terminal[target] += new TextDecoder().decode(bytes); return bytes.length; };
   class Exit extends Error { constructor(readonly code: number) { super(`exit ${code}`); } }
   const unused = () => { throw new Error("child called a parent-only import"); };
   const instance = new WebAssembly.Instance(new WebAssembly.Module(runtimeProcFixture()), {
@@ -103,16 +109,31 @@ test("child fixture closes its inherited alias, waits for stdin EOF and exits wi
         expect(length).toBe(reads === 2 ? 4 : 2); new Uint8Array(memory.buffer, ptr, 2).set(bytes); return 2;
       },
       write(fd: number, ptr: number, length: number) {
+        const bytes = new Uint8Array(memory.buffer, ptr, length);
+        if (bounded && fd !== 10) {
+          expect([11, 2]).toContain(fd);
+          const count = writer.tryWrite(fd === 11 ? 1 : 2, [bytes]);
+          if (count === -6) blockedWrites++;
+          if (count > 0 && count < length) shortWrites++;
+          return count;
+        }
         expect(fd).toBe(writes.length < 2 ? 10 : writes.length === 2 ? 11 : 2);
-        writes.push(new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, length))); return length;
+        writes.push(new TextDecoder().decode(bytes)); return length;
       },
       pipe: unused, dup: unused, spawn: unused, wait: unused, job_of: unused,
       poll(ptr: number, count: number, timeout: number, out: number) {
-        expect(count).toBe(1); expect(timeout).toBe(5000); polls++;
-        const view = new DataView(memory.buffer);
+        expect(count).toBe(1); expect(timeout).toBe(5000);
+        const view = new DataView(memory.buffer), kind = view.getUint32(ptr, true);
+        if (kind === 1) {
+          outputPolls++;
+          expect([11, 2]).toContain(view.getUint32(ptr + 4, true));
+          if (outputPolls === 1) return 0;
+          budget.service(deliver);
+          expect(writer.writable()).toBe(true);
+        } else { expect(kind).toBe(0); polls++; }
         view.setBigUint64(out, view.getBigUint64(ptr + 8, true), true);
-        view.setUint32(out + 8, view.getUint32(ptr, true), true);
-        view.setUint32(out + 12, polls === 3 ? 1 : 0, true); return 1;
+        view.setUint32(out + 8, kind, true);
+        view.setUint32(out + 12, kind === 0 && polls === 3 ? 1 : 0, true); return 1;
       },
     },
     wasi_snapshot_preview1: {
@@ -123,8 +144,41 @@ test("child fixture closes its inherited alias, waits for stdin EOF and exits wi
   memory = instance.exports.memory as WebAssembly.Memory;
   try { (instance.exports._start as () => void)(); throw new Error("child returned instead of calling proc_exit"); }
   catch (error) { expect(error).toBeInstanceOf(Exit); expect((error as Exit).code).toBe(23); }
-  expect(writes).toEqual(["R", "pong", "child-stdout\n", "child-stderr\n"]); expect(closed).toEqual([1, 0, 10, 11, 2]);
+  budget.service(deliver);
+  expect(writes).toEqual(bounded ? ["R", "pong"] : ["R", "pong", "child-stdout\n", "child-stderr\n"]);
+  expect(terminal).toEqual(bounded ? { 1: "child-stdout\n", 2: "child-stderr\n" } : { 1: "", 2: "" });
+  if (bounded) { expect(blockedWrites).toBeGreaterThan(0); expect(shortWrites).toBeGreaterThan(0); expect(outputPolls).toBeGreaterThan(1); }
+  expect(reader.pending()).toBe(0); expect(closed).toEqual([1, 0, 10, 11, 2]);
   expect(reads).toBe(4); expect(polls).toBe(3);
+});
+
+for (const returned of [0, -8, 14]) test(`child fixture rejects invalid terminal write result ${returned} at stage90`, () => {
+  let memory: WebAssembly.Memory, reads = 0;
+  class Exit extends Error { constructor(readonly code: number) { super(`exit ${code}`); } }
+  const unused = () => { throw new Error("child continued after terminal write failure"); };
+  const instance = new WebAssembly.Instance(new WebAssembly.Module(runtimeProcFixture()), {
+    runtime_proc: {
+      read(_fd: number, ptr: number) {
+        if (reads++) return 0;
+        new Uint8Array(memory.buffer, ptr, 4).set(new TextEncoder().encode("ping")); return 4;
+      },
+      write: (fd: number, _ptr: number, length: number) => fd === 10 ? length : returned,
+      pipe: unused, dup: unused, spawn: unused, wait: unused, job_of: unused,
+      poll(ptr: number, _count: number, _timeout: number, out: number) {
+        const view = new DataView(memory.buffer);
+        view.setBigUint64(out, view.getBigUint64(ptr + 8, true), true);
+        view.setUint32(out + 8, view.getUint32(ptr, true), true);
+        view.setUint32(out + 12, reads > 0 ? 1 : 0, true); return 1;
+      },
+    },
+    wasi_snapshot_preview1: {
+      args_sizes_get(ptr: number) { new DataView(memory.buffer).setUint32(ptr, 1, true); return 0; },
+      fd_close: () => 0, proc_exit(code: number) { throw new Exit(code); },
+    },
+  });
+  memory = instance.exports.memory as WebAssembly.Memory;
+  try { (instance.exports._start as () => void)(); throw new Error("invalid terminal write was accepted"); }
+  catch (error) { expect(error).toBeInstanceOf(Exit); expect((error as Exit).code).toBe(90); }
 });
 
 for (const returned of [0, -8]) test(`child fixture still fails early EOF or unexpected read errno (${returned})`, () => {
