@@ -11,6 +11,11 @@ const payload = {
   ioCalls: [{ worker: 2, operation: "read", fd: 4, result: -6 }, { worker: 2, operation: "poll", result: 1 }, { worker: 2, operation: "read", fd: 4, result: 0 }],
   ioReports: 3,
   spawns: [{ pid: 17, directory: "opaque-dir" }],
+  terminalDiagnostics: {
+    heartbeat: { intervalMs: 50, ticks: 100, maxGapMs: 57 },
+    workers: [{ worker: 2, doorbellCount: 1, doorbellTimes: [21.5], header: [0, 0, 0, 0, 0, 0, 1, 0],
+      abiReports: 1, abiCalls: [{ operation: "write", args: [11, 1024, 13], result: -6 }] }],
+  },
 };
 const metadata = { browser: "webkit", mode: "automatic", scenario: "job-wait", pageErrors: ["page error"] };
 
