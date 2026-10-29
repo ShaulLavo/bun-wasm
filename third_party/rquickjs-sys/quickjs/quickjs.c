@@ -2105,7 +2105,11 @@ void *js_realloc_rt(JSRuntime *rt, void *ptr, size_t size)
     if (!ptr) {
         if (size == 0)
             return NULL;
-        return js_malloc_rt(rt, size);
+        uint32_t category = rt->bunwasm_allocation_category;
+        rt->bunwasm_allocation_category = category ? category : JS_BUNWASM_ALLOC_REALLOC;
+        ptr = js_malloc_rt(rt, size);
+        rt->bunwasm_allocation_category = category;
+        return ptr;
     }
     if (unlikely(size == 0)) {
         js_free_rt(rt, ptr);

@@ -107,6 +107,11 @@ static void bounded_failures(JSRuntime *rt, JSContext *ctx)
     expect_failure(rt, JS_BUNWASM_ALLOC_CALLOC, 2 * request, true);
 
     JS_bunwasm_ClearAllocationFailure(rt);
+    assert(!js_realloc(ctx, NULL, 2 * request));
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    expect_failure(rt, JS_BUNWASM_ALLOC_REALLOC, 2 * request, true);
+
+    JS_bunwasm_ClearAllocationFailure(rt);
     void *block = js_malloc_rt(rt, 4096);
     assert(block);
     assert(!js_realloc(ctx, block, request));
@@ -119,6 +124,13 @@ static void bounded_failures(JSRuntime *rt, JSContext *ctx)
     assert(JS_IsException(failed));
     JS_FreeValue(ctx, JS_GetException(ctx));
     expect_failure(rt, JS_BUNWASM_ALLOC_ARRAY_BUFFER, request, true);
+
+    JS_bunwasm_ClearAllocationFailure(rt);
+    const char *resize = "new ArrayBuffer(1, {maxByteLength:2097152}).resize(2097152)";
+    failed = JS_Eval(ctx, resize, strlen(resize), "failed-resize", JS_EVAL_TYPE_GLOBAL);
+    assert(JS_IsException(failed));
+    JS_FreeValue(ctx, JS_GetException(ctx));
+    expect_failure(rt, JS_BUNWASM_ALLOC_ARRAY_BUFFER, 2 * request, true);
 
     JS_bunwasm_ClearAllocationFailure(rt);
     assert(!js_calloc_rt(rt, SIZE_MAX, 2));
