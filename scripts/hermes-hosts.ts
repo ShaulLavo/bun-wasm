@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -30,17 +30,35 @@ async function verifyHermesHosts(corePath: string, browsers: boolean) {
     fetch: async url => new Response(url.endsWith("hermes-engine.wasm") ? side : core),
   });
   assert.equal(programKind(module), "hermes");
-  const native = ["node", process.execPath].flatMap(executable => hostCases.map(test => {
-    const actual = spawnSync(executable, ["--disable-warning=ExperimentalWarning", join(repository, "web/scripts/node-host.ts"),
-      "--wasm", corePath, "--", "run", join(fixtures, test.path)], { encoding: "utf8", timeout: 60_000 });
-    assert.equal(actual.error, undefined);
-    assert.equal(actual.status, 0, actual.stderr);
-    assert.equal(actual.stdout, test.stdout);
-    assert.equal(actual.stderr, "");
-    return { executable, runtime: executable === "node" ? "node" : "bun", version: executable === "node" ? spawnSync("node", ["--version"], { encoding: "utf8" }).stdout.trim() : Bun.version, path: test.path, status: actual.status, stdout: actual.stdout, stderr: actual.stderr };
-  }));
+  const native = await nativeSmoke(corePath);
   const browser = browsers ? await browserSmoke(identity) : null;
   return { identity, packageHost: { runtime: "bun", version: Bun.version, engine: programKind(module) }, native, browser };
+}
+
+async function nativeSmoke(corePath: string) {
+  const scratch = await mkdtemp(join(tmpdir(), "bw-h5-node-"));
+  const env = { ...process.env, BUN_WASM_SCRATCH_ROOT: scratch };
+  try {
+    const results = ["node", process.execPath].flatMap(executable => hostCases.map(test => runNativeCase(executable, test, corePath, env)));
+    assert.deepEqual(readdirSync(scratch), [], "Node/Bun fixture hosts released their private executable mounts");
+    return results;
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+    assert.equal(existsSync(scratch), false);
+    console.log(JSON.stringify({ cleanup: { nativeExecutableRootsRemoved: true, scratchRemoved: true } }));
+  }
+}
+
+function runNativeCase(executable: string, test: typeof hostCases[number], corePath: string, env: NodeJS.ProcessEnv) {
+  const actual = spawnSync(executable, ["--disable-warning=ExperimentalWarning", join(repository, "web/scripts/node-host.ts"),
+    "--wasm", corePath, "--", "run", join(fixtures, test.path)], { encoding: "utf8", timeout: 60_000, env });
+  assert.equal(actual.error, undefined);
+  assert.equal(actual.status, 0, actual.stderr);
+  assert.equal(actual.stdout, test.stdout);
+  assert.equal(actual.stderr, "");
+  return { executable, runtime: executable === "node" ? "node" : "bun",
+    version: executable === "node" ? spawnSync("node", ["--version"], { encoding: "utf8" }).stdout.trim() : Bun.version,
+    path: test.path, status: actual.status, stdout: actual.stdout, stderr: actual.stderr };
 }
 
 async function browserSmoke(identity: { core: { path: string; sha256: string }; side: { path: string; sha256: string } }) {

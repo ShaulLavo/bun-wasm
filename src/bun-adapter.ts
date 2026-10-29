@@ -5,7 +5,7 @@ import { loadBunWasm, type LoadBunWasmOptions } from "./assets.js";
 
 import type { BunNetworkOptions } from "../web/src/net/helper.js";
 import { bunLauncher } from "../web/src/bun-launcher.js";
-import { isPairedEngine, type PairedEngine } from "./engine-kind.js";
+import { isPairedEngine, programKind, type PairedEngine } from "./engine-kind.js";
 import { ENGINE_BIN } from "./executable-paths.js";
 export type Engine = PairedEngine | "browser";
 
@@ -93,7 +93,13 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
     for (const name of adapters) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), runtime, network: options.network })));
     for (const name of names) unregisters.push(runtime.registerProgram(name, {
       adapter: `bun:${engine}`, cooperative: true,
-      module: () => loadBunWasm(options),
+      module: async () => {
+        const module = await loadBunWasm(options);
+        const expected = engine === "browser" ? "single" : engine;
+        const declared = programKind(module);
+        if (declared !== expected) throw new TypeError(`Selected ${engine} core declares ${declared}`);
+        return module;
+      },
     }));
     // Check every path before creating any files, so a conflict cannot leave a partial install.
     for (const name of names) {
