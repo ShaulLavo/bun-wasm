@@ -1,10 +1,15 @@
 import { expect, test } from "bun:test";
-import { readFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseArgs } from "node:util";
 import ts from "typescript-api";
+import { acceptanceBudget, acceptanceTimeouts, timeoutOptions } from "./next-acceptance-options";
+import { registryReceipt } from "./next-acceptance-registry";
+import { runAcceptancePhase } from "./next-acceptance-phase";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
-import { emptyMemory, memoryGate, parseMemory, resultTable, type MemorySample } from "./next-acceptance-model";
+import { emptyMemory, memoryGate, parseMemory, resultTable, type MemorySample, type PhaseResult } from "./next-acceptance-model";
 
 const MiB = 1024 * 1024;
 function sample(phase: string, live = 200): MemorySample {
@@ -36,9 +41,11 @@ test("memory hook validates counters and failed-allocation evidence", () => {
 });
 
 test("report records blocked phases and engine identity without unescaped table cells", () => {
-  const table = resultTable([{ phase: "dev", engine: "jsc", observedEngine: "ready | JavaScriptCore", durationMs: 20, status: "blocked", reason: "build\nfailed" }]);
+  const table = resultTable([{ phase: "dev", engine: "jsc", observedEngine: "ready | JavaScriptCore", durationMs: 20, budgetMs: null, status: "blocked", reason: "build\nfailed" }]);
   expect(table).toContain("jsc | ready \\| JavaScriptCore | dev | blocked");
   expect(table).toContain("build failed");
+  expect(table).toContain("Watchdog ms");
+  expect(table).toContain("20 | n/a | build failed");
 });
 
 function sourceFiles(directory: string): string[] {
@@ -96,3 +103,104 @@ function verifyLauncher(directory: string, bin: string, args: string[]) {
   const actual: unknown = JSON.parse(child.stdout.toString());
   expect(Array.isArray(actual) ? actual.slice(1) : actual).toEqual([bin].concat(args));
 }
+
+function selectedTimeouts(args: string[] = []) {
+  return acceptanceTimeouts(parseArgs({ args, options: timeoutOptions }).values);
+}
+
+test("only production builds receive the approved 300-second operation budget", () => {
+  const timeouts = selectedTimeouts();
+  expect(timeouts).toEqual({ timeoutMs: 180000, buildTimeoutMs: 300000 });
+  expect(acceptanceBudget("build", timeouts)).toEqual({ operationMs: 300000, watchdogMs: 305000 });
+  for (const name of ["assets", "engine", "install", "start", "dev", "start:http-ready", "dev:static", "dev:cycle:0", "dev:compile-recovery", "start:stop", "dev:stop", "network"]) {
+    expect(acceptanceBudget(name, timeouts)).toEqual({ operationMs: 180000, watchdogMs: 185000 });
+  }
+});
+
+test("build and other-operation timeout overrides are independent", () => {
+  const buildOnly = selectedTimeouts(["--build-timeout-ms", "240000"]);
+  expect(acceptanceBudget("build", buildOnly)).toEqual({ operationMs: 240000, watchdogMs: 245000 });
+  expect(acceptanceBudget("install", buildOnly)).toEqual({ operationMs: 180000, watchdogMs: 185000 });
+  const otherOnly = selectedTimeouts(["--timeout-ms", "60000"]);
+  expect(acceptanceBudget("build", otherOnly)).toEqual({ operationMs: 300000, watchdogMs: 305000 });
+  expect(acceptanceBudget("dev:cycle:0", otherOnly)).toEqual({ operationMs: 60000, watchdogMs: 65000 });
+  expect(selectedTimeouts(["--timeout-ms", "1000", "--build-timeout-ms", "900000"]))
+    .toEqual({ timeoutMs: 1000, buildTimeoutMs: 900000 });
+});
+
+test("both timeout options reject values outside their integer bounds", () => {
+  for (const option of Object.keys(timeoutOptions)) {
+    for (const value of ["", "0", "-1", "999", "900001", "1000.5", "NaN", "Infinity", "not-a-number", "9007199254740992"]) {
+      expect(() => selectedTimeouts([`--${option}=${value}`])).toThrow(`Invalid --${option}`);
+    }
+    expect(() => selectedTimeouts([`--${option}`])).toThrow();
+  }
+});
+
+test("phase reports persist the selected build watchdog and the actual operation failure", async () => {
+  const { watchdogMs } = acceptanceBudget("build", selectedTimeouts(["--build-timeout-ms", "250000"]));
+  const rows: PhaseResult[] = [];
+  const result = await runAcceptancePhase({ phase: "build", engine: "quickjs", observedEngine: "QuickJS control",
+    timeoutMs: watchdogMs, operation: async () => { throw new Error("build exited 7"); },
+    cancel: async () => { throw new Error("completed operations must not be cancelled"); }, record: row => rows.push(row) });
+  expect(result).toMatchObject({ phase: "build", budgetMs: 255000, status: "fail", reason: "Error: build exited 7" });
+  expect(rows).toEqual([result]);
+  expect(JSON.parse(JSON.stringify(rows))[0].budgetMs).toBe(255000);
+  expect(resultTable(rows)).toContain("255000 | Error: build exited 7");
+});
+
+test("an expired stage waits for cancellation before recording failure even if work completes during teardown", async () => {
+  const events: string[] = [];
+  let finish = () => {};
+  const operation = new Promise<void>(resolve => { finish = resolve; });
+  const rows: PhaseResult[] = [];
+  const result = await runAcceptancePhase({ phase: "build", engine: "quickjs", observedEngine: "QuickJS control", timeoutMs: 10,
+    operation: () => operation,
+    cancel: async () => { events.push("cancel"); await Promise.resolve(); finish(); events.push("released"); },
+    record: row => { events.push("record"); rows.push(row); } });
+  expect(events).toEqual(["cancel", "released", "record"]);
+  expect(result).toMatchObject({ status: "fail", budgetMs: 10, reason: "Error: Phase build deadline exceeded (10ms)" });
+  expect(rows).toEqual([result]);
+});
+
+
+test("registry overlay without a supplement rejects before report or session resources exist", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-next01-options-"));
+  try {
+    const output = join(scratch, "report");
+    const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "next-acceptance.ts"),
+      "--engine", "quickjs", "--web-root", join(scratch, "unused-web"), "--output", output,
+      "--runtime-revision", "d7fa432cbf03276c0c39119444bb524ce80db0ba",
+      "--registry-overlay", join(import.meta.dir, "fixtures/next-advisory")],
+    { env: { ...process.env, TMPDIR: scratch, BUN_WASM_TEST_TMP: scratch }, timeout: 5000 });
+    expect(child.exitCode).toBe(1);
+    expect(child.stderr.toString()).toContain("--registry-overlay requires --registry-extra");
+    expect(existsSync(output)).toBe(false);
+    expect(readdirSync(scratch)).toEqual([]);
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test("registry receipt identifies all three indexes and changes with the authentic overlay bytes", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-next01-receipt-"));
+  try {
+    const captured = readFileSync(join(import.meta.dir, "fixtures/next-advisory/index.json"), "utf8");
+    const paths = ["borrowed", "supplement", "overlay"].map(name => join(scratch, `${name}.json`));
+    for (const path of paths) writeFileSync(path, captured);
+    const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+    const receipt = registryReceipt(paths);
+    expect(receipt.entries).toBe(1);
+    expect(receipt.sha256).toBe(hash([captured, captured, captured].join("\n")));
+    expect(receipt.inputs).toEqual(paths.map(path => ({ path, sha256: hash(captured), entries: 1 })));
+    expect(registryReceipt(paths.slice(0, 2)).sha256).not.toBe(receipt.sha256);
+    const overlay = paths.at(-1);
+    if (!overlay) throw new Error("Missing overlay input");
+    writeFileSync(overlay, captured + "\n");
+    const changed = registryReceipt(paths);
+    expect(changed.sha256).not.toBe(receipt.sha256);
+    expect(changed.entries).toBe(receipt.entries);
+    expect(changed.inputs.slice(0, 2)).toEqual(receipt.inputs.slice(0, 2));
+    expect(changed.inputs.at(-1)?.sha256).toBe(hash(captured + "\n"));
+    rmSync(overlay);
+    expect(() => registryReceipt(paths)).toThrow("ENOENT");
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});

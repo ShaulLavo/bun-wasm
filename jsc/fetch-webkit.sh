@@ -18,7 +18,7 @@ if [[ "$(git -C "$WEBKIT_DIR" rev-parse HEAD 2>/dev/null)" != "$WEBKIT_COMMIT" ]
   git -C "$WEBKIT_DIR" checkout -q --detach "$WEBKIT_COMMIT"
 fi
 if git -C "$WEBKIT_DIR" apply --check "$JSC_SRC/webkit-wasi.patch" 2>/dev/null; then
-  git -C "$WEBKIT_DIR" apply "$JSC_SRC/webkit-wasi.patch"
+  git -C "$WEBKIT_DIR" apply --index "$JSC_SRC/webkit-wasi.patch"
   echo "webkit: applied webkit-wasi.patch"
 elif git -C "$WEBKIT_DIR" apply --reverse --check "$JSC_SRC/webkit-wasi.patch" 2>/dev/null; then
   echo "webkit: patch already applied"

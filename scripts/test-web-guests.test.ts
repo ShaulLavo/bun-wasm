@@ -64,7 +64,7 @@ test("all eight artifact-backed cases leave the fixture-free Web glob", () => {
   const compose = readFileSync(new URL("../web/guest-tests/compose.ts", import.meta.url), "utf8");
   expect(quickjs.match(/test\(/g)).toHaveLength(2);
   expect(quickjs).toContain("for (const fallback of [false, true])");
-  expect(browser.match(/test\(/g)).toHaveLength(2);
+  expect(browser.match(/test\(/g)).toHaveLength(3);
   expect(compose).not.toContain("skipIf");
   expect(compose).toContain("child lint routed");
   expect(compose).toContain('INSTALL_CASES: "aliases"');

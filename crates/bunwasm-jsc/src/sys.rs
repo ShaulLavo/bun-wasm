@@ -64,6 +64,45 @@ pub type JSObjectCallAsFunctionCallback = unsafe extern "C" fn(
 pub type JSTypedArrayBytesDeallocator =
     unsafe extern "C" fn(bytes: *mut c_void, context: *mut c_void);
 
+/// Allocation-free cached JSC counters. Unknown values are `u64::MAX`.
+/// The corresponding C++ layout is WebKit `runtime/WASIMemoryTelemetry.h`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct BunjscMemoryTelemetry {
+    pub abi_version: u64,
+    pub byte_length: u64,
+    pub snapshot_sequence: u64,
+    pub heap_used: u64,
+    pub heap_total: u64,
+    pub extra_memory: u64,
+    pub array_buffer_bytes: u64,
+    pub heap_after_last_collection: u64,
+    pub heap_before_last_full_collection: u64,
+    pub heap_after_last_full_collection: u64,
+    pub total_bytes_allocated: u64,
+    pub gc_max_heap_size: u64,
+    pub small_heap_size: u64,
+    pub large_heap_size: u64,
+    pub gc_enabled: u64,
+    pub generational_gc_enabled: u64,
+    pub concurrent_gc_enabled: u64,
+    pub allocation_sequence: u64,
+    pub active_allocation_bytes: u64,
+    pub active_allocation_category: u64,
+    pub failed_allocation_bytes: u64,
+    pub failed_allocation_category: u64,
+    pub failed_allocation_sequence: u64,
+    pub allocation_budget_this_cycle: u64,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<BunjscMemoryTelemetry>() == 192);
+    assert!(std::mem::offset_of!(BunjscMemoryTelemetry, heap_used) == 24);
+    assert!(std::mem::offset_of!(BunjscMemoryTelemetry, failed_allocation_bytes) == 160);
+    assert!(std::mem::offset_of!(BunjscMemoryTelemetry, failed_allocation_sequence) == 176);
+    assert!(std::mem::offset_of!(BunjscMemoryTelemetry, allocation_budget_this_cycle) == 184);
+};
+
 unsafe extern "C" {
     pub fn JSGlobalContextCreate(globalObjectClass: JSClassRef) -> JSGlobalContextRef;
     pub fn JSGlobalContextRelease(ctx: JSGlobalContextRef);
@@ -242,6 +281,8 @@ unsafe extern "C" {
     pub fn bunjsc_enter(ctx: JSContextRef);
     pub fn bunjsc_drain_microtasks(ctx: JSContextRef) -> bool;
     pub fn bunjsc_collect_garbage(ctx: JSContextRef);
+    pub fn bunjsc_refresh_memory_telemetry(ctx: JSContextRef);
+    pub fn bunjsc_memory_telemetry() -> *const BunjscMemoryTelemetry;
     pub fn bunjsc_report_unhandled_error(ctx: JSContextRef, value: JSValueRef);
     pub fn bunjsc_is_error(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_is_detachable_buffer(ctx: JSContextRef, value: JSValueRef) -> bool;
