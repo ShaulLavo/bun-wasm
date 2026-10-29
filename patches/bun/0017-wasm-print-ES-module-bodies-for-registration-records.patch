@@ -1,17 +1,17 @@
-From e93fe538d4673d2f8df04ab49a97bf984e8b7878 Mon Sep 17 00:00:00 2001
+From b1c36a7670385986482d7f9d0e301c06efaa1793 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 29 Oct 2026 08:27:56 +0200
 Subject: [PATCH 17/17] wasm: print ES module bodies for registration records
 
 ---
- src/js_printer/lib.rs | 100 +++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 98 insertions(+), 2 deletions(-)
+ src/js_printer/lib.rs | 108 +++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 106 insertions(+), 2 deletions(-)
 
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index 015fbba1..69f387c2 100644
+index d84ed54d..af472a84 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
-@@ -2136,6 +2136,34 @@ pub(crate) mod __gated_printer {
+@@ -2189,6 +2189,34 @@ pub(crate) mod __gated_printer {
              }
          }
  
@@ -44,17 +44,17 @@ index 015fbba1..69f387c2 100644
 +        }
 +
          /// bun-wasm `for await` hooks (see BUNWASM_AWAIT_HOOKS): open a block
-         /// holding the context at the loop's start.
-         fn print_bunwasm_loop_start(&mut self) {
-@@ -2529,6 +2557,7 @@ pub(crate) mod __gated_printer {
+         /// holding the loop's record (`__bunwasm_iterate`), and a `try` whose
+         /// `finally` runs after the iterator closed on every exit.
+@@ -2669,6 +2697,7 @@ pub(crate) mod __gated_printer {
                  false,
              );
              self.print_space();
 +            let _depth = BunwasmFnDepth::enter();
-             self.print_block(func.body.loc, slice_of(func.body.stmts), None);
+             self.print_fn_body(func.body.loc, stmts);
          }
  
-@@ -3301,7 +3330,9 @@ pub(crate) mod __gated_printer {
+@@ -3442,7 +3471,9 @@ pub(crate) mod __gated_printer {
                  ExprData::EImportMeta(_) => {
                      self.print_space_before_identifier();
                      self.add_source_mapping(expr.loc);
@@ -65,7 +65,22 @@ index 015fbba1..69f387c2 100644
                          debug_assert!(self.options.hmr_ref.is_valid());
                          self.print_symbol(self.options.hmr_ref);
                          self.print(b".importMeta");
-@@ -3837,6 +3868,7 @@ pub(crate) mod __gated_printer {
+@@ -3465,6 +3496,14 @@ pub(crate) mod __gated_printer {
+                         self.print_symbol(self.options.import_meta_ref);
+                     }
+                 }
++                ExprData::EImportMetaMain(data) if bunwasm_register() => {
++                    self.print_space_before_identifier();
++                    self.add_source_mapping(expr.loc);
++                    if data.inverted {
++                        self.print(b"!");
++                    }
++                    self.print(b"__bunwasm_m.meta.main");
++                }
+                 ExprData::EImportMetaMain(data) => {
+                     if self.options.module_type == bundle_opts::Format::Esm
+                         && self.options.target != bun_ast::Target::Node
+@@ -3979,6 +4018,7 @@ pub(crate) mod __gated_printer {
                          true,
                      );
                      self.print_whitespacer(ws!(b" => "));
@@ -73,7 +88,7 @@ index 015fbba1..69f387c2 100644
  
                      let mut was_printed = false;
                      if e.body.stmts.len() == 1 && e.prefer_expr {
-@@ -4315,6 +4347,9 @@ pub(crate) mod __gated_printer {
+@@ -4457,6 +4497,9 @@ pub(crate) mod __gated_printer {
                                  if let Some(target) = &self.call_target {
                                      wrap = e.was_originally_identifier()
                                          && matches!(target, ExprData::EIdentifier(id) if id.ref_.eql(e.ref_));
@@ -83,7 +98,7 @@ index 015fbba1..69f387c2 100644
                                  }
  
                                  if wrap {
-@@ -4387,6 +4422,13 @@ pub(crate) mod __gated_printer {
+@@ -4529,6 +4572,13 @@ pub(crate) mod __gated_printer {
                          self.print_symbol(e.ref_);
                      }
                  }
@@ -97,7 +112,7 @@ index 015fbba1..69f387c2 100644
                  ExprData::EAwait(e) => {
                      let wrap = level.gte(Level::Prefix);
                      if wrap {
-@@ -5915,6 +5957,10 @@ pub(crate) mod __gated_printer {
+@@ -6082,6 +6132,10 @@ pub(crate) mod __gated_printer {
                      self.print(b")");
                      self.print_body(s.body);
                  }
@@ -106,19 +121,19 @@ index 015fbba1..69f387c2 100644
 +                    self.print_bunwasm_register_for_await(&s, stmt.loc, labeled);
 +                }
                  StmtData::SForOf(s) => {
-                     // bun-wasm: `{ const c = capture(); for await (…) { resume(c); body } resume(c); }`
-                     // (a label goes right before `for`: SLabel prints the outer block).
-@@ -5995,7 +6041,8 @@ pub(crate) mod __gated_printer {
+                     // bun-wasm: the hooked `for await` of BUNWASM_AWAIT_HOOKS. A
+                     // `for await` always makes its body an S body. A label goes
+@@ -6167,7 +6221,8 @@ pub(crate) mod __gated_printer {
                      }
                      self.print_symbol(s.name.ref_);
                      self.print(b":");
--                    BUNWASM_LABELED.with(|l| l.set(hooked_loop));
+-                    BUNWASM_LABELED.with(|l| l.set(hooked_loop || inherited));
 +                    let register_loop = bunwasm_register_top_level() && matches!(s.stmt.data, StmtData::SForOf(f) if f.is_await);
-+                    BUNWASM_LABELED.with(|l| l.set(hooked_loop || register_loop));
++                    BUNWASM_LABELED.with(|l| l.set(hooked_loop || inherited || register_loop));
                      self.print_body(s.stmt);
                      BUNWASM_LABELED.with(|l| l.set(false));
                      if hooked_loop {
-@@ -6555,6 +6602,10 @@ pub(crate) mod __gated_printer {
+@@ -6727,6 +6782,10 @@ pub(crate) mod __gated_printer {
          }
  
          fn print_dynamic_import(&mut self) {
@@ -129,7 +144,7 @@ index 015fbba1..69f387c2 100644
              super::BUNWASM_IMPORT_REFERRER.with_borrow(|from| {
                  if let Some(from) = from {
                      self.print(b"globalThis.__bunwasm_dynamicImport(");
-@@ -7729,6 +7780,51 @@ fn bunwasm_await_hooks() -> bool {
+@@ -7923,6 +7982,51 @@ fn bunwasm_await_hooks() -> bool {
      BUNWASM_AWAIT_HOOKS.load(core::sync::atomic::Ordering::Relaxed)
  }
  
@@ -178,6 +193,6 @@ index 015fbba1..69f387c2 100644
 +    }
 +}
 +
- thread_local! {
-     /// The statement being printed is the body of a label: a `for await` there
-     /// can't be wrapped in a block (labeled `continue` needs the loop).
+ /// The body being printed declares `__bunwasm_s`.
+ const BUNWASM_FN_S: u8 = 1;
+ /// ... and is an async generator's (its `yield`s get hooks).

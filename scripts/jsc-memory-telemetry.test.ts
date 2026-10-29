@@ -26,7 +26,7 @@ const BunjscMemoryTelemetry* otherTranslationUnit() { return bunjsc_cached_memor
     const binary = join(scratch, 'telemetry-test');
     execFileSync('c++', ['-std=c++20', '-Wall', '-Wextra', '-Werror', '-I', scratch,
       join(root, 'crates/bunwasm-jsc/tests/memory-telemetry.cpp'), otherSource, '-o', binary]);
-    for (const scenario of ['success', 'failure', 'nested', 'abandoned', 'wide', 'repeated']) {
+    for (const scenario of ['success', 'failure', 'nested', 'abandoned', 'wide', 'repeated', 'observed-construction']) {
       assert.equal(execFileSync(binary, [scenario], { encoding: 'utf8' }).trim(), scenario);
     }
   } finally {

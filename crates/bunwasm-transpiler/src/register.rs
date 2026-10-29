@@ -413,6 +413,33 @@ mod tests {
         assert!(record.contains("return __bunwasm_m.meta.url"), "{record}");
     }
 
+    #[test]
+    fn import_meta_main_changes_only_in_record_mode() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let source = "console.log(import.meta.main, !import.meta.main);\nfunction nested() { return import.meta.main; }\n";
+        let esm = crate::transpile(source, "/main.mjs", Loader::Js).unwrap();
+        let cjs = crate::public_transpile(
+            source.as_bytes(),
+            r#"{"target":"node","loader":"js"}"#,
+            "transform",
+            "js",
+        )
+        .unwrap();
+        assert!(esm.contains("import.meta.main"), "{esm}");
+        assert!(cjs.contains("require.main"), "{cjs}");
+        assert!(!esm.contains("__bunwasm_m"), "{esm}");
+        assert!(!cjs.contains("__bunwasm_m"), "{cjs}");
+        println!("ordinary esm: {esm}\nordinary cjs: {cjs}");
+        let record = register(source, "/main.mjs", Loader::Js).unwrap().code;
+        assert!(!record.contains("import.meta"), "{record}");
+        assert_eq!(
+            record.matches("__bunwasm_m.meta.main").count(),
+            3,
+            "{record}"
+        );
+        assert!(record.contains("!__bunwasm_m.meta.main"), "{record}");
+    }
+
     /// tests/fixtures/esm-loader/*/records.json came from this transform
     /// (scripts/esm-loader-fixtures.ts); the loader tests run them.
     #[test]

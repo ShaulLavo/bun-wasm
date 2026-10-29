@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
 
 use super::stdin::SharedInput;
@@ -63,12 +64,40 @@ impl Default for SignalState {
     }
 }
 
+type BlockingCallback = Arc<dyn Fn() + Send + Sync + 'static>;
+
+#[derive(Default)]
+struct BlockingCallbacks {
+    next_id: u64,
+    callbacks: HashMap<u64, BlockingCallback>,
+}
+
+pub struct BlockingCancellationGuard {
+    cancellation: Weak<Cancellation>,
+    id: u64,
+}
+
+impl Drop for BlockingCancellationGuard {
+    fn drop(&mut self) {
+        let Some(cancellation) = self.cancellation.upgrade() else {
+            return;
+        };
+        cancellation
+            .blocking
+            .lock()
+            .unwrap()
+            .callbacks
+            .remove(&self.id);
+    }
+}
+
 #[derive(Default)]
 pub struct Cancellation {
     /// Only an already-selected fatal signal interrupts engine/stdio work.
     fatal: AtomicI32,
     state: Mutex<SignalState>,
     wakers: Mutex<Vec<Waker>>,
+    blocking: Mutex<BlockingCallbacks>,
 }
 
 impl Cancellation {
@@ -108,12 +137,45 @@ impl Cancellation {
         }
     }
 
+    pub fn register_blocking<F>(self: &Arc<Self>, callback: F) -> BlockingCancellationGuard
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let callback: BlockingCallback = Arc::new(callback);
+        let mut blocking = self.blocking.lock().unwrap();
+        let id = blocking.next_id;
+        blocking.next_id = blocking.next_id.wrapping_add(1);
+        blocking.callbacks.insert(id, callback.clone());
+        let immediate = (self.fatal.load(Ordering::SeqCst) != 0)
+            .then(|| blocking.callbacks.remove(&id))
+            .flatten();
+        drop(blocking);
+        if let Some(callback) = immediate {
+            callback();
+        }
+        BlockingCancellationGuard {
+            cancellation: Arc::downgrade(self),
+            id,
+        }
+    }
+
+    fn cancel_blocking(&self) {
+        if self.fatal.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+        let callbacks = std::mem::take(&mut self.blocking.lock().unwrap().callbacks);
+        for callback in callbacks.into_values() {
+            callback();
+        }
+    }
+
     fn wake(&self) {
         // Do not invoke arbitrary wakers while holding either state mutex.
         let wakers = std::mem::take(&mut *self.wakers.lock().unwrap());
         for waker in wakers {
             waker.wake();
         }
+        self.cancel_blocking();
     }
 
     pub fn kill(&self, signal: i32) -> bool {
@@ -203,6 +265,8 @@ impl Cancellation {
         if let FinalOutcome::Signal(signal) = selected {
             self.fatal.store(signal, Ordering::SeqCst);
         }
+        drop(state);
+        self.cancel_blocking();
         selected
     }
 

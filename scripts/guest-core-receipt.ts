@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 import { lstatSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { tagProgramCore, verifyProgramSide, type PairedEngine } from "../src/engine-kind.ts";
+import { isPairedEngine, programKindForBuild, tagProgramCore, verifyProgramSide, type PairedEngine } from "../src/engine-kind.ts";
 import { captureSourceManifest, guestBuilds, hash, run, sourceOptions, type ProgramInputScope, type SourceOptions } from "./guest-source-manifest.ts";
 
 export interface ProgramInputSnapshot {
@@ -23,7 +23,7 @@ export function record(value: unknown): value is Record<string, unknown> {
 const digest = (value: unknown, length: number): value is string => typeof value === "string" && new RegExp(`^[0-9a-f]{${length}}$`).test(value);
 
 export function parseProgramInputs(value: unknown): ProgramInputSnapshot {
-  if (!record(value) || value.schema !== 1 || (value.scope !== "core" && value.scope !== "quickjs" && value.scope !== "jsc")
+  if (!record(value) || value.schema !== 1 || (value.scope !== "core" && !isPairedEngine(value.scope))
     || !record(value.source) || !digest(value.source.head, 40) || !digest(value.source.tree, 40)
     || !digest(value.contentSha256, 64) || !record(value.content) || hash(JSON.stringify(value.content)) !== value.contentSha256) throw new Error("Invalid program input snapshot");
   return { schema: 1, scope: value.scope, source: { head: value.source.head, tree: value.source.tree }, content: value.content, contentSha256: value.contentSha256 };
@@ -106,8 +106,12 @@ export async function prepareProgramOutputs(requests: readonly ProgramOutputRequ
   }
 }
 
-async function prepareComposedOutputs(repository: string, sysroot: string, build: "quickjs" | "quickjs-minimal" | "jsc", core: string, side: string): Promise<void> {
-  const kind = build === "jsc" ? "jsc" : "quickjs";
+type ComposedBuild = "quickjs" | "quickjs-minimal" | "jsc" | "hermes";
+const composedBuilds: readonly ComposedBuild[] = ["quickjs", "quickjs-minimal", "jsc", "hermes"];
+
+async function prepareComposedOutputs(repository: string, sysroot: string, build: ComposedBuild, core: string, side: string): Promise<void> {
+  const kind = programKindForBuild(build);
+  if (kind === "single") throw new Error(`Not a paired build: ${build}`);
   await prepareProgramOutputs([
     { artifact: core, scope: "core", selection: { features: guestBuilds[build].features }, options: sourceOptions(repository, sysroot, "browser") },
     { artifact: side, scope: kind, options: sourceOptions(repository, sysroot, kind) },
@@ -119,7 +123,7 @@ export function engineEnvironment(kind: PairedEngine, sysroot: string): Record<s
     CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS: "-C relocation-model=pic -C panic=abort -C link-self-contained=no",
     CFLAGS_wasm32_wasip1: `--sysroot=${sysroot} -fPIC`,
   };
-  if (kind === "jsc") flags.CXXFLAGS_wasm32_wasip1 = `--sysroot=${sysroot} -fPIC -fno-exceptions`;
+  if (kind === "jsc" || kind === "hermes") flags.CXXFLAGS_wasm32_wasip1 = `--sysroot=${sysroot} -fPIC -fno-exceptions`;
   else flags.RQUICKJS_SYS_NO_WASI_SDK = "1";
   return flags;
 }
@@ -160,21 +164,22 @@ if (import.meta.main) {
   const sysroot = process.env.BUN_WASM_SYSROOT;
   if (!sysroot) throw new Error("Set BUN_WASM_SYSROOT");
   const [command, path, argument, output] = process.argv.slice(2);
+  const composed = composedBuilds.find(build => build === path);
   if (command === "inputs" && path) console.log(JSON.stringify(await captureProgramInputs(sourceOptions(root, sysroot, "browser"), "core", await Bun.file(path).json())));
   else if (command === "prepare-core" && path && argument) await prepareProgramOutputs([
     { artifact: argument, scope: "core", selection: coreSelection(await Bun.file(path).json()), options: sourceOptions(root, sysroot, "browser") },
   ]);
-  else if (command === "prepare" && (path === "quickjs" || path === "quickjs-minimal" || path === "jsc") && argument && output) await prepareComposedOutputs(root, sysroot, path, argument, output);
+  else if (command === "prepare" && composed && argument && output) await prepareComposedOutputs(root, sysroot, composed, argument, output);
   else if (command === "write" && path && argument) await writeProgramReceipt(root, sysroot, path, argument);
   else if (command === "verify" && path && argument) {
     const expected = parseProgramInputs(await Bun.file(argument).json());
     if (expected.scope !== "core") throw new Error("Expected common core inputs");
     verifyProgramReceipt(await Bun.file(path).bytes(), await Bun.file(`${path}.core.json`).json(), expected);
-  } else if (command === "tag" && path && (argument === "quickjs" || argument === "jsc") && output) {
+  } else if (command === "tag" && path && isPairedEngine(argument) && output) {
     const receipt = parseProgramReceipt(await Bun.file(`${path}.core.json`).json());
     const expected = await recaptureProgramInputs(root, sysroot, receipt.inputs);
     const bytes = await Bun.file(path).bytes();
     verifyProgramReceipt(bytes, receipt, expected);
     await Bun.write(output, tagProgramCore(bytes, argument));
-  } else throw new Error("Usage: guest-core-receipt.ts inputs PROFILE_JSON_FILE | prepare-core PROFILE_JSON_FILE CORE | prepare BUILD CORE SIDE | write CORE SNAPSHOT | verify CORE SNAPSHOT | tag CORE quickjs|jsc OUTPUT");
+  } else throw new Error("Usage: guest-core-receipt.ts inputs PROFILE_JSON_FILE | prepare-core PROFILE_JSON_FILE CORE | prepare BUILD CORE SIDE | write CORE SNAPSHOT | verify CORE SNAPSHOT | tag CORE quickjs|jsc|hermes OUTPUT");
 }

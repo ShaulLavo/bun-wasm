@@ -611,7 +611,7 @@ diff --git a/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h b/Source/JavaSc
 new file mode 100644
 --- /dev/null
 +++ b/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,94 @@
 +#pragma once
 +
 +#include <cstdint>
@@ -683,8 +683,10 @@ new file mode 100644
 +class WASIMemoryAllocationScope {
 +public:
 +    enum Category : uint32_t { TypedArray = 1, ArrayBuffer = 2 };
++    enum class FailurePolicy { ReportFailure, ObserveOnly };
 +
-+    WASIMemoryAllocationScope(uint64_t bytes, Category category)
++    WASIMemoryAllocationScope(uint64_t bytes, Category category, FailurePolicy policy = FailurePolicy::ReportFailure)
++        : m_failed(policy == FailurePolicy::ReportFailure)
 +    {
 +        bunjsc_telemetry_allocation_begin(bytes, category);
 +    }
@@ -700,7 +702,7 @@ new file mode 100644
 +    void succeed() { m_failed = false; }
 +
 +private:
-+    bool m_failed { true };
++    bool m_failed;
 +};
 +
 +} // namespace JSC
@@ -763,3 +765,19 @@ diff --git a/Source/JavaScriptCore/heap/Heap.h b/Source/JavaScriptCore/heap/Heap
 +    bool hasCompletedFullCollection() const { return static_cast<bool>(m_lastFullGCEndTime); }
 +#endif
      // Everything the mutator has allocated (cells and reported extra memory), the current cycle included. Mutator thread only.
+diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
+--- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
++++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
+@@ -42,2 +42,5 @@
+ #include <wtf/text/MakeString.h>
++#if OS(WASI)
++#include "WASIMemoryTelemetry.h"
++#endif
+
+@@ -58,2 +61,6 @@
+ {
++#if OS(WASI)
++    WASIMemoryAllocationScope request(static_cast<uint64_t>(length) * sizeof(typename Adaptor::Type),
++        WASIMemoryAllocationScope::TypedArray, WASIMemoryAllocationScope::FailurePolicy::ObserveOnly);
++#endif
+     VM& vm = globalObject->vm();
