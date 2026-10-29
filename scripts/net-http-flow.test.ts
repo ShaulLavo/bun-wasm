@@ -616,7 +616,7 @@ for (const phase of ["before-headers", "after-headers", "streaming"] as const) {
   });
 }
 
-for (const ending of ["cancel", "write-error", "end-error"] as const) {
+for (const ending of ["cancel", "eof", "write-error", "end-error"] as const) {
   test(`HTTP ${ending} settles the active request and frees its connection`, async () => {
     const state = fixture();
     let response: ServerResponse | undefined;
@@ -630,13 +630,14 @@ for (const ending of ["cancel", "write-error", "end-error"] as const) {
     });
     const connection = state.socket();
     try {
-      state.block(ending !== "cancel");
+      state.block(ending === "write-error" || ending === "end-error");
       Reflect.get(server, "_onConnection").call(server, connection);
       state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"));
       await state.pump();
       expect(response).toBeDefined();
       expect(Reflect.get(connection, "busy")).toBe(true);
-      connection.destroy(ending === "cancel" ? undefined : new Error("transport failed"));
+      if (ending === "eof") state.packets.push(0);
+      else connection.destroy(ending === "cancel" ? undefined : new Error("transport failed"));
       await state.pump();
       expect(response?.destroyed).toBe(true);
       expect(response?.writableFinished).toBe(false);
