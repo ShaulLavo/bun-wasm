@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { captureProgramInputs, engineEnvironment, inputProfile, verifyProgramReceipt, type ProgramInputSnapshot } from "../../scripts/guest-core-receipt.ts";
@@ -170,4 +170,42 @@ test("only the QuickJS engine is qualified for the shared-group profile", () => 
     expect(() => engineEnvironment(engine, "/sysroot", "shared-group")).toThrow(/not qualified/);
     expect(engineEnvironment(engine, "/sysroot").BUN_WASM_PROGRAM_PROFILE).toBeUndefined();
   }
+});
+
+// Source-contract checks only: these do not build or qualify a shared-group guest.
+const cliBuild = readFileSync(new URL("../../crates/bunwasm-cli/build.rs", import.meta.url), "utf8");
+
+function cliBuildFunction(name: string): string {
+  const body = new RegExp(`^fn ${name}\\([^]*?^}`, "m").exec(cliBuild)?.[0];
+  if (!body) throw new Error(`Missing CLI build function ${name}`);
+  return body;
+}
+
+test("both core C objects use the exact opt-in profile flags and preserve default flags", () => {
+  expect(cliBuildFunction("entry_flags")).toMatch(/if shared_group\(\) \{\s*&\["-fPIC", "-matomics", "-mbulk-memory", "-mmutable-globals"\]\s*} else \{\s*&\[\]\s*}/);
+  for (const name of ["split_entry", "memory_telemetry"]) {
+    const body = cliBuildFunction(name);
+    expect(body).toContain('std::process::Command::new(compiler)');
+    expect(body).toContain('"--target=wasm32-wasip1"');
+    expect(body).toContain('"--sysroot={sysroot}"');
+    expect(body).toContain('"-O2"');
+    expect(body).toContain('"-c"');
+    expect(body).toMatch(/\.args\(entry_flags\(\)\)\s*\.arg\(&source\)/);
+  }
+  expect(cliBuildFunction("memory_telemetry")).toContain('"-fno-builtin"');
+});
+
+test("telemetry remains unconditional for both link profiles with every allocator wrapper", () => {
+  const main = cliBuildFunction("main");
+  expect(main).toMatch(/memory_telemetry\(\);\s*if shared_group\(\) \{\s*shared_group_link\(\);\s*} else \{/);
+  expect(main.indexOf("memory_telemetry();")).toBeLessThan(main.indexOf('CARGO_FEATURE_ENGINE_SPLIT'));
+  for (const flag of ["-zstack-size=8388608", "--max-memory=536870912", "--export-table", "--growable-table"]) {
+    expect(main).toContain(`cargo:rustc-link-arg-bin=bun=${flag}`);
+  }
+  const telemetry = cliBuildFunction("memory_telemetry");
+  for (const name of ["malloc", "calloc", "realloc", "free", "aligned_alloc", "posix_memalign", "__libc_malloc", "__libc_calloc", "__libc_free"]) {
+    expect(telemetry).toContain(`"${name}"`);
+  }
+  expect(telemetry).toContain('cargo:rustc-link-arg-bin=bun=--wrap={name}');
+  expect(telemetry).toContain('cargo:rustc-link-arg-bin=bun=--export=bun_memory_telemetry');
 });
