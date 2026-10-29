@@ -865,9 +865,19 @@
   defineGlobal("console", internal.require("console"));
   defineGlobal("Bun", internal.require("bun"));
   defineLazyGlobal("Buffer", () => internal.require("buffer").Buffer);
-  if (typeof globalThis.Intl === "undefined") {
-    // QuickJS has no Intl: a small en-US one (intl.js), which the engine's
-    // own toLocaleString methods then defer to.
+  function hasRealIntl() {
+    if (native.engine === "host") return true;
+    if (typeof globalThis.Intl === "undefined") return false;
+    try {
+      // JSC's WASI build has ICU but only root/English data. Check behavior,
+      // not just constructor presence, so those partial builds get FormatJS.
+      return new Intl.NumberFormat("de-DE").format(1234.5) === "1.234,5" &&
+        new Intl.PluralRules("he").select(2) === "two";
+    } catch {
+      return false;
+    }
+  }
+  if (!hasRealIntl()) {
     defineLazyGlobal("Intl", () => internal.require("intl"));
     defineHidden(Number.prototype, {
       toLocaleString(locales, options) {

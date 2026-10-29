@@ -82,25 +82,15 @@
     "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.3/waffle-base-0.0.3.tgz"
   },
   "devDependencies": {
-    "@formatjs/intl-collator": "0.2.9",
-    "@formatjs/intl-datetimeformat": "7.8.2",
-    "@formatjs/intl-getcanonicallocales": "3.2.12",
-    "@formatjs/intl-listformat": "8.3.15",
-    "@formatjs/intl-locale": "5.3.12",
-    "@formatjs/intl-numberformat": "9.4.3",
-    "@formatjs/intl-pluralrules": "6.3.16",
-    "@formatjs/intl-relativetimeformat": "12.3.16",
-    "@formatjs/intl-segmenter": "12.2.15",
-    "@formatjs/intl-supportedvaluesof": "2.3.11",
     "@types/bun": "^1.4.3",
-    "jscpd": "5.4.1",
-    "knip": "6.41.0",
-    "oxlint": "1.88.0",
-    "playwright": "1.64.1",
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
     "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.95/waffle-0.0.95.tgz",
-    "wrangler": "4.151.0"
+    "jscpd": "5.4.1",
+    "knip": "6.41.0",
+    "oxlint": "1.88.0",
+    "wrangler": "4.151.0",
+    "playwright": "1.64.1"
   }
 }
