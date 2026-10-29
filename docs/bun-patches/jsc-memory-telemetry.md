@@ -5,12 +5,13 @@
 | Source | Class | Origin and change |
 | --- | --- | --- |
 | `jsc/webkit-wasi.patch`, `runtime/WASIMemoryTelemetry.h` | Port | Original WASI allocation recorder. No upstream implementation copied. |
-| WebKit `runtime/JSArrayBufferView.cpp` and `runtime/ArrayBuffer.cpp` | Port | Minimal WASI-only allocation scopes around the existing upstream allocation paths. |
+| WebKit `runtime/JSArrayBufferView.cpp`, `runtime/ArrayBuffer.cpp`, and `heap/Heap.h` | Port | Minimal WASI-only allocation scopes and a read-only accessor for the existing completed-full-GC timestamp. |
 | `crates/bunwasm-jsc/{cpp/helpers.cpp,src/sys.rs}` and `crates/bunwasm-engine-jsc/src/vm.rs` | Port | Original adapters to existing JSC heap and option APIs, plus a cached readout. No upstream implementation copied. |
 
 The upstream reference is Bun's WebKit fork at
 `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`. The touched paths are
-`Source/JavaScriptCore/runtime/{ArrayBuffer.cpp,JSArrayBufferView.cpp}`.
+`Source/JavaScriptCore/runtime/{ArrayBuffer.cpp,JSArrayBufferView.cpp}` and
+`Source/JavaScriptCore/heap/Heap.h`.
 The adapters reference `heap/{Heap.h,Heap.cpp,MarkedSpace.cpp}` and
 `runtime/Options{,List}.h` at that revision.
 
@@ -38,7 +39,9 @@ and `largeHeapSize`. A zero `gcMaxHeapSize` means no explicitly configured cap.
 The configured small and large heap sizes are policy inputs, not available
 memory. `allocationBudgetThisCycle()` exposes the heap's current effective
 Eden allocation budget. Collection-size counters stay unknown until the
-corresponding collection has occurred.
+corresponding collection has occurred. A WASI-only accessor checks the existing
+completed-full-GC timestamp. The initial full-GC duration is a policy heuristic
+and does not prove that a full collection occurred.
 
 ## Allocation failure capture
 

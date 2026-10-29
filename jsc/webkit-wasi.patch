@@ -754,3 +754,12 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCo
 +    allocation.succeed();
 +#endif
  }
+diff --git a/Source/JavaScriptCore/heap/Heap.h b/Source/JavaScriptCore/heap/Heap.h
+--- a/Source/JavaScriptCore/heap/Heap.h
++++ b/Source/JavaScriptCore/heap/Heap.h
+@@ -400,2 +400,5 @@
+     size_t sizeAfterLastCollection() const { return m_sizeAfterLastCollect; }
++#if OS(WASI)
++    bool hasCompletedFullCollection() const { return static_cast<bool>(m_lastFullGCEndTime); }
++#endif
+     // Everything the mutator has allocated (cells and reported extra memory), the current cycle included. Mutator thread only.
