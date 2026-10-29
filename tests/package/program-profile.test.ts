@@ -202,6 +202,24 @@ test("only a shared-group core defines its C++ runtime overrides, for exactly Bo
   expect(Array.from(source.matchAll(/__asm__\("([^"]+)"\)/g), match => match[1]).toSorted()).toEqual(["_ZNSt3__222__libcpp_verbose_abortEPKcz", "_ZdlPvm"]);
 });
 
+test("a shared-group core links no C++ runtime archive, so the override object resolves BoringSSL wherever it sits", () => {
+  const crypto = readFileSync(new URL("../../crates/bunwasm-crypto-sys/build.rs", import.meta.url), "utf8");
+  const link = /fn link_cxx_runtime\(self\) \{[^]*?\n    \}/.exec(crypto)?.[0];
+  if (!link) throw new Error("Missing link_cxx_runtime");
+  expect(link).toMatch(/Self::Split => &\["static=c\+\+", "static=c\+\+abi"\]/);
+  expect(link).toMatch(/Self::SharedGroup => &\[\]/);
+  expect(link).not.toContain("libc++");
+});
+
+test("a shared-group core exports no linker stack or heap layout; split keeps every export", () => {
+  const layout = /const GROUP_HOST_LAYOUT: \[&str; 4\] = \[([^\]]*)\]/.exec(cliBuild)?.[1];
+  if (!layout) throw new Error("Missing GROUP_HOST_LAYOUT");
+  expect(Array.from(layout.matchAll(/"([^"]+)"/g), match => match[1])).toEqual(["__stack_pointer", "__stack_low", "__stack_high", "__heap_base"]);
+  expect(cliBuildFunction("split_entry")).toMatch(/if shared_group\(\) && GROUP_HOST_LAYOUT\.contains\(&name\) \{\s*continue;\s*\}/);
+  const exports = readFileSync(new URL("../../scripts/quickjs-core-exports.txt", import.meta.url), "utf8").split("\n");
+  for (const name of ["__stack_low", "__stack_high", "__heap_base"]) expect(exports).toContain(name);
+});
+
 test("telemetry remains unconditional for both link profiles with every allocator wrapper", () => {
   const main = cliBuildFunction("main");
   expect(main).toMatch(/memory_telemetry\(\);\s*if shared_group\(\) \{\s*shared_group_link\(\);\s*} else \{/);

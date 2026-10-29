@@ -4,7 +4,9 @@
 // bodies as libc++abi/libc++ at LLVM 895aa2c896ad (wasi-sdk 34). Defining them here keeps
 // every SDK libc++/libc++abi member out of the link: the stock noeh members they would pull
 // (`cxa_handlers`, `cxa_default_handlers`) disallow shared memory, and the `-threads` archives
-// are not PIC. wasm-ld keeps its full feature check; the link map proves zero members.
+// are not PIC. The shared-group crypto build therefore links no C++ runtime archive at all
+// (`crates/bunwasm-crypto-sys/build.rs`), so this object resolves both symbols wherever it sits
+// on the link line. wasm-ld keeps its full feature check; the link map proves zero members.
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>

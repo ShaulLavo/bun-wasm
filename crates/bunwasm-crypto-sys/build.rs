@@ -208,11 +208,15 @@ impl Profile {
         std::fs::write(build.join(STAMP), self.name()).expect("BoringSSL profile stamp");
     }
 
-    /// A PIE link prefers a shared library for `-l`; a group member must not depend on one.
+    /// A shared-group core links no C++ runtime archive. BoringSSL's whole C++ runtime need
+    /// (sized `operator delete`, `__libcpp_verbose_abort`) is defined by the core's
+    /// `crates/bunwasm-cli/cxx-runtime.c`, and any other need fails as an undefined symbol.
+    /// Bundled into this rlib, the SDK archives would be searched before that object and pull
+    /// members that disallow shared memory.
     fn link_cxx_runtime(self) {
-        let names: [&str; 2] = match self {
-            Self::Split => ["static=c++", "static=c++abi"],
-            Self::SharedGroup => ["static:+verbatim=libc++.a", "static:+verbatim=libc++abi.a"],
+        let names: &[&str] = match self {
+            Self::Split => &["static=c++", "static=c++abi"],
+            Self::SharedGroup => &[],
         };
         for name in names {
             println!("cargo:rustc-link-lib={name}");

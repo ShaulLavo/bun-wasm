@@ -137,7 +137,9 @@ fn split_entry() {
     );
     for name in std::fs::read_to_string(exports).unwrap().lines() {
         // A PIE member imports its stack pointer; the side shares that same imported global.
-        if name == "__stack_pointer" && shared_group() {
+        // Its stack and heap are carved by the host, so wasm-ld defines no stack bounds or heap
+        // base for it. Only JSC and Hermes sides import those, and neither is shared-group qualified.
+        if shared_group() && GROUP_HOST_LAYOUT.contains(&name) {
             continue;
         }
         println!("cargo:rustc-link-arg-bin=bun=--export={name}");
@@ -148,6 +150,14 @@ fn split_entry() {
         }
     }
 }
+
+/// Linker layout symbols a PIE member does not have: the host supplies its stack and heap.
+const GROUP_HOST_LAYOUT: [&str; 4] = [
+    "__stack_pointer",
+    "__stack_low",
+    "__stack_high",
+    "__heap_base",
+];
 
 /// The core's memory-group service for its engine side (bunwasm-runtime `group_memory`).
 const GROUP_MEMORY_EXPORTS: [&str; 10] = [
