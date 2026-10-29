@@ -75,15 +75,23 @@ test("bootstrap and private WebSocket reject foreign/missing origin, bad ticket 
   await expect(socket(origin, valid)).rejects.toThrow();
 });
 
-test("fixed-owner dispatcher carries native HTTP bodies and raw WebSocket frames; disconnect removes roots", async () => {
+test("fixed-owner dispatcher carries native HTTP bodies and structured WebSocket opens; disconnect removes roots", async () => {
   const { origin } = hosting();
   const target = native();
   const lifetime = new AbortController();
   releases.push(() => lifetime.abort());
   const owner = crypto.randomUUID();
+  const socketOpens: Extract<OwnerFrame, { type: "open" }>[] = [];
   const client = await PreviewOwnerClient.connect({ baseURL: origin, signal: lifetime.signal,
     fetch: (input, init) => fetch(input, { ...init, headers: { origin } }),
-    webSocket: (url, protocols) => nativeWebSocket(url, protocols, origin),
+    webSocket: (url, protocols) => {
+      const connection = nativeWebSocket(url, protocols, origin);
+      connection.addEventListener("message", event => {
+        const frame = ownerFrame(String(event.data));
+        if (frame.type === "open" && frame.open.type === "socket") socketOpens.push(frame);
+      });
+      return connection;
+    },
     async bind({ origin: root, port, signal }) {
       return nativeBinding({ owner, port, origin: root, target: target.url.href, signal });
     },
@@ -101,6 +109,12 @@ test("fixed-owner dispatcher carries native HTTP bodies and raw WebSocket frames
   const ws = new WebSocket(`${root.replace("http:", "ws:")}/socket`);
   releases.push(() => ws.close());
   await new Promise<void>((resolve, reject) => { ws.onopen = () => resolve(); ws.onerror = () => reject(new Error("Native socket failed")); });
+  expect(socketOpens).toHaveLength(1);
+  const open = socketOpens[0]!.open;
+  expect(open.type).toBe("socket");
+  expect(open.method).toBe("GET");
+  expect(open.headers.some(([name]) => name.toLowerCase() === "host")).toBe(true);
+  expect(open.headers.some(([name]) => name.toLowerCase() === "origin")).toBe(false);
   const echoed = new Promise<ArrayBuffer>(resolve => { ws.onmessage = event => resolve(event.data); });
   ws.binaryType = "arraybuffer";
   ws.send(new Uint8Array([0, 255, 42]));
@@ -148,8 +162,9 @@ test("codec retains Waffle byte payloads and rejects wrong schemes and foreign a
   const authorization = { owner: crypto.randomUUID(), port: 3137, origin: "http://127.0.0.1:7777", capability: crypto.randomUUID() };
   const frame: HostFrame = { type: "output", id: "exchange", output: { type: "data", chunk: new Uint8Array([0, 255]) } };
   expect(hostFrame(encode(frame))).toEqual(frame);
-  expect(() => ownerFrame(JSON.stringify({ type: "open", id: "exchange", open: { type: "socket", authorization, url: "file:///etc/passwd" } }))).toThrow();
-  expect(() => ownerFrame(JSON.stringify({ type: "open", id: "exchange", open: { type: "socket", authorization, url: "ws://127.0.0.1:8888/" } }))).toThrow();
+  const request = { method: "GET", headers: [["host", "127.0.0.1:3137"]] };
+  expect(() => ownerFrame(JSON.stringify({ type: "open", id: "exchange", open: { type: "socket", authorization, url: "file:///etc/passwd", ...request } }))).toThrow();
+  expect(() => ownerFrame(JSON.stringify({ type: "open", id: "exchange", open: { type: "socket", authorization, url: "ws://127.0.0.1:8888/", ...request } }))).toThrow();
 });
 
 
