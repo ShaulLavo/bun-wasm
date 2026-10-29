@@ -1,4 +1,7 @@
 const instant = new Date("2024-02-29T00:00:00Z");
+const hostUsesNativeIntl = process.env.BUNWASM_TEST_HOST === "node";
+if (hostUsesNativeIntl === (Intl.NumberFormat.polyfilled === true)) throw new Error("Unexpected Intl implementation");
+console.log("implementation ok");
 for (const locale of ["en-US", "de-DE", "he-IL"]) {
   console.log(locale, JSON.stringify({
     number: new Intl.NumberFormat(locale).format(1234567.5),
