@@ -3,7 +3,7 @@ import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { expect, test } from "bun:test";
 import { installBunAdapters } from "../../src/bun-adapter";
 import { ENGINE_BIN, engineEnvironment } from "../../src/executable-paths";
-import { processRuntimeFixture } from "../../web/tests/process-runtime-fixture";
+import { socketRuntimeFixture as processRuntimeFixture } from "../../web/tests/socket-runtime-fixture";
 import { startRun } from "../../web/src/runner";
 import { MemoryBackend } from "waffle/fs/backend";
 import { FilesystemService } from "waffle/fs/service";

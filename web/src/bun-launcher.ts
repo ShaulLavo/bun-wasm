@@ -43,6 +43,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   const memoryTelemetryId = crypto.randomUUID();
   let revoked = false;
   let helper: RuntimeNetworkHelper | undefined;
+  let socketRoot: Awaited<ReturnType<Runtime["filesystem"]["directoryHandle"]>> | undefined;
   let moduleCache: string | null = null;
   let lookupChannel: BroadcastChannel | undefined;
   let disposeLookup: (() => void) | undefined;
@@ -57,6 +58,8 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     unregister();
     try { helper?.dispose(); }
     finally {
+      socketRoot?.release();
+      socketRoot = undefined;
       sharedRoute?.close();
       disposeLookup?.();
       lookupChannel = undefined;
@@ -82,7 +85,10 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     ]);
     if (!active()) throw new Error("Bun process launch was revoked");
     const ring = createRing();
-    helper = createBunNetworkHelper(network, ring, options.network);
+    socketRoot = await options.runtime.filesystem.directoryHandle("/");
+    if (!active()) throw new Error("Bun process launch was revoked");
+    const pathScope = service.networkPathScope(context, socketRoot.handle);
+    helper = createBunNetworkHelper(network, ring, { ...options.network, pathScope });
     if (engine === "browser" && typeof BroadcastChannel === "function") {
       lookupChannel = new BroadcastChannel(`bun-wasm-dns-${crypto.randomUUID()}`);
       disposeLookup = installLookupServer(lookupChannel, network);
