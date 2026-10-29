@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { captureProgramInputs, verifyProgramReceipt, type ProgramInputSnapshot } from "./guest-core-receipt.ts";
+import { captureProgramInputs, parseProgramInputs, verifyProgramReceipt, type ProgramInputSnapshot } from "./guest-core-receipt.ts";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, verifyGuestCompanions, writeGuestBuildReceipt } from "./guest-build-receipt.ts";
 import { hash, sourceOptions } from "./guest-source-manifest.ts";
 import { programProfile, tagProgramCore, type PairedEngine } from "../src/engine-kind.ts";
@@ -38,8 +38,13 @@ async function inputs(): Promise<ProgramInputSnapshot[]> {
 function lockedInputs(current: readonly ProgramInputSnapshot[]): void {
   const path = join(output, "inputs/programs.json");
   const json = JSON.stringify(current, null, 2) + "\n";
-  if (existsSync(path) && readFileSync(path, "utf8") !== json) throw new Error("Canonical producer inputs changed. Existing outputs are not reusable; do not relabel them.");
-  writeFileSync(path, json);
+  if (!existsSync(path)) { writeFileSync(path, json); return; }
+  const previous: unknown = JSON.parse(readFileSync(path, "utf8"));
+  if (!Array.isArray(previous) || previous.length !== current.length) throw new Error("Invalid canonical input snapshot");
+  const origins = previous.map(value => parseProgramInputs(value));
+  if (origins.some((origin, index) => origin.scope !== current[index]?.scope || origin.contentSha256 !== current[index]?.contentSha256)) {
+    throw new Error("Canonical producer inputs changed. Existing outputs are not reusable; do not relabel them.");
+  }
 }
 async function verifyPrograms(current: readonly ProgramInputSnapshot[]): Promise<void> {
   for (const [index, scope] of scopes.entries()) {
@@ -123,7 +128,8 @@ async function build(): Promise<void> {
   if (JSON.stringify(sourceIdentity()) !== JSON.stringify(source)) throw new Error("Producer source changed during validation");
   const files = await identities(["core/bun-core.wasm", "core/bun-core.wasm.core.json", "quickjs/engine.wasm", "quickjs/engine.wasm.engine.json", "jsc/engine.wasm", "jsc/engine.wasm.engine.json", "dist/bun.wasm", "dist/bun.wasm.build.json", "dist/quickjs.wasm", "dist/quickjs.wasm.engine.json", "dist/bun-jsc.wasm", "dist/bun-jsc.wasm.build.json", "dist/jsc-engine.wasm", "dist/jsc-engine.wasm.engine.json", "dist/bash-web-shell.wasm", "dist/bash-web-env.wasm", "dist/bash-web-guests.json", "hook-smoke.json"].concat(webFiles(join(output, "web"), "web")));
   writeFileSync(join(output, "manifest.json"), JSON.stringify({ schema: 1, status: "reusable", source, nativePrebuild: prebuild,
-    inputs: current.map(input => ({ scope: input.scope, contentSha256: input.contentSha256 })), files,
+    inputs: current.map(input => ({ scope: input.scope, contentSha256: input.contentSha256 })),
+    inputOrigins: JSON.parse(readFileSync(join(output, "inputs/programs.json"), "utf8")), files,
     webRoot: join(output, "web"), hook: join(repository, "scripts/app-matrix/engine-memory-hook.ts"),
     engineBuilds: JSON.parse(readFileSync(join(output, "web/engine-builds.json"), "utf8")),
   }, null, 2) + "\n");
