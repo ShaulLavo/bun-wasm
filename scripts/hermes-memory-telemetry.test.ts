@@ -98,10 +98,11 @@ test("Hermes channel refreshes only at normal boundaries and freezes before disp
   const channel = createMemoryChannel();
   const publisher = createMemoryPublisher(channel, f.reader);
   const generation = requestMemoryChannel(channel, true);
-  publisher.capture(false);
-  expect(f.refreshes()).toBe(0); expect(memoryChannelReady(channel, generation, true)).toBe(false);
-  publisher.capture(true);
-  expect(f.refreshes()).toBe(1); expect(memoryChannelReady(channel, generation, true)).toBe(true);
+  for (const normal of [false, true]) {
+    publisher.capture(normal);
+    expect(f.refreshes()).toBe(Number(normal));
+    expect(memoryChannelReady(channel, generation, true)).toBe(normal);
+  }
   f.put(128, 4, 123456n); f.put(128, 5, 3n);
   publisher.capture(false, true);
   f.put(256, 3, unknown); f.put(256, 6, 0n);
