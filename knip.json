@@ -23,6 +23,7 @@
         "scripts/discover-solid-watch-import.ts",
         "scripts/check-await-observer.ts",
         "scripts/check-quickjs-async-context.ts",
+        "scripts/check-quickjs-memory-telemetry.ts",
         "scripts/crypto-review-vectors.mjs",
         "scripts/generate-*.{ts,mjs}",
         "scripts/guest-core-receipt.ts",
