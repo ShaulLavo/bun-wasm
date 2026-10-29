@@ -1,11 +1,11 @@
-From cd71d1ec16a495f0354d4e531794b5b97c548aab Mon Sep 17 00:00:00 2001
+From 7ad0f2cb53ff745a32567d25ce05f601023084a4 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
-Date: Thu, 29 Oct 2026 11:53:30 +0200
+Date: Thu, 29 Oct 2026 11:58:15 +0200
 Subject: [PATCH] wasm: collect runtime source splices and prepare eval
  arguments
 
 ---
- src/js_parser/lexer.rs                |  3 +++
+ src/js_parser/lexer.rs                |  6 +++++
  src/js_parser/lib.rs                  | 38 +++++++++++++++++++++++++++
  src/js_parser/parse/mod.rs            | 24 +++++++++++++++++
  src/js_parser/parse/parse_fn.rs       | 10 +++++++
@@ -14,13 +14,21 @@ Subject: [PATCH] wasm: collect runtime source splices and prepare eval
  src/js_parser/parse/parse_stmt.rs     | 14 ++++++++++
  src/js_parser/parse/parse_suffix.rs   | 12 +++++++++
  src/js_printer/lib.rs                 |  7 ++++-
- 9 files changed, 115 insertions(+), 1 deletion(-)
+ 9 files changed, 118 insertions(+), 1 deletion(-)
 
 diff --git a/src/js_parser/lexer.rs b/src/js_parser/lexer.rs
-index 063d2206..6f66d780 100644
+index 063d2206..7bd3ca9a 100644
 --- a/src/js_parser/lexer.rs
 +++ b/src/js_parser/lexer.rs
-@@ -206,6 +206,7 @@ pub struct Lexer<'a> {
+@@ -144,6 +144,7 @@ pub struct LexerSnapshot<'a> {
+     pub(crate) current: usize,
+     pub(crate) start: usize,
+     pub(crate) end: usize,
++    pub(crate) prev_token_end: usize,
+     pub(crate) approximate_newline_count: usize,
+     pub(crate) previous_backslash_quote_in_jsx: Range,
+     pub(crate) token: T,
+@@ -206,6 +207,7 @@ pub struct Lexer<'a> {
      pub current: usize,
      pub(crate) start: usize,
      pub end: usize,
@@ -28,7 +36,23 @@ index 063d2206..6f66d780 100644
      pub(crate) approximate_newline_count: usize,
      pub(crate) previous_backslash_quote_in_jsx: Range,
      pub token: T,
-@@ -1258,6 +1259,7 @@ impl<'a> Lexer<'a> {
+@@ -331,6 +333,7 @@ impl<'a> Lexer<'a> {
+             current: self.current,
+             start: self.start,
+             end: self.end,
++            prev_token_end: self.prev_token_end,
+             approximate_newline_count: self.approximate_newline_count,
+             previous_backslash_quote_in_jsx: self.previous_backslash_quote_in_jsx,
+             token: self.token,
+@@ -369,6 +372,7 @@ impl<'a> Lexer<'a> {
+         self.current = original.current;
+         self.start = original.start;
+         self.end = original.end;
++        self.prev_token_end = original.prev_token_end;
+         self.approximate_newline_count = original.approximate_newline_count;
+         self.previous_backslash_quote_in_jsx = original.previous_backslash_quote_in_jsx;
+         self.token = original.token;
+@@ -1258,6 +1262,7 @@ impl<'a> Lexer<'a> {
      /// `parse_string_literal::<QUOTE>`) stay `#[inline]`/`#[inline(always)]` so
      /// they merge *into* this body.
      pub fn next(&mut self) -> Result<(), Error> {
@@ -36,7 +60,7 @@ index 063d2206..6f66d780 100644
          self.has_newline_before = self.end == 0;
          self.has_pure_comment_before = false;
          self.prev_token_was_await_keyword = false;
-@@ -2258,6 +2260,7 @@ impl<'a> Lexer<'a> {
+@@ -2258,6 +2263,7 @@ impl<'a> Lexer<'a> {
              current: 0,
              start: 0,
              end: 0,
@@ -317,7 +341,7 @@ index 5298b27d..201bb653 100644
      }
  
 diff --git a/src/js_parser/parse/parse_suffix.rs b/src/js_parser/parse/parse_suffix.rs
-index 76c1603f..9a042758 100644
+index 76c1603f..ada55198 100644
 --- a/src/js_parser/parse/parse_suffix.rs
 +++ b/src/js_parser/parse/parse_suffix.rs
 @@ -384,7 +384,19 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
@@ -326,7 +350,7 @@ index 76c1603f..9a042758 100644
  
 +        let eval_target = match &left.data {
 +            ExprData::EIdentifier(e) => p.load_name_from_ref(e.ref_) == b"eval",
-+            ExprData::EBinary(e) if e.op == OpCode::BinComma && matches!(e.left.data, ExprData::ENumber(n) if n.value == 0.0) => match &e.right.data {
++            ExprData::EBinary(e) if e.op == OpCode::BinComma && matches!(e.left.data, ExprData::ENumber(n) if n.value() == 0.0) => match &e.right.data {
 +                ExprData::EIdentifier(e) => p.load_name_from_ref(e.ref_) == b"eval",
 +                _ => false,
 +            },
@@ -341,7 +365,7 @@ index 76c1603f..9a042758 100644
          let target = *left;
          *left = p.new_expr(
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index d84ed54d..cabcf053 100644
+index d84ed54d..3eb16fd2 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
 @@ -3681,7 +3681,12 @@ pub(crate) mod __gated_printer {
@@ -353,7 +377,7 @@ index d84ed54d..cabcf053 100644
 +                            && !matches!(args[0].data, ExprData::ESpread(_));
 +                        if prepare_eval { self.print(b"__bunwasm_evalArg(eval, "); }
                          self.print_expr(args[0], Level::Comma, ExprFlag::none());
-+                        if prepare_eval { self.print(if is_unbound_eval { b", \"eval-indirect\")" } else { b")" }); }
++                        if prepare_eval { self.print(if is_unbound_eval { b", \"eval-indirect\")".as_slice() } else { b")".as_slice() }); }
                          for arg in &args[1..] {
                              self.print(b",");
                              self.print_space();

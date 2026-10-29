@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import * as fs from "node:fs";
-import { createRequire, isBuiltin, stripTypeScriptTypes } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import * as path from "node:path";
 import { createContext, runInContext } from "node:vm";
 import { createScriptEvaluation } from "../web/src/script-evaluation.ts";
@@ -77,7 +77,11 @@ function productionRuntime(filename: string, compiledWrapper?: string, realHost 
       if (name === "path") return () => path;
       if (name === "node_fs") return () => ({ fs });
       if (name === "web" || name === "crypto") return () => () => {};
-      if (name === "source_prepare") return runInContext(stripTypeScriptTypes(source("source_prepare.ts")), context);
+      if (name === "source_prepare") {
+        const preparedFactory = process.env.BUNWASM_SOURCE_PREPARE_FACTORY;
+        if (!preparedFactory) throw new Error("Missing production-erased source_prepare factory");
+        return runInContext(readFileSync(preparedFactory, "utf8"), context);
+      }
       if (name === "module_compile") return runInContext(readFileSync(emittedFactory, "utf8"), context);
       return () => ({});
     },

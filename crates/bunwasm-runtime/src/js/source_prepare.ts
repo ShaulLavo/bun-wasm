@@ -33,7 +33,7 @@
     return source.includes("await") || source.includes("eval") || source.includes("import");
   }
   function parseable(source: string): string {
-    return source.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, value => value.length === 1 ? " " : value);
+    return source.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, value => value.length === 1 ? "\uFFFD" : value);
   }
   function compact(value: RawPrepared): Prepared {
     return { ...value, edits: Int32Array.from(value.edits), columns: Int32Array.from(value.columns) };

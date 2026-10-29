@@ -8,11 +8,15 @@ import { productionHostEvaluation } from "./module-compile-runtime.ts";
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-module-compile-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const factory = join(scratch, "module_compile.js");
-const env = { ...process.env, BUNWASM_MODULE_COMPILE_FACTORY: factory };
+const prepareFactory = join(scratch, "source_prepare.js");
+const env = { ...process.env, BUNWASM_MODULE_COMPILE_FACTORY: factory, BUNWASM_SOURCE_PREPARE_FACTORY: prepareFactory };
 beforeAll(() => {
-  const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", new URL("./transpile-runtime.ts", import.meta.url).pathname, new URL("../crates/bunwasm-runtime/src/js/module_compile.ts", import.meta.url).pathname, factory], { stdout: "pipe", stderr: "pipe" });
-  expect(result.exitCode).toBe(0);
-  expect(result.stderr.toString()).toBe("");
+  for (const [name, destination] of [["module_compile", factory], ["source_prepare", prepareFactory]]) {
+    const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", new URL("./transpile-runtime.ts", import.meta.url).pathname,
+      new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url).pathname, destination], { stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toString()).toBe("");
+  }
 });
 const probe = new URL("./module-compile-probe.ts", import.meta.url).pathname;
 
