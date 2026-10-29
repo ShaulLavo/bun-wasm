@@ -1,0 +1,11 @@
+[package]
+name = "bunwasm-nested"
+description = "Bounds-checked memory regions for host-executed nested WebAssembly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+wasmparser = "=0.228.0"
+wasm-encoder = { version = "=0.228.0", features = ["wasmparser"] }
