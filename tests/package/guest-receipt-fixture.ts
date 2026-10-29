@@ -102,7 +102,7 @@ checksum = "${"2".repeat(64)}"
     await writeFile(artifact, wasm);
     await writeFile(join(root, "dist/quickjs.wasm"), wasm);
     const tools = Object.fromEntries(["rustc", "cargo", "bun", "node", "rust-lld", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"].map(name => [name, join(root, "fake-tool")]));
-    return await run({ repository: root, sysroot: join(root, "sysroot"), sdk: join(root, "sdk"), waffle: join(root, "waffle"), boringssl: join(root, "vendor/boringssl"), rustTargetLib: join(root, "rustlib"), rustSourceLib: join(root, "rust-src"), tools, build: "browser", jscBuild: join(root, "jsc-build") }, artifact);
+    return await run({ repository: root, sysroot: join(root, "sysroot"), sdk: join(root, "sdk"), waffle: join(root, "waffle"), boringssl: join(root, "vendor/boringssl"), rustTargetLib: join(root, "rustlib"), rustSourceLib: join(root, "rust-src"), tools, build: "browser", jscBuild: join(root, "jsc-build"), hermesBuild: join(root, "hermes-build") }, artifact);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

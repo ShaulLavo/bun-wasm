@@ -1,13 +1,14 @@
 import { resolve } from "node:path";
 import { captureProgramInputs, engineEnvironment, parseProgramInputs, verifyProgramReceipt, writeProgramReceipt } from "./guest-core-receipt.ts";
 import { sourceOptions } from "./guest-source-manifest.ts";
+import { isPairedEngine } from "../src/engine-kind.ts";
 
 if (import.meta.main) {
   const root = resolve(import.meta.dir, "..");
   const sysroot = process.env.BUN_WASM_SYSROOT;
   if (!sysroot) throw new Error("Set BUN_WASM_SYSROOT");
   const [command, path, snapshot] = process.argv.slice(2);
-  if ((command === "inputs" || command === "environment") && (path === "quickjs" || path === "jsc")) {
+  if ((command === "inputs" || command === "environment") && isPairedEngine(path)) {
     if (command === "inputs") console.log(JSON.stringify(await captureProgramInputs(sourceOptions(root, sysroot, path), path)));
     else {
       const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
@@ -18,5 +19,5 @@ if (import.meta.main) {
     const expected = parseProgramInputs(await Bun.file(snapshot).json());
     if (expected.scope === "core") throw new Error("Expected engine program inputs");
     verifyProgramReceipt(await Bun.file(path).bytes(), await Bun.file(`${path}.engine.json`).json(), expected);
-  } else throw new Error("Usage: guest-engine-receipt.ts inputs quickjs|jsc | environment quickjs|jsc | write SIDE SNAPSHOT | verify SIDE SNAPSHOT");
+  } else throw new Error("Usage: guest-engine-receipt.ts inputs quickjs|jsc|hermes | environment quickjs|jsc|hermes | write SIDE SNAPSHOT | verify SIDE SNAPSHOT");
 }
