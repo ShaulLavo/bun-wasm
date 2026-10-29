@@ -1,5 +1,5 @@
 import { javascript } from "@codemirror/lang-javascript";
-import { EditorState, type Extension } from "@codemirror/state";
+import { EditorState, Prec, type Extension } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
@@ -41,10 +41,11 @@ export class Editor {
       javascript({ typescript: ts, jsx }),
       oneDark,
       EditorView.lineWrapping,
-      keymap.of([
+      // Ahead of basicSetup, whose default keymap binds Mod-Enter to "insert blank line".
+      Prec.high(keymap.of([
         { key: "Mod-s", preventDefault: true, run: () => (void this.save().catch(this.host.report), true) },
         { key: "Mod-Enter", preventDefault: true, run: () => (void this.host.run().catch(this.host.report), true) },
-      ]),
+      ])),
       EditorView.updateListener.of((u) => {
         if (u.docChanged) void this.refreshFiles().catch(this.host.report);
       }),
