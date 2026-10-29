@@ -27,6 +27,8 @@ bun web/tests/next-framework-registry.ts /work/tmp/bun-wasm-next-registry exampl
 # --registry-extra /work/tmp/bun-wasm-next-registry
 ```
 
+Add `--registry-overlay /absolute/recorded-advisory-overlay` with `--registry-extra` to replay the exact recorded advisory POST through the shared Next registry helper. The overlay option requires the supplement option. Unknown POST bodies and paths still fail replay. `network.mirror.inputs` records the absolute path, SHA-256 and entry count of the borrowed, supplemental and overlay indexes. The combined registry hash includes all supplied index bytes, and its entry count counts unique keys across those indexes. No registry cache is changed. See [recorded advisory replay](next-advisory-replay.md) for the authentic fixture and recording rules.
+
 `--registry DIRECTORY` instead replays a complete app-matrix registry recording. These two options are mutually exclusive. Replay fails on a missing object or blocked external request. Remove the supplemental directory after its consumer runs finish. A run without replay is labeled a live npm diagnostic.
 
 ## Use the shared config

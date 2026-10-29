@@ -21,13 +21,14 @@ import { runAcceptancePhase } from "./next-acceptance-phase";
 import { acceptanceBudget, acceptanceTimeouts, timeoutOptions } from "./next-acceptance-options";
 import { routeCases, runRouteCase, overlappingRequests } from "./next-acceptance-cases";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
+import { registryReceipt } from "./next-acceptance-registry";
 import { verifyAcceptanceAssets } from "./next-acceptance-assets";
 import { emptyMemory, memoryGate, parseMemory, resultTable, type AcceptanceEngine, type MemorySample, type Outcome, type PhaseResult } from "./next-acceptance-model";
 
 const { values } = parseArgs({ options: {
   engine: { type: "string" }, "web-root": { type: "string" }, output: { type: "string" },
   "runtime-revision": { type: "string" }, "runtime-receipt": { type: "string" },
-  registry: { type: "string" }, "registry-extra": { type: "string" }, "memory-hook": { type: "string" },
+  registry: { type: "string" }, "registry-extra": { type: "string" }, "registry-overlay": { type: "string" }, "memory-hook": { type: "string" },
   port: { type: "string", default: "43701" }, cycles: { type: "string", default: "30" },
   phases: { type: "string", default: "install,build,start,dev" },
   ...timeoutOptions, "idle-ms": { type: "string", default: "1500" },
@@ -35,6 +36,7 @@ const { values } = parseArgs({ options: {
 } });
 if (values.engine !== "quickjs" && values.engine !== "jsc" && values.engine !== "browser") throw new Error("--engine quickjs|jsc|browser is required");
 if (!values["web-root"] || !values.output || !/^[a-f0-9]{40}$/.test(values["runtime-revision"] ?? "")) throw new Error("--web-root, --output and --runtime-revision <full SHA> are required");
+if (values["registry-overlay"] && !values["registry-extra"]) throw new Error("--registry-overlay requires --registry-extra");
 const engine: AcceptanceEngine = values.engine;
 const webRoot = resolve(values["web-root"]);
 const output = resolve(values.output);
@@ -295,11 +297,11 @@ async function main() {
   if (values.registry && values["registry-extra"]) throw new Error("Choose --registry or --registry-extra");
   if (values.registry) mirror = await registry({ directory: resolve(values.registry), record: false });
   if (values["registry-extra"]) {
-    const replay = nextRegistry(resolve(values["registry-extra"]), 0);
-    const indexes = ["/work/cache/bun-wasm-app-matrix/index.json", join(resolve(values["registry-extra"]), "index.json")].map(path => readFileSync(path, "utf8"));
-    const registryHash = digest(indexes.join("\n"));
-    const entries = new Set(indexes.flatMap(text => Object.keys(JSON.parse(text)))).size;
-    mirror = { ...replay, errors: [], snapshot: () => ({ entries, sha256: registryHash, requests: replay.requests.length, misses: replay.misses, errors: [] }) };
+    const indexPaths = ["/work/cache/bun-wasm-app-matrix/index.json", join(resolve(values["registry-extra"]), "index.json")]
+      .concat(values["registry-overlay"] ? [join(resolve(values["registry-overlay"]), "index.json")] : []);
+    const receipt = registryReceipt(indexPaths);
+    const replay = nextRegistry(resolve(values["registry-extra"]), 0, values["registry-overlay"] ? resolve(values["registry-overlay"]) : undefined);
+    mirror = { ...replay, errors: [], snapshot: () => ({ ...receipt, requests: replay.requests.length, misses: replay.misses, errors: [] }) };
   }
   const match = await task.start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { ROOT: webRoot, PORT: "0", PREVIEW_ORIGINS: "1" });
   const browser = await task.launch({ launch: async () => {

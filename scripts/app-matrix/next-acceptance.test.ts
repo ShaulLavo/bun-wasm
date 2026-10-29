@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
-import { readFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import ts from "typescript-api";
 import { acceptanceBudget, acceptanceTimeouts, timeoutOptions } from "./next-acceptance-options";
+import { registryReceipt } from "./next-acceptance-registry";
 import { runAcceptancePhase } from "./next-acceptance-phase";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
 import { emptyMemory, memoryGate, parseMemory, resultTable, type MemorySample, type PhaseResult } from "./next-acceptance-model";
@@ -159,4 +161,46 @@ test("an expired stage waits for cancellation before recording failure even if w
   expect(events).toEqual(["cancel", "released", "record"]);
   expect(result).toMatchObject({ status: "fail", budgetMs: 10, reason: "Error: Phase build deadline exceeded (10ms)" });
   expect(rows).toEqual([result]);
+});
+
+
+test("registry overlay without a supplement rejects before report or session resources exist", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-next01-options-"));
+  try {
+    const output = join(scratch, "report");
+    const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "next-acceptance.ts"),
+      "--engine", "quickjs", "--web-root", join(scratch, "unused-web"), "--output", output,
+      "--runtime-revision", "d7fa432cbf03276c0c39119444bb524ce80db0ba",
+      "--registry-overlay", join(import.meta.dir, "fixtures/next-advisory")],
+    { env: { ...process.env, TMPDIR: scratch, BUN_WASM_TEST_TMP: scratch }, timeout: 5000 });
+    expect(child.exitCode).toBe(1);
+    expect(child.stderr.toString()).toContain("--registry-overlay requires --registry-extra");
+    expect(existsSync(output)).toBe(false);
+    expect(readdirSync(scratch)).toEqual([]);
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test("registry receipt identifies all three indexes and changes with the authentic overlay bytes", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-next01-receipt-"));
+  try {
+    const captured = readFileSync(join(import.meta.dir, "fixtures/next-advisory/index.json"), "utf8");
+    const paths = ["borrowed", "supplement", "overlay"].map(name => join(scratch, `${name}.json`));
+    for (const path of paths) writeFileSync(path, captured);
+    const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+    const receipt = registryReceipt(paths);
+    expect(receipt.entries).toBe(1);
+    expect(receipt.sha256).toBe(hash([captured, captured, captured].join("\n")));
+    expect(receipt.inputs).toEqual(paths.map(path => ({ path, sha256: hash(captured), entries: 1 })));
+    expect(registryReceipt(paths.slice(0, 2)).sha256).not.toBe(receipt.sha256);
+    const overlay = paths.at(-1);
+    if (!overlay) throw new Error("Missing overlay input");
+    writeFileSync(overlay, captured + "\n");
+    const changed = registryReceipt(paths);
+    expect(changed.sha256).not.toBe(receipt.sha256);
+    expect(changed.entries).toBe(receipt.entries);
+    expect(changed.inputs.slice(0, 2)).toEqual(receipt.inputs.slice(0, 2));
+    expect(changed.inputs.at(-1)?.sha256).toBe(hash(captured + "\n"));
+    rmSync(overlay);
+    expect(() => registryReceipt(paths)).toThrow("ENOENT");
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
