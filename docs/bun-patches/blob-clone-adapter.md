@@ -1,6 +1,6 @@
 ## Blob clone adapter
 
-The Blob branches in `crates/bunwasm-runtime/src/js/structured_clone.js` and
+The Blob branches in `crates/bunwasm-runtime/src/js/structured_clone.ts` and
 `worker_codec.ts`, and the `blob` tuple in `worker_protocol.d.ts`, are original
 host adapters. No upstream implementation was copied. The comparison contract is
 Bun's `src/js/node/worker_threads.ts` at revision
@@ -32,7 +32,7 @@ natural exit or close. The parent integration run owns its three-engine guest re
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| `structured_clone.js` Blob branch | Host feature | Original Blob byte/type clone adapter. |
+| `structured_clone.ts` Blob branch | Host feature | Original Blob byte/type clone adapter. |
 | `worker_codec.ts` Blob branches and `worker_protocol.d.ts` blob tuple | Host feature | Original Blob graph encoding, validation and reconstruction. |
 
 [Ledger scope and pinned revisions](scope.md).
