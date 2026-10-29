@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { selectChecks } from "../test-checks";
 
@@ -17,7 +18,7 @@ function readReport(path: string) {
   return { report, rows };
 }
 function control(scenario: string, verify: (value: ReturnType<typeof readReport>, closed: boolean, status: number | null) => void) {
-  const directory = mkdtempSync("/work/tmp/bun-wasm-vinext-regression-");
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-vinext-regression-"));
   try {
     const child = spawnSync(process.execPath, [resolve(import.meta.dir, "../fixtures/vinext-probe-control.ts"), directory, scenario], { encoding: "utf8", timeout: 15000 });
     expect(child.error).toBeUndefined();
