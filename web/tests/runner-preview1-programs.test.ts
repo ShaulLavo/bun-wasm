@@ -2,7 +2,8 @@ import { expect, spyOn, test } from "bun:test";
 import { createFilesystemIdentity } from "waffle/fs";
 import { startRun } from "../src/runner";
 import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess-broker";
-import { processRuntimeFixture, fixtureFilesystemConnection } from "./process-runtime-fixture";
+import { fixtureFilesystemConnection } from "./process-runtime-fixture";
+import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 
 test("a Preview1-first runtime does not register its guest as the immutable Bun engine program", async () => {
   const previousWorker = globalThis.Worker;

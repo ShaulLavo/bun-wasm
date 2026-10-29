@@ -1,6 +1,6 @@
 import { terminalOutputFixture } from "./terminal-output-fixture";
 import { controlLoad, controlStore } from "waffle/proc/control";
-import { processRuntimeFixture } from "./process-runtime-fixture";
+import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 import { afterAll, expect, mock, test } from "bun:test";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";

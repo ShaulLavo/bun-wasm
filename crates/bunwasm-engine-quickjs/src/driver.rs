@@ -1,7 +1,8 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use crate::client::CoreClient;
 use crate::engine::{Engine, NativeError};
@@ -21,6 +22,7 @@ pub(crate) fn run<E: Engine>(session: u32) -> i32 {
         client,
         internal: RefCell::new(None),
         handoffs: RefCell::new(HashMap::new()),
+        flushed: Cell::new(Instant::now()),
     });
     let engine = E::new(core.clone());
     let code = run_in_engine(&engine, &core, &entry, &main);
@@ -39,7 +41,12 @@ pub(crate) struct Core<E: Engine> {
     pub(crate) internal: RefCell<Option<E::Value>>,
     /// Exports objects of wrapper modules, until their `import.meta` is set.
     pub(crate) handoffs: ModuleHandoffs<E::Value>,
+    /// When a busy loop last published buffered stdout.
+    flushed: Cell<Instant>,
 }
+
+/// A busy loop publishes buffered stdout at most this often; idle waits always flush.
+const BUSY_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 
 impl<E: Engine> Core<E> {
     pub(crate) fn bootstrap(self: &Rc<Self>, e: &E) -> Result<E::Value, E::Value> {
@@ -55,6 +62,13 @@ impl<E: Engine> Core<E> {
     }
     pub(crate) fn flush(&self) {
         self.client.flush();
+        self.flushed.set(Instant::now());
+    }
+    /// Publish stdout from a loop that never idles, without a core call on every turn.
+    pub(crate) fn flush_busy(&self) {
+        if self.flushed.get().elapsed() >= BUSY_FLUSH_INTERVAL {
+            self.flush();
+        }
     }
     pub(crate) fn write_error(&self, text: &str) {
         self.flush();

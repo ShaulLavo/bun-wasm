@@ -4,7 +4,7 @@ import { DescriptorTable } from "waffle/core/descriptors";
 import { createWorkerProcessTransport, WorkerProcessClient, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
 import { SubprocessBroker, type SubprocessBrokerOptions } from "../src/subprocess-broker";
 import type { SharedFilesystem } from "../src/shared-fs";
-import { processRuntimeFixture } from "./process-runtime-fixture";
+import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 
 /** A page-side broker, its fake runtime, and a worker-side client for the root process it adopts.
  * The client posts into `messages` instead of a worker, so a test delivers each one explicitly. */
