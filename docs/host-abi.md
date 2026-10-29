@@ -93,8 +93,10 @@ reads as `UNSUPPORTED`. The playground and sandbox use this by default (`web/src
 | 13   | `local_addr` | `(handle, buf_ptr, buf_cap) -> len`                              |
 | 14   | `lookup_start` | `(host_ptr, host_len, family, hints) -> handle`                |
 | 15   | `lookup_head` | `(handle, buf_ptr, buf_cap) -> len`                              |
+| 16   | `listen_path` | `(path_ptr, path_len, flags) -> handle`                         |
+| 17   | `connect_path` | `(path_ptr, path_len) -> handle`                              |
 
-Version 2 has 16 slots. Slots 0 through 13 are unchanged. Hosts that do not
+Version 2 has 18 slots. Slots 0 through 13 are unchanged. Hosts that do not
 provide lookup leave slots 14 and 15 at 0; the runtime then keeps its existing
 unsupported-capability rejection. There is no version-skew bridge.
 The Bun-specific child slots (`spawn`, `child_wait`, `child_pipe`,
@@ -215,6 +217,19 @@ walks the returned list in resolver order, and publishes either one owned JSON
 result or one structured resolver error. It does not connect, listen, fetch,
 inspect `/etc/hosts`, or substitute a local hostname table. A cancelled worker
 may finish later, but its result is discarded and it never retains guest state.
+
+### Unix path calls
+
+`listen_path` and `connect_path` take absolute UTF-8 paths. Bun joins relative
+Node paths to the current cwd without lexical normalization. Invalid UTF-8 and
+reserved listen flags report ERROR with EINVAL through `error(0)`. Listen flag
+bit 0 requests unlink on close. NUL and abstract names report EINVAL.
+
+The calls delegate to Waffle's `listenPath` and `connectPath`. All subsequent
+accept, read, write, shutdown, close, error and sized address calls reuse the
+same handles. Unix addresses are JSON `{ "family": "Unix", "path": string | null }`.
+The native Wasmtime host leaves these two slots unset. The shared Waffle NET
+provider is required for real filesystem sockets.
 
 ### `lookup_head(handle, buf_ptr, buf_cap) -> len`
 

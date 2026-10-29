@@ -222,6 +222,13 @@ for (const path of ["web/guest-tests/quickjs.test.ts", "web/guest-tests/browser.
   });
 }
 
+test("the busy-loop stdout fixture and its handshake runner select the native and JSC gates", () => {
+  for (const path of ["tests/fixtures/stdout-busy-loop/index.ts", "tests/test-stdout-busy-loop.ts"]) {
+    expect(needsRust([path])).toBe(true);
+    expect(needsJsc([path])).toBe(true);
+  }
+});
+
 test("the Astro response fixture selects the existing native and JSC gates", () => {
   const paths = ["tests/fixtures/astro-http2-response/index.ts"];
   expect(needsRust(paths)).toBe(true);

@@ -18,6 +18,7 @@ import type { NetRequest } from "waffle/browser/net/protocol";
 
 export interface BunNetworkOptions {
   readonly fetch?: NetFetch;
+  readonly pathScope?: Parameters<RuntimeNetwork["createHelper"]>[0]["pathScope"];
   listening?(port: number, helper: RuntimeNetworkHelper): void;
   stopped?(port: number, helper: RuntimeNetworkHelper): void;
 }
@@ -26,7 +27,7 @@ export function createBunNetworkHelper(network: RuntimeNetwork, ring: SharedArra
   const fetch = options.fetch ?? installFetch;
   const listening = options.listening;
   const stopped = options.stopped;
-  const helper = network.createHelper({ ring, fetch, hooks: {
+  const helper = network.createHelper({ ring, fetch, pathScope: options.pathScope, hooks: {
     listening: port => listening?.(port, helper),
     stopped: port => stopped?.(port, helper),
   } });
@@ -37,6 +38,9 @@ function isNetRequest(value: unknown): value is NetRequest {
   if (!value || typeof value !== "object" || !("type" in value) || !("id" in value)) return false;
   if (!Number.isSafeInteger(value.id) || typeof value.id !== "number" || value.id < 1) return false;
   switch (value.type) {
+    case "unix-listen": return validPath(value) && "unlinkOnClose" in value && typeof value.unlinkOnClose === "boolean" && validReply(value);
+    case "unix-connect": return validPath(value) && validReply(value);
+    case "unix-close": return validReply(value);
     case "tcp-listen":
       return "host" in value && typeof value.host === "string" && validPort(value) && validReply(value);
     case "tcp-connect": return validPort(value) && validReply(value);
@@ -53,6 +57,7 @@ function isNetRequest(value: unknown): value is NetRequest {
     default: return false;
   }
 }
+const validPath = (value: object): boolean => "path" in value && typeof value.path === "string";
 const validPort = (value: object): boolean => "port" in value && typeof value.port === "number" && Number.isInteger(value.port) && value.port >= 0 && value.port <= 65535;
 const validReply = (value: object): boolean => "reply" in value && value.reply instanceof SharedArrayBuffer && value.reply.byteLength === 12;
 function validLookup(value: object): boolean {
