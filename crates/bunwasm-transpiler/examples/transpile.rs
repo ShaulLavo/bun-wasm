@@ -13,7 +13,13 @@ fn main() {
     let loader =
         bunwasm_transpiler::Loader::from_path(path).unwrap_or(bunwasm_transpiler::Loader::Ts);
     let result = if register {
-        bunwasm_transpiler::register(&source, path, loader).map(|t| t.code)
+        bunwasm_transpiler::register(&source, path, loader).map(|t| {
+            if map {
+                bunwasm_transpiler::source_map_json(path, &source, &t.mappings)
+            } else {
+                t.code
+            }
+        })
     } else if map {
         bunwasm_transpiler::transpile_with_source_map(&source, path, loader, false)
             .map(|t| bunwasm_transpiler::source_map_json(path, &source, &t.mappings))

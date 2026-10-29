@@ -23,11 +23,10 @@ function readRecords(name: string): Records {
   return JSON.parse(readFileSync(join(fixturesDir, name, "records.json"), "utf8"));
 }
 
-// The loader file is one function expression; assigning it keeps the
-// transpiler from dropping it as an unused expression.
 export function loaderSource(): string {
   const prefix = "globalThis.factory = ";
-  const out = new Bun.Transpiler({ loader: "ts" }).transformSync(prefix + readFileSync(loaderPath, "utf8"));
+  const source = readFileSync(loaderPath, "utf8").replace("(function (", `${prefix}(function (`);
+  const out = new Bun.Transpiler({ loader: "ts" }).transformSync(source);
   return out.slice(out.indexOf(prefix) + prefix.length).trim().replace(/;$/, "");
 }
 

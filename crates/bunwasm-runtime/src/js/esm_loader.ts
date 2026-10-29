@@ -6,22 +6,28 @@
 // and evaluates them with the ECMAScript algorithm (16.2.1.5.3): depth-first
 // with cycle roots, async modules, pending async dependencies, and async
 // parents released in evaluation order.
+type Getter = () => unknown;
+type RecordBody = Generator<unknown, void, unknown>;
+type ModuleRecord = {
+  r: string[];
+  i: [number, string][];
+  x: [string, number, string][];
+  s: number[];
+  a: boolean;
+  f: (api: RegistrationApi) => RecordBody;
+};
+type RegistrationApi = {
+  l(getters: Record<string, Getter>): void;
+  n: object[];
+  readonly meta: object;
+  import(specifier: unknown): Promise<object>;
+};
 (function (native: {
   resolve(specifier: string, referrer: string): string;
   load(name: string): { record: ModuleRecord } | { namespace: object; default: unknown };
   initMeta(name: string, meta: object): void;
 }) {
   "use strict";
-  type Getter = () => unknown;
-  type Body = Generator<unknown, void, unknown>;
-  type ModuleRecord = {
-    r: string[];
-    i: [number, string][];
-    x: [string, number, string][];
-    s: number[];
-    a: boolean;
-    f: (api: ModuleApi) => Body;
-  };
   type Status = "loaded" | "linked" | "evaluating" | "evaluating-async" | "evaluated";
   type Capability = { promise: Promise<void>; resolve(): void; reject(error: unknown): void };
   type Mod = {
@@ -32,7 +38,7 @@
     locals: Record<string, Getter>;
     namespace: object | null;
     api: ModuleApi;
-    body: Body | null;
+    body: RecordBody | null;
     dfsIndex: number;
     dfsAncestorIndex: number;
     cycleRoot: Mod | null;

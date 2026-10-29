@@ -13,7 +13,7 @@ export function runCase(name: string, engine: string[], scratch: string, loader 
   const [command, ...args] = engine;
   const run = spawnSync(command!, args.concat(script), { encoding: "utf8", timeout: 30_000 });
   const expected = readFileSync(join(fixturesDir, name, "expected.txt"), "utf8");
-  return { name, ok: run.stdout === expected, actual: run.stdout + run.stderr, expected };
+  return { name, ok: run.status === 0 && !run.error && run.stderr === "" && run.stdout === expected, actual: run.stdout + run.stderr, expected };
 }
 
 function runAll(engine: string[]): number {

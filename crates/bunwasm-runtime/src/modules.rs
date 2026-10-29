@@ -683,7 +683,7 @@ mod tests {
     #[test]
     fn record_positions_compose_before_prologue_and_transpile_maps() {
         let positions = PositionMap {
-            record: Some(crate::sourcemap::SourceMap::parse("oGAAG;AACA")),
+            record: Some(crate::sourcemap::SourceMap::parse("oGAAG;AACH")),
             line1_shift: 3,
             map: Some(crate::sourcemap::SourceMap::parse("AAEK;AACA")),
             ..Default::default()

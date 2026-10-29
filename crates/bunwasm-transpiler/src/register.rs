@@ -77,16 +77,14 @@ impl Module {
                 let name = Self::name_of(ast, id.r#ref);
                 self.locals.push((name.clone(), name));
             }
-            B::B::BArray(array) => {
-                for item in array.items.iter() {
-                    self.export_binding(ast, item.binding);
-                }
-            }
-            B::B::BObject(object) => {
-                for item in object.properties.iter() {
-                    self.export_binding(ast, item.value);
-                }
-            }
+            B::B::BArray(array) => array
+                .items
+                .iter()
+                .for_each(|item| self.export_binding(ast, item.binding)),
+            B::B::BObject(object) => object
+                .properties
+                .iter()
+                .for_each(|item| self.export_binding(ast, item.value)),
         }
     }
 
@@ -137,17 +135,9 @@ pub fn prepare(ast: &mut js_ast::Ast<'_>, arena: &Arena) -> Module {
         has_tla: ast.top_level_await_keyword.len > 0,
         ..Module::default()
     };
-    for part in ast.parts.iter() {
-        for stmt in part.stmts.slice() {
-            let StmtData::SImport(st) = stmt.data else {
-                continue;
-            };
-            if !st.star_name_loc.is_empty() {
-                module
-                    .star_imports
-                    .push((st.namespace_ref, st.import_record_index));
-            }
-        }
+    let statements = ast.parts.iter().flat_map(|part| part.stmts.slice());
+    for stmt in statements {
+        record_star_import(&mut module, *stmt);
     }
     for part in 0..ast.parts.len() {
         let stmts = ast.parts[part].stmts.slice_mut();
@@ -158,61 +148,84 @@ pub fn prepare(ast: &mut js_ast::Ast<'_>, arena: &Arena) -> Module {
     module
 }
 
+fn record_star_import(module: &mut Module, stmt: Stmt) {
+    let StmtData::SImport(st) = stmt.data else {
+        return;
+    };
+    if st.star_name_loc.is_empty() {
+        return;
+    }
+    module
+        .star_imports
+        .push((st.namespace_ref, st.import_record_index));
+}
+
+fn export_from(module: &mut Module, ast: &js_ast::Ast<'_>, st: &S::ExportFrom) -> Stmt {
+    let request = module.request(ast, st.import_record_index);
+    for item in st.items.iter() {
+        module.indirect.push((
+            text(item.alias.slice()),
+            request,
+            text(item.original_name.slice()),
+        ));
+    }
+    Stmt::empty()
+}
+
+fn export_star(module: &mut Module, ast: &js_ast::Ast<'_>, st: &S::ExportStar) -> Stmt {
+    let request = module.request(ast, st.import_record_index);
+    match &st.alias {
+        Some(alias) => {
+            module
+                .indirect
+                .push((text(alias.original_name.slice()), request, "*".to_owned()))
+        }
+        None => module.stars.push(request),
+    }
+    Stmt::empty()
+}
+
+fn export_clause(module: &mut Module, ast: &js_ast::Ast<'_>, st: &S::ExportClause) -> Stmt {
+    for item in st.items.iter() {
+        module.export_local(ast, &text(item.alias.slice()), item.name.ref_);
+    }
+    Stmt::empty()
+}
+
+fn export_declarations(module: &mut Module, ast: &js_ast::Ast<'_>, st: &mut S::Local) {
+    st.is_export = false;
+    for decl in st.decls.iter() {
+        module.export_binding(ast, decl.binding);
+    }
+}
+
+fn export_named(module: &mut Module, ast: &js_ast::Ast<'_>, name: Option<Ref>) {
+    let Some(name) = name else { return };
+    let name = Module::name_of(ast, name);
+    module.locals.push((name.clone(), name));
+}
+
 fn rewrite(module: &mut Module, ast: &mut js_ast::Ast<'_>, arena: &Arena, stmt: Stmt) -> Stmt {
     match stmt.data {
         StmtData::SImport(st) => {
             import(module, ast, arena, &st);
             Stmt::empty()
         }
-        StmtData::SExportFrom(st) => {
-            let request = module.request(ast, st.import_record_index);
-            for item in st.items.iter() {
-                let imported = text(item.original_name.slice());
-                module
-                    .indirect
-                    .push((text(item.alias.slice()), request, imported));
-            }
-            Stmt::empty()
-        }
-        StmtData::SExportStar(st) => {
-            let request = module.request(ast, st.import_record_index);
-            match &st.alias {
-                Some(alias) => module.indirect.push((
-                    text(alias.original_name.slice()),
-                    request,
-                    "*".to_owned(),
-                )),
-                None => module.stars.push(request),
-            }
-            Stmt::empty()
-        }
-        StmtData::SExportClause(st) => {
-            for item in st.items.iter() {
-                module.export_local(ast, &text(item.alias.slice()), item.name.ref_);
-            }
-            Stmt::empty()
-        }
+        StmtData::SExportFrom(st) => export_from(module, ast, &st),
+        StmtData::SExportStar(st) => export_star(module, ast, &st),
+        StmtData::SExportClause(st) => export_clause(module, ast, &st),
         StmtData::SLocal(mut st) if st.is_export => {
-            st.is_export = false;
-            for decl in st.decls.iter() {
-                module.export_binding(ast, decl.binding);
-            }
+            export_declarations(module, ast, &mut st);
             stmt
         }
         StmtData::SFunction(mut st) if st.func.flags.contains(js_ast::G::FnFlags::IsExport) => {
             st.func.flags.remove(js_ast::G::FnFlags::IsExport);
-            if let Some(name) = st.func.name {
-                let name = Module::name_of(ast, name.ref_);
-                module.locals.push((name.clone(), name));
-            }
+            export_named(module, ast, st.func.name.map(|name| name.ref_));
             stmt
         }
         StmtData::SClass(mut st) if st.is_export => {
             st.is_export = false;
-            if let Some(name) = st.class.class_name {
-                let name = Module::name_of(ast, name.ref_);
-                module.locals.push((name.clone(), name));
-            }
+            export_named(module, ast, st.class.class_name.map(|name| name.ref_));
             stmt
         }
         StmtData::SExportDefault(st) => export_default(module, ast, arena, stmt, &st),
@@ -255,11 +268,7 @@ fn export_default(
     let default = st.default_name;
     match st.value {
         StmtOrExpr::Stmt(inner) => {
-            let name = match inner.data {
-                StmtData::SClass(mut class) => class.class.class_name.get_or_insert(default).ref_,
-                StmtData::SFunction(mut func) => func.func.name.get_or_insert(default).ref_,
-                _ => default.ref_,
-            };
+            let name = default_statement_name(inner, default);
             module
                 .locals
                 .push(("default".to_owned(), Module::name_of(ast, name)));
@@ -289,6 +298,14 @@ fn export_default(
                 stmt.loc,
             )
         }
+    }
+}
+
+fn default_statement_name(inner: Stmt, default: js_ast::LocRef) -> Ref {
+    match inner.data {
+        StmtData::SClass(mut class) => class.class.class_name.get_or_insert(default).ref_,
+        StmtData::SFunction(mut func) => func.func.name.get_or_insert(default).ref_,
+        _ => default.ref_,
     }
 }
 
@@ -350,6 +367,20 @@ mod tests {
     }
 
     #[test]
+    fn record_map_includes_the_header_column_offset() {
+        let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let record = register(
+            "export const n = 1;\nthrow new Error('mapped');\n",
+            "/mapped.mjs",
+            Loader::Js,
+        )
+        .unwrap();
+        let first = bun_sourcemap::vlq::decode(record.mappings.as_bytes(), 0);
+        assert_eq!(first.value as usize, record.code.find("const n").unwrap());
+        assert!(record.mappings.contains(';'));
+    }
+
+    #[test]
     fn records_carry_imports_exports_and_await() {
         let source = "import d, { a as b } from './x.js';\nexport * from './y.js';\nexport { b as c };\nexport let n = await d();\nexport default function () { return b(); }\n";
         let record = register_one(source, "/m.js");
@@ -389,24 +420,27 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/esm-loader");
         for case in std::fs::read_dir(&root).unwrap().flatten() {
-            let records: serde_json::Value = serde_json::from_str(
-                &std::fs::read_to_string(case.path().join("records.json")).unwrap(),
-            )
-            .unwrap();
-            for (name, code) in records["modules"].as_object().unwrap() {
-                let file = case.path().join(name.trim_start_matches('/'));
-                if !name.ends_with(".mjs") {
-                    continue;
-                }
-                let source = std::fs::read_to_string(&file).unwrap();
-                let fresh = register_one(&source, file.to_str().unwrap());
-                assert_eq!(
-                    code.as_str().unwrap(),
-                    fresh,
-                    "stale record for {}; rerun scripts/esm-loader-fixtures.ts",
-                    file.display()
-                );
+            check_fixture_records(&case.path());
+        }
+    }
+
+    fn check_fixture_records(case: &std::path::Path) {
+        let records: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(case.join("records.json")).unwrap())
+                .unwrap();
+        for (name, code) in records["modules"].as_object().unwrap() {
+            if !name.ends_with(".mjs") {
+                continue;
             }
+            let file = case.join(name.trim_start_matches('/'));
+            let source = std::fs::read_to_string(&file).unwrap();
+            let fresh = register_one(&source, file.to_str().unwrap());
+            assert_eq!(
+                code.as_str().unwrap(),
+                fresh,
+                "stale record for {}; rerun scripts/esm-loader-fixtures.ts",
+                file.display()
+            );
         }
     }
 }
