@@ -114,8 +114,10 @@ is stopped and maps unknown values before converting integers to JS numbers.
 
 ## Verification boundary
 
-`node --test crates/bunwasm-jsc/tests/memory-telemetry.test.ts` compiles the
-recorder header extracted from the actual WebKit patch. Native scenarios cover
+`bun test scripts/jsc-memory-telemetry.test.ts` compiles the
+recorder header extracted from the actual WebKit patch. The CMake check manifest
+runs it in CI after C++ tools are installed. Scratch uses the environment's
+`TMPDIR` or `RUNNER_TEMP`, with `os.tmpdir()` as the fallback. Native scenarios cover
 success, original failure retention, nested allocation attribution, and an
 abandoned scope, requests wider than wasm32, repeated failures, and shared state
 across translation units. Syntax checks compile the two patched upstream sources and the

@@ -58,7 +58,7 @@ test("native fixture smoke selects the typed runtime behavior without another bu
 
 test("every migrated selection retains one blocking owner and the original local runtime set", () => {
   expect(proveCheckMigration().deduplicated).toHaveLength(7);
-  expect(selectChecks("cmake")).toEqual(["scripts/cmake-cache.test.ts"]);
+  expect(selectChecks("cmake")).toEqual(["scripts/cmake-cache.test.ts", "scripts/jsc-memory-telemetry.test.ts"]);
   const checks = discoverChecks().map(check => check.path).concat(automaticChecks().map(check => check.path));
   expect(new Set(checks).size).toBe(checks.length);
   expect(selectChecks("quality")).toContain("scripts/runtime-ts-small.test.ts");

@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-const root = fileURLToPath(new URL('../../../', import.meta.url));
+const root = fileURLToPath(new URL('../', import.meta.url));
 
 test('WASI JSC telemetry retains the original request without entering the VM', () => {
-  const scratch = mkdtempSync('/work/tmp/bun-wasm-jsc-telemetry-test-');
+  const scratch = mkdtempSync(join(process.env.TMPDIR || process.env.RUNNER_TEMP || tmpdir(), 'bun-wasm-jsc-telemetry-test-'));
   try {
     const patch = readFileSync(join(root, 'jsc/webkit-wasi.patch'), 'utf8');
     const headerPatch = patch.split('diff --git ').find((entry) =>
