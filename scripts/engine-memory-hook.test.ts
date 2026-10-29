@@ -106,19 +106,39 @@ test("an unsampled live process stays unknown rather than inheriting a previous 
   expect(retainedMemorySnapshots().find(snapshot => snapshot.id === id)?.terminal).toBe(true);
 });
 
-test("a current command keeps a failed child while its parent stays live and excludes an older command", () => {
+test("an explicit root retains a failed child and excludes unrelated later commands", () => {
   const f = fixture("quickjs");
-  const parent = { ...f.reader.sample(), id: "parent", commandId: "current", commandStartedAt: 2, commandSequence: 2, terminal: false };
+  const parent = { ...f.reader.sample(), id: "parent", terminal: false,
+    lineage: { authority: "runtime-supervisor", runtimeId: "runtime", pid: 10, parentPid: 0, rootId: "parent", rootPid: 10, ancestry: [10] } };
   const failure = { bytes: 629145600, category: "quickjs.arrayBuffer" };
-  const child = { ...parent, id: "child", terminal: true, failedAllocation: failure, engineFailure: failure };
-  const stale = { ...child, id: "old-child", commandId: "old", commandStartedAt: 1, commandSequence: 1, failedAllocation: { bytes: 9, category: "old" } };
-  const value = selectMemorySnapshots([stale, child, parent], "quickjs");
+  const child = { ...parent, id: "child", terminal: true, failedAllocation: failure, engineFailure: failure,
+    lineage: { ...parent.lineage, pid: 11, parentPid: 10, ancestry: [11, 10] } };
+  const unrelated = { ...child, id: "unrelated", commandSequence: 999,
+    lineage: { ...parent.lineage, pid: 20, parentPid: 0, rootId: "unrelated", rootPid: 20, ancestry: [20] } };
+  const roots = [{ authority: "runtime-supervisor", complete: true, runtimeId: "runtime", rootId: "parent", rootPid: 10,
+    members: [{ pid: 10, parentPid: 0, telemetryId: "parent", terminal: false }, { pid: 11, parentPid: 10, telemetryId: "child", terminal: true }] }];
+  const value = selectMemorySnapshots([unrelated, child, parent], "quickjs", "parent", roots);
+  expect(value.attribution.kind).toBe("root");
   expect(value.failedAllocation).toEqual(failure);
   expect(value.failureProcessId).toBe("child");
-  expect(value.processes.map(process => process.id)).toEqual(["child", "parent"]);
+  expect(value.processes.map(process => process.id)).toEqual(["unrelated", "child", "parent"]);
+  expect(value.attributedProcesses.map(process => process.id)).toEqual(["parent", "child"]);
   expect(value.allocatorLiveBytes).toBe(parent.allocatorLiveBytes);
   expect(value.memoryLimitBytes).toBeNull();
-  expect(aggregate([parent, parent]).memoryLimitBytes).toBeNull();
+});
+
+test("legacy snapshots retain earlier active build and later terminal processes without inventing ancestry", () => {
+  const f = fixture("quickjs");
+  const build = { ...f.reader.sample(), id: "build", commandSequence: 2, terminal: false, allocatorLiveBytes: 300000000 };
+  const tiny = { ...build, id: "tiny", commandSequence: 5, terminal: true, allocatorLiveBytes: 43664488 };
+  const value = selectMemorySnapshots([build, tiny], "quickjs");
+  expect(value.attribution.kind).toBe("unknown");
+  expect(value.allocatorLiveBytes).toBeNull();
+  expect(value.allocatorPeakBytes).toBeNull();
+  expect(value.memoryLimitBytes).toBeNull();
+  expect(value.rawProcesses).toEqual([build, tiny]);
+  expect(value.processes.map(process => process.id)).toEqual(["build", "tiny"]);
+  expect(selectMemorySnapshots([build, tiny], "quickjs", "build").attribution.kind).toBe("unknown");
 });
 
 test("shared telemetry refreshes only at a normal boundary and preserves cached failure after runtime destruction", () => {
@@ -186,7 +206,7 @@ test("a late frame cannot replace a new command record using the same diagnostic
   endMemorySnapshot(id);
 });
 
-test("command ordering remains correct when wall-clock timestamps tie", () => {
+test("clock ties never choose an aggregate scope without a caller root", () => {
   const clock = spyOn(Date, "now").mockReturnValue(1234);
   const f = fixture("quickjs");
   const old = beginMemorySnapshot("quickjs", crypto.randomUUID());
@@ -199,6 +219,18 @@ test("command ordering remains correct when wall-clock timestamps tie", () => {
     beginMemorySnapshot("quickjs", currentId);
     const selected = selectMemorySnapshots(retainedMemorySnapshots(), "quickjs");
     expect(selected.failedAllocation).toBeNull();
-    expect(selected.processes.map(process => process.id)).toEqual([currentId]);
+    expect(selected.attribution.kind).toBe("unknown");
+    expect(selected.allocatorLiveBytes).toBeNull();
+    expect(selected.processes.some(process => process.id === currentId)).toBe(true);
   } finally { clock.mockRestore(); endMemorySnapshot(currentId); }
+});
+
+test("a root scope with a missing opaque member or a broken parent edge stays unknown", () => {
+  const f = fixture("quickjs");
+  const root = { ...f.reader.sample(), id: "root" };
+  const inventory = { authority: "runtime-supervisor", complete: true, runtimeId: "runtime", rootId: "root", rootPid: 1,
+    members: [{ pid: 1, parentPid: 0, telemetryId: "root", terminal: false }, { pid: 2, parentPid: 1, telemetryId: null, terminal: false }] };
+  expect(selectMemorySnapshots([root], "quickjs", "root", [inventory]).attribution.kind).toBe("unknown");
+  const broken = { ...inventory, members: [{ pid: 1, parentPid: 0, telemetryId: "root", terminal: false }, { pid: 2, parentPid: 3, telemetryId: "child", terminal: false }] };
+  expect(selectMemorySnapshots([root, { ...root, id: "child" }], "quickjs", "root", [broken]).attribution.kind).toBe("unknown");
 });
