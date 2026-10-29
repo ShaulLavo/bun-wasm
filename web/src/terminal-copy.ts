@@ -14,17 +14,12 @@ function terminalText(term: Terminal): string {
   return lines.join("\n").trimEnd();
 }
 
-export function enableTerminalCopy(term: Terminal, button: HTMLButtonElement): void {
-  let reset: ReturnType<typeof setTimeout>;
-  button.addEventListener("click", async () => {
-    clearTimeout(reset);
-    try {
-      // Call in the tap handler: Safari requires clipboard writes to retain user activation.
-      await navigator.clipboard.writeText(terminalText(term));
-      button.textContent = "Copied";
-    } catch {
-      button.textContent = "Copy failed";
-    }
-    reset = setTimeout(() => { button.textContent = "Copy"; }, 2500);
-  });
+/** Call from the tap handler: Safari requires clipboard writes to retain user activation. */
+export async function copyTerminal(term: Terminal): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(terminalText(term));
+    return true;
+  } catch {
+    return false;
+  }
 }
