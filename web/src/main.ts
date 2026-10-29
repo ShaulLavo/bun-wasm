@@ -9,6 +9,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { basicSetup } from "codemirror";
+
 import { HOME, examples } from "./examples";
 import { decode, normalize } from "./fs";
 import { createRuntime } from "waffle";
@@ -44,7 +45,6 @@ const requested = params.get("engine");
 const engine: Engine = isEngine(requested) ? requested : defaultEngine;
 const engineName = engines[engine].name;
 const wasmUrl = params.get("wasm") ?? engines[engine].wasm;
-const trace = params.has("trace");
 const mode = getVfsDescriptor(params.get("mode") ?? "fast").mode;
 
 engineSelect.value = engine;
@@ -125,7 +125,6 @@ addEventListener("pagehide", (event: PageTransitionEvent) => {
   void Promise.all([runtime.dispose(), browserPrograms.dispose()]).catch(console.error);
 });
 
-let wasm: { module: WebAssembly.Module; size: number } | { error: string } | null = null;
 // The final status waits for the page to finish setting up, so "ready" means usable.
 let pageSetUp!: () => void;
 const pageReady = new Promise<void>((resolve) => { pageSetUp = resolve; });
@@ -140,18 +139,18 @@ function setStatus(text: string, kind: "" | "ok" | "error" = ""): void {
   statusEl.dataset.kind = kind;
 }
 
-async function loadWasm(): Promise<void> {
+async function loadWasm() {
   try {
     const loaded = await fetchWasm(wasmUrl, (text) => setStatus(text));
-    wasm = loaded;
     void pageReady.then(() => setStatus(`bun.wasm ready · ${engineName} · ${mb(loaded.size)}`, "ok"));
+    return loaded;
   } catch (err) {
     const missing = err instanceof WasmMissing;
     const error = missing
       ? `${wasmUrl} is not in this build. Build it with ${engines[engine].script} (dist/${engines[engine].wasm}), then rebuild web/.`
       : `could not load bun.wasm: ${String(err)}`;
-    wasm = { error };
     void pageReady.then(() => setStatus(missing ? "bun.wasm missing" : "bun.wasm failed to load", "error"));
+    return { error };
   }
 }
 
@@ -391,7 +390,7 @@ for (const line of [
   "",
 ]) term.writeln(line);
 
-const [programs, scoped] = await Promise.all([browserPrograms.ready(), moduleScope, wasmReady]);
+const [programs, scoped, wasm] = await Promise.all([browserPrograms.ready(), moduleScope, wasmReady]);
 if (!wasm || "error" in wasm) throw new Error(wasm?.error ?? "bun.wasm unavailable");
 const module = wasm.module;
 const bin = ENGINE_BIN[engine];
@@ -409,7 +408,7 @@ for (const name of ["bun", "node", "nodejs"]) {
 await fs.flush();
 const shell = await Shell.create({
   runtime, cwd: HOME,
-  env: { HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "\\[\\e[32m\\]user@bun\\[\\e[0m\\]:\\[\\e[34m\\]\\w\\[\\e[0m\\]$ " },
+  env: { HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "\x1b[32muser@bun\x1b[0m:\x1b[34m~\x1b[0m$ " },
   cols: term.cols, rows: term.rows,
   wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
   workerUrl: new URL("./shell-worker.js", location.href),
@@ -435,7 +434,7 @@ addEventListener("pagehide", (event: PageTransitionEvent) => {
   }).catch(console.error);
 });
 
-Object.assign(globalThis, { playground: { fs, shell, term, editor, previews } });
+Object.assign(globalThis, { playground: { runtime, fs, shell, term, editor, previews } });
 if (!fs.ownershipLost) {
   startup = "ready";
   runButton.disabled = false;
