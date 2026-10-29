@@ -93,6 +93,14 @@ mod bun_transpiler {
             bunwasm_transpiler::function_imports(args, kind)
         }
 
+        fn hooks_version(&self) -> u32 {
+            if AWAIT_HOOKS {
+                bunwasm_transpiler::HOOKS_VERSION
+            } else {
+                0
+            }
+        }
+
         fn parse_data(
             &self,
             source: &[u8],
@@ -171,6 +179,15 @@ mod bun_transpiler {
                 },
                 imports: runtime_imports(out.imports),
                 module_kind,
+            })
+        }
+
+        fn register(&self, source: &str, path: &str) -> Result<Transpiled, String> {
+            let out = bunwasm_transpiler::register(source, path, BunLoader::Js)?;
+            Ok(Transpiled {
+                code: out.code,
+                mappings: (!out.mappings.is_empty()).then_some(out.mappings),
+                ..Default::default()
             })
         }
 

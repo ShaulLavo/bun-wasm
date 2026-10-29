@@ -565,6 +565,12 @@
       }
       return internal.concatBytes(chunks);
     }
+    let closed = false;
+    let settled = false;
+    let referenced = true;
+    let reaped = false;
+    let registered = false;
+    const waiter: BunWasm.IoWaiter = { step, fail, subscriptions, ref: true };
     const states = spec.outputFds.map((fd, index): OutputState => {
       const discard = spec.discard[index];
       let requested = fd >= 0 && !discard;
@@ -575,6 +581,7 @@
       let ended = false;
       const notify = () => { if (wake) wake(); wake = null; };
       const wakeIo = () => {
+        if (!registered) return;
         refreshRef();
         const host = native as unknown as { wake?: (timeout: number) => void };
         host.wake?.(0);
@@ -616,10 +623,6 @@
     let rejectExit!: (error: unknown) => void;
     let timer: unknown;
     let abort: (() => void) | undefined;
-    let closed = false;
-    let settled = false;
-    let referenced = true;
-    let reaped = false;
     const exited = new Promise<number>((resolve, reject) => { resolveExit = resolve; rejectExit = reject; });
     const child: Child = {
       pid: spec.pid, stdin: spec.stdinFd >= 0 ? sink : null, stdout: outputs[0], stderr: outputs[1],
@@ -759,7 +762,6 @@
       rejectExit(error);
     }
     Object.defineProperty(child, "_finishWorker", { value: close });
-    const waiter: BunWasm.IoWaiter = internal.addIoWaiter({ step, fail, subscriptions, ref: true });
     if (spec.worker) Object.defineProperty(child, "_workerChannel", { value: spec.worker });
     Object.defineProperty(child, "_abortWorker", { value() {
       if (!settled) terminate(spec.pid, spec.job);
@@ -773,6 +775,8 @@
       resolveExit(1);
       close();
     } });
+    registered = true;
+    internal.addIoWaiter(waiter);
     if (spec.options._worker) trackWorkerChild(child);
     supplyInput(sink, () => initialInput(spec.input, sink));
     if (Number(spec.options.timeout) > 0) timer = internal.realTimers.setTimeout(() => { child.exitedDueToTimeout = true; child.kill(spec.options.killSignal); }, Number(spec.options.timeout));

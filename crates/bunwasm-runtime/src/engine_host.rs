@@ -289,6 +289,10 @@ pub unsafe extern "C" fn bunwasm_call(index: u32, ptr: *mut u8, len: u32) -> i32
 /// Natives only the host engine needs: module sources ready for the host's
 /// native ES module loader, CommonJS wrappers, polyfill sources.
 fn install_host_natives(t: &mut Table, state: &Rc<State>) {
+    t.constants.push((
+        "prepareVersion",
+        Val::from(state.transpiler.hooks_version()),
+    ));
     let st = state.clone();
     t.add("hostModuleSource", move |a| module_source(&st, a.str(0)?));
     let st = state.clone();

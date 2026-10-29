@@ -101,15 +101,7 @@ fn selected_backend_and_metadata_survive_a_lock_round_trip() {
 pub(super) fn assert_lock_round_trip(version: &str) {
     let (mut resolver, manifest) = fixture(version, false, false);
     resolver.resolve(&manifest, false).unwrap();
-    let mut locked = json!({"packages": {}, "workspaces": {"": manifest}});
-    for (key, package) in resolver.packages.iter().chain(&resolver.skipped) {
-        locked["packages"][key] = json!([
-            format!("{}@{}", package.name, package.version),
-            package.tarball,
-            lock_info(&package.meta),
-            package.integrity
-        ]);
-    }
+    let locked = super::test_support::lock_snapshot(&manifest, &resolver);
     let original = locked.clone();
     let mut replay = Resolver::new(resolver.registry.clone(), locked, false);
     replay.resolve(&manifest, false).unwrap();

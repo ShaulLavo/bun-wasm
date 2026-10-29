@@ -109,3 +109,26 @@ test("JSC cache fingerprint rejects failed host compiler probes", () => {
     shell('if jsc_inputs_hash >/dev/null 2>&1; then exit 92; fi', { CC: "false" });
   });
 });
+
+test("cold JSC fetch stages patch-added files for strict source stamping", () => {
+  fixture((root, shell) => {
+    const webkit = join(root, "build/webkit");
+    mkdirSync(join(webkit, "Source"), { recursive: true });
+    writeFileSync(join(webkit, "Source/tracked.cpp"), "original source\n");
+    shell('git -C "$WEBKIT_DIR" init -q; git -C "$WEBKIT_DIR" add .; git -C "$WEBKIT_DIR" -c user.name=fixture -c user.email=fixture@example.invalid commit -qm fixture; git -C "$WEBKIT_DIR" sparse-checkout set Source');
+    writeFileSync(join(root, "jsc/webkit-wasi.patch"), "diff --git a/Source/added.h b/Source/added.h\nnew file mode 100644\n--- /dev/null\n+++ b/Source/added.h\n@@ -0,0 +1 @@\n+patched header\n");
+    copyFileSync(new URL("../jsc/fetch-webkit.sh", import.meta.url), join(root, "jsc/fetch-webkit.sh"));
+    const common = join(root, "jsc/common.sh");
+    writeFileSync(common, readFileSync(common, "utf8") + '\nWEBKIT_COMMIT=$(git -C "$WEBKIT_DIR" rev-parse HEAD)\n');
+    shell('bash "$JSC_SRC/fetch-webkit.sh"; check_jsc_webkit_tree');
+    expect(shell('git -C "$WEBKIT_DIR" ls-files --others --exclude-standard')).toBe("");
+    expect(shell('git -C "$WEBKIT_DIR" show :Source/added.h')).toBe("patched header");
+    shell('bash "$JSC_SRC/fetch-webkit.sh"; check_jsc_webkit_tree');
+    const reject = (command: string) => shell(command + '; if check_jsc_webkit_tree >/dev/null 2>&1; then exit 91; fi');
+    reject('echo changed >> "$WEBKIT_DIR/Source/added.h"');
+    shell('printf "patched header\\n" > "$WEBKIT_DIR/Source/added.h"');
+    reject('echo unexpected > "$WEBKIT_DIR/Source/unexpected.h"');
+    shell('rm "$WEBKIT_DIR/Source/unexpected.h"');
+    reject('rm "$WEBKIT_DIR/Source/added.h"');
+  });
+});

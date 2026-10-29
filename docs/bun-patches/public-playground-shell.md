@@ -19,8 +19,8 @@ before starting the shell. The Run button submits an absolute editor path so
 shell `cd` does not change which file it runs.
 
 The earlier bash-web pin sent `shellTerminal` and `terminalAdmission`, while
-Bun accepts `terminalContext` and `terminalInput`. This consumer pins the accepted
-the prompt-status API, Waffle 0.0.99 and base-program 0.0.7 tuple together. The shell guest
+Bun accepts `terminalContext` and `terminalInput`. This consumer pins
+the prompt-status API, Waffle 0.0.100 and base-program 0.0.8 tuple together. The shell guest
 builder uses the same shell revision as both browser applications.
 
 The new shell revision delegates `env` to the published Waffle coreutils family.

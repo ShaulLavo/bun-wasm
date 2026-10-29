@@ -1,0 +1,9 @@
+{
+ "modules": {
+  "/a.mjs": "({r:[\"./bad.mjs\"],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"a must not run\");\n\n}})",
+  "/b.mjs": "({r:[\"./bad.mjs\"],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"b must not run\");\n\n}})",
+  "/bad.mjs": "({r:[],i:[],x:[],s:[],a:true,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;(yield new Promise((resolve) => setTimeout(resolve, 1)));\nthrow Error(\"bad module\");\n\n}})",
+  "/main.mjs": "({r:[],i:[],x:[],s:[],a:true,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;const results = (yield Promise.allSettled([__bunwasm_m.import(\"./a.mjs\"), __bunwasm_m.import(\"./b.mjs\")]));\nconsole.log(results.map((r) => r.status + \":\" + (r.reason && r.reason.message)).join(\" \"));\nconst [ra, rb] = results;\nconsole.log(\"same error object\", ra.reason === rb.reason);\n\n}})"
+ },
+ "cjs": {}
+}

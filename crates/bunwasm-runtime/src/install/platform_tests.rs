@@ -1,4 +1,5 @@
 use super::super::{lockfile, migration};
+use super::test_support::archive;
 use super::*;
 
 fn fixture(locked: bool, required: bool) -> (Resolver, Value) {
@@ -249,20 +250,6 @@ fn platform_archive_extraction() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn archive(meta: &Value) -> Vec<u8> {
-    let compressor = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    let mut archive = tar::Builder::new(compressor);
-    let bytes = serde_json::to_vec(meta).unwrap();
-    let mut header = tar::Header::new_gnu();
-    header.set_size(bytes.len() as u64);
-    header.set_mode(0o644);
-    header.set_cksum();
-    archive
-        .append_data(&mut header, "package/package.json", bytes.as_slice())
-        .unwrap();
-    archive.into_inner().unwrap().finish().unwrap()
 }
 
 fn extract_platform_archives() {

@@ -5,6 +5,7 @@ import type { ProductCheck } from "./product-types";
 import { fullstackApps } from "./product-fullstack";
 import { serverCommand } from "./browser.mjs";
 import type { Page } from "../../web/node_modules/playwright";
+import { HarnessCleanupError } from "./cleanup";
 
 interface FixtureOptions {
   updateMessage: string | null;
@@ -536,9 +537,10 @@ function readinessResponse({ status, body }: ReadinessResponse) {
 /** A probe page double: one scripted response per navigation, the last one repeating. */
 function readinessProbe(responses: readonly ReadinessResponse[], log: string[] = []) {
   let navigations = 0;
+  const session = { send: async (method: string, params?: { value: boolean }) => { log.push(params ? `${method}:${params.value}` : method); } };
   const probe = {
     get navigations() { return navigations; },
-    context: () => ({ newCDPSession: async () => ({ send: async (method: string, params: { value: boolean }) => { log.push(`${method}:${params.value}`); } }) }),
+    context: () => ({ newCDPSession: async () => session }),
     async goto(_url: string, options: { timeout: number; waitUntil: "commit" }) {
       log.push(`goto:${options.waitUntil}`);
       const response = responses[navigations] ?? responses.at(-1);
@@ -549,6 +551,56 @@ function readinessProbe(responses: readonly ReadinessResponse[], log: string[] =
     close: async () => { log.push("probe-close"); },
   };
   return probe;
+}
+
+function settlementProbe(send: (method: string) => Promise<unknown>, pollingFailure?: { error: unknown }) {
+  const session = { send };
+  return {
+    ...readinessProbe([{ status: 200, body: "ready" }]),
+    context: () => ({ newCDPSession: async () => session }),
+    goto: async () => {
+      if (pollingFailure) throw pollingFailure.error;
+      return readinessResponse({ status: 200, body: "ready" });
+    },
+  };
+}
+
+const originalPollingFailures = [new Error("original navigation failure"), false, 0, null, undefined, ""];
+for (const stage of ["Page.stopLoading", "Runtime.getIsolateId"]) {
+  for (const original of originalPollingFailures) {
+    test(`retains polling rejection ${String(original)} when ${stage} rejects`, async () => {
+      const settlementError = new Error(`${stage}: session disconnected`);
+      const probe = settlementProbe(async method => { if (method === stage) throw settlementError; }, { error: original });
+      const error = await waitForPreviewReady(probe, "http://local/", Date.now() + 1_000, 25).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(HarnessCleanupError);
+      if (!(error instanceof HarnessCleanupError)) throw new Error("Expected structured cleanup failure");
+      expect(error.cause).toBe(original);
+      expect(Object.hasOwn(error, "cause")).toBe(true);
+      expect(error.message).toContain(`Original failure: ${String(original)}`);
+      expect(error.failures).toEqual([{ operation: "probe-navigation-settlement", timedOut: false, error: String(settlementError) }]);
+    });
+  }
+}
+
+for (const stage of ["Page.stopLoading", "Runtime.getIsolateId"]) {
+  test(`bounds stalled ${stage} and preserves an undefined polling rejection`, async () => {
+    let release = () => {};
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const calls: string[] = [];
+    const probe = settlementProbe(async method => { calls.push(method); if (method === stage) await pending; }, { error: undefined });
+    const guard = {};
+    const operation = waitForPreviewReady(probe, "http://local/", Date.now() + 1_000, 25).catch((error: unknown) => error);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const error = await Promise.race([operation, new Promise(resolve => { timer = setTimeout(() => resolve(guard), 250); })]);
+      expect(error).not.toBe(guard);
+      expect(error).toBeInstanceOf(HarnessCleanupError);
+      if (!(error instanceof HarnessCleanupError)) throw new Error("Expected bounded cleanup failure");
+      expect(error.cause).toBeUndefined();
+      expect(error.failures).toEqual([{ operation: "probe-navigation-settlement", timedOut: true, error: "Error: Harness cleanup exceeded 25ms" }]);
+    } finally { clearTimeout(timer); release(); await operation; }
+    if (stage === "Page.stopLoading") expect(calls).not.toContain("Runtime.getIsolateId");
+  });
 }
 
 test("waits for a listening server's transient HTTP 503 and closes the probe before one page navigation", async () => {
@@ -590,38 +642,82 @@ test("waits for a listening server's transient HTTP 503 and closes the probe bef
     terminalText: async () => "",
   });
   expect(result.status).toBe("pass");
-  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit", "goto:commit", "probe-close", "page-navigation"]);
+  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit", "goto:commit", "Page.stopLoading", "Runtime.getIsolateId", "probe-close", "page-navigation"]);
 });
 
 test("a fast HTTP 2xx readiness response needs one script-disabled probe navigation", async () => {
   const log: string[] = [];
   const probe = readinessProbe([{ status: 200, body: "ready" }], log);
-  await waitForPreviewReady(probe, "http://local/", Date.now() + 1_000);
-  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit"]);
+  await waitForPreviewReady(probe, "http://local/", Date.now() + 1_000, 1_000);
+  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit", "Page.stopLoading", "Runtime.getIsolateId"]);
+});
+
+test("an inactive frame during cancellation still waits for the renderer navigation barrier", async () => {
+  const log: string[] = [];
+  const session = { send: async (method: string) => {
+    log.push(method);
+    if (method === "Page.stopLoading") throw new Error("send: Protocol error (Page.stopLoading): Not attached to an active page");
+  } };
+  const probe = {
+    ...readinessProbe([{ status: 200, body: "ready" }], log),
+    context: () => ({ newCDPSession: async () => session }),
+  };
+  await waitForPreviewReady(probe, "http://local/", Date.now() + 1_000, 1_000);
+  expect(log).toEqual(["Emulation.setScriptExecutionDisabled", "goto:commit", "Page.stopLoading", "Runtime.getIsolateId"]);
+});
+
+test("an unexpected probe cancellation error is reported without a renderer command", async () => {
+  const log: string[] = [];
+  const failure = new Error("probe session disconnected");
+  const session = { send: async (method: string) => {
+    log.push(method);
+    if (method === "Page.stopLoading") throw failure;
+  } };
+  const probe = {
+    ...readinessProbe([{ status: 200, body: "ready" }], log),
+    context: () => ({ newCDPSession: async () => session }),
+  };
+  const error = await waitForPreviewReady(probe, "http://local/", Date.now() + 1_000, 1_000).catch((error: unknown) => error);
+  expect(error).toBeInstanceOf(HarnessCleanupError);
+  if (!(error instanceof HarnessCleanupError)) throw new Error("Expected structured cleanup failure");
+  expect(error.failures[0]?.error).toBe(String(failure));
+  expect(Object.hasOwn(error, "cause")).toBe(false);
+  expect(log).not.toContain("Runtime.getIsolateId");
 });
 
 test("persistent HTTP 503 readiness failure retains the last response body at the deadline", async () => {
   const probe = readinessProbe([{ status: 503, body: "first" }, { status: 503, body: "Nuxt dev server is starting..." }]);
   const started = performance.now();
-  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 150)).rejects.toThrow("last HTTP 503: Nuxt dev server is starting...");
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 150, 1_000)).rejects.toThrow("last HTTP 503: Nuxt dev server is starting...");
   expect(performance.now() - started).toBeLessThan(400);
   expect(probe.navigations).toBeGreaterThan(1);
 });
 
 test("an unexpected HTTP status fails without a retry", async () => {
   const probe = readinessProbe([{ status: 500, body: "server crashed" }, { status: 200, body: "ready" }]);
-  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 1_000)).rejects.toThrow("Preview HTTP 500: server crashed");
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 1_000, 1_000)).rejects.toThrow("Preview HTTP 500: server crashed");
   expect(probe.navigations).toBe(1);
 });
 
 test("preserves a non-deadline readiness navigation error", async () => {
   const transportError = new Error("net::ERR_FAILED");
   const probe = { ...readinessProbe([]), goto: async () => { throw transportError; } };
-  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 1_000)).rejects.toBe(transportError);
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 1_000, 1_000)).rejects.toBe(transportError);
 });
 
 test("readiness never starts a navigation after the shared deadline", async () => {
   const probe = readinessProbe([{ status: 503, body: "still starting" }]);
-  await expect(waitForPreviewReady(probe, "http://local/", Date.now() - 1)).rejects.toThrow("not HTTP-ready before the deadline");
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() - 1, 1_000)).rejects.toThrow("not HTTP-ready before the deadline");
   expect(probe.navigations).toBe(0);
+});
+
+test("Next 16 typed build messages prove an edit and its restoration", async () => {
+  const control = fixture({ updateMessage: JSON.stringify({ type: "built", hash: "next16-build" }) });
+  const traffic = await observeProductTraffic(control.page);
+  await control.open();
+  try {
+    const observations = await productObservations(control.page, "http://local/__preview/3137/", hmrCheck(), control.source, traffic, 1000);
+    expect(observations.every(observation => observation.status === "pass")).toBe(true);
+    expect(control.writes).toEqual(["changed", "original"]);
+  } finally { await traffic.close(); }
 });

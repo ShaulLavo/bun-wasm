@@ -2,10 +2,11 @@ import { messageData, sharedError, sharedObjectLimit, sharedRequest, sharedRoute
 import { createSharedMailbox, requireSharedMailboxWake } from "./mailbox.ts";
 import type { SharedAttachment, SharedPort, SharedReference, SharedRequest, SharedResponse, SharedRouteCommand } from "./protocol.ts";
 
+interface AttachmentRequest { readonly reference: SharedReference; readonly request: string; }
 interface Source { owner: string | null; peer: string | null; sent: number; version: number; }
-interface Client { readonly id: string; port: SharedPort | null; mailbox: ReturnType<typeof createSharedMailbox> | null; outbox: ReturnType<typeof createSharedMailbox> | null; readonly held: Set<string>; readonly retired: Set<string>; readonly waiting: Map<string, SharedReference>; detach: () => void; readonly watches: (() => void)[]; readonly sources: Map<number, Map<string, Source>>; }
+interface Client { readonly id: string; port: SharedPort | null; mailbox: ReturnType<typeof createSharedMailbox> | null; outbox: ReturnType<typeof createSharedMailbox> | null; readonly held: Set<string>; readonly retired: Set<string>; readonly waiting: Map<string, AttachmentRequest>; readonly attaching: Map<string, AttachmentRequest>; detach: () => void; readonly watches: (() => void)[]; readonly sources: Map<number, Map<string, Source>>; }
 type RoutePacket = Extract<SharedRouteCommand, { kind: "port-data" | "port-close" }>;
-interface Entry { readonly attachment: SharedAttachment; readonly publisher: string; readonly transaction: string; readonly holders: Set<string>; mailbox: boolean; revoked: boolean; }
+interface Entry { readonly attachment: SharedAttachment; readonly publisher: string; readonly transaction: string; readonly holders: Set<string>; readonly pins: Set<string>; mailbox: boolean; revoked: boolean; }
 export function createSharedObjectBroker() {
   requireSharedMailboxWake();
   const clients = new Map<string, Client>();
@@ -31,17 +32,32 @@ export function createSharedObjectBroker() {
     client.held.delete(id);
     const entry = entries.get(id);
     entry?.holders.delete(client.id);
-    if (entry && !entry.holders.size) entries.delete(id);
+    if (entry && !entry.holders.size && !entry.pins.size) entries.delete(id);
   }
-  function unavailable(client: Client, reference: SharedReference, message: string) {
-    client.waiting.delete(reference.id);
-    send(client, { kind: "unavailable", references: [reference], message });
+  function unavailable(client: Client, transfer: AttachmentRequest, message: string) {
+    client.waiting.delete(transfer.reference.id);
+    send(client, { kind: "unavailable", request: transfer.request, references: [transfer.reference], message });
   }
-  function deliverAttachment(client: Client, reference: SharedReference, entry: Entry) {
-    if (entry.attachment.byteLength !== reference.byteLength) { unavailable(client, reference, "Shared backing length mismatch"); return; }
-    client.waiting.delete(reference.id);
-    entry.holders.add(client.id); client.held.add(reference.id);
-    send(client, { kind: "attached", attachments: [entry.attachment] });
+  function attachmentKey(transfer: AttachmentRequest) { return `${transfer.request}/${transfer.reference.id}`; }
+  function settleAttachment(client: Client, transfer: AttachmentRequest, accept: boolean) {
+    const key = attachmentKey(transfer);
+    const pending = client.attaching.get(key);
+    if (!pending) return;
+    if (pending.reference.byteLength !== transfer.reference.byteLength) throw sharedError("Shared backing length mismatch");
+    client.attaching.delete(key);
+    const entry = entries.get(transfer.reference.id);
+    if (!entry) return;
+    if (accept) { entry.holders.add(client.id); client.held.add(transfer.reference.id); }
+    entry.pins.delete(`${client.id}/${transfer.request}`);
+    if (!entry.holders.size && !entry.pins.size) entries.delete(transfer.reference.id);
+  }
+  function deliverAttachment(client: Client, transfer: AttachmentRequest, entry: Entry) {
+    if (entry.attachment.byteLength !== transfer.reference.byteLength) { unavailable(client, transfer, "Shared backing length mismatch"); return; }
+    client.waiting.delete(transfer.reference.id);
+    if (!client.attaching.has(attachmentKey(transfer)) && client.attaching.size >= sharedObjectLimit) throw sharedError("Shared attachment limit exceeded");
+    client.attaching.set(attachmentKey(transfer), transfer);
+    entry.pins.add(`${client.id}/${transfer.request}`);
+    send(client, { kind: "attached", request: transfer.request, attachments: [entry.attachment] });
   }
   function publish(client: Client, packet: Extract<SharedRequest, { kind: "publish" }>) {
     const seen = new Set<string>();
@@ -51,26 +67,27 @@ export function createSharedObjectBroker() {
     }
     if (client.held.size + packet.attachments.length > sharedObjectLimit) throw sharedError("Shared-object limit exceeded");
     for (const attachment of packet.attachments) {
-      entries.set(attachment.id, { attachment, publisher: client.id, transaction: packet.transaction, holders: new Set([client.id]), mailbox: false, revoked: false });
+      entries.set(attachment.id, { attachment, publisher: client.id, transaction: packet.transaction, holders: new Set([client.id]), pins: new Set(), mailbox: false, revoked: false });
       client.held.add(attachment.id);
     }
     for (const peer of Array.from(clients.values())) deliverWaiting(peer);
   }
   function deliverWaiting(client: Client) {
-    for (const reference of Array.from(client.waiting.values())) {
-      const entry = entries.get(reference.id);
-      if (entry) deliverAttachment(client, reference, entry);
+    for (const transfer of Array.from(client.waiting.values())) {
+      const entry = entries.get(transfer.reference.id);
+      if (entry) deliverAttachment(client, transfer, entry);
     }
   }
-  function need(client: Client, reference: SharedReference) {
+  function need(client: Client, transfer: AttachmentRequest) {
+    const { reference } = transfer;
     const entry = entries.get(reference.id);
-    if (entry?.revoked) { unavailable(client, reference, "Shared publication was released"); return; }
-    if (entry) { deliverAttachment(client, reference, entry); return; }
+    if (entry?.revoked) { unavailable(client, transfer, "Shared publication was released"); return; }
+    if (entry) { deliverAttachment(client, transfer, entry); return; }
     const owner = reference.id.slice(0, reference.id.indexOf("/"));
-    if (clients.get(owner)?.retired.has(reference.id)) { unavailable(client, reference, "Shared publication was released"); return; }
-    if (!clients.has(owner)) { unavailable(client, reference, "Shared publisher is unavailable"); return; }
+    if (clients.get(owner)?.retired.has(reference.id)) { unavailable(client, transfer, "Shared publication was released"); return; }
+    if (!clients.has(owner)) { unavailable(client, transfer, "Shared publisher is unavailable"); return; }
     if (client.waiting.size >= sharedObjectLimit) throw sharedError("Shared-object pending limit exceeded");
-    client.waiting.set(reference.id, reference);
+    client.waiting.set(reference.id, transfer);
   }
   function abort(client: Client, transaction: string) {
     const ids: string[] = [];
@@ -85,8 +102,8 @@ export function createSharedObjectBroker() {
     }
   }
   function rejectWaiting(client: Client, id: string) {
-    const reference = client.waiting.get(id);
-    if (reference) unavailable(client, reference, "Shared publication was released");
+    const transfer = client.waiting.get(id);
+    if (transfer) unavailable(client, transfer, "Shared publication was released");
   }
   function retainPending(origin: string, target: string, command: SharedRouteCommand) {
     if (pendingSize() >= pendingRouteLimit) throw sharedError("Shared route queue limit exceeded");
@@ -368,10 +385,10 @@ export function createSharedObjectBroker() {
     switch (packet.kind) {
       case "publish": publish(client, packet); return;
       case "abort": abort(client, packet.transaction); return;
-      case "need": for (const reference of packet.references) need(client, reference); return;
+      case "need": for (const reference of packet.references) need(client, { reference, request: packet.request }); return;
       case "mailbox": {
         const inbound = entries.get(packet.inbound.id), outbound = entries.get(packet.outbound.id);
-        if (!inbound || !outbound || inbound.publisher !== client.id || outbound.publisher !== client.id
+        if (!inbound || !outbound || !("buffer" in inbound.attachment) || !("buffer" in outbound.attachment) || inbound.publisher !== client.id || outbound.publisher !== client.id
           || inbound.attachment.byteLength !== packet.inbound.byteLength || outbound.attachment.byteLength !== packet.outbound.byteLength) throw sharedError("Invalid shared mailbox");
         inbound.mailbox = true; outbound.mailbox = true;
         client.mailbox = createSharedMailbox(inbound.attachment.buffer);
@@ -381,9 +398,15 @@ export function createSharedObjectBroker() {
         return;
       }
       case "route-ready": credit(); return;
-      case "cancel": for (const reference of packet.references) client.waiting.delete(reference.id); return;
+      case "accept": case "cancel":
+        for (const reference of packet.references) settleRequest(client, { reference, request: packet.request }, packet.kind === "accept");
+        return;
       case "close": closeClient(client); return;
     }
+  }
+  function settleRequest(client: Client, transfer: AttachmentRequest, accept: boolean) {
+    if (client.waiting.get(transfer.reference.id)?.request === transfer.request) client.waiting.delete(transfer.reference.id);
+    settleAttachment(client, transfer, accept);
   }
   function closeClient(client: Client) {
     if (!clients.delete(client.id)) return;
@@ -399,20 +422,21 @@ export function createSharedObjectBroker() {
     for (const [receipt, delivery] of deliveries) if (delivery.origin === client.id || delivery.holder === client.id && !routeOwners.has(delivery.command.id)) deliveries.delete(receipt);
     for (const [id, registration] of registrations) if (registration.origin === client.id || id.startsWith(`${client.id}:`)) registrations.delete(id);
     for (const id of Array.from(client.held)) release(client, id);
+    for (const transfer of Array.from(client.attaching.values())) settleAttachment(client, transfer, false);
     client.waiting.clear();
     credit();
     for (const peer of Array.from(clients.values())) rejectPublisher(peer, client.id);
   }
   function rejectPublisher(client: Client, owner: string) {
-    for (const reference of Array.from(client.waiting.values())) {
-      if (reference.id.startsWith(`${owner}/`)) unavailable(client, reference, "Shared publisher is unavailable");
+    for (const transfer of Array.from(client.waiting.values())) {
+      if (transfer.reference.id.startsWith(`${owner}/`)) unavailable(client, transfer, "Shared publisher is unavailable");
     }
   }
   function register() {
     if (disposed) throw sharedError("Shared-object broker is disposed");
     if (clients.size >= sharedObjectLimit) throw sharedError("Shared client limit exceeded");
     const id = crypto.randomUUID();
-    const client: Client = { id, port: null, mailbox: null, outbox: null, held: new Set(), retired: new Set(), waiting: new Map(), watches: [], sources: new Map(), detach() {} };
+    const client: Client = { id, port: null, mailbox: null, outbox: null, held: new Set(), retired: new Set(), waiting: new Map(), attaching: new Map(), watches: [], sources: new Map(), detach() {} };
     clients.set(id, client);
     function attach(port: SharedPort) {
       if (!clients.has(id) || client.port) { port.close(); throw sharedError("Shared-object route is unavailable"); }
@@ -433,5 +457,7 @@ export function createSharedObjectBroker() {
     disposed = true;
     for (const client of Array.from(clients.values())) closeClient(client);
   }
-  return { register, dispose, inspectDeliveries: () => ({ receipts: deliveries.size, deferred: deferredBatches.length }), inspectRoutes: () => ({ endpoints: routeOwners.size, pending: pendingRoutes.length, registrations: registrations.size }), inspect: () => ({ clients: clients.size, objects: Array.from(entries.values()).filter(entry => !entry.mailbox).length, waiting: Array.from(clients.values()).reduce((count, client) => count + client.waiting.size, 0) }) };
+  return { register, dispose,
+    inspectTransfers: () => ({ pins: Array.from(entries.values()).reduce((count, entry) => count + entry.pins.size, 0), attaching: Array.from(clients.values()).reduce((count, client) => count + client.attaching.size, 0) }),
+    inspectDeliveries: () => ({ receipts: deliveries.size, deferred: deferredBatches.length }), inspectRoutes: () => ({ endpoints: routeOwners.size, pending: pendingRoutes.length, registrations: registrations.size }), inspect: () => ({ clients: clients.size, objects: Array.from(entries.values()).filter(entry => !entry.mailbox).length, waiting: Array.from(clients.values()).reduce((count, client) => count + client.waiting.size, 0) }) };
 }

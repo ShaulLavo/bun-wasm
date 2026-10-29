@@ -7,8 +7,8 @@ export interface CleanupFailure {
 }
 
 export class HarnessCleanupError extends Error {
-  constructor(readonly failures: readonly CleanupFailure[], cause?: unknown) {
-    super(failures.map(failure => `${failure.operation}: ${failure.error}`).concat(cause === undefined ? [] : [`Original failure: ${String(cause)}`]).join("\n"), { cause });
+  constructor(readonly failures: readonly CleanupFailure[], ...cause: [] | [unknown]) {
+    super(failures.map(failure => `${failure.operation}: ${failure.error}`).concat(cause.map(value => `Original failure: ${String(value)}`)).join("\n"), cause.length ? { cause: cause[0] } : undefined);
     this.name = "HarnessCleanupError";
   }
 }

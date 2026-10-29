@@ -1083,3 +1083,38 @@ test("new Web output demand references a dormant settled waiter", async () => {
   expect(waiters).toHaveLength(0);
   expect(fake.open()).toBe(0);
 });
+
+test("synchronous native stream pull cannot observe an uninitialized child waiter", async () => {
+  const fake = service(), fixture = load(fake);
+  let pulls = 0, earlyWake = 0;
+  Object.assign(fake.native, { wake() { if (!fixture.waiters.length) earlyWake++; } });
+  fixture.internal.web.ReadableStream = new Proxy(ReadableStream, {
+    construct(target, args) {
+      const source: unknown = args[0];
+      if (!source || typeof source !== "object" || !("pull" in source) || typeof source.pull !== "function") return Reflect.construct(target, args);
+      const pull = source.pull;
+      let controller: ReadableStreamDefaultController<unknown> | undefined;
+      const stream = new target({
+        start(value) { controller = value; if ("start" in source && typeof source.start === "function") Reflect.apply(source.start, source, [value]); },
+        pull(value) { return Reflect.apply(pull, source, [value]); },
+        cancel(reason) { if ("cancel" in source && typeof source.cancel === "function") return Reflect.apply(source.cancel, source, [reason]); },
+      }, args[1]);
+      pulls++;
+      Reflect.apply(pull, source, [controller]);
+      return stream;
+    },
+  });
+  const child = fixture.module.spawn(["bun", "synchronous-pull"], { stdout: "pipe", stderr: "pipe" });
+  expect(pulls).toBe(2);
+  expect(earlyWake).toBe(0);
+  expect(fixture.waiters).toHaveLength(1);
+  child.unref(); expect(fixture.waiters[0].ref).toBe(false);
+  child.ref(); expect(fixture.waiters[0].ref).toBe(true);
+  const stdout = child.stdout.text(), stderr = child.stderr.text();
+  const record = fake.children.get(child.pid)!;
+  fake.childWrite(record, 1, "ready"); fake.childWrite(record, 2, "diagnostic"); fake.exit(record, 0);
+  await fixture.pump();
+  expect(await stdout).toBe("ready"); expect(await stderr).toBe("diagnostic");
+  expect(await child.exited).toBe(0);
+  expect(fake.open()).toBe(0);
+});

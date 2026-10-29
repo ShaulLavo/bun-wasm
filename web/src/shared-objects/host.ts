@@ -10,6 +10,8 @@ export function bindSharedObjectHost(service: SharedObjects, host: SharedHostLif
   function active() { if (!host.active()) throw sharedError("Shared-object engine host is closed"); }
   function begin() { active(); return service.begin(); }
   function read(reference: SharedReference) { active(); return service.read(reference); }
+  const serviceReadWasm = service.readWasm;
+  const readWasm = serviceReadWasm ? (reference: SharedReference) => { active(); return serviceReadWasm(reference); } : undefined;
   function wait(references: readonly SharedReference[], ready: () => void) {
     active();
     const state: { phase: "preparing" | "pending" | "done" } = { phase: "preparing" };
@@ -26,13 +28,14 @@ export function bindSharedObjectHost(service: SharedObjects, host: SharedHostLif
     return () => { try { cancel(); } finally { finish(false); } };
   }
   const routes = service.routes;
-  if (!routes) return { begin, read, wait, mailbox: service.mailbox };
+  if (!routes) return { begin, read, readWasm, wait, mailbox: service.mailbox };
   active();
   routes.enable();
   const mailbox = service.mailbox, lanes = service.lanes;
   return {
     begin,
     read,
+    readWasm,
     wait,
     lanes: lanes ? {
       create() { active(); return lanes.create(); },
