@@ -1,26 +1,18 @@
 (function (internal: BunWasm.Internal & {
-  timers: {
-    setInterval(callback: () => void, delay: number): { ref(): void; unref(): void };
-    clearInterval(timer: { ref(): void; unref(): void }): void;
+  native: {
+    fsWatchOpen(path: string, recursive: boolean): number;
+    procRead(fd: number, capacity?: number): Uint8Array | number;
+    procClose(fd: number): number;
   };
   nextTick(callback: () => void): void;
 }) {
   "use strict";
-  interface Stat {
-    ino: number;
-    size: number;
-    mtimeMs: number;
-    ctimeMs: number;
-    isDirectory(): boolean;
-    isSymbolicLink(): boolean;
-  }
   interface FileSystem {
-    statSync(path: string): Stat;
-    lstatSync(path: string): Stat;
-    readdirSync(path: string): string[];
+    statSync(path: string): unknown;
     toPath(path: unknown): string;
     absolute(path: string): string;
   }
+  type WatchRecord = { type: "change" | "rename"; name: Uint8Array | null } | { type: "overflow" };
   interface Options {
     persistent?: boolean;
     recursive?: boolean;
@@ -31,8 +23,45 @@
   const EventEmitter = internal.require("events");
   const { Buffer } = internal.require("buffer");
 
-  function missing(error: unknown) {
-    return error !== null && typeof error === "object" && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR");
+  const native = internal.native;
+  const AGAIN = -6;
+  const READ_CAPACITY = 65536;
+  const NULL_NAME = 0xffffffff;
+  const RECORD_TYPES = [undefined, "change", "rename", "overflow"] as const;
+  // WASI errno -> Node code and errno, as for the synchronous filesystem natives.
+  const ERRORS: Record<number, [string, number | undefined]> = {
+    2: ["EACCES", -13], 6: ["EAGAIN", -11], 8: ["EBADF", -9], 11: ["ECANCELED", -125], 28: ["EINVAL", -22],
+    29: ["EIO", -5], 44: ["ENOENT", -2], 48: ["ENOMEM", -12], 52: ["ENOSYS", -38], 54: ["ENOTDIR", -20],
+    58: ["ENOTSUP", -95], 61: ["EOVERFLOW", -75], 63: ["EPERM", -1], 76: ["ENOTCAPABLE", undefined],
+  };
+
+  function watchError(wasiErrno: number, path: string) {
+    const [code, errno] = ERRORS[wasiErrno] ?? [`E${wasiErrno}`, undefined];
+    return Object.assign(new Error(`${code}: watch '${path}'`), { code, errno, syscall: "watch", path, filename: path });
+  }
+
+  // Packed runtime_proc watch records: u8 type, 3 reserved bytes, u32 LE name length
+  // (0xffffffff for the watched root), then the UTF-8 relative name.
+  function decode(bytes: Uint8Array): WatchRecord[] {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const records: WatchRecord[] = [];
+    for (let offset = 0; offset < bytes.length;) {
+      const type = RECORD_TYPES[bytes[offset]];
+      const length = view.getUint32(offset + 4, true);
+      offset += 8;
+      if (type === undefined) throw new Error(`unknown filesystem watch record ${bytes[offset - 8]}`);
+      if (type === "overflow") { records.push({ type }); continue; }
+      const name = length === NULL_NAME ? null : bytes.subarray(offset, offset + length);
+      if (name) offset += length;
+      records.push({ type, name });
+    }
+    return records;
+  }
+
+  function readable(fd: number) {
+    const subscription = new Uint8Array(16);
+    new DataView(subscription.buffer).setUint32(4, fd, true);
+    return subscription;
   }
 
   function filenameEncoding(value: unknown): string | undefined {
@@ -63,41 +92,10 @@
   }
 
   return function createWatch(fs: FileSystem) {
-    function collect(path: string, recursive: boolean) {
-      const entries = new Map<string, Stat>();
-      let root: Stat;
-      try { root = fs.statSync(path); } catch (error) { if (missing(error)) return entries; throw error; }
-      entries.set("", root);
-      if (!root.isDirectory()) return entries;
-      const directories = [""];
-      for (let index = 0; index < directories.length; index++) {
-        const directory = directories[index];
-        scan(directory, path, recursive, entries, directories);
-      }
-      return entries;
-    }
-
-    function scan(directory: string, path: string, recursive: boolean, entries: Map<string, Stat>, directories: string[]) {
-      let names: string[];
-      const current = directory ? `${path}/${directory}` : path;
-      try { names = fs.readdirSync(current); } catch (error) { if (missing(error)) return; throw error; }
-      for (const name of names) {
-        const relative = directory ? `${directory}/${name}` : name;
-        addEntry(path, relative, recursive, entries, directories);
-      }
-    }
-
-    function addEntry(path: string, name: string, recursive: boolean, entries: Map<string, Stat>, directories: string[]) {
-      let stat: Stat;
-      try { stat = fs.lstatSync(`${path}/${name}`); } catch (error) { if (missing(error)) return; throw error; }
-      entries.set(name, stat);
-      if (recursive && stat.isDirectory() && !stat.isSymbolicLink()) directories.push(name);
-    }
-
     class FSWatcher extends EventEmitter {
       #closed = false;
-      #timer: ReturnType<typeof internal.timers.setInterval>;
-      #entries: Map<string, Stat>;
+      #fd: number;
+      #waiter: BunWasm.IoWaiter & { late: true };
       #path: string;
       #options: Options;
       #abort = () => this.close();
@@ -105,49 +103,60 @@
       constructor(path: string, settings: Options, listener?: Listener) {
         super();
         fs.statSync(path);
+        const fd = native.fsWatchOpen(path, Boolean(settings.recursive));
+        if (fd < 0) throw watchError(-fd, path);
+        this.#fd = fd;
         this.#path = path;
         this.#options = settings;
-        this.#entries = collect(path, Boolean(settings.recursive));
         if (listener) this.on("change", listener);
-        this.#timer = internal.timers.setInterval(() => this.#poll(), 100);
-        if (settings.persistent === false) this.unref();
+        const subscription = readable(fd);
+        internal.require("net");
+        this.#waiter = internal.addIoWaiter({
+          ref: settings.persistent !== false,
+          late: true,
+          step: () => this.#step(),
+          fail: (error: unknown) => this.#fail(error),
+          subscriptions: () => subscription,
+        });
         if (settings.signal?.aborted) internal.nextTick(this.#abort);
         else settings.signal?.addEventListener("abort", this.#abort, { once: true });
       }
 
-      #poll() {
-        if (this.#closed) return;
-        let current: Map<string, Stat>;
-        try { current = collect(this.#path, Boolean(this.#options.recursive)); } catch (error) { this.close(); this.emit("error", error); return; }
-        const previous = this.#entries;
-        this.#entries = current;
-        const names = new Set(previous.keys());
-        for (const name of current.keys()) names.add(name);
-        for (const name of names) {
-          if (this.#closed) break;
-          this.#change(name, previous.get(name), current.get(name));
+      #step(): boolean | "progress" {
+        let progressed = false;
+        while (!this.#closed) {
+          const chunk = native.procRead(this.#fd, READ_CAPACITY);
+          if (chunk === AGAIN) return progressed && "progress";
+          if (chunk === 0) { this.close(); return true; }
+          if (typeof chunk === "number") { this.#fail(watchError(-chunk, this.#path)); return true; }
+          progressed = true;
+          for (const record of decode(chunk)) this.#dispatch(record);
         }
+        return true;
       }
 
-      #change(name: string, previous: Stat | undefined, current: Stat | undefined) {
-        let event: "rename" | "change";
-        if (!previous || !current || previous.ino !== current.ino) event = "rename";
-        else if (!current.isDirectory() && (previous.size !== current.size || previous.mtimeMs !== current.mtimeMs || previous.ctimeMs !== current.ctimeMs)) event = "change";
-        else return;
-        const filename = name || this.#path.slice(this.#path.lastIndexOf("/") + 1);
-        const encoded = Buffer.from(filename);
-        this.emit("change", event, this.#options.encoding === "buffer" ? encoded : encoded.toString(this.#options.encoding));
+      #dispatch(record: WatchRecord) {
+        if (this.#closed) return;
+        if (record.type === "overflow") { this.#fail(watchError(61, this.#path)); return; }
+        const encoded = Buffer.from(record.name ?? this.#path.slice(this.#path.lastIndexOf("/") + 1));
+        this.emit("change", record.type, this.#options.encoding === "buffer" ? encoded : encoded.toString(this.#options.encoding));
+      }
+
+      #fail(error: unknown) {
+        this.close();
+        this.emit("error", error);
       }
 
       close() {
         if (this.#closed) return;
         this.#closed = true;
-        internal.timers.clearInterval(this.#timer);
+        internal.removeIoWaiter(this.#waiter);
+        native.procClose(this.#fd);
         this.#options.signal?.removeEventListener("abort", this.#abort);
         internal.nextTick(() => this.emit("close"));
       }
-      ref() { if (!this.#closed) this.#timer.ref(); return this; }
-      unref() { if (!this.#closed) this.#timer.unref(); return this; }
+      ref() { if (!this.#closed) this.#waiter.ref = true; return this; }
+      unref() { if (!this.#closed) this.#waiter.ref = false; return this; }
     }
 
     function watch(path: unknown, value?: unknown, listener?: Listener) {

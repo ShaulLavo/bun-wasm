@@ -147,6 +147,8 @@ declare namespace BunWasm {
     fail(error: unknown): void;
     cancel?(): void;
     subscriptions?(): Uint8Array;
+    /** Stepped after the other waiters in each pump (filesystem watches; see net.js pumpIo). */
+    late?: boolean;
   }
   interface NetWaiterModule {
     addWaiter<W extends IoWaiter>(waiter: W): W;

@@ -60,10 +60,13 @@
     return typeof native.procPoll(internal.concatBytes(watched), timeout) !== "number";
   };
 
-  // Run each waiter once; returns whether anything made progress.
+  // Run each waiter once; returns whether anything made progress. Late waiters (filesystem
+  // watches) step after socket reads, so a watch event committed before bytes this pump read
+  // reaches its listeners in the same turn as those bytes.
   internal.pumpIo = function pumpIo() {
     let progressed = false;
-    for (const waiter of Array.from(waiters)) {
+    const turn = Array.from(waiters).sort((a, b) => Number(a.late === true) - Number(b.late === true));
+    for (const waiter of turn) {
       let result;
       try {
         result = waiter.step();
