@@ -20,6 +20,7 @@ jobs:
     outputs:
       rust: ${{ steps.changes.outputs.rust }}
       jsc: ${{ steps.changes.outputs.jsc }}
+      shared: ${{ steps.changes.outputs.shared }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -652,6 +653,140 @@ jobs:
           TMPDIR: ${{ runner.temp }}
       - name: Test vectored reads and browser dependency resolution
         run: bun scripts/test-checks.ts package-extra
+
+  shared-sysroot:
+    name: Shared PIC sysroot proof
+    needs: quality
+    if: needs.quality.outputs.shared == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WASI_LIBC_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure private shared sysroot paths
+        run: |
+          echo "WASM_TOOLS=$RUNNER_TEMP/wasm-tools" >> "$GITHUB_ENV"
+          echo "BUN_WASM_SHARED_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
+          echo "BUN_WASM_SYSROOT=$RUNNER_TEMP/bun-wasm-shared-sysroot" >> "$GITHUB_ENV"
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install sysroot build tools
+        run: |
+          if command -v cmake && command -v ninja; then exit 0; fi
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build
+      - uses: actions/cache/restore@v4
+        id: shared-sdk
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasi-sdk
+          key: wasi-sdk-34.0-stock-${{ runner.os }}-${{ runner.arch }}
+      - name: Install pinned WASI SDK
+        if: steps.shared-sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/wasi-sdk-34.tar.gz"
+          trap 'rm -f -- "$archive"' EXIT
+          curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz -o "$archive"
+          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
+          mkdir -p "$WASM_TOOLS/wasi-sdk"
+          tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
+      - name: Save completed shared-sdk setup
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sdk.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasi-sdk
+          key: ${{ steps.shared-sdk.outputs.cache-primary-key }}
+      - uses: actions/cache/restore@v4
+        id: shared-wasm-tools
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
+          key: wasm-tools-1.262.0-${{ runner.os }}-${{ runner.arch }}
+      - name: Install pinned wasm-tools
+        run: |
+          set -euo pipefail
+          archive="$WASM_TOOLS/wasm-tools-1.262.0-x86_64-linux.tar.gz"
+          stage=$(mktemp -d "$WASM_TOOLS/.wasm-tools-XXXXXX")
+          trap 'rm -rf -- "$stage"' EXIT
+          if [[ ! -f "$archive" ]]; then
+            curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
+              https://github.com/bytecodealliance/wasm-tools/releases/download/v1.262.0/wasm-tools-1.262.0-x86_64-linux.tar.gz -o "$archive"
+          fi
+          echo "655b8df67d54c3ef9b52fc237c4e94bbfbb5f5f43825245cb0940a7002a9ed65  $archive" | sha256sum --check
+          tar -xzf "$archive" --strip-components=1 -C "$stage"
+          test "$("$stage/wasm-tools" --version)" = "wasm-tools 1.262.0 (e22db44da 2026-10-13)"
+          mkdir -p "$WASM_TOOLS/wasm-tools-bin"
+          cp "$stage/wasm-tools" "$WASM_TOOLS/wasm-tools-bin/wasm-tools"
+          echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
+      - name: Save completed shared-wasm-tools setup
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-wasm-tools.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
+          key: ${{ steps.shared-wasm-tools.outputs.cache-primary-key }}
+      - uses: actions/cache/restore@v4
+        id: shared-wasmtime
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
+          key: wasmtime-49.0.3-${{ runner.os }}-${{ runner.arch }}
+      - name: Install pinned Wasmtime
+        run: |
+          set -euo pipefail
+          archive="$WASM_TOOLS/wasmtime-v49.0.3-x86_64-linux.tar.xz"
+          stage=$(mktemp -d "$WASM_TOOLS/.wasmtime-XXXXXX")
+          trap 'rm -rf -- "$stage"' EXIT
+          if [[ ! -f "$archive" ]]; then
+            curl --fail --location --silent --show-error --connect-timeout 15 --max-time 180 \
+              https://github.com/bytecodealliance/wasmtime/releases/download/v49.0.3/wasmtime-v49.0.3-x86_64-linux.tar.xz -o "$archive"
+          fi
+          echo "4001225413f208345b980525f31c4080e1873808b38d0ddc7918497340667fbb  $archive" | sha256sum --check
+          tar -xJf "$archive" --strip-components=1 -C "$stage"
+          test "$("$stage/wasmtime" --version)" = "wasmtime 49.0.3 (f96eabaa1 2026-10-14)"
+          mkdir -p "$WASM_TOOLS/wasmtime"
+          cp "$stage/wasmtime" "$WASM_TOOLS/wasmtime/wasmtime"
+          echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
+      - name: Save completed shared-wasmtime setup
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-wasmtime.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
+          key: ${{ steps.shared-wasmtime.outputs.cache-primary-key }}
+      - name: Identify shared profile inputs
+        id: shared-inputs
+        run: |
+          source env.sh
+          inputs=$(bun scripts/build-wasi-sysroot.ts --shared-pic --inputs)
+          echo "hash=$inputs" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: shared-sysroot-cache
+        with:
+          path: ${{ env.BUN_WASM_SHARED_SYSROOT }}
+          key: wasi-shared-pic-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.shared-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts', 'scripts/build-shared-wasi-libc.sh', 'patches/wasi-libc/group-grow.patch', 'patches/wasi-libc/.gitattributes') }}
+      - name: Build or verify shared profile
+        run: |
+          source env.sh
+          bun scripts/build-wasi-sysroot.ts --shared-pic
+      - name: Save shared profile cache
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sysroot-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BUN_WASM_SHARED_SYSROOT }}
+          key: ${{ steps.shared-sysroot-cache.outputs.cache-primary-key }}
+      - name: Run two-member real-libc proof
+        run: |
+          source env.sh
+          bash scripts/test-shared-sysroot.sh "$RUNNER_TEMP/shared-sysroot-proof"
 
   web:
     name: Web host

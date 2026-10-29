@@ -23,6 +23,7 @@
     "**/generated/**",
     "**/*.generated.ts",
     "**/bunwasm-runtime/src/js/temporal.js",
+    "**/bunwasm-runtime/src/js/intl.js",
     "**/bunwasm-runtime/src/js/streams_polyfill.js",
     "**/bunwasm-runtime/src/js/node_stream_core.js",
     "**/bunwasm-runtime/src/js/ws_builtin.js",

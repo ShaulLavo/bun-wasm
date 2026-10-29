@@ -16,6 +16,19 @@ const nativeFiles = new Set([
   // Embedded in bun.wasm as the runtime module `direct_stream`.
   "web/src/native-direct-stream.ts",
 ]);
+const sharedSysrootFiles = new Set([
+  ".github/workflows/ci.yml", "env.sh", "scripts/ci-changes.ts", "scripts/build-wasi-sysroot.ts",
+  "scripts/build-shared-wasi-libc.sh", "scripts/test-shared-sysroot.sh", "scripts/shared-sysroot-proof.ts",
+  "scripts/shared-sysroot-native.ts", "tests/fixtures/shared-sysroot/member.c", "patches/wasi-libc/group-grow.patch",
+  "patches/wasi-libc/.gitattributes", "scripts/shared-sysroot-inputs.test.ts", "scripts/shared-sysroot-ci.test.ts",
+  "checks/quality-shared-sysroot-inputs.json", "checks/quality-shared-sysroot-ci.json",
+  "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json", "package.json", "bun.lock",
+]);
+
+export function needsSharedSysroot(paths: readonly string[]): boolean {
+  return paths.some(path => sharedSysrootFiles.has(path));
+}
+
 const nativeCheckInputs = discoverChecks().flatMap(checkInputPaths);
 const nativeCheckManifests = /^checks\/(?:native|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
@@ -104,5 +117,5 @@ if (import.meta.main) {
     ? execFileSync("git", ["merge-base", base, head], { encoding: "utf8" }).trim() : base;
   const native = nativeChanges(paths, base, head, ancestor);
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
-  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}`);
+  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}\nshared=${needsSharedSysroot(paths)}`);
 }
