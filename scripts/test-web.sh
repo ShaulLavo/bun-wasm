@@ -120,6 +120,8 @@ if [[ $browser == 1 ]]; then
     echo "SKIPPED engine interruption: missing ${missing_interruption[*]}"
   fi
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
+    (cd "$root/tests/fixtures/worker-wasm" && bun install --frozen-lockfile --ignore-scripts)
+    browser_test bun tests/browser-wasm-transfer.ts chromium webkit || failed=1
     browser_test node tests/browser-worker-modules.ts || failed=1
     browser_test node tests/browser-engine.mjs || failed=1
     browser_test node tests/browser-tools.ts || failed=1

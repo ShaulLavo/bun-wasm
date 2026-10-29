@@ -1,5 +1,15 @@
 export interface SharedReference { readonly id: string; readonly byteLength: number; }
-export interface SharedAttachment extends SharedReference { readonly buffer: SharedArrayBuffer; }
+export type SharedWasmValue = WebAssembly.Module | WebAssembly.Memory;
+export type SharedAttachment = SharedReference & (
+  | { readonly buffer: SharedArrayBuffer }
+  | { readonly module: WebAssembly.Module }
+  | { readonly memory: WebAssembly.Memory }
+);
+export function sharedAttachmentValue(attachment: SharedAttachment) {
+  if ("buffer" in attachment) return attachment.buffer;
+  if ("module" in attachment) return attachment.module;
+  return attachment.memory;
+}
 export type SharedRequest =
   | { readonly kind: "publish"; readonly transaction: string; readonly attachments: readonly SharedAttachment[] }
   | { readonly kind: "abort"; readonly transaction: string }
@@ -25,6 +35,7 @@ export interface BunSharedConnection { readonly type: "bun-shared-connect"; read
 export interface BunSharedNativeHost { postMessage(message: BunSharedConnection, transfer: MessagePort[]): void; }
 export interface SharedPublication {
   reference(buffer: SharedArrayBuffer): SharedReference;
+  referenceWasm?(value: WebAssembly.Module | WebAssembly.Memory): SharedReference;
   publish(): void;
   abort(): void;
 }
@@ -58,6 +69,7 @@ export interface SharedObjects {
   readonly routes?: SharedRoutes;
   begin(): SharedPublication;
   read(reference: SharedReference): SharedArrayBuffer;
+  readWasm?(reference: SharedReference): WebAssembly.Module | WebAssembly.Memory;
   wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
 }
 export const sharedObjectLimit = 1024;
@@ -65,6 +77,10 @@ const byteLength = typeof SharedArrayBuffer === "function" ? Object.getOwnProper
 export function sharedBufferLength(value: unknown): number {
   try { if (!byteLength) throw sharedError("Shared backing is unavailable"); return byteLength.call(value); }
   catch { throw new DOMException("Invalid shared backing store", "DataCloneError"); }
+}
+function isSharedBuffer(value: unknown): value is SharedArrayBuffer {
+  try { sharedBufferLength(value); return true; }
+  catch { return false; }
 }
 export function sharedError(message: string): DOMException { return new DOMException(message, "DataCloneError"); }
 function object(value: unknown): Record<string, unknown> {
@@ -86,8 +102,13 @@ function attachments(value: unknown): SharedAttachment[] {
   return value.map(value => {
     const reference = sharedReference(value);
     const input = object(value);
-    if (sharedBufferLength(input.buffer) !== reference.byteLength) throw sharedError("Shared backing length mismatch");
-    return { ...reference, buffer: input.buffer as SharedArrayBuffer };
+    if ("module" in input && input.module instanceof WebAssembly.Module && reference.byteLength === 0) return { ...reference, module: input.module };
+    if ("memory" in input && input.memory instanceof WebAssembly.Memory && reference.byteLength === 0) {
+      sharedBufferLength(input.memory.buffer);
+      return { ...reference, memory: input.memory };
+    }
+    if (!isSharedBuffer(input.buffer) || sharedBufferLength(input.buffer) !== reference.byteLength) throw sharedError("Shared backing length mismatch");
+    return { ...reference, buffer: input.buffer };
   });
 }
 function counter(value: unknown): number {

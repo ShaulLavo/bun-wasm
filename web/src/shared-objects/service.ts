@@ -1,7 +1,9 @@
 import { createSharedLaneBuffer, openSharedLane } from "./lane.ts";
 import { createSharedMailbox } from "./mailbox.ts";
-import { messageData, sharedBufferLength, sharedError, sharedObjectLimit, sharedResponse, sharedRouteCommand } from "./protocol.ts";
-import type { BunSharedNativeHost, SharedAttachment, SharedObjects, SharedPort, SharedPublication, SharedReference, SharedRouteCommand } from "./protocol.ts";
+import { messageData, sharedAttachmentValue, sharedBufferLength, sharedError, sharedObjectLimit, sharedResponse, sharedRouteCommand } from "./protocol.ts";
+import type { BunSharedNativeHost, SharedAttachment, SharedObjects, SharedPort, SharedPublication, SharedReference, SharedRouteCommand, SharedWasmValue } from "./protocol.ts";
+
+const nativeClone = globalThis.structuredClone.bind(globalThis);
 
 export interface SharedObjectService extends SharedObjects {
   close(reason?: DOMException): void;
@@ -12,11 +14,11 @@ interface Waiter { readonly ids: Set<string>; readonly ready: () => void; }
 export function createSharedObjects(owner: string, port: SharedPort): SharedObjectService {
   if (!/^[\w-]{1,128}$/.test(owner)) throw sharedError("Invalid shared-object owner");
   const buffers = new Map<string, SharedAttachment>();
-  const identities = new WeakMap<SharedArrayBuffer, SharedReference>();
+  const identities = new WeakMap<SharedArrayBuffer | SharedWasmValue, SharedReference>();
   const pending = new Map<string, { reference: SharedReference; waiters: Set<Waiter> }>();
   const failures = new Map<string, DOMException>();
   const publications = new Set<SharedPublication>();
-  const reservedIdentities = new WeakSet<SharedArrayBuffer>();
+  const reservedIdentities = new WeakSet<SharedArrayBuffer | SharedWasmValue>();
   let reserved = 0;
   let closed: DOMException | null = null;
   let nextId = 0;
@@ -119,8 +121,15 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   }
   function read(reference: SharedReference) {
     const attachment = present(reference);
-    if (!attachment) throw sharedError("Shared backing is not attached");
+    if (!attachment || !("buffer" in attachment)) throw sharedError("Shared backing is not attached");
     return attachment.buffer;
+  }
+  function readWasm(reference: SharedReference): SharedWasmValue {
+    const attachment = present(reference);
+    if (!attachment) throw sharedError("Shared Wasm object is not attached");
+    if ("module" in attachment) return nativeClone(attachment.module);
+    if ("memory" in attachment) return attachment.memory;
+    throw sharedError("Invalid shared Wasm object");
   }
   function settled(id: string) {
     const request = pending.get(id);
@@ -153,7 +162,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
       if (request.reference.byteLength !== attachment.byteLength) throw sharedError("Shared backing length mismatch");
       if (buffers.size + failures.size >= sharedObjectLimit) throw sharedError("Shared-object limit exceeded");
       buffers.set(attachment.id, attachment);
-      identities.set(attachment.buffer, attachment);
+      identities.set(sharedAttachmentValue(attachment), attachment);
       settled(attachment.id);
     }
   }
@@ -182,18 +191,28 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   function begin(): SharedPublication {
     active();
     if (publications.size >= sharedObjectLimit) throw sharedError("Shared publication limit exceeded");
-    const staged = new Map<SharedArrayBuffer, SharedAttachment>();
+    const staged = new Map<SharedArrayBuffer | SharedWasmValue, SharedAttachment>();
     const transaction = crypto.randomUUID();
     let phase: "prepared" | "published" | "aborted" = "prepared";
     function reference(buffer: SharedArrayBuffer): SharedReference {
+      return stage(buffer, { buffer, byteLength: sharedBufferLength(buffer) });
+    }
+    function referenceWasm(value: SharedWasmValue): SharedReference {
+      if (value instanceof WebAssembly.Module) return stage(value, { module: value, byteLength: 0 });
+      sharedBufferLength(value.buffer);
+      return stage(value, { memory: value, byteLength: 0 });
+    }
+    function stage(value: SharedArrayBuffer | SharedWasmValue, backing: Omit<SharedReference, "id"> & (
+      { buffer: SharedArrayBuffer } | { module: WebAssembly.Module } | { memory: WebAssembly.Memory }
+    )): SharedReference {
       active();
       if (phase !== "prepared") throw sharedError("Shared publication is not prepared");
-      const known = identities.get(buffer) ?? staged.get(buffer);
+      const known = identities.get(value) ?? staged.get(value);
       if (known) return known;
-      if (reservedIdentities.has(buffer)) throw sharedError("Shared backing already has a pending publication");
+      if (reservedIdentities.has(value)) throw sharedError("Shared backing already has a pending publication");
       if (buffers.size + failures.size + reserved >= sharedObjectLimit) throw sharedError("Shared-object limit exceeded");
-      const attachment = { id: `${owner}/${nextId++}`, byteLength: sharedBufferLength(buffer), buffer };
-      staged.set(buffer, attachment); reservedIdentities.add(buffer); reserved++;
+      const attachment = { id: `${owner}/${nextId++}`, ...backing };
+      staged.set(value, attachment); reservedIdentities.add(value); reserved++;
       return attachment;
     }
     function publish() {
@@ -203,7 +222,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
       if (attachments.length) port.postMessage({ kind: "publish", transaction, attachments });
       phase = "published";
       unreserve();
-      for (const attachment of attachments) { buffers.set(attachment.id, attachment); identities.set(attachment.buffer, attachment); }
+      for (const attachment of attachments) { buffers.set(attachment.id, attachment); identities.set(sharedAttachmentValue(attachment), attachment); }
       publications.delete(publication);
     }
     function unreserve() {
@@ -216,12 +235,12 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
       if (!published) unreserve();
       phase = "aborted";
       if (published) {
-        for (const attachment of staged.values()) { buffers.delete(attachment.id); identities.delete(attachment.buffer); }
+        for (const attachment of staged.values()) { buffers.delete(attachment.id); identities.delete(sharedAttachmentValue(attachment)); }
         try { if (staged.size) port.postMessage({ kind: "abort", transaction }); } catch { close(sharedError("Shared publication rollback failed")); }
       }
       staged.clear(); publications.delete(publication);
     }
-    const publication = { reference, publish, abort };
+    const publication = { reference, referenceWasm, publish, abort };
     publications.add(publication);
     return publication;
   }
@@ -262,7 +281,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   port.addEventListener("messageerror", onError);
   port.start();
   const lanes = { create: createSharedLaneBuffer, open(buffer: SharedArrayBuffer, side: 0 | 1) { active(); return openSharedLane(buffer, side); } };
-  return { mailbox, lanes, routes: { owner, get enabled() { return routesEnabled; }, enable() { active(); routesEnabled = true; }, send: sendRoute, retired: (id: string) => retiredTargets.has(id), transaction, tryTransaction, onCredit(ready) { retryCredit = ready; }, credit }, begin, read, wait, close,
+  return { mailbox, lanes, routes: { owner, get enabled() { return routesEnabled; }, enable() { active(); routesEnabled = true; }, send: sendRoute, retired: (id: string) => retiredTargets.has(id), transaction, tryTransaction, onCredit(ready) { retryCredit = ready; }, credit }, begin, read, readWasm, wait, close,
     inspectRoutes: () => ({ outbound: outbox.inspect().queued, terminals: terminals.size, enabled: routesEnabled }),
     inspect: () => ({ buffers: buffers.size, pending: pending.size, staged: publications.size, closed: closed !== null }) };
 }

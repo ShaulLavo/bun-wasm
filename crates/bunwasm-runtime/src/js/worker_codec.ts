@@ -46,6 +46,13 @@
         const reference = publication.reference(buffer);
         return ["shared", reference.id, reference.byteLength];
       }
+      function wasmNode(value: WebAssembly.Module | WebAssembly.Memory): Node {
+        if (!sharedObjects?.readWasm) throw cloneError();
+        publication ??= sharedObjects.begin();
+        if (!publication.referenceWasm) throw cloneError();
+        const reference = publication.referenceWasm(value);
+        return [value instanceof WebAssembly.Module ? "wasm-module" : "wasm-memory", reference.id];
+      }
       function prepare(item: unknown) {
         if (internal.isMarkedAsUntransferable?.(item)) throw cloneError("Object is not transferable");
         if (!hooks.isPort(item)) throw cloneError("Invalid transferable object");
@@ -108,6 +115,8 @@
         if (object === processEnv) return ["object", entries(object, implicit)];
         if (internal.isProxy?.(object)) throw cloneError();
         if (isSharedBuffer(object)) return sharedNode(object);
+        if (typeof WebAssembly === "object" && object instanceof WebAssembly.Module) return wasmNode(object);
+        if (typeof WebAssembly === "object" && object instanceof WebAssembly.Memory) return wasmNode(object);
         if (object instanceof Blob) return ["blob", internal.native.base64Encode(object._bytes(), false), object.type];
         if (isArrayBuffer(object)) return bufferViews.has(object) ? ["buffer", "", 0] : encodeBuffer(object);
         if (ArrayBuffer.isView(object) && hooks.buffer?.isBuffer(object)) return bufferView(object, implicit);
@@ -198,12 +207,29 @@
 
     function decode(value: unknown) {
       const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(sharedObjects));
-      for (const reference of sharedReferences(graph)) sharedObjects!.read(reference);
       const memory = new Map<number, unknown>();
+      hydrate(graph, memory);
+      function hydrate(graph: Graph, values?: Map<number, unknown>) {
+        for (const [index, node] of graph.nodes.entries()) {
+          if (node[0] === "shared") sharedObjects!.read({ id: node[1], byteLength: node[2] });
+          if (node[0] === "wasm-module" || node[0] === "wasm-memory") {
+            const value = readWasm(node); values?.set(index, value);
+          }
+          if (node[0] !== "port") continue;
+          for (const [, pending] of node[1].pending) hydrate(pending);
+        }
+      }
       const restored: unknown[] = [];
       function properties(target: object, entries: [string, number][]) {
         for (const [key, ref] of entries) Object.defineProperty(target, key, { value: read(ref), writable: true, configurable: true, enumerable: true });
         return target;
+      }
+      function readWasm(node: Extract<Node, ["wasm-module" | "wasm-memory", string]>) {
+        if (!sharedObjects?.readWasm) throw cloneError("Shared Wasm objects are unavailable");
+        const value = sharedObjects.readWasm({ id: node[1], byteLength: 0 });
+        if (node[0] === "wasm-module" && value instanceof WebAssembly.Module) return value;
+        if (node[0] === "wasm-memory" && value instanceof WebAssembly.Memory && isSharedBuffer(value.buffer)) return value;
+        throw cloneError("Invalid shared Wasm object");
       }
       function readNodeBuffer(node: BufferNode) {
         const adapter = hooks.buffer;
@@ -241,6 +267,7 @@
             if (!isSharedBuffer(buffer) || sharedByteLength!.call(buffer) !== node[2]) throw cloneError("Invalid shared backing store");
             result = buffer; break;
           }
+          case "wasm-module": case "wasm-memory": result = readWasm(node); break;
           case "node-buffer": result = readNodeBuffer(node); break;
           case "view": result = readView(node); break;
           case "array": { const array = new Array(node[1]); memory.set(index, array); return properties(array, node[2]); }
@@ -290,6 +317,7 @@
     const references: BunWasm.SharedReference[] = [];
     for (const node of graph.nodes) {
       if (node[0] === "shared") references.push({ id: node[1], byteLength: node[2] });
+      if (node[0] === "wasm-module" || node[0] === "wasm-memory") references.push({ id: node[1], byteLength: 0 });
       if (node[0] !== "port") continue;
       for (const [, pending] of node[1].pending) references.push(...sharedReferences(pending));
     }
@@ -309,6 +337,9 @@
   function validShared(node: unknown): node is ["shared", string, number] {
     return Array.isArray(node) && node.length === 3 && node[0] === "shared" && typeof node[1] === "string"
       && /^[\w-]{1,128}\/[\w-]{1,128}$/.test(node[1]) && counter(node[2]);
+  }
+  function validWasm(node: unknown[], shared: boolean) {
+    return shared && node.length === 2 && typeof node[1] === "string" && /^[\w-]{1,128}\/[\w-]{1,128}$/.test(node[1]);
   }
   function validNumber(value: unknown) {
     return typeof value === "string" && (value === "-0" || String(Number(value)) === value);
@@ -334,6 +365,10 @@
     function validNodeBuffer(node: unknown[]) {
       return nodeBuffer && node.length === 4 && ref(node[1]) && validBuffer(nodes[node[1]]) && validView(node[1], node[2], node[3], 1);
     }
+    function validViewNode(node: unknown[]) {
+      return node.length === 5 && typeof node[1] === "string" && Object.hasOwn(views, node[1])
+        && validView(node[2], node[3], node[4], viewWidth(node[1]));
+    }
     // A port node may name its channel's shared lane and the side of it this end reads.
     function validPortNode(node: unknown[]) {
       if (!validPort(node[1], depth, nodeBuffer, shared) || !ref(node[2])) return false;
@@ -355,10 +390,10 @@
         case "blob": return node.length === 3 && canonicalBase64(node[1]) && typeof node[2] === "string";
         case "regexp": return strings(node.slice(1)) && node.length === 3;
         case "shared": return shared && validShared(node);
+        case "wasm-module": case "wasm-memory": return validWasm(node, shared);
         case "buffer": return validBuffer(node);
         case "node-buffer": return validNodeBuffer(node);
-        case "view": return node.length === 5 && typeof node[1] === "string" && Object.hasOwn(views, node[1])
-          && validView(node[2], node[3], node[4], viewWidth(node[1]));
+        case "view": return validViewNode(node);
         case "error": return strings(node.slice(1, 3)) && (node[3] === null || typeof node[3] === "string") && ref(node[4]);
         case "boxed": return ref(node[1]);
         case "port": return validPortNode(node);

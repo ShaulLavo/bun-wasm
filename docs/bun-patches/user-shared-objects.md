@@ -41,7 +41,7 @@ SAB aliases already delivered to guest code.
 
 | Source | Class | Change |
 | --- | --- | --- |
-| Shared-object protocol, service, broker, codec, and port scheduling | Host feature | Original guarded native shared backing transport with staged publication, attachment ordering, and process-owned reference cleanup. |
+| Shared-object protocol, service, broker, codec, and port scheduling | Host feature | Original guarded native SAB, WebAssembly.Module and shared WebAssembly.Memory transport with staged publication, attachment ordering, and process-owned reference cleanup. |
 
 [Ledger scope and pinned revisions](scope.md).
 
@@ -91,3 +91,28 @@ The startup regression fixture evaluates the actual bootstrap, worker factories,
 and EngineHost entry gate with native MessageChannels. It stubs unrelated module
 services and the entry body. This is source-host evidence, not a built guest or
 an application result.
+
+## Native WebAssembly objects
+
+Browser-engine workers publish native `WebAssembly.Module` and shared
+`WebAssembly.Memory` through the same transaction and broker as SAB. These are
+original host extensions, with no copied implementation. Modules clone for each
+decoded graph. Repeated references inside a graph retain object identity, and
+attached shared memories retain their backing across messages and growth.
+Unshared memories, Wasm objects in transfer lists, and codecs without the native
+Wasm capability reject with `DataCloneError`. Native references use a zero
+byte-length marker because memory growth does not change their identity.
+
+`tests/fixtures/worker-wasm/` is an original regression fixture. It pins
+`@emnapi/core` and `@emnapi/runtime` at `2.0.0-alpha.5`, the versions declared by
+`@rolldown/binding-wasm32-wasi@1.2.15`, and calls the unmodified `MessageHandler`
+load/start path. The addon imports one 64 KiB shared memory and exports atomic
+wait/notify and `wasi_thread_start`. `atomic-module.ts` contains the bytes assembled
+from `atomic.wat` with `wasm-tools parse`; it copies no upstream source.
+
+The browser gate runs two real Bun browser-engine workers through the production
+codec, launcher and broker. It checks shared writes in both directions, native
+Wasm wait/notify, emnapi load/start, and release of process-owned references after
+worker termination. The source tests cover failed publication and delivery,
+unread-message discard, unavailable capabilities and nested decode preflight.
+The fixture does not load Rolldown or allocate its 1 GiB memory.

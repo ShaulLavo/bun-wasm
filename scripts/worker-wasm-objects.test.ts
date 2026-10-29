@@ -10,7 +10,7 @@ function values() {
 function received(value: unknown) {
   if (!value || typeof value !== "object" || !("module" in value) || !(value.module instanceof WebAssembly.Module)
     || !("memory" in value) || !(value.memory instanceof WebAssembly.Memory)) throw new Error("Missing native Wasm objects");
-  return value;
+  return { ...value, module: value.module, memory: value.memory };
 }
 
 test("native Wasm objects use staged publication, module clone and shared-memory identity", async () => {
@@ -64,4 +64,59 @@ test("native Wasm publication rolls back preparation, publish and delivery failu
   expect(failing.service.inspect()).toMatchObject({ buffers: 0, staged: 0 });
   await tick();
   expect(broker.inspect().objects).toBe(0);
+});
+
+test("discarding an unread native Wasm message cancels hydration and exit drops its publications", async () => {
+  const { broker, client } = brokerClients(cleanup, { lanes: true });
+  const sender = client(), receiver = client();
+  const plan = sourceCodec(sender.sharedObjects).prepare({ data: values(), ports: [] });
+  const { port1, port2 } = new receiver.runtime.MessageChannel();
+  cleanup.add(() => { port1.close(); port2.close(); });
+  const seen: unknown[] = [];
+  port2.on("message", value => seen.push(value));
+  receiver.runtime.__fixturePacket(port2, 0, plan.graph);
+  await tick();
+  expect(broker.inspect().waiting).toBe(2);
+  port2.close(); await tick();
+  expect(broker.inspect().waiting).toBe(0);
+  expect(receiver.service.inspect().pending).toBe(0);
+  plan.commit(); await tick();
+  expect(seen).toEqual([]);
+  for (const node of plan.graph.nodes) {
+    if (node[0] !== "wasm-module" && node[0] !== "wasm-memory") continue;
+    expect(() => receiver.sharedObjects.readWasm?.({ id: node[1], byteLength: 0 })).toThrow("not attached");
+  }
+  sender.service.close(); receiver.service.close(); await tick();
+  expect(broker.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+});
+
+test("a committed native identity survives later rollback and shared Memory may grow in transit", async () => {
+  const { broker, client } = brokerClients(cleanup, { lanes: true });
+  const sender = client(), receiver = client();
+  const codec = sourceCodec(sender.sharedObjects), target = sourceCodec(receiver.sharedObjects);
+  const input = values(), graph = codec.encode(input);
+  expect(() => codec.prepare(input).commit(() => { throw new Error("later failure"); })).toThrow("later failure");
+  input.memory.grow(1);
+  await new Promise<void>(resolve => target.wait(graph, resolve));
+  const value = received(target.decode(graph));
+  expect(value.memory.buffer.byteLength).toBe(131072);
+  expect(broker.inspect().objects).toBe(2);
+});
+
+test("unattached, forged and nested native references fail before restoring any port", () => {
+  const { client } = brokerClients(cleanup, { lanes: true });
+  const { sharedObjects } = client();
+  let restored = 0;
+  const codec = sourceCodec(sharedObjects, { isPort: () => false, prepare() { throw new Error("Unexpected transfer"); }, restore() { restored++; }, activate() {} });
+  const pending = { root: 0, nodes: [["wasm-module", "unknown/id"]] };
+  const snapshot = { id: "a", peer: "b", version: 1, sent: 0, received: 0, pending: [[0, pending]], closing: null, closed: false };
+  const graph = { root: 0, nodes: [["port", snapshot, 1], ["array", 0, []]] };
+  expect(() => codec.decode(graph)).toThrow("not attached");
+  expect(restored).toBe(0);
+  const sab = codec.encode(new SharedArrayBuffer(0));
+  const node = sab.nodes[0];
+  if (!node || node[0] !== "shared") throw new Error("Missing backing reference");
+  expect(() => codec.decode({ root: 0, nodes: [["wasm-memory", node[1]]] })).toThrow("Invalid shared Wasm");
+  expect(() => codec.decode({ root: 0, nodes: [["wasm-module", "bad/id", "extra"]] })).toThrow("Invalid worker message");
+  expect(() => codec.decode({ root: 0, nodes: [["wasm-memory", "invalid"]] })).toThrow("Invalid worker message");
 });

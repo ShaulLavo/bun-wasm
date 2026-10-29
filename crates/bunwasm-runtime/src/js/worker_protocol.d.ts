@@ -27,6 +27,7 @@ declare namespace BunWasm {
     | ["map", [number, number][]] | ["set", number[]] | ["date", string] | ["regexp", string, string]
     | ["blob", string, string] | ["buffer", string, number] | ["view", string, number, number, number]
     | ["node-buffer", number, number, number] | ["shared", string, number]
+    | ["wasm-module", string] | ["wasm-memory", string]
     | ["error", string, string, string | null, number] | ["boxed", number]
     | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side?: 0 | 1 }, number] | ["port", Omit<PortSnapshot, "queue" | "lane"> & { side?: 0 | 1 }, number, number];
   interface WorkerGraph { root: number; nodes: WorkerNode[]; }
@@ -49,6 +50,7 @@ declare namespace BunWasm {
   interface SharedReference { readonly id: string; readonly byteLength: number; }
   interface SharedPublication {
     reference(buffer: SharedArrayBuffer): SharedReference;
+    referenceWasm?(value: WebAssembly.Module | WebAssembly.Memory): SharedReference;
     publish(): void;
     abort(): void;
   }
@@ -67,6 +69,7 @@ declare namespace BunWasm {
     };
     begin(): SharedPublication;
     read(reference: SharedReference): SharedArrayBuffer;
+    readWasm?(reference: SharedReference): WebAssembly.Module | WebAssembly.Memory;
     wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
   }
   interface WorkerCodec {

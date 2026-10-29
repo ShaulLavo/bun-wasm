@@ -371,7 +371,7 @@ export function createSharedObjectBroker() {
       case "need": for (const reference of packet.references) need(client, reference); return;
       case "mailbox": {
         const inbound = entries.get(packet.inbound.id), outbound = entries.get(packet.outbound.id);
-        if (!inbound || !outbound || inbound.publisher !== client.id || outbound.publisher !== client.id
+        if (!inbound || !outbound || !("buffer" in inbound.attachment) || !("buffer" in outbound.attachment) || inbound.publisher !== client.id || outbound.publisher !== client.id
           || inbound.attachment.byteLength !== packet.inbound.byteLength || outbound.attachment.byteLength !== packet.outbound.byteLength) throw sharedError("Invalid shared mailbox");
         inbound.mailbox = true; outbound.mailbox = true;
         client.mailbox = createSharedMailbox(inbound.attachment.buffer);
