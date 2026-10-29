@@ -1,0 +1,18 @@
+[package]
+name = "bunwasm-nested"
+description = "Bounds-checked memory regions for host-executed nested WebAssembly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+wasmparser = "=0.228.0"
+wasm-encoder = { version = "=0.228.0", features = ["wasmparser"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+anyhow = "1"
+wasmtime = { version = "39.0.1", default-features = false, features = ["cranelift", "runtime", "std", "threads"] }
+wat = "=1.240.0"
+wasm-smith = "=0.228.0"
+arbitrary = "1"
