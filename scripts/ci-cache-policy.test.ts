@@ -45,23 +45,29 @@ function allows(step: Record<string, unknown>, values: Record<string, string>, c
       if (!(name in values)) throw new Error(`Missing condition input ${name}`);
       return JSON.stringify(values[name]);
     });
-  const evaluate: () => unknown = new Function(`return (${expression})`);
-  const result = evaluate();
+  const evaluate = new Function(`return (${expression})`);
+  const result: unknown = Reflect.apply(evaluate, undefined, []);
   if (typeof result !== "boolean") throw new Error("Cache condition did not produce a boolean");
   return !cancelled && result;
 }
 
 test("all heavy cache actions explicitly separate restoring from saving", () => {
   expect(heavy.length).toBeGreaterThan(8);
-  for (const step of heavy) expect(["actions/cache/restore@v4", "actions/cache/save@v4"]).toContain(step.uses);
+  for (const step of heavy) {
+    if (typeof step.uses !== "string") throw new Error("Missing cache action");
+    expect(["actions/cache/restore@v4", "actions/cache/save@v4"]).toContain(step.uses);
+  }
   expect(saves).toHaveLength(6);
 });
 
-test.each(saves)("$name reserves heavy writes for successful main pushes", step => {
+test.each(saves)("$name reserves heavy writes for main pushes", step => {
   expect(allows(step, healthy)).toBe(true);
   expect(allows(step, { ...healthy, "github.event_name": "pull_request", "github.ref": "refs/pull/363/merge" })).toBe(false);
   expect(allows(step, { ...healthy, "github.ref": "refs/heads/feature" })).toBe(false);
   expect(allows(step, healthy, true)).toBe(false);
+  const exact = Object.fromEntries(Object.entries(healthy).map(([key, value]) => [key, key.endsWith("cache-hit") ? "true" : value]));
+  expect(allows(step, exact)).toBe(false);
+  expect(allows(step, { ...healthy, "github.event_name": "pull_request", "steps.native-cargo-cache.outputs.cache-matched-key": "main-prefix", "steps.jsc-cargo-cache.outputs.cache-matched-key": "main-prefix" })).toBe(false);
 });
 
 test("PRs retain all heavy restore paths and native/JSC checks remain blocking", () => {
