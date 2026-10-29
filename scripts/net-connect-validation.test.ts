@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import type * as NodeNet from "node:net";
 import * as util from "node:util";
 import { runInNewContext } from "node:vm";
+import { netAddressSource } from "./net-address-source";
 
 const runtime = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 const invalidNames = ["this is not a hostname", "localhost:80", "a..b", "[127.0.0.1]", "[]", "[example.invalid]", "::1/64", "[::1/64]", "::ffff:127.1", "127.0.0.1\n", "a".repeat(64) + ".com"];
@@ -24,6 +25,7 @@ function fixture(connect = true) {
   };
   const context = { Buffer, AbortController, AbortSignal, TextEncoder, Error, TypeError, Uint8Array, clearTimeout() {}, setTimeout: held };
   function factory(name: string, extension = "js") {
+    if (name === "net_address") return runInNewContext(netAddressSource(), context);
     const source = readFileSync(new URL(`${name}.${extension}`, runtime), "utf8");
     const text = extension === "ts" ? new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`) : source;
     return runInNewContext(text, context);

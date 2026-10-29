@@ -10,7 +10,6 @@ crates/bunwasm-runtime/src/js/crypto_keys.js
 crates/bunwasm-runtime/src/js/html_server.js
 crates/bunwasm-runtime/src/js/inspect.js
 crates/bunwasm-runtime/src/js/net.js
-crates/bunwasm-runtime/src/js/net_address.js
 crates/bunwasm-runtime/src/js/node_fs.js
 crates/bunwasm-runtime/src/js/node_net.js
 crates/bunwasm-runtime/src/js/node_stream_bindings.js
