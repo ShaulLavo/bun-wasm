@@ -877,21 +877,9 @@
       return false;
     }
   }
-  if (!hasRealIntl()) {
+  const installIntlFallback = !hasRealIntl();
+  if (installIntlFallback) {
     defineLazyGlobal("Intl", () => internal.require("intl"));
-    defineHidden(Number.prototype, {
-      toLocaleString(locales, options) {
-        return new globalThis.Intl.NumberFormat(locales, options).format(Number(this));
-      },
-    });
-    defineHidden(Date.prototype, {
-      toLocaleDateString(locales, options) {
-        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ year: "numeric", month: "numeric", day: "numeric" }, options)).format(this);
-      },
-      toLocaleTimeString(locales, options) {
-        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ hour: "numeric", minute: "2-digit", second: "2-digit" }, options)).format(this);
-      },
-    });
   }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
   if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
@@ -906,6 +894,24 @@
   }
   if (process.env.BUNWASM_IPC_CHANNEL) internal.require("child_ipc").initialize();
   if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
+
+  // Temporal probes Date's native locale methods during initialization. Install
+  // these wrappers last so that probe does not eagerly load the Intl bundle.
+  if (installIntlFallback) {
+    defineHidden(Number.prototype, {
+      toLocaleString(locales, options) {
+        return new globalThis.Intl.NumberFormat(locales, options).format(Number(this));
+      },
+    });
+    defineHidden(Date.prototype, {
+      toLocaleDateString(locales, options) {
+        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ year: "numeric", month: "numeric", day: "numeric" }, options)).format(this);
+      },
+      toLocaleTimeString(locales, options) {
+        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ hour: "numeric", minute: "2-digit", second: "2-digit" }, options)).format(this);
+      },
+    });
+  }
 
   return internal;
 })
