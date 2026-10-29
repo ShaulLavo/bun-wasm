@@ -152,6 +152,35 @@ for (const bounded of [false, true]) test(`child fixture preserves every byte an
   expect(reads).toBe(4); expect(polls).toBe(3);
 });
 
+for (const returned of [0, -8, 14]) test(`child fixture rejects invalid terminal write result ${returned} at stage90`, () => {
+  let memory: WebAssembly.Memory, reads = 0;
+  class Exit extends Error { constructor(readonly code: number) { super(`exit ${code}`); } }
+  const unused = () => { throw new Error("child continued after terminal write failure"); };
+  const instance = new WebAssembly.Instance(new WebAssembly.Module(runtimeProcFixture()), {
+    runtime_proc: {
+      read(_fd: number, ptr: number) {
+        if (reads++) return 0;
+        new Uint8Array(memory.buffer, ptr, 4).set(new TextEncoder().encode("ping")); return 4;
+      },
+      write: (fd: number, _ptr: number, length: number) => fd === 10 ? length : returned,
+      pipe: unused, dup: unused, spawn: unused, wait: unused, job_of: unused,
+      poll(ptr: number, _count: number, _timeout: number, out: number) {
+        const view = new DataView(memory.buffer);
+        view.setBigUint64(out, view.getBigUint64(ptr + 8, true), true);
+        view.setUint32(out + 8, view.getUint32(ptr, true), true);
+        view.setUint32(out + 12, reads > 0 ? 1 : 0, true); return 1;
+      },
+    },
+    wasi_snapshot_preview1: {
+      args_sizes_get(ptr: number) { new DataView(memory.buffer).setUint32(ptr, 1, true); return 0; },
+      fd_close: () => 0, proc_exit(code: number) { throw new Exit(code); },
+    },
+  });
+  memory = instance.exports.memory as WebAssembly.Memory;
+  try { (instance.exports._start as () => void)(); throw new Error("invalid terminal write was accepted"); }
+  catch (error) { expect(error).toBeInstanceOf(Exit); expect((error as Exit).code).toBe(90); }
+});
+
 for (const returned of [0, -8]) test(`child fixture still fails early EOF or unexpected read errno (${returned})`, () => {
   let memory: WebAssembly.Memory;
   class Exit extends Error { constructor(readonly code: number) { super(`exit ${code}`); } }
