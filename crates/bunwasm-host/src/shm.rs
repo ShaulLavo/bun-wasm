@@ -45,7 +45,6 @@ impl Errno {
 pub struct GroupPolicy {
     pub members: usize,
     pub parallelism: u32,
-    pub budget_bytes: u64,
     pub maximum_pages: u32,
     pub regions: usize,
     pub pins: usize,
@@ -57,12 +56,85 @@ impl Default for GroupPolicy {
         Self {
             members: DEFAULT_MEMBERS,
             parallelism: 1,
-            budget_bytes: DEFAULT_BUDGET_BYTES,
             maximum_pages: MAX_GROUP_PAGES,
             regions: DEFAULT_REGIONS,
             pins: DEFAULT_PINS,
             watches: DEFAULT_WATCHES,
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct GroupBackingBudget {
+    inner: Arc<Mutex<BudgetState>>,
+    limit_bytes: u64,
+}
+
+#[derive(Default)]
+struct BudgetState {
+    committed_bytes: u64,
+    peak_bytes: u64,
+}
+
+impl Default for GroupBackingBudget {
+    fn default() -> Self {
+        Self::new(DEFAULT_BUDGET_BYTES)
+    }
+}
+
+impl GroupBackingBudget {
+    pub fn new(limit_bytes: u64) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(BudgetState {
+                committed_bytes: 0,
+                peak_bytes: 0,
+            })),
+            limit_bytes,
+        }
+    }
+
+    pub fn committed_bytes(&self) -> u64 {
+        self.lock().committed_bytes
+    }
+
+    pub fn peak_bytes(&self) -> u64 {
+        self.lock().peak_bytes
+    }
+
+    fn lock(&self) -> MutexGuard<'_, BudgetState> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    fn charge(&self, bytes: u64) -> bool {
+        let mut state = self.lock();
+        let Some(committed) = state.committed_bytes.checked_add(bytes) else {
+            return false;
+        };
+        if committed > self.limit_bytes {
+            return false;
+        }
+        state.committed_bytes = committed;
+        state.peak_bytes = state.peak_bytes.max(committed);
+        true
+    }
+
+    fn force(&self, bytes: u64) {
+        let mut state = self.lock();
+        state.committed_bytes = state
+            .committed_bytes
+            .checked_add(bytes)
+            .expect("actual group backing exceeds u64 accounting");
+        state.peak_bytes = state.peak_bytes.max(state.committed_bytes);
+    }
+
+    fn release(&self, bytes: u64) {
+        let mut state = self.lock();
+        state.committed_bytes = state
+            .committed_bytes
+            .checked_sub(bytes)
+            .expect("group backing released twice");
     }
 }
 
@@ -122,6 +194,7 @@ pub struct GroupSnapshot {
     pub waiters: usize,
     pub committed_bytes: u64,
     pub free_bytes: u64,
+    pub bypassed: bool,
 }
 
 #[derive(Clone)]
@@ -132,7 +205,16 @@ pub struct MemoryGroup {
 struct GroupInner {
     memory: SharedMemory,
     policy: GroupPolicy,
+    budget: GroupBackingBudget,
     state: Mutex<GroupState>,
+}
+
+impl Drop for GroupInner {
+    fn drop(&mut self) {
+        let state = self.lock();
+        self.budget
+            .release(u64::from(state.committed_pages) * u64::from(PAGE_BYTES));
+    }
 }
 
 struct GroupState {
@@ -150,6 +232,7 @@ struct GroupState {
     next_watch: u32,
     next_waiter: u64,
     watch_sequence: u64,
+    bypassed: bool,
     ended: bool,
 }
 
@@ -198,6 +281,8 @@ struct Waiter {
     id: WaiterId,
     member: MemberId,
     addr: u32,
+    started: Instant,
+    timeout: Option<Duration>,
     state: Mutex<WaitStatus>,
     ready: Condvar,
 }
@@ -208,6 +293,13 @@ enum WaitStatus {
     Woken,
     TimedOut,
     Interrupted,
+}
+
+impl Waiter {
+    fn expired(&self, now: Instant) -> bool {
+        self.timeout
+            .is_some_and(|timeout| now.saturating_duration_since(self.started) >= timeout)
+    }
 }
 
 pub struct MemberReservation {
@@ -221,18 +313,18 @@ pub struct MemberLease {
 }
 
 impl MemoryGroup {
-    pub fn new(engine: &Engine, policy: GroupPolicy) -> Result<Self> {
+    pub fn new(engine: &Engine, policy: GroupPolicy, budget: GroupBackingBudget) -> Result<Self> {
         anyhow::ensure!(policy.members > 0, "memory group needs a member slot");
         anyhow::ensure!(policy.parallelism > 0, "parallelism must be positive");
         anyhow::ensure!(
             (1..=MAX_GROUP_PAGES).contains(&policy.maximum_pages),
             "memory group maximum exceeds wasm32"
         );
-        anyhow::ensure!(
-            policy.budget_bytes >= u64::from(PAGE_BYTES),
-            "memory group budget is smaller than one page"
-        );
         let memory = SharedMemory::new(engine, MemoryType::shared(1, policy.maximum_pages))?;
+        anyhow::ensure!(
+            budget.charge(u64::from(PAGE_BYTES)),
+            "runtime group backing budget is exhausted"
+        );
         let members = std::iter::repeat_with(|| None)
             .take(policy.members)
             .collect();
@@ -251,23 +343,29 @@ impl MemoryGroup {
             next_watch: 1,
             next_waiter: 1,
             watch_sequence: 1,
+            bypassed: false,
             ended: false,
         };
         Ok(Self {
             inner: Arc::new(GroupInner {
                 memory,
                 policy,
+                budget,
                 state: Mutex::new(state),
             }),
         })
     }
 
-    pub fn shared_memory(&self) -> SharedMemory {
-        self.inner.memory.clone()
+    pub fn shared_memory(&self) -> &SharedMemory {
+        &self.inner.memory
     }
 
     pub fn reserve(&self, pid: u32) -> Result<MemberReservation, Errno> {
         let mut state = self.inner.lock();
+        self.inner.reconcile(&mut state);
+        if state.bypassed {
+            return Err(Errno::Inval);
+        }
         if state.ended {
             return Err(Errno::Search);
         }
@@ -301,7 +399,8 @@ impl MemoryGroup {
     }
 
     pub fn snapshot(&self) -> GroupSnapshot {
-        let state = self.inner.lock();
+        let mut state = self.inner.lock();
+        self.inner.reconcile(&mut state);
         let live = state.members.iter().flatten();
         let members = live.clone().count();
         let reserved = live
@@ -331,6 +430,7 @@ impl MemoryGroup {
                 .iter()
                 .map(|chunk| u64::from(chunk.pages) * u64::from(PAGE_BYTES))
                 .sum(),
+            bypassed: state.bypassed,
         }
     }
 
@@ -381,6 +481,17 @@ impl GroupInner {
         self.state
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    fn reconcile(&self, state: &mut GroupState) {
+        let actual_pages = (self.memory.data_size() / PAGE_BYTES as usize) as u32;
+        let excess = actual_pages.saturating_sub(state.committed_pages);
+        if excess == 0 {
+            return;
+        }
+        self.budget.force(u64::from(excess) * u64::from(PAGE_BYTES));
+        state.committed_pages = actual_pages;
+        state.bypassed = true;
     }
 
     fn current_member(state: &GroupState, id: MemberId) -> Result<&Member, Errno> {
@@ -684,18 +795,28 @@ impl GroupInner {
             zero_chunk(&self.memory, chunk);
             return Ok(chunk);
         }
+        self.reconcile(state);
+        if state.bypassed {
+            return Err(Errno::NoMem);
+        }
         let new_pages = state
             .committed_pages
             .checked_add(pages)
             .ok_or(Errno::NoMem)?;
-        let budget_pages = self.policy.budget_bytes / u64::from(PAGE_BYTES);
-        if new_pages > self.policy.maximum_pages || u64::from(new_pages) > budget_pages {
+        if new_pages > self.policy.maximum_pages {
             return Err(Errno::NoMem);
         }
-        let page = self
-            .memory
-            .grow(u64::from(pages))
-            .map_err(|_| Errno::NoMem)? as u32;
+        let bytes = u64::from(pages) * u64::from(PAGE_BYTES);
+        if !self.budget.charge(bytes) {
+            return Err(Errno::NoMem);
+        }
+        let page = match self.memory.grow(u64::from(pages)) {
+            Ok(page) => page as u32,
+            Err(_) => {
+                self.budget.release(bytes);
+                return Err(Errno::NoMem);
+            }
+        };
         state.committed_pages = new_pages;
         Ok(Chunk { page, pages })
     }
@@ -765,11 +886,16 @@ impl GroupInner {
         if actual != expected {
             return Ok(WaitPreparation::NotEqual);
         }
+        if timeout_ns == 0 {
+            return Ok(WaitPreparation::TimedOut);
+        }
         let id = fresh_waiter(&mut state);
         let waiter = Arc::new(Waiter {
             id,
             member,
             addr,
+            started: Instant::now(),
+            timeout: (timeout_ns >= 0).then(|| Duration::from_nanos(timeout_ns as u64)),
             state: Mutex::new(WaitStatus::Waiting),
             ready: Condvar::new(),
         });
@@ -778,8 +904,7 @@ impl GroupInner {
         Ok(WaitPreparation::Registered(WaitRegistration {
             group: self.clone(),
             waiter,
-            started: Instant::now(),
-            timeout: (timeout_ns >= 0).then(|| Duration::from_nanos(timeout_ns as u64)),
+            settled: false,
         }))
     }
 
@@ -788,19 +913,30 @@ impl GroupInner {
         let mut state = self.lock();
         Self::receives(&state, member)?;
         let mut woken = Vec::new();
+        let mut live_count = 0;
+        let now = Instant::now();
         let sync = state
             .queues
             .get(&addr)
             .map(|queue| queue.iter().copied().collect::<Vec<_>>())
             .unwrap_or_default();
-        for id in sync.into_iter().take(count as usize) {
-            let waiter = state.waiters.get(&id).cloned();
-            if let Some(waiter) = waiter {
-                Self::remove_waiter_locked(&mut state, &waiter, WaitStatus::Woken);
-                woken.push(waiter);
+        for id in sync {
+            if live_count == count as usize {
+                break;
             }
+            let Some(waiter) = state.waiters.get(&id).cloned() else {
+                continue;
+            };
+            let status = if waiter.expired(now) {
+                WaitStatus::TimedOut
+            } else {
+                WaitStatus::Woken
+            };
+            Self::remove_waiter_locked(&mut state, &waiter, status);
+            live_count += usize::from(status == WaitStatus::Woken);
+            woken.push(waiter);
         }
-        let remaining = (count as usize).saturating_sub(woken.len());
+        let remaining = (count as usize).saturating_sub(live_count);
         let watchers = state
             .watches
             .iter()
@@ -820,7 +956,7 @@ impl GroupInner {
         for waiter in &woken {
             waiter.ready.notify_one();
         }
-        Ok((woken.len() + watch_count) as u32)
+        Ok((live_count + watch_count) as u32)
     }
 
     fn remove_waiter_locked(state: &mut GroupState, waiter: &Waiter, status: WaitStatus) {
@@ -850,6 +986,24 @@ impl GroupInner {
         drop(state);
         waiter.ready.notify_one();
         Ok(())
+    }
+
+    fn cancel_member(&self, member: MemberId) -> usize {
+        let mut state = self.lock();
+        let waiters = state
+            .waiters
+            .values()
+            .filter(|waiter| waiter.member == member)
+            .cloned()
+            .collect::<Vec<_>>();
+        for waiter in &waiters {
+            Self::remove_waiter_locked(&mut state, waiter, WaitStatus::Interrupted);
+        }
+        drop(state);
+        for waiter in &waiters {
+            waiter.ready.notify_one();
+        }
+        waiters.len()
     }
 
     fn finish_wait(&self, waiter: &Waiter, timed_out: bool) -> WaitResult {
@@ -906,6 +1060,13 @@ impl MemberLease {
         self.group.fail(self.member);
     }
 
+    pub fn wait_cancellation(&self) -> MemberWaitCancellation {
+        MemberWaitCancellation {
+            group: Arc::downgrade(&self.group),
+            member: self.member,
+        }
+    }
+
     pub fn physical_stopped(self) {
         self.group.release(self.member);
     }
@@ -957,6 +1118,7 @@ impl MemberLease {
 
 pub enum WaitPreparation {
     NotEqual,
+    TimedOut,
     Registered(WaitRegistration),
 }
 
@@ -964,6 +1126,7 @@ impl WaitPreparation {
     pub fn wait(self) -> WaitResult {
         match self {
             Self::NotEqual => WaitResult::NotEqual,
+            Self::TimedOut => WaitResult::TimedOut,
             Self::Registered(registration) => registration.wait(),
         }
     }
@@ -972,8 +1135,7 @@ impl WaitPreparation {
 pub struct WaitRegistration {
     group: Arc<GroupInner>,
     waiter: Arc<Waiter>,
-    started: Instant,
-    timeout: Option<Duration>,
+    settled: bool,
 }
 
 impl WaitRegistration {
@@ -989,7 +1151,13 @@ impl WaitRegistration {
         }
     }
 
-    pub fn wait(self) -> WaitResult {
+    pub fn wait(mut self) -> WaitResult {
+        let result = self.wait_inner();
+        self.settled = true;
+        result
+    }
+
+    fn wait_inner(&self) -> WaitResult {
         let mut status = self
             .waiter
             .state
@@ -999,7 +1167,7 @@ impl WaitRegistration {
             if *status != WaitStatus::Waiting {
                 return wait_status(*status);
             }
-            let Some(timeout) = self.timeout else {
+            let Some(timeout) = self.waiter.timeout else {
                 status = self
                     .waiter
                     .ready
@@ -1007,7 +1175,7 @@ impl WaitRegistration {
                     .unwrap_or_else(|poison| poison.into_inner());
                 continue;
             };
-            let remaining = timeout.saturating_sub(self.started.elapsed());
+            let remaining = timeout.saturating_sub(self.waiter.started.elapsed());
             if remaining.is_zero() {
                 drop(status);
                 return self.group.finish_wait(&self.waiter, true);
@@ -1023,6 +1191,29 @@ impl WaitRegistration {
                 return self.group.finish_wait(&self.waiter, true);
             }
         }
+    }
+}
+
+impl Drop for WaitRegistration {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        let _ = self.group.cancel_wait(self.waiter.member, self.waiter.id);
+    }
+}
+
+pub struct MemberWaitCancellation {
+    group: Weak<GroupInner>,
+    member: MemberId,
+}
+
+impl MemberWaitCancellation {
+    pub fn cancel(&self) -> usize {
+        let Some(group) = self.group.upgrade() else {
+            return 0;
+        };
+        group.cancel_member(self.member)
     }
 }
 
@@ -1163,9 +1354,8 @@ fn zero_chunk(memory: &SharedMemory, chunk: Chunk) {
     for page in 0..chunk.pages {
         let base = (chunk.page + page) * PAGE_BYTES;
         for offset in (0..PAGE_BYTES).step_by(4) {
-            if let Ok(cell) = atomic32_cell(memory, base + offset) {
-                cell.store(0, Ordering::Relaxed);
-            }
+            let cell = atomic32_cell(memory, base + offset).expect("allocated chunk is in bounds");
+            cell.store(0, Ordering::Relaxed);
         }
     }
 }
@@ -1273,16 +1463,49 @@ pub fn shm_unpin(member: &MemberLease, pin: u32) -> i32 {
         .map_or_else(Errno::result, |()| 0)
 }
 
-pub fn futex_wait32(member: &MemberLease, addr: u32, expected: i32, timeout_ns: i64) -> i32 {
-    member
-        .wait32(addr, expected, timeout_ns)
-        .map_or_else(Errno::result, WaitResult::code)
+pub fn futex_wait32(
+    member: &MemberLease,
+    addr: u32,
+    expected: i32,
+    timeout_ns: i64,
+    cancellation: &Arc<crate::process::Cancellation>,
+) -> i32 {
+    wait_with_cancellation(
+        member.prepare_wait32(addr, expected, timeout_ns),
+        cancellation,
+    )
 }
 
-pub fn futex_wait64(member: &MemberLease, addr: u32, expected: i64, timeout_ns: i64) -> i32 {
-    member
-        .wait64(addr, expected, timeout_ns)
-        .map_or_else(Errno::result, WaitResult::code)
+pub fn futex_wait64(
+    member: &MemberLease,
+    addr: u32,
+    expected: i64,
+    timeout_ns: i64,
+    cancellation: &Arc<crate::process::Cancellation>,
+) -> i32 {
+    wait_with_cancellation(
+        member.prepare_wait64(addr, expected, timeout_ns),
+        cancellation,
+    )
+}
+
+fn wait_with_cancellation(
+    preparation: Result<WaitPreparation, Errno>,
+    cancellation: &Arc<crate::process::Cancellation>,
+) -> i32 {
+    let preparation = match preparation {
+        Ok(preparation) => preparation,
+        Err(error) => return error.result(),
+    };
+    let registration = match preparation {
+        WaitPreparation::Registered(registration) => registration,
+        other => return other.wait().code(),
+    };
+    let cancel = registration.cancel_handle();
+    let _guard = cancellation.register_blocking(move || {
+        let _ = cancel.cancel();
+    });
+    registration.wait().code()
 }
 
 pub fn futex_wake(member: &MemberLease, addr: u32, count: u32) -> i32 {
@@ -1316,6 +1539,20 @@ pub fn parallelism(member: &MemberLease) -> i32 {
 
 fn host_member(host: &Host) -> Result<&MemberLease, i32> {
     host.shm.as_ref().ok_or(Errno::NotSup.result())
+}
+
+fn host_wait32(host: &Host, addr: u32, expected: i32, timeout_ns: i64) -> i32 {
+    match host_member(host) {
+        Ok(member) => futex_wait32(member, addr, expected, timeout_ns, &host.cancel),
+        Err(error) => error,
+    }
+}
+
+fn host_wait64(host: &Host, addr: u32, expected: i64, timeout_ns: i64) -> i32 {
+    match host_member(host) {
+        Ok(member) => futex_wait64(member, addr, expected, timeout_ns, &host.cancel),
+        Err(error) => error,
+    }
 }
 
 /// Registers the exact J1 ABI. J3 must install both the imported shared memory
@@ -1389,20 +1626,14 @@ pub fn add_imports(linker: &mut Linker<Host>) -> Result<()> {
         "runtime_shm",
         "futex_wait32",
         |caller: Caller<'_, Host>, addr: u32, expected: i32, timeout_ns: i64| {
-            host_member(caller.data()).map_or_else(
-                |error| error,
-                |member| futex_wait32(member, addr, expected, timeout_ns),
-            )
+            host_wait32(caller.data(), addr, expected, timeout_ns)
         },
     )?;
     linker.func_wrap(
         "runtime_shm",
         "futex_wait64",
         |caller: Caller<'_, Host>, addr: u32, expected: i64, timeout_ns: i64| {
-            host_member(caller.data()).map_or_else(
-                |error| error,
-                |member| futex_wait64(member, addr, expected, timeout_ns),
-            )
+            host_wait64(caller.data(), addr, expected, timeout_ns)
         },
     )?;
     linker.func_wrap(
