@@ -173,9 +173,9 @@ fn metadata_correction_is_exact_and_idempotent() {
     let mut meta = binding_meta();
     let mut expected = meta.clone();
     expected["dependencies"][RUNTIME] = "1.2.5".into();
-    wasm_packages::adapt(&mut meta);
+    wasm_packages::adapt(&mut meta, &Overrides::default());
     assert_eq!(meta, expected);
-    wasm_packages::adapt(&mut meta);
+    wasm_packages::adapt(&mut meta, &Overrides::default());
     assert_eq!(meta, expected);
     for (field, value) in [
         ("name", "@other/binding-wasm32-wasi"),
@@ -185,7 +185,7 @@ fn metadata_correction_is_exact_and_idempotent() {
         let mut untouched = binding_meta();
         untouched[field] = value.into();
         let original = untouched.clone();
-        wasm_packages::adapt(&mut untouched);
+        wasm_packages::adapt(&mut untouched, &Overrides::default());
         assert_eq!(untouched, original);
     }
 }
@@ -200,7 +200,7 @@ fn different_dependency_metadata_and_explicit_overrides_stay_authoritative() {
         let mut meta = binding_meta();
         meta["dependencies"][name] = value.into();
         let original = meta.clone();
-        wasm_packages::adapt(&mut meta);
+        wasm_packages::adapt(&mut meta, &Overrides::default());
         assert_eq!(meta, original);
     }
     let (mut resolver, mut manifest) = fixture();

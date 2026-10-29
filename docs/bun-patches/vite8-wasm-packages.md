@@ -14,7 +14,7 @@ Metadata adaptation runs for registry resolution and lock replay. Native desktop
 
 ## Rolldown 1.2.15 runtime metadata correction
 
-For exact `@rolldown/binding-wasm32-wasi@1.2.15`, the adapter narrows `@napi-rs/wasm-runtime` from `~1.2.5` to published `1.2.5` when both emnapi dependencies still pin `2.0.0-alpha.5`. This is an intentional upstream metadata correction within the published range. Other packages, versions and changed dependency metadata remain untouched. Explicit user overrides keep their existing precedence.
+For exact `@rolldown/binding-wasm32-wasi@1.2.15`, the adapter narrows `@napi-rs/wasm-runtime` from `~1.2.5` to published `1.2.5` when both emnapi dependencies still pin `2.0.0-alpha.5`. This is an intentional upstream metadata correction within the published range. Other packages, versions and changed dependency metadata remain untouched. Explicit user overrides match against the original published `~1.2.5` range before this default correction. A matching override keeps that range available to the ordinary override resolver, including when replay restores it from the adapter's narrowed lock metadata.
 
 Runtime 1.2.6 excludes alpha.5 from its peer range and its plugin uses `addonModule`, which alpha.5 does not provide. Native Node reproduces `initWorker` failure in a flat graph. npm can instead split emnapi versions and fail at `setLastError` when the loader passes its alpha.5 context into a different core. Runtime 1.2.5 uses `napiModule` and accepts alpha.5. Ordinary nested placement preserves an unrelated root runtime 1.2.6 and emnapi 1.11.3 while the binding uses runtime 1.2.5 with alpha.5.
 
