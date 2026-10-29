@@ -1,0 +1,4 @@
+dep start
+dep end
+main start 42 set
+main after await

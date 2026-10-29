@@ -1,0 +1,4 @@
+b body fromA
+b tdz ReferenceError
+a body fromA via b
+main fromA late value

@@ -1,0 +1,8 @@
+{
+ "modules": {
+  "/broken.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"broken evaluated\");\nthrow Error(\"broken module\");\n\n}})",
+  "/lazy.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"value\":()=>value,\"default\":()=>lazy_default});yield;yield;console.log(\"lazy evaluated\");\nconst value = \"lazy\";\nconst lazy_default = \"lazy default\";\n\n}})",
+  "/main.mjs": "({r:[],i:[],x:[],s:[],a:true,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"main start\");\nconst lazy = (yield __bunwasm_m.import(\"./lazy.mjs\"));\nconsole.log(\"lazy value\", lazy.value, lazy.default);\nasync function later() {\n  return (await __bunwasm_m.import(\"./lazy.mjs\")).value;\n}\nconsole.log(\"again\", (yield later()));\ntry {\n  (yield __bunwasm_m.import(\"./broken.mjs\"));\n} catch (error) {\n  console.log(\"broken rejected\", error.message);\n}\ntry {\n  (yield __bunwasm_m.import(\"./broken.mjs\"));\n} catch (error) {\n  console.log(\"broken again\", error.message);\n}\nconst spec = \"./lazy.mjs\";\nconsole.log(\"computed\", (yield __bunwasm_m.import(spec)).value);\n\n}})"
+ },
+ "cjs": {}
+}
