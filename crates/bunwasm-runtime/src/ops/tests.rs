@@ -7,7 +7,14 @@ fn request(values: Vec<Val>) -> Vec<u8> {
     codec::encode(&Val::Array(values)).unwrap()
 }
 
-fn dispatcher(function: impl Fn(Args<'_>) -> NativeResult + 'static) -> Dispatcher {
+fn reply_result(reply: Reply) -> NativeResult {
+    let bytes = reply
+        .value
+        .map_or_else(Vec::new, |value| codec::encode(&value).unwrap());
+    Reply::decode(reply.status, &bytes)
+}
+
+pub(super) fn dispatcher(function: impl Fn(Args<'_>) -> NativeResult + 'static) -> Dispatcher {
     Dispatcher::new(NonZeroU32::MIN, 17, Rc::new(function)).unwrap()
 }
 
@@ -61,6 +68,57 @@ fn codec_matches_legacy_tag_bytes_without_permissive_decoding() {
             8, 1, 0, 0, 0, 1, 0, 0, 0, b'x', 7, 2, 0, 0, 0, 3, 6, 2, 0, 0, 0, 1, 2
         ]
     );
+}
+
+#[test]
+fn codec_keeps_wire_bytes_with_a_leading_payload() {
+    let value = Val::Array(vec![
+        Val::Bytes(vec![1, 2]),
+        Val::from("é"),
+        Val::Object(vec![("k".into(), Val::Num(1.5))]),
+        Val::BigInt(-1),
+    ]);
+    let mut expected = vec![
+        7, 4, 0, 0, 0, 6, 2, 0, 0, 0, 1, 2, 5, 2, 0, 0, 0, 0xc3, 0xa9,
+    ];
+    expected.extend([8, 1, 0, 0, 0, 1, 0, 0, 0, b'k', 4]);
+    expected.extend(1.5f64.to_le_bytes());
+    expected.push(9);
+    expected.extend([0xff; 8]);
+    assert_eq!(codec::encode(&value).unwrap(), expected);
+}
+
+#[test]
+fn encoded_len_and_encode_into_match_encode_for_every_payload_position() {
+    let big = || Val::Bytes(vec![0xa5; 70_000]);
+    let cases = [
+        Val::Array(vec![big(), Val::Num(1.0), Val::Num(2.0)]),
+        Val::Array(vec![Val::from("path"), big(), Val::Num(1.0)]),
+        Val::Array(vec![Val::from("path"), Val::Num(1.0), big()]),
+        Val::Object(vec![
+            ("code".into(), Val::Str("é".repeat(40_000))),
+            ("map".into(), Val::Array(vec![big(), Val::Null])),
+        ]),
+        Val::Array(vec![
+            Val::Array(vec![Val::Object(vec![("k".into(), big())])]),
+            Val::BigUint(u64::MAX),
+        ]),
+        Val::Undefined,
+        Val::Array(vec![]),
+    ];
+    for value in cases {
+        let encoded = codec::encode(&value).unwrap();
+        assert_eq!(codec::encoded_len(&value).unwrap(), encoded.len());
+        assert_eq!(encoded.capacity(), encoded.len());
+        let mut filled = vec![0xff; encoded.len()];
+        codec::encode_into(&value, &mut filled).unwrap();
+        assert_eq!(filled, encoded);
+        assert_eq!(codec::decode(&encoded).unwrap(), value);
+        let mut short = vec![0; encoded.len() - 1];
+        assert!(codec::encode_into(&value, &mut short).is_err());
+        let mut long = vec![0; encoded.len() + 1];
+        assert!(codec::encode_into(&value, &mut long).is_err());
+    }
 }
 
 #[test]
@@ -176,6 +234,13 @@ fn dispatch_deep_request() {
         codec::decode(&partial),
         Err(CodecError::Invalid("impossible item count"))
     ));
+
+    let deep = codec::decode(&deep_value()).unwrap();
+    assert_eq!(codec::encoded_len(&deep).unwrap(), deep_value().len());
+    let mut filled = vec![0; deep_value().len()];
+    codec::encode_into(&deep, &mut filled).unwrap();
+    assert_eq!(filled, deep_value());
+    drop_tree(deep);
 }
 
 #[test]
@@ -212,14 +277,13 @@ fn invalid_calls_cannot_invoke_the_native() {
 }
 
 #[test]
-fn replies_keep_independent_owned_storage_across_later_calls() {
+fn replies_keep_independent_owned_values_across_later_calls() {
     let dispatch = dispatcher(|args| Ok(args.get(0).clone()));
     let first = dispatch.dispatch(dispatch.op(), 1, &request(vec![Val::Bytes(vec![3; 4096])]));
-    let expected = first.bytes.clone();
     let second = dispatch.dispatch(dispatch.op(), 1, &request(vec![Val::Str("second".into())]));
-    assert_eq!(first.bytes, expected);
-    assert_eq!(first.into_result().unwrap(), Val::Bytes(vec![3; 4096]));
-    assert_eq!(second.into_result().unwrap(), Val::Str("second".into()));
+    assert_eq!(first.status, Status::Ok);
+    assert_eq!(first.value, Some(Val::Bytes(vec![3; 4096])));
+    assert_eq!(reply_result(second).unwrap(), Val::Str("second".into()));
 }
 
 #[test]
@@ -233,7 +297,7 @@ fn native_errors_remain_data_with_ordered_duplicate_properties() {
     });
     let reply = dispatch.dispatch(dispatch.op(), 1, &request(vec![]));
     assert_eq!(reply.status, Status::NativeError);
-    let error = reply.into_result().unwrap_err();
+    let error = reply_result(reply).unwrap_err();
     assert_eq!(error.kind, ErrorKind::TypeError);
     assert_eq!(error.name.as_deref(), Some("CustomError"));
     assert_eq!(error.message, "bad\0argument");
@@ -357,7 +421,11 @@ fn frame_span_checks_alignment_bounds_overlap_and_initial_reply() {
     assert_eq!(Frame::read(&memory, 1), Err(Status::BadCall));
 }
 
-fn allocated_frame(transport: &abi::Transport, op: u32, values: Vec<Val>) -> (u32, u32, u32) {
+pub(super) fn allocated_frame(
+    transport: &abi::Transport,
+    op: u32,
+    values: Vec<Val>,
+) -> (u32, u32, u32) {
     let request = request(values);
     let len = request.len() as u32;
     let pointer = transport.alloc(len, Frame::ALIGN);
@@ -369,7 +437,12 @@ fn allocated_frame(transport: &abi::Transport, op: u32, values: Vec<Val>) -> (u3
     (frame, pointer, len)
 }
 
-fn release_frame(transport: &abi::Transport, frame: u32, pointer: u32, len: u32) -> Vec<u8> {
+pub(super) fn release_frame(
+    transport: &abi::Transport,
+    frame: u32,
+    pointer: u32,
+    len: u32,
+) -> Vec<u8> {
     let result = Frame::decode(&transport.read(frame, Frame::SIZE as u32).unwrap()).unwrap();
     let bytes = transport.read(result.reply_ptr, result.reply_len).unwrap();
     transport
@@ -470,4 +543,25 @@ fn physical_native_error_and_wrong_free_sizes_release_every_allocation() {
         transport.free(frame.1, frame.2, Frame::ALIGN),
         Err(Status::BadCall)
     );
+}
+
+#[test]
+fn reply_allocation_failure_is_a_resource_limit_without_a_reply() {
+    let transport = abi::Transport::default();
+    let dispatch = dispatcher(|_| Ok(Val::Bytes(vec![3; 1024])));
+    let frame = allocated_frame(&transport, dispatch.op(), vec![]);
+    transport.exhaust();
+    assert_eq!(
+        transport.dispatch(&dispatch, frame.0),
+        Status::ResourceLimit
+    );
+    let words = Frame::decode(&transport.read(frame.0, Frame::SIZE as u32).unwrap()).unwrap();
+    assert_eq!((words.reply_ptr, words.reply_len), (0, 0));
+    assert_eq!(transport.encode(&Val::Null), Err(CodecError::Allocation));
+    assert_eq!(transport.live_allocations(), 2);
+    transport.free(frame.1, frame.2, Frame::ALIGN).unwrap();
+    transport
+        .free(frame.0, Frame::SIZE as u32, Frame::ALIGN)
+        .unwrap();
+    assert_eq!(transport.live_allocations(), 0);
 }

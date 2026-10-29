@@ -79,8 +79,8 @@ pub unsafe extern "C" fn quickjs_rust_realloc(
 }
 
 fn data_echo(value: i32) -> i32 {
-    let request = transport::TransportBuffer::new(14);
-    let frame = transport::TransportBuffer::new(24);
+    let request = transport::TransportBuffer::new(14).expect("transport allocation");
+    let frame = transport::TransportBuffer::new(24).expect("transport allocation");
     let mut bytes = [0u8; 14];
     bytes[0] = 7;
     bytes[1..5].copy_from_slice(&1u32.to_le_bytes());
