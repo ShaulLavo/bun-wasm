@@ -40,7 +40,8 @@ PATH="$(dirname "$(command -v node)"):$(echo "$PATH" | tr ':' '\n' | grep -v bin
 "$WASI_SDK_PATH/bin/wasm-ld" --shared --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
   --import-memory=env,memory --import-table --allow-undefined \
   --export=hermes_ctor_value --export=__stack_pointer --export=__wasm_call_ctors \
-  --export=hermes_register --export=hermes_run -Map="$out/engine-link.map" \
+  --export=hermes_register --export=hermes_run \
+  --export=hermes_memory_telemetry --export=hermes_memory_telemetry_refresh -Map="$out/engine-link.map" \
   -o "$out/engine.implicit.wasm" "$out/engine-init.o" "$CARGO_TARGET_DIR/wasm32-wasip1/release/libbunwasm_engine_hermes.a"
 node "$root/scripts/src/engine-explicit-init.ts" hermes "$out/engine.implicit.wasm" "$side"
 wasm-tools validate "$side"
