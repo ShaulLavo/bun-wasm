@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/async-context-runtime.test.ts",
+  "localRuntime": true
+}

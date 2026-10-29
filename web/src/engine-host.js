@@ -47,6 +47,62 @@ const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const nativeDateNow = globalThis.Date.now.bind(globalThis.Date);
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
+
+// A `for await` loop's iterator record, made by `__bunwasm_iterate` with the
+// reads and calls of GetIterator(iterable, async) and given to the loop in
+// place of the iterable; a sync iterable stays sync, so the engine still
+// adapts it. It notes the frame once `next()` or `return()` has returned,
+// right before the loop's implicit await suspends: an async iterator method
+// that throws synchronously leaves nothing pending. The engine's adapter for
+// a sync iterator turns such a throw into a rejection the loop awaits, and
+// awaits on close even without `return`, so a sync record notes the frame in
+// those cases too. A frame already pending (a sync iterator closed because
+// its value rejected) is kept.
+const noFrame = Symbol("no frame");
+function iteratorMethod(iterable, key) {
+  const method = iterable[key];
+  if (method === undefined || method === null) return undefined;
+  if (typeof method !== "function") throw new TypeError(`${String(key)} is not a function`);
+  return method;
+}
+function forAwaitRecord(iterable, frame) {
+  const asyncMethod = iteratorMethod(iterable, Symbol.asyncIterator);
+  const key = asyncMethod ? Symbol.asyncIterator : Symbol.iterator;
+  const method = asyncMethod ?? iteratorMethod(iterable, Symbol.iterator);
+  if (method === undefined) throw new TypeError("object is not async iterable");
+  const iterator = Reflect.apply(method, iterable, []);
+  if ((typeof iterator !== "object" || iterator === null) && typeof iterator !== "function") {
+    throw new TypeError(`Result of the ${String(key)} method is not an object`);
+  }
+  const next = iterator.next;
+  const sync = key === Symbol.iterator;
+  const note = () => {
+    if (record.pending === noFrame) record.pending = frame();
+  };
+  const call = (method) => {
+    if (!sync) {
+      const result = Reflect.apply(method, iterator, []);
+      note();
+      return result;
+    }
+    try {
+      return Reflect.apply(method, iterator, []);
+    } finally {
+      note();
+    }
+  };
+  const record = {
+    pending: noFrame,
+    next: () => call(next),
+    get return() {
+      const close = iterator.return;
+      if (typeof close === "function") return () => call(close);
+      if (sync) note();
+      return close;
+    },
+  };
+  return Object.defineProperty(Object.setPrototypeOf(record, null), key, { value: () => record });
+}
 const nativeGc = typeof globalThis.gc === "function" ? globalThis.gc.bind(globalThis) : null;
 const nativeAtomicsLoad = Atomics.load;
 const nativeWaitAsync = typeof Atomics.waitAsync === "function" ? Atomics.waitAsync : null;
@@ -645,28 +701,91 @@ class EngineHost {
       ),
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));
-    // AsyncLocalStorage across `await`: the transpiler prints `await x` as
-    // `__bunwasm_resume(__bunwasm_capture(), await x)` for this engine.
-    // A resumed context would stay set for whatever runs after the function
-    // suspends again or returns; jobs the host wraps (then callbacks, timers,
-    // ticks) set their own, and a microtask puts the previous one back if
-    // nothing changed it meanwhile.
-    // A native continuation provider already scopes every job, including raw eval.
-    // Its post-getter frame must not be replaced with the printer's earlier frame.
-    hidden("__bunwasm_capture", () => host.o.asyncContext ? undefined : host.asyncContext);
-    hidden("__bunwasm_resume", (saved, value) => {
-      if (host.o.asyncContext) return value;
-      const ambient = host.asyncContext;
-      if (ambient !== saved) {
-        host.asyncContext = saved;
-        nativeQueueMicrotask(() => {
-          if (host.asyncContext === saved) host.asyncContext = ambient;
-        });
-      }
-      return value;
-    });
+    this.installContextHooks(hidden);
     // Without a networking host, user code gets the host's own fetch.
     if (this.o.fetch && !this.native.hostCaps.fetch) this.installFetch(this.o.fetch);
+  }
+
+  // AsyncLocalStorage across suspensions. For this engine the transpiler
+  // prints hooks around `await`, async generator `yield`, `for await`, and the
+  // `catch` and `finally` blocks that can observe a rejected await (vendor
+  // patch 0008, docs/engine-browser.md). A resumed frame would stay set for
+  // whatever runs after the function suspends again or returns; jobs the host
+  // wraps (then callbacks, timers, ticks) set their own, and a microtask puts
+  // the previous one back if nothing changed it meanwhile.
+  installContextHooks(hidden) {
+    const host = this;
+    const id = (value) => value;
+    // A native continuation provider already scopes every job, including raw
+    // eval. Its post-getter frame must not be replaced with the printer's
+    // earlier frame, so every hook is inert.
+    if (this.o.asyncContext) {
+      hidden("__bunwasm_capture", () => undefined);
+      hidden("__bunwasm_resume", (_saved, value) => value);
+      hidden("__bunwasm_resumed", id);
+      hidden("__bunwasm_caught", () => {});
+      hidden("__bunwasm_id", id);
+      hidden("__bunwasm_iterate", id);
+      hidden("__bunwasm_entered", () => {});
+      hidden("__bunwasm_exited", () => {});
+      return;
+    }
+    const enter = (saved) => {
+      const ambient = host.asyncContext;
+      if (ambient === saved) return;
+      host.asyncContext = saved;
+      nativeQueueMicrotask(() => {
+        if (host.asyncContext === saved) host.asyncContext = ambient;
+      });
+    };
+    // `__bunwasm_resume(__bunwasm_capture(), await x)` in a function without
+    // handlers; `__bunwasm_resumed(await __bunwasm_id(x, s = capture()), s, s = 0)`
+    // in one whose `catch`/`finally` blocks start with `__bunwasm_caught(s, s = 0)`.
+    // `s` is 0 while no suspension is pending, else the frame it began in.
+    hidden("__bunwasm_capture", () => host.asyncContext);
+    hidden("__bunwasm_resume", (saved, value) => {
+      enter(saved);
+      return value;
+    });
+    hidden("__bunwasm_resumed", (value, saved) => {
+      enter(saved);
+      return value;
+    });
+    // A generator's throw() runs its handlers synchronously in the caller's
+    // frame, not the one its pending `yield` captured.
+    let syncGeneratorResume = 0;
+    hidden("__bunwasm_caught", (saved) => {
+      if (saved !== 0 && syncGeneratorResume === 0) enter(saved);
+    });
+    hidden("__bunwasm_id", id);
+    // `for await`: `{ let c; try { for await (… of c = __bunwasm_iterate(y)) {
+    // try { __bunwasm_entered(c); … } finally { __bunwasm_caught(s, s = 0); } } }
+    // finally { __bunwasm_exited(c); } }`. The body starts in the frame its
+    // `next()` was called in; the loop leaves, after the iterator closed, in
+    // the frame of its last `next()` or `return()`.
+    const reenter = (record) => {
+      const saved = record.pending;
+      record.pending = noFrame;
+      if (saved !== noFrame) enter(saved);
+    };
+    hidden("__bunwasm_iterate", (iterable) => forAwaitRecord(iterable, () => host.asyncContext));
+    hidden("__bunwasm_entered", reenter);
+    hidden("__bunwasm_exited", (record) => {
+      if (record !== undefined) reenter(record);
+    });
+    const asyncGeneratorPrototype = Object.getPrototypeOf(Object.getPrototypeOf((async function* () {})()));
+    const nativeThrow = asyncGeneratorPrototype.throw;
+    const { throw: wrapped } = {
+      throw(value) {
+        syncGeneratorResume++;
+        try {
+          return nativeThrow.call(this, value);
+        } finally {
+          syncGeneratorResume--;
+        }
+      },
+    };
+    Object.defineProperty(asyncGeneratorPrototype, "throw", { value: wrapped });
   }
 
   // User code gets the host's real fetch, adapted to the runtime's Response.

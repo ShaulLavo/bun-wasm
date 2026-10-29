@@ -334,7 +334,7 @@ test("Astro opt-outs leave optional and unrelated external requests strictly blo
   let aborted = 0;
   for (const target of targets) {
     await browserRegistryRoute({
-      request: () => ({ url: () => target, method: () => "GET", headers: () => ({}) }),
+      request: () => ({ url: () => target, method: () => "GET", postDataBuffer: () => null, headers: () => ({}) }),
       abort: async () => { aborted++; },
       continue: async () => { throw new Error("External request escaped guard"); },
       fetch: async () => { throw new Error("External request reached fetch"); },

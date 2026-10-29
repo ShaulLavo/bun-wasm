@@ -409,10 +409,13 @@ pub fn with_dynamic_import_referrer<T>(from: &str, f: impl FnOnce() -> T) -> T {
     bun_js_printer::with_bunwasm_import_referrer(from, f)
 }
 
-/// Runs `f` with Bun's printer emitting the bun-wasm `await` hooks
-/// (`__bunwasm_resume(__bunwasm_capture(), await x)`, see
+/// Version of the shapes [`with_await_hooks`] prints.
+pub const HOOKS_VERSION: u32 = bun_js_printer::BUNWASM_HOOKS_VERSION;
+
+/// Runs `f` with Bun's printer emitting the bun-wasm async-context hooks
+/// (`await`, `catch`/`finally`, async generator `yield` and `for await`; see
 /// `bun_js_printer::BUNWASM_AWAIT_HOOKS`) when `on`. For the browser engine,
-/// which carries AsyncLocalStorage across `await` with them.
+/// which carries AsyncLocalStorage across suspensions with them.
 pub fn with_await_hooks<T>(on: bool, f: impl FnOnce() -> T) -> T {
     use std::sync::atomic::Ordering;
     let hooks = &bun_js_printer::BUNWASM_AWAIT_HOOKS;

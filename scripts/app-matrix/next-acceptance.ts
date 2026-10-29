@@ -18,22 +18,25 @@ import { editCycle, compileErrorRecovery } from "./next-acceptance-edits";
 import { closeOwnedBrowser, boundedCleanup } from "./cleanup";
 import { requestProbe } from "./next-acceptance-http";
 import { runAcceptancePhase } from "./next-acceptance-phase";
+import { acceptanceBudget, acceptanceTimeouts, timeoutOptions } from "./next-acceptance-options";
 import { routeCases, runRouteCase, overlappingRequests } from "./next-acceptance-cases";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
+import { registryReceipt } from "./next-acceptance-registry";
 import { verifyAcceptanceAssets } from "./next-acceptance-assets";
 import { emptyMemory, memoryGate, parseMemory, resultTable, type AcceptanceEngine, type MemorySample, type Outcome, type PhaseResult } from "./next-acceptance-model";
 
 const { values } = parseArgs({ options: {
   engine: { type: "string" }, "web-root": { type: "string" }, output: { type: "string" },
   "runtime-revision": { type: "string" }, "runtime-receipt": { type: "string" },
-  registry: { type: "string" }, "registry-extra": { type: "string" }, "memory-hook": { type: "string" },
+  registry: { type: "string" }, "registry-extra": { type: "string" }, "registry-overlay": { type: "string" }, "memory-hook": { type: "string" },
   port: { type: "string", default: "43701" }, cycles: { type: "string", default: "30" },
   phases: { type: "string", default: "install,build,start,dev" },
-  "timeout-ms": { type: "string", default: "180000" }, "idle-ms": { type: "string", default: "1500" },
+  ...timeoutOptions, "idle-ms": { type: "string", default: "1500" },
   "min-headroom-mib": { type: "string", default: "32" }, "max-growth-mib": { type: "string", default: "16" },
 } });
 if (values.engine !== "quickjs" && values.engine !== "jsc" && values.engine !== "browser") throw new Error("--engine quickjs|jsc|browser is required");
 if (!values["web-root"] || !values.output || !/^[a-f0-9]{40}$/.test(values["runtime-revision"] ?? "")) throw new Error("--web-root, --output and --runtime-revision <full SHA> are required");
+if (values["registry-overlay"] && !values["registry-extra"]) throw new Error("--registry-overlay requires --registry-extra");
 const engine: AcceptanceEngine = values.engine;
 const webRoot = resolve(values["web-root"]);
 const output = resolve(values.output);
@@ -46,7 +49,8 @@ const numeric = (name: keyof typeof values, minimum: number, maximum: number) =>
   return value;
 };
 const cycles = numeric("cycles", 0, 1000);
-const timeout = numeric("timeout-ms", 1000, 900000);
+const timeouts = acceptanceTimeouts(values);
+const timeout = timeouts.timeoutMs;
 const idle = numeric("idle-ms", 1000, 60000);
 const port = numeric("port", 1024, 65535);
 const minHeadroom = numeric("min-headroom-mib", 1, 4096);
@@ -77,7 +81,6 @@ const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture
 mkdirSync(output, { recursive: true });
 // A report directory is a single run, so stale evidence cannot turn a later run green.
 writeFileSync(join(output, "run.json"), "", { flag: "wx" });
-process.env.BUN_WASM_TEST_TMP ??= "/work/tmp";
 const task = session("bun-wasm-next01-");
 process.env.TMPDIR = task.scratch;
 let mirror: Awaited<ReturnType<typeof registry>> | undefined;
@@ -88,7 +91,7 @@ function save() {
     schema: 1, engine, observedEngine, browser: { name: "chromium", version: browserVersion },
     fixture: { path: "examples/next-acceptance", sourceRevision, sha256: digest(JSON.stringify(sources)), lockSha256: digest(sources["bun.lock"] ?? ""), stagedSha256: digest(JSON.stringify(staged.files)), config: staged.config, dependencies: JSON.parse(sources["package.json"] ?? "{}").dependencies },
     runtime: { revision: values["runtime-revision"], revisionSource: "caller supplied; compare to producer receipt", assets, webRoot, receipt: values["runtime-receipt"] ? resolve(values["runtime-receipt"]) : null },
-    parameters: { cycles, timeoutMs: timeout, idleMs: idle, minHeadroomMiB: minHeadroom, maxGrowthMiB: maxGrowth, phases: Array.from(phases) },
+    parameters: { cycles, ...timeouts, idleMs: idle, minHeadroomMiB: minHeadroom, maxGrowthMiB: maxGrowth, phases: Array.from(phases) },
     completedCycles, devProcessId, droppedSamples, samplerErrors, failedAllocations, rebuilds, rows, samples,
     network: { mode: mirror ? "registry replay" : "live npm (diagnostic)", external, mirror: mirror?.snapshot() }, cleanup,
     acceptance: rows.length > 0 && rows.every(row => row.status === "pass") && cleanup === "pass" && !samplerErrors.length && !droppedSamples,
@@ -145,7 +148,7 @@ async function cancelPhase() {
   if (browserServer) await closeOwnedBrowser(browserServer, 1000);
 }
 
-async function phase(name: string, operation: () => Promise<void>, prerequisite?: string, budgetMs = timeout + 5000): Promise<boolean> {
+async function phase(name: string, operation: () => Promise<void>, prerequisite?: string, budgetMs = acceptanceBudget(name, timeouts).watchdogMs): Promise<boolean> {
   const previous = prerequisite ? rows.find(row => row.phase === prerequisite) : undefined;
   if (prerequisite && previous?.status !== "pass") return record(name, { status: "blocked", reason: `Requires ${prerequisite}: ${previous?.status ?? "missing"}` });
   const result = await runAcceptancePhase({ phase: name, engine, observedEngine, timeoutMs: budgetMs,
@@ -160,7 +163,7 @@ function persistResult(row: PhaseResult) {
 }
 
 function record(name: string, outcome: Outcome, started = performance.now()): boolean {
-  const row = { phase: name, engine, observedEngine, durationMs: Math.round(performance.now() - started), ...outcome };
+  const row = { phase: name, engine, observedEngine, durationMs: Math.round(performance.now() - started), budgetMs: null, ...outcome };
   persistResult(row);
   return row.status === "pass";
 }
@@ -172,7 +175,7 @@ function selected(name: string) {
 }
 
 async function command(page: Page, name: string, text: string) {
-  const result = await run(page, text, timeout);
+  const result = await run(page, text, acceptanceBudget(name, timeouts).operationMs);
   writeFileSync(join(output, `${name}.log`), result.output);
   assert.equal(result.code, 0, `${text}: ${result.output}`);
 }
@@ -231,7 +234,7 @@ async function stopServer(page: Page, mode: string) {
 async function serverCases(owner: Page, page: Page, base: string, mode: "start" | "dev", source: GuestSource, traffic: Awaited<ReturnType<typeof observeNativeProductTraffic>>) {
   await phase(`${mode}:http-ready`, async () => {
     const probe = await page.context().newPage();
-    try { await waitForPreviewReady(probe, base, Date.now() + timeout); }
+    try { await waitForPreviewReady(probe, base, Date.now() + timeout, 1000); }
     finally { await probe.close(); }
   }, mode);
   for (const name of routeCases) await phase(`${mode}:${name}`, async () => { await alive(owner); await runRouteCase(name, page, base, timeout); await alive(owner); }, `${mode}:http-ready`);
@@ -294,11 +297,11 @@ async function main() {
   if (values.registry && values["registry-extra"]) throw new Error("Choose --registry or --registry-extra");
   if (values.registry) mirror = await registry({ directory: resolve(values.registry), record: false });
   if (values["registry-extra"]) {
-    const replay = nextRegistry(resolve(values["registry-extra"]), 0);
-    const indexes = ["/work/cache/bun-wasm-app-matrix/index.json", join(resolve(values["registry-extra"]), "index.json")].map(path => readFileSync(path, "utf8"));
-    const registryHash = digest(indexes.join("\n"));
-    const entries = new Set(indexes.flatMap(text => Object.keys(JSON.parse(text)))).size;
-    mirror = { ...replay, errors: [], snapshot: () => ({ entries, sha256: registryHash, requests: replay.requests.length, misses: replay.misses, errors: [] }) };
+    const indexPaths = ["/work/cache/bun-wasm-app-matrix/index.json", join(resolve(values["registry-extra"]), "index.json")]
+      .concat(values["registry-overlay"] ? [join(resolve(values["registry-overlay"]), "index.json")] : []);
+    const receipt = registryReceipt(indexPaths);
+    const replay = nextRegistry(resolve(values["registry-extra"]), 0, values["registry-overlay"] ? resolve(values["registry-overlay"]) : undefined);
+    mirror = { ...replay, errors: [], snapshot: () => ({ ...receipt, requests: replay.requests.length, misses: replay.misses, errors: [] }) };
   }
   const match = await task.start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { ROOT: webRoot, PORT: "0", PREVIEW_ORIGINS: "1" });
   const browser = await task.launch({ launch: async () => {
