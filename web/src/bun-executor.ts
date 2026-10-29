@@ -1,4 +1,5 @@
-import { linkedWorkerHooks, type LinkPlanSource } from "waffle/link";
+import { prepareLinkPlan, instantiateLinkPlan, type LinkedGroup, type LinkPlanSource } from "waffle/link";
+import { createMemoryReader, type MemorySnapshot } from "./memory-telemetry.js";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
 import { startEngineHost } from "./engine-host.js";
@@ -41,7 +42,7 @@ export interface RunRequest extends RuntimeWorkerRequest {
   slots?: "table" | "imports" | "off";
 }
 
-export type WorkerMessage = RuntimeWorkerMessage | { type: "net"; req: NetRequest } | BunSharedConnection;
+export type WorkerMessage = RuntimeWorkerMessage | { type: "bun-memory"; snapshot: MemorySnapshot } | { type: "net"; req: NetRequest } | BunSharedConnection;
 
 // The browser engine's polyfills replace globalThis.Response; Cache.put needs the real one.
 const NativeResponse = Response;
@@ -106,7 +107,7 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
       ? createLookupClient(new BroadcastChannel(req.lookupChannel))
       : undefined;
   const lookup = lookupClient;
-  const linked = linkedExecutor(req);
+  const linked = linkedExecutor(req, host);
   return {
     ...linked,
     hostCallFd: HOST_CALL_FD,
@@ -181,16 +182,43 @@ function finishHostServices(sharedObjects: SharedObjectService | undefined, look
   }
 }
 
-function linkedExecutor(req: RunRequest): Pick<WorkerExecutor<RunRequest>, "instantiate" | "initialize" | "beforeFinish"> {
+function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExecutor<RunRequest>, "instantiate" | "initialize" | "beforeFinish"> {
   if (!req.linkPlan) return {};
   const request = { ...req, linkPlan: req.linkPlan };
-  const hooks = linkedWorkerHooks();
+  let group: LinkedGroup | undefined;
+  let reader: ReturnType<typeof createMemoryReader> | undefined;
+  let finished = false;
   return {
-    instantiate(imports, context) {
-      if (!hooks.instantiate) throw new Error("linked worker instantiate hook is missing");
-      return hooks.instantiate(imports, { ...context, request });
+    async instantiate(imports, context) {
+      context.checkActive();
+      if (finished || group) throw new Error("link executor already used");
+      const plan = await prepareLinkPlan(request.linkPlan);
+      context.checkActive();
+      if (finished) throw new Error("link executor finished during admission");
+      const linked = instantiateLinkPlan(plan, {
+        wasi: context.wasi, coreImports: imports, checkActive: context.checkActive, bindMemory: context.bindMemory,
+      });
+      try { context.checkActive(); }
+      catch (error) { linked.dispose(); throw error; }
+      group = linked;
+      return linked.entry;
     },
-    initialize(context) { hooks.initialize?.({ ...context, request }); },
-    beforeFinish: hooks.beforeFinish,
+    initialize(context) {
+      context.checkActive();
+      if (!group || finished) throw new Error("link group is unavailable");
+      group.initialize();
+      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance);
+      Reflect.set(globalThis, "__bunMemoryTelemetry", (refresh = false) => reader?.sample(refresh));
+    },
+    beforeFinish() {
+      finished = true;
+      try {
+        if (reader) host.postMessage({ type: "bun-memory", snapshot: reader.finish() });
+      } finally {
+        Reflect.deleteProperty(globalThis, "__bunMemoryTelemetry");
+        group?.dispose();
+        group = undefined;
+      }
+    },
   };
 }

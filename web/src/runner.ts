@@ -1,3 +1,4 @@
+import { recordMemorySnapshot } from "./memory-telemetry.js";
 import { programLinkPlan } from "../../src/assets.js";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
@@ -265,6 +266,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   };
   const onMessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
+    if (recordMemorySnapshot(msg)) return;
     if (msg.type === "bun-shared-connect") {
       const selected = rootOutcome && readOutcome(rootOutcome);
       const error = acceptRootSharedConnection(sharedRoute, msg, options.runtime.disposed || finished || Boolean(selected));

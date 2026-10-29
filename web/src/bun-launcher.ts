@@ -1,3 +1,4 @@
+import { recordMemorySnapshot } from "./memory-telemetry.js";
 import { programLinkPlan } from "../../src/assets.js";
 import { bunEnvironment } from "../../src/executable-paths.js";
 // Page-side launchers: one Waffle worker per Bun or preview1 process. The service owns admission,
@@ -61,6 +62,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     }
   };
   const onMessage = (message: unknown) => {
+    if (recordMemorySnapshot(message)) return;
     try {
       if (!active()) sharedRoute?.close();
       if (sharedRoute?.accept(message)) return;

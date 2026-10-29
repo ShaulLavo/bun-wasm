@@ -56,7 +56,8 @@
     "src/executable-paths.ts",
     "web/src/bun-launcher.ts",
     "web/src/tool-command.ts",
-    "web/src/bun-executor.ts"
+    "web/src/bun-executor.ts",
+    "web/src/memory-telemetry.ts"
   ],
   "scripts": {
     "build": "bun build.ts",
