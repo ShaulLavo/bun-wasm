@@ -993,6 +993,22 @@ function assertProducerMutation(contract: ReturnType<typeof nativeCacheContract>
   expect(saved.startsWith(expandNativeKey(contract.prefix, changed))).toBe(compatible);
 }
 
+test("program profile source refines native keys while retaining compatible targets and JSC keys", () => {
+  const before = changedCacheFile("scripts/src/program-profile.ts", "profile-before");
+  const after = changedCacheFile("scripts/src/program-profile.ts", "profile-after");
+  for (const namespace of [nativeCargoNamespace, "native-v4"]) {
+    const keys = nativeKeyTemplates(namespace);
+    expect(fixtureCacheKey(keys.primary, before)).not.toBe(fixtureCacheKey(keys.primary, after));
+    expect(fixtureCacheKey(keys.save, before)).not.toBe(fixtureCacheKey(keys.save, after));
+    expect(fixtureCacheKey(keys.prefix, before)).toBe(fixtureCacheKey(keys.prefix, after));
+  }
+  for (const namespace of ["jsc-prebuild-v2", "jsc-cargo-v2"]) {
+    const key = rust.split("\n").find(line => line.trim().startsWith(`key: ${namespace}-`));
+    if (!key) throw new Error(`Missing ${namespace} cache key`);
+    expect(fixtureCacheKey(key, before)).toBe(fixtureCacheKey(key, after));
+  }
+});
+
 test("common-core preparation and release inputs refine native cache identity without discarding compatible Cargo work", () => {
   const contract = nativeCacheContract("native-cargo-cache", "Save the refined native Cargo cache once per input revision");
   const inputs = nativeCacheInputs(contract.primary);
