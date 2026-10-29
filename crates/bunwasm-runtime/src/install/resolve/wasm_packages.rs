@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 pub(super) fn adapt(meta: &mut Value) {
+    rolldown_runtime(meta);
     let name = meta["name"].as_str().unwrap_or_default();
     let Some(backend) = binding(name) else {
         return;
@@ -26,6 +27,18 @@ pub(super) fn adapt(meta: &mut Value) {
         .as_object_mut()
         .unwrap()
         .remove(backend);
+}
+
+fn rolldown_runtime(meta: &mut Value) {
+    if meta["name"] != "@rolldown/binding-wasm32-wasi"
+        || meta["version"] != "1.2.15"
+        || meta["dependencies"]["@napi-rs/wasm-runtime"] != "~1.2.5"
+        || meta["dependencies"]["@emnapi/core"] != "2.0.0-alpha.5"
+        || meta["dependencies"]["@emnapi/runtime"] != "2.0.0-alpha.5"
+    {
+        return;
+    }
+    meta["dependencies"]["@napi-rs/wasm-runtime"] = "1.2.5".into();
 }
 
 fn binding(name: &str) -> Option<&'static str> {

@@ -8,6 +8,16 @@ For `rolldown`, `oxc-parser` and `oxc-transform`, the adapter keeps the original
 
 Metadata adaptation runs for registry resolution and lock replay. Native desktop archives stay in lock metadata but the existing linux/wasm32 platform filter skips extraction. A new lock records the selected official distribution's archive and integrity. A native Lightning CSS lock row is not mistaken for a Wasm archive.
 
+## Rolldown 1.2.15 runtime metadata correction
+
+For exact `@rolldown/binding-wasm32-wasi@1.2.15`, the adapter narrows `@napi-rs/wasm-runtime` from `~1.2.5` to published `1.2.5` when both emnapi dependencies still pin `2.0.0-alpha.5`. This is an intentional upstream metadata correction within the published range. Other packages, versions and changed dependency metadata remain untouched. Explicit user overrides keep their existing precedence.
+
+Runtime 1.2.6 excludes alpha.5 from its peer range and its plugin uses `addonModule`, which alpha.5 does not provide. Native Node reproduces `initWorker` failure in a flat graph. npm can instead split emnapi versions and fail at `setLastError` when the loader passes its alpha.5 context into a different core. Runtime 1.2.5 uses `napiModule` and accepts alpha.5. Ordinary nested placement preserves an unrelated root runtime 1.2.6 and emnapi 1.11.3 while the binding uses runtime 1.2.5 with alpha.5.
+
+The official binding archive is identified below. Runtime [1.2.5 metadata](https://registry.npmjs.org/@napi-rs/wasm-runtime/1.2.5) identifies git revision `023a9f067af5d44c9a06c9a30b48fdd50ab18ac0`; [1.2.6 metadata](https://registry.npmjs.org/@napi-rs/wasm-runtime/1.2.6) identifies `4fff029f67693d08be0ff16818eb9ead2637a99e`. No loader, Wasm bytes or installed package manifest is patched. The lock records the adapted dependency and each official archive's URL and integrity. Existing broken locks need an unlocked install to record the corrected graph.
+
+Removal condition: delete this exact-version correction when the consuming compiler selection moves to an official binding whose declared graph passes the same Node-WASI import, filesystem bundle and mixed-context lock replay controls. No upstream issue has been posted.
+
 ## Upstream sources inspected
 
 - [Lightning CSS docs](https://lightningcss.dev/docs.html), npm `lightningcss-wasm@1.33.0`, git revision `1d680fa14e9a089c92dc0929f869d6757ae91c30`, `wasm/wasm-node.mjs`, published `wasm-node.{mjs,cjs}` and package exports. Archive SHA256 `266866c1b0efd7ca5307fe312411e4f1895b997086fb76f392ec5b60aadf31c8`.
@@ -18,7 +28,7 @@ Metadata adaptation runs for registry resolution and lock replay. Native desktop
 
 The stock Node WASI loader uses real `node:wasi`, `node:fs` and worker APIs. It requests shared memory with 16384 initial pages, 1 GiB. Generic napi, shared memory and threads belong to Engines.
 
-The published Rolldown binding pins emnapi core/runtime `2.0.0-alpha.5` and permits `@napi-rs/wasm-runtime` through `~1.2.5`. Version `1.2.6` excludes alpha.5 in its peer metadata. This adapter does not add a dependency override. Selecting the official package does not establish runtime initialization or a passing Vite workflow.
+Selecting the compatible official packages does not establish guest runtime initialization or a passing Vite workflow.
 
 Current source already implements `node:util.parseEnv`. Historical deployed failures do not justify another implementation. Current paired artifact acceptance requires the common producer's verified manifest.
 
