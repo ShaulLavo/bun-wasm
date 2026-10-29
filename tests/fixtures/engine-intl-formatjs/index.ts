@@ -16,6 +16,8 @@ console.log("supported", Intl.NumberFormat.supportedLocalesOf(["en-US", "de-DE"]
 console.log("collation", new Intl.Collator("en").compare("ä", "z"), new Intl.Collator("sv").compare("ä", "z"));
 console.log("collationOptions", new Intl.Collator("en", { numeric: true }).compare("item2", "item10"),
   new Intl.Collator("en", { sensitivity: "base" }).compare("a", "ä"));
+console.log("collatorPunctuation", new Intl.Collator("en", { ignorePunctuation: true }).compare("a-b", "ab"),
+  new Intl.Collator("en", { ignorePunctuation: false }).compare("a-b", "ab"));
 const numericExtension = new Intl.Collator("en-u-kn");
 const upperExtension = new Intl.Collator("en-u-kf-upper");
 console.log("collatorExtensions", numericExtension.compare("item2", "item10"), numericExtension.resolvedOptions().numeric,
@@ -41,3 +43,16 @@ console.log("segment", Array.from(new Intl.Segmenter("de-DE", { granularity: "wo
   part => `${part.segment}:${part.isWordLike === true}`).join("|"));
 console.log("canonical", Intl.getCanonicalLocales(["en-us", "de-de"]).join(","));
 console.log("values", Intl.supportedValuesOf("timeZone").includes("Asia/Jerusalem"), Intl.supportedValuesOf("currency").includes("EUR"));
+
+function errorName(run: () => unknown): string {
+  try {
+    run();
+    return "no error";
+  } catch (error) {
+    if (error instanceof Error) return error.name;
+    throw error;
+  }
+}
+console.log("errors", errorName(() => new Intl.NumberFormat("en", { style: "currency" })),
+  errorName(() => new Intl.DateTimeFormat("en", { timeZone: "Not/AZone" })),
+  errorName(() => new Intl.Collator("not_a_locale")));

@@ -4,6 +4,10 @@
 
 `scripts/vendor-intl.ts` bundles the unmodified packages and their locale data, minifies them, and wraps the CommonJS output as a factory in `crates/bunwasm-runtime/src/js/intl.js`. The TypeScript entry point and namespace adapter are original bun-wasm code. They select the locale packs and let FormatJS's generated locale modules register through the lazy global. No dependency source is edited. Copied licenses record the bundled package closure.
 
+The generator installs private copies with a temporary package cache. The source gate classifies only its exact generated output path. The original Rust adapter returns an explicit null for an unsupported locale, matching the TypeScript resolver contract across every engine's plain-data bridge; the generic optional-value conversion would return undefined instead.
+
+For `ignorePunctuation`, the adapter selects ICU4X shifted handling while keeping the requested sensitivity. Raising variant sensitivity to quaternary would compare the shifted punctuation again.
+
 
 ## Classification
 

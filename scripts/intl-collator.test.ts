@@ -27,7 +27,7 @@ function factoryWithNativeCallback() {
       }).compare(left, right));
     },
   } });
-  return { fallback, calls };
+  return { fallback, calls, context };
 }
 
 test("generated factory preserves extension defaults and explicit option precedence through the native callback", () => {
@@ -75,4 +75,43 @@ test("generated factory negotiates locales through the native resolver callback"
   expect(control.resolvedOptions()).toMatchObject({ locale: "sv", numeric: false, caseFirst: "false" });
   expect(control.compare("ä", "z")).toBe(1);
   expect(calls.at(-1)?.slice(1, 4)).toEqual(["variant", undefined, undefined]);
+});
+
+test("generated library formats loaded locales and rejects invalid options", () => {
+  const { fallback } = factoryWithNativeCallback();
+  expect(new fallback.NumberFormat("de-DE").format(1234.5)).toBe("1.234,5");
+  expect(new fallback.PluralRules("he").select(2)).toBe("two");
+  expect(new fallback.DateTimeFormat("en-US", {
+    timeZone: "Asia/Jerusalem", hour: "numeric", hourCycle: "h23",
+  }).format(new Date("2024-07-01T00:00:00Z"))).toBe("03");
+  expect(() => new fallback.NumberFormat("en", { style: "currency" })).toThrow();
+  expect(() => new fallback.DateTimeFormat("en", { timeZone: "Not/AZone" })).toThrow();
+  expect(() => new fallback.Collator("not_a_locale")).toThrow();
+  expect(() => new fallback.Collator("en", { sensitivity: "invalid" })).toThrow();
+  expect(() => new fallback.Collator("en", { caseFirst: "invalid" })).toThrow();
+  expect(() => new fallback.Collator("en", { localeMatcher: "invalid" })).toThrow();
+  expect(() => new fallback.Collator("en", { usage: "search" })).toThrow("search usage is not supported");
+});
+
+test("generated library runs the engine fixture with production locale wrappers and a native callback control", () => {
+  const { context } = factoryWithNativeCallback();
+  const output: string[] = [];
+  context.process = { env: { BUNWASM_TEST_HOST: "native" } };
+  context.console = { log: (...parts: unknown[]) => output.push(parts.join(" ")) };
+  const bootstrap = readFileSync(new URL("../crates/bunwasm-runtime/src/js/bootstrap.js", import.meta.url), "utf8");
+  const start = bootstrap.lastIndexOf("  if (installIntlFallback) {");
+  const end = bootstrap.indexOf("\n\n  return internal;", start);
+  expect(start).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(start);
+  vm.runInContext(`const installIntlFallback = true;
+    function defineHidden(target, values) {
+      for (const key of Object.keys(values)) Object.defineProperty(target, key, {
+        value: values[key], writable: true, configurable: true,
+      });
+    }
+    ${bootstrap.slice(start, end)}`, context);
+  const fixture = new URL("../tests/fixtures/engine-intl-formatjs/", import.meta.url);
+  const input = readFileSync(new URL("index.ts", fixture), "utf8");
+  vm.runInContext(new Bun.Transpiler({ loader: "ts" }).transformSync(input), context);
+  expect(output.join("\n") + "\n").toBe(readFileSync(new URL("expected.txt", fixture), "utf8"));
 });

@@ -11,7 +11,7 @@ use icu_locale_fallback::{LocaleFallbackConfig, LocaleFallbackPriority, LocaleFa
 use icu_provider::marker::DataMarkerExt;
 use icu_provider::{DataIdentifierBorrowed, DataLocale, DataProvider, DataRequest};
 
-use crate::data::{Args, NativeError, NativeResult};
+use crate::data::{Args, NativeError, NativeResult, Val};
 use crate::natives::Table;
 
 fn strength(sensitivity: &str) -> Result<Strength, NativeError> {
@@ -82,9 +82,6 @@ fn compare(a: Args<'_>) -> NativeResult {
     if a.bool(4) {
         options.alternate_handling = Some(AlternateHandling::Shifted);
         options.max_variable = Some(MaxVariable::Punctuation);
-        if sensitivity == "variant" {
-            options.strength = Some(Strength::Quaternary);
-        }
     }
 
     let numeric = if a.is_missing(2) {
@@ -167,7 +164,7 @@ fn resolve_locale(input: &str) -> Result<Option<String>, NativeError> {
 }
 
 fn resolve(a: Args<'_>) -> NativeResult {
-    Ok(resolve_locale(a.str(0)?)?.into())
+    Ok(resolve_locale(a.str(0)?)?.map_or(Val::Null, Val::from))
 }
 
 pub fn install(t: &mut Table) {
@@ -228,5 +225,34 @@ mod tests {
         assert_eq!(resolve_locale("zz-ZZ").unwrap(), None);
         assert_eq!(resolve_locale("xx").unwrap(), None);
         assert_eq!(resolve_locale("und").unwrap().as_deref(), Some("und"));
+    }
+
+    #[test]
+    fn native_resolver_returns_null_for_unsupported_locales() {
+        assert_eq!(resolve(Args(&[Val::from("zz-ZZ")])).unwrap(), Val::Null);
+        assert_eq!(resolve(Args(&[Val::from("sv")])).unwrap(), Val::from("sv"));
+    }
+
+    #[test]
+    fn native_comparison_applies_sensitivity_and_punctuation_options() {
+        let args = [
+            Val::from("en"),
+            Val::from("base"),
+            Val::Undefined,
+            Val::Undefined,
+            Val::from(false),
+            Val::from("default"),
+            Val::from("a"),
+            Val::from("ä"),
+        ];
+        assert_eq!(compare(Args(&args)).unwrap(), Val::from(0));
+        let mut args = args;
+        args[1] = Val::from("variant");
+        args[4] = Val::from(true);
+        args[6] = Val::from("a-b");
+        args[7] = Val::from("ab");
+        assert_eq!(compare(Args(&args)).unwrap(), Val::from(0));
+        args[4] = Val::from(false);
+        assert_eq!(compare(Args(&args)).unwrap(), Val::from(-1));
     }
 }

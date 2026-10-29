@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
@@ -28,7 +28,10 @@ try {
   for (const name of ["package.json", "bun.lock", "entry.ts", "namespace.ts", "collator.ts"]) {
     copyFileSync(join(source, name), join(scratch, name));
   }
-  run(["bun", "install", "--ignore-scripts", "--linker", "hoisted", "--frozen-lockfile"]);
+  run(["bun", "install", "--ignore-scripts", "--linker", "hoisted", "--frozen-lockfile", "--backend", "copy", "--cache-dir", join(scratch, "cache")]);
+  cpSync(join(scratch, "node_modules"), join(scratch, "private-node_modules"), { recursive: true, verbatimSymlinks: true });
+  rmSync(join(scratch, "node_modules"), { recursive: true });
+  renameSync(join(scratch, "private-node_modules"), join(scratch, "node_modules"));
   run(["bun", "build", "entry.ts", "--target", "browser", "--format", "cjs", "--minify", "--outfile", "bundle.js"]);
 
   const licenses = join(source, "licenses");
