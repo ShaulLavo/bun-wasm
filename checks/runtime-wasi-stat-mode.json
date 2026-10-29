@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/wasi-stat-mode.test.ts",
+  "localRuntime": true
+}
