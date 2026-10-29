@@ -7,6 +7,16 @@ const decoder = new TextDecoder();
 function equal(actual: unknown, expected: unknown, label: string) {
   if (actual !== expected) throw new Error(`${label}: ${actual} !== ${expected}`);
 }
+class GuestMessageChannel {
+  constructor() { throw new Error("guest MessageChannel used by host transport"); }
+}
+function fork(): ReturnType<RuntimeFilesystem["fork"]> {
+  const native = globalThis.MessageChannel;
+  try {
+    Object.assign(globalThis, { MessageChannel: GuestMessageChannel });
+    return fs.fork();
+  } finally { globalThis.MessageChannel = native; }
+}
 async function guest(connection: ReturnType<RuntimeFilesystem["fork"]>, action: string) {
   const worker = new Worker("./filesystem-browser-guest.js", { type: "module" });
   try {
@@ -23,7 +33,7 @@ try {
   equal(first.original, "before", "guest read");
   equal(first.detached, "after!", "open unlinked file");
   equal(decoder.decode(await fs.readFile("/shared")), "replacement", "page sees guest write before process teardown");
-  await Promise.all(Array.from({ length: 2 }, () => guest(fs.fork(), "writers")));
+  await Promise.all(Array.from({ length: 2 }, () => guest(fork(), "writers")));
   const root = await fs.lookup("/");
   if (root?.kind !== "dir") throw new Error("filesystem root is not a directory");
   const entries = root.children;
