@@ -27,7 +27,7 @@ function fixture(connect = true) {
   function factory(name: string, extension = "js") {
     if (name === "net_address") return runInNewContext(netAddressSource(), context);
     const source = readFileSync(new URL(`${name}.${extension}`, runtime), "utf8");
-    const text = extension === "ts" ? new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`) : source;
+    const text = extension === "ts" ? new Bun.Transpiler({ loader: "ts" }).transformSync(source.replace("(function", "globalThis.__factory = (function")) : source;
     return runInNewContext(text, context);
   }
   const ports = factory("net_port", "ts")();
@@ -66,7 +66,7 @@ function fixture(connect = true) {
     listenOrThrow: held, acceptLoop: held, trackServerConnection: held,
     closeNodeServer: held, disposeNodeServer: held,
   });
-  const bun: { connect(options: BunOptions): Promise<unknown> } = factory("bun_tcp")(internal)({ listenOrThrow: held, acceptLoop: held, waiters: new Set() });
+  const bun: { connect(options: BunOptions): Promise<unknown> } = factory("bun_tcp", "ts")(internal)({ listenOrThrow: held, acceptLoop: held, waiters: new Set() });
   function drain() {
     for (let count = 0; count < 32 && (ticks.length || immediates.length); count++) (ticks.shift() ?? immediates.shift())!();
     expect(ticks.length + immediates.length).toBe(0);

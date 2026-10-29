@@ -17,7 +17,7 @@ annotations in local source and replaces the module export wrapper with a runtim
 factory. The runtime stripper erases those annotations during embedding. The
 predicates themselves are unchanged.
 
-The other address helpers, `node_net.js`, `bun_tcp.js`, and the changes to
+The other address helpers, `node_net.js`, `bun_tcp.ts`, and the changes to
 `net.js`, the Rust host and the browser hosts are original adapters. They share
 one byte transport with fetch, Bun.serve, and WebSockets. The added host slots
 provide write-side shutdown and the local endpoint. HTTP upgrade listeners get
