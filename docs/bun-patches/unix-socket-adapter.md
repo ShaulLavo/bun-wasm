@@ -28,8 +28,12 @@ of the request URL path and the agent pool separates socket names.
 The Node adapter tests supply the specified path API over existing Waffle stream
 bytes. That fixture does not prove filesystem binding, unlink leases, or Nuxt.
 The manual `net-unix-path` guest fixture checks echo, half-close and filesystem
-unlink with a real provider. A NET release, dependency pin and full Nuxt playground
-check remain required. The native Wasmtime host leaves the new slots unavailable;
+unlink with a real provider. The released-provider test runs the Node adapter
+against Waffle 0.0.100 from `ea051e5e9061bcd2bfed6faf363be0f21d211acc`.
+It checks a real socket node, UTF-8 bytes, reverse traffic after half-close and
+acknowledged unlink. It uses the released compiled runtime and NetHost, with
+Bun runtime factories loaded in a worker. The matching browser guest and full
+Nuxt playground check remain required. The native Wasmtime host leaves the new slots unavailable;
 it does not implement a second Unix socket transport.
 
 The rev-2 handoff also requires `createHelper.pathScope`, with the admitted guest's

@@ -23,7 +23,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
   let filesystem: RuntimeFilesystem = {
     vfs: getVfsDescriptor("memory"), state: { status: "ready" }, workspace: undefined, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
     revoke: unused, reap: unused, quiesce: unused, drain: unused, flush: unused,
-    lookup: unused, readFile: unused, listFiles: unused, directoryHandle: unused,
+    lookup: unused, readFile: unused, listFiles: unused, directoryHandle: socketDirectoryFixture,
     mkdirp: unused, writeFile: unused, remove: unused, move: unused, ...overrides,
   };
   const identities = new ProcessIdentityAllocator();
