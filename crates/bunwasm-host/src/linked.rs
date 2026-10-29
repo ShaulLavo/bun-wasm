@@ -12,6 +12,8 @@ use crate::Host;
 #[path = "linked_relay.rs"]
 mod relay;
 use relay::{SelfPlan, SelfSlots};
+#[path = "linked_group.rs"]
+mod group;
 
 #[derive(Default)]
 pub struct Programs(Vec<Program>);
@@ -78,12 +80,29 @@ impl Programs {
             .with_context(|| format!("loading {}", path.display()))?;
         let has_bind = core_bind_is_function(&core)?;
         let kind = parse_program_kind(&core_bytes, has_bind)?;
+        let profile = group::admit(&core_bytes, true)
+            .with_context(|| format!("admitting {}", path.display()))?;
         let Some(kind) = kind else {
+            ensure!(
+                profile == group::Profile::Split,
+                "a memory group image runs only as a member of a linked program"
+            );
             return Ok(core);
         };
         let path = path.with_file_name(kind.companion());
         let bytes = std::fs::read(&path)
             .with_context(|| format!("loading paired {:?} engine {}", kind, path.display()))?;
+        let side = group::admit(&bytes, false)
+            .with_context(|| format!("admitting paired {:?} engine {}", kind, path.display()))?;
+        ensure!(
+            side == profile,
+            "paired {kind:?} engine profile {side:?} does not match core profile {profile:?}"
+        );
+        // Admitted shared-group programs need the group memory host (the runtime_shm service).
+        ensure!(
+            profile == group::Profile::Split,
+            "memory group programs need a group host; this host runs split programs"
+        );
         let layout = layout(&bytes)?;
         let library = Module::new(engine, &bytes)?;
         validate_profile(kind, &library)?;
