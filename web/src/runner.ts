@@ -1,3 +1,4 @@
+import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
 import { programLinkPlan } from "../../src/assets.js";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
@@ -112,6 +113,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   // client chunks load on first use rather than with the page.
   const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("waffle/fs").FilesystemIdentity } | undefined)?.filesystem;
   const pid = options.runtime.identities.pid(), job = options.runtime.identities.job();
+  const memoryTelemetryId = crypto.randomUUID();
   let request: RunRequest;
   try {
     request = {
@@ -187,6 +189,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   function confirm(ownedDisposal = false) {
     if (confirmed || (options.runtime.disposed && !ownedDisposal)) return;
     confirmed = true;
+    endMemorySnapshot(memoryTelemetryId);
     // The admission fence proves completion. Never make run.done depend on terminate().
     settle(selectedResult!);
     stopWorker();
@@ -265,6 +268,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   };
   const onMessage = (event: MessageEvent<WorkerMessage>) => {
     const msg = event.data;
+    if (recordMemorySnapshot(msg)) return;
     if (msg.type === "bun-shared-connect") {
       const selected = rootOutcome && readOutcome(rootOutcome);
       const error = acceptRootSharedConnection(sharedRoute, msg, options.runtime.disposed || finished || Boolean(selected));
@@ -362,6 +366,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     }
     if (!preparationStopped() && worker) {
       const transfers = [request.filesystem.port].concat(request.lookupPort ? [request.lookupPort] : []);
+      request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob));
       worker.postMessage(request, transfers);
       watchOutcome();
     }

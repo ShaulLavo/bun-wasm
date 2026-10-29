@@ -5,6 +5,7 @@ fn main() {
     if !target.starts_with("wasm32") {
         return;
     }
+    memory_telemetry();
     // Bun's parser recurses deeply: 8 MiB of stack.
     println!("cargo:rustc-link-arg-bin=bun=-zstack-size=8388608");
     // Bun's string pointer tags use the top three address bits on wasm32, so
@@ -73,4 +74,42 @@ fn split_entry() {
     for name in std::fs::read_to_string(exports).unwrap().lines() {
         println!("cargo:rustc-link-arg-bin=bun=--export={name}");
     }
+}
+
+fn memory_telemetry() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("memory-telemetry.c");
+    let object =
+        std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("memory-telemetry.o");
+    let compiler = std::env::var("CC_wasm32_wasip1").expect("source env.sh");
+    let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
+    let status = std::process::Command::new(compiler)
+        .args([
+            "--target=wasm32-wasip1",
+            &format!("--sysroot={sysroot}"),
+            "-O2",
+            "-fno-builtin",
+            "-c",
+        ])
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .status()
+        .unwrap();
+    assert!(status.success(), "compile memory telemetry");
+    println!("cargo:rerun-if-changed={}", source.display());
+    println!("cargo:rustc-link-arg-bin=bun={}", object.display());
+    for name in [
+        "malloc",
+        "calloc",
+        "realloc",
+        "free",
+        "aligned_alloc",
+        "posix_memalign",
+        "__libc_malloc",
+        "__libc_calloc",
+        "__libc_free",
+    ] {
+        println!("cargo:rustc-link-arg-bin=bun=--wrap={name}");
+    }
+    println!("cargo:rustc-link-arg-bin=bun=--export=bun_memory_telemetry");
 }

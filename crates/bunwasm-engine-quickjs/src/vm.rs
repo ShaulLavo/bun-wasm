@@ -5,7 +5,7 @@
 //! `rquickjs::Value<'static>`: the `'js` lifetime is erased once, here, and
 //! never escapes this file in any other form.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::rc::{Rc, Weak};
 
@@ -21,7 +21,75 @@ use crate::engine::{Engine, ErrorKind, ModuleHost, NativeError, PromiseState, Va
 
 type V = Value<'static>;
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct QuickJsMemoryTelemetry {
+    pub abi_version: u64,
+    pub byte_size: u64,
+    pub refresh_sequence: u64,
+    pub malloc_size: u64,
+    pub memory_used_size: u64,
+    pub array_buffer_size: u64,
+    pub array_buffer_count: u64,
+    pub wasm_capacity: u64,
+    pub failed_size: u64,
+    pub failed_category: u64,
+    pub failed_size_known: u64,
+    pub counters_valid: u64,
+}
+
+const _: () = assert!(std::mem::size_of::<QuickJsMemoryTelemetry>() == 96);
+static NO_MEMORY_TELEMETRY: QuickJsMemoryTelemetry = QuickJsMemoryTelemetry {
+    abi_version: 1,
+    byte_size: 96,
+    refresh_sequence: 0,
+    malloc_size: u64::MAX,
+    memory_used_size: u64::MAX,
+    array_buffer_size: u64::MAX,
+    array_buffer_count: u64::MAX,
+    wasm_capacity: u64::MAX,
+    failed_size: u64::MAX,
+    failed_category: 0,
+    failed_size_known: 0,
+    counters_valid: 0,
+};
+
+thread_local! {
+    static TELEMETRY_RUNTIME: Cell<*mut qjs::JSRuntime> = const { Cell::new(std::ptr::null_mut()) };
+}
+
+/// Cached bytes only. Does not enter JS, allocate, or walk the heap.
+#[unsafe(no_mangle)]
+pub extern "C" fn quickjs_memory_telemetry() -> *const QuickJsMemoryTelemetry {
+    TELEMETRY_RUNTIME.with(|runtime| {
+        if runtime.get().is_null() {
+            return std::ptr::addr_of!(NO_MEMORY_TELEMETRY);
+        }
+        // SAFETY: Inner clears this thread's pointer before its runtime is freed.
+        unsafe { JS_bunwasm_MemoryTelemetry(runtime.get()) }
+    })
+}
+
+/// Refresh only at a normal boundary. Never call this after a trap or OOM.
+#[unsafe(no_mangle)]
+pub extern "C" fn quickjs_memory_telemetry_refresh() -> *const QuickJsMemoryTelemetry {
+    TELEMETRY_RUNTIME.with(|runtime| {
+        if runtime.get().is_null() {
+            return std::ptr::addr_of!(NO_MEMORY_TELEMETRY);
+        }
+        // SAFETY: caller stops guest execution at a normal boundary; runtime is live.
+        unsafe { JS_bunwasm_RefreshMemoryTelemetry(runtime.get()) }
+    })
+}
+
 unsafe extern "C" {
+    fn JS_bunwasm_MemoryTelemetry(rt: *mut qjs::JSRuntime) -> *const QuickJsMemoryTelemetry;
+    fn JS_bunwasm_RefreshMemoryTelemetry(rt: *mut qjs::JSRuntime) -> *const QuickJsMemoryTelemetry;
+    fn JS_bunwasm_GetAllocationFailure(
+        rt: *mut qjs::JSRuntime,
+        size: *mut u64,
+        size_known: *mut bool,
+    ) -> u32;
     fn JS_bunwasm_IsArrayBufferLike(value: qjs::JSValue) -> bool;
     fn JS_bunwasm_IsDetachableArrayBuffer(value: qjs::JSValue) -> bool;
     /// A WebAssembly.Memory buffer over bytes QuickJS never frees (new reference).
@@ -51,11 +119,22 @@ fn erase(v: Value<'_>) -> V {
 
 struct Inner {
     _runtime: Runtime,
+    runtime_raw: *mut qjs::JSRuntime,
     _context: Context,
     ctx: Ctx<'static>,
     host: Rc<dyn ModuleHost<QuickJs>>,
     /// Rejected promises without a handler yet: (promise, reason).
     rejections: RefCell<Vec<(V, V)>>,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        TELEMETRY_RUNTIME.with(|runtime| {
+            if runtime.get() == self.runtime_raw {
+                runtime.set(std::ptr::null_mut());
+            }
+        });
+    }
 }
 
 // QuickJS already polls every 10,000 backedges/calls. Amortize host crossings
@@ -168,9 +247,13 @@ impl Engine for QuickJs {
         let context = Context::full(&runtime).expect("create QuickJS context");
         // SAFETY: single-threaded; the context lives as long as the process.
         let ctx: Ctx<'static> = unsafe { Ctx::from_raw(context.as_raw()) };
+        // SAFETY: the context and its runtime are live and retained by Inner.
+        let runtime_raw = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
+        TELEMETRY_RUNTIME.with(|active| active.set(runtime_raw));
         let has_interrupt_handler = host.has_interrupt_handler();
         let engine = QuickJs(Rc::new(Inner {
             _runtime: runtime.clone(),
+            runtime_raw,
             _context: context,
             ctx,
             host,
@@ -459,28 +542,51 @@ impl Engine for QuickJs {
             qjs::JS_ComputeMemoryUsage(qjs::JS_GetRuntime(self.raw()), usage.as_mut_ptr());
             usage.assume_init()
         };
-        let heap = usage.malloc_size as f64;
         crate::engine::Record::new()
-            .set("rss", wasm_memory_bytes().max(heap))
-            .set(
-                "heapTotal",
-                usage.malloc_limit.max(usage.malloc_size) as f64,
-            )
+            .set("rss", Val::Null)
+            .set("heapTotal", usage.malloc_size as f64)
             .set("heapUsed", usage.memory_used_size as f64)
-            .set("external", 0)
-            .set("arrayBuffers", 0)
+            .set("external", Val::Null)
+            .set("arrayBuffers", usage.array_buffer_size as f64)
+            .set("arrayBufferCount", usage.array_buffer_count as f64)
+            .set("failedAllocation", allocation_failure(self.raw()))
+            .set("wasmCapacity", wasm_memory_bytes())
             .into()
     }
 }
 
-fn wasm_memory_bytes() -> f64 {
+fn allocation_failure(ctx: *mut qjs::JSContext) -> Val {
+    let mut size = 0;
+    let mut known = false;
+    // SAFETY: the runtime is live and both output pointers refer to stack values.
+    let category =
+        unsafe { JS_bunwasm_GetAllocationFailure(qjs::JS_GetRuntime(ctx), &mut size, &mut known) };
+    let category = match category {
+        1 => "quickjs.malloc",
+        2 => "quickjs.calloc",
+        3 => "quickjs.realloc",
+        4 => "quickjs.arrayBuffer",
+        _ => return Val::Null,
+    };
+    let size = if known {
+        Val::Num(size as f64)
+    } else {
+        Val::Null
+    };
+    crate::engine::Record::new()
+        .set("size", size)
+        .set("category", category)
+        .into()
+}
+
+fn wasm_memory_bytes() -> Val {
     #[cfg(target_arch = "wasm32")]
     {
-        (core::arch::wasm32::memory_size(0) * 65536) as f64
+        Val::Num((core::arch::wasm32::memory_size(0) * 65536) as f64)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        0.0
+        Val::Null
     }
 }
 
@@ -687,6 +793,82 @@ mod tests {
                 InterruptMode::OneShot(armed) => armed.replace(false),
             }
         }
+    }
+
+    fn memory_field(snapshot: &Val, key: &str) -> Val {
+        let Val::Object(fields) = snapshot else {
+            panic!("memory snapshot is an object");
+        };
+        fields
+            .iter()
+            .find(|(name, _)| name == key)
+            .unwrap()
+            .1
+            .clone()
+    }
+
+    #[test]
+    fn memory_telemetry_reports_owned_bytes_and_original_failure() {
+        let engine = QuickJs::new(Rc::new(InterruptHost::new(InterruptMode::Continue)));
+        // SAFETY: the bound runtime is live for this test; accessors return fixed cached data.
+        let initial = unsafe { *quickjs_memory_telemetry() };
+        assert_eq!(initial.byte_size, 96);
+        assert_eq!(initial.counters_valid, 0);
+        let baseline = engine.memory_usage();
+        assert_eq!(memory_field(&baseline, "rss"), Val::Null);
+        assert_eq!(memory_field(&baseline, "external"), Val::Null);
+        assert_eq!(memory_field(&baseline, "wasmCapacity"), Val::Null);
+        assert_eq!(memory_field(&baseline, "failedAllocation"), Val::Null);
+        let buffer = engine
+            .eval_script("new ArrayBuffer(1048576)", "buffer", 1)
+            .unwrap();
+        let live = engine.memory_usage();
+        // SAFETY: refresh occurs at a normal boundary, with no JS executing.
+        let cached = unsafe { *quickjs_memory_telemetry_refresh() };
+        assert_eq!(cached.counters_valid, 1);
+        assert_eq!(cached.array_buffer_size, 1048576);
+        assert_eq!(cached.array_buffer_count, 1);
+        assert_eq!(memory_field(&live, "arrayBuffers"), Val::Num(1048576.0));
+        assert_eq!(memory_field(&live, "arrayBufferCount"), Val::Num(1.0));
+        let Val::Num(base_heap) = memory_field(&baseline, "heapTotal") else {
+            panic!("heap bytes")
+        };
+        let Val::Num(live_heap) = memory_field(&live, "heapTotal") else {
+            panic!("heap bytes")
+        };
+        assert!(live_heap >= base_heap + 1048576.0);
+        drop(buffer);
+        assert_eq!(
+            memory_field(&engine.memory_usage(), "arrayBuffers"),
+            Val::Num(0.0)
+        );
+        // SAFETY: the runtime is live; the limit leaves room to construct the error.
+        unsafe { qjs::JS_SetMemoryLimit(qjs::JS_GetRuntime(engine.raw()), live_heap as _) };
+        let Val::Num(limited_heap) = memory_field(&engine.memory_usage(), "heapTotal") else {
+            panic!("heap bytes")
+        };
+        assert!(
+            limited_heap < live_heap,
+            "configured limit is not allocated bytes"
+        );
+        assert!(
+            engine
+                .eval_script("new ArrayBuffer(2097152)", "failure", 1)
+                .is_err()
+        );
+        // SAFETY: cached read performs no heap traversal after the failed request.
+        let failed_cache = unsafe { *quickjs_memory_telemetry() };
+        assert_eq!(failed_cache.refresh_sequence, cached.refresh_sequence);
+        assert_eq!(failed_cache.array_buffer_size, cached.array_buffer_size);
+        assert_eq!(failed_cache.failed_size, 2097152);
+        assert_eq!(failed_cache.failed_category, 4);
+        let failure = memory_field(&engine.memory_usage(), "failedAllocation");
+        assert_eq!(memory_field(&failure, "size"), Val::Num(2097152.0));
+        assert_eq!(
+            memory_field(&failure, "category"),
+            Val::Str("quickjs.arrayBuffer".into())
+        );
+        std::mem::forget(engine);
     }
 
     #[test]

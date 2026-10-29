@@ -37,7 +37,7 @@ sysroot=$("$RUSTC" --print sysroot)
   -j "${CARGO_BUILD_JOBS:-4}" -p bunwasm-engine-quickjs
 "$CC_wasm32_wasip1" --target=wasm32-wasip1 --sysroot="$BUN_WASM_SYSROOT" -fPIC -O2 -fno-builtin-malloc -fno-builtin-free \
   -DENGINE_CTOR_VALUE=quickjs_ctor_value -c "$root/scripts/src/engine-init.c" -o "$out/engine-init.o"
-exports=(quickjs_ctor_value __stack_pointer __wasm_call_ctors)
+exports=(quickjs_ctor_value __stack_pointer __wasm_call_ctors quickjs_memory_telemetry quickjs_memory_telemetry_refresh)
 if [[ "${QUICKJS_SMOKE_EXPORTS:-0}" == 1 ]]; then
   exports+=(quickjs_helpers_smoke quickjs_link_smoke quickjs_rust_alloc quickjs_rust_free quickjs_rust_realloc
     quickjs_stack_reenter quickjs_interrupt_smoke quickjs_stack_guard_smoke)

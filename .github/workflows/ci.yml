@@ -455,6 +455,7 @@ jobs:
             source env.sh
             bun scripts/quality-rust.ts --checks-only
             bun run quality:wasi
+            bun test tests/memory-telemetry.test.ts
             # The WASI lint probe rewrites a source file; restore its time before the next build.
             bun scripts/quality-input-times.ts
             source env.sh
