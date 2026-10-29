@@ -459,28 +459,25 @@ impl Engine for QuickJs {
             qjs::JS_ComputeMemoryUsage(qjs::JS_GetRuntime(self.raw()), usage.as_mut_ptr());
             usage.assume_init()
         };
-        let heap = usage.malloc_size as f64;
         crate::engine::Record::new()
-            .set("rss", wasm_memory_bytes().max(heap))
-            .set(
-                "heapTotal",
-                usage.malloc_limit.max(usage.malloc_size) as f64,
-            )
+            .set("rss", Val::Null)
+            .set("heapTotal", usage.malloc_size as f64)
             .set("heapUsed", usage.memory_used_size as f64)
-            .set("external", 0)
-            .set("arrayBuffers", 0)
+            .set("external", Val::Null)
+            .set("arrayBuffers", Val::Null)
+            .set("wasmCapacity", wasm_memory_bytes())
             .into()
     }
 }
 
-fn wasm_memory_bytes() -> f64 {
+fn wasm_memory_bytes() -> Val {
     #[cfg(target_arch = "wasm32")]
     {
-        (core::arch::wasm32::memory_size(0) * 65536) as f64
+        Val::Num((core::arch::wasm32::memory_size(0) * 65536) as f64)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        0.0
+        Val::Null
     }
 }
 
