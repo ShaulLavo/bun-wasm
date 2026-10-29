@@ -32,6 +32,17 @@ const PORT = 5173;
 const DEFAULT_ENGINE: Engine = "browser";
 const DEPS_PATH = "/.bunwasm/deps-cache";
 
+/** What exists once the page's runtime is built; construction can fail before it does. */
+interface Workspace {
+  runtime: Runtime;
+  fs: Filesystem;
+  browserPrograms: BrowserPrograms;
+  editor: Editor;
+  term: Terminal;
+  // A QuickJS/JSC parent can launch Bun light, whose cyclic imports need the module scope too.
+  moduleScope: Promise<boolean>;
+}
+
 interface Server {
   port: number;
   helper: RuntimeNetworkHelper;
@@ -43,8 +54,6 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   /** Each template has its own persistent workspace, shared across engine switches. */
   readonly template: Template;
   readonly engine: Engine;
-  term?: Terminal;
-  editor?: Editor;
   failure?: Failure;
   resetting = false;
   /** Project files, relative to the app directory, as of the last listing. */
@@ -59,14 +68,10 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private readonly terminalOpen = new Promise<void>((resolve) => { this.terminalOpened = resolve; });
   private message: Status = { text: "", kind: "" };
   private started = false;
-  private fs?: Filesystem;
-  private runtime?: Runtime;
-  private browserPrograms?: BrowserPrograms;
+  private workspace?: Workspace;
   private frame?: HTMLIFrameElement;
   private templateSources: TemplateSources = {};
   private filesRevision = 0;
-  // A QuickJS/JSC parent can launch Bun light, whose cyclic imports need the module scope too.
-  private moduleScope?: Promise<boolean>;
   private readonly previews = new Previews();
   private wasm: Awaited<ReturnType<typeof loadWasm>> | null = null;
   private firstStart = true;
@@ -103,21 +108,31 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.engine = isEngine(requested) ? requested : DEFAULT_ENGINE;
   }
 
+  get term(): Terminal | undefined {
+    return this.workspace?.term;
+  }
+
+  get editor(): Editor | undefined {
+    return this.workspace?.editor;
+  }
+
   get status(): Status {
-    if (this.fs?.ownershipLost) return { text: `${WORKSPACE_TAKEN_OVER} ${UNSAVED_CHANGES_LOST}`, kind: "error" };
+    if (this.workspace?.fs.ownershipLost) return { text: `${WORKSPACE_TAKEN_OVER} ${UNSAVED_CHANGES_LOST}`, kind: "error" };
     return this.message;
   }
 
   /** Builds the page's runtime, then starts the workspace and dev server in the background. */
   start(): void {
+    let workspace: Workspace;
     try {
-      this.construct();
+      workspace = this.workspace = this.construct();
     } catch (error) {
       console.error(error);
       this.fail("construction", error);
       return;
     }
-    void this.boot().catch((error) => { this.fail("startup", error); this.report(error); });
+    this.changed();
+    void this.boot(workspace).catch((error) => { this.fail("startup", error); this.report(error); });
   }
 
   openTerminal(term: Terminal, node: HTMLElement, signal: AbortSignal): void {
@@ -131,9 +146,9 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
 
   /** Lists the project again for the file tree and file menu. Dotfiles stay hidden. */
   async refreshFiles(): Promise<void> {
-    if (!this.fs) return;
+    if (!this.workspace) return;
     const revision = ++this.filesRevision;
-    const paths = (await this.fs.listFiles(APP)).map(rel).filter((p) => !p.split("/").some((part) => part.startsWith(".")));
+    const paths = (await this.workspace.fs.listFiles(APP)).map(rel).filter((p) => !p.split("/").some((part) => part.startsWith(".")));
     if (revision !== this.filesRevision) return;
     this.files = paths;
     this.changed();
@@ -158,14 +173,16 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   }
 
   async reset(): Promise<void> {
+    const { workspace } = this;
+    if (!workspace) return;
     this.resetting = true;
     this.changed();
     try {
-      this.editor?.discard();
+      workspace.editor.discard();
       const current = this.run;
       this.stopDevServer();
       await current?.done;
-      await loadTemplate(this.fs!, APP, this.templateFile, true);
+      await loadTemplate(workspace.fs, APP, this.templateFile, true);
       location.reload();
     } catch (error) {
       this.resetting = false;
@@ -198,11 +215,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.changed();
   }
 
-  private construct(): void {
+  private construct(): Workspace {
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
-    const runtime = this.runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${this.template}` } });
-    const fs = this.fs = runtime.filesystem;
-    const browserPrograms = this.browserPrograms = new BrowserPrograms(runtime, {
+    const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${this.template}` } });
+    const fs = runtime.filesystem;
+    const browserPrograms = new BrowserPrograms(runtime, {
       worker: new URL("./preview1-worker.js", location.href),
       shell: new URL("./programs/shell-engine.wasm", location.href),
       shellWorker: new URL("./shell-worker.js", location.href),
@@ -212,23 +229,22 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       void Promise.all([runtime.dispose(), browserPrograms.dispose()]).catch(console.error);
     });
     fs.onOwnershipLost = () => this.fail("startup", "");
-    const term = this.term = createTerminal();
+    const term = createTerminal();
     term.loadAddon(this.fit);
     linkLocalUrls(term, this.previews);
-    this.moduleScope = registerModuleScope();
-    this.editor = new Editor(fs, {
+    const moduleScope = registerModuleScope();
+    const editor = new Editor(fs, {
       app: APP,
-      save: (path, text, revision) => this.save(path, text, revision),
+      save: (path, text, revision) => this.save(fs, path, text, revision),
       changed: () => this.changed(),
     });
-    this.changed();
     Object.assign(globalThis, {
-      sandbox: { fs, editor: this.editor, term, restart: () => this.startDevServer(), server: () => this.server, engine: this.engine, template: this.template },
+      sandbox: { fs, editor, term, restart: () => this.startDevServer(), server: () => this.server, engine: this.engine, template: this.template },
     });
+    return { runtime, fs, browserPrograms, editor, term, moduleScope };
   }
 
-  private async boot(): Promise<void> {
-    const fs = this.fs!;
+  private async boot({ fs, editor }: Workspace): Promise<void> {
     await this.terminalOpen;
     await fs.mkdirp("/tmp");
     this.setServerState("starting", "loading…");
@@ -241,7 +257,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     ]);
     await this.refreshFiles();
     const startFile = this.template === "vanilla" ? "src/main.ts" : "src/App.tsx";
-    await this.editor!.open(await fs.lookup(abs(startFile)) ? startFile : ((await fs.listFiles(APP)).map(rel)[0] ?? startFile));
+    await editor.open(await fs.lookup(abs(startFile)) ? startFile : ((await fs.listFiles(APP)).map(rel)[0] ?? startFile));
     if (!this.failure) this.started = true;
     if (!this.wasm) return;
     this.setStatus(`starting the dev server on ${ENGINES[this.engine].name}…`);
@@ -262,15 +278,15 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private async startDevServer(): Promise<void> {
     this.stopDevServer();
     const revision = this.serverRevision;
-    const { wasm, editor, runtime, browserPrograms, term } = this;
-    const fs = this.fs!;
-    if (!wasm || !editor || !runtime || !browserPrograms || !term) return;
+    const { wasm, workspace } = this;
+    if (!wasm || !workspace) return;
+    const { runtime, fs, browserPrograms, editor, term } = workspace;
     await editor.flushAll();
     if (revision !== this.serverRevision) return;
     const visibleStart = this.firstStart ? 0 : performance.now();
     this.firstStart = false;
     this.setStatus("waiting for module service worker…");
-    const scoped = await this.moduleScope!;
+    const scoped = await workspace.moduleScope;
     if (revision !== this.serverRevision) return;
     this.unsent.clear();
     for (const phase of ["deps-cached", "bundling-react", "bundled-react"]) {
@@ -340,7 +356,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     try {
       const result = await guestBytes(target, "/_bun/deps-cache");
       if (result.status !== 200 || this.server !== target || decode(result.bytes.subarray(0, 8)) !== "BUNDEPS1") return;
-      await this.fs!.writeFile(DEPS_PATH, result.bytes);
+      await this.workspace?.fs.writeFile(DEPS_PATH, result.bytes);
       await writeDeps(key, result.bytes);
     } catch {
       // Restart can close the guest while the dependency cache is being saved.
@@ -360,7 +376,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.setServerState("up", `localhost:${port}/`, url);
     this.setStatus("loading preview…");
     const previewStarted = performance.now();
-    const frame = this.frame!;
+    const { frame } = this;
+    if (!frame) return;
     frame.addEventListener("load", () => {
       if (this.server !== target) return;
       measureStartup("preview", previewStarted);
@@ -387,8 +404,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     }
   }
 
-  private async save(path: string, text: string, revision: number): Promise<void> {
-    const fs = this.fs!;
+  private async save(fs: Filesystem, path: string, text: string, revision: number): Promise<void> {
     await fs.writeFile(abs(path), text);
     await fs.flush(abs(path));
     if (this.server) await this.sendUpdate(path, revision);
