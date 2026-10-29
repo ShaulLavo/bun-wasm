@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::ops::Range;
 use std::path::Path;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use anyhow::{Context, Result, bail, ensure};
 use wasmparser::{Dylink0Subsection, KnownCustom, MemInfo, Parser, Payload};
@@ -452,18 +453,13 @@ impl ImageMemory {
     }
 }
 
-/// Zero a side's reservation in the group memory. It came from this member's own allocator,
-/// so no other agent addresses these bytes while the side is linked.
+/// Zero a side's reservation in the group memory with atomic stores: shared bytes are never
+/// accessed through a plain Rust reference, even when only this member addresses them.
 fn zero_shared(memory: &SharedMemory, range: Range<usize>) {
-    let cells = &memory.data()[range];
-    // SAFETY: `cells` is in bounds and UnsafeCell<u8> has u8's layout; the bytes are private.
-    unsafe {
-        std::ptr::write_bytes(
-            std::cell::UnsafeCell::raw_get(cells.as_ptr()),
-            0,
-            cells.len(),
-        )
-    };
+    for cell in &memory.data()[range] {
+        // SAFETY: the cell is in bounds of the stable shared backing; AtomicU8 has u8's layout.
+        unsafe { AtomicU8::from_ptr(cell.get()) }.store(0, Ordering::Relaxed);
+    }
 }
 
 /// The member's own memory, table and stack pointer; everything else comes from the core.
