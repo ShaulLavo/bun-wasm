@@ -4,6 +4,7 @@
 #[path = "../../bunwasm-cli/src/tool_args.rs"]
 mod tool_args;
 
+mod guest;
 mod linked;
 mod net;
 mod process;
@@ -50,7 +51,7 @@ BUN_WASM_HOST_STACK_KIB sets the host wasm stack limit (default 16384 KiB).
 pub struct Host {
     pub wasi: WasiP1Ctx,
     pub net: net::Net,
-    pub memory: Option<wasmtime::Memory>,
+    pub memory: Option<guest::GuestMemory>,
     pub trace: bool,
     pub processes: process::Processes,
     /// J3 installs the lease together with the group's imported shared memory.
@@ -391,7 +392,12 @@ fn run_module_instance(
     let (instance, member) = runtime
         .linked
         .instantiate(selected, &mut linker, &mut store)?;
-    store.data_mut().memory = instance.get_memory(&mut store, "memory");
+    store.data_mut().memory = match &member {
+        Some(member) => Some(guest::GuestMemory::Shared(member.memory().clone())),
+        None => instance
+            .get_memory(&mut store, "memory")
+            .map(guest::GuestMemory::Private),
+    };
     slots::install(&mut store, &instance)?;
     process::wasi::initialize(&linker, &mut store)?;
     runtime

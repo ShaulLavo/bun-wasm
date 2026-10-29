@@ -1,16 +1,15 @@
 use std::collections::HashSet;
-use std::ops::Range;
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
 
 use anyhow::{Context, Result, bail, ensure};
 use wasmparser::{Dylink0Subsection, KnownCustom, MemInfo, Parser, Payload};
 use wasmtime::{
-    Engine, Extern, ExternType, Func, Global, GlobalType, Instance, Linker, Memory, Module,
-    Mutability, Ref, SharedMemory, Store, Table, Val, ValType,
+    Engine, Extern, ExternType, Func, Global, GlobalType, Instance, Linker, Module, Mutability,
+    Ref, Store, Table, Val, ValType,
 };
 
 use crate::Host;
+use crate::guest::GuestMemory;
 
 #[path = "linked_relay.rs"]
 mod relay;
@@ -321,10 +320,17 @@ impl Program {
         );
         let end = u64::from(base) + u64::from(size);
         ensure!(
-            end <= core.memory.size(&*store) as u64,
+            end <= core.memory.len(&*store) as u64,
             "side reservation exceeds core memory"
         );
-        core.memory.zero(&mut *store, base as usize..end as usize);
+        let reservation = base as usize..end as usize;
+        let zeroed = reservation.len();
+        core.memory
+            .fill(&mut *store, reservation, |bytes, _| {
+                bytes.fill(0);
+                zeroed as i32
+            })
+            .context("side reservation")?;
         let alignment = 1_u64 << self.layout.table_alignment;
         let table_base = table.size(&*store).max(1).div_ceil(alignment) * alignment;
         let table_end = table_base + u64::from(self.layout.table_size.max(1));
@@ -378,7 +384,7 @@ impl Program {
 /// and the base that rebases its relative data exports.
 struct CoreImage<'a> {
     instance: Instance,
-    memory: ImageMemory,
+    memory: GuestMemory,
     table: Table,
     stack_pointer: Option<Global>,
     base: u32,
@@ -395,7 +401,7 @@ impl<'a> CoreImage<'a> {
             .context("core table")?;
         Ok(Self {
             instance,
-            memory: ImageMemory::Own(memory),
+            memory: GuestMemory::Private(memory),
             table,
             stack_pointer: None,
             base: 0,
@@ -406,7 +412,7 @@ impl<'a> CoreImage<'a> {
     fn member(instance: Instance, member: &MemberImage, relative: &'a HashSet<String>) -> Self {
         Self {
             instance,
-            memory: ImageMemory::Group(member.memory.clone()),
+            memory: GuestMemory::Shared(member.memory.clone()),
             table: member.table,
             stack_pointer: Some(member.stack_pointer),
             base: member.memory_base,
@@ -422,43 +428,6 @@ impl<'a> CoreImage<'a> {
         } else {
             value
         }
-    }
-}
-
-enum ImageMemory {
-    Own(Memory),
-    Group(SharedMemory),
-}
-
-impl ImageMemory {
-    fn size<T>(&self, store: &Store<T>) -> usize {
-        match self {
-            Self::Own(memory) => memory.data_size(store),
-            Self::Group(memory) => memory.data_size(),
-        }
-    }
-
-    fn zero<T>(&self, store: &mut Store<T>, range: Range<usize>) {
-        match self {
-            Self::Own(memory) => memory.data_mut(store)[range].fill(0),
-            Self::Group(memory) => zero_shared(memory, range),
-        }
-    }
-
-    fn export(&self) -> Extern {
-        match self {
-            Self::Own(memory) => (*memory).into(),
-            Self::Group(memory) => memory.clone().into(),
-        }
-    }
-}
-
-/// Zero a side's reservation in the group memory with atomic stores: shared bytes are never
-/// accessed through a plain Rust reference, even when only this member addresses them.
-fn zero_shared(memory: &SharedMemory, range: Range<usize>) {
-    for cell in &memory.data()[range] {
-        // SAFETY: the cell is in bounds of the stable shared backing; AtomicU8 has u8's layout.
-        unsafe { AtomicU8::from_ptr(cell.get()) }.store(0, Ordering::Relaxed);
     }
 }
 
@@ -529,7 +498,7 @@ fn got_address<T>(core: &CoreImage<'_>, store: &mut Store<T>, name: &str) -> Res
         .context("GOT address must be i32")? as u32;
     let value = core.data_address(name, value);
     ensure!(
-        data_address(name, value, core.memory.size(&*store)),
+        data_address(name, value, core.memory.len(&*store)),
         "GOT.mem.{name} address is outside core memory"
     );
     address_global(store, value, Mutability::Var)

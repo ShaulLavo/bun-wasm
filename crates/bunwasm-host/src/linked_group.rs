@@ -446,6 +446,13 @@ pub struct MemberImage {
     pub(super) memory_base: u32,
 }
 
+impl MemberImage {
+    /// The group memory host imports read and write for this member.
+    pub fn memory(&self) -> &SharedMemory {
+        &self.memory
+    }
+}
+
 /// Instantiate a shared-group core into `memory` at its carved chunks, with its own table
 /// (slot 0 null), and initialize its memory. Constructors run later, as for a split core.
 pub(super) fn instantiate_core<T: 'static>(
