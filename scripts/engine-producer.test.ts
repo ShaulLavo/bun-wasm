@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { maxMemoryBytes } from "./src/program-profile.ts";
 
 const repository = resolve(import.meta.dir, "..");
 const recorder = `#!/usr/bin/env bash
@@ -193,7 +194,7 @@ test("WebKit configure and each shim member request PIC without merging the shim
     for (const line of compiles) expect(line).toContain("-fPIC -O2 -c");
     expect(log()).toContain("wasi-compat.o");
     expect(log()).toContain("madvise.o");
-    expect(log()).toContain("-Wl,--max-memory=1073741824");
+    expect(log()).toContain(`-Wl,--max-memory=${maxMemoryBytes()}`);
   });
 });
 
