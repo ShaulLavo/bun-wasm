@@ -7,7 +7,9 @@ use std::cell::RefCell;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-use super::{Dispatcher, Frame, Status};
+use super::{Dispatcher, Frame, Status, error_status};
+use crate::data::codec::{self, CodecError};
+use crate::data::{Val, drop_tree};
 
 struct Allocation {
     pointer: NonNull<u8>,
@@ -37,6 +39,15 @@ impl Allocation {
     fn bytes(&self) -> &[u8] {
         // SAFETY: allocation owns exactly layout.size initialized bytes, live while self is.
         unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.layout.size()) }
+    }
+
+    /// Encodes into a fresh allocation. Nothing else has seen its pointer, so no other borrow of
+    /// its bytes exists.
+    fn encode(&self, value: &Val) -> Result<(), CodecError> {
+        // SAFETY: allocation owns exactly layout.size initialized bytes, live while self is.
+        let bytes =
+            unsafe { std::slice::from_raw_parts_mut(self.pointer.as_ptr(), self.layout.size()) };
+        codec::encode_into(value, bytes)
     }
 
     fn write(&self, bytes: &[u8]) {
@@ -131,6 +142,28 @@ impl Transport {
         Ok(allocation.clone())
     }
 
+    /// Encodes `value` into one allocation of exactly its encoded length, the only copy of the
+    /// encoded bytes. Returns the allocation's pointer and length.
+    pub fn encode(&self, value: &Val) -> Result<(u32, u32), CodecError> {
+        let len = codec::encoded_len(value)?;
+        let len = u32::try_from(len).map_err(|_| CodecError::Allocation)?;
+        let pointer = self.alloc(len, Frame::ALIGN);
+        if pointer == 0 {
+            return Err(CodecError::Allocation);
+        }
+        let encoded = self
+            .allocation(pointer, len)
+            .expect("fresh transport allocation")
+            .encode(value);
+        if let Err(error) = encoded {
+            self.free(pointer, len, Frame::ALIGN)
+                .expect("fresh transport allocation");
+            return Err(error);
+        }
+        Ok((pointer, len))
+    }
+
+    #[cfg(any(test, not(feature = "engine-split")))]
     pub fn write(&self, pointer: u32, bytes: &[u8]) -> Result<(), Status> {
         let len = u32::try_from(bytes.len()).map_err(|_| Status::BadCall)?;
         self.allocation(pointer, len)?.write(bytes);
@@ -162,19 +195,22 @@ impl Transport {
         let request = self.allocation(frame.request_ptr, frame.request_len)?;
         let reply = dispatcher.dispatch(frame.op, frame.session, request.bytes());
         drop(request);
-        let len = u32::try_from(reply.bytes.len()).map_err(|_| Status::ResourceLimit)?;
-        if len == 0 {
+        let Some(value) = reply.value else {
             return Ok(reply.status);
-        }
-        let pointer = self.alloc(len, Frame::ALIGN);
-        if pointer == 0 {
-            return Err(Status::ResourceLimit);
-        }
-        self.write(pointer, &reply.bytes)?;
+        };
+        let encoded = self.encode(&value);
+        drop_tree(value);
+        let (pointer, len) = encoded.map_err(error_status)?;
         frame_bytes[16..20].copy_from_slice(&pointer.to_le_bytes());
         frame_bytes[20..24].copy_from_slice(&len.to_le_bytes());
         frame_owner.write(&frame_bytes);
         Ok(reply.status)
+    }
+
+    /// Makes every later synthetic offset overflow, as if core memory were exhausted.
+    #[cfg(test)]
+    pub fn exhaust(&self) {
+        self.next_offset.set(u32::MAX);
     }
 
     #[cfg(test)]
@@ -200,23 +236,18 @@ pub(super) fn call(
     session: u32,
     args: Vec<crate::data::Val>,
 ) -> crate::data::NativeResult {
-    use crate::data::{NativeError, Val};
+    use crate::data::NativeError;
     let transport = Transport::default();
     let args = Val::Array(args);
-    let request = super::codec::encode(&args);
-    crate::data::drop_tree(args);
-    let request = request.map_err(super::transport_error)?;
-    let request_len = u32::try_from(request.len())
-        .map_err(|_| NativeError::error("core data request too large"))?;
-    let request_ptr = transport.alloc(request_len, Frame::ALIGN);
+    let request = transport.encode(&args);
+    drop_tree(args);
+    let (request_ptr, request_len) = request.map_err(super::transport_error)?;
     let frame_ptr = transport.alloc(Frame::SIZE as u32, Frame::ALIGN);
-    if request_ptr == 0 || frame_ptr == 0 {
+    if frame_ptr == 0 {
         return Err(NativeError::error("core data allocation failed"));
     }
     let frame = frame_bytes(op, session, request_ptr, request_len);
-    transport.write(request_ptr, &request).map_err(call_error)?;
     transport.write(frame_ptr, &frame).map_err(call_error)?;
-    drop(request);
     let status = transport.dispatch(dispatcher, frame_ptr);
     let frame = Frame::decode(
         &transport
@@ -231,7 +262,7 @@ pub(super) fn call(
     transport
         .free(frame_ptr, Frame::SIZE as u32, Frame::ALIGN)
         .map_err(call_error)?;
-    super::Reply { status, bytes }.into_result()
+    super::Reply::decode(status, &bytes)
 }
 
 #[cfg(any(test, not(feature = "engine-split")))]
