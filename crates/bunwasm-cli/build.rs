@@ -65,6 +65,11 @@ fn split_entry() {
     println!("cargo:rerun-if-changed={}", source.display());
     println!("cargo:rerun-if-changed={}", exports.display());
     println!("cargo:rustc-link-arg-bin=bun={}", object.display());
+    // `clock` and `getrusage` for engine sides: their emulation keeps state (its start time), so
+    // the core owns it. Side programs cannot link libc members, which are not PIC.
+    println!(
+        "cargo:rustc-link-arg-bin=bun={sysroot}/lib/wasm32-wasip1/libwasi-emulated-process-clocks.a"
+    );
     for name in std::fs::read_to_string(exports).unwrap().lines() {
         println!("cargo:rustc-link-arg-bin=bun=--export={name}");
     }

@@ -1,0 +1,8 @@
+{
+ "modules": {
+  "/dep.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"yes\":()=>yes});yield;yield;console.log(\"dep must not run\");\nconst yes = 1;\n\n}})",
+  "/importer.mjs": "({r:[\"./dep.mjs\"],i:[[0,\"nope\"]],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0];yield;console.log(\"importer must not run\", __bunwasm_ns0_0.nope);\n\n}})",
+  "/main.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;__bunwasm_m.import(\"./importer.mjs\").then(() => console.log(\"unexpected\"), (error) => console.log(error.name));\n\n}})"
+ },
+ "cjs": {}
+}
