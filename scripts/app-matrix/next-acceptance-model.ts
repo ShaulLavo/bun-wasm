@@ -62,6 +62,14 @@ export function memoryGate(samples: readonly MemorySample[], cycles: number, min
     return { status: "blocked", reason: "Missing capacity/live/peak/heap/ArrayBuffer/SWC attribution; unknown counters cannot pass" };
   }
   const live = (sample: MemorySample) => sample.allocatorLiveBytes ?? 0;
+  const retainedCounters = ["allocatorLiveBytes", "jsHeapBytes", "arrayBufferBytes", "swcBytes"] as const;
+  const growing = retainedCounters.filter(key => {
+    const tail = retained.slice(-10).map(sample => sample[key] ?? 0);
+    const baseline = warm[key] ?? 0;
+    const totalGrowth = Math.max(...tail) - baseline;
+    const tailGrowth = Math.max(...tail.slice(5)) - Math.min(...tail.slice(0, 5));
+    return Math.max(totalGrowth, tailGrowth) > maxGrowthMiB * 1024 * 1024;
+  });
   const peaks = required.map(sample => sample.allocatorPeakBytes ?? 0);
   const peak = Math.max(...peaks);
   const headroom = Math.min(...required.map(sample => (sample.memoryLimitBytes ?? 0) - (sample.allocatorPeakBytes ?? 0)));
@@ -70,7 +78,7 @@ export function memoryGate(samples: readonly MemorySample[], cycles: number, min
   const tailGrowth = Math.max(...tail.slice(5)) - Math.min(...tail.slice(0, 5));
   const MiB = 1024 * 1024;
   const detail = `peak ${(peak / MiB).toFixed(2)} MiB; retained tail ${(Math.max(...tail) / MiB).toFixed(2)} MiB; growth ${(growth / MiB).toFixed(2)} MiB; tail growth ${(tailGrowth / MiB).toFixed(2)} MiB; headroom ${(headroom / MiB).toFixed(2)} MiB`;
-  if (headroom < minHeadroomMiB * MiB || growth > maxGrowthMiB * MiB || tailGrowth > maxGrowthMiB * MiB) return { status: "fail", reason: detail };
+  if (headroom < minHeadroomMiB * MiB || growing.length > 0) return { status: "fail", reason: `${detail}; growing counters: ${growing.join(", ") || "none"}` };
   return { status: "pass", detail };
 }
 

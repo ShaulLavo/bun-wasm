@@ -1,27 +1,29 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { gunzipSync } from "node:zlib";
 import type { Page } from "playwright";
 import { playwright, ready, run, session, terminalText, writeFile } from "../../web/tests/playground.mjs";
 import { stopShell } from "../../web/tests/stop-shell";
 import { resetBrowserProject } from "./browser-environment";
 import { observeNativeProductTraffic, waitForPreviewReady, type GuestSource } from "./product-browser";
 import { registry } from "./registry.mjs";
+import { nextRegistry } from "../../web/tests/next-framework-registry";
 import { readGuest } from "./browser.mjs";
 import { browserRegistryRoute } from "./registry-request";
 import { editCycle, compileErrorRecovery } from "./next-acceptance-edits";
 import { routeCases, runRouteCase, overlappingRequests } from "./next-acceptance-cases";
+import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
+import { verifyAcceptanceAssets } from "./next-acceptance-assets";
 import { emptyMemory, memoryGate, parseMemory, resultTable, type AcceptanceEngine, type MemorySample, type Outcome, type PhaseResult } from "./next-acceptance-model";
 
 const { values } = parseArgs({ options: {
   engine: { type: "string" }, "web-root": { type: "string" }, output: { type: "string" },
   "runtime-revision": { type: "string" }, "runtime-receipt": { type: "string" },
-  registry: { type: "string" }, "memory-hook": { type: "string" },
+  registry: { type: "string" }, "registry-extra": { type: "string" }, "memory-hook": { type: "string" },
   port: { type: "string", default: "43701" }, cycles: { type: "string", default: "30" },
   phases: { type: "string", default: "install,build,start,dev" },
   "timeout-ms": { type: "string", default: "180000" }, "idle-ms": { type: "string", default: "1500" },
@@ -48,9 +50,11 @@ const minHeadroom = numeric("min-headroom-mib", 1, 4096);
 const maxGrowth = numeric("max-growth-mib", 0, 4096);
 const digest = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 const sources = fixtureSources(fixture);
+const staged = stageFixture(sources);
 const rows: PhaseResult[] = [];
 const samples: MemorySample[] = [];
 const external: string[] = [];
+const rebuilds: Awaited<ReturnType<typeof editCycle>>[] = [];
 let observedEngine = "not loaded";
 let completedCycles = 0;
 let droppedSamples = 0;
@@ -58,7 +62,11 @@ let browserVersion = "not launched";
 let owner: Page | undefined;
 let assets: Record<string, string> = {};
 let cleanup = "pending";
+const failedAllocations: { bytes: number | null; category: string; evidence: string }[] = [];
 const samplerErrors: string[] = [];
+let samplerBusy = false;
+let lastSample: Promise<void> = Promise.resolve();
+let samplingPhase = "startup";
 const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture, encoding: "utf8" }).trim();
 mkdirSync(output, { recursive: true });
 // A report directory is a single run, so stale evidence cannot turn a later run green.
@@ -67,24 +75,13 @@ const task = session("next01-");
 let mirror: Awaited<ReturnType<typeof registry>> | undefined;
 let hook: ((input: { page: Page; phase: string; engine: AcceptanceEngine }) => Promise<unknown>) | undefined;
 
-function fixtureSources(directory: string, prefix = ""): Record<string, string> {
-  const files: Record<string, string> = {};
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (["node_modules", ".next", ".gitignore", "next-env.d.ts"].includes(entry.name) || entry.name.endsWith("tsbuildinfo")) continue;
-    const path = prefix + entry.name;
-    if (entry.isDirectory()) Object.assign(files, fixtureSources(join(directory, entry.name), path + "/"));
-    else files[path] = readFileSync(join(directory, entry.name), "utf8");
-  }
-  return files;
-}
-
 function save() {
   const report = {
     schema: 1, engine, observedEngine, browser: { name: "chromium", version: browserVersion },
-    fixture: { path: "examples/next-acceptance", sourceRevision, sha256: digest(JSON.stringify(sources)), lockSha256: digest(sources["bun.lock"] ?? ""), dependencies: JSON.parse(sources["package.json"] ?? "{}").dependencies },
+    fixture: { path: "examples/next-acceptance", sourceRevision, sha256: digest(JSON.stringify(sources)), lockSha256: digest(sources["bun.lock"] ?? ""), stagedSha256: digest(JSON.stringify(staged.files)), config: staged.config, dependencies: JSON.parse(sources["package.json"] ?? "{}").dependencies },
     runtime: { revision: values["runtime-revision"], revisionSource: "caller supplied; compare to producer receipt", assets, webRoot, receipt: values["runtime-receipt"] ? resolve(values["runtime-receipt"]) : null },
     parameters: { cycles, timeoutMs: timeout, idleMs: idle, minHeadroomMiB: minHeadroom, maxGrowthMiB: maxGrowth, phases: Array.from(phases) },
-    completedCycles, droppedSamples, samplerErrors, rows, samples,
+    completedCycles, droppedSamples, samplerErrors, failedAllocations, rebuilds, rows, samples,
     network: { mode: mirror ? "registry replay" : "live npm (diagnostic)", external, mirror: mirror?.snapshot() }, cleanup,
     acceptance: rows.length > 0 && rows.every(row => row.status === "pass") && cleanup === "pass",
   };
@@ -99,6 +96,13 @@ async function sample(phase: string) {
   samples.push({ ...counters, phase, engine, time: Date.now() });
 }
 
+async function boundarySample(phase: string) {
+  await lastSample;
+  samplerBusy = true;
+  try { await sample(phase); }
+  finally { samplerBusy = false; }
+}
+
 async function boundedSample(operation: Promise<unknown>): Promise<unknown> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -107,17 +111,21 @@ async function boundedSample(operation: Promise<unknown>): Promise<unknown> {
 }
 
 async function measured(operation: () => Promise<void>, phase: string) {
-  let pending = Promise.resolve();
-  let sampling = false;
+  const previous = samplingPhase;
+  samplingPhase = phase;
   const tick = () => {
-    if (sampling) return;
-    sampling = true;
-    pending = sample(phase).catch(error => { if (samplerErrors.length < 64) samplerErrors.push(String(error)); }).finally(() => { sampling = false; });
+    if (samplerBusy || samplingPhase !== phase) return;
+    samplerBusy = true;
+    lastSample = sample(phase).catch(recordSamplerError).finally(() => { samplerBusy = false; });
   };
   tick();
   const timer = setInterval(tick, 500);
   try { await operation(); }
-  finally { clearInterval(timer); await pending; }
+  finally { clearInterval(timer); await lastSample; samplingPhase = previous; }
+}
+
+function recordSamplerError(error: unknown) {
+  if (samplerErrors.length < 64) samplerErrors.push(String(error));
 }
 
 async function phase(name: string, operation: () => Promise<void>, prerequisite?: string): Promise<boolean> {
@@ -211,7 +219,7 @@ async function serverCases(owner: Page, page: Page, base: string, mode: "start" 
   if (mode !== "dev") return;
   const warmed = routeCases.every(name => rows.find(row => row.phase === `dev:${name}`)?.status === "pass");
   record("dev:warm", warmed ? { status: "pass", detail: "Every route compiled and checked" } : { status: "blocked", reason: "Warm-up requires all route probes" });
-  await phase("dev:warm-memory", async () => { await page.waitForTimeout(idle); await sample("warm:idle"); }, "dev:warm");
+  await phase("dev:warm-memory", async () => { await page.waitForTimeout(idle); await boundarySample("warm:idle"); }, "dev:warm");
   await phase("dev:edits", async () => {
     for (let index = 0; index < cycles; index++) await cycle(owner, page, base, source, traffic, index);
     assert.ok(completedCycles >= 30, `${completedCycles}/30 cycles; smoke run cannot pass`);
@@ -231,45 +239,38 @@ async function serverCases(owner: Page, page: Page, base: string, mode: "start" 
 async function cycle(owner: Page, page: Page, base: string, source: GuestSource, traffic: Awaited<ReturnType<typeof observeNativeProductTraffic>>, index: number) {
   const passed = await phase(`dev:cycle:${index}`, async () => {
     await alive(owner);
-    await sample(`cycle:${index}:before`);
-    await editCycle(page, base, source, traffic, index, timeout, sample);
+    await boundarySample(`cycle:${index}:before`);
+    rebuilds.push(await editCycle(page, base, source, traffic, index, timeout, boundarySample));
     await overlappingRequests(page, base, `hmr-${index}`);
     await page.waitForTimeout(idle);
-    await sample(`cycle:${index}:idle`);
+    await boundarySample(`cycle:${index}:idle`);
     await alive(owner);
   });
   if (!passed) throw new Error(`Edit/revert cycle ${index} failed; retained ${completedCycles} complete cycles`);
   completedCycles++;
 }
 
-function verifyAssets() {
-  const manifest: unknown = JSON.parse(readFileSync(join(webRoot, "engine-builds.json"), "utf8"));
-  assert.ok(manifest && typeof manifest === "object");
-  const core = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm" }[engine];
-  const side = engine === "quickjs" ? ["quickjs.wasm"] : engine === "jsc" ? ["jsc-engine.wasm"] : [];
-  for (const name of [core].concat(side)) {
-    const raw = join(webRoot, name);
-    const bytes = existsSync(raw) ? readFileSync(raw) : gunzipSync(readFileSync(raw + ".gz"));
-    const hash = digest(bytes);
-    assert.equal(Reflect.get(manifest, name), hash, `${name} served bytes match manifest`);
-    assets[name] = hash;
-  }
-  if (!values["runtime-receipt"]) return;
-  const receipt: unknown = JSON.parse(readFileSync(values["runtime-receipt"], "utf8"));
-  assert.ok(receipt && typeof receipt === "object");
-  assert.equal(Reflect.get(receipt, "artifactSha256"), assets[core], "Producer receipt matches executed core");
-  writeFileSync(join(output, "runtime-receipt.json"), JSON.stringify(receipt, null, 2));
-}
-
 async function main() {
-  if (!await phase("assets", async () => { verifyAssets(); })) return;
+  if (!await phase("assets", async () => {
+    assets = await verifyAcceptanceAssets({ root: webRoot, engine, revision: values["runtime-revision"] ?? "", receipt: values["runtime-receipt"], scratch: task.scratch });
+    if (values["runtime-receipt"]) writeFileSync(join(output, "runtime-receipt.json"), readFileSync(values["runtime-receipt"]));
+  })) return;
+  record("provenance", values["runtime-receipt"] ? { status: "pass", detail: "Canonical core, companion, source manifest and source revision verified" } : { status: "blocked", reason: "No canonical runtime receipt; historical/diagnostic bytes only" });
   if (values["memory-hook"]) {
     const module: unknown = await import(pathToFileURL(resolve(values["memory-hook"])).href);
     assert.ok(module && typeof module === "object" && "sample" in module && typeof module.sample === "function");
     const fn = module.sample;
     hook = async input => fn(input);
   }
+  if (values.registry && values["registry-extra"]) throw new Error("Choose --registry or --registry-extra");
   if (values.registry) mirror = await registry({ directory: resolve(values.registry), record: false });
+  if (values["registry-extra"]) {
+    const replay = nextRegistry(resolve(values["registry-extra"]), 0);
+    const indexes = ["/work/cache/bun-wasm-app-matrix/index.json", join(resolve(values["registry-extra"]), "index.json")].map(path => readFileSync(path, "utf8"));
+    const registryHash = digest(indexes.join("\n"));
+    const entries = new Set(indexes.flatMap(text => Object.keys(JSON.parse(text)))).size;
+    mirror = { ...replay, errors: [], snapshot: () => ({ entries, sha256: registryHash, requests: replay.requests.length, misses: replay.misses, errors: [] }) };
+  }
   const match = await task.start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { ROOT: webRoot, PORT: "0", PREVIEW_ORIGINS: "1" });
   const browser = await task.launch(playwright.chromium);
   browserVersion = browser.version();
@@ -284,7 +285,7 @@ async function main() {
     assert.ok(observedEngine.includes("ready") && observedEngine.includes(label), `Wrong engine: ${observedEngine}`);
     assert.equal(await page.locator("#engine").inputValue(), engine);
     await page.evaluate(resetBrowserProject);
-    for (const [path, text] of Object.entries(sources)) await writeFile(page, `/home/user/${path}`, text);
+    for (const [path, text] of Object.entries(staged.files)) await writeFile(page, `/home/user/${path}`, text);
     if (mirror) await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(mirror.base)}\n`);
     await sample("startup");
   });
@@ -302,7 +303,11 @@ async function main() {
 try { await main(); }
 catch (error) { record("runner", { status: "fail", reason: String(error) }); }
 finally {
-  if (owner && !owner.isClosed()) await terminalText(owner).then(text => writeFileSync(join(output, "terminal.log"), text)).catch(error => samplerErrors.push(String(error)));
+  if (owner && !owner.isClosed()) await terminalText(owner).then(text => {
+    writeFileSync(join(output, "terminal.log"), text);
+    for (const match of text.matchAll(/memory allocation of (\d+) bytes failed/g)) failedAllocations.push({ bytes: Number(match[1]), category: "allocator; attribution unavailable", evidence: match[0] });
+    if (/MemoryExhaustion|out of memory|OOM/i.test(text) && !failedAllocations.length) failedAllocations.push({ bytes: null, category: "unattributed memory failure", evidence: "See terminal.log" });
+  }).catch(recordSamplerError);
   const released = await Promise.allSettled([task.cleanup(), mirror?.close()]);
   cleanup = released.every(result => result.status === "fulfilled") ? "pass" : released.flatMap(result => result.status === "rejected" ? [String(result.reason)] : []).join("; ");
   save();

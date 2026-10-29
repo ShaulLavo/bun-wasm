@@ -184,7 +184,7 @@ function frameworkTraffic(input: unknown): Omit<TrafficEvidence, "sequence"> | n
   if (type === "full-reload") return { framework: "vite", event: type, payload };
   const updates = Reflect.get(message, "updates");
   if (type === "update" && Array.isArray(updates) && updates.some(meaningfulUpdate)) return { framework: "vite", event: type, payload };
-  const action = stringProperty(message, "action");
+  const action = stringProperty(message, "action") ?? type;
   if (action === "built" && stringProperty(message, "hash")) return { framework: "next", event: action, payload };
   if (action && nextActions.has(action)) return { framework: "next", event: action, payload };
   const eventName = stringProperty(message, "event");

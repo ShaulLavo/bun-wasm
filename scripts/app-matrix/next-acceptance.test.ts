@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript-api";
+import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
 import { emptyMemory, memoryGate, parseMemory, resultTable, type MemorySample } from "./next-acceptance-model";
 
 const MiB = 1024 * 1024;
@@ -18,6 +19,7 @@ test("memory gate separates capacity, live memory and peak headroom", () => {
   expect(memoryGate(highCapacity, 30, 32, 16).status).toBe("pass");
   const peak = settled().concat([{ ...sample("dev:cycle:14"), allocatorPeakBytes: 500 * MiB }]);
   expect(memoryGate(peak, 30, 32, 16).status).toBe("fail");
+  expect(memoryGate(settled().map(value => ({ ...value, jsHeapBytes: value.phase === "warm:idle" ? 150 * MiB : 300 * MiB })), 30, 32, 16).status).toBe("fail");
 });
 
 test("memory gate refuses partial sessions, missing attribution and retention growth", () => {
@@ -60,4 +62,17 @@ test("acceptance implementation and fixture stay within three block levels", () 
   const directory = import.meta.dir;
   const runner = readdirSync(directory).filter(name => /^next-acceptance.*\.ts$/.test(name)).map(name => join(directory, name));
   expect(runner.concat(sourceFiles(join(directory, "../../examples/next-acceptance"))).flatMap(deepBlocks)).toEqual([]);
+});
+
+
+test("every engine stages the same TS-authored config as native ESM", async () => {
+  const sources = fixtureSources(join(import.meta.dir, "../../examples/next-acceptance"));
+  const staged = stageFixture(sources);
+  expect(staged.files["next.config.ts"]).toBeUndefined();
+  expect(staged.files["next.config.mjs"]).toContain("export default");
+  expect(staged.config.sourceSha256).toHaveLength(64);
+  expect(staged.config.generatedSha256).toHaveLength(64);
+  expect(sources["next.config.ts"]).toContain("import type");
+  const module = await import("data:text/javascript;base64," + Buffer.from(staged.files["next.config.mjs"] ?? "").toString("base64"));
+  expect(module.default).toEqual({ outputFileTracingRoot: process.cwd(), agentRules: false, experimental: { cpus: 1 } });
 });

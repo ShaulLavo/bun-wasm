@@ -625,3 +625,14 @@ test("readiness never starts a navigation after the shared deadline", async () =
   await expect(waitForPreviewReady(probe, "http://local/", Date.now() - 1)).rejects.toThrow("not HTTP-ready before the deadline");
   expect(probe.navigations).toBe(0);
 });
+
+test("Next 16 typed build messages prove an edit and its restoration", async () => {
+  const control = fixture({ updateMessage: JSON.stringify({ type: "built", hash: "next16-build" }) });
+  const traffic = await observeProductTraffic(control.page);
+  await control.open();
+  try {
+    const observations = await productObservations(control.page, "http://local/__preview/3137/", hmrCheck(), control.source, traffic, 1000);
+    expect(observations.every(observation => observation.status === "pass")).toBe(true);
+    expect(control.writes).toEqual(["changed", "original"]);
+  } finally { await traffic.close(); }
+});

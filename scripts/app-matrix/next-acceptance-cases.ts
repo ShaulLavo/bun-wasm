@@ -16,9 +16,13 @@ export async function overlappingRequests(page: Page, base: string, marker: stri
     const request = async (index: number) => {
       const value = `${marker}-${index}`;
       document.cookie = `next-marker-${value}=${value}; path=/`;
-      const path = index % 2 === 0 ? "dynamic" : "api/context?fail=1";
-      const response = await fetch(new URL(path, base), { headers: { "x-next-marker": value } });
-      return { marker: value, status: response.status, text: await response.text() };
+      const path = index % 3 === 0 ? "dynamic" : "api/context?fail=1";
+      const post = index % 3 === 2;
+      const response = await fetch(new URL(path, base), {
+        method: post ? "POST" : "GET", headers: { "x-next-marker": value, "content-type": "application/json" },
+        ...(post ? { body: JSON.stringify({ marker: value }) } : {}),
+      });
+      return { marker: value, status: response.status, expectedStatus: post ? 201 : 200, text: await response.text() };
     };
     return Promise.all(Array.from({ length: 6 }, (_, index) => request(index)));
   }, { base, marker });
@@ -28,8 +32,8 @@ export async function overlappingRequests(page: Page, base: string, marker: stri
   for (const result of results) verifyContext(result, result.marker);
 }
 
-function verifyContext(response: { status: number; text: string }, marker: string) {
-  assert.equal(response.status, 200, response.text.slice(0, 500));
+function verifyContext(response: { status: number; expectedStatus: number; text: string }, marker: string) {
+  assert.equal(response.status, response.expectedStatus, response.text.slice(0, 500));
   const normalized = response.text.replaceAll("&quot;", '"');
   for (const field of ["header", "cookie", "after", "cookieAfter"]) assert.ok(normalized.includes(`"${field}":"${marker}"`), `${field} lost after await: ${normalized.slice(0, 1000)}`);
 }
