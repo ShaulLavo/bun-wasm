@@ -9,6 +9,7 @@ import { FilesystemService } from "waffle/fs/service";
 import { createFilesystemConnection, FilesystemError } from "waffle/fs/protocol";
 import { installBunAdapters as installReal, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
 import type { BunAdapterOptions } from "../../src/index.js";
+import { runtimeSharedObjectRoute } from "../../web/src/shared-objects/runtime.js";
 const workerUrl = "https://example.test/worker.js";
 const notificationWorkerUrl = "https://example.test/notification-worker.js";
 // @ts-expect-error Hermes is a playground-only engine, not a package adapter engine.
@@ -256,4 +257,11 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) test(`default ${eng
     if (typeof program?.module !== "function") throw new Error("Expected lazy module registration");
     expect(await program.module()).toBe(module);
   } finally { installed.dispose(); }
+});
+
+test("installing the adapters alone installs no shared-object service", async () => {
+  const f = fixture();
+  const install = await installBunAdapters(f.runtime);
+  try { expect(runtimeSharedObjectRoute(f.runtime as unknown as Runtime)).toBeUndefined(); }
+  finally { install.dispose(); }
 });

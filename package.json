@@ -43,6 +43,7 @@
     "src/quickjs-program.ts",
     "src/engine-kind.ts",
     "src/bun-adapter.ts",
+    "src/shared-objects.ts",
     "src/guest-asset.generated.ts",
     "src/worker-entry.ts",
     "src/notification-worker-entry.ts",

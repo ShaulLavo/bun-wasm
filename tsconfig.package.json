@@ -23,6 +23,7 @@
     "src/index.ts",
     "src/assets.ts",
     "src/bun-adapter.ts",
+    "src/shared-objects.ts",
     "build.ts",
     "prepare.ts",
     "tests/package/**/*.ts",
