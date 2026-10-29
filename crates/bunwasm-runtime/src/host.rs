@@ -585,24 +585,32 @@ pub fn fs_watch_open(path: &str, recursive: bool) -> Result<u32, i32> {
 /// (6 when nothing is pending). A record that doesn't fit grows the buffer and retries.
 pub fn fs_watch_read(id: u32) -> Result<Vec<u8>, i32> {
     WATCH_BUFFER.with_borrow_mut(|buf| {
-        loop {
-            let mut len = 0u32;
-            let errno = proc_call!(runtime_fs::watch_read(
-                id as i32,
-                ptr_mut(buf.as_mut_slice()),
-                buf.len() as i32,
-                ptr_mut(std::slice::from_mut(&mut len))
-            ));
-            if errno == WATCH_NOBUFS && len as usize > buf.len() {
-                buf.resize(len as usize, 0);
-                continue;
+        let mut read = watch_read_into(id, buf);
+        while let Err((WATCH_NOBUFS, needed)) = read {
+            if needed <= buf.len() {
+                return Err(WATCH_NOBUFS);
             }
-            if errno != 0 {
-                return Err(errno);
-            }
-            return Ok(buf[..len as usize].to_vec());
+            buf.resize(needed, 0);
+            read = watch_read_into(id, buf);
         }
+        read.map(|len| buf[..len].to_vec())
+            .map_err(|(errno, _)| errno)
     })
+}
+
+/// One `watch_read` into `buf`: the byte count, or the errno with the reported length.
+fn watch_read_into(id: u32, buf: &mut [u8]) -> Result<usize, (i32, usize)> {
+    let mut len = 0u32;
+    let errno = proc_call!(runtime_fs::watch_read(
+        id as i32,
+        ptr_mut(buf),
+        buf.len() as i32,
+        ptr_mut(std::slice::from_mut(&mut len))
+    ));
+    if errno != 0 {
+        return Err((errno, len as usize));
+    }
+    Ok(len as usize)
 }
 
 /// `watch_close`: 0, or the positive errno (8 for an unknown or closed id).
