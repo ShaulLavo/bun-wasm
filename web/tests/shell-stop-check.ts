@@ -77,3 +77,36 @@ export async function checkRootSignals(page: Page, base: string, browser: string
   }
 }
 
+
+export async function checkPipelineReader(page: Page, base: string, browser: string, engine: string): Promise<void> {
+  await page.goto(`${base}?mode=memory&engine=${engine}`);
+  assert.match(await ready(page), /ready/);
+  await writeFile(page, "/home/user/pipe-left.ts", 'process.on("SIGINT", () => { console.error("PIPE_LEFT_EXIT0"); process.exit(0); }); setInterval(() => {}, 1000); console.error("PIPE_LEFT_READY");');
+  await writeFile(page, "/home/user/pipe-right.ts", 'process.on("SIGINT", () => console.error("PIPE_RIGHT_HANDLED")); process.stdin.setEncoding("utf8"); process.stdin.once("data", data => { console.log("PIPE_READER:" + data.trim()); process.exit(0); }); setInterval(() => {}, 1000); console.error("PIPE_RIGHT_READY");');
+  await page.evaluate(async () => {
+    const { runtime } = Reflect.get(globalThis, "playground");
+    const supervisor = await (await runtime.processes()).ready();
+    Reflect.set(globalThis, "pipelineChildExits", []);
+    supervisor.onChildExit((event: unknown) => Reflect.get(globalThis, "pipelineChildExits").push(event));
+  });
+  const done = page.evaluate(() => {
+    const { shell } = Reflect.get(globalThis, "playground");
+    return shell.submit("exec 9<&0; bun run pipe-left.ts | bun run pipe-right.ts <&9").then(() => shell.lastExit);
+  });
+  await waitForMarker(page, "PIPE_LEFT_READY");
+  await waitForMarker(page, "PIPE_RIGHT_READY");
+  await page.click(".xterm");
+  await page.keyboard.press("Control+c");
+  await waitForMarker(page, "PIPE_LEFT_EXIT0");
+  await waitForMarker(page, "PIPE_RIGHT_HANDLED");
+  await page.waitForFunction(() => Reflect.get(globalThis, "pipelineChildExits").length === 1);
+  assert.equal(await page.evaluate(() => Reflect.get(globalThis, "playground").shell.running), true, "Pipeline remains live after the first reader exits");
+  await page.keyboard.type("reader-survived");
+  await page.keyboard.press("Enter");
+  await waitForMarker(page, "PIPE_READER:reader-survived");
+  assert.equal(await done, 0, "Surviving pipeline reader receives keyboard input and exits normally");
+  const next = await run(page, 'exec 9<&-; printf "PIPE_EDITOR_%s\\n" recovered');
+  assert.equal(next.code, 0, next.output);
+  assert.equal(next.output.trim(), "PIPE_EDITOR_recovered");
+  console.log(JSON.stringify({ pipelineReader: { browser, engine, ok: true, exits: await page.evaluate(() => Reflect.get(globalThis, "pipelineChildExits")) } }));
+}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
-import { checkDelayedStop, checkRootSignals } from "./shell-stop-check";
+import { checkDelayedStop, checkRootSignals, checkPipelineReader } from "./shell-stop-check";
 import { pinnedBashWeb } from "../../scripts/bash-web-guests";
 
 const port = Number(process.env.SITE_SHELL_PORT);
@@ -125,6 +125,7 @@ async function exercise(page: Page, engine: string) {
   console.log(JSON.stringify({ partial: true, engine, check: "keyboard-repl-builtin", sourceHead, sourceDirty, shellIdentity, builds, transcript }));
   assert.equal(await checkDelayedStop(page, base, "chromium", engine), true);
   await checkRootSignals(page, base, "chromium", engine);
+  await checkPipelineReader(page, base, "chromium", engine);
   return { engine, ok: true, sourceHead, sourceDirty, shellIdentity, builds, transcript };
 }
 async function reportFailure(page: Page, engine: string): Promise<void> {

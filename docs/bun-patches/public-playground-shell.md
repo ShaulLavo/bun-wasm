@@ -2,7 +2,7 @@
 
 | Area | Classification | Source | Local change | Reason |
 | --- | --- | --- | --- | --- |
-| `web/src/shell.ts`, `web/src/main.ts` | Original Bun consumer adapter | bash-web public shell/bridge API at `a9a4d7c0eda9fb48951a5a79ef61fc4f2a0b079e (draft diagnosis; final pin awaits reviewed merge)`; existing private playground `src/session.ts` and `src/main.ts` integration | Connect xterm input, resize, output, signals and shell state to the page-owned Waffle runtime | Bun REPL and child processes need a live terminal instead of output-only runs |
+| `web/src/shell.ts`, `web/src/main.ts` | Original Bun consumer adapter | bash-web public shell/bridge API at `da1f2eedfdeff174db4009e6345660aa2adfafbc (draft diagnosis; final pin awaits reviewed merge)`; existing private playground `src/session.ts` and `src/main.ts` integration | Connect xterm input, resize, output, signals and shell state to the page-owned Waffle runtime | Bun REPL and child processes need a live terminal instead of output-only runs |
 | Staged `env.wasm` | Host feature, unchanged upstream artifact | Waffle `packages/coreutils/dist/env.wasm`, `programs-v0.0.7`, source `63ddc5da0699d6e3ca449eaecb0bc35069c664d9` | Copy to the native launcher guest path; no implementation changes | bash-web delegates external programs to the released Waffle families |
 
 This replaces the playground's local command parser and line editor with
