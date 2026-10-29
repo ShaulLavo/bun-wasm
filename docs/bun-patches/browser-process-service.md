@@ -98,6 +98,6 @@ async test, thread-pool test, and intentional rejection all pass through the mai
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`waffle/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry including nodejs, jobs, registered signal dispositions including Node/Bun's ignored SIGPIPE default, immutable final-kind query and byte-sized exit statuses. |
-| [`web/src/main.ts`, `web/src/runner.ts`, shared-object root activation](#browser-process-service) | Host feature | Original page-owned runtime installation and per-root shared-object route activation, native connect acceptance, late-port rejection, and teardown; verified by the real browser Vitest worker pool. |
+| [`web/src/playground/playground.ts`, `web/src/runner.ts`, shared-object root activation](#browser-process-service) | Host feature | Original page-owned runtime installation and per-root shared-object route activation, native connect acceptance, late-port rejection, and teardown; verified by the real browser Vitest worker pool. |
 
 [Ledger scope and pinned revisions](scope.md).
