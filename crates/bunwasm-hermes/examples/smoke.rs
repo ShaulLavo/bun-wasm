@@ -1,14 +1,20 @@
 //! Bare smoke test of the Hermes VM library under wasmtime (hermes/smoke.sh): create a runtime,
 //! evaluate scripts, read results back, call a native function, drain promise jobs, catch
 //! errors and keep a value alive across a forced GC. Exits 1 on the first failed check.
+use std::cell::RefCell;
 use std::ffi::c_char;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+static INTERRUPT: AtomicBool = AtomicBool::new(false);
+static RECURSE: AtomicU32 = AtomicU32::new(0);
+thread_local! { static DEAD: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) }; }
 
 use bunwasm_hermes::{self as sys, Handle, kind};
 
 /// `add(...)`: the one native function, id 1. Takes ownership of `this` and the arguments.
 #[unsafe(no_mangle)]
 extern "C" fn bunhermes_host_call(
-    _id: u32,
+    id: u32,
     this: Handle,
     args: *const Handle,
     count: usize,
@@ -20,6 +26,25 @@ extern "C" fn bunhermes_host_call(
         // SAFETY: the shim passes `count` handles.
         unsafe { std::slice::from_raw_parts(args, count) }
     };
+    if id == 3 {
+        unsafe {
+            sys::bh_release(this);
+        }
+        let receiver = unsafe { sys::bh_undefined() };
+        let ok = unsafe {
+            sys::bh_call(
+                RECURSE.load(Ordering::Relaxed),
+                receiver,
+                std::ptr::null(),
+                0,
+                out,
+            )
+        };
+        unsafe {
+            sys::bh_release(receiver);
+        }
+        return ok;
+    }
     // SAFETY: handles from the shim, released once.
     unsafe {
         let sum = args.iter().map(|h| number(*h)).sum();
@@ -27,15 +52,17 @@ extern "C" fn bunhermes_host_call(
         sys::bh_release(this);
         *out = sys::bh_number(sum);
     }
-    true
+    id != 2
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn bunhermes_host_drop(_id: u32) {}
+extern "C" fn bunhermes_host_drop(id: u32) {
+    DEAD.with_borrow_mut(|ids| ids.push(id));
+}
 
 #[unsafe(no_mangle)]
 extern "C" fn bunhermes_host_interrupt() -> bool {
-    false
+    INTERRUPT.load(Ordering::Relaxed)
 }
 
 #[unsafe(no_mangle)]
@@ -121,6 +148,11 @@ fn main() {
         });
     };
 
+    if std::env::args().any(|arg| arg == "--oom") {
+        let _ = eval("var a = []; for (;;) a.push(new Array(100000).fill(1));");
+        panic!("OOM must terminate through the fatal callback");
+    }
+
     let n = eval("1 + 2 * 3").map(number);
     check("number result", n == Ok(7.0), format!("{n:?}"));
 
@@ -188,5 +220,219 @@ fn main() {
     let (mut used, mut size, mut external) = (0.0, 0.0, 0.0);
     // SAFETY: valid out-parameters.
     unsafe { sys::bh_heap_info(&mut used, &mut size, &mut external) };
-    check("heap info", size > 0.0, format!("used={used} size={size}"));
+    check(
+        "heap info",
+        size > 0.0 && used > 0.0,
+        format!("used={used} size={size} external={external}"),
+    );
+    check_bytes();
+    check_external();
+    check_context();
+    check_boundaries();
+}
+
+fn put_global(name: &str, value: Handle) {
+    unsafe {
+        let global = sys::bh_global();
+        let mut out = 0;
+        assert!(sys::bh_set(
+            global,
+            name.as_ptr().cast(),
+            name.len(),
+            value,
+            &mut out
+        ));
+        sys::bh_release(global);
+    }
+}
+
+fn bytes(value: Handle) -> Vec<u8> {
+    unsafe {
+        let mut len = 0;
+        let data = sys::bh_bytes(value, &mut len);
+        if len == 0 {
+            return Vec::new();
+        }
+        std::slice::from_raw_parts(data, len).to_vec()
+    }
+}
+
+fn check_bytes() {
+    let buffer = eval("var bytes = new Uint8Array([1,2,3,4,5,6,7,8]); bytes.buffer").unwrap();
+    check(
+        "ArrayBuffer bytes",
+        bytes(buffer) == [1, 2, 3, 4, 5, 6, 7, 8],
+        format!("{:?}", bytes(buffer)),
+    );
+    for name in [
+        "Int8Array",
+        "Uint8Array",
+        "Uint8ClampedArray",
+        "Int16Array",
+        "Uint16Array",
+        "Int32Array",
+        "Uint32Array",
+        "Float32Array",
+        "Float64Array",
+    ] {
+        let source = format!("new {name}(bytes.buffer, 0, 8 / {name}.BYTES_PER_ELEMENT)");
+        let view = eval(&source).unwrap();
+        let kind = unsafe { sys::bh_kind(view) };
+        let expected_kind = if name == "Uint8Array" {
+            kind::UINT8ARRAY
+        } else {
+            kind::TYPED_ARRAY
+        };
+        check(
+            name,
+            kind == expected_kind && bytes(view) == bytes(buffer),
+            format!("kind={kind}"),
+        );
+        unsafe {
+            sys::bh_release(view);
+        }
+    }
+    for source in [
+        "new Uint8Array(bytes.buffer, 2, 4)",
+        "new Uint16Array(bytes.buffer, 2, 2)",
+        "new DataView(bytes.buffer, 2, 4)",
+    ] {
+        let view = eval(source).unwrap();
+        check(
+            "view offset",
+            bytes(view) == [3, 4, 5, 6],
+            format!("{:?}", bytes(view)),
+        );
+        unsafe {
+            sys::bh_release(view);
+        }
+    }
+    unsafe {
+        sys::bh_release(buffer);
+    }
+}
+
+fn check_external() {
+    let mut memory = vec![1u8, 2, 3, 4];
+    let buffer = unsafe { sys::bh_external_buffer(memory.as_mut_ptr(), memory.len()) };
+    put_global("external", buffer);
+    assert!(unsafe { sys::bh_is_external(buffer) });
+    assert!(!unsafe { sys::bh_is_external(sys::bh_number(0.0)) });
+    let empty = unsafe { sys::bh_external_buffer(std::ptr::null_mut(), 0) };
+    assert!(unsafe { sys::bh_is_external(empty) && sys::bh_detach_external(empty) });
+    unsafe {
+        sys::bh_release(empty);
+    }
+    let view = eval("var externalView = new DataView(external, 1, 2); externalView.setUint8(0, 42); externalView").unwrap();
+    check(
+        "external memory alias",
+        memory[1] == 42 && bytes(view) == [42, 3],
+        format!("{memory:?}"),
+    );
+    unsafe {
+        sys::bh_gc();
+    }
+    check(
+        "external rooted across GC",
+        bytes(buffer) == memory,
+        format!("{:?}", bytes(buffer)),
+    );
+    assert!(unsafe { sys::bh_detach_external(buffer) });
+    check(
+        "external view detach",
+        bytes(view).is_empty() && bytes(buffer).is_empty(),
+        format!("memory={memory:?}"),
+    );
+    assert!(!unsafe { sys::bh_detach_external(buffer) });
+    assert!(!unsafe { sys::bh_is_external(buffer) });
+    unsafe {
+        sys::bh_release(view);
+        sys::bh_release(buffer);
+    }
+    check(
+        "external storage retained",
+        memory == [1, 42, 3, 4],
+        format!("{memory:?}"),
+    );
+}
+
+fn drain() {
+    let mut out = 0;
+    assert!(unsafe { sys::bh_drain_jobs(&mut out) });
+}
+
+fn check_context() {
+    let _ = eval(r#"
+        var getContext = Promise._G, setContext = Promise._S, internalThen = Promise._T;
+        delete Promise._G; delete Promise._S; delete Promise._T;
+        var contexts = [];
+        var resolver;
+        var pending = new Promise(r => resolver = r);
+        setContext('registered');
+        pending.then(() => contexts.push(getContext()));
+        async function awaiting() { await pending; contexts.push(getContext()); }
+        awaiting();
+        setContext('resolver'); resolver(1);
+        var hostile = Promise.resolve(1);
+        Object.defineProperty(hostile, 'constructor', { get() { throw Error('constructor read'); } });
+        Object.defineProperty(hostile, 'then', { get() { throw Error('then read'); } });
+        setContext('private');
+        internalThen(hostile, () => contexts.push(getContext()), undefined);
+        setContext('restored');
+    "#).unwrap();
+    drain();
+    let result = eval("contexts.join(',') + '/' + getContext()").map(string);
+    check(
+        "Promise then/await/private context",
+        result.as_deref() == Ok("registered,registered,private/restored"),
+        format!("{result:?}"),
+    );
+}
+
+fn check_boundaries() {
+    let throwing = unsafe { sys::bh_function(c"throws".as_ptr(), 6, 2) };
+    put_global("nativeThrows", throwing);
+    let result = eval("nativeThrows(42)").map_err(number);
+    check(
+        "native exception",
+        result == Err(42.0),
+        format!("{result:?}"),
+    );
+    let recursion = eval("function recurse() { return recurse(); } recurse()").map_err(message);
+    check(
+        "stack overflow",
+        recursion.as_ref().is_err_and(|s| s.contains("call stack")),
+        format!("{recursion:?}"),
+    );
+    let native_recurse = unsafe { sys::bh_function(c"nativeRecurse".as_ptr(), 13, 3) };
+    RECURSE.store(native_recurse, Ordering::Relaxed);
+    put_global("nativeRecurse", native_recurse);
+    let native_stack = eval("nativeRecurse()").map_err(message);
+    check(
+        "native stack bounds",
+        native_stack
+            .as_ref()
+            .is_err_and(|s| s.contains("native stack depth")),
+        format!("{native_stack:?}"),
+    );
+    let temporary = unsafe { sys::bh_function(c"temporary".as_ptr(), 9, 99) };
+    unsafe {
+        sys::bh_release(temporary);
+        sys::bh_gc();
+    }
+    let dead = DEAD.take();
+    check(
+        "GC queues native drops",
+        dead.contains(&99),
+        format!("{dead:?}"),
+    );
+    INTERRUPT.store(true, Ordering::Relaxed);
+    let interrupted = eval("var caught = false; try { for (;;) {} } catch(e) { caught = true; }");
+    INTERRUPT.store(false, Ordering::Relaxed);
+    let caught = eval("caught").unwrap();
+    check(
+        "uncatchable host interrupt",
+        interrupted.is_err() && !unsafe { sys::bh_get_bool(caught) },
+        format!("{interrupted:?}"),
+    );
 }

@@ -1,5 +1,5 @@
 // bun-wasm's C interface to the Hermes VM (hermes::vm::Runtime), covering the
-// operations of bunwasm-runtime's Engine trait (docs/hermes-engine.md). One
+// operations of bunwasm-runtime's Engine trait (docs/bun-patches/hermes-wasi.md). One
 // runtime per process, single-threaded.
 //
 // Values cross as `bh_value` handles: indices into a slot table whose entries
@@ -248,8 +248,8 @@ uintptr_t bunhermes_stack_low() { return state->stackLow; }
 uintptr_t bunhermes_stack_high() { return state->stackHigh; }
 
 void bh_init(const bh_config *options) {
-  llvh::install_fatal_error_handler([](void *, const char *message, bool) {
-    bunhermes_host_fatal(message, strlen(message));
+  llvh::install_fatal_error_handler([](void *, const std::string &message, bool) {
+    bunhermes_host_fatal(message.data(), message.size());
     abort();
   });
   if (!options || options->stack_high <= options->stack_low ||

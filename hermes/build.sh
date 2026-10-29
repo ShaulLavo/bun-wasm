@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the Hermes VM for wasm32-wasip1 as one static library, $HERMES_LIB (hermesvm_bunwasm:
 # VM, compiler and support code, without the C++ JSI API, plus crates/bunwasm-hermes/cpp/shim.cpp). A host hermesc build comes first: the
-# wasm build compiles Hermes's internal JavaScript with it. Incremental. See docs/hermes-engine.md.
+# wasm build compiles Hermes's internal JavaScript with it. Incremental. See docs/bun-patches/hermes-wasi.md.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 "$HERMES_SRC/fetch-hermes.sh"
 
@@ -12,8 +12,8 @@ $CAGE cmake -S "$HERMES_DIR" -B "$HERMES_HOST" -G Ninja \
   -DHERMES_ALLOW_BOOST_CONTEXT=0 > "$HERMES_BUILD_DIR/configure-host.log"
 $CAGE cmake --build "$HERMES_HOST" --target hermesc --parallel "$JOBS"
 
-# Headers for mmap, signal, getpid and process clocks; bunwasm-posix and wasi-libc provide them
-# at bun.wasm's link. The link flags below only serve CMake's configure-time checks.
+# The mmap define exposes llvh headers only. No mmap emulation library is linked.
+# These link flags serve CMake's configure-time checks.
 defines="-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID"
 libdir="$BUN_WASM_SYSROOT/lib/wasm32-wasip1"
 ldflags="-L$libdir/noeh -lwasi-emulated-signal -lwasi-emulated-process-clocks -lwasi-emulated-getpid"
@@ -45,4 +45,4 @@ $CAGE cmake -S "$HERMES_DIR" -B "$HERMES_OBJ" -G Ninja \
   -DCMAKE_CXX_FLAGS="$defines -fPIC -fno-exceptions -fno-rtti" \
   -DCMAKE_EXE_LINKER_FLAGS="$ldflags" > "$HERMES_BUILD_DIR/configure-wasi.log"
 build_hermes_lib
-ls -l "$HERMES_LIB"
+node "$HERMES_SRC/check-build.ts" "$HERMES_BUILD_DIR"

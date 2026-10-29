@@ -35,12 +35,9 @@ fn main() {
     );
     println!("cargo:rustc-link-search=native={}", libdir.display());
     // libc++ without exceptions, and wasi-libc's process-clock emulation (Hermes's CPU-time
-    // queries). bunwasm-posix provides mmap, signals and getpid.
+    // queries). The paired core provides signals and getpid.
     if env::var_os("CARGO_FEATURE_STANDALONE").is_some() {
-        for lib in [
-            "wasi-emulated-signal",
-            "wasi-emulated-getpid",
-        ] {
+        for lib in ["wasi-emulated-signal", "wasi-emulated-getpid"] {
             println!("cargo:rustc-link-lib=static={lib}");
         }
         let crt = libdir.join("crt1-command.o");

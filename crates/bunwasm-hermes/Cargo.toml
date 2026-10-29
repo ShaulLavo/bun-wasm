@@ -6,7 +6,7 @@ license.workspace = true
 description = "The Hermes VM (wasm32-wasip1, hermes/build.sh) behind bun-wasm's C shim (cpp/shim.cpp)"
 
 [features]
-# Link wasi-libc's mmap, signal and getpid emulation, for binaries without bunwasm-posix
+# Link signal and getpid emulation for the VM-only command
 # (examples/smoke.rs).
 standalone = []
 

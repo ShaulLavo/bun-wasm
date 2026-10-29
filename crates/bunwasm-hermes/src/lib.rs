@@ -1,5 +1,5 @@
 //! The Hermes VM, compiled to wasm32-wasip1 (hermes/build.sh), behind bun-wasm's C shim
-//! (cpp/shim.cpp). `examples/smoke.rs` exercises it; see docs/hermes-engine.md.
+//! (cpp/shim.cpp). `examples/smoke.rs` exercises it; see docs/bun-patches/hermes-wasi.md.
 //!
 //! Values are [`Handle`]s: indices into the shim's slot table, which the VM scans as GC roots.
 //! A handle owns one reference (`bh_dup` adds one, `bh_release` drops one). Calls that can
