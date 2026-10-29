@@ -4,7 +4,7 @@
   const native = internal.native;
   const hooks = native.engine === "host" && globalThis.__bunwasm_contextHooks;
   const version = native.engine === "host" ? native.prepareVersion : 4;
-  const realm = `${process.pid}/${process.env.BUNWASM_THREAD_ID || "0"}`;
+  const realm = `${process.pid}/${process.env?.BUNWASM_THREAD_ID || "0"}`;
   const budget = 16 * 1024 * 1024;
   const maxEntry = 4 * 1024 * 1024;
   const cache = new Map<string, { bytes: number; values: Prepared[] }>();
@@ -104,7 +104,7 @@
     counters.fallbacks += prepared.filter(value => value.fallback !== null).length;
     counters.spreadEval += prepared.reduce((total, value) => total + value.spreadEval, 0);
     counters.unhookedAwaitUsing += prepared.reduce((total, value) => total + value.unhookedAwaitUsing, 0);
-    if (process.env.BUN_WASM_PREPARE_TRACE !== "1") return;
+    if (process.env?.BUN_WASM_PREPARE_TRACE !== "1") return;
     console.error("BUNWASM_PREPARE " + JSON.stringify({ version, realm, mapPolicy: "c1", origin, name, bytes: size * 2,
       edits: prepared.reduce((total, value) => total + value.edits.length / 3, 0), milliseconds: performance.now() - start,
       cacheHit: hit, fallback: prepared.map(value => value.fallback) }));
