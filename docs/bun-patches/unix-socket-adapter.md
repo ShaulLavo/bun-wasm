@@ -44,3 +44,9 @@ admitted child's scope. The runner uses its existing filesystem connection.
 Failed and cancelled launches release acquired roots; helper cleanup precedes
 root release. Scope attachment and authentication remain Waffle's responsibility.
 Passing no scope fails with ENOTCAPABLE.
+
+
+Socket-only unit mocks live in `web/tests/socket-runtime-fixture.ts` and call the
+canonical process fixture. The shared process fixture keeps its unexpected-operation
+guard; socket tests opt into a directory lease explicitly. Main's request-memory,
+terminal-output and filesystem payload fixtures remain the source of those protocols.

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { networkPathScopeFixture, socketDirectoryFixture, processRuntimeFixture } from "./process-runtime-fixture";
+import { processRuntimeFixture } from "./process-runtime-fixture";
+import { networkPathScopeFixture, socketDirectoryFixture } from "./socket-runtime-fixture";
 import { outcomeWord } from "waffle/proc/outcome";
 import type { ProcessService, RuntimeProcessContext } from "waffle";
 import { bunLauncher, preview1Launcher } from "../src/bun-launcher";

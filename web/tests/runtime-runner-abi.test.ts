@@ -1,5 +1,5 @@
 import { createNotifyObserver } from "./notify-observer";
-import { processRuntimeFixture } from "./process-runtime-fixture";
+import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 import type { Runtime } from "waffle";
 import { expect, spyOn, test } from "bun:test";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";

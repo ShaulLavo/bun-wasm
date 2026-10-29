@@ -2,7 +2,7 @@ import { createBunExecutor, type RunRequest } from "../../src/bun-executor";
 import { createFilesystemIdentity } from "waffle/fs/protocol";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { WorkerProcessClient, workerProcessState } from "waffle/proc/worker-client";
-import { attachTerminalOutput } from "../../node_modules/waffle/browser/terminal-output";
+import { attachTerminalOutput } from "../../../node_modules/waffle/browser/terminal-output";
 
 function reportEnvironment(data: RunRequest, env: Record<string, string>) {
   const identity = workerProcessState(data.runtimeProcess!);
