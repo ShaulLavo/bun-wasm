@@ -204,3 +204,47 @@ These follow from running on a standard JS engine without engine hooks. Every fi
 | `process.nextTick` vs `await` continuations | Ticks run before `.then`/`queueMicrotask` callbacks queued earlier, but not before `await` continuations queued earlier. |
 
 Everything else, including the transpiler, resolver, `bun test`, `bun build`, sqlite, fetch, timers, the file system, stdin and exit codes, matches the other engines on the fixture suite.
+
+### Runtime-built source and async context
+
+Runtime-built JavaScript uses insertion-only preparation through Bun's parser.
+This includes all four dynamic constructors, their prototype `.constructor`
+routes, direct and `(0, eval)` calls, `vm.Script`, vm contexts, `vm.compileFunction`,
+and the complete CommonJS `_compile` wrapper. A native continuation provider
+bypasses the hooks. Constructor argument conversion happens once, in order;
+preparation never wraps an awaited value in an extra promise or thenable.
+
+The text cache key contains the guest preparation version, process/thread realm,
+parse goal with constructor argument lengths, map policy, and source payload.
+Only edit and column vectors are cached, never functions or request stores.
+The cache is bounded to 16 MiB and skips entries over 4 MiB. Named column tables
+replace prior entries after HMR and are bounded separately. `sourceURL` and
+`sourceMappingURL` comments survive unchanged. Lines stay exact. The runtime's
+stack formatter corrects inserted columns before existing source-map offsets.
+A debugger, or an app that replaces `Error.prepareStackTrace`, sees raw shifted
+columns on lines containing hooks.
+
+`BUN_WASM_PREPARE_TRACE=1` prints preparation version, realm, goal, map policy,
+origin, name, byte count, edit count, duration, cache hits, and parse fallback.
+`bun:internal-for-testing` exposes preparation counters and the text preparation
+entry point used by regression tests. Parse failures evaluate the original text,
+so the engine remains responsible for its own syntax errors.
+
+The following bounded gaps remain. These are not full-language continuation
+semantics.
+
+- G1: an async generator's `yield*` rejection handler sees the delegation-start frame.
+- G2: async generator `finally` after `return()` can see the last yield's frame.
+- G3: a global accessor named `eval` is read twice; `with (proxy)` sees extra callee lookups.
+- G4: `with (proxy)` sees hook-name lookups.
+- G5: catch-binding destructuring and defaults run before the handler hook.
+- G6: `await using` implicit suspension is unhooked and counted.
+- G7: aliased, member, optional and spread eval calls are unprepared. Spread eval is counted.
+- G8: the async-generator `.throw` wrapper changes its function identity.
+
+A nested labeled `for await` continuation after `continue outer` also currently
+loses context, equally in the parent printer and runtime insertion path. The
+CTX-02b report retains its exact reproducer. The parent owns its hook-contract
+fix. Host-originated job entry, raw polyfill awaits and a passing Next/HMR
+context gate remain separate work. User-created data/blob modules and
+`importScripts` outside the loader are not prepared.

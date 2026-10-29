@@ -27,7 +27,8 @@ export function createScriptEvaluation(evaluate: (source: string, filename: stri
       const corrected = correctPreparedColumn(filename, line, column);
       const offset = lineOffsets.get(filename);
       if (offset !== undefined) return [line + offset, corrected];
-      return mapPosition(filename, line, corrected) ?? (corrected === column ? null : [line, corrected]);
+      const mapped = mapPosition(filename, line, corrected);
+      return mapped ?? (corrected === column ? mapped : [line, corrected]);
     },
   };
 }

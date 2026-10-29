@@ -24,6 +24,7 @@ pub const TEXT: &[&str] = &[
     "} finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } }",
     "__bunwasm_evalArg(eval, ",
     "__bunwasm_dynamicImport",
+    ", \"eval-indirect\")",
 ];
 
 #[derive(Default)]
@@ -35,7 +36,7 @@ struct Body {
     prepared: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Edits(Vec<(usize, usize, usize, i64)>);
 impl Edits {
     fn at(&mut self, at: usize, kind: usize) {
@@ -164,23 +165,18 @@ fn collect_span(edits: &mut Edits, source: &str, spans: &[Span], bodies: &[Body]
             operand,
             end,
             asynchronous: true,
-        } => {
-            if !owner(bodies, start).is_some_and(|index| bodies[index].suspension_handlers)
-                || already_hooked(source, start)
-            {
-                return;
-            }
+        } if owner(bodies, start).is_some_and(|index| bodies[index].suspension_handlers)
+            && !already_hooked(source, start) =>
+        {
             edits.open(start, end, 3);
             edits.open(operand, end, 3);
             edits.close(end, start, 7);
         }
-        Span::Handler(at) => {
-            if !owner(bodies, at).is_some_and(|index| bodies[index].suspension_handlers) {
-                return;
-            }
-            if !source[at..].trim_start().starts_with("__bunwasm_caught(") {
-                edits.at(at, 6);
-            }
+        Span::Handler(at)
+            if owner(bodies, at).is_some_and(|index| bodies[index].suspension_handlers)
+                && !source[at..].trim_start().starts_with("__bunwasm_caught(") =>
+        {
+            edits.at(at, 6)
         }
         Span::Loop {
             start,
@@ -202,7 +198,7 @@ fn collect_span(edits: &mut Edits, source: &str, spans: &[Span], bodies: &[Body]
                 block,
             );
         }
-        Span::Eval { start, .. } => eval_edits(edits, source, spans, start),
+        Span::Eval { start, indirect } => eval_edits(edits, source, spans, start, indirect),
         _ => (),
     }
 }
@@ -246,7 +242,7 @@ fn loop_edits(
     edits.close(end, start, 12);
 }
 
-fn eval_edits(edits: &mut Edits, source: &str, spans: &[Span], call: usize) {
+fn eval_edits(edits: &mut Edits, source: &str, spans: &[Span], call: usize, indirect: bool) {
     let argument = spans.iter().find_map(|span| match span {
         Span::Argument {
             call: parent,
@@ -266,7 +262,7 @@ fn eval_edits(edits: &mut Edits, source: &str, spans: &[Span], call: usize) {
         return;
     }
     edits.open(start, end, 15);
-    edits.close(end, start, 1);
+    edits.close(end, start, if indirect { 17 } else { 1 });
 }
 
 fn parse(source: &str) -> Result<(Vec<Span>, Vec<usize>), String> {
@@ -292,6 +288,8 @@ fn parse(source: &str) -> Result<(Vec<Span>, Vec<usize>), String> {
 fn already_prepared(source: &str, spans: &[Span]) -> bool {
     spans.iter().any(|span| match *span {
         Span::Await { start, .. } | Span::Yield { start, .. } => already_hooked(source, start),
+        Span::Loop { iterable, iterable_end, .. } => source[iterable..iterable_end].trim_start().starts_with("__bunwasm_c = __bunwasm_iterate("),
+        Span::Prologue { end, .. } => source[end..].trim_start().starts_with("let __bunwasm_s = 0;"),
         Span::Argument { start, end, .. } => source[start..end]
             .trim_start()
             .starts_with("__bunwasm_evalArg("),
@@ -378,26 +376,22 @@ pub fn function(args: &[String], kind: &str, hooks: bool) -> Vec<Value> {
         ranges.push(start..text.len());
     }
     text.push_str("\n})");
-    match parse(&text) {
-        Ok((spans, imports)) => ranges
-            .into_iter()
-            .map(|range| {
-                result(
-                    &text,
-                    if hooks {
-                        collect(&text, &spans, &imports)
-                    } else {
-                        Edits(imports.iter().map(|at| (*at, 6, 16, 0)).collect())
-                    },
-                    range,
-                    None,
-                    &spans,
-                )
-            })
-            .collect(),
-        Err(error) => ranges
-            .into_iter()
-            .map(|range| result(&text, Edits::default(), range, Some(error.clone()), &[]))
-            .collect(),
-    }
+    let (spans, imports) = match parse(&text) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return ranges
+                .into_iter()
+                .map(|range| result(&text, Edits::default(), range, Some(error.clone()), &[]))
+                .collect();
+        }
+    };
+    let edits = if hooks {
+        collect(&text, &spans, &imports)
+    } else {
+        Edits(imports.iter().map(|at| (*at, 6, 16, 0)).collect())
+    };
+    ranges
+        .into_iter()
+        .map(|range| result(&text, edits.clone(), range, None, &spans))
+        .collect()
 }

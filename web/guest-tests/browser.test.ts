@@ -46,6 +46,27 @@ test("browser guest keeps AsyncLocalStorage across rejected awaits, handlers, ge
   }
 }, 70000);
 
+test("browser guest prepares runtime-built constructors, lexical eval, wrappers and source columns", () => {
+  const fixture = resolve(root, "tests/async-context-runtime");
+  const wasm = process.env.BUN_WASM_TEST_BROWSER_WASM || resolve(root, "dist/bun-browser.wasm");
+  for (const context of ["hooks", "native"]) {
+    const child = spawnSync("node", ["--no-warnings", resolve(root, "web/scripts/node-host.mjs"), "--wasm", wasm,
+      "--context", context, "--dir", `${fixture}::/`, "--env", "PWD=/", "--env", "HOME=/", "--", "run", "/prepare-probe.ts"],
+    { cwd: root, encoding: "utf8", timeout: 30000 });
+    expect(child.status, child.stderr + child.stdout).toBe(0);
+    expect(child.stdout).toBe("PREPARE_OK\n");
+    expect(child.stderr).toBe("");
+  }
+  for (const [fixtureName, expected] of [["prepare-transforms", "PREPARE_TRANSFORMS_OK"], ["prepare-cache", "PREPARE_CACHE_OK"]]) {
+    const transformed = spawnSync("node", ["--no-warnings", resolve(root, "web/scripts/node-host.mjs"), "--wasm", wasm,
+      "--context", "hooks", "--dir", `${fixture}::/`, "--env", "PWD=/", "--env", "HOME=/", "--", "run", `/${fixtureName}.ts`],
+    { cwd: root, encoding: "utf8", timeout: 30000 });
+    expect(transformed.status, transformed.stderr + transformed.stdout).toBe(0);
+    expect(transformed.stdout).toBe(`${expected}\n`);
+    expect(transformed.stderr).toBe("");
+  }
+}, 100000);
+
 test("fresh Node-hosted WASM subprocesses preserve stdio, cwd, files, exits and signals", () => {
   const child = spawnSync("node", ["--no-warnings", new URL("../tests/subprocess.mjs", import.meta.url).pathname], { cwd: root, encoding: "utf8", timeout: 100000 });
   expect(child.error).toBeUndefined();

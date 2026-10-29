@@ -164,20 +164,26 @@ test("converted byte sink keeps its factory and copied-buffer behavior", async (
 
 test("converted Function adapter preserves construction and module origins", async () => {
   const { createContext, runInContext } = await import("node:vm");
-  const context = createContext({});
+  const context = createContext({ process: { pid: 1, env: {} }, performance });
   const generated = emit(join(root, "crates/bunwasm-runtime/src/js/function.ts"));
   const factory = runInContext(generated, context);
   const resolutions: unknown[][] = [];
-  factory({
+  const internal = {
     native: {
       engine: "quickjs",
-      functionImports: (strings: string[]) => strings.map(source => source.includes("import") ? [source.indexOf("import")] : []),
+      prepareFunction: (strings: string[]) => JSON.stringify(strings.map(source => ({
+        version: 4, alreadyPrepared: false, edits: source.includes("import") ? [source.indexOf("import"), 6, 16] : [],
+        columns: [], fallback: null, spreadEval: 0, unhookedAwaitUsing: 0,
+      }))),
       resolve(...args: unknown[]) { resolutions.push(args); return "/loaded.ts"; },
       importModule: async (path: string) => ({ path }),
     },
+    mainPath: "/entry.ts",
     require: () => ({ "bun:jsc": () => ({ callerSourceOrigin: () => "/entry.ts" }) }),
     defineGlobal(name: string, value: unknown) { context[name] = value; },
-  });
+  };
+  runInContext(emit(join(root, "crates/bunwasm-runtime/src/js/source_prepare.ts")), context)(internal);
+  factory(internal);
   expect(runInContext('new Function("return 7")()', context)).toBe(7);
   expect(() => runInContext('new Function("return @")', context)).toThrow();
   expect(await runInContext('new Function("return import(\\\"./leaf\\\")")()', context)).toEqual({ path: "/loaded.ts" });

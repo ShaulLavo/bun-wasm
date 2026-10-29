@@ -1,3 +1,4 @@
+/* oxlint-disable no-eval -- These fixtures exercise lexical direct-eval preparation. */
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import vm from "node:vm";
@@ -41,6 +42,7 @@ await Promise.all(["A", "B"].map(name => storage.run(name, async () => {
 
 function lexicalEval() {
   const local = 7;
+  assert.equal(local, 7);
   assert.equal(eval("local + 1"), 8);
   assert.equal((eval)("local"), 7);
   assert.equal(eval(19), 19);

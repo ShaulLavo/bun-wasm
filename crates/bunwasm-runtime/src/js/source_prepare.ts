@@ -27,7 +27,7 @@
     "try { __bunwasm_entered(__bunwasm_c); ",
     "} finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } ",
     " } finally { __bunwasm_exited(__bunwasm_c); } }", "{ try { __bunwasm_entered(__bunwasm_c); ",
-    "} finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } }", "__bunwasm_evalArg(eval, ", "",
+    "} finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } }", "__bunwasm_evalArg(eval, ", "", ", \"eval-indirect\")",
   ];
   function hasWork(source: string): boolean {
     return source.includes("await") || source.includes("eval") || source.includes("import");
@@ -154,9 +154,13 @@
   internal.preparedColumns = columns;
   internal.preparation = { counters, version, realm, correctPosition, cacheBytes: () => bytes, columnBytes: () => columnBytes };
   if (hooks) {
+    // oxlint-disable-next-line no-eval -- Direct calls must retain the realm intrinsic as their callee.
     const NativeEval = eval;
-    internal.defineGlobal("__bunwasm_evalArg", (callee: unknown, source: unknown) =>
-      callee === NativeEval && typeof source === "string" ? prepareText(source, "eval", "eval-direct") : source);
+    internal.defineGlobal("__bunwasm_evalArg", (callee: unknown, source: unknown, origin = "eval-direct") => {
+      if (callee !== NativeEval || typeof source !== "string") return source;
+      const name = internal.require("builtins")["bun:jsc"]().callerSourceOrigin();
+      return prepareText(source, "eval", origin, name ?? undefined);
+    });
   } else if (native.engine === "host") internal.defineGlobal("__bunwasm_evalArg", (_callee: unknown, source: unknown) => source);
   return { prepareText, prepareFunctionArgs };
 })

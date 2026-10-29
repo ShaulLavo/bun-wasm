@@ -1,3 +1,4 @@
+/* oxlint-disable no-eval -- These fixtures exercise lexical direct-eval preparation. */
 import assert from "node:assert/strict";
 const testing = require("bun:internal-for-testing");
 const preparation = testing.preparation();
