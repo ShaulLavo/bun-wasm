@@ -8,7 +8,8 @@
 
 This is an original adapter, not copied or adapted upstream source. It extends
 `node_net.js`, the HTTP code in `net.js`, and the Bun host ABI, with shared policy
-in `net_path.ts`. No Bun, Node or WebKit upstream implementation is imported.
+in `net_path.ts`. `bun-launcher.ts` and `runner.ts` supply the filesystem scope
+and release each retained directory after its helper. No Bun, Node or WebKit upstream implementation is imported.
 The starting Bun revision is `404a956ffdf3fbee9c94b4875be0afe3fbe09df5`.
 
 The interface is Waffle's wave-20261029 `unix-design/BUN-HANDOFF.md`, based on
@@ -33,6 +34,9 @@ it does not implement a second Unix socket transport.
 
 The rev-2 handoff also requires `createHelper.pathScope`, with the admitted guest's
 filesystem identity and a retained directory capability. `BunNetworkOptions`
-forwards that scope without adding authority to guest messages. Launcher wiring
-awaits Waffle's public guest-identity API and the final directory-lease signature;
-passing no scope must continue to fail with ENOTCAPABLE.
+forwards that scope without adding authority to guest messages. The launcher obtains an explicitly releasable root from `directoryHandle("/")`
+and asks the trusted `service.networkPathScope(context, root.handle)` for the
+admitted child's scope. The runner uses its existing filesystem connection.
+Failed and cancelled launches release acquired roots; helper cleanup precedes
+root release. Scope attachment and authentication remain Waffle's responsibility.
+Passing no scope fails with ENOTCAPABLE.

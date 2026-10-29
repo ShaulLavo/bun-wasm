@@ -1,3 +1,4 @@
+import { createFilesystemIdentity } from "waffle/fs";
 import { NetHelper, NetNamespace } from "waffle/browser/net/helper";
 import type { RuntimeNetwork } from "waffle";
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
@@ -22,7 +23,8 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
     vfs: getVfsDescriptor("memory"), state: { status: "ready" }, workspace: undefined, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
     revoke: unused, reap: unused, quiesce: unused, drain: unused, flush: unused,
     lookup: unused, readFile: unused, listFiles: unused,
-    mkdirp: unused, writeFile: unused, remove: unused, move: unused, ...overrides,
+    mkdirp: unused, writeFile: unused, remove: unused, move: unused,
+    directoryHandle: async () => ({ handle: 1, release() {} }), ...overrides,
   };
   const identities = new ProcessIdentityAllocator();
   const files = new MemFS();
@@ -88,7 +90,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
           },
         });
         if (disposed) broker.suspend();
-        service = broker;
+        service = Object.assign(broker, { networkPathScope: networkPathScopeFixture });
         return service;
       });
     },
@@ -126,4 +128,9 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
       return disposal;
     },
   };
+}
+
+
+export function networkPathScopeFixture(_context: unknown, directory: number) {
+  return { filesystem: createFilesystemIdentity(), directory };
 }
