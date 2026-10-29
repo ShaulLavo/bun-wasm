@@ -9,16 +9,25 @@ const MiB = 2 ** 20;
 const size = 40 * MiB;
 const data = Buffer.alloc(size, "webpack pack 0123456789 ");
 fs.writeFileSync("large.bin", data);
-const rss = () => process.memoryUsage().rss;
+function wasmCapacity(): number {
+  const capacity = process.memoryUsage().wasmCapacity;
+  if (typeof capacity !== "number" || !Number.isFinite(capacity) || capacity <= 0) {
+    throw new Error(`Expected numeric Wasm capacity, got ${capacity}`);
+  }
+  return capacity;
+}
 
 const target = Buffer.allocUnsafeSlow(size + 5);
 const fd = fs.openSync("large.bin", "r");
 // Use up the free heap left by the write, so a full-size temporary has to grow memory.
 const fillers: Buffer[] = [];
-for (const start = rss(); rss() === start;) fillers.push(Buffer.alloc(MiB));
-const before = rss();
+for (const start = wasmCapacity(); wasmCapacity() === start;) {
+  if (fillers.length === 64) throw new Error("Wasm capacity did not grow after 64 MiB of pressure");
+  fillers.push(Buffer.alloc(MiB));
+}
+const before = wasmCapacity();
 const positional = fs.readSync(fd, target, 0, size + 5, 0);
-const growth = rss() - before;
+const growth = wasmCapacity() - before;
 console.log("positional read stops at end of file", positional === size && target.subarray(0, size).equals(data));
 console.log("read growth under 8 MiB", growth < 8 * MiB);
 fillers.length = 0;
