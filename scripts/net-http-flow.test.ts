@@ -7,6 +7,7 @@ import type { ClientRequest, IncomingMessage, ServerResponse, Server } from "nod
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { createRequire } from "node:module";
+import { netAddressSource } from "./net-address-source";
 
 const hostRequire = createRequire(import.meta.url);
 
@@ -61,7 +62,8 @@ function fixture() {
   Reflect.set(context, "self", context);
   function load(name: string, extension = "ts") {
     const source = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url), "utf8");
-    return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`), context);
+    const code = name === "net_address" ? netAddressSource() : new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${source}`);
+    return runInNewContext(code, context);
   }
   const native = {
     hostCaps: { connect: true }, platformInfo: { version: "test" },
@@ -81,7 +83,7 @@ function fixture() {
   const modules: Record<string, unknown> = {
     events: EventEmitter, buffer: { Buffer }, websocket: { clientClass: () => undefined },
     http_common: load("http_common")(), http_body: load("http_body")(), http_agent: load("http_agent")(),
-    net_port: ports, net_address: load("net_address", "js")({ require: () => ports }), node_net_socket_options: load("node_net_socket_options")(),
+    net_port: ports, net_address: load("net_address")({ require: () => ports }), node_net_socket_options: load("node_net_socket_options")(),
     fetch_body: load("fetch_body")(), compression_streams: { decode: (body: ReadableStream) => body },
   };
   modules.net_hostname = load("net_hostname")({ require: (name: string) => modules[name] });

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import { runInNewContext } from "node:vm";
 import type { Server } from "node:http";
+import { netAddressSource } from "./net-address-source";
 
 function fixture(refuse = false) {
   const ticks: (() => void)[] = [];
@@ -16,11 +17,12 @@ function fixture(refuse = false) {
   };
   function load(name: string, extension = "ts") {
     const source = readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.${extension}`, import.meta.url), "utf8");
-    return runInNewContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`), { TextEncoder, Buffer });
+    const code = name === "net_address" ? netAddressSource() : new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`);
+    return runInNewContext(code, { TextEncoder, Buffer });
   }
   const ports = load("net_port")();
   const modules: Record<string, unknown> = {
-    events: EventEmitter, buffer: { Buffer }, net_port: ports, net_address: load("net_address", "js")({ require: () => ports }),
+    events: EventEmitter, buffer: { Buffer }, net_port: ports, net_address: load("net_address")({ require: () => ports }),
     http_common: load("http_common")(), http_agent: load("http_agent")(), websocket: { clientClass() {} },
     net_listener: load("net_listener")({ native }),
   };
