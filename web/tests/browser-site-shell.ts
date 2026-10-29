@@ -61,11 +61,16 @@ async function exercise(page: Page, engine: string) {
     const { shell } = Reflect.get(globalThis, "playground");
     await shell.submit("bun -e 'process.exit(7)'");
     if (shell.lastExit !== 7) throw new Error(`Expected exit 7, got ${shell.lastExit}`);
+    await shell.submit("bun -e 'process.exit(130)'");
+    if (shell.lastExit !== 130) throw new Error(`Expected normal exited status 130, got ${shell.lastExit}`);
+    await shell.submit("bun -e 'process.exit(130)'; printf 'NORMAL_EXIT_%s\\n' \"$?\"");
+    if (shell.lastExit !== 0) throw new Error(`Normal exit130 cancelled the compound command: ${shell.lastExit}`);
     await shell.submit("false");
     if (shell.lastExit !== 1) throw new Error(`Expected builtin false status 1, got ${shell.lastExit}`);
     await shell.submit("echo BUILTIN_RECOVERED");
     if (shell.lastExit !== 0) throw new Error(`Expected builtin echo status 0, got ${shell.lastExit}`);
   });
+  await contains(page, "NORMAL_EXIT_130");
   await command(page, "bun -e 'console.log(\"TTY_\" + process.stdin.isTTY)'");
   await contains(page, "TTY_true");
   await ready(page);

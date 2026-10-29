@@ -38,7 +38,7 @@ async function waitForMarker(page: Page, marker: string): Promise<void> {
 }
 
 export async function checkRootSignals(page: Page, base: string, browser: string, engine: string): Promise<void> {
-  for (const mode of ["handled", "removed", "once"]) {
+  for (const mode of ["handled", "default", "removed", "once"]) {
     await page.goto(`${base}?mode=memory&engine=${engine}`);
     assert.match(await ready(page), /ready/);
     await page.evaluate(async () => {
@@ -50,6 +50,7 @@ export async function checkRootSignals(page: Page, base: string, browser: string
     const marker = `ROOT_${mode.toUpperCase()}_READY`;
     const source = mode === "once"
       ? 'process.once("SIGINT", () => console.log("ROOT_ONCE_HANDLED")); process.kill(process.pid, "SIGINT");'
+      : mode === "default" ? ""
       : 'const handler = () => { console.log("ROOT_HANDLED_EXIT0"); process.exit(0); }; process.on("SIGINT", handler);' +
         (mode === "removed" ? 'process.removeListener("SIGINT", handler);' : '');
     await writeFile(page, "/home/user/root-signal.ts", `${source} setInterval(() => {}, 1000); console.log(${JSON.stringify(marker)});`);

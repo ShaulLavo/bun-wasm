@@ -17,7 +17,7 @@
     "@codemirror/view": "^6.43.14",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#460462baaaa76113e20cff4107bbf28fba1f7358",
+    "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#a9a4d7c0eda9fb48951a5a79ef61fc4f2a0b079e",
     "codemirror": "^6.0.2",
     "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.99/waffle-0.0.99.tgz",
     "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.7/waffle-base-0.0.7.tgz"
