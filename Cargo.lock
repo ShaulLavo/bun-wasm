@@ -1425,6 +1425,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-hermes"
+version = "0.0.53"
+
+[[package]]
 name = "bunwasm-host"
 version = "0.0.53"
 dependencies = [
