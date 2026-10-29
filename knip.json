@@ -27,6 +27,7 @@
         "scripts/bun-suite-small-causes.ts",
         "scripts/discover-solid-watch-import.ts",
         "scripts/check-await-observer.ts",
+        "scripts/check-encoded-slice.ts",
         "scripts/check-quickjs-async-context.ts",
         "scripts/crypto-review-vectors.mjs",
         "scripts/generate-*.{ts,mjs}",
