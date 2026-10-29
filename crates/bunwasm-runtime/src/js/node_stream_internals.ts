@@ -20,11 +20,11 @@
   for (const Ctor of [streams.ReadableStream, streams.WritableStream]) {
     Object.defineProperty(Ctor.prototype, kState, { configurable: true, get(this: WebStream) { return getWebStreamState(this); } });
   }
-  function adapter(type: string, method: string): (stream: WebStream, options?: unknown) => unknown {
-    return function (stream: WebStream, options?: unknown): unknown { return internal.builtin("node:stream")[type][method](stream, options); };
+  function adapter(type: string, method: string): (stream: object, options?: unknown) => unknown {
+    return function (stream: object, options?: unknown): unknown { return internal.builtin("node:stream")[type][method](stream, options); };
   }
   const modules: {
-    "internal/webstreams/adapters": Record<string, (stream: WebStream, options?: unknown) => unknown>;
+    "internal/webstreams/adapters": Record<string, (stream: object, options?: unknown) => unknown>;
     "internal/webstreams/util": { kState: symbol; isPromisePending: (promise: PromiseLike<unknown>) => boolean };
   } = {
     "internal/webstreams/adapters": {
