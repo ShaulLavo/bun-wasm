@@ -3,11 +3,13 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inputProfile, verifyProgramReceipt, type ProgramInputSnapshot } from "../../scripts/guest-core-receipt.ts";
+import { captureProgramInputs, inputProfile, verifyProgramReceipt, type ProgramInputSnapshot } from "../../scripts/guest-core-receipt.ts";
+import { artifactIdentity } from "../../scripts/guest-build-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
 import { parseProgramProfile, selectedCxxMembers, sharedGroupEnvironment, targetFeatures, verifySharedSysroot, verifySplitSysroot } from "../../scripts/src/program-profile.ts";
 import { importedMemory, sharedGroupPair } from "../../src/engine-kind.ts";
 import { quickjsPair } from "./quickjs-plan-fixture.ts";
+import { fixtureGit, withReceiptFixture } from "./guest-receipt-fixture.ts";
 
 const scratches: string[] = [];
 afterEach(() => {
@@ -116,3 +118,48 @@ test("object target features keep their allow and disallow prefixes", () => {
   expect(targetFeatures(object)).toEqual(["+atomics", "-shared-mem"]);
   expect(targetFeatures(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]))).toEqual([]);
 });
+
+/** Run `action` with the shared-group compiler environment the capture requires, then restore. */
+async function withSharedEnvironment<T>(sysroot: string, kind: "core" | "quickjs", action: () => Promise<T>): Promise<T> {
+  const environment = sharedGroupEnvironment(sysroot, kind);
+  const saved = Object.fromEntries(Object.keys(environment).map(name => [name, process.env[name]]));
+  Object.assign(process.env, environment);
+  try {
+    return await action();
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+for (const [kind, path] of [["core", "scripts/src/engine-explicit-init.ts"], ["core", "scripts/src/program-profile.ts"], ["quickjs", "scripts/src/program-profile.ts"]] as const) {
+  test(`a retained shared-group ${kind} output is refused after ${path} changes`, async () => {
+    await withReceiptFixture(async options => {
+      const fixture = hash("fixture\n");
+      writeFileSync(join(options.sysroot, "bun-wasm-sysroot.json"), JSON.stringify({ builderSha256: fixture, patchSha256: fixture, libcSha256: fixture,
+        sdkVersion: "fixture\n", profile: "shared-pic", growthImport: "runtime_shm.group_grow", flags: J2_FLAGS, sharedBuilderSha256: digest, groupGrowPatchSha256: digest }));
+      mkdirSync(join(options.repository, "scripts/src"), { recursive: true });
+      writeFileSync(join(options.repository, path), "export {};\n");
+      fixtureGit(options.repository, "add", path);
+      fixtureGit(options.repository, "commit", "-m", "shared-group helper");
+      const capture = () => withSharedEnvironment(options.sysroot, kind, () => kind === "core"
+        ? captureProgramInputs(options, "core", { features: ["engine-split"], profile: "shared-group" })
+        : captureProgramInputs({ ...options, build: "quickjs" }, "quickjs", undefined, "shared-group"));
+      const origin = await capture();
+      expect(inputProfile(origin)).toBe("shared-group");
+      const { core, side } = quickjsPair();
+      // A retained core receipt names the untagged generic core: drop the appended engine tag
+      // section (id, size, name length, "bun-wasm-engine", "quickjs").
+      const bytes = kind === "core" ? core.slice(0, core.length - (3 + "bun-wasm-engine".length + "quickjs".length)) : side;
+      const receipt = { schema: 1, inputs: origin, artifact: artifactIdentity(bytes) };
+      writeFileSync(join(options.repository, path), "export const changed = 1;\n");
+      fixtureGit(options.repository, "add", path);
+      fixtureGit(options.repository, "commit", "-m", "changed shared-group helper");
+      const changed = await capture();
+      expect(changed.contentSha256).not.toBe(origin.contentSha256);
+      expect(() => verifyProgramReceipt(bytes, receipt, changed)).toThrow("compatibility mismatch");
+    });
+  });
+}

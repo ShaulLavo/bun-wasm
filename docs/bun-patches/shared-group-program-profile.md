@@ -1,8 +1,9 @@
 # Shared-group program profile
 
 Opt-in build profile for memory-group members: a PIE core and an atomics QuickJS side that run
-in one shared `WebAssembly.Memory` with other Bun processes. The default `split` profile, its
-receipts and artifacts are unchanged. Contract: [Shared-group programs](../shared-group-profile.md).
+in one shared `WebAssembly.Memory` with other Bun processes. The default `split` profile keeps its
+flags and receipt shape (no profile field is recorded); its input digests change whenever the
+inventoried sources do, these helpers included. Contract: [Shared-group programs](../shared-group-profile.md).
 
 No upstream implementation is copied. The admission rules mirror Waffle's group loader contract
 (Waffle `11d5553`, `packages/waffle/link/plan.ts` `groupAdmission`, `link/code.ts`): refuse

@@ -7,7 +7,9 @@ admission contract. The group itself (members, regions, futex, budgets) belongs 
 
 ## Profiles
 
-`split` is the default profile and is unchanged. `shared-group` is opt-in:
+`split` is the default profile. Its flags and receipt shape are unchanged: no profile field is
+recorded. Its input digests still follow the inventoried sources, which now include the profile
+helper and the core converter. `shared-group` is opt-in:
 
 ```sh
 export BUN_WASM_SHARED_SYSROOT=<J2 shared-pic sysroot>

@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use anyhow::{Context, Result, bail, ensure};
 use wasmparser::{
     ConstExpr, Dylink0Subsection, ExternalKind, KnownCustom, MemInfo, Operator, Parser, Payload,
-    TypeRef,
+    RefType as ParsedRef, TypeRef,
 };
 use wasmtime::{
     Engine, Extern, Global, GlobalType, Instance, Linker, Module, Mutability, Ref, RefType,
@@ -43,15 +43,26 @@ pub(super) enum Profile {
 }
 
 /// What admission needs to know about one image, read without decoding function bodies.
+/// `problems` collects every departure from the closed relocatable-image shape Waffle's
+/// `link/metadata.ts` `inspectProfile` enforces; they refuse only group images.
 #[derive(Default)]
 struct Summary {
     dylink: bool,
+    memory_info: bool,
     needed: bool,
     start: bool,
     memory_export: bool,
     /// `(shared, maximum)` of the `env.memory` import.
     memory: Option<(bool, Option<u64>)>,
+    /// Any imported memory is shared: a side doing so is a group image whatever its name.
+    shared_import: bool,
+    memories: u32,
+    tables: u32,
+    stack_pointer: bool,
+    env_functions: HashSet<String>,
+    import_info: Vec<(String, String)>,
     functions: Vec<String>,
+    problems: Vec<String>,
 }
 
 /// Classify one image and admit it if it is a group image. A core is a group image when it is
@@ -61,12 +72,15 @@ pub(super) fn admit(bytes: &[u8], core: bool) -> Result<Profile> {
     let group = if core {
         summary.dylink
     } else {
-        summary.memory.is_some_and(|(shared, _)| shared)
+        summary.shared_import
     };
     if !group {
         return Ok(Profile::Split);
     }
     let what = if core { "core" } else { "side" };
+    if let Some(problem) = shape_problems(&summary).first() {
+        bail!("memory group {what}: {problem}");
+    }
     ensure!(
         !summary.needed,
         "memory group {what} must not need a shared library"
@@ -87,6 +101,32 @@ pub(super) fn admit(bytes: &[u8], core: bool) -> Result<Profile> {
         "a memory group image cannot use memory.grow; grow through group_grow"
     );
     Ok(Profile::SharedGroup)
+}
+
+/// Whole-image shape: one imported memory and table, the stack pointer, dylink memory-info,
+/// and import-info that names imported env functions.
+fn shape_problems(summary: &Summary) -> Vec<String> {
+    let mut problems = summary.problems.clone();
+    if !summary.dylink {
+        problems.push("group image requires dylink.0".into());
+    }
+    if summary.dylink && !summary.memory_info {
+        problems.push("dylink.0 lacks memory-info".into());
+    }
+    if summary.memories != 1 || summary.tables != 1 {
+        problems.push("group image requires one imported memory and table".into());
+    }
+    if !summary.stack_pointer {
+        problems.push("group image must import env.__stack_pointer".into());
+    }
+    for (module, name) in &summary.import_info {
+        if module != "env" || !summary.env_functions.contains(name) {
+            problems.push(format!(
+                "import-info {module}.{name} must name an imported env function"
+            ));
+        }
+    }
+    problems
 }
 
 fn admit_core(summary: &Summary) -> Result<()> {
@@ -112,29 +152,107 @@ fn summarize(bytes: &[u8]) -> Result<Summary> {
     for payload in Parser::new(0).parse_all(bytes) {
         match payload? {
             Payload::StartSection { .. } => summary.start = true,
-            Payload::ImportSection(imports) => {
-                for import in imports {
-                    read_import(import?, &mut summary);
-                }
-            }
+            Payload::ImportSection(imports) => read_imports(imports, &mut summary)?,
             Payload::ExportSection(exports) => {
                 for export in exports {
                     read_export(export?, &mut summary);
                 }
             }
-            Payload::CustomSection(section) => read_dylink(section.as_known(), &mut summary)?,
+            Payload::TableSection(tables) if tables.count() > 0 => {
+                summary
+                    .problems
+                    .push("group image cannot define tables".into());
+            }
+            Payload::MemorySection(memories) if memories.count() > 0 => {
+                summary
+                    .problems
+                    .push("group image cannot define memory".into());
+            }
+            Payload::TagSection(_) => summary
+                .problems
+                .push("exception tags are unsupported".into()),
+            Payload::CustomSection(section) => read_custom(section, &mut summary)?,
             _ => {}
         }
     }
     Ok(summary)
 }
 
-fn read_import(import: wasmparser::Import<'_>, summary: &mut Summary) {
-    if let TypeRef::Memory(memory) = import.ty
-        && (import.module, import.name) == ("env", "memory")
-    {
-        summary.memory = Some((memory.shared, memory.maximum));
+fn read_imports(imports: wasmparser::ImportSectionReader<'_>, summary: &mut Summary) -> Result<()> {
+    for import in imports {
+        let import = import?;
+        if let Some(problem) = import_problem(&import, summary) {
+            summary.problems.push(problem);
+        }
     }
+    Ok(())
+}
+
+/// Record one import; return why it departs from the relocatable-image shape, if it does.
+fn import_problem(import: &wasmparser::Import<'_>, summary: &mut Summary) -> Option<String> {
+    let (module, name) = (import.module, import.name);
+    let got = matches!(module, "GOT.mem" | "GOT.func");
+    if module.starts_with("GOT.") && (!got || !matches!(import.ty, TypeRef::Global(_))) {
+        return Some(format!("unsupported {module}.{name}"));
+    }
+    match import.ty {
+        TypeRef::Func(_) => {
+            if module == "env" {
+                summary.env_functions.insert(name.to_owned());
+            }
+            None
+        }
+        TypeRef::Table(table) => {
+            summary.tables += 1;
+            let shape = table.element_type == ParsedRef::FUNCREF && !table.table64;
+            let named = (module, name) == ("env", "__indirect_function_table");
+            (!shape || !named).then(|| {
+                format!(
+                    "table import {module}.{name} must be env.__indirect_function_table funcref"
+                )
+            })
+        }
+        TypeRef::Memory(memory) => {
+            summary.memories += 1;
+            summary.shared_import |= memory.shared;
+            let named = (module, name) == ("env", "memory");
+            if named {
+                summary.memory = Some((memory.shared, memory.maximum));
+            }
+            let shape = !memory.memory64 && memory.page_size_log2.is_none();
+            (!shape || !named)
+                .then(|| format!("memory import {module}.{name} must be a 32-bit env.memory"))
+        }
+        TypeRef::Global(global) => global_problem(module, name, global, summary),
+        TypeRef::Tag(_) => Some("tag imports are unsupported".into()),
+    }
+}
+
+fn global_problem(
+    module: &str,
+    name: &str,
+    global: wasmparser::GlobalType,
+    summary: &mut Summary,
+) -> Option<String> {
+    if global.content_type != wasmparser::ValType::I32 {
+        return Some(format!("global import {module}.{name} must be i32"));
+    }
+    if !matches!(module, "env" | "GOT.mem" | "GOT.func") {
+        return Some(format!(
+            "global import {module}.{name} must come from env, GOT.mem or GOT.func"
+        ));
+    }
+    let mutable = match (module, name) {
+        ("env", "__stack_pointer") => {
+            summary.stack_pointer = true;
+            true
+        }
+        ("env", "__memory_base" | "__table_base") => false,
+        ("env", _) => return None,
+        _ => true,
+    };
+    (global.mutable != mutable)
+        .then(|| format!("global import {module}.{name} has the wrong mutability"))
 }
 
 fn read_export(export: wasmparser::Export<'_>, summary: &mut Summary) {
@@ -145,17 +263,55 @@ fn read_export(export: wasmparser::Export<'_>, summary: &mut Summary) {
     }
 }
 
-fn read_dylink(section: KnownCustom<'_>, summary: &mut Summary) -> Result<()> {
-    let KnownCustom::Dylink0(subsections) = section else {
-        return Ok(());
-    };
-    summary.dylink = true;
-    for subsection in subsections {
-        if let Dylink0Subsection::Needed(names) = subsection? {
-            summary.needed |= !names.is_empty();
+fn read_custom(section: wasmparser::CustomSectionReader<'_>, summary: &mut Summary) -> Result<()> {
+    let name = section.name();
+    if let KnownCustom::Dylink0(subsections) = section.as_known() {
+        if summary.dylink {
+            summary.problems.push("duplicate dylink.0 section".into());
         }
+        summary.dylink = true;
+        for subsection in subsections {
+            read_dylink(subsection?, summary);
+        }
+        return Ok(());
+    }
+    if name.starts_with("dylink") || name == "linking" || name.starts_with("reloc.") {
+        summary
+            .problems
+            .push(format!("unsupported custom section {name}"));
     }
     Ok(())
+}
+
+fn read_dylink(subsection: Dylink0Subsection<'_>, summary: &mut Summary) {
+    match subsection {
+        Dylink0Subsection::MemInfo(info) => {
+            let aligned = info.memory_alignment <= 31 && info.table_alignment <= 31;
+            if summary.memory_info || !aligned {
+                summary
+                    .problems
+                    .push("dylink.0 memory-info is duplicated or misaligned".into());
+            }
+            summary.memory_info = true;
+        }
+        Dylink0Subsection::Needed(names) => summary.needed |= !names.is_empty(),
+        Dylink0Subsection::ImportInfo(records) => read_import_info(&records, summary),
+        _ => summary
+            .problems
+            .push("unsupported dylink.0 subsection".into()),
+    }
+}
+
+fn read_import_info(records: &[wasmparser::ImportInfo<'_>], summary: &mut Summary) {
+    for record in records {
+        let key = (record.module.to_owned(), record.field.to_owned());
+        if record.flags.bits() != 0x11 || summary.import_info.contains(&key) {
+            summary
+                .problems
+                .push(format!("unsupported import-info {}.{}", key.0, key.1));
+        }
+        summary.import_info.push(key);
+    }
 }
 
 /// True when no function body contains `memory.grow`. An undecodable body is an error.
@@ -362,8 +518,8 @@ mod tests {
     use wasm_encoder::{
         CodeSection, ConstExpr as EncodedConst, CustomSection, EntityType, ExportKind,
         ExportSection, Function, FunctionSection, GlobalSection, GlobalType as EncodedGlobal,
-        ImportSection, Instruction, MemArg, MemoryType, StartSection, TableType as EncodedTable,
-        TypeSection, ValType as EncodedValue,
+        ImportSection, Instruction, MemArg, MemoryType, StartSection, TableSection,
+        TableType as EncodedTable, TypeSection, ValType as EncodedValue,
     };
     use wasmtime::{Config, Engine};
 
@@ -378,6 +534,29 @@ mod tests {
         grow: bool,
         export_memory: bool,
         start: bool,
+        shape: Shape,
+    }
+
+    /// One departure from the closed relocatable-image shape (benign: never grows or exports).
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Shape {
+        Valid,
+        ExtraMemory,
+        ForeignMemory,
+        ExtraTable,
+        ExternrefTable,
+        DefinedTable,
+        ImmutableStack,
+        MissingStack,
+        ForeignGlobal,
+        GotFunction,
+        UnsupportedDylink,
+        SecondMemInfo,
+        BadImportInfo,
+        StrayImportInfo,
+        LinkingSection,
+        /// Valid weak-import metadata for an imported env function: must still be admitted.
+        ImportInfo,
     }
 
     const CORE: Image = Image {
@@ -388,16 +567,52 @@ mod tests {
         grow: false,
         export_memory: false,
         start: false,
+        shape: Shape::Valid,
     };
 
-    fn dylink(needed: bool) -> Vec<u8> {
+    fn dylink(needed: bool, shape: Shape) -> Vec<u8> {
         // memory-info: size 8, alignment 2^2, table size 0, alignment 0.
         let mut payload = vec![1, 4, 8, 2, 0, 0];
         if needed {
             payload.extend([2, 6, 1, 4]);
             payload.extend(b"x.so");
         }
+        // import-info: one record env.f with the given flags.
+        let import_info = |flags: u8| [4, 8, 1, 3, b'e', b'n', b'v', 1, b'f', flags];
+        match shape {
+            Shape::UnsupportedDylink => payload.extend([5, 1, 0]),
+            Shape::SecondMemInfo => payload.extend([1, 4, 8, 2, 0, 0]),
+            Shape::BadImportInfo => payload.extend(import_info(0x01)),
+            Shape::StrayImportInfo | Shape::ImportInfo => payload.extend(import_info(0x11)),
+            _ => {}
+        }
         payload
+    }
+
+    /// Imports appended after the regular ones, so the regular indices stay put.
+    fn extra_imports(imports: &mut ImportSection, shape: Shape, memory: MemoryType) {
+        let table = |element_type| EncodedTable {
+            element_type,
+            table64: false,
+            minimum: 1,
+            maximum: None,
+            shared: false,
+        };
+        let constant = EntityType::Global(EncodedGlobal {
+            val_type: EncodedValue::I32,
+            mutable: false,
+            shared: false,
+        });
+        match shape {
+            Shape::ExtraMemory => imports.import("env", "memory2", memory),
+            Shape::ExtraTable => {
+                imports.import("env", "table2", table(wasm_encoder::RefType::FUNCREF))
+            }
+            Shape::ForeignGlobal => imports.import("host", "value", constant),
+            Shape::GotFunction => imports.import("GOT.mem", "f", EntityType::Function(0)),
+            Shape::ImportInfo => imports.import("env", "f", EntityType::Function(0)),
+            _ => &mut *imports,
+        };
     }
 
     fn store_word(offset: u64, value: Instruction<'static>) -> Vec<Instruction<'static>> {
@@ -426,23 +641,40 @@ mod tests {
             shared: spec.shared,
             page_size_log2: None,
         };
-        imports.import("env", "memory", memory);
+        let memory_module = if spec.shape == Shape::ForeignMemory {
+            "host"
+        } else {
+            "env"
+        };
+        imports.import(memory_module, "memory", memory);
         let global = |mutable| EncodedGlobal {
             val_type: EncodedValue::I32,
             mutable,
             shared: false,
         };
-        imports.import("env", "__stack_pointer", EntityType::Global(global(true)));
+        let stack = if spec.shape == Shape::MissingStack {
+            "__other"
+        } else {
+            "__stack_pointer"
+        };
+        let stack_mutable = spec.shape != Shape::ImmutableStack;
+        imports.import("env", stack, EntityType::Global(global(stack_mutable)));
         imports.import("env", "__memory_base", EntityType::Global(global(false)));
         imports.import("env", "__table_base", EntityType::Global(global(false)));
+        let element_type = if spec.shape == Shape::ExternrefTable {
+            wasm_encoder::RefType::EXTERNREF
+        } else {
+            wasm_encoder::RefType::FUNCREF
+        };
         let table = EncodedTable {
-            element_type: wasm_encoder::RefType::FUNCREF,
+            element_type,
             table64: false,
             minimum: 1,
             maximum: None,
             shared: false,
         };
         imports.import("env", "__indirect_function_table", table);
+        extra_imports(&mut imports, spec.shape, memory);
         let mut functions = FunctionSection::new();
         for ty in [0, 0, 0, 0, 1] {
             functions.function(ty);
@@ -494,15 +726,28 @@ mod tests {
         if spec.dylink {
             module.section(&CustomSection {
                 name: "dylink.0".into(),
-                data: dylink(spec.needed).into(),
+                data: dylink(spec.needed, spec.shape).into(),
             });
         }
-        module
-            .section(&types)
-            .section(&imports)
-            .section(&functions)
-            .section(&globals)
-            .section(&exports);
+        if spec.shape == Shape::LinkingSection {
+            module.section(&CustomSection {
+                name: "linking".into(),
+                data: [2].as_slice().into(),
+            });
+        }
+        module.section(&types).section(&imports).section(&functions);
+        if spec.shape == Shape::DefinedTable {
+            let mut tables = TableSection::new();
+            tables.table(EncodedTable {
+                element_type: wasm_encoder::RefType::FUNCREF,
+                table64: false,
+                minimum: 1,
+                maximum: None,
+                shared: false,
+            });
+            module.section(&tables);
+        }
+        module.section(&globals).section(&exports);
         if spec.start {
             module.section(&StartSection { function_index: 0 });
         }
@@ -550,6 +795,61 @@ mod tests {
         for spec in refused {
             assert!(admit(&image(spec), true).is_err());
         }
+    }
+
+    #[test]
+    fn group_images_must_have_the_closed_relocatable_shape() {
+        let refused = [
+            (Shape::ExtraMemory, "memory import env.memory2"),
+            (Shape::ForeignMemory, "memory import host.memory"),
+            (Shape::ExtraTable, "table import env.table2"),
+            (Shape::ExternrefTable, "funcref"),
+            (Shape::DefinedTable, "cannot define tables"),
+            (
+                Shape::ImmutableStack,
+                "env.__stack_pointer has the wrong mutability",
+            ),
+            (Shape::MissingStack, "must import env.__stack_pointer"),
+            (Shape::ForeignGlobal, "host.value must come from env"),
+            (Shape::GotFunction, "unsupported GOT.mem.f"),
+            (Shape::UnsupportedDylink, "unsupported dylink.0 subsection"),
+            (Shape::SecondMemInfo, "memory-info is duplicated"),
+            (Shape::BadImportInfo, "unsupported import-info env.f"),
+            (Shape::StrayImportInfo, "must name an imported env function"),
+            (Shape::LinkingSection, "unsupported custom section linking"),
+        ];
+        for (shape, reason) in refused {
+            let core = Image { shape, ..CORE };
+            let side = Image {
+                maximum: Some(65_536),
+                ..core
+            };
+            for (bytes, is_core) in [(image(core), true), (image(side), false)] {
+                let error = admit(&bytes, is_core).expect_err("malformed shape admitted");
+                assert!(
+                    format!("{error:#}").contains(reason),
+                    "{shape:?}: {error:#}"
+                );
+            }
+        }
+        let weak = Image {
+            shape: Shape::ImportInfo,
+            ..CORE
+        };
+        assert_eq!(admit(&image(weak), true).unwrap(), Profile::SharedGroup);
+    }
+
+    #[test]
+    fn shape_rules_leave_split_images_alone() {
+        let split = Image {
+            dylink: false,
+            shared: false,
+            maximum: None,
+            shape: Shape::ExtraTable,
+            ..CORE
+        };
+        assert_eq!(admit(&image(split), true).unwrap(), Profile::Split);
+        assert_eq!(admit(&image(split), false).unwrap(), Profile::Split);
     }
 
     #[test]
