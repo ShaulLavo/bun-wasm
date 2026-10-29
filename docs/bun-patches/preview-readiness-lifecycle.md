@@ -16,6 +16,16 @@ active page`. Only that exact protocol state proceeds to the renderer barrier.
 Other cancellation errors remain failures. A stop command alone and an
 about:blank navigation both failed real-browser controls.
 
+The caller passes its existing cleanup budget explicitly. One bounded operation
+covers cancellation and renderer completion. A settlement rejection or expiry
+throws `HarnessCleanupError`, retaining the polling rejection as its cause and
+the settlement error in its failure list. An omitted cause differs from a thrown
+`undefined`; falsy polling rejections retain their original value. The matrix
+records settlement failures as cleanup failures and reaches owned teardown
+without navigating the application. On expiry an abort signal also prevents a
+late cancellation reply from starting a renderer command. Already pending CDP
+work ends when owned teardown closes its target.
+
 The source paths inspected at Chromium `156.0.8078.4` are
 `content/browser/devtools/protocol/{target,page}_handler.cc`,
 `content/browser/devtools/{render_frame_devtools_agent_host,devtools_session}.cc`,

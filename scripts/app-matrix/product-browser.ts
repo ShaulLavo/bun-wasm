@@ -1,4 +1,5 @@
 import type { FeatureProbe, ProductCheck, SourceEdit } from "./product-types";
+import { boundedCleanup, HarnessCleanupError } from "./cleanup";
 
 interface Locator {
   filter(options: { hasText: string }): Locator;
@@ -82,11 +83,12 @@ async function pollPreviewReady<Probe extends PreviewProbePage<Probe>>(probe: Pr
   throw new Error(`Preview was not HTTP-ready before the deadline: ${last503 === undefined ? "no complete response" : `last HTTP 503: ${last503 || "empty body"}`}`);
 }
 
-async function settlePreviewNavigation(session: ScriptControlSession): Promise<void> {
+async function settlePreviewNavigation(session: ScriptControlSession, signal: AbortSignal): Promise<void> {
   try { await session.send("Page.stopLoading"); }
   catch (error) {
     if (!(error instanceof Error) || !error.message.includes("Protocol error (Page.stopLoading): Not attached to an active page")) throw error;
   }
+  signal.throwIfAborted();
   // Chromium holds renderer commands until a pending navigation commits or cancels. Closing
   // before that barrier can acknowledge Target.closeTarget without destroying the new frame.
   await session.send("Runtime.getIsolateId");
@@ -96,11 +98,18 @@ async function settlePreviewNavigation(session: ScriptControlSession): Promise<v
  * Navigates a script-disabled probe until the preview stops answering HTTP 503, then settles
  * its navigation before the caller closes it. The probe never runs application scripts.
  */
-export async function waitForPreviewReady<Probe extends PreviewProbePage<Probe>>(probe: Probe, url: string, deadline: number): Promise<void> {
+export async function waitForPreviewReady<Probe extends PreviewProbePage<Probe>>(probe: Probe, url: string, deadline: number, cleanupTimeout: number): Promise<void> {
   const session = await probe.context().newCDPSession(probe);
   await session.send("Emulation.setScriptExecutionDisabled", { value: true });
+  let pollingFailure: { error: unknown } | undefined;
   try { await pollPreviewReady(probe, url, deadline); }
-  finally { await settlePreviewNavigation(session); }
+  catch (error) { pollingFailure = { error }; }
+  const controller = new AbortController();
+  const failed = await boundedCleanup("probe-navigation-settlement", () => settlePreviewNavigation(session, controller.signal), cleanupTimeout);
+  controller.abort();
+  if (failed && pollingFailure) throw new HarnessCleanupError([failed], pollingFailure.error);
+  if (failed) throw new HarnessCleanupError([failed]);
+  if (pollingFailure) throw pollingFailure.error;
 }
 export interface GuestSource {
   read(path: string): Promise<string | null>;

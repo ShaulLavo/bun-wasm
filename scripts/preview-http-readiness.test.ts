@@ -24,7 +24,7 @@ async function withServer(fetch: (request: Request) => Response | Promise<Respon
 }
 
 async function expectReadinessFailure(probe: Page, url: string, deadline: number, message: string): Promise<void> {
-  const failure = await waitForPreviewReady(probe, url, deadline).catch((error: unknown) => error);
+  const failure = await waitForPreviewReady(probe, url, deadline, 2_000).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(Error);
   expect(String(failure)).toContain(message);
 }
@@ -39,7 +39,7 @@ test("the probe never runs application scripts, including a self-reloading 503 l
     return html(`<script>fetch("/effect")</script>ready`);
   }, async (origin, context) => {
     const probe = await context.newPage();
-    await waitForPreviewReady(probe, `${origin}/`, Date.now() + 5_000);
+    await waitForPreviewReady(probe, `${origin}/`, Date.now() + 5_000, 2_000);
     await probe.close();
     expect(effects).toBe(0);
     const app = await context.newPage();
@@ -55,7 +55,7 @@ test("a 503 followed by an ordinary redirect to a ready page passes like normal 
     if (new URL(request.url).pathname === "/ready") return html("ready");
     return requests++ === 0 ? html("Loading", 503) : new Response(null, { status: 302, headers: { location: "/ready" } });
   }, async (origin, context) => {
-    await waitForPreviewReady(await context.newPage(), `${origin}/`, Date.now() + 5_000);
+    await waitForPreviewReady(await context.newPage(), `${origin}/`, Date.now() + 5_000, 2_000);
     expect(requests).toBe(2);
   });
 }, 20_000);
@@ -64,7 +64,7 @@ test("the probe stays behind the context network guard", async () => {
   const external: string[] = [];
   await withServer(() => html("unused"), async (_origin, context) => {
     await context.route("**/*", route => browserRegistryRoute(route, "http://127.0.0.1:1", external));
-    const failure = await waitForPreviewReady(await context.newPage(), "https://example.com/preview", Date.now() + 5_000).catch(error => error);
+    const failure = await waitForPreviewReady(await context.newPage(), "https://example.com/preview", Date.now() + 5_000, 2_000).catch(error => error);
     expect(String(failure)).toContain("net::ERR_FAILED");
     expect(external).toEqual(["https://example.com/preview"]);
   });
@@ -154,7 +154,7 @@ test("a mounted service-worker preview is probed through its worker with page sc
       await new Promise<void>(resolve => worker?.addEventListener("statechange", () => { if (worker.state === "activated") resolve(); }));
     });
     const probe = await context.newPage();
-    await waitForPreviewReady(probe, `${origin}/__preview/3137/`, Date.now() + 5_000);
+    await waitForPreviewReady(probe, `${origin}/__preview/3137/`, Date.now() + 5_000, 2_000);
     expect(previewRequests).toBe(0);
     expect(effects).toBe(0);
   });
