@@ -91,63 +91,58 @@ export async function* plainGenerator(a) {
 }
 export async function loops(xs, a) {
   let __bunwasm_s = 0;
-  { let __bunwasm_c = __bunwasm_capture();
-  for await (const x of __bunwasm_id(xs, __bunwasm_s = __bunwasm_c)) {
+  { let __bunwasm_c; try {
+  for await (const x of __bunwasm_c = __bunwasm_iterate(xs)) {
     try {
-      __bunwasm_resume(__bunwasm_c, __bunwasm_s = 0);
+      __bunwasm_entered(__bunwasm_c);
       g(x);
-    } finally { __bunwasm_s = __bunwasm_c = __bunwasm_capture(); }
+    } finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); }
   }
-  __bunwasm_resume(__bunwasm_c, 0);
-  __bunwasm_s = 0;
+  } finally { __bunwasm_exited(__bunwasm_c); }
   }
-    { let __bunwasm_c = __bunwasm_capture();
+    { let __bunwasm_c; try {
   outer:
-    for await (const _x of __bunwasm_id(__bunwasm_resumed(await __bunwasm_id(a, __bunwasm_s = __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0), __bunwasm_s = __bunwasm_c)) {
+    for await (const _x of __bunwasm_c = __bunwasm_iterate(__bunwasm_resumed(await __bunwasm_id(a, __bunwasm_s = __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0))) {
       try {
-        __bunwasm_resume(__bunwasm_c, __bunwasm_s = 0);
-        { let __bunwasm_c = __bunwasm_capture();
-        for await (const y of __bunwasm_id(xs, __bunwasm_s = __bunwasm_c)) {
+        __bunwasm_entered(__bunwasm_c);
+        { let __bunwasm_c; try {
+        for await (const y of __bunwasm_c = __bunwasm_iterate(xs)) {
           try {
-            __bunwasm_resume(__bunwasm_c, __bunwasm_s = 0);
+            __bunwasm_entered(__bunwasm_c);
             if (y)
               continue outer;
             break;
-          } finally { __bunwasm_s = __bunwasm_c = __bunwasm_capture(); }
+          } finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); }
         }
-        __bunwasm_resume(__bunwasm_c, 0);
-        __bunwasm_s = 0;
+        } finally { __bunwasm_exited(__bunwasm_c); }
         }
-      } finally { __bunwasm_s = __bunwasm_c = __bunwasm_capture(); }
+      } finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); }
     }
-  __bunwasm_resume(__bunwasm_c, 0);
-  __bunwasm_s = 0;
+  } finally { __bunwasm_exited(__bunwasm_c); }
   }
-    { let __bunwasm_c = __bunwasm_capture();
+    { let __bunwasm_c; try {
   a:
     b:
-      for await (const z of __bunwasm_id(xs, __bunwasm_s = __bunwasm_c)) {
+      for await (const z of __bunwasm_c = __bunwasm_iterate(xs)) {
         try {
-          __bunwasm_resume(__bunwasm_c, __bunwasm_s = 0);
+          __bunwasm_entered(__bunwasm_c);
           if (z)
             continue b;
           break a;
-        } finally { __bunwasm_s = __bunwasm_c = __bunwasm_capture(); }
+        } finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); }
       }
-  __bunwasm_resume(__bunwasm_c, 0);
-  __bunwasm_s = 0;
+  } finally { __bunwasm_exited(__bunwasm_c); }
   }
   switch (a) {
     case 1:
-      { let __bunwasm_c = __bunwasm_capture();
-      for await (const _w of __bunwasm_id(xs, __bunwasm_s = __bunwasm_c)) {
+      { let __bunwasm_c; try {
+      for await (const _w of __bunwasm_c = __bunwasm_iterate(xs)) {
         try {
-          __bunwasm_resume(__bunwasm_c, __bunwasm_s = 0);
+          __bunwasm_entered(__bunwasm_c);
           ;
-        } finally { __bunwasm_s = __bunwasm_c = __bunwasm_capture(); }
+        } finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); }
       }
-      __bunwasm_resume(__bunwasm_c, 0);
-      __bunwasm_s = 0;
+      } finally { __bunwasm_exited(__bunwasm_c); }
       }
   }
 }
@@ -156,13 +151,12 @@ try {
 } catch {
   __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0);
 }
-{ let __bunwasm_c = __bunwasm_capture();
-for await (const x of __bunwasm_id([1], __bunwasm_s = __bunwasm_c)) {
+{ let __bunwasm_c; try {
+for await (const x of __bunwasm_c = __bunwasm_iterate([1])) {
   try {
-    __bunwasm_resume(__bunwasm_c, __bunwasm_s = 0);
+    __bunwasm_entered(__bunwasm_c);
     g(x);
-  } finally { __bunwasm_s = __bunwasm_c = __bunwasm_capture(); }
+  } finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); }
 }
-__bunwasm_resume(__bunwasm_c, 0);
-__bunwasm_s = 0;
+} finally { __bunwasm_exited(__bunwasm_c); }
 }
