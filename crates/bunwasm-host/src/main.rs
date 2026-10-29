@@ -6,6 +6,8 @@ mod tool_args;
 
 mod guest;
 mod linked;
+#[path = "../../bunwasm-cli/max_memory.rs"]
+mod max_memory;
 mod net;
 mod process;
 mod shm;

@@ -7,9 +7,9 @@ bash "$REPO/scripts/check-wasi-cmake-cache.sh" "$JSC_OBJ" "$JSC_TOOLCHAIN_FILE"
 build_shim
 flags="-fPIC -include $JSC_CONFIG_SHIM_DIR/wasi-compat.h -msimd128 -DSIMDE_FLOAT16_API=1 \
 -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_GETPID"
-# The jsc shell's link. 512 MiB: the cap bun-wasm links with (Bun's string pointer tags).
+# The jsc shell's link, at bun-wasm's guest memory maximum (part of jsc_inputs_hash).
 ldflags="-lwasi-emulated-mman -lwasi-emulated-signal -lwasi-emulated-process-clocks -lwasi-emulated-getpid \
--Wl,-z,stack-size=8388608 -Wl,--max-memory=536870912"
+-Wl,-z,stack-size=8388608 -Wl,--max-memory=$(<"$JSC_MAX_MEMORY_FILE")"
 cd "$JSC_OBJ"
 $CAGE cmake -G Ninja "$WEBKIT_DIR" \
   -DCMAKE_TOOLCHAIN_FILE="$JSC_TOOLCHAIN_FILE" \
