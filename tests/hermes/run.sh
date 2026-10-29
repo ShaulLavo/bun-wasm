@@ -12,7 +12,7 @@ cd "$root"
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/bun-wasm-hermes-proof-XXXXXX")
 server=''
 cleanup() {
-  if [[ -n "$server" ]]; then kill "$server" 2>/dev/null || true; fi
+  if [[ -n "$server" ]]; then kill -KILL "$server" 2>/dev/null || true; fi
   rm -rf "$scratch"
 }
 trap cleanup EXIT
@@ -39,7 +39,7 @@ expect eval "2" -e 'console.log(1 + 1)'
 expect hello "hello 2" run tests/hermes/hello.cts
 expect serve-self "200 hello from /hermes" run tests/hermes/serve.cts
 
-# The host fetches a guest server, then SIGINT ends it through the interrupt path.
+# The host fetches a guest server, then asks it to raise SIGINT on itself (guest signal path).
 port=$(bun -e 'const s = Bun.serve({ port: 0, fetch: () => new Response() }); console.log(s.port); s.stop(true)')
 "$launcher" --wasm "$core" --env "PORT=$port" -- run tests/hermes/serve-hold.cts >"$scratch/hold.out" 2>"$scratch/hold.err" &
 server=$!
@@ -49,12 +49,20 @@ for _ in $(seq 600); do
   sleep 0.1
 done
 body=$(curl -fsS --max-time 10 "http://127.0.0.1:$port/from-host") || body="(fetch failed)"
-kill -INT "$server"
+stop=$(curl -fsS --max-time 10 "http://127.0.0.1:$port/stop") || stop="(fetch failed)"
 status=0
-wait "$server" || status=$?
-server=''
-if [[ "$body" != "hermes GET /from-host" || $status != 0 || "$(cat "$scratch/hold.out")" != "$(printf 'listening %s\nstopping' "$port")" ]]; then
-  echo "FAIL serve-host (exit $status, body: $body)"
+for _ in $(seq 300); do
+  kill -0 "$server" 2>/dev/null || break
+  sleep 0.1
+done
+if kill -0 "$server" 2>/dev/null; then
+  status=timeout # the EXIT trap kills it
+else
+  wait "$server" || status=$?
+  server=''
+fi
+if [[ "$body" != "hermes GET /from-host" || "$stop" != "hermes GET /stop" || $status != 0 || "$(cat "$scratch/hold.out")" != "$(printf 'listening %s\nstopping' "$port")" ]]; then
+  echo "FAIL serve-host (exit $status, body: $body, stop: $stop)"
   echo "--- stdout"; cat "$scratch/hold.out"
   echo "--- stderr"; cat "$scratch/hold.err"
   exit 1
