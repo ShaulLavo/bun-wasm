@@ -18,12 +18,15 @@ use wasmparser::{
     RefType as ParsedRef, TypeRef,
 };
 use wasmtime::{
-    Engine, Extern, Global, GlobalType, Instance, Linker, Module, Mutability, Ref, RefType,
-    SharedMemory, Store, Table, TableType, Val, ValType,
+    Engine, Extern, Global, GlobalType, Instance, Linker, Module, Mutability, Ref, RefType, Store,
+    Table, TableType, Val, ValType,
 };
 
 use super::preview1::Preview1View;
-use crate::shm::{self, MemberLease};
+use crate::shm::{
+    self, GroupBackingBudget, GroupPolicy, MemberLease, MemberReservation, MemoryGroup,
+    SharedMemoryLease,
+};
 
 /// Bun's wasm32 string tags use address bits 29-31, so a Bun group stays below 512 MiB.
 pub(super) const MAX_PAGES: u64 = 8192;
@@ -412,6 +415,75 @@ fn exported_globals(exports: wasmparser::ExportSectionReader<'_>) -> Result<Vec<
     Ok(globals)
 }
 
+/// A reserved member slot that has not launched. Dropping it unlaunched returns the slot
+/// exactly once, so a launch that fails before its guest starts retains nothing (W1).
+pub struct Admission(Option<MemberReservation>);
+
+impl Admission {
+    fn launch(mut self) -> MemberLease {
+        self.0.take().expect("an admission launches once").launch()
+    }
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        if let Some(reservation) = self.0.take() {
+            reservation.abort();
+        }
+    }
+}
+
+/// A Bun group: the 512 MiB string-tag ceiling as its address space, the service's other
+/// defaults (16 members including pending, parallelism 1).
+fn bun_policy() -> GroupPolicy {
+    GroupPolicy {
+        maximum_pages: MAX_PAGES as u32,
+        ..GroupPolicy::default()
+    }
+}
+
+fn errno(error: shm::Errno) -> i32 {
+    -(error as i32)
+}
+
+/// A worker spawned by a group member joins its parent's group: its slot is reserved before
+/// the worker's thread exists, and `EAGAIN` reports a full group. Other spawns reserve nothing.
+pub(super) fn worker_admission(
+    parent: Option<&MemoryGroup>,
+    worker: bool,
+    group_program: bool,
+    pid: u32,
+) -> Result<Option<Admission>, i32> {
+    let Some(parent) = parent.filter(|_| worker && group_program) else {
+        return Ok(None);
+    };
+    let reservation = parent.reserve(pid).map_err(errno)?;
+    Ok(Some(Admission(Some(reservation))))
+}
+
+/// The membership of a process about to run a program: an inherited worker slot launches;
+/// any other group program becomes the first member of a new group on the runtime-wide
+/// budget; a split program is not a member (an unused admission returns its slot).
+pub(super) fn member(
+    engine: &Engine,
+    budget: &GroupBackingBudget,
+    group_program: bool,
+    pid: u32,
+    admission: Option<Admission>,
+) -> Result<Option<MemberLease>> {
+    if !group_program {
+        return Ok(None);
+    }
+    if let Some(admission) = admission {
+        return Ok(Some(admission.launch()));
+    }
+    let group = MemoryGroup::new(engine, bun_policy(), budget.clone())?;
+    let reservation = group.reserve(pid).map_err(|error| {
+        anyhow::anyhow!("memory group admission failed: errno {}", -errno(error))
+    })?;
+    Ok(Some(reservation.launch()))
+}
+
 /// A member's private data and stack chunks, carved through its lease before instantiation.
 pub(super) struct Placement {
     data: u32,
@@ -438,9 +510,10 @@ fn grow(lease: &MemberLease, pages: u32) -> Result<u32> {
     Ok(page as u32)
 }
 
-/// One relocated core image in a group memory: what its side links against.
+/// One relocated core image in a group memory: what its side links against. It holds the group
+/// memory as a lease, never as a bare `SharedMemory`.
 pub struct MemberImage {
-    pub(super) memory: SharedMemory,
+    pub(super) memory: SharedMemoryLease,
     pub(super) table: Table,
     pub(super) stack_pointer: Global,
     pub(super) memory_base: u32,
@@ -448,19 +521,24 @@ pub struct MemberImage {
 
 impl MemberImage {
     /// The group memory host imports read and write for this member.
-    pub fn memory(&self) -> &SharedMemory {
+    pub fn memory(&self) -> &SharedMemoryLease {
         &self.memory
     }
 }
 
-/// Instantiate a shared-group core into `memory` at its carved chunks, with its own table
-/// (slot 0 null), and initialize its memory. Constructors run later, as for a split core.
-pub(super) fn instantiate_core<T: 'static>(
+/// Instantiate a shared-group core into the group memory at its carved chunks, with its own
+/// table (slot 0 null), and initialize its memory. Constructors run later, as for a split core.
+///
+/// # Safety
+///
+/// The caller keeps a lease of this group's backing alive until `store` and every instance in
+/// it have dropped (`SharedMemoryLease::memory_for_admission`).
+pub(super) unsafe fn instantiate_core<T: 'static>(
     store: &mut Store<T>,
     linker: &Linker<T>,
     module: &Module,
     layout: &MemInfo,
-    memory: SharedMemory,
+    memory: &SharedMemoryLease,
     placement: &Placement,
 ) -> Result<(Instance, MemberImage)> {
     let memory_base = page_address(placement.data)?;
@@ -476,8 +554,10 @@ pub(super) fn instantiate_core<T: 'static>(
     let mut imports = linker.clone();
     let base = i32_global(store, memory_base, Mutability::Const)?;
     let table_base = i32_global(store, table_base as u32, Mutability::Const)?;
+    // SAFETY: forwarded to the caller's contract above.
+    let raw = unsafe { memory.memory_for_admission() }.clone();
     let env: [(&str, Extern); 5] = [
-        ("memory", memory.clone().into()),
+        ("memory", raw.into()),
         ("__indirect_function_table", table.into()),
         ("__memory_base", base.into()),
         ("__table_base", table_base.into()),
@@ -494,7 +574,7 @@ pub(super) fn instantiate_core<T: 'static>(
             .with_context(|| format!("initializing {name}"))?;
     }
     let image = MemberImage {
-        memory,
+        memory: memory.clone(),
         table,
         stack_pointer,
         memory_base,
@@ -530,7 +610,7 @@ mod tests {
     };
     use wasmtime::{Config, Engine};
 
-    use crate::shm::{GroupPolicy, MemoryGroup};
+    use crate::guest::GuestMemory;
 
     #[derive(Clone, Copy)]
     struct Image {
@@ -891,11 +971,20 @@ mod tests {
     }
 
     fn bun_group(engine: &Engine) -> MemoryGroup {
-        let policy = GroupPolicy {
-            maximum_pages: MAX_PAGES as u32,
-            ..GroupPolicy::default()
-        };
-        MemoryGroup::new(engine, policy).unwrap()
+        MemoryGroup::new(engine, bun_policy(), GroupBackingBudget::default()).unwrap()
+    }
+
+    fn word(memory: &SharedMemoryLease, at: u32) -> u32 {
+        let store = Store::new(memory_engine(), ());
+        let bytes = GuestMemory::Shared(memory.clone())
+            .read(&store, at as usize..at as usize + 4)
+            .unwrap();
+        u32::from_le_bytes(bytes.try_into().unwrap())
+    }
+
+    fn memory_engine() -> &'static Engine {
+        static ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
+        ENGINE.get_or_init(Engine::default)
     }
 
     #[test]
@@ -908,6 +997,7 @@ mod tests {
     fn two_leased_members_initialize_their_own_data_in_one_group() {
         let engine = engine();
         let group = bun_group(&engine);
+        let memory = group.memory_lease();
         let module = Module::new(&engine, image(CORE)).unwrap();
         let mut store = Store::new(&engine, ());
         let linker = Linker::new(&engine);
@@ -915,13 +1005,13 @@ mod tests {
         for pid in [1, 2] {
             let lease = group.reserve(pid).unwrap().launch();
             let placement = carve(&lease, &layout()).unwrap();
-            let memory = group.shared_memory();
-            let (instance, image) =
-                instantiate_core(&mut store, &linker, &module, &layout(), memory, &placement)
-                    .unwrap();
+            // SAFETY: `memory` is declared before `store`, so it outlives the Store.
+            let (instance, image) = unsafe {
+                instantiate_core(&mut store, &linker, &module, &layout(), &memory, &placement)
+            }
+            .unwrap();
             members.push((lease, instance, image));
         }
-        let memory = group.shared_memory();
         assert_ne!(members[0].2.memory_base, members[1].2.memory_base);
         for (_, instance, image) in &members {
             let value = instance
@@ -930,9 +1020,7 @@ mod tests {
                 .call(&mut store, ())
                 .unwrap();
             assert_eq!(value as u32, image.memory_base);
-            let word = &memory.data()[image.memory_base as usize..][..4];
-            let bytes: Vec<u8> = word.iter().map(|cell| unsafe { *cell.get() }).collect();
-            assert_eq!(u32::from_le_bytes(bytes.try_into().unwrap()), 42);
+            assert_eq!(word(&memory, image.memory_base), 42);
             assert_eq!(image.table.size(&store), 1);
             let top = image.stack_pointer.get(&mut store).unwrap_i32() as u32;
             assert_eq!(top - STACK_BYTES, image.memory_base + PAGE);
@@ -951,6 +1039,7 @@ mod tests {
     fn a_side_got_rebases_relative_core_data_onto_the_member_base() {
         let engine = engine();
         let group = bun_group(&engine);
+        let memory = group.memory_lease();
         let bytes = image(CORE);
         let relative = relative_exports(&bytes).unwrap();
         let module = Module::new(&engine, bytes).unwrap();
@@ -958,9 +1047,11 @@ mod tests {
         let lease = group.reserve(1).unwrap().launch();
         let placement = carve(&lease, &layout()).unwrap();
         let linker = Linker::new(&engine);
-        let memory = group.shared_memory();
-        let (instance, member) =
-            instantiate_core(&mut store, &linker, &module, &layout(), memory, &placement).unwrap();
+        // SAFETY: `memory` is declared before `store`, so it outlives the Store.
+        let (instance, member) = unsafe {
+            instantiate_core(&mut store, &linker, &module, &layout(), &memory, &placement)
+        }
+        .unwrap();
         let core = super::super::CoreImage::member(instance, &member, &relative);
         let Extern::Global(cell) =
             super::super::got_address(&core, &mut store, "data_symbol").unwrap()
@@ -978,15 +1069,165 @@ mod tests {
     #[test]
     fn a_four_gib_group_cannot_instantiate_a_bun_core() {
         let engine = engine();
-        let group = MemoryGroup::new(&engine, GroupPolicy::default()).unwrap();
+        let budget = GroupBackingBudget::default();
+        let group = MemoryGroup::new(&engine, GroupPolicy::default(), budget).unwrap();
+        let memory = group.memory_lease();
         let module = Module::new(&engine, image(CORE)).unwrap();
         let mut store = Store::new(&engine, ());
         let lease = group.reserve(1).unwrap().launch();
         let placement = carve(&lease, &layout()).unwrap();
         let linker = Linker::new(&engine);
-        let memory = group.shared_memory();
-        let result = instantiate_core(&mut store, &linker, &module, &layout(), memory, &placement);
+        // SAFETY: `memory` is declared before `store`, so it outlives the Store.
+        let result = unsafe {
+            instantiate_core(&mut store, &linker, &module, &layout(), &memory, &placement)
+        };
         assert!(result.is_err());
         lease.physical_stopped();
+    }
+
+    #[test]
+    fn a_root_member_starts_a_group_and_its_workers_join_it() {
+        let engine = engine();
+        let budget = GroupBackingBudget::default();
+        let root = member(&engine, &budget, true, 1, None).unwrap().unwrap();
+        let group = root.group();
+        let admission = worker_admission(Some(&group), true, true, 2).unwrap();
+        assert_eq!(group.snapshot().reserved, 1);
+        let worker = member(&engine, &budget, true, 2, admission)
+            .unwrap()
+            .unwrap();
+        assert_eq!(group.snapshot().members, 2);
+        assert!(budget.committed_bytes() > 0);
+        // A second root starts its own group on the same runtime-wide budget.
+        let other = member(&engine, &budget, true, 1, None).unwrap().unwrap();
+        assert_eq!(other.group().snapshot().members, 1);
+        assert_eq!(group.snapshot().members, 2);
+        for lease in [worker, root, other] {
+            lease.physical_stopped();
+        }
+        assert_eq!(group.snapshot().members, 0);
+    }
+
+    #[test]
+    fn spawns_that_are_not_group_workers_reserve_nothing() {
+        let engine = engine();
+        let budget = GroupBackingBudget::default();
+        let root = member(&engine, &budget, true, 1, None).unwrap().unwrap();
+        let group = root.group();
+        for (parent, worker, program) in [
+            (None, true, true),
+            (Some(&group), false, true),
+            (Some(&group), true, false),
+        ] {
+            assert!(
+                worker_admission(parent, worker, program, 2)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        assert!(member(&engine, &budget, false, 3, None).unwrap().is_none());
+        assert_eq!(group.snapshot().reserved, 0);
+        root.physical_stopped();
+    }
+
+    #[test]
+    fn an_unlaunched_admission_returns_its_slot_exactly_once() {
+        let engine = engine();
+        let budget = GroupBackingBudget::default();
+        let root = member(&engine, &budget, true, 1, None).unwrap().unwrap();
+        let group = root.group();
+        // Dropped before launch, e.g. a worker thread that never started.
+        drop(worker_admission(Some(&group), true, true, 2).unwrap());
+        assert_eq!(group.snapshot().reserved, 0);
+        // Admitted for a program that turned out to be split: not a member, slot returned.
+        let admission = worker_admission(Some(&group), true, true, 3).unwrap();
+        assert!(
+            member(&engine, &budget, false, 3, admission)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(group.snapshot().reserved, 0);
+        assert_eq!(group.snapshot().members, 1);
+        root.physical_stopped();
+    }
+
+    #[test]
+    fn a_full_group_refuses_a_worker_with_eagain_and_retains_nothing() {
+        let engine = engine();
+        let policy = GroupPolicy {
+            members: 1,
+            ..bun_policy()
+        };
+        let group = MemoryGroup::new(&engine, policy, GroupBackingBudget::default()).unwrap();
+        let root = group.reserve(1).unwrap().launch();
+        let refused = worker_admission(Some(&group), true, true, 2).err();
+        assert_eq!(refused, Some(crate::process::AGAIN));
+        assert_eq!(group.snapshot().reserved, 0);
+        root.physical_stopped();
+    }
+
+    #[test]
+    fn a_killed_members_wait_is_cancelled_while_another_member_runs() {
+        let engine = engine();
+        let budget = GroupBackingBudget::default();
+        let root = member(&engine, &budget, true, 1, None).unwrap().unwrap();
+        let group = root.group();
+        let admission = worker_admission(Some(&group), true, true, 2).unwrap();
+        let worker = member(&engine, &budget, true, 2, admission)
+            .unwrap()
+            .unwrap();
+        let word = grow(&root, 1).unwrap() * PAGE;
+        let cancel = std::sync::Arc::new(crate::process::Cancellation::default());
+        let blocked = {
+            let cancel = cancel.clone();
+            std::thread::spawn(move || {
+                let code = shm::futex_wait32(&worker, word, 0, -1, &cancel);
+                (code, worker)
+            })
+        };
+        while group.snapshot().waiters == 0 {
+            std::thread::yield_now();
+        }
+        cancel.select(crate::process::FinalOutcome::Signal(9));
+        let (code, worker) = blocked.join().unwrap();
+        assert_eq!(code, shm::WaitResult::Interrupted.code());
+        // The killed thread has stopped: settle it; the surviving member keeps growing.
+        worker.physical_stopped();
+        assert!(grow(&root, 1).is_ok());
+        assert_eq!(group.snapshot().members, 1);
+        root.physical_stopped();
+    }
+
+    #[test]
+    fn the_runtime_budget_is_released_only_after_the_member_store_and_backing_drop() {
+        let engine = engine();
+        let budget = GroupBackingBudget::default();
+        let root = member(&engine, &budget, true, 1, None).unwrap().unwrap();
+        // The Store owner's backing lease, declared before the Store as in run_module_instance.
+        let backing = root.group().memory_lease();
+        let module = Module::new(&engine, image(CORE)).unwrap();
+        let mut store = Store::new(&engine, ());
+        let placement = carve(&root, &layout()).unwrap();
+        // SAFETY: `backing` outlives `store`.
+        let (_instance, image) = unsafe {
+            instantiate_core(
+                &mut store,
+                &Linker::new(&engine),
+                &module,
+                &layout(),
+                &backing,
+                &placement,
+            )
+        }
+        .unwrap();
+        root.physical_stopped();
+        drop(image);
+        drop(store);
+        assert!(
+            budget.committed_bytes() > 0,
+            "the owner's backing lease still charges"
+        );
+        drop(backing);
+        assert_eq!(budget.committed_bytes(), 0);
     }
 }

@@ -124,7 +124,10 @@ fn call_values_in(
             } else {
                 &delegate.module
             };
-            linker.define(&mut *caller, "t", "m", memory.export())?;
+            // SAFETY: the delegate instance lives in this caller's Store. A group member's Store
+            // owner keeps the group backing alive past the Store (`Programs::instantiate`).
+            let export = unsafe { memory.export_for_admission() };
+            linker.define(&mut *caller, "t", "m", export)?;
             let instance = linker.instantiate(&mut *caller, module)?;
             let function = instance
                 .get_func(&mut *caller, "run")

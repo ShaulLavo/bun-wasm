@@ -61,3 +61,14 @@ or imports an unshared memory or one whose maximum is not 8192 pages. A pair who
 on the profile is refused. A group core cannot run as a single module. There is no bypass.
 
 Receipts of one profile never verify against inputs of the other.
+
+## Processes on the native host
+
+A shared-group program started by `bun-wasm` becomes the first member of a new group (8192
+pages) on one runtime-wide backing budget. A worker it spawns reserves its slot in the parent's
+group before the worker thread exists, and gets `EAGAIN` when the group is full. Any other spawn
+of a group program starts its own group. Host imports read and write a member's memory only
+through atomic cells and owned copies. The group backing outlives the member's Store, and the
+member is released once its thread has stopped and its instances are destroyed. A fatal signal
+interrupts a member blocked in a futex wait.
+

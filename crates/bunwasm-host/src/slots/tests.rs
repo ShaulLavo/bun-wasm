@@ -2,14 +2,14 @@ use super::*;
 use crate::guest::GuestMemory;
 use crate::process::{self, Cancellation, FinalOutcome, Runtime, Stdio};
 use std::sync::Arc;
-use wasmtime::{
-    Config, Engine, Memory, MemoryType, Module, SharedMemory, StoreLimitsBuilder, WasmParams,
-};
+use wasmtime::{Config, Engine, Memory, MemoryType, Module, StoreLimitsBuilder, WasmParams};
 
 struct Fixture {
     store: Store<Host>,
     linker: Linker<Host>,
     runtime: Arc<Runtime>,
+    /// A shared fixture's group backing: fields drop in order, so it outlives `store`.
+    _backing: Option<crate::shm::SharedMemoryLease>,
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -70,10 +70,21 @@ impl Fixture {
             },
         );
         store.set_epoch_deadline(1);
-        let memory = if shared {
-            GuestMemory::Shared(SharedMemory::new(&engine, MemoryType::shared(1, 8192)).unwrap())
-        } else {
-            GuestMemory::Private(Memory::new(&mut store, MemoryType::new(1, None)).unwrap())
+        let backing = shared.then(|| {
+            let policy = crate::shm::GroupPolicy {
+                maximum_pages: 8192,
+                ..crate::shm::GroupPolicy::default()
+            };
+            let budget = crate::shm::GroupBackingBudget::default();
+            crate::shm::MemoryGroup::new(&engine, policy, budget)
+                .unwrap()
+                .memory_lease()
+        });
+        let memory = match &backing {
+            Some(lease) => GuestMemory::Shared(lease.clone()),
+            None => {
+                GuestMemory::Private(Memory::new(&mut store, MemoryType::new(1, None)).unwrap())
+            }
         };
         store.data_mut().memory = Some(memory);
         let mut linker = Linker::new(&engine);
@@ -84,6 +95,7 @@ impl Fixture {
             store,
             linker,
             runtime,
+            _backing: backing,
         }
     }
     fn call<P: WasmParams>(&mut self, module: &str, name: &str, args: P) -> i32 {

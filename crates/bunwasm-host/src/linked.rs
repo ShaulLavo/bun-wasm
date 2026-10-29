@@ -10,6 +10,7 @@ use wasmtime::{
 
 use crate::Host;
 use crate::guest::GuestMemory;
+use crate::shm::{GroupBackingBudget, MemberLease, MemoryGroup};
 
 #[path = "linked_relay.rs"]
 mod relay;
@@ -18,10 +19,14 @@ use relay::{SelfPlan, SelfSlots};
 mod group;
 #[path = "linked_preview1.rs"]
 mod preview1;
-pub use group::MemberImage;
+pub use group::{Admission, MemberImage};
 
 #[derive(Default)]
-pub struct Programs(Vec<Program>);
+pub struct Programs {
+    programs: Vec<Program>,
+    /// One runtime-wide committed-backing budget shared by every memory group (W3).
+    budget: GroupBackingBudget,
+}
 
 struct Program {
     core: Module,
@@ -116,7 +121,7 @@ impl Programs {
             .transpose()?;
         validate_profile(kind, &library)?;
         let self_plan = SelfPlan::new(engine, &core, &library, &bytes)?;
-        self.0.push(Program {
+        self.programs.push(Program {
             core: core.clone(),
             library,
             layout,
@@ -129,14 +134,56 @@ impl Programs {
 
     /// Executable admission clones Modules. Keep the original image alive with its pair.
     fn program(&self, module: &Module) -> Option<&Program> {
-        self.0
+        self.programs
             .iter()
             .find(|program| program.core.image_range() == module.image_range())
     }
 
+    /// Whether `module` is the core of an admitted shared-group program.
+    pub fn is_group(&self, module: &Module) -> bool {
+        self.program(module)
+            .is_some_and(|program| program.group.is_some())
+    }
+
+    /// The slot a worker of a group member reserves in its parent's group before its thread
+    /// starts (`EAGAIN` when the group is full); `None` for every other spawn.
+    pub fn worker_admission(
+        &self,
+        parent: Option<&MemoryGroup>,
+        worker: bool,
+        module: &Module,
+        pid: u32,
+    ) -> Result<Option<Admission>, i32> {
+        group::worker_admission(parent, worker, self.is_group(module), pid)
+    }
+
+    /// The membership of a process about to run `module`: its inherited slot, the first slot of
+    /// a new group on the runtime-wide budget, or none for a split program.
+    pub fn member(
+        &self,
+        module: &Module,
+        pid: u32,
+        admission: Option<Admission>,
+    ) -> Result<Option<MemberLease>> {
+        group::member(
+            module.engine(),
+            &self.budget,
+            self.is_group(module),
+            pid,
+            admission,
+        )
+    }
+
     /// Instantiate a program's core. A shared-group core is a member image: its data and stack
     /// are carved through the member lease in `Host::shm`, and its memory is initialized here.
-    pub fn instantiate(
+    ///
+    /// # Safety
+    ///
+    /// For a group program, the caller keeps a lease of the member's group backing
+    /// (`MemberLease::group().memory_lease()`) alive until `store` and every instance in it
+    /// have dropped. Wasmtime drops a Store's data before its instances, so the lease held in
+    /// `Host` is not enough on its own.
+    pub unsafe fn instantiate(
         &self,
         module: &Module,
         linker: &mut Linker<Host>,
@@ -154,11 +201,13 @@ impl Programs {
             .as_ref()
             .context("a memory group program needs a member lease")?;
         let placement = group::carve(lease, &core.layout)?;
-        let memory = lease.group().shared_memory();
+        let memory = lease.group().memory_lease();
         // Preview1 reaches the member's memory only through its view, for the core and side.
-        core.preview1.bind(store, linker, &memory)?;
-        let (instance, image) =
-            group::instantiate_core(store, linker, module, &core.layout, memory, &placement)?;
+        // SAFETY: both admissions are covered by this function's contract.
+        unsafe { core.preview1.bind(store, linker, &memory) }?;
+        let (instance, image) = unsafe {
+            group::instantiate_core(store, linker, module, &core.layout, &memory, &placement)
+        }?;
         Ok((instance, Some(image)))
     }
 
@@ -440,7 +489,9 @@ fn env_value(
     slots: &SelfSlots,
 ) -> Result<Extern> {
     match (name, core.stack_pointer) {
-        ("memory", _) => Ok(core.memory.export()),
+        // SAFETY: a member image exists only through `Programs::instantiate`, whose caller keeps
+        // the group backing alive past this Store and its side instance.
+        ("memory", _) => Ok(unsafe { core.memory.export_for_admission() }),
         ("__indirect_function_table", _) => Ok(core.table.into()),
         ("__stack_pointer", Some(stack_pointer)) => Ok(stack_pointer.into()),
         _ => env_export(core.instance, store, name, own, slots),

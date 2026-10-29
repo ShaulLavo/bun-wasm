@@ -12,7 +12,9 @@ use wasm_encoder::{
     CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection, ImportSection,
     Instruction, MemoryType, TypeSection, ValType as EncodedValue,
 };
-use wasmtime::{Engine, Extern, FuncType, Instance, Linker, Module, SharedMemory, Store, ValType};
+use wasmtime::{Engine, Extern, FuncType, Instance, Linker, Module, Store, ValType};
+
+use crate::shm::SharedMemoryLease;
 
 const PREVIEW1: &str = "wasi_snapshot_preview1";
 
@@ -47,16 +49,23 @@ impl Preview1View {
         })
     }
 
-    /// Instantiate the view over `memory` and define the core's preview1 imports from it in
-    /// `linker`, shadowing the host's direct definitions for this member only.
-    pub(super) fn bind<T>(
+    /// Instantiate the view over the group memory and define the core's preview1 imports from it
+    /// in `linker`, shadowing the host's direct definitions for this member only.
+    ///
+    /// # Safety
+    ///
+    /// The caller keeps a lease of this group's backing alive until `store` and every instance
+    /// in it have dropped (`SharedMemoryLease::memory_for_admission`).
+    pub(super) unsafe fn bind<T>(
         &self,
         store: &mut Store<T>,
         linker: &mut Linker<T>,
-        memory: &SharedMemory,
+        memory: &SharedMemoryLease,
     ) -> Result<Instance> {
         let mut forwarding = Linker::new(store.engine());
-        forwarding.define(&*store, "t", "memory", memory.clone())?;
+        // SAFETY: forwarded to the caller's contract above.
+        let raw = unsafe { memory.memory_for_admission() }.clone();
+        forwarding.define(&*store, "t", "memory", raw)?;
         for name in &self.names {
             let original = linker
                 .get(&mut *store, PREVIEW1, name)
@@ -130,8 +139,10 @@ fn adapter(functions: &[(String, FuncType)], maximum_pages: u64) -> Result<Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::guest::GuestMemory;
+    use crate::shm::{GroupBackingBudget, GroupPolicy, MemoryGroup};
     use wasm_encoder::{ConstExpr, DataSection, MemArg};
-    use wasmtime::{Config, MemoryType as HostMemory};
+    use wasmtime::{Config, MemoryType as HostMemory, SharedMemory};
     use wasmtime_wasi::WasiCtxBuilder;
     use wasmtime_wasi::p1::{self, WasiP1Ctx};
     use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
@@ -213,17 +224,19 @@ mod tests {
         module.finish()
     }
 
-    fn word(memory: &SharedMemory, at: usize) -> u32 {
-        let cells = &memory.data()[at..at + 4];
-        let bytes: Vec<u8> = cells.iter().map(|cell| unsafe { *cell.get() }).collect();
-        u32::from_le_bytes(bytes.try_into().unwrap())
-    }
-
     #[test]
     fn preview1_reads_and_writes_a_shared_member_memory_through_the_view() {
         let mut config = Config::new();
         config.wasm_threads(true);
         let engine = Engine::new(&config).unwrap();
+        // The lease is declared before the Store, so it outlives the Store's instances.
+        let policy = GroupPolicy {
+            maximum_pages: MAX,
+            ..GroupPolicy::default()
+        };
+        let group = MemoryGroup::new(&engine, policy, GroupBackingBudget::default()).unwrap();
+        let lease = group.memory_lease();
+        let memory = GuestMemory::Shared(lease.clone());
         let stdout = MemoryOutputPipe::new(64);
         let wasi = WasiCtxBuilder::new()
             .stdin(MemoryInputPipe::new("stdin bytes"))
@@ -233,7 +246,6 @@ mod tests {
         let mut store: Store<WasiP1Ctx> = Store::new(&engine, wasi);
         let mut linker = Linker::new(&engine);
         p1::add_to_linker_sync(&mut linker, |cx| cx).unwrap();
-        let memory = SharedMemory::new(&engine, HostMemory::shared(1, MAX)).unwrap();
         let module = Module::new(&engine, member()).unwrap();
         assert!(
             module
@@ -241,10 +253,10 @@ mod tests {
                 .all(|export| export.ty().memory().is_none())
         );
         let view = Preview1View::new(&engine, &[&module], u64::from(MAX)).unwrap();
-        view.bind(&mut store, &mut linker, &memory).unwrap();
-        linker
-            .define(&store, "env", "memory", memory.clone())
-            .unwrap();
+        // SAFETY: `lease` outlives `store` (declared first).
+        unsafe { view.bind(&mut store, &mut linker, &lease) }.unwrap();
+        let raw = unsafe { memory.export_for_admission() };
+        linker.define(&store, "env", "memory", raw).unwrap();
         let instance = linker.instantiate(&mut store, &module).unwrap();
         instance
             .get_typed_func::<(), ()>(&mut store, "run")
@@ -252,14 +264,14 @@ mod tests {
             .call(&mut store, ())
             .unwrap();
         assert_eq!(&stdout.contents()[..], b"hello");
-        assert_eq!(word(&memory, 2100), 5);
-        assert_eq!(word(&memory, 2300), 11);
-        let read: Vec<u8> = memory.data()[3000..3011]
-            .iter()
-            .map(|cell| unsafe { *cell.get() })
-            .collect();
-        assert_eq!(read, b"stdin bytes");
-        assert_eq!(word(&memory, 2400), 3);
+        let word = |at: usize| {
+            let bytes = memory.read(&store, at..at + 4).unwrap();
+            u32::from_le_bytes(bytes.try_into().unwrap())
+        };
+        assert_eq!(word(2100), 5);
+        assert_eq!(word(2300), 11);
+        assert_eq!(memory.read(&store, 3000..3011).unwrap(), b"stdin bytes");
+        assert_eq!(word(2400), 3);
     }
 
     #[test]

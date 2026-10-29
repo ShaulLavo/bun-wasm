@@ -5,6 +5,11 @@
 //! is touched only through atomic cells and owned copies of the bytes a call reads or produces,
 //! never through a Rust slice. Ranges are bounds-checked here; callers keep their own error
 //! conventions for a `None`.
+//!
+//! A shared memory is held as the memory group's `SharedMemoryLease`, never as a bare
+//! `SharedMemory`: the lease keeps the group's backing charged while any host value can reach
+//! it. The raw memory is borrowed only for one call, and leaves only through the unsafe
+//! admission export.
 
 use std::cell::UnsafeCell;
 use std::ops::Range;
@@ -12,26 +17,33 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use wasmtime::{AsContext, AsContextMut, Extern, Memory, SharedMemory, StoreContextMut};
 
+use crate::shm::SharedMemoryLease;
+
 #[derive(Clone)]
 pub enum GuestMemory {
     Private(Memory),
-    Shared(SharedMemory),
+    Shared(SharedMemoryLease),
 }
 
 impl GuestMemory {
-    /// The memory an instance exports as `memory`, private or shared.
+    /// The private memory an instance exports as `memory`. A group member's memory comes only
+    /// from its lease (`Programs::instantiate`), never from an export.
     pub fn from_extern(export: Extern) -> Option<Self> {
-        match export {
-            Extern::Memory(memory) => Some(Self::Private(memory)),
-            Extern::SharedMemory(memory) => Some(Self::Shared(memory)),
-            _ => None,
-        }
+        export.into_memory().map(Self::Private)
     }
 
-    pub fn export(&self) -> Extern {
+    /// The memory as an import for another instance in the same Store.
+    ///
+    /// # Safety
+    ///
+    /// For a shared memory, the Store receiving the import must be owned by a caller that keeps
+    /// a lease of this group's backing alive until that Store and every instance in it have
+    /// dropped (`SharedMemoryLease::memory_for_admission`).
+    pub unsafe fn export_for_admission(&self) -> Extern {
         match self {
             Self::Private(memory) => (*memory).into(),
-            Self::Shared(memory) => memory.clone().into(),
+            // SAFETY: forwarded to the caller's contract above.
+            Self::Shared(lease) => unsafe { lease.memory_for_admission() }.clone().into(),
         }
     }
 
@@ -42,7 +54,7 @@ impl GuestMemory {
     pub fn len(&self, store: impl AsContext) -> usize {
         match self {
             Self::Private(memory) => memory.data_size(store),
-            Self::Shared(memory) => memory.data_size(),
+            Self::Shared(lease) => raw(lease).data_size(),
         }
     }
 
@@ -53,7 +65,7 @@ impl GuestMemory {
                 .data(store.as_context())
                 .get(range)
                 .map(<[u8]>::to_vec),
-            Self::Shared(memory) => load(memory, range),
+            Self::Shared(lease) => load(raw(lease), range),
         }
     }
 
@@ -64,7 +76,7 @@ impl GuestMemory {
                 .data_mut(store.as_context_mut())
                 .get_mut(range)?
                 .copy_from_slice(bytes),
-            Self::Shared(memory) => store_bytes(memory, range.start, bytes)?,
+            Self::Shared(lease) => store_bytes(raw(lease), range.start, bytes)?,
         }
         Some(())
     }
@@ -86,10 +98,10 @@ impl GuestMemory {
                     .collect::<Option<Vec<&[u8]>>>()?;
                 Some(f(&views, data))
             }
-            Self::Shared(memory) => {
+            Self::Shared(lease) => {
                 let copies = ranges
                     .iter()
-                    .map(|range| load(memory, range.clone()))
+                    .map(|range| load(raw(lease), range.clone()))
                     .collect::<Option<Vec<_>>>()?;
                 let views: Vec<&[u8]> = copies.iter().map(Vec::as_slice).collect();
                 let mut store = store.into();
@@ -111,17 +123,24 @@ impl GuestMemory {
                 let (bytes, data) = memory.data_and_store_mut(store);
                 Some(f(bytes.get_mut(range)?, data))
             }
-            Self::Shared(memory) => {
-                memory.data().get(range.clone())?;
+            Self::Shared(lease) => {
+                raw(lease).data().get(range.clone())?;
                 let mut buffer = vec![0; range.len()];
                 let mut store = store.into();
                 let produced = f(&mut buffer, store.data_mut());
                 let count = usize::try_from(produced).unwrap_or(0).min(buffer.len());
-                store_bytes(memory, range.start, &buffer[..count])?;
+                store_bytes(raw(lease), range.start, &buffer[..count])?;
                 Some(produced)
             }
         }
     }
+}
+
+/// Borrow the shared memory for one host call.
+fn raw(lease: &SharedMemoryLease) -> &SharedMemory {
+    // SAFETY: the borrow cannot outlive `lease`, which keeps the backing charged, and no clone
+    // of the raw memory is made from it.
+    unsafe { lease.memory_for_admission() }
 }
 
 fn atomic(cell: &UnsafeCell<u8>) -> &AtomicU8 {
@@ -151,12 +170,28 @@ fn store_bytes(memory: &SharedMemory, at: usize, bytes: &[u8]) -> Option<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shm::{GroupBackingBudget, GroupPolicy, MemoryGroup};
     use wasmtime::{Config, Engine, MemoryType, Store};
 
     fn memories(store: &mut Store<u32>) -> [GuestMemory; 2] {
         let private = Memory::new(&mut *store, MemoryType::new(1, None)).unwrap();
+        let policy = GroupPolicy {
+            maximum_pages: 4,
+            ..GroupPolicy::default()
+        };
+        let group =
+            MemoryGroup::new(store.engine(), policy, GroupBackingBudget::default()).unwrap();
+        [
+            GuestMemory::Private(private),
+            GuestMemory::Shared(group.memory_lease()),
+        ]
+    }
+
+    #[test]
+    fn a_shared_export_is_never_adopted_without_its_lease() {
+        let store = store();
         let shared = SharedMemory::new(store.engine(), MemoryType::shared(1, 4)).unwrap();
-        [GuestMemory::Private(private), GuestMemory::Shared(shared)]
+        assert!(GuestMemory::from_extern(shared.into()).is_none());
     }
 
     fn store() -> Store<u32> {
