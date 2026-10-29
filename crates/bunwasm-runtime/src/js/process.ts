@@ -318,7 +318,10 @@
     nextTick: internal.nextTick,
     hrtime,
     memoryUsage,
-    resourceUsage: () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: native.memoryUsage().rss / 1024 }),
+    resourceUsage: () => {
+      const rss = native.memoryUsage().rss;
+      return { userCPUTime: 0, systemCPUTime: 0, maxRSS: rss === null ? null : rss / 1024 };
+    },
     cpuUsage: () => ({ user: Math.floor(native.now() * 1000), system: 0 }),
     uptime: () => native.now() / 1000,
     umask: () => 0o22,
@@ -356,7 +359,10 @@
     setUncaughtExceptionCaptureCallback() {},
     getActiveResourcesInfo: () => [],
     constrainedMemory: () => 0,
-    availableMemory: () => 4294967296 - native.memoryUsage().rss,
+    availableMemory: () => {
+      const rss = native.memoryUsage().rss;
+      return rss === null ? null : 4294967296 - rss;
+    },
     report: { getReport: () => ({ header: {} }) },
     stdin: undefined,
   };
