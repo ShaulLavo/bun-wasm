@@ -38,7 +38,7 @@ async function waitForMarker(page: Page, marker: string): Promise<void> {
 }
 
 export async function checkRootSignals(page: Page, base: string, browser: string, engine: string): Promise<void> {
-  for (const mode of ["handled", "default", "removed", "once"]) {
+  for (const mode of ["handled", "handled7", "default", "removed", "once"]) {
     await page.goto(`${base}?mode=memory&engine=${engine}`);
     assert.match(await ready(page), /ready/);
     await page.evaluate(async () => {
@@ -48,10 +48,11 @@ export async function checkRootSignals(page: Page, base: string, browser: string
       supervisor.onChildExit((event: unknown) => Reflect.get(globalThis, "shellSignalExits").push(event));
     });
     const marker = `ROOT_${mode.toUpperCase()}_READY`;
+    const handledStatus = mode === "handled7" ? 7 : 0;
     const source = mode === "once"
       ? 'process.once("SIGINT", () => console.log("ROOT_ONCE_HANDLED")); process.kill(process.pid, "SIGINT");'
       : mode === "default" ? ""
-      : 'const handler = () => { console.log("ROOT_HANDLED_EXIT0"); process.exit(0); }; process.on("SIGINT", handler);' +
+      : `const handler = () => { console.log("ROOT_HANDLED_EXIT${handledStatus}"); process.exit(${handledStatus}); }; process.on("SIGINT", handler);` +
         (mode === "removed" ? 'process.removeListener("SIGINT", handler);' : '');
     await writeFile(page, "/home/user/root-signal.ts", `${source} setInterval(() => {}, 1000); console.log(${JSON.stringify(marker)});`);
     const done = page.evaluate(() => {
@@ -68,7 +69,7 @@ export async function checkRootSignals(page: Page, base: string, browser: string
     await stopShell(page);
     const code = await done;
     console.log(JSON.stringify({ signalDiagnostic: { browser, engine, mode, code, exits: await page.evaluate(() => Reflect.get(globalThis, "shellSignalExits")) } }));
-    assert.equal(code, mode === "handled" ? 0 : 130, `${browser}/${engine}/${mode}: guest-selected exit or restored default`);
+    assert.equal(code, mode === "handled" || mode === "handled7" ? handledStatus : 130, `${browser}/${engine}/${mode}: guest-selected exit or restored default`);
     const next = await run(page, 'bun -e "console.log(42)"');
     assert.equal(next.code, 0, next.output);
     assert.equal(next.output.trim(), "42");
