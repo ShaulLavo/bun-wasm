@@ -74,15 +74,21 @@ export function createMemoryPublisher(buffer: SharedArrayBuffer, reader: Reader)
   return { capture: (normal = false, force = false) => publish(normal, force, false), finish: () => publish(false, true, true) };
 }
 
+function observeMemoryImport(
+  namespace: string,
+  name: string,
+  value: WebAssembly.ImportValue,
+  capture: (normal: boolean, force: boolean) => void,
+  side: boolean,
+): [string, WebAssembly.ImportValue] {
+  if (typeof value !== "function") return [name, value];
+  const normal = side && namespace === "env" && (name === "bun_core_idle" || name === "bun_core_poll");
+  const force = namespace === "wasi_snapshot_preview1" && (name === "fd_write" || name === "proc_exit");
+  return [name, (...args: unknown[]) => { capture(normal, force); return Reflect.apply(value, undefined, args); }];
+}
+
 export function observeMemoryImports(imports: WebAssembly.Imports, capture: (normal: boolean, force: boolean) => void, side: boolean): WebAssembly.Imports {
   const result: WebAssembly.Imports = {};
-  for (const [namespace, entries] of Object.entries(imports)) {
-    result[namespace] = Object.fromEntries(Object.entries(entries).map(([name, value]) => {
-      if (typeof value !== "function") return [name, value];
-      const normal = side && namespace === "env" && (name === "bun_core_idle" || name === "bun_core_poll");
-      const force = namespace === "wasi_snapshot_preview1" && (name === "fd_write" || name === "proc_exit");
-      return [name, (...args: unknown[]) => { capture(normal, force); return Reflect.apply(value, undefined, args); }];
-    }));
-  }
+  for (const [namespace, entries] of Object.entries(imports)) result[namespace] = Object.fromEntries(Object.entries(entries).map(([name, value]) => observeMemoryImport(namespace, name, value, capture, side)));
   return result;
 }
