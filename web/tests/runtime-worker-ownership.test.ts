@@ -1,5 +1,5 @@
 import { controlLoad } from "waffle/proc/control";
-import { processRuntimeFixture } from "./process-runtime-fixture";
+import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 import { expect, test } from "bun:test";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { DescriptorTable } from "waffle/core/descriptors";
