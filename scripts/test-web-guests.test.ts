@@ -122,7 +122,7 @@ test("guest gate logs retain stderr and cannot hide failure behind tee", () => {
 
 for (const path of [
   "web/scripts/node-spawn.ts", "web/scripts/node-host.mjs", "web/scripts/node-worker.ts", "web/scripts/node-process.ts", "web/src/net/trampoline.ts",
-  "web/src/engine-host.js", "web/src/crypto-inputs.js", "web/src/script-evaluation.ts", "web/bun.lock", "web/guest-tests/compose.ts",
+  "web/src/engine-host.js", "web/src/crypto-inputs.js", "web/bun.lock", "web/guest-tests/compose.ts",
   "web/tests/subprocess.ts", "tests/fixtures/spawn-executable/index.ts", "tests/install/run.mjs",
   "crates/bunwasm-runtime/src/host.rs", "crates/bunwasm-runtime/src/js/process.ts", "crates/bunwasm-cli/src/main.rs",
   "scripts/test-web-guests.ts", "scripts/guest-build-receipt.ts", "scripts/build-bun-tools.sh",
@@ -151,7 +151,7 @@ test("engine-specific changes keep their own native gates", () => {
     expect(needsJsc([path])).toBe(false);
   }
   expect(needsJsc(["web/guest-tests/jsc.test.ts"])).toBe(true);
-  for (const path of ["tests/async-context-runtime/prepare-probe.ts", "tests/async-context-rejection/index.ts"]) {
+  for (const path of ["tests/async-context-runtime/prepare-probe.ts", "tests/async-context-rejection/index.ts", "web/src/script-evaluation.ts"]) {
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
   }

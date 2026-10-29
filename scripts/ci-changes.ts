@@ -9,6 +9,7 @@ const nativeFiles = new Set([
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "scripts/ci-changes.ts", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
+  "web/src/script-evaluation.ts",
   // Embedded in bun.wasm as the runtime module `direct_stream`.
   "web/src/native-direct-stream.ts",
 ]);
@@ -41,7 +42,7 @@ const webGuestFiles = new Set([
   "tests/fixtures/runtime-proc-spawn-requests.json", "web/guest-tests/compose.ts", "web/guest-tests/jsc.test.ts",
   "web/tests/subprocess.ts", "web/tests/subprocess.mjs",
   "web/src/fs.ts", "web/src/tool-command.ts", "web/src/engine-host.js", "web/src/engine-host.d.ts",
-  "web/src/crypto-host.js", "web/src/crypto-inputs.js", "web/src/promise-reactions.ts", "web/src/script-evaluation.ts",
+  "web/src/crypto-host.js", "web/src/crypto-inputs.js", "web/src/promise-reactions.ts",
   "web/src/native-stream-state.ts", "web/src/native-direct-stream.ts", "web/src/buffer-transfer.ts", "web/src/content-modules.ts",
 ]);
 const engineSpecificFiles = new Set([
