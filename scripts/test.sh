@@ -149,6 +149,15 @@ pass=0
 fail=0
 failed=()
 for name in "${names[@]}"; do
+  if [[ $update == 0 && "$name" == http-response-lifecycle ]]; then
+    if BUN_WASM_LAUNCHER="$launcher" bun "$root/scripts/http-response-lifecycle.ts" "$engine" "$scratch/http-response-lifecycle"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      failed+=("$name")
+    fi
+    continue
+  fi
   if [[ $update == 0 && "$name" == worker-review ]]; then
     if node "$root/tests/check-worker-regressions.ts" --engine "$engine" --wasm "$wasm"; then
       pass=$((pass + 1))

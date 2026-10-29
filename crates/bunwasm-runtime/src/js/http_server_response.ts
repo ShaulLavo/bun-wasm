@@ -2,6 +2,9 @@
   type Callback = (error?: unknown) => void;
   type Response = {
     destroyed: boolean;
+    closed: boolean;
+    finished: boolean;
+    writableEnded: boolean;
     writableFinished: boolean;
     _completed: boolean;
     _destroyError?: unknown;
@@ -18,12 +21,27 @@
     this.destroyed = true;
     this._completed = true;
     this._destroyError = error || Object.assign(new Error("Cannot call write after a stream was destroyed"), { code: "ERR_STREAM_DESTROYED" });
-    this._done(false);
     if (this.socket) this.socket.destroy(error);
     else {
       this._conn.destroy(this._destroyError);
       internal.nextTick(() => this._emitClose());
     }
+    return this;
+  }
+
+  function emitClose(this: Response): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.destroyed = true;
+    if (!this.writableFinished) {
+      this._completed = true;
+      this._done(false);
+    }
+    this.emit("close");
+  }
+
+  function endDestroyed(this: Response): Response {
+    this.writableEnded = this.finished = true;
     return this;
   }
 
@@ -50,5 +68,5 @@
     return false;
   }
 
-  return { destroy, _completeEnd: completeEnd, _writeDestroyed: writeDestroyed };
+  return { destroy, _emitClose: emitClose, _endDestroyed: endDestroyed, _completeEnd: completeEnd, _writeDestroyed: writeDestroyed };
 })
