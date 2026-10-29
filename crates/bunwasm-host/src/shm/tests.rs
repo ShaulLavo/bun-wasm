@@ -176,7 +176,9 @@ fn bypass_growth_is_reconciled_and_blocks_further_admission() {
     let group =
         MemoryGroup::new(&Engine::default(), GroupPolicy::default(), budget.clone()).unwrap();
     let owner = member(&group, 1);
-    group.shared_memory().grow(1).unwrap();
+    let lease = group.memory_lease();
+    // SAFETY: `lease` remains alive until after the group and raw backing checks.
+    unsafe { lease.memory_for_admission() }.grow(1).unwrap();
     let snapshot = group.snapshot();
     assert!(snapshot.bypassed);
     assert_eq!(snapshot.committed_bytes, 2 * u64::from(PAGE_BYTES));
@@ -185,6 +187,43 @@ fn bypass_growth_is_reconciled_and_blocks_further_admission() {
     assert!(matches!(group.reserve(2), Err(Errno::Inval)));
     owner.physical_stopped();
     drop(group);
+    assert_eq!(budget.committed_bytes(), 2 * u64::from(PAGE_BYTES));
+    drop(lease);
+    assert_eq!(budget.committed_bytes(), 0);
+}
+
+#[test]
+fn escaped_memory_lease_retains_charge_until_raw_users_and_lease_drop() {
+    let budget = GroupBackingBudget::new(u64::from(PAGE_BYTES));
+    let group =
+        MemoryGroup::new(&Engine::default(), GroupPolicy::default(), budget.clone()).unwrap();
+    let lease = group.memory_lease();
+    // SAFETY: `lease` is retained until `escaped` has dropped.
+    let escaped = unsafe { lease.memory_for_admission() }.clone();
+    drop(group);
+    assert_eq!(budget.committed_bytes(), u64::from(PAGE_BYTES));
+    assert!(MemoryGroup::new(&Engine::default(), GroupPolicy::default(), budget.clone()).is_err());
+    drop(escaped);
+    assert_eq!(budget.committed_bytes(), u64::from(PAGE_BYTES));
+    let last_lease = lease.clone();
+    drop(lease);
+    assert_eq!(budget.committed_bytes(), u64::from(PAGE_BYTES));
+    drop(last_lease);
+    assert_eq!(budget.committed_bytes(), 0);
+}
+
+#[test]
+fn a_new_group_reconciles_growth_in_every_owned_group() {
+    let budget = GroupBackingBudget::new(2 * u64::from(PAGE_BYTES));
+    let first =
+        MemoryGroup::new(&Engine::default(), GroupPolicy::default(), budget.clone()).unwrap();
+    let lease = first.memory_lease();
+    // SAFETY: `lease` outlives this raw growth and the following admission.
+    unsafe { lease.memory_for_admission() }.grow(1).unwrap();
+    assert!(MemoryGroup::new(&Engine::default(), GroupPolicy::default(), budget.clone()).is_err());
+    assert_eq!(budget.committed_bytes(), 2 * u64::from(PAGE_BYTES));
+    drop(lease);
+    drop(first);
     assert_eq!(budget.committed_bytes(), 0);
 }
 

@@ -6,7 +6,7 @@
 //! Wasmtime's separate built-in futex table.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
@@ -74,6 +74,54 @@ pub struct GroupBackingBudget {
 struct BudgetState {
     committed_bytes: u64,
     peak_bytes: u64,
+    backings: Vec<Weak<Backing>>,
+    next_backing: u64,
+}
+
+struct Backing {
+    id: u64,
+    memory: SharedMemory,
+    budget: GroupBackingBudget,
+    charged_pages: AtomicU32,
+    bypassed: AtomicBool,
+}
+
+impl Backing {
+    fn charged_pages(&self) -> u32 {
+        self.charged_pages.load(Ordering::SeqCst)
+    }
+
+    fn actual_pages(&self) -> u32 {
+        (self.memory.data_size() / PAGE_BYTES as usize) as u32
+    }
+
+    fn bypassed(&self) -> bool {
+        self.bypassed.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for Backing {
+    fn drop(&mut self) {
+        self.budget.release_backing(self.id, self.charged_pages());
+    }
+}
+
+#[derive(Clone)]
+pub struct SharedMemoryLease {
+    backing: Arc<Backing>,
+}
+
+impl SharedMemoryLease {
+    /// Returns the raw memory for trusted Wasmtime admission.
+    ///
+    /// # Safety
+    ///
+    /// Keep this lease in every owning host Store until all raw clones and
+    /// admitted instances have dropped. Dropping the lease earlier releases the
+    /// runtime's backing charge while the raw memory remains usable.
+    pub unsafe fn memory_for_admission(&self) -> &SharedMemory {
+        &self.backing.memory
+    }
 }
 
 impl Default for GroupBackingBudget {
@@ -85,19 +133,18 @@ impl Default for GroupBackingBudget {
 impl GroupBackingBudget {
     pub fn new(limit_bytes: u64) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(BudgetState {
-                committed_bytes: 0,
-                peak_bytes: 0,
-            })),
+            inner: Arc::new(Mutex::new(BudgetState::default())),
             limit_bytes,
         }
     }
 
     pub fn committed_bytes(&self) -> u64 {
+        self.reconcile();
         self.lock().committed_bytes
     }
 
     pub fn peak_bytes(&self) -> u64 {
+        self.reconcile();
         self.lock().peak_bytes
     }
 
@@ -107,8 +154,69 @@ impl GroupBackingBudget {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
-    fn charge(&self, bytes: u64) -> bool {
+    fn register(&self, memory: SharedMemory) -> Option<Arc<Backing>> {
         let mut state = self.lock();
+        Self::reconcile_all_locked(&mut state);
+        let initial = u64::from(PAGE_BYTES);
+        let committed = state.committed_bytes.checked_add(initial)?;
+        if committed > self.limit_bytes {
+            return None;
+        }
+        let id = state.next_backing;
+        state.next_backing = state.next_backing.wrapping_add(1);
+        let backing = Arc::new(Backing {
+            id,
+            memory,
+            budget: self.clone(),
+            charged_pages: AtomicU32::new(1),
+            bypassed: AtomicBool::new(false),
+        });
+        state.committed_bytes = committed;
+        state.peak_bytes = state.peak_bytes.max(committed);
+        state.backings.push(Arc::downgrade(&backing));
+        Some(backing)
+    }
+
+    fn reconcile(&self) {
+        let mut state = self.lock();
+        Self::reconcile_all_locked(&mut state);
+    }
+
+    fn reconcile_all_locked(state: &mut BudgetState) {
+        let backings = state
+            .backings
+            .iter()
+            .filter_map(Weak::upgrade)
+            .collect::<Vec<_>>();
+        state.backings.retain(|weak| weak.strong_count() > 0);
+        for backing in backings {
+            Self::reconcile_backing_locked(state, &backing);
+        }
+    }
+
+    fn reconcile_backing_locked(state: &mut BudgetState, backing: &Backing) {
+        let actual = backing.actual_pages();
+        let excess = actual.saturating_sub(backing.charged_pages());
+        if excess == 0 {
+            return;
+        }
+        let bytes = u64::from(excess) * u64::from(PAGE_BYTES);
+        state.committed_bytes = state
+            .committed_bytes
+            .checked_add(bytes)
+            .expect("actual group backing exceeds u64 accounting");
+        state.peak_bytes = state.peak_bytes.max(state.committed_bytes);
+        backing.charged_pages.store(actual, Ordering::SeqCst);
+        backing.bypassed.store(true, Ordering::SeqCst);
+    }
+
+    fn charge(&self, backing: &Backing, pages: u32) -> bool {
+        let mut state = self.lock();
+        Self::reconcile_all_locked(&mut state);
+        if backing.bypassed() {
+            return false;
+        }
+        let bytes = u64::from(pages) * u64::from(PAGE_BYTES);
         let Some(committed) = state.committed_bytes.checked_add(bytes) else {
             return false;
         };
@@ -117,24 +225,30 @@ impl GroupBackingBudget {
         }
         state.committed_bytes = committed;
         state.peak_bytes = state.peak_bytes.max(committed);
+        backing.charged_pages.fetch_add(pages, Ordering::SeqCst);
         true
     }
 
-    fn force(&self, bytes: u64) {
+    fn rollback(&self, backing: &Backing, pages: u32) {
         let mut state = self.lock();
+        let bytes = u64::from(pages) * u64::from(PAGE_BYTES);
         state.committed_bytes = state
             .committed_bytes
-            .checked_add(bytes)
-            .expect("actual group backing exceeds u64 accounting");
-        state.peak_bytes = state.peak_bytes.max(state.committed_bytes);
+            .checked_sub(bytes)
+            .expect("group growth reservation released twice");
+        backing.charged_pages.fetch_sub(pages, Ordering::SeqCst);
     }
 
-    fn release(&self, bytes: u64) {
+    fn release_backing(&self, id: u64, pages: u32) {
         let mut state = self.lock();
+        let bytes = u64::from(pages) * u64::from(PAGE_BYTES);
         state.committed_bytes = state
             .committed_bytes
             .checked_sub(bytes)
             .expect("group backing released twice");
+        state
+            .backings
+            .retain(|weak| weak.upgrade().is_some_and(|backing| backing.id != id));
     }
 }
 
@@ -203,18 +317,9 @@ pub struct MemoryGroup {
 }
 
 struct GroupInner {
-    memory: SharedMemory,
+    backing: Arc<Backing>,
     policy: GroupPolicy,
-    budget: GroupBackingBudget,
     state: Mutex<GroupState>,
-}
-
-impl Drop for GroupInner {
-    fn drop(&mut self) {
-        let state = self.lock();
-        self.budget
-            .release(u64::from(state.committed_pages) * u64::from(PAGE_BYTES));
-    }
 }
 
 struct GroupState {
@@ -225,14 +330,12 @@ struct GroupState {
     waiters: HashMap<WaiterId, Arc<Waiter>>,
     queues: HashMap<u32, VecDeque<WaiterId>>,
     free: Vec<Chunk>,
-    committed_pages: u32,
     next_incarnation: u64,
     next_handle: u32,
     next_pin: u32,
     next_watch: u32,
     next_waiter: u64,
     watch_sequence: u64,
-    bypassed: bool,
     ended: bool,
 }
 
@@ -321,10 +424,9 @@ impl MemoryGroup {
             "memory group maximum exceeds wasm32"
         );
         let memory = SharedMemory::new(engine, MemoryType::shared(1, policy.maximum_pages))?;
-        anyhow::ensure!(
-            budget.charge(u64::from(PAGE_BYTES)),
-            "runtime group backing budget is exhausted"
-        );
+        let backing = budget
+            .register(memory)
+            .ok_or_else(|| anyhow::anyhow!("runtime group backing budget is exhausted"))?;
         let members = std::iter::repeat_with(|| None)
             .take(policy.members)
             .collect();
@@ -336,34 +438,33 @@ impl MemoryGroup {
             waiters: HashMap::new(),
             queues: HashMap::new(),
             free: Vec::new(),
-            committed_pages: 1,
             next_incarnation: 1,
             next_handle: 1,
             next_pin: 1,
             next_watch: 1,
             next_waiter: 1,
             watch_sequence: 1,
-            bypassed: false,
             ended: false,
         };
         Ok(Self {
             inner: Arc::new(GroupInner {
-                memory,
+                backing,
                 policy,
-                budget,
                 state: Mutex::new(state),
             }),
         })
     }
 
-    pub fn shared_memory(&self) -> &SharedMemory {
-        &self.inner.memory
+    pub fn memory_lease(&self) -> SharedMemoryLease {
+        SharedMemoryLease {
+            backing: self.inner.backing.clone(),
+        }
     }
 
     pub fn reserve(&self, pid: u32) -> Result<MemberReservation, Errno> {
         let mut state = self.inner.lock();
-        self.inner.reconcile(&mut state);
-        if state.bypassed {
+        self.inner.reconcile();
+        if self.inner.backing.bypassed() {
             return Err(Errno::Inval);
         }
         if state.ended {
@@ -399,8 +500,8 @@ impl MemoryGroup {
     }
 
     pub fn snapshot(&self) -> GroupSnapshot {
-        let mut state = self.inner.lock();
-        self.inner.reconcile(&mut state);
+        let state = self.inner.lock();
+        self.inner.reconcile();
         let live = state.members.iter().flatten();
         let members = live.clone().count();
         let reserved = live
@@ -424,13 +525,13 @@ impl MemoryGroup {
             holds,
             watches: state.watches.len(),
             waiters: state.waiters.len(),
-            committed_bytes: u64::from(state.committed_pages) * u64::from(PAGE_BYTES),
+            committed_bytes: u64::from(self.inner.backing.charged_pages()) * u64::from(PAGE_BYTES),
             free_bytes: state
                 .free
                 .iter()
                 .map(|chunk| u64::from(chunk.pages) * u64::from(PAGE_BYTES))
                 .sum(),
-            bypassed: state.bypassed,
+            bypassed: self.inner.backing.bypassed(),
         }
     }
 
@@ -458,19 +559,19 @@ impl MemoryGroup {
 
     #[cfg(test)]
     fn load32(&self, addr: u32) -> Result<i32, Errno> {
-        Ok(atomic32(&self.inner.memory, addr)? as i32)
+        Ok(atomic32(&self.inner.backing.memory, addr)? as i32)
     }
 
     #[cfg(test)]
     fn store32(&self, addr: u32, value: i32) -> Result<(), Errno> {
-        let cell = atomic32_cell(&self.inner.memory, addr)?;
+        let cell = atomic32_cell(&self.inner.backing.memory, addr)?;
         cell.store(value as u32, Ordering::SeqCst);
         Ok(())
     }
 
     #[cfg(test)]
     fn store64(&self, addr: u32, value: i64) -> Result<(), Errno> {
-        let cell = atomic64_cell(&self.inner.memory, addr)?;
+        let cell = atomic64_cell(&self.inner.backing.memory, addr)?;
         cell.store(value as u64, Ordering::SeqCst);
         Ok(())
     }
@@ -483,15 +584,8 @@ impl GroupInner {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 
-    fn reconcile(&self, state: &mut GroupState) {
-        let actual_pages = (self.memory.data_size() / PAGE_BYTES as usize) as u32;
-        let excess = actual_pages.saturating_sub(state.committed_pages);
-        if excess == 0 {
-            return;
-        }
-        self.budget.force(u64::from(excess) * u64::from(PAGE_BYTES));
-        state.committed_pages = actual_pages;
-        state.bypassed = true;
+    fn reconcile(&self) {
+        self.backing.budget.reconcile();
     }
 
     fn current_member(state: &GroupState, id: MemberId) -> Result<&Member, Errno> {
@@ -792,37 +886,33 @@ impl GroupInner {
 
     fn take_chunk_locked(&self, state: &mut GroupState, pages: u32) -> Result<Chunk, Errno> {
         if let Some(chunk) = take_free_chunk(&mut state.free, pages) {
-            zero_chunk(&self.memory, chunk);
+            zero_chunk(&self.backing.memory, chunk);
             return Ok(chunk);
         }
-        self.reconcile(state);
-        if state.bypassed {
-            return Err(Errno::NoMem);
-        }
-        let new_pages = state
-            .committed_pages
+        self.reconcile();
+        let new_pages = self
+            .backing
+            .charged_pages()
             .checked_add(pages)
             .ok_or(Errno::NoMem)?;
         if new_pages > self.policy.maximum_pages {
             return Err(Errno::NoMem);
         }
-        let bytes = u64::from(pages) * u64::from(PAGE_BYTES);
-        if !self.budget.charge(bytes) {
+        if !self.backing.budget.charge(&self.backing, pages) {
             return Err(Errno::NoMem);
         }
-        let page = match self.memory.grow(u64::from(pages)) {
+        let page = match self.backing.memory.grow(u64::from(pages)) {
             Ok(page) => page as u32,
             Err(_) => {
-                self.budget.release(bytes);
+                self.backing.budget.rollback(&self.backing, pages);
                 return Err(Errno::NoMem);
             }
         };
-        state.committed_pages = new_pages;
         Ok(Chunk { page, pages })
     }
 
     fn watch(&self, member: MemberId, addr: u32, expected: i32) -> Result<WatchId, Errno> {
-        validate_span(&self.memory, addr, 4)?;
+        validate_span(&self.backing.memory, addr, 4)?;
         let mut state = self.lock();
         Self::receives(&state, member)?;
         if state.watches.len() >= self.policy.watches {
@@ -864,7 +954,7 @@ impl GroupInner {
         if !watch.pending {
             return Ok(true);
         }
-        Ok(atomic32(&self.memory, watch.addr)? as i32 != watch.expected)
+        Ok(atomic32(&self.backing.memory, watch.addr)? as i32 != watch.expected)
     }
 
     fn prepare_wait(
@@ -875,12 +965,12 @@ impl GroupInner {
         expected: u64,
         timeout_ns: i64,
     ) -> Result<WaitPreparation, Errno> {
-        validate_span(&self.memory, addr, width)?;
+        validate_span(&self.backing.memory, addr, width)?;
         let mut state = self.lock();
         Self::receives(&state, member)?;
         let actual = match width {
-            4 => u64::from(atomic32(&self.memory, addr)?),
-            8 => atomic64(&self.memory, addr)?,
+            4 => u64::from(atomic32(&self.backing.memory, addr)?),
+            8 => atomic64(&self.backing.memory, addr)?,
             _ => return Err(Errno::Inval),
         };
         if actual != expected {
@@ -909,7 +999,7 @@ impl GroupInner {
     }
 
     fn wake(&self, member: MemberId, addr: u32, count: u32) -> Result<u32, Errno> {
-        validate_span(&self.memory, addr, 4)?;
+        validate_span(&self.backing.memory, addr, 4)?;
         let mut state = self.lock();
         Self::receives(&state, member)?;
         let mut woken = Vec::new();
@@ -1370,10 +1460,10 @@ fn write_words(memory: &SharedMemory, out: u32, words: &[u32]) {
 }
 
 fn output_span(member: &MemberLease, out: u32, words: u32) -> Result<(), Errno> {
-    validate_span(&member.group.memory, out, 4)?;
+    validate_span(&member.group.backing.memory, out, 4)?;
     let bytes = words.checked_mul(4).ok_or(Errno::Inval)?;
     let end = u64::from(out) + u64::from(bytes);
-    if end > member.group.memory.data_size() as u64 {
+    if end > member.group.backing.memory.data_size() as u64 {
         return Err(Errno::Inval);
     }
     Ok(())
@@ -1392,7 +1482,11 @@ pub fn shm_create(member: &MemberLease, len: u32, align: u32, out: u32) -> i32 {
     }
     match member.group.create(member.member, len, align) {
         Ok(backing) => {
-            write_words(&member.group.memory, out, &[backing.handle.0, backing.addr]);
+            write_words(
+                &member.group.backing.memory,
+                out,
+                &[backing.handle.0, backing.addr],
+            );
             0
         }
         Err(error) => error.result(),
@@ -1405,7 +1499,7 @@ pub fn shm_attach(member: &MemberLease, handle: u32, out: u32) -> i32 {
     }
     match member.group.attach(member.member, RegionHandle(handle)) {
         Ok(backing) => {
-            write_words(&member.group.memory, out, &[backing.addr]);
+            write_words(&member.group.backing.memory, out, &[backing.addr]);
             0
         }
         Err(error) => error.result(),
@@ -1425,7 +1519,7 @@ pub fn shm_pin(member: &MemberLease, handle: u32, out: u32) -> i32 {
     }
     match member.group.pin(member.member, RegionHandle(handle)) {
         Ok(pin) => {
-            write_words(&member.group.memory, out, &[pin.0]);
+            write_words(&member.group.backing.memory, out, &[pin.0]);
             0
         }
         Err(error) => error.result(),
@@ -1446,7 +1540,7 @@ pub fn shm_accept(member: &MemberLease, pin: u32, out: u32) -> i32 {
     match member.group.accept(member.member, PinId(pin)) {
         Ok(backing) => {
             write_words(
-                &member.group.memory,
+                &member.group.backing.memory,
                 out,
                 &[backing.handle.0, backing.addr, backing.len],
             );
@@ -1520,7 +1614,7 @@ pub fn futex_watch(member: &MemberLease, addr: u32, expected: i32, out: u32) -> 
     }
     match member.watch(addr, expected) {
         Ok(id) => {
-            write_words(&member.group.memory, out, &[id.0]);
+            write_words(&member.group.backing.memory, out, &[id.0]);
             0
         }
         Err(error) => error.result(),

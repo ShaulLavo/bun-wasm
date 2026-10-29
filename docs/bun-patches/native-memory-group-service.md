@@ -52,9 +52,11 @@ second Wasmtime futex table.
 ### J3 and nested-Wasm binding
 
 J3 owns PIE admission and `linked.rs`. It constructs one runtime
-`GroupBackingBudget`, passes a clone to every `MemoryGroup::new`, binds
-`MemoryGroup::shared_memory()` as the imported group memory, and installs the
-matching `MemberLease` in `Host::shm`. Registered waits bind their
+`GroupBackingBudget`, passes a clone to every `MemoryGroup::new`, and retains a
+`SharedMemoryLease` in every host Store. The only raw binding is the explicitly
+unsafe `SharedMemoryLease::memory_for_admission()`; its contract requires the lease
+to outlive every raw clone and admitted instance. J3 installs the matching
+`MemberLease` in `Host::shm`. Registered waits bind their
 incarnation-specific cancellation handle to `Host::cancel`; a fatal stop interrupts
 the blocked guest before physical-stop release. `MemberLease::wait_cancellation()`
 provides the same current-wait control to a host stop controller without releasing
