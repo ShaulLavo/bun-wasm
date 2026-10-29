@@ -1,0 +1,198 @@
+From b1c36a7670385986482d7f9d0e301c06efaa1793 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 29 Oct 2026 08:27:56 +0200
+Subject: [PATCH 17/17] wasm: print ES module bodies for registration records
+
+---
+ src/js_printer/lib.rs | 108 +++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 106 insertions(+), 2 deletions(-)
+
+diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
+index d84ed54d..af472a84 100644
+--- a/src/js_printer/lib.rs
++++ b/src/js_printer/lib.rs
+@@ -2189,6 +2189,34 @@ pub(crate) mod __gated_printer {
+             }
+         }
+ 
++        /// bun-wasm registration records (see `with_bunwasm_register`): a
++        /// top-level `for await` driven by `yield`. Unlabeled loops close the
++        /// iterator when left early; a labeled one must stay a bare loop.
++        fn print_bunwasm_register_for_await(&mut self, s: &S::ForOf, loc: bun_ast::Loc, labeled: bool) {
++            self.print_indent();
++            self.add_source_mapping(loc);
++            if !labeled {
++                self.print(b"{let __bunwasm_i=__bunwasm_m.ai(");
++                self.print_expr(s.value, Level::Comma, ExprFlag::none());
++                self.print(b"),__bunwasm_r;try{for(;");
++            } else {
++                self.print(b"for(let __bunwasm_i=__bunwasm_m.ai(");
++                self.print_expr(s.value, Level::Comma, ExprFlag::none());
++                self.print(b"),__bunwasm_r;");
++            }
++            self.print(b"!(__bunwasm_r=void 0,__bunwasm_r=yield __bunwasm_i.next()).done;){");
++            self.print_for_loop_init(s.init, ExprFlagSet::empty());
++            self.print(b"=__bunwasm_r.value;");
++            self.print_newline();
++            self.print_stmt(s.body).expect("unreachable");
++            self.print_indent();
++            self.print(b"}");
++            if !labeled {
++                self.print(b"}finally{if(__bunwasm_r&&!__bunwasm_r.done)yield __bunwasm_m.ac(__bunwasm_i)}}");
++            }
++            self.print_newline();
++        }
++
+         /// bun-wasm `for await` hooks (see BUNWASM_AWAIT_HOOKS): open a block
+         /// holding the loop's record (`__bunwasm_iterate`), and a `try` whose
+         /// `finally` runs after the iterator closed on every exit.
+@@ -2669,6 +2697,7 @@ pub(crate) mod __gated_printer {
+                 false,
+             );
+             self.print_space();
++            let _depth = BunwasmFnDepth::enter();
+             self.print_fn_body(func.body.loc, stmts);
+         }
+ 
+@@ -3442,7 +3471,9 @@ pub(crate) mod __gated_printer {
+                 ExprData::EImportMeta(_) => {
+                     self.print_space_before_identifier();
+                     self.add_source_mapping(expr.loc);
+-                    if self.options.module_type == bundle_opts::Format::InternalBakeDev {
++                    if bunwasm_register() {
++                        self.print(b"__bunwasm_m.meta");
++                    } else if self.options.module_type == bundle_opts::Format::InternalBakeDev {
+                         debug_assert!(self.options.hmr_ref.is_valid());
+                         self.print_symbol(self.options.hmr_ref);
+                         self.print(b".importMeta");
+@@ -3465,6 +3496,14 @@ pub(crate) mod __gated_printer {
+                         self.print_symbol(self.options.import_meta_ref);
+                     }
+                 }
++                ExprData::EImportMetaMain(data) if bunwasm_register() => {
++                    self.print_space_before_identifier();
++                    self.add_source_mapping(expr.loc);
++                    if data.inverted {
++                        self.print(b"!");
++                    }
++                    self.print(b"__bunwasm_m.meta.main");
++                }
+                 ExprData::EImportMetaMain(data) => {
+                     if self.options.module_type == bundle_opts::Format::Esm
+                         && self.options.target != bun_ast::Target::Node
+@@ -3979,6 +4018,7 @@ pub(crate) mod __gated_printer {
+                         true,
+                     );
+                     self.print_whitespacer(ws!(b" => "));
++                    let _depth = BunwasmFnDepth::enter();
+ 
+                     let mut was_printed = false;
+                     if e.body.stmts.len() == 1 && e.prefer_expr {
+@@ -4457,6 +4497,9 @@ pub(crate) mod __gated_printer {
+                                 if let Some(target) = &self.call_target {
+                                     wrap = e.was_originally_identifier()
+                                         && matches!(target, ExprData::EIdentifier(id) if id.ref_.eql(e.ref_));
++                                    // bun-wasm: an imported function is called with `this` undefined.
++                                    wrap |= bunwasm_register()
++                                        && matches!(target, ExprData::EImportIdentifier(id) if id.ref_.eql(e.ref_));
+                                 }
+ 
+                                 if wrap {
+@@ -4529,6 +4572,13 @@ pub(crate) mod __gated_printer {
+                         self.print_symbol(e.ref_);
+                     }
+                 }
++                ExprData::EAwait(e) if bunwasm_register_top_level() => {
++                    self.print_space_before_identifier();
++                    self.add_source_mapping(expr.loc);
++                    self.print(b"(yield ");
++                    self.print_expr(e.value, Level::Yield, ExprFlag::none());
++                    self.print(b")");
++                }
+                 ExprData::EAwait(e) => {
+                     let wrap = level.gte(Level::Prefix);
+                     if wrap {
+@@ -6082,6 +6132,10 @@ pub(crate) mod __gated_printer {
+                     self.print(b")");
+                     self.print_body(s.body);
+                 }
++                StmtData::SForOf(s) if s.is_await && bunwasm_register_top_level() => {
++                    let labeled = BUNWASM_LABELED.with(|l| l.replace(false));
++                    self.print_bunwasm_register_for_await(&s, stmt.loc, labeled);
++                }
+                 StmtData::SForOf(s) => {
+                     // bun-wasm: the hooked `for await` of BUNWASM_AWAIT_HOOKS. A
+                     // `for await` always makes its body an S body. A label goes
+@@ -6167,7 +6221,8 @@ pub(crate) mod __gated_printer {
+                     }
+                     self.print_symbol(s.name.ref_);
+                     self.print(b":");
+-                    BUNWASM_LABELED.with(|l| l.set(hooked_loop || inherited));
++                    let register_loop = bunwasm_register_top_level() && matches!(s.stmt.data, StmtData::SForOf(f) if f.is_await);
++                    BUNWASM_LABELED.with(|l| l.set(hooked_loop || inherited || register_loop));
+                     self.print_body(s.stmt);
+                     BUNWASM_LABELED.with(|l| l.set(false));
+                     if hooked_loop {
+@@ -6727,6 +6782,10 @@ pub(crate) mod __gated_printer {
+         }
+ 
+         fn print_dynamic_import(&mut self) {
++            if bunwasm_register() {
++                self.print(b"__bunwasm_m.import(");
++                return;
++            }
+             super::BUNWASM_IMPORT_REFERRER.with_borrow(|from| {
+                 if let Some(from) = from {
+                     self.print(b"globalThis.__bunwasm_dynamicImport(");
+@@ -7923,6 +7982,51 @@ fn bunwasm_await_hooks() -> bool {
+     BUNWASM_AWAIT_HOOKS.load(core::sync::atomic::Ordering::Relaxed)
+ }
+ 
++thread_local! {
++    static BUNWASM_REGISTER: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
++    static BUNWASM_FN_DEPTH: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
++}
++
++/// bun-wasm: print an ES module's body for a registration record (the
++/// runtime's loader for engines without native ES modules, see
++/// bunwasm-transpiler's `register`): top-level `await x` as `(yield x)`, a
++/// top-level `for await` as a `yield` loop, `import.meta` as
++/// `__bunwasm_m.meta` and `import(…)` as `__bunwasm_m.import(…)`.
++pub fn with_bunwasm_register<T>(f: impl FnOnce() -> T) -> T {
++    let previous = BUNWASM_REGISTER.with(|r| r.replace(true));
++    let depth = BUNWASM_FN_DEPTH.with(|d| d.replace(0));
++    let out = f();
++    BUNWASM_REGISTER.with(|r| r.set(previous));
++    BUNWASM_FN_DEPTH.with(|d| d.set(depth));
++    out
++}
++
++#[inline]
++fn bunwasm_register() -> bool {
++    BUNWASM_REGISTER.with(|r| r.get())
++}
++
++#[inline]
++fn bunwasm_register_top_level() -> bool {
++    bunwasm_register() && BUNWASM_FN_DEPTH.with(|d| d.get()) == 0
++}
++
++/// Counts function bodies being printed, for [`bunwasm_register_top_level`].
++struct BunwasmFnDepth;
++
++impl BunwasmFnDepth {
++    fn enter() -> BunwasmFnDepth {
++        BUNWASM_FN_DEPTH.with(|d| d.set(d.get() + 1));
++        BunwasmFnDepth
++    }
++}
++
++impl Drop for BunwasmFnDepth {
++    fn drop(&mut self) {
++        BUNWASM_FN_DEPTH.with(|d| d.set(d.get() - 1));
++    }
++}
++
+ /// The body being printed declares `__bunwasm_s`.
+ const BUNWASM_FN_S: u8 = 1;
+ /// ... and is an async generator's (its `yield`s get hooks).

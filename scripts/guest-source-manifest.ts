@@ -10,6 +10,7 @@ export const guestBuilds = {
   quickjs: { artifact: "bun.wasm", package: "bunwasm-cli", features: ["engine-split", "bun-transpiler", "bun-build"], optimizer: "required" },
   "quickjs-minimal": { artifact: "bun.wasm", package: "bunwasm-cli", features: ["engine-split"], optimizer: "required" },
   jsc: { artifact: "bun-jsc.wasm", package: "bunwasm-cli", features: ["engine-split", "bun-transpiler", "bun-build"], optimizer: "required" },
+  hermes: { artifact: "bun-hermes.wasm", package: "bunwasm-cli", features: ["engine-split", "bun-transpiler", "bun-build"], optimizer: "required" },
   tools: { artifact: "bun-tools.wasm", package: "bunwasm-tools", features: ["default"], optimizer: "required" },
 } as const;
 export type GuestBuild = keyof typeof guestBuilds;
@@ -37,6 +38,7 @@ export interface SourceOptions {
   readonly rustSourceLib: string | undefined;
   readonly tools: Readonly<Record<string, string>>;
   readonly jscBuild: string | undefined;
+  readonly hermesBuild: string;
 }
 
 export function run(command: string[], cwd: string): string {
@@ -135,7 +137,7 @@ async function verifySysrootInputs(options: SourceOptions, groups: readonly Inpu
     || await Bun.file(join(options.sdk, "VERSION")).text() !== receipt.sdkVersion) throw new Error("Patched sysroot receipt does not match installed builder, patch, SDK or libc bytes");
 }
 
-export type ProgramInputScope = "core" | "quickjs" | "jsc";
+export type ProgramInputScope = "core" | "quickjs" | "jsc" | "hermes";
 
 export async function captureSourceManifest(options: SourceOptions, scope: "guest" | ProgramInputScope = "guest"): Promise<SourceManifest> {
   const { repository, build, sysroot, sdk, waffle, boringssl, rustTargetLib } = options;
@@ -143,7 +145,7 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
   const repositoryPaths = scope === "guest"
     ? ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "package.json", "bun.lock", "crates", "third_party", "scripts", "patches", "jsc", "src/engine-kind.ts", "src/quickjs-program.ts", "web/src/native-direct-stream.ts"]
     : scopedRepositoryPaths(scope);
-  const groups = [await committedGroup("repository", repository, repositoryPaths, "reject", path => scope === "core" && /^(crates\/bunwasm-(engine-quickjs|engine-jsc|jsc)\/|third_party\/rquickjs)/.test(path))];
+  const groups = [await committedGroup("repository", repository, repositoryPaths, "reject", path => scope === "core" && /^(crates\/bunwasm-(engine-quickjs|engine-jsc|jsc|engine-hermes|hermes)\/|third_party\/rquickjs)/.test(path))];
   const bun = join(repository, "vendor/bun");
   if (scope === "guest" || scope === "core") {
     await committedGroup("bun", bun, ["src", "Cargo.toml", "Cargo.lock"], "within-repository");
@@ -174,6 +176,9 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
     if (headers?.sdk.length) groups.push(await group("jsc-helper-sdk-headers", sdk, Array.from(new Set(headers.sdk)).sort()));
     if (headers?.sysroot.length) groups.push(await group("jsc-helper-sysroot-headers", sysroot, Array.from(new Set(headers.sysroot)).sort(), [sdk]));
   }
+  if (build === "hermes") {
+    groups.push(await group("hermes-prebuild", options.hermesBuild, ["wasi/lib/libhermesvm_bunwasm.a", "wasi/compile_commands.json"]));
+  }
   const tools = await Promise.all(Object.entries(options.tools).map(([name, path]) => tool(name, path, repository)));
   if (git(repository, "rev-parse", "HEAD") !== source.head || git(repository, "status", "--porcelain", "--untracked-files=normal")) throw new Error("Guest source changed while collecting manifest");
   return {
@@ -191,12 +196,17 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
 }
 
 function scopedRepositoryPaths(scope: ProgramInputScope): string[] {
-  const common = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "scripts/guest-source-manifest.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "src/engine-kind.ts"];
-  if (scope === "core") return common.concat(["crates", "third_party", "patches", "scripts/build-bun-core.sh", "scripts/quickjs-core-exports.txt",
+  const common = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "scripts/guest-source-manifest.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/src/program-profile.ts", "src/engine-kind.ts"];
+  if (scope === "core") return common.concat(["crates", "third_party", "patches", "scripts/build-bun-core.sh", "scripts/quickjs-core-exports.txt", "scripts/src/engine-explicit-init.ts",
     "scripts/transpile-runtime.ts", "scripts/generate-bun-wrap.ts", "scripts/generate-node-path.ts", "scripts/generate-direct-stream.ts", "web/src/native-direct-stream.ts", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake"]);
   const shared = ["engine.rs", "data.rs", "data/codec.rs", "ops.rs", "ops", "split_api.rs"].map(path => `crates/bunwasm-runtime/src/${path}`);
-  const program = ["driver.rs", "client.rs", "loader.rs", "program.rs", "natives.rs", "value_natives.rs", "allocator.rs", "transport.rs"].map(path => `crates/bunwasm-engine-quickjs/src/${path}`);
-  const own = scope === "jsc" ? ["crates/bunwasm-engine-jsc", "crates/bunwasm-jsc", "jsc"] : ["crates/bunwasm-engine-quickjs", "third_party/rquickjs", "third_party/rquickjs-sys"];
+  const program = ["driver.rs", "client.rs", "loader.rs", "program.rs", "natives.rs", "value_natives.rs", "allocator.rs", "transport.rs", "side_modules.rs"].map(path => `crates/bunwasm-engine-quickjs/src/${path}`);
+  const owned = {
+    quickjs: ["crates/bunwasm-engine-quickjs", "third_party/rquickjs", "third_party/rquickjs-sys"],
+    jsc: ["crates/bunwasm-engine-jsc", "crates/bunwasm-jsc", "jsc"],
+    hermes: ["crates/bunwasm-engine-hermes", "crates/bunwasm-hermes", "hermes"],
+  };
+  const own = owned[scope];
   return common.concat(shared, program, own, [`scripts/build-engine-${scope}.sh`, "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c"]);
 }
 
@@ -323,5 +333,6 @@ export function sourceOptions(repository: string, sysroot: string, build: GuestB
     rustTargetLib: run([rust.rustc, "--print", "target-libdir", "--target", "wasm32-wasip1"], repository),
     rustSourceLib: programKindForBuild(build) === "single" ? undefined : join(run([rust.rustc, "--print", "sysroot"], repository), "lib/rustlib/src/rust/library"),
     jscBuild: process.env.JSC_BUILD_DIR ?? "/work/tmp/bun-wasm-jsc",
+    hermesBuild: process.env.HERMES_BUILD_DIR ?? "/work/tmp/bun-wasm-hermes",
   };
 }

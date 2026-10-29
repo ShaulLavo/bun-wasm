@@ -2,7 +2,8 @@ import { expect, spyOn, test } from "bun:test";
 import { createFilesystemIdentity } from "waffle/fs";
 import { startRun } from "../src/runner";
 import { SubprocessBroker, type ExecutableRegistration } from "../src/subprocess-broker";
-import { processRuntimeFixture } from "./process-runtime-fixture";
+import { fixtureFilesystemConnection } from "./process-runtime-fixture";
+import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 
 test("a Preview1-first runtime does not register its guest as the immutable Bun engine program", async () => {
   const previousWorker = globalThis.Worker;
@@ -22,7 +23,7 @@ test("a Preview1-first runtime does not register its guest as the immutable Bun 
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/") });
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
   const runtime = processRuntimeFixture({
-    fork() { const channel = new MessageChannel(); ports.push(channel.port1, channel.port2); return { ...createFilesystemIdentity(), port: channel.port1 }; },
+    fork() { const channel = new MessageChannel(); ports.push(channel.port1, channel.port2); return fixtureFilesystemConnection(createFilesystemIdentity(), channel.port1); },
     revoke() {}, reap() {}, async quiesce() {},
   });
   const runs: ReturnType<typeof startRun>[] = [];

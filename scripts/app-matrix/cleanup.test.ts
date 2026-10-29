@@ -12,13 +12,25 @@ import { completeObservations } from "./product-browser";
 import { checkCommand, checkInstall } from "./checks.mjs";
 
 const pending = () => new Promise<never>(() => {});
-const readyProbe = () => ({
-  context: () => ({ newCDPSession: async () => ({ send: async () => {} }) }),
-  goto: async () => ({ ok: () => true, status: () => 200 }),
-  close: async () => {},
-});
+function readyProbe() {
+  const session = { send: async (_method: string) => {} };
+  return {
+    context: () => ({ newCDPSession: async () => session }),
+    goto: async () => ({ ok: () => true, status: () => 200 }),
+    close: async () => {},
+  };
+}
 const fixtureDirectories: string[] = [];
 afterEach(() => { for (const directory of fixtureDirectories) rmSync(directory, { recursive: true, force: true }); fixtureDirectories.length = 0; });
+
+test("cleanup errors distinguish an omitted cause from a thrown undefined", () => {
+  const failure = { operation: "test", timedOut: false, error: "secondary failure" };
+  const withoutCause = new HarnessCleanupError([failure]);
+  const withUndefined = new HarnessCleanupError([failure], undefined);
+  expect(Object.hasOwn(withoutCause, "cause")).toBe(false);
+  expect(Object.hasOwn(withUndefined, "cause")).toBe(true);
+  expect(withUndefined.message).toContain("Original failure: undefined");
+});
 
 function fixture(stop: () => Promise<unknown>, productError = new Error("page.goto: Timeout 90000ms exceeded"), exit = 130) {
   const releases: string[] = [];
@@ -29,7 +41,7 @@ function fixture(stop: () => Promise<unknown>, productError = new Error("page.go
     exposeBinding: async () => ({ dispose: async () => { releases.push("binding"); } }),
     addInitScript: async () => ({ dispose: async () => { releases.push("script"); } }),
     evaluate: async () => {},
-    goto: async (_url: string, options: { timeout: number }) => { expect(options.timeout).toBeLessThanOrEqual(90_000); throw productError; },
+    goto: async (_url: string, options: { timeout: number }) => { releases.push("application-navigation"); expect(options.timeout).toBeLessThanOrEqual(90_000); throw productError; },
     close: async () => { releases.push("preview"); },
   };
   const probe = { ...readyProbe(), close: async () => { releases.push("probe"); } };
@@ -55,7 +67,7 @@ function fixture(stop: () => Promise<unknown>, productError = new Error("page.go
     app: { id: "next" }, engine: "browser", options: { timeout: 90_000, cleanupTimeout: 20, output },
     terminalText: async () => "user@bun:~$ bun run .matrix-command.ts dev\noriginal product output\n",
   };
-  return { input, releases, preview };
+  return { input, releases, preview, probe };
 }
 
 async function within<T>(promise: Promise<T>): Promise<T> {
@@ -65,6 +77,25 @@ async function within<T>(promise: Promise<T>): Promise<T> {
       timer = setTimeout(() => reject(new Error("serverCommand did not return after cleanup deadline")), 200);
     })]);
   } finally { clearTimeout(timer); }
+}
+
+for (const stage of ["Page.stopLoading", "Runtime.getIsolateId"]) {
+  test(`stalled ${stage} reports cleanup failure and reaches teardown without application navigation`, async () => {
+    const { input, releases, probe } = fixture(async () => {});
+    let release = () => {};
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const session = { send: async (method: string) => { if (method === stage) await pending; } };
+    probe.context = () => ({ newCDPSession: async () => session });
+    try {
+      const result = await within(serverCommand(input));
+      expect(result.status).toBe("fail");
+      expect("harnessCleanup" in result && result.harnessCleanup).toEqual([expect.objectContaining({ operation: "probe-navigation-settlement", timedOut: true })]);
+      expect(releases).toContain("probe");
+      expect(releases).toContain("keyboard");
+      expect(releases).toContain("preview");
+      expect(releases).not.toContain("application-navigation");
+    } finally { release(); }
+  });
 }
 
 test("stuck Ctrl-C does not swallow the original product timeout or prevent preview release", async () => {

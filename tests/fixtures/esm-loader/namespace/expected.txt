@@ -1,0 +1,4 @@
+[object Module] true
+false a,b,default,zeta
+function anonymous default b true
+same namespace true

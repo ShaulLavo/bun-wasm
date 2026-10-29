@@ -48,6 +48,8 @@ fn is_cjs_wrapper(code: &str) -> bool {
 /// How positions in the code the engine evaluated map to the file on disk.
 #[derive(Default)]
 pub struct PositionMap {
+    /// Source map from registration record to the prologued ES module.
+    pub record: Option<crate::sourcemap::SourceMap>,
     /// Source map from transpiled to original code.
     pub map: Option<crate::sourcemap::SourceMap>,
     /// Original source, for error excerpts (only kept when mapped).
@@ -62,6 +64,11 @@ pub struct PositionMap {
 impl PositionMap {
     /// Original 1-based (line, column) for a position in evaluated code.
     pub fn original_position(&self, line: u32, col: u32) -> (u32, u32) {
+        let (line, col) = self
+            .record
+            .as_ref()
+            .and_then(|map| map.lookup(line, col))
+            .unwrap_or((line, col));
         let line = if line > self.line_offset {
             line - self.line_offset
         } else {
@@ -313,6 +320,51 @@ fn read_stdin() -> std::io::Result<Vec<u8>> {
 }
 
 impl State {
+    #[cfg(feature = "engine-split")]
+    pub fn module_record(&self, name: &str, code: &str) -> Result<String, NativeError> {
+        let source = esm_source(self, name, code);
+        let out = self
+            .transpiler
+            .register(&source, name)
+            .map_err(|message| build_error(&message, &source))?;
+        self.positions
+            .borrow_mut()
+            .entry(name.to_owned())
+            .or_default()
+            .record = out
+            .mappings
+            .filter(|m| !m.is_empty())
+            .map(|m| crate::sourcemap::SourceMap::parse(&m));
+        Ok(out.code)
+    }
+
+    #[cfg(feature = "engine-split")]
+    pub fn lower_script(&self, source: &str, filename: &str) -> Result<String, NativeError> {
+        if !source.contains("import") {
+            return Ok(source.to_owned());
+        }
+        let imports = self
+            .transpiler
+            .module_imports(source, filename)
+            .map_err(|message| build_error(&message, source))?;
+        let replacement = format!(
+            "__bunwasm_import({})",
+            serde_json::to_string(filename).unwrap()
+        );
+        let mut code = String::with_capacity(source.len());
+        let mut previous = 0;
+        for import in imports {
+            if !matches!(import.kind, crate::transpiler::ModuleImportKind::Dynamic) {
+                continue;
+            }
+            code.push_str(&source[previous..import.start]);
+            code.push_str(&replacement);
+            previous = import.end;
+        }
+        code.push_str(&source[previous..]);
+        Ok(code)
+    }
+
     /// Read, transpile and classify a file. Results are cached while the
     /// file's content stays the same.
     pub fn load_source(&self, path: &str) -> Result<(Rc<str>, Format), NativeError> {
@@ -513,9 +565,10 @@ impl State {
 
     /// Forget what was cached for `path` when its content changed since.
     /// Dev servers rewrite their output in place (webpack's server chunks),
-    /// and `delete require.cache[path]` then expects the new code.
+    /// and `delete require.cache[path]` then expects the new code. The key
+    /// includes the printed hooks' version, like every cache of hooked text.
     fn revalidate(&self, path: &str, raw: &[u8]) {
-        let digest = bun_wyhash::hash(raw);
+        let digest = bun_wyhash::hash_with_seed(u64::from(self.transpiler.hooks_version()), raw);
         let previous = self
             .source_digests
             .borrow_mut()
@@ -629,6 +682,78 @@ pub fn eval_entry(state: &State, code: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_positions_compose_before_prologue_and_transpile_maps() {
+        let positions = PositionMap {
+            record: Some(crate::sourcemap::SourceMap::parse("oGAAG;AACH")),
+            line1_shift: 3,
+            map: Some(crate::sourcemap::SourceMap::parse("AAEK;AACA")),
+            ..Default::default()
+        };
+        assert_eq!(positions.original_position(1, 101), (3, 6));
+        assert_eq!(positions.original_position(2, 1), (4, 6));
+    }
+
+    #[cfg(feature = "engine-split")]
+    struct RecordTranspiler;
+
+    #[cfg(feature = "engine-split")]
+    impl crate::Transpiler for RecordTranspiler {
+        fn transpile(&self, source: &str, _: &str, _: SourceLoader) -> Result<String, String> {
+            Ok(source.to_owned())
+        }
+
+        fn register(&self, source: &str, _: &str) -> Result<crate::Transpiled, String> {
+            Ok(crate::Transpiled {
+                code: source.to_owned(),
+                mappings: Some("AAAA".into()),
+                ..Default::default()
+            })
+        }
+
+        fn module_imports(
+            &self,
+            source: &str,
+            _: &str,
+        ) -> Result<Vec<crate::transpiler::ModuleImport>, String> {
+            Ok(source
+                .match_indices("import")
+                .map(|(start, _)| crate::transpiler::ModuleImport {
+                    start,
+                    end: start + 6,
+                    kind: crate::transpiler::ModuleImportKind::Dynamic,
+                })
+                .collect())
+        }
+    }
+
+    #[cfg(feature = "engine-split")]
+    #[test]
+    fn module_records_use_the_native_module_prologue_and_remember_map() {
+        let state = State::new(Vec::new(), Box::new(RecordTranspiler));
+        let source = "console.log(require('fs'), import.meta.url);";
+        assert_eq!(
+            state.module_record("/m.mjs", source).unwrap(),
+            esm_source(&state, "/m.mjs", source)
+        );
+        assert!(state.positions.borrow()["/m.mjs"].record.is_some());
+    }
+
+    #[cfg(feature = "engine-split")]
+    #[test]
+    fn script_import_rewrite_keeps_arguments_newlines_and_unicode() {
+        let state = State::new(Vec::new(), Box::new(RecordTranspiler));
+        let source = "/* 🥞 */ import\n('./a.mjs', options);\nimport('./b.mjs');";
+        assert_eq!(
+            state.lower_script(source, "/a\"b.cjs").unwrap(),
+            "/* 🥞 */ __bunwasm_import(\"/a\\\"b.cjs\")\n('./a.mjs', options);\n__bunwasm_import(\"/a\\\"b.cjs\")('./b.mjs');"
+        );
+        assert_eq!(
+            state.lower_script("console.log(1);", "/m.cjs").unwrap(),
+            "console.log(1);"
+        );
+    }
 
     #[test]
     fn rewritten_files_load_again() {

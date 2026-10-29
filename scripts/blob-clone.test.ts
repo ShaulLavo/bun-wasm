@@ -43,7 +43,7 @@ function runtime() {
   };
   const install = runInContext(source("web.js"), context)(internal);
   install((name: string, value: unknown) => { context[name] = value; }, () => {});
-  const clone = runInContext(source("structured_clone.js"), context)(internal).structuredClone;
+  const clone = runInContext(source("structured_clone.ts"), context)(internal).structuredClone;
   let restored = 0;
   const codec = runInContext(source("worker_codec.ts"), context)(internal).create({
     isPort: () => false,

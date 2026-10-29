@@ -14,6 +14,7 @@
     "tests/fixtures/**",
     "tests/build/**",
     "tests/jsc/**",
+    "tests/transpiler-hooks/expected.mjs",
     "crates/bunwasm-runtime/src/js/temporal.js",
     "crates/bunwasm-runtime/src/js/intl.js",
     "crates/bunwasm-runtime/src/js/streams_polyfill.js",

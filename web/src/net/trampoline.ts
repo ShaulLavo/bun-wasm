@@ -25,6 +25,8 @@ export const SLOT_NAMES = [
   "local_addr",
   "lookup_start",
   "lookup_head",
+  "listen_path",
+  "connect_path",
 ] as const;
 export type SlotName = (typeof SLOT_NAMES)[number];
 
@@ -46,6 +48,8 @@ const ARITY: Record<SlotName, number> = {
   local_addr: 3,
   lookup_start: 4,
   lookup_head: 3,
+  listen_path: 3,
+  connect_path: 2,
 };
 
 type SlotFunction = (...args: number[]) => number;

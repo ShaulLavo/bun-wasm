@@ -96,6 +96,13 @@ pub trait Transpiler {
         Err("generated imports need Bun's parser".to_owned())
     }
 
+    /// Version of the async-context hooks printed into transpiled code for
+    /// the browser engine, or 0 when none are. Cached printed text is keyed
+    /// on it.
+    fn hooks_version(&self) -> u32 {
+        0
+    }
+
     fn parse_data(&self, _source: &[u8], format: &str) -> Result<String, crate::data::NativeError> {
         Err(crate::data::NativeError::error(format!(
             "{format}.parse needs Bun's parser, which this bun.wasm was built without"
@@ -117,6 +124,14 @@ pub trait Transpiler {
             code,
             ..Default::default()
         })
+    }
+
+    /// Print an ES module as a registration record for engines without native
+    /// module support. The optional mappings map record positions to source.
+    fn register(&self, _source: &str, path: &str) -> Result<Transpiled, String> {
+        Err(format!(
+            "module registration for {path} needs Bun's parser, which this bun.wasm was built without"
+        ))
     }
 
     /// Semantic imports for the host engine's module URL and dynamic-import hooks.

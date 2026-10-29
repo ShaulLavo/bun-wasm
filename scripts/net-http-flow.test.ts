@@ -43,6 +43,7 @@ function fixture() {
   const writes: Uint8Array[] = [];
   const timers = new Map<object, { at: number; callback: () => void }>();
   const ticks: (() => void)[] = [];
+  const immediates: (() => void)[] = [];
   let now = 0;
   let blocked = false;
   let reads = 0;
@@ -86,7 +87,7 @@ function fixture() {
   modules.net_hostname = load("net_hostname")({ require: (name: string) => modules[name] });
   modules.node_net_socket_state = load("node_net_socket_state")();
   const internal = {
-    native, web: { Request, Response: class extends Response { static _setNetwork() {} }, Headers }, builtinFactories: {}, realTimers: { setImmediate: (fn: () => void) => ticks.push(fn) },
+    native, web: { Request, Response: class extends Response { static _setNetwork() {} }, Headers }, builtinFactories: {}, realTimers: { setImmediate: (fn: () => void) => immediates.push(fn) },
     require(name: string): unknown { if (!(name in modules)) throw new Error(`Unexpected module ${name}`); return modules[name]; },
     builtin(name: string): unknown {
       if (name === "node:process") return { env: {}, versions: process.versions, nextTick: (fn: (...args: unknown[]) => void, ...args: unknown[]) => ticks.push(() => fn(...args)), stderr: { write() {} }, emitWarning() {} };
@@ -100,6 +101,7 @@ function fixture() {
     concatBytes: (parts: Uint8Array[]) => Buffer.concat(parts),
     pumpIo: () => false, ioPending: () => 0,
   };
+  modules.net_path = load("net_path")(internal);
   modules.http_server_response = load("http_server_response")(internal);
   modules.fetch_lifetime = load("fetch_lifetime")(internal);
   modules.node_net_onread = load("node_net_onread")(internal);
@@ -110,9 +112,19 @@ function fixture() {
   net = load("net", "js")(internal);
   const http = net.nodeHttp("http:");
   const https = net.nodeHttp("https:");
-  function flush() { while (ticks.length) ticks.shift()?.(); }
+  function flushTicks() { while (ticks.length) ticks.shift()?.(); }
+  function flush() {
+    flushTicks();
+    for (const immediate of immediates.splice(0)) immediate();
+    flushTicks();
+  }
   async function pump() {
-    for (let turn = 0; turn < 64; turn++) { flush(); internal.pumpIo(); await Promise.resolve(); }
+    for (let turn = 0; turn < 64; turn++) {
+      flushTicks();
+      internal.pumpIo();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      flush();
+    }
     flush();
   }
   function advance(ms: number) {
@@ -586,6 +598,134 @@ test("accepted write callbacks do not emit drain after response destruction", as
     expect(events).toEqual([]);
     expect(response.writableLength).toBe(0);
     expect(state.closed).toEqual([8]);
+    expect(state.pending()).toBe(0);
+  } finally { connection.destroy(); await state.pump(); }
+});
+
+for (const phase of ["before-headers", "after-headers", "streaming"] as const) {
+  test(`end after destroy ${phase} does not revive the response`, async () => {
+    const state = fixture();
+    const { connection, response } = state.server();
+    const events: string[] = [];
+    response.on("finish", () => events.push("finish"));
+    response.on("close", () => events.push("close"));
+    try {
+      if (phase === "after-headers") response.flushHeaders();
+      if (phase === "streaming") response.write("first");
+      const sent = response.headersSent;
+      const output = Buffer.concat(state.writes).toString();
+      response.destroy();
+      response.destroy();
+      response.end("late");
+      await state.pump();
+      expect(response.headersSent).toBe(sent);
+      expect(response.writableEnded).toBe(true);
+      expect(response.writableFinished).toBe(false);
+      expect(Buffer.concat(state.writes).toString()).toBe(output);
+      expect(events).toEqual(["close"]);
+      expect(state.pending()).toBe(0);
+    } finally { connection.destroy(); await state.pump(); }
+  });
+}
+
+for (const ending of ["cancel", "eof", "write-error", "end-error"] as const) {
+  test(`HTTP ${ending} settles the active request and frees its connection`, async () => {
+    const state = fixture();
+    let response: ServerResponse | undefined;
+    const events: string[] = [];
+    const server = state.http.createServer((_request, current) => {
+      response = current;
+      current.on("close", () => events.push("close"));
+      current.on("finish", () => events.push("finish"));
+      current.write("first");
+      if (ending === "end-error") current.end("last");
+    });
+    const connection = state.socket();
+    try {
+      state.block(ending === "write-error" || ending === "end-error");
+      Reflect.get(server, "_onConnection").call(server, connection);
+      state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"));
+      await state.pump();
+      expect(response).toBeDefined();
+      expect(Reflect.get(connection, "busy")).toBe(true);
+      if (ending === "eof") state.packets.push(0);
+      else connection.destroy(ending === "cancel" ? undefined : new Error("transport failed"));
+      await state.pump();
+      expect(response?.destroyed).toBe(true);
+      expect(response?.writableFinished).toBe(false);
+      expect(events).toEqual(["close"]);
+      expect(Reflect.get(connection, "busy")).toBe(false);
+      expect(Reflect.get(server, "_connections").size).toBe(0);
+      expect(state.closed).toEqual([9]);
+      expect(state.pending()).toBe(0);
+    } finally { connection.destroy(); await state.pump(); }
+  });
+}
+
+test("a disconnected request does not start a response after its socket has closed", async () => {
+  const state = fixture();
+  let requests = 0;
+  const server = state.http.createServer(() => { requests++; });
+  const connection = state.socket();
+  try {
+    Reflect.get(server, "_onConnection").call(server, connection);
+    state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"));
+    Reflect.get(connection, "pumpRead").call(connection);
+    connection.destroy();
+    await state.pump();
+    expect(requests).toBe(0);
+    expect(Reflect.get(connection, "busy")).toBe(false);
+    expect(Reflect.get(server, "_connections").size).toBe(0);
+    expect(state.pending()).toBe(0);
+  } finally { connection.destroy(); await state.pump(); }
+});
+
+
+for (const completion of ["synchronous", "promise", "nested-promises"] as const) {
+  test(`HTTP half-close still serves a ${completion} complete response`, async () => {
+    const state = fixture();
+    let response: ServerResponse | undefined;
+    const events: string[] = [];
+    const server = state.http.createServer((_request, current) => {
+      response = current;
+      current.on("finish", () => events.push("finish"));
+      current.on("close", () => events.push("close"));
+      if (completion === "synchronous") { current.end("complete"); return; }
+      const ready = completion === "promise" ? Promise.resolve() : Promise.resolve().then(() => Promise.resolve());
+      void ready.then(() => current.end("complete"));
+    });
+    const connection = state.socket();
+    try {
+      Reflect.get(server, "_onConnection").call(server, connection);
+      state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"), 0);
+      await state.pump();
+      expect(response?.writableFinished).toBe(true);
+      expect(Buffer.concat(state.writes).toString()).toContain("complete");
+      expect(events).toEqual(["finish", "close"]);
+      expect(Reflect.get(connection, "busy")).toBe(false);
+      expect(Reflect.get(server, "_connections").size).toBe(0);
+      expect(state.pending()).toBe(0);
+    } finally { connection.destroy(); await state.pump(); }
+  });
+}
+
+test("HTTP half-close cancels a response deferred to a later timer", async () => {
+  const state = fixture();
+  let response: ServerResponse | undefined;
+  const server = state.http.createServer((_request, current) => {
+    response = current;
+    const timeout = setTimeout(() => current.end("late"), 30000);
+    current.once("close", () => clearTimeout(timeout));
+  });
+  const connection = state.socket();
+  try {
+    Reflect.get(server, "_onConnection").call(server, connection);
+    state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"), 0);
+    await state.pump();
+    expect(response?.writableFinished).toBe(false);
+    expect(response?.closed).toBe(true);
+    expect(state.writes).toEqual([]);
+    expect(Reflect.get(connection, "busy")).toBe(false);
     expect(state.pending()).toBe(0);
   } finally { connection.destroy(); await state.pump(); }
 });

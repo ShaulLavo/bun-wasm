@@ -83,3 +83,14 @@ promise continuations between messages. BroadcastChannel receive returns
 | [Worker threads adapters](#worker-threads-adapter) | Host feature | Original TypeScript worker, clone, port-routing, coded constructors, browser module loading and stream adapters over separate host guest instances, with dynamically bound control pipes and typed wait outcomes. |
 
 [Ledger scope and pinned revisions](scope.md).
+
+## Synchronous stream construction
+
+The original async spawn adapter in `spawn.ts` initializes its waiter and ref
+state before constructing native output streams. It registers that waiter after
+child setup. A stream pulling synchronously during construction records demand
+without waking observers of a partially initialized child. Firefox exposed the
+previous temporal-dead-zone error during the shared Wasm worker gate. The focused
+source regression forces synchronous pull on real ReadableStreams and checks
+ref/unref, output, exit and descriptor cleanup. This changes original host glue,
+not imported Bun source; the upstream contract revision above is unchanged.

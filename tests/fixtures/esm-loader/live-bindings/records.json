@@ -1,0 +1,7 @@
+{
+ "modules": {
+  "/counter.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"count\":()=>count,\"increment\":()=>increment,\"reset\":()=>reset,\"alias\":()=>count});yield;yield;let count = 0;\nfunction increment() {\n  count += 1;\n}\nfunction reset() {\n  count = 0;\n}\n;\n\n}})",
+  "/main.mjs": "({r:[\"./counter.mjs\"],i:[[0,\"count\"],[0,\"increment\"],[0,\"alias\"],[0,\"reset\"]],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0],ns=__bunwasm_m.n[0];yield;console.log(__bunwasm_ns0_0.count, __bunwasm_ns0_0.alias, ns.count);\n(0, __bunwasm_ns0_0.increment)();\n(0, __bunwasm_ns0_0.increment)();\nconsole.log(__bunwasm_ns0_0.count, __bunwasm_ns0_0.alias, ns.count);\n(0, __bunwasm_ns0_0.reset)();\nconsole.log(__bunwasm_ns0_0.count, ns.count);\nlet threw = !1;\ntry {\n  ns.count = 5;\n} catch (error) {\n  threw = error instanceof TypeError;\n}\nconsole.log(\"assign to namespace throws\", threw);\n\n}})"
+ },
+ "cjs": {}
+}
