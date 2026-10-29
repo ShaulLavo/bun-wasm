@@ -101,8 +101,37 @@
     };
   }
 
+  type StreamBindings = BunWasm.StreamGlobals & StreamBundle & {
+    Buffer: BunWasm.BufferConstructor;
+    TextEncoder: typeof TextEncoder;
+    kEosNodeSynchronousCallback: unknown;
+    kEmptyObject: object;
+    normalizeEncoding: unknown;
+    isAnyArrayBuffer(value: unknown): boolean;
+    isReadableStream(value: unknown): boolean;
+    isWritableStream(value: unknown): boolean;
+    zlib: object;
+    SafeSet: SetConstructor;
+    ArrayPrototypeFilter: <T>(array: T[], callback: (value: T, index: number, array: T[]) => unknown) => T[];
+    ObjectKeys: ObjectConstructor["keys"];
+    PromisePrototypeThen: <T, TResult1 = T, TResult2 = never>(promise: Promise<T>, resolve: ((value: T) => TResult1 | PromiseLike<TResult1>) | null | undefined, reject: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null | undefined) => Promise<TResult1 | TResult2>;
+    PromiseResolve: PromiseConstructor["resolve"];
+    PromiseWithResolvers: <T>() => { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void; reject: (reason?: unknown) => void };
+    SafePromiseAllReturnVoid: <T, U>(items: Iterable<T>, callback: (value: T, index: number) => U) => Promise<void>;
+    SafePromisePrototypeFinally: <T>(promise: Promise<T>, callback: (() => void) | null | undefined) => Promise<T>;
+    StringPrototypeStartsWith(text: string, prefix: string): boolean;
+    TypedArrayPrototypeGetBuffer(value: object): unknown;
+    TypedArrayPrototypeGetByteOffset(value: object): unknown;
+    TypedArrayPrototypeGetByteLength(value: object): unknown;
+    setOwnProperty(object: object, key: PropertyKey, value: unknown): object;
+    getDeprecationWarningEmitter(code: string, message: string): () => void;
+    withDestroyHook: typeof withDestroyHook;
+    observeTerminalWritable: typeof observeTerminalWritable;
+    kPipelineBuffers: symbol;
+  };
+
   return {
-    create(bundle: StreamBundle) {
+    create(bundle: StreamBundle): StreamBindings {
       installWebState(streams.ReadableStream, true);
       installWebState(streams.WritableStream, false);
       const typed: object = Object.getPrototypeOf(Uint8Array.prototype);

@@ -5,17 +5,17 @@
 }) {
   "use strict";
   type WebStreamState = { state: unknown; storedError: unknown };
-  type WebStream = {
+  type WebStream = object & {
     _state?: unknown;
     _storedError?: unknown;
-    [key: symbol]: WebStreamState | undefined;
   };
+  type WebStreamSymbols = { [key: symbol]: WebStreamState | undefined };
   const streams = internal.require("streams");
   const kState = Symbol("kState");
-  function getWebStreamState(stream: WebStream): unknown {
+  function getWebStreamState(stream: WebStream): WebStreamState | undefined {
     if (Object.prototype.hasOwnProperty.call(stream, "_state")) return { state: stream._state, storedError: stream._storedError };
     const symbol = Object.getOwnPropertySymbols(stream).find(key => key.description === "kState");
-    return symbol === undefined ? undefined : stream[symbol];
+    return symbol === undefined ? undefined : (stream as WebStreamSymbols)[symbol];
   }
   for (const Ctor of [streams.ReadableStream, streams.WritableStream]) {
     Object.defineProperty(Ctor.prototype, kState, { configurable: true, get(this: WebStream) { return getWebStreamState(this); } });

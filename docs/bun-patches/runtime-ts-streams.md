@@ -38,12 +38,30 @@ ambient contract for `String.toWellFormed`. Their declaration now matches the
 stream declaration's required method; the utility implementation keeps its
 feature detection and fallback. No runtime implementation changed.
 
+The strict conversion of `node_stream_bindings.ts` and
+`node_stream_internals.ts` replaces the corresponding JavaScript adapters from
+bun-wasm `5ea462933fccb6a9788fb8b36cfb170933e3212b`. Both are original
+bun-wasm adapters. No Bun or Node implementation is copied. Local contracts
+cover Web Stream state, adapter options, writable lifecycle state, destruction
+callbacks, promise helpers, and core bundle inputs. The module keys and parsed
+runtime syntax stay unchanged.
+
+`scripts/test-native-stream-interop.mjs` now loads the binding through Node's
+strip-mode TypeScript emission. `scripts/stream-bindings.test.ts` generates
+compile-time probes from the actual factories and checks nullish options,
+typed callbacks, portable state, brands, promise helpers, and listener cleanup.
+The existing runtime and quality manifests own these checks. Emission and
+byte-equivalence evidence is under
+`/work/reports/wave-20261029/bun/typescript-stream-bindings/`.
+
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`crates/bunwasm-runtime/src/js/streams.ts`](#strict-handwritten-stream-adapter) | Host feature | Original text-stream wrapper and native codec contracts, with bounded local normalization and descriptor validation. |
 | [`crates/bunwasm-runtime/src/js/assert_util_types.d.ts`](#strict-handwritten-stream-adapter) | Host feature | Integration-only alignment of the existing original utility declaration with the required string method used by both adapters. |
+| [`crates/bunwasm-runtime/src/js/node_stream_bindings.ts`](#strict-handwritten-stream-adapter) | Host feature | Original Node and Web Stream bindings with strict local state, callback, promise, and bundle contracts. |
+| [`crates/bunwasm-runtime/src/js/node_stream_internals.ts`](#strict-handwritten-stream-adapter) | Host feature | Original internal stream adapters with strict state and forwarded-option contracts. |
 
 [Parent context](bun-patch-series.md).
 
