@@ -2,6 +2,7 @@
   "use strict";
   type Graph = BunWasm.WorkerGraph;
   type Node = BunWasm.WorkerNode;
+  type WasmNode = Extract<Node, ["wasm-module", string] | ["wasm-memory", string, number]>;
   type BufferNode = Extract<Node, ["node-buffer", number, number, number]>;
   const bufferByteLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")!.get!;
   const sharedByteLength = typeof SharedArrayBuffer === "function" ? Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, "byteLength")!.get! : null;
@@ -46,12 +47,13 @@
         const reference = publication.reference(buffer);
         return ["shared", reference.id, reference.byteLength];
       }
-      function wasmNode(value: WebAssembly.Module | WebAssembly.Memory): Node {
+      function wasmNode(value: WebAssembly.Module | WebAssembly.Memory, implicit: boolean): Node {
         if (!sharedObjects?.readWasm) throw cloneError();
         publication ??= sharedObjects.begin();
         if (!publication.referenceWasm) throw cloneError();
         const reference = publication.referenceWasm(value);
-        return [value instanceof WebAssembly.Module ? "wasm-module" : "wasm-memory", reference.id];
+        if (value instanceof WebAssembly.Module) return ["wasm-module", reference.id];
+        return ["wasm-memory", reference.id, visit(value.buffer, implicit)];
       }
       function prepare(item: unknown) {
         if (internal.isMarkedAsUntransferable?.(item)) throw cloneError("Object is not transferable");
@@ -115,8 +117,8 @@
         if (object === processEnv) return ["object", entries(object, implicit)];
         if (internal.isProxy?.(object)) throw cloneError();
         if (isSharedBuffer(object)) return sharedNode(object);
-        if (typeof WebAssembly === "object" && object instanceof WebAssembly.Module) return wasmNode(object);
-        if (typeof WebAssembly === "object" && object instanceof WebAssembly.Memory) return wasmNode(object);
+        if (typeof WebAssembly === "object" && object instanceof WebAssembly.Module) return wasmNode(object, implicit);
+        if (typeof WebAssembly === "object" && object instanceof WebAssembly.Memory) return wasmNode(object, implicit);
         if (object instanceof Blob) return ["blob", internal.native.base64Encode(object._bytes(), false), object.type];
         if (isArrayBuffer(object)) return bufferViews.has(object) ? ["buffer", "", 0] : encodeBuffer(object);
         if (ArrayBuffer.isView(object) && hooks.buffer?.isBuffer(object)) return bufferView(object, implicit);
@@ -212,19 +214,24 @@
       function hydrate(graph: Graph, values?: Map<number, unknown>) {
         for (const [index, node] of graph.nodes.entries()) {
           if (node[0] === "shared") sharedObjects!.read({ id: node[1], byteLength: node[2] });
-          if (node[0] === "wasm-module" || node[0] === "wasm-memory") {
-            const value = readWasm(node); values?.set(index, value);
-          }
+          if (node[0] === "wasm-module" || node[0] === "wasm-memory") cacheWasm(node, graph, index, values);
           if (node[0] !== "port") continue;
           for (const [, pending] of node[1].pending) hydrate(pending);
         }
+      }
+      function cacheWasm(node: WasmNode, graph: Graph, index: number, values?: Map<number, unknown>) {
+        const value = readWasm(node);
+        values?.set(index, value);
+        if (node[0] !== "wasm-memory" || !(value instanceof WebAssembly.Memory)) return;
+        const backing = graph.nodes[node[2]], buffer = value.buffer;
+        if (backing[0] === "shared" && backing[2] === sharedByteLength!.call(buffer)) values?.set(node[2], buffer);
       }
       const restored: unknown[] = [];
       function properties(target: object, entries: [string, number][]) {
         for (const [key, ref] of entries) Object.defineProperty(target, key, { value: read(ref), writable: true, configurable: true, enumerable: true });
         return target;
       }
-      function readWasm(node: Extract<Node, ["wasm-module" | "wasm-memory", string]>) {
+      function readWasm(node: WasmNode) {
         if (!sharedObjects?.readWasm) throw cloneError("Shared Wasm objects are unavailable");
         const value = sharedObjects.readWasm({ id: node[1], byteLength: 0 });
         if (node[0] === "wasm-module" && value instanceof WebAssembly.Module) return value;
@@ -338,8 +345,10 @@
     return Array.isArray(node) && node.length === 3 && node[0] === "shared" && typeof node[1] === "string"
       && /^[\w-]{1,128}\/[\w-]{1,128}$/.test(node[1]) && counter(node[2]);
   }
-  function validWasm(node: unknown[], shared: boolean) {
-    return shared && node.length === 2 && typeof node[1] === "string" && /^[\w-]{1,128}\/[\w-]{1,128}$/.test(node[1]);
+  function validWasm(node: unknown[], shared: boolean, nodes: unknown[]) {
+    if (!shared || typeof node[1] !== "string" || !/^[\w-]{1,128}\/[\w-]{1,128}$/.test(node[1])) return false;
+    if (node[0] === "wasm-module") return node.length === 2;
+    return node.length === 3 && counter(node[2]) && validShared(nodes[node[2]]);
   }
   function validNumber(value: unknown) {
     return typeof value === "string" && (value === "-0" || String(Number(value)) === value);
@@ -390,7 +399,7 @@
         case "blob": return node.length === 3 && canonicalBase64(node[1]) && typeof node[2] === "string";
         case "regexp": return strings(node.slice(1)) && node.length === 3;
         case "shared": return shared && validShared(node);
-        case "wasm-module": case "wasm-memory": return validWasm(node, shared);
+        case "wasm-module": case "wasm-memory": return validWasm(node, shared, nodes);
         case "buffer": return validBuffer(node);
         case "node-buffer": return validNodeBuffer(node);
         case "view": return validViewNode(node);

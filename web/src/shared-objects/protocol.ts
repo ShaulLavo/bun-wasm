@@ -13,7 +13,7 @@ export function sharedAttachmentValue(attachment: SharedAttachment) {
 export type SharedRequest =
   | { readonly kind: "publish"; readonly transaction: string; readonly attachments: readonly SharedAttachment[] }
   | { readonly kind: "abort"; readonly transaction: string }
-  | { readonly kind: "need" | "cancel"; readonly references: readonly SharedReference[] }
+  | { readonly kind: "need" | "cancel" | "accept"; readonly request: string; readonly references: readonly SharedReference[] }
   | { readonly kind: "mailbox"; readonly inbound: SharedReference; readonly outbound: SharedReference }
   | { readonly kind: "route-ready" }
   | { readonly kind: "close" };
@@ -21,8 +21,8 @@ export type SharedResponse =
   | { readonly kind: "route-drained" }
   | { readonly kind: "route-retired"; readonly id: string }
   | { readonly kind: "closed"; readonly message: string }
-  | { readonly kind: "attached"; readonly attachments: readonly SharedAttachment[] }
-  | { readonly kind: "unavailable"; readonly references: readonly SharedReference[]; readonly message: string };
+  | { readonly kind: "attached"; readonly request: string; readonly attachments: readonly SharedAttachment[] }
+  | { readonly kind: "unavailable"; readonly request: string; readonly references: readonly SharedReference[]; readonly message: string };
 export interface SharedPort {
   postMessage(message: SharedRequest | SharedResponse): void;
   addEventListener(type: "message" | "messageerror", listener: EventListener): void;
@@ -155,7 +155,7 @@ export function sharedRequest(value: unknown): SharedRequest {
     case "abort": return { kind: input.kind, transaction: transaction(input.transaction) };
     case "mailbox": return { kind: input.kind, inbound: sharedReference(input.inbound), outbound: sharedReference(input.outbound) };
     case "route-ready": return { kind: input.kind };
-    case "need": case "cancel": return { kind: input.kind, references: references(input.references) };
+    case "need": case "cancel": case "accept": return { kind: input.kind, request: transaction(input.request), references: references(input.references) };
     case "close": return { kind: input.kind };
     default: throw sharedError("Invalid shared-object request");
   }
@@ -165,8 +165,8 @@ export function sharedResponse(value: unknown): SharedResponse {
   if (input.kind === "route-drained") return { kind: input.kind };
   if (input.kind === "route-retired" && typeof input.id === "string") return { kind: input.kind, id: input.id };
   if (input.kind === "closed" && typeof input.message === "string") return { kind: input.kind, message: input.message };
-  if (input.kind === "attached") return { kind: input.kind, attachments: attachments(input.attachments) };
-  if (input.kind === "unavailable" && typeof input.message === "string") return { kind: input.kind, references: references(input.references), message: input.message };
+  if (input.kind === "attached") return { kind: input.kind, request: transaction(input.request), attachments: attachments(input.attachments) };
+  if (input.kind === "unavailable" && typeof input.message === "string") return { kind: input.kind, request: transaction(input.request), references: references(input.references), message: input.message };
   throw sharedError("Invalid shared-object response");
 }
 export function messageData(event: Event): unknown {

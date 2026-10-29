@@ -99,6 +99,8 @@ Browser-engine workers publish native `WebAssembly.Module` and shared
 original host extensions, with no copied implementation. Modules clone for each
 decoded graph. Repeated references inside a graph retain object identity, and
 attached shared memories retain their backing across messages and growth.
+Memory graph nodes also identify their buffer node, preserving the identity of
+separately posted buffers and typed-array views over that memory.
 Unshared memories, Wasm objects in transfer lists, and codecs without the native
 Wasm capability reject with `DataCloneError`. Native references use a zero
 byte-length marker because memory growth does not change their identity.
@@ -116,3 +118,12 @@ Wasm wait/notify, emnapi load/start, and release of process-owned references aft
 worker termination. The source tests cover failed publication and delivery,
 unread-message discard, unavailable capabilities and nested decode preflight.
 The fixture does not load Rolldown or allocate its 1 GiB memory.
+
+Attachment requests carry a unique request incarnation scoped to the destination
+process lease. The broker pins a native reply until that request accepts or
+cancels it. A port closing its wait cancels only that request. Delayed replies
+cannot satisfy a later wait for the same object. Duplicate settlement is harmless,
+and process exit drops every outstanding reply pin before the broker ends.
+Accepted aliases remain process-owned and stay usable when another process exits.
+The lifetime regression runs the same cancellation races for SAB, Module and
+Memory, including publication rollback and a destination replaced by a new lease.

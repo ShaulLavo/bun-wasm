@@ -28,7 +28,7 @@ try {
     stderr(bytes) { stderr += new TextDecoder().decode(bytes); },
   });
   const outcome = await run.done;
-  result = { ...outcome, stdout, stderr, sharedBeforeDispose: shared.inspect() };
+  result = { ...outcome, stdout, stderr, sharedBeforeDispose: shared.inspect(), transfersBeforeDispose: shared.inspectTransfers() };
 } catch (error) { result = { error: String(error), stdout, stderr }; }
 finally {
   run?.kill(9);
@@ -36,5 +36,5 @@ finally {
   const forcedWorkers = workers.size;
   for (const worker of workers) worker.terminate();
   globalThis.Worker = NativeWorker;
-  Reflect.set(globalThis, "wasmTransferResult", { ...result, cleanup: shared.inspect(), forcedWorkers, activeWorkers: workers.size });
+  Reflect.set(globalThis, "wasmTransferResult", { ...result, cleanup: shared.inspect(), transfersAfterDispose: shared.inspectTransfers(), forcedWorkers, activeWorkers: workers.size });
 }

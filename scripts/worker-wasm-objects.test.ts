@@ -76,7 +76,7 @@ test("discarding an unread native Wasm message cancels hydration and exit drops 
   port2.on("message", value => seen.push(value));
   receiver.runtime.__fixturePacket(port2, 0, plan.graph);
   await tick();
-  expect(broker.inspect().waiting).toBe(2);
+  expect(broker.inspect().waiting).toBe(3);
   port2.close(); await tick();
   expect(broker.inspect().waiting).toBe(0);
   expect(receiver.service.inspect().pending).toBe(0);
@@ -100,7 +100,7 @@ test("a committed native identity survives later rollback and shared Memory may 
   await new Promise<void>(resolve => target.wait(graph, resolve));
   const value = received(target.decode(graph));
   expect(value.memory.buffer.byteLength).toBe(131072);
-  expect(broker.inspect().objects).toBe(2);
+  expect(broker.inspect().objects).toBe(3);
 });
 
 test("unattached, forged and nested native references fail before restoring any port", () => {
@@ -116,7 +116,25 @@ test("unattached, forged and nested native references fail before restoring any 
   const sab = codec.encode(new SharedArrayBuffer(0));
   const node = sab.nodes[0];
   if (!node || node[0] !== "shared") throw new Error("Missing backing reference");
-  expect(() => codec.decode({ root: 0, nodes: [["wasm-memory", node[1]]] })).toThrow("Invalid shared Wasm");
+  expect(() => codec.decode({ root: 0, nodes: [["wasm-memory", node[1], 1], ["shared", node[1], 0]] })).toThrow("Invalid shared Wasm");
   expect(() => codec.decode({ root: 0, nodes: [["wasm-module", "bad/id", "extra"]] })).toThrow("Invalid worker message");
   expect(() => codec.decode({ root: 0, nodes: [["wasm-memory", "invalid"]] })).toThrow("Invalid worker message");
+});
+
+test("shared Memory buffer keeps the identity of separately posted buffers and views through growth", async () => {
+  const { client } = brokerClients(cleanup, { lanes: true });
+  const sender = client(), receiver = client();
+  const input = values();
+  const codec = sourceCodec(sender.sharedObjects), target = sourceCodec(receiver.sharedObjects);
+  for (const pages of [1, 2]) {
+    if (pages === 2) input.memory.grow(1);
+    const graph = codec.encode({ memory: input.memory, buffer: input.memory.buffer, view: new Int32Array(input.memory.buffer) });
+    await new Promise<void>(resolve => target.wait(graph, resolve));
+    const value = target.decode(graph);
+    if (!value || typeof value !== "object" || !("memory" in value) || !(value.memory instanceof WebAssembly.Memory)
+      || !("buffer" in value) || !("view" in value) || !(value.view instanceof Int32Array)) throw new Error("Missing memory aliases");
+    expect(value.buffer).toBe(value.memory.buffer);
+    expect(value.view.buffer).toBe(value.memory.buffer);
+    expect(value.memory.buffer.byteLength).toBe(pages * 65536);
+  }
 });

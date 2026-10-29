@@ -8,10 +8,11 @@ const port = parentPort;
 const data: unknown = workerData;
 if (!data || typeof data !== "object" || !("module" in data) || !(data.module instanceof WebAssembly.Module)
   || !("memory" in data) || !(data.memory instanceof WebAssembly.Memory) || !("role" in data)
-  || !("alias" in data) || !("moduleAlias" in data)) throw new Error("Invalid Wasm worker data");
+  || !("alias" in data) || !("moduleAlias" in data) || !("view" in data) || !(data.view instanceof Int32Array)) throw new Error("Invalid Wasm worker data");
 const { module, memory, role, alias, moduleAlias } = data;
 assert.equal(memory, alias);
 assert.equal(module, moduleAlias);
+assert.equal(data.view.buffer, memory.buffer);
 const instance = new WebAssembly.Instance(module, { env: { memory } });
 const view = new Int32Array(memory.buffer);
 const wait = instance.exports.wait;

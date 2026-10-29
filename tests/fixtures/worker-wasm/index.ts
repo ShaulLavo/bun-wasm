@@ -4,7 +4,7 @@ import { atomicModuleBytes } from "./atomic-module.ts";
 
 const module = new WebAssembly.Module(atomicModuleBytes);
 const memory = new WebAssembly.Memory({ initial: 1, maximum: 2, shared: true });
-const input = { module, memory, alias: memory, moduleAlias: module };
+const input = { module, memory, alias: memory, moduleAlias: module, view: new Int32Array(memory.buffer) };
 const workers = ["waiter", "notifier"].map(role => new Worker(new URL("./worker.ts", import.meta.url), { workerData: { ...input, role } }));
 const [waiter, notifier] = workers;
 assert.ok(waiter && notifier);

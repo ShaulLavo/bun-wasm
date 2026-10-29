@@ -15,7 +15,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
   if (!/^[\w-]{1,128}$/.test(owner)) throw sharedError("Invalid shared-object owner");
   const buffers = new Map<string, SharedAttachment>();
   const identities = new WeakMap<SharedArrayBuffer | SharedWasmValue, SharedReference>();
-  const pending = new Map<string, { reference: SharedReference; waiters: Set<Waiter> }>();
+  const pending = new Map<string, { reference: SharedReference; request: string; waiters: Set<Waiter> }>();
   const failures = new Map<string, DOMException>();
   const publications = new Set<SharedPublication>();
   const reservedIdentities = new WeakSet<SharedArrayBuffer | SharedWasmValue>();
@@ -150,7 +150,7 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     if (response.kind === "closed") { close(sharedError(response.message)); return; }
     if (response.kind === "unavailable") {
       for (const reference of response.references) {
-        if (!pending.has(reference.id)) continue;
+        if (pending.get(reference.id)?.request !== response.request) continue;
         failures.set(reference.id, sharedError(response.message));
         settled(reference.id);
       }
@@ -158,11 +158,12 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     }
     for (const attachment of response.attachments) {
       const request = pending.get(attachment.id);
-      if (!request) continue;
+      if (!request || request.request !== response.request) continue;
       if (request.reference.byteLength !== attachment.byteLength) throw sharedError("Shared backing length mismatch");
       if (buffers.size + failures.size >= sharedObjectLimit) throw sharedError("Shared-object limit exceeded");
       buffers.set(attachment.id, attachment);
       identities.set(sharedAttachmentValue(attachment), attachment);
+      port.postMessage({ kind: "accept", request: response.request, references: [request.reference] });
       settled(attachment.id);
     }
   }
@@ -245,23 +246,25 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     return publication;
   }
   function cancel(waiter: Waiter) {
-    const references: SharedReference[] = [];
+    const canceled = new Map<string, SharedReference[]>();
     for (const id of waiter.ids) {
       const request = pending.get(id);
       request?.waiters.delete(waiter);
       if (!request || request.waiters.size) continue;
-      pending.delete(id); references.push(request.reference);
+      pending.delete(id);
+      const references = canceled.get(request.request) ?? [];
+      references.push(request.reference); canceled.set(request.request, references);
     }
     waiter.ids.clear();
-    if (!references.length || closed) return;
-    try { port.postMessage({ kind: "cancel", references }); }
+    if (!canceled.size || closed) return;
+    try { for (const [request, references] of canceled) port.postMessage({ kind: "cancel", request, references }); }
     catch { close(sharedError("Shared cancellation failed")); }
   }
-  function requestMissing(reference: SharedReference, waiter: Waiter, requested: SharedReference[]) {
+  function requestMissing(reference: SharedReference, waiter: Waiter, requested: SharedReference[], requestId: string) {
     let request = pending.get(reference.id);
     if (!request) {
       if (buffers.size + failures.size + pending.size + reserved >= sharedObjectLimit) throw sharedError("Shared-object pending limit exceeded");
-      request = { reference, waiters: new Set() }; pending.set(reference.id, request); requested.push(reference);
+      request = { reference, request: requestId, waiters: new Set() }; pending.set(reference.id, request); requested.push(reference);
     }
     if (request.reference.byteLength !== reference.byteLength) throw sharedError("Shared backing length mismatch");
     request.waiters.add(waiter);
@@ -272,8 +275,9 @@ export function createSharedObjects(owner: string, port: SharedPort): SharedObje
     const waiter: Waiter = { ids: new Set(missing.map(reference => reference.id)), ready };
     const requested: SharedReference[] = [];
     try {
-      for (const reference of missing) requestMissing(reference, waiter, requested);
-      if (requested.length) port.postMessage({ kind: "need", references: requested });
+      const request = crypto.randomUUID();
+      for (const reference of missing) requestMissing(reference, waiter, requested, request);
+      if (requested.length) port.postMessage({ kind: "need", request, references: requested });
     } catch (error) { cancel(waiter); throw error; }
     return () => cancel(waiter);
   }

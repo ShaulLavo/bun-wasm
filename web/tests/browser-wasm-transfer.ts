@@ -61,6 +61,8 @@ try {
     assert.equal(result.stderr, "");
     assert.deepEqual(result.sharedBeforeDispose, { clients: 0, objects: 0, waiting: 0 });
     assert.deepEqual(result.cleanup, { clients: 0, objects: 0, waiting: 0 });
+    assert.deepEqual(result.transfersBeforeDispose, { pins: 0, attaching: 0 });
+    assert.deepEqual(result.transfersAfterDispose, { pins: 0, attaching: 0 });
     assert.equal(result.forcedWorkers, 0);
     assert.equal(result.activeWorkers, 0);
     assert.deepEqual(errors, []);
