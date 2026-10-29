@@ -10,7 +10,7 @@ import type { Page } from "playwright";
 import { playwright, ready, run, session, terminalText, writeFile } from "../../web/tests/playground.mjs";
 import { stopShell } from "../../web/tests/stop-shell";
 import { resetBrowserProject } from "./browser-environment";
-import { observeProductTraffic, waitForPreviewReady, type GuestSource } from "./product-browser";
+import { observeNativeProductTraffic, waitForPreviewReady, type GuestSource } from "./product-browser";
 import { registry } from "./registry.mjs";
 import { readGuest } from "./browser.mjs";
 import { browserRegistryRoute } from "./registry-request";
@@ -82,7 +82,7 @@ function save() {
   const report = {
     schema: 1, engine, observedEngine, browser: { name: "chromium", version: browserVersion },
     fixture: { path: "examples/next-acceptance", sourceRevision, sha256: digest(JSON.stringify(sources)), lockSha256: digest(sources["bun.lock"] ?? ""), dependencies: JSON.parse(sources["package.json"] ?? "{}").dependencies },
-    runtime: { revision: values["runtime-revision"], revisionSource: "caller supplied; compare to producer receipt", assets, receipt: values["runtime-receipt"] ? resolve(values["runtime-receipt"]) : null },
+    runtime: { revision: values["runtime-revision"], revisionSource: "caller supplied; compare to producer receipt", assets, webRoot, receipt: values["runtime-receipt"] ? resolve(values["runtime-receipt"]) : null },
     parameters: { cycles, timeoutMs: timeout, idleMs: idle, minHeadroomMiB: minHeadroom, maxGrowthMiB: maxGrowth, phases: Array.from(phases) },
     completedCycles, droppedSamples, samplerErrors, rows, samples,
     network: { mode: mirror ? "registry replay" : "live npm (diagnostic)", external, mirror: mirror?.snapshot() }, cleanup,
@@ -94,14 +94,26 @@ function save() {
 
 async function sample(phase: string) {
   if (!owner) return;
-  const counters = hook ? parseMemory(await hook({ page: owner, phase, engine })) : emptyMemory;
+  const counters = hook ? parseMemory(await boundedSample(hook({ page: owner, phase, engine }))) : emptyMemory;
   if (samples.length >= 8192) { droppedSamples++; return; }
   samples.push({ ...counters, phase, engine, time: Date.now() });
 }
 
+async function boundedSample(operation: Promise<unknown>): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([operation, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Memory hook exceeded 5s")), 5000); })]);
+  } finally { clearTimeout(timer); }
+}
+
 async function measured(operation: () => Promise<void>, phase: string) {
   let pending = Promise.resolve();
-  const tick = () => { pending = pending.then(() => sample(phase)).catch(error => { samplerErrors.push(String(error)); }); };
+  let sampling = false;
+  const tick = () => {
+    if (sampling) return;
+    sampling = true;
+    pending = sample(phase).catch(error => { if (samplerErrors.length < 64) samplerErrors.push(String(error)); }).finally(() => { sampling = false; });
+  };
   tick();
   const timer = setInterval(tick, 500);
   try { await operation(); }
@@ -171,7 +183,7 @@ async function server(page: Page, mode: "start" | "dev") {
   const preview = await page.context().newPage();
   preview.setDefaultTimeout(timeout);
   preview.setDefaultNavigationTimeout(timeout);
-  const traffic = await observeProductTraffic(preview);
+  const traffic = await observeNativeProductTraffic(preview);
   const source: GuestSource = { read: path => readGuest(page, path), write: (path, text) => writeFile(page, `/home/user/${path}`, text) };
   const base = started ? await page.evaluate(port => Reflect.get(Reflect.get(globalThis, "playground"), "previews").url(port), port) : "http://127.0.0.1/";
   try { await serverCases(page, preview, base, mode, source, traffic); }
@@ -189,7 +201,7 @@ async function stopServer(page: Page, mode: string) {
   writeFileSync(join(output, `${mode}.log`), await terminalText(page));
 }
 
-async function serverCases(owner: Page, page: Page, base: string, mode: "start" | "dev", source: GuestSource, traffic: Awaited<ReturnType<typeof observeProductTraffic>>) {
+async function serverCases(owner: Page, page: Page, base: string, mode: "start" | "dev", source: GuestSource, traffic: Awaited<ReturnType<typeof observeNativeProductTraffic>>) {
   await phase(`${mode}:http-ready`, async () => {
     const probe = await page.context().newPage();
     try { await waitForPreviewReady(probe, base, Date.now() + timeout); }
@@ -216,7 +228,7 @@ async function serverCases(owner: Page, page: Page, base: string, mode: "start" 
   record("dev:bounded-memory", samplerErrors.length || droppedSamples ? { status: "blocked", reason: `Sampler errors ${samplerErrors.length}; dropped ${droppedSamples}` } : memoryGate(samples, completedCycles, minHeadroom, maxGrowth));
 }
 
-async function cycle(owner: Page, page: Page, base: string, source: GuestSource, traffic: Awaited<ReturnType<typeof observeProductTraffic>>, index: number) {
+async function cycle(owner: Page, page: Page, base: string, source: GuestSource, traffic: Awaited<ReturnType<typeof observeNativeProductTraffic>>, index: number) {
   const passed = await phase(`dev:cycle:${index}`, async () => {
     await alive(owner);
     await sample(`cycle:${index}:before`);
@@ -258,7 +270,7 @@ async function main() {
     hook = async input => fn(input);
   }
   if (values.registry) mirror = await registry({ directory: resolve(values.registry), record: false });
-  const match = await task.start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { ROOT: webRoot, PORT: "0" });
+  const match = await task.start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { ROOT: webRoot, PORT: "0", PREVIEW_ORIGINS: "1" });
   const browser = await task.launch(playwright.chromium);
   browserVersion = browser.version();
   const context = await browser.newContext({ serviceWorkers: "allow" });
@@ -266,8 +278,8 @@ async function main() {
   owner = await context.newPage();
   const page = owner;
   const loaded = await phase("engine", async () => {
-    await page.goto(`${match[1]}?engine=${engine}`);
-    observedEngine = await ready(page, timeout);
+    await page.goto(`${match[1]}?root-previews&engine=${engine}`);
+    observedEngine = (await ready(page, timeout)).replaceAll(" MB", " MiB");
     const label = { quickjs: "QuickJS", jsc: "JavaScriptCore", browser: "Browser" }[engine];
     assert.ok(observedEngine.includes("ready") && observedEngine.includes(label), `Wrong engine: ${observedEngine}`);
     assert.equal(await page.locator("#engine").inputValue(), engine);
@@ -291,8 +303,8 @@ try { await main(); }
 catch (error) { record("runner", { status: "fail", reason: String(error) }); }
 finally {
   if (owner && !owner.isClosed()) await terminalText(owner).then(text => writeFileSync(join(output, "terminal.log"), text)).catch(error => samplerErrors.push(String(error)));
-  try { await task.cleanup(); await mirror?.close(); cleanup = "pass"; }
-  catch (error) { cleanup = String(error); }
+  const released = await Promise.allSettled([task.cleanup(), mirror?.close()]);
+  cleanup = released.every(result => result.status === "fulfilled") ? "pass" : released.flatMap(result => result.status === "rejected" ? [String(result.reason)] : []).join("; ");
   save();
 }
 if (rows.some(row => row.status !== "pass") || cleanup !== "pass") process.exitCode = 1;
