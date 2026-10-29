@@ -5,7 +5,11 @@
   type Snapshot = BunWasm.PortSnapshot;
   const native = internal.native;
   // A shared-group QuickJS member backs SharedArrayBuffers with memory-group regions.
-  if (!internal.sharedObjects && "shmAccept" in native) internal.sharedObjects = internal.require("group_shared_objects");
+  const groupTransfer = !internal.sharedObjects && "shmAccept" in native;
+  if (groupTransfer) internal.sharedObjects = internal.require("group_shared_objects");
+  // A worker's startup pins are routed to it only once spawn returns its pid; the child must not
+  // accept them before then (awaitPublication). The bound is a failure deadline, not a retry.
+  const PUBLICATION_DEADLINE_MS = 60_000;
   const process = internal.require("process");
   const EventEmitter = internal.require("events");
   const clone = internal.require("structured_clone").structuredClone;
@@ -54,7 +58,7 @@
     const path = parseRoute(value.route);
     if (typeof value.envGroup !== "string" || !Array.isArray(value.argv) || !value.argv.every(arg => typeof arg === "string") || !Array.isArray(value.execArgv) || !value.execArgv.every(arg => typeof arg === "string")) throw new TypeError("Invalid worker initialization");
     return { route: path, envGroup: value.envGroup, argv: value.argv, execArgv: value.execArgv,
-      graph: value.graph, resourceLimits: limits(value.resourceLimits), web: webOptions(value.web) };
+      graph: value.graph, resourceLimits: limits(value.resourceLimits), web: webOptions(value.web), attach: value.attach === true };
   }
   function webOptions(value: unknown): BunWasm.WebWorkerOptions | null {
     if (value === undefined || value === null) return null;
@@ -805,7 +809,8 @@
       catch (error) { publicPort.close(); childPort.close(); throw error; }
       const graph = transferPlan.graph;
       const group = options.env === SHARE_ENV ? envGroup : routeKey(this.#path);
-      env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv: exec.argv, graph, resourceLimits: this.resourceLimits, web });
+      env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv: exec.argv, graph, resourceLimits: this.resourceLimits, web,
+        ...(groupTransfer ? { attach: true } : {}) });
       const memoryLimitMb = (this.resourceLimits.maxOldGenerationSizeMb || 0) + (this.resourceLimits.maxYoungGenerationSizeMb || 0);
       let child: BunWasm.WorkerChild;
       try { child = internal.require("spawn").spawn([process.execPath].concat(exec.conditions, target.argv, argv), {
@@ -819,6 +824,8 @@
         control = internal.require("worker_channel").open(child._workerChannel.input, child._workerChannel.output);
         this.#channel = control;
         transferPlan.commit(undefined, undefined, child.pid);
+        // The first frame on the child's control pipe: every startup pin is routed to it now.
+        if (groupTransfer) control.send({ kind: "down", path: this.#path, body: { kind: "attached" } });
         groupDestinations.set(publicPort, child.pid);
         children.set(this.#id, { ref: true, send: frame => { if (!this.#exited) this.#channel.send(frame); }, pump: () => this.#pump(), watch: () => this.#channel.subscriptions(), event: frame => this.#event(frame) });
         root({ kind: "member", path: this.#path, group });
@@ -944,14 +951,37 @@
     if (!Number.isInteger(control.input) || !Number.isInteger(control.output) || control.input < 3 || control.output < 3) throw new Error("Invalid worker control descriptors");
     parentChannel = internal.require("worker_channel").open(control.input, control.output);
     try {
+      const early = config.attach ? awaitPublication(parentChannel) : [];
       let startup: ReturnType<typeof deferredInitialization> | undefined;
       let notified = false;
       const cancel = codec.wait(config.graph, () => { notified = true; startup?.resume(); });
-      if (!cancel) { initializeData(exec); return; }
+      if (!cancel) { initializeData(exec); for (const frame of early) incoming(frame); return; }
       startup = deferredInitialization(cancel, () => initializeData(exec));
       internal.workerStartup = startup;
       if (notified) startup.resume();
     } catch (error) { parentChannel.close(); throw error; }
+  }
+  function isPublication(frame: unknown) {
+    const value = record(frame);
+    return value.kind === "down" && Boolean(value.body) && typeof value.body === "object" && (value.body as { kind?: unknown }).kind === "attached";
+  }
+  /** Block until the parent's `attached` frame; later frames are returned in order for replay. */
+  function awaitPublication(channel: BunWasm.WorkerChannel): unknown[] {
+    const early: unknown[] = [];
+    let attached = false;
+    const receive = (frame: unknown) => {
+      if (!attached && isPublication(frame)) attached = true;
+      else early.push(frame);
+    };
+    const deadline = Date.now() + PUBLICATION_DEADLINE_MS;
+    for (;;) {
+      channel.pump(receive);
+      if (attached) return early;
+      if (channel.ended) throw new Error("Worker parent closed before publishing its shared memory");
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error("Worker parent did not publish its shared memory");
+      channel.waitReadable(remaining);
+    }
   }
   function deferredInitialization(cancelWait: () => void, hydrate: () => void) {
     let phase: "pending" | "settled" | "cancelled" = "pending";

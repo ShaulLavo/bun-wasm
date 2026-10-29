@@ -353,7 +353,7 @@ test("a thrown source delivery aborts publication without detaching port or buff
       bound = true;
       receive({ kind: "up", body: { kind: "bind", snapshot: transferred[1], owner: [0] } });
       return true;
-    }, subscriptions: () => new Uint8Array(), drain() {}, close() {}, pending: false, ended: false }, graph);
+    }, subscriptions: () => new Uint8Array(), drain() {}, close() {}, waitReadable() {}, pending: false, ended: false }, graph);
   runtime.pump();
   const sab = new SharedArrayBuffer(8), buffer = new ArrayBuffer(8);
   expect(() => control.port1.postMessage({ sab, buffer, port: reply.port2 }, [buffer, reply.port2])).toThrow("byte graph send failed");
