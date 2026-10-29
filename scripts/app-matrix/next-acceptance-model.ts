@@ -1,6 +1,6 @@
 export type AcceptanceEngine = "quickjs" | "jsc" | "browser";
 export type Outcome = { status: "pass"; detail: string } | { status: "fail" | "blocked"; reason: string };
-export type PhaseResult = Outcome & { phase: string; engine: AcceptanceEngine; observedEngine: string; durationMs: number };
+export type PhaseResult = Outcome & { phase: string; engine: AcceptanceEngine; observedEngine: string; durationMs: number; budgetMs: number | null };
 
 export interface MemoryCounters {
   wasmCapacityBytes: number | null;
@@ -84,6 +84,6 @@ export function memoryGate(samples: readonly MemorySample[], cycles: number, min
 
 export function resultTable(rows: readonly PhaseResult[]): string {
   const clean = (text: string) => text.replaceAll("|", "\\|").replaceAll("\n", " ");
-  const lines = rows.map(row => `| ${row.engine} | ${clean(row.observedEngine)} | ${row.phase} | ${row.status} | ${row.durationMs} | ${clean(row.status === "pass" ? row.detail : row.reason)} |`);
-  return ["| Engine | Observed | Phase | Result | ms | Evidence |", "|---|---|---|---|---:|---|"].concat(lines).join("\n") + "\n";
+  const lines = rows.map(row => `| ${row.engine} | ${clean(row.observedEngine)} | ${row.phase} | ${row.status} | ${row.durationMs} | ${row.budgetMs ?? "n/a"} | ${clean(row.status === "pass" ? row.detail : row.reason)} |`);
+  return ["| Engine | Observed | Phase | Result | ms | Watchdog ms | Evidence |", "|---|---|---|---|---:|---:|---|"].concat(lines).join("\n") + "\n";
 }
