@@ -878,9 +878,6 @@
     }
   }
   const installIntlFallback = !hasRealIntl();
-  if (installIntlFallback) {
-    defineLazyGlobal("Intl", () => internal.require("intl"));
-  }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
   if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
   defineLazyGlobal("HTMLRewriter", () => internal.require("html_rewriter").HTMLRewriter);
@@ -896,8 +893,9 @@
   if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
 
   // Temporal probes Date's native locale methods during initialization. Install
-  // these wrappers last so that probe does not eagerly load the Intl bundle.
+  // the Intl global and wrappers last so that probe does not load the bundle.
   if (installIntlFallback) {
+    defineLazyGlobal("Intl", () => internal.require("intl"));
     defineHidden(Number.prototype, {
       toLocaleString(locales, options) {
         return new globalThis.Intl.NumberFormat(locales, options).format(Number(this));
