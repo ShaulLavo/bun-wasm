@@ -18,6 +18,13 @@
       "node": "./dist/package/worker-entry.js",
       "default": "./src/worker-entry.ts"
     },
+    "./notification-worker": {
+      "types": "./src/notification-worker-entry.ts",
+      "bun": "./src/notification-worker-entry.ts",
+      "browser": "./src/notification-worker-entry.ts",
+      "node": "./dist/package/notification-worker-entry.js",
+      "default": "./src/notification-worker-entry.ts"
+    },
     "./asset": {
       "types": "./src/assets.ts",
       "bun": "./src/assets.ts",
@@ -38,6 +45,7 @@
     "src/bun-adapter.ts",
     "src/guest-asset.generated.ts",
     "src/worker-entry.ts",
+    "src/notification-worker-entry.ts",
     "web/src/worker.ts",
     "web/src/engine-host.js",
     "web/src/script-evaluation.ts",

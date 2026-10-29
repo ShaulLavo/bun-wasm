@@ -20,6 +20,8 @@ export interface BunAdapterOptions extends LoadBunWasmOptions {
   readonly network?: BunNetworkOptions;
   /** Bundler-produced module worker URL running bun-wasm/worker. */
   readonly workerUrl: string | URL;
+  /** Bundler-produced module worker URL running bun-wasm/notification-worker (fs.watch wakes). */
+  readonly notificationWorkerUrl: string | URL;
   /** Engine for the registered executable; defaults to browser. */
   readonly engine?: Engine;
   /** Absolute canonical executable paths; defaults to bun, node and nodejs in the selected engine bin directory. */
@@ -66,6 +68,7 @@ async function rollbackExecutables(filesystem: FilesystemClient, created: string
 export async function installBunAdapters(runtime: Runtime, options: BunAdapterOptions): Promise<BunAdapterInstallation> {
   if (installations.has(runtime) || installing.has(runtime)) throw new Error("bun-wasm adapters are already installed on this Runtime");
   if (!options?.workerUrl?.toString()) throw new TypeError("workerUrl is required");
+  if (!options.notificationWorkerUrl?.toString()) throw new TypeError("notificationWorkerUrl is required");
   const engine = options.engine ?? "browser";
   if (!["quickjs", "jsc", "browser"].includes(engine)) throw new TypeError(`Unknown Bun engine: ${engine}`);
   if (engine !== "browser" && !options.module && !options.asset) {
@@ -88,7 +91,7 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
     // every installer operation observes only its own completion, including EEXIST.
     await runtime.filesystem.resolvePath("/");
     filesystem = new FilesystemClient(runtime.filesystem.fork());
-    for (const name of ["quickjs", "jsc", "browser"] as const) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), runtime, network: options.network })));
+    for (const name of ["quickjs", "jsc", "browser"] as const) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), notificationWorkerUrl: options.notificationWorkerUrl.toString(), runtime, network: options.network })));
     for (const name of names) unregisters.push(runtime.registerProgram(name, {
       adapter: `bun:${engine}`, cooperative: true,
       module: () => loadBunWasm(options),

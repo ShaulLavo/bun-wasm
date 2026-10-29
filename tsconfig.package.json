@@ -26,6 +26,7 @@
     "build.ts",
     "prepare.ts",
     "tests/package/**/*.ts",
-    "src/worker-entry.ts"
+    "src/worker-entry.ts",
+    "src/notification-worker-entry.ts"
   ]
 }

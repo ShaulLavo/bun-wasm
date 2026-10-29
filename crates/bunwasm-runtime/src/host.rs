@@ -370,6 +370,34 @@ mod runtime_proc {
     }
 }
 
+/// Waffle's `runtime_fs` guest filesystem watches (Waffle docs/host-abi.md, "Guest filesystem
+/// watches"). Each call returns a positive WASI errno, 0 on success. Watch ids are process-local
+/// and are not descriptors.
+#[cfg(target_arch = "wasm32")]
+mod runtime_fs {
+    #[link(wasm_import_module = "runtime_fs")]
+    unsafe extern "C" {
+        pub fn watch_open(fd: i32, flags: i32, out_id: i32) -> i32;
+        pub fn watch_read(id: i32, buf: i32, len: i32, out_len: i32) -> i32;
+        pub fn watch_close(id: i32) -> i32;
+    }
+}
+
+/// Host builds (unit tests) have no runtime_fs namespace: every call is ENOSYS.
+#[cfg(not(target_arch = "wasm32"))]
+mod runtime_fs {
+    const NOSYS: i32 = 52;
+    pub unsafe fn watch_open(_: i32, _: i32, _: i32) -> i32 {
+        NOSYS
+    }
+    pub unsafe fn watch_read(_: i32, _: i32, _: i32, _: i32) -> i32 {
+        NOSYS
+    }
+    pub unsafe fn watch_close(_: i32) -> i32 {
+        NOSYS
+    }
+}
+
 /// Whether this build imports the `runtime_proc` namespace (every wasm32 build does).
 pub const PROCESS_ABI: bool = cfg!(target_arch = "wasm32");
 
@@ -500,6 +528,63 @@ pub fn proc_poll(subscriptions: &[u8], timeout_ms: i32) -> Result<Vec<u8>, i32> 
     }
     events.truncate(ready as usize * 16);
     Ok(events)
+}
+
+const WATCH_RECURSIVE: i32 = 1;
+const WATCH_IO: i32 = 29;
+const WATCH_NOBUFS: i32 = 42;
+
+thread_local! {
+    /// One 64 KiB read buffer, reused: a watch is read on every loop turn, usually to EAGAIN.
+    static WATCH_BUFFER: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0; 64 * 1024]);
+}
+
+/// Opens `path` (following a final symlink), watches that node and closes the temporary
+/// descriptor; the watch follows the node's identity. Returns the id or the positive errno.
+pub fn fs_watch_open(path: &str, recursive: bool) -> Result<u32, i32> {
+    use std::os::fd::AsRawFd;
+    let file =
+        std::fs::File::open(path).map_err(|error| error.raw_os_error().unwrap_or(WATCH_IO))?;
+    let flags = if recursive { WATCH_RECURSIVE } else { 0 };
+    let mut id = 0u32;
+    let errno = proc_call!(runtime_fs::watch_open(
+        file.as_raw_fd(),
+        flags,
+        ptr_mut(std::slice::from_mut(&mut id))
+    ));
+    if errno != 0 {
+        return Err(errno);
+    }
+    Ok(id)
+}
+
+/// One `watch_read`: whole records (empty at end of stream), or the positive errno
+/// (6 when nothing is pending). A record that doesn't fit grows the buffer and retries.
+pub fn fs_watch_read(id: u32) -> Result<Vec<u8>, i32> {
+    WATCH_BUFFER.with_borrow_mut(|buf| {
+        loop {
+            let mut len = 0u32;
+            let errno = proc_call!(runtime_fs::watch_read(
+                id as i32,
+                ptr_mut(buf.as_mut_slice()),
+                buf.len() as i32,
+                ptr_mut(std::slice::from_mut(&mut len))
+            ));
+            if errno == WATCH_NOBUFS && len as usize > buf.len() {
+                buf.resize(len as usize, 0);
+                continue;
+            }
+            if errno != 0 {
+                return Err(errno);
+            }
+            return Ok(buf[..len as usize].to_vec());
+        }
+    })
+}
+
+/// `watch_close`: 0, or the positive errno (8 for an unknown or closed id).
+pub fn fs_watch_close(id: u32) -> i32 {
+    proc_call!(runtime_fs::watch_close(id as i32))
 }
 
 /// `runtime_proc.signal(sig, mode)` (docs/host-abi.md, "Signal dispositions"). A selected default

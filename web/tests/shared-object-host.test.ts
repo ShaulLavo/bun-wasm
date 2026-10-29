@@ -63,7 +63,7 @@ async function launch(runtime: Runtime, context: RuntimeProcessContext, rejected
     cleanup.add(options.cleanup);
     return { terminate() {} };
   } } as unknown as ProcessService;
-  await bunLauncher("browser", { runtime, workerUrl: "./worker.js" })(context, service);
+  await bunLauncher("browser", { runtime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" })(context, service);
   if (!launched) throw new Error("No native launch");
   return launched;
 }

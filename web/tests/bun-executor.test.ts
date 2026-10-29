@@ -6,6 +6,7 @@ import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { bootstrap, type RuntimeWorkerHost } from "waffle/browser/worker";
 import { createRing } from "waffle/browser/net/ring";
+import { createNotificationBridge } from "waffle/browser/notification-relay";
 import { DefaultSignal } from "../src/default-signal";
 import type { BunExecutorHost, RunRequest, WorkerMessage } from "../src/bun-executor";
 import { guest, PROCESS_IMPORTS } from "../../scripts/fixtures/shared-objects/executor-guest";
@@ -66,14 +67,19 @@ async function run(options: Partial<Pick<RunRequest, "engine" | "adapter" | "slo
   } finally { connection.client.port.close(); connection.server.port.close(); }
 }
 /** The real bootstrap with its filesystem calls kept local, so no service must share this thread. */
-async function bootstrapBun(request: RunRequest, host: BunExecutorHost & RuntimeWorkerHost): Promise<void> {
-  const executor = createBunExecutor(request, host);
-  await bootstrap(request, { ...executor, setup(context) {
-    context.fs.preopen = () => 1;
-    context.fs.retain = () => {};
-    context.fs.release = () => {};
-    executor.setup?.(context);
-  } }, host);
+/** A launcher passes one notification helper with every networked Bun process; so does this. */
+async function bootstrapBun(request: RunRequest, host: BunExecutorHost & RuntimeWorkerHost, notifications = true): Promise<void> {
+  const bridge = request.net && notifications ? createNotificationBridge(new URL("../src/notification-worker.ts", import.meta.url).href) : undefined;
+  const launched = bridge ? { ...request, notifications: bridge.connection } : request;
+  const executor = createBunExecutor(launched, host);
+  try {
+    await bootstrap(launched, { ...executor, setup(context) {
+      context.fs.preopen = () => 1;
+      context.fs.retain = () => {};
+      context.fs.release = () => {};
+      executor.setup?.(context);
+    } }, host);
+  } finally { await bridge?.dispose(); }
 }
 /** Like run(), but hands the caller the process's shared signal words before the guest starts. */
 async function runCapturingSignals(capture: (signals: ReturnType<typeof workerProcessState>["signals"]) => void, net: SharedArrayBuffer) {
@@ -93,6 +99,24 @@ async function runCapturingSignals(capture: (signals: ReturnType<typeof workerPr
   return { messages };
 }
 const exits = (messages: WorkerMessage[]) => messages.filter(message => message.type === "exit" || message.type === "error");
+
+test("a networked Bun process without a notification scope fails its launch", async () => {
+  const connection = createFilesystemConnection();
+  const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
+  const messages: WorkerMessage[] = [];
+  const host: BunExecutorHost & RuntimeWorkerHost = {
+    crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message: WorkerMessage) { messages.push(message); },
+    async fetch() { return new Response("ok"); },
+  };
+  const request: RunRequest = { engine: "browser", module: guest(1), args: ["bun"], env: {}, filesystem: connection.client,
+    runtimeProcess, trace: false, net: createRing(), moduleCache: null, slots: "imports" };
+  startEngineHost.mockClear();
+  try { await bootstrapBun(request, host, false); }
+  finally { connection.client.port.close(); connection.server.port.close(); }
+  expect(startEngineHost).not.toHaveBeenCalled();
+  expect(JSON.stringify(exits(messages))).toContain("notificationWorkerUrl");
+});
 
 test("importing the executor module installs no worker message handler", () => {
   expect((globalThis as { onmessage?: unknown }).onmessage ?? null).toBeNull();

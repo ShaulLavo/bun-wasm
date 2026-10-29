@@ -103,9 +103,10 @@ try {
     runtime.registerProgram("/bin/bun", { adapter: "preview1", module, cooperative: true });
   } else {
     const workerUrl = new URL("./worker.js", location.href).href;
+    const notificationWorkerUrl = new URL("./notification-worker.js", location.href).href;
     // Explicit opt-in only: this mode exercises the package's public default descriptor,
     // with no engine/module/asset/URL override and no local artifact fallback.
-    const options: BunAdapterOptions = publishedDefault ? { workerUrl } : { workerUrl, engine,
+    const options: BunAdapterOptions = publishedDefault ? { workerUrl, notificationWorkerUrl } : { workerUrl, notificationWorkerUrl, engine,
       module: await WebAssembly.compileStreaming(fetch("./bun-guest.wasm")),
       executables: ["/bin/bun", "/bin/node"] };
     // Disposal must unregister aliases and adapters, not merely clear a private installed flag.

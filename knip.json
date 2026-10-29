@@ -44,7 +44,7 @@
         "scripts/stream-polyfill-node-hooks.ts",
         "scripts/http-suite-report.ts",
         "scripts/ci-report.ts",
-        "tests/shell-consumer/{main,worker,fs-worker,sw}.ts"
+        "tests/shell-consumer/{main,worker,fs-worker,notification-worker,sw}.ts"
       ],
       "project": [
         "src/**/*.ts",
@@ -66,6 +66,7 @@
         "tests/ten-app-finishline.ts",
         "scripts/*.{ts,mjs}",
         "src/fs-worker.ts",
+        "src/notification-worker.ts",
         "src/sw.ts",
         "src/preview-websocket-client.ts",
         "tests/bench-*.{ts,mjs}",

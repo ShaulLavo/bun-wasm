@@ -52,7 +52,7 @@ async function checkCopies(directory: string): Promise<void> {
   const bundle = join(directory, "bun-runtime-proc");
   await mkdir(bundle);
   await Bun.write(join(bundle, "index.html"), '<!doctype html><script type="module" src="./bun-runtime-proc-main.js"></script>');
-  for (const name of ["bun-runtime-proc-main.js", "worker.js", "fs-worker.js"]) await Bun.write(join(bundle, name), `test-only captured bytes: ${name}`);
+  for (const name of ["bun-runtime-proc-main.js", "worker.js", "fs-worker.js", "notification-worker.js"]) await Bun.write(join(bundle, name), `test-only captured bytes: ${name}`);
   const source = new Bun.CryptoHasher("sha256").update(await Bun.file(new URL("./bun-runtime-proc-main.ts", import.meta.url)).bytes()).digest("hex");
   await Bun.write(join(bundle, "bundle.json"), JSON.stringify({ fixture: "bun-runtime-proc", source, files: await hashes(bundle) }));
   expect(await Bun.file(join(bundle, "index.html")).text()).toContain('src="./bun-runtime-proc-main.js"');

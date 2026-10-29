@@ -57,7 +57,7 @@ async function run() {
       quickjs: { url: new URL("./quickjs.wasm", location.href).href, bytes: 1058884,
         sha256: "c64a2336b7d6ed5a8b44824e668bae1f17462e8979c5fb8f1093c6045dd5e977" } };
     const module = await loadBunWasm({ asset });
-    installation = await installBunAdapters(runtime, { module, engine: "quickjs", workerUrl: new URL("./worker.js", location.href) });
+    installation = await installBunAdapters(runtime, { module, engine: "quickjs", workerUrl: new URL("./worker.js", location.href), notificationWorkerUrl: new URL("./notification-worker.js", location.href) });
     await runtime.filesystem.mkdirp("/fixture");
     for (const name of ["main.ts", "value.ts"]) {
       const response = await fetch(`./fixtures/${name}`);

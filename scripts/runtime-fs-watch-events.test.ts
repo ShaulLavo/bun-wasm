@@ -4,9 +4,9 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-// The shipped watcher and the real net.js waiter scheduler over a fake runtime_proc watch
-// descriptor: watch_open, then read() returning packed records, -EAGAIN or 0 at the end.
-// Everything is per-fixture memory; no timers, files or processes need teardown.
+// The shipped watcher and the real net.js waiter scheduler over the frozen runtime_fs watch ABI
+// as the natives surface it: fsWatchOpen returns an id, fsWatchRead returns whole padded
+// records, 0 at the end or -errno. Everything is per-fixture memory; nothing needs teardown.
 interface Watcher extends EventEmitter {
   close(): Watcher;
   ref(): Watcher;
@@ -17,7 +17,7 @@ interface WatchModule {
   watch(path: string, listener: Listener): Watcher;
   watch(path: string, options?: unknown, listener?: Listener): Watcher;
 }
-type Waiter = { ref: boolean; late?: boolean; step(): boolean | "progress"; subscriptions?(): Uint8Array };
+type Waiter = { ref: boolean; watch?: boolean; step(): boolean | "progress"; subscriptions?(): Uint8Array };
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 const transpile = (name: string) => new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${readFileSync(new URL(name, directory), "utf8")}`);
@@ -25,7 +25,7 @@ const transpile = (name: string) => new Bun.Transpiler({ loader: "ts" }).transfo
 const encoder = new TextEncoder();
 function record(type: "change" | "rename" | "overflow", name?: string | null) {
   const bytes = name == null ? new Uint8Array(0) : encoder.encode(name);
-  const out = new Uint8Array(8 + bytes.length);
+  const out = new Uint8Array(8 + ((bytes.length + 3) & ~3));
   out[0] = { change: 1, rename: 2, overflow: 3 }[type];
   new DataView(out.buffer).setUint32(4, name == null ? 0xffffffff : bytes.length, true);
   out.set(bytes, 8);
@@ -35,11 +35,11 @@ const chunk = (...records: Uint8Array[]) => Buffer.concat(records);
 
 function fixture() {
   const queued = new Map<number, (Uint8Array | number)[]>();
-  const opened: { path: string; recursive: boolean; fd: number }[] = [];
+  const opened: { path: string; recursive: boolean; id: number }[] = [];
   const closed: number[] = [];
   const ticks: (() => void)[] = [];
   const effects = { stats: 0, timers: 0, scans: 0 };
-  let nextFd = 40;
+  let nextId = 40;
   let openResult: number | undefined;
   let net: unknown;
   const internal: any = {
@@ -47,16 +47,21 @@ function fixture() {
       hostCaps: {},
       fsWatchOpen(path: string, recursive: boolean) {
         if (openResult !== undefined) return openResult;
-        const fd = nextFd++;
-        opened.push({ path, recursive, fd });
-        queued.set(fd, []);
-        return fd;
+        const id = nextId++;
+        opened.push({ path, recursive, id });
+        queued.set(id, []);
+        return id;
       },
-      procRead(fd: number) {
-        if (closed.includes(fd)) return -8;
-        return queued.get(fd)?.shift() ?? -6;
+      fsWatchRead(id: number) {
+        if (closed.includes(id)) return -8;
+        return queued.get(id)?.shift() ?? -6;
       },
-      procClose(fd: number) { closed.push(fd); return 0; },
+      fsWatchClose(id: number) {
+        if (closed.includes(id)) return -8;
+        closed.push(id);
+        return 0;
+      },
+      procPoll() { throw new Error("a watch must not sleep in runtime_proc.poll"); },
     },
     nextTick: (callback: () => void) => ticks.push(callback),
     timers: { setInterval() { effects.timers++; return { ref() {}, unref() {} }; }, clearInterval() {} },
@@ -83,7 +88,7 @@ function fixture() {
   const module: WatchModule = factory(internal)(filesystem);
   return {
     module, opened, closed, effects, internal,
-    commit(fd: number, ...results: (Uint8Array | number)[]) { queued.get(fd)!.push(...results); },
+    commit(id: number, ...results: (Uint8Array | number)[]) { queued.get(id)!.push(...results); },
     failOpen(errno: number) { openResult = -errno; },
     pump: (): boolean => internal.pumpIo(),
     pending: (): number => internal.ioPending(),
@@ -91,36 +96,51 @@ function fixture() {
   };
 }
 
-test("a committed write reaches change listeners in the same pump as later socket bytes, with no timer", () => {
+test("a write committed before the pump reaches change listeners before a socket step runs its handler, with no timer", () => {
   const world = fixture();
   const log: string[] = [];
+  // The reload's socket was accepted before the watch, so registration order alone would step it first.
+  let reload = true;
+  world.internal.addIoWaiter({ step() { if (!reload) return false; reload = false; log.push("request"); return "progress"; } });
   const watcher = world.module.watch("/app", { recursive: true }, (event, name) => log.push(`${event} ${name}`));
-  const fd = world.opened[0]!.fd;
-  let reloadSent = true;
-  // The edit commits, then the browser's reload bytes become readable. Both happen while the
-  // pump is running, after the watch was registered (and possibly already stepped).
-  world.internal.addIoWaiter({
-    step() {
-      if (!reloadSent) return false;
-      reloadSent = false;
-      world.commit(fd, chunk(record("change", "page.tsx")));
-      log.push("request");
-      return "progress";
-    },
-  });
+  world.commit(world.opened[0]!.id, chunk(record("change", "page.tsx")));
   world.pump();
-  expect(log).toEqual(["request", "change page.tsx"]);
+  expect(log).toEqual(["change page.tsx", "request"]);
   expect(world.effects).toEqual({ stats: 1, timers: 0, scans: 0 });
-  expect(world.opened).toEqual([{ path: "/app", recursive: true, fd: 40 }]);
+  expect(world.opened).toEqual([{ path: "/app", recursive: true, id: 40 }]);
   watcher.close();
+});
+
+test("a write committed while the pump runs is not claimed for that pump; the next drain delivers it", () => {
+  const world = fixture();
+  const log: string[] = [];
+  world.module.watch("/app", (event, name) => log.push(`${event} ${name}`));
+  let reload = true;
+  world.internal.addIoWaiter({ step() {
+    if (!reload) return false;
+    reload = false;
+    world.commit(40, chunk(record("change", "late.tsx")));
+    log.push("request");
+    return "progress";
+  } });
+  world.pump();
+  expect(log).toEqual(["request"]);
+  world.pump();
+  expect(log).toEqual(["request", "change late.tsx"]);
+});
+
+test("watch waiters expose no runtime_proc subscriptions, so the loop sleeps in the network host poll", () => {
+  const world = fixture();
+  world.module.watch("/dir");
+  expect(world.internal.ioWait(25)).toBe(false);
 });
 
 test("one step drains every queued record until EAGAIN", () => {
   const world = fixture();
   const events: unknown[][] = [];
   world.module.watch("/dir", (...args) => events.push(args));
-  const fd = world.opened[0]!.fd;
-  world.commit(fd, chunk(record("rename", "a"), record("change", "sub/b")), chunk(record("change", "a")));
+  const id = world.opened[0]!.id;
+  world.commit(id, chunk(record("rename", "a"), record("change", "sub/b")), chunk(record("change", "a")));
   expect(world.pump()).toBe(true);
   expect(events).toEqual([["rename", "a"], ["change", "sub/b"], ["change", "a"]]);
   expect(world.pump()).toBe(false);
@@ -140,22 +160,11 @@ test("filenames honor the validated encoding, and the root reports its basename"
   expect(seen.slice(1)).toEqual([Buffer.from("é").toString("hex"), "ü/ß"]);
 });
 
-test("registration failure throws a watch error and leaves nothing registered", () => {
+test.each([[44, "ENOENT", -2], [6, "ENOSPC", -28], [2, "EACCES", -13], [58, "ENOTSUP", -95]] as const)("registration errno %d throws %s and leaves nothing registered", (errno, code, nodeErrno) => {
   const world = fixture();
-  world.failOpen(44);
-  expect(() => world.module.watch("/gone")).toThrow(expect.objectContaining({ code: "ENOENT", errno: -2, syscall: "watch", path: "/gone" }));
+  world.failOpen(errno);
+  expect(() => world.module.watch("/gone")).toThrow(expect.objectContaining({ code, errno: nodeErrno, syscall: "watch", path: "/gone" }));
   expect(world.pending()).toBe(0);
-});
-
-test("the waiter sleeps on a READABLE subscription for the watch descriptor", () => {
-  const world = fixture();
-  const added: Waiter[] = [];
-  const add = world.internal.addIoWaiter;
-  world.internal.addIoWaiter = (waiter: Waiter) => { added.push(waiter); return add(waiter); };
-  world.module.watch("/dir");
-  const subscription = added[0]!.subscriptions!();
-  const view = new DataView(subscription.buffer, subscription.byteOffset, 16);
-  expect([subscription.length, view.getUint32(0, true), view.getUint32(4, true)]).toEqual([16, 0, 40]);
 });
 
 test("persistent, ref and unref decide whether the watch keeps the loop alive", () => {
@@ -171,7 +180,7 @@ test("persistent, ref and unref decide whether the watch keeps the loop alive", 
   expect(world.pending()).toBe(0);
 });
 
-test("close is idempotent, releases the descriptor and emits close once on a later tick", () => {
+test("close is idempotent, releases the watch id and emits close once on a later tick", () => {
   const world = fixture();
   const watcher = world.module.watch("/a", () => { throw new Error("closed watcher emitted"); });
   let closes = 0;
@@ -209,20 +218,24 @@ test("end of stream closes quietly; read errors and overflow emit error then clo
   track("ended", world.module.watch("/a"));
   track("failed", world.module.watch("/b"));
   track("overflowed", world.module.watch("/c"));
+  track("revoked", world.module.watch("/d"));
   world.commit(40, 0);
   world.commit(41, -29);
-  world.commit(42, chunk(record("change", "kept"), record("overflow"), record("change", "dropped")));
+  world.commit(42, chunk(record("change", "kept"), record("overflow")), 0);
+  world.commit(43, -11);
   world.pump();
   world.runTicks();
   expect(outcomes).toEqual([
     "failed error EIO watch",
     "overflowed change kept",
     "overflowed error EOVERFLOW watch",
+    "revoked error ECANCELED watch",
     "ended close",
     "failed close",
     "overflowed close",
+    "revoked close",
   ]);
-  expect([world.closed.toSorted(), world.pending()]).toEqual([[40, 41, 42], 0]);
+  expect([world.closed.toSorted(), world.pending()]).toEqual([[40, 41, 42, 43], 0]);
 });
 
 test("a throwing change listener becomes an error event and releases the watch", () => {

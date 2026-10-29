@@ -10,7 +10,7 @@ test("Bun child launches receive a per-process networking ring", async () => {
   const context = { identity: { pid: 1, parentPid: 0, host: null }, outcome: outcomeWord(), registerRevocation: () => () => {}, module, interruptible: false, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
   let request: RunRequest | undefined;
   const service = { launchWorker(_context: unknown, options: { request: RunRequest }) { request = options.request; return { terminate() {} }; } } as unknown as ProcessService;
-  const options = { workerUrl: "https://example.test/worker.js", runtime: processRuntimeFixture({}) };
+  const options = { workerUrl: "https://example.test/worker.js", notificationWorkerUrl: "https://example.test/notification-worker.js", runtime: processRuntimeFixture({}) };
   try {
     await bunLauncher("browser", options)(context, service);
     expect(request?.net).toBeInstanceOf(SharedArrayBuffer);
@@ -104,7 +104,7 @@ test("child launch revocation during activation allocates no session", async () 
   const context = { identity: { pid: 1, parentPid: 0, host: null }, module: new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])), outcome: outcomeWord(), registerRevocation(hook: () => void) { revoke = hook; return () => {}; }, request: { executable: "/bin/bun", argv: ["bun"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;
   const service = { launchWorker() { throw new Error("must not launch"); } } as unknown as ProcessService;
   try {
-    const launching = bunLauncher("browser", { runtime, workerUrl: "https://example.test/worker.js" })(context, service);
+    const launching = bunLauncher("browser", { runtime, workerUrl: "https://example.test/worker.js", notificationWorkerUrl: "./notification-worker.js" })(context, service);
     revoke(); gate.resolve(network);
     await expect(launching).rejects.toThrow("revoked");
     expect(allocations).toBe(0);
@@ -120,7 +120,7 @@ test("child helper lives until physical cleanup, not its logical outcome or adap
   let launch: Parameters<ProcessService["launchWorker"]>[1] | undefined;
   const service = { launchWorker(_context: unknown, value: typeof launch) { launch = value; return { terminate() {} }; } } as unknown as ProcessService;
   try {
-    await bunLauncher("browser", { runtime, workerUrl: "https://example.test/worker.js", network: options })(context, service);
+    await bunLauncher("browser", { runtime, workerUrl: "https://example.test/worker.js", notificationWorkerUrl: "./notification-worker.js", network: options })(context, service);
     if (!launch) throw new Error("missing launch");
     const request = launch.request as RunRequest;
     const host = new NetHost(request.net!, req => launch!.onMessage?.({ type: "net", req }, context), undefined, { shared: true });
@@ -145,7 +145,7 @@ for (const phase of ["before launch", "during tools load"] as const) test(`revok
   const service = { launchWorker() { throw new Error("must not launch"); } } as unknown as ProcessService;
   try {
     if (phase === "before launch") claimOutcome(context.outcome, { kind: "start-failed", code: 13 });
-    const launching = bunLauncher("browser", { runtime, workerUrl: "https://example.test/worker.js", loadTools() { loads++; return loading.promise; } })(context, service);
+    const launching = bunLauncher("browser", { runtime, workerUrl: "https://example.test/worker.js", notificationWorkerUrl: "./notification-worker.js", loadTools() { loads++; return loading.promise; } })(context, service);
     revoke(); loading.resolve(module);
     await expect(launching).rejects.toThrow("revoked");
     expect(activations).toBe(0);

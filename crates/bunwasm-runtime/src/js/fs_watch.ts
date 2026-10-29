@@ -1,8 +1,10 @@
 (function (internal: BunWasm.Internal & {
   native: {
+    /** A process-local watch id, or a negative WASI errno (runtime_fs.watch_open). */
     fsWatchOpen(path: string, recursive: boolean): number;
-    procRead(fd: number, capacity?: number): Uint8Array | number;
-    procClose(fd: number): number;
+    /** Whole records, 0 at end of stream, or a negative WASI errno (-6 when nothing is pending). */
+    fsWatchRead(id: number): Uint8Array | number;
+    fsWatchClose(id: number): number;
   };
   nextTick(callback: () => void): void;
 }) {
@@ -25,7 +27,7 @@
 
   const native = internal.native;
   const AGAIN = -6;
-  const READ_CAPACITY = 65536;
+  const NO_SPACE = 6;
   const NULL_NAME = 0xffffffff;
   const RECORD_TYPES = [undefined, "change", "rename", "overflow"] as const;
   // WASI errno -> Node code and errno, as for the synchronous filesystem natives.
@@ -35,13 +37,15 @@
     58: ["ENOTSUP", -95], 61: ["EOVERFLOW", -75], 63: ["EPERM", -1], 76: ["ENOTCAPABLE", undefined],
   };
 
-  function watchError(wasiErrno: number, path: string) {
-    const [code, errno] = ERRORS[wasiErrno] ?? [`E${wasiErrno}`, undefined];
+  function watchError(wasiErrno: number, path: string, open = false) {
+    // The runtime refuses a registration over its watch bounds with EAGAIN; Node reports
+    // an exhausted inotify watch limit as ENOSPC.
+    const [code, errno] = open && wasiErrno === NO_SPACE ? ["ENOSPC", -28] : ERRORS[wasiErrno] ?? [`E${wasiErrno}`, undefined];
     return Object.assign(new Error(`${code}: watch '${path}'`), { code, errno, syscall: "watch", path, filename: path });
   }
 
-  // Packed runtime_proc watch records: u8 type, 3 reserved bytes, u32 LE name length
-  // (0xffffffff for the watched root), then the UTF-8 relative name.
+  // runtime_fs.watch_read records: u8 type, 3 zero bytes, u32 LE name length (0xffffffff for
+  // the watched root and overflow), then the UTF-8 relative name, zero-padded to 4 bytes.
   function decode(bytes: Uint8Array): WatchRecord[] {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const records: WatchRecord[] = [];
@@ -52,16 +56,10 @@
       if (type === undefined) throw new Error(`unknown filesystem watch record ${bytes[offset - 8]}`);
       if (type === "overflow") { records.push({ type }); continue; }
       const name = length === NULL_NAME ? null : bytes.subarray(offset, offset + length);
-      if (name) offset += length;
+      if (name) offset += (length + 3) & ~3;
       records.push({ type, name });
     }
     return records;
-  }
-
-  function readable(fd: number) {
-    const subscription = new Uint8Array(16);
-    new DataView(subscription.buffer).setUint32(4, fd, true);
-    return subscription;
   }
 
   function filenameEncoding(value: unknown): string | undefined {
@@ -94,8 +92,8 @@
   return function createWatch(fs: FileSystem) {
     class FSWatcher extends EventEmitter {
       #closed = false;
-      #fd: number;
-      #waiter: BunWasm.IoWaiter & { late: true };
+      #id: number;
+      #waiter: BunWasm.IoWaiter & { watch: true };
       #path: string;
       #options: Options;
       #abort = () => this.close();
@@ -103,20 +101,20 @@
       constructor(path: string, settings: Options, listener?: Listener) {
         super();
         fs.statSync(path);
-        const fd = native.fsWatchOpen(path, Boolean(settings.recursive));
-        if (fd < 0) throw watchError(-fd, path);
-        this.#fd = fd;
+        const id = native.fsWatchOpen(path, Boolean(settings.recursive));
+        if (id < 0) throw watchError(-id, path, true);
+        this.#id = id;
         this.#path = path;
         this.#options = settings;
         if (listener) this.on("change", listener);
-        const subscription = readable(fd);
         internal.require("net");
+        // No subscriptions(): the idle loop then sleeps in the network host poll, whose
+        // notification set wakes on filesystem commits (runtime_proc.poll cannot).
         this.#waiter = internal.addIoWaiter({
           ref: settings.persistent !== false,
-          late: true,
+          watch: true,
           step: () => this.#step(),
           fail: (error: unknown) => this.#fail(error),
-          subscriptions: () => subscription,
         });
         if (settings.signal?.aborted) internal.nextTick(this.#abort);
         else settings.signal?.addEventListener("abort", this.#abort, { once: true });
@@ -125,7 +123,7 @@
       #step(): boolean | "progress" {
         let progressed = false;
         while (!this.#closed) {
-          const chunk = native.procRead(this.#fd, READ_CAPACITY);
+          const chunk = native.fsWatchRead(this.#id);
           if (chunk === AGAIN) return progressed && "progress";
           if (chunk === 0) { this.close(); return true; }
           if (typeof chunk === "number") { this.#fail(watchError(-chunk, this.#path)); return true; }
@@ -151,7 +149,7 @@
         if (this.#closed) return;
         this.#closed = true;
         internal.removeIoWaiter(this.#waiter);
-        native.procClose(this.#fd);
+        native.fsWatchClose(this.#id);
         this.#options.signal?.removeEventListener("abort", this.#abort);
         internal.nextTick(() => this.emit("close"));
       }

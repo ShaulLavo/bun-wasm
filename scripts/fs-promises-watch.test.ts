@@ -202,8 +202,8 @@ function productionBackend() {
   const backend = factory({
     native: {
       fsWatchOpen() { open.add(7); return 7; },
-      procRead: () => reads.shift() ?? -6,
-      procClose(fd: number) { expect(open.delete(fd)).toBe(true); return 0; },
+      fsWatchRead: () => reads.shift() ?? -6,
+      fsWatchClose(id: number) { expect(open.delete(id)).toBe(true); return 0; },
     },
     require: (name: string) => name === "events" ? EventEmitter : { Buffer },
     addIoWaiter: (waiter: { step(): unknown }) => { waiters.add(waiter); return waiter; },

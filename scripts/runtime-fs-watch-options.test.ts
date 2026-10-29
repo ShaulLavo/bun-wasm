@@ -18,8 +18,8 @@ function watchOptions() {
   const internal = {
     native: {
       fsWatchOpen() { return 30 + effects.opens++; },
-      procRead: () => -6,
-      procClose() { effects.closes++; return 0; },
+      fsWatchRead: () => -6,
+      fsWatchClose() { effects.closes++; return 0; },
     },
     require(name: string) {
       if (name === "events") return EventEmitter;
@@ -47,7 +47,7 @@ function watchOptions() {
 
 const invalidOptions = ["not-an-encoding", "buffer!", "utf9", 7, {}].flatMap<unknown>(encoding =>
   typeof encoding === "string" ? [encoding, { encoding }] : [{ encoding }]);
-test.each(invalidOptions)("watch rejects %j before filesystem or watch registration", value => {
+test.each(invalidOptions)("watch rejects %j before filesystem work or watch registration", value => {
   const { module, effects } = watchOptions();
   let watcher: Watcher | undefined;
   try {
