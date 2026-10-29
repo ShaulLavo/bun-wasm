@@ -1,6 +1,6 @@
-import { on, ref, type Handle } from "@remix-run/component";
+import { ref, type Handle } from "@remix-run/component";
 import type { Terminal } from "@xterm/xterm";
-import { terminalCopier } from "../../web/src/terminal-copy";
+import { CopyButton } from "../../web/src/copy-button";
 import type { Sandbox } from "./sandbox";
 
 export function TerminalPane(handle: Handle<{ sandbox: Sandbox }>) {
@@ -24,16 +24,4 @@ export function TerminalPane(handle: Handle<{ sandbox: Sandbox }>) {
 function TerminalHost(handle: Handle<{ term: Terminal; sandbox: Sandbox }>) {
   const open = ref((node, signal) => handle.props.sandbox.openTerminal(handle.props.term, node as HTMLElement, signal));
   return () => <div id="terminal" mix={open} />;
-}
-
-function CopyButton(handle: Handle<{ term?: Terminal }>) {
-  let text = "Copy";
-  const copyTerminal = terminalCopier((label) => { text = label; void handle.update(); }, handle.signal);
-  const copy = on<HTMLButtonElement>("click", () => {
-    const { term } = handle.props;
-    if (term) void copyTerminal(term);
-  });
-  return () => (
-    <button id="copy-terminal" type="button" title="Copy terminal output, including scrollback" aria-live="polite" mix={copy}>{text}</button>
-  );
 }
