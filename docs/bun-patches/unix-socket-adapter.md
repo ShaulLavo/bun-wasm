@@ -20,7 +20,13 @@ names, permission checks, stream queues, wakeups, half-close and unlink leases.
 Bun appends host slots 16 and 17 and exposes the same calls to the browser engine.
 
 Relative names join the current process cwd without normalizing dots or symlinks.
-NUL names, including abstract names, report EINVAL under this contract. Node
+A leading NUL selects Waffle's abstract namespace, unchanged; other NULs report
+EINVAL. `net_path.ts` classifies before the cwd join, so `"\0name"` reaches Waffle
+as is and `"rel\0x"` still joins the cwd and fails. Waffle owns the abstract names'
+scope, lifetime and limits (Waffle `docs/unix-sockets.md`, "Abstract names"). The
+released-provider abstract case and the guest fixture's abstract checks need the
+Waffle release that adds abstract names; on 0.0.102 the provider still rejects them
+with EINVAL. Node
 servers expose the requested path in `address()`. Pipe sockets expose no IP
 address, family or port. HTTP `socketPath` selects the connection independently
 of the request URL path and the agent pool separates socket names.

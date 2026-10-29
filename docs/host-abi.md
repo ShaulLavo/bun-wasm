@@ -220,10 +220,12 @@ may finish later, but its result is discarded and it never retains guest state.
 
 ### Unix path calls
 
-`listen_path` and `connect_path` take absolute UTF-8 paths. Bun joins relative
-Node paths to the current cwd without lexical normalization. Invalid UTF-8 and
-reserved listen flags report ERROR with EINVAL through `error(0)`. Listen flag
-bit 0 requests unlink on close. NUL and abstract names report EINVAL.
+`listen_path` and `connect_path` take absolute UTF-8 paths or Linux abstract
+names. Bun classifies the name before anything else: a leading NUL selects
+Waffle's abstract namespace and passes unchanged, with no cwd join. Bun joins
+other relative Node paths to the current cwd without lexical normalization.
+Invalid UTF-8 and reserved listen flags report ERROR with EINVAL through
+`error(0)`. Listen flag bit 0 requests unlink on close. Other NULs report EINVAL.
 
 The calls delegate to Waffle's `listenPath` and `connectPath`. All subsequent
 accept, read, write, shutdown, close, error and sized address calls reuse the
