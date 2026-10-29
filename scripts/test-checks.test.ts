@@ -35,6 +35,12 @@ test("immutable old selections match the discovered sets, with seven overlapping
   expect(new Set(paths).size).toBe(paths.length);
 });
 
+test("CI's native command runs the busy-loop stdout handshake fixture", () => {
+  const command = checkCommand("native");
+  expect(command.slice(0, 3)).toEqual(["bash", join(root, "scripts/test.sh"), "--no-build"]);
+  expect(command).toContain("stdout-busy-loop");
+});
+
 test("discovery is sorted and adding a feature needs no shared command edit", () => {
   const directory = fixture();
   writeFileSync(join(directory, "scripts/another.test.ts"), "");
