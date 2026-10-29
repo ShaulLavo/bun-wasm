@@ -11,7 +11,7 @@ const factory = join(scratch, "module_compile.js");
 const prepareFactory = join(scratch, "source_prepare.js");
 const env = { ...process.env, BUNWASM_MODULE_COMPILE_FACTORY: factory, BUNWASM_SOURCE_PREPARE_FACTORY: prepareFactory };
 beforeAll(() => {
-  for (const [name, destination] of [["module_compile", factory], ["source_prepare", prepareFactory]]) {
+  for (const [name, destination] of [["module_compile", factory], ["source_prepare", prepareFactory]] satisfies [string, string][]) {
     const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", new URL("./transpile-runtime.ts", import.meta.url).pathname,
       new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url).pathname, destination], { stdout: "pipe", stderr: "pipe" });
     expect(result.exitCode).toBe(0);

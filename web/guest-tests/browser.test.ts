@@ -67,6 +67,25 @@ test("browser guest prepares runtime-built constructors, lexical eval, wrappers 
   }
 }, 100000);
 
+test("browser guest prepares the complete rejection and iterator fixture at runtime", () => {
+  const fixture = resolve(root, "tests/async-context-runtime");
+  const rejection = resolve(root, "tests/async-context-rejection");
+  const reference = spawnSync("node", ["--no-warnings", resolve(rejection, "index.ts")], { encoding: "utf8", timeout: 30000 });
+  expect(reference.status, reference.stderr).toBe(0);
+  const wasm = process.env.BUN_WASM_TEST_BROWSER_WASM || resolve(root, "dist/bun-browser.wasm");
+  for (const context of ["hooks", "native"]) {
+    for (const route of ["constructor", "eval", "vm"]) {
+      const child = spawnSync("node", ["--no-warnings", resolve(root, "web/scripts/node-host.mjs"), "--wasm", wasm,
+        "--context", context, "--dir", `${fixture}::/`, "--dir", `${rejection}::/rejection`, "--env", "PWD=/", "--env", "HOME=/",
+        "--", "run", "/prepare-runtime-rejection.ts", route], { cwd: root, encoding: "utf8", timeout: 30000 });
+      const expected = context === "hooks" ? reference.stdout.split("\n").map(line => hookGaps[line] ?? line).join("\n") : reference.stdout;
+      expect(child.status, `${context}/${route}: ${child.stderr}${child.stdout}`).toBe(0);
+      expect(child.stdout).toBe(expected);
+      expect(child.stderr).toBe("");
+    }
+  }
+}, 190000);
+
 test("fresh Node-hosted WASM subprocesses preserve stdio, cwd, files, exits and signals", () => {
   const child = spawnSync("node", ["--no-warnings", new URL("../tests/subprocess.mjs", import.meta.url).pathname], { cwd: root, encoding: "utf8", timeout: 100000 });
   expect(child.error).toBeUndefined();

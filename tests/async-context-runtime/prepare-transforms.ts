@@ -32,6 +32,7 @@ const cases = [
   'function f(x) { return (0, eval)(x); }',
   'async function f(x) { const s = "é😀\ud800"; try { return await x; } finally {} }',
 ];
+cases.push('; async function emptyPrefix(x) { ; try { return await x; } finally {} }');
 for (const source of cases) {
   const result = prepare(source);
   assert.notEqual(result, source, source);

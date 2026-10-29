@@ -1,20 +1,20 @@
-From 7ad0f2cb53ff745a32567d25ce05f601023084a4 Mon Sep 17 00:00:00 2001
+From 465c70b19a80ff8cc2b8192823c7e30c2bf28b6a Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
-Date: Thu, 29 Oct 2026 11:58:15 +0200
+Date: Thu, 29 Oct 2026 12:06:34 +0200
 Subject: [PATCH] wasm: collect runtime source splices and prepare eval
  arguments
 
 ---
  src/js_parser/lexer.rs                |  6 +++++
  src/js_parser/lib.rs                  | 38 +++++++++++++++++++++++++++
- src/js_parser/parse/mod.rs            | 24 +++++++++++++++++
+ src/js_parser/parse/mod.rs            | 25 ++++++++++++++++++
  src/js_parser/parse/parse_fn.rs       | 10 +++++++
  src/js_parser/parse/parse_prefix.rs   |  4 +++
  src/js_parser/parse/parse_property.rs |  4 +++
  src/js_parser/parse/parse_stmt.rs     | 14 ++++++++++
  src/js_parser/parse/parse_suffix.rs   | 12 +++++++++
  src/js_printer/lib.rs                 |  7 ++++-
- 9 files changed, 118 insertions(+), 1 deletion(-)
+ 9 files changed, 119 insertions(+), 1 deletion(-)
 
 diff --git a/src/js_parser/lexer.rs b/src/js_parser/lexer.rs
 index 063d2206..7bd3ca9a 100644
@@ -115,7 +115,7 @@ index 045bf990..23d43889 100644
 +    });
 +}
 diff --git a/src/js_parser/parse/mod.rs b/src/js_parser/parse/mod.rs
-index 8e3392db..b26b4e19 100644
+index 8e3392db..685c190d 100644
 --- a/src/js_parser/parse/mod.rs
 +++ b/src/js_parser/parse/mod.rs
 @@ -112,7 +112,12 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
@@ -188,17 +188,20 @@ index 8e3392db..b26b4e19 100644
  
          loop {
              for comment in p.lexer.comments_to_preserve_before.iter() {
-@@ -1494,6 +1513,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -1492,8 +1511,12 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+             }
+ 
              let mut current_opts = opts;
++            let statement_start = p.lexer.start;
              let mut stmt = p.parse_stmt(&mut current_opts)?;
  
 +            if is_directive_prologue {
-+                prologue_end = stmt.loc.start as usize;
++                prologue_end = statement_start;
 +            }
              // Skip TypeScript types entirely
              if Self::IS_TYPESCRIPT_ENABLED {
                  if let js_ast::stmt::Data::STypeScript(_) = stmt.data {
-@@ -1538,6 +1560,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -1538,6 +1561,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
                  }
              }
  
@@ -206,7 +209,7 @@ index 8e3392db..b26b4e19 100644
              if !skip {
                  stmts.push(stmt);
              }
-@@ -1567,6 +1590,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -1567,6 +1591,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
              }
          }
  
