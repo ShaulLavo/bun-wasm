@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript-api";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
@@ -76,3 +76,22 @@ test("every engine stages the same TS-authored config as native ESM", async () =
   const module = await import("data:text/javascript;base64," + Buffer.from(staged.files["next.config.mjs"] ?? "").toString("base64"));
   expect(module.default).toEqual({ outputFileTracingRoot: process.cwd(), agentRules: false, experimental: { cpus: 1 } });
 });
+
+
+test("real launcher preserves exact dev/build/start argv", () => {
+  const scratch = mkdtempSync("/work/tmp/bun-wasm-next01-argv-");
+  try {
+    const bin = join(scratch, "node_modules/next/dist/bin/next");
+    mkdirSync(join(scratch, "node_modules/next/dist/bin"), { recursive: true });
+    writeFileSync(bin, "process.stdout.write(JSON.stringify(process.argv));\n");
+    writeFileSync(join(scratch, "launch.ts"), readFileSync(join(import.meta.dir, "../../examples/next-acceptance/launch.ts")));
+    for (const args of [["dev", "--webpack", "--hostname", "127.0.0.1", "--port", "43701"], ["build", "--webpack"], ["start", "--hostname", "127.0.0.1", "--port", "43701"]]) verifyLauncher(scratch, bin, args);
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+});
+
+function verifyLauncher(directory: string, bin: string, args: string[]) {
+  const child = Bun.spawnSync([process.execPath, "run", "launch.ts"].concat(args), { cwd: directory });
+  expect(child.exitCode).toBe(0);
+  const actual: unknown = JSON.parse(child.stdout.toString());
+  expect(Array.isArray(actual) ? actual.slice(1) : actual).toEqual([bin].concat(args));
+}

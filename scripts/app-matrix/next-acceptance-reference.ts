@@ -1,6 +1,6 @@
 // A native control validates the fixture and public-URL assertions; it never supplies an engine acceptance result.
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
@@ -24,6 +24,22 @@ async function release() {
   for (const child of children) await stopProcessGroup(child);
   rmSync(scratch, { recursive: true, force: true });
 }
+async function nativeCommand(args: string[], name: string) {
+  const child = spawn("bun", args, { cwd: scratch, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" } });
+  children.push(child);
+  child.stdout?.on("data", data => appendFileSync(join(reports, name), data));
+  child.stderr?.on("data", data => appendFileSync(join(reports, name), data));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", resolve);
+      timer = setTimeout(() => reject(new Error(`Native command timed out: bun ${args.join(" ")}`)), 120000);
+    });
+    assert.equal(result, 0, `bun ${args.join(" ")}; see ${name}`);
+  } finally { clearTimeout(timer); await stopProcessGroup(child); }
+}
+
 async function waitServer(base: string, child: ReturnType<typeof spawn>) {
   const deadline = Date.now() + 60000;
   while (Date.now() < deadline) {
@@ -46,8 +62,7 @@ try {
   }
   writeFileSync(join(reports, "config.json"), JSON.stringify(staged.config, null, 2));
   const lock = readFileSync(join(scratch, "bun.lock"), "utf8");
-  const installed = execFileSync("bun", ["install", "--frozen-lockfile", "--ignore-scripts"], { cwd: scratch, encoding: "utf8" });
-  writeFileSync(join(reports, "install.log"), installed);
+  await nativeCommand(["install", "--frozen-lockfile", "--ignore-scripts"], "install.log");
   assert.equal(readFileSync(join(scratch, "bun.lock"), "utf8"), lock);
   browser = await chromium.launch();
   const context = await browser.newContext();
@@ -74,8 +89,7 @@ try {
   results.push({ phase: "edits-and-recovery", status: "pass", detail: "Three edit/revert cycles; compile error/fix; overlap after errors" });
   await traffic.close();
   await stopProcessGroup(child);
-  const built = execFileSync("bun", ["run", "launch.ts", "build", "--webpack"], { cwd: scratch, encoding: "utf8", timeout: 120000, env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" } });
-  writeFileSync(join(reports, "build.log"), built);
+  await nativeCommand(["run", "launch.ts", "build", "--webpack"], "build.log");
   assert.ok(readFileSync(join(scratch, ".next/BUILD_ID"), "utf8"));
   const production = spawn("bun", ["run", "launch.ts", "start", "--hostname", "127.0.0.1", "--port", String(port)], { cwd: scratch, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" } });
   children.push(production);

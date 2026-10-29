@@ -33,7 +33,7 @@ bun web/tests/next-framework-registry.ts /work/tmp/bun-wasm-next-registry exampl
 
 The authoritative config is `examples/next-acceptance/next.config.ts`. `stageFixture` in `scripts/app-matrix/next-acceptance-fixture.ts` uses host Bun's TypeScript transpiler to generate `next.config.mjs` and omits the `.ts` config from the staged app. It performs this same step for every engine and the native control. Settings are identical: one compile CPU, fixture-local tracing root, and no automatic agent-rule file generation. Reports record source and generated digests, settings and the transpiler recipe. No generated JavaScript is checked in.
 
-This is a Next-supported ESM config. It does not prove the guest's separate TypeScript config-loading path works. To reproduce that boundary, stage the original `.ts` file instead of generated `.mjs` in disposable scratch and run `bun run launch.ts dev --webpack --hostname 127.0.0.1 --port 43701`. Historical JSC returned `Unexpected keyword export` from `module_compile`; preserve the original log when comparing a runtime fix.
+This is a Next-supported ESM config. It does not prove the guest's separate TypeScript config-loading path works. To reproduce that boundary, stage the original `.ts` file instead of generated `.mjs` in disposable scratch and run `bun run launch.ts dev --webpack --hostname 127.0.0.1 --port 43701`. Historical JSC returned `Unexpected keyword export` from `module_compile`; HTTP-01 also reproduced the export failure on native Node and QJS, identifying upstream SWC config compilation. Preserve the original log when comparing a compiler fix.
 
 ## Read the results
 
