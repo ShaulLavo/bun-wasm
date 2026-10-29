@@ -99,10 +99,8 @@ mod bun_transpiler {
             kind: &str,
             hooks: bool,
         ) -> Result<String, String> {
-            Ok(bunwasm_transpiler::prepare::function(args, kind, hooks)
-                .into_iter()
-                .collect::<serde_json::Value>()
-                .to_string())
+            let values = bunwasm_transpiler::prepare::function(args, kind, hooks);
+            Ok(format!("[{}]", values.into_iter().map(|value| value.to_string()).collect::<Vec<_>>().join(",")))
         }
 
         fn function_imports(&self, args: &[String], kind: &str) -> Result<Vec<Vec<usize>>, String> {

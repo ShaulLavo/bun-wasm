@@ -285,7 +285,7 @@ index 5298b27d..201bb653 100644
      }
  
 diff --git a/src/js_parser/parse/parse_suffix.rs b/src/js_parser/parse/parse_suffix.rs
-index 76c1603f..c77c564b 100644
+index 76c1603f..aa70c668 100644
 --- a/src/js_parser/parse/parse_suffix.rs
 +++ b/src/js_parser/parse/parse_suffix.rs
 @@ -384,7 +384,19 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
@@ -293,9 +293,9 @@ index 76c1603f..c77c564b 100644
          }
  
 +        let eval_target = match &left.data {
-+            js_ast::ExprData::EIdentifier(e) => p.load_name_from_ref(e.ref_) == b"eval",
-+            js_ast::ExprData::EBinary(e) if e.op == js_ast::op::Code::BinComma => match &e.right.data {
-+                js_ast::ExprData::EIdentifier(e) => p.load_name_from_ref(e.ref_) == b"eval",
++            ExprData::EIdentifier(e) => p.load_name_from_ref(e.ref_) == b"eval",
++            ExprData::EBinary(e) if e.op == OpCode::BinComma => match &e.right.data {
++                ExprData::EIdentifier(e) => p.load_name_from_ref(e.ref_) == b"eval",
 +                _ => false,
 +            },
 +            _ => false,
