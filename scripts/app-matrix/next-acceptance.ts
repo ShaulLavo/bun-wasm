@@ -72,7 +72,9 @@ const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture
 mkdirSync(output, { recursive: true });
 // A report directory is a single run, so stale evidence cannot turn a later run green.
 writeFileSync(join(output, "run.json"), "", { flag: "wx" });
-const task = session("next01-");
+process.env.BUN_WASM_TEST_TMP ??= "/work/tmp";
+const task = session("bun-wasm-next01-");
+process.env.TMPDIR = task.scratch;
 let mirror: Awaited<ReturnType<typeof registry>> | undefined;
 let hook: ((input: { page: Page; phase: string; engine: AcceptanceEngine }) => Promise<unknown>) | undefined;
 

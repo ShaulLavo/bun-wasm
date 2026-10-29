@@ -14,6 +14,8 @@ import { routeCases, runRouteCase, overlappingRequests } from "./next-acceptance
 const reports = resolve(process.argv[2] ?? "/work/reports/wave-20261029/bun/next01/native-reference");
 const port = Number(process.env.NEXT_REFERENCE_PORT ?? "43702");
 const scratch = mkdtempSync("/work/tmp/bun-wasm-next01-reference-");
+process.env.TMPDIR = join(scratch, "t");
+mkdirSync(process.env.TMPDIR);
 const fixture = resolve(import.meta.dir, "../../examples/next-acceptance");
 const children: ReturnType<typeof spawn>[] = [];
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
