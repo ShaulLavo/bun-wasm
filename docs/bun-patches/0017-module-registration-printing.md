@@ -23,3 +23,14 @@ the actual pair.
 [Parent context](bun-patch-series.md).
 
 [Ledger scope and pinned revisions](scope.md).
+
+## Main printer integration
+
+The registration patch is exported against the browser context-hook printer from
+main `a8628e196`. Its function-body and loop-comment contexts follow patch 0008.
+The existing registration additions remain unchanged, with main's `inherited`
+label flag retained in the shared label union. Outside registration mode that
+assignment therefore keeps main's nested-label behavior. The private source-only
+`wasm` commit is `b1c36a7670385986482d7f9d0e301c06efaa1793`, tree
+`b8982aff66428799986216d6252dca597ff73048`; no new native build is required to
+regenerate this patch from the cached upstream sources.
