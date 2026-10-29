@@ -154,11 +154,7 @@ impl Fixture {
     fn with_memory(directory: &std::path::Path, shared: bool) -> Self {
         Self::with_memory_and_stdio(directory, shared, Stdio::inherited())
     }
-    fn with_memory_and_stdio(
-        directory: &std::path::Path,
-        shared: bool,
-        stdio: Stdio,
-    ) -> Self {
+    fn with_memory_and_stdio(directory: &std::path::Path, shared: bool, stdio: Stdio) -> Self {
         let mut config = Config::new();
         config.epoch_interruption(true);
         let engine = Engine::new(&config).unwrap();
