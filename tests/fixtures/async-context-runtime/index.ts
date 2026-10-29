@@ -59,10 +59,10 @@ function record(caseName: string, request: string, phase: string, expected: stri
   failures.push(`${caseName}/${request}/${phase}: expected ${expected}, got ${actual ?? "undefined"}`);
 }
 
-function timer(caseName: string, request: string): (phase: string) => Promise<void> {
+function timer(caseName: string, request: string, expected = request): (phase: string) => Promise<void> {
   return phase => new Promise(resolve => {
     setTimeout(() => {
-      record(caseName, request, phase, currentStore()?.nested ?? request);
+      record(caseName, request, phase, expected);
       resolve();
     }, 0);
   });
@@ -72,33 +72,40 @@ function makeNote(caseName: string, request: string): Note {
   return (phase, expected = request) => record(caseName, request, phase, expected);
 }
 
+async function runNested(name: string, request: string): Promise<void> {
+  const expected = `${request}:nested`;
+  const note = makeNote(name, request);
+  const wait = timer(name, request, expected);
+  await storage.run({ request, nested: expected }, async () => {
+    note("nested.enter", expected);
+    await wait("nested.timer");
+    note("nested.after-timer", expected);
+  });
+}
+
+async function requestBody(name: string, request: string, fn: AsyncCase): Promise<void> {
+  const note = makeNote(name, request);
+  const wait = timer(name, request);
+  note("run.enter");
+  await fn(note, wait);
+  note("run.after-function");
+  await wait("run.timer");
+  try {
+    await Promise.reject(new Error("outer rejection"));
+  } catch {
+    note("run.catch");
+  } finally {
+    note("run.finally");
+  }
+  await runNested(name, request);
+  note("nested.exit");
+}
+
 async function runCase(name: string, origin: CodeOrigin, fn: AsyncCase): Promise<void> {
   const requests = ["request-A", "request-B"];
   const report: CaseReport = { name, origin: origin.id, compiledOnce: origin.compiledOnce, requests };
   cases.push(report);
-  const runRequest = async (request: string): Promise<void> => {
-    await storage.run({ request }, async () => {
-      const note = makeNote(name, request);
-      const wait = timer(name, request);
-      note("run.enter");
-      await fn(note, wait);
-      note("run.after-function");
-      await wait("run.timer");
-      try {
-        await Promise.reject(new Error("outer rejection"));
-      } catch {
-        note("run.catch");
-      } finally {
-        note("run.finally");
-      }
-      await storage.run({ request, nested: `${request}:nested` }, async () => {
-        note("nested.enter", `${request}:nested`);
-        await wait("nested.timer");
-        note("nested.after-timer", `${request}:nested`);
-      });
-      note("nested.exit");
-    });
-  };
+  const runRequest = (request: string) => storage.run({ request }, () => requestBody(name, request, fn));
   try {
     await Promise.all(requests.map(runRequest));
   } catch (error) {
@@ -125,7 +132,7 @@ function asyncGeneratorFunctionConstructor(): FunctionConstructor {
 }
 
 function makeDynamicAsync(ctor: FunctionConstructor, id: string, kind: OriginKind): AsyncCase {
-  const fn = ctor(
+  const fn = new ctor(
     "note",
     "timer",
     `note("dynamic.before-await"); await Promise.resolve(); note("dynamic.after-await"); await timer("dynamic.after-timer"); try { await Promise.reject(new Error("dynamic rejection")); } catch { note("dynamic.catch"); } finally { note("dynamic.finally"); }\n//# sourceURL=${sourceURL(id)}`,
@@ -139,6 +146,24 @@ function makeEvaluated(): AsyncCase {
   const fn = eval(source) as AsyncCase;
   addOrigin({ id: "eval", kind: "eval", source, sourceURL: sourceURL("eval"), constructor: "AsyncFunction", compiledOnce: false });
   return fn;
+}
+
+type ConstructorMode = "function" | "async" | "generator" | "async-generator";
+
+async function invokeConstructor(mode: ConstructorMode, fn: unknown, note: Note, wait: (phase: string) => Promise<void>): Promise<void> {
+  if (mode === "function") {
+    (fn as (note: Note) => void)(note);
+    return;
+  }
+  if (mode === "async") {
+    await (fn as AsyncCase)(note, wait);
+    return;
+  }
+  if (mode === "generator") {
+    for (const value of (fn as (note: Note) => Iterable<unknown>)(note)) await value;
+    return;
+  }
+  for await (const value of (fn as (note: Note, wait: (phase: string) => Promise<void>) => AsyncGenerator<unknown>)(note, wait)) void value;
 }
 
 async function runConstructors(): Promise<void> {
@@ -166,21 +191,7 @@ async function runConstructors(): Promise<void> {
       fn = entry.ctor("note", "timer", `note("constructor.async-generator-enter"); await Promise.resolve(); note("constructor.async-generator-after-await"); await timer("constructor.async-generator-after-timer"); yield 1;\n//# sourceURL=${sourceURLValue}`);
     }
     addOrigin({ id, kind: "constructor", source: Function.prototype.toString.call(fn), sourceURL: sourceURLValue, constructor: entry.name, compiledOnce: false });
-    const invoke: AsyncCase = async (note, wait) => {
-      if (entry.mode === "function") {
-        (fn as (note: Note) => void)(note);
-        return;
-      }
-      if (entry.mode === "async") {
-        await (fn as AsyncCase)(note, wait);
-        return;
-      }
-      if (entry.mode === "generator") {
-        for (const value of (fn as (note: Note) => Iterable<unknown>)(note)) await value;
-        return;
-      }
-      for await (const value of (fn as (note: Note, wait: (phase: string) => Promise<void>) => AsyncGenerator<unknown>)(note, wait)) void value;
-    };
+    const invoke: AsyncCase = (note, wait) => invokeConstructor(entry.mode, fn, note, wait);
     await runCase(entry.name, { id, kind: "constructor", source: Function.prototype.toString.call(fn), sourceURL: sourceURLValue, constructor: entry.name, compiledOnce: false }, invoke);
   }
 }

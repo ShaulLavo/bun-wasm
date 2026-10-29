@@ -121,7 +121,7 @@ if [[ $browser == 1 ]]; then
   fi
   if [[ -f "$root/dist/bun-browser.wasm" ]]; then
     browser_test node tests/browser-worker-modules.ts || failed=1
-    browser_test node tests/async-context-runtime.mjs || failed=1
+    browser_test node tests/async-context-runtime.ts || failed=1
     browser_test node tests/browser-engine.mjs || failed=1
     browser_test node tests/browser-tools.ts || failed=1
     browser_test node tests/browser-crypto.mjs || failed=1
