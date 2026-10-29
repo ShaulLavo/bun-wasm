@@ -99,7 +99,8 @@ function interruption(): void {
 function digest(path: string): string { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
 try {
   if (!integrationOnly) modules();
-  for (const file of ["tla/main.mts", "dynamic-import.cts", "require-esm.cts", "async-context.ts", "metadata-main.mts"]) {
+  for (const file of ["tla/main.mts", "dynamic-import.cts", "require-esm.cts", "async-context.ts", "metadata-main.mts", "synthetic-defaults.ts"]) {
+  for (const file of ["tla/main.mts", "dynamic-import.cts", "require-esm.cts", "async-context.ts", "metadata-main.mts", "synthetic-defaults.ts"]) {
     againstNode(file, join(root, "tests/hermes", file));
   }
   sourceLines("tla/source-lines.mts");

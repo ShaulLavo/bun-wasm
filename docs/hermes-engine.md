@@ -12,15 +12,14 @@ source env.sh
 export HERMES_BUILD_DIR=/work/tmp/bun-wasm-hermes-<lane>
 hermes/build.sh                      # the VM library
 scripts/build-bun-hermes.sh          # dist/bun-hermes.wasm + dist/hermes-engine.wasm
-"$CARGO_TARGET_DIR/release/bun-wasm" dist/bun-hermes.wasm -e 'console.log(1 + 1)'
-"$CARGO_TARGET_DIR/release/bun-wasm" dist/bun-hermes.wasm run tests/hermes/hello.cts
+"$CARGO_TARGET_DIR/release/bun-wasm" --wasm dist/bun-hermes.wasm -- -e 'console.log(1 + 1)'
+"$CARGO_TARGET_DIR/release/bun-wasm" --wasm dist/bun-hermes.wasm -- run tests/hermes/hello.cts
 ```
 
 Settings: `BUN_WASM_HERMES_OPT` (`none` default, `user`, `all`) and
 `BUN_WASM_HERMES_MAX_HEAP_MIB` (default 384). Heap exhaustion is fatal (exit 134).
 
 Provenance: [engine program](bun-patches/hermes-engine-program.md).
-
 ## Hosts
 
 The browser loader accepts `?engine=hermes` when the web build contains both files.
