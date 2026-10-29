@@ -1,19 +1,20 @@
-From a922e4bb66c3bbfb64b43adb4b91af76e5165891 Mon Sep 17 00:00:00 2001
+From cd71d1ec16a495f0354d4e531794b5b97c548aab Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
-Date: Thu, 29 Oct 2026 11:23:02 +0200
+Date: Thu, 29 Oct 2026 11:53:30 +0200
 Subject: [PATCH] wasm: collect runtime source splices and prepare eval
  arguments
 
 ---
- src/js_parser/lexer.rs              |  3 +++
- src/js_parser/lib.rs                | 38 +++++++++++++++++++++++++++++
- src/js_parser/parse/mod.rs          | 23 +++++++++++++++++
- src/js_parser/parse/parse_fn.rs     | 10 ++++++++
- src/js_parser/parse/parse_prefix.rs |  4 +++
- src/js_parser/parse/parse_stmt.rs   | 14 +++++++++++
- src/js_parser/parse/parse_suffix.rs | 12 +++++++++
- src/js_printer/lib.rs               |  7 +++++-
- 8 files changed, 110 insertions(+), 1 deletion(-)
+ src/js_parser/lexer.rs                |  3 +++
+ src/js_parser/lib.rs                  | 38 +++++++++++++++++++++++++++
+ src/js_parser/parse/mod.rs            | 24 +++++++++++++++++
+ src/js_parser/parse/parse_fn.rs       | 10 +++++++
+ src/js_parser/parse/parse_prefix.rs   |  4 +++
+ src/js_parser/parse/parse_property.rs |  4 +++
+ src/js_parser/parse/parse_stmt.rs     | 14 ++++++++++
+ src/js_parser/parse/parse_suffix.rs   | 12 +++++++++
+ src/js_printer/lib.rs                 |  7 ++++-
+ 9 files changed, 115 insertions(+), 1 deletion(-)
 
 diff --git a/src/js_parser/lexer.rs b/src/js_parser/lexer.rs
 index 063d2206..6f66d780 100644
@@ -44,7 +45,7 @@ index 063d2206..6f66d780 100644
              previous_backslash_quote_in_jsx: Range::NONE,
              token: T::TEndOfFile,
 diff --git a/src/js_parser/lib.rs b/src/js_parser/lib.rs
-index 045bf990..da9b84f2 100644
+index 045bf990..23d43889 100644
 --- a/src/js_parser/lib.rs
 +++ b/src/js_parser/lib.rs
 @@ -799,3 +799,41 @@ fn bunwasm_dynamic_import(loc: bun_ast::Loc) {
@@ -63,7 +64,7 @@ index 045bf990..da9b84f2 100644
 +    Handler(usize),
 +    Loop { start: usize, iterable: usize, iterable_end: usize, body: usize, end: usize, block: bool },
 +    Label { start: usize, body: usize },
-+    Eval { start: usize, end: usize, spread: bool },
++    Eval { start: usize, indirect: bool },
 +    Argument { call: usize, start: usize, end: usize, spread: bool },
 +    AwaitUsing,
 +}
@@ -316,7 +317,7 @@ index 5298b27d..201bb653 100644
      }
  
 diff --git a/src/js_parser/parse/parse_suffix.rs b/src/js_parser/parse/parse_suffix.rs
-index 76c1603f..aa70c668 100644
+index 76c1603f..9a042758 100644
 --- a/src/js_parser/parse/parse_suffix.rs
 +++ b/src/js_parser/parse/parse_suffix.rs
 @@ -384,7 +384,19 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
@@ -325,7 +326,7 @@ index 76c1603f..aa70c668 100644
  
 +        let eval_target = match &left.data {
 +            ExprData::EIdentifier(e) => p.load_name_from_ref(e.ref_) == b"eval",
-+            ExprData::EBinary(e) if e.op == OpCode::BinComma => match &e.right.data {
++            ExprData::EBinary(e) if e.op == OpCode::BinComma && matches!(e.left.data, ExprData::ENumber(n) if n.value == 0.0) => match &e.right.data {
 +                ExprData::EIdentifier(e) => p.load_name_from_ref(e.ref_) == b"eval",
 +                _ => false,
 +            },
@@ -334,13 +335,13 @@ index 76c1603f..aa70c668 100644
 +        let open = p.lexer.start;
          let list_loc = p.parse_call_args()?;
 +        if eval_target && old_optional_chain.is_none() {
-+            crate::bunwasm_splice(crate::BunwasmSplice::Eval { start: open, end: list_loc.loc.start as usize, spread: false });
++            crate::bunwasm_splice(crate::BunwasmSplice::Eval { start: open, indirect: matches!(left.data, ExprData::EBinary(_)) });
 +        }
          let loc = left.loc;
          let target = *left;
          *left = p.new_expr(
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index d84ed54d..2b120a13 100644
+index d84ed54d..cabcf053 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
 @@ -3681,7 +3681,12 @@ pub(crate) mod __gated_printer {
@@ -352,7 +353,7 @@ index d84ed54d..2b120a13 100644
 +                            && !matches!(args[0].data, ExprData::ESpread(_));
 +                        if prepare_eval { self.print(b"__bunwasm_evalArg(eval, "); }
                          self.print_expr(args[0], Level::Comma, ExprFlag::none());
-+                        if prepare_eval { self.print(b")"); }
++                        if prepare_eval { self.print(if is_unbound_eval { b", \"eval-indirect\")" } else { b")" }); }
                          for arg in &args[1..] {
                              self.print(b",");
                              self.print_space();

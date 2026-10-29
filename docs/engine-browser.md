@@ -242,9 +242,6 @@ semantics.
 - G7: aliased, member, optional and spread eval calls are unprepared. Spread eval is counted.
 - G8: the async-generator `.throw` wrapper changes its function identity.
 
-A nested labeled `for await` continuation after `continue outer` also currently
-loses context, equally in the parent printer and runtime insertion path. The
-CTX-02b report retains its exact reproducer. The parent owns its hook-contract
-fix. Host-originated job entry, raw polyfill awaits and a passing Next/HMR
+Host-originated job entry, raw polyfill awaits and a passing Next/HMR
 context gate remain separate work. User-created data/blob modules and
 `importScripts` outside the loader are not prepared.
