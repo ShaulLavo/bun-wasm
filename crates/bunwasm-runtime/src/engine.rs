@@ -27,6 +27,15 @@ pub enum PromiseState {
     Rejected,
 }
 
+/// Source for an engine without native ES modules.
+pub enum ModuleSource<E: Engine> {
+    Record(String),
+    Synthetic {
+        namespace: E::Value,
+        default: E::Value,
+    },
+}
+
 /// The runtime's side of module loading, called by the engine's loader.
 pub trait ModuleHost<E: Engine> {
     /// Report an immediate uncaught engine value through the owning driver.
@@ -50,6 +59,18 @@ pub trait ModuleHost<E: Engine> {
     /// ES module source for a resolved name (CommonJS, JSON and built-ins
     /// come back as generated wrapper modules).
     fn load(&self, engine: &E, name: &str) -> Result<String, E::Value>;
+    /// The registration loader factory for an engine without native modules.
+    fn record_loader_source(&self, engine: &E) -> Result<String, E::Value> {
+        Err(engine.error_value(&NativeError::error("this engine has native ES modules")))
+    }
+    /// Registration record or synthetic namespace for an already-resolved name.
+    fn load_record(&self, engine: &E, _name: &str) -> Result<ModuleSource<E>, E::Value> {
+        Err(engine.error_value(&NativeError::error("this engine has native ES modules")))
+    }
+    /// Rewrite dynamic imports in a classic script without reprinting it.
+    fn lower_script(&self, _engine: &E, source: &str, _filename: &str) -> Result<String, E::Value> {
+        Ok(source.to_owned())
+    }
     /// Fill in `import.meta` for a module created from `load`'s source.
     fn init_meta(&self, engine: &E, name: &str, meta: &E::Value) -> Result<(), E::Value>;
 }

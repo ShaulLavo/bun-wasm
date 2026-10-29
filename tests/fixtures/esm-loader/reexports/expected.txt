@@ -1,0 +1,3 @@
+x original only x only y only x y default hub shared
+def,nsX,onlyX,onlyY,original,renamed,shared
+ambiguous hidden false false

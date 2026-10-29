@@ -1,0 +1,9 @@
+{
+ "modules": {
+  "/failing.mjs": "({r:[\"./inner.mjs\"],i:[[0,\"inner\"]],x:[],s:[],a:true,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"never\":()=>never});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0];yield;console.log(\"failing start\", __bunwasm_ns0_0.inner);\n(yield null);\nconst never = 1;\nthrow Error(\"rejected after await\");\n\n}})",
+  "/inner.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"inner\":()=>inner});yield;yield;const inner = \"inner ok\";\n\n}})",
+  "/main.mjs": "({r:[\"./sibling.mjs\",\"./failing.mjs\"],i:[[1,\"never\"]],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;var __bunwasm_ns1_0=__bunwasm_m.n[1];yield;console.log(\"main must not run\", __bunwasm_ns1_0.never);\n\n}})",
+  "/sibling.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"sibling sync\");\n\n}})"
+ },
+ "cjs": {}
+}
