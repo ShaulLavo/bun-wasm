@@ -66,7 +66,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
   let checked;
   let url;
   let captured = false;
-  const cleanupFailures = [];
+  let cleanupFailures = [];
   const cleanupTimeout = options.cleanupTimeout ?? 10_000;
   const release = async (operation, cleanup, timeout = cleanupTimeout) => {
     const failed = await boundedCleanup(operation, cleanup, timeout);
@@ -87,7 +87,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
     if (previewState !== "ready") throw new Error(`Preview service worker is ${previewState}`);
     url = await page.evaluate(() => globalThis.playground.previews.url(3137));
     const probe = await context.newPage();
-    try { await waitForPreviewReady(probe, url, deadline); }
+    try { await waitForPreviewReady(probe, url, deadline, cleanupTimeout); }
     finally { await release("probe-close", () => probe.close()); }
     timings.httpReadyMs = since(started);
     const loading = performance.now();
@@ -110,6 +110,7 @@ export async function serverCommand({ page, context, command, app, engine, optio
       checked = { status: "pass", assertion: `${options.previewOrigins ? "Root-origin" : "Service-worker"} preview renders ${JSON.stringify(check.text)}${contract ? `; ${contract}` : ""}`, observations, timings };
     }
   } catch (error) {
+    if (error instanceof HarnessCleanupError) cleanupFailures = cleanupFailures.concat(error.failures);
     let diagnostic = "";
     captured = true;
     await release("terminal-capture", async () => { diagnostic = await output(); });
