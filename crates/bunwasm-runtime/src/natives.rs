@@ -447,8 +447,10 @@ fn bun_string_round_trip(bytes: &[u8], encoding: &str) -> NativeResult {
     let owned = bytes.to_vec();
     let words: Vec<u16> = match encoding {
         "utf16le" => owned
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
             .collect(),
         _ => Vec::new(),
     };
