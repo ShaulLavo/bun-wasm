@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 const testing = require("bun:internal-for-testing");
 const preparation = testing.preparation();
 const prepare = (source: string, goal = "script", name?: string): string => testing.prepareSource(source, goal, "transform-test", name);
-if (!globalThis.__bunwasm_capture) throw new Error("requires the browser hooks guest");
+if (!("__bunwasm_capture" in globalThis)) throw new Error("requires the browser hooks guest");
 
 const cases = [
   'async function f(x) { return await x; }',

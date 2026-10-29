@@ -70,7 +70,7 @@ for (const value of [undefined, null, false, 0, "", NaN]) {
   assert.equal(await rejected(value), true);
 }
 
-const loop = AsyncFunction("storage", `const trace = []; outer: for (let i = 0; i < 2; i++) { for await (const x of [1]) { trace.push(storage.getStore()); continue outer; } } return trace;`);
+const loop = AsyncFunction("storage", `const trace = []; outer: for await (const i of [1, 2]) { for await (const x of [1]) { trace.push(storage.getStore()); continue outer; } } return trace;`);
 assert.deepEqual(await storage.run("loop", () => loop(storage)), ["loop", "loop"]);
 const badIterator = AsyncFunction("storage", `try { for await (const x of { [Symbol.asyncIterator]() { storage.enterWith("changed"); throw false; } }) {} } catch (error) { if (error !== false) throw error; return storage.getStore(); }`);
 assert.equal(await storage.run("initial", () => badIterator(storage)), "changed");

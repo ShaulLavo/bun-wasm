@@ -39,13 +39,19 @@ struct Body {
 struct Edits(Vec<(usize, usize, usize, i64)>);
 impl Edits {
     fn at(&mut self, at: usize, kind: usize) {
-        self.0.push((at, 0, kind, 0));
+        self.0.push((at, 0, kind, i64::MIN + kind as i64));
     }
     fn open(&mut self, at: usize, end: usize, kind: usize) {
-        self.0.push((at, 0, kind, -(end as i64)));
+        let rank = match kind {
+            15 => 0,
+            3 => 1,
+            8 => 2,
+            _ => 3,
+        };
+        self.0.push((at, 0, kind, -(end as i64) * 32 + rank));
     }
     fn close(&mut self, at: usize, start: usize, kind: usize) {
-        self.0.push((at, 0, kind, -(start as i64)));
+        self.0.push((at, 0, kind, -(start as i64) * 32));
     }
 }
 
