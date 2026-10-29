@@ -1,6 +1,6 @@
 import { on, ref, type Handle } from "@remix-run/component";
 import type { Terminal } from "@xterm/xterm";
-import { copyTerminal } from "../terminal-copy";
+import { terminalCopier } from "../terminal-copy";
 import type { Playground } from "./playground";
 
 export function TerminalPane(handle: Handle<{ playground: Playground }>) {
@@ -34,15 +34,10 @@ function TerminalHost(handle: Handle<{ term: Terminal; playground: Playground }>
 
 function CopyButton(handle: Handle<{ term?: Terminal }>) {
   let text = "Copy";
-  let reset: ReturnType<typeof setTimeout> | undefined;
-  handle.signal.addEventListener("abort", () => clearTimeout(reset));
-  const copy = on<HTMLButtonElement>("click", async () => {
+  const copyTerminal = terminalCopier((label) => { text = label; void handle.update(); }, handle.signal);
+  const copy = on<HTMLButtonElement>("click", () => {
     const { term } = handle.props;
-    if (!term) return;
-    clearTimeout(reset);
-    text = await copyTerminal(term) ? "Copied" : "Copy failed";
-    void handle.update();
-    reset = setTimeout(() => { text = "Copy"; void handle.update(); }, 2500);
+    if (term) void copyTerminal(term);
   });
   return () => (
     <button id="copy-terminal" type="button" title="Copy terminal output, including scrollback" aria-live="polite" mix={copy}>{text}</button>

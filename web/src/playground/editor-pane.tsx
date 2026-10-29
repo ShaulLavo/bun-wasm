@@ -22,10 +22,10 @@ export function EditorPane(handle: Handle<Props>) {
           <Tabs editor={editor} report={playground.report} />
           {/* Phones get a file dropdown instead of the tab strip, so nothing scrolls sideways. */}
           <select
-            id="file-select" aria-label="File" disabled={locked} value={editor?.path}
+            id="file-select" aria-label="File" disabled={locked}
             mix={on("change", (event) => void editor?.open(event.currentTarget.value).catch(playground.report))}
           >
-            {editor?.files.map((path) => <option key={path} value={path}>{label(editor, path)}</option>)}
+            {editor?.files.map((path) => <option key={path} value={path} selected={path === editor.path}>{label(editor, path)}</option>)}
           </select>
           <button id="new-file" type="button" title="New file" aria-label="New file" disabled={locked} mix={newFile}>+</button>
         </div>

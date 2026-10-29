@@ -1,5 +1,4 @@
 import { on, type Handle } from "@remix-run/component";
-import { followVisualViewport } from "../../web/src/viewport";
 import { EditorPane } from "./editor-pane";
 import { FileTree } from "./file-tree";
 import { PreviewPane } from "./preview-pane";
@@ -8,12 +7,12 @@ import { TerminalPane } from "./terminal-pane";
 
 type Props = { sandbox: Sandbox };
 
+const ENGINE_OPTIONS = [["browser", "Browser (native)"], ["quickjs", "QuickJS"], ["jsc", "JSC"]] as const;
 const RELOAD_TITLES = { construction: "Retry sandbox startup", startup: "Open the latest saved workspace" };
 
 export function App(handle: Handle<Props>) {
   const { sandbox } = handle.props;
   sandbox.addEventListener("change", () => void handle.update(), { signal: handle.signal });
-  followVisualViewport(handle.signal);
   return () => (
     <>
       <Header sandbox={sandbox} />
@@ -47,17 +46,15 @@ function Header(handle: Handle<Props>) {
         <a class="nav" href="./playground/" title="Terminal playground: bun test, bun build, bun:sqlite">Playground</a>
         <label class="engine template-choice">
           <span class="label">Template</span>
-          <select id="template" aria-label="App template" title="App template" value={sandbox.template} disabled={locked} mix={choose("template")}>
-            <option value="react">React</option>
-            <option value="vanilla">Vanilla TS</option>
+          <select id="template" aria-label="App template" title="App template" disabled={locked} mix={choose("template")}>
+            <option value="react" selected={sandbox.template === "react"}>React</option>
+            <option value="vanilla" selected={sandbox.template === "vanilla"}>Vanilla TS</option>
           </select>
         </label>
         <label class="engine">
           <span class="label">Engine</span>
-          <select id="engine" aria-label="JavaScript engine" title="JavaScript engine (restarts the dev server)" value={sandbox.engine} disabled={locked} mix={choose("engine")}>
-            <option value="browser">Browser (native)</option>
-            <option value="quickjs">QuickJS</option>
-            <option value="jsc">JSC</option>
+          <select id="engine" aria-label="JavaScript engine" title="JavaScript engine (restarts the dev server)" disabled={locked} mix={choose("engine")}>
+            {ENGINE_OPTIONS.map(([value, label]) => <option value={value} selected={value === sandbox.engine}>{label}</option>)}
           </select>
         </label>
         <button id="reset" type="button" title="Discard this workspace and restore its template" disabled={locked} mix={reset}>Reset template</button>

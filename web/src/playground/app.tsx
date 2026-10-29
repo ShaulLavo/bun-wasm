@@ -1,5 +1,4 @@
 import { on, type Handle } from "@remix-run/component";
-import { followVisualViewport } from "../viewport";
 import { EditorPane } from "./editor-pane";
 import type { Playground } from "./playground";
 import { TerminalPane } from "./terminal-pane";
@@ -13,7 +12,6 @@ const RELOAD_TITLES = { startup: "Retry playground startup", ownership: "Open th
 export function App(handle: Handle<Props>) {
   const { playground } = handle.props;
   playground.addEventListener("change", () => void handle.update(), { signal: handle.signal });
-  followVisualViewport(handle.signal);
   return () => (
     <>
       <Header playground={playground} />
@@ -36,10 +34,10 @@ function Header(handle: Handle<Props>) {
         <a class="nav" href="../" title="React sandbox with hot reload">Sandbox</a>
         <select
           id="engine" aria-label="JavaScript engine" title="JavaScript engine (reloads the page)"
-          value={playground.engine} disabled={playground.locked}
+          disabled={playground.locked}
           mix={on("change", (event) => playground.chooseEngine(event.currentTarget.value))}
         >
-          {ENGINE_OPTIONS.map(([value, label]) => <option value={value}>{label}</option>)}
+          {ENGINE_OPTIONS.map(([value, label]) => <option value={value} selected={value === playground.engine}>{label}</option>)}
         </select>
         <RunButton playground={playground} />
       </header>

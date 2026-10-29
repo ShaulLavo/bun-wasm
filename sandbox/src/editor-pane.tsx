@@ -11,10 +11,10 @@ export function EditorPane(handle: Handle<{ sandbox: Sandbox }>) {
       <section class="pane editor-pane" aria-label="Editor">
         <div class="bar">
           <select
-            id="file-select" aria-label="File" disabled={sandbox.failure !== undefined} value={editor?.path}
+            id="file-select" aria-label="File" disabled={sandbox.failure !== undefined}
             mix={on("change", (event) => void editor?.open(event.currentTarget.value).catch(sandbox.report))}
           >
-            {sandbox.files.filter((path) => !path.startsWith("node_modules/")).map((path) => <option key={path} value={path}>{path}</option>)}
+            {sandbox.files.filter((path) => !path.startsWith("node_modules/")).map((path) => <option key={path} value={path} selected={path === editor?.path}>{path}</option>)}
           </select>
           <span id="file-name">{editor?.path}</span>
           <span id="save-state" aria-live="polite" data-kind={saveState?.kind}>{saveState?.text}</span>
