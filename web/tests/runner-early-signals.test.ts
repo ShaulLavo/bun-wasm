@@ -6,7 +6,8 @@ import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { startRun, type Run } from "../src/runner";
 import type { RunRequest } from "../src/bun-executor";
-import { processRuntimeFixture, fixtureFilesystemConnection } from "./process-runtime-fixture";
+import { fixtureFilesystemConnection } from "./process-runtime-fixture";
+import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 
 async function until(check: () => boolean) {
   for (let turn = 0; turn < 100; turn++) {

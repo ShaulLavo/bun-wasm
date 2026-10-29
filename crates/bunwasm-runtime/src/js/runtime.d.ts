@@ -15,6 +15,8 @@ declare namespace BunWasm {
     };
     hostCaps: Record<string, boolean>;
     hostLocalAddr(handle: number): string | number;
+    hostListenPath(path: string, flags: number): number;
+    hostConnectPath(path: string): number;
     hostLookupStart?(hostname: string, family: 0 | 4 | 6, hints: number): number;
     hostLookupHead?(handle: number): string | number;
     /** Browser host only: switch the attached terminal session between raw and cooked input.

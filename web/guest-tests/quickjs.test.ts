@@ -54,18 +54,37 @@ test("installHostSlots fills bun.wasm's slot table", () => {
   const runtimeProc = Object.fromEntries(WebAssembly.Module.imports(module).filter(entry => entry.module === "runtime_proc").map(entry => [entry.name, () => 0]));
   const wasi = new Wasi({ args: ["bun"], env: {}, fs: new MemFS(), preopens: { "/": "/" }, stdout() {}, stderr() {}, sleep() {}, namespaces: { runtime_proc: runtimeProc } });
   const instance = new WebAssembly.Instance(module, wasi.imports(module));
-  const installed = installHostSlots(instance, { poll: () => 0, fetch: () => -1, close: () => 0 });
-  expect(installed).toEqual(["poll", "fetch", "close"]);
+  const pathCalls: number[][] = [];
+  const installed = installHostSlots(instance, {
+    poll: () => 0, fetch: () => -1, close: () => 0,
+    listen_path: (ptr, length, flags) => { pathCalls.push([ptr, length, flags]); return 21; },
+    connect_path: (ptr, length) => { pathCalls.push([ptr, length]); return 22; },
+  });
+  expect(installed).toEqual(["poll", "fetch", "close", "listen_path", "connect_path"]);
   const ptr = (instance.exports.bun_wasm_host_slots as () => number)();
   const view = new DataView((instance.exports.memory as WebAssembly.Memory).buffer);
   expect(view.getUint32(ptr, true)).toBe(2);
   expect(view.getUint32(ptr + 4, true)).toBe(SLOT_NAMES.length);
-  expect(SLOT_NAMES).toHaveLength(16);
+  expect(SLOT_NAMES).toHaveLength(18);
+  expect(SLOT_NAMES).toEqual([
+    "poll", "fetch", "fetch_head", "read", "write", "close", "listen", "local_port", "accept", "connect",
+    "error", "peer_addr", "shutdown", "local_addr", "lookup_start", "lookup_head", "listen_path", "connect_path",
+  ]);
   const table = instance.exports.__indirect_function_table as WebAssembly.Table;
   const slot = (i: number) => view.getUint32(ptr + 8 + 4 * i, true);
   expect(slot(0)).toBeGreaterThan(0);
   expect(slot(2)).toBe(0); // fetch_head not provided
   expect((table.get(slot(1)) as Function)(0, 0, 0, 0)).toBe(-1);
+  expect(slot(16)).toBeGreaterThan(0);
+  expect(slot(17)).toBeGreaterThan(0);
+  expect(slot(16)).not.toBe(slot(17));
+  const listenPath = table.get(slot(16)), connectPath = table.get(slot(17));
+  expect(typeof listenPath).toBe("function");
+  expect(typeof connectPath).toBe("function");
+  if (typeof listenPath !== "function" || typeof connectPath !== "function") throw new Error("Path slot entries are missing");
+  expect(listenPath(128, 8, 1)).toBe(21);
+  expect(connectPath(256, 12)).toBe(22);
+  expect(pathCalls).toEqual([[128, 8, 1], [256, 12]]);
 });
 
 testCompose("bun.wasm");
