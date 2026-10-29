@@ -900,3 +900,6 @@ mod wasm_packages_tests;
 
 #[cfg(test)]
 mod wasm_peer_graph_tests;
+
+#[cfg(test)]
+mod test_support;
