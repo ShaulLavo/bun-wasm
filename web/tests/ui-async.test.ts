@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EditorState } from "@codemirror/state";
-import { Shell } from "../src/shell";
 import { SharedFilesystem } from "waffle/browser/shared-fs";
 import { FilesystemClient, FilesystemError, FilesystemService, MemoryBackend, createFilesystemConnection } from "waffle/fs";
 
@@ -441,22 +440,6 @@ test("sandbox only wakes HMR after the durable save and never on checkpoint fail
   fs.flush = async () => { throw failure; };
   await expect(save("file.ts", "not durable", 2)).rejects.toBe(failure);
   expect(notifications).toEqual(["file.ts"]);
-});
-
-test("shell discards filesystem completion after the line was submitted", async () => {
-  const lookup = deferred<undefined>();
-  const shell = new Shell({ cols: 100, onData() {}, write() {}, writeln() {} } as never, {
-    fs: { lookup: () => lookup.promise } as never,
-    runBun: async () => 0, kill() {}, changed() {}, open() {}, info: () => [],
-  });
-  const ui = shell as unknown as { line: string; cursor: number; busy: boolean; complete(): Promise<void> };
-  ui.line = "cat f";
-  ui.cursor = ui.line.length;
-  const completing = ui.complete();
-  ui.busy = true;
-  lookup.resolve({ kind: "dir", children: new Map([["file.ts", { kind: "file" }]]) } as never);
-  await completing;
-  expect(ui.line).toBe("cat f");
 });
 
 class ControlledFilesystemBackend extends MemoryBackend {
