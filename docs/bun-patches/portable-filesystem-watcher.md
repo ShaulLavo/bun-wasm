@@ -68,11 +68,26 @@ with no polling fallback. A watch follows the node the descriptor holds, never a
 pathname, so a rename, a replacement at the old path or `fd_renumber` cannot redirect it.
 `watch_open(fd)` reads that descriptor's preview1 `filestat` through Wasmtime's own
 `fd_filestat_get` into private scratch memory. Its `ino` is wasmtime-wasi's identity hash of
-the host device and inode, and the host computes the same hash. The host then finds the
-descriptor open on that node (`/proc/self/fd` on Linux, `F_GETPATH` on macOS), watches its
-current path, and checks the identity again once the watch exists. A node that was unlinked
-has no path and reports ENOENT, like a detached node in Waffle. A WASI-level test pins the
-identity agreement, so a Wasmtime change to it fails the build's tests. Each delivered
+the host device and inode ([adapted below](#wasmtime-preview1-node-identity)). The host then
+duplicates every candidate descriptor of the process and keeps the one whose `fstat`
+identity matches. The match never goes through a name, and a reused descriptor number cannot
+substitute another file. An unlinked node (`st_nlink == 0`) reports ENOENT, as Waffle does
+for a detached node.
+
+On Linux, the backend registers that duplicate's `/proc/self/fd/<fd>` link. The kernel
+resolves it to the descriptor's inode, so no rename or swap of names, even one between
+resolving and registering, can make the watch hold a different node. The watch owns the
+duplicate, so the paths `notify` derives later (subdirectories added to a recursive watch)
+resolve through the same descriptor even after the guest closes its own. A test reads the
+kernel's registered inodes from `/proc/self/fdinfo`. It forces a name swap between the two
+steps of the old resolve-then-register binding, where the kernel registers the other file
+while a path check still passes, and shows the descriptor link registers the held inode
+under the same swap.
+
+macOS FSEvents subscribes by path for the watch's whole life, so there the host registers the
+duplicate's current `F_GETPATH` and checks the identity once. That binding is path-scoped,
+not descriptor-scoped, and is not covered by the Linux kernel proof. A WASI-level test also
+pins Wasmtime's `ino` to the host identity, so a Wasmtime change to it fails the tests. Each delivered
 notification bumps the network notification that `Slot::Poll` waits on, so a native guest wakes on the commit like a browser guest. Records,
 coalescing, the 128-record bound, overflow, end of stream and the errnos follow the Waffle ABI.
 `notify` reports a new directory before watching it and never reports entries that already
@@ -84,10 +99,29 @@ The pinned Waffle and `bun.wasm` land as a pair, because the WASI adapter reject
 `runtime_fs` names.
 
 
+## Wasmtime preview1 node identity
+
+Class **Host feature**, **adapted implementation** in `crates/bunwasm-host/src/fs_watch.rs`
+`node_identity`. Upstream: wasmtime-wasi 39.0.2 (crates.io; git `f66a5b61465c937aba66d73cd5d82f763cc3074f`,
+`crates/wasi`), `src/filesystem.rs` `impl From<&cap_std::fs::Metadata> for MetadataHashValue`
+(lines 327-351; `lower` at 335-338), which `p1.rs` `fd_filestat_get` reports as `ino: metadata_hash.lower`.
+
+The adaptation hashes the host `st_dev` then `st_ino` with `std::collections::hash_map::DefaultHasher::new()`
+and returns `finish()`, which is the same computation as upstream's `lower` half. It omits the
+synthesized `upper` half. It takes `std::fs::Metadata` instead of `cap_std::fs::Metadata`.
+Reason: the native host must recognize which host descriptor holds the node a guest
+descriptor names, and preview1 exposes only this hash. The equality holds only because both
+sides are compiled into one binary with the same `DefaultHasher`. Upstream notes the value may
+change across rustc releases. The WASI test
+`runtime_fs_watches_the_descriptor_node_through_rename_replacement_and_renumber` asserts
+`fd_filestat_get(fd).ino == node_identity(host metadata)`, so any upstream change fails the
+tests. Revisit this when the Wasmtime pin moves.
+
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`src/js/fs_watch.ts`, `net.js` watch-first pump, `fsWatch*` natives, web notification wiring, native `runtime_fs` host](#portable-filesystem-watcher) | Host feature | Original event-driven watcher over Waffle `runtime_fs` watch ids, with Node listener identity, and an original native host over `notify`. |
+| [`src/js/fs_watch.ts`, `net.js` watch-first pump, `fsWatch*` natives, web notification wiring, native `runtime_fs` host](#portable-filesystem-watcher) | Host feature | Original event-driven watcher over Waffle `runtime_fs` watch ids, with Node listener identity, and an original native host over `notify` that watches the descriptor's node. |
+| [`crates/bunwasm-host/src/fs_watch.rs` `node_identity`](#wasmtime-preview1-node-identity) | Host feature | Adapted from wasmtime-wasi 39.0.2 `MetadataHashValue::from` (the `lower` half), to match a guest descriptor's preview1 `ino` to a host descriptor. |
 
 [Ledger scope and pinned revisions](scope.md).

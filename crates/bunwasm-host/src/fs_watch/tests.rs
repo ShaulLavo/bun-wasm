@@ -252,7 +252,15 @@ fn a_watch_follows_the_held_node_through_rename_and_replacement() {
     assert_ne!(node_identity(&path.metadata().unwrap()), node);
     f.held.push(held);
     let id = f.watches.open(node, false).unwrap();
-    assert_eq!(f.watches.open[&id].root, moved.canonicalize().unwrap());
+    let registered = inotify_inodes();
+    assert!(
+        registered.contains(&moved.metadata().unwrap().ino()),
+        "{registered:?}"
+    );
+    assert!(
+        !registered.contains(&path.metadata().unwrap().ino()),
+        "{registered:?}"
+    );
     fs::write(&path, "replacement changed").unwrap();
     f.net.poll(300);
     assert_eq!(
@@ -274,4 +282,123 @@ fn an_unlinked_held_node_reports_enoent() {
     fs::remove_file(&path).unwrap();
     f.held.push(held);
     assert_eq!(f.watches.open(node, false), Err(NOENT));
+}
+
+/// The inodes the kernel has registered for every inotify watch of this process, read from
+/// `/proc/self/fdinfo` (`inotify wd:… ino:<hex> sdev:…`). This is what the backend watches,
+/// independent of any path the host resolved.
+#[cfg(target_os = "linux")]
+fn inotify_inodes() -> Vec<u64> {
+    let entries = fs::read_dir("/proc/self/fdinfo").unwrap().flatten();
+    let texts = entries.filter_map(|entry| fs::read_to_string(entry.path()).ok());
+    texts
+        .flat_map(|text| text.lines().filter_map(watched_inode).collect::<Vec<_>>())
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn watched_inode(line: &str) -> Option<u64> {
+    let field = line
+        .strip_prefix("inotify wd:")?
+        .split_whitespace()
+        .find(|field| field.starts_with("ino:"))?;
+    u64::from_str_radix(&field["ino:".len()..], 16).ok()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn registration_binds_the_held_inode_while_its_name_names_another_file() {
+    let mut f = Fixture::new("swap-boundary");
+    let name = f.root.join("page.tsx");
+    let aside = f.root.join("page.aside");
+    fs::write(&name, "held").unwrap();
+    let held = fs::File::open(&name).unwrap();
+    let held_inode = held.metadata().unwrap().ino();
+    let node = node_identity(&held.metadata().unwrap());
+    f.held.push(held);
+    // A→B: at registration the held node's name names a different file.
+    fs::rename(&name, &aside).unwrap();
+    fs::write(&name, "other").unwrap();
+    let other_inode = name.metadata().unwrap().ino();
+    let id = f.watches.open(node, false).unwrap();
+    // B→A: swap the names back after registration; a path-based check would now pass either way.
+    fs::rename(&name, f.root.join("other.tsx")).unwrap();
+    fs::rename(&aside, &name).unwrap();
+    let registered = inotify_inodes();
+    assert!(registered.contains(&held_inode), "{registered:?}");
+    assert!(!registered.contains(&other_inode), "{registered:?}");
+    // Renaming the held file back is itself a rename of the watched node.
+    f.expect(id, (RENAME, None));
+    f.drain(id);
+    fs::write(f.root.join("other.tsx"), "other changed").unwrap();
+    f.net.poll(300);
+    assert_eq!(
+        f.drain(id),
+        Vec::new(),
+        "the other file is not the held node"
+    );
+    fs::write(&name, "held changed").unwrap();
+    f.expect(id, (CHANGE, None));
+}
+
+#[test]
+fn a_watch_keeps_its_node_after_every_other_descriptor_closes() {
+    let mut f = Fixture::new("own-descriptor");
+    let id = f.watch(&f.root.clone(), true).unwrap();
+    f.held.clear();
+    fs::create_dir(f.root.join("later")).unwrap();
+    fs::write(f.root.join("later/file.txt"), "x").unwrap();
+    f.expect(id, (RENAME, Some("later/file.txt")));
+}
+
+/// Register `path` with a real `notify` backend while `swap` runs between resolving and
+/// registering, then report which inodes the kernel registered.
+#[cfg(target_os = "linux")]
+fn registered_after_swap(path: &Path, swap: impl FnOnce()) -> (RecommendedWatcher, Vec<u64>) {
+    let mut watcher = notify::recommended_watcher(|_: notify::Result<Event>| {}).unwrap();
+    swap();
+    watcher.watch(path, RecursiveMode::NonRecursive).unwrap();
+    (watcher, inotify_inodes())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_name_swapped_at_the_registration_boundary_cannot_redirect_the_descriptor_link() {
+    let f = Fixture::new("boundary-link");
+    let name = f.root.join("page.tsx");
+    let aside = f.root.join("page.aside");
+    fs::write(&name, "held").unwrap();
+    let held = fs::File::open(&name).unwrap();
+    let node = node_identity(&held.metadata().unwrap());
+    let held_inode = held.metadata().unwrap().ino();
+    fs::write(&aside, "other").unwrap();
+    let other_inode = aside.metadata().unwrap().ino();
+    let swap = || {
+        fs::rename(&name, f.root.join("tmp")).unwrap();
+        fs::rename(&aside, &name).unwrap();
+    };
+    let restore = || {
+        fs::rename(&name, &aside).unwrap();
+        fs::rename(f.root.join("tmp"), &name).unwrap();
+    };
+    // The old binding: resolve the descriptor's current name, then register that name. A swap
+    // between the two steps registers the other file, and swapping back hides it from a check.
+    let resolved = fs::read_link(format!("/proc/self/fd/{}", held.as_raw_fd())).unwrap();
+    let (by_name, registered) = registered_after_swap(&resolved, swap);
+    restore();
+    assert_eq!(
+        node_identity(&resolved.metadata().unwrap()),
+        node,
+        "a path check passes"
+    );
+    assert!(registered.contains(&other_inode), "{registered:?}");
+    assert!(!registered.contains(&held_inode), "{registered:?}");
+    drop(by_name);
+    // The binding: the duplicated descriptor's link resolves to the held inode under the same swap.
+    let (descriptor, _) = node_descriptor(node).unwrap();
+    let root = descriptor_root(&descriptor).unwrap();
+    let (_by_descriptor, registered) = registered_after_swap(&root, swap);
+    restore();
+    assert!(registered.contains(&held_inode), "{registered:?}");
+    assert!(!registered.contains(&other_inode), "{registered:?}");
 }

@@ -3,14 +3,18 @@
 //! watches"): process-local ids, whole packed records, positive WASI errnos. A delivered event
 //! bumps the network notification, so a guest asleep in `Slot::Poll` wakes on the commit.
 //!
-//! A watch follows the node an open descriptor holds, never a saved pathname: registration
-//! takes the descriptor's node identity, finds the host descriptor open on that node, and
-//! watches its current path, checking the identity again once the watch exists.
+//! A watch follows the node an open descriptor holds, never a name. Registration takes the
+//! descriptor's node identity, duplicates the host descriptor open on that node (checked with
+//! fstat, not a path), and on Linux registers that duplicate's `/proc/self/fd` link, which the
+//! kernel resolves to the descriptor's inode. The watch owns the duplicate, so the backend's
+//! later paths (new subdirectories of a recursive watch) resolve through it too. macOS FSEvents
+//! subscribes by path for the watch's whole life, so there the binding is path-scoped.
 use crate::net::Notify;
 use notify::event::{CreateKind, EventKind, ModifyKind};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hasher;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -43,6 +47,8 @@ struct Inbox {
 
 struct Watch {
     _watcher: RecommendedWatcher,
+    /// The watched node, held for the watch's life; declared after the watcher so it drops last.
+    _descriptor: OwnedFd,
     root: PathBuf,
     directory: bool,
     recursive: bool,
@@ -77,8 +83,8 @@ impl Watches {
 
     /// Watch the node with this identity ([`node_identity`]), which an open descriptor holds.
     pub fn open(&mut self, node: u64, recursive: bool) -> Result<u32, i32> {
-        let root = node_path(node)?;
-        let directory = root.metadata().map_err(io_errno)?.is_dir();
+        let (descriptor, directory) = node_descriptor(node)?;
+        let root = descriptor_root(&descriptor)?;
         let inbox = Arc::new(Mutex::new(Inbox::default()));
         let (sink, notify) = (inbox.clone(), self.notify.clone());
         let mut watcher = notify::recommended_watcher(move |event| {
@@ -92,7 +98,8 @@ impl Watches {
             RecursiveMode::NonRecursive
         };
         watcher.watch(&root, mode).map_err(watch_errno)?;
-        // The path could have been renamed or replaced since it was found.
+        // FSEvents resolves the name; the descriptor link on Linux cannot name another node.
+        #[cfg(target_os = "macos")]
         if path_identity(&root) != Some(node) {
             return Err(NOENT);
         }
@@ -102,6 +109,7 @@ impl Watches {
             id,
             Watch {
                 _watcher: watcher,
+                _descriptor: descriptor,
                 root,
                 directory,
                 recursive: directory && recursive,
@@ -302,53 +310,86 @@ pub fn node_identity(metadata: &std::fs::Metadata) -> u64 {
     hasher.finish()
 }
 
+#[cfg(target_os = "macos")]
 fn path_identity(path: &Path) -> Option<u64> {
     std::fs::metadata(path)
         .ok()
         .map(|metadata| node_identity(&metadata))
 }
 
-/// The current path of the node a host descriptor of this process holds. An unlinked node has
-/// no path and reports ENOENT, as Waffle does for a detached node.
-#[cfg(target_os = "linux")]
-fn node_path(node: u64) -> Result<PathBuf, i32> {
-    let descriptors = std::fs::read_dir("/proc/self/fd").map_err(io_errno)?;
-    descriptors
-        .flatten()
-        .filter(|entry| path_identity(&entry.path()) == Some(node))
-        .find_map(|entry| {
-            std::fs::read_link(entry.path())
-                .ok()
-                .filter(|path| path_identity(path) == Some(node))
-        })
-        .ok_or(NOENT)
+/// An owned duplicate of a host descriptor of this process that holds `node`, and whether that
+/// node is a directory. Every candidate is duplicated first and identified by fstat, so neither
+/// a name nor a reused descriptor number can substitute another node. An unlinked node reports
+/// ENOENT, as Waffle does for a detached node.
+fn node_descriptor(node: u64) -> Result<(OwnedFd, bool), i32> {
+    let (descriptor, metadata) = descriptor_numbers()?
+        .into_iter()
+        .find_map(|fd| duplicate_if_node(fd, node))
+        .ok_or(NOENT)?;
+    if metadata.nlink() == 0 {
+        return Err(NOENT);
+    }
+    Ok((descriptor, metadata.is_dir()))
 }
 
-#[cfg(target_os = "macos")]
-fn node_path(node: u64) -> Result<PathBuf, i32> {
-    // SAFETY: getdtablesize has no preconditions.
-    let limit = unsafe { libc::getdtablesize() };
-    (0..limit)
-        .find_map(|fd| descriptor_path(fd).filter(|path| path_identity(path) == Some(node)))
-        .ok_or(NOENT)
-}
-
-#[cfg(target_os = "macos")]
-fn descriptor_path(fd: i32) -> Option<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-    let mut buffer = [0u8; libc::PATH_MAX as usize];
-    // SAFETY: F_GETPATH writes at most PATH_MAX bytes into the buffer; a closed fd fails.
-    if unsafe { libc::fcntl(fd, libc::F_GETPATH, buffer.as_mut_ptr()) } != 0 {
+fn duplicate_if_node(fd: i32, node: u64) -> Option<(OwnedFd, std::fs::Metadata)> {
+    // SAFETY: F_DUPFD_CLOEXEC only reads the descriptor number; a closed one fails with EBADF.
+    let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate < 0 {
         return None;
     }
-    let length = buffer.iter().position(|&byte| byte == 0)?;
-    Some(PathBuf::from(std::ffi::OsStr::from_bytes(
+    // SAFETY: the duplicate was just created and nothing else owns it.
+    let file = std::fs::File::from(unsafe { OwnedFd::from_raw_fd(duplicate) });
+    let metadata = file.metadata().ok()?;
+    (node_identity(&metadata) == node).then(|| (OwnedFd::from(file), metadata))
+}
+
+#[cfg(target_os = "linux")]
+fn descriptor_numbers() -> Result<Vec<i32>, i32> {
+    let entries = std::fs::read_dir("/proc/self/fd").map_err(io_errno)?;
+    Ok(entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse().ok())
+        .collect())
+}
+
+#[cfg(target_os = "macos")]
+fn descriptor_numbers() -> Result<Vec<i32>, i32> {
+    // SAFETY: getdtablesize has no preconditions.
+    Ok((0..unsafe { libc::getdtablesize() }).collect())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn descriptor_numbers() -> Result<Vec<i32>, i32> {
+    Err(NOTSUP)
+}
+
+/// The path the backend registers: the descriptor link on Linux, resolved by the kernel to the
+/// held inode; the descriptor's current path on macOS.
+#[cfg(target_os = "linux")]
+fn descriptor_root(descriptor: &OwnedFd) -> Result<PathBuf, i32> {
+    Ok(PathBuf::from(format!(
+        "/proc/self/fd/{}",
+        descriptor.as_raw_fd()
+    )))
+}
+
+#[cfg(target_os = "macos")]
+fn descriptor_root(descriptor: &OwnedFd) -> Result<PathBuf, i32> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buffer = [0u8; libc::PATH_MAX as usize];
+    // SAFETY: F_GETPATH writes at most PATH_MAX bytes into the buffer.
+    if unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) } != 0 {
+        return Err(NOENT);
+    }
+    let length = buffer.iter().position(|&byte| byte == 0).ok_or(NOENT)?;
+    Ok(PathBuf::from(std::ffi::OsStr::from_bytes(
         &buffer[..length],
     )))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn node_path(_: u64) -> Result<PathBuf, i32> {
+fn descriptor_root(_: &OwnedFd) -> Result<PathBuf, i32> {
     Err(NOTSUP)
 }
 
