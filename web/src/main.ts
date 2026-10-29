@@ -19,7 +19,6 @@ import type { BunNetworkOptions } from "./net/helper";
 import { Previews } from "./preview";
 import { HostedPreviews } from "./hosted-previews";
 import { ENGINES as engines, type Engine, WasmMissing, isEngine, loadWasm as fetchWasm, mb, registerModuleScope } from "./engine-loader";
-import { Shell } from "./shell";
 import { ENGINE_BIN } from "../../src/executable-paths";
 import { commandChunks } from "./startup-cache";
 import { enableTerminalCopy } from "./terminal-copy";
@@ -408,6 +407,7 @@ for (const name of ["bun", "node", "nodejs"]) {
   await fs.writeFile(path, "bun-wasm registered executable\n");
 }
 await fs.flush();
+const { Shell } = await import("./shell");
 const shell = await Shell.create({
   runtime, cwd: HOME,
   env: { HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "\x1b[32muser@bun\x1b[0m:\x1b[34m~\x1b[0m$ " },

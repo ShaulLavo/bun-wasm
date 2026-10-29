@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, posix, resolve } from "node:path";
-import { buildBrowserEntries } from "../../scripts/browser-build";
-import { initialJavaScript } from "../../scripts/runtime-size";
+import { buildBrowserEntries, resolveRuntimePackage } from "../../scripts/browser-build";
+import { checkLazyProcessService, initialJavaScript } from "../../scripts/runtime-size";
 
 for (const app of ["web", "sandbox"]) test(`${app} keeps Bun execution lazy alongside its startup shell contract`, async () => {
   const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-demo-startup-"));
@@ -18,6 +18,7 @@ for (const app of ["web", "sandbox"]) test(`${app} keeps Bun execution lazy alon
       .filter(([, input]) => input.bytesInOutput > 0).map(([path]) => resolve(path)));
     const eagerKeys = initialJavaScript(outputs, [main!]);
     const eager = sources(eagerKeys);
+    checkLazyProcessService(eager, resolveRuntimePackage(entry));
     for (const file of ["runner.ts", "bun-launcher.ts", "subprocess-broker.ts", "bun-executor.ts"]) {
       expect(eager.some(path => path.endsWith(`/web/src/${file}`) || path === `web/src/${file}`)).toBe(false);
     }
@@ -33,7 +34,8 @@ for (const app of ["web", "sandbox"]) test(`${app} keeps Bun execution lazy alon
     const command = sources(initialJavaScript(outputs, commandRoots));
     const execution = app === "web" ? "bun-launcher.ts" : "runner.ts";
     expect(command.some(path => path.endsWith(`/web/src/${execution}`))).toBe(true);
-    expect(eager.some(path => path.endsWith("/bash-web/src/runtime/shell-host.ts"))).toBe(app === "web");
+    expect(eager.some(path => path.endsWith("/bash-web/src/runtime/shell-host.ts"))).toBe(false);
+    if (app === "web") expect(command.some(path => path.endsWith("/bash-web/src/runtime/shell-host.ts"))).toBe(true);
     if (app === "web") expect(Object.keys(result.metafile!.inputs).some(path => resolve(path).endsWith("/web/src/runner.ts"))).toBe(false);
     const filesystem = Object.keys(outputs).find(path => path.endsWith("/fs-worker.js"));
     expect(filesystem).toBeDefined();
