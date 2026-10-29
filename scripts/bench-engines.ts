@@ -26,6 +26,7 @@ interface Workload {
 }
 
 interface Execution {
+  startedAt: string;
   command: string[];
   stdout: string;
   stderr: string;
@@ -188,6 +189,7 @@ export function summarize(samples: readonly Sample[], engines: readonly EngineBu
 
 function execute(adapter: EngineAdapter, request: LaunchRequest): Execution {
   const { command, env } = adapter.launch(request);
+  const startedAt = new Date().toISOString();
   const started = performance.now();
   const child = Bun.spawnSync({ cmd: command, env, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 180_000 });
   const wallMs = performance.now() - started;
@@ -195,6 +197,7 @@ function execute(adapter: EngineAdapter, request: LaunchRequest): Execution {
   const stderr = child.stderr.toString();
   assert.equal(child.exitCode, 0, `${request.engine.name}/${request.workload.name} failed\n${command.join(" ")}\n${stdout}${stderr}`);
   return {
+    startedAt,
     command,
     stdout,
     stderr,
@@ -342,7 +345,7 @@ async function main(): Promise<void> {
     method: values["native-control"] ? "Runner validation only on native Bun. Fresh process per sample; cold/precompiled names are workload IDs and do not imply Wasm cache or engine measurements." : "Fresh native bun-wasm launcher per sample. Cold disables Wasmtime compilation cache; precompiled reuses a per-engine cache warmed once. No OS cache flush or warm JS VM. Three engines use all six permutations; two alternate. Wall includes launch, bootstrap and guest work. Peak RSS includes Wasmtime and compilation, not guest heap. Fixtures are bundled and hashed before timing. Experimental evidence, no default decision.",
     environment: { host: hostname(), platform: platform(), cpu: cpus()[0]?.model, kernel: release(), bun: Bun.version, runs, loadBefore: loadavg(),
       bootId: await readFile("/proc/sys/kernel/random/boot_id", "utf8").then(text => text.trim(), () => null), source: gitIdentity(),
-      memory: { nativePeakRss: "whole process including Wasmtime and compiler; not guest heap", capacity: null, allocatorLive: null, allocatorPeak: null, engineHeap: null, backingStores: null, swc: null } },
+      memory: { nativePeakRss: "whole process including inherited harness footprint at fork, Wasmtime and compiler; diagnostic only, not guest heap", capacity: null, allocatorLive: null, allocatorPeak: null, engineHeap: null, backingStores: null, swc: null } },
     engines: [],
     launcher: { path: launcher, ...await artifact(launcher) },
     samples: [],
@@ -362,7 +365,7 @@ async function main(): Promise<void> {
     report.engines = await Promise.all(engines.map(async engine => ({ ...engine, program: values["native-control"] ? null : await engineArtifacts(engine.path) })));
     const fixturePaths = ["hello.ts", "micro.js", "large-bundle.js"].map(name => join(fixtureDir, name));
     report.registration = {
-      registeredAt: new Date().toISOString(), argv: process.argv, scope: report.scope, engines: report.engines, launcher: report.launcher, environment: report.environment,
+      registeredAt: new Date().toISOString(), argv: process.argv, scope: report.scope, engines: report.engines, launcher: report.launcher, environment: structuredClone(report.environment),
       protocol: values.protocol ? await identity(resolve(values.protocol)) : null,
       producerManifest: values["producer-manifest"] ? { ...await identity(resolve(values["producer-manifest"])), content: await Bun.file(values["producer-manifest"]).json(), verification: "Producer verifier must pass before this invocation; this runner does not reimplement its schema" } : null,
       fixtures: await Promise.all(fixturePaths.concat([join(root, "bun.lock"), join(root, "tests/bench/large-bundle.ts"), import.meta.filename]).map(identity)),
@@ -378,7 +381,7 @@ async function main(): Promise<void> {
     if (!output) console.log(JSON.stringify({ registration: report.registration }));
     const adapter = values["native-control"] ? nativeControlAdapter(launcher) : nativeLauncherAdapter(launcher);
     if (!values["native-control"]) for (const engine of engines) await prepareEngine(engine, adapter, fixtureDir, scratch);
-    if (registered) await persist(report, output);
+    await persist(report, output);
     for (let round = 0; round < runs; round++) await measureRound(engines, round, { adapter, fixtureDir, scratch, report, output, nativeControl: values["native-control"] });
     report.environment.loadAfter = loadavg();
     report.summaries = summarize(report.samples, engines);
@@ -386,7 +389,7 @@ async function main(): Promise<void> {
     console.log(formatSummaries(report.summaries));
   } catch (error) {
     report.error = error instanceof Error ? error.stack ?? error.message : String(error);
-    await persist(report, output);
+    if (registered) await persist(report, output);
     throw error;
   } finally {
     removeSignalHandlers();
