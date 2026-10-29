@@ -36,5 +36,8 @@ The driver calls existing app-matrix `browserHost`, command checks, HMR probes,
 root previews, and registry replay. It creates no new runtime. It records guest
 asset hashes and labels all runs diagnostic. A current-source acceptance claim
 requires the canonical producer's manifest and verified receipts separately.
+The original `scripts/fixtures/vinext-probe-control.ts` simulates the browser
+boundary for subprocess regressions. It exercises the actual driver reporting,
+registry teardown, and plain/gzip checks without supplying engine evidence.
 
 [Run the probe](../vinext-probe.md).

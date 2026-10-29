@@ -29,7 +29,13 @@ navigates again to check reload, clicks the counter, builds, and runs
 page/edit checks. Missing registry archives fail the run. No downgrade or
 framework substitution occurs.
 
-`run.json`, `results.jsonl`, and the terminal log hold results. Exit 1 means a
+`run.json` and `results.jsonl` include every required cell, including blocked
+cells when setup fails or a signal interrupts the run. Completed results survive
+interruption; teardown finishes before the final cleanup status is written.
+The asset check hashes decompressed gzip bytes when present and rejects a
+plain/gzip payload mismatch before starting the app.
+
+The reports and terminal log hold results. Exit 1 means a
 failed/blocked cell or infrastructure failure. `canonical: false` is intentional:
 this bounded driver hashes distributed bytes but does not verify the engine
 producer manifest. Compare a current run with the producer's receipt before
@@ -40,3 +46,7 @@ The source lock's hash and dependency versions are recorded; guest platform
 metadata may be rewritten. This does not establish frozen-lock compatibility.
 
 [Upstream source and local changes](bun-patches/vinext-probe.md).
+
+Run the host-driver regressions with `bun test scripts/app-matrix/vinext-probe.test.ts`.
+The discovered quality gate runs them too. Their simulated browser boundary
+checks reporting, interruption, and asset identity; it does not run a guest.

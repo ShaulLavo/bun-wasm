@@ -24,6 +24,8 @@ function control(scenario: string, verify: (value: ReturnType<typeof readReport>
     expect(child.signal).toBeNull();
     const value = readReport(join(directory, "output/run.json"));
     expect(value.rows.filter(row => expectedStages.includes(row.stage)).map(row => row.stage)).toEqual(expectedStages);
+    const jsonl = readFileSync(join(directory, "output/results.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(value.report).toHaveProperty("rows", jsonl);
     expect(value.report).toHaveProperty("cleanup", "pass");
     expect(value.report).toHaveProperty("runtime.canonical", false);
     verify(value, existsSync(join(directory, "host-closed")), child.status);
