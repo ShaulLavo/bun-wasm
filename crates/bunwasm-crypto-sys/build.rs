@@ -67,6 +67,7 @@ fn crypto(manifest: &Path, out: &Path) {
     let guard = manifest.join("../../scripts/check-cmake-cache.cmake");
     println!("cargo:rerun-if-changed={}", guard.display());
     check_crypto_cache(manifest, &build, wasm, &guard);
+    let profile = program_profile(&build);
     {
         let mut configure = Command::new("cmake");
         configure
@@ -82,8 +83,19 @@ fn crypto(manifest: &Path, out: &Path) {
                 "-DBUILD_TESTING=OFF",
             ]);
         if wasm {
-            configure.arg(format!("-DCMAKE_TOOLCHAIN_FILE={}", manifest.join("../../jsc/wasi-jsc.cmake").display()))
-                .args(["-DCMAKE_C_FLAGS=-DOPENSSL_NO_THREADS_CORRUPT_MEMORY_AND_LEAK_SECRETS_IF_THREADED -DOPENSSL_NO_SOCK", "-DCMAKE_CXX_FLAGS=-DOPENSSL_NO_THREADS_CORRUPT_MEMORY_AND_LEAK_SECRETS_IF_THREADED -DOPENSSL_NO_SOCK"]);
+            let flags = format!(
+                "-DOPENSSL_NO_THREADS_CORRUPT_MEMORY_AND_LEAK_SECRETS_IF_THREADED -DOPENSSL_NO_SOCK{}",
+                profile.c_flags()
+            );
+            configure
+                .arg(format!(
+                    "-DCMAKE_TOOLCHAIN_FILE={}",
+                    manifest.join("../../jsc/wasi-jsc.cmake").display()
+                ))
+                .args([
+                    format!("-DCMAKE_C_FLAGS={flags}"),
+                    format!("-DCMAKE_CXX_FLAGS={flags}"),
+                ]);
         } else {
             configure.args([
                 "-DCMAKE_C_COMPILER=/usr/bin/cc",
@@ -95,6 +107,7 @@ fn crypto(manifest: &Path, out: &Path) {
             "BoringSSL configure failed"
         );
         check_crypto_cache(manifest, &build, wasm, &guard);
+        profile.stamp(&build);
         assert!(
             Command::new("cmake")
                 .arg("--build")
@@ -139,9 +152,70 @@ fn crypto(manifest: &Path, out: &Path) {
         let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
         println!("cargo:rustc-link-search=native={sysroot}/lib/wasm32-wasip1/noeh");
         println!("cargo:rustc-link-search=native={sysroot}/lib/wasm32-wasip1");
-        println!("cargo:rustc-link-lib=static=c++");
-        println!("cargo:rustc-link-lib=static=c++abi");
+        profile.link_cxx_runtime();
     } else {
         println!("cargo:rustc-link-lib=stdc++");
+    }
+}
+
+/// The program profile of this BoringSSL build (docs/shared-group-profile.md). A build
+/// directory keeps the profile it was configured for; any other profile is refused.
+#[derive(Clone, Copy, PartialEq)]
+enum Profile {
+    Split,
+    SharedGroup,
+}
+
+const STAMP: &str = "bunwasm-program-profile";
+
+fn program_profile(build: &Path) -> Profile {
+    println!("cargo:rerun-if-env-changed=BUN_WASM_PROGRAM_PROFILE");
+    let profile = match std::env::var("BUN_WASM_PROGRAM_PROFILE").as_deref() {
+        Err(_) => Profile::Split,
+        Ok("shared-group") => Profile::SharedGroup,
+        Ok(other) => panic!("unsupported BUN_WASM_PROGRAM_PROFILE {other}"),
+    };
+    let stamp = std::fs::read_to_string(build.join(STAMP)).ok();
+    let configured = build.join("CMakeCache.txt").exists();
+    let matches = match stamp.as_deref() {
+        Some(value) => value == profile.name(),
+        // A pre-profile build directory can only be a split build.
+        None => !configured || profile == Profile::Split,
+    };
+    assert!(
+        matches,
+        "BoringSSL build directory belongs to another program profile; choose a fresh BUNWASM_BORINGSSL_BUILD"
+    );
+    profile
+}
+
+impl Profile {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Split => "split",
+            Self::SharedGroup => "shared-group",
+        }
+    }
+
+    fn c_flags(self) -> &'static str {
+        match self {
+            Self::Split => "",
+            Self::SharedGroup => " -fPIC -matomics -mbulk-memory -mmutable-globals",
+        }
+    }
+
+    fn stamp(self, build: &Path) {
+        std::fs::write(build.join(STAMP), self.name()).expect("BoringSSL profile stamp");
+    }
+
+    /// A PIE link prefers a shared library for `-l`; a group member must not depend on one.
+    fn link_cxx_runtime(self) {
+        let names: [&str; 2] = match self {
+            Self::Split => ["static=c++", "static=c++abi"],
+            Self::SharedGroup => ["static:+verbatim=libc++.a", "static:+verbatim=libc++abi.a"],
+        };
+        for name in names {
+            println!("cargo:rustc-link-lib={name}");
+        }
     }
 }

@@ -1,5 +1,6 @@
+import { terminalOutputFixture } from "./terminal-output-fixture";
 import { controlLoad, controlStore } from "waffle/proc/control";
-import { processRuntimeFixture } from "./process-runtime-fixture";
+import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 import { afterAll, expect, mock, test } from "bun:test";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
@@ -80,8 +81,10 @@ for (const trigger of ["watcher", "late-kill", "handled-signal-before-exit", "pu
     await until(() => state.workers.length === 1, "child launch");
     const worker = state.workers[0]!, transport = worker.request!.runtimeProcess!;
     const shared = workerProcessState(transport);
-    // The worker selected ordinary completion, but its previously posted terminal messages
-    // and final exit acknowledgement have not yet been dispatched on the page.
+    const terminal = terminalOutputFixture(worker.request!, data => worker.onmessage!({ data }));
+    terminal.write(1, new TextEncoder().encode("queued stdout\n"));
+    terminal.write(2, new TextEncoder().encode("queued stderr\n"));
+    // Accepted terminal bytes and the final exit acknowledgement are still queued.
     let signalDelivery: Promise<void> | undefined;
     if (trigger === "handled-signal-before-exit") {
       setSignalDisposition(shared.signals.signalState, 15, 2);
@@ -113,8 +116,7 @@ for (const trigger of ["watcher", "late-kill", "handled-signal-before-exit", "pu
     expect(worker.terminated).toBe(false);
     expect(state.parent.wait(1, pid)).toBeNull();
     expect(output).toEqual([]);
-    worker.onmessage!({ data: { type: "stdout", data: new TextEncoder().encode("queued stdout\n") } });
-    worker.onmessage!({ data: { type: "stderr", data: new TextEncoder().encode("queued stderr\n") } });
+    terminal.flush();
     expect(output).toEqual([{ fd: 1, text: "queued stdout\n" }, { fd: 2, text: "queued stderr\n" }]);
     // The earlier runtime-proc notification is not the worker's final host acknowledgement.
     await state.broker.runtimeMessage({ type: "runtime-proc", operation: "exit", transport, targets: [pid] }, pid);

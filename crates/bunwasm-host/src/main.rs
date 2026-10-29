@@ -4,9 +4,11 @@
 #[path = "../../bunwasm-cli/src/tool_args.rs"]
 mod tool_args;
 
+mod guest;
 mod linked;
 mod net;
 mod process;
+mod shm;
 mod slots;
 
 use std::path::{Path, PathBuf};
@@ -49,9 +51,11 @@ BUN_WASM_HOST_STACK_KIB sets the host wasm stack limit (default 16384 KiB).
 pub struct Host {
     pub wasi: WasiP1Ctx,
     pub net: net::Net,
-    pub memory: Option<wasmtime::Memory>,
+    pub memory: Option<guest::GuestMemory>,
     pub trace: bool,
     pub processes: process::Processes,
+    /// J3 installs the lease together with the group's imported shared memory.
+    pub shm: Option<shm::MemberLease>,
     pub limits: StoreLimits,
     pub functions: Vec<wasmtime::Func>,
     pub cancel: Arc<process::Cancellation>,
@@ -316,7 +320,7 @@ fn run_instance(
     cancel: Arc<process::Cancellation>,
 ) -> Result<process::FinalOutcome> {
     let module = runtime.module.clone();
-    run_module_instance(runtime, &module, argv, env, stdio, cancel)
+    run_module_instance(runtime, &module, argv, env, stdio, cancel, None)
 }
 
 fn run_module_instance(
@@ -326,6 +330,7 @@ fn run_module_instance(
     mut env: Vec<(String, String)>,
     stdio: process::Stdio,
     cancel: Arc<process::Cancellation>,
+    admission: Option<linked::Admission>,
 ) -> Result<process::FinalOutcome> {
     if !env.iter().any(|(k, _)| k == "BUN_WASM_STACK_KIB") {
         env.push(("BUN_WASM_STACK_KIB".into(), GUEST_STACK_KIB.into()));
@@ -341,9 +346,19 @@ fn run_module_instance(
         .iter()
         .find(|(key, _)| key == "PWD")
         .map_or_else(|| "/".into(), |(_, value)| value.clone());
+    let selected = runtime.module_for(&argv, module)?;
+    let member = runtime
+        .linked
+        .member(selected, stdio.pid as u32, admission)?;
+    // Wasmtime drops a Store's data before its instances. This lease of the group backing is
+    // declared before the Store, so it outlives every instance that imports the group memory
+    // (`Programs::instantiate`), on every return and unwind path.
+    let _backing = member.as_ref().map(|member| member.group().memory_lease());
     let net = net::Net::new();
     let memory_limit = stdio.memory_limit;
-    let processes = process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
+    let mut processes =
+        process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
+    processes.join_memory_group(member.as_ref().map(shm::MemberLease::group));
     let host = Host {
         wasi: wasi.build_p1(),
         net,
@@ -351,6 +366,7 @@ fn run_module_instance(
         cancel: cancel.clone(),
         cwd,
         processes,
+        shm: member,
         limits: StoreLimitsBuilder::new()
             .memory_size(memory_limit)
             // One guest and bounded memory-sharing preview1 delegation adapters.
@@ -360,6 +376,28 @@ fn run_module_instance(
         trace: std::env::var("BUN_WASM_TRACE").is_ok_and(|v| !v.is_empty() && v != "0"),
     };
     let mut store = Store::new(&runtime.engine, host);
+    let outcome = run_store(&runtime, selected, &mut store, &cancel);
+    settle(store);
+    outcome
+}
+
+/// The guest ran on this thread, so it has physically stopped: destroy the Store's instances
+/// first (`into_data`), then release the member's slot, memory and holds in its group.
+fn settle(store: Store<Host>) {
+    let mut host = store.into_data();
+    let Some(member) = host.shm.take() else {
+        return;
+    };
+    drop(host);
+    member.physical_stopped();
+}
+
+fn run_store(
+    runtime: &process::Runtime,
+    selected: &Module,
+    store: &mut Store<Host>,
+    cancel: &Arc<process::Cancellation>,
+) -> Result<process::FinalOutcome> {
     store.limiter(|host| &mut host.limits);
     store.set_epoch_deadline(1);
     let interruption = cancel.clone();
@@ -380,23 +418,34 @@ fn run_module_instance(
         |status: i32| -> Result<()> { Err(I32Exit(i32::from(status as u8)).into()) },
     )?;
     linker.allow_shadowing(false);
-    slots::add_import(&mut linker, &mut store)?;
+    slots::add_import(&mut linker, &mut *store)?;
     slots::add_shell_imports(&mut linker)?;
-    let selected = runtime.module_for(&argv, module)?;
-    let instance = linker.instantiate(&mut store, selected)?;
-    store.data_mut().memory = instance.get_memory(&mut store, "memory");
-    slots::install(&mut store, &instance)?;
-    process::wasi::initialize(&linker, &mut store)?;
+    shm::add_imports(&mut linker)?;
+    // SAFETY: run_module_instance holds the member's group backing lease (`_backing`) from
+    // before this Store exists until after it is destroyed.
+    let (instance, member) = unsafe {
+        runtime
+            .linked
+            .instantiate(selected, &mut linker, &mut *store)
+    }?;
+    store.data_mut().memory = match &member {
+        Some(member) => Some(guest::GuestMemory::Shared(member.memory().clone())),
+        None => instance
+            .get_memory(&mut *store, "memory")
+            .map(guest::GuestMemory::Private),
+    };
+    slots::install(&mut *store, &instance)?;
+    process::wasi::initialize(&linker, &mut *store)?;
     runtime
         .linked
-        .initialize(selected, instance, &linker, &mut store)?;
+        .initialize(selected, instance, member.as_ref(), &linker, &mut *store)?;
 
-    let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
+    let start = instance.get_typed_func::<(), ()>(&mut *store, "_start")?;
     if !cancel.mark_started() {
         return Ok(cancel.select(process::FinalOutcome::Exit(0)));
     }
-    let result = start.call(&mut store, ());
-    let outcome = select_instance_outcome(result, &cancel);
+    let result = start.call(&mut *store, ());
+    let outcome = select_instance_outcome(result, cancel);
     if matches!(outcome, process::FinalOutcome::Exit(_)) {
         store
             .data_mut()

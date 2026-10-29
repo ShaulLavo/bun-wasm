@@ -1,0 +1,7 @@
+{
+ "modules": {
+  "/dep.mjs": "({r:[],i:[],x:[],s:[],a:true,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"late\":()=>late,\"v\":()=>v});yield;yield;console.log(\"dep start\");\nlet late = \"unset\";\nconst v = (yield new Promise((resolve) => setTimeout(() => resolve(42), 5)));\nlate = \"set\";\nconsole.log(\"dep end\");\n\n}})",
+  "/main.mjs": "({r:[\"./dep.mjs\"],i:[[0,\"v\"],[0,\"late\"]],x:[],s:[],a:true,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0];yield;console.log(\"main start\", __bunwasm_ns0_0.v, __bunwasm_ns0_0.late);\n(yield null);\nconsole.log(\"main after await\");\n\n}})"
+ },
+ "cjs": {}
+}

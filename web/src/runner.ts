@@ -105,6 +105,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const ring = options.adapter !== "preview1" && globalThis.crossOriginIsolated === true ? createRing() : null;
   const lookupChannel = options.engine === "browser" && options.adapter !== "preview1" ? new MessageChannel() : null;
   let helper: RuntimeNetworkHelper | undefined;
+  let socketRoot: Awaited<ReturnType<typeof options.runtime.filesystem.directoryHandle>> | undefined;
   let disposeLookup: (() => void) | undefined;
   const moduleCache = options.moduleScope ? `bunwasm-m-${crypto.randomUUID()}` : null;
   // The runtime exists only on an isolated page, so every run roots a process tree. The root
@@ -176,7 +177,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     disposeLookup?.();
     worker?.terminate();
     try { helper?.dispose(); }
-    finally { if (moduleCache) void caches.delete(moduleCache); }
+    finally { socketRoot?.release(); socketRoot = undefined; if (moduleCache) void caches.delete(moduleCache); }
   };
   const stopRoot = () => { if (rootStopped) return; rootStopped = true; stopWorker(); };
   const starting = performance.now();
@@ -355,8 +356,13 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       if (preparationStopped()) return;
       if (lookupChannel) disposeLookup = installLookupServer(lookupChannel.port1, network);
       if (ring) {
-        helper = createBunNetworkHelper(network, ring, options.network);
-        if (workerStopped) return helper.dispose();
+        const root = await options.runtime.filesystem.directoryHandle("/");
+        if (preparationStopped() || workerStopped) { root.release(); return; }
+        socketRoot = root;
+        helper = createBunNetworkHelper(network, ring, {
+          ...options.network, pathScope: { filesystem: request.filesystem, directory: root.handle },
+        });
+        if (workerStopped) { helper.dispose(); socketRoot?.release(); socketRoot = undefined; return; }
       }
       if (preparationStopped()) return;
     }

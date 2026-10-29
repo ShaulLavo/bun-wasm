@@ -9,7 +9,7 @@ import { guestBuilds, hash, type GuestBuild, type SourceOptions } from "../../sc
 import type { GuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import waffleRelease from "../../scripts/waffle-release-inputs.json";
 
-export const receiptCliSources = ["guest-build-receipt.ts", "guest-source-manifest.ts", "guest-core-receipt.ts", "guest-engine-receipt.ts", "waffle-release-inputs.ts", "waffle-release-inputs.json"];
+export const receiptCliSources = ["guest-build-receipt.ts", "guest-source-manifest.ts", "guest-core-receipt.ts", "guest-engine-receipt.ts", "waffle-release-inputs.ts", "waffle-release-inputs.json", "src/program-profile.ts"];
 
 export const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild, side?: Uint8Array): GuestBuildReceipt {
@@ -102,7 +102,7 @@ checksum = "${"2".repeat(64)}"
     await writeFile(artifact, wasm);
     await writeFile(join(root, "dist/quickjs.wasm"), wasm);
     const tools = Object.fromEntries(["rustc", "cargo", "bun", "node", "rust-lld", "clang", "clang++", "llvm-ar", "wasm-ld", "cmake", "ninja", "wasm-opt"].map(name => [name, join(root, "fake-tool")]));
-    return await run({ repository: root, sysroot: join(root, "sysroot"), sdk: join(root, "sdk"), waffle: join(root, "waffle"), boringssl: join(root, "vendor/boringssl"), rustTargetLib: join(root, "rustlib"), rustSourceLib: join(root, "rust-src"), tools, build: "browser", jscBuild: join(root, "jsc-build") }, artifact);
+    return await run({ repository: root, sysroot: join(root, "sysroot"), sdk: join(root, "sdk"), waffle: join(root, "waffle"), boringssl: join(root, "vendor/boringssl"), rustTargetLib: join(root, "rustlib"), rustSourceLib: join(root, "rust-src"), tools, build: "browser", jscBuild: join(root, "jsc-build"), hermesBuild: join(root, "hermes-build") }, artifact);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -119,6 +119,7 @@ type CliFixture = { root: string; artifact: string; cli: string; env: NodeJS.Pro
 export async function withCliReceiptFixture<T>(action: (fixture: CliFixture) => Promise<T>): Promise<T> {
   return withReceiptFixture(async (options, artifact) => {
     const root = options.repository;
+    await mkdir(join(root, "scripts/src"), { recursive: true });
     for (const name of receiptCliSources) await copyFile(new URL(`../../scripts/${name}`, import.meta.url), join(root, "scripts", name));
     await writeFile(join(root, ".gitignore"), (await readFile(join(root, ".gitignore"), "utf8")) + "node_modules/\nnative-tools/\n");
     await mkdir(join(root, "src"));

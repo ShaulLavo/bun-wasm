@@ -1,0 +1,8 @@
+{
+ "modules": {
+  "/a.mjs": "({r:[\"./b.mjs\"],i:[[0,\"useA\"],[0,\"readLate\"]],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"fromA\":()=>fromA,\"late\":()=>late,\"early\":()=>early});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0];yield;console.log(\"a body\", (0, __bunwasm_ns0_0.useA)());\nfunction fromA() {\n  return \"fromA\";\n}\nlet late = \"late value\";\nconst early = (0, __bunwasm_ns0_0.readLate)();\n\n}})",
+  "/b.mjs": "({r:[\"./a.mjs\"],i:[[0,\"fromA\"],[0,\"late\"]],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"useA\":()=>useA,\"readLate\":()=>readLate});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0];yield;console.log(\"b body\", (0, __bunwasm_ns0_0.fromA)());\ntry {\n  console.log(__bunwasm_ns0_0.late);\n} catch (error) {\n  console.log(\"b tdz\", error.constructor.name);\n}\nfunction useA() {\n  return (0, __bunwasm_ns0_0.fromA)() + \" via b\";\n}\nfunction readLate() {\n  return __bunwasm_ns0_0.late;\n}\n\n}})",
+  "/main.mjs": "({r:[\"./a.mjs\"],i:[[0,\"fromA\"],[0,\"early\"]],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0];yield;console.log(\"main\", (0, __bunwasm_ns0_0.fromA)(), __bunwasm_ns0_0.early);\n\n}})"
+ },
+ "cjs": {}
+}

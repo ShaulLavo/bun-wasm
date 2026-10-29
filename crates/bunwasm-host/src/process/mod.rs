@@ -287,6 +287,8 @@ pub struct Processes {
     notify: Arc<Notify>,
     cancel: Arc<Cancellation>,
     access: HashMap<i32, Arc<Mutex<AccessState>>>,
+    /// The memory group this process is a member of; its workers join it.
+    memory_group: Option<crate::shm::MemoryGroup>,
 }
 
 enum AccessState {
@@ -340,7 +342,13 @@ impl Processes {
             notify,
             cancel,
             access: HashMap::new(),
+            memory_group: None,
         }
+    }
+
+    /// Record the memory group this process joined, so the workers it spawns join it too.
+    pub fn join_memory_group(&mut self, group: Option<crate::shm::MemoryGroup>) {
+        self.memory_group = group;
     }
 
     /// Native metadata work runs off the import stack, with caller-owned,
@@ -606,6 +614,16 @@ impl Processes {
         };
         let pid = state.next;
         state.next = next;
+        // A group member's worker reserves its slot before its thread exists (W1).
+        let admission = match &startup {
+            Ok(resolved) => self.runtime.linked.worker_admission(
+                self.memory_group.as_ref(),
+                request.worker.is_some(),
+                &resolved.module,
+                pid as u32,
+            )?,
+            Err(_) => None,
+        };
         let job = if request.job > 0.0 {
             request.job as i32
         } else {
@@ -658,6 +676,7 @@ impl Processes {
                                 },
                                 stdio,
                                 cancellation.clone(),
+                                admission,
                             )
                         }))
                         .unwrap_or_else(|_| {

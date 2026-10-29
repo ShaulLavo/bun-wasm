@@ -1,7 +1,8 @@
 import { programProfile } from "../../src/engine-kind";
 import { TaggedCells, controlLoad } from "waffle/proc/control";
 import type { RootProcessOptions } from "waffle/proc";
-import { processRuntimeFixture } from "./process-runtime-fixture";
+import { fixtureFilesystemConnection } from "./process-runtime-fixture";
+import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
 import { expect, spyOn, test } from "bun:test";
 import { startRun } from "../src/runner";
 import { ENGINES, type Engine } from "../src/engine-loader";
@@ -66,7 +67,7 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: isolated });
   globalThis.Worker = FakeWorker as unknown as typeof Worker;
   const filesystem = {
-    fork: () => ({ ...createFilesystemIdentity(), port: channel.port1 }),
+    fork: () => fixtureFilesystemConnection(createFilesystemIdentity(), channel.port1),
     connect(identity: object) {
       const child = new MessageChannel(); child.port2.close(); ports.push(child.port1);
       return { ...identity, port: child.port1 };
@@ -200,7 +201,7 @@ for (const failure of ["fork", "retainConsumer", "registerAdapter"] as const) te
   const channel = new MessageChannel();
   const runtime = processRuntimeFixture(failure === "fork"
     ? { fork: () => { throw new Error("fork failed"); } }
-    : { fork: () => ({ ...createFilesystemIdentity(), port: channel.port1 }) });
+    : { fork: () => fixtureFilesystemConnection(createFilesystemIdentity(), channel.port1) });
   const installation = installRuntimeSharedObjects(runtime);
   const NativeChannel = globalThis.MessageChannel;
   const lookups: MessageChannel[] = [];
@@ -359,7 +360,7 @@ test("concurrent roots on one runtime inherit independent engine PATHs without r
       : new Response(wasm, { headers: { "content-type": "application/wasm" } }), { preconnect: globalThis.fetch.preconnect }));
   function connect(identity = createFilesystemIdentity()) {
     const channel = new MessageChannel(); channel.port2.close(); ports.push(channel.port1);
-    return { ...identity, port: channel.port1 };
+    return fixtureFilesystemConnection(identity, channel.port1);
   }
   const runtime = processRuntimeFixture({ fork: () => connect(), connect, revoke() {}, reap() {}, async quiesce() {} } as unknown as SharedFilesystem);
   class FakeWorker {
@@ -430,7 +431,7 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
   const registered: string[] = [];
   function connect(identity = createFilesystemIdentity()) {
     const channel = new MessageChannel(); channel.port2.close(); ports.push(channel.port1);
-    return { ...identity, port: channel.port1 };
+    return fixtureFilesystemConnection(identity, channel.port1);
   }
   const runtime = processRuntimeFixture({ fork: () => connect(), connect, revoke() {}, reap() {}, async quiesce() {} } as unknown as SharedFilesystem);
   const register = runtime.registerProgram.bind(runtime);
