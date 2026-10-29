@@ -43,6 +43,7 @@ function fixture() {
   const writes: Uint8Array[] = [];
   const timers = new Map<object, { at: number; callback: () => void }>();
   const ticks: (() => void)[] = [];
+  const immediates: (() => void)[] = [];
   let now = 0;
   let blocked = false;
   let reads = 0;
@@ -86,7 +87,7 @@ function fixture() {
   modules.net_hostname = load("net_hostname")({ require: (name: string) => modules[name] });
   modules.node_net_socket_state = load("node_net_socket_state")();
   const internal = {
-    native, web: { Request, Response: class extends Response { static _setNetwork() {} }, Headers }, builtinFactories: {}, realTimers: { setImmediate: (fn: () => void) => ticks.push(fn) },
+    native, web: { Request, Response: class extends Response { static _setNetwork() {} }, Headers }, builtinFactories: {}, realTimers: { setImmediate: (fn: () => void) => immediates.push(fn) },
     require(name: string): unknown { if (!(name in modules)) throw new Error(`Unexpected module ${name}`); return modules[name]; },
     builtin(name: string): unknown {
       if (name === "node:process") return { env: {}, versions: process.versions, nextTick: (fn: (...args: unknown[]) => void, ...args: unknown[]) => ticks.push(() => fn(...args)), stderr: { write() {} }, emitWarning() {} };
@@ -110,9 +111,19 @@ function fixture() {
   net = load("net", "js")(internal);
   const http = net.nodeHttp("http:");
   const https = net.nodeHttp("https:");
-  function flush() { while (ticks.length) ticks.shift()?.(); }
+  function flushTicks() { while (ticks.length) ticks.shift()?.(); }
+  function flush() {
+    flushTicks();
+    for (const immediate of immediates.splice(0)) immediate();
+    flushTicks();
+  }
   async function pump() {
-    for (let turn = 0; turn < 64; turn++) { flush(); internal.pumpIo(); await Promise.resolve(); }
+    for (let turn = 0; turn < 64; turn++) {
+      flushTicks();
+      internal.pumpIo();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      flush();
+    }
     flush();
   }
   function advance(ms: number) {
@@ -669,19 +680,51 @@ test("a disconnected request does not start a response after its socket has clos
 });
 
 
-test("HTTP half-close still serves a synchronous complete response", async () => {
+for (const completion of ["synchronous", "promise", "nested-promises"] as const) {
+  test(`HTTP half-close still serves a ${completion} complete response`, async () => {
+    const state = fixture();
+    let response: ServerResponse | undefined;
+    const events: string[] = [];
+    const server = state.http.createServer((_request, current) => {
+      response = current;
+      current.on("finish", () => events.push("finish"));
+      current.on("close", () => events.push("close"));
+      if (completion === "synchronous") { current.end("complete"); return; }
+      const ready = completion === "promise" ? Promise.resolve() : Promise.resolve().then(() => Promise.resolve());
+      void ready.then(() => current.end("complete"));
+    });
+    const connection = state.socket();
+    try {
+      Reflect.get(server, "_onConnection").call(server, connection);
+      state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"), 0);
+      await state.pump();
+      expect(response?.writableFinished).toBe(true);
+      expect(Buffer.concat(state.writes).toString()).toContain("complete");
+      expect(events).toEqual(["finish", "close"]);
+      expect(Reflect.get(connection, "busy")).toBe(false);
+      expect(Reflect.get(server, "_connections").size).toBe(0);
+      expect(state.pending()).toBe(0);
+    } finally { connection.destroy(); await state.pump(); }
+  });
+}
+
+test("HTTP half-close cancels a response deferred to a later timer", async () => {
   const state = fixture();
   let response: ServerResponse | undefined;
-  const server = state.http.createServer((_request, current) => { response = current; current.end("complete"); });
+  const server = state.http.createServer((_request, current) => {
+    response = current;
+    const timeout = setTimeout(() => current.end("late"), 30000);
+    current.once("close", () => clearTimeout(timeout));
+  });
   const connection = state.socket();
   try {
     Reflect.get(server, "_onConnection").call(server, connection);
     state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"), 0);
     await state.pump();
-    expect(response?.writableFinished).toBe(true);
-    expect(Buffer.concat(state.writes).toString()).toContain("complete");
+    expect(response?.writableFinished).toBe(false);
+    expect(response?.closed).toBe(true);
+    expect(state.writes).toEqual([]);
     expect(Reflect.get(connection, "busy")).toBe(false);
-    expect(Reflect.get(server, "_connections").size).toBe(0);
     expect(state.pending()).toBe(0);
   } finally { connection.destroy(); await state.pump(); }
 });
