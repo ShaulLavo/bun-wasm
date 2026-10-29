@@ -16,6 +16,8 @@ mod relay;
 use relay::{SelfPlan, SelfSlots};
 #[path = "linked_group.rs"]
 mod group;
+#[path = "linked_preview1.rs"]
+mod preview1;
 pub use group::MemberImage;
 
 #[derive(Default)]
@@ -105,10 +107,13 @@ impl Programs {
         );
         let group = match profile {
             group::Profile::Split => None,
-            group::Profile::SharedGroup => Some(group::CoreLayout::read(&core_bytes)?),
+            group::Profile::SharedGroup => Some(&core_bytes),
         };
         let layout = layout(&bytes)?;
         let library = Module::new(engine, &bytes)?;
+        let group = group
+            .map(|bytes| group::CoreLayout::read(engine, bytes, &core, &library))
+            .transpose()?;
         validate_profile(kind, &library)?;
         let self_plan = SelfPlan::new(engine, &core, &library, &bytes)?;
         self.0.push(Program {
@@ -134,7 +139,7 @@ impl Programs {
     pub fn instantiate(
         &self,
         module: &Module,
-        linker: &Linker<Host>,
+        linker: &mut Linker<Host>,
         store: &mut Store<Host>,
     ) -> Result<(Instance, Option<MemberImage>)> {
         let Some(core) = self
@@ -150,6 +155,8 @@ impl Programs {
             .context("a memory group program needs a member lease")?;
         let placement = group::carve(lease, &core.layout)?;
         let memory = lease.group().shared_memory();
+        // Preview1 reaches the member's memory only through its view, for the core and side.
+        core.preview1.bind(store, linker, &memory)?;
         let (instance, image) =
             group::instantiate_core(store, linker, module, &core.layout, memory, &placement)?;
         Ok((instance, Some(image)))

@@ -18,10 +18,11 @@ use wasmparser::{
     TypeRef,
 };
 use wasmtime::{
-    Extern, Global, GlobalType, Instance, Linker, Module, Mutability, Ref, RefType, SharedMemory,
-    Store, Table, TableType, Val, ValType,
+    Engine, Extern, Global, GlobalType, Instance, Linker, Module, Mutability, Ref, RefType,
+    SharedMemory, Store, Table, TableType, Val, ValType,
 };
 
+use super::preview1::Preview1View;
 use crate::shm::{self, MemberLease};
 
 /// Bun's wasm32 string tags use address bits 29-31, so a Bun group stays below 512 MiB.
@@ -179,13 +180,21 @@ pub(super) struct CoreLayout {
     /// Immutable exported globals with a constant initializer. wasm-ld emits PIE data
     /// symbols this way without extended-const, relative to the core's `__memory_base`.
     pub(super) relative: HashSet<String>,
+    /// The member's preview1 view over the group memory, for the core and its side.
+    pub(super) preview1: Preview1View,
 }
 
 impl CoreLayout {
-    pub(super) fn read(bytes: &[u8]) -> Result<Self> {
+    pub(super) fn read(
+        engine: &Engine,
+        bytes: &[u8],
+        core: &Module,
+        side: &Module,
+    ) -> Result<Self> {
         Ok(Self {
             layout: super::layout(bytes)?,
             relative: relative_exports(bytes)?,
+            preview1: Preview1View::new(engine, &[core, side], MAX_PAGES)?,
         })
     }
 }

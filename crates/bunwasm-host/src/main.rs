@@ -388,7 +388,9 @@ fn run_module_instance(
     slots::add_shell_imports(&mut linker)?;
     shm::add_imports(&mut linker)?;
     let selected = runtime.module_for(&argv, module)?;
-    let (instance, member) = runtime.linked.instantiate(selected, &linker, &mut store)?;
+    let (instance, member) = runtime
+        .linked
+        .instantiate(selected, &mut linker, &mut store)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");
     slots::install(&mut store, &instance)?;
     process::wasi::initialize(&linker, &mut store)?;
