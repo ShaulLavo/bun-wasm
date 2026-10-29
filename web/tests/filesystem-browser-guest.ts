@@ -1,17 +1,23 @@
-import { FilesystemClient, revokeFilesystem } from "waffle/fs";
+import { FilesystemClient } from "waffle/fs";
+
+class GuestMessageChannel {
+  constructor() { throw new Error("guest MessageChannel used by host transport"); }
+}
+
+function writeFiles(fs: FilesystemClient): void {
+  const native = globalThis.MessageChannel;
+  try {
+    Object.assign(globalThis, { MessageChannel: GuestMessageChannel });
+    const prefix = crypto.randomUUID();
+    for (let i = 0; i < 20; i++) fs.writeFile(`/${prefix}-${i}`, new Uint8Array([i]));
+  } finally { globalThis.MessageChannel = native; }
+}
+
 self.onmessage = ({ data }) => {
   const fs = new FilesystemClient(data.connection);
   try {
     if (data.action === "writers") {
-      // Native-engine guest polyfills replace MessageChannel before Bun.spawn forks a client.
-      const native = globalThis.MessageChannel;
-      try {
-        Object.assign(globalThis, { MessageChannel: class { constructor() { throw new Error("guest MessageChannel used by host transport"); } } });
-        const connection = fs.fork();
-        revokeFilesystem(connection); fs.sweep(); connection.port.close();
-      } finally { globalThis.MessageChannel = native; }
-      const prefix = crypto.randomUUID();
-      for (let i = 0; i < 20; i++) fs.writeFile(`/${prefix}-${i}`, new Uint8Array([i]));
+      writeFiles(fs);
       self.postMessage({ ok: true });
       return;
     }
