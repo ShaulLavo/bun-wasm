@@ -58,7 +58,7 @@ test("installed service does not grant shared permission to direct codecs, clone
   expect(runtime.internal.workerErrorData?.(new Error("not cloneable", { cause: sab })).code).toBe("ERR_WORKER_UNSERIALIZABLE_ERROR");
   const child = new runtime.MessageChannel(), transfer = runtime.codec.encode(child.port2, [child.port2]);
   cleanup.add(() => child.port1.close());
-  runtime.__fixtureChild({ send() {}, pump: () => false, subscriptions: () => new Uint8Array(), close() {}, drain() {}, pending: false, ended: false }, transfer);
+  runtime.__fixtureChild({ send() {}, pump: () => false, subscriptions: () => new Uint8Array(), close() {}, drain() {}, waitReadable() {}, pending: false, ended: false }, transfer);
   const channel = new runtime.BroadcastChannel("strict");
   cleanup.add(() => channel.close());
   expect(() => channel.postMessage(sab)).toThrow();

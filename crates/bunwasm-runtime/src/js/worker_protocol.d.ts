@@ -168,6 +168,7 @@ declare namespace BunWasm {
     /** What the idle loop sleeps on: the input, plus the output while frames are queued. */
     subscriptions(): Uint8Array;
     pump(receive: (frame: unknown) => void): boolean;
+    waitReadable(ms: number): void;
     close(): void;
     readonly pending: boolean;
     readonly ended: boolean;

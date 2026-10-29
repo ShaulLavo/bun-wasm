@@ -69,6 +69,8 @@
         if (ended && incoming.length) fail("Incomplete worker message");
         return flush() || progress;
       },
+      // Block in the host until the input is readable or closed, or `ms` passes.
+      waitReadable(ms) { if (!ended) native.procPoll(subscription(READABLE, input), ms); },
       close() { native.procClose(input); native.procClose(output); ended = true; incoming = ""; outgoing.length = 0; },
       get pending() { return outgoing.length > 0; },
       get ended() { return ended; },
