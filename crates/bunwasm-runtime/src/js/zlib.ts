@@ -377,6 +377,16 @@
   function maxFlush(a: number, b: number) {
     return flushiness[a] > flushiness[b] ? a : b;
   }
+  // Output room per codec call. A stream with a huge chunkSize (webpack's cache
+  // passes 100 MiB) would otherwise get one contiguous output that grows by
+  // doubling, which a fragmented 512 MiB guest heap cannot always supply.
+  // A filled room is reported as a full chunk, so callers continue exactly as
+  // they do when a chunkSize buffer fills; only the pieces are smaller.
+  const kOutputRoom = 1 << 20;
+  function outputRoom(self: ZlibBase, offset: number) {
+    return Math.min(self._chunkSize - offset, kOutputRoom);
+  }
+
   const kFlushBuffers: Uint8Array[] = [];
   for (const flag of kFlushFlagList) {
     kFlushBuffers[flag] = Object.assign(Buffer.from(new ArrayBuffer(0)), { [kFlushFlag]: flag });
@@ -384,7 +394,7 @@
 
   function processChunkSync(self: ZlibBase, chunk: Uint8Array, flushFlag: number) {
     let availInBefore = chunk.byteLength;
-    let availOutBefore = self._chunkSize - self._outOffset;
+    let availOutBefore = outputRoom(self, self._outOffset);
     let inOff = 0;
     let availOutAfter: number;
     let availInAfter: number;
@@ -418,10 +428,8 @@
         }
       }
       // Exhausted the output buffer, or used all the input: start a new one.
-      if (availOutAfter === 0 || offset >= chunkSize) {
-        availOutBefore = chunkSize;
-        offset = 0;
-      }
+      if (availOutAfter === 0 || offset >= chunkSize) offset = 0;
+      if (availOutAfter === 0) availOutBefore = outputRoom(self, offset);
       if (availOutAfter === 0) {
         // Not actually done. Reprocess with the input left over.
         inOff += inDelta;
@@ -445,7 +453,7 @@
     if (!handle) { internal.nextTick(cb); return; }
     handle.buffer = chunk;
     handle.cb = cb;
-    handle.availOutBefore = self._chunkSize - self._outOffset;
+    handle.availOutBefore = outputRoom(self, self._outOffset);
     handle.availInBefore = chunk.byteLength;
     handle.inOff = 0;
     handle.flushFlag = flushFlag;
@@ -479,15 +487,13 @@
       return;
     }
     // Exhausted the output buffer, or used all the input: start a new one.
-    if (availOutAfter === 0 || self._outOffset >= self._chunkSize) {
-      handle.availOutBefore = self._chunkSize;
-      self._outOffset = 0;
-    }
+    if (availOutAfter === 0 || self._outOffset >= self._chunkSize) self._outOffset = 0;
+    if (availOutAfter === 0) handle.availOutBefore = outputRoom(self, self._outOffset);
     if (availOutAfter === 0) {
       // Not actually done. Reprocess the rest once the consumer has room.
       handle.inOff += inDelta;
       handle.availInBefore = availInAfter;
-      const again = () => handle.write(handle.flushFlag, handle.buffer!, handle.inOff, handle.availInBefore, self._chunkSize);
+      const again = () => handle.write(handle.flushFlag, handle.buffer!, handle.inOff, handle.availInBefore, handle.availOutBefore);
       if (!streamBufferIsFull) {
         again();
       } else {
