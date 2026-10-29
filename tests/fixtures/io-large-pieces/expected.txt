@@ -1,0 +1,11 @@
+positional read stops at end of file true
+read growth under 8 MiB true
+cursor reads continue true
+cursor reads advance true
+callback read true
+gunzip round trip true
+gunzip pieces at most 1 MiB true
+gzip round trip true
+one large deflate write matches deflateSync true
+brotli round trip true
+sync inflate of a large input true
