@@ -1,5 +1,6 @@
 use super::*;
 use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Barrier};
 use std::thread::{self, JoinHandle};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -16,13 +17,22 @@ struct WaitThread {
     cancel: WaitCancel,
     result: Receiver<WaitResult>,
     handle: Option<JoinHandle<()>>,
+    gate: Option<Arc<Barrier>>,
 }
 
 impl WaitThread {
     fn spawn(registration: WaitRegistration) -> Self {
+        Self::spawn_gated(registration, None)
+    }
+
+    fn spawn_gated(registration: WaitRegistration, gate: Option<Arc<Barrier>>) -> Self {
         let cancel = registration.cancel_handle();
         let (send, result) = channel();
+        let thread_gate = gate.clone();
         let handle = thread::spawn(move || {
+            if let Some(gate) = thread_gate {
+                gate.wait();
+            }
             let outcome = registration.wait();
             let _ = send.send(outcome);
         });
@@ -30,6 +40,7 @@ impl WaitThread {
             cancel,
             result,
             handle: Some(handle),
+            gate,
         }
     }
 
@@ -41,11 +52,20 @@ impl WaitThread {
         self.handle.take().unwrap().join().unwrap();
         outcome
     }
+
+    fn release_gate(&mut self) {
+        if let Some(gate) = self.gate.take() {
+            gate.wait();
+        }
+    }
 }
 
 impl Drop for WaitThread {
     fn drop(&mut self) {
         let _ = self.cancel.cancel();
+        if self.handle.is_some() {
+            self.release_gate();
+        }
         if let Some(handle) = self.handle.take() {
             handle.join().unwrap();
         }
@@ -66,7 +86,6 @@ fn defaults_preserve_member_and_page_budget_policy() {
     assert_eq!(policy.parallelism, 1);
     assert_eq!(policy.budget_bytes, 2 * 1024 * 1024 * 1024);
     assert_eq!(policy.maximum_pages, 65536);
-    assert_eq!(POLL_FUTEX_KIND, 7);
 }
 
 #[test]
@@ -152,12 +171,50 @@ fn failed_launch_abort_returns_member_capacity() {
 }
 
 #[test]
+fn allocation_boundaries_reject_overflow_alignment_and_budget_exhaustion() {
+    let group = MemoryGroup::new(
+        &Engine::default(),
+        GroupPolicy {
+            budget_bytes: 2 * u64::from(PAGE_BYTES),
+            ..GroupPolicy::default()
+        },
+    )
+    .unwrap();
+    let owner = member(&group, 1);
+    assert_eq!(owner.group.grow(owner.member, 0), Err(Errno::Inval));
+    assert_eq!(
+        owner.group.grow(owner.member, MAX_GROUP_PAGES + 1),
+        Err(Errno::Inval)
+    );
+    assert_eq!(owner.group.create(owner.member, 0, 16), Err(Errno::Inval));
+    assert_eq!(
+        owner.group.create(owner.member, 0x8000_0000, 16),
+        Err(Errno::Inval)
+    );
+    assert_eq!(owner.group.create(owner.member, 64, 3), Err(Errno::Inval));
+    assert_eq!(
+        owner.group.create(owner.member, 64, PAGE_BYTES * 2),
+        Err(Errno::Inval)
+    );
+    let region = owner.group.create(owner.member, 64, 16).unwrap();
+    let before = group.snapshot();
+    assert_eq!(owner.group.create(owner.member, 64, 16), Err(Errno::NoMem));
+    assert_eq!(group.snapshot(), before);
+    owner.group.detach(owner.member, region.handle).unwrap();
+    assert_eq!(
+        owner.group.create(owner.member, 64, 16).unwrap().addr,
+        region.addr
+    );
+}
+
+#[test]
 fn invalid_output_spans_leave_regions_holds_pins_and_watches_unchanged() {
     let group = group();
     let owner = member(&group, 1);
     let receiver = member(&group, 2);
     let out_of_bounds = u32::MAX - 3;
     let before = group.snapshot();
+    assert_eq!(shm_create(&owner, 64, 16, 1), Errno::Inval.result());
     assert_eq!(
         shm_create(&owner, 64, 16, out_of_bounds),
         Errno::Inval.result()
@@ -196,21 +253,12 @@ fn delayed_waiter_intent_survives_a_250ms_scheduling_delay() {
     let waiter = member(&group, 2);
     let region = owner.group.create(owner.member, 64, 16).unwrap();
     let registration = registered(waiter.prepare_wait32(region.addr, 0, -1).unwrap());
-    let cancel = registration.cancel_handle();
-    let barrier = Arc::new(std::sync::Barrier::new(2));
-    let waiter_barrier = barrier.clone();
-    let (send, result) = channel();
-    let handle = thread::spawn(move || {
-        waiter_barrier.wait();
-        let outcome = registration.wait();
-        let _ = send.send(outcome);
-    });
+    let barrier = Arc::new(Barrier::new(2));
+    let mut waiting = WaitThread::spawn_gated(registration, Some(barrier));
     assert_eq!(owner.wake(region.addr, 1).unwrap(), 1);
     thread::sleep(Duration::from_millis(250));
-    barrier.wait();
-    assert_eq!(result.recv_timeout(TEST_TIMEOUT), Ok(WaitResult::Ok));
-    handle.join().unwrap();
-    let _ = cancel;
+    waiting.release_gate();
+    assert_eq!(waiting.outcome(), WaitResult::Ok);
 }
 
 #[test]
@@ -328,6 +376,8 @@ fn failed_stop_retains_debt_until_the_same_incarnation_stops() {
     let receiver = member(&group, 2);
     let survivor = member(&group, 3);
     let region = owner.group.create(owner.member, 64, 16).unwrap();
+    owner.group.attach(owner.member, region.handle).unwrap();
+    assert_eq!(group.snapshot().holds, 2);
     let grown = owner.group.grow(owner.member, 1).unwrap();
     let pin = owner.group.pin(owner.member, region.handle).unwrap();
     owner.group.route(owner.member, pin, 2).unwrap();

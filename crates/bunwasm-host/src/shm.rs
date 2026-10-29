@@ -22,7 +22,6 @@ const DEFAULT_MEMBERS: usize = 16;
 const DEFAULT_REGIONS: usize = 4096;
 const DEFAULT_PINS: usize = 4096;
 const DEFAULT_WATCHES: usize = 1024;
-pub const POLL_FUTEX_KIND: u32 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
@@ -454,7 +453,7 @@ impl GroupInner {
             .map(|member| member.holds.keys().copied().collect::<Vec<_>>())
             .unwrap_or_default();
         for handle in holds {
-            let _ = self.drop_hold_locked(&mut state, id, handle);
+            self.release_hold_locked(&mut state, id, handle);
         }
         let chunks = Self::current_member_mut(&mut state, id)
             .map(|member| std::mem::take(&mut member.chunks))
@@ -581,6 +580,16 @@ impl GroupInner {
         }
         Self::maybe_free_region(state, handle);
         Ok(())
+    }
+
+    fn release_hold_locked(&self, state: &mut GroupState, member: MemberId, handle: RegionHandle) {
+        if let Ok(member) = Self::current_member_mut(state, member) {
+            member.holds.remove(&handle);
+        }
+        if let Some(region) = state.regions.get_mut(&handle) {
+            region.holders.remove(&member);
+        }
+        Self::maybe_free_region(state, handle);
     }
 
     fn pin(&self, member: MemberId, handle: RegionHandle) -> Result<PinId, Errno> {
@@ -1120,7 +1129,8 @@ fn give_chunk(free: &mut Vec<Chunk>, chunk: Chunk) {
 }
 
 fn validate_span(memory: &SharedMemory, addr: u32, width: u32) -> Result<(), Errno> {
-    if addr % width != 0 || u64::from(addr) + u64::from(width) > memory.data_size() as u64 {
+    if !addr.is_multiple_of(width) || u64::from(addr) + u64::from(width) > memory.data_size() as u64
+    {
         return Err(Errno::Inval);
     }
     Ok(())
