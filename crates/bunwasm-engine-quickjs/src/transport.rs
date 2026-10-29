@@ -4,10 +4,13 @@ pub(crate) struct TransportBuffer {
 }
 
 impl TransportBuffer {
-    pub(crate) fn new(bytes: u32) -> Self {
+    /// Core-owned memory for one call, or `None` when core cannot allocate it.
+    pub(crate) fn new(bytes: u32) -> Option<Self> {
         let pointer = unsafe { bun_core_alloc(bytes, 8) };
-        assert_ne!(pointer, 0, "transport allocation");
-        Self { pointer, bytes }
+        if pointer == 0 {
+            return None;
+        }
+        Some(Self { pointer, bytes })
     }
 }
 
