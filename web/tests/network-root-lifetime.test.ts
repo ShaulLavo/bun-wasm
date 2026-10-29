@@ -4,7 +4,7 @@ import { NetHost } from "waffle/browser/net/host";
 import type { RuntimeNetwork, RuntimeNetworkHelper } from "waffle";
 import { startRun } from "../src/runner";
 import type { RunRequest, WorkerMessage } from "../src/bun-executor";
-import { processRuntimeFixture } from "./process-runtime-fixture";
+import { processRuntimeFixture, fixtureFilesystemConnection } from "./process-runtime-fixture";
 
 function fixture(constructionFailure = false) {
   const previousWorker = globalThis.Worker;
@@ -26,7 +26,7 @@ function fixture(constructionFailure = false) {
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/") });
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
   const runtime = processRuntimeFixture({
-    fork: () => ({ ...createFilesystemIdentity(), port: channel.port1 }),
+    fork: () => fixtureFilesystemConnection(createFilesystemIdentity(), channel.port1),
     revoke() {}, reap() {}, quiesce: () => gate.promise,
   });
   const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
