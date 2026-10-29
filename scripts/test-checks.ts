@@ -12,7 +12,7 @@ function parseOwner(value: unknown): Owner {
   throw new Error(`Unknown check owner: ${String(value)}`);
 }
 
-function parseCheck(value: unknown, file: string): Check {
+export function parseCheck(value: unknown, file: string): Check {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid check: ${file}`);
   if (!("owner" in value) || !("path" in value)) throw new Error(`Missing check fields: ${file}`);
   if (Object.keys(value).some(key => !["owner", "path", "localRuntime", "batch"].includes(key))) throw new Error(`Unknown check fields: ${file}`);
