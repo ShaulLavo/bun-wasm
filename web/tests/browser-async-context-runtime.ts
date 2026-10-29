@@ -5,10 +5,11 @@ import { checkPageReady } from "./async-context-runtime-page.ts";
 import { playwright, ready, run, session, writeFile } from "./playground.mjs";
 
 const { chromium, webkit, devices } = playwright;
-const root = new URL("../../tests/fixtures/async-context-runtime/", import.meta.url);
+const root = new URL("../../tests/async-context-runtime/", import.meta.url);
 const source = {
   index: await readFile(new URL("index.ts", root), "utf8"),
   loaded: await readFile(new URL("loaded.ts", root), "utf8"),
+  report: await readFile(new URL("report.ts", root), "utf8"),
 };
 const browsers: Record<string, [BrowserType, BrowserContextOptions | undefined]> = {
   chromium: [chromium, { viewport: { width: 1200, height: 900 } }],
@@ -28,6 +29,7 @@ async function exercise(name: string, type: BrowserType, options: BrowserContext
     assert.match(status, /ready · Browser \(native\)/);
     await writeFile(page, "/home/user/ctx01/index.ts", source.index);
     await writeFile(page, "/home/user/ctx01/loaded.ts", source.loaded);
+    await writeFile(page, "/home/user/ctx01/report.ts", source.report);
     const result = await run(page, "bun run ctx01/index.ts");
     const line = result.output.split("\n").find(value => value.startsWith("CTX01_RESULT "));
     assert.ok(line, result.output);

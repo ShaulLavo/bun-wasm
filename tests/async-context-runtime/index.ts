@@ -1,45 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { loadedFromFile, type Note } from "./loaded.ts";
+import { evidenceFailures, type CaseReport, type CodeOrigin, type Report } from "./report.ts";
 
 type Store = { request: string; nested?: string };
-type OriginKind = "file" | "new-async-function" | "eval" | "reused" | "constructor";
-type CodeOrigin = {
-  id: string;
-  kind: OriginKind;
-  source: string;
-  sourceURL: string;
-  constructor: string;
-  compiledOnce: boolean;
-};
-type Observation = {
-  caseName: string;
-  request: string;
-  phase: string;
-  expected: string;
-  actual: string | null;
-  ok: boolean;
-};
-type CaseReport = {
-  name: string;
-  origin: string;
-  compiledOnce: boolean;
-  requests: string[];
-  error?: string;
-};
-type Report = {
-  version: 1;
-  status: "pass" | "fail";
-  origins: CodeOrigin[];
-  cases: CaseReport[];
-  observations: Observation[];
-  failures: string[];
-};
 type AsyncCase = (note: Note, timer: (phase: string) => Promise<void>) => unknown;
 
 const storage = new AsyncLocalStorage<Store>();
 const origins: CodeOrigin[] = [];
 const cases: CaseReport[] = [];
-const observations: Observation[] = [];
+const observations: Report["observations"] = [];
 const failures: string[] = [];
 
 function addOrigin(origin: CodeOrigin): void {
@@ -90,9 +59,12 @@ async function requestBody(name: string, request: string, fn: AsyncCase): Promis
   await fn(note, wait);
   note("run.after-function");
   await wait("run.timer");
+  const rejection = new Error("outer rejection");
   try {
-    await Promise.reject(new Error("outer rejection"));
-  } catch {
+    await Promise.reject(rejection);
+    throw new Error("outer expected rejection fulfilled");
+  } catch (caught) {
+    if (caught !== rejection) throw caught;
     note("run.catch");
   } finally {
     note("run.finally");
@@ -131,18 +103,19 @@ function asyncGeneratorFunctionConstructor(): FunctionConstructor {
   return Object.getPrototypeOf(async function* () {}).constructor as FunctionConstructor;
 }
 
-function makeDynamicAsync(ctor: FunctionConstructor, id: string, kind: OriginKind): AsyncCase {
+function makeDynamicAsync(ctor: FunctionConstructor, id: string, kind: CodeOrigin["kind"]): AsyncCase {
   const fn = new ctor(
     "note",
     "timer",
-    `note("dynamic.before-await"); await Promise.resolve(); note("dynamic.after-await"); await timer("dynamic.after-timer"); try { await Promise.reject(new Error("dynamic rejection")); } catch { note("dynamic.catch"); } finally { note("dynamic.finally"); }\n//# sourceURL=${sourceURL(id)}`,
+    `note("dynamic.before-await"); await Promise.resolve(); note("dynamic.after-await"); await timer("dynamic.after-timer"); const rejection = new Error("dynamic rejection"); try { await Promise.reject(rejection); throw new Error("dynamic expected rejection fulfilled"); } catch (caught) { if (caught !== rejection) throw caught; note("dynamic.catch"); } finally { note("dynamic.finally"); }\n//# sourceURL=${sourceURL(id)}`,
   ) as AsyncCase;
   addOrigin({ id, kind, source: Function.prototype.toString.call(fn), sourceURL: sourceURL(id), constructor: ctor.name, compiledOnce: kind === "reused" });
   return fn;
 }
 
 function makeEvaluated(): AsyncCase {
-  const source = `(async function evaluated(note, timer) { note("eval.before-await"); await Promise.resolve(); note("eval.after-await"); await timer("eval.after-timer"); try { await Promise.reject(new Error("eval rejection")); } catch { note("eval.catch"); } finally { note("eval.finally"); } })\n//# sourceURL=${sourceURL("eval")}`;
+  const source = `(async function evaluated(note, timer) { note("eval.before-await"); await Promise.resolve(); note("eval.after-await"); await timer("eval.after-timer"); const rejection = new Error("eval rejection"); try { await Promise.reject(rejection); throw new Error("eval expected rejection fulfilled"); } catch (caught) { if (caught !== rejection) throw caught; note("eval.catch"); } finally { note("eval.finally"); } })\n//# sourceURL=${sourceURL("eval")}`;
+  // oxlint-disable-next-line no-eval -- Direct eval is the behavior under test.
   const fn = eval(source) as AsyncCase;
   addOrigin({ id: "eval", kind: "eval", source, sourceURL: sourceURL("eval"), constructor: "AsyncFunction", compiledOnce: false });
   return fn;
@@ -200,8 +173,8 @@ async function main(): Promise<Report> {
   const fileOrigin: CodeOrigin = {
     id: "file-loaded",
     kind: "file",
-    source: "tests/fixtures/async-context-runtime/loaded.ts",
-    sourceURL: "file:///tests/fixtures/async-context-runtime/loaded.ts",
+    source: "tests/async-context-runtime/loaded.ts",
+    sourceURL: "file:///tests/async-context-runtime/loaded.ts",
     constructor: "AsyncFunction",
     compiledOnce: false,
   };
@@ -219,7 +192,10 @@ async function main(): Promise<Report> {
   await runCase("compiled-once-reused", origins.at(-1)!, reused);
 
   await runConstructors();
-  return { version: 1, status: failures.length === 0 ? "pass" : "fail", origins, cases, observations, failures };
+  const report: Report = { version: 1, status: "pass", origins, cases, observations, failures };
+  failures.push(...evidenceFailures(report));
+  report.status = failures.length === 0 ? "pass" : "fail";
+  return report;
 }
 
 const report = await main();
