@@ -1499,6 +1499,8 @@ dependencies = [
  "hmac",
  "icu_collator",
  "icu_locale_core",
+ "icu_locale_fallback",
+ "icu_provider",
  "libc",
  "libsqlite3-sys",
  "lol_html",

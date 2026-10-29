@@ -16,6 +16,17 @@ console.log("supported", Intl.NumberFormat.supportedLocalesOf(["en-US", "de-DE"]
 console.log("collation", new Intl.Collator("en").compare("ä", "z"), new Intl.Collator("sv").compare("ä", "z"));
 console.log("collationOptions", new Intl.Collator("en", { numeric: true }).compare("item2", "item10"),
   new Intl.Collator("en", { sensitivity: "base" }).compare("a", "ä"));
+const numericExtension = new Intl.Collator("en-u-kn");
+const upperExtension = new Intl.Collator("en-u-kf-upper");
+console.log("collatorExtensions", numericExtension.compare("item2", "item10"), numericExtension.resolvedOptions().numeric,
+  upperExtension.compare("A", "a"), upperExtension.resolvedOptions().caseFirst);
+console.log("collatorExtensionOverrides", new Intl.Collator("en-u-kn", { numeric: false }).compare("item2", "item10"),
+  new Intl.Collator("en-u-kn", { numeric: false }).resolvedOptions().numeric,
+  new Intl.Collator("en-u-kf-upper", { caseFirst: "false" }).compare("A", "a"),
+  new Intl.Collator("en-u-kf-upper", { caseFirst: "false" }).resolvedOptions().caseFirst);
+const negotiated = new Intl.Collator(["zz-ZZ", "sv"]);
+console.log("collatorNegotiation", negotiated.compare("ä", "z"), negotiated.resolvedOptions().locale,
+  JSON.stringify(Intl.Collator.supportedLocalesOf(["zz-ZZ", "xx"])));
 console.log("timezone", new Intl.DateTimeFormat("en-US", {
   timeZone: "Asia/Jerusalem",
   hour: "numeric",
