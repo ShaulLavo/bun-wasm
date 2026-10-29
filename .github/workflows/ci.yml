@@ -698,7 +698,7 @@ jobs:
           mkdir -p "$WASM_TOOLS/wasi-sdk"
           tar -xzf "$archive" --strip-components=1 -C "$WASM_TOOLS/wasi-sdk"
       - name: Save completed shared-sdk setup
-        if: steps.shared-sdk.outputs.cache-hit != 'true'
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sdk.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasi-sdk
@@ -725,7 +725,7 @@ jobs:
           cp "$stage/wasm-tools" "$WASM_TOOLS/wasm-tools-bin/wasm-tools"
           echo "$WASM_TOOLS/wasm-tools-bin" >> "$GITHUB_PATH"
       - name: Save completed shared-wasm-tools setup
-        if: steps.shared-wasm-tools.outputs.cache-hit != 'true'
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-wasm-tools.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasm-tools-1.262.0-x86_64-linux.tar.gz
@@ -752,7 +752,7 @@ jobs:
           cp "$stage/wasmtime" "$WASM_TOOLS/wasmtime/wasmtime"
           echo "$WASM_TOOLS/wasmtime" >> "$GITHUB_PATH"
       - name: Save completed shared-wasmtime setup
-        if: steps.shared-wasmtime.outputs.cache-hit != 'true'
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-wasmtime.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ env.WASM_TOOLS }}/wasmtime-v49.0.3-x86_64-linux.tar.xz
@@ -773,7 +773,7 @@ jobs:
           source env.sh
           bun scripts/build-wasi-sysroot.ts --shared-pic
       - name: Save shared profile cache
-        if: steps.shared-sysroot-cache.outputs.cache-hit != 'true'
+        if: ${{ success() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.shared-sysroot-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ env.BUN_WASM_SHARED_SYSROOT }}

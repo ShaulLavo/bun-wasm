@@ -109,3 +109,54 @@ test("real member map checks work without ripgrep and reject either missing libc
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+type SharedSaveContext = { event: string; ref: string; hit: string; success: boolean; cancelled: boolean };
+
+function sharedCacheSaves(): { name: string; condition: string }[] {
+  const job: unknown = Bun.YAML.parse(shared);
+  assert(job && typeof job === "object" && "steps" in job && Array.isArray(job.steps));
+  return job.steps.flatMap((step: unknown) => {
+    assert(step && typeof step === "object");
+    if (!("uses" in step) || step.uses !== "actions/cache/save@v4") return [];
+    assert("name" in step && typeof step.name === "string" && "if" in step && typeof step.if === "string");
+    return [{ name: step.name, condition: step.if }];
+  });
+}
+
+function sharedSaveAllowed(condition: string, state: SharedSaveContext): boolean {
+  const expression = condition.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
+    .replace(/success\(\)/g, String(state.success))
+    .replace(/cancelled\(\)/g, String(state.cancelled))
+    .replace(/github\.event_name/g, JSON.stringify(state.event))
+    .replace(/github\.ref/g, JSON.stringify(state.ref))
+    .replace(/steps\.[\w-]+\.outputs\.cache-hit/g, JSON.stringify(state.hit));
+  const result: unknown = new Function(`return (${expression})`)();
+  assert(typeof result === "boolean");
+  return result;
+}
+
+test("all four shared saves require a successful uncancelled main push and an actual miss", () => {
+  const saves = sharedCacheSaves();
+  expect(saves.map(step => step.name)).toEqual([
+    "Save completed shared-sdk setup",
+    "Save completed shared-wasm-tools setup",
+    "Save completed shared-wasmtime setup",
+    "Save shared profile cache",
+  ]);
+  const main = { event: "push", ref: "refs/heads/main", hit: "false", success: true, cancelled: false };
+  const cases = [
+    { name: "cold main", state: main, allowed: true },
+    { name: "main prefix or empty miss", state: { ...main, hit: "" }, allowed: true },
+    { name: "exact main hit", state: { ...main, hit: "true" }, allowed: false },
+    { name: "cold PR", state: { ...main, event: "pull_request", ref: "refs/pull/356/merge" }, allowed: false },
+    { name: "PR prefix miss", state: { ...main, event: "pull_request", ref: "refs/pull/356/merge", hit: "" }, allowed: false },
+    { name: "feature push", state: { ...main, ref: "refs/heads/feature" }, allowed: false },
+    { name: "cancelled", state: { ...main, cancelled: true }, allowed: false },
+    { name: "failed setup", state: { ...main, success: false }, allowed: false },
+  ];
+  for (const save of saves) {
+    for (const item of cases) {
+      expect(sharedSaveAllowed(save.condition, item.state), `${save.name}: ${item.name}`).toBe(item.allowed);
+    }
+  }
+});
