@@ -22,7 +22,7 @@ const fd = fs.openSync("large.bin", "r");
 // Use up the free heap left by the write, so a full-size temporary has to grow memory.
 const fillers: Buffer[] = [];
 for (const start = wasmCapacity(); wasmCapacity() === start;) {
-  if (fillers.length === 64) throw new Error("Wasm capacity did not grow after 64 MiB of pressure");
+  if (fillers.length * MiB >= start) throw new Error("Wasm capacity did not grow after filling its initial capacity");
   fillers.push(Buffer.alloc(MiB));
 }
 const before = wasmCapacity();
