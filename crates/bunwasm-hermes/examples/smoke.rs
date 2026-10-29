@@ -26,6 +26,15 @@ extern "C" fn bunhermes_host_call(
         // SAFETY: the shim passes `count` handles.
         unsafe { std::slice::from_raw_parts(args, count) }
     };
+    if id == 4 {
+        unsafe {
+            sys::bh_gc();
+            args.iter().for_each(|h| sys::bh_release(*h));
+            sys::bh_release(this);
+            *out = sys::bh_undefined();
+        }
+        return true;
+    }
     if id == 3 {
         unsafe {
             sys::bh_release(this);
@@ -148,6 +157,10 @@ fn main() {
         });
     };
 
+    if std::env::args().any(|arg| arg == "--constructor-gc") {
+        check_constructor_gc();
+        return;
+    }
     if std::env::args().any(|arg| arg == "--oom") {
         let _ = eval("var a = []; for (;;) a.push(new Array(100000).fill(1));");
         panic!("OOM must terminate through the fatal callback");
@@ -227,6 +240,7 @@ fn main() {
     );
     check_bytes();
     check_external();
+    check_constructor_gc();
     check_context();
     check_boundaries();
 }
@@ -435,4 +449,38 @@ fn check_boundaries() {
         interrupted.is_err() && !unsafe { sys::bh_get_bool(caught) },
         format!("{interrupted:?}"),
     );
+}
+
+fn check_constructor_gc() {
+    let collect = unsafe { sys::bh_function(c"forceGC".as_ptr(), 7, 4) };
+    put_global("forceGC", collect);
+    unsafe {
+        sys::bh_release(collect);
+    }
+    for (label, body) in [
+        (
+            "constructor identity without GC",
+            "globalThis.constructorThis = this;",
+        ),
+        (
+            "constructor identity across GC",
+            "globalThis.constructorThis = this; forceGC();",
+        ),
+    ] {
+        let constructor = eval(&format!("(function C() {{ {body} }})")).unwrap();
+        let mut instance = 0;
+        assert!(unsafe { sys::bh_construct(constructor, std::ptr::null(), 0, &mut instance) });
+        let expected = eval("constructorThis").unwrap();
+        let equal = unsafe { sys::bh_strict_equals(instance, expected) };
+        check(
+            label,
+            equal,
+            format!("returned this === rooted this: {equal}"),
+        );
+        unsafe {
+            sys::bh_release(instance);
+            sys::bh_release(expected);
+            sys::bh_release(constructor);
+        }
+    }
 }

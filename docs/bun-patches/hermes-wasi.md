@@ -5,6 +5,7 @@
 | `hermes/hermes-wasi.patch` | Port | facebook/hermes `c36356f416ee19bb0d54c2e7ecb3c5fb0538a065`, paths below |
 | Runtime timeout hooks, `hasPendingJobs`, `hermesvm_bunwasm` target | Host feature | `include/hermes/VM/Runtime.h`, `lib/VM/Runtime.cpp`, `lib/CMakeLists.txt`, same pin |
 | `cpp/shim.cpp` in `crates/bunwasm-hermes` | Original adapter | `API/hermes_abi/hermes_vtable.cpp` rooting and call patterns at the same pin; no verbatim copy |
+| `bh_construct` receiver root in `cpp/shim.cpp` | Adapted implementation | `API/hermes_abi/hermes_vtable.cpp` `call_as_constructor` at the same pin |
 | `hermes/*.sh`, `wasi-hermes.cmake`, sys crate and smoke | Original build glue | Retained bun-wasm `d7c6149b210b59f9229d4b8018102ba958e6f6ce`, PR #231 |
 
 This ports the retained VM-only work to a PIC static library for an engine side module. No runtime adapter, default engine selection, default CI build, or common-core code changes are included.
@@ -20,3 +21,5 @@ Build with `source env.sh; HERMES_BUILD_DIR=<private-tree> hermes/build.sh`. All
 See [Promise context changes](hermes-async-context.md) and `hermes/smoke.sh` for the VM-only gate. This classified record is additive; the frozen overview file is unchanged for the coordinated wave.
 
 The VM smoke uses the launcher's existing 16 MiB Wasm host-stack limit. With wasmtime's smaller CLI default, native reentry exhausts the host stack before Hermes reaches its configured linear-memory guard. At the matching limit it throws `RangeError` with `native stack depth`. The OOM check uses Node WASI `returnOnExit` to assert the exact guest exit 134, since the wasmtime CLI rejects guest exit statuses at or above 126.
+
+The constructor receiver uses upstream's `LocalsRAII` and `PinnedValue` pattern to remain a registered GC root across `Callable::call`. If a constructor returns a primitive, the fallback reads the updated rooted receiver after collection. The bounded constructor smoke compares that result with the constructor's rooted global `this`, both with and without an explicit GC. The former unregistered local copy failed this identity comparison after collection.
