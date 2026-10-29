@@ -38,10 +38,16 @@ export function verifyEmbeddingReceipt(value: unknown, expected: ReturnType<type
   if (JSON.stringify(value) !== JSON.stringify(receipt)) throw new Error("JSC embedding source/prebuild/artifact receipt mismatch");
 }
 
+// Fixtures that need a live host handshake, not a final stdout snapshot, own their runner.
+export function handshakeCommands(artifact: string): string[][] {
+  return [["node", "--no-warnings", join(root, "tests/test-stdout-busy-loop.ts"), "--engine", "jsc", "--wasm", artifact]];
+}
+
 function testFixtures(artifact: string): void {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-jsc-embedding-"));
   try {
     for (const fixture of fixtures) runFixture(artifact, fixture, scratch);
+    for (const command of handshakeCommands(artifact)) runHandshake(command, scratch);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -61,6 +67,14 @@ function runFixture(artifact: string, fixture: string, scratch: string): void {
     throw new Error(`JSC fixture ${fixture} failed, exit ${run.status}, signal ${run.signal}`);
   }
   console.log(`PASS JSC ${fixture}`);
+}
+
+function runHandshake([executable, ...args]: string[], scratch: string): void {
+  const run = spawnSync(executable!, args, { cwd: root, encoding: "utf8", timeout: 60_000, env: { ...process.env, BUN_WASM_SCRATCH_ROOT: scratch } });
+  process.stdout.write(run.stdout ?? "");
+  process.stderr.write(run.stderr ?? "");
+  if (run.error) throw run.error;
+  if (run.status !== 0) throw new Error(`JSC handshake ${args[1]} failed, exit ${run.status}, signal ${run.signal}`);
 }
 
 if (import.meta.main) {

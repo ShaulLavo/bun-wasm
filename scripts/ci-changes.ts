@@ -6,7 +6,7 @@ const nativeDirectories = ["crates/", "vendor/", "third_party/", "patches/", ".c
 const nativeFiles = new Set([
   "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml", "env.sh", "package.json", "bun.lock", ".github/workflows/ci.yml",
   "scripts/quality.ts", "scripts/quality-rust.ts", "scripts/rust-test-packages.ts", "scripts/quality-wasi.ts", "scripts/quality-wasi-probe.ts", "scripts/quality-command.ts", "scripts/quality-input-times.ts",
-  "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/test.sh",
+  "jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/test.sh", "tests/test-stdout-busy-loop.ts",
   "scripts/check-cmake-cache.cmake", "scripts/check-wasi-cmake-cache.sh",
   "scripts/ci-changes.ts", "scripts/browser-build.ts", "scripts/guest-build-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/transpile-runtime.ts",
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
@@ -32,15 +32,15 @@ const nativeCheckManifests = /^checks\/(?:native|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 
-const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/jsc-embedding/"];
+const jscDirectories = ["jsc/", "crates/bunwasm-jsc/", "crates/bunwasm-engine-jsc/", "tests/fixtures/shared-array-buffer/", "tests/fixtures/astro-http2-response/", "tests/fixtures/stdout-busy-loop/", "tests/jsc-embedding/"];
 const jscFiles = new Set([
   "crates/bunwasm-engine-quickjs/src/program.rs", "crates/bunwasm-engine-quickjs/src/loader.rs", "crates/bunwasm-engine-quickjs/src/value_natives.rs",
   "crates/bunwasm-engine-quickjs/src/driver.rs", "crates/bunwasm-engine-quickjs/src/client.rs", "crates/bunwasm-engine-quickjs/src/natives.rs", "crates/bunwasm-engine-quickjs/src/allocator.rs", "crates/bunwasm-engine-quickjs/src/transport.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs",
   "crates/bunwasm-runtime/src/engine_jsc.rs", "scripts/build-bun-jsc.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "scripts/build-bun-core.sh", "scripts/build.sh", "scripts/quickjs-core-exports.txt", "scripts/build-jsc.sh",
   "scripts/guest-artifact.ts", "scripts/guest-build-receipt.ts", "scripts/guest-core-receipt.ts", "scripts/guest-engine-receipt.ts", "scripts/guest-source-manifest.ts", "scripts/guest-acceptance.ts",
   "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/engine-producer.test.ts", "scripts/src/engine-explicit-init.test.ts",
-  "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts",
-  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "scripts/bench-jsc.sh", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", ".github/workflows/ci.yml",
+  "scripts/src/program-profile.ts", "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts",
+  "scripts/jsc-embedding.ts", "scripts/jsc-embedding.test.ts", "scripts/bench-jsc.sh", "tests/test-stdout-busy-loop.ts", "scripts/ci-changes.ts", "scripts/ci-check-inputs.ts", ".github/workflows/ci.yml",
   "env.sh", "scripts/build-wasi-sysroot.ts", "scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.json", "scripts/ci-binaryen.ts", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "bun.lock",
 ]);
 

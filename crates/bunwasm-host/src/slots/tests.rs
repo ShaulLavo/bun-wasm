@@ -1,4 +1,5 @@
 use super::*;
+use crate::guest::GuestMemory;
 use crate::process::{self, Cancellation, FinalOutcome, Runtime, Stdio};
 use std::sync::Arc;
 use wasmtime::{Config, Engine, Memory, MemoryType, Module, StoreLimitsBuilder, WasmParams};
@@ -7,6 +8,8 @@ struct Fixture {
     store: Store<Host>,
     linker: Linker<Host>,
     runtime: Arc<Runtime>,
+    /// A shared fixture's group backing: fields drop in order, so it outlives `store`.
+    _backing: Option<crate::shm::SharedMemoryLease>,
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -17,7 +20,18 @@ impl Fixture {
     fn new() -> Self {
         Self::at(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
     }
+    /// The same imports over a memory group's shared memory.
+    fn shared() -> Self {
+        Self::with_memory(std::path::Path::new(env!("CARGO_MANIFEST_DIR")), true)
+    }
+    /// A private-memory fixture, then a shared-memory one.
+    fn both() -> [Self; 2] {
+        [Self::new(), Self::shared()]
+    }
     fn at(directory: &std::path::Path) -> Self {
+        Self::with_memory(directory, false)
+    }
+    fn with_memory(directory: &std::path::Path, shared: bool) -> Self {
         let mut config = Config::new();
         config.epoch_interruption(true);
         let engine = Engine::new(&config).unwrap();
@@ -56,7 +70,22 @@ impl Fixture {
             },
         );
         store.set_epoch_deadline(1);
-        let memory = Memory::new(&mut store, MemoryType::new(1, None)).unwrap();
+        let backing = shared.then(|| {
+            let policy = crate::shm::GroupPolicy {
+                maximum_pages: 8192,
+                ..crate::shm::GroupPolicy::default()
+            };
+            let budget = crate::shm::GroupBackingBudget::default();
+            crate::shm::MemoryGroup::new(&engine, policy, budget)
+                .unwrap()
+                .memory_lease()
+        });
+        let memory = match &backing {
+            Some(lease) => GuestMemory::Shared(lease.clone()),
+            None => {
+                GuestMemory::Private(Memory::new(&mut store, MemoryType::new(1, None)).unwrap())
+            }
+        };
         store.data_mut().memory = Some(memory);
         let mut linker = Linker::new(&engine);
         wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |host: &mut Host| &mut host.wasi)
@@ -66,6 +95,7 @@ impl Fixture {
             store,
             linker,
             runtime,
+            _backing: backing,
         }
     }
     fn call<P: WasmParams>(&mut self, module: &str, name: &str, args: P) -> i32 {
@@ -82,16 +112,14 @@ impl Fixture {
             .unwrap()
     }
 
-    fn write(&mut self, ptr: usize, bytes: &[u8]) {
-        self.store
-            .data()
-            .memory
-            .unwrap()
-            .write(&mut self.store, ptr, bytes)
-            .unwrap();
+    fn memory(&self) -> GuestMemory {
+        self.store.data().memory.clone().unwrap()
     }
-    fn bytes(&self, ptr: usize, len: usize) -> &[u8] {
-        &self.store.data().memory.unwrap().data(&self.store)[ptr..ptr + len]
+    fn write(&mut self, ptr: usize, bytes: &[u8]) {
+        self.memory().write(&mut self.store, ptr, bytes).unwrap();
+    }
+    fn bytes(&self, ptr: usize, len: usize) -> Vec<u8> {
+        self.memory().read(&self.store, ptr..ptr + len).unwrap()
     }
     fn word(&self, ptr: usize) -> i32 {
         i32::from_le_bytes(self.bytes(ptr, 4).try_into().unwrap())
@@ -108,10 +136,17 @@ impl Fixture {
 
 #[test]
 fn network_slots_have_no_child_or_signal_transport() {
-    assert_eq!(SLOT_NAMES.len(), 16);
+    assert_eq!(SLOT_NAMES.len(), 18);
     assert_eq!(
         &SLOT_NAMES[12..],
-        &["shutdown", "local_addr", "lookup_start", "lookup_head"]
+        &[
+            "shutdown",
+            "local_addr",
+            "lookup_start",
+            "lookup_head",
+            "listen_path",
+            "connect_path"
+        ]
     );
     assert!(
         SLOT_NAMES
@@ -122,17 +157,15 @@ fn network_slots_have_no_child_or_signal_transport() {
 
 #[test]
 fn lookup_sized_results_do_not_overwrite_small_buffers() {
-    let mut memory = vec![0x7f; 4];
-    assert_eq!(
-        put(&mut memory, 0, 3, Output::Bytes(b"abcd".to_vec())).unwrap(),
-        4
-    );
-    assert_eq!(memory, vec![0x7f; 4]);
-    assert_eq!(
-        put(&mut memory, 0, 4, Output::Bytes(b"abcd".to_vec())).unwrap(),
-        4
-    );
-    assert_eq!(memory, b"abcd");
+    for mut f in Fixture::both() {
+        let memory = f.memory();
+        f.write(0, &[0x7f; 4]);
+        let output = || Output::Bytes(b"abcd".to_vec());
+        assert_eq!(put(&memory, &mut f.store, 0, 3, output()).unwrap(), 4);
+        assert_eq!(f.bytes(0, 4), [0x7f; 4]);
+        assert_eq!(put(&memory, &mut f.store, 0, 4, output()).unwrap(), 4);
+        assert_eq!(f.bytes(0, 4), b"abcd");
+    }
 }
 
 #[test]
@@ -166,110 +199,113 @@ fn lookup_start_rejects_invalid_utf8_before_allocating_a_handle() {
 
 #[test]
 fn runtime_pipe_and_preview1_io_close_and_renumber_share_descriptors() {
-    let mut f = Fixture::new();
-    let [read, write] = f.pipe();
-    f.write(128, b"abc");
-    assert_eq!(f.call("runtime_proc", "write", (write, 128, 3)), 3);
-    f.iovec(256, 8);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_read", (read, 32, 1, 48)),
-        0
-    );
-    assert_eq!(f.word(48), 3);
-    assert_eq!(f.bytes(256, 3), b"abc");
-    f.iovec(128, 3);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_write", (write, 32, 1, 48)),
-        0
-    );
-    assert_eq!(f.word(48), 3);
-    assert_eq!(f.call("runtime_proc", "read", (read, 256, 3)), 3);
-    assert_eq!(f.bytes(256, 3), b"abc");
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_renumber", (write, 19)),
-        0
-    );
-    assert_eq!(
-        f.call("runtime_proc", "write", (write, 128, 3)),
-        process::BADF
-    );
-    assert_eq!(f.call("runtime_proc", "write", (19, 128, 3)), 3);
-    assert_eq!(f.call("runtime_proc", "read", (read, 256, 3)), 3);
-    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 19), 0);
-    f.iovec(256, 8);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_read", (read, 32, 1, 48)),
-        0
-    );
-    assert_eq!(f.word(48), 0);
-    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", read), 0);
-    assert_eq!(
-        f.call("runtime_proc", "read", (read, 256, 3)),
-        process::BADF
-    );
+    for mut f in Fixture::both() {
+        let [read, write] = f.pipe();
+        f.write(128, b"abc");
+        assert_eq!(f.call("runtime_proc", "write", (write, 128, 3)), 3);
+        f.iovec(256, 8);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_read", (read, 32, 1, 48)),
+            0
+        );
+        assert_eq!(f.word(48), 3);
+        assert_eq!(f.bytes(256, 3), b"abc");
+        f.iovec(128, 3);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_write", (write, 32, 1, 48)),
+            0
+        );
+        assert_eq!(f.word(48), 3);
+        assert_eq!(f.call("runtime_proc", "read", (read, 256, 3)), 3);
+        assert_eq!(f.bytes(256, 3), b"abc");
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_renumber", (write, 19)),
+            0
+        );
+        assert_eq!(
+            f.call("runtime_proc", "write", (write, 128, 3)),
+            process::BADF
+        );
+        assert_eq!(f.call("runtime_proc", "write", (19, 128, 3)), 3);
+        assert_eq!(f.call("runtime_proc", "read", (read, 256, 3)), 3);
+        assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 19), 0);
+        f.iovec(256, 8);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_read", (read, 32, 1, 48)),
+            0
+        );
+        assert_eq!(f.word(48), 0);
+        assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", read), 0);
+        assert_eq!(
+            f.call("runtime_proc", "read", (read, 256, 3)),
+            process::BADF
+        );
+    }
 }
 
 #[test]
 fn stdio_binding_can_be_read_through_both_abis_without_buffer_loss() {
-    let mut f = Fixture::new();
-    let [read, write] = f.pipe();
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_renumber", (read, 0)),
-        0
-    );
-    f.write(128, b"abcdef");
-    assert_eq!(f.call("runtime_proc", "write", (write, 128, 6)), 6);
-    f.iovec(256, 1);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_read", (0, 32, 1, 48)),
-        0
-    );
-    assert_eq!(f.bytes(256, 1), b"a");
-    assert_eq!(f.call("runtime_proc", "read", (0, 256, 5)), 5);
-    assert_eq!(f.bytes(256, 5), b"bcdef");
-    assert_eq!(f.call("wasi_snapshot_preview1", "fd_renumber", (0, 19)), 0);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_read", (0, 32, 1, 48)),
-        -process::BADF
-    );
-    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 19), 0);
-    assert_eq!(
-        f.call("runtime_proc", "write", (write, 128, 1)),
-        process::PIPE
-    );
+    for mut f in Fixture::both() {
+        let [read, write] = f.pipe();
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_renumber", (read, 0)),
+            0
+        );
+        f.write(128, b"abcdef");
+        assert_eq!(f.call("runtime_proc", "write", (write, 128, 6)), 6);
+        f.iovec(256, 1);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_read", (0, 32, 1, 48)),
+            0
+        );
+        assert_eq!(f.bytes(256, 1), b"a");
+        assert_eq!(f.call("runtime_proc", "read", (0, 256, 5)), 5);
+        assert_eq!(f.bytes(256, 5), b"bcdef");
+        assert_eq!(f.call("wasi_snapshot_preview1", "fd_renumber", (0, 19)), 0);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_read", (0, 32, 1, 48)),
+            -process::BADF
+        );
+        assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 19), 0);
+        assert_eq!(
+            f.call("runtime_proc", "write", (write, 128, 1)),
+            process::PIPE
+        );
+    }
 }
 
 #[test]
 fn process_import_faults_return_errno_before_resource_changes_or_job_reap() {
-    let mut f = Fixture::new();
-    assert_eq!(f.call("runtime_proc", "pipe", 65535), process::FAULT);
-    let [read, write] = f.pipe();
-    assert_eq!(read, process::FIRST_HANDLE);
-    assert_eq!(write, read + 1);
-    assert_eq!(
-        f.call("runtime_proc", "poll", (0, -1, 0, 64)),
-        process::FAULT
-    );
-    let request = serde_json::to_vec(
+    for mut f in Fixture::both() {
+        assert_eq!(f.call("runtime_proc", "pipe", 65535), process::FAULT);
+        let [read, write] = f.pipe();
+        assert_eq!(read, process::FIRST_HANDLE);
+        assert_eq!(write, read + 1);
+        assert_eq!(
+            f.call("runtime_proc", "poll", (0, -1, 0, 64)),
+            process::FAULT
+        );
+        let request = serde_json::to_vec(
         &serde_json::json!({"executable":"/bin/bun","argv":[],"env":{},"cwd":"/","job":0,"fds":[]}),
     )
     .unwrap();
-    f.write(512, &request);
-    let pid = f.call("runtime_proc", "spawn", (512, request.len() as i32));
-    assert!(pid > 0);
-    let job = f.call("runtime_proc", "job_of", pid);
-    assert_eq!(
-        f.call("runtime_proc", "wait_job", (job, 1, 65532)),
-        process::FAULT
-    );
-    assert_eq!(f.call("runtime_proc", "wait_job", (job, 0, 80)), 0);
-    assert_eq!(f.word(80), 0);
-    assert_eq!(f.word(84), 0);
-    assert_eq!(f.call("runtime_proc", "wait", (pid, 88)), process::CHILD);
-    assert_eq!(
-        f.call("runtime_proc", "wait_job", (job, 1, 80)),
-        process::CHILD
-    );
+        f.write(512, &request);
+        let pid = f.call("runtime_proc", "spawn", (512, request.len() as i32));
+        assert!(pid > 0);
+        let job = f.call("runtime_proc", "job_of", pid);
+        assert_eq!(
+            f.call("runtime_proc", "wait_job", (job, 1, 65532)),
+            process::FAULT
+        );
+        assert_eq!(f.call("runtime_proc", "wait_job", (job, 0, 80)), 0);
+        assert_eq!(f.word(80), 0);
+        assert_eq!(f.word(84), 0);
+        assert_eq!(f.call("runtime_proc", "wait", (pid, 88)), process::CHILD);
+        assert_eq!(
+            f.call("runtime_proc", "wait_job", (job, 1, 80)),
+            process::CHILD
+        );
+    }
 }
 
 #[test]
@@ -431,69 +467,71 @@ fn engine_preopens_form_a_contiguous_libc_scan_ending_at_ebadf() {
 
 #[test]
 fn renumber_files_and_streams_replaces_the_destination_without_hidden_entries() {
-    let mut f = Fixture::new();
-    let [read, write] = f.pipe();
-    let file = f.open_manifest(3);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_renumber", (read, 9)),
-        0
-    );
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_renumber", (file, 9)),
-        0
-    );
-    assert_eq!(
-        f.call("runtime_proc", "write", (write, 0, 1)),
-        process::PIPE
-    );
-    f.iovec(2048, 8);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_read", (9, 32, 1, 48)),
-        0
-    );
-    assert_eq!(f.bytes(2048, 8), b"[package");
-    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 9), 0);
-    let [read, _write] = f.pipe();
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_renumber", (read, 3)),
-        0
-    );
-    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 3), 0);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_prestat_get", (3, 256)),
-        -process::BADF
-    );
+    for mut f in Fixture::both() {
+        let [read, write] = f.pipe();
+        let file = f.open_manifest(3);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_renumber", (read, 9)),
+            0
+        );
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_renumber", (file, 9)),
+            0
+        );
+        assert_eq!(
+            f.call("runtime_proc", "write", (write, 0, 1)),
+            process::PIPE
+        );
+        f.iovec(2048, 8);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_read", (9, 32, 1, 48)),
+            0
+        );
+        assert_eq!(f.bytes(2048, 8), b"[package");
+        assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 9), 0);
+        let [read, _write] = f.pipe();
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_renumber", (read, 3)),
+            0
+        );
+        assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 3), 0);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_prestat_get", (3, 256)),
+            -process::BADF
+        );
+    }
 }
 
 #[test]
 fn preview1_poll_reports_process_readiness_hangup_and_regular_files() {
-    let mut f = Fixture::new();
-    let [read, write] = f.pipe();
-    let file = f.open_manifest(3);
-    let mut subscriptions = [0u8; 96];
-    subscriptions[..8].copy_from_slice(&41u64.to_le_bytes());
-    subscriptions[8] = 1;
-    subscriptions[16..20].copy_from_slice(&read.to_le_bytes());
-    subscriptions[48..56].copy_from_slice(&42u64.to_le_bytes());
-    subscriptions[56] = 1;
-    subscriptions[64..68].copy_from_slice(&file.to_le_bytes());
-    f.write(512, &subscriptions);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "poll_oneoff", (512, 2048, 2, 128)),
-        0
-    );
-    assert_eq!(f.word(128), 1);
-    assert_eq!(f.word(2048), 42);
-    assert_eq!(f.word(2056) & 0xffff, 0);
-    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", write), 0);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "poll_oneoff", (512, 2048, 1, 128)),
-        0
-    );
-    assert_eq!(f.word(128), 1);
-    assert_eq!(f.word(2048), 41);
-    assert_eq!(f.bytes(2072, 2), &1u16.to_le_bytes());
-    assert_eq!(f.bytes(512, 96), subscriptions);
+    for mut f in Fixture::both() {
+        let [read, write] = f.pipe();
+        let file = f.open_manifest(3);
+        let mut subscriptions = [0u8; 96];
+        subscriptions[..8].copy_from_slice(&41u64.to_le_bytes());
+        subscriptions[8] = 1;
+        subscriptions[16..20].copy_from_slice(&read.to_le_bytes());
+        subscriptions[48..56].copy_from_slice(&42u64.to_le_bytes());
+        subscriptions[56] = 1;
+        subscriptions[64..68].copy_from_slice(&file.to_le_bytes());
+        f.write(512, &subscriptions);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "poll_oneoff", (512, 2048, 2, 128)),
+            0
+        );
+        assert_eq!(f.word(128), 1);
+        assert_eq!(f.word(2048), 42);
+        assert_eq!(f.word(2056) & 0xffff, 0);
+        assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", write), 0);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "poll_oneoff", (512, 2048, 1, 128)),
+            0
+        );
+        assert_eq!(f.word(128), 1);
+        assert_eq!(f.word(2048), 41);
+        assert_eq!(f.bytes(2072, 2), &1u16.to_le_bytes());
+        assert_eq!(f.bytes(512, 96), subscriptions);
+    }
 }
 
 #[test]
@@ -805,42 +843,44 @@ fn local_file_writes_share_offsets_without_modifying_guest_iovecs() {
         std::env::temp_dir().join(format!("bun-wasm-native-file-{}", std::process::id()));
     std::fs::create_dir(&directory).unwrap();
     let scratch = Scratch(directory);
-    std::fs::write(scratch.0.join("output"), b"").unwrap();
-    let mut f = Fixture::at(&scratch.0);
-    f.write(1024, b"output");
-    assert_eq!(
-        f.call(
-            "wasi_snapshot_preview1",
-            "path_open",
-            (3, 0, 1024, 6, 0, 64i64, 0i64, 0, 1080)
-        ),
-        0
-    );
-    let file = f.word(1080);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_renumber", (file, 1)),
-        0
-    );
-    f.write(256, b"abc");
-    f.iovec(256, 3);
-    let iovec = f.bytes(32, 8).to_vec();
-    assert_eq!(f.call("runtime_proc", "write", (1, 256, 3)), 3);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_write", (1, 32, 1, 48)),
-        0
-    );
-    assert_eq!(f.word(48), 3);
-    assert_eq!(f.call("runtime_proc", "write", (1, 256, 3)), 3);
-    assert_eq!(f.bytes(32, 8), iovec);
-    assert_eq!(
-        f.call("runtime_proc", "write", (1, 65535, 3)),
-        process::FAULT
-    );
-    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 1), 0);
-    assert_eq!(
-        std::fs::read(scratch.0.join("output")).unwrap(),
-        b"abcabcabc"
-    );
+    for shared in [false, true] {
+        std::fs::write(scratch.0.join("output"), b"").unwrap();
+        let mut f = Fixture::with_memory(&scratch.0, shared);
+        f.write(1024, b"output");
+        assert_eq!(
+            f.call(
+                "wasi_snapshot_preview1",
+                "path_open",
+                (3, 0, 1024, 6, 0, 64i64, 0i64, 0, 1080)
+            ),
+            0
+        );
+        let file = f.word(1080);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_renumber", (file, 1)),
+            0
+        );
+        f.write(256, b"abc");
+        f.iovec(256, 3);
+        let iovec = f.bytes(32, 8).to_vec();
+        assert_eq!(f.call("runtime_proc", "write", (1, 256, 3)), 3);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_write", (1, 32, 1, 48)),
+            0
+        );
+        assert_eq!(f.word(48), 3);
+        assert_eq!(f.call("runtime_proc", "write", (1, 256, 3)), 3);
+        assert_eq!(f.bytes(32, 8), iovec);
+        assert_eq!(
+            f.call("runtime_proc", "write", (1, 65535, 3)),
+            process::FAULT
+        );
+        assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", 1), 0);
+        assert_eq!(
+            std::fs::read(scratch.0.join("output")).unwrap(),
+            b"abcabcabc"
+        );
+    }
 }
 
 #[test]
@@ -848,7 +888,9 @@ fn zero_page_exported_memory_does_not_prevent_descriptor_initialization() {
     let mut f = Fixture::new();
     let module = Module::new(f.store.engine(), b"\0asm\x01\0\0\0\x01\x04\x01\x60\0\0\x03\x02\x01\0\x05\x03\x01\0\0\x07\x13\x02\x06memory\x02\0\x06_start\0\0\x0a\x04\x01\x02\0\x0b").unwrap();
     let instance = f.linker.instantiate(&mut f.store, &module).unwrap();
-    f.store.data_mut().memory = instance.get_memory(&mut f.store, "memory");
+    f.store.data_mut().memory = instance
+        .get_memory(&mut f.store, "memory")
+        .map(GuestMemory::Private);
     process::wasi::initialize(&f.linker, &mut f.store).unwrap();
     instance
         .get_typed_func::<(), ()>(&mut f.store, "_start")
@@ -922,76 +964,77 @@ fn access_import_validation_never_allocates_a_request_on_invalid_input() {
 
 #[test]
 fn engine_files_are_visible_to_wasi_metadata_open_and_readdir() {
-    let mut f = Fixture::new();
-    // root is fd 3, /bin fd 4, /opt/bun fd 5.
-    for path in ["bun", "node"] {
-        f.write(1024, path.as_bytes());
+    for mut f in Fixture::both() {
+        // root is fd 3, /bin fd 4, /opt/bun fd 5.
+        for path in ["bun", "node"] {
+            f.write(1024, path.as_bytes());
+            assert_eq!(
+                f.call(
+                    "wasi_snapshot_preview1",
+                    "path_filestat_get",
+                    (4, 0, 1024, path.len() as i32, 2048)
+                ),
+                0
+            );
+            assert_eq!(f.bytes(2064, 1), &[4]); // regular file
+        }
         assert_eq!(
             f.call(
                 "wasi_snapshot_preview1",
-                "path_filestat_get",
-                (4, 0, 1024, path.len() as i32, 2048)
+                "fd_readdir",
+                (4, 2048, 1024, 0i64, 128)
             ),
             0
         );
-        assert_eq!(f.bytes(2064, 1), &[4]); // regular file
-    }
-    assert_eq!(
-        f.call(
-            "wasi_snapshot_preview1",
-            "fd_readdir",
-            (4, 2048, 1024, 0i64, 128)
-        ),
-        0
-    );
-    let count = f.word(128) as usize;
-    let directory = f.bytes(2048, count);
-    assert!(directory.windows(3).any(|name| name == b"bun"));
-    assert!(directory.windows(4).any(|name| name == b"node"));
-    for (engine, paths) in [
-        ("quickjs", ["quickjs/bin/bun", "quickjs/bin/node"]),
-        ("jsc", ["jsc/bin/bun", "jsc/bin/node"]),
-    ] {
-        for path in paths {
-            f.write(1024, path.as_bytes());
-            assert_eq!(
-                f.call(
-                    "wasi_snapshot_preview1",
-                    "path_filestat_get",
-                    (5, 0, 1024, path.len() as i32, 2048)
-                ),
-                -process::NOENT
-            );
-        }
-        f.runtime
-            .register_engine(engine, &f.runtime.module)
-            .unwrap();
-        for path in paths {
-            f.write(1024, path.as_bytes());
-            assert_eq!(
-                f.call(
-                    "wasi_snapshot_preview1",
-                    "path_filestat_get",
-                    (5, 0, 1024, path.len() as i32, 2048)
-                ),
-                0
-            );
-            assert_eq!(f.bytes(2064, 1), &[4]);
-            assert_eq!(
-                f.call(
-                    "wasi_snapshot_preview1",
-                    "path_open",
-                    (5, 0, 1024, path.len() as i32, 0, 2i64, 0i64, 0, 1080)
-                ),
-                0
-            );
-            let fd = f.word(1080);
-            assert_eq!(
-                f.call("wasi_snapshot_preview1", "fd_filestat_get", (fd, 2048)),
-                0
-            );
-            assert_eq!(f.bytes(2064, 1), &[4]);
-            assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", fd), 0);
+        let count = f.word(128) as usize;
+        let directory = f.bytes(2048, count);
+        assert!(directory.windows(3).any(|name| name == b"bun"));
+        assert!(directory.windows(4).any(|name| name == b"node"));
+        for (engine, paths) in [
+            ("quickjs", ["quickjs/bin/bun", "quickjs/bin/node"]),
+            ("jsc", ["jsc/bin/bun", "jsc/bin/node"]),
+        ] {
+            for path in paths {
+                f.write(1024, path.as_bytes());
+                assert_eq!(
+                    f.call(
+                        "wasi_snapshot_preview1",
+                        "path_filestat_get",
+                        (5, 0, 1024, path.len() as i32, 2048)
+                    ),
+                    -process::NOENT
+                );
+            }
+            f.runtime
+                .register_engine(engine, &f.runtime.module)
+                .unwrap();
+            for path in paths {
+                f.write(1024, path.as_bytes());
+                assert_eq!(
+                    f.call(
+                        "wasi_snapshot_preview1",
+                        "path_filestat_get",
+                        (5, 0, 1024, path.len() as i32, 2048)
+                    ),
+                    0
+                );
+                assert_eq!(f.bytes(2064, 1), &[4]);
+                assert_eq!(
+                    f.call(
+                        "wasi_snapshot_preview1",
+                        "path_open",
+                        (5, 0, 1024, path.len() as i32, 0, 2i64, 0i64, 0, 1080)
+                    ),
+                    0
+                );
+                let fd = f.word(1080);
+                assert_eq!(
+                    f.call("wasi_snapshot_preview1", "fd_filestat_get", (fd, 2048)),
+                    0
+                );
+                assert_eq!(f.bytes(2064, 1), &[4]);
+                assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", fd), 0);
+            }
         }
     }
 }
@@ -999,101 +1042,104 @@ fn engine_files_are_visible_to_wasi_metadata_open_and_readdir() {
 #[test]
 fn both_wait_imports_encode_startup_failure_as_eight_bytes_without_consuming_on_fault() {
     for by_job in [false, true] {
-        let mut f = Fixture::new();
-        let request=serde_json::to_vec(&serde_json::json!({"executable":"/missing","argv":[],"env":{},"cwd":"/","job":0,"fds":[]})).unwrap();
-        f.write(512, &request);
-        let pid = f.call("runtime_proc", "spawn", (512, request.len() as i32));
-        assert!(pid > 0);
-        let job = f.call("runtime_proc", "job_of", pid);
-        let subscription: Vec<u8> = [6u32, pid as u32, 123, 0]
-            .into_iter()
-            .flat_map(u32::to_le_bytes)
-            .collect();
-        f.write(256, &subscription);
-        assert_eq!(f.call("runtime_proc", "poll", (256, 1, 5000, 80)), 1);
-        assert_eq!(f.word(80), 123);
-        assert_eq!(f.word(88), 6);
-        assert_eq!(f.call("runtime_proc", "start_status", pid), 44);
-        assert_eq!(f.call("runtime_proc", "start_status", pid), 44);
-        if by_job {
-            assert_eq!(
-                f.call("runtime_proc", "wait_job", (job, 1, 65532)),
-                process::FAULT
-            );
-            assert_eq!(f.call("runtime_proc", "wait_job", (job, 0, 80)), 0);
-        } else {
-            assert_eq!(f.call("runtime_proc", "wait", (pid, 65532)), process::FAULT);
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                let result = f.call("runtime_proc", "wait", (pid, 80));
-                if result == 0 {
-                    break;
+        for mut f in Fixture::both() {
+            let request=serde_json::to_vec(&serde_json::json!({"executable":"/missing","argv":[],"env":{},"cwd":"/","job":0,"fds":[]})).unwrap();
+            f.write(512, &request);
+            let pid = f.call("runtime_proc", "spawn", (512, request.len() as i32));
+            assert!(pid > 0);
+            let job = f.call("runtime_proc", "job_of", pid);
+            let subscription: Vec<u8> = [6u32, pid as u32, 123, 0]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect();
+            f.write(256, &subscription);
+            assert_eq!(f.call("runtime_proc", "poll", (256, 1, 5000, 80)), 1);
+            assert_eq!(f.word(80), 123);
+            assert_eq!(f.word(88), 6);
+            assert_eq!(f.call("runtime_proc", "start_status", pid), 44);
+            assert_eq!(f.call("runtime_proc", "start_status", pid), 44);
+            if by_job {
+                assert_eq!(
+                    f.call("runtime_proc", "wait_job", (job, 1, 65532)),
+                    process::FAULT
+                );
+                assert_eq!(f.call("runtime_proc", "wait_job", (job, 0, 80)), 0);
+            } else {
+                assert_eq!(f.call("runtime_proc", "wait", (pid, 65532)), process::FAULT);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    let result = f.call("runtime_proc", "wait", (pid, 80));
+                    if result == 0 {
+                        break;
+                    }
+                    assert_eq!(result, process::AGAIN);
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::yield_now();
                 }
-                assert_eq!(result, process::AGAIN);
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::yield_now();
             }
-        }
-        assert_eq!(f.word(80), 2);
-        assert_eq!(f.word(84), 44);
-        assert_eq!(f.call("runtime_proc", "start_status", pid), process::CHILD);
-        assert_eq!(
-            f.call("runtime_proc", "poll", (256, 1, 0, 80)),
-            process::CHILD
-        );
-        assert_eq!(f.call("runtime_proc", "wait", (pid, 80)), process::CHILD);
-        if by_job {
+            assert_eq!(f.word(80), 2);
+            assert_eq!(f.word(84), 44);
+            assert_eq!(f.call("runtime_proc", "start_status", pid), process::CHILD);
             assert_eq!(
-                f.call("runtime_proc", "wait_job", (job, 1, 80)),
+                f.call("runtime_proc", "poll", (256, 1, 0, 80)),
                 process::CHILD
             );
+            assert_eq!(f.call("runtime_proc", "wait", (pid, 80)), process::CHILD);
+            if by_job {
+                assert_eq!(
+                    f.call("runtime_proc", "wait_job", (job, 1, 80)),
+                    process::CHILD
+                );
+            }
         }
     }
 }
 
 #[test]
 fn fd_kind_tracks_pipes_files_remaps_and_closed_descriptors_without_consuming() {
-    let mut f = Fixture::new();
-    assert_eq!(f.call("runtime_proc", "fd_kind", 3), 4);
-    for fd in [-1, 400000, i32::MAX] {
-        assert_eq!(f.call("runtime_proc", "fd_kind", fd), process::BADF);
+    for mut f in Fixture::both() {
+        assert_eq!(f.call("runtime_proc", "fd_kind", 3), 4);
+        for fd in [-1, 400000, i32::MAX] {
+            assert_eq!(f.call("runtime_proc", "fd_kind", fd), process::BADF);
+        }
+        let [read, write] = f.pipe();
+        for fd in [read, write] {
+            assert_eq!(f.call("runtime_proc", "fd_kind", fd), 1);
+        }
+        let duplicate = f.call("runtime_proc", "dup", read);
+        assert_eq!(f.call("runtime_proc", "fd_kind", duplicate), 1);
+        assert_eq!(f.call("runtime_proc", "write", (write, 256, 1)), 1);
+        assert_eq!(f.call("runtime_proc", "fd_kind", read), 1);
+        assert_eq!(f.call("runtime_proc", "read", (read, 512, 1)), 1);
+        let file = f.open_manifest(3);
+        assert_eq!(f.call("runtime_proc", "fd_kind", file), 3);
+        f.iovec(2048, 8);
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_read", (file, 32, 1, 48)),
+            0
+        );
+        assert_eq!(f.bytes(2048, 8), b"[package");
+        assert_eq!(
+            f.call("wasi_snapshot_preview1", "fd_renumber", (file, 0)),
+            0
+        );
+        assert_eq!(f.call("runtime_proc", "fd_kind", 0), 3);
+        assert_eq!(f.call("runtime_proc", "fd_kind", file), process::BADF);
+        assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", read), 0);
+        assert_eq!(f.call("runtime_proc", "fd_kind", read), process::BADF);
+        assert_eq!(f.call("runtime_proc", "fd_kind", duplicate), 1);
     }
-    let [read, write] = f.pipe();
-    for fd in [read, write] {
-        assert_eq!(f.call("runtime_proc", "fd_kind", fd), 1);
-    }
-    let duplicate = f.call("runtime_proc", "dup", read);
-    assert_eq!(f.call("runtime_proc", "fd_kind", duplicate), 1);
-    assert_eq!(f.call("runtime_proc", "write", (write, 256, 1)), 1);
-    assert_eq!(f.call("runtime_proc", "fd_kind", read), 1);
-    assert_eq!(f.call("runtime_proc", "read", (read, 512, 1)), 1);
-    let file = f.open_manifest(3);
-    assert_eq!(f.call("runtime_proc", "fd_kind", file), 3);
-    f.iovec(2048, 8);
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_read", (file, 32, 1, 48)),
-        0
-    );
-    assert_eq!(f.bytes(2048, 8), b"[package");
-    assert_eq!(
-        f.call("wasi_snapshot_preview1", "fd_renumber", (file, 0)),
-        0
-    );
-    assert_eq!(f.call("runtime_proc", "fd_kind", 0), 3);
-    assert_eq!(f.call("runtime_proc", "fd_kind", file), process::BADF);
-    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", read), 0);
-    assert_eq!(f.call("runtime_proc", "fd_kind", read), process::BADF);
-    assert_eq!(f.call("runtime_proc", "fd_kind", duplicate), 1);
 }
 
 #[test]
 fn cwd_reports_the_full_length_and_writes_only_when_it_fits() {
-    let mut f = Fixture::new();
-    assert_eq!(f.call("runtime_proc", "cwd", (1024, 0)), 9);
-    assert_eq!(f.call("runtime_proc", "cwd", (1024, 4)), 9);
-    assert_eq!(f.bytes(1024, 4), &[0; 4]);
-    assert_eq!(f.call("runtime_proc", "cwd", (1024, 64)), 9);
-    assert_eq!(f.bytes(1024, 9), b"/work/app");
-    assert_eq!(f.call("runtime_proc", "cwd", (65536, 0)), 9);
-    assert_eq!(f.call("runtime_proc", "cwd", (65530, 9)), process::FAULT);
+    for mut f in Fixture::both() {
+        assert_eq!(f.call("runtime_proc", "cwd", (1024, 0)), 9);
+        assert_eq!(f.call("runtime_proc", "cwd", (1024, 4)), 9);
+        assert_eq!(f.bytes(1024, 4), &[0; 4]);
+        assert_eq!(f.call("runtime_proc", "cwd", (1024, 64)), 9);
+        assert_eq!(f.bytes(1024, 9), b"/work/app");
+        assert_eq!(f.call("runtime_proc", "cwd", (65536, 0)), 9);
+        assert_eq!(f.call("runtime_proc", "cwd", (65530, 9)), process::FAULT);
+    }
 }

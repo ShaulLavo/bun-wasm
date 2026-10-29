@@ -49,6 +49,14 @@ test("Bun policy attribution names current adapters without hiding generic servi
   for (const file of service) expect(() => checkLazyProcessService([file], runtime)).toThrow("process service is eager");
 });
 
+test("realm-local terminal turn guards do not admit terminal or process services", () => {
+  const guards = ["proc/terminal-turn.ts", "dist/proc/terminal-turn.js"].map(installed);
+  expect(() => checkLazyProcessService(guards, runtime)).not.toThrow();
+  const services = ["access", "pipes", "terminal-lifetime", "worker-client", "terminal-turn-service"]
+    .flatMap(module => [`proc/${module}.ts`, `dist/proc/${module}.js`]).map(installed);
+  for (const file of services) expect(() => checkLazyProcessService([file], runtime)).toThrow("process service is eager");
+});
+
 test("core gzip budget includes boundary, reports actionable excess", () => {
   expect(() => checkCoreBudget(9.75 * 1024)).not.toThrow();
   expect(() => checkCoreBudget(9.75 * 1024 + 1)).toThrow("core exceeds 9984 B gzip budget by 1 B");

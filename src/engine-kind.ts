@@ -21,6 +21,75 @@ export function isPairedEngine(value: unknown): value is PairedEngine {
 
 export function programProfile(kind: PairedEngine) { return profiles[kind]; }
 
+/** Explicit initialization of a shared-group (PIE) core, before its side links. */
+export const SHARED_GROUP_CORE_INITIALIZE = ["core_initialize_memory", "__wasm_apply_data_relocs", "__wasm_call_ctors"] as const;
+
+/** A shared-group pair is a relocatable core and a side that imports a shared memory. Mixed halves are refused. */
+export function sharedGroupPair(core: WebAssembly.Module, side: Uint8Array): boolean {
+  const group = WebAssembly.Module.customSections(core, "dylink.0").length === 1;
+  if (group !== (importedMemory(side)?.shared ?? false)) throw new TypeError("Core and engine side were built for different program profiles");
+  return group;
+}
+
+interface Cursor { readonly bytes: Uint8Array; at: number }
+
+function readUnsigned(cursor: Cursor): number {
+  let value = 0;
+  for (let shift = 0; shift < 35; shift += 7) {
+    const byte = cursor.bytes[cursor.at++];
+    if (byte === undefined) throw new TypeError("Truncated Wasm module");
+    value += (byte & 0x7f) * 2 ** shift;
+    if (byte < 0x80) return value;
+  }
+  throw new TypeError("Invalid Wasm integer");
+}
+
+function readName(cursor: Cursor): string {
+  const length = readUnsigned(cursor);
+  cursor.at += length;
+  return new TextDecoder().decode(cursor.bytes.subarray(cursor.at - length, cursor.at));
+}
+
+function readLimits(cursor: Cursor): { shared: boolean; maximum: number | undefined } {
+  const flags = readUnsigned(cursor);
+  if (flags > 3) throw new TypeError("Unsupported memory or table limits");
+  readUnsigned(cursor);
+  return { shared: (flags & 2) !== 0, maximum: flags & 1 ? readUnsigned(cursor) : undefined };
+}
+
+/** Skip one non-memory import descriptor. */
+function skipImport(cursor: Cursor, kind: number | undefined): void {
+  if (kind === 0) readUnsigned(cursor);
+  else if (kind === 1) {
+    cursor.at++;
+    readLimits(cursor);
+  } else if (kind === 3) cursor.at += 2;
+  else throw new TypeError(`Unsupported import kind ${kind}`);
+}
+
+/** The limits of a module's `env.memory` import, read from its bytes, or undefined without one. */
+export function importedMemory(bytes: Uint8Array): { shared: boolean; maximum: number | undefined } | undefined {
+  const module: Cursor = { bytes, at: 8 };
+  while (module.at < bytes.length) {
+    const id = bytes[module.at++];
+    const size = readUnsigned(module);
+    if (id === 2) return memoryImport({ bytes: bytes.subarray(module.at, module.at + size), at: 0 });
+    module.at += size;
+  }
+  return undefined;
+}
+
+function memoryImport(imports: Cursor): { shared: boolean; maximum: number | undefined } | undefined {
+  for (let count = readUnsigned(imports); count > 0; count--) {
+    const name = `${readName(imports)}.${readName(imports)}`;
+    const kind = imports.bytes[imports.at++];
+    if (kind !== 2) skipImport(imports, kind);
+    else if (name === "env.memory") return readLimits(imports);
+    else readLimits(imports);
+  }
+  return undefined;
+}
+
 export function programKind(module: WebAssembly.Module): ProgramKind {
   const sections = WebAssembly.Module.customSections(module, ENGINE_SECTION);
   const binding = WebAssembly.Module.exports(module).find(entry => entry.name === "bun_core_bind_engine");
