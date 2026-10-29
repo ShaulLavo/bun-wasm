@@ -1,0 +1,7 @@
+{
+ "modules": {
+  "/dep.mjs": "({r:[],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({\"metaOf\":()=>metaOf});yield;yield;function metaOf() {\n  return __bunwasm_m.meta.url;\n}\n\n}})",
+  "/main.mjs": "({r:[\"./dep.mjs\"],i:[[0,\"metaOf\"]],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0];yield;console.log(__bunwasm_m.meta.url.split(\"/\").pop(), (0, __bunwasm_ns0_0.metaOf)().split(\"/\").pop());\nconsole.log(__bunwasm_m.meta === __bunwasm_m.meta, typeof __bunwasm_m.meta);\n\n}})"
+ },
+ "cjs": {}
+}

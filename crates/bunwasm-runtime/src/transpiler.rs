@@ -126,6 +126,14 @@ pub trait Transpiler {
         })
     }
 
+    /// Print an ES module as a registration record for engines without native
+    /// module support. The optional mappings map record positions to source.
+    fn register(&self, _source: &str, path: &str) -> Result<Transpiled, String> {
+        Err(format!(
+            "module registration for {path} needs Bun's parser, which this bun.wasm was built without"
+        ))
+    }
+
     /// Semantic imports for the host engine's module URL and dynamic-import hooks.
     fn module_imports(&self, _source: &str, path: &str) -> Result<Vec<ModuleImport>, String> {
         Err(format!("host module linking for {path} needs Bun's parser"))

@@ -77,13 +77,21 @@ fn source(state: &State, args: Args<'_>) -> NativeResult {
         let (name, source) = modules::eval_entry(state, name);
         return Ok(Val::Array(vec![name.into(), source.into()]));
     }
-    if mode == "module" && resolve::builtin_name(name).is_some() {
+    if matches!(mode, "module" | "record") && resolve::builtin_name(name).is_some() {
         return Ok(Val::Array(vec!["builtin".into(), "".into()]));
     }
     let (code, format) = state.load_source(name)?;
     if mode == "cjs" {
         let (code, line) = modules::cjs_wrapper(&code);
         return Ok(Val::Array(vec![code.into(), line.into()]));
+    }
+    if mode == "record" {
+        let record = if format == modules::Format::Esm {
+            state.module_record(name, &code)?
+        } else {
+            String::new()
+        };
+        return Ok(Val::Array(vec![format.name().into(), record.into()]));
     }
     if mode != "module" {
         return Err(NativeError::type_error("unknown source preparation mode"));
@@ -189,6 +197,11 @@ fn dispatcher(state: &Rc<State>, entry: &Entry, main_path: &str) -> Rc<ops::Disp
     entries.push((
         split_api::PREPARE_SOURCE,
         Rc::new(move |args| source(&st, args)),
+    ));
+    let st = state.clone();
+    entries.push((
+        split_api::LOWER_SCRIPT,
+        Rc::new(move |args| st.lower_script(args.str(0)?, args.str(1)?).map(Val::from)),
     ));
     entries.push((
         split_api::POLYFILL_SOURCE,

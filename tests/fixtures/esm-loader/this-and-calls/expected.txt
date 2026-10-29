@@ -1,0 +1,3 @@
+top-level this is nullish true
+import call this undefined
+sloppy call gets global true
