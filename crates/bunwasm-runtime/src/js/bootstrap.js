@@ -546,7 +546,7 @@
 
   function nodeModulePaths(dir) {
     const paths = [];
-    let current = dir.startsWith("/") ? dir : internal.require("node_path").posix.resolve(native.cwd(), dir);
+    let current = dir.startsWith("/") ? dir : internal.require("path").posix.resolve(native.cwd(), dir);
     for (;;) {
       if (basename(current) !== "node_modules") paths.push((current === "/" ? "" : current) + "/node_modules");
       if (current === "/") break;

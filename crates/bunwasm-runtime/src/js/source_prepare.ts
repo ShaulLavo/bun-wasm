@@ -1,6 +1,7 @@
 (function (internal: BunWasm.Internal) {
   "use strict";
   type Prepared = BunWasm.PreparedSource;
+  type RawPrepared = Omit<Prepared, "edits" | "columns"> & { edits: number[]; columns: number[] };
   const native = internal.native;
   const hooks = native.engine === "host" && native.contextHooks;
   const version = native.engine === "host" ? native.prepareVersion : 4;
@@ -33,6 +34,13 @@
   }
   function parseable(source: string): string {
     return source.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, value => value.length === 1 ? " " : value);
+  }
+  function compact(value: RawPrepared): Prepared {
+    return { ...value, edits: Int32Array.from(value.edits), columns: Int32Array.from(value.columns) };
+  }
+  function parseFunctionRecords(value: string): Prepared[] {
+    const values: RawPrepared[] = JSON.parse(value);
+    return values.map(compact);
   }
   function remember(key: string, values: Prepared[]): void {
     const size = key.length * 2 + values.reduce((total, value) => total + (value.edits.length + value.columns.length) * 4, 0);
@@ -118,7 +126,7 @@
     if (!hooks) return source;
     if (!hasWork(source)) { counters.skippedByAbsence++; register(sourceName(source, name), []); return source; }
     const start = performance.now();
-    const prepared = records(source, goal, () => [JSON.parse(native.prepareSource(parseable(source), goal))]);
+    const prepared = records(source, goal, () => [compact(JSON.parse(native.prepareSource(parseable(source), goal)))]);
     trace(origin, name, source.length, prepared.values, prepared.hit, start, goal);
     return apply(source, prepared.values[0], name);
   }
@@ -126,7 +134,7 @@
     if (!args.some(value => hooks ? hasWork(value) : value.includes("import"))) return args;
     const start = performance.now();
     const goal = `function:${kind}:${args.map(value => value.length).join(",")}:${hooks ? "hooks" : "imports"}`;
-    const prepared = records(args.join(""), goal, () => JSON.parse(native.prepareFunction(args.map(parseable), kind, hooks)));
+    const prepared = records(args.join(""), goal, () => parseFunctionRecords(native.prepareFunction(args.map(parseable), kind, hooks)));
     trace(kind === "normal" ? "function" : `${kind}-function`, name, args.join("").length, prepared.values, prepared.hit, start, goal);
     return args.map((source, index) => apply(source, prepared.values[index], index === args.length - 1 ? name : undefined, index === args.length - 1 ? 2 : 0));
   }

@@ -3,8 +3,8 @@ declare namespace BunWasm {
   type PrepareGoal = "script" | "eval" | "wrapper";
   interface PreparedSource {
     version: number;
-    edits: number[];
-    columns: number[];
+    edits: Int32Array;
+    columns: Int32Array;
     fallback: string | null;
     spreadEval: number;
     unhookedAwaitUsing: number;
