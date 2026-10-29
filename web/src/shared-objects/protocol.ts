@@ -1,9 +1,19 @@
 export interface SharedReference { readonly id: string; readonly byteLength: number; }
-export interface SharedAttachment extends SharedReference { readonly buffer: SharedArrayBuffer; }
+export type SharedWasmValue = WebAssembly.Module | WebAssembly.Memory;
+export type SharedAttachment = SharedReference & (
+  | { readonly buffer: SharedArrayBuffer }
+  | { readonly module: WebAssembly.Module }
+  | { readonly memory: WebAssembly.Memory }
+);
+export function sharedAttachmentValue(attachment: SharedAttachment) {
+  if ("buffer" in attachment) return attachment.buffer;
+  if ("module" in attachment) return attachment.module;
+  return attachment.memory;
+}
 export type SharedRequest =
   | { readonly kind: "publish"; readonly transaction: string; readonly attachments: readonly SharedAttachment[] }
   | { readonly kind: "abort"; readonly transaction: string }
-  | { readonly kind: "need" | "cancel"; readonly references: readonly SharedReference[] }
+  | { readonly kind: "need" | "cancel" | "accept"; readonly request: string; readonly references: readonly SharedReference[] }
   | { readonly kind: "mailbox"; readonly inbound: SharedReference; readonly outbound: SharedReference }
   | { readonly kind: "route-ready" }
   | { readonly kind: "close" };
@@ -11,8 +21,8 @@ export type SharedResponse =
   | { readonly kind: "route-drained" }
   | { readonly kind: "route-retired"; readonly id: string }
   | { readonly kind: "closed"; readonly message: string }
-  | { readonly kind: "attached"; readonly attachments: readonly SharedAttachment[] }
-  | { readonly kind: "unavailable"; readonly references: readonly SharedReference[]; readonly message: string };
+  | { readonly kind: "attached"; readonly request: string; readonly attachments: readonly SharedAttachment[] }
+  | { readonly kind: "unavailable"; readonly request: string; readonly references: readonly SharedReference[]; readonly message: string };
 export interface SharedPort {
   postMessage(message: SharedRequest | SharedResponse): void;
   addEventListener(type: "message" | "messageerror", listener: EventListener): void;
@@ -25,6 +35,7 @@ export interface BunSharedConnection { readonly type: "bun-shared-connect"; read
 export interface BunSharedNativeHost { postMessage(message: BunSharedConnection, transfer: MessagePort[]): void; }
 export interface SharedPublication {
   reference(buffer: SharedArrayBuffer): SharedReference;
+  referenceWasm?(value: WebAssembly.Module | WebAssembly.Memory): SharedReference;
   publish(): void;
   abort(): void;
 }
@@ -58,6 +69,7 @@ export interface SharedObjects {
   readonly routes?: SharedRoutes;
   begin(): SharedPublication;
   read(reference: SharedReference): SharedArrayBuffer;
+  readWasm?(reference: SharedReference): WebAssembly.Module | WebAssembly.Memory;
   wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
 }
 export const sharedObjectLimit = 1024;
@@ -65,6 +77,10 @@ const byteLength = typeof SharedArrayBuffer === "function" ? Object.getOwnProper
 export function sharedBufferLength(value: unknown): number {
   try { if (!byteLength) throw sharedError("Shared backing is unavailable"); return byteLength.call(value); }
   catch { throw new DOMException("Invalid shared backing store", "DataCloneError"); }
+}
+function isSharedBuffer(value: unknown): value is SharedArrayBuffer {
+  try { sharedBufferLength(value); return true; }
+  catch { return false; }
 }
 export function sharedError(message: string): DOMException { return new DOMException(message, "DataCloneError"); }
 function object(value: unknown): Record<string, unknown> {
@@ -86,8 +102,13 @@ function attachments(value: unknown): SharedAttachment[] {
   return value.map(value => {
     const reference = sharedReference(value);
     const input = object(value);
-    if (sharedBufferLength(input.buffer) !== reference.byteLength) throw sharedError("Shared backing length mismatch");
-    return { ...reference, buffer: input.buffer as SharedArrayBuffer };
+    if ("module" in input && input.module instanceof WebAssembly.Module && reference.byteLength === 0) return { ...reference, module: input.module };
+    if ("memory" in input && input.memory instanceof WebAssembly.Memory && reference.byteLength === 0) {
+      sharedBufferLength(input.memory.buffer);
+      return { ...reference, memory: input.memory };
+    }
+    if (!isSharedBuffer(input.buffer) || sharedBufferLength(input.buffer) !== reference.byteLength) throw sharedError("Shared backing length mismatch");
+    return { ...reference, buffer: input.buffer };
   });
 }
 function counter(value: unknown): number {
@@ -134,7 +155,7 @@ export function sharedRequest(value: unknown): SharedRequest {
     case "abort": return { kind: input.kind, transaction: transaction(input.transaction) };
     case "mailbox": return { kind: input.kind, inbound: sharedReference(input.inbound), outbound: sharedReference(input.outbound) };
     case "route-ready": return { kind: input.kind };
-    case "need": case "cancel": return { kind: input.kind, references: references(input.references) };
+    case "need": case "cancel": case "accept": return { kind: input.kind, request: transaction(input.request), references: references(input.references) };
     case "close": return { kind: input.kind };
     default: throw sharedError("Invalid shared-object request");
   }
@@ -144,8 +165,8 @@ export function sharedResponse(value: unknown): SharedResponse {
   if (input.kind === "route-drained") return { kind: input.kind };
   if (input.kind === "route-retired" && typeof input.id === "string") return { kind: input.kind, id: input.id };
   if (input.kind === "closed" && typeof input.message === "string") return { kind: input.kind, message: input.message };
-  if (input.kind === "attached") return { kind: input.kind, attachments: attachments(input.attachments) };
-  if (input.kind === "unavailable" && typeof input.message === "string") return { kind: input.kind, references: references(input.references), message: input.message };
+  if (input.kind === "attached") return { kind: input.kind, request: transaction(input.request), attachments: attachments(input.attachments) };
+  if (input.kind === "unavailable" && typeof input.message === "string") return { kind: input.kind, request: transaction(input.request), references: references(input.references), message: input.message };
   throw sharedError("Invalid shared-object response");
 }
 export function messageData(event: Event): unknown {
