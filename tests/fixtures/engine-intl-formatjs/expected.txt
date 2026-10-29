@@ -5,11 +5,9 @@ parts integer,group,integer,group,integer,decimal,fraction,literal,currency
 supported en-US,de-DE
 collation -1 1
 timezone 03:00:00
-defaultZone UTC
 prototype 1.234,5 29.2.2024
 list rot, grün und blau
 relative gestern
 segment Das:true| :false|ist:true| :false|gut:true|!:false
 canonical en-US,de-DE
 values true true
-polyfilled true true true true
