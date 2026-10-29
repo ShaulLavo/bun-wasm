@@ -23,6 +23,12 @@ const server = createServer((request, response) => {
     return;
   }
   recordClose(path, response);
+  if (path === "/half-close-promise") { void Promise.resolve().then(() => response.end("complete")); return; }
+  if (path === "/half-close-timer") {
+    const timer = setTimeout(() => response.end("complete"), 30);
+    response.once("close", () => clearTimeout(timer));
+    return;
+  }
   if (path === "/ok") { response.end("alive"); return; }
   if (path === "/before") { response.destroy(); return; }
   if (path === "/late-end") { response.destroy(); response.end("late"); return; }

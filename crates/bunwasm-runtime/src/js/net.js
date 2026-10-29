@@ -505,7 +505,7 @@
     }
     conn.onEnd = () => {
       ended = true;
-      if (busy) Promise.resolve().then(endActive);
+      if (busy) internal.realTimers.setImmediate(endActive);
       else next();
     };
     conn.onError = () => {};
