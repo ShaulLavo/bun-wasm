@@ -2,7 +2,7 @@
 
 QuickJS has no `Intl`. The WASI JavaScriptCore build has ICU with root and English data only. Engines with either limitation use the generated FormatJS bundle in `crates/bunwasm-runtime/src/js/intl.js`. The browser host keeps its native `Intl`.
 
-Bootstrap checks German number formatting and Hebrew dual plurals on non-host engines. This detects partial locale data even when every constructor exists. Access to the fallback remains lazy.
+Bootstrap checks German number formatting and Hebrew dual plurals on non-host engines. This detects partial locale data even when every constructor exists. The fallback uses a lazy global, but built-ins can initialize it during process startup.
 
 ## Supported behavior
 
