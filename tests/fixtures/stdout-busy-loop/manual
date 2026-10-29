@@ -1,0 +1,2 @@
+Hand-written expected.txt. The guest waits for /ack, which only tests/test-stdout-busy-loop.ts
+creates after reading "ready"; a plain snapshot run cannot produce that handshake.

@@ -178,6 +178,15 @@ for name in "${names[@]}"; do
     fi
     continue
   fi
+  if [[ $update == 0 && "$name" == stdout-busy-loop ]]; then
+    if node --no-warnings "$root/tests/test-stdout-busy-loop.ts" --engine "$engine" --wasm "$wasm"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      failed+=("$name")
+    fi
+    continue
+  fi
   if [[ $update == 0 && "$name" == fs-writev-partial ]]; then
     if python3 "$root/tests/test-writev-partial.py" --engine "$engine" --wasm "$wasm"; then
       pass=$((pass + 1))
