@@ -50,7 +50,9 @@ for (const id of requested) if (!apps.some(app => app.id === id)) throw new Erro
 const selected = apps.filter(app => requested.includes(app.id));
 const wasmName = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm", hermes: "bun-hermes.wasm" };
 for (const engine of options.engines) if (!existsSync(join(root, "dist", wasmName[engine]))) throw new Error(`Build dist/${wasmName[engine]} first`);
-if (options.engines.includes("quickjs") && !existsSync(join(root, "dist/quickjs.wasm"))) throw new Error("Build the matching dist/quickjs.wasm first");
+for (const [engine, side] of Object.entries({ quickjs: "quickjs.wasm", jsc: "jsc-engine.wasm", hermes: "hermes-engine.wasm" })) {
+  if (options.engines.includes(engine) && !existsSync(join(root, "dist", side))) throw new Error(`Build the matching dist/${side} first`);
+}
 if (options.hosts.includes("native") && options.engines.some(engine => engine !== "browser") && !existsSync(options.launcher)) throw new Error(`Build launcher ${options.launcher} first`);
 if (options.hosts.includes("playground") && !existsSync(join(root, "web/dist/index.html"))) throw new Error("Build web/ first");
 if (existsSync(join(options.output, "results.json"))) throw new Error("Results already exist; choose another --output");
@@ -278,7 +280,7 @@ try {
     const name = wasmName[engine];
     const core = readFileSync(join(root, "dist", name));
     const kind = programKind(new WebAssembly.Module(core));
-    const expected = engine === "quickjs" || engine === "jsc" ? engine : "single";
+    const expected = engine === "browser" ? "single" : engine;
     if (kind !== expected) throw new Error(`Selected ${engine} core declares ${kind}`);
     const stage = (name, bytes) => {
       const path = join(scratch, name);

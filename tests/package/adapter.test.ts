@@ -9,9 +9,6 @@ import { createFilesystemConnection, FilesystemError } from "waffle/fs/protocol"
 import { installBunAdapters as installReal, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
 import type { BunAdapterOptions } from "../../src/index.js";
 const workerUrl = "https://example.test/worker.js";
-// @ts-expect-error Hermes is a playground-only engine, not a package adapter engine.
-const packageHermesOptions: BunAdapterOptions = { workerUrl, engine: "hermes" };
-void packageHermesOptions;
 const installBunAdapters = (runtime: Runtime, options: Omit<BunAdapterOptions, "workerUrl"> & { workerUrl?: string | URL } = {}) => installReal(runtime, { workerUrl, ...options });
 
 
@@ -214,7 +211,7 @@ for (const conflict of [false, true]) {
   });
 }
 
-for (const engine of ["quickjs", "jsc", "browser"] as const) test(`default ${engine} nodejs registration uses its selected module`, async () => {
+for (const engine of ["quickjs", "jsc", "browser", "hermes"] as const) test(`default ${engine} nodejs registration uses its selected module`, async () => {
   const f = fixture();
   const installed = await installBunAdapters(f.runtime, { engine, module });
   try {
@@ -225,4 +222,14 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) test(`default ${eng
     if (typeof program?.module !== "function") throw new Error("Expected lazy module registration");
     expect(await program.module()).toBe(module);
   } finally { installed.dispose(); }
+});
+
+test("Hermes adapters require an explicit engine and matching assets", async () => {
+  const f = fixture();
+  await expect(installBunAdapters(f.runtime, { engine: "hermes" })).rejects.toThrow("requires its matching guest");
+  expect(f.adapters.size).toBe(0);
+  const installed = await installBunAdapters(f.runtime, { engine: "hermes", module });
+  try { expect(Array.from(f.adapters.keys())).toEqual(["bun:quickjs", "bun:jsc", "bun:browser", "bun:hermes"]); }
+  finally { installed.dispose(); }
+  expect(f.adapters.size).toBe(0);
 });

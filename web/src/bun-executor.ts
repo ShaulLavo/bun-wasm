@@ -1,4 +1,5 @@
 import { prepareLinkPlan, instantiateLinkPlan, type LinkedGroup, type LinkPlanSource } from "waffle/link";
+import { programKind } from "../../src/engine-kind.js";
 import { createMemoryPublisher, observeMemoryImports } from "./memory-channel.js";
 import { createMemoryReader, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
@@ -196,6 +197,7 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
       context.checkActive();
       if (finished || group) throw new Error("link executor already used");
       const plan = await prepareLinkPlan(request.linkPlan);
+      if (programKind(plan.entryModule) !== req.engine) throw new TypeError(`Selected ${req.engine} engine differs from paired core declaration`);
       context.checkActive();
       if (finished) throw new Error("link executor finished during admission");
       const capture = (normal: boolean, force: boolean) => { if (normal) context.checkActive(); publisher?.capture(normal, force); };

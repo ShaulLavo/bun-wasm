@@ -21,6 +21,7 @@ import { createNodeAsyncContext } from "./async-context.ts";
 import { createNodeProcess, type NodeWasiImports } from "./node-process.ts";
 import { loadNodeProgram, linkNodeProgram, startNodeProgram } from "./node-linked.ts";
 import { createNodeWorker } from "./node-worker.ts";
+import { isPairedEngine, type PairedEngine } from "../../src/engine-kind.ts";
 import type { LinkPlanSource, LinkedGroup } from "waffle/link";
 
 const STACK_MB = 32, GUEST_STACK_KIB = "6144";
@@ -28,7 +29,7 @@ const STACK_MB = 32, GUEST_STACK_KIB = "6144";
 const nodeProcess = process;
 interface Settings {
   wasmPath: string;
-  engines: Partial<Record<"quickjs" | "jsc", string>>;
+  engines: Partial<Record<PairedEngine, string>>;
   stackMb: number;
   withNet: boolean;
   preopens: Record<string, string>;
@@ -52,7 +53,7 @@ function settings(): Settings {
     if (arg === "--wasm") result.wasmPath = argv[++i]!;
     else if (arg === "--engine") {
       const value = argv[++i] ?? "", equal = value.indexOf("="), engine = value.slice(0, equal);
-      if ((engine !== "quickjs" && engine !== "jsc") || equal < 0 || !value.slice(equal + 1)) throw new Error("--engine requires quickjs=PATH or jsc=PATH");
+      if (!isPairedEngine(engine) || equal < 0 || !value.slice(equal + 1)) throw new Error("--engine requires quickjs=PATH, jsc=PATH or hermes=PATH");
       result.engines[engine] = resolve(value.slice(equal + 1));
     }
     else if (arg === "--net") result.withNet = true;
@@ -81,11 +82,11 @@ async function main() {
   const programs = new Map<WebAssembly.Module, LinkPlanSource>();
   if (base.linkPlan) programs.set(baseModule, base.linkPlan);
   const module = await nodeModule({ args: config.args, baseModule, wasmPath: config.wasmPath });
-  const engines: Partial<Record<"quickjs" | "jsc", WebAssembly.Module>> = {};
-  for (const engine of ["quickjs", "jsc"] as const) {
+  const engines: Partial<Record<PairedEngine, WebAssembly.Module>> = {};
+  for (const engine of ["quickjs", "jsc", "hermes"] as const) {
     const path = config.engines[engine];
     if (!path) continue;
-    const program = await loadNodeProgram(path);
+    const program = await loadNodeProgram(path, engine);
     engines[engine] = program.module;
     if (program.linkPlan) programs.set(program.module, program.linkPlan);
   }
