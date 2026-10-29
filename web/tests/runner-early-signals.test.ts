@@ -6,7 +6,7 @@ import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { startRun, type Run } from "../src/runner";
 import type { RunRequest } from "../src/bun-executor";
-import { processRuntimeFixture } from "./process-runtime-fixture";
+import { processRuntimeFixture, fixtureFilesystemConnection } from "./process-runtime-fixture";
 
 async function until(check: () => boolean) {
   for (let turn = 0; turn < 100; turn++) {
@@ -46,8 +46,8 @@ function fixture(explicit = true, deferNetwork = false) {
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
   const runtime = processRuntimeFixture({
-    connect: value => ({ ...value, port: channel.port1 }),
-    fork: () => ({ ...identity, port: channel.port1 }),
+    connect: value => fixtureFilesystemConnection(value, channel.port1),
+    fork: () => (fixtureFilesystemConnection(identity, channel.port1)),
     revoke: revokeFilesystem,
     reap() {},
     async quiesce(value) { events.push("fence"); revokeFilesystem(value); await fence.promise; },
