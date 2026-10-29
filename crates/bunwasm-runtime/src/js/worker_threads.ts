@@ -4,6 +4,8 @@
   type Graph = BunWasm.WorkerGraph;
   type Snapshot = BunWasm.PortSnapshot;
   const native = internal.native;
+  // A shared-group QuickJS member backs SharedArrayBuffers with memory-group regions.
+  if (!internal.sharedObjects && "shmAccept" in native) internal.sharedObjects = internal.require("group_shared_objects");
   const process = internal.require("process");
   const EventEmitter = internal.require("events");
   const clone = internal.require("structured_clone").structuredClone;
@@ -13,6 +15,8 @@
   const messagePayloads = new WeakMap<Event, unknown>();
   const channels = new Map<string, Set<BroadcastChannel>>();
   const localPorts = new Map<string, MessagePort>();
+  // The pid of the process holding a port's peer, where this process knows it: a Worker's port.
+  const groupDestinations = new WeakMap<MessagePort, number>();
   const deleteLocalPort = localPorts.delete.bind(localPorts);
   let restoredPorts: MessagePort[] | null = null;
   const children = new Map<number, { ref: boolean; send(frame: unknown): void; pump(): boolean; watch(): Uint8Array; event(frame: Record<string, unknown>): void }>();
@@ -515,7 +519,7 @@
       // The lane frame becomes visible only after transfers and detachment commit. Ports it
       // carries stay in the custody of the lane's destination port until restored.
       const staged: { frame: { commit(): void; abort(): void } | null } = { frame: null };
-      try { plan.commit(() => { staged.frame = this.#stagePacket(plan.graph, sequence, other); }, lane ? state.peer : undefined); }
+      try { plan.commit(() => { staged.frame = this.#stagePacket(plan.graph, sequence, other); }, lane ? state.peer : undefined, other ? undefined : groupDestinations.get(this)); }
       catch (error) { staged.frame?.abort(); throw error; }
       staged.frame?.commit();
       state.sent++;
@@ -814,7 +818,8 @@
       try {
         control = internal.require("worker_channel").open(child._workerChannel.input, child._workerChannel.output);
         this.#channel = control;
-        transferPlan.commit();
+        transferPlan.commit(undefined, undefined, child.pid);
+        groupDestinations.set(publicPort, child.pid);
         children.set(this.#id, { ref: true, send: frame => { if (!this.#exited) this.#channel.send(frame); }, pump: () => this.#pump(), watch: () => this.#channel.subscriptions(), event: frame => this.#event(frame) });
         root({ kind: "member", path: this.#path, group });
         if (!route.length) claimTransferred(graph, this.#path);

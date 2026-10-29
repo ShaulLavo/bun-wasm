@@ -44,6 +44,15 @@ mod wasm;
 mod x509;
 mod zlib_ffi;
 
+#[cfg(any(
+    test,
+    all(
+        feature = "engine-split",
+        target_arch = "wasm32",
+        target_feature = "atomics"
+    )
+))]
+mod group_memory;
 #[cfg(feature = "engine-split")]
 mod split;
 #[cfg(feature = "engine-split")]

@@ -51,8 +51,15 @@ declare namespace BunWasm {
   interface SharedPublication {
     reference(buffer: SharedArrayBuffer): SharedReference;
     referenceWasm?(value: WebAssembly.Module | WebAssembly.Memory): SharedReference;
-    publish(): void;
+    publish(destination?: number): void;
     abort(): void;
+  }
+  /** Memory-group natives of a shared-group QuickJS side (crates/bunwasm-engine-quickjs/src/vm/group.rs). */
+  interface GroupSharedNatives {
+    shmPin(buffer: SharedArrayBuffer): number;
+    shmRoute(pin: number, pid: number): number;
+    shmUnpin(pin: number): number;
+    shmAccept(pin: number, byteLength: number): SharedArrayBuffer;
   }
   interface SharedObjects {
     readonly mailbox?: { drain(consume: (bytes: Uint8Array) => void | boolean): number; close(): void };
@@ -73,7 +80,8 @@ declare namespace BunWasm {
     wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
   }
   interface WorkerCodec {
-    prepare(value: unknown, transfer?: unknown, forbidden?: readonly string[]): { graph: WorkerGraph; commit(deliver?: () => void, toward?: string): void; abort(): void };
+    /** `destination` is the receiving process's pid when the sender knows it (memory-group routing). */
+    prepare(value: unknown, transfer?: unknown, forbidden?: readonly string[]): { graph: WorkerGraph; commit(deliver?: () => void, toward?: string, destination?: number): void; abort(): void };
     encode(value: unknown, transfer?: unknown, forbidden?: readonly string[]): WorkerGraph;
     decode(value: unknown): unknown;
     wait(value: unknown, ready: () => void): (() => void) | null;
@@ -167,6 +175,7 @@ declare namespace BunWasm {
   interface Internal {
     require(name: "process"): GuestProcess;
     require(name: "worker_codec"): { create(hooks: WorkerCodecHooks): WorkerCodec };
+    require(name: "group_shared_objects"): SharedObjects;
     require(name: "worker_channel"): { open(input: number, output: number): WorkerChannel };
     require(name: "worker_threads"): { isMainThread: boolean; initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
     require(name: "net"): NetWaiterModule;

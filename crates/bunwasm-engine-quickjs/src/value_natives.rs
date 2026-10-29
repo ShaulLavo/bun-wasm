@@ -215,6 +215,10 @@ pub(crate) fn bootstrap<E: Engine>(
     for (name, function) in value_natives(core) {
         e.set(&native, name, e.new_function(name, function))?;
     }
+    #[cfg(target_feature = "atomics")]
+    for (name, function) in crate::vm::group_natives::<E>() {
+        e.set(&native, name, e.new_function(name, function))?;
+    }
     e.set(&native, "engine", e.value_from(e.name().into()))?;
     let factory = load_polyfill(e, core, "bootstrap")?;
     e.call(&factory, &e.undefined(), &[native])

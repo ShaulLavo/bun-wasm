@@ -21,6 +21,12 @@ use crate::engine::{Engine, ErrorKind, ModuleHost, NativeError, PromiseState, Va
 
 type V = Value<'static>;
 
+/// Memory-group SharedArrayBuffers, compiled only into a shared-group (atomics) side.
+#[cfg(target_feature = "atomics")]
+mod group;
+#[cfg(target_feature = "atomics")]
+pub(crate) use group::natives as group_natives;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct QuickJsMemoryTelemetry {
@@ -250,6 +256,8 @@ impl Engine for QuickJs {
         // SAFETY: the context and its runtime are live and retained by Inner.
         let runtime_raw = unsafe { qjs::JS_GetRuntime(ctx.as_raw().as_ptr()) };
         TELEMETRY_RUNTIME.with(|active| active.set(runtime_raw));
+        #[cfg(target_feature = "atomics")]
+        group::install(runtime_raw);
         let has_interrupt_handler = host.has_interrupt_handler();
         let engine = QuickJs(Rc::new(Inner {
             _runtime: runtime.clone(),

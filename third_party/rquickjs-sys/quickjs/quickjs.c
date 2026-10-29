@@ -77,6 +77,18 @@
 #define CONFIG_ATOMICS
 #endif
 
+/* bun-wasm: a shared-group member (compiled with wasm atomics) runs Atomics on its
+   memory group. Waiters park in the group futex the core exports, so a notify from
+   any member process wakes them; the single-agent waiter list below is not used. */
+#if defined(__wasi__) && defined(__wasm_atomics__)
+#include "quickjs-c-atomics.h"
+#define CONFIG_ATOMICS
+#define BUN_GROUP_FUTEX
+int32_t bun_futex_wait32(uint32_t addr, int32_t expected, int64_t timeout_ns);
+int32_t bun_futex_wait64(uint32_t addr, int64_t expected, int64_t timeout_ns);
+int32_t bun_futex_wake(uint32_t addr, uint32_t count);
+#endif
+
 #ifndef __GNUC__
 #define __extension__
 #endif
@@ -63147,6 +63159,7 @@ static JSValue js_atomics_isLockFree(JSContext *ctx,
     return js_bool(ret);
 }
 
+#ifndef BUN_GROUP_FUTEX
 typedef struct JSAtomicsWaiter {
     struct list_head link;
     bool linked;
@@ -63158,6 +63171,7 @@ static js_once_t js_atomics_once = JS_ONCE_INIT;
 static js_mutex_t js_atomics_mutex;
 static struct list_head js_atomics_waiter_list =
     LIST_HEAD_INIT(js_atomics_waiter_list);
+#endif
 
 // no-op: Atomics.pause() is not allowed to block or yield to another
 // thread, only to hint the CPU that it should back off for a bit;
@@ -63195,7 +63209,9 @@ static JSValue js_atomics_wait(JSContext *ctx,
     int64_t timeout;
     uint64_t idx;
     JSObject *p;
+#ifndef BUN_GROUP_FUTEX
     JSAtomicsWaiter waiter_s, *waiter;
+#endif
     int ret, size_log2, res;
     double d;
 
@@ -63228,6 +63244,22 @@ static JSValue js_atomics_wait(JSContext *ctx,
 
     ptr = p->u.array.u.uint8_ptr + ((uintptr_t)idx << size_log2);
 
+#ifdef BUN_GROUP_FUTEX
+    (void)res;
+    /* Milliseconds to nanoseconds; beyond i64 nanoseconds (292 years) waits forever. */
+    timeout = timeout > INT64_MAX / 1000000 ? -1 : timeout * 1000000;
+    if (size_log2 == 3)
+        ret = bun_futex_wait64((uintptr_t)ptr, v, timeout);
+    else
+        ret = bun_futex_wait32((uintptr_t)ptr, (int32_t)v, timeout);
+    switch (ret) {
+    case 0: return JS_AtomToString(ctx, JS_ATOM_ok);
+    case 1: return JS_AtomToString(ctx, JS_ATOM_not_equal);
+    case 2: return JS_AtomToString(ctx, JS_ATOM_timed_out);
+    case -27: __builtin_trap(); /* EINTR: the host cancelled this member; it is terminating */
+    default: return JS_ThrowTypeError(ctx, "Atomics.wait failed in the memory group (errno %d)", -ret);
+    }
+#else
     /* XXX: inefficient if large number of waiters, should hash on
        'ptr' value */
     js_mutex_lock(&js_atomics_mutex);
@@ -63262,20 +63294,23 @@ static JSValue js_atomics_wait(JSContext *ctx,
     } else {
         return JS_AtomToString(ctx, JS_ATOM_ok);
     }
+#endif
 }
 
 static JSValue js_atomics_notify(JSContext *ctx,
                                  JSValueConst this_obj,
                                  int argc, JSValueConst *argv)
 {
+#ifndef BUN_GROUP_FUTEX
     struct list_head *el, *el1, waiter_list;
+    JSAtomicsWaiter *waiter;
+#endif
     int size_log2;
     int32_t count, n;
     void *ptr;
     uint64_t idx;
     JSObject *p;
     JSArrayBuffer *abuf;
-    JSAtomicsWaiter *waiter;
 
     p = js_atomics_get_buf(ctx, argv[0], argv[1], &abuf, &idx, 1);
     if (!p)
@@ -63294,6 +63329,14 @@ static JSValue js_atomics_notify(JSContext *ctx,
         return JS_ThrowRangeError(ctx, "out-of-bound access");
 
     n = 0;
+#ifdef BUN_GROUP_FUTEX
+    if (abuf->shared && count > 0) {
+        ptr = p->u.array.u.uint8_ptr + ((uintptr_t)idx << size_log2);
+        n = bun_futex_wake((uintptr_t)ptr, (uint32_t)count);
+        if (n < 0)
+            return JS_ThrowTypeError(ctx, "Atomics.notify failed in the memory group (errno %d)", -n);
+    }
+#else
     if (abuf->shared && count > 0) {
         ptr = p->u.array.u.uint8_ptr + ((uintptr_t)idx << size_log2);
 
@@ -63316,6 +63359,7 @@ static JSValue js_atomics_notify(JSContext *ctx,
         }
         js_mutex_unlock(&js_atomics_mutex);
     }
+#endif
     return js_int32(n);
 }
 
@@ -63340,14 +63384,18 @@ static const JSCFunctionListEntry js_atomics_obj[] = {
     JS_OBJECT_DEF("Atomics", js_atomics_funcs, countof(js_atomics_funcs), JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE ),
 };
 
+#ifndef BUN_GROUP_FUTEX
 static void js__atomics_init(void) {
     js_mutex_init(&js_atomics_mutex);
 }
+#endif
 
 /* TODO(saghul) make this public and not dependent on typed arrays? */
 static int JS_AddIntrinsicAtomics(JSContext *ctx)
 {
+#ifndef BUN_GROUP_FUTEX
     js_once(&js_atomics_once, js__atomics_init);
+#endif
 
     /* add Atomics as autoinit object */
     return JS_SetPropertyFunctionList(ctx, ctx->global_obj, js_atomics_obj, countof(js_atomics_obj));

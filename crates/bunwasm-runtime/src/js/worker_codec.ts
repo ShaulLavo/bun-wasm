@@ -175,11 +175,11 @@
         if (phase === "aborted") return;
         publication?.abort(); phase = "aborted";
       }
-      function commit(deliver?: () => void, toward?: string) {
+      function commit(deliver?: () => void, toward?: string, destination?: number) {
         if (phase !== "prepared") throw cloneError("Worker transfer is no longer prepared");
         try {
           validateTransfers();
-          publication?.publish();
+          publication?.publish(destination);
           const stage = () => { for (const plan of ports.values()) plan.publish?.(toward); deliver?.(); };
           const finish = () => {
             const plans = Array.from(ports.values());

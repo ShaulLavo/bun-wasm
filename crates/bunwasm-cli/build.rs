@@ -142,7 +142,26 @@ fn split_entry() {
         }
         println!("cargo:rustc-link-arg-bin=bun=--export={name}");
     }
+    if shared_group() {
+        for name in GROUP_MEMORY_EXPORTS {
+            println!("cargo:rustc-link-arg-bin=bun=--export={name}");
+        }
+    }
 }
+
+/// The core's memory-group service for its engine side (bunwasm-runtime `group_memory`).
+const GROUP_MEMORY_EXPORTS: [&str; 10] = [
+    "bun_shm_create",
+    "bun_shm_retain",
+    "bun_shm_release",
+    "bun_shm_pin",
+    "bun_shm_route",
+    "bun_shm_unpin",
+    "bun_shm_accept",
+    "bun_futex_wait32",
+    "bun_futex_wait64",
+    "bun_futex_wake",
+];
 
 fn memory_telemetry() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("memory-telemetry.c");
