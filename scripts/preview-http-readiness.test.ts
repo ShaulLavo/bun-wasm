@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chromium, type Browser, type BrowserContext } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { waitForPreviewReady } from "./app-matrix/product-browser";
 import { browserRegistryRoute } from "./app-matrix/registry-request";
+import { boundedCleanup } from "./app-matrix/cleanup";
 
 // Real Chromium against loopback servers: the probe page must reach the preview the way the
 // application page will (same context, routing, service worker and redirects) without running it.
@@ -22,6 +23,12 @@ async function withServer(fetch: (request: Request) => Response | Promise<Respon
   }
 }
 
+async function expectReadinessFailure(probe: Page, url: string, deadline: number, message: string): Promise<void> {
+  const failure = await waitForPreviewReady(probe, url, deadline, 2_000).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(String(failure)).toContain(message);
+}
+
 test("the probe never runs application scripts, including a self-reloading 503 loading page", async () => {
   let effects = 0;
   let loading = 2;
@@ -32,7 +39,7 @@ test("the probe never runs application scripts, including a self-reloading 503 l
     return html(`<script>fetch("/effect")</script>ready`);
   }, async (origin, context) => {
     const probe = await context.newPage();
-    await waitForPreviewReady(probe, `${origin}/`, Date.now() + 5_000);
+    await waitForPreviewReady(probe, `${origin}/`, Date.now() + 5_000, 2_000);
     await probe.close();
     expect(effects).toBe(0);
     const app = await context.newPage();
@@ -48,7 +55,7 @@ test("a 503 followed by an ordinary redirect to a ready page passes like normal 
     if (new URL(request.url).pathname === "/ready") return html("ready");
     return requests++ === 0 ? html("Loading", 503) : new Response(null, { status: 302, headers: { location: "/ready" } });
   }, async (origin, context) => {
-    await waitForPreviewReady(await context.newPage(), `${origin}/`, Date.now() + 5_000);
+    await waitForPreviewReady(await context.newPage(), `${origin}/`, Date.now() + 5_000, 2_000);
     expect(requests).toBe(2);
   });
 }, 20_000);
@@ -57,7 +64,7 @@ test("the probe stays behind the context network guard", async () => {
   const external: string[] = [];
   await withServer(() => html("unused"), async (_origin, context) => {
     await context.route("**/*", route => browserRegistryRoute(route, "http://127.0.0.1:1", external));
-    const failure = await waitForPreviewReady(await context.newPage(), "https://example.com/preview", Date.now() + 5_000).catch(error => error);
+    const failure = await waitForPreviewReady(await context.newPage(), "https://example.com/preview", Date.now() + 5_000, 2_000).catch(error => error);
     expect(String(failure)).toContain("net::ERR_FAILED");
     expect(external).toEqual(["https://example.com/preview"]);
   });
@@ -66,16 +73,41 @@ test("the probe stays behind the context network guard", async () => {
 test("a non-503 HTTP failure is reported without a retry", async () => {
   let requests = 0;
   await withServer(() => { requests++; return new Response("server crashed", { status: 500 }); }, async (origin, context) => {
-    await expect(waitForPreviewReady(await context.newPage(), `${origin}/`, Date.now() + 5_000)).rejects.toThrow("Preview HTTP 500: server crashed");
+    await expectReadinessFailure(await context.newPage(), `${origin}/`, Date.now() + 5_000, "Preview HTTP 500: server crashed");
     expect(requests).toBe(1);
+  });
+}, 20_000);
+
+async function closeDeadlineProbe(origin: string): Promise<void> {
+  const context = await browser.newContext();
+  try {
+    const terminal = await context.newPage();
+    await terminal.setContent("terminal remains usable");
+    await context.newPage();
+    const probe = await context.newPage();
+    await probe.goto(origin, { waitUntil: "commit" });
+    await expectReadinessFailure(probe, origin, Date.now() + 5, "not HTTP-ready before the deadline");
+    expect(await boundedCleanup("probe-close", () => probe.close(), 2_000)).toBeNull();
+    expect(context.pages()).toHaveLength(2);
+    expect(await terminal.locator("body").textContent()).toBe("terminal remains usable");
+  } finally { await context.close(); }
+}
+
+test("a readiness deadline crossing a reload commit leaves the probe closable with other pages open", async () => {
+  await withServer(async () => { await Bun.sleep(0); return html("still starting", 503); }, async origin => {
+    for (let iteration = 0; iteration < 32; iteration++) await closeDeadlineProbe(origin);
   });
 }, 20_000);
 
 test("stalled response headers stop at the shared deadline", async () => {
   await withServer(() => new Promise<Response>(() => {}), async (origin, context) => {
+    const probe = await context.newPage();
+    let canceled = false;
+    probe.on("requestfailed", request => { canceled = request.failure()?.errorText === "net::ERR_ABORTED"; });
     const started = performance.now();
-    await expect(waitForPreviewReady(await context.newPage(), `${origin}/`, Date.now() + 1_000)).rejects.toThrow("not HTTP-ready before the deadline: no complete response");
+    await expectReadinessFailure(probe, `${origin}/`, Date.now() + 1_000, "not HTTP-ready before the deadline: no complete response");
     expect(performance.now() - started).toBeLessThan(2_000);
+    expect(canceled).toBe(true);
   });
 }, 20_000);
 
@@ -86,8 +118,9 @@ test("a stalled 503 body stops at the shared deadline and keeps the last complet
     const body = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("<!doctype html>partial")); } });
     return new Response(body, { status: 503, headers: { "content-type": "text/html" } });
   }, async (origin, context) => {
+    const probe = await context.newPage();
     const started = performance.now();
-    await expect(waitForPreviewReady(await context.newPage(), `${origin}/`, Date.now() + 2_000)).rejects.toThrow("last HTTP 503: <!doctype html>Loading: prior 503");
+    await expectReadinessFailure(probe, `${origin}/`, Date.now() + 2_000, "last HTTP 503: <!doctype html>Loading: prior 503");
     expect(performance.now() - started).toBeLessThan(3_000);
   });
 }, 20_000);
@@ -121,7 +154,7 @@ test("a mounted service-worker preview is probed through its worker with page sc
       await new Promise<void>(resolve => worker?.addEventListener("statechange", () => { if (worker.state === "activated") resolve(); }));
     });
     const probe = await context.newPage();
-    await waitForPreviewReady(probe, `${origin}/__preview/3137/`, Date.now() + 5_000);
+    await waitForPreviewReady(probe, `${origin}/__preview/3137/`, Date.now() + 5_000, 2_000);
     expect(previewRequests).toBe(0);
     expect(effects).toBe(0);
   });
