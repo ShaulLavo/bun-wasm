@@ -16,7 +16,7 @@ exported separately.
 | Source | Class | Change |
 | --- | --- | --- |
 | `scripts/src/program-profile.ts`, `crates/bunwasm-cli/shared-group-link.txt` | Host feature | Original profile types, flags, J2 sysroot identity check, split/shared sysroot separation, and the selected C++ runtime member proof read from the core's link map. |
-| `crates/bunwasm-cli/build.rs` | Host feature | Original PIE member link (`-pie --experimental-pic --import-memory --shared-memory --import-table --max-memory=536870912`) and PIC+atomics split entry, selected only by `BUN_WASM_PROGRAM_PROFILE=shared-group`. |
+| `crates/bunwasm-cli/build.rs` | Host feature | Original PIE member link (`-pie --experimental-pic --import-memory --shared-memory --import-table`, plus `--max-memory` from `max-memory.txt` as for every core) and PIC+atomics split entry, selected only by `BUN_WASM_PROGRAM_PROFILE=shared-group`. |
 | `crates/bunwasm-crypto-sys/build.rs` | Host feature | BoringSSL configured with PIC+atomics flags under the profile, a profile stamp refusing reuse of another profile's build directory, and C++ runtime archives linked by exact file name so a PIE never depends on `libc++abi.so`. |
 | `scripts/build-bun-core.sh`, `scripts/build-engine-quickjs.sh` | Host feature | `--shared-group` / `QUICKJS_PROFILE=shared-group` producers: `-Zbuild-std`, `--shared-memory`, `--enable-threads`, group finalization. |
 | `scripts/src/engine-explicit-init.ts` | Host feature | Original core converter (start → `core_initialize_memory`) and a group side variant that never re-exports the group memory. |

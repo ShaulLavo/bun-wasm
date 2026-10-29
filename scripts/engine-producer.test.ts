@@ -68,8 +68,9 @@ function fixture(run: (root: string, shell: (script: string, env?: Record<string
 }
 
 function prepare(root: string): void {
-  for (const directory of ["scripts/src", "jsc/shim", "sdk/bin", "t", "native/build/jsc/lib"]) mkdirSync(join(root, directory), { recursive: true });
-  for (const file of ["scripts/build.sh", "scripts/build-bun-jsc.sh", "scripts/build-bun-core.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "jsc/configure.sh", "jsc/finalize.sh", "jsc/common.sh"]) {
+  for (const directory of ["scripts/src", "jsc/shim", "sdk/bin", "t", "native/build/jsc/lib", "crates/bunwasm-cli"]) mkdirSync(join(root, directory), { recursive: true });
+  for (const file of ["scripts/build.sh", "scripts/build-bun-jsc.sh", "scripts/build-bun-core.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "jsc/configure.sh", "jsc/finalize.sh", "jsc/common.sh",
+    "crates/bunwasm-cli/max-memory.txt"]) {
     copyFileSync(join(repository, file), join(root, file));
   }
   for (const tool of ["bun", "selected-cargo", "selected-rustc", "cargo", "rustc", "clang", "clang++", "wasm-ld", "wasm-opt", "wasm-tools", "node", "git", "cmake"]) {

@@ -1,0 +1,4 @@
+memory above 512 MiB true
+outputs 4 identical true
+ballast intact true
+true

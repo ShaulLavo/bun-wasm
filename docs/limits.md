@@ -8,13 +8,13 @@ bun-wasm is pre-1.0 and experimental. The package is version 0.0.58 and private.
 
 | Limit | Value | Source |
 | --- | --- | --- |
-| Linear memory of one guest | 512 MiB (`--max-memory=536870912`) | `crates/bunwasm-cli/build.rs`. Bun's string pointer tags use the top three address bits on wasm32, so memory must stay below 512 MiB. |
-| Typed arrays live at once on JSC | About 485 MiB before `RangeError: Out of memory` | [JavaScriptCore for wasm32-wasip1](jsc-build.md) |
+| Linear memory of one guest | 1 GiB maximum (`--max-memory=1073741824`) | `crates/bunwasm-cli/max-memory.txt`, the one source for every link, admission check and JSC's heap sizing. A maximum is not memory a device can supply. See [Memory ceiling](memory-ceiling.md). |
+| Typed arrays live at once on JSC | About 485 MiB before `RangeError: Out of memory`, measured at the earlier 512 MiB maximum | [JavaScriptCore for wasm32-wasip1](jsc-build.md) |
 | Small live objects on JSC | About 3 million (QuickJS: about 4 million) | same |
 | Heap exhaustion on JSC | The process aborts instead of throwing | same |
 | JS heap of a headless Node child | 128 MiB | [Playground](playground.md#bun-subprocess-workers) |
 
-A package install that needs more than 512 MiB fails with `memory allocation of N bytes failed`. Prisma 6.17.1 fails this way in the app matrix snapshot.
+A package install that needs more than the maximum fails with `memory allocation of N bytes failed`. Prisma 6.17.1 failed this way at the earlier 512 MiB maximum in the app matrix snapshot.
 
 ## Stack
 

@@ -134,7 +134,10 @@ fn compile_helpers(sdk: &Path, sysroot: &Path, obj: &Path, manifest: &Path, out:
         .args(&flags)
         .arg("-fPIC")
         // JSC sizes its heap from this (`forceRAMSize`), so it follows the guest's memory maximum.
-        .arg(format!("-DBUN_WASM_MAX_MEMORY={}", max_memory::MAX_MEMORY_BYTES))
+        .arg(format!(
+            "-DBUN_WASM_MAX_MEMORY={}",
+            max_memory::MAX_MEMORY_BYTES
+        ))
         .arg(format!("--sysroot={}", sysroot.display()))
         .arg("-c")
         .arg(&src)

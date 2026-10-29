@@ -7,7 +7,7 @@
 pub const MAX_MEMORY_BYTES: u64 = parse(include_str!("max-memory.txt"));
 
 const _: () = assert!(
-    MAX_MEMORY_BYTES > 0 && MAX_MEMORY_BYTES % 65_536 == 0 && MAX_MEMORY_BYTES <= 1 << 31,
+    MAX_MEMORY_BYTES > 0 && MAX_MEMORY_BYTES.is_multiple_of(65_536) && MAX_MEMORY_BYTES <= 1 << 31,
     "max-memory.txt must be a page multiple in (0, 2 GiB]"
 );
 
