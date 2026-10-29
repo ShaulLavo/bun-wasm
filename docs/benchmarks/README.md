@@ -1,6 +1,6 @@
 # Engine comparison benchmark
 
-Run engine builds through the native Wasmtime launcher and compare seven alternating rounds. The default measures `dist/bun.wasm`. Repeat `--engine` to compare builds.
+Run engine builds through the native Wasmtime launcher and compare six counterbalanced rounds. The default measures `dist/bun.wasm`. Repeat `--engine` to compare builds.
 
 ```sh
 source env.sh
