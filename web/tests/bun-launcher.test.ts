@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { processRuntimeFixture } from "./process-runtime-fixture";
+import { networkPathScopeFixture, socketDirectoryFixture } from "./socket-runtime-fixture";
 import { outcomeWord } from "waffle/proc/outcome";
 import type { ProcessService, RuntimeProcessContext } from "waffle";
 import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
@@ -8,10 +9,10 @@ import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
 interface Launch { workerUrl: string; request: Record<string, any>; cleanup?(): void; executableName?(name: string): string }
 const activeCleanups: Array<() => void> = [];
 function service(launches: Launch[]): ProcessService {
-  return { launchWorker(_context: unknown, options: Launch) { launches.push(options); if (options.cleanup) activeCleanups.push(options.cleanup); return { terminate() {} }; } } as unknown as ProcessService;
+  return { networkPathScope: networkPathScopeFixture, launchWorker(_context: unknown, options: Launch) { launches.push(options); if (options.cleanup) activeCleanups.push(options.cleanup); return { terminate() {} }; } } as unknown as ProcessService;
 }
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-const runtime = processRuntimeFixture({});
+const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
 const context = { identity: { pid: 1, parentPid: 0, host: null }, outcome: outcomeWord(), registerRevocation: () => () => {}, module, interruptible: false, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { A: "1" }, cwd: "/work" } } as unknown as RuntimeProcessContext;
 
 const location = Object.getOwnPropertyDescriptor(globalThis, "location");
@@ -160,4 +161,61 @@ test("child launch selection retains each distinct QuickJS pair", async () => {
   expect(launches[0]!.request.linkPlan.libraries[0].source).toEqual(side);
   expect(launches[1]!.request.linkPlan.libraries[0].source).toEqual(sideB);
   expect(launches[0]!.request.module).not.toBe(launches[1]!.request.module);
+});
+
+
+for (const phase of ["success", "scope failure", "helper failure", "launch failure"] as const) test(`socket directory ownership survives ${phase}`, async () => {
+  const events: string[] = [];
+  const scopedRuntime = processRuntimeFixture({
+    async directoryHandle() { return { handle: 19, release() { events.push("root-release"); } }; },
+  });
+  const network = await scopedRuntime.network();
+  const make = network.createHelper.bind(network);
+  const create = spyOn(network, "createHelper").mockImplementation(options => {
+    if (phase === "helper failure") throw new Error(phase);
+    const helper = make(options);
+    const dispose = helper.dispose.bind(helper);
+    helper.dispose = () => { events.push("helper-dispose"); dispose(); };
+    return helper;
+  });
+  const launches: Launch[] = [];
+  const scope = networkPathScopeFixture(context, 19);
+  const launcherService = Object.assign(service(launches), {
+    networkPathScope(actual: unknown, directory: number) {
+      expect(actual).toBe(context);
+      expect(directory).toBe(19);
+      if (phase === "scope failure") throw new Error(phase);
+      return scope;
+    },
+  });
+  if (phase === "launch failure") launcherService.launchWorker = () => { throw new Error(phase); };
+  try {
+    const launching = bunLauncher("quickjs", { runtime: scopedRuntime, workerUrl: "./worker.js" })(context, launcherService);
+    if (phase !== "success") await expect(launching).rejects.toThrow(phase);
+    else { await launching; launches[0]!.cleanup!(); launches[0]!.cleanup!(); }
+    expect(events).toEqual(phase === "scope failure" || phase === "helper failure" ? ["root-release"] : ["helper-dispose", "root-release"]);
+    if (phase !== "scope failure") expect(create.mock.calls[0]?.[0]).toMatchObject({ pathScope: scope });
+  } finally { create.mockRestore(); await scopedRuntime.dispose(); }
+});
+
+test("revocation while awaiting a directory lease releases it without creating a helper", async () => {
+  const directory = Promise.withResolvers<{ handle: number; release(): void }>();
+  const requested = Promise.withResolvers<void>();
+  const events: string[] = [];
+  const scopedRuntime = processRuntimeFixture({
+    directoryHandle() { requested.resolve(); return directory.promise; },
+  });
+  const network = await scopedRuntime.network();
+  const create = spyOn(network, "createHelper");
+  let revoke = () => {};
+  const revocable = { ...context, registerRevocation(hook: () => void) { revoke = hook; return () => {}; } };
+  try {
+    const launching = bunLauncher("quickjs", { runtime: scopedRuntime, workerUrl: "./worker.js" })(revocable, service([]));
+    await requested.promise;
+    revoke();
+    directory.resolve({ handle: 19, release() { events.push("root-release"); } });
+    await expect(launching).rejects.toThrow("revoked");
+    expect(create).not.toHaveBeenCalled();
+    expect(events).toEqual(["root-release"]);
+  } finally { create.mockRestore(); await scopedRuntime.dispose(); }
 });

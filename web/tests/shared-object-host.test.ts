@@ -6,6 +6,7 @@ import { bindSharedObjectHost } from "../src/shared-objects/host";
 import { installRuntimeSharedObjects, runtimeSharedObjectRoute, type SharedObjectRoute } from "../src/shared-objects/runtime";
 import { bunLauncher } from "../src/bun-launcher";
 import { processRuntimeFixture } from "./process-runtime-fixture";
+import { networkPathScopeFixture, socketDirectoryFixture } from "./socket-runtime-fixture";
 import type { Runtime, RuntimeProcessContext, ProcessService } from "waffle";
 import type { RunRequest } from "../src/bun-executor";
 import type { SharedObjects } from "../src/shared-objects/protocol";
@@ -35,7 +36,7 @@ function host(service?: ReturnType<typeof createSharedObjects>) {
   return { value, wakeups, exits, api: value.valueNatives().sharedObjects as SharedObjects | undefined };
 }
 function fixtureRuntime() {
-  const runtime = processRuntimeFixture({});
+  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
   cleanup.add(() => runtime.dispose());
   return runtime;
 }
@@ -57,7 +58,7 @@ function processContext() {
 interface Launch { request: RunRequest; onMessage(message: unknown): void; cleanup(): void; }
 async function launch(runtime: Runtime, context: RuntimeProcessContext, rejected = false) {
   let launched: Launch | undefined;
-  const service = { launchWorker(_context: unknown, options: Launch) {
+  const service = { networkPathScope: networkPathScopeFixture, launchWorker(_context: unknown, options: Launch) {
     launched = options;
     if (rejected) throw new Error("native launch rejected");
     cleanup.add(options.cleanup);

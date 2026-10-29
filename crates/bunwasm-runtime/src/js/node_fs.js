@@ -444,14 +444,35 @@
     return Object.assign(new RangeError(`The value of "${name}" is out of range. Received ${value}`), { code: "ERR_OUT_OF_RANGE" });
   }
 
+  // Each native read returns a fresh copy of its bytes. Reading a large regular
+  // file in one call (webpack's cache reads a whole pack) needs two more
+  // contiguous blocks of the full size beside the destination; bounded pieces
+  // fill the destination the same way, stopping at end of file.
+  const kReadPiece = 1 << 20;
+  function readRegularPieces(fd, target, offset, length, position) {
+    let count = 0;
+    while (count < length) {
+      const want = Math.min(kReadPiece, length - count);
+      const chunk = readVectorChunk(fd, want, position < 0 ? -1 : position + count, count);
+      if (chunk === null) return count;
+      target.set(chunk, offset + count);
+      count += chunk.length;
+      if (chunk.length < want) return count;
+    }
+    return count;
+  }
+
   function readSync(fd, buffer, offsetOrOptions, length, position) {
     validateFd(fd);
     const options = readOptions(buffer, offsetOrOptions, length, position);
     // Public zero-byte reads return without a syscall, even on a closed descriptor.
     // Direct native callers still validate empty reads for ABI safety.
     if (options.length === 0) return 0;
-    const chunk = native.read(fd, options.length, options.position === null || options.position === undefined ? -1 : Number(options.position));
-    internal.toUint8(buffer).set(chunk, options.offset);
+    const at = options.position === null || options.position === undefined ? -1 : Number(options.position);
+    const target = internal.toUint8(buffer);
+    if (options.length > kReadPiece && isRegularReadFd(fd)) return readRegularPieces(fd, target, options.offset, options.length, at);
+    const chunk = native.read(fd, options.length, at);
+    target.set(chunk, options.offset);
     return chunk.length;
   }
 

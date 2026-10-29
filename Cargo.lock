@@ -1395,6 +1395,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-engine-hermes"
+version = "0.0.53"
+dependencies = [
+ "bunwasm-hermes",
+]
+
+[[package]]
 name = "bunwasm-engine-jsc"
 version = "0.0.53"
 dependencies = [
@@ -1423,6 +1430,10 @@ dependencies = [
  "libc",
  "miniz_oxide 0.8.9",
 ]
+
+[[package]]
+name = "bunwasm-hermes"
+version = "0.0.53"
 
 [[package]]
 name = "bunwasm-host"

@@ -9,7 +9,7 @@
 use std::ptr::{addr_of, addr_of_mut, read_volatile};
 
 pub const ABI_VERSION: u32 = 2;
-pub const SLOT_COUNT: usize = 16;
+pub const SLOT_COUNT: usize = 18;
 
 pub const ERROR: i32 = -1;
 pub const AGAIN: i32 = -2;
@@ -35,6 +35,8 @@ pub enum Slot {
     LocalAddr = 13,
     LookupStart = 14,
     LookupHead = 15,
+    ListenPath = 16,
+    ConnectPath = 17,
 }
 
 pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
@@ -54,6 +56,8 @@ pub const SLOT_NAMES: [&str; SLOT_COUNT] = [
     "local_addr",
     "lookup_start",
     "lookup_head",
+    "listen_path",
+    "connect_path",
 ];
 
 #[repr(C)]
@@ -80,6 +84,7 @@ pub fn provided(slot_number: usize) -> bool {
         && unsafe { read_volatile(addr_of!(HOST_SLOTS.slots[slot_number])) } != 0
 }
 
+type F2 = extern "C" fn(i32, i32) -> i32;
 type F1 = extern "C" fn(i32) -> i32;
 type F3 = extern "C" fn(i32, i32, i32) -> i32;
 type F4 = extern "C" fn(i32, i32, i32, i32) -> i32;
@@ -147,6 +152,7 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
             Slot::Poll | Slot::Close | Slot::LocalPort | Slot::Accept | Slot::Shutdown => {
                 std::mem::transmute::<usize, F1>(index as usize)(args[0])
             }
+            Slot::ConnectPath => std::mem::transmute::<usize, F2>(index as usize)(args[0], args[1]),
             Slot::Fetch | Slot::LookupStart => {
                 std::mem::transmute::<usize, F4>(index as usize)(args[0], args[1], args[2], args[3])
             }
@@ -158,7 +164,8 @@ fn call(id: Slot, args: [i32; 4]) -> Option<i32> {
             | Slot::Error
             | Slot::PeerAddr
             | Slot::LocalAddr
-            | Slot::LookupHead => {
+            | Slot::LookupHead
+            | Slot::ListenPath => {
                 std::mem::transmute::<usize, F3>(index as usize)(args[0], args[1], args[2])
             }
         }
@@ -278,6 +285,22 @@ pub fn connect(host: &str, port: i32) -> i32 {
     call(
         Slot::Connect,
         [ptr(host.as_bytes()), host.len() as i32, port, 0],
+    )
+    .unwrap_or(UNSUPPORTED)
+}
+
+pub fn listen_path(path: &str, flags: i32) -> i32 {
+    call(
+        Slot::ListenPath,
+        [ptr(path.as_bytes()), path.len() as i32, flags, 0],
+    )
+    .unwrap_or(UNSUPPORTED)
+}
+
+pub fn connect_path(path: &str) -> i32 {
+    call(
+        Slot::ConnectPath,
+        [ptr(path.as_bytes()), path.len() as i32, 0, 0],
     )
     .unwrap_or(UNSUPPORTED)
 }
@@ -695,7 +718,9 @@ mod signal_tests {
         assert_eq!(SLOT_NAMES[13], "local_addr");
         assert_eq!(SLOT_NAMES[14], "lookup_start");
         assert_eq!(SLOT_NAMES[15], "lookup_head");
-        assert_eq!(SLOT_COUNT, 16);
+        assert_eq!(SLOT_NAMES[16], "listen_path");
+        assert_eq!(SLOT_NAMES[17], "connect_path");
+        assert_eq!(SLOT_COUNT, 18);
         assert!(
             SLOT_NAMES
                 .iter()

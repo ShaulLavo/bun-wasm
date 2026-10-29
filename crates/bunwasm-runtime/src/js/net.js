@@ -769,12 +769,13 @@
 
   function closeNodeServer(server, callback, http) {
     const running = server.listening || server._closing;
-    if (typeof callback === "function" && running) server.once("close", callback);
+    if (typeof callback === "function" && running) server.once("close", server._pipeName === undefined ? callback : () => callback(server._closeError));
     if (typeof callback === "function" && !running) internal.nextTick(() => callback(Object.assign(new Error("Server is not running."), { code: "ERR_SERVER_NOT_RUNNING" })));
     if (server.listening) {
       waiters.delete(server._accepting);
       waiters.delete(server._starting);
-      native.hostClose(server._listener);
+      if (server._pipeName === undefined) native.hostClose(server._listener);
+      else internal.require("net_path").close(server, hostError, typeof callback === "function");
       server.listening = false;
       server._closing = true;
     }
@@ -1123,17 +1124,17 @@
         this._connections = new Set();
       }
       listen(...args) {
-        const callback = typeof args[args.length - 1] === "function" ? args.pop() : null;
-        const opts = args[0] !== null && typeof args[0] === "object" ? args[0] : { port: args[0], host: typeof args[1] === "string" ? args[1] : undefined };
-        const targetPort = internal.require("net_port").httpPort(opts.port);
+        const [opts, callback] = internal.require("net_address")._normalizeArgs(args);
+        const targetPort = opts.path === undefined ? internal.require("net_port").httpPort(opts.port) : undefined;
+        this._pipeName = opts.path;
         if (callback) this.once("listening", callback);
         try {
-          this._listener = listenOrThrow(opts.host || "0.0.0.0", targetPort);
+          this._listener = opts.path === undefined ? listenOrThrow(opts.host || "0.0.0.0", targetPort) : internal.require("net_path").listen(opts.path, hostError);
         } catch (err) {
           internal.nextTick(() => this.emit("error", err));
           return this;
         }
-        this._port = native.hostLocalPort(this._listener);
+        this._port = opts.path === undefined ? native.hostLocalPort(this._listener) : undefined;
         this._host = opts.host || "::";
         this.listening = true;
         internal.require("net_listener").start(this, {
@@ -1202,6 +1203,7 @@
       }
       address() {
         if (!this.listening) return null;
+        if (this._pipeName !== undefined) return this._pipeName;
         return { address: this._host === "0.0.0.0" ? "0.0.0.0" : this._host, family: this._host.includes(":") ? "IPv6" : "IPv4", port: this._port };
       }
       close(callback) {
@@ -1513,7 +1515,7 @@
         this.agent = options.agent === false || options.createConnection ? null : options.agent || globalAgent;
         const key = this.agent?.getName(Object.assign({}, options, { host, port: targetPort }));
         const reused = this.agent?._pool.take(key);
-        const socket = reused || (options.createConnection ? options.createConnection(Object.assign({}, options, { host, port: targetPort })) : net.connect({ host, port: targetPort }));
+        const socket = reused || (options.createConnection ? options.createConnection(Object.assign({}, options, { host, port: targetPort })) : net.connect(options.socketPath === undefined ? { host, port: targetPort } : { path: options.socketPath }));
         this.reusedSocket = Boolean(reused);
         if (this.agent && !reused) this.agent._pool.track(key, socket);
         this.socket = this.connection = socket;
@@ -1687,7 +1689,7 @@
         this.freeSockets = this._pool.freeSockets;
       }
       get totalSocketCount() { return this._pool.size; }
-      getName(options) { return `${options.host || "localhost"}:${options.port || 80}:${options.localAddress || ""}${options.family ? ":" + options.family : ""}`; }
+      getName(options) { if (options.socketPath !== undefined) return `unix:${options.socketPath}`; return `${options.host || "localhost"}:${options.port || 80}:${options.localAddress || ""}${options.family ? ":" + options.family : ""}`; }
       destroy() { this._pool.destroy(); }
     }
     const globalAgent = new Agent({ keepAlive: true, timeout: 5000 });

@@ -1,7 +1,8 @@
 import { processRuntimeFixture } from "../../web/tests/process-runtime-fixture";
+import { networkPathScopeFixture, socketDirectoryFixture } from "../../web/tests/socket-runtime-fixture";
 import { outcomeWord } from "waffle/proc/outcome";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import type { Runtime, GuestLauncher, ProgramDefinition } from "waffle";
+import type { Runtime, GuestLauncher, ProgramDefinition, ProcessService } from "waffle";
 import { FilesystemClient } from "waffle/fs/client";
 import { MemoryBackend } from "waffle/fs/backend";
 import { FilesystemService } from "waffle/fs/service";
@@ -36,6 +37,7 @@ function fixture() {
     registerAdapter: (name: string, value: GuestLauncher) => register("adapter", adapters, name, value),
     registerProgram: (name: string, value: ProgramDefinition) => register("program", programs, name, value),
     filesystem: {
+      directoryHandle: socketDirectoryFixture,
       lookup: async (path: string) => files.has(path) ? { kind: "file" } : directories.has(path) ? { kind: "dir" } : undefined,
       readFile: async (path: string) => files.get(path),
       writeFile: async (path: string, bytes: Uint8Array, mode?: { exclusive?: boolean }) => {
@@ -121,16 +123,38 @@ test("installation requires the notification helper worker", async () => {
 test("every engine forwards to the production process worker", async () => {
   const f = fixture();
   const install = await installBunAdapters(f.runtime, { module });
+  const launches: Parameters<ProcessService["launchWorker"]>[1][] = [];
+  const releases: number[] = [];
+  const acquire = f.runtime.filesystem.directoryHandle.bind(f.runtime.filesystem);
+  const directory = spyOn(f.runtime.filesystem, "directoryHandle").mockImplementation(async path => {
+    const lease = await acquire(path);
+    const index = releases.length;
+    releases.push(0);
+    return { handle: lease.handle, release() { releases[index] = (releases[index] ?? 0) + 1; lease.release(); } };
+  });
+  const service = {
+    networkPathScope: networkPathScopeFixture,
+    launchWorker(_context: unknown, options: Parameters<ProcessService["launchWorker"]>[1]) { launches.push(options); return { terminate() {} }; },
+  };
   try {
-    const launches: any[] = [];
     const context = { outcome: outcomeWord(), registerRevocation: () => () => {}, module, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { PATH: "/bin" }, cwd: "/" } };
     for (const [name, launch] of f.adapters) {
-      await launch(context as never, { launchWorker(_context: unknown, options: unknown) { launches.push(options); return { terminate() {} }; } } as never);
+      await launch(context as never, service as never);
       expect(launches.at(-1)).toMatchObject({ workerUrl, notificationWorkerUrl, request: { engine: name.slice(4), module, args: ["bun", "-e", "0"], env: { BUNWASM_EXEC_PATH: "/bin/bun", PATH: "/bin" } } });
+      expect(directory).toHaveBeenLastCalledWith("/");
+      expect(releases.at(-1)).toBe(0);
+      launches.at(-1)?.cleanup?.();
+      launches.at(-1)?.cleanup?.();
+      expect(releases.at(-1)).toBe(1);
     }
     const load = f.programs.get("/bin/bun")!.module as () => Promise<WebAssembly.Module>;
     expect(await load()).toBe(module);
-  } finally { install.dispose(); }
+    expect(directory).toHaveBeenCalledTimes(f.adapters.size);
+  } finally {
+    for (const launched of launches) launched.cleanup?.();
+    directory.mockRestore();
+    install.dispose();
+  }
 });
 
 test("caller can choose canonical aliases or keep program registration separately owned", async () => {

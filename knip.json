@@ -24,6 +24,7 @@
         "scripts/migrations/*.ts",
         "scripts/bench-module-preparation.ts",
         "scripts/engine-comparison.ts",
+        "scripts/esm-loader-*.ts",
         "scripts/bun-suite-small-causes.ts",
         "scripts/discover-solid-watch-import.ts",
         "scripts/check-await-observer.ts",
@@ -32,6 +33,7 @@
         "scripts/generate-*.{ts,mjs}",
         "scripts/guest-core-receipt.ts",
         "scripts/guest-engine-receipt.ts",
+        "scripts/hermes-import-delta.ts",
         "scripts/measure-suite-dependencies.ts",
         "scripts/refresh-compatibility-docs.ts",
         "scripts/group-suite-category-d.ts",
@@ -121,6 +123,7 @@
   },
   "ignoreBinaries": [
     "unshare",
+    "rustc",
     "ss",
     "build.mjs",
     "^c\\+\\+$"

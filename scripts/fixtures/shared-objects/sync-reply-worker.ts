@@ -17,9 +17,32 @@ const service = exportSharedObjects(request.owner, { postMessage(message, transf
   const ports = transfer.map(port => { assert(port instanceof NativeMessagePort); return port; });
   host.postMessage(message, ports);
 } });
-const sharedObjects = bindSharedObjectHost(service, { active: () => true, pending() {}, wake() {} });
-const runtime = sourcePorts({ sharedObjects: workerData.noLanes ? { ...sharedObjects, lanes: undefined } : sharedObjects });
+const bound = bindSharedObjectHost(service, { active: () => true, pending() {}, wake() {} });
 const gate = new Int32Array(workerData.gate);
+let stopping = false;
+function withCloseControl(shared: typeof bound): typeof bound {
+  if (!workerData.closeMode || request.role !== "service" || !shared.lanes) return shared;
+  const lanes = shared.lanes;
+  type Lane = ReturnType<typeof lanes.open>;
+  function peerClosed(lane: Lane) {
+    const closed = lane.peerClosed();
+    if (closed || !stopping || workerData.closeMode !== "race") return closed;
+    host.postMessage({ kind: "close-check" });
+    if (Atomics.load(gate, 2) === 0 && Atomics.wait(gate, 2, 0, 2000) === "timed-out") throw new Error("Caller failed to finish the coordinated close");
+    return closed;
+  }
+  function reserve(lane: Lane, text: string) {
+    if (stopping && workerData.closeMode === "failure") throw new Error("Close-frame reserve failed while peer open");
+    return lane.reserve(text);
+  }
+  function open(buffer: SharedArrayBuffer, side: 0 | 1) {
+    const lane = lanes.open(buffer, side);
+    return { ...lane, peerClosed: () => peerClosed(lane), reserve: (text: string) => reserve(lane, text) };
+  }
+  return { ...shared, lanes: { create: lanes.create, open } };
+}
+const sharedObjects = withCloseControl(bound);
+const runtime = sourcePorts({ sharedObjects: workerData.noLanes ? { ...sharedObjects, lanes: undefined } : sharedObjects });
 let gateRound = 0;
 const exact = readFileSync(new URL("./esbuild-run-call-sync.txt", import.meta.url), "utf8");
 const owned: SourcePort[] = [];
@@ -67,6 +90,7 @@ host.on("message", (value: { kind: string; graph?: Graph }) => {
   }
   if (value.kind === "run" && run) { run(); return; }
   if (value.kind !== "stop") throw new Error("Invalid synchronous reply fixture command");
+  stopping = true;
   clearInterval(interval);
   for (const port of owned) port.close();
   setImmediate(() => { service.close(); host.postMessage({ kind: "cleanup" }); host.close(); });

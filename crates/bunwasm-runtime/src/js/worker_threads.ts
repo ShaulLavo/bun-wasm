@@ -356,7 +356,12 @@
       const lane = this.#value().lane;
       if (!lane) return false;
       if (lane.io.peerClosed()) return true;
-      const frame = lane.io.reserve(JSON.stringify({ kind: "port-close", sequence: sent }));
+      let frame: ReturnType<typeof lane.io.reserve>;
+      try { frame = lane.io.reserve(JSON.stringify({ kind: "port-close", sequence: sent })); }
+      catch (error) {
+        if (lane.io.peerClosed()) return true;
+        throw error;
+      }
       frame?.commit();
       return frame !== null;
     }
