@@ -72,7 +72,7 @@
         if (this._ended && this.readableLength === 0) this.read(0);
       }
       _updatePeer() {
-        const peer = this._conn.peer();
+        const peer = internal.require("net_path").peer(this._conn.peer());
         this.remoteAddress = peer.address;
         this.remotePort = peer.port;
         this.remoteFamily = peer.family;
@@ -86,9 +86,10 @@
           return this;
         }
         if (this._phase === "open") { this._conn.onClose = null; this._conn.destroy(); }
-        if (options.path) throw error(Error, "ENOTSUP", "Unix sockets are not supported in bun-wasm");
-        if (options.port === undefined) throw error(TypeError, "ERR_MISSING_ARGS", "The port or path argument is required");
-        const targetPort = port(options.port);
+        const path = options.path === undefined ? undefined : internal.require("net_path").absolute(options.path);
+        if (path === undefined && options.port === undefined) throw error(TypeError, "ERR_MISSING_ARGS", "The port or path argument is required");
+        const targetPort = path === undefined ? port(options.port) : undefined;
+        this._unixPath = path;
         if (callback) this.once("connect", callback);
         if (this.destroyed) this._undestroy();
         this._readReady = true;
@@ -101,12 +102,13 @@
           this._readableState.highWaterMark = options.highWaterMark;
           this._writableState.highWaterMark = options.highWaterMark;
         }
-        if (options.lookup && typeof options.host === "string" && !internal.require("net_address").isIP(options.host)) {
+        if (path === undefined && options.lookup && typeof options.host === "string" && !internal.require("net_address").isIP(options.host)) {
           options.lookup(options.host, { family: options.family || 0, all: options.autoSelectFamily !== false },
             (err, addresses, family) => this._lookupResult(options, targetPort, err, addresses, family));
           return this;
         }
-        this._dial(options, targetPort);
+        if (path === undefined) this._dial(options, targetPort);
+        else internal.require("net_path").connect(this, path, options.path, { Connection, addWaiter, hostError });
         return this;
       }
       _lookupResult(options, targetPort, err, addresses, family) {
@@ -147,7 +149,8 @@
         if (ready < 0) {
           const err = hostError(conn.handle, "connect failed");
           err.syscall = err.syscall || "connect";
-          if (err.code === "ENOTFOUND") err.hostname = target;
+          if (this._unixPath !== undefined) internal.require("net_path").failure(err, "connect", target);
+          else if (err.code === "ENOTFOUND") err.hostname = target;
           else { err.address = target; err.port = targetPort; }
           this.destroy(err);
           return true;
@@ -254,7 +257,8 @@
       address() {
         if (!this._conn || this.destroyed) return {};
         const text = native.hostLocalAddr(this._conn.handle);
-        return typeof text === "string" ? JSON.parse(text) : {};
+        const address = typeof text === "string" ? internal.require("net_path").local(text) : {};
+        return typeof address === "string" ? {} : address;
       }
     }
 
@@ -268,10 +272,10 @@
         if (this.listening) throw error(Error, "ERR_SERVER_ALREADY_LISTEN", "Listen method has been called more than once without closing");
         const [options, callback] = _normalizeArgs(args);
         if (args[0] && typeof args[0] === "object" && !("port" in options) && !("path" in options)) throw error(TypeError, "ERR_INVALID_ARG_VALUE", `The argument 'options' must have the property "port" or "path". Received ${JSON.stringify(options)}`);
-        if (options.path) throw error(Error, "ENOTSUP", "Unix sockets are not supported in bun-wasm");
-        const targetPort = port(options.port);
+        const targetPort = options.path === undefined ? port(options.port) : undefined;
+        this._pipeName = options.path;
         if (callback) this.once("listening", callback);
-        try { this._listener = listenOrThrow(options.host || "0.0.0.0", targetPort); }
+        try { this._listener = options.path === undefined ? listenOrThrow(options.host || "0.0.0.0", targetPort) : internal.require("net_path").listen(options.path, hostError); }
         catch (err) { internal.nextTick(() => this.emit("error", err)); return this; }
         this.listening = true;
         this._closing = false;
@@ -308,7 +312,7 @@
       }
       _accept(conn) {
         const peer = conn.peer();
-        if (this._options.blockList?.check(peer.address, peer.family.toLowerCase()) || (this.maxConnections !== undefined && this._connections.size >= this.maxConnections)) { conn.destroy(); this.emit("drop", peer); return; }
+        if ((peer.family !== "Unix" && this._options.blockList?.check(peer.address, peer.family.toLowerCase())) || (this.maxConnections !== undefined && this._connections.size >= this.maxConnections)) { conn.destroy(); this.emit("drop", peer); return; }
         const socket = new Socket(this._options);
         socket._attach(conn);
         socket.server = socket._server = this;
@@ -319,7 +323,7 @@
       address() {
         if (!this.listening) return null;
         const text = native.hostLocalAddr(this._listener);
-        return typeof text === "string" ? JSON.parse(text) : null;
+        return typeof text === "string" ? this._pipeName ?? internal.require("net_path").local(text) : null;
       }
       getConnections(callback) { internal.nextTick(() => callback(null, this._connections.size)); }
       close(callback) { return closeNodeServer(this, callback, false); }

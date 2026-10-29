@@ -9,3 +9,7 @@ and upstream bugs. Add or update the relevant record, not this entrypoint.
 The [migration map](../scripts/migrations/bun-patches-map.json) maps the former
 single-page anchors to their records. The deterministic splitter and proof are
 in [split-bun-patches.ts](../scripts/migrations/split-bun-patches.ts).
+
+| Adapter | Class | Record |
+| --- | --- | --- |
+| Unix socket adapter | Host feature | [Original Node/Bun path glue over Waffle](bun-patches/unix-socket-adapter.md) |
