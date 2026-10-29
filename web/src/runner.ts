@@ -1,4 +1,4 @@
-import { recordMemorySnapshot } from "./memory-telemetry.js";
+import { beginMemorySnapshot, endMemorySnapshot, recordMemorySnapshot } from "./memory-telemetry.js";
 import { programLinkPlan } from "../../src/assets.js";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
@@ -113,10 +113,12 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   // client chunks load on first use rather than with the page.
   const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("waffle/fs").FilesystemIdentity } | undefined)?.filesystem;
   const pid = options.runtime.identities.pid(), job = options.runtime.identities.job();
+  const memoryTelemetryId = crypto.randomUUID();
   let request: RunRequest;
   try {
     request = {
       engine: options.engine,
+      memoryTelemetryId,
       adapter: options.adapter,
       runtimeProcess: options.runtimeProcess,
       module: options.module,
@@ -188,6 +190,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   function confirm(ownedDisposal = false) {
     if (confirmed || (options.runtime.disposed && !ownedDisposal)) return;
     confirmed = true;
+    endMemorySnapshot(memoryTelemetryId);
     // The admission fence proves completion. Never make run.done depend on terminate().
     settle(selectedResult!);
     stopWorker();
@@ -322,6 +325,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   let interrupted = false;
   let prepared = false;
   const pendingKills: (2 | 9 | 15)[] = [];
+  if (!finished) beginMemorySnapshot(options.engine, memoryTelemetryId);
   void (async () => {
     if (finished || options.runtime.disposed) return;
     // The runtime's pool usually has this worker started already, so the command doesn't wait

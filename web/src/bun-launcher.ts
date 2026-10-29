@@ -1,4 +1,4 @@
-import { recordMemorySnapshot } from "./memory-telemetry.js";
+import { beginMemorySnapshot, endMemorySnapshot, recordMemorySnapshot } from "./memory-telemetry.js";
 import { programLinkPlan } from "../../src/assets.js";
 import { bunEnvironment } from "../../src/executable-paths.js";
 // Page-side launchers: one Waffle worker per Bun or preview1 process. The service owns admission,
@@ -40,6 +40,7 @@ export function bunLauncher(engine: Engine, options: BunLauncherOptions): GuestL
 }
 
 async function launchBunProcess(engine: Engine, options: BunLauncherOptions, context: Parameters<GuestLauncher>[0], service: Parameters<GuestLauncher>[1]) {
+  const memoryTelemetryId = crypto.randomUUID();
   let revoked = false;
   let helper: RuntimeNetworkHelper | undefined;
   let moduleCache: string | null = null;
@@ -52,6 +53,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   const cleanup = () => {
     if (released) return;
     released = true;
+    endMemorySnapshot(memoryTelemetryId);
     unregister();
     try { helper?.dispose(); }
     finally {
@@ -90,10 +92,11 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     dispatch = message => dispatchBunNetwork(session, message);
     moduleCache = engine === "browser" && scopedWorker(options.workerUrl) ? `bunwasm-m-${crypto.randomUUID()}` : null;
     if (engine === "browser") sharedRoute = runtimeSharedObjectRoute(options.runtime);
+    beginMemorySnapshot(engine, memoryTelemetryId);
     return service.launchWorker<RunRequest>(context, {
       workerUrl: options.workerUrl,
       request: {
-        engine, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
+        engine, memoryTelemetryId, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
         args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
         trace: false, net: ring, moduleCache, lookupChannel: lookupChannel?.name,
         sharedObjects: sharedRoute ? { owner: sharedRoute.owner } : undefined,

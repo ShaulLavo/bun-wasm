@@ -20,10 +20,10 @@ const actualTrampoline = { ...await import("../src/net/trampoline") };
 const actualControl = { ...await import("waffle/proc/control") };
 const actualLink = { ...await import("waffle/link") };
 let linkedFinishFailure: Error | undefined;
-mock.module("waffle/link", () => ({ ...actualLink, linkedWorkerHooks() {
-  const hooks = actualLink.linkedWorkerHooks();
-  return { ...hooks, beforeFinish() {
-    hooks.beforeFinish?.();
+mock.module("waffle/link", () => ({ ...actualLink, instantiateLinkPlan(...args: Parameters<typeof actualLink.instantiateLinkPlan>) {
+  const group = actualLink.instantiateLinkPlan(...args);
+  return { ...group, dispose() {
+    group.dispose();
     if (linkedFinishFailure) throw linkedFinishFailure;
   } };
 } }));

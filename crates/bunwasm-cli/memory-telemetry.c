@@ -104,3 +104,13 @@ EXPORT("bun_memory_telemetry") const struct MemoryTelemetry *bun_memory_telemetr
 #endif
     return &counters;
 }
+
+EXPORT("__libc_malloc") void *__wrap___libc_malloc(size_t size) {
+    return __wrap_malloc(size);
+}
+EXPORT("__libc_calloc") void *__wrap___libc_calloc(size_t count, size_t size) {
+    return __wrap_calloc(count, size);
+}
+EXPORT("__libc_free") void __wrap___libc_free(void *pointer) {
+    __wrap_free(pointer);
+}

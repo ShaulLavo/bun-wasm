@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
-const wrapped = ["malloc", "calloc", "realloc", "free", "aligned_alloc", "posix_memalign"];
+const wrapped = ["malloc", "calloc", "realloc", "free", "aligned_alloc", "posix_memalign", "__libc_malloc", "__libc_calloc", "__libc_free"];
 
 function fixture(run: (exports: WebAssembly.Exports, snapshot: () => bigint[]) => void): void {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-memory-"));
@@ -95,5 +95,19 @@ test("aligned allocation and zero-sized realloc retain libc behavior without dup
     expect(snapshot()[5]).toBe(0n);
     call(exports, "free", 0);
     expect(snapshot()[2]).toBe(0n);
+  });
+});
+
+test("libc internal aliases share the same accounting as the exported allocator", () => {
+  fixture((exports, snapshot) => {
+    const pointer = call(exports, "__libc_calloc", 8, 128);
+    expect(snapshot()[2]).toBe(BigInt(call(exports, "malloc_usable_size", pointer)));
+    call(exports, "free", pointer);
+    expect(snapshot()[2]).toBe(0n);
+    const next = call(exports, "malloc", 32);
+    call(exports, "__libc_free", next);
+    expect(snapshot()[2]).toBe(0n);
+    expect(snapshot()[7]).toBe(2n);
+    expect(snapshot()[8]).toBe(2n);
   });
 });

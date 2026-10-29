@@ -9,13 +9,3 @@ and upstream bugs. Add or update the relevant record, not this entrypoint.
 The [migration map](../scripts/migrations/bun-patches-map.json) maps the former
 single-page anchors to their records. The deterministic splitter and proof are
 in [split-bun-patches.ts](../scripts/migrations/split-bun-patches.ts).
-
-| Patch or source | Class | Record |
-| --- | --- | --- |
-| Common allocator and linked-engine readers | Original port and host feature | [Common memory telemetry](bun-patches/common-memory-telemetry.md) |
-| QuickJS memory counters and failure attribution | Host feature and original adapter | [QuickJS memory telemetry](bun-patches/quickjs-memory-telemetry.md) |
-## JSC memory telemetry
-
-| Source | Class | Record |
-| --- | --- | --- |
-| WASI WebKit allocation scopes and JSC heap readout adapters | Port | [JSC memory telemetry](bun-patches/jsc-memory-telemetry.md) |

@@ -100,6 +100,9 @@ fn memory_telemetry() {
         "free",
         "aligned_alloc",
         "posix_memalign",
+        "__libc_malloc",
+        "__libc_calloc",
+        "__libc_free",
     ] {
         println!("cargo:rustc-link-arg-bin=bun=--wrap={name}");
     }

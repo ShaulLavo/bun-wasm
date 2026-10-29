@@ -4,12 +4,14 @@ import { emptyCounters, type MemoryCounters, type MemorySnapshot, type Telemetry
 export async function sample({ page, phase, engine }: { page: Page; phase: string; engine: TelemetryEngine }): Promise<MemoryCounters & { processes: unknown[] }> {
   const refresh = !/fail|error|trap|oom|terminal/i.test(phase);
   const workers = await Promise.all(page.workers().map(async worker => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await worker.evaluate(refresh => {
+      return await Promise.race([worker.evaluate(refresh => {
         const getter: unknown = Reflect.get(globalThis, "__bunMemoryTelemetry");
         return typeof getter === "function" ? getter(refresh) : null;
-      }, refresh);
+      }, refresh), new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 1000); })]);
     } catch { return null; }
+    finally { clearTimeout(timer); }
   }));
   const retained: unknown = await page.evaluate(() => {
     const getter: unknown = Reflect.get(globalThis, "__bunMemorySnapshots");

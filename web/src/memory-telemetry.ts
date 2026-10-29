@@ -79,10 +79,9 @@ function engineReadout(engine: TelemetryEngine, memory: WebAssembly.Memory, expo
   };
 }
 
-export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side?: WebAssembly.Instance) {
+export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side?: WebAssembly.Instance, id: string = crypto.randomUUID()) {
   const memory = core.exports.memory;
   if (!(memory instanceof WebAssembly.Memory)) throw new TypeError("Missing telemetry memory");
-  const id = crypto.randomUUID();
   let terminal = false;
   let failed = false;
   return {
@@ -117,6 +116,17 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
 }
 
 const retained = new Map<string, MemorySnapshot>();
+export function beginMemorySnapshot(engine: TelemetryEngine, id: string): void {
+  retained.set(id, { ...emptyCounters, id, engine, time: Date.now(), terminal: false,
+    allocatorFailure: null, engineFailure: null, engineCounters: {} });
+  trimTerminalSnapshots();
+}
+export function endMemorySnapshot(id: string): void {
+  const snapshot = retained.get(id);
+  if (snapshot) retained.set(id, { ...snapshot, terminal: true, time: Date.now() });
+  trimTerminalSnapshots();
+}
+
 export function recordMemorySnapshot(message: unknown): boolean {
   if (!message || typeof message !== "object" || !("type" in message) || message.type !== "bun-memory") return false;
   if (!("snapshot" in message) || !message.snapshot || typeof message.snapshot !== "object") throw new TypeError("Invalid memory snapshot");
@@ -125,10 +135,16 @@ export function recordMemorySnapshot(message: unknown): boolean {
   if (!isMemorySnapshot(snapshot)) throw new TypeError("Invalid memory snapshot fields");
   const value = snapshot;
   retained.set(value.id, value);
-  if (retained.size > 128) retained.delete(retained.keys().next().value!);
+  trimTerminalSnapshots();
   return true;
 }
 
+function trimTerminalSnapshots(): void {
+  for (const [id, snapshot] of retained) {
+    if (retained.size <= 128) return;
+    if (snapshot.terminal) retained.delete(id);
+  }
+}
 export function retainedMemorySnapshots(): readonly MemorySnapshot[] { return Array.from(retained.values()); }
 
 function isMemorySnapshot(value: object): value is MemorySnapshot {
@@ -138,8 +154,9 @@ function isMemorySnapshot(value: object): value is MemorySnapshot {
   if (!byteKeys.every(key => isCounter(Reflect.get(value, key)))) return false;
   if (!["failedAllocation", "allocatorFailure", "engineFailure"].every(key => isFailure(Reflect.get(value, key)))) return false;
   const engine: unknown = Reflect.get(value, "engine");
-  if (!["quickjs", "jsc", "browser", "hermes"].includes(String(engine))) return false;
-  if (typeof Reflect.get(value, "terminal") !== "boolean" || !isCounter(Reflect.get(value, "time"))) return false;
+  if (typeof engine !== "string" || !["quickjs", "jsc", "browser", "hermes"].includes(engine)) return false;
+  const time: unknown = Reflect.get(value, "time");
+  if (typeof Reflect.get(value, "terminal") !== "boolean" || typeof time !== "number" || !isCounter(time)) return false;
   const counters: unknown = Reflect.get(value, "engineCounters");
   return counters !== null && typeof counters === "object" && Object.values(counters).every(isCounter);
 }

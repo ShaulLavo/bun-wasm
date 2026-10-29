@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createMemoryReader, emptyCounters, recordMemorySnapshot, retainedMemorySnapshots } from "../web/src/memory-telemetry.ts";
+import { beginMemorySnapshot, createMemoryReader, emptyCounters, endMemorySnapshot, recordMemorySnapshot, retainedMemorySnapshots } from "../web/src/memory-telemetry.ts";
 import { aggregate } from "./app-matrix/engine-memory-hook.ts";
 
 function fixture(engine: "jsc" | "quickjs") {
@@ -93,4 +93,14 @@ test("terminal channel retains bounded validated identities and unknown aggregat
   expect(aggregate([snapshot, { ...emptyCounters }]).allocatorLiveBytes).toBeNull();
   expect(aggregate([snapshot, snapshot]).allocatorLiveBytes).toBe(20000);
   expect(aggregate([]).jsHeapBytes).toBeNull();
+});
+
+test("an unsampled live process stays unknown rather than inheriting a previous terminal process", () => {
+  const id = crypto.randomUUID();
+  beginMemorySnapshot("jsc", id);
+  const initial = retainedMemorySnapshots().find(snapshot => snapshot.id === id);
+  expect(initial?.terminal).toBe(false);
+  expect(initial?.allocatorLiveBytes).toBeNull();
+  endMemorySnapshot(id);
+  expect(retainedMemorySnapshots().find(snapshot => snapshot.id === id)?.terminal).toBe(true);
 });

@@ -17,6 +17,7 @@ export type Engine = "quickjs" | "jsc" | "browser" | "hermes";
 
 export interface RunRequest extends RuntimeWorkerRequest {
   engine: Engine;
+  memoryTelemetryId?: string;
   linkPlan?: LinkPlanSource;
   adapter?: "bun" | "preview1";
   trace: boolean;
@@ -207,17 +208,20 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
       context.checkActive();
       if (!group || finished) throw new Error("link group is unavailable");
       group.initialize();
-      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance);
+      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, req.memoryTelemetryId);
       Reflect.set(globalThis, "__bunMemoryTelemetry", (refresh = false) => reader?.sample(refresh));
     },
     beforeFinish() {
+      if (finished) return;
       finished = true;
+      const owned = group;
+      group = undefined;
       try {
         if (reader) host.postMessage({ type: "bun-memory", snapshot: reader.finish() });
       } finally {
         Reflect.deleteProperty(globalThis, "__bunMemoryTelemetry");
-        group?.dispose();
-        group = undefined;
+        reader = undefined;
+        owned?.dispose();
       }
     },
   };

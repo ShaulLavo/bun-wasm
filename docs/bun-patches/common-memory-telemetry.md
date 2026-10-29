@@ -3,10 +3,12 @@
 | Source | Class | Origin and change |
 | --- | --- | --- |
 | `crates/bunwasm-cli/memory-telemetry.c` and `build.rs` | Port | Original adapter around the existing WASI libc allocation ABI. No upstream allocator implementation is copied or changed. |
+| `crates/bunwasm-runtime/src/js/{process.ts,runtime.d.ts}` | Original adapter | Nullable memory values and derived RSS values preserve unknowns. No Bun or Node implementation copied. |
 | `web/src/memory-telemetry.ts`, executor and launchers | Host feature | Original readers and transport for core and engine snapshots. Uses Waffle's public linked-group API from the pinned package. |
 
 The core retains its existing WASI libc allocator. Linker wrapping observes
-`malloc`, `calloc`, `realloc`, `free`, `aligned_alloc`, and `posix_memalign`.
+`malloc`, `calloc`, `realloc`, `free`, `aligned_alloc`, `posix_memalign`,
+and libc's internal malloc/calloc/free aliases.
 The wrappers return the original result and preserve the original failure path.
 They add no per-allocation headers and allocate no diagnostic data.
 
