@@ -9,7 +9,7 @@ fn fixture(name: &str, backend: &str, version: &str) -> (Resolver, Value) {
     );
     let native = format!("@{name}/binding-linux-x64-gnu");
     let metadata = [
-        (name, json!({"dependencies": {}, "optionalDependencies": {native: version}})),
+        (name, json!({"dependencies": {}, "optionalDependencies": {native.clone(): version}})),
         (backend, json!({"main": "official-loader.cjs"})),
         (&native, json!({"os": ["linux"], "cpu": ["x64"]})),
     ];
