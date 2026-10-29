@@ -1,6 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
@@ -145,4 +145,43 @@ test.each(["base", "head"])("invalid %s check metadata fails closed", side => {
 test("selector helper changes retain both engine gates", () => {
   expect(needsRust(["scripts/ci-check-inputs.ts"])).toBe(true);
   expect(needsJsc(["scripts/ci-check-inputs.ts"])).toBe(true);
+});
+
+
+test("a diverged PR preserves compiled ownership introduced by the verified tested base", () => {
+  const repo = repository();
+  const path = "scripts/target-owned.test.ts";
+  repo.write("checks/web-target-owned.json", JSON.stringify({ owner: "web", path }));
+  repo.write(path, "before\n");
+  const ancestor = repo.commit();
+  repo.git(["checkout", "-qb", "target"]);
+  repo.git(["mv", "checks/web-target-owned.json", "checks/runtime-target-owned.json"]);
+  repo.write("checks/runtime-target-owned.json", JSON.stringify({ owner: "runtime", path }));
+  const verifiedBase = repo.commit();
+  repo.git(["checkout", "--detach", ancestor]);
+  repo.write(path, "changed on PR\n");
+  const head = repo.commit();
+  repo.git(["checkout", "target"]);
+  repo.git(["merge", "--no-ff", "--no-edit", head]);
+  expect(JSON.parse(readFileSync(join(repo.directory, "checks/runtime-target-owned.json"), "utf8")).owner).toBe("runtime");
+  const selected = repo.select(verifiedBase, head, "pull_request");
+  expect(selected.output).toBe("rust=true\njsc=false");
+  expect(selected.inputs).toBe(`Native inputs changed: ${path}`);
+});
+
+const unsafeSnapshots = ["empty", "symlink"].flatMap(kind => ["base", "head"].flatMap(side =>
+  ["pull_request", "push"].map(event => ({ kind, side, event }))));
+
+test.each(unsafeSnapshots)("$event rejects $kind manifests in the $side snapshot", ({ kind, side, event }) => {
+  const repo = repository();
+  repo.write("checks/web-control.json", JSON.stringify({ owner: "web", path: "scripts/control.test.ts" }));
+  repo.write("scripts/control.test.ts", "valid source-only test\n");
+  const clean = repo.commit();
+  const path = "checks/web-invalid.json";
+  if (kind === "empty") repo.write(path, "");
+  if (kind === "symlink") symlinkSync("web-control.json", join(repo.directory, path));
+  const invalid = repo.commit();
+  rmSync(join(repo.directory, path));
+  const repaired = repo.commit();
+  expect(() => repo.select(side === "base" ? invalid : clean, side === "base" ? repaired : invalid, event)).toThrow();
 });
