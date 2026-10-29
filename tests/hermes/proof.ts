@@ -100,7 +100,6 @@ function digest(path: string): string { return createHash("sha256").update(readF
 try {
   if (!integrationOnly) modules();
   for (const file of ["tla/main.mts", "dynamic-import.cts", "require-esm.cts", "async-context.ts", "metadata-main.mts", "synthetic-defaults.ts"]) {
-  for (const file of ["tla/main.mts", "dynamic-import.cts", "require-esm.cts", "async-context.ts", "metadata-main.mts", "synthetic-defaults.ts"]) {
     againstNode(file, join(root, "tests/hermes", file));
   }
   sourceLines("tla/source-lines.mts");
