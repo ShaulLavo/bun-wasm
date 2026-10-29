@@ -12,8 +12,8 @@
 //! context carried across reactions) and `_T` (an internal `then`); they are captured here
 //! once and deleted before any user code runs.
 //!
-//! Hermes runs classic scripts only. Until the record loader lands (design section 3),
-//! `eval_module` runs module-free `bun -e` code as a script and `import_module` throws.
+//! Hermes runs classic scripts. The core lowers ES modules to registration records;
+//! its loader owns linking, live bindings and top-level await inside this VM.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
@@ -24,7 +24,7 @@ use std::rc::Rc;
 use bunwasm_hermes::{self as sys, Handle, kind};
 
 use crate::engine::{
-    Engine, ErrorKind, ModuleHost, NativeError, PromiseState, Record, Val, ValueFn,
+    Engine, ErrorKind, ModuleHost, ModuleSource, NativeError, PromiseState, Record, Val, ValueFn,
 };
 
 thread_local! {
@@ -36,6 +36,7 @@ thread_local! {
     static HOST: RefCell<Option<Rc<dyn ModuleHost<Hermes>>>> = const { RefCell::new(None) };
     static REJECTIONS: RefCell<Vec<(HVal, HVal)>> = const { RefCell::new(Vec::new()) };
     static INTRINSICS: OnceCell<Intrinsics> = const { OnceCell::new() };
+    static LOADER: OnceCell<HVal> = const { OnceCell::new() };
     /// Attached `WebAssembly.Memory` buffers, until `detach_wasm_memory_buffer`.
     static WASM_BUFFERS: RefCell<Vec<HVal>> = const { RefCell::new(Vec::new()) };
 }
@@ -50,8 +51,6 @@ unsafe extern "C" {
 /// Built-ins captured at startup, before user code can replace them.
 struct Intrinsics {
     promise: HVal,
-    promise_resolve: HVal,
-    promise_reject: HVal,
     object_keys: HVal,
     define_property: HVal,
     reflect_own_keys: HVal,
@@ -499,8 +498,6 @@ fn capture_intrinsics() -> Intrinsics {
     let reflect = lookup(&g, "Reflect");
     let delete = lookup(&reflect, "deleteProperty");
     Intrinsics {
-        promise_resolve: lookup(&promise, "resolve"),
-        promise_reject: lookup(&promise, "reject"),
         object_keys: lookup(&object, "keys"),
         define_property: lookup(&object, "defineProperty"),
         reflect_own_keys: lookup(&reflect, "ownKeys"),
@@ -559,6 +556,61 @@ fn max_heap_mib() -> u32 {
         .unwrap_or(384)
 }
 
+fn module_host() -> Rc<dyn ModuleHost<Hermes>> {
+    HOST.with(|h| h.borrow().as_ref().expect("Hermes module host").clone())
+}
+
+fn resolve_record(e: &Hermes, args: &[HVal]) -> Result<HVal, HVal> {
+    let specifier = to_string(&args[0]);
+    let referrer = to_string(&args[1]);
+    module_host()
+        .resolve(e, &specifier, &referrer)
+        .map(|name| string(&name))
+}
+
+fn load_record(e: &Hermes, args: &[HVal]) -> Result<HVal, HVal> {
+    let name = to_string(&args[0]);
+    let result = e.new_object();
+    match module_host().load_record(e, &name)? {
+        ModuleSource::Record(source) => {
+            e.set(&result, "record", e.eval_script(&source, &name, 1)?)?
+        }
+        ModuleSource::Synthetic { namespace, default } => {
+            e.set(&result, "namespace", namespace)?;
+            e.set(&result, "default", default)?;
+        }
+    }
+    Ok(result)
+}
+
+fn init_record_meta(e: &Hermes, args: &[HVal]) -> Result<HVal, HVal> {
+    let name = to_string(&args[0]);
+    module_host().init_meta(e, &name, &args[1])?;
+    Ok(undefined())
+}
+
+fn record_loader(e: &Hermes) -> Result<HVal, HVal> {
+    let source = module_host().record_loader_source(e)?;
+    let factory = e.eval_script(&source, "bun-wasm:esm_loader", 1)?;
+    let native = e.new_object();
+    for (name, callback) in [
+        (
+            "resolve",
+            resolve_record as fn(&Hermes, &[HVal]) -> Result<HVal, HVal>,
+        ),
+        ("load", load_record),
+        ("initMeta", init_record_meta),
+    ] {
+        e.set(&native, name, e.new_function(name, Rc::new(callback)))?;
+    }
+    call(&factory, &undefined(), &[native])
+}
+
+fn call_loader(method: &str, args: &[HVal]) -> Result<HVal, HVal> {
+    let loader = LOADER.with(|l| l.get().expect("Hermes record loader").clone());
+    call(&get(&loader, method)?, &loader, args)
+}
+
 fn wasm_capacity() -> Val {
     #[cfg(target_arch = "wasm32")]
     {
@@ -595,6 +647,13 @@ impl Engine for Hermes {
         let rejection = Hermes.new_function("trackRejection", Rc::new(track_rejection));
         let handler = Hermes.new_function("trackHandler", Rc::new(track_handler));
         assert!(set(&promise, "_C", &rejection).is_ok() && set(&promise, "_B", &handler).is_ok());
+        let loader = record_loader(&Hermes).unwrap_or_else(|error| {
+            let message = get(&error, "message")
+                .map(|v| to_string(&v))
+                .unwrap_or_default();
+            panic!("Hermes record loader initialization: {message}");
+        });
+        LOADER.with(|l| assert!(l.set(loader).is_ok(), "one Hermes record loader"));
         Hermes
     }
 
@@ -682,7 +741,19 @@ impl Engine for Hermes {
 
     fn eval_script(&self, source: &str, filename: &str, first_line: i32) -> Result<HVal, HVal> {
         let source = fold_header_lines(source, first_line);
+        let user_source = !filename.starts_with("bun-wasm:");
+        let source = if user_source && source.contains("import") {
+            module_host().lower_script(self, &source, filename)?.into()
+        } else {
+            source
+        };
         let flags = eval_flags(&source, filename);
+        let source =
+            if user_source && std::env::var("BUN_WASM_HERMES_SHOW_SOURCE").as_deref() != Ok("0") {
+                format!("\"show source\";{source}").into()
+            } else {
+                source
+            };
         let mut out = 0;
         // SAFETY: valid buffers.
         let ok = unsafe {
@@ -699,18 +770,11 @@ impl Engine for Hermes {
     }
 
     fn import_module(&self, specifier: &str) -> Result<HVal, HVal> {
-        Err(self.error_value(&NativeError::error(format!(
-            "Cannot import \"{specifier}\": ES modules on Hermes need the record loader"
-        ))))
+        call_loader("importModule", &[string(specifier), string("")])
     }
 
-    fn eval_module(&self, name: &str, source: &str) -> Result<HVal, HVal> {
-        // Module-free `bun -e` code runs as a script until the record loader lands.
-        let promise = intrinsic(|i| &i.promise);
-        match self.eval_script(source, name, 1) {
-            Ok(_) => call(&intrinsic(|i| &i.promise_resolve), &promise, &[undefined()]),
-            Err(thrown) => call(&intrinsic(|i| &i.promise_reject), &promise, &[thrown]),
-        }
+    fn eval_module(&self, name: &str, _source: &str) -> Result<HVal, HVal> {
+        call_loader("importName", &[string(name)])
     }
 
     fn run_jobs(&self) -> bool {
