@@ -125,7 +125,7 @@ fn has_known_language(locale: &DataLocale) -> bool {
     if locale.language.is_unknown() {
         return true;
     }
-    let mut language_only = locale.clone();
+    let mut language_only = *locale;
     language_only.script = None;
     language_only.region = None;
     language_only.variant = None;
@@ -150,7 +150,7 @@ fn resolve_locale(input: &str) -> Result<Option<String>, NativeError> {
     let mut fallback = LocaleFallbacker::new()
         .for_config(Default::default())
         .fallback_for(data_locale);
-    let mut effective = fallback.get().clone();
+    let mut effective = *fallback.get();
     loop {
         if has_collation_data(fallback.get()) {
             return Ok(Some(fallback.get().to_string()));
@@ -161,7 +161,7 @@ fn resolve_locale(input: &str) -> Result<Option<String>, NativeError> {
             }
             return Ok(Some(effective.to_string()));
         }
-        effective = fallback.get().clone();
+        effective = *fallback.get();
         fallback.step();
     }
 }
