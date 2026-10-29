@@ -14,7 +14,7 @@ export function requestMemoryChannel(buffer: SharedArrayBuffer, refresh: boolean
 }
 export function memoryChannelReady(buffer: SharedArrayBuffer, generation: number, refresh: boolean): boolean {
   const words = new Int32Array(buffer, 0, 8);
-  return Atomics.load(words, 2) === generation && (!refresh || Atomics.load(words, 5) === generation);
+  return Atomics.load(words, 3) % 2 === 0 && Atomics.load(words, 2) === generation && (!refresh || Atomics.load(words, 5) === generation);
 }
 export function readMemoryChannel(buffer: SharedArrayBuffer): unknown {
   const words = new Int32Array(buffer, 0, 8);

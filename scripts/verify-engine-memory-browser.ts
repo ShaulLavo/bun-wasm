@@ -7,6 +7,9 @@ import { sample } from "./app-matrix/engine-memory-hook.ts";
 import { ready, terminalText, writeFile } from "../web/tests/playground.mjs";
 import { stopForeground } from "../web/tests/foreground.ts";
 
+const failedBytes = 600 * 1024 * 1024;
+const gate = `import fs from 'node:fs'; async function gate(name) { while (!fs.existsSync('/home/user/'+name)) await Bun.sleep(20); }`;
+
 const repository = resolve(import.meta.dir, "..");
 const output = resolve(process.argv[2] ?? "/work/tmp/bun-wasm-wave1029-engines-current");
 const serverLog = join(output, "hook-server.log");
@@ -66,8 +69,6 @@ async function startFixture(page: Page, path: string, code: string): Promise<voi
     void submit.call(shell, `bun run ${path}`);
   }, path);
 }
-const failedBytes = 600 * 1024 * 1024;
-const gate = `import fs from 'node:fs'; async function gate(name) { while (!fs.existsSync('/home/user/'+name)) await Bun.sleep(20); }`;
 function exactFailure(value: Awaited<ReturnType<typeof sample>>, engine: "quickjs" | "jsc"): string {
   assert.deepEqual(value.failedAllocation, { bytes: failedBytes, category: engine === "quickjs" ? "quickjs.arrayBuffer" : "jsc.typedArray" });
   assert(value.failureProcessId, "failed process identity retained");

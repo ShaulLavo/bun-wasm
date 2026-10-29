@@ -117,6 +117,7 @@ test("a current command keeps a failed child while its parent stays live and exc
   expect(value.failureProcessId).toBe("child");
   expect(value.processes.map(process => process.id)).toEqual(["child", "parent"]);
   expect(value.allocatorLiveBytes).toBe(parent.allocatorLiveBytes);
+  expect(value.memoryLimitBytes).toBeNull();
   expect(aggregate([parent, parent]).memoryLimitBytes).toBeNull();
 });
 

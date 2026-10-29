@@ -197,7 +197,7 @@ function isFailure(value: unknown): value is FailedAllocation | null {
   return typeof value === "object" && "bytes" in value && isCounter(value.bytes)
     && "category" in value && typeof value.category === "string";
 }
-export async function requestMemorySnapshots(engine: TelemetryEngine, refresh: boolean): Promise<readonly MemorySnapshot[]> {
+async function requestMemorySnapshots(engine: TelemetryEngine, refresh: boolean): Promise<readonly MemorySnapshot[]> {
   const requested = Array.from(channels, ([id, channel]) => ({ id, channel }))
     .filter(entry => retained.get(entry.id)?.engine === engine)
     .map(entry => ({ ...entry, generation: requestMemoryChannel(entry.channel, refresh) }));
@@ -207,8 +207,18 @@ export async function requestMemorySnapshots(engine: TelemetryEngine, refresh: b
   }
   for (const entry of requested) {
     const value: unknown = readMemoryChannel(entry.channel);
-    if (!value || typeof value !== "object" || !isMemorySnapshot(value)) continue;
+    if (!value || typeof value !== "object" || !isMemorySnapshot(value)) {
+      const previous = retained.get(entry.id);
+      if (previous) retained.set(entry.id, { ...previous, ...emptyCounters, failedAllocation: previous.failedAllocation });
+      continue;
+    }
     if (value.id !== entry.id || value.engine !== engine) throw new TypeError("Memory channel identity mismatch");
+    const current = memoryChannelReady(entry.channel, entry.generation, false);
+    if (!current) {
+      retained.set(entry.id, { ...value, ...emptyCounters, failedAllocation: value.failedAllocation,
+        notes: "Host snapshot was not acknowledged for this phase. " + value.notes });
+      continue;
+    }
     const normal = memoryChannelReady(entry.channel, entry.generation, refresh);
     retained.set(entry.id, normal || !refresh ? value : { ...value, jsHeapBytes: null, arrayBufferBytes: null,
       notes: "Normal phase refresh not acknowledged. Engine counters are unavailable for this phase. " + value.notes });

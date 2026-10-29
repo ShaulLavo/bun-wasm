@@ -20,7 +20,7 @@ export function selectMemorySnapshots(all: readonly unknown[], engine: Telemetry
   const selected = active.length ? active : command.toSorted((a, b) => b.time - a.time).slice(0, 1);
   const counters = aggregate(selected);
   const failed = command.find(snapshot => snapshot.failedAllocation !== null);
-  return { ...counters, failedAllocation: failed?.failedAllocation ?? null,
+  return { ...counters, memoryLimitBytes: command.length > 1 ? null : counters.memoryLimitBytes, failedAllocation: failed?.failedAllocation ?? null,
     failureProcessId: failed?.id ?? null, processes: command };
 }
 
