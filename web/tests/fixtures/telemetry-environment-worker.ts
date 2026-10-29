@@ -2,14 +2,29 @@ import { createBunExecutor, type RunRequest } from "../../src/bun-executor";
 import { createFilesystemIdentity } from "waffle/fs/protocol";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { WorkerProcessClient, workerProcessState } from "waffle/proc/worker-client";
+import { attachTerminalOutput } from "../../node_modules/waffle/browser/terminal-output";
+
+function reportEnvironment(data: RunRequest, env: Record<string, string>) {
+  const identity = workerProcessState(data.runtimeProcess!);
+  const bytes = new TextEncoder().encode(JSON.stringify({ env, pid: identity.pid, parentPid: identity.parentPid }) + "\n");
+  if (!data.terminalOutput) {
+    self.postMessage({ type: "stdout", data: bytes });
+    return;
+  }
+  const notify = () => self.postMessage({ type: "terminal-output" });
+  const output = attachTerminalOutput(data.terminalOutput, {
+    checkActive() {}, interrupted: () => false, doorbell: notify,
+  });
+  output.write(1, [bytes]);
+  notify();
+}
 
 async function observe(data: RunRequest) {
   const executor = createBunExecutor(data);
   const descriptors = new DescriptorTable();
   try {
     const env = executor.env?.(data) ?? data.env;
-    const identity = workerProcessState(data.runtimeProcess!);
-    self.postMessage({ type: "stdout", data: new TextEncoder().encode(JSON.stringify({ env, pid: identity.pid, parentPid: identity.parentPid }) + "\n") });
+    reportEnvironment(data, env);
     if (data.args.includes("--spawn-child")) await observeChild(data, env, descriptors);
     self.postMessage({ type: "exit", code: 0 });
   } finally {
