@@ -7,3 +7,4 @@ pub(crate) const TAKE_TICK: u32 = 5;
 pub(crate) const FLUSH: u32 = 6;
 pub(crate) const WRAPPER_SOURCE: u32 = 7;
 pub(crate) const MAIN_PATH: u32 = 8;
+pub(crate) const LOWER_SCRIPT: u32 = 9;

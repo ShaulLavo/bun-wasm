@@ -1,0 +1,7 @@
+shared start
+z
+shared end
+z end
+x
+y
+main

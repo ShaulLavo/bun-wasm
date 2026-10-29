@@ -19,6 +19,7 @@
         "scripts/fixtures/runtime-js-child.ts",
         "scripts/migrations/*.ts",
         "scripts/bench-module-preparation.ts",
+        "scripts/esm-loader-*.ts",
         "scripts/bun-suite-small-causes.ts",
         "scripts/discover-solid-watch-import.ts",
         "scripts/check-await-observer.ts",

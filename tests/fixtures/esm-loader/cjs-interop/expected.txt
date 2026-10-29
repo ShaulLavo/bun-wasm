@@ -1,0 +1,2 @@
+named named 0 object named
+named exports are snapshots 0 1
