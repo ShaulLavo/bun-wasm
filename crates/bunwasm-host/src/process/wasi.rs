@@ -3,7 +3,6 @@
 //! owned by Wasmtime and are deliberately not transferable through spawn.
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use wasmtime::{Caller, Func, Linker, Store, Val, ValType};
 
@@ -434,19 +433,15 @@ struct Namespace {
     closing: Arc<Delegated>,
     files: HashMap<i32, i32>,
     preopens: HashSet<i32>,
-    /// Host paths of Wasmtime's descriptors (keyed by its own numbers, which renumbering
-    /// keeps), so `runtime_fs.watch_open` can watch the node an open descriptor names.
-    paths: HashMap<i32, PathBuf>,
 }
 impl Namespace {
-    fn new(dirs: Vec<PathBuf>, closing: Arc<Delegated>) -> Self {
-        let preopens: HashSet<i32> = (3..3 + dirs.len() as i32).collect();
+    fn new(count: usize, closing: Arc<Delegated>) -> Self {
+        let preopens: HashSet<i32> = (3..3 + count as i32).collect();
         Self {
             initialized: false,
             closing,
             files: preopens.iter().map(|&fd| (fd, fd)).collect(),
             preopens,
-            paths: (3..).zip(dirs).collect(),
         }
     }
     fn initialize(&mut self, caller: &mut Caller<'_, Host>) -> Result<()> {
@@ -476,9 +471,7 @@ impl Namespace {
         (3..i32::MAX).find(|fd| !self.files.contains_key(fd) && !host.processes.owns(*fd))
     }
     fn remove(&mut self, fd: i32) {
-        if let Some(actual) = self.files.remove(&fd) {
-            self.paths.remove(&actual);
-        }
+        self.files.remove(&fd);
         self.preopens.remove(&fd);
     }
     fn close(&mut self, caller: &mut Caller<'_, Host>, fd: i32) -> Result<i32> {
@@ -510,13 +503,15 @@ pub fn initialize(linker: &Linker<Host>, store: &mut Store<Host>) -> Result<()> 
 pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()> {
     let close = Arc::new(original(linker, store, "fd_close")?);
     let namespace = Arc::new(Mutex::new(Namespace::new(
-        store.data().processes.preopen_dirs(),
+        store.data().processes.preopen_count(),
         close.clone(),
     )));
     let read = original(linker, store, "fd_read")?;
     let write = original(linker, store, "fd_write")?;
     let fdstat = original(linker, store, "fd_fdstat_get")?;
     let filestat = original(linker, store, "fd_filestat_get")?;
+    // Wasmtime's own fd_filestat_get, taken before this file shadows it, over private scratch.
+    let watch_stat = original(linker, store, "fd_filestat_get")?;
     let prestat = original(linker, store, "fd_prestat_get")?;
     let open = original(linker, store, "path_open")?;
     let poll = original(linker, store, "poll_oneoff")?;
@@ -847,11 +842,6 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
                 .read(&caller, output.clone())
                 .context("validated descriptor output")?;
             let opened = i32::from_le_bytes(opened.try_into().unwrap());
-            let name = span(memory.len(&caller), path, length as u32 as usize)
-                .and_then(|range| memory.read(&caller, range));
-            if let Some(opened_path) = opened_path(&state, actual, name) {
-                state.paths.insert(opened, opened_path);
-            }
             state.files.insert(external, opened);
             caller.data_mut().processes.reserve_file(external);
             store_word(&memory, &mut caller, output.start, external as u32)?;
@@ -952,19 +942,44 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
             Ok(0)
         },
     )?;
-    install_watches(linker, &namespace)?;
+    install_watches(linker, &namespace, watch_stat, poll_scratch)?;
     linker.allow_shadowing(false);
     Ok(())
 }
 
-/// The host path a successful `path_open` names: its directory's path joined with the guest path.
-fn opened_path(state: &Namespace, directory: i32, name: Option<Vec<u8>>) -> Option<PathBuf> {
-    let base = state.paths.get(&directory)?;
-    Some(base.join(std::str::from_utf8(&name?).ok()?))
+/// The node a file or directory descriptor holds: its preview1 `filestat.ino` (an identity, see
+/// `fs_watch::node_identity`), read through Wasmtime's own `fd_filestat_get` into private
+/// scratch memory. Renaming, replacing or renumbering never changes it.
+fn descriptor_node(
+    stat: &Delegated,
+    caller: &mut Caller<'_, Host>,
+    scratch: wasmtime::Memory,
+    actual: i32,
+) -> Result<Result<u64, i32>> {
+    let result = call_values_in(
+        stat,
+        caller,
+        &[Val::I32(actual), Val::I32(0)],
+        Some(scratch),
+    )?;
+    if result != 0 {
+        return Ok(Err(result));
+    }
+    // filestat: dev u64, ino u64, filetype u8 (3 directory, 4 regular file).
+    let filestat = &scratch.data(&*caller)[..24];
+    if !matches!(filestat[16], 3 | 4) {
+        return Ok(Err(crate::fs_watch::INVAL));
+    }
+    Ok(Ok(u64::from_le_bytes(filestat[8..16].try_into().unwrap())))
 }
 
 /// Waffle's `runtime_fs` guest filesystem watches (positive WASI errnos, process-local ids).
-fn install_watches(linker: &mut Linker<Host>, namespace: &Arc<Mutex<Namespace>>) -> Result<()> {
+fn install_watches(
+    linker: &mut Linker<Host>,
+    namespace: &Arc<Mutex<Namespace>>,
+    stat: Delegated,
+    scratch: wasmtime::Memory,
+) -> Result<()> {
     use crate::fs_watch::{BADF, FAULT, INVAL, NOBUFS, Read};
     let state = namespace.clone();
     linker.func_wrap(
@@ -987,11 +1002,12 @@ fn install_watches(linker: &mut Linker<Host>, namespace: &Arc<Mutex<Namespace>>)
             let Some(&actual) = state.files.get(&fd) else {
                 return Ok(BADF);
             };
-            let Some(path) = state.paths.get(&actual).cloned() else {
-                return Ok(INVAL);
-            };
             drop(state);
-            match caller.data_mut().watches.open(&path, flags & 1 != 0) {
+            let node = match descriptor_node(&stat, &mut caller, scratch, actual)? {
+                Ok(node) => node,
+                Err(errno) => return Ok(errno),
+            };
+            match caller.data_mut().watches.open(node, flags & 1 != 0) {
                 Ok(id) => {
                     store_word(&memory, &mut caller, output.start, id)?;
                     Ok(0)

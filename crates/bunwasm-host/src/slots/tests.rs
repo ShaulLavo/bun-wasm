@@ -1303,19 +1303,39 @@ fn watch_records(f: &mut Fixture, id: i32) -> Result<Vec<(u8, Option<String>)>, 
 
 /// Sleep in the network poll until a drain of the watch reports `name` as a rename.
 fn wait_for_rename(f: &mut Fixture, id: i32, name: &str) {
+    wait_for(f, id, (2, Some(name.to_string())));
+}
+
+/// Sleep in the network poll until a drain of the watch reports `wanted`.
+fn wait_for(f: &mut Fixture, id: i32, wanted: (u8, Option<String>)) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        assert!(std::time::Instant::now() < deadline, "no rename for {name}");
+        assert!(std::time::Instant::now() < deadline, "no record {wanted:?}");
         f.store.data_mut().net.poll(1000);
         while let Ok(records) = watch_records(f, id) {
-            if records
-                .iter()
-                .any(|record| *record == (2, Some(name.to_string())))
-            {
+            if records.contains(&wanted) {
                 return;
             }
         }
     }
+}
+
+/// `path_open` of `path` under preopen 3 with the rights Rust's `File::open` uses (wasi-libc
+/// `open(O_RDONLY)`): every right except FD_DATASYNC, FD_WRITE, FD_ALLOCATE and
+/// FD_FILESTAT_SET_SIZE.
+fn open_read_only(f: &mut Fixture, path: &[u8]) -> i32 {
+    f.write(1024, path);
+    let rights = 0x1fff_ffffi64 & !(1 | 1 << 6 | 1 << 8 | 1 << 22);
+    let length = path.len() as i32;
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "path_open",
+            (3, 1, 1024, length, 0, rights, rights, 0, 128)
+        ),
+        0
+    );
+    f.word(128)
 }
 
 #[test]
@@ -1326,19 +1346,7 @@ fn runtime_fs_watches_follow_an_opened_directory_and_wake_the_network_poll() {
     std::fs::create_dir_all(root.join("app")).unwrap();
     let _scratch = Scratch(root.clone());
     let mut f = Fixture::at(&root);
-    // Rust's File::open through wasi-libc's open(O_RDONLY): symlink-follow lookup, no open
-    // flags, every right except FD_DATASYNC, FD_WRITE, FD_ALLOCATE and FD_FILESTAT_SET_SIZE.
-    f.write(1024, b"app");
-    let rights = 0x1fff_ffffi64 & !(1 | 1 << 6 | 1 << 8 | 1 << 22);
-    assert_eq!(
-        f.call(
-            "wasi_snapshot_preview1",
-            "path_open",
-            (3, 1, 1024, 3, 0, rights, rights, 0, 128)
-        ),
-        0
-    );
-    let directory = f.word(128);
+    let directory = open_read_only(&mut f, b"app");
     assert_eq!(
         f.call("runtime_fs", "watch_open", (directory, 2, 132)),
         28,
@@ -1373,4 +1381,48 @@ fn runtime_fs_watches_follow_an_opened_directory_and_wake_the_network_poll() {
     assert_eq!(f.call("runtime_fs", "watch_close", id), 0);
     assert_eq!(f.call("runtime_fs", "watch_close", id), 8);
     assert_eq!(watch_records(&mut f, id), Err(8));
+}
+
+#[test]
+fn runtime_fs_watches_the_descriptor_node_through_rename_replacement_and_renumber() {
+    let root =
+        std::env::temp_dir().join(format!("bun-wasm-runtime-fs-node-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("app")).unwrap();
+    std::fs::write(root.join("app/page.tsx"), "original").unwrap();
+    std::fs::write(root.join("app/gone.tsx"), "x").unwrap();
+    let _scratch = Scratch(root.clone());
+    let mut f = Fixture::at(&root);
+    let opened = open_read_only(&mut f, b"app/page.tsx");
+    // Another writer moves the node away and puts a different file at the old path.
+    std::fs::rename(root.join("app/page.tsx"), root.join("app/moved.tsx")).unwrap();
+    std::fs::write(root.join("app/page.tsx"), "replacement").unwrap();
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_renumber", (opened, 30)),
+        0
+    );
+    // The descriptor's preview1 ino is the identity the native watch table looks up.
+    assert_eq!(
+        f.call("wasi_snapshot_preview1", "fd_filestat_get", (30, 256)),
+        0
+    );
+    let ino = u64::from_le_bytes(f.bytes(264, 8).try_into().unwrap());
+    let moved = std::fs::metadata(root.join("app/moved.tsx")).unwrap();
+    assert_eq!(ino, crate::fs_watch::node_identity(&moved));
+    assert_eq!(f.call("runtime_fs", "watch_open", (30, 0, 132)), 0);
+    let id = f.word(132);
+    std::fs::write(root.join("app/page.tsx"), "replacement changed").unwrap();
+    f.store.data_mut().net.poll(300);
+    assert_eq!(
+        watch_records(&mut f, id),
+        Err(6),
+        "the replacement is a different node"
+    );
+    std::fs::write(root.join("app/moved.tsx"), "original changed").unwrap();
+    wait_for(&mut f, id, (1, None));
+    assert_eq!(f.call("runtime_fs", "watch_close", id), 0);
+    // A descriptor whose node was unlinked names no path: ENOENT, as for a detached node.
+    let unlinked = open_read_only(&mut f, b"app/gone.tsx");
+    std::fs::remove_file(root.join("app/gone.tsx")).unwrap();
+    assert_eq!(f.call("runtime_fs", "watch_open", (unlinked, 0, 132)), 44);
 }

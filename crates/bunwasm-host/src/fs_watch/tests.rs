@@ -7,6 +7,8 @@ struct Fixture {
     root: PathBuf,
     net: Net,
     watches: Watches,
+    /// Host descriptors standing in for the guest's: a watch names the node one of them holds.
+    held: Vec<fs::File>,
 }
 impl Fixture {
     fn new(name: &str) -> Self {
@@ -16,7 +18,19 @@ impl Fixture {
         fs::create_dir_all(root.join("nested")).unwrap();
         let net = Net::new();
         let watches = Watches::new(net.notify());
-        Self { root, net, watches }
+        Self {
+            root,
+            net,
+            watches,
+            held: Vec::new(),
+        }
+    }
+    /// Open `path` like a guest descriptor and watch the node it holds.
+    fn watch(&mut self, path: &Path, recursive: bool) -> Result<u32, i32> {
+        let file = fs::File::open(path).unwrap();
+        let node = node_identity(&file.metadata().unwrap());
+        self.held.push(file);
+        self.watches.open(node, recursive)
     }
     /// Drain the watch until EAGAIN after the poll wakes, as Bun's waiter does.
     fn drain(&mut self, id: u32) -> Vec<(u8, Option<String>)> {
@@ -80,7 +94,7 @@ fn decode(mut bytes: &[u8]) -> Vec<(u8, Option<String>)> {
 #[test]
 fn a_commit_wakes_the_network_poll_and_drains_as_a_directory_record() {
     let mut f = Fixture::new("wake");
-    let id = f.watches.open(&f.root, false).unwrap();
+    let id = f.watch(&f.root.clone(), false).unwrap();
     assert_eq!(f.watches.read(id, 4096), Read::Errno(AGAIN));
     fs::write(f.root.join("page.tsx"), "export default 1").unwrap();
     assert_eq!(
@@ -96,8 +110,8 @@ fn a_commit_wakes_the_network_poll_and_drains_as_a_directory_record() {
 #[test]
 fn recursive_names_descendants_and_a_direct_watch_skips_them() {
     let mut f = Fixture::new("recursive");
-    let direct = f.watches.open(&f.root, false).unwrap();
-    let recursive = f.watches.open(&f.root, true).unwrap();
+    let direct = f.watch(&f.root.clone(), false).unwrap();
+    let recursive = f.watch(&f.root.clone(), true).unwrap();
     fs::write(f.root.join("nested/deep.txt"), "x").unwrap();
     fs::write(f.root.join("top.txt"), "x").unwrap();
     f.expect(recursive, (RENAME, Some("nested/deep.txt")));
@@ -115,7 +129,7 @@ fn a_file_watch_reports_a_null_name() {
     let mut f = Fixture::new("file");
     let file = f.root.join("one.txt");
     fs::write(&file, "a").unwrap();
-    let id = f.watches.open(&file, true).unwrap();
+    let id = f.watch(&file, true).unwrap();
     fs::write(&file, "b").unwrap();
     f.expect(id, (CHANGE, None));
 }
@@ -123,7 +137,7 @@ fn a_file_watch_reports_a_null_name() {
 #[test]
 fn a_record_that_does_not_fit_reports_its_size_and_consumes_nothing() {
     let mut f = Fixture::new("nobufs");
-    let id = f.watches.open(&f.root, false).unwrap();
+    let id = f.watch(&f.root.clone(), false).unwrap();
     fs::write(f.root.join("abcde"), "x").unwrap();
     f.net.poll(5000);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -146,7 +160,7 @@ fn a_record_that_does_not_fit_reports_its_size_and_consumes_nothing() {
 #[test]
 fn a_full_queue_becomes_one_terminal_overflow_then_end_of_stream() {
     let mut f = Fixture::new("overflow");
-    let id = f.watches.open(&f.root, false).unwrap();
+    let id = f.watch(&f.root.clone(), false).unwrap();
     for index in 0..=QUEUE {
         fs::write(f.root.join(format!("f{index}")), "x").unwrap();
     }
@@ -174,7 +188,7 @@ fn identical_unread_records_coalesce() {
     let mut f = Fixture::new("coalesce");
     let file = f.root.join("same.txt");
     fs::write(&file, "0").unwrap();
-    let id = f.watches.open(&file, false).unwrap();
+    let id = f.watch(&file, false).unwrap();
     for value in 1..20 {
         fs::write(&file, value.to_string()).unwrap();
     }
@@ -190,21 +204,28 @@ fn identical_unread_records_coalesce() {
 #[test]
 fn ids_close_once_and_missing_nodes_fail_registration() {
     let mut f = Fixture::new("close");
-    assert_eq!(f.watches.open(&f.root.join("missing"), false), Err(NOENT));
-    let first = f.watches.open(&f.root, false).unwrap();
-    let second = f.watches.open(&f.root, false).unwrap();
+    // A node that no descriptor holds has no path to watch.
+    let loose = f.root.join("loose.txt");
+    fs::write(&loose, "x").unwrap();
+    assert_eq!(
+        f.watches
+            .open(node_identity(&loose.metadata().unwrap()), false),
+        Err(NOENT)
+    );
+    let first = f.watch(&f.root.clone(), false).unwrap();
+    let second = f.watch(&f.root.clone(), false).unwrap();
     assert_ne!(first, second);
     assert_eq!(f.watches.close(first), 0);
     assert_eq!(f.watches.close(first), BADF);
     assert_eq!(f.watches.read(first, 4096), Read::Errno(BADF));
-    let third = f.watches.open(&f.root, false).unwrap();
+    let third = f.watch(&f.root.clone(), false).unwrap();
     assert!(third > second, "ids are never reused");
 }
 
 #[test]
 fn entries_created_with_a_new_directory_are_reported_under_a_recursive_watch() {
     let mut f = Fixture::new("fresh-directory");
-    let id = f.watches.open(&f.root, true).unwrap();
+    let id = f.watch(&f.root.clone(), true).unwrap();
     // Created before notify can add the new directory's own watch.
     fs::create_dir_all(f.root.join("routes/blog")).unwrap();
     fs::write(f.root.join("routes/index.tsx"), "1").unwrap();
@@ -216,4 +237,41 @@ fn entries_created_with_a_new_directory_are_reported_under_a_recursive_watch() {
         f.expect(id, (RENAME, Some("routes/blog/post.tsx")))
     };
     assert!(seen.contains(&(RENAME, Some("routes".into()))), "{seen:?}");
+}
+
+#[test]
+fn a_watch_follows_the_held_node_through_rename_and_replacement() {
+    let mut f = Fixture::new("held-node");
+    let path = f.root.join("page.tsx");
+    let moved = f.root.join("moved.tsx");
+    fs::write(&path, "original").unwrap();
+    let held = fs::File::open(&path).unwrap();
+    let node = node_identity(&held.metadata().unwrap());
+    fs::rename(&path, &moved).unwrap();
+    fs::write(&path, "replacement").unwrap();
+    assert_ne!(node_identity(&path.metadata().unwrap()), node);
+    f.held.push(held);
+    let id = f.watches.open(node, false).unwrap();
+    assert_eq!(f.watches.open[&id].root, moved.canonicalize().unwrap());
+    fs::write(&path, "replacement changed").unwrap();
+    f.net.poll(300);
+    assert_eq!(
+        f.drain(id),
+        Vec::new(),
+        "the replacement is a different node"
+    );
+    fs::write(&moved, "original changed").unwrap();
+    f.expect(id, (CHANGE, None));
+}
+
+#[test]
+fn an_unlinked_held_node_reports_enoent() {
+    let mut f = Fixture::new("unlinked");
+    let path = f.root.join("gone.txt");
+    fs::write(&path, "x").unwrap();
+    let held = fs::File::open(&path).unwrap();
+    let node = node_identity(&held.metadata().unwrap());
+    fs::remove_file(&path).unwrap();
+    f.held.push(held);
+    assert_eq!(f.watches.open(node, false), Err(NOENT));
 }

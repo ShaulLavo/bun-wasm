@@ -2,10 +2,16 @@
 //! macOS). This is the frozen Waffle ABI (Waffle docs/host-abi.md, "Guest filesystem
 //! watches"): process-local ids, whole packed records, positive WASI errnos. A delivered event
 //! bumps the network notification, so a guest asleep in `Slot::Poll` wakes on the commit.
+//!
+//! A watch follows the node an open descriptor holds, never a saved pathname: registration
+//! takes the descriptor's node identity, finds the host descriptor open on that node, and
+//! watches its current path, checking the identity again once the watch exists.
 use crate::net::Notify;
 use notify::event::{CreateKind, EventKind, ModifyKind};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::{HashMap, VecDeque};
+use std::hash::Hasher;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -69,9 +75,9 @@ impl Watches {
         }
     }
 
-    /// Watch the node at `path` (an open descriptor's host path). The watch follows that node.
-    pub fn open(&mut self, path: &Path, recursive: bool) -> Result<u32, i32> {
-        let root = path.canonicalize().map_err(io_errno)?;
+    /// Watch the node with this identity ([`node_identity`]), which an open descriptor holds.
+    pub fn open(&mut self, node: u64, recursive: bool) -> Result<u32, i32> {
+        let root = node_path(node)?;
         let directory = root.metadata().map_err(io_errno)?.is_dir();
         let inbox = Arc::new(Mutex::new(Inbox::default()));
         let (sink, notify) = (inbox.clone(), self.notify.clone());
@@ -86,6 +92,10 @@ impl Watches {
             RecursiveMode::NonRecursive
         };
         watcher.watch(&root, mode).map_err(watch_errno)?;
+        // The path could have been renamed or replaced since it was found.
+        if path_identity(&root) != Some(node) {
+            return Err(NOENT);
+        }
         let id = self.next;
         self.next += 1;
         self.open.insert(
@@ -214,20 +224,23 @@ impl Watch {
     fn scan(&mut self, directory: &Path) -> bool {
         let mut pending = vec![directory.to_path_buf()];
         while let Some(next) = pending.pop() {
-            let Ok(entries) = std::fs::read_dir(&next) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                    pending.push(path.clone());
-                }
-                if !self.push(RENAME, &path) {
-                    return false;
-                }
+            let entries = std::fs::read_dir(&next).into_iter().flatten().flatten();
+            if !entries
+                .into_iter()
+                .all(|entry| self.push_entry(entry, &mut pending))
+            {
+                return false;
             }
         }
         true
+    }
+
+    fn push_entry(&mut self, entry: std::fs::DirEntry, pending: &mut Vec<PathBuf>) -> bool {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            pending.push(path.clone());
+        }
+        self.push(RENAME, &path)
     }
 
     /// The reported name: `Some(None)` for the watched node itself, `None` to skip the path.
@@ -277,6 +290,66 @@ fn encode(kind: u8, name: Option<&Path>) -> Result<Vec<u8>, ()> {
     record.extend_from_slice(name);
     record.resize(8 + name.len().next_multiple_of(4), 0);
     Ok(record)
+}
+
+/// A node's identity as wasmtime-wasi's preview1 `filestat.ino` reports it: `DefaultHasher`
+/// over the device then the inode (wasmtime-wasi `MetadataHashValue::from`). Both sides are
+/// compiled into this binary, so a descriptor's `ino` and a host file's identity agree.
+pub fn node_identity(metadata: &std::fs::Metadata) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write_u64(metadata.dev());
+    hasher.write_u64(metadata.ino());
+    hasher.finish()
+}
+
+fn path_identity(path: &Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .ok()
+        .map(|metadata| node_identity(&metadata))
+}
+
+/// The current path of the node a host descriptor of this process holds. An unlinked node has
+/// no path and reports ENOENT, as Waffle does for a detached node.
+#[cfg(target_os = "linux")]
+fn node_path(node: u64) -> Result<PathBuf, i32> {
+    let descriptors = std::fs::read_dir("/proc/self/fd").map_err(io_errno)?;
+    descriptors
+        .flatten()
+        .filter(|entry| path_identity(&entry.path()) == Some(node))
+        .find_map(|entry| {
+            std::fs::read_link(entry.path())
+                .ok()
+                .filter(|path| path_identity(path) == Some(node))
+        })
+        .ok_or(NOENT)
+}
+
+#[cfg(target_os = "macos")]
+fn node_path(node: u64) -> Result<PathBuf, i32> {
+    // SAFETY: getdtablesize has no preconditions.
+    let limit = unsafe { libc::getdtablesize() };
+    (0..limit)
+        .find_map(|fd| descriptor_path(fd).filter(|path| path_identity(path) == Some(node)))
+        .ok_or(NOENT)
+}
+
+#[cfg(target_os = "macos")]
+fn descriptor_path(fd: i32) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut buffer = [0u8; libc::PATH_MAX as usize];
+    // SAFETY: F_GETPATH writes at most PATH_MAX bytes into the buffer; a closed fd fails.
+    if unsafe { libc::fcntl(fd, libc::F_GETPATH, buffer.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    let length = buffer.iter().position(|&byte| byte == 0)?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(
+        &buffer[..length],
+    )))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn node_path(_: u64) -> Result<PathBuf, i32> {
+    Err(NOTSUP)
 }
 
 fn io_errno(error: std::io::Error) -> i32 {

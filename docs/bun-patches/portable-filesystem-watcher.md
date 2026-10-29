@@ -64,10 +64,16 @@ over the real `net.js` scheduler.
 
 The native wasmtime host (`crates/bunwasm-host/src/fs_watch.rs`) implements the same three
 `runtime_fs` imports over the `notify` crate 8.2.0: inotify on Linux and FSEvents on macOS,
-with no polling fallback. Its descriptor namespace records the host path of each Wasmtime
-descriptor (the preopens, then every `path_open`), so `watch_open(fd)` watches the canonical
-node that descriptor names. Each delivered notification bumps the network notification that
-`Slot::Poll` waits on, so a native guest wakes on the commit like a browser guest. Records,
+with no polling fallback. A watch follows the node the descriptor holds, never a saved
+pathname, so a rename, a replacement at the old path or `fd_renumber` cannot redirect it.
+`watch_open(fd)` reads that descriptor's preview1 `filestat` through Wasmtime's own
+`fd_filestat_get` into private scratch memory. Its `ino` is wasmtime-wasi's identity hash of
+the host device and inode, and the host computes the same hash. The host then finds the
+descriptor open on that node (`/proc/self/fd` on Linux, `F_GETPATH` on macOS), watches its
+current path, and checks the identity again once the watch exists. A node that was unlinked
+has no path and reports ENOENT, like a detached node in Waffle. A WASI-level test pins the
+identity agreement, so a Wasmtime change to it fails the build's tests. Each delivered
+notification bumps the network notification that `Slot::Poll` waits on, so a native guest wakes on the commit like a browser guest. Records,
 coalescing, the 128-record bound, overflow, end of stream and the errnos follow the Waffle ABI.
 `notify` reports a new directory before watching it and never reports entries that already
 exist inside it. So when a recursive watch drains a directory create, it walks that
