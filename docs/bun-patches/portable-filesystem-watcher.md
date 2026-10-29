@@ -86,7 +86,8 @@ under the same swap.
 
 macOS FSEvents subscribes by path for the watch's whole life, so there the host registers the
 duplicate's current `F_GETPATH` and checks the identity once. That binding is path-scoped,
-not descriptor-scoped, and is not covered by the Linux kernel proof. A WASI-level test also
+not descriptor-scoped, and is not covered by the Linux kernel proof. The macOS boundary is
+unqualified: no macOS run has exercised it. A WASI-level test also
 pins Wasmtime's `ino` to the host identity, so a Wasmtime change to it fails the tests. Each delivered
 notification bumps the network notification that `Slot::Poll` waits on, so a native guest wakes on the commit like a browser guest. Records,
 coalescing, the 128-record bound, overflow, end of stream and the errnos follow the Waffle ABI.
@@ -97,6 +98,31 @@ host reports no `ECANCELED`, because it has no revocable filesystem connection.
 
 The pinned Waffle and `bun.wasm` land as a pair, because the WASI adapter rejects unknown
 `runtime_fs` names.
+
+## Node fixture host watch answer
+
+Class **Host feature**, **adapted implementation** in `web/scripts/node-process.ts`
+`watchImports`. Upstream: Waffle 0.0.103 (git `dc945b0ea353959c1d3d7589dd43afb57ceeb14d`),
+`core/wasi.ts` `Wasi.watchOpen` (lines 511-525), `Wasi.watchRead` (527-533) and the
+`watch_close` import (396).
+
+The Node host (`web/scripts/node-host.ts`, used by `scripts/jsc-embedding.ts` and
+`scripts/test.sh --engine browser`) runs guests on Node's `node:wasi` over the real
+filesystem, with no Waffle filesystem service and no change source. It answers the three
+`runtime_fs` imports as Waffle's `Wasi` does for a filesystem without `watches`. `watch_open`
+checks the output range (EFAULT), the flags (EINVAL), the guest descriptor in the host's own
+descriptor table (EBADF) and its kind (EINVAL for pipes and terminals). A valid file or
+directory then reports ENOTSUP and writes no id. No id ever exists, so `watch_read` reports
+EFAULT for an out-of-range buffer and otherwise EBADF, and `watch_close` reports EBADF.
+`fs.watch` on this host throws `ENOTSUP`; there is no polling fallback. Local change: it
+validates against the Node host's `DescriptorTable` instead of `Wasi.descriptors`, because
+Waffle's `Wasi` methods are private and bound to its own table.
+
+Releasing the host after a start failure is original. Before `wasi.start()` binds memory,
+Node WASI rejects every call with `ERR_WASI_NOT_STARTED`. Only preopens exist then, and the
+unstarted instance's own table releases them, so the release ignores that one error code.
+`web/tests/node-runtime-fs.test.ts` instantiates a guest importing the three names on a real
+Node WASI host and checks each errno and the unstarted release.
 
 
 ## Wasmtime preview1 node identity
@@ -122,6 +148,7 @@ tests. Revisit this when the Wasmtime pin moves.
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`src/js/fs_watch.ts`, `net.js` watch-first pump, `fsWatch*` natives, web notification wiring, native `runtime_fs` host](#portable-filesystem-watcher) | Host feature | Original event-driven watcher over Waffle `runtime_fs` watch ids, with Node listener identity, and an original native host over `notify` that watches the descriptor's node. |
+| [`web/scripts/node-process.ts` `watchImports`](#node-fixture-host-watch-answer) | Host feature | Adapted from Waffle 0.0.103 `Wasi.watchOpen`/`watchRead` for a filesystem without watches: the Node host's descriptors validate, then ENOTSUP; original release of an unstarted Node WASI host. |
 | [`crates/bunwasm-host/src/fs_watch.rs` `node_identity`](#wasmtime-preview1-node-identity) | Host feature | Adapted from wasmtime-wasi 39.0.2 `MetadataHashValue::from` (the `lower` half), to match a guest descriptor's preview1 `ino` to a host descriptor. |
 
 [Ledger scope and pinned revisions](scope.md).

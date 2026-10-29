@@ -8,7 +8,8 @@
 //! fstat, not a path), and on Linux registers that duplicate's `/proc/self/fd` link, which the
 //! kernel resolves to the descriptor's inode. The watch owns the duplicate, so the backend's
 //! later paths (new subdirectories of a recursive watch) resolve through it too. macOS FSEvents
-//! subscribes by path for the watch's whole life, so there the binding is path-scoped.
+//! subscribes by path for the watch's whole life, so there the binding is path-scoped and
+//! unqualified (no macOS run).
 use crate::net::Notify;
 use notify::event::{CreateKind, EventKind, ModifyKind};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
