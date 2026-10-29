@@ -121,7 +121,7 @@
     "unshare",
     "ss",
     "build.mjs",
-    "c++"
+    "^c\\+\\+$"
   ],
   "ignoreUnresolved": [
     "./space # \u00fc.mjs"
