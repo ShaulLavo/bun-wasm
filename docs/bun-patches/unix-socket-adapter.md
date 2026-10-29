@@ -29,7 +29,7 @@ The Node adapter tests supply the specified path API over existing Waffle stream
 bytes. That fixture does not prove filesystem binding, unlink leases, or Nuxt.
 The manual `net-unix-path` guest fixture checks echo, half-close and filesystem
 unlink with a real provider. The released-provider test runs the Node adapter
-against Waffle 0.0.100 from `ea051e5e9061bcd2bfed6faf363be0f21d211acc`.
+against Waffle 0.0.102 from `b8b205b932649b20ec33cf2457b95a7b2b6a1b08`.
 It checks a real socket node, UTF-8 bytes, reverse traffic after half-close and
 acknowledged unlink. It uses the released compiled runtime and NetHost, with
 Bun runtime factories loaded in a worker. The matching browser guest and full

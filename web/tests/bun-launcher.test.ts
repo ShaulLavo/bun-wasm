@@ -190,7 +190,7 @@ for (const phase of ["success", "scope failure", "helper failure", "launch failu
   });
   if (phase === "launch failure") launcherService.launchWorker = () => { throw new Error(phase); };
   try {
-    const launching = bunLauncher("quickjs", { runtime: scopedRuntime, workerUrl: "./worker.js" })(context, launcherService);
+    const launching = bunLauncher("quickjs", { runtime: scopedRuntime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" })(context, launcherService);
     if (phase !== "success") await expect(launching).rejects.toThrow(phase);
     else { await launching; launches[0]!.cleanup!(); launches[0]!.cleanup!(); }
     expect(events).toEqual(phase === "scope failure" || phase === "helper failure" ? ["root-release"] : ["helper-dispose", "root-release"]);
@@ -210,7 +210,7 @@ test("revocation while awaiting a directory lease releases it without creating a
   let revoke = () => {};
   const revocable = { ...context, registerRevocation(hook: () => void) { revoke = hook; return () => {}; } };
   try {
-    const launching = bunLauncher("quickjs", { runtime: scopedRuntime, workerUrl: "./worker.js" })(revocable, service([]));
+    const launching = bunLauncher("quickjs", { runtime: scopedRuntime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" })(revocable, service([]));
     await requested.promise;
     revoke();
     directory.resolve({ handle: 19, release() { events.push("root-release"); } });

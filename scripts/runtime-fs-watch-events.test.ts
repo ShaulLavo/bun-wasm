@@ -17,7 +17,6 @@ interface WatchModule {
   watch(path: string, listener: Listener): Watcher;
   watch(path: string, options?: unknown, listener?: Listener): Watcher;
 }
-type Waiter = { ref: boolean; watch?: boolean; step(): boolean | "progress"; subscriptions?(): Uint8Array };
 
 const directory = new URL("../crates/bunwasm-runtime/src/js/", import.meta.url);
 const transpile = (name: string) => new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__factory = ${readFileSync(new URL(name, directory), "utf8")}`);

@@ -2,14 +2,14 @@
 
 Class **Port**, with an original local build wrapper and native runtime adapter. The libc input is
 not copied into this repository. The original `scripts/waffle-release-inputs.ts` adapter binds
-runtime archive `waffle-v0.0.100` to reviewed source `ea051e5e9061bcd2bfed6faf363be0f21d211acc`.
+runtime archive `waffle-v0.0.102` to reviewed source `b8b205b932649b20ec33cf2457b95a7b2b6a1b08`.
 The checked `scripts/waffle-release-inputs.json` records its HTTPS archive URL, SHA-256/size,
 source commit, `packages/waffle` directory and the hashes of its package metadata, libc builder
 and patch. The adapter verifies the archive and installed builder, then caches those three
 native source files from that exact commit. It always uses this released-source directory;
 there is no installed-file fallback or old Git-pin branch. The runtime archive remains untouched.
 The build wrapper and guest source manifest use the same cached native directory, preserving
-source provenance and the actual builder/patch hashes. The 0.0.100 runtime archive also contains
+source provenance and the actual builder/patch hashes. The 0.0.102 runtime archive also contains
 the same libc patch. The canonical released-source directory and its package-root-relative
 paths remain unchanged. Update the release binding with the dependency pin. The builder pins
 wasi-libc revision `2e6fb9d8ee0cdf9e431fbcabe8af3115de000a13`. Its `preopen-scan.patch` skips occupied inherited descriptors
