@@ -288,8 +288,16 @@ fn parse(source: &str) -> Result<(Vec<Span>, Vec<usize>), String> {
 fn already_prepared(source: &str, spans: &[Span]) -> bool {
     spans.iter().any(|span| match *span {
         Span::Await { start, .. } | Span::Yield { start, .. } => already_hooked(source, start),
-        Span::Loop { iterable, iterable_end, .. } => source[iterable..iterable_end].trim_start().starts_with("__bunwasm_c = __bunwasm_iterate("),
-        Span::Prologue { end, .. } => source[end..].trim_start().starts_with("let __bunwasm_s = 0;"),
+        Span::Loop {
+            iterable,
+            iterable_end,
+            ..
+        } => source[iterable..iterable_end]
+            .trim_start()
+            .starts_with("__bunwasm_c = __bunwasm_iterate("),
+        Span::Prologue { end, .. } => source[end..]
+            .trim_start()
+            .starts_with("let __bunwasm_s = 0;"),
         Span::Argument { start, end, .. } => source[start..end]
             .trim_start()
             .starts_with("__bunwasm_evalArg("),
