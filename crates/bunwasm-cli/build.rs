@@ -73,6 +73,35 @@ fn shared_group_link() {
     let map = std::env::var("BUN_WASM_CORE_LINK_MAP")
         .expect("shared-group cores record their link map in BUN_WASM_CORE_LINK_MAP");
     println!("cargo:rustc-link-arg-bin=bun=-Map={map}");
+    shared_cxx_runtime();
+}
+
+/// A loaded object's definitions keep every SDK libc++/libc++abi member out of the link
+/// (cxx-runtime.c explains why none of them qualify for shared memory).
+fn shared_cxx_runtime() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("cxx-runtime.c");
+    let object = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("cxx-runtime.o");
+    let compiler = std::env::var("CC_wasm32_wasip1").expect("source env.sh");
+    let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
+    let status = std::process::Command::new(compiler)
+        .args([
+            "--target=wasm32-wasip1",
+            &format!("--sysroot={sysroot}"),
+            "-O2",
+            "-c",
+        ])
+        .args(entry_flags())
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "compile shared-group C++ runtime overrides"
+    );
+    println!("cargo:rerun-if-changed={}", source.display());
+    println!("cargo:rustc-link-arg-bin=bun={}", object.display());
 }
 
 fn split_entry() {

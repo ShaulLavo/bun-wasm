@@ -183,7 +183,7 @@ function cliBuildFunction(name: string): string {
 
 test("both core C objects use the exact opt-in profile flags and preserve default flags", () => {
   expect(cliBuildFunction("entry_flags")).toMatch(/if shared_group\(\) \{\s*&\["-fPIC", "-matomics", "-mbulk-memory", "-mmutable-globals"\]\s*} else \{\s*&\[\]\s*}/);
-  for (const name of ["split_entry", "memory_telemetry"]) {
+  for (const name of ["split_entry", "memory_telemetry", "shared_cxx_runtime"]) {
     const body = cliBuildFunction(name);
     expect(body).toContain('std::process::Command::new(compiler)');
     expect(body).toContain('"--target=wasm32-wasip1"');
@@ -193,6 +193,13 @@ test("both core C objects use the exact opt-in profile flags and preserve defaul
     expect(body).toMatch(/\.args\(entry_flags\(\)\)\s*\.arg\(&source\)/);
   }
   expect(cliBuildFunction("memory_telemetry")).toContain('"-fno-builtin"');
+});
+
+test("only a shared-group core defines its C++ runtime overrides, for exactly BoringSSL's two references", () => {
+  expect(cliBuildFunction("shared_group_link")).toMatch(/-Map=\{map\}"\);\s*shared_cxx_runtime\(\);\s*}$/);
+  for (const name of ["main", "split_entry", "memory_telemetry"]) expect(cliBuildFunction(name)).not.toContain("shared_cxx_runtime");
+  const source = readFileSync(new URL("../../crates/bunwasm-cli/cxx-runtime.c", import.meta.url), "utf8");
+  expect(Array.from(source.matchAll(/__asm__\("([^"]+)"\)/g), match => match[1]).toSorted()).toEqual(["_ZNSt3__222__libcpp_verbose_abortEPKcz", "_ZdlPvm"]);
 });
 
 test("telemetry remains unconditional for both link profiles with every allocator wrapper", () => {
