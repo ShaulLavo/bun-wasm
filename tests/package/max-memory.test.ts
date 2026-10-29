@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { maxMemoryBytes, parseMaxMemory, sharedGroupCoreLink, sharedGroupMaxPages } from "../../scripts/src/program-profile.ts";
 
@@ -45,9 +46,11 @@ test("every consumer reads the authority", () => {
   expect(read("crates/bunwasm-host/src/process/stdio.rs")).toContain("crate::max_memory::MAX_MEMORY_BYTES as usize");
   expect(read("crates/bunwasm-host/src/process/mod.rs")).toContain("unwrap_or(stdio::DEFAULT_MEMORY_LIMIT)");
   expect(read("crates/bunwasm-jsc/cpp/helpers.cpp")).toContain("forceRAMSize() = BUN_WASM_MAX_MEMORY;");
-  expect(read("jsc/configure.sh")).toContain('--max-memory=$(<"$JSC_MAX_MEMORY_FILE")');
+  expect(read("jsc/configure.sh")).toContain('max_memory=$(bun "$REPO/scripts/src/program-profile.ts" max-memory)');
+  expect(read("jsc/configure.sh")).toContain("-Wl,--max-memory=$max_memory");
   expect(read("jsc/common.sh")).toContain('sha256sum "$JSC_MAX_MEMORY_FILE"');
-  expect(read("tests/linker/quickjs/run.sh")).toContain("--max-memory=\"$(<crates/bunwasm-cli/max-memory.txt)\"");
+  expect(read("tests/linker/quickjs/run.sh")).toContain("max_memory=$(bun scripts/src/program-profile.ts max-memory)");
+  expect(read("tests/linker/quickjs/run.sh")).toContain('-Wl,--max-memory="$max_memory"');
   expect(read("scripts/guest-source-manifest.ts")).toContain('"crates/bunwasm-cli/max-memory.txt", "crates/bunwasm-cli/max_memory.rs"');
 });
 
@@ -57,4 +60,38 @@ test("no consumer keeps its own capacity number", () => {
   expect(tracked("forceRAMSize\\(\\) = [0-9]")).toEqual([]);
   expect(tracked("536870912|512 << 20|MAX_PAGES: u64 = [0-9]|SHARED_GROUP_MAX_PAGES")
     .filter(path => !path.startsWith("third_party/") && !path.startsWith(".internal/"))).toEqual([]);
+});
+
+test("shell consumers read the maximum through the validating reader", () => {
+  const result = Bun.spawnSync([process.execPath, join(ROOT, "scripts/src/program-profile.ts"), "max-memory"]);
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString()).toBe("1073741824\n");
+});
+
+// jsc/configure.sh's refusal is in scripts/engine-producer.test.ts, beside its other recipe checks.
+test("the QuickJS linker test refuses an out-of-range maximum before anything else", () => {
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-max-memory-"));
+  try {
+    for (const path of ["tests/linker/quickjs/run.sh", "scripts/src/program-profile.ts"]) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      copyFileSync(join(ROOT, path), join(root, path));
+    }
+    writeFileSync(join(root, "env.sh"), "");
+    mkdirSync(join(root, "crates/bunwasm-cli"), { recursive: true });
+    const run = (value: string) => {
+      writeFileSync(join(root, "crates/bunwasm-cli/max-memory.txt"), value);
+      const env = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: root };
+      return Bun.spawnSync(["bash", join(root, "tests/linker/quickjs/run.sh")], { cwd: root, env });
+    };
+    for (const value of ["2147549184\n", "184467440737095516161073741824\n"]) {
+      const refused = run(value);
+      expect(refused.exitCode).not.toBe(0);
+      expect(refused.stderr.toString()).toContain("max-memory.txt must be a page multiple in (0, 2 GiB]");
+      expect(refused.stderr.toString()).not.toContain("QUICKJS_BUILD_DIR");
+    }
+    // A valid maximum passes the reader and stops at the next requirement.
+    expect(run("1073741824\n").stderr.toString()).toContain("Set QUICKJS_BUILD_DIR");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

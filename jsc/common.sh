@@ -2,7 +2,8 @@
 set -euo pipefail
 JSC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$JSC_SRC/.." && pwd)"
-# The jsc shell links at bun-wasm's guest memory maximum (docs/memory-ceiling.md).
+# The jsc shell links at bun-wasm's guest memory maximum (docs/memory-ceiling.md); configure.sh
+# reads it through scripts/src/program-profile.ts, and the input hash covers the file.
 JSC_MAX_MEMORY_FILE="$REPO/crates/bunwasm-cli/max-memory.txt"
 # shellcheck source=/dev/null
 source "$REPO/env.sh"

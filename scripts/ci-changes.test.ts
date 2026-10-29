@@ -178,6 +178,7 @@ for (const path of [
   "scripts/src/engine-explicit-init.ts", "scripts/src/engine-init.c", "scripts/engine-producer.test.ts", "scripts/src/engine-explicit-init.test.ts",
   "src/engine-kind.ts", "src/assets.ts", "src/quickjs-program.ts", "web/src/engine-loader.ts",
   "scripts/bench-jsc.sh", "scripts/ci-binaryen.ts", "tests/fixtures/shared-array-buffer/index.ts", "tests/jsc-embedding/growable-memory/index.ts",
+  "tests/fixtures/strings-above-512mib/index.ts", "crates/bunwasm-cli/max-memory.txt",
   "web/scripts/node-host.ts", "web/scripts/node-worker.ts", "web/guest-tests/compose.ts", "web/src/net/trampoline.ts", "web/bun.lock",
   "web/src/native-direct-stream.ts",
   "crates/bunwasm-runtime/src/host.rs", "scripts/test-web-guests.ts",

@@ -153,12 +153,17 @@ function linkProof(mapPath: string, output: string): void {
 
 if (import.meta.main) {
   const [command, kind, output] = process.argv.slice(2);
+  // Shell consumers read the maximum here, so they get the same validation before they configure or link.
+  if (command === "max-memory" && !kind) {
+    console.log(maxMemoryBytes());
+    process.exit(0);
+  }
   if (command === "link-proof" && kind && output) {
     linkProof(kind, output);
     process.exit(0);
   }
   const sysroot = process.env.BUN_WASM_SYSROOT;
-  if (command !== "environment" || (kind !== "core" && kind !== "quickjs") || !sysroot) throw new Error("Usage: BUN_WASM_SYSROOT=... program-profile.ts environment core|quickjs | link-proof MAP OUTPUT");
+  if (command !== "environment" || (kind !== "core" && kind !== "quickjs") || !sysroot) throw new Error("Usage: BUN_WASM_SYSROOT=... program-profile.ts environment core|quickjs | link-proof MAP OUTPUT | max-memory");
   if (process.env.BUN_WASM_SHARED_SYSROOT !== sysroot) throw new Error("shared-group builds set BUN_WASM_SHARED_SYSROOT and BUN_WASM_SYSROOT to the same J2 sysroot");
   verifySharedSysroot(sysroot);
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";

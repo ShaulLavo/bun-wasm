@@ -23,7 +23,9 @@ It is the only copy. Everything else derives from it:
 
 Rust reads the file in `crates/bunwasm-cli/max_memory.rs`, TypeScript in
 `scripts/src/program-profile.ts`, and both accept only a page multiple in
-(0, 2 GiB]. The file is part of every guest's source manifest and of the JSC
+(0, 2 GiB], bounding the number before each decimal digit so a long value cannot
+wrap. Shell consumers get the value from `program-profile.ts max-memory` before
+they configure or link anything. The file is part of every guest's source manifest and of the JSC
 prebuild's input hash. `tests/package/max-memory.test.ts` fails if a consumer
 gets its own number again. There is no environment variable or flag for it.
 Changing capacity is a reviewed edit of that one file, one stage at a time.
@@ -70,9 +72,8 @@ native `WebAssembly.Memory` is outside this maximum.
   (`scripts/check-encoded-slice.ts`) check layouts, constructors, substrings,
   truncation, lifetime detachment, and synthetic addresses through `0xffffffff`
   without dereferencing them.
-- **1 GiB, stage 1 (this maximum):** one authority for every consumer. Source
-  checks cover the wiring. The guest checks below need the one coordinated
-  producer and have **not been run**.
+- **1 GiB, stage 1 (this maximum):** one authority for every consumer, and the
+  checks below.
 - **2 GiB, stage 2:** repeat near the signed-address boundary with real
   allocations and each engine's safety and workflow checks. This is the first
   stage that could hold stock Rolldown's memory beside Bun.
@@ -82,22 +83,28 @@ native `WebAssembly.Memory` is outside this maximum.
   and repeat the engine gates, up to wasm32's 4 GiB address space. Both readers
   refuse values above 2 GiB until then.
 
-### Stage-1 guest checks (not run)
+### Stage-1 checks
 
-For the coordinated producer, on QuickJS and on JSC separately, with guests built
-from this source:
-
-1. `tests/fixtures/strings-above-512mib`: transpiles and bundles Latin-1, UTF-8
-   and UTF-16 sources, fills memory past 600 MiB with live ballast, repeats, and
-   compares the outputs byte for byte (`expected.txt`). It is not yet a registered
-   check. It sees linear memory above 512 MiB, not each Bun string's address; a
-   test-only probe of the highest `EncodedSlice` address would close that gap.
-2. `tests/fixtures/gc-large-cyclic-garbage` now passes 1.5 GiB of cyclic garbage
-   through the 1 GiB guest, so it still requires collection.
-3. Each engine's workflow, retention and memory gates from the plan, recording
-   JSC's peak against the earlier 512 MiB runs.
-4. The native host's memory-group admission at 16384 pages with a real
-   shared-group pair, and host-bridge reads and writes as memory grows past 512 MiB.
+- `scripts/check-encoded-slice.ts` (blocking `rust` CI job) links its wasm32 probe
+  of the actual `EncodedSlice` and `String` source at the maximum. It grows memory,
+  places Latin-1, UTF-8 and UTF-16 bytes at and above `0x20000000`, decodes them
+  through Bun's readers, and moves them through WASI `fd_write` and `fd_read` with
+  iovecs, buffers and result cells above 512 MiB. It then checks that the top of
+  the maximum is usable and one more page is not. Source from before patch 0019
+  fails it, and so does a 512 MiB link.
+- `tests/fixtures/strings-above-512mib` runs on the produced guests: QuickJS in
+  the native fixture checks and JSC in `scripts/jsc-embedding.ts`, both blocking.
+  It fills memory past 560 MiB with 16 MiB blocks, so later 17 MiB allocations
+  come from above them. `bunStringRoundTrip` (`bun:internal-for-testing`) wraps
+  such a copy in Bun's own `String`, decodes it through `EncodedSlice`, and
+  reports the address; the fixture requires it at or above `2**29` with identical
+  bytes for each encoding. Transpile and build outputs must also match a run
+  without ballast.
+- `tests/fixtures/gc-large-cyclic-garbage` passes 1.5 GiB of cyclic garbage
+  through the 1 GiB guest, so it still requires collection.
+- Not covered by CI: each engine's app, retention and memory gates, JSC's peak
+  against the earlier 512 MiB runs, a real 16384-page shared-group pair, and
+  device availability.
 
 At every increase, record successful growth and allocation failures on desktop
 browsers and iOS Safari. A synthetic pointer test does not establish device

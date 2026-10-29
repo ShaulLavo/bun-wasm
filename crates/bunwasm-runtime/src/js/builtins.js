@@ -756,6 +756,7 @@
       isASANEnabled: () => false,
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
       directoryCount: () => native.directoryCount(),
+      bunStringRoundTrip: (bytes, encoding) => native.bunStringRoundTrip(bytes, encoding),
     }),
     "node:test": () => internal.require("node_test"),
     "bun:test": () => internal.require("bun_test").exports,
