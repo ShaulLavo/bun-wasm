@@ -19,7 +19,19 @@ function literalPrefix(node: ts.Expression): string | undefined {
   if (ts.isTemplateExpression(node)) return node.head.text;
   if (ts.isParenthesizedExpression(node)) return literalPrefix(node.expression);
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) return literalPrefix(node.left);
-  if (ts.isCallExpression(node) && ["join", "resolve"].includes(methodName(node.expression) ?? "") && node.arguments[0]) return literalPrefix(node.arguments[0]);
+  if (!ts.isCallExpression(node)) return undefined;
+  if (methodName(node.expression) === "resolve") return resolvedPrefix(node.arguments);
+  if (methodName(node.expression) === "join" && node.arguments[0]) return literalPrefix(node.arguments[0]);
+  return undefined;
+}
+
+function resolvedPrefix(arguments_: readonly ts.Expression[]): string | undefined {
+  for (let index = arguments_.length - 1; index >= 0; index--) {
+    const argument = arguments_[index]!;
+    const prefix = literalPrefix(argument);
+    if (prefix === undefined || (prefix === "" && !ts.isStringLiteralLike(argument))) return undefined;
+    if (posix.isAbsolute(prefix) || win32.isAbsolute(prefix)) return prefix;
+  }
   return undefined;
 }
 

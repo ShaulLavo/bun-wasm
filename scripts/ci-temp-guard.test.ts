@@ -35,6 +35,30 @@ test.each([
   expect(failures(text)).toHaveLength(1);
 });
 
+for (const call of ["mkdtempSync", "await fs.promises.mkdtemp"]) {
+  test.each([
+    'resolve(tmpdir(), "/work/tmp/regression-")',
+    'resolve(tmpdir(), "/work/tmp", "regression-")',
+    'resolve(join(tmpdir(), "nested"), join("/work/tmp", "regression-"))',
+    'resolve(tmpdir(), resolve("ignored", "/work/tmp/regression-"))',
+    'resolve(resolve(tmpdir(), "nested"), "/work/tmp/regression-")',
+  ])(`${call} rejects rightmost literal absolute resolve overrides: %s`, expression => {
+    expect(failures(`${call}(${expression});`)).toHaveLength(1);
+  });
+
+  test.each([
+    'resolve(tmpdir(), "regression-")',
+    'resolve(process.env.TMPDIR!, "regression-")',
+    'resolve("/work/tmp", tmpdir(), "regression-")',
+    'resolve("/work/tmp", join(tmpdir(), "nested"), "regression-")',
+    'resolve(join(tmpdir(), "/work/tmp"), "regression-")',
+    'join(tmpdir(), "/work/tmp/regression-")',
+    'join(tmpdir(), resolve("ignored", "/work/tmp/regression-"))',
+  ])(`${call} accepts portable resolve roots and preserves join semantics: %s`, expression => {
+    expect(failures(`${call}(${expression});`)).toEqual([]);
+  });
+}
+
 test.each([
   'mkdtempSync(join(tmpdir(), "bun-wasm-next01-argv-"));',
   'await fs.promises.mkdtemp(join(process.env.TMPDIR!, "test-"));',
