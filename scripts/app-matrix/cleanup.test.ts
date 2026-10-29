@@ -49,7 +49,7 @@ function fixture(stop: () => Promise<unknown>, productError = new Error("page.go
   const page = {
     click: async (selector: string) => { expect(selector).toBe(".xterm"); releases.push("focus"); },
     keyboard: { press: async (key: string) => { expect(key).toBe("Control+c"); expect(releases.at(-1)).toBe("focus"); releases.push("keyboard"); await stop(); } },
-    waitForFunction: async (expression: string) => { expect(expression).toBe("globalThis.playground.shell.running === false"); releases.push("idle"); },
+    waitForFunction: async (expression: string) => { expect(expression).toBe("globalThis.playground.shell.running === false && !document.querySelector('#run').disabled"); releases.push("idle"); },
     evaluate: async (fn: () => unknown, text?: string) => {
       if (text) return;
       const source = String(fn);

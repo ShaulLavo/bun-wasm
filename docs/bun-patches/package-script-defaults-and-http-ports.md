@@ -2,7 +2,7 @@
 
 Class **Host feature**, **original adapter** changes in
 `crates/bunwasm-runtime/src/js/package_scripts.ts` and `net_port.ts`, with
-minimal call-site wiring in `net.js` and `net_address.js`. No upstream
+minimal call-site wiring in `net.js` and `net_address.ts`. No upstream
 implementation is copied or patched.
 The package-command and TCP adapters retain their existing provenance in
 [package commands](portable-installer-and-package-commands.md) and
@@ -28,7 +28,7 @@ whitespace-only strings. The dependency-free `net_port.ts` factory owns
 `error`, `port`, and `httpPort`; `net_address` re-exports the same error and port
 functions. The runtime-module declaration records their exact callable signatures,
 and `net_port_types.d.ts` declares the new helper without embedding declaration
-files. The IP predicates in `net_address.js` are unchanged. Actual host bind
+files. The IP predicates in `net_address.ts` are unchanged. Actual host bind
 failures still emit an asynchronous error through the existing next-tick path.
 
 `scripts/package-port-expansion.test.ts` executes the checked-in production

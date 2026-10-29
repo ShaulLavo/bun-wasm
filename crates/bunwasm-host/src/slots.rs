@@ -540,7 +540,7 @@ fn process_functions(store: &mut Store<Host>) -> Vec<Func> {
 }
 
 /// bash-web's shell guest imports two small namespaces besides runtime_proc. On this host it is
-/// never the terminal owner: it reads its inherited stdio, reports 80 columns and owns no phase.
+/// never the terminal owner: it reads inherited stdio, reports 80x24 geometry and owns no phase.
 /// The native filesystem has no Waffle inode metadata, so the permission query answers ENOTSUP
 /// (docs/host-abi.md "Inode permission query" allows it) and the shell treats access as unknown.
 pub fn add_shell_imports(linker: &mut Linker<Host>) -> Result<()> {
@@ -548,7 +548,8 @@ pub fn add_shell_imports(linker: &mut Linker<Host>) -> Result<()> {
         if (0..3).contains(&index) { index } else { -1 }
     })?;
     linker.func_wrap("shell_terminal", "columns", || -> i32 { 80 })?;
-    linker.func_wrap("shell_terminal", "phase", |_: i32| {})?;
+    linker.func_wrap("shell_terminal", "rows", || -> i32 { 24 })?;
+    linker.func_wrap("shell_terminal", "phase", |_: i32, _: i32| {})?;
     linker.func_wrap(
         "runtime_fs",
         "path_permissions_get",
@@ -562,6 +563,14 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
     for (name, function) in PROCESS_NAMES.into_iter().zip(process_functions(store)) {
         linker.define(&mut *store, "runtime_proc", name, function)?;
     }
+    linker.func_wrap(
+        "runtime_proc",
+        "inherited_fd",
+        |caller: Caller<'_, Host>, index: u32| -> Result<i32> {
+            caller.data().cancel.check()?;
+            Ok(caller.data().processes.inherited_fd(index))
+        },
+    )?;
     linker.func_wrap(
         "runtime_proc",
         "start_status",

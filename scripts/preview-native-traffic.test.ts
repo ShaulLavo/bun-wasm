@@ -52,12 +52,15 @@ test("native HMR evidence comes from real frames after editing without patching 
 }, 30_000);
 
 function installKeyboardStopFixture(url: string): void {
+  const runButton = document.querySelector<HTMLButtonElement>("#run");
+  if (!runButton) throw new Error("Keyboard fixture requires its Run button");
   let end = () => {};
   const shell = {
     running: false, lastExit: 0,
     async submit(text: string) {
       if (text === "echo PROMPT_USABLE") { shell.lastExit = 0; return; }
       shell.running = true;
+      runButton.disabled = true;
       await new Promise<void>(resolve => { end = resolve; });
     },
     input() { throw new Error("Direct input cannot prove keyboard stop"); },
@@ -69,6 +72,7 @@ function installKeyboardStopFixture(url: string): void {
     Reflect.set(globalThis, "keyboardStop", { trusted: event.isTrusted, focused: document.activeElement?.className });
     shell.running = false;
     shell.lastExit = 130;
+    runButton.disabled = false;
     end();
   });
 }
@@ -81,7 +85,7 @@ test("matrix cleanup sends a trusted terminal Ctrl-C and waits for status 130", 
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext();
     const page = await context.newPage();
-    await page.setContent('<div class="xterm" tabindex="0">Terminal fixture</div>');
+    await page.setContent('<button id="run">Run</button><div class="xterm" tabindex="0">Terminal fixture</div>');
     await page.evaluate(installKeyboardStopFixture, server.url.href);
     const result = await serverCommand({ page, context, app: { id: "keyboard-fixture" }, engine: "browser",
       command: { name: "dev", args: ["run", "fixture.ts"], check: { kind: "http", text: "unused" } },
@@ -91,6 +95,7 @@ test("matrix cleanup sends a trusted terminal Ctrl-C and waits for status 130", 
     expect("harnessCleanup" in result ? result.harnessCleanup : undefined).toBeUndefined();
     expect(await page.evaluate(() => Reflect.get(globalThis, "keyboardStop"))).toEqual({ trusted: true, focused: "xterm" });
     expect(await page.evaluate(() => { const shell = Reflect.get(Reflect.get(globalThis, "playground"), "shell"); return [shell.running, shell.lastExit]; })).toEqual([false, 130]);
+    expect(await page.locator("#run").isEnabled()).toBe(true);
     expect(await page.evaluate(async () => { const shell = Reflect.get(Reflect.get(globalThis, "playground"), "shell"); await shell.submit("echo PROMPT_USABLE"); return shell.lastExit; })).toBe(0);
   } finally { await browser?.close(); await server.stop(true); await rm(directory, { recursive: true, force: true }); }
 }, 15_000);
