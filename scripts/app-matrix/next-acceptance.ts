@@ -18,6 +18,7 @@ import { editCycle, compileErrorRecovery } from "./next-acceptance-edits";
 import { closeOwnedBrowser, boundedCleanup } from "./cleanup";
 import { requestProbe } from "./next-acceptance-http";
 import { runAcceptancePhase } from "./next-acceptance-phase";
+import { acceptanceBudget, acceptanceTimeouts, timeoutOptions } from "./next-acceptance-options";
 import { routeCases, runRouteCase, overlappingRequests } from "./next-acceptance-cases";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
 import { verifyAcceptanceAssets } from "./next-acceptance-assets";
@@ -29,7 +30,7 @@ const { values } = parseArgs({ options: {
   registry: { type: "string" }, "registry-extra": { type: "string" }, "memory-hook": { type: "string" },
   port: { type: "string", default: "43701" }, cycles: { type: "string", default: "30" },
   phases: { type: "string", default: "install,build,start,dev" },
-  "timeout-ms": { type: "string", default: "180000" }, "idle-ms": { type: "string", default: "1500" },
+  ...timeoutOptions, "idle-ms": { type: "string", default: "1500" },
   "min-headroom-mib": { type: "string", default: "32" }, "max-growth-mib": { type: "string", default: "16" },
 } });
 if (values.engine !== "quickjs" && values.engine !== "jsc" && values.engine !== "browser") throw new Error("--engine quickjs|jsc|browser is required");
@@ -46,7 +47,8 @@ const numeric = (name: keyof typeof values, minimum: number, maximum: number) =>
   return value;
 };
 const cycles = numeric("cycles", 0, 1000);
-const timeout = numeric("timeout-ms", 1000, 900000);
+const timeouts = acceptanceTimeouts(values);
+const timeout = timeouts.timeoutMs;
 const idle = numeric("idle-ms", 1000, 60000);
 const port = numeric("port", 1024, 65535);
 const minHeadroom = numeric("min-headroom-mib", 1, 4096);
@@ -77,7 +79,6 @@ const sourceRevision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture
 mkdirSync(output, { recursive: true });
 // A report directory is a single run, so stale evidence cannot turn a later run green.
 writeFileSync(join(output, "run.json"), "", { flag: "wx" });
-process.env.BUN_WASM_TEST_TMP ??= "/work/tmp";
 const task = session("bun-wasm-next01-");
 process.env.TMPDIR = task.scratch;
 let mirror: Awaited<ReturnType<typeof registry>> | undefined;
@@ -88,7 +89,7 @@ function save() {
     schema: 1, engine, observedEngine, browser: { name: "chromium", version: browserVersion },
     fixture: { path: "examples/next-acceptance", sourceRevision, sha256: digest(JSON.stringify(sources)), lockSha256: digest(sources["bun.lock"] ?? ""), stagedSha256: digest(JSON.stringify(staged.files)), config: staged.config, dependencies: JSON.parse(sources["package.json"] ?? "{}").dependencies },
     runtime: { revision: values["runtime-revision"], revisionSource: "caller supplied; compare to producer receipt", assets, webRoot, receipt: values["runtime-receipt"] ? resolve(values["runtime-receipt"]) : null },
-    parameters: { cycles, timeoutMs: timeout, idleMs: idle, minHeadroomMiB: minHeadroom, maxGrowthMiB: maxGrowth, phases: Array.from(phases) },
+    parameters: { cycles, ...timeouts, idleMs: idle, minHeadroomMiB: minHeadroom, maxGrowthMiB: maxGrowth, phases: Array.from(phases) },
     completedCycles, devProcessId, droppedSamples, samplerErrors, failedAllocations, rebuilds, rows, samples,
     network: { mode: mirror ? "registry replay" : "live npm (diagnostic)", external, mirror: mirror?.snapshot() }, cleanup,
     acceptance: rows.length > 0 && rows.every(row => row.status === "pass") && cleanup === "pass" && !samplerErrors.length && !droppedSamples,
@@ -145,7 +146,7 @@ async function cancelPhase() {
   if (browserServer) await closeOwnedBrowser(browserServer, 1000);
 }
 
-async function phase(name: string, operation: () => Promise<void>, prerequisite?: string, budgetMs = timeout + 5000): Promise<boolean> {
+async function phase(name: string, operation: () => Promise<void>, prerequisite?: string, budgetMs = acceptanceBudget(name, timeouts).watchdogMs): Promise<boolean> {
   const previous = prerequisite ? rows.find(row => row.phase === prerequisite) : undefined;
   if (prerequisite && previous?.status !== "pass") return record(name, { status: "blocked", reason: `Requires ${prerequisite}: ${previous?.status ?? "missing"}` });
   const result = await runAcceptancePhase({ phase: name, engine, observedEngine, timeoutMs: budgetMs,
@@ -160,7 +161,7 @@ function persistResult(row: PhaseResult) {
 }
 
 function record(name: string, outcome: Outcome, started = performance.now()): boolean {
-  const row = { phase: name, engine, observedEngine, durationMs: Math.round(performance.now() - started), ...outcome };
+  const row = { phase: name, engine, observedEngine, durationMs: Math.round(performance.now() - started), budgetMs: null, ...outcome };
   persistResult(row);
   return row.status === "pass";
 }
@@ -172,7 +173,7 @@ function selected(name: string) {
 }
 
 async function command(page: Page, name: string, text: string) {
-  const result = await run(page, text, timeout);
+  const result = await run(page, text, acceptanceBudget(name, timeouts).operationMs);
   writeFileSync(join(output, `${name}.log`), result.output);
   assert.equal(result.code, 0, `${text}: ${result.output}`);
 }

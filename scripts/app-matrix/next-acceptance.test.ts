@@ -36,7 +36,7 @@ test("memory hook validates counters and failed-allocation evidence", () => {
 });
 
 test("report records blocked phases and engine identity without unescaped table cells", () => {
-  const table = resultTable([{ phase: "dev", engine: "jsc", observedEngine: "ready | JavaScriptCore", durationMs: 20, status: "blocked", reason: "build\nfailed" }]);
+  const table = resultTable([{ phase: "dev", engine: "jsc", observedEngine: "ready | JavaScriptCore", durationMs: 20, budgetMs: null, status: "blocked", reason: "build\nfailed" }]);
   expect(table).toContain("jsc | ready \\| JavaScriptCore | dev | blocked");
   expect(table).toContain("build failed");
 });
