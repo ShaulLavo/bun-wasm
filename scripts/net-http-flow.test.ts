@@ -589,3 +589,62 @@ test("accepted write callbacks do not emit drain after response destruction", as
     expect(state.pending()).toBe(0);
   } finally { connection.destroy(); await state.pump(); }
 });
+
+for (const phase of ["before-headers", "after-headers", "streaming"] as const) {
+  test(`end after destroy ${phase} does not revive the response`, async () => {
+    const state = fixture();
+    const { connection, response } = state.server();
+    const events: string[] = [];
+    response.on("finish", () => events.push("finish"));
+    response.on("close", () => events.push("close"));
+    try {
+      if (phase === "after-headers") response.flushHeaders();
+      if (phase === "streaming") response.write("first");
+      const sent = response.headersSent;
+      const output = Buffer.concat(state.writes).toString();
+      response.destroy();
+      response.destroy();
+      response.end("late");
+      await state.pump();
+      expect(response.headersSent).toBe(sent);
+      expect(response.writableEnded).toBe(true);
+      expect(response.writableFinished).toBe(false);
+      expect(Buffer.concat(state.writes).toString()).toBe(output);
+      expect(events).toEqual(["close"]);
+      expect(state.pending()).toBe(0);
+    } finally { connection.destroy(); await state.pump(); }
+  });
+}
+
+for (const ending of ["cancel", "write-error", "end-error"] as const) {
+  test(`HTTP ${ending} settles the active request and frees its connection`, async () => {
+    const state = fixture();
+    let response: ServerResponse | undefined;
+    const events: string[] = [];
+    const server = state.http.createServer((_request, current) => {
+      response = current;
+      current.on("close", () => events.push("close"));
+      current.on("finish", () => events.push("finish"));
+      current.write("first");
+      if (ending === "end-error") current.end("last");
+    });
+    const connection = state.socket();
+    try {
+      state.block(ending !== "cancel");
+      Reflect.get(server, "_onConnection").call(server, connection);
+      state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"));
+      await state.pump();
+      expect(response).toBeDefined();
+      expect(Reflect.get(connection, "busy")).toBe(true);
+      connection.destroy(ending === "cancel" ? undefined : new Error("transport failed"));
+      await state.pump();
+      expect(response?.destroyed).toBe(true);
+      expect(response?.writableFinished).toBe(false);
+      expect(events).toEqual(["close"]);
+      expect(Reflect.get(connection, "busy")).toBe(false);
+      expect(Reflect.get(server, "_connections").size).toBe(0);
+      expect(state.closed).toEqual([9]);
+      expect(state.pending()).toBe(0);
+    } finally { connection.destroy(); await state.pump(); }
+  });
+}
