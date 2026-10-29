@@ -25,5 +25,6 @@ The browser driver calls the existing playground test helpers. Recorded dependen
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`scripts/app-matrix/`](#app-compatibility-fixtures) | Host feature | Original app fixtures, registry recorder and typed classifier, with no copied framework implementation. |
+| [`examples/vinext-probe/`](vinext-probe.md) | Host feature | Adapted vinext example and original probe; upstream paths, revision, and changes recorded separately. |
 
 [Ledger scope and pinned revisions](scope.md).

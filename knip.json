@@ -4,6 +4,7 @@
     ".": {
       "entry": [
         "scripts/app-matrix/run.mjs",
+        "scripts/app-matrix/vinext-probe.ts",
         "scripts/app-matrix/reclassify.mjs",
         "scripts/app-matrix/*.test.{ts,mjs}",
         "tests/package/*.test.ts",
