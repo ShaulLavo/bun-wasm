@@ -1,10 +1,11 @@
 import { test, expect } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { registry, sha256, rewriteMetadata } from "./registry.mjs";
 
 test("offline mirror rewrites tarballs, verifies objects, and refuses missing records without fetching", async () => {
-  const directory = mkdtempSync("/work/tmp/bun-wasm-app-matrix-registry-test-");
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-app-matrix-registry-test-"));
   let mirror;
   const fetch = globalThis.fetch;
   try {
@@ -34,7 +35,7 @@ test("offline mirror rewrites tarballs, verifies objects, and refuses missing re
 });
 
 test("recording uses only the explicit Unix-socket broker", async () => {
-  const directory = mkdtempSync("/work/tmp/bun-wasm-app-matrix-recorder-test-");
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-app-matrix-recorder-test-"));
   let mirror;
   let broker;
   const previous = process.env.MATRIX_RECORDER_SOCKET;

@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-10-29T09:27:59.900Z",
+  "url": "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+  "method": "POST",
+  "requestBody": "{\"next\":[\"16.4.3\"]}",
+  "status": 200,
+  "contentType": "application/octet-stream",
+  "snapshot": {
+    "entries": 1,
+    "sha256": "1fe0d88d8fd4620e0080ec20810338dd3ae24e12ac9852d95cc88ff86388f896",
+    "requests": 1,
+    "misses": [],
+    "errors": []
+  },
+  "credentials": "No npm config read. Only explicit public fetch with accept/content-type headers."
+}

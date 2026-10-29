@@ -13,6 +13,7 @@ export interface SharedObjectRuntime {
   open(): SharedObjectRoute;
   close(): void;
   inspect(): { clients: number; objects: number; waiting: number };
+  inspectTransfers(): { pins: number; attaching: number };
 }
 
 /** Internal host installation, deliberately separate from registering the public Bun adapter. */
@@ -53,7 +54,7 @@ export function installRuntimeSharedObjects(runtime: Runtime): SharedObjectRunti
     for (const route of Array.from(routes)) route.close();
     broker.dispose();
   }
-  const installation = { open, close, inspect: broker.inspect };
+  const installation = { open, close, inspect: broker.inspect, inspectTransfers: broker.inspectTransfers };
   installations.set(runtime, installation);
   return installation;
 }
