@@ -88,30 +88,34 @@
       columns.delete(first);
     }
   }
-  function apply(source: string, value: Prepared, name?: string, lineOffset = 0): string {
+  type Mapping = { position: { line: number; column: number }; columns: number[] };
+  function advance(mapping: Mapping, source: string): void {
+    const lines = source.split(/\r\n|[\n\r\u2028\u2029]/);
+    mapping.position.line += lines.length - 1;
+    mapping.position.column = lines.length === 1 ? mapping.position.column + source.length : lines.at(-1)!.length + 1;
+  }
+  function apply(source: string, value: Prepared, name?: string, sharedMapping?: Mapping): string {
     const edits = value.edits;
-    const table: number[] = [];
+    const mapping = sharedMapping ?? { position: { line: 1, column: 1 }, columns: [] };
     let result = "";
     let previous = 0;
-    let line = 1;
-    let column = 1;
     const replacement = native.engine === "host"
       ? `__bunwasm_dynamicImport(${JSON.stringify(name || internal.mainPath)})`
       : `(function(){})["__bunwasmFunctionImport"](${JSON.stringify(name || internal.mainPath)})`;
     for (let index = 0; index < edits.length; index += 3) {
       const at = edits[index];
       const unchanged = source.slice(previous, at);
-      const lines = unchanged.split(/\r\n|[\n\r\u2028\u2029]/);
-      line += lines.length - 1;
-      column = lines.length === 1 ? column + unchanged.length : lines.at(-1)!.length + 1;
+      advance(mapping, unchanged);
       const inserted = edits[index + 2] === 16 ? replacement : text[edits[index + 2]];
-      table.push(line + lineOffset, column, inserted.length - edits[index + 1]);
+      mapping.columns.push(mapping.position.line, mapping.position.column, inserted.length - edits[index + 1]);
       result += unchanged + inserted;
-      column += inserted.length;
+      mapping.position.column += inserted.length;
       previous = at + edits[index + 1];
     }
-    if (edits.length > 0 || !value.alreadyPrepared) register(sourceName(source, name), table);
-    return result + source.slice(previous);
+    const remaining = source.slice(previous);
+    advance(mapping, remaining);
+    if (!sharedMapping && (edits.length > 0 || !value.alreadyPrepared)) register(sourceName(source, name), mapping.columns);
+    return result + remaining;
   }
   function trace(origin: string, name: string | undefined, size: number, prepared: Prepared[], hit: boolean, start: number, goal: string): void {
     counters.prepared++;
@@ -137,7 +141,18 @@
     const goal = `function:${kind}:${args.map(value => value.length).join(",")}:${hooks ? "hooks" : "imports"}`;
     const prepared = records(args.join(""), goal, () => parseFunctionRecords(native.prepareFunction(args.map(parseable), kind, hooks)));
     trace(kind === "normal" ? "function" : `${kind}-function`, name, args.join("").length, prepared.values, prepared.hit, start, goal);
-    return args.map((source, index) => apply(source, prepared.values[index], index === args.length - 1 ? name : undefined, index === args.length - 1 ? 2 : 0));
+    const prefix = { normal: "function", async: "async function", generator: "function*", "async-generator": "async function*" }[kind];
+    const mapping: Mapping = { position: { line: 1, column: `${prefix} anonymous(`.length + 1 }, columns: [] };
+    const result: string[] = [];
+    for (const [index, source] of args.entries()) {
+      if (index === args.length - 1) advance(mapping, "\n) {\n");
+      else if (index > 0) advance(mapping, ",");
+      result.push(apply(source, prepared.values[index], name, mapping));
+    }
+    if (prepared.values.some(value => value.edits.length > 0 || !value.alreadyPrepared)) {
+      register(sourceName(args[args.length - 1], name), mapping.columns);
+    }
+    return result;
   }
   function correctPosition(name: string, line: number, column: number): number {
     const table = columns.get(name)?.columns;

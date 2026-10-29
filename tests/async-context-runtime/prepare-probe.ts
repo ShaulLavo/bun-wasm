@@ -87,4 +87,14 @@ assert.deepEqual(await Promise.all([
 ]), [["isolated-A", "secret"], ["isolated-B", undefined]]);
 assert.deepEqual(await Promise.all(["file-eval-A", "file-eval-B"].map(name => storage.run(name, () =>
   evaluate('(async () => { await 0; return storage.getStore(); })()', storage)))), ["file-eval-A", "file-eval-B"]);
+const conversions: string[] = [];
+const parameter = { toString() { conversions.push("parameter"); return "value"; } };
+const generatedBody = { toString() { conversions.push("body"); return "await 0; return value"; } };
+assert.equal(await AsyncFunction(parameter, generatedBody)(23), 23);
+assert.deepEqual(conversions, ["parameter", "body"]);
+function NewTarget() {}
+NewTarget.prototype = Object.create(AsyncFunction.prototype);
+const constructed = Reflect.construct(AsyncFunction, ["await 0; return 29"], NewTarget);
+assert.equal(Object.getPrototypeOf(constructed), NewTarget.prototype);
+assert.equal(await constructed(), 29);
 console.log("PREPARE_OK");

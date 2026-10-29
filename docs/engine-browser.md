@@ -222,7 +222,9 @@ replace prior entries after HMR and are bounded separately. `sourceURL` and
 `sourceMappingURL` comments survive unchanged. Lines stay exact. The runtime's
 stack formatter corrects inserted columns before existing source-map offsets.
 A debugger, or an app that replaces `Error.prepareStackTrace`, sees raw shifted
-columns on lines containing hooks.
+columns on lines containing hooks. WebKit currently omits coordinates entirely
+for the tested async direct-eval frame, even without preparation. Its prepared
+frame matches that native control; the column table itself remains available.
 
 `BUN_WASM_PREPARE_TRACE=1` prints preparation version, realm, goal, map policy,
 origin, name, byte count, edit count, duration, cache hits, and parse fallback.

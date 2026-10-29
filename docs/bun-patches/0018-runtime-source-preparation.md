@@ -16,3 +16,5 @@ Runtime preparation preserves all original text outside edits, including comment
 The original constructor import-only API is removed. The same preparation call returns import locations and async/eval edits. Non-host engines request import edits only; a host native continuation provider bypasses hook preparation.
 
 The preparation counter/trace entry is exposed through bun:internal-for-testing. BUN_WASM_PREPARE_TRACE=1 records version, realm, goal, map policy, origin, name, bytes, edits, milliseconds, cache hit and fallback. This is evidence about the origin of code, not a full-language guarantee.
+
+The raw `.mjs` regression fixture deliberately has no suspension keyword. Its plain-JavaScript loader path must still prepare its eval call site, which a TypeScript fixture cannot prove. The rest of the new fixture and host code is TypeScript.

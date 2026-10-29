@@ -67,11 +67,34 @@ assert.ok(preparation.counters.fallbacks > 0);
 assert.ok(preparation.cacheBytes() <= 16 * 1024 * 1024);
 assert.ok(preparation.columnBytes() <= 16 * 1024 * 1024);
 const mappedCall = 'async function mappedCall() { await 0; throw new Error("mapped"); } mappedCall();\n//# sourceURL=prepare-stack.js';
-try {
-  await eval(prepare(mappedCall));
-  assert.fail("expected mapped rejection");
-} catch (error) {
-  assert.ok(error instanceof Error);
-  assert.ok(error.stack?.includes(`prepare-stack.js:1:${mappedCall.indexOf('new Error') + 1}`), error.stack);
+async function failureStack(run: () => unknown): Promise<string> {
+  try {
+    await run();
+    assert.fail("expected mapped rejection");
+  } catch (error) {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, "mapped");
+    return error.stack ?? "";
+  }
 }
+const nativeEval = eval;
+const nativeStack = await failureStack(() => nativeEval(mappedCall));
+const preparedStack = await failureStack(() => eval(prepare(mappedCall)));
+assert.ok(nativeStack.includes("mappedCall"), nativeStack);
+if (nativeStack.includes("prepare-stack.js:1:")) {
+  assert.ok(preparedStack.includes(`prepare-stack.js:1:${mappedCall.indexOf('new Error') + 1}`), preparedStack);
+} else {
+  assert.equal(preparedStack.split("\n").find(line => line.includes("mappedCall")), nativeStack.split("\n").find(line => line.includes("mappedCall")));
+}
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const parameter = 'value = async () => { await 0; throw new Error("parameter"); }';
+const parameterFunction = AsyncFunction(parameter, 'return value();\n//# sourceURL=parameter-map.js');
+const parameterColumn = parameterFunction.toString().split("\n")[0].indexOf("new Error") + 1;
+const originalParameterColumn = ("async function anonymous(" + parameter).indexOf("new Error") + 1;
+assert.equal(preparation.correctPosition("parameter-map.js", 1, parameterColumn), originalParameterColumn);
+const multiline = AsyncFunction('value\n= 1', 'await 0; throw new Error("multiline");\n//# sourceURL=multiline-map.js');
+const multilineCode = multiline.toString().split("\n");
+const throwLine = multilineCode.findIndex((line: string) => line.includes('new Error("multiline")'));
+const throwColumn = multilineCode[throwLine].indexOf('new Error("multiline")') + 1;
+assert.equal(preparation.correctPosition("multiline-map.js", throwLine + 1, throwColumn), 'await 0; throw new Error'.indexOf('new Error') + 1);
 console.log("PREPARE_TRANSFORMS_OK");
