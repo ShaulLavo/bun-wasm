@@ -553,12 +553,20 @@ bool bh_construct(bh_value f, const bh_value *args, size_t count, bh_value *out)
     return thrown(out);
   }
   auto func = handleAs<vm::Callable>(f);
+  struct : public vm::Locals {
+    vm::PinnedValue<> thisArg;
+  } lv;
+  vm::LocalsRAII roots(rt(), &lv);
   auto self = vm::Callable::createThisForConstruct_RJS(func, rt(), func);
   if (self == vm::ExecutionStatus::EXCEPTION)
     return thrown(out);
-  vm::PinnedHermesValue thisArg = self->get();
+  lv.thisArg = std::move(*self);
   vm::ScopedNativeCallFrame frame{
-      rt(), (uint32_t)count, func.getHermesValue(), func.getHermesValue(), thisArg};
+      rt(),
+      (uint32_t)count,
+      func.getHermesValue(),
+      func.getHermesValue(),
+      lv.thisArg.getHermesValue()};
   if (LLVM_UNLIKELY(frame.overflowed())) {
     (void)rt().raiseStackOverflow(vm::Runtime::StackOverflowKind::NativeStack);
     return thrown(out);
@@ -569,7 +577,7 @@ bool bh_construct(bh_value f, const bh_value *args, size_t count, bh_value *out)
   if (res == vm::ExecutionStatus::EXCEPTION)
     return thrown(out);
   vm::HermesValue r = res->get();
-  *out = add(r.isObject() ? r : (vm::HermesValue)thisArg);
+  *out = add(r.isObject() ? r : lv.thisArg.getHermesValue());
   return true;
 }
 
