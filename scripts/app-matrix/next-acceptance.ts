@@ -231,7 +231,7 @@ async function stopServer(page: Page, mode: string) {
 async function serverCases(owner: Page, page: Page, base: string, mode: "start" | "dev", source: GuestSource, traffic: Awaited<ReturnType<typeof observeNativeProductTraffic>>) {
   await phase(`${mode}:http-ready`, async () => {
     const probe = await page.context().newPage();
-    try { await waitForPreviewReady(probe, base, Date.now() + timeout); }
+    try { await waitForPreviewReady(probe, base, Date.now() + timeout, 1000); }
     finally { await probe.close(); }
   }, mode);
   for (const name of routeCases) await phase(`${mode}:${name}`, async () => { await alive(owner); await runRouteCase(name, page, base, timeout); await alive(owner); }, `${mode}:http-ready`);
