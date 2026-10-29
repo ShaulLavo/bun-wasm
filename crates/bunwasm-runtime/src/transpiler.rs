@@ -96,6 +96,13 @@ pub trait Transpiler {
         Err("generated imports need Bun's parser".to_owned())
     }
 
+    /// Version of the async-context hooks printed into transpiled code for
+    /// the browser engine, or 0 when none are. Cached printed text is keyed
+    /// on it.
+    fn hooks_version(&self) -> u32 {
+        0
+    }
+
     fn parse_data(&self, _source: &[u8], format: &str) -> Result<String, crate::data::NativeError> {
         Err(crate::data::NativeError::error(format!(
             "{format}.parse needs Bun's parser, which this bun.wasm was built without"
