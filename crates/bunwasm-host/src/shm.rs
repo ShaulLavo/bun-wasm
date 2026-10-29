@@ -75,11 +75,11 @@ struct BudgetState {
     committed_bytes: u64,
     peak_bytes: u64,
     backings: Vec<Weak<Backing>>,
-    next_backing: u64,
+    #[cfg(test)]
+    reconcile_hook: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 }
 
 struct Backing {
-    id: u64,
     memory: SharedMemory,
     budget: GroupBackingBudget,
     charged_pages: AtomicU32,
@@ -102,7 +102,7 @@ impl Backing {
 
 impl Drop for Backing {
     fn drop(&mut self) {
-        self.budget.release_backing(self.id, self.charged_pages());
+        self.budget.release_backing(self);
     }
 }
 
@@ -156,16 +156,24 @@ impl GroupBackingBudget {
 
     fn register(&self, memory: SharedMemory) -> Option<Arc<Backing>> {
         let mut state = self.lock();
-        Self::reconcile_all_locked(&mut state);
+        let backings = Self::reconcile_all_locked(&mut state);
+        let outcome = self.register_locked(&mut state, memory);
+        drop(state);
+        drop(backings);
+        outcome
+    }
+
+    fn register_locked(
+        &self,
+        state: &mut BudgetState,
+        memory: SharedMemory,
+    ) -> Option<Arc<Backing>> {
         let initial = u64::from(PAGE_BYTES);
         let committed = state.committed_bytes.checked_add(initial)?;
         if committed > self.limit_bytes {
             return None;
         }
-        let id = state.next_backing;
-        state.next_backing = state.next_backing.wrapping_add(1);
         let backing = Arc::new(Backing {
-            id,
             memory,
             budget: self.clone(),
             charged_pages: AtomicU32::new(1),
@@ -178,20 +186,30 @@ impl GroupBackingBudget {
     }
 
     fn reconcile(&self) {
-        let mut state = self.lock();
-        Self::reconcile_all_locked(&mut state);
+        let backings = {
+            let mut state = self.lock();
+            let backings = Self::reconcile_all_locked(&mut state);
+            drop(state);
+            backings
+        };
+        drop(backings);
     }
 
-    fn reconcile_all_locked(state: &mut BudgetState) {
+    fn reconcile_all_locked(state: &mut BudgetState) -> Vec<Arc<Backing>> {
         let backings = state
             .backings
             .iter()
             .filter_map(Weak::upgrade)
             .collect::<Vec<_>>();
-        state.backings.retain(|weak| weak.strong_count() > 0);
-        for backing in backings {
-            Self::reconcile_backing_locked(state, &backing);
+        #[cfg(test)]
+        if let Some(hook) = &state.reconcile_hook {
+            hook();
         }
+        state.backings.retain(|weak| weak.strong_count() > 0);
+        for backing in &backings {
+            Self::reconcile_backing_locked(state, backing);
+        }
+        backings
     }
 
     fn reconcile_backing_locked(state: &mut BudgetState, backing: &Backing) {
@@ -212,7 +230,14 @@ impl GroupBackingBudget {
 
     fn charge(&self, backing: &Backing, pages: u32) -> bool {
         let mut state = self.lock();
-        Self::reconcile_all_locked(&mut state);
+        let backings = Self::reconcile_all_locked(&mut state);
+        let outcome = self.charge_locked(&mut state, backing, pages);
+        drop(state);
+        drop(backings);
+        outcome
+    }
+
+    fn charge_locked(&self, state: &mut BudgetState, backing: &Backing, pages: u32) -> bool {
         if backing.bypassed() {
             return false;
         }
@@ -239,16 +264,22 @@ impl GroupBackingBudget {
         backing.charged_pages.fetch_sub(pages, Ordering::SeqCst);
     }
 
-    fn release_backing(&self, id: u64, pages: u32) {
+    fn release_backing(&self, backing: &Backing) {
         let mut state = self.lock();
-        let bytes = u64::from(pages) * u64::from(PAGE_BYTES);
+        let bytes = u64::from(backing.charged_pages()) * u64::from(PAGE_BYTES);
         state.committed_bytes = state
             .committed_bytes
             .checked_sub(bytes)
             .expect("group backing released twice");
+        let pointer = backing as *const Backing;
         state
             .backings
-            .retain(|weak| weak.upgrade().is_some_and(|backing| backing.id != id));
+            .retain(|weak| !std::ptr::eq(weak.as_ptr(), pointer));
+    }
+
+    #[cfg(test)]
+    fn set_reconcile_hook(&self, hook: impl Fn() + Send + Sync + 'static) {
+        self.lock().reconcile_hook = Some(Arc::new(hook));
     }
 }
 
