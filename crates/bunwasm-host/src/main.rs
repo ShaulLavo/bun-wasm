@@ -388,13 +388,13 @@ fn run_module_instance(
     slots::add_shell_imports(&mut linker)?;
     shm::add_imports(&mut linker)?;
     let selected = runtime.module_for(&argv, module)?;
-    let instance = linker.instantiate(&mut store, selected)?;
+    let (instance, member) = runtime.linked.instantiate(selected, &linker, &mut store)?;
     store.data_mut().memory = instance.get_memory(&mut store, "memory");
     slots::install(&mut store, &instance)?;
     process::wasi::initialize(&linker, &mut store)?;
     runtime
         .linked
-        .initialize(selected, instance, &linker, &mut store)?;
+        .initialize(selected, instance, member.as_ref(), &linker, &mut store)?;
 
     let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
     if !cancel.mark_started() {

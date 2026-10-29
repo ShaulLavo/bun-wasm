@@ -67,6 +67,11 @@ fn shared_group_link() {
     for arg in std::fs::read_to_string(list).unwrap().lines() {
         println!("cargo:rustc-link-arg-bin=bun={arg}");
     }
+    // The producer proves which C++ runtime members the link selected from this map.
+    println!("cargo:rerun-if-env-changed=BUN_WASM_CORE_LINK_MAP");
+    let map = std::env::var("BUN_WASM_CORE_LINK_MAP")
+        .expect("shared-group cores record their link map in BUN_WASM_CORE_LINK_MAP");
+    println!("cargo:rustc-link-arg-bin=bun=-Map={map}");
 }
 
 fn split_entry() {

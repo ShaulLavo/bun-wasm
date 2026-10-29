@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -75,10 +75,69 @@ export function parseProgramProfile(value: unknown): ProgramProfile {
   throw new Error("Invalid program profile");
 }
 
+interface CxxRuntimeMember {
+  readonly archive: string;
+  readonly member: string;
+  readonly sha256: string;
+  readonly features: readonly string[];
+}
+
+/** Every libc++/libc++abi archive member a link map shows was selected into the image. */
+export function selectedCxxMembers(map: string): { archive: string; member: string }[] {
+  const selected = new Map<string, { archive: string; member: string }>();
+  for (const match of map.matchAll(/(\S*\/libc\+\+(?:abi)?\.a)\(([^)]+)\)/g)) {
+    selected.set(`${match[1]}(${match[2]})`, { archive: match[1]!, member: match[2]! });
+  }
+  return Array.from(selected.values());
+}
+
+/** The `target_features` custom section of one object file, with its +/-/= prefixes. */
+export function targetFeatures(bytes: Uint8Array): string[] {
+  const cursor = { at: 8 };
+  const read = () => {
+    let value = 0;
+    for (let shift = 0; ; shift += 7) {
+      const byte = bytes[cursor.at++]!;
+      value += (byte & 0x7f) * 2 ** shift;
+      if (byte < 0x80) return value;
+    }
+  };
+  const text = () => {
+    const length = read();
+    cursor.at += length;
+    return new TextDecoder().decode(bytes.subarray(cursor.at - length, cursor.at));
+  };
+  while (cursor.at < bytes.length) {
+    const id = bytes[cursor.at++];
+    const end = read() + cursor.at;
+    if (id === 0 && text() === "target_features") return Array.from({ length: read() }, () => String.fromCharCode(bytes[cursor.at++]!) + text());
+    cursor.at = end;
+  }
+  return [];
+}
+
+/** Record the selected C++ runtime members; one that disallows shared memory is refused. */
+function linkProof(mapPath: string, output: string): void {
+  const ar = join(process.env.WASI_SDK_PATH ?? "", "bin/llvm-ar");
+  const members: CxxRuntimeMember[] = selectedCxxMembers(readFileSync(mapPath, "utf8")).map(({ archive, member }) => {
+    const extracted = Bun.spawnSync([ar, "p", archive, member], { stdout: "pipe", stderr: "inherit" });
+    if (extracted.exitCode !== 0) throw new Error(`cannot read ${archive}(${member})`);
+    const bytes = extracted.stdout;
+    return { archive, member, sha256: sha256(bytes), features: targetFeatures(bytes) };
+  });
+  const refused = members.filter(member => member.features.includes("-shared-mem"));
+  if (refused.length) throw new Error(`C++ runtime members disallow shared memory: ${refused.map(member => member.member).join(", ")}`);
+  writeFileSync(output, JSON.stringify(members, null, 2) + "\n");
+}
+
 if (import.meta.main) {
-  const [command, kind] = process.argv.slice(2);
+  const [command, kind, output] = process.argv.slice(2);
+  if (command === "link-proof" && kind && output) {
+    linkProof(kind, output);
+    process.exit(0);
+  }
   const sysroot = process.env.BUN_WASM_SYSROOT;
-  if (command !== "environment" || (kind !== "core" && kind !== "quickjs") || !sysroot) throw new Error("Usage: BUN_WASM_SYSROOT=... program-profile.ts environment core|quickjs");
+  if (command !== "environment" || (kind !== "core" && kind !== "quickjs") || !sysroot) throw new Error("Usage: BUN_WASM_SYSROOT=... program-profile.ts environment core|quickjs | link-proof MAP OUTPUT");
   if (process.env.BUN_WASM_SHARED_SYSROOT !== sysroot) throw new Error("shared-group builds set BUN_WASM_SHARED_SYSROOT and BUN_WASM_SYSROOT to the same J2 sysroot");
   verifySharedSysroot(sysroot);
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";

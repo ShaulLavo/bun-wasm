@@ -4,34 +4,36 @@
 //! its bases and a mutable stack pointer. Its side imports the same shared memory. Admission
 //! mirrors Waffle's group loader: no image may grow or export the group memory, because the
 //! group's owner charges every byte through `runtime_shm.group_grow`. There is no bypass.
+//!
+//! Linking owns the member image: data and stack chunks carved through the member's
+//! [`MemberLease`], the core instance with its own table and stack pointer, and the rebase of
+//! the core's base-relative data exports for the side. Regions, pins and futexes are the
+//! `shm` service's.
+
+use std::collections::HashSet;
 
 use anyhow::{Context, Result, bail, ensure};
 use wasmparser::{
-    Dylink0Subsection, ExternalKind, KnownCustom, MemInfo, Operator, Parser, Payload, TypeRef,
+    ConstExpr, Dylink0Subsection, ExternalKind, KnownCustom, MemInfo, Operator, Parser, Payload,
+    TypeRef,
 };
 use wasmtime::{
     Extern, Global, GlobalType, Instance, Linker, Module, Mutability, Ref, RefType, SharedMemory,
     Store, Table, TableType, Val, ValType,
 };
 
+use crate::shm::{self, MemberLease};
+
 /// Bun's wasm32 string tags use address bits 29-31, so a Bun group stays below 512 MiB.
 pub(super) const MAX_PAGES: u64 = 8192;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the runtime_shm group host links members through this boundary"
-    )
-)]
 /// The Bun parser's stack. A PIE member's stack is carved by its host.
 pub(super) const STACK_BYTES: u32 = 8 << 20;
 const PAGE: u32 = 65_536;
-/// Explicit initialization order of a shared-group core.
-pub(super) const CORE_INITIALIZE: [&str; 3] = [
-    "core_initialize_memory",
-    "__wasm_apply_data_relocs",
-    "__wasm_call_ctors",
-];
+/// Memory initialization of a shared-group core, run before any import can touch its data.
+/// Constructors (`__wasm_call_ctors`) and `_start` follow in the same order as a split core.
+pub(super) const CORE_MEMORY_INITIALIZE: [&str; 2] =
+    ["core_initialize_memory", "__wasm_apply_data_relocs"];
+const CORE_ENTRIES: [&str; 2] = ["__wasm_call_ctors", "_start"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Profile {
@@ -95,7 +97,7 @@ fn admit_core(summary: &Summary) -> Result<()> {
         maximum == Some(MAX_PAGES),
         "memory group core must declare a {MAX_PAGES}-page maximum"
     );
-    for name in CORE_INITIALIZE.into_iter().chain(["_start"]) {
+    for name in CORE_MEMORY_INITIALIZE.into_iter().chain(CORE_ENTRIES) {
         ensure!(
             summary.functions.iter().any(|export| export == name),
             "memory group core is missing {name}"
@@ -171,62 +173,126 @@ fn growth_free(bytes: &[u8]) -> Result<bool> {
     Ok(true)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the runtime_shm group host links members through this boundary"
-    )
-)]
-/// Where a group host carves a member's private chunks. Waffle's owner and the wasmtime group
-/// service implement it with `group_grow` accounting; chunks are zeroed and never overlap.
-pub(super) trait Placement {
-    /// The first page index of a fresh chunk of `pages` pages.
-    fn carve(&mut self, pages: u32) -> Result<u32>;
+/// What linking needs from an admitted shared-group core, read once at load.
+pub(super) struct CoreLayout {
+    pub(super) layout: MemInfo,
+    /// Immutable exported globals with a constant initializer. wasm-ld emits PIE data
+    /// symbols this way without extended-const, relative to the core's `__memory_base`.
+    pub(super) relative: HashSet<String>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the runtime_shm group host links members through this boundary"
-    )
-)]
-/// One relocated core instance in a group memory.
-pub(super) struct Member {
-    pub(super) instance: Instance,
-    pub(super) memory_base: u32,
+impl CoreLayout {
+    pub(super) fn read(bytes: &[u8]) -> Result<Self> {
+        Ok(Self {
+            layout: super::layout(bytes)?,
+            relative: relative_exports(bytes)?,
+        })
+    }
+}
+
+fn relative_exports(bytes: &[u8]) -> Result<HashSet<String>> {
+    let mut imported = 0_u32;
+    let mut constant = Vec::new();
+    let mut exports = Vec::new();
+    for payload in Parser::new(0).parse_all(bytes) {
+        match payload? {
+            Payload::ImportSection(imports) => imported += imported_globals(imports)?,
+            Payload::GlobalSection(globals) => constant = constant_globals(globals)?,
+            Payload::ExportSection(list) => exports = exported_globals(list)?,
+            _ => {}
+        }
+    }
+    let relative = |index: u32| {
+        let local = index.checked_sub(imported)?;
+        constant.get(local as usize).copied()
+    };
+    Ok(exports
+        .into_iter()
+        .filter(|(_, index)| relative(*index) == Some(true))
+        .map(|(name, _)| name)
+        .collect())
+}
+
+fn imported_globals(imports: wasmparser::ImportSectionReader<'_>) -> Result<u32> {
+    let mut count = 0;
+    for import in imports {
+        count += u32::from(matches!(import?.ty, TypeRef::Global(_)));
+    }
+    Ok(count)
+}
+
+fn constant_globals(globals: wasmparser::GlobalSectionReader<'_>) -> Result<Vec<bool>> {
+    let mut constant = Vec::new();
+    for global in globals {
+        let global = global?;
+        constant.push(!global.ty.mutable && constant_init(&global.init_expr)?);
+    }
+    Ok(constant)
+}
+
+fn constant_init(expression: &ConstExpr<'_>) -> Result<bool> {
+    let mut operators = expression.get_operators_reader();
+    let first = operators.read()?;
+    Ok(matches!(first, Operator::I32Const { .. }) && matches!(operators.read()?, Operator::End))
+}
+
+fn exported_globals(exports: wasmparser::ExportSectionReader<'_>) -> Result<Vec<(String, u32)>> {
+    let mut globals = Vec::new();
+    for export in exports {
+        let export = export?;
+        if export.kind == ExternalKind::Global {
+            globals.push((export.name.to_owned(), export.index));
+        }
+    }
+    Ok(globals)
+}
+
+/// A member's private data and stack chunks, carved through its lease before instantiation.
+pub(super) struct Placement {
+    data: u32,
+    stack: u32,
+}
+
+const STACK_PAGES: u32 = STACK_BYTES / PAGE;
+
+/// Carve the member's data (`dylink.0` memory-info) and stack. The service zeroes chunks and
+/// charges them to this member until its physical stop.
+pub(super) fn carve(lease: &MemberLease, layout: &MemInfo) -> Result<Placement> {
+    ensure!(
+        layout.memory_alignment <= 16,
+        "member data alignment exceeds a page"
+    );
+    let data = grow(lease, layout.memory_size.div_ceil(PAGE).max(1))?;
+    let stack = grow(lease, STACK_PAGES)?;
+    Ok(Placement { data, stack })
+}
+
+fn grow(lease: &MemberLease, pages: u32) -> Result<u32> {
+    let page = shm::group_grow(lease, pages);
+    ensure!(page >= 0, "group_grow({pages}) failed with errno {}", -page);
+    Ok(page as u32)
+}
+
+/// One relocated core image in a group memory: what its side links against.
+pub struct MemberImage {
+    pub(super) memory: SharedMemory,
     pub(super) table: Table,
     pub(super) stack_pointer: Global,
+    pub(super) memory_base: u32,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the runtime_shm group host links members through this boundary"
-    )
-)]
-/// Instantiate a shared-group core into `memory` at freshly carved data and stack chunks, with
-/// its own table (slot 0 null), then run its explicit initialization in order.
+/// Instantiate a shared-group core into `memory` at its carved chunks, with its own table
+/// (slot 0 null), and initialize its memory. Constructors run later, as for a split core.
 pub(super) fn instantiate_core<T: 'static>(
     store: &mut Store<T>,
     linker: &Linker<T>,
     module: &Module,
     layout: &MemInfo,
-    memory: &SharedMemory,
-    placement: &mut dyn Placement,
-) -> Result<Member> {
-    ensure!(
-        layout.memory_alignment <= 16,
-        "member data alignment exceeds a page"
-    );
-    let data_pages = layout.memory_size.div_ceil(PAGE).max(1);
-    let data = placement.carve(data_pages)?;
-    let stack_pages = STACK_BYTES / PAGE;
-    let stack = placement.carve(stack_pages)?;
-    let memory_base = page_address(data)?;
-    let stack_top = page_address(stack + stack_pages)?;
+    memory: SharedMemory,
+    placement: &Placement,
+) -> Result<(Instance, MemberImage)> {
+    let memory_base = page_address(placement.data)?;
+    let stack_top = page_address(placement.stack + STACK_PAGES)?;
     let table_base = 1_u64.next_multiple_of(1 << layout.table_alignment);
     let table_type = TableType::new(
         RefType::FUNCREF,
@@ -249,27 +315,21 @@ pub(super) fn instantiate_core<T: 'static>(
         imports.define(&*store, "env", name, value)?;
     }
     let instance = imports.instantiate(&mut *store, module)?;
-    for name in CORE_INITIALIZE {
+    for name in CORE_MEMORY_INITIALIZE {
         instance
             .get_typed_func::<(), ()>(&mut *store, name)?
             .call(&mut *store, ())
             .with_context(|| format!("initializing {name}"))?;
     }
-    Ok(Member {
-        instance,
-        memory_base,
+    let image = MemberImage {
+        memory,
         table,
         stack_pointer,
-    })
+        memory_base,
+    };
+    Ok((instance, image))
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the runtime_shm group host links members through this boundary"
-    )
-)]
 fn page_address(page: u32) -> Result<u32> {
     let address = u64::from(page) * u64::from(PAGE);
     ensure!(
@@ -279,13 +339,6 @@ fn page_address(page: u32) -> Result<u32> {
     u32::try_from(address).context("member chunk exceeds wasm32")
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the runtime_shm group host links members through this boundary"
-    )
-)]
 fn i32_global<T>(store: &mut Store<T>, value: u32, mutability: Mutability) -> Result<Global> {
     Global::new(
         store,
@@ -298,11 +351,14 @@ fn i32_global<T>(store: &mut Store<T>, value: u32, mutability: Mutability) -> Re
 mod tests {
     use super::*;
     use wasm_encoder::{
-        CodeSection, CustomSection, EntityType, ExportKind, ExportSection, Function,
-        FunctionSection, GlobalType as EncodedGlobal, ImportSection, Instruction, MemArg,
-        MemoryType, StartSection, TableType as EncodedTable, TypeSection, ValType as EncodedValue,
+        CodeSection, ConstExpr as EncodedConst, CustomSection, EntityType, ExportKind,
+        ExportSection, Function, FunctionSection, GlobalSection, GlobalType as EncodedGlobal,
+        ImportSection, Instruction, MemArg, MemoryType, StartSection, TableType as EncodedTable,
+        TypeSection, ValType as EncodedValue,
     };
-    use wasmtime::{Config, Engine, MemoryType as HostMemory};
+    use wasmtime::{Config, Engine};
+
+    use crate::shm::{GroupPolicy, MemoryGroup};
 
     #[derive(Clone, Copy)]
     struct Image {
@@ -382,11 +438,20 @@ mod tests {
         for ty in [0, 0, 0, 0, 1] {
             functions.function(ty);
         }
+        // An immutable constant data symbol (base-relative) and a mutable counter.
+        let mut globals = GlobalSection::new();
+        globals.global(global(false), &EncodedConst::i32_const(16));
+        globals.global(global(true), &EncodedConst::i32_const(0));
         let mut exports = ExportSection::new();
-        let names = CORE_INITIALIZE.into_iter().chain(["_start", "value"]);
+        let names = CORE_MEMORY_INITIALIZE
+            .into_iter()
+            .chain(CORE_ENTRIES)
+            .chain(["value"]);
         for (index, name) in names.enumerate() {
             exports.export(name, ExportKind::Func, index as u32);
         }
+        exports.export("data_symbol", ExportKind::Global, 3);
+        exports.export("counter", ExportKind::Global, 4);
         if spec.export_memory {
             exports.export("memory", ExportKind::Memory, 0);
         }
@@ -427,6 +492,7 @@ mod tests {
             .section(&types)
             .section(&imports)
             .section(&functions)
+            .section(&globals)
             .section(&exports);
         if spec.start {
             module.section(&StartSection { function_index: 0 });
@@ -493,66 +559,118 @@ mod tests {
         assert_eq!(admit(&image(split), false).unwrap(), Profile::Split);
     }
 
-    struct Ledger {
-        next: u32,
-        chunks: Vec<(u32, u32)>,
-    }
-
-    impl Placement for Ledger {
-        fn carve(&mut self, pages: u32) -> Result<u32> {
-            let first = self.next;
-            self.next += pages;
-            self.chunks.push((first, self.next));
-            Ok(first)
-        }
-    }
-
-    #[test]
-    fn two_members_initialize_their_own_data_in_one_shared_memory() {
-        let mut config = Config::new();
-        config.wasm_threads(true);
-        let engine = Engine::new(&config).unwrap();
-        let module = Module::new(&engine, image(CORE)).unwrap();
-        let memory = SharedMemory::new(&engine, HostMemory::shared(1, MAX_PAGES as u32)).unwrap();
-        let mut store = Store::new(&engine, ());
-        let linker = Linker::new(&engine);
-        let layout = MemInfo {
+    fn layout() -> MemInfo {
+        MemInfo {
             memory_size: 8,
             memory_alignment: 2,
             table_size: 0,
             table_alignment: 0,
-        };
-        let mut ledger = Ledger {
-            next: 1,
-            chunks: Vec::new(),
-        };
-        let mut members = Vec::new();
-        for _ in 0..2 {
-            let needed = ledger.next + 1 + STACK_BYTES / PAGE;
-            memory.grow(u64::from(needed) - memory.size()).unwrap();
-            let member =
-                instantiate_core(&mut store, &linker, &module, &layout, &memory, &mut ledger)
-                    .unwrap();
-            members.push(member);
         }
-        let bases: Vec<u32> = members.iter().map(|member| member.memory_base).collect();
-        assert_ne!(bases[0], bases[1]);
-        for member in &members {
-            let value = member
-                .instance
+    }
+
+    fn engine() -> Engine {
+        let mut config = Config::new();
+        config.wasm_threads(true);
+        Engine::new(&config).unwrap()
+    }
+
+    fn bun_group(engine: &Engine) -> MemoryGroup {
+        let policy = GroupPolicy {
+            maximum_pages: MAX_PAGES as u32,
+            ..GroupPolicy::default()
+        };
+        MemoryGroup::new(engine, policy).unwrap()
+    }
+
+    #[test]
+    fn constant_immutable_core_exports_are_base_relative() {
+        let relative = relative_exports(&image(CORE)).unwrap();
+        assert_eq!(relative, HashSet::from(["data_symbol".to_owned()]));
+    }
+
+    #[test]
+    fn two_leased_members_initialize_their_own_data_in_one_group() {
+        let engine = engine();
+        let group = bun_group(&engine);
+        let module = Module::new(&engine, image(CORE)).unwrap();
+        let mut store = Store::new(&engine, ());
+        let linker = Linker::new(&engine);
+        let mut members = Vec::new();
+        for pid in [1, 2] {
+            let lease = group.reserve(pid).unwrap().launch();
+            let placement = carve(&lease, &layout()).unwrap();
+            let memory = group.shared_memory();
+            let (instance, image) =
+                instantiate_core(&mut store, &linker, &module, &layout(), memory, &placement)
+                    .unwrap();
+            members.push((lease, instance, image));
+        }
+        let memory = group.shared_memory();
+        assert_ne!(members[0].2.memory_base, members[1].2.memory_base);
+        for (_, instance, image) in &members {
+            let value = instance
                 .get_typed_func::<(), i32>(&mut store, "value")
                 .unwrap()
                 .call(&mut store, ())
                 .unwrap();
-            assert_eq!(value as u32, member.memory_base);
-            let word = &memory.data()[member.memory_base as usize..][..4];
+            assert_eq!(value as u32, image.memory_base);
+            let word = &memory.data()[image.memory_base as usize..][..4];
             let bytes: Vec<u8> = word.iter().map(|cell| unsafe { *cell.get() }).collect();
             assert_eq!(u32::from_le_bytes(bytes.try_into().unwrap()), 42);
-            assert_eq!(member.table.size(&store), 1);
-            let top = member.stack_pointer.get(&mut store).unwrap_i32() as u32;
-            assert_eq!(top % PAGE, 0);
-            assert!(top > member.memory_base);
+            assert_eq!(image.table.size(&store), 1);
+            let top = image.stack_pointer.get(&mut store).unwrap_i32() as u32;
+            assert_eq!(top - STACK_BYTES, image.memory_base + PAGE);
         }
-        assert!(ledger.chunks.windows(2).all(|pair| pair[0].1 <= pair[1].0));
+        let committed = group.snapshot().committed_bytes;
+        assert_eq!(
+            committed,
+            u64::from(PAGE) * (1 + 2 * (1 + u64::from(STACK_PAGES)))
+        );
+        for (lease, _, _) in members {
+            lease.physical_stopped();
+        }
+    }
+
+    #[test]
+    fn a_side_got_rebases_relative_core_data_onto_the_member_base() {
+        let engine = engine();
+        let group = bun_group(&engine);
+        let bytes = image(CORE);
+        let relative = relative_exports(&bytes).unwrap();
+        let module = Module::new(&engine, bytes).unwrap();
+        let mut store = Store::new(&engine, ());
+        let lease = group.reserve(1).unwrap().launch();
+        let placement = carve(&lease, &layout()).unwrap();
+        let linker = Linker::new(&engine);
+        let memory = group.shared_memory();
+        let (instance, member) =
+            instantiate_core(&mut store, &linker, &module, &layout(), memory, &placement).unwrap();
+        let core = super::super::CoreImage::member(instance, &member, &relative);
+        let Extern::Global(cell) =
+            super::super::got_address(&core, &mut store, "data_symbol").unwrap()
+        else {
+            panic!("GOT.mem cell is not a global");
+        };
+        assert_eq!(
+            cell.get(&mut store).unwrap_i32() as u32,
+            member.memory_base + 16
+        );
+        assert!(super::super::got_address(&core, &mut store, "counter").is_err());
+        lease.physical_stopped();
+    }
+
+    #[test]
+    fn a_four_gib_group_cannot_instantiate_a_bun_core() {
+        let engine = engine();
+        let group = MemoryGroup::new(&engine, GroupPolicy::default()).unwrap();
+        let module = Module::new(&engine, image(CORE)).unwrap();
+        let mut store = Store::new(&engine, ());
+        let lease = group.reserve(1).unwrap().launch();
+        let placement = carve(&lease, &layout()).unwrap();
+        let linker = Linker::new(&engine);
+        let memory = group.shared_memory();
+        let result = instantiate_core(&mut store, &linker, &module, &layout(), memory, &placement);
+        assert!(result.is_err());
+        lease.physical_stopped();
     }
 }

@@ -26,17 +26,30 @@ atomics.
 ## Memory ceiling
 
 Bun's wasm32 string tags use address bits 29-31, so every Bun member must stay below 512 MiB.
-The core declares its imported memory with an 8192-page maximum. A Bun group is created with
-Waffle's `memoryGroups.maximumPages = 8192` and `stackBytes = 8 MiB`. A group memory with a
-larger maximum cannot instantiate the core.
+The core declares its imported memory with an 8192-page maximum, so a group memory with a larger
+maximum cannot instantiate it.
+
+Waffle's `memoryGroups.maximumPages` and `stackBytes` are runtime-wide options: every group in
+one `createRuntime()` uses the same policy. A runtime that hosts Bun groups must opt in with
+`createRuntime({ memoryGroups: { maximumPages: 8192, stackBytes: 8 << 20 } })`, and that also caps
+every other group in the same runtime at 512 MiB. Waffle's defaults (4 GiB, 1 MiB stacks) still
+apply to runtimes that don't set them. A Waffle runtime left at the defaults cannot admit a Bun
+core: the import check fails. There is no fallback. One consequence: a 1 GiB nested memory
+(Rolldown's addon) cannot be a region of a Bun group.
+
+On wasmtime, a Bun group is an `shm::MemoryGroup` created with `GroupPolicy { maximum_pages: 8192, .. }`; the service default (65536) refuses the core the same way.
 
 ## Initialization
 
-1. The host carves the core's data (`dylink.0` memory-info), an 8 MiB stack and a table base.
+1. The host carves the core's data (`dylink.0` memory-info) and an 8 MiB stack through the
+   member's lease (`group_grow`), and gives the core its own table with slot 0 null.
 2. It instantiates the core with `env.memory`, `__memory_base`, `__table_base`, a mutable
    `__stack_pointer` and the member's own table.
-3. `core_initialize_memory`, `__wasm_apply_data_relocs`, `__wasm_call_ctors`, in that order.
-4. The engine side links through `bun_core_alloc` as in the split profile, then `_start`.
+3. `core_initialize_memory`, then `__wasm_apply_data_relocs`, at instantiation.
+4. Host imports are installed as for a split core, then `__wasm_call_ctors`.
+5. The engine side links through `bun_core_alloc` into the member's memory and table. Its
+   `__stack_pointer` is the member's, and its `GOT.mem` cells add the member's `__memory_base`
+   to the core's constant data exports. Then `_start`.
 
 ## Admission
 

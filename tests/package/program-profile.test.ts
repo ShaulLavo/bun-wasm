@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inputProfile, verifyProgramReceipt, type ProgramInputSnapshot } from "../../scripts/guest-core-receipt.ts";
 import { hash } from "../../scripts/guest-source-manifest.ts";
-import { parseProgramProfile, sharedGroupEnvironment, verifySharedSysroot, verifySplitSysroot } from "../../scripts/src/program-profile.ts";
+import { parseProgramProfile, selectedCxxMembers, sharedGroupEnvironment, targetFeatures, verifySharedSysroot, verifySplitSysroot } from "../../scripts/src/program-profile.ts";
 import { importedMemory, sharedGroupPair } from "../../src/engine-kind.ts";
 import { quickjsPair } from "./quickjs-plan-fixture.ts";
 
@@ -94,4 +94,25 @@ test("a pair's halves must agree on the program profile", () => {
   expect(importedMemory(sharedSide)).toEqual({ shared: true, maximum: 8192 });
   expect(() => sharedGroupPair(split, sharedSide)).toThrow(/different program profiles/);
   expect(importedMemory(memoryImport([1, 1, 2]))).toEqual({ shared: false, maximum: 2 });
+});
+
+test("the core link map names each selected C++ runtime member once", () => {
+  const map = [
+    "      1a2b     40     1 /sdk/noeh/libc++abi.a(stdlib_new_delete.cpp.o):(_Znwm)",
+    "      1a6b     20     1 /sdk/noeh/libc++abi.a(stdlib_new_delete.cpp.o):(_ZdlPvm)",
+    "      2000     80     1 /sdk/noeh/libc++.a(string.cpp.o):(.text)",
+    "      3000     10     1 /sysroot/lib/wasm32-wasip1/libc.a(dlmalloc.c.obj):(malloc)",
+  ].join("\n");
+  expect(selectedCxxMembers(map)).toEqual([
+    { archive: "/sdk/noeh/libc++abi.a", member: "stdlib_new_delete.cpp.o" },
+    { archive: "/sdk/noeh/libc++.a", member: "string.cpp.o" },
+  ]);
+});
+
+test("object target features keep their allow and disallow prefixes", () => {
+  const label = (value: string) => [value.length].concat(Array.from(new TextEncoder().encode(value)));
+  const payload = label("target_features").concat([2, 43], label("atomics"), [45], label("shared-mem"));
+  const object = Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0, 0, payload.length].concat(payload));
+  expect(targetFeatures(object)).toEqual(["+atomics", "-shared-mem"]);
+  expect(targetFeatures(Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0]))).toEqual([]);
 });

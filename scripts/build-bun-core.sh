@@ -29,6 +29,7 @@ if [[ "${1:-}" == --shared-group ]]; then
   shared_environment=$(bun "$root/scripts/src/program-profile.ts" environment core)
   eval "$shared_environment"
   build_std=(-Zbuild-std=std,panic_abort)
+  export BUN_WASM_CORE_LINK_MAP="$out/bun-core.link.map"
   shift
 fi
 [[ $# == 0 ]] || { echo "usage: build-bun-core.sh [--no-bun-transpiler] [--shared-group]" >&2; exit 2; }
@@ -61,6 +62,7 @@ fi
 "$GUEST_CARGO" build --locked --offline "${build_std[@]}" --release --target wasm32-wasip1 -j "${CARGO_BUILD_JOBS:-4}" -p bunwasm-cli "${features[@]}"
 raw="$CARGO_TARGET_DIR/wasm32-wasip1/release/bun.wasm"
 if (( shared_group )); then
+  bun "$root/scripts/src/program-profile.ts" link-proof "$BUN_WASM_CORE_LINK_MAP" "$out/cxx-runtime-members.json"
   node "$root/scripts/src/engine-explicit-init.ts" core "$raw" "$out/bun-core.explicit.wasm" --group
   wasm-opt -O2 -g --strip-dwarf --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
     --enable-mutable-globals --enable-threads "$out/bun-core.explicit.wasm" -o "$core"
