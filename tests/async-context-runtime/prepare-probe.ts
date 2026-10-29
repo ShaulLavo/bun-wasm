@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import vm from "node:vm";
 import Module from "node:module";
+import { evaluate } from "./eval-callsite.mjs";
 
 const storage = new AsyncLocalStorage<string>();
 const second = new AsyncLocalStorage<string>();
@@ -84,4 +85,6 @@ assert.deepEqual(await Promise.all([
   second.run("secret", () => storage.run("isolated-A", () => shared(storage, second))),
   storage.run("isolated-B", () => shared(storage, second)),
 ]), [["isolated-A", "secret"], ["isolated-B", undefined]]);
+assert.deepEqual(await Promise.all(["file-eval-A", "file-eval-B"].map(name => storage.run(name, () =>
+  evaluate('(async () => { await 0; return storage.getStore(); })()', storage)))), ["file-eval-A", "file-eval-B"]);
 console.log("PREPARE_OK");
