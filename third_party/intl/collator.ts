@@ -49,6 +49,21 @@ function negotiate(internal: IntlInternal, locales: readonly string[]): Negotiat
   return selected;
 }
 
+function resolvedLocale(locale: Intl.Locale, options: CollatorOptions): string {
+  const extensions: string[] = [];
+  if (locale.collation && (options.collation === undefined || options.collation === locale.collation)) {
+    extensions.push("co", locale.collation);
+  }
+  if (locale.caseFirst && (options.caseFirst === undefined || options.caseFirst === locale.caseFirst)) {
+    extensions.push("kf", locale.caseFirst);
+  }
+  const numericExtension = locale.toString().split("-u-")[1]?.split("-").includes("kn");
+  if (numericExtension && (options.numeric === undefined || Boolean(options.numeric) === locale.numeric)) {
+    extensions.push(locale.numeric ? "kn" : "kn-false");
+  }
+  return extensions.length ? `${locale.baseName}-u-${extensions.join("-")}` : locale.baseName;
+}
+
 export function createCollator(internal: IntlInternal) {
   return class Collator {
     #resolved: ResolvedCollatorOptions;
@@ -69,9 +84,9 @@ export function createCollator(internal: IntlInternal) {
       this.#caseFirst = options.caseFirst === undefined ? undefined : option(options.caseFirst, ["upper", "lower", "false"], "false", "caseFirst");
       this.#collation = options.collation === undefined ? "default" : option(options.collation,
         ["default", "compat", "dict", "ducet", "emoji", "eor", "phonebk", "phonetic", "pinyin", "reformed", "standard", "stroke", "trad", "unihan", "zhuyin"], "default", "collation");
-      const locale = new Intl.Locale(this.#compareLocale);
+      const locale = new Intl.Locale(selected?.effective ?? "und");
       this.#resolved = {
-        locale: selected?.effective ?? "und",
+        locale: resolvedLocale(locale, options),
         usage,
         sensitivity: option(options.sensitivity, ["base", "accent", "case", "variant"], "variant", "sensitivity"),
         ignorePunctuation: Boolean(options.ignorePunctuation),

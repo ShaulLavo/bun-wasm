@@ -8,6 +8,8 @@ The generator installs private copies with a temporary package cache. The source
 
 For `ignorePunctuation`, the adapter selects ICU4X shifted handling while keeping the requested sensitivity. Raising variant sensitivity to quaternary would compare the shifted punctuation again.
 
+The Rust locale resolver preserves parsed `kn` and `kf` preferences and checks `co` against the baked ICU4X collation metadata before retaining it. The TypeScript adapter builds the resolved locale from these supported keys, removing a key when an explicit option changes its value. Matching options retain the requested key; options alone do not add locale extensions. Native-backed factory tests exercise both adapters together.
+
 
 ## Classification
 

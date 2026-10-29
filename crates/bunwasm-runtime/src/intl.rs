@@ -3,13 +3,15 @@ use std::str::FromStr;
 
 use icu_collator::options::{AlternateHandling, CaseLevel, CollatorOptions, MaxVariable, Strength};
 use icu_collator::preferences::{CollationCaseFirst, CollationNumericOrdering, CollationType};
-use icu_collator::provider::{Baked, CollationRootV1, CollationTailoringV1};
+use icu_collator::provider::{Baked, CollationMetadataV1, CollationRootV1, CollationTailoringV1};
 use icu_collator::{Collator, CollatorPreferences};
 use icu_locale_core::Locale;
-use icu_locale_core::extensions::unicode::Value;
+use icu_locale_core::extensions::unicode::{Value, key};
 use icu_locale_fallback::{LocaleFallbackConfig, LocaleFallbackPriority, LocaleFallbacker};
 use icu_provider::marker::DataMarkerExt;
-use icu_provider::{DataIdentifierBorrowed, DataLocale, DataProvider, DataRequest};
+use icu_provider::{
+    DataIdentifierBorrowed, DataLocale, DataMarkerAttributes, DataProvider, DataRequest,
+};
 
 use crate::data::{Args, NativeError, NativeResult, Val};
 use crate::natives::Table;
@@ -135,12 +137,47 @@ fn has_known_language(locale: &DataLocale) -> bool {
     normalized.take().region.is_some()
 }
 
+fn has_collation_type(locale: &DataLocale, collation: CollationType) -> bool {
+    let mut request = DataRequest {
+        id: DataIdentifierBorrowed::for_marker_attributes_and_locale(
+            DataMarkerAttributes::from_str_or_panic(collation.as_str()),
+            locale,
+        ),
+        metadata: Default::default(),
+    };
+    request.metadata.silent = true;
+    <Baked as DataProvider<CollationMetadataV1>>::load(&Baked, request).is_ok()
+}
+
+fn resolved_locale_tag(effective: DataLocale, requested: &Locale) -> String {
+    let preferences = CollatorPreferences::from(requested.clone());
+    let collation_supported = preferences
+        .collation_type
+        .is_some_and(|collation| has_collation_type(&effective, collation));
+    let mut resolved = effective.into_locale();
+    for (key, supported) in [
+        (key!("co"), collation_supported),
+        (key!("kf"), preferences.case_first.is_some()),
+        (key!("kn"), preferences.numeric_ordering.is_some()),
+    ] {
+        if !supported {
+            continue;
+        }
+        let Some(value) = requested.extensions.unicode.keywords.get(&key) else {
+            continue;
+        };
+        resolved.extensions.unicode.keywords.set(key, value.clone());
+    }
+    resolved.to_string()
+}
+
 fn resolve_locale(input: &str) -> Result<Option<String>, NativeError> {
     let locale = input
         .parse::<Locale>()
         .map_err(|error| NativeError::error(format!("Invalid collation locale: {error}")))?;
-    let data_locale =
-        CollationTailoringV1::make_locale(CollatorPreferences::from(locale).locale_preferences);
+    let data_locale = CollationTailoringV1::make_locale(
+        CollatorPreferences::from(locale.clone()).locale_preferences,
+    );
     if !has_known_language(&data_locale) {
         return Ok(None);
     }
@@ -150,13 +187,13 @@ fn resolve_locale(input: &str) -> Result<Option<String>, NativeError> {
     let mut effective = *fallback.get();
     loop {
         if has_collation_data(fallback.get()) {
-            return Ok(Some(fallback.get().to_string()));
+            return Ok(Some(resolved_locale_tag(*fallback.get(), &locale)));
         }
         if fallback.get().is_unknown() {
             if !has_root_collation_data() {
                 return Ok(None);
             }
-            return Ok(Some(effective.to_string()));
+            return Ok(Some(resolved_locale_tag(effective, &locale)));
         }
         effective = *fallback.get();
         fallback.step();
@@ -231,6 +268,24 @@ mod tests {
     fn native_resolver_returns_null_for_unsupported_locales() {
         assert_eq!(resolve(Args(&[Val::from("zz-ZZ")])).unwrap(), Val::Null);
         assert_eq!(resolve(Args(&[Val::from("sv")])).unwrap(), Val::from("sv"));
+    }
+
+    #[test]
+    fn native_resolver_preserves_supported_collation_extensions() {
+        for (input, expected) in [
+            ("en-u-kn", "en-u-kn"),
+            ("en-u-kn-false", "en-u-kn-false"),
+            ("en-u-kf-upper", "en-u-kf-upper"),
+            ("de-u-co-phonebk", "de-u-co-phonebk"),
+            ("de-u-co-phonebk-kf-upper-kn", "de-u-co-phonebk-kf-upper-kn"),
+            ("en-u-co-phonebk", "en"),
+            ("en-u-ca-gregory-kn", "en-u-kn"),
+        ] {
+            assert_eq!(
+                resolve(Args(&[Val::from(input)])).unwrap(),
+                Val::from(expected)
+            );
+        }
     }
 
     #[test]

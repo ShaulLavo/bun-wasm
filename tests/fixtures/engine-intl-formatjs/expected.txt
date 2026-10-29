@@ -9,6 +9,7 @@ collationOptions -1 0
 collatorPunctuation 0 -1
 collatorExtensions -1 true -1 upper
 collatorExtensionOverrides 1 false 1 false
+collatorResolvedLocales en-u-kn en-u-kf-upper de-u-co-phonebk en en de
 collatorNegotiation 1 sv []
 timezone 03:00:00
 prototype 1.234,5 29.2.2024

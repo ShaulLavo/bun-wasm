@@ -6,17 +6,35 @@ const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/intl.js", 
 const nativeIntl = Intl;
 type NativeCollatorOptions = NonNullable<ConstructorParameters<typeof Intl.Collator>[1]>;
 type CallbackArgs = [string, NativeCollatorOptions["sensitivity"], NativeCollatorOptions["numeric"], NativeCollatorOptions["caseFirst"], NativeCollatorOptions["ignorePunctuation"], NativeCollatorOptions["collation"], string, string];
+const nativeControl = process.env.BUNWASM_INTL_NATIVE_CONTROL;
+
+function nativeResult(args: string[]): unknown {
+  if (nativeControl === undefined) throw new Error("Missing Intl native control");
+  const result = Bun.spawnSync([nativeControl].concat(args));
+  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+  return JSON.parse(result.stdout.toString());
+}
 
 function factoryWithNativeCallback() {
   const calls: CallbackArgs[] = [];
   const context = vm.createContext({});
   const fallback = vm.runInContext(source, context)({ native: {
     collatorResolveLocale(locale: string): string | null {
+      if (nativeControl !== undefined) {
+        const result = nativeResult(["collatorResolveLocale", locale]);
+        if (result === null || typeof result === "string") return result;
+        throw new Error("Invalid native locale result");
+      }
       if (nativeIntl.Collator.supportedLocalesOf([locale]).length === 0) return null;
       return new nativeIntl.Collator(locale).resolvedOptions().locale;
     },
     collatorCompare(...args: CallbackArgs): number {
       calls.push(args);
+      if (nativeControl !== undefined) {
+        const result = nativeResult(["collatorCompare"].concat(args.map(value => value === undefined ? "-" : String(value))));
+        if (typeof result === "number") return result;
+        throw new Error("Invalid native comparison result");
+      }
       const [locale, sensitivity, numeric, caseFirst, ignorePunctuation, collation, left, right] = args;
       return Math.sign(new nativeIntl.Collator(locale, {
         sensitivity,
@@ -56,6 +74,28 @@ test("generated factory preserves extension defaults and explicit option precede
   expect(phonebook.compare("ä", "ae")).toBe(1);
   expect(phonebook.resolvedOptions().collation).toBe("phonebk");
   expect(calls.at(-1)?.[5]).toBe("default");
+});
+
+test("resolved locales retain supported collation extensions unless an option changes their value", () => {
+  const { fallback } = factoryWithNativeCallback();
+  const cases: [string, NativeCollatorOptions][] = [
+    ["en-u-kn", {}],
+    ["en-u-kn", { numeric: true }],
+    ["en-u-kn", { numeric: false }],
+    ["en-u-kn-false", { numeric: false }],
+    ["en-u-kn-false", { numeric: true }],
+    ["en-u-kf-upper", {}],
+    ["en-u-kf-upper", { caseFirst: "upper" }],
+    ["en-u-kf-upper", { caseFirst: "false" }],
+    ["de-u-co-phonebk", {}],
+    ["de-u-co-phonebk", { collation: "phonebk" }],
+    ["de-u-co-phonebk", { collation: "emoji" }],
+    ["de-u-co-phonebk-kf-upper-kn", { numeric: false }],
+    ["en", { numeric: true, caseFirst: "upper" }],
+  ];
+  for (const [locale, options] of cases) {
+    expect(new fallback.Collator(locale, options).resolvedOptions()).toEqual(new nativeIntl.Collator(locale, options).resolvedOptions());
+  }
 });
 
 test("generated factory negotiates locales through the native resolver callback", () => {

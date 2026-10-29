@@ -26,6 +26,11 @@ console.log("collatorExtensionOverrides", new Intl.Collator("en-u-kn", { numeric
   new Intl.Collator("en-u-kn", { numeric: false }).resolvedOptions().numeric,
   new Intl.Collator("en-u-kf-upper", { caseFirst: "false" }).compare("A", "a"),
   new Intl.Collator("en-u-kf-upper", { caseFirst: "false" }).resolvedOptions().caseFirst);
+console.log("collatorResolvedLocales", numericExtension.resolvedOptions().locale, upperExtension.resolvedOptions().locale,
+  new Intl.Collator("de-u-co-phonebk").resolvedOptions().locale,
+  new Intl.Collator("en-u-kn", { numeric: false }).resolvedOptions().locale,
+  new Intl.Collator("en-u-kf-upper", { caseFirst: "false" }).resolvedOptions().locale,
+  new Intl.Collator("de-u-co-phonebk", { collation: "emoji" }).resolvedOptions().locale);
 const negotiated = new Intl.Collator(["zz-ZZ", "sv"]);
 console.log("collatorNegotiation", negotiated.compare("ä", "z"), negotiated.resolvedOptions().locale,
   JSON.stringify(Intl.Collator.supportedLocalesOf(["zz-ZZ", "xx"])));

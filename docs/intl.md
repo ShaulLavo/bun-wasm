@@ -12,6 +12,8 @@ English, German, and Hebrew locale packs cover numbers, dates, plurals, lists, a
 
 ICU4X 2.4.0 implements collation with Unicode collation data and locale tailorings. The adapter supports sensitivity, numeric ordering, case-first, punctuation handling, and collation extensions. It negotiates requests against the actual data build, filters unsupported tags from `supportedLocalesOf`, and reports the selected data locale from `resolvedOptions()`. ICU4X falls back to root data for known languages without a tailoring. An entirely unsupported request uses and reports `und` without claiming that tag is supported. Search usage is not included in this data build and throws `RangeError`.
 
+The resolved locale retains supported `kn`, `kf`, and `co` extension keys. An explicit option with the same value retains its key; a different value removes that key from the locale while applying the option. For example, `en-u-kn` reports numeric ordering and locale `en-u-kn`, while `{ numeric: false }` reports locale `en`.
+
 Dates support the Gregorian and ISO 8601 calendars. The bundle includes FormatJS's complete IANA timezone data, with daylight transitions through 2100. The default timezone is UTC because a WASI guest has no host-local timezone contract. Named zones and explicit UTC offsets work without native engine support.
 
 `DisplayNames`, `DurationFormat`, and non-Gregorian calendar packages are not bundled. There is no consumer for them yet. `DateTimeFormat` accepts `Date` and numeric inputs, but not Temporal objects. The previous fallback had the same Temporal limitation.
