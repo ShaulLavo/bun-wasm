@@ -4,6 +4,7 @@
 #[path = "../../bunwasm-cli/src/tool_args.rs"]
 mod tool_args;
 
+mod fs_watch;
 mod linked;
 mod net;
 mod process;
@@ -52,6 +53,8 @@ pub struct Host {
     pub memory: Option<wasmtime::Memory>,
     pub trace: bool,
     pub processes: process::Processes,
+    /// `runtime_fs` guest filesystem watches.
+    pub watches: fs_watch::Watches,
     pub limits: StoreLimits,
     pub functions: Vec<wasmtime::Func>,
     pub cancel: Arc<process::Cancellation>,
@@ -344,6 +347,7 @@ fn run_module_instance(
     let net = net::Net::new();
     let memory_limit = stdio.memory_limit;
     let processes = process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
+    let watches = fs_watch::Watches::new(net.notify());
     let host = Host {
         wasi: wasi.build_p1(),
         net,
@@ -351,6 +355,7 @@ fn run_module_instance(
         cancel: cancel.clone(),
         cwd,
         processes,
+        watches,
         limits: StoreLimitsBuilder::new()
             .memory_size(memory_limit)
             // One guest and bounded memory-sharing preview1 delegation adapters.

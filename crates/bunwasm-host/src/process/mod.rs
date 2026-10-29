@@ -454,8 +454,13 @@ impl Processes {
         self.next = self.next.max(fd as u32 + 1);
     }
 
-    pub fn preopen_count(&self) -> usize {
-        self.runtime.dirs.len()
+    /// Host directories of the preopens, in descriptor order from 3.
+    pub fn preopen_dirs(&self) -> Vec<std::path::PathBuf> {
+        self.runtime
+            .dirs
+            .iter()
+            .map(|(host, _)| host.clone())
+            .collect()
     }
 
     pub fn readiness(&self, fd: i32, write: bool) -> Result<(bool, bool), i32> {

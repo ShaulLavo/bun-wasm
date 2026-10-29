@@ -3,6 +3,7 @@
 //! owned by Wasmtime and are deliberately not transferable through spawn.
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use wasmtime::{Caller, Func, Linker, Store, Val, ValType};
 
@@ -380,15 +381,19 @@ struct Namespace {
     closing: Arc<Delegated>,
     files: HashMap<i32, i32>,
     preopens: HashSet<i32>,
+    /// Host paths of Wasmtime's descriptors (keyed by its own numbers, which renumbering
+    /// keeps), so `runtime_fs.watch_open` can watch the node an open descriptor names.
+    paths: HashMap<i32, PathBuf>,
 }
 impl Namespace {
-    fn new(count: usize, closing: Arc<Delegated>) -> Self {
-        let preopens: HashSet<i32> = (3..3 + count as i32).collect();
+    fn new(dirs: Vec<PathBuf>, closing: Arc<Delegated>) -> Self {
+        let preopens: HashSet<i32> = (3..3 + dirs.len() as i32).collect();
         Self {
             initialized: false,
             closing,
             files: preopens.iter().map(|&fd| (fd, fd)).collect(),
             preopens,
+            paths: (3..).zip(dirs).collect(),
         }
     }
     fn initialize(&mut self, caller: &mut Caller<'_, Host>) -> Result<()> {
@@ -418,7 +423,9 @@ impl Namespace {
         (3..i32::MAX).find(|fd| !self.files.contains_key(fd) && !host.processes.owns(*fd))
     }
     fn remove(&mut self, fd: i32) {
-        self.files.remove(&fd);
+        if let Some(actual) = self.files.remove(&fd) {
+            self.paths.remove(&actual);
+        }
         self.preopens.remove(&fd);
     }
     fn close(&mut self, caller: &mut Caller<'_, Host>, fd: i32) -> Result<i32> {
@@ -450,7 +457,7 @@ pub fn initialize(linker: &Linker<Host>, store: &mut Store<Host>) -> Result<()> 
 pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()> {
     let close = Arc::new(original(linker, store, "fd_close")?);
     let namespace = Arc::new(Mutex::new(Namespace::new(
-        store.data().processes.preopen_count(),
+        store.data().processes.preopen_dirs(),
         close.clone(),
     )));
     let read = original(linker, store, "fd_read")?;
@@ -778,6 +785,10 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
             }
             let opened =
                 i32::from_le_bytes(memory.data(&caller)[output.clone()].try_into().unwrap());
+            let opened_path = opened_path(&state, actual, memory.data(&caller), path, length);
+            if let Some(opened_path) = opened_path {
+                state.paths.insert(opened, opened_path);
+            }
             state.files.insert(external, opened);
             caller.data_mut().processes.reserve_file(external);
             memory.data_mut(&mut caller)[output].copy_from_slice(&external.to_le_bytes());
@@ -874,6 +885,92 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
             Ok(0)
         },
     )?;
+    install_watches(linker, &namespace)?;
     linker.allow_shadowing(false);
+    Ok(())
+}
+
+/// The host path a successful `path_open` names: its directory's path joined with the guest path.
+fn opened_path(
+    state: &Namespace,
+    directory: i32,
+    memory: &[u8],
+    path: i32,
+    length: i32,
+) -> Option<PathBuf> {
+    let base = state.paths.get(&directory)?;
+    let bytes = &memory[span(memory, path, length as u32 as usize)?];
+    Some(base.join(std::str::from_utf8(bytes).ok()?))
+}
+
+/// Waffle's `runtime_fs` guest filesystem watches (positive WASI errnos, process-local ids).
+fn install_watches(linker: &mut Linker<Host>, namespace: &Arc<Mutex<Namespace>>) -> Result<()> {
+    use crate::fs_watch::{BADF, FAULT, INVAL, NOBUFS, Read};
+    let state = namespace.clone();
+    linker.func_wrap(
+        "runtime_fs",
+        "watch_open",
+        move |mut caller: Caller<'_, Host>, fd: i32, flags: i32, out: i32| -> Result<i32> {
+            let memory = memory(&mut caller)?;
+            let Some(output) = span(memory.data(&caller), out, 4) else {
+                return Ok(FAULT);
+            };
+            if flags as u32 & !1 != 0 {
+                return Ok(INVAL);
+            }
+            let mut state = state.lock().unwrap();
+            state.initialize(&mut caller)?;
+            // Pipes and terminals are runtime_proc streams, not files or directories.
+            if caller.data().processes.owns(fd) {
+                return Ok(INVAL);
+            }
+            let Some(&actual) = state.files.get(&fd) else {
+                return Ok(BADF);
+            };
+            let Some(path) = state.paths.get(&actual).cloned() else {
+                return Ok(INVAL);
+            };
+            drop(state);
+            match caller.data_mut().watches.open(&path, flags & 1 != 0) {
+                Ok(id) => {
+                    memory.data_mut(&mut caller)[output].copy_from_slice(&id.to_le_bytes());
+                    Ok(0)
+                }
+                Err(errno) => Ok(errno),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_fs",
+        "watch_read",
+        |mut caller: Caller<'_, Host>, id: i32, buf: i32, len: i32, out: i32| -> Result<i32> {
+            let memory = memory(&mut caller)?;
+            let data = memory.data(&caller);
+            let (Some(buffer), Some(output)) =
+                (span(data, buf, len as u32 as usize), span(data, out, 4))
+            else {
+                return Ok(FAULT);
+            };
+            let (errno, written) = match caller.data_mut().watches.read(id as u32, buffer.len()) {
+                Read::Records(bytes) => {
+                    let start = buffer.start;
+                    memory.data_mut(&mut caller)[start..start + bytes.len()]
+                        .copy_from_slice(&bytes);
+                    (0, bytes.len() as u32)
+                }
+                Read::Short(needed) => (NOBUFS, needed),
+                Read::Errno(errno) => return Ok(errno),
+            };
+            memory.data_mut(&mut caller)[output].copy_from_slice(&written.to_le_bytes());
+            Ok(errno)
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_fs",
+        "watch_close",
+        |mut caller: Caller<'_, Host>, id: i32| -> i32 {
+            caller.data_mut().watches.close(id as u32)
+        },
+    )?;
     Ok(())
 }

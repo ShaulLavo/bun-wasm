@@ -62,15 +62,26 @@ checks that invalid encodings stat nothing and open no watch, and
 `scripts/runtime-fs-watch-events.test.ts` covers delivery, ordering and lifecycle
 over the real `net.js` scheduler.
 
-The native wasmtime host (`crates/bunwasm-host`) implements the same three
-`runtime_fs` imports over the `notify` crate in a follow-up. The pinned Waffle and
-`bun.wasm` land as a pair, because the WASI adapter rejects unknown `runtime_fs` names.
+The native wasmtime host (`crates/bunwasm-host/src/fs_watch.rs`) implements the same three
+`runtime_fs` imports over the `notify` crate 8.2.0: inotify on Linux and FSEvents on macOS,
+with no polling fallback. Its descriptor namespace records the host path of each Wasmtime
+descriptor (the preopens, then every `path_open`), so `watch_open(fd)` watches the canonical
+node that descriptor names. Each delivered notification bumps the network notification that
+`Slot::Poll` waits on, so a native guest wakes on the commit like a browser guest. Records,
+coalescing, the 128-record bound, overflow, end of stream and the errnos follow the Waffle ABI.
+`notify` reports a new directory before watching it and never reports entries that already
+exist inside it. So when a recursive watch drains a directory create, it walks that
+directory and reports each entry as a rename, as Node's recursive watcher does. A native
+host reports no `ECANCELED`, because it has no revocable filesystem connection.
+
+The pinned Waffle and `bun.wasm` land as a pair, because the WASI adapter rejects unknown
+`runtime_fs` names.
 
 
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`src/js/fs_watch.ts`, `net.js` watch-first pump, `fsWatch*` natives, web notification wiring](#portable-filesystem-watcher) | Host feature | Original event-driven watcher over Waffle `runtime_fs` watch ids, with Node listener identity. |
+| [`src/js/fs_watch.ts`, `net.js` watch-first pump, `fsWatch*` natives, web notification wiring, native `runtime_fs` host](#portable-filesystem-watcher) | Host feature | Original event-driven watcher over Waffle `runtime_fs` watch ids, with Node listener identity, and an original native host over `notify`. |
 
 [Ledger scope and pinned revisions](scope.md).

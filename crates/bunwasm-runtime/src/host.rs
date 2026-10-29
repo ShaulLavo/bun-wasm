@@ -710,6 +710,13 @@ mod signal_tests {
     }
 
     #[test]
+    fn filesystem_watches_report_enosys_without_the_runtime_fs_imports() {
+        assert_eq!(fs_watch_open(env!("CARGO_MANIFEST_DIR"), true), Err(52));
+        assert_eq!(fs_watch_read(1), Err(52));
+        assert_eq!(fs_watch_close(1), 52);
+    }
+
+    #[test]
     fn idle_without_the_process_abi_still_waits_the_requested_time() {
         let started = std::time::Instant::now();
         idle(20);

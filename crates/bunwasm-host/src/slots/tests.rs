@@ -40,10 +40,12 @@ impl Fixture {
         }
         let processes =
             process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
+        let watches = crate::fs_watch::Watches::new(net.notify());
         let mut store = Store::new(
             &engine,
             Host {
                 wasi: wasi.build_p1(),
+                watches,
                 net,
                 memory: None,
                 trace: false,
@@ -1095,4 +1097,111 @@ fn cwd_reports_the_full_length_and_writes_only_when_it_fits() {
     assert_eq!(f.bytes(1024, 9), b"/work/app");
     assert_eq!(f.call("runtime_proc", "cwd", (65536, 0)), 9);
     assert_eq!(f.call("runtime_proc", "cwd", (65530, 9)), process::FAULT);
+}
+
+/// Removes its scratch directory however the test ends.
+struct Scratch(std::path::PathBuf);
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Reads one `runtime_fs.watch_read` result into (type, name) pairs.
+fn watch_records(f: &mut Fixture, id: i32) -> Result<Vec<(u8, Option<String>)>, i32> {
+    let errno = f.call("runtime_fs", "watch_read", (id, 4096, 2048, 64));
+    if errno != 0 {
+        return Err(errno);
+    }
+    let mut bytes = f.bytes(4096, f.word(64) as usize).to_vec();
+    let mut records = Vec::new();
+    while !bytes.is_empty() {
+        let length = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        let (name, stride) = if length == u32::MAX {
+            (None, 8)
+        } else {
+            let length = length as usize;
+            (
+                Some(String::from_utf8(bytes[8..8 + length].to_vec()).unwrap()),
+                8 + length.next_multiple_of(4),
+            )
+        };
+        records.push((bytes[0], name));
+        bytes.drain(..stride);
+    }
+    Ok(records)
+}
+
+/// Sleep in the network poll until a drain of the watch reports `name` as a rename.
+fn wait_for_rename(f: &mut Fixture, id: i32, name: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        assert!(std::time::Instant::now() < deadline, "no rename for {name}");
+        f.store.data_mut().net.poll(1000);
+        while let Ok(records) = watch_records(f, id) {
+            if records
+                .iter()
+                .any(|record| *record == (2, Some(name.to_string())))
+            {
+                return;
+            }
+        }
+    }
+}
+
+#[test]
+fn runtime_fs_watches_follow_an_opened_directory_and_wake_the_network_poll() {
+    let root =
+        std::env::temp_dir().join(format!("bun-wasm-runtime-fs-watch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("app")).unwrap();
+    let _scratch = Scratch(root.clone());
+    let mut f = Fixture::at(&root);
+    // Rust's File::open through wasi-libc's open(O_RDONLY): symlink-follow lookup, no open
+    // flags, every right except FD_DATASYNC, FD_WRITE, FD_ALLOCATE and FD_FILESTAT_SET_SIZE.
+    f.write(1024, b"app");
+    let rights = 0x1fff_ffffi64 & !(1 | 1 << 6 | 1 << 8 | 1 << 22);
+    assert_eq!(
+        f.call(
+            "wasi_snapshot_preview1",
+            "path_open",
+            (3, 1, 1024, 3, 0, rights, rights, 0, 128)
+        ),
+        0
+    );
+    let directory = f.word(128);
+    assert_eq!(
+        f.call("runtime_fs", "watch_open", (directory, 2, 132)),
+        28,
+        "unknown flags"
+    );
+    assert_eq!(
+        f.call("runtime_fs", "watch_open", (999, 0, 132)),
+        8,
+        "unknown descriptor"
+    );
+    let [reader, _writer] = f.pipe();
+    assert_eq!(
+        f.call("runtime_fs", "watch_open", (reader, 0, 132)),
+        28,
+        "a pipe is not a file"
+    );
+    assert_eq!(
+        f.call("runtime_fs", "watch_open", (directory, 0, 65_534)),
+        21,
+        "output span"
+    );
+    assert_eq!(f.call("runtime_fs", "watch_open", (directory, 1, 132)), 0);
+    let id = f.word(132);
+    assert_eq!(watch_records(&mut f, id), Err(6), "nothing pending yet");
+    std::fs::write(root.join("app/page.tsx"), "1").unwrap();
+    wait_for_rename(&mut f, id, "page.tsx");
+    // The watch follows the node, not the descriptor that registered it.
+    assert_eq!(f.call("wasi_snapshot_preview1", "fd_close", directory), 0);
+    std::fs::create_dir(root.join("app/routes")).unwrap();
+    std::fs::write(root.join("app/routes/index.tsx"), "1").unwrap();
+    wait_for_rename(&mut f, id, "routes/index.tsx");
+    assert_eq!(f.call("runtime_fs", "watch_close", id), 0);
+    assert_eq!(f.call("runtime_fs", "watch_close", id), 8);
+    assert_eq!(watch_records(&mut f, id), Err(8));
 }
