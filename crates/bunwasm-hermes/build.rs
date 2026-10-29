@@ -34,22 +34,20 @@ fn main() {
         libdir.join("noeh").display()
     );
     println!("cargo:rustc-link-search=native={}", libdir.display());
-    // libc++ without exceptions, and wasi-libc's process-clock emulation (Hermes's CPU-time
-    // queries). The paired core provides signals and getpid.
+    // The paired core owns stateful libc, including process-clock initialization.
     if env::var_os("CARGO_FEATURE_STANDALONE").is_some() {
-        for lib in ["wasi-emulated-signal", "wasi-emulated-getpid"] {
+        for lib in [
+            "wasi-emulated-signal",
+            "wasi-emulated-getpid",
+            "wasi-emulated-process-clocks",
+        ] {
             println!("cargo:rustc-link-lib=static={lib}");
         }
         let crt = libdir.join("crt1-command.o");
         println!("cargo:rustc-link-arg-examples={}", crt.display());
         println!("cargo:rustc-link-arg-examples=-zstack-size=8388608");
     }
-    for lib in [
-        "hermesvm_bunwasm",
-        "c++",
-        "c++abi",
-        "wasi-emulated-process-clocks",
-    ] {
+    for lib in ["hermesvm_bunwasm", "c++", "c++abi"] {
         println!("cargo:rustc-link-lib=static={lib}");
     }
 }

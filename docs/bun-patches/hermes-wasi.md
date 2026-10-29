@@ -15,7 +15,7 @@ Stack bounds arrive in `bh_init` configuration before Runtime creation. The shim
 
 The shim keeps rooted reference-counted handles from #231. New APIs add configured heap and stack bounds, explicit eval flags, all typed-array and DataView byte ranges, heap external-byte accounting, and external buffers whose no-op deleter preserves embedder-owned Wasm memory. Detach invalidates views without freeing that memory.
 
-Build with `source env.sh; HERMES_BUILD_DIR=<private-tree> hermes/build.sh`. All VM C++ objects use `-fPIC -fno-exceptions -fno-rtti`; HV32, 1 MiB segments and native stack checks are enabled. The sys crate links the patched sysroot's `noeh` C++ libraries and process clocks only. Host-target builds link no Hermes library. The optional `standalone` feature exists only for the VM-only smoke and links signal/getpid emulation and the WASI command startup object.
+Build with `source env.sh; HERMES_BUILD_DIR=<private-tree> hermes/build.sh`. All VM C++ objects use `-fPIC -fno-exceptions -fno-rtti`; HV32, 1 MiB segments and native stack checks are enabled. The paired sys crate links the patched sysroot's `noeh` C++ libraries and imports stateful libc from the core. Host-target builds link no Hermes library. The optional `standalone` feature exists only for the VM-only smoke and links signal, getpid and process-clock emulation plus the WASI command startup object. The process-clock archive is not PIC and must stay out of the paired side.
 
 See [Promise context changes](hermes-async-context.md) and `hermes/smoke.sh` for the VM-only gate. This classified record is additive; the frozen overview file is unchanged for the coordinated wave.
 
