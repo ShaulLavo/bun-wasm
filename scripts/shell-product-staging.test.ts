@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import release from "./waffle-release-inputs.json";
@@ -18,6 +18,25 @@ test("the ordinary Shell producer, public product selection and both apps pin th
   expect(/^commit=([a-f0-9]{40})$/m.exec(producer)?.[1]).toBe(commit);
   expect(pinnedBashWeb(join(root, "sandbox"))).toBe(commit);
   expect(waffleCommits({ SHELL_PRODUCT_SHELL_COMMIT: commit }, release.url).shellCommit).toBe(commit);
+});
+
+test("an explicit Bash source is preserved when its revision differs from the pin", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "bw-provided-shell-"));
+  const source = join(scratch, "provided");
+  const bin = join(scratch, "bin");
+  try {
+    await mkdir(source);
+    await mkdir(bin);
+    await Bun.write(join(source, "owner-work"), "keep");
+    await Bun.write(join(bin, "git"), '#!/bin/sh\nif [ "$3" = rev-parse ]; then printf other-revision; exit 0; fi\nexit 42\n');
+    await chmod(join(bin, "git"), 0o755);
+    const result = Bun.spawnSync(["bash", join(import.meta.dir, "build-bash-web-shell.sh")], { env: {
+      ...process.env, BASH_WEB_SOURCE: source, CARGO_TARGET_DIR: join(scratch, "target"), PATH: `${bin}:${process.env.PATH}`,
+    } });
+    expect(result.exitCode).not.toBe(0);
+    expect(await Bun.file(join(source, "owner-work")).text()).toBe("keep");
+    expect(result.stderr.toString()).toContain("Provided bash-web source does not match");
+  } finally { await rm(scratch, { recursive: true, force: true }); }
 });
 
 test("Shell receipt validation rejects stale, partial and changed unit guest fixtures", async () => {
