@@ -31,7 +31,7 @@ function repository() {
     });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(result.stderr);
-    return { output: result.stdout.trim().split("\n").slice(0, 2).join("\n"), inputs: result.stderr.trim() };
+    return { output: result.stdout.trim().split("\n").slice(0, 3).join("\n"), inputs: result.stderr.trim() };
   }
   git(["init", "-q"]);
   write("base.txt", "fixture\n");
@@ -55,8 +55,8 @@ for (const event of ["pull_request", "push"]) {
       repo.write(input, "first\n");
       const registered = repo.commit();
       repo.write(input, "changed\n");
-      expect(repo.select(registered, repo.commit(), event).output).toBe("rust=true\njsc=false");
-      expect(repo.select(base, registered, event).output).toBe("rust=true\njsc=false");
+      expect(repo.select(registered, repo.commit(), event).output).toBe("rust=true\njsc=false\nshared=false");
+      expect(repo.select(base, registered, event).output).toBe("rust=true\njsc=false\nshared=false");
     });
     test(`${event} reads removed ${owner} check paths from the base snapshot`, () => {
       const repo = repository();
@@ -68,7 +68,7 @@ for (const event of ["pull_request", "push"]) {
       repo.write("checks/web-new-owned-case.json", JSON.stringify({ owner: "web", path: "scripts/replacement.test.ts", localRuntime: true }));
       repo.write("scripts/replacement.test.ts", "replacement\n");
       const selected = repo.select(base, repo.commit(), event);
-      expect(selected.output).toBe("rust=true\njsc=false");
+      expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
       expect(selected.inputs).toContain(input);
     });
   }
@@ -78,9 +78,9 @@ for (const event of ["pull_request", "push"]) {
     repo.write("checks/web-context-reference.json", JSON.stringify({ owner: "web", path: "scripts/context-reference.test.ts", localRuntime: true }));
     repo.write("scripts/context-reference.test.ts", "Node reference\n");
     const registered = repo.commit();
-    expect(repo.select(base, registered, event).output).toBe("rust=false\njsc=false");
+    expect(repo.select(base, registered, event).output).toBe("rust=false\njsc=false\nshared=false");
     repo.write("scripts/context-reference.test.ts", "edited Node reference\n");
-    expect(repo.select(registered, repo.commit(), event).output).toBe("rust=false\njsc=false");
+    expect(repo.select(registered, repo.commit(), event).output).toBe("rust=false\njsc=false\nshared=false");
   });
 }
 
@@ -93,7 +93,7 @@ test("deleted native ownership still gates a renamed input in a later PR commit"
   repo.commit();
   repo.git(["mv", "scripts/old-harness.test.ts", "scripts/source-only.test.ts"]);
   const selected = repo.select(base, repo.commit(), "pull_request");
-  expect(selected.output).toBe("rust=true\njsc=false");
+  expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
   expect(selected.inputs).toContain("scripts/old-harness.test.ts");
 });
 
@@ -114,7 +114,7 @@ for (const event of ["pull_request", "push"]) {
     repo.write("checks/runtime-moved.json", JSON.stringify({ owner: "runtime", path: "scripts/new.test.ts" }));
     repo.git(["mv", "scripts/old.test.ts", "scripts/new.test.ts"]);
     const selected = repo.select(base, repo.commit(), event);
-    expect(selected.output).toBe("rust=true\njsc=false");
+    expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
     expect(selected.inputs).toContain("scripts/old.test.ts");
     expect(selected.inputs).toContain("scripts/new.test.ts");
   });
@@ -165,7 +165,7 @@ test("a diverged PR preserves compiled ownership introduced by the verified test
   repo.git(["merge", "--no-ff", "--no-edit", head]);
   expect(JSON.parse(readFileSync(join(repo.directory, "checks/runtime-target-owned.json"), "utf8")).owner).toBe("runtime");
   const selected = repo.select(verifiedBase, head, "pull_request");
-  expect(selected.output).toBe("rust=true\njsc=false");
+  expect(selected.output).toBe("rust=true\njsc=false\nshared=false");
   expect(selected.inputs).toBe(`Native inputs changed: ${path}`);
 });
 
