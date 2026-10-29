@@ -888,3 +888,6 @@ mod next_swc_tests;
 
 #[cfg(test)]
 mod peer_selection_tests;
+
+#[cfg(test)]
+mod wasm_packages_tests;
