@@ -2,6 +2,10 @@
 
 Classification: original installer adapter. No compiler or loader implementation is copied.
 
+| Adapter | Class | Upstream |
+| --- | --- | --- |
+| Official Wasm compiler selection | Original installer adapter | Lightning CSS 1.33.0, Rolldown 1.2.15, Oxc 0.156.0 |
+
 The installer resolves `lightningcss` to official `lightningcss-wasm` at the exact selected version. Its Node export condition selects `wasm-node.mjs` or `wasm-node.cjs`. Both initialize synchronously and preserve `transform`, `transformStyleAttribute`, `bundle`, `bundleAsync`, visitors and thrown compiler errors.
 
 For `rolldown`, `oxc-parser` and `oxc-transform`, the adapter keeps the original package and entrypoints. Matching native binding metadata adds a required exact-version `@<name>/binding-wasm32-wasi` dependency. Existing optional Wasm binding metadata becomes required. The unchanged upstream loader discovers this package after Linux/wasm32 has no native binding. Package archive integrity and resolution errors follow the ordinary installer path. An unavailable same-version release fails instead of selecting a different compiler version.

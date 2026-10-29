@@ -1,3 +1,4 @@
+use super::test_support::{archive, lock_snapshot};
 use super::*;
 
 fn fixture(name: &str, backend: &str, version: &str) -> (Resolver, Value) {
@@ -79,15 +80,7 @@ fn vite_wasm_packages_lock_replays_without_registry_or_wrong_archive_identity() 
     ] {
         let (mut resolver, manifest) = fixture(name, backend, version);
         resolver.resolve(&manifest, false).unwrap();
-        let mut locked = json!({"workspaces": {"": manifest}, "packages": {}});
-        for (key, package) in resolver.packages.iter().chain(&resolver.skipped) {
-            locked["packages"][key] = json!([
-                format!("{}@{}", package.name, package.version),
-                package.tarball,
-                lock_info(&package.meta),
-                package.integrity
-            ]);
-        }
+        let locked = lock_snapshot(&manifest, &resolver);
         let original = locked.clone();
         let mut replay = Resolver::new(resolver.registry.clone(), locked, false);
         replay.resolve(&manifest, false).unwrap();
@@ -173,20 +166,6 @@ fn vite_wasm_packages_archive_extraction_uses_selected_package_identity() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn archive(meta: &Value) -> Vec<u8> {
-    let compressor = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    let mut archive = tar::Builder::new(compressor);
-    let bytes = serde_json::to_vec(meta).unwrap();
-    let mut header = tar::Header::new_gnu();
-    header.set_size(bytes.len() as u64);
-    header.set_mode(0o644);
-    header.set_cksum();
-    archive
-        .append_data(&mut header, "package/package.json", bytes.as_slice())
-        .unwrap();
-    archive.into_inner().unwrap().finish().unwrap()
 }
 
 fn seed_archives(resolver: &Resolver, version: &str) {

@@ -897,3 +897,6 @@ mod peer_selection_tests;
 
 #[cfg(test)]
 mod wasm_packages_tests;
+
+#[cfg(test)]
+mod test_support;
