@@ -536,9 +536,10 @@ function readinessResponse({ status, body }: ReadinessResponse) {
 /** A probe page double: one scripted response per navigation, the last one repeating. */
 function readinessProbe(responses: readonly ReadinessResponse[], log: string[] = []) {
   let navigations = 0;
+  const session = { send: async (method: string, params?: { value: boolean }) => { log.push(params ? `${method}:${params.value}` : method); } };
   const probe = {
     get navigations() { return navigations; },
-    context: () => ({ newCDPSession: async () => ({ send: async (method: string, params: { value: boolean }) => { log.push(`${method}:${params.value}`); } }) }),
+    context: () => ({ newCDPSession: async () => session }),
     async goto(_url: string, options: { timeout: number; waitUntil: "commit" }) {
       log.push(`goto:${options.waitUntil}`);
       const response = responses[navigations] ?? responses.at(-1);
@@ -590,14 +591,43 @@ test("waits for a listening server's transient HTTP 503 and closes the probe bef
     terminalText: async () => "",
   });
   expect(result.status).toBe("pass");
-  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit", "goto:commit", "probe-close", "page-navigation"]);
+  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit", "goto:commit", "Page.stopLoading", "Runtime.getIsolateId", "probe-close", "page-navigation"]);
 });
 
 test("a fast HTTP 2xx readiness response needs one script-disabled probe navigation", async () => {
   const log: string[] = [];
   const probe = readinessProbe([{ status: 200, body: "ready" }], log);
   await waitForPreviewReady(probe, "http://local/", Date.now() + 1_000);
-  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit"]);
+  expect(log).toEqual(["Emulation.setScriptExecutionDisabled:true", "goto:commit", "Page.stopLoading", "Runtime.getIsolateId"]);
+});
+
+test("an inactive frame during cancellation still waits for the renderer navigation barrier", async () => {
+  const log: string[] = [];
+  const session = { send: async (method: string) => {
+    log.push(method);
+    if (method === "Page.stopLoading") throw new Error("send: Protocol error (Page.stopLoading): Not attached to an active page");
+  } };
+  const probe = {
+    ...readinessProbe([{ status: 200, body: "ready" }], log),
+    context: () => ({ newCDPSession: async () => session }),
+  };
+  await waitForPreviewReady(probe, "http://local/", Date.now() + 1_000);
+  expect(log).toEqual(["Emulation.setScriptExecutionDisabled", "goto:commit", "Page.stopLoading", "Runtime.getIsolateId"]);
+});
+
+test("an unexpected probe cancellation error is reported without a renderer command", async () => {
+  const log: string[] = [];
+  const failure = new Error("probe session disconnected");
+  const session = { send: async (method: string) => {
+    log.push(method);
+    if (method === "Page.stopLoading") throw failure;
+  } };
+  const probe = {
+    ...readinessProbe([{ status: 200, body: "ready" }], log),
+    context: () => ({ newCDPSession: async () => session }),
+  };
+  await expect(waitForPreviewReady(probe, "http://local/", Date.now() + 1_000)).rejects.toBe(failure);
+  expect(log).not.toContain("Runtime.getIsolateId");
 });
 
 test("persistent HTTP 503 readiness failure retains the last response body at the deadline", async () => {

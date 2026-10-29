@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { chromium, type Browser, type BrowserContext } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { waitForPreviewReady } from "./app-matrix/product-browser";
 import { browserRegistryRoute } from "./app-matrix/registry-request";
 import { boundedCleanup } from "./app-matrix/cleanup";
@@ -21,6 +21,12 @@ async function withServer(fetch: (request: Request) => Response | Promise<Respon
     await context.close();
     await server.stop(true);
   }
+}
+
+async function expectReadinessFailure(probe: Page, url: string, deadline: number, message: string): Promise<void> {
+  const failure = await waitForPreviewReady(probe, url, deadline).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(String(failure)).toContain(message);
 }
 
 test("the probe never runs application scripts, including a self-reloading 503 loading page", async () => {
@@ -67,7 +73,7 @@ test("the probe stays behind the context network guard", async () => {
 test("a non-503 HTTP failure is reported without a retry", async () => {
   let requests = 0;
   await withServer(() => { requests++; return new Response("server crashed", { status: 500 }); }, async (origin, context) => {
-    await expect(waitForPreviewReady(await context.newPage(), `${origin}/`, Date.now() + 5_000)).rejects.toThrow("Preview HTTP 500: server crashed");
+    await expectReadinessFailure(await context.newPage(), `${origin}/`, Date.now() + 5_000, "Preview HTTP 500: server crashed");
     expect(requests).toBe(1);
   });
 }, 20_000);
@@ -80,7 +86,7 @@ async function closeDeadlineProbe(origin: string): Promise<void> {
     await context.newPage();
     const probe = await context.newPage();
     await probe.goto(origin, { waitUntil: "commit" });
-    await expect(waitForPreviewReady(probe, origin, Date.now() + 5)).rejects.toThrow("not HTTP-ready before the deadline");
+    await expectReadinessFailure(probe, origin, Date.now() + 5, "not HTTP-ready before the deadline");
     expect(await boundedCleanup("probe-close", () => probe.close(), 2_000)).toBeNull();
     expect(context.pages()).toHaveLength(2);
     expect(await terminal.locator("body").textContent()).toBe("terminal remains usable");
@@ -99,7 +105,7 @@ test("stalled response headers stop at the shared deadline", async () => {
     let canceled = false;
     probe.on("requestfailed", request => { canceled = request.failure()?.errorText === "net::ERR_ABORTED"; });
     const started = performance.now();
-    await expect(waitForPreviewReady(probe, `${origin}/`, Date.now() + 1_000)).rejects.toThrow("not HTTP-ready before the deadline: no complete response");
+    await expectReadinessFailure(probe, `${origin}/`, Date.now() + 1_000, "not HTTP-ready before the deadline: no complete response");
     expect(performance.now() - started).toBeLessThan(2_000);
     expect(canceled).toBe(true);
   });
@@ -114,7 +120,7 @@ test("a stalled 503 body stops at the shared deadline and keeps the last complet
   }, async (origin, context) => {
     const probe = await context.newPage();
     const started = performance.now();
-    await expect(waitForPreviewReady(probe, `${origin}/`, Date.now() + 2_000)).rejects.toThrow("last HTTP 503: <!doctype html>Loading: prior 503");
+    await expectReadinessFailure(probe, `${origin}/`, Date.now() + 2_000, "last HTTP 503: <!doctype html>Loading: prior 503");
     expect(performance.now() - started).toBeLessThan(3_000);
   });
 }, 20_000);
