@@ -195,7 +195,7 @@ test("publication detects changed snapshot bytes even after matching browser rec
 test("real CLI resolves its default dist inside a checkout path containing spaces and #", async () => {
   await fixture(async directory => {
     const root = join(directory, "checkout with spaces # encoded"), dist = join(root, "dist");
-    await mkdir(join(root, "scripts"), { recursive: true }); await mkdir(dist);
+    await mkdir(join(root, "scripts/src"), { recursive: true }); await mkdir(dist);
     for (const name of ["publish-guest.ts", "guest-acceptance.ts", "guest-artifact.ts"].concat(receiptCliSources)) {
       await copyFile(fileURLToPath(new URL(`../../scripts/${name}`, import.meta.url)), join(root, "scripts", name));
     }
