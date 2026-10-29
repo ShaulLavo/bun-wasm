@@ -34,6 +34,9 @@ startup and each serialized host submission. Receipt generations make a prompt
 published before the waiter safe. Status comes from the shell, including builtins;
 there is no prompt parsing, injected status command or child-exit inference.
 Normal terminal input and accepted-prefix retries carry the command and Enter.
+Before publishing readiness or resolving a submission, the consumer drains the
+bridge's available output into the terminal view. The prompt receipt alone does
+not acknowledge that page-side handoff; captures still await xterm's write callback.
 
 The interactive shell starts during page setup, while the Bun launcher loads on
 the first Bun child launch. The graph gate checks contributing bundle inputs

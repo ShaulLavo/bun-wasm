@@ -61,7 +61,7 @@ export class Shell {
         session.bridge.signal();
       });
       session.pump();
-      session.receipt = await shell.waitForPrompt({ signal: session.admission.signal });
+      session.acceptPrompt(await shell.waitForPrompt({ signal: session.admission.signal }));
       options.onState("ready");
       void session.observePrompts(shell).catch(error => {
         if (!session.disposed) session.failureMessage = String(error);
@@ -81,6 +81,7 @@ export class Shell {
     return this.receipt?.status ?? 0;
   }
 
+  /** Resolves after the prompt receipt and queued output handoff; the view may parse writes asynchronously. */
   submit(command: string): Promise<void> {
     if (this.disposed) return Promise.reject(new Error("Shell is closed"));
     this.pendingSubmissions++;
@@ -95,7 +96,7 @@ export class Shell {
     if (Atomics.load(this.bridge.state, control.phase) === 2) throw new Error("Shell is running a foreground command");
     const ready = await shell.waitForPrompt({ signal: this.admission.signal });
     this.input(new TextEncoder().encode(`\x05\x15${command}\r`));
-    this.receipt = await shell.waitForPrompt({ after: ready.generation, signal: this.admission.signal });
+    this.acceptPrompt(await shell.waitForPrompt({ after: ready.generation, signal: this.admission.signal }));
   }
 
   input(data: string | Uint8Array): void {
@@ -167,10 +168,21 @@ export class Shell {
     return Atomics.load(this.bridge.state, control.outputWrite) !== Atomics.load(this.bridge.state, control.outputRead);
   }
 
+  private drainOutput(limit = 32768): void {
+    const output = this.bridge.drain(limit);
+    if (output.length) this.newlines.write(output, (chunk) => this.options.onOutput(chunk));
+  }
+
+  private acceptPrompt(receipt: Prompt): void {
+    // A guest receipt precedes the page's output pump. Hand off the queued bytes before settling.
+    this.drainOutput(this.bridge.output.length);
+    this.receipt = receipt;
+  }
+
   private async observePrompts(shell: RuntimeShell): Promise<void> {
     while (!this.disposed) {
       const next = await shell.waitForPrompt({ after: this.receipt?.generation ?? 0n, signal: this.admission.signal });
-      this.receipt = next;
+      this.acceptPrompt(next);
       this.options.onState("ready");
     }
   }
@@ -179,8 +191,7 @@ export class Shell {
     if (this.disposed) return;
     const sequence = Atomics.load(this.bridge.state, control.wake);
     this.flushInput();
-    const output = this.bridge.drain();
-    if (output.length) this.newlines.write(output, (chunk) => this.options.onOutput(chunk));
+    this.drainOutput();
     const phase = Atomics.load(this.bridge.state, control.phase);
     const pending = this.outputPending();
     if (phase >= 3 && pending) {
