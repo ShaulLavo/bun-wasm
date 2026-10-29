@@ -28,6 +28,7 @@ struct Program {
 enum ProgramKind {
     QuickJs,
     Jsc,
+    Hermes,
 }
 
 impl ProgramKind {
@@ -35,6 +36,7 @@ impl ProgramKind {
         match self {
             Self::QuickJs => "quickjs.wasm",
             Self::Jsc => "jsc-engine.wasm",
+            Self::Hermes => "hermes-engine.wasm",
         }
     }
 
@@ -52,6 +54,12 @@ impl ProgramKind {
                 "jsc_call_ctors",
                 "jsc_register",
             ],
+            Self::Hermes => &[
+                "hermes_initialize_memory",
+                "hermes_apply_data_relocs",
+                "hermes_call_ctors",
+                "hermes_register",
+            ],
         }
     }
 
@@ -59,14 +67,14 @@ impl ProgramKind {
         match self {
             Self::QuickJs => "quickjs_run",
             Self::Jsc => "jsc_run",
+            Self::Hermes => "hermes_run",
         }
     }
 
-    fn other_profile(self) -> ProgramKind {
-        match self {
-            Self::QuickJs => Self::Jsc,
-            Self::Jsc => Self::QuickJs,
-        }
+    fn other_profiles(self) -> impl Iterator<Item = ProgramKind> {
+        [Self::QuickJs, Self::Jsc, Self::Hermes]
+            .into_iter()
+            .filter(move |kind| *kind != self)
     }
 }
 
@@ -140,6 +148,7 @@ fn parse_program_kind(bytes: &[u8], has_bind: bool) -> Result<Option<ProgramKind
         let kind = match section.data() {
             b"quickjs" => ProgramKind::QuickJs,
             b"jsc" => ProgramKind::Jsc,
+            b"hermes" => ProgramKind::Hermes,
             _ => bail!("invalid bun-wasm-engine payload"),
         };
         tag = Some(kind);
@@ -166,13 +175,14 @@ fn validate_profile(kind: ProgramKind, side: &Module) -> Result<()> {
         kind,
         kind.run()
     );
-    let other = kind.other_profile();
-    for name in other.initializers().iter().copied().chain([other.run()]) {
-        ensure!(
-            side.get_export(name).is_none(),
-            "paired {:?} side exports wrong profile symbol {name}",
-            kind
-        );
+    for other in kind.other_profiles() {
+        for name in other.initializers().iter().copied().chain([other.run()]) {
+            ensure!(
+                side.get_export(name).is_none(),
+                "paired {:?} side exports wrong profile symbol {name}",
+                kind
+            );
+        }
     }
     Ok(())
 }
@@ -561,5 +571,23 @@ mod tests {
         assert_eq!(ProgramKind::Jsc.companion(), "jsc-engine.wasm");
         assert_eq!(ProgramKind::Jsc.run(), "jsc_run");
         assert!(ProgramKind::Jsc.initializers().contains(&"jsc_register"));
+        assert_eq!(ProgramKind::Hermes.companion(), "hermes-engine.wasm");
+        assert_eq!(ProgramKind::Hermes.run(), "hermes_run");
+        assert!(
+            ProgramKind::Hermes
+                .initializers()
+                .contains(&"hermes_register")
+        );
+        let others: Vec<_> = ProgramKind::Hermes.other_profiles().collect();
+        assert_eq!(others, [ProgramKind::QuickJs, ProgramKind::Jsc]);
+    }
+
+    #[test]
+    fn hermes_engine_tag_selects_the_hermes_profile() {
+        let bytes = wasm_custom(b"bun-wasm-engine", b"hermes");
+        assert_eq!(
+            parse_program_kind(&bytes, true).unwrap(),
+            Some(ProgramKind::Hermes)
+        );
     }
 }
