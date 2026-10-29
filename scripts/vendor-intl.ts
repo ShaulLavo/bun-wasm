@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
@@ -36,6 +36,7 @@ try {
   mkdirSync(licenses, { recursive: true });
   for (const name of packages) {
     copyFileSync(join(scratch, "node_modules/@formatjs", name, "LICENSE.md"), join(licenses, `${name}.md`));
+    chmodSync(join(licenses, `${name}.md`), 0o644);
   }
 
   const bundle = readFileSync(join(scratch, "bundle.js"), "utf8");
