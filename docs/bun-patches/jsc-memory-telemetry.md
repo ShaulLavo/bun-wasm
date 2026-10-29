@@ -5,12 +5,12 @@
 | Source | Class | Origin and change |
 | --- | --- | --- |
 | `jsc/webkit-wasi.patch`, `runtime/WASIMemoryTelemetry.h` | Port | Original WASI allocation recorder. No upstream implementation copied. |
-| WebKit `runtime/JSArrayBufferView.cpp`, `runtime/ArrayBuffer.cpp`, and `heap/Heap.h` | Port | Minimal WASI-only allocation scopes and a read-only accessor for the existing completed-full-GC timestamp. |
+| WebKit `runtime/JSArrayBufferView.cpp`, `runtime/ArrayBuffer.cpp`, `runtime/JSGenericTypedArrayViewInlines.h`, and `heap/Heap.h` | Port | Minimal WASI-only allocation scopes, an observe-only direct typed-array request scope, and a read-only accessor for the existing completed-full-GC timestamp. |
 | `crates/bunwasm-jsc/{cpp/helpers.cpp,src/sys.rs}` and `crates/bunwasm-engine-jsc/src/vm.rs` | Port | Original adapters to existing JSC heap and option APIs, plus a cached readout. No upstream implementation copied. |
 
 The upstream reference is Bun's WebKit fork at
 `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`. The touched paths are
-`Source/JavaScriptCore/runtime/{ArrayBuffer.cpp,JSArrayBufferView.cpp}` and
+`Source/JavaScriptCore/runtime/{ArrayBuffer.cpp,JSArrayBufferView.cpp,JSGenericTypedArrayViewInlines.h}` and
 `Source/JavaScriptCore/heap/Heap.h`.
 The adapters reference `heap/{Heap.h,Heap.cpp,MarkedSpace.cpp}` and
 `runtime/Options{,List}.h` at that revision.
@@ -60,6 +60,17 @@ unwind C++ scopes. In that case the active request remains available and the
 failed request remains unknown unless a scope had already reported failure.
 The producer's allocator failure record can distinguish that case.
 
+The direct `JSGenericTypedArrayView<Adaptor>::create(JSGlobalObject*, Structure*,
+size_t length)` overload has an observe-only outer scope. Its original logical
+request is `uint64_t(length) * sizeof(Adaptor::Type)`. The scope stays active
+while the inner vector scope completes and the result cell is allocated and
+finished. `FailurePolicy::ObserveOnly` never reports a failed allocation from
+scope exit or abandonment. An inner vector scope can still report a returned
+failure. A result-cell assertion that traps instead leaves an active request
+with no fabricated engine failure. The logical request is not the cell size,
+marked-block size, allocator padding, or proof that the vector allocation failed.
+Other overloads are unchanged.
+
 The recorder is single-agent state, matching this WASI JSC port. The most recent scoped failure remains latched across samples and successful
 allocations. A later failed outermost scope replaces it. This change does not instrument every
 allocation in JSC, externally supplied ArrayBuffer bytes, buffer growth, or
@@ -107,7 +118,7 @@ use `UINT64_MAX` and map to JSON null. Categories use zero for no record.
 | 22 | `failedAllocationSequence` |
 | 23 | `allocationBudgetThisCycle` |
 
-Category 1 is a typed-array vector and 2 is a fixed ArrayBuffer backing store. `allocationSequence`
+Category 1 is a typed-array logical request and 2 is a fixed ArrayBuffer backing store. `allocationSequence`
 counts outermost attempts. `failedAllocationSequence` identifies the most recent
 failed attempt. A consumer reads all fields synchronously while guest execution
 is stopped and maps unknown values before converting integers to JS numbers.
@@ -120,7 +131,9 @@ runs it in CI after C++ tools are installed. Scratch uses the environment's
 `TMPDIR` or `RUNNER_TEMP`, with `os.tmpdir()` as the fallback. Native scenarios cover
 success, original failure retention, nested allocation attribution, and an
 abandoned scope, requests wider than wasm32, repeated failures, and shared state
-across translation units. Syntax checks compile the two patched upstream sources and the
+across translation units. The observe-only construction case keeps the request
+active after vector success, does not turn observation into engine failure,
+and preserves a real nested vector failure. Syntax checks compile the two patched upstream sources and the
 adapter against retained WASI JSC headers. These checks establish recorder and
 source behavior only. Actual counter movement, exported-symbol retention, safe
 host reads after a real Wasm allocation failure, and acceptance without forced
