@@ -103,7 +103,7 @@ async function replayControl(url: string, method = "GET", status = 200, reject =
     let fulfilled = false;
     let continued = false;
     const route = {
-      request: () => ({ url: () => url, method: () => method, headers: () => ({ accept: "application/vnd.npm.install-v1+json", "x-matrix-control": "retained" }) }),
+      request: () => ({ url: () => url, method: () => method, postDataBuffer: () => null, headers: () => ({ accept: "application/vnd.npm.install-v1+json", "x-matrix-control": "retained" }) }),
       fetch: async (options: Parameters<Route["fetch"]>[0] = {}) => {
         if (reject) throw new Error("loopback registry unavailable");
         if (!options.url) throw new Error("Missing replay URL");
