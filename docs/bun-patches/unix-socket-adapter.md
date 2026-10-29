@@ -24,9 +24,8 @@ A leading NUL selects Waffle's abstract namespace, unchanged; other NULs report
 EINVAL. `net_path.ts` classifies before the cwd join, so `"\0name"` reaches Waffle
 as is and `"rel\0x"` still joins the cwd and fails. Waffle owns the abstract names'
 scope, lifetime and limits (Waffle `docs/unix-sockets.md`, "Abstract names"). The
-released-provider abstract case and the guest fixture's abstract checks need the
-Waffle release that adds abstract names; on 0.0.102 the provider still rejects them
-with EINVAL. Node
+released-provider test also binds, echoes and refuses an abstract name on Waffle
+0.0.103. The guest fixture's abstract checks need a guest build. Node
 servers expose the requested path in `address()`. Pipe sockets expose no IP
 address, family or port. HTTP `socketPath` selects the connection independently
 of the request URL path and the agent pool separates socket names.
@@ -35,7 +34,7 @@ The Node adapter tests supply the specified path API over existing Waffle stream
 bytes. That fixture does not prove filesystem binding, unlink leases, or Nuxt.
 The manual `net-unix-path` guest fixture checks echo, half-close and filesystem
 unlink with a real provider. The released-provider test runs the Node adapter
-against Waffle 0.0.102 from `b8b205b932649b20ec33cf2457b95a7b2b6a1b08`.
+against Waffle 0.0.103 from `dc945b0ea353959c1d3d7589dd43afb57ceeb14d`.
 It checks a real socket node, UTF-8 bytes, reverse traffic after half-close and
 acknowledged unlink. It uses the released compiled runtime and NetHost, with
 Bun runtime factories loaded in a worker. The matching browser guest and full
