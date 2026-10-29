@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import * as fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { createRequire, isBuiltin, stripTypeScriptTypes } from "node:module";
 import * as path from "node:path";
 import { createContext, runInContext } from "node:vm";
 import { createScriptEvaluation } from "../web/src/script-evaluation.ts";
@@ -27,9 +27,9 @@ function hostEvaluation(context: ReturnType<typeof createContext>, mapPosition: 
   const end = host.indexOf("  // --- ES modules", start);
   if (start < 0 || end < 0) throw new Error("Missing real Host evaluator methods");
   const methods = host.slice(start, end);
-  const evaluator: { valueNatives(mapPosition: ScriptEvaluation["mapPosition"]): ScriptEvaluation } = runInContext(`new (class { ${methods} })`, context);
+  const evaluator: { valueNatives(mapPosition: ScriptEvaluation["mapPosition"]): ScriptEvaluation } = runInContext(`new (class { o = {}; ${methods} })`, context);
   const natives = evaluator.valueNatives(mapPosition);
-  return { evalScript: natives.evalScript, mapPosition: natives.mapPosition };
+  return natives;
 }
 
 function runtimeContext() {
@@ -53,6 +53,9 @@ function productionRuntime(filename: string, compiledWrapper?: string, realHost 
   if (!emittedFactory) throw new Error("Missing production-erased module_compile factory");
   const runtime = bootstrap({
     engine: "host",
+    contextHooks: false,
+    prepareVersion: 4,
+    preparedColumns: new Map(),
     mapPosition: () => null,
     mainPath: () => filename,
     moduleFormat: (file: string) => file.endsWith(".json") ? "json" : "cjs",
@@ -74,6 +77,7 @@ function productionRuntime(filename: string, compiledWrapper?: string, realHost 
       if (name === "path") return () => path;
       if (name === "node_fs") return () => ({ fs });
       if (name === "web" || name === "crypto") return () => () => {};
+      if (name === "source_prepare") return runInContext(stripTypeScriptTypes(source("source_prepare.ts")), context);
       if (name === "module_compile") return runInContext(readFileSync(emittedFactory, "utf8"), context);
       return () => ({});
     },
