@@ -649,3 +649,19 @@ for (const ending of ["cancel", "eof", "write-error", "end-error"] as const) {
     } finally { connection.destroy(); await state.pump(); }
   });
 }
+
+test("a disconnected request does not start a response after its socket has closed", async () => {
+  const state = fixture();
+  let requests = 0;
+  const server = state.http.createServer(() => { requests++; });
+  const connection = state.socket();
+  try {
+    Reflect.get(server, "_onConnection").call(server, connection);
+    state.packets.push(Buffer.from("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"), 0);
+    await state.pump();
+    expect(requests).toBe(0);
+    expect(Reflect.get(connection, "busy")).toBe(false);
+    expect(Reflect.get(server, "_connections").size).toBe(0);
+    expect(state.pending()).toBe(0);
+  } finally { connection.destroy(); await state.pump(); }
+});
