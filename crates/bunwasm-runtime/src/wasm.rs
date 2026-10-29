@@ -1,8 +1,9 @@
 use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc};
 
 use wasmi::{
-    Engine, ExternRef, ExternType, Func, FuncRef, Instance, Memory, MemoryType, Module,
-    ResumableCall, ResumableCallHostTrap, Store, Table as WasmTable, TableType, Val as WVal,
+    CompilationMode, Config, Engine, ExternRef, ExternType, Func, FuncRef, Instance, Memory,
+    MemoryType, Module, ResumableCall, ResumableCallHostTrap, Store, Table as WasmTable, TableType,
+    Val as WVal,
     core::{HostError, ValType},
 };
 
@@ -10,6 +11,8 @@ use crate::{
     data::{NativeError, NativeResult, Record, Val},
     natives::Table,
 };
+
+const COMPILATION_MODE: CompilationMode = CompilationMode::LazyTranslation;
 
 #[derive(Debug)]
 struct ImportCall {
@@ -49,7 +52,9 @@ struct Runtime {
 }
 impl Default for Runtime {
     fn default() -> Self {
-        let engine = Engine::default();
+        let mut config = Config::default();
+        config.compilation_mode(COMPILATION_MODE);
+        let engine = Engine::new(&config);
         let store = Store::new(&engine, ());
         Self {
             engine,
@@ -644,6 +649,11 @@ mod tests {
             panic!("expected numeric memory id");
         };
         id as u32
+    }
+
+    #[test]
+    fn engine_validates_eagerly_and_translates_lazily() {
+        assert!(matches!(COMPILATION_MODE, CompilationMode::LazyTranslation));
     }
 
     #[test]
