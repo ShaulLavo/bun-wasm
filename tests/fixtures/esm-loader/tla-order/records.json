@@ -1,0 +1,10 @@
+{
+ "modules": {
+  "/main.mjs": "({r:[\"./x.mjs\",\"./y.mjs\"],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"main\");\n\n}})",
+  "/shared.mjs": "({r:[],i:[],x:[],s:[],a:true,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"shared start\");\n(yield 0);\nconsole.log(\"shared end\");\n\n}})",
+  "/x.mjs": "({r:[\"./shared.mjs\"],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"x\");\n\n}})",
+  "/y.mjs": "({r:[\"./shared.mjs\",\"./z.mjs\"],i:[],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"y\");\n\n}})",
+  "/z.mjs": "({r:[],i:[],x:[],s:[],a:true,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;yield;console.log(\"z\");\n(yield 0);\nconsole.log(\"z end\");\n\n}})"
+ },
+ "cjs": {}
+}

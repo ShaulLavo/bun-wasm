@@ -1,0 +1,12 @@
+[package]
+name = "bunwasm-engine-hermes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Hermes linked engine program for bun-wasm"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+bunwasm-hermes = { path = "../bunwasm-hermes" }

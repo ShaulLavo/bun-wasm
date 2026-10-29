@@ -1,0 +1,8 @@
+{
+ "modules": {
+  "/main.mjs": "({r:[\"./lib.cjs\"],i:[[0,\"default\"],[0,\"named\"],[0,\"counter\"]],x:[],s:[],a:false,f:function*(__bunwasm_m){\"use strict\";__bunwasm_m.l({});yield;var __bunwasm_ns0_0=__bunwasm_m.n[0],ns=__bunwasm_m.n[0];yield;console.log(__bunwasm_ns0_0.default.named, __bunwasm_ns0_0.named, __bunwasm_ns0_0.counter, typeof ns.default, ns.named);\n__bunwasm_ns0_0.default.bump();\nconsole.log(\"named exports are snapshots\", __bunwasm_ns0_0.counter, __bunwasm_ns0_0.default.counter);\n\n}})"
+ },
+ "cjs": {
+  "/lib.cjs": "exports.named = 'named';\nexports.counter = 0;\nexports.bump = function () { exports.counter += 1; };\n"
+ }
+}

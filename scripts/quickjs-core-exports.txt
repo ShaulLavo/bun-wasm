@@ -140,3 +140,13 @@ exit
 strncasecmp
 stderr
 _CLOCK_REALTIME
+clock
+getrusage
+getpagesize
+isatty
+lseek
+pthread_create
+pthread_join
+isalpha
+isprint
+modf
