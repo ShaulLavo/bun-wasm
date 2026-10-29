@@ -5,6 +5,8 @@
       "entry": [
         "scripts/app-matrix/run.mjs",
         "scripts/app-matrix/reclassify.mjs",
+        "scripts/app-matrix/next-acceptance.ts",
+        "scripts/app-matrix/next-acceptance-reference.ts",
         "scripts/app-matrix/*.test.{ts,mjs}",
         "tests/package/*.test.ts",
         "tests/check-worker-regressions.ts",

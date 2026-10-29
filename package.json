@@ -63,6 +63,7 @@
     "prepare": "bun prepare.ts",
     "check": "tsc -p tsconfig.package.json",
     "test": "bun test ./tests/package/*.test.ts",
+    "test:http:lifecycle": "bun scripts/http-response-lifecycle.ts",
     "generate-guest": "bun scripts/guest-artifact.ts",
     "publish-guest": "bun scripts/publish-guest.ts",
     "quality": "bun scripts/quality.ts",

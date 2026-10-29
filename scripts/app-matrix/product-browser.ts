@@ -1,4 +1,5 @@
 import type { FeatureProbe, ProductCheck, SourceEdit } from "./product-types";
+import { boundedCleanup, HarnessCleanupError } from "./cleanup";
 
 interface Locator {
   filter(options: { hasText: string }): Locator;
@@ -25,6 +26,7 @@ export interface ProductPage {
 
 interface ScriptControlSession {
   send(method: "Emulation.setScriptExecutionDisabled", params: { value: true }): Promise<unknown>;
+  send(method: "Page.stopLoading" | "Runtime.getIsolateId"): Promise<unknown>;
 }
 /** A page in the preview's own browser context, so the probe shares its service worker, routing and redirects. */
 export interface PreviewProbePage<Self> {
@@ -69,14 +71,7 @@ async function probePreview<Probe extends PreviewProbePage<Probe>>(probe: Probe,
   throw new Error(`Preview HTTP ${response.status()}: ${body.body}`);
 }
 
-/**
- * Navigates a script-disabled probe page until the preview stops answering HTTP 503. The probe
- * never runs the loading page's or the application's scripts; the caller closes it before the
- * application navigation.
- */
-export async function waitForPreviewReady<Probe extends PreviewProbePage<Probe>>(probe: Probe, url: string, deadline: number): Promise<void> {
-  const session = await probe.context().newCDPSession(probe);
-  await session.send("Emulation.setScriptExecutionDisabled", { value: true });
+async function pollPreviewReady<Probe extends PreviewProbePage<Probe>>(probe: Probe, url: string, deadline: number): Promise<void> {
   let last503: string | undefined;
   while (Date.now() < deadline) {
     const outcome = await probePreview(probe, url, deadline);
@@ -86,6 +81,35 @@ export async function waitForPreviewReady<Probe extends PreviewProbePage<Probe>>
     await new Promise(resolve => setTimeout(resolve, Math.min(100, deadline - Date.now())));
   }
   throw new Error(`Preview was not HTTP-ready before the deadline: ${last503 === undefined ? "no complete response" : `last HTTP 503: ${last503 || "empty body"}`}`);
+}
+
+async function settlePreviewNavigation(session: ScriptControlSession, signal: AbortSignal): Promise<void> {
+  try { await session.send("Page.stopLoading"); }
+  catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("Protocol error (Page.stopLoading): Not attached to an active page")) throw error;
+  }
+  signal.throwIfAborted();
+  // Chromium holds renderer commands until a pending navigation commits or cancels. Closing
+  // before that barrier can acknowledge Target.closeTarget without destroying the new frame.
+  await session.send("Runtime.getIsolateId");
+}
+
+/**
+ * Navigates a script-disabled probe until the preview stops answering HTTP 503, then settles
+ * its navigation before the caller closes it. The probe never runs application scripts.
+ */
+export async function waitForPreviewReady<Probe extends PreviewProbePage<Probe>>(probe: Probe, url: string, deadline: number, cleanupTimeout: number): Promise<void> {
+  const session = await probe.context().newCDPSession(probe);
+  await session.send("Emulation.setScriptExecutionDisabled", { value: true });
+  let pollingFailure: { error: unknown } | undefined;
+  try { await pollPreviewReady(probe, url, deadline); }
+  catch (error) { pollingFailure = { error }; }
+  const controller = new AbortController();
+  const failed = await boundedCleanup("probe-navigation-settlement", () => settlePreviewNavigation(session, controller.signal), cleanupTimeout);
+  controller.abort();
+  if (failed && pollingFailure) throw new HarnessCleanupError([failed], pollingFailure.error);
+  if (failed) throw new HarnessCleanupError([failed]);
+  if (pollingFailure) throw pollingFailure.error;
 }
 export interface GuestSource {
   read(path: string): Promise<string | null>;
@@ -184,7 +208,7 @@ function frameworkTraffic(input: unknown): Omit<TrafficEvidence, "sequence"> | n
   if (type === "full-reload") return { framework: "vite", event: type, payload };
   const updates = Reflect.get(message, "updates");
   if (type === "update" && Array.isArray(updates) && updates.some(meaningfulUpdate)) return { framework: "vite", event: type, payload };
-  const action = stringProperty(message, "action");
+  const action = stringProperty(message, "action") ?? type;
   if (action === "built" && stringProperty(message, "hash")) return { framework: "next", event: action, payload };
   if (action && nextActions.has(action)) return { framework: "next", event: action, payload };
   const eventName = stringProperty(message, "event");
