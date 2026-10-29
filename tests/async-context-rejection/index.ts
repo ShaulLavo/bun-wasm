@@ -175,7 +175,8 @@ async function semantics(log: (key: string, value: unknown) => void) {
   log("thenable", await thenable);
   log("thenReads", thenReads);
   log("thenCalls", thenCalls);
-  const bad = { then(_: unknown, no: (reason: unknown) => void) { no(reason); } };
+  // A thenable that rejects; typed as a promise only for the type checker.
+  const bad = { then(_: unknown, no: (reason: unknown) => void) { no(reason); } } as unknown as PromiseLike<never>;
   try {
     await bad;
   } catch (error) {
@@ -329,7 +330,7 @@ async function p4() {
   await als.run("t2", () => t.throw(new Error("thrown")));
   const r = als.run("created", () => returner());
   await als.run("r1", () => r.next());
-  await als.run("r2", () => r.return(0));
+  await als.run("r2", () => r.return(undefined));
 }
 
 // P5: enterWith and abrupt exits in for await bodies.

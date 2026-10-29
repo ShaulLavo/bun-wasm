@@ -18,7 +18,7 @@ export async function plain(a, b) {
 
 // ASI: the hooks never introduce a line break decision.
 export async function asi(y, z, x) {
-  y
+  f(y)
   await z
   await x
   (y)
@@ -42,7 +42,7 @@ export async function handlers(a, b) {
   }
   try {
     try { await a; } finally { await b; }
-  } catch (e) {}
+  } catch (_e) {}
   return await b;
 }
 
@@ -78,14 +78,14 @@ export async function* plainGenerator(a) {
 // label chain, which ECMAScript allows.)
 export async function loops(xs, a) {
   for await (const x of xs) g(x);
-  outer: for await (const x of await a) {
+  outer: for await (const _x of await a) {
     for await (const y of xs) {
       if (y) continue outer;
       break;
     }
   }
   a: b: for await (const z of xs) { if (z) continue b; break a; }
-  switch (a) { case 1: for await (const w of xs) {} }
+  switch (a) { case 1: for await (const _w of xs) {} }
 }
 
 // Top-level await with a handler: the module body is S.

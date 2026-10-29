@@ -45,6 +45,10 @@ interface GuestData {
   transport: WorkerProcessTransport;
   request?: SpawnRequest;
 }
+function contextMode(value: string | undefined): Settings["context"] {
+  if (value !== "native" && value !== "hooks") throw new Error("--context requires native or hooks");
+  return value;
+}
 function settings(): Settings {
   const argv = nodeProcess.argv.slice(2);
   const result: Settings = { wasmPath: resolve(import.meta.dirname, "../../dist/bun-browser.wasm"), engines: {}, stackMb: STACK_MB, withNet: false, preopens: {}, env: {}, args: [], context: "native" };
@@ -59,11 +63,8 @@ function settings(): Settings {
       result.engines[engine] = resolve(value.slice(equal + 1));
     }
     else if (arg === "--net") result.withNet = true;
-    else if (arg === "--context" || arg.startsWith("--context=")) {
-      const value = arg === "--context" ? argv[++i] : arg.slice("--context=".length);
-      if (value !== "native" && value !== "hooks") throw new Error("--context requires native or hooks");
-      result.context = value;
-    }
+    else if (arg === "--context") result.context = contextMode(argv[++i]);
+    else if (arg?.startsWith("--context=")) result.context = contextMode(arg.slice("--context=".length));
     else if (arg === "--stack-mb") result.stackMb = Number(argv[++i]);
     else if (arg === "--dir") {
       const [host, guest = host] = argv[++i]!.split("::");

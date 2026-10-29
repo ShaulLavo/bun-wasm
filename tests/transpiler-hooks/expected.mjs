@@ -15,6 +15,7 @@ export async function plain(a, b) {
   return [y, inner, C];
 }
 export async function asi(y, z, x) {
+  f(y);
   __bunwasm_resume(__bunwasm_capture(), await z);
   __bunwasm_resume(__bunwasm_capture(), await x(y));
 }
@@ -42,7 +43,7 @@ export async function handlers(a, b) {
       __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0);
       __bunwasm_resumed(await __bunwasm_id(b, __bunwasm_s = __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0);
     }
-  } catch (e) {
+  } catch (_e) {
     __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0);
   }
   return __bunwasm_resumed(await __bunwasm_id(b, __bunwasm_s = __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0);
@@ -102,7 +103,7 @@ export async function loops(xs, a) {
   }
     { let __bunwasm_c = __bunwasm_capture();
   outer:
-    for await (const x of __bunwasm_id(__bunwasm_resumed(await __bunwasm_id(a, __bunwasm_s = __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0), __bunwasm_s = __bunwasm_c)) {
+    for await (const _x of __bunwasm_id(__bunwasm_resumed(await __bunwasm_id(a, __bunwasm_s = __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0), __bunwasm_s = __bunwasm_c)) {
       try {
         __bunwasm_resume(__bunwasm_c, __bunwasm_s = 0);
         { let __bunwasm_c = __bunwasm_capture();
@@ -139,7 +140,7 @@ export async function loops(xs, a) {
   switch (a) {
     case 1:
       { let __bunwasm_c = __bunwasm_capture();
-      for await (const w of __bunwasm_id(xs, __bunwasm_s = __bunwasm_c)) {
+      for await (const _w of __bunwasm_id(xs, __bunwasm_s = __bunwasm_c)) {
         try {
           __bunwasm_resume(__bunwasm_c, __bunwasm_s = 0);
           ;
