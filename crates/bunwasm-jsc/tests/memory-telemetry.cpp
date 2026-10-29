@@ -100,6 +100,38 @@ static void checkAbandonedAllocation()
     delete allocation;
 }
 
+static void checkObservedConstruction()
+{
+    {
+        JSC::WASIMemoryAllocationScope request(4096, JSC::WASIMemoryAllocationScope::TypedArray,
+            JSC::WASIMemoryAllocationScope::FailurePolicy::ObserveOnly);
+        {
+            JSC::WASIMemoryAllocationScope vector(4096, JSC::WASIMemoryAllocationScope::TypedArray);
+            vector.succeed();
+        }
+        const auto& pendingCell = *bunjsc_cached_memory_telemetry();
+        assert(pendingCell.activeAllocationBytes == 4096);
+        assert(pendingCell.activeAllocationCategory == 1);
+        assert(pendingCell.allocationSequence == 1);
+        assert(pendingCell.failedAllocationBytes == bunjscUnknownMemory);
+        assert(pendingCell.failedAllocationCategory == 0);
+    }
+    assert(bunjsc_cached_memory_telemetry()->activeAllocationCategory == 0);
+    assert(bunjsc_cached_memory_telemetry()->failedAllocationCategory == 0);
+    {
+        JSC::WASIMemoryAllocationScope request(8192, JSC::WASIMemoryAllocationScope::TypedArray,
+            JSC::WASIMemoryAllocationScope::FailurePolicy::ObserveOnly);
+        {
+            JSC::WASIMemoryAllocationScope vector(8192, JSC::WASIMemoryAllocationScope::TypedArray);
+        }
+        assert(bunjsc_cached_memory_telemetry()->failedAllocationBytes == 8192);
+    }
+    const auto& failedVector = *bunjsc_cached_memory_telemetry();
+    assert(failedVector.activeAllocationCategory == 0);
+    assert(failedVector.failedAllocationCategory == 1);
+    assert(failedVector.failedAllocationSequence == 2);
+}
+
 int main(int argc, char** argv)
 {
     assert(argc == 2);
@@ -117,6 +149,8 @@ int main(int argc, char** argv)
         checkWideRequest();
     else if (!std::strcmp(argv[1], "repeated"))
         checkRepeatedFailure();
+    else if (!std::strcmp(argv[1], "observed-construction"))
+        checkObservedConstruction();
     else
         return EXIT_FAILURE;
     std::puts(argv[1]);

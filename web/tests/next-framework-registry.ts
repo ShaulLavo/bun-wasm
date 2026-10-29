@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { recorderErrorHeader } from "../../scripts/app-matrix/registry.mjs";
+import { advisoryResponseLimit, registryIdentity } from "../../scripts/app-matrix/registry-identity";
 
 const shared = "/work/cache/bun-wasm-app-matrix";
 type Entry = { status: number; type: string; sha256: string };
@@ -11,7 +13,7 @@ function index(directory: string): Record<string, Entry> {
   if (!data || typeof data !== "object") throw new Error("Invalid registry index");
   const entries: Record<string, Entry> = {};
   for (const [path, entry] of Object.entries(data)) {
-    if (!entry || typeof entry !== "object" || !("sha256" in entry) || typeof entry.sha256 !== "string") throw new Error(`Invalid registry entry ${path}`);
+    if (!entry || typeof entry !== "object" || !("sha256" in entry) || typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)) throw new Error(`Invalid registry entry ${path}`);
     if (!("status" in entry) || typeof entry.status !== "number" || !("type" in entry) || typeof entry.type !== "string") throw new Error(`Invalid registry entry ${path}`);
     entries[path] = { sha256: entry.sha256, status: entry.status, type: entry.type };
   }
@@ -19,23 +21,34 @@ function index(directory: string): Record<string, Entry> {
 }
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-export function nextRegistry(directory: string, port: number) {
+export function nextRegistry(directory: string, port: number, overlay?: string) {
   const borrowed = index(shared);
   const supplemental = index(directory);
+  const advisories = overlay ? index(overlay) : {};
   const requests: string[] = [];
   const misses: string[] = [];
   const server = Bun.serve({
     hostname: "127.0.0.1", port,
-    fetch(request) {
-      const headers = { "access-control-allow-origin": "*", "cross-origin-resource-policy": "cross-origin" };
-      const path = new URL(request.url).pathname;
-      requests.push(path);
-      const entry = supplemental[path] ?? borrowed[path];
-      if (!entry) { misses.push(path); return new Response(`Unrecorded ${path}`, { status: 503, headers }); }
-      const root = supplemental[path] ? directory : shared;
-      const bytes = readFileSync(join(root, "objects", entry.sha256));
-      if (sha256(bytes) !== entry.sha256) throw new Error(`Registry digest mismatch ${path}`);
-      return new Response(bytes, { status: entry.status, headers: { ...headers, "content-type": entry.type } });
+    async fetch(request) {
+      const headers = { "access-control-allow-origin": "*", "access-control-allow-headers": "*", "cross-origin-resource-policy": "cross-origin" };
+      if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
+      try {
+        const identity = await registryIdentity(request);
+        const { key, method } = identity;
+        requests.push(key);
+        const entry = method === "POST" ? advisories[key] : supplemental[key] ?? borrowed[key];
+        if (!entry) { misses.push(key); return new Response(`Unrecorded ${key}`, { status: 503, headers: { ...headers, [recorderErrorHeader]: "1" } }); }
+        const root = method === "POST" && overlay ? overlay : supplemental[key] ? directory : shared;
+        const filename = join(root, "objects", entry.sha256);
+        if (method === "POST" && statSync(filename).size > advisoryResponseLimit) throw new Error("Advisory response exceeds limit");
+        const bytes = readFileSync(filename);
+        if (sha256(bytes) !== entry.sha256) throw new Error(`Registry digest mismatch ${key}`);
+        return new Response(bytes, { status: entry.status, headers: { ...headers, "content-type": entry.type } });
+      } catch (error) {
+        const key = `${request.method} ${new URL(request.url).pathname}`;
+        misses.push(key);
+        return new Response(String(error), { status: 502, headers: { ...headers, [recorderErrorHeader]: "1" } });
+      }
     },
   });
   return { base: `http://127.0.0.1:${server.port}`, requests, misses, close: () => server.stop(true) };

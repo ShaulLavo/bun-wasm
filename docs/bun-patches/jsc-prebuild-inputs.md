@@ -32,6 +32,7 @@ shell reports a successful wait for a terminated worker. Missing proof never per
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [JSC prebuild inputs](#jsc-prebuild-inputs) | Host feature | Original build-cache fingerprint, output integrity checks and early CI saves reuse only completed matching WebKit builds. |
+| `jsc/fetch-webkit.sh` | Port | Original patch application adapter tracks patch-added files for the existing strict source stamp. |
 
 [Ledger scope and pinned revisions](scope.md).
 
@@ -143,3 +144,14 @@ The retained prepolicy fixture actually passed sync survivor/finalizer checks
 then aborted on the unserved bare async request at API unlock. Real-loader hello passed before the allocation-state repair; the allocation
 and GC regressions remain separate runtime checks. These source conditions
 are not a general thread-support claim.
+
+## Patch-added files in cold prebuilds
+
+`jsc/fetch-webkit.sh` is an original port adapter for the pinned WebKit checkout.
+It applies the patch with `git apply --index` so new upstream files are tracked
+alongside modified files. The existing strict source-tree guard can then check
+the exact patched tree without rejecting a patch-owned header as untracked.
+The guard, source pin, artifact hashes, input stamp, and sparse-checkout checks
+remain unchanged. A cold metadata regression covers patch application,
+idempotence, and rejection of unexpected, modified, or missing added files.
+No upstream implementation is copied by this recipe change.
