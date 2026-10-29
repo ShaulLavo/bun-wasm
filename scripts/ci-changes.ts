@@ -138,5 +138,4 @@ if (import.meta.main) {
   const native = nativeChanges(paths, base, head, ancestor);
   console.error(`Native inputs changed: ${native.join(", ") || "none"}`);
   console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}\nshared=${needsSharedSysroot(paths)}\nhermes=${needsHermes(native)}`);
-  console.log(`rust=${native.length > 0}\njsc=${needsJsc(paths)}`);
 }
