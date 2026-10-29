@@ -2,7 +2,7 @@
 
 | Area | Classification | Source | Local change | Reason |
 | --- | --- | --- | --- | --- |
-| `web/src/shell.ts`, `web/src/main.ts` | Original Bun consumer adapter | bash-web public shell/bridge API at `da1f2eedfdeff174db4009e6345660aa2adfafbc (draft diagnosis; final pin awaits reviewed merge)`; existing private playground `src/session.ts` and `src/main.ts` integration | Connect xterm input, resize, output, signals and shell state to the page-owned Waffle runtime | Bun REPL and child processes need a live terminal instead of output-only runs |
+| `web/src/shell.ts`, `web/src/main.ts` | Original Bun consumer adapter | bash-web public shell/bridge API at `0bf41ec6d7f149c77ec2ad00a97b5b9928b4a2e0 (merged PR176; CI run 40886275313)`; existing private playground `src/session.ts` and `src/main.ts` integration | Connect xterm input, resize, output, signals and shell state to the page-owned Waffle runtime | Bun REPL and child processes need a live terminal instead of output-only runs |
 | Staged `env.wasm` | Host feature, unchanged upstream artifact | Waffle `packages/coreutils/dist/env.wasm`, `programs-v0.0.7`, source `63ddc5da0699d6e3ca449eaecb0bc35069c664d9` | Copy to the native launcher guest path; no implementation changes | bash-web delegates external programs to the released Waffle families |
 
 This replaces the playground's local command parser and line editor with
@@ -45,3 +45,8 @@ and keeps Bun execution and process-service implementations out of initial JS.
 
 An explicitly supplied Bash source path must already match the selected commit.
 The producer rejects a mismatch without replacing that caller-owned checkout.
+
+The merged Bash CI handoff supplies the exact source archive, runtime guest and
+worker files. Its retained workers are copied unchanged; the page host bundles
+the matching installed source. Consumer staging verifies the original native
+checksum receipt before writing the app's guest receipt.
