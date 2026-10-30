@@ -211,13 +211,13 @@ test("a shared-group core links no C++ runtime archive, so the override object r
   expect(link).not.toContain("libc++");
 });
 
-test("a shared-group core exports no linker stack or heap layout; split keeps every export", () => {
-  const layout = /const GROUP_HOST_LAYOUT: \[&str; 4\] = \[([^\]]*)\]/.exec(cliBuild)?.[1];
-  if (!layout) throw new Error("Missing GROUP_HOST_LAYOUT");
-  expect(Array.from(layout.matchAll(/"([^"]+)"/g), match => match[1])).toEqual(["__stack_pointer", "__stack_low", "__stack_high", "__heap_base"]);
-  expect(cliBuildFunction("split_entry")).toMatch(/if shared_group\(\) && GROUP_HOST_LAYOUT\.contains\(&name\) \{\s*continue;\s*\}/);
+test("a shared-group core exports no linker stack or heap layout and no TLS-offset errno; split keeps every export", () => {
+  const layout = /const GROUP_UNEXPORTED: \[&str; 5\] = \[([^\]]*)\]/.exec(cliBuild)?.[1];
+  if (!layout) throw new Error("Missing GROUP_UNEXPORTED");
+  expect(Array.from(layout.matchAll(/"([^"]+)"/g), match => match[1])).toEqual(["__stack_pointer", "__stack_low", "__stack_high", "__heap_base", "errno"]);
+  expect(cliBuildFunction("split_entry")).toMatch(/if shared_group\(\) && GROUP_UNEXPORTED\.contains\(&name\) \{\s*continue;\s*\}/);
   const exports = readFileSync(new URL("../../scripts/quickjs-core-exports.txt", import.meta.url), "utf8").split("\n");
-  for (const name of ["__stack_low", "__stack_high", "__heap_base"]) expect(exports).toContain(name);
+  for (const name of ["__stack_low", "__stack_high", "__heap_base", "errno"]) expect(exports).toContain(name);
 });
 
 test("core errno goes through wasi-libc's accessor, never a plain declaration of a thread-local", () => {

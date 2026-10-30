@@ -139,7 +139,7 @@ fn split_entry() {
         // A PIE member imports its stack pointer; the side shares that same imported global.
         // Its stack and heap are carved by the host, so wasm-ld defines no stack bounds or heap
         // base for it. Only JSC and Hermes sides import those, and neither is shared-group qualified.
-        if shared_group() && GROUP_HOST_LAYOUT.contains(&name) {
+        if shared_group() && GROUP_UNEXPORTED.contains(&name) {
             continue;
         }
         println!("cargo:rustc-link-arg-bin=bun=--export={name}");
@@ -151,12 +151,16 @@ fn split_entry() {
     }
 }
 
-/// Linker layout symbols a PIE member does not have: the host supplies its stack and heap.
-const GROUP_HOST_LAYOUT: [&str; 4] = [
+/// Core exports a PIE member does not have or must not offer. The host supplies its stack and
+/// heap, so wasm-ld defines no layout symbols. Its `errno` is thread-local, so the export would be
+/// a TLS offset that a side's `GOT.mem.errno` would misread as an address; the QuickJS side has
+/// its own errno (crates/bunwasm-engine-quickjs/group-errno.c).
+const GROUP_UNEXPORTED: [&str; 5] = [
     "__stack_pointer",
     "__stack_low",
     "__stack_high",
     "__heap_base",
+    "errno",
 ];
 
 /// The core's memory-group service for its engine side (bunwasm-runtime `group_memory`).
