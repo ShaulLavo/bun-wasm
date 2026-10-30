@@ -31,8 +31,7 @@ declare namespace CryptoKeys {
     algorithm(algorithm: BunWasm.CryptoAlgorithm): Algorithm;
     keyAlgorithm(algorithm: Algorithm, key: KeyMaterial): Algorithm;
   }
-  interface Writable {
-  }
+  type Writable = BunWasm.WorkerWritable;
   type WritableConstructor = new(options?: unknown) => Writable;
   interface Internal extends Pick<BunWasm.Internal, "realTimers"> {
     crypto: Crypto;

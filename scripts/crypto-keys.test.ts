@@ -102,8 +102,18 @@ keys.generateKey("hmac", { length: 128 }, (error, key) => {
   void error;
   void key;
 });
-const signer = keys.createSign("sha256", undefined).update(view).sign(pair.privateKey, undefined);
-const validStream: boolean = keys.createVerify("sha256", undefined).update(typed).verify(pair.publicKey, signer, undefined);
+const streamSigner = keys.createSign("sha256", undefined);
+streamSigner.update(view);
+streamSigner.write(data);
+streamSigner.end();
+streamSigner.on("finish", () => {});
+const streamVerifier = keys.createVerify("sha256", undefined);
+streamVerifier.update(typed);
+streamVerifier.write(data);
+streamVerifier.end();
+streamVerifier.on("error", () => {});
+const signer = streamSigner.sign(pair.privateKey, undefined);
+const validStream: boolean = streamVerifier.verify(pair.publicKey, signer, undefined);
 const derived: ArrayBuffer = keys.hkdfSync("sha256", secret, typed, view, 32);
 keys.pbkdf2("password", "salt", 1, 32, "sha256", (error, value) => {
   void error;
@@ -147,6 +157,8 @@ for (const probe of [
   'keys.generateKeySync("rsa", { length: 128 });',
   'keys.sign("sha256", data, null);',
   'pair.privateKey.export({ format: "der", type: "invalid" });',
+  'keys.createSign("sha256").write();',
+  'keys.createVerify("sha256").on("finish", "not a listener");',
 ]) {
   test(`actual factory types reject ${probe}`, () => {
     const result = checkTypes(`${validProbe}\n${probe}`);
@@ -163,6 +175,6 @@ test("existing native-provider runtime fixture passes through the emitted factor
   });
   expect(result.stderr.toString()).toBe("");
   expect(result.exitCode).toBe(0);
-  expect(result.stdout.toString().match(/^PASS /gm)).toHaveLength(20);
+  expect(result.stdout.toString().match(/^PASS /gm)).toHaveLength(21);
   expect(result.stdout.toString()).toContain("failures 0");
 });
