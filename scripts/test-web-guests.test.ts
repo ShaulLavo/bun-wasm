@@ -153,23 +153,22 @@ test("engine-specific changes keep their own native gates", () => {
   expect(needsJsc(["web/guest-tests/jsc.test.ts"])).toBe(true);
 });
 
-test("the completed prebuild is saved before native checks and every later guest gate", () => {
+test("the background prebuild is verified and saved before every guest producer and gate", () => {
   const names = nativeStepNames();
   const owner = "Build or verify the JSC prebuild";
-  const later = ["Blocking JSC embedding and allocation checks", "Build one host-engine guest for real-browser source cache acceptance", "Build the single tools fixture in the existing native target", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)", "Save the JSC prebuild cache once per input revision", "Save the JSC Cargo cache once per input revision", "Save the refined native Cargo cache once per input revision", "Save the native quality checkpoint"];
-  expect(names.filter(value => value === owner)).toHaveLength(1);
-  for (const step of later) {
-    expect(names.filter(value => value === step)).toHaveLength(1);
-    expect(names.indexOf(step)).toBeGreaterThan(names.indexOf(owner));
-  }
+  const launch = "Start the JSC prebuild beside native quality";
+  const later = ["Start the JSC Cargo guest build", "Blocking JSC embedding and allocation checks", "Build one host-engine guest for real-browser source cache acceptance", "Build the single tools fixture in the existing native target", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)", "Save the JSC prebuild cache once per input revision", "Save the JSC Cargo cache once per input revision", "Save the refined native Cargo cache once per input revision"];
+  for (const step of [owner, launch].concat(later)) expect(names.filter(value => value === step)).toHaveLength(1);
+  for (const step of later) expect(names.indexOf(step)).toBeGreaterThan(names.indexOf(owner));
+  expect(names.indexOf(launch)).toBeLessThan(names.indexOf("Blocking native quality checks"));
+  expect(names.indexOf(owner)).toBeGreaterThan(names.indexOf("Save the native quality checkpoint"));
   expect(workflow.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
   expect(workflow.match(/bash scripts\/build-bun-jsc.sh/g)).toHaveLength(1);
   const prebuild = rust.split(`      - name: ${owner}\n`)[1]!.split("      - name: Save the JSC prebuild cache")[0]!;
-  expect(prebuild).toContain('wait "$jsc_pid"\n          [[ "$(cat "$jsc_completion")" == verified ]]\n          echo "jsc-ready=true" >> "$GITHUB_OUTPUT"');
+  expect(prebuild).toContain('cat "$RUNNER_TEMP/jsc-prebuild.log"\n          [[ "$(cat "$state/completion")" == verified ]]\n          echo "jsc-ready=true" >> "$GITHUB_OUTPUT"');
   expect(prebuild).not.toContain("run_native_checks");
   expect(prebuild).not.toContain("continue-on-error");
   expect(prebuild).not.toContain("uses: actions/cache/save");
-  expect(names.indexOf("Save the JSC prebuild cache once per input revision")).toBeLessThan(names.indexOf("Blocking native quality checks"));
   expect(rust).toContain("dist/web-guests-*.log\n            ${{ runner.temp }}/jsc-prebuild.log");
   expect(rust).toContain("if: always()\n        with:\n          name: web-guest-fixture-receipts");
 });
