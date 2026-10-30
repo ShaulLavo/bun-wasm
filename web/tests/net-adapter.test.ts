@@ -199,7 +199,8 @@ test("Bun helper keeps installer cache policy outside the generic runtime", asyn
     },
   };
   const sab = createRing();
-  const helper = new NetHelper(sab, await NetNamespace.create());
+  const namespace = await NetNamespace.create();
+  const helper = new NetHelper(sab, namespace);
   const host = new RuntimeNetHost(sab, (request) => helper.handle(request));
   try {
     Object.defineProperty(globalThis, "caches", { configurable: true, value: { async open(name: string) { opened.push(name); return cache; } } });
@@ -212,7 +213,8 @@ test("Bun helper keeps installer cache policy outside the generic runtime", asyn
     expect(decode(body)).toBe("cached tarball");
     expect(opened).toEqual(["bun-wasm-install-v1"]);
   } finally {
-    helper.dispose();
+    try { helper.dispose(); }
+    finally { namespace.dispose(); }
     globalThis.fetch = originalFetch;
     if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches);
     else Reflect.deleteProperty(globalThis, "caches");
@@ -335,7 +337,7 @@ test("the exact guest lookup factory decodes the real runtime helper result and 
     await expect(completion).resolves.toEqual([{ address: "127.0.0.1", family: 4 }]);
     expect(closed).toHaveLength(1);
     expect(slots.lookup_head!(closed[0]!, 65536, 0)).toBe(BADF);
-  } finally { helper.dispose(); owner.dispose(); }
+  } finally { try { helper.dispose(); } finally { await owner.dispose(); } }
 });
 
 
@@ -354,9 +356,9 @@ test("standalone CLI helper handles requests sent immediately after initializati
     worker.postMessage({ type: "init", ring });
     const host = new RuntimeNetHost(ring, (request, transfer = []) => worker.postMessage(request, transfer));
     const bodies = ["first early request", "second early request"];
-    const handles = bodies.map(body => host.fetch(JSON.stringify({ url: `data:text/plain,${encodeURIComponent(body)}` })));
-    for (const [index, handle] of handles.entries()) {
-      expect(await fetchBody(host, handle)).toBe(bodies[index]);
+    const requests = bodies.map(body => ({ handle: host.fetch(JSON.stringify({ url: `data:text/plain,${encodeURIComponent(body)}` })), body }));
+    for (const { handle, body } of requests) {
+      expect(await fetchBody(host, handle)).toBe(body);
       host.close(handle);
     }
   } finally { await worker.terminate(); }
@@ -370,9 +372,74 @@ test("process fixture shares one awaited network capability across concurrent ca
   } finally { await runtime.dispose(); }
 });
 
-test("process fixture rejects network admission when disposal wins initialization", async () => {
+test("process fixture rejects network admission before native namespace creation when disposed", async () => {
+  const create = spyOn(NetNamespace, "create");
+  const dispose = spyOn(NetNamespace.prototype, "dispose");
   const runtime = processRuntimeFixture({});
-  const pending = expect(runtime.network()).rejects.toThrow("Runtime is disposed");
-  try { await runtime.dispose(); await pending; }
-  finally { await runtime.dispose(); }
+  const pending = runtime.network();
+  const disposal = runtime.dispose();
+  try {
+    await expect(pending).rejects.toThrow("Runtime is disposed");
+    const creation = create.mock.results[0]?.value;
+    if (!(creation instanceof Promise)) throw new Error("Expected namespace initialization");
+    const observed: Promise<unknown> = creation;
+    const [admission, cancellation] = await Promise.all([pending.catch(error => error), observed.catch(error => error)]);
+    expect(admission).toBe(cancellation);
+    expect(dispose).not.toHaveBeenCalled();
+    await disposal;
+  } finally {
+    await runtime.dispose();
+    create.mockRestore();
+    dispose.mockRestore();
+  }
+});
+
+
+test("process fixture owns one namespace and disposes it after its helpers", async () => {
+  const create = spyOn(NetNamespace, "create");
+  const dispose = spyOn(NetNamespace.prototype, "dispose");
+  const runtime = processRuntimeFixture({});
+  try {
+    const [first, second] = await Promise.all([runtime.network(), runtime.network()]);
+    expect(first).toBe(second);
+    expect(create).toHaveBeenCalledTimes(1);
+    const helper = createBunNetworkHelper(first, createRing());
+    helper.dispose();
+    expect(dispose).not.toHaveBeenCalled();
+    await runtime.dispose();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    await runtime.dispose();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  } finally {
+    await runtime.dispose();
+    const created = create.mock.results[0]?.value;
+    if (!dispose.mock.calls.length && created instanceof Promise) {
+      const namespace: unknown = await created;
+      if (namespace instanceof NetNamespace) namespace.dispose();
+    }
+    create.mockRestore();
+    dispose.mockRestore();
+  }
+});
+
+
+test("process fixture preserves helper failure identity and still disposes its namespace", async () => {
+  const runtime = processRuntimeFixture({});
+  const network = await runtime.network();
+  const stopped = new Error("listener cleanup failed");
+  const helper = createBunNetworkHelper(network, createRing(), { stopped() { throw stopped; } });
+  const close = spyOn(helper, "dispose");
+  const namespaceDispose = spyOn(NetNamespace.prototype, "dispose");
+  try {
+    helper.handle({ type: "listen", id: 1, host: "127.0.0.1", port: 0 });
+    const failure: unknown = await runtime.dispose().catch(error => error);
+    if (!(failure instanceof AggregateError)) throw new Error("Expected listener cleanup failure");
+    expect(failure.errors).toEqual([stopped]);
+    expect(close.mock.results[0]?.value).toBe(failure);
+    expect(namespaceDispose).toHaveBeenCalledTimes(1);
+  } finally {
+    await runtime.dispose().catch(() => {});
+    close.mockRestore();
+    namespaceDispose.mockRestore();
+  }
 });

@@ -12,20 +12,37 @@ declare const self: Worker;
 type Init = { type: "init"; ring: SharedArrayBuffer };
 
 let helper: NetHelper | null = null;
-let initialization: Promise<void> = Promise.resolve();
+let initialization: Promise<void> | undefined;
+let namespace: NetNamespace | undefined;
+let stopped = false;
 const servers = new Map<number, ReturnType<typeof Bun.serve>>();
+process.once("exit", dispose);
 
 self.onmessage = async (event: MessageEvent<Init | NetRequest>) => {
   const msg = event.data;
   if (msg.type === "init") {
-    initialization = NetNamespace.create().then(namespace => {
-      helper = new NetHelper(msg.ring, namespace, { listening: serve, stopped: unserve });
-    });
+    if (initialization) throw new Error("Network helper is already initialized");
+    initialization = initialize(msg.ring);
     return;
   }
   await initialization;
   helper?.handle(msg);
 };
+
+async function initialize(ring: SharedArrayBuffer): Promise<void> {
+  namespace = await NetNamespace.create(() => {
+    if (stopped) throw new Error("Network helper is stopped");
+  });
+  if (stopped) return namespace.dispose();
+  helper = new NetHelper(ring, namespace, { listening: serve, stopped: unserve });
+}
+
+function dispose(): void {
+  if (stopped) return;
+  stopped = true;
+  try { helper?.dispose(); }
+  finally { namespace?.dispose(); }
+}
 
 function serve(port: number): void {
   if (!helper) return;

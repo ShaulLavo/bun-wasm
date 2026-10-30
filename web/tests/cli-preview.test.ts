@@ -7,7 +7,8 @@ import { createCliPreview } from "../scripts/cli-preview";
 
 async function preview(guestPort: number, body: string) {
   const ring = createRing();
-  const helper = new NetHelper(ring, await NetNamespace.create());
+  const namespace = await NetNamespace.create();
+  const helper = new NetHelper(ring, namespace);
   const host = new NetHost(ring, request => helper.handle(request));
   const listener = host.listen("127.0.0.1", guestPort);
   const server = createCliPreview(guestPort, helper);
@@ -26,10 +27,14 @@ async function preview(guestPort: number, body: string) {
   }, 1);
   return { server, async dispose() {
     clearInterval(timer);
-    await server.stop(true);
-    for (const handle of connections) host.close(handle);
-    host.close(listener);
-    helper.dispose();
+    try {
+      await server.stop(true);
+      for (const handle of connections) host.close(handle);
+      host.close(listener);
+    } finally {
+      try { helper.dispose(); }
+      finally { namespace.dispose(); }
+    }
   } };
 }
 

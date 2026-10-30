@@ -41,24 +41,35 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
   let disposed = false;
   let disposal: Promise<void> | undefined;
   let network: Promise<RuntimeNetwork> | undefined;
+  let namespace: NetNamespace | undefined;
+  const networkClosed = new Error("Runtime is disposed");
+  const assertNetworkLive = () => { if (disposed) throw networkClosed; };
   const helpers = new Set<NetHelper>();
   async function initializeNetwork(): Promise<RuntimeNetwork> {
-    const namespace = await NetNamespace.create();
+    const initialized = await NetNamespace.create(assertNetworkLive);
+    namespace = initialized;
     return { lookup() { throw new Error("Unexpected network lookup in process-only fixture"); }, createHelper({ ring, fetch, hooks }) {
-      if (disposed) throw new Error("Runtime is disposed");
-      const helper = new NetHelper(ring, fetch, hooks, namespace);
+      assertNetworkLive();
+      const helper = new NetHelper(ring, fetch, hooks, initialized);
       helpers.add(helper);
       return helper;
     } };
+  }
+  function disposeNetwork(errors: unknown[]): void {
+    for (const helper of helpers) {
+      try { helper.dispose(); } catch (error) { errors.push(error); }
+    }
+    helpers.clear();
+    try { namespace?.dispose(); } catch (error) { errors.push(error); }
   }
   const consumers = new Set<RuntimeConsumer>();
   let service!: ProcessService;
   return {
     hostIdentity: null, filesystem, identities,
     async network() {
-      if (disposed) throw new Error("Runtime is disposed");
+      assertNetworkLive();
       const initialized = await (network ??= initializeNetwork());
-      if (disposed) throw new Error("Runtime is disposed");
+      assertNetworkLive();
       return initialized;
     },
     get disposed() { return disposed; },
@@ -115,7 +126,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
       try { broker?.suspend(); } catch (error) { errors.push(error); }
       void Promise.resolve().then(async () => {
         try { if (activation) await activation; } catch (error) { errors.push(error); }
-        try { if (network) await network; } catch (error) { errors.push(error); }
+        try { if (network) await network; } catch (error) { if (error !== networkClosed) errors.push(error); }
         // This process-only fixture owns the same pre-admission fence, not a no-op lease.
         // A rejected fence prevents physical cleanup, as it does in the real page owner.
         const fences = await Promise.allSettled(retained.map(consumer => Promise.resolve().then(() => filesystem.quiesce(consumer.filesystem))));
@@ -124,14 +135,15 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
           const stops = await Promise.allSettled(retained.map(consumer => Promise.resolve().then(() => consumer.stop())));
           for (const result of stops) if (result.status === "rejected") errors.push(result.reason);
           consumers.clear();
-          for (const helper of helpers) helper.dispose();
-          helpers.clear();
+          disposeNetwork(errors);
         }
         try {
           if (failures.length) await broker?.quiesce();
           else await broker?.dispose();
         } catch (error) { errors.push(error); }
-        if (errors.length || failures.length) throw new AggregateError(errors.concat(failures), "Process fixture disposal failed");
+        const failuresAndErrors = errors.concat(failures);
+        if (failuresAndErrors.length === 1) throw failuresAndErrors[0];
+        if (failuresAndErrors.length) throw new AggregateError(failuresAndErrors, "Process fixture disposal failed");
       }).then(completion.resolve, completion.reject);
       return disposal;
     },
