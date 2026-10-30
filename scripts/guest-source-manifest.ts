@@ -41,8 +41,8 @@ export interface SourceOptions {
   readonly hermesBuild: string;
 }
 
-export function run(command: string[], cwd: string): string {
-  const result = Bun.spawnSync(command, { cwd, stdin: "ignore", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
+export function run(command: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): string {
+  const result = Bun.spawnSync(command, { cwd, stdin: "ignore", env: { ...env, GIT_OPTIONAL_LOCKS: "0" } });
   if (result.exitCode !== 0) throw new Error(`Guest source check failed: ${result.stderr.toString()}`);
   return result.stdout.toString().trim();
 }
@@ -123,7 +123,9 @@ async function committedGroup(name: string, repository: string, paths: readonly 
 async function tool(name: string, path: string, repository: string) {
   const physical = await realpath(path);
   const flags = name === "rustc" ? ["-vV"] : name === "cargo" ? ["-Vv"] : name === "rust-lld" ? ["-flavor", "wasm", "--version"] : ["--version"];
-  return { name, path: physical, sha256: (await fingerprint(physical)).sha256, version: run([path].concat(flags), repository) };
+  const env = { ...process.env };
+  delete env.LLD_REPRODUCE;
+  return { name, path: physical, sha256: (await fingerprint(physical)).sha256, version: run([path].concat(flags), repository, env) };
 }
 
 async function verifySysrootInputs(options: SourceOptions, groups: readonly InputGroup[]): Promise<void> {
