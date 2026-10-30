@@ -57,3 +57,9 @@ test("starter locks preserve the qualified Vite 8 graph", async () => {
     expect(lock).toMatchObject({ packages: { vite: expect.arrayContaining(["vite@8.3.5"]), rolldown: expect.arrayContaining(["rolldown@1.2.16"]) } });
   }
 });
+
+test("project parsing preserves ordinary files named __proto__", () => {
+  const files = Object.fromEntries([["package.json", packageJson], ["__proto__", "ordinary project file"]]);
+  const parsed = templateFiles(JSON.stringify({ files }));
+  expect(parsed?.["__proto__"]).toBe("ordinary project file");
+});

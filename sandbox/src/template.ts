@@ -10,7 +10,7 @@ export function templateFiles(text: string): TemplateSources | null {
     if (!value || typeof value !== "object" || !("files" in value)) return null;
     const files = value.files;
     if (!files || typeof files !== "object" || Array.isArray(files)) return null;
-    const output: TemplateSources = {};
+    const output: TemplateSources = Object.create(null);
     for (const [path, source] of Object.entries(files)) {
       if (typeof source !== "string" || !projectPath(path)) return null;
       output[path] = source;
