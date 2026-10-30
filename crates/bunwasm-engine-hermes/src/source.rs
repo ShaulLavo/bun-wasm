@@ -48,7 +48,7 @@ mod tests {
         let path =
             "/app/node_modules/tool/node_modules/next/dist/compiled/jest-worker/processChild.js";
         assert_eq!(
-            adapt(&source, &path),
+            adapt(&source, path),
             source.replace(EVAL_REQUIRE, REQUIRE_VALUE)
         );
     }
