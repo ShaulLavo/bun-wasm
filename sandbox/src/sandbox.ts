@@ -2,9 +2,9 @@ import { TypedEventTarget } from "@remix-run/component";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { createRuntime, type Runtime } from "waffle";
+import { installBunSharedObjects } from "../../src/shared-objects";
 import { BrowserPrograms } from "../../web/src/browser-programs";
 import { ENGINES, type Engine, WasmMissing, isEngine, loadWasm, mb, registerModuleScope } from "../../web/src/engine-loader";
-import { decode } from "../../web/src/fs";
 import type { BunNetworkOptions, RuntimeNetworkHelper } from "../../web/src/net/helper";
 import { Previews } from "../../web/src/preview";
 import type { Run } from "../../web/src/runner";
@@ -12,14 +12,13 @@ import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "..
 import { errorText, measureStartup } from "../../web/src/startup";
 import { openTerminal } from "../../web/src/terminal-mount";
 import { linkLocalUrls } from "../../web/src/terminal-links";
-import { depsCacheKey, readDeps, writeDeps } from "./deps-cache";
 import { Editor } from "./editor";
 import { StartupOutput } from "./startup-output";
-import { dependenciesChanged, loadTemplate, type TemplateSources } from "./template";
+import { loadTemplate } from "./template";
+import { defaultTemplate, selectTemplate, type Template } from "./template-catalog";
 
 type Filesystem = Runtime["filesystem"];
 export type Status = { text: string; kind: "" | "ok" | "error" };
-export type Template = "react" | "vanilla";
 /** No state until startup reaches the dev server. */
 export type ServerState = { state?: "starting" | "up" | "down"; text: string; url?: string };
 /** Why Restart became Reload; any failure locks the workspace controls. */
@@ -30,7 +29,6 @@ const HOME = "/home/user";
 const APP = `${HOME}/app`;
 const PORT = 5173;
 const DEFAULT_ENGINE: Engine = "browser";
-const DEPS_PATH = "/.bunwasm/deps-cache";
 
 /** What exists once the page's runtime is built; construction can fail before it does. */
 interface Workspace {
@@ -46,13 +44,12 @@ interface Workspace {
 interface Server {
   port: number;
   helper: RuntimeNetworkHelper;
-  updates: Promise<void>;
 }
 
-/** The sandbox page: one Waffle runtime, the template workspace, and `bun ./index.html` serving the preview. */
+/** One Waffle runtime installs the selected project and runs its dev script. */
 export class Sandbox extends TypedEventTarget<{ change: Event }> {
   /** Each template has its own persistent workspace, shared across engine switches. */
-  readonly template: Template;
+  get template(): Template["id"] { return this.project.id; }
   readonly engine: Engine;
   failure?: Failure;
   resetting = false;
@@ -62,7 +59,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   /** The preview's address once it has been up; the ↗ link keeps it after the server stops. */
   previewLink = "#";
   private readonly params: URLSearchParams;
-  private readonly templateFile: string;
+  private readonly project: Template;
   private readonly fit = new FitAddon();
   private terminalOpened!: () => void;
   private readonly terminalOpen = new Promise<void>((resolve) => { this.terminalOpened = resolve; });
@@ -70,26 +67,20 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private started = false;
   private workspace?: Workspace;
   private frame?: HTMLIFrameElement;
-  private templateSources: TemplateSources = {};
   private filesRevision = 0;
   private readonly previews = new Previews();
   private wasm: Awaited<ReturnType<typeof loadWasm>> | null = null;
   private firstStart = true;
-  private depsKey: string | null = null;
   private run: Run | null = null;
   private server: Server | null = null;
   private serverRevision = 0;
   private serverTiming = { started: 0, visibleStart: 0 };
-  /** Saved while the dev server was starting (before it listens): sent once it listens. */
-  private readonly unsent = new Map<string, number>();
   private readonly network: BunNetworkOptions = {
     listening: (port, helper) => {
       this.previews.register(port, helper);
-      const server = this.server = { port, helper, updates: Promise.resolve() };
+      const server = this.server = { port, helper };
       measureStartup("dev-server", this.serverTiming.started);
       void this.showPreview(server, this.serverTiming.visibleStart).catch(this.report);
-      for (const [path, revision] of this.unsent) void this.sendUpdate(path, revision);
-      this.unsent.clear();
     },
     stopped: (port, helper) => {
       this.previews.unregister(port, helper);
@@ -102,8 +93,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   constructor(search: string) {
     super();
     this.params = new URLSearchParams(search);
-    this.template = this.params.get("template") === "vanilla" ? "vanilla" : "react";
-    this.templateFile = this.template === "vanilla" ? "template-vanilla.json" : "template.json";
+    this.project = selectTemplate(this.params.get("template"));
     const requested = this.params.get("engine");
     this.engine = isEngine(requested) ? requested : DEFAULT_ENGINE;
   }
@@ -158,7 +148,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   async navigate(param: "engine" | "template", value: string): Promise<void> {
     await this.editor?.flushAll();
     const next = new URL(location.href);
-    const fallback = param === "engine" ? DEFAULT_ENGINE : "react";
+    const fallback = param === "engine" ? DEFAULT_ENGINE : defaultTemplate.id;
     if (value === fallback) next.searchParams.delete(param);
     else next.searchParams.set(param, value);
     if (param === "engine") next.searchParams.delete("wasm");
@@ -182,7 +172,7 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       const current = this.run;
       this.stopDevServer();
       await current?.done;
-      await loadTemplate(workspace.fs, APP, this.templateFile, true);
+      await loadTemplate(workspace.fs, APP, this.project.file, true);
       location.reload();
     } catch (error) {
       this.resetting = false;
@@ -218,6 +208,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
   private construct(): Workspace {
     const mode = getVfsDescriptor(this.params.get("mode") ?? "fast").mode;
     const runtime = createRuntime({ filesystem: { mode, name: `bun-wasm-sandbox-${this.template}` } });
+    const sharedObjects = installBunSharedObjects(runtime);
+    addEventListener("pagehide", (event: PageTransitionEvent) => { if (!event.persisted) sharedObjects.close(); });
     const fs = runtime.filesystem;
     const browserPrograms = new BrowserPrograms(runtime, {
       worker: new URL("./preview1-worker.js", location.href),
@@ -252,11 +244,11 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       this.setStatus("this page is not cross-origin isolated: the dev server can't serve previews", "error");
     }
     await Promise.all([
-      loadTemplate(fs, APP, this.templateFile).then((sources) => { this.templateSources = sources; }),
+      loadTemplate(fs, APP, this.project.file),
       this.loadEngine(),
     ]);
     await this.refreshFiles();
-    const startFile = this.template === "vanilla" ? "src/main.ts" : "src/App.tsx";
+    const startFile = this.project.editorFile;
     await editor.open(await fs.lookup(abs(startFile)) ? startFile : ((await fs.listFiles(APP)).map(rel)[0] ?? startFile));
     if (!this.failure) this.started = true;
     if (!this.wasm) return;
@@ -288,24 +280,8 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.setStatus("waiting for module service worker…");
     const scoped = await workspace.moduleScope;
     if (revision !== this.serverRevision) return;
-    this.unsent.clear();
-    for (const phase of ["deps-cached", "bundling-react", "bundled-react"]) {
-      performance.clearMarks(`bunwasm:${phase}`);
-      performance.clearMeasures(`bunwasm:${phase}`);
-    }
-    const changedDeps = await dependenciesChanged(fs, APP, this.templateSources);
-    if (revision !== this.serverRevision) return;
-    this.depsKey = changedDeps ? null : depsCacheKey(this.engine, wasm.build, this.templateFile);
-    const cached = this.depsKey ? await readDeps(this.depsKey) : null;
-    if (revision !== this.serverRevision) return;
-    await fs.remove(DEPS_PATH);
-    if (revision !== this.serverRevision) return;
-    if (cached) await fs.writeFile(DEPS_PATH, cached);
     await fs.flush();
     if (revision !== this.serverRevision) return;
-    this.setStatus("starting worker…");
-    this.setServerState("starting", "starting dev server…");
-    term.write(`\x1b[2m$\x1b[0m bun ./index.html \x1b[2m(${ENGINES[this.engine].name})\x1b[0m\r\n`);
     const programs = await browserPrograms.ready();
     if (revision !== this.serverRevision) return;
     const env: Record<string, string> = {
@@ -321,26 +297,30 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
       PORT: String(PORT),
       BUN_WASM_STARTUP: "1",
     };
-    const started = performance.now();
     const [{ startRun }] = await Promise.all([import("../../web/src/runner"), runtime.processes()]);
     if (revision !== this.serverRevision) return;
     const output = new StartupOutput((text) => term.write(text), startupRecord);
-    this.serverTiming = { started, visibleStart };
-    const current = startRun({ engine: this.engine, module: wasm.module, args: ["./index.html"], env, runtime, moduleScope: scoped, network: this.network }, {
-      phase: (name) => {
-        if (name === "worker-start") this.setStatus("starting dev server…");
-      },
-      stdout: (data) => output.write(data),
-      stderr: (data) => output.write(data),
-    });
-    this.run = current;
-    const result = await current.done;
-    output.flush();
-    if (result.error) term.write(`\x1b[31m${result.error}\x1b[0m\r\n`);
-    if (this.run !== current) return; // restarted
-    this.run = null;
-    term.write(`\x1b[2m[dev server exited with code ${result.code}]\x1b[0m\r\n`);
-    if (!this.server) this.setServerState("down", `dev server stopped (exit ${result.code}) · press Restart`);
+    const hooks = { stdout: (data: Uint8Array) => output.write(data), stderr: (data: Uint8Array) => output.write(data) };
+    for (const script of ["install", "dev"] as const) {
+      if (revision !== this.serverRevision) return;
+      const args = script === "install" ? ["install"] : ["run", "dev"];
+      const message = script === "install" ? "installing dependencies…" : "starting dev server…";
+      this.setStatus(message);
+      this.setServerState("starting", message);
+      term.write(`\x1b[2m$\x1b[0m bun ${args.join(" ")} \x1b[2m(${ENGINES[this.engine].name})\x1b[0m\r\n`);
+      this.serverTiming = { started: performance.now(), visibleStart };
+      const current = startRun({ engine: this.engine, module: wasm.module, args, env, runtime, moduleScope: scoped, network: this.network }, hooks);
+      this.run = current;
+      const result = await current.done;
+      output.flush();
+      if (result.error) term.write(`\x1b[31m${result.error}\x1b[0m\r\n`);
+      if (this.run !== current) return;
+      this.run = null;
+      if (script === "install" && result.code === 0 && !result.error) continue;
+      term.write(`\x1b[2m[${script} exited with code ${result.code}]\x1b[0m\r\n`);
+      this.setServerState("down", `${script} stopped (exit ${result.code}) · press Restart`);
+      return;
+    }
   }
 
   private stopDevServer(): void {
@@ -350,17 +330,6 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     this.server = null;
     // Restart discards this Run handle, so request the force-stop action explicitly.
     current?.kill(9);
-  }
-
-  private async saveDeps(target: Server, key: string): Promise<void> {
-    try {
-      const result = await guestBytes(target, "/_bun/deps-cache");
-      if (result.status !== 200 || this.server !== target || decode(result.bytes.subarray(0, 8)) !== "BUNDEPS1") return;
-      await this.workspace?.fs.writeFile(DEPS_PATH, result.bytes);
-      await writeDeps(key, result.bytes);
-    } catch {
-      // Restart can close the guest while the dependency cache is being saved.
-    }
   }
 
   private async showPreview(target: Server, visibleStart: number): Promise<void> {
@@ -381,36 +350,17 @@ export class Sandbox extends TypedEventTarget<{ change: Event }> {
     frame.addEventListener("load", () => {
       if (this.server !== target) return;
       measureStartup("preview", previewStarted);
-      if (this.depsKey) void this.saveDeps(target, this.depsKey);
       this.setStatus(`dev server ready in ${((performance.now() - visibleStart) / 1000).toFixed(1)} s · ${ENGINES[this.engine].name} · ${mb(this.wasm?.size ?? 0)}`, "ok");
     }, { once: true });
     frame.src = url;
   }
 
-  private async sendUpdate(path: string, revision: number): Promise<void> {
-    const target = this.server;
-    if (!target) return;
-    // The shared filesystem owns the bytes. Only wake HMR; replaying this save's
-    // contents through changeFile could roll back a newer write already committed there.
-    const update = target.updates.then(async () => {
-      if (this.server === target) await target.helper.notifyFileChanged(abs(path));
-    });
-    target.updates = update.catch(() => {});
-    try {
-      await update;
-      if (this.server === target) this.editor?.settle(revision, { text: "saved", kind: "ok" });
-    } catch (error) {
-      if (this.server === target) this.editor?.settle(revision, { text: `not sent: ${error instanceof Error ? error.message : String(error)}`, kind: "error" });
-    }
-  }
-
   private async save(fs: Filesystem, path: string, text: string, revision: number): Promise<void> {
     await fs.writeFile(abs(path), text);
     await fs.flush(abs(path));
-    if (this.server) await this.sendUpdate(path, revision);
-    else if (this.run) this.unsent.set(path, revision);
-    else this.editor?.settle(revision, { text: "saved", kind: "ok" });
+    this.editor?.settle(revision, { text: "saved", kind: "ok" });
   }
+
 }
 
 const rel = (path: string) => path.slice(APP.length + 1);
@@ -435,25 +385,4 @@ function startupRecord(line: string): boolean {
   if (typeof event.phase !== "string" || typeof event.duration !== "number") return false;
   measureStartup(event.phase, performance.now() - event.duration);
   return true;
-}
-
-function guestBytes(target: Server, path: string): Promise<{ status: number; bytes: Uint8Array }> {
-  return new Promise((resolve, reject) => {
-    const chunks: Uint8Array[] = [];
-    let status = 0;
-    const accepted = target.helper.request(target.port, {
-      method: "GET", target: path, headers: [], body: new Uint8Array(),
-    }, {
-      head: (head) => { status = head.status; },
-      data: (chunk) => { chunks.push(chunk.slice()); },
-      end: () => {
-        const bytes = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
-        let at = 0;
-        for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.length; }
-        resolve({ status, bytes });
-      },
-      error: (message) => reject(new Error(message)),
-    });
-    if (!accepted) reject(new Error("the dev server is not listening"));
-  });
 }

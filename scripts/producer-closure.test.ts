@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hash } from "./guest-source-manifest.ts";
@@ -69,6 +69,80 @@ test("original native generation captures actual compiler header dependencies an
     expect(captured.consumerInputs.inputs.map(input => input.path)).toContain("crates/bunwasm-hermes/cpp/nested.h");
     expect(() => verifyHermesLibrary(root, root, receipt)).not.toThrow();
     expect(readFileSync(receipt, "utf8")).toBe(original);
+  });
+});
+
+function relocatedHermesFixture(run: (fixture: { original: string; consumer: string; build: string; receipt: string }) => void): void {
+  const root = mkdtempSync(join(tmpdir(), "producer-hermes-consumer-"));
+  try {
+    const original = join(root, "original"), consumer = join(root, "consumer"), build = join(root, "native");
+    const directory = join(original, "crates/bunwasm-hermes/cpp");
+    mkdirSync(directory, { recursive: true });
+    mkdirSync(join(build, "wasi/lib"), { recursive: true });
+    const paths = ["shim.cpp", "memory-telemetry.h", "nested.h"].map(name => join(directory, name));
+    for (const path of paths) writeFileSync(path, `original input ${path}\n`);
+    cpSync(original, consumer, { recursive: true });
+    const generated = join(build, "wasi/generated.h");
+    paths.push(generated);
+    writeFileSync(generated, "generated input\n");
+    writeFileSync(join(build, "wasi/lib/libhermesvm_bunwasm.a"), "archive fixture");
+    writeFileSync(join(build, "wasi/shim-dependencies.txt"), `shim.cpp.o: #deps 4, deps mtime 1 (VALID)\n${paths.map(path => `    ${path}`).join("\n")}\n\n`);
+    const receipt = join(root, "original.json");
+    writeFileSync(receipt, JSON.stringify({ sha256: hash("archive fixture"), bytes: 15, ...hermesConsumerReceipt(original, build) }));
+    run({ original, consumer, build, receipt });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+test("unchanged Hermes consumer inputs in a new checkout retain the original compiler identity", () => {
+  relocatedHermesFixture(({ original, consumer, build, receipt }) => {
+    const recorded = readFileSync(receipt, "utf8");
+    writeFileSync(join(consumer, "unrelated-adapter.rs"), "changed engine-only adapter\n");
+    expect(() => verifyHermesLibrary(consumer, build, receipt)).not.toThrow();
+    expect(readFileSync(receipt, "utf8")).toBe(recorded);
+    expect(JSON.parse(recorded).consumerInputs.roots.repository).toBe(original);
+    expect(readFileSync(join(build, "wasi/lib/libhermesvm_bunwasm.a"), "utf8")).toBe("archive fixture");
+  });
+});
+
+test.each(["shim.cpp", "memory-telemetry.h", "nested.h"])("changed current checkout %s rejects unchanged original Hermes inputs", name => {
+  relocatedHermesFixture(({ consumer, build, receipt }) => {
+    const recorded = readFileSync(receipt, "utf8");
+    writeFileSync(join(consumer, "crates/bunwasm-hermes/cpp", name), "changed current consumer input\n");
+    expect(() => verifyHermesLibrary(consumer, build, receipt)).toThrow(/new matching native generation/);
+    expect(readFileSync(receipt, "utf8")).toBe(recorded);
+  });
+});
+
+test.each(["missing", "alias"])("a %s current consumer header cannot substitute original compiler bytes", change => {
+  relocatedHermesFixture(({ original, consumer, build, receipt }) => {
+    const path = "crates/bunwasm-hermes/cpp/memory-telemetry.h";
+    unlinkSync(join(consumer, path));
+    if (change === "alias") symlinkSync(join(original, path), join(consumer, path));
+    expect(() => verifyHermesLibrary(consumer, build, receipt)).toThrow(/new matching native generation/);
+  });
+});
+
+test.each(["original source", "generated header", "metadata", "receipt root"])("relocated consumer still rejects changed %s", change => {
+  relocatedHermesFixture(({ original, consumer, build, receipt }) => {
+    if (change === "original source") writeFileSync(join(original, "crates/bunwasm-hermes/cpp/nested.h"), "changed origin\n");
+    if (change === "generated header") writeFileSync(join(build, "wasi/generated.h"), "changed generated header\n");
+    if (change === "metadata") writeFileSync(join(build, "wasi/shim-dependencies.txt"), "changed dependency metadata\n");
+    if (change === "receipt root") {
+      const value = JSON.parse(readFileSync(receipt, "utf8"));
+      value.consumerInputs.roots.repository = consumer;
+      writeFileSync(receipt, JSON.stringify(value));
+    }
+    expect(() => verifyHermesLibrary(consumer, build, receipt)).toThrow(/new matching native generation/);
+  });
+});
+
+test("Node admits a new consumer checkout without changing the original Hermes receipt", () => {
+  relocatedHermesFixture(({ consumer, build, receipt }) => {
+    const recorded = readFileSync(receipt, "utf8");
+    const script = `import {verifyHermesLibrary} from ${JSON.stringify(join(import.meta.dir, "producer-closure.ts"))}; verifyHermesLibrary(process.argv[1],process.argv[2],process.argv[3]);`;
+    const result = Bun.spawnSync(["node", "--input-type=module", "-e", script, consumer, build, receipt]);
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(readFileSync(receipt, "utf8")).toBe(recorded);
   });
 });
 

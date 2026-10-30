@@ -4,6 +4,7 @@ import { FileTree } from "./file-tree";
 import { PreviewPane } from "./preview-pane";
 import type { Sandbox } from "./sandbox";
 import { TerminalPane } from "./terminal-pane";
+import { templates } from "./template-catalog";
 
 type Props = { sandbox: Sandbox };
 
@@ -47,8 +48,7 @@ function Header(handle: Handle<Props>) {
         <label class="engine template-choice">
           <span class="label">Template</span>
           <select id="template" aria-label="App template" title="App template" disabled={locked} mix={choose("template")}>
-            <option value="react" selected={sandbox.template === "react"}>React</option>
-            <option value="vanilla" selected={sandbox.template === "vanilla"}>Vanilla TS</option>
+            {templates.map(template => <option value={template.id} selected={sandbox.template === template.id}>{template.label}</option>)}
           </select>
         </label>
         <label class="engine">

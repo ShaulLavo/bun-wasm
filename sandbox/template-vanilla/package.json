@@ -2,5 +2,11 @@
   "name": "vanilla-app",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "bun ./index.html" }
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "vite": "8.3.5"
+  }
 }
