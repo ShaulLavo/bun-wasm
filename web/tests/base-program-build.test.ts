@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { brotliCompressSync, gzipSync } from "node:zlib";
+import { baseProgramAssets } from "../../scripts/base-program-build";
 import { browserBuildConfig } from "../../scripts/browser-build";
 
 async function buildAssets(root: string) {
@@ -79,6 +81,33 @@ test("transitive base families resolve from the isolated package scope", async (
   } finally {
     if (previousLocation) Object.defineProperty(globalThis, "location", previousLocation);
     else Reflect.deleteProperty(globalThis, "location");
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("base asset staging preserves only supplied wasm representations byte for byte", async () => {
+  const root = await mkdtemp(join(tmpdir(), "bun-wasm-base-variants-"));
+  try {
+    const family = join(root, "node_modules/waffle-coreutils");
+    await Bun.write(join(family, "package.json"), JSON.stringify({ name: "waffle-coreutils", type: "module", exports: "./src/index.ts" }));
+    await Bun.write(join(family, "src/index.ts"), 'export const wasm = new URL("../dist/ls.wasm", import.meta.url).href;');
+    const wasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
+    const variants = new Map([
+      ["ls.wasm", wasm], ["raw-only.wasm", wasm],
+      ["ls.wasm.br", brotliCompressSync(wasm)], ["ls.wasm.gz", gzipSync(wasm)],
+      ["compressed-only.wasm.br", brotliCompressSync(wasm)],
+    ]);
+    for (const [name, bytes] of variants) await Bun.write(join(family, "dist", name), bytes);
+    await Bun.write(join(family, "dist/README.txt"), "not a program");
+    const entry = join(root, "entry.ts");
+    await Bun.write(entry, 'export { wasm } from "waffle-coreutils";');
+    const outdir = join(root, "out");
+    const result = await Bun.build({ entrypoints: [entry], outdir, target: "browser", plugins: [baseProgramAssets(entry)] });
+    expect(result.success).toBe(true);
+    const staged = join(outdir, "programs/base/waffle-coreutils/dist");
+    expect((await readdir(staged)).sort()).toEqual(Array.from(variants.keys()).sort());
+    for (const [name, bytes] of variants) expect(await Bun.file(join(staged, name)).bytes()).toEqual(bytes);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
