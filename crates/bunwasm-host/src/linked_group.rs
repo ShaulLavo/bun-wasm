@@ -63,6 +63,8 @@ struct Summary {
     tables: u32,
     stack_pointer: bool,
     env_functions: HashSet<String>,
+    /// Data symbols imported from `GOT.mem`.
+    got_data: HashSet<String>,
     import_info: Vec<(String, String)>,
     functions: Vec<String>,
     problems: Vec<String>,
@@ -123,14 +125,22 @@ fn shape_problems(summary: &Summary) -> Vec<String> {
         problems.push("group image must import env.__stack_pointer".into());
     }
     for (module, name) in &summary.import_info {
-        if module != "env" || !summary.env_functions.contains(name) {
+        let function = summary.env_functions.contains(name);
+        let stack_bound =
+            HOST_STACK_BOUNDS.contains(&name.as_str()) && summary.got_data.contains(name);
+        if module != "env" || !(function || stack_bound) {
             problems.push(format!(
-                "import-info {module}.{name} must name an imported env function"
+                "import-info {module}.{name} must name an imported env function or a host stack bound imported from GOT.mem"
             ));
         }
     }
     problems
 }
+
+/// The weak data symbols a member's libc reads that only the host can supply: the bounds of
+/// the stack it carved for the member (wasi-libc `__init_tp` records them as the main thread's
+/// stack and derives the default thread stack size). wasm-ld defines no stack for a PIE.
+const HOST_STACK_BOUNDS: [&str; 2] = ["__stack_low", "__stack_high"];
 
 fn admit_core(summary: &Summary) -> Result<()> {
     let Some((shared, maximum)) = summary.memory else {
@@ -145,6 +155,16 @@ fn admit_core(summary: &Summary) -> Result<()> {
         ensure!(
             summary.functions.iter().any(|export| export == name),
             "memory group core is missing {name}"
+        );
+    }
+    // A core owns all of its data; the host resolves only the stack bounds it carved.
+    if let Some(name) = summary
+        .got_data
+        .iter()
+        .find(|name| !HOST_STACK_BOUNDS.contains(&name.as_str()))
+    {
+        bail!(
+            "memory group core cannot import GOT.mem.{name}; only the host stack bounds are supplied"
         );
     }
     Ok(())
@@ -226,7 +246,12 @@ fn import_problem(import: &wasmparser::Import<'_>, summary: &mut Summary) -> Opt
             (!shape || !named)
                 .then(|| format!("memory import {module}.{name} must be a 32-bit env.memory"))
         }
-        TypeRef::Global(global) => global_problem(module, name, global, summary),
+        TypeRef::Global(global) => {
+            if module == "GOT.mem" {
+                summary.got_data.insert(name.to_owned());
+            }
+            global_problem(module, name, global, summary)
+        }
         TypeRef::Tag(_) => Some("tag imports are unsupported".into()),
     }
 }
@@ -566,6 +591,12 @@ pub(super) unsafe fn instantiate_core<T: 'static>(
     for (name, value) in env {
         imports.define(&*store, "env", name, value)?;
     }
+    // The member's own stack, for libc's weak `GOT.mem` stack bounds (HOST_STACK_BOUNDS).
+    let stack_low = i32_global(store, page_address(placement.stack)?, Mutability::Var)?;
+    let stack_high = i32_global(store, stack_top, Mutability::Var)?;
+    for (name, value) in HOST_STACK_BOUNDS.into_iter().zip([stack_low, stack_high]) {
+        imports.define(&*store, "GOT.mem", name, value)?;
+    }
     let instance = imports.instantiate(&mut *store, module)?;
     for name in CORE_MEMORY_INITIALIZE {
         instance
@@ -644,6 +675,13 @@ mod tests {
         LinkingSection,
         /// Valid weak-import metadata for an imported env function: must still be admitted.
         ImportInfo,
+        /// libc's weak `GOT.mem.__stack_low`/`__stack_high` with their import-info: admitted,
+        /// and bound to the member's carved stack.
+        StackBounds,
+        /// A core `GOT.mem` data import other than the host stack bounds.
+        ForeignGotData,
+        /// Stack-bound import-info without the `GOT.mem` import it describes.
+        UnboundStackInfo,
     }
 
     const CORE: Image = Image {
@@ -671,9 +709,25 @@ mod tests {
             Shape::SecondMemInfo => payload.extend([1, 4, 8, 2, 0, 0]),
             Shape::BadImportInfo => payload.extend(import_info(0x01)),
             Shape::StrayImportInfo | Shape::ImportInfo => payload.extend(import_info(0x11)),
+            Shape::StackBounds | Shape::UnboundStackInfo => {
+                payload.extend(weak_env_imports(&HOST_STACK_BOUNDS))
+            }
             _ => {}
         }
         payload
+    }
+
+    /// import-info records `env.<name>`, weak and undefined (0x11), as wasm-ld writes them.
+    fn weak_env_imports(names: &[&str]) -> Vec<u8> {
+        let mut records = vec![names.len() as u8];
+        for name in names {
+            records.extend([3, b'e', b'n', b'v', name.len() as u8]);
+            records.extend(name.bytes());
+            records.push(0x11);
+        }
+        let mut subsection = vec![4, records.len() as u8];
+        subsection.extend(records);
+        subsection
     }
 
     /// Imports appended after the regular ones, so the regular indices stay put.
@@ -698,6 +752,24 @@ mod tests {
             Shape::ForeignGlobal => imports.import("host", "value", constant),
             Shape::GotFunction => imports.import("GOT.mem", "f", EntityType::Function(0)),
             Shape::ImportInfo => imports.import("env", "f", EntityType::Function(0)),
+            Shape::StackBounds => {
+                let bound = EntityType::Global(EncodedGlobal {
+                    val_type: EncodedValue::I32,
+                    mutable: true,
+                    shared: false,
+                });
+                imports.import("GOT.mem", "__stack_low", bound);
+                imports.import("GOT.mem", "__stack_high", bound)
+            }
+            Shape::ForeignGotData => imports.import(
+                "GOT.mem",
+                "table_of_contents",
+                EntityType::Global(EncodedGlobal {
+                    val_type: EncodedValue::I32,
+                    mutable: true,
+                    shared: false,
+                }),
+            ),
             _ => &mut *imports,
         };
     }
@@ -778,8 +850,14 @@ mod tests {
         for (index, name) in names.enumerate() {
             exports.export(name, ExportKind::Func, index as u32);
         }
-        exports.export("data_symbol", ExportKind::Global, 3);
-        exports.export("counter", ExportKind::Global, 4);
+        // Imported globals precede defined ones; StackBounds exports its two imported bounds.
+        if spec.shape == Shape::StackBounds {
+            exports.export("stack_low", ExportKind::Global, 3);
+            exports.export("stack_high", ExportKind::Global, 4);
+        } else {
+            exports.export("data_symbol", ExportKind::Global, 3);
+            exports.export("counter", ExportKind::Global, 4);
+        }
         if spec.export_memory {
             exports.export("memory", ExportKind::Memory, 0);
         }
@@ -903,6 +981,10 @@ mod tests {
             (Shape::SecondMemInfo, "memory-info is duplicated"),
             (Shape::BadImportInfo, "unsupported import-info env.f"),
             (Shape::StrayImportInfo, "must name an imported env function"),
+            (
+                Shape::UnboundStackInfo,
+                "import-info env.__stack_low must name an imported env function or a host stack bound",
+            ),
             (Shape::LinkingSection, "unsupported custom section linking"),
         ];
         for (shape, reason) in refused {
@@ -924,6 +1006,21 @@ mod tests {
             ..CORE
         };
         assert_eq!(admit(&image(weak), true).unwrap(), Profile::SharedGroup);
+        // A side resolves GOT.mem data against core exports; a core has nothing to resolve it from.
+        let foreign = Image {
+            shape: Shape::ForeignGotData,
+            ..CORE
+        };
+        let error = admit(&image(foreign), true).expect_err("core GOT.mem data admitted");
+        assert!(
+            format!("{error:#}").contains("cannot import GOT.mem.table_of_contents"),
+            "{error:#}"
+        );
+        let side = Image {
+            maximum: Some(65_536),
+            ..foreign
+        };
+        assert_eq!(admit(&image(side), false).unwrap(), Profile::SharedGroup);
     }
 
     #[test]
@@ -1031,6 +1128,49 @@ mod tests {
             u64::from(PAGE) * (1 + 2 * (1 + u64::from(STACK_PAGES)))
         );
         for (lease, _, _) in members {
+            lease.physical_stopped();
+        }
+    }
+
+    fn global_u32(store: &mut Store<()>, instance: &Instance, name: &str) -> u32 {
+        let global = instance.get_global(&mut *store, name).unwrap();
+        global.get(&mut *store).unwrap_i32() as u32
+    }
+
+    #[test]
+    fn each_member_core_reads_the_bounds_of_its_own_carved_stack() {
+        let engine = engine();
+        let group = bun_group(&engine);
+        let memory = group.memory_lease();
+        let bytes = image(Image {
+            shape: Shape::StackBounds,
+            ..CORE
+        });
+        assert_eq!(admit(&bytes, true).unwrap(), Profile::SharedGroup);
+        let module = Module::new(&engine, bytes).unwrap();
+        let mut store = Store::new(&engine, ());
+        let linker = Linker::new(&engine);
+        let mut members = Vec::new();
+        for pid in [1, 2] {
+            let lease = group.reserve(pid).unwrap().launch();
+            let placement = carve(&lease, &layout()).unwrap();
+            // SAFETY: `memory` is declared before `store`, so it outlives the Store.
+            let (instance, image) = unsafe {
+                instantiate_core(&mut store, &linker, &module, &layout(), &memory, &placement)
+            }
+            .unwrap();
+            let low = global_u32(&mut store, &instance, "stack_low");
+            let high = global_u32(&mut store, &instance, "stack_high");
+            assert_eq!(low, page_address(placement.stack).unwrap());
+            assert_eq!(high - low, STACK_BYTES);
+            assert_eq!(
+                high,
+                image.stack_pointer.get(&mut store).unwrap_i32() as u32
+            );
+            members.push((lease, low));
+        }
+        assert_ne!(members[0].1, members[1].1);
+        for (lease, _) in members {
             lease.physical_stopped();
         }
     }
