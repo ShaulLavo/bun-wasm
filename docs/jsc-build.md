@@ -55,7 +55,7 @@ A full build from nothing takes about 10 minutes at `-j6` on this machine (ICU ~
 - wasip1, single-threaded: pthreads are wasi-libc's stubs, so there is no concurrent or parallel GC.
 - ICU 78.3 (Bun's version) for common + i18n, data filtered to root/en (8 MB instead of 33 MB) and
   linked in as `icudt78_dat`. `Intl` works for English; other locales fall back to root.
-- 512 MiB memory cap (`--max-memory=536870912`), the cap bun-wasm needs for Bun's pointer tags.
+- The jsc shell links at bun-wasm's guest memory maximum (`crates/bunwasm-cli/max-memory.txt`, part of the prebuild's input hash).
 
 ## Files
 
@@ -99,7 +99,9 @@ live cells: without the spill step, `gc5.js`-style tests deterministically produ
 them. Cost: about +50% code size (14 MB -> 22 MB for the jsc shell) and 5-15% run time. The
 JavaScript stack itself (the C loop's register file) is in linear memory and was always scanned.
 
-## Memory under the 512 MiB cap
+## Memory under the earlier 512 MiB cap
+
+These were measured before the maximum became 1 GiB (stage 1, [Memory ceiling](memory-ceiling.md)) and have not been re-measured.
 
 `gc.js`/`stress.js` (churn with ~40 MB live) pass. Measured limits at 512 MiB:
 

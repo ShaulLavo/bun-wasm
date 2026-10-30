@@ -22,8 +22,8 @@ These tests run in the single Rust test command (`scripts/quality-rust.ts` selec
 `-p wasmi_core`), since path-patched crates are not workspace members.
 
 Every WebAssembly memory a guest program creates is a Vec inside the bun.wasm linear memory,
-which must stay below 512 MiB because Bun's string pointer tags use the top three address bits
-on wasm32. With doubling, a memory held twice its size in reserve, and a reallocation needed the
+which was capped at 512 MiB when this change was made (now the guest maximum in
+`crates/bunwasm-cli/max-memory.txt`). With doubling, a memory held twice its size in reserve, and a reallocation needed the
 old block and the doubled one at once. In a fresh QuickJS guest a memory stopped growing at
 160.1 MiB while the guest had used 315 MiB. esbuild-wasm's Go runtime grows in 4 MiB arenas and
 reported `out of memory: cannot allocate 4194304-byte block (70549504 in use)`. Exact growth may

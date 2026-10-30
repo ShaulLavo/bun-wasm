@@ -3,6 +3,9 @@ import { beginMemorySnapshot, createMemoryReader, emptyCounters, endMemorySnapsh
 import { createMemoryChannel, createMemoryPublisher, memoryChannelReady, observeMemoryImports, readMemoryChannel, requestMemoryChannel } from "../web/src/memory-channel.ts";
 import { aggregate, selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
 
+// Passed through as the core's declared maximum; any page multiple shows it is not a constant.
+const LIMIT_BYTES = 7 * 65536;
+
 function fixture(engine: "jsc" | "quickjs") {
   const memory = new WebAssembly.Memory({ initial: 1 });
   const view = new DataView(memory.buffer);
@@ -23,7 +26,7 @@ function fixture(engine: "jsc" | "quickjs") {
       return 256;
     },
   } };
-  return { memory, core, side, put, reader: createMemoryReader(engine, core, side), refreshes: () => refreshes, trap: () => { trap = true; } };
+  return { memory, core, side, put, reader: createMemoryReader(engine, core, side, LIMIT_BYTES), refreshes: () => refreshes, trap: () => { trap = true; } };
 }
 
 test("normal JSC refresh preserves overlapping estimates, unknowns, and the exact 192-byte ABI", () => {
@@ -32,6 +35,7 @@ test("normal JSC refresh preserves overlapping estimates, unknowns, and the exac
   const sample = f.reader.sample(true);
   expect(sample.allocatorLiveBytes).toBe(10000);
   expect(sample.allocatorPeakBytes).toBe(20000);
+  expect(sample.memoryLimitBytes).toBe(LIMIT_BYTES);
   expect(sample.jsHeapBytes).toBe(3000);
   expect(sample.arrayBufferBytes).toBeNull();
   expect(sample.swcBytes).toBeNull();
@@ -180,7 +184,7 @@ test("a late shared frame cannot resurrect a process ended while a phase sample 
   const id = crypto.randomUUID();
   const transport = beginMemorySnapshot("quickjs", id);
   if (!transport) throw new Error("missing shared transport");
-  const publisher = createMemoryPublisher(transport.buffer, createMemoryReader("quickjs", f.core, f.side, transport));
+  const publisher = createMemoryPublisher(transport.buffer, createMemoryReader("quickjs", f.core, f.side, LIMIT_BYTES, transport));
   publisher.capture(false, true);
   const getter: unknown = Reflect.get(globalThis, "__bunMemorySnapshots");
   if (typeof getter !== "function") throw new Error("missing host sampler");
@@ -196,7 +200,7 @@ test("a late frame cannot replace a new command record using the same diagnostic
   const id = crypto.randomUUID();
   const transport = beginMemorySnapshot("quickjs", id, "old-record");
   if (!transport) throw new Error("missing shared transport");
-  createMemoryPublisher(transport.buffer, createMemoryReader("quickjs", f.core, f.side, transport)).capture(false, true);
+  createMemoryPublisher(transport.buffer, createMemoryReader("quickjs", f.core, f.side, LIMIT_BYTES, transport)).capture(false, true);
   const getter: unknown = Reflect.get(globalThis, "__bunMemorySnapshots");
   if (typeof getter !== "function") throw new Error("missing host sampler");
   const pending: unknown = getter("quickjs", true);
@@ -213,7 +217,7 @@ test("clock ties never choose an aggregate scope without a caller root", () => {
   const currentId = crypto.randomUUID();
   try {
     if (!old) throw new Error("missing shared transport");
-    const oldSnapshot = createMemoryReader("quickjs", f.core, f.side, old).finish();
+    const oldSnapshot = createMemoryReader("quickjs", f.core, f.side, LIMIT_BYTES, old).finish();
     recordMemorySnapshot({ type: "bun-memory", snapshot: { ...oldSnapshot, failedAllocation: { bytes: 1, category: "old" } } });
     endMemorySnapshot(old.id);
     beginMemorySnapshot("quickjs", currentId);

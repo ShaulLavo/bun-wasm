@@ -441,7 +441,7 @@ remains unsupported.
 ## Native process resource limits
 
 The native `bun-wasm` launcher admits at most four active children across the root and all
-its descendants. Each instance defaults to 512 MiB of linear memory; a worker's
+its descendants. Each instance defaults to the guest memory maximum (`crates/bunwasm-cli/max-memory.txt`) of linear memory; a worker's
 `memoryLimitMb` extension can select its own memory limit. Each native guest thread reserves
 a 16 MiB Wasm stack plus 8 MiB of host-call headroom. `BUN_WASM_HOST_STACK_KIB` changes the
 Wasm portion for the root and children; `BUN_WASM_MEMORY_INIT_COW=0|1` controls Wasmtime's

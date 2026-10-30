@@ -8,7 +8,10 @@ function fixture(run: (root: string, shell: (command: string, env?: Record<strin
   try {
     mkdirSync(join(root, "jsc", "shim"), { recursive: true });
     mkdirSync(join(root, "scripts"));
+    mkdirSync(join(root, "crates", "bunwasm-cli"), { recursive: true });
     copyFileSync(new URL("../jsc/common.sh", import.meta.url), join(root, "jsc", "common.sh"));
+    // The jsc shell links at the guest memory maximum, so the stamp covers its one authority.
+    copyFileSync(new URL("../crates/bunwasm-cli/max-memory.txt", import.meta.url), join(root, "crates", "bunwasm-cli", "max-memory.txt"));
     copyFileSync(new URL("../env.sh", import.meta.url), join(root, "env.sh"));
     copyFileSync(new URL("./check-wasi-cmake-cache.sh", import.meta.url), join(root, "scripts/check-wasi-cmake-cache.sh"));
     writeFileSync(join(root, "scripts", "build-jsc.sh"), "# fixture build recipe\n");
@@ -44,6 +47,12 @@ test("JSC stamp ignores scratch policy but fingerprints effective compiler input
     writeFileSync(join(root, "env.sh"), readFileSync(join(root, "env.sh"), "utf8") + '\n# Unrelated workstation policy\nexport TMPDIR=/different/scratch\n');
     expect(shell("jsc_inputs_hash")).toBe(original);
     expect(shell("jsc_inputs_hash", { CFLAGS: "-DJSC_STAMP_REGRESSION=1" })).not.toBe(original);
+    const authority = join(root, "crates", "bunwasm-cli", "max-memory.txt");
+    const maximum = readFileSync(authority, "utf8");
+    writeFileSync(authority, "2147483648\n");
+    expect(shell("jsc_inputs_hash")).not.toBe(original);
+    writeFileSync(authority, maximum);
+    expect(shell("jsc_inputs_hash")).toBe(original);
     writeFileSync(join(root, "jsc", "shim", "wasi-compat.h"), "// changed injected header\n");
     expect(shell("jsc_inputs_hash")).not.toBe(original);
   });

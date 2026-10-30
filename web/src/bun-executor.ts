@@ -2,6 +2,7 @@ import { prepareLinkPlan, instantiateLinkPlan, type LinkedGroup, type LinkPlanSo
 import { programKind } from "../../src/engine-kind.js";
 import { createMemoryPublisher, observeMemoryImports } from "./memory-channel.js";
 import { createMemoryReader, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
+import { memoryMaximumBytes } from "../../src/engine-kind.ts";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
 import { startEngineHost } from "./engine-host.js";
@@ -196,6 +197,7 @@ function finishHostServices(sharedObjects: SharedObjectService | undefined, look
 function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExecutor<RunRequest>, "instantiate" | "initialize" | "beforeFinish"> {
   if (!req.linkPlan) return {};
   const request = { ...req, linkPlan: req.linkPlan };
+  const limitBytes = memoryMaximumBytes(req.linkPlan.core.source) ?? null;
   let group: LinkedGroup | undefined;
   let reader: ReturnType<typeof createMemoryReader> | undefined;
   let publisher: ReturnType<typeof createMemoryPublisher> | undefined;
@@ -217,7 +219,7 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
           coreImports: observeMemoryImports(imports, capture, false), checkActive: context.checkActive, bindMemory: context.bindMemory });
       } finally { context.wasi.imports = originalImports; }
       group = linked;
-      reader = createMemoryReader(req.engine, linked.entry, undefined, req.memoryTelemetry);
+      reader = createMemoryReader(req.engine, linked.entry, undefined, limitBytes, req.memoryTelemetry);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
       context.checkActive();
       return linked.entry;
@@ -226,7 +228,7 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
       context.checkActive();
       if (!group || finished) throw new Error("link group is unavailable");
       group.initialize();
-      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, req.memoryTelemetry);
+      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, limitBytes, req.memoryTelemetry);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
     },
     beforeFinish() {

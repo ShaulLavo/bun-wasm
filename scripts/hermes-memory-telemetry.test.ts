@@ -29,7 +29,7 @@ function fixture() {
       return 256;
     },
   } };
-  return { memory, core, side, put, reader: createMemoryReader("hermes", core, side), refreshes: () => refreshes,
+  return { memory, core, side, put, reader: createMemoryReader("hermes", core, side, null), refreshes: () => refreshes,
     trap: () => { trap = true; }, dispose: () => { disposed = true; } };
 }
 
@@ -63,7 +63,7 @@ test("Hermes rejects wrong layout, version, alignment and bounds instead of deco
   expect(() => f.reader.sample()).toThrow("ABI");
   for (const pointer of [257, 65528, -8]) {
     const side = { exports: { hermes_memory_telemetry: () => pointer } };
-    expect(() => createMemoryReader("hermes", f.core, side).sample()).toThrow("bounds");
+    expect(() => createMemoryReader("hermes", f.core, side, null).sample()).toThrow("bounds");
   }
 });
 
@@ -115,7 +115,7 @@ test("Hermes channel refreshes only at normal boundaries and freezes before disp
 
 test("Hermes initializer failure has allocator-only access and no fabricated failure or root", () => {
   const f = fixture();
-  const initial = createMemoryReader("hermes", f.core).finish();
+  const initial = createMemoryReader("hermes", f.core, undefined, null).finish();
   expect(initial.allocatorLiveBytes).toBe(10000); expect(initial.jsHeapBytes).toBeNull();
   expect(initial.engineCounters).toEqual({}); expect(initial.engineFailure).toBeNull(); expect(f.refreshes()).toBe(0);
   const snapshot = f.reader.sample(true);
