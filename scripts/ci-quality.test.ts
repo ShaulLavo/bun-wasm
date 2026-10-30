@@ -33,6 +33,16 @@ test("native checks share one conditional job and the cached target directory", 
   expect(rust).toContain("--lib modules::tests::host_");
 });
 
+test("only the native job has the 90-minute cold-pipeline guard; other job budgets are unchanged", () => {
+  const jobs = workflowField(Bun.YAML.parse(workflow), "jobs");
+  if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
+  const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
+  expect(budgets).toEqual({
+    quality: 10, rust: 90, package: 10, "shared-sysroot": 30, web: 10, "process-bundles": 10, "browser-process": 10, hermes: 30,
+  });
+  expect(rust).toContain("# Whole-job guard only; every phase, fixture and runtime timeout is unchanged.");
+});
+
 test("owned Rust formatting blocks before native setup and has no late duplicate", () => {
   const format = rust.indexOf("bun scripts/quality-rust.ts --format-only");
   expect(format).toBeGreaterThan(rust.indexOf("Save completed rustup-cache setup"));
