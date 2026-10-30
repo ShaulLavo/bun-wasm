@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -19,3 +19,8 @@ test("Hermes worker source guards pass against the original upstream fixtures", 
     rmSync(scratch, { recursive: true, force: true });
   }
 }, 65_000);
+
+test("Hermes VM resolves the sibling adapter file", () => {
+  const source = readFileSync(resolve(import.meta.dir, "../crates/bunwasm-engine-hermes/src/vm.rs"), "utf8");
+  expect(/#\[path = "source\.rs"\]\s*mod source;/.test(source)).toBe(true);
+});

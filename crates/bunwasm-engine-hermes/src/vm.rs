@@ -27,6 +27,7 @@ use crate::engine::{
     Engine, ErrorKind, ModuleHost, ModuleSource, NativeError, PromiseState, Record, Val, ValueFn,
 };
 
+#[path = "source.rs"]
 mod source;
 
 /// Cached bytes only; does not enter the VM, including after a failed refresh.
