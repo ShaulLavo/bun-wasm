@@ -497,4 +497,3 @@ declare namespace BunWasm {
 }
 
 interface String { toWellFormed(): string }
-
