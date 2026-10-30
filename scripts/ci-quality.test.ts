@@ -12,8 +12,10 @@ import { rustTestPackages } from "./rust-test-packages";
 import { inBatches, missingPackages, parseArchives, planArchives, prefetchArchive } from "../web/scripts/ci-browser-deps";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-const quality = workflow.split("\n  quality:\n")[1]!.split("\n  rust:\n")[0]!;
+const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-prebuild:\n")[0]!;
+const prebuild = workflow.split("\n  jsc-prebuild:\n")[1]!.split("\n  rust:\n")[0]!;
 const rust = workflow.split("\n  rust:\n")[1]!.split("\n  package:\n")[0]!;
+const importStepName = "Import the verified JSC prebuild and sysroot";
 
 test("JavaScript quality does not set up or compile Rust", () => {
   expect(quality).toContain("bun run quality --javascript");
@@ -33,21 +35,27 @@ test("native checks share one conditional job and the cached target directory", 
   expect(rust).toContain("--lib modules::tests::host_");
 });
 
-test("only the native job has the 90-minute cold-pipeline guard; other job budgets are unchanged", () => {
+test("the native job keeps its 60-minute guard and only the new prebuild job adds a budget or name", () => {
   const jobs = workflowField(Bun.YAML.parse(workflow), "jobs");
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    quality: 10, rust: 90, package: 10, "shared-sysroot": 30, web: 10, "process-bundles": 10, "browser-process": 10, hermes: 30,
+    quality: 10, "jsc-prebuild": 45, rust: 60, package: 10, "shared-sysroot": 30, web: 10, "process-bundles": 10, "browser-process": 10, hermes: 30,
   });
-  expect(rust).toContain("# Whole-job guard only; every phase, fixture and runtime timeout is unchanged.");
+  const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
+  expect(names).toEqual({
+    quality: "Code quality", "jsc-prebuild": "JSC C/C++ prebuild", rust: "Rust workspace tests (QuickJS host)",
+    package: "Browser adapter package", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host",
+    "process-bundles": "Shared process browser bundles", "browser-process": "Processes (${{ matrix.browser }})", hermes: "Opt-in Hermes paired program",
+  });
+  expect(rust).not.toContain("Whole-job guard");
 });
 
 test("owned Rust formatting blocks before native setup and has no late duplicate", () => {
   const format = rust.indexOf("bun scripts/quality-rust.ts --format-only");
   expect(format).toBeGreaterThan(rust.indexOf("Save completed rustup-cache setup"));
   expect(format).toBeLessThan(rust.indexOf("Install native build tools"));
-  expect(format).toBeLessThan(rust.indexOf("Build or verify the JSC prebuild"));
+  expect(format).toBeLessThan(rust.indexOf(importStepName));
   expect(rust.match(/quality-rust\.ts --format-only/g)).toHaveLength(1);
   expect(rust.match(/quality-rust\.ts --checks-only/g)).toHaveLength(1);
   expect(rust).not.toContain("bun run quality --native");
@@ -155,7 +163,8 @@ test("the refined Cargo cache keeps Cargo inputs and leaves JSC-only inputs to t
   expect(rust).toContain("if: steps.native-cargo-cache.outputs.cache-matched-key == ''");
   expect(rust).toContain("steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true'");
   expect(rust).toContain("JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine");
-  expect(rust).toContain("key: jsc-prebuild-v2-");
+  expect(prebuild).toContain("key: jsc-prebuild-v2-");
+  expect(rust).not.toContain("jsc-prebuild-v2-");
   expect(rust).toContain("key: jsc-cargo-v2-");
   expect(rust).toContain("'scripts/ci-binaryen.ts'");
   expect(rust).toContain("'crates/**'");
@@ -346,19 +355,20 @@ test("old Cargo-first keys cannot use the new compatibility prefix, and fallback
 });
 
 test("JSC prebuild and Cargo caches keep separate authoritative identities", () => {
-  const prebuild = nativeCacheContract("jsc-prebuild-cache", "Save the JSC prebuild cache once per input revision");
+  const archive = nativeCacheContract("jsc-prebuild-cache", "Save the JSC prebuild cache once per input revision", "jsc-prebuild");
   const cargo = nativeCacheContract("jsc-cargo-cache", "Save the JSC Cargo cache once per input revision");
-  expect(prebuild.primary).toBe(prebuild.save);
+  expect(archive.primary).toBe(archive.save);
   expect(cargo.primary).toBe(cargo.save);
-  expect(prebuild.restorePath).toBe("${{ runner.temp }}/jsc/prebuild");
+  expect(archive.restorePath).toBe("${{ runner.temp }}/jsc/prebuild");
   expect(cargo.restorePath).toBe("${{ runner.temp }}/jsc/engine");
-  expect(prebuild.primary).toContain("steps.jsc-inputs.outputs.hash");
+  expect(archive.primary).toContain("steps.jsc-inputs.outputs.hash");
   expect(cargo.prefix).toContain("steps.jsc-inputs.outputs.hash");
   expect(cargo.prefix).toContain("steps.native-inputs.outputs.hash");
-  expect(prebuild.primary).not.toContain("crates/**");
+  expect(archive.primary).not.toContain("crates/**");
   expect(cargo.primary).toContain("crates/**");
   expect(rust).not.toContain("steps.jsc-cache");
-  expect(rust.indexOf("name: Save the JSC prebuild")).toBeLessThan(rust.indexOf("name: Build native fixtures"));
+  expect(rust).not.toContain("name: Save the JSC prebuild");
+  expect(prebuild.indexOf("name: Save the JSC prebuild")).toBeLessThan(prebuild.indexOf("name: Package the verified prebuild and sysroot"));
   expect(rust.indexOf("name: Save the JSC Cargo")).toBeLessThan(rust.indexOf("name: Blocking JSC embedding"));
 });
 
@@ -621,8 +631,12 @@ test("Rust build caches follow host tool versions, not the runner image", () => 
   expect(rust).not.toContain("ImageVersion");
   const step = rust.indexOf("name: Identify host build tools");
   expect(step).toBeGreaterThan(rust.indexOf("name: Install native build tools"));
-  expect(step).toBeLessThan(rust.indexOf("id: sysroot-cache"));
-  expect(rust.match(/steps\.host-tools\.outputs\.hash/g)).toHaveLength(15);
+  expect(step).toBeLessThan(rust.indexOf("id: native-cargo-cache"));
+  expect(rust.match(/steps\.host-tools\.outputs\.hash/g)).toHaveLength(10);
+  const producerStep = prebuild.indexOf("name: Identify host build tools");
+  expect(producerStep).toBeGreaterThan(prebuild.indexOf("name: Install native build tools"));
+  expect(producerStep).toBeLessThan(prebuild.indexOf("id: sysroot-cache"));
+  expect(prebuild.match(/steps\.host-tools\.outputs\.hash/g)).toHaveLength(5);
   // Cargo does not see sysroot or C toolchain changes, so the shell guest's key carries them.
   const shellKey = rust.split("\n").find(line => line.includes("key: bash-web-shell-"))!;
   for (const input of ["runner.arch", "steps.host-tools.outputs.hash", "'scripts/build-wasi-sysroot.ts'", "'bun.lock'"]) expect(shellKey).toContain(input);
@@ -631,25 +645,28 @@ test("Rust build caches follow host tool versions, not the runner image", () => 
 test("native cache stays bounded per input revision, and the SDK is not copied per lock", () => {
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cache");
   expect(rust).toContain("uses: actions/cache/restore@v4\n        id: native-cargo-cache");
-  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(11);
+  expect(rust.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(9);
+  expect(prebuild.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(4);
+  expect(prebuild).not.toContain("github.run_id");
   expect(rust).toContain("steps.native-cargo-cache.outputs.cache-hit != 'true'");
   expect(rust).not.toContain("github.run_id");
   expect(rust).not.toContain("github.run_attempt");
   const sdkKey = rust.split("\n").find(line => line.includes("key: wasi-sdk-"))!;
   expect(sdkKey).not.toContain("hashFiles");
   expect(sdkKey).not.toContain("steps.host-tools.outputs.hash");
-  expect(rust).toContain("path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched");
+  expect(prebuild).toContain("path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched");
+  expect(rust).not.toContain("path: ${{ env.WASM_TOOLS }}/bun-wasm-sysroot-patched");
 });
 
 test("completed producers seed caches before unrelated guest gates", () => {
-  const prebuildSave = rust.indexOf("name: Save the JSC prebuild cache");
+  const prebuildSave = prebuild.indexOf("name: Save the JSC prebuild cache");
   const bootstrapSave = rust.indexOf("name: Save the native quality checkpoint");
   const jscCargoSave = rust.indexOf("name: Save the JSC Cargo cache");
   const nativeSave = rust.indexOf("name: Save the refined native Cargo cache");
-  expect(prebuildSave).toBeGreaterThan(rust.indexOf("name: Build or verify the JSC prebuild"));
-  expect(prebuildSave).toBeLessThan(rust.indexOf("name: Blocking native quality checks"));
+  expect(prebuildSave).toBeGreaterThan(prebuild.indexOf("name: Build or verify the JSC prebuild"));
+  expect(prebuildSave).toBeLessThan(prebuild.indexOf("name: Package the verified prebuild and sysroot"));
+  expect(rust.indexOf(`name: ${importStepName}`)).toBeLessThan(rust.indexOf("name: Blocking native quality checks"));
   expect(bootstrapSave).toBeGreaterThan(rust.indexOf("name: Blocking native quality checks"));
-  expect(prebuildSave).toBeLessThan(rust.indexOf("name: Build native fixtures"));
   expect(bootstrapSave).toBeLessThan(rust.indexOf("name: Build native fixtures"));
   expect(jscCargoSave).toBeGreaterThan(rust.indexOf("name: Build the JSC Cargo guest"));
   expect(jscCargoSave).toBeLessThan(rust.indexOf("bun scripts/jsc-embedding.ts test"));
@@ -686,11 +703,13 @@ test("preinstalled native tools skip apt and fallback removes the known slow mir
 });
 
 test("cold and restored JSC setup install Binaryen before sourcing common.sh", () => {
-  const setup = rust.match(/      - name: Install pinned Binaryen\n((?:        .*\n|          .*\n)+)/)?.[0] ?? "";
-  expect(setup).toContain("bun scripts/ci-binaryen.ts");
-  expect(setup).not.toContain("needs.quality.outputs.jsc");
-  expect(setup).not.toContain("cache-hit");
-  expect(rust.indexOf(setup)).toBeLessThan(rust.indexOf("name: Build or verify the JSC prebuild"));
+  for (const [job, consumer] of [[prebuild, "name: Identify JSC prebuild inputs"], [rust, `name: ${importStepName}`]] satisfies [string, string][]) {
+    const setup = job.match(/      - name: Install pinned Binaryen\n((?:        .*\n|          .*\n)+)/)?.[0] ?? "";
+    expect(setup).toContain("bun scripts/ci-binaryen.ts");
+    expect(setup).not.toContain("needs.quality.outputs.jsc");
+    expect(setup).not.toContain("cache-hit");
+    expect(job.indexOf(setup)).toBeLessThan(job.indexOf(consumer));
+  }
 });
 
 test("Binaryen remains pinned while runtime tool identity owns JSC reuse", () => {
@@ -745,10 +764,10 @@ function workflowString(value: unknown): string {
   return value;
 }
 
-function nativeWorkflowStep(key: string, value: string): unknown {
+function nativeWorkflowStep(key: string, value: string, job = "rust"): unknown {
   const parsed: unknown = Bun.YAML.parse(workflow);
-  const steps: unknown = workflowField(workflowField(workflowField(parsed, "jobs"), "rust"), "steps");
-  if (!Array.isArray(steps)) throw new Error("Expected native steps");
+  const steps: unknown = workflowField(workflowField(workflowField(parsed, "jobs"), job), "steps");
+  if (!Array.isArray(steps)) throw new Error(`Expected ${job} steps`);
   const matches = steps.filter((item: unknown) => typeof item === "object" && item !== null && key in item && Reflect.get(item, key) === value);
   expect(matches).toHaveLength(1);
   return matches[0];
@@ -774,7 +793,7 @@ test("split producer wasm-tools setup is pinned, cached and unconditional before
   expect(script).toContain('wasm-tools 1.262.0 (e22db44da 2026-10-13)');
   expect(script.indexOf("sha256sum --check")).toBeLessThan(script.indexOf("tar -xzf"));
   expect(script.indexOf("--version")).toBeLessThan(script.indexOf('>> "$GITHUB_PATH"'));
-  expect(rust.indexOf(`name: ${wasmToolsSetupName}`)).toBeLessThan(rust.indexOf(`name: ${prebuildStepName}`));
+  expect(rust.indexOf(`name: ${wasmToolsSetupName}`)).toBeLessThan(rust.indexOf(`name: ${importStepName}`));
   for (const path of ["build-bun-core.sh", "build-engine-quickjs.sh"]) {
     expect(readFileSync(join(import.meta.dir, path), "utf8")).toContain("wasm-tools validate");
   }
@@ -838,7 +857,7 @@ test("Wasmtime is pinned and cached, then fixture commands are checked before na
   expect(script.indexOf("sha256sum --check")).toBeLessThan(script.indexOf("tar -xJf"));
   expect(script.indexOf("--version")).toBeLessThan(script.indexOf('>> "$GITHUB_PATH"'));
   expect(workflowField(nativeWorkflowStep("name", "Check transpiler example command prerequisites"), "run")).toBe("bash scripts/test-transpiler-example.sh --check-tools");
-  expect(rust.indexOf("name: Check transpiler example command prerequisites")).toBeLessThan(rust.indexOf(`name: ${prebuildStepName}`));
+  expect(rust.indexOf("name: Check transpiler example command prerequisites")).toBeLessThan(rust.indexOf(`name: ${importStepName}`));
   expect(readFileSync(join(import.meta.dir, "build.sh"), "utf8")).toContain('"$root/scripts/test-transpiler-example.sh"');
 });
 
@@ -859,9 +878,9 @@ for (const contents of ["corrupt cached Wasmtime", ""]) test(`Wasmtime ${content
   expect(result.path).toBe("");
 });
 
-function nativeCacheContract(id: string, saveName: string) {
-  const restore = nativeWorkflowStep("id", id);
-  const save = nativeWorkflowStep("name", saveName);
+function nativeCacheContract(id: string, saveName: string, job = "rust") {
+  const restore = nativeWorkflowStep("id", id, job);
+  const save = nativeWorkflowStep("name", saveName, job);
   const inputs = workflowField(restore, "with");
   return {
     primary: workflowString(workflowField(inputs, "key")),
@@ -893,9 +912,10 @@ function comparison(clause: string, outputs: Readonly<Record<string, string>>): 
 test("parsed native cache guards distinguish exact, prefix and missing restores after successful gates", () => {
   const fallback = workflowString(workflowField(nativeWorkflowStep("id", "native-cache"), "if"));
   const saves = [
-    "Save the JSC prebuild cache once per input revision", "Save the JSC Cargo cache once per input revision",
-    "Save the refined native Cargo cache once per input revision", "Save the native quality checkpoint",
-  ].map(name => workflowString(workflowField(nativeWorkflowStep("name", name), "if")));
+    nativeWorkflowStep("name", "Save the JSC prebuild cache once per input revision", "jsc-prebuild"),
+  ].concat([
+    "Save the JSC Cargo cache once per input revision", "Save the refined native Cargo cache once per input revision", "Save the native quality checkpoint",
+  ].map(name => nativeWorkflowStep("name", name))).map(step => workflowString(workflowField(step, "if")));
   const states = [
     { v2: "exact", v4: "not-run", expected: [false, false, false] },
     { v2: "prefix", v4: "not-run", expected: [false, true, false] },
@@ -1013,7 +1033,7 @@ test("program profile source refines native keys while retaining compatible targ
     expect(fixtureCacheKey(keys.prefix, before)).toBe(fixtureCacheKey(keys.prefix, after));
   }
   for (const namespace of ["jsc-prebuild-v2", "jsc-cargo-v2"]) {
-    const key = rust.split("\n").find(line => line.trim().startsWith(`key: ${namespace}-`));
+    const key = (prebuild + rust).split("\n").find(line => line.trim().startsWith(`key: ${namespace}-`));
     if (!key) throw new Error(`Missing ${namespace} cache key`);
     expect(fixtureCacheKey(key, before)).toBe(fixtureCacheKey(key, after));
   }
@@ -1090,7 +1110,7 @@ for (const namespace of [nativeCargoNamespace, "native-v4"]) {
 const prebuildStepName = "Build or verify the JSC prebuild";
 
 function prebuildScript(): string {
-  return workflowString(workflowField(nativeWorkflowStep("name", prebuildStepName), "run"));
+  return workflowString(workflowField(nativeWorkflowStep("name", prebuildStepName, "jsc-prebuild"), "run"));
 }
 
 function replaceWorkload(script: string, functionName: string, body: string): string {
@@ -1099,18 +1119,20 @@ function replaceWorkload(script: string, functionName: string, body: string): st
   return script.replace(pattern, () => `${functionName}() {\n${body}\n}`);
 }
 
-test("ordered producers keep every blocking native command and save JSC before native work", () => {
+test("ordered producers keep every blocking native command and save JSC before its hand-off", () => {
   const script = prebuildScript();
-  const step = nativeWorkflowStep("name", prebuildStepName);
+  const step = nativeWorkflowStep("name", prebuildStepName, "jsc-prebuild");
   expect(workflowField(step, "shell")).toBe("bash");
   expect(step).not.toHaveProperty("if");
   expect(workflowField(step, "env")).toEqual({
     CI_JSC_PREBUILD_HIT: "${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}",
   });
-  const before = rust.slice(0, rust.indexOf(`name: ${prebuildStepName}`));
-  for (const prerequisite of ["Build patched WASI sysroot", "Preserve unchanged build-script input timestamps", "Configure private JSC build paths", "id: jsc-prebuild-cache", "id: jsc-cargo-cache"]) {
+  const before = prebuild.slice(0, prebuild.indexOf(`name: ${prebuildStepName}`));
+  for (const prerequisite of ["Build patched WASI sysroot", "Save the verified sysroot cache", "Configure private JSC build paths", "id: jsc-inputs", "id: jsc-prebuild-cache"]) {
     expect(before).toContain(prerequisite);
   }
+  expect(rust).not.toContain(`name: ${prebuildStepName}`);
+  expect(workflow.match(/bash scripts\/build-jsc\.sh/g)).toHaveLength(1);
   const native = nativeScript() + ["Build native fixtures after the cache checkpoint", "Blocking native fixture checks"]
     .map(name => workflowString(workflowField(nativeWorkflowStep("name", name), "run"))).join("");
   const commands = ["bun scripts/quality-rust.ts --checks-only", "bun run quality:wasi", "bun scripts/quality-input-times.ts", "cargo test --locked", "cargo build --release --locked -j 2 -p bunwasm-host", "CARGO_BUILD_JOBS=2 bash scripts/build.sh", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts", "bun tests/install/root-overrides.ts"];
@@ -1131,9 +1153,9 @@ test("ordered producers keep every blocking native command and save JSC before n
   expect(script).toContain("set +m\n  trap - EXIT INT TERM\n  run_jsc_prebuild");
   expect(script).toContain('wait "$jsc_pid"\n[[ "$(cat "$jsc_completion")" == verified ]]\necho "jsc-ready=true" >> "$GITHUB_OUTPUT"');
   expect(script).not.toContain("tee");
-  const save = rust.indexOf("name: Save the JSC prebuild cache");
-  expect(save).toBeGreaterThan(rust.indexOf(`name: ${prebuildStepName}`));
-  expect(save).toBeLessThan(rust.indexOf("name: Blocking native quality checks"));
+  const save = prebuild.indexOf("name: Save the JSC prebuild cache");
+  expect(save).toBeGreaterThan(prebuild.indexOf(`name: ${prebuildStepName}`));
+  expect(save).toBeLessThan(prebuild.indexOf("name: Package the verified prebuild and sysroot"));
 });
 
 function nativeScript(): string {

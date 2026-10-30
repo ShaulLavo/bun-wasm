@@ -55,17 +55,31 @@ The WASI crypto toolchain, its CMake cache preflight dependencies, and the share
 process-request JSON compiled into host tests also select native checks.
 Browser-only and documentation changes install no Rust toolchain or SDK.
 
-After the patched sysroot and input timestamps are ready, the native job restores
-both private JSC caches, then builds or verifies the JSC C/C++ prebuild in its own
-process group and saves it before any native check runs. Cancellation kills and
-reaps only that group; its log joins the always-run guest diagnostic upload.
+The JSC C/C++ prebuild runs in its own job, `JSC C/C++ prebuild`, selected exactly
+when the native job is: the tools fixture links JSC even when no JSC engine gate
+runs. It owns the run's one patched sysroot and one prebuild, and their caches. It
+restores or builds the sysroot, then builds the prebuild or verifies a restored one
+in its own process group. Cancellation kills and reaps only that group. On main it
+saves the prebuild cache before packaging. It then packs both trees into one
+`jsc-prebuild` artifact. A manifest binds the artifact to the run ID, the commit,
+both absolute paths and both archive hashes, and the job reports the manifest hash
+as an output.
 
-The native job's `timeout-minutes: 90` is a whole-job guard for legitimately cold
-pipelines, not a check budget. PR 390 spent 1739s on a cold JSC prebuild and 1489s on
-cold native quality before the common core, and cold native runs with a warm prebuild
-took up to 3595s on the slower runner class, so 60 minutes cut off real cold work.
-Warm runs take about 14-18 minutes. Every phase, fixture and runtime timeout keeps
-its own limit.
+The native job needs the prebuild job but does not skip when it fails or is
+skipped. Its first step fails unless the prebuild job succeeded, so a missing
+prebuild turns the native check red instead of grey. Only the change filter, a
+failed quality job or a cancelled run skip it. Before any native check, it
+downloads the artifact. It checks the reported manifest hash, the run, commit and
+paths, and both archive hashes, and refuses to overlay an existing tree. Then it
+extracts both trees at the same absolute paths and runs `check_jsc_inputs_stamp` in
+its own environment. That check covers the toolchain, sysroot receipt, WebKit tree,
+archives and CMake state. `bun scripts/build-wasi-sysroot.ts` then verifies the
+imported sysroot against the native job's own tools. The prebuild log joins the
+always-run guest diagnostic upload.
+
+The native job keeps its 60-minute guard. The prebuild job has 45 minutes: a cold
+prebuild took up to 1739s on the slower runner class, plus setup, the sysroot and
+the hand-off. Every phase, fixture and runtime timeout keeps its own limit.
 
 One Cargo build overlaps others. Right after the native quality checkpoint,
 `Start the JSC Cargo guest build` runs `build-bun-jsc.sh` in its own session at
