@@ -11,10 +11,11 @@ import { qualityGates } from "./quality";
 import { rustTestPackages } from "./rust-test-packages";
 import { inBatches, missingPackages, parseArchives, planArchives, prefetchArchive } from "../web/scripts/ci-browser-deps";
 
+import { nativePipeline } from "./ci-native-pipeline";
+
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-prebuild:\n")[0]!;
-const prebuild = workflow.split("\n  jsc-prebuild:\n")[1]!.split("\n  rust:\n")[0]!;
-const rust = workflow.split("\n  rust:\n")[1]!.split("\n  package:\n")[0]!;
+const { prebuild, ordered: rust } = nativePipeline(workflow);
 const importStepName = "Import the verified JSC prebuild and sysroot";
 
 test("JavaScript quality does not set up or compile Rust", () => {
@@ -23,7 +24,7 @@ test("JavaScript quality does not set up or compile Rust", () => {
   expect(quality).not.toContain("sync-bun.sh");
 });
 
-test("native checks share one conditional job and the cached target directory", () => {
+test("native checks share one cached target through the quality checkpoint", () => {
   expect(rust).toContain("needs.quality.outputs.rust == 'true'");
   expect(rust).toContain("CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target");
   expect(rust).toContain("${{ env.CARGO_TARGET_DIR }}");
@@ -40,11 +41,11 @@ test("the native job keeps its 60-minute guard and only the new prebuild job add
   if (typeof jobs !== "object" || jobs === null) throw new Error("Missing workflow jobs");
   const budgets = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "timeout-minutes")]));
   expect(budgets).toEqual({
-    quality: 10, "jsc-prebuild": 45, rust: 60, package: 10, "shared-sysroot": 30, web: 10, "process-bundles": 10, "browser-process": 10, hermes: 30,
+    quality: 10, "jsc-prebuild": 45, "native-quality": 45, rust: 60, package: 10, "shared-sysroot": 30, web: 10, "process-bundles": 10, "browser-process": 10, hermes: 30,
   });
   const names = Object.fromEntries(Object.entries(jobs).map(([id, job]) => [id, workflowField(job, "name")]));
   expect(names).toEqual({
-    quality: "Code quality", "jsc-prebuild": "JSC C/C++ prebuild", rust: "Rust workspace tests (QuickJS host)",
+    quality: "Code quality", "jsc-prebuild": "JSC C/C++ prebuild", "native-quality": "Native quality checkpoint", rust: "Rust workspace tests (QuickJS host)",
     package: "Browser adapter package", "shared-sysroot": "Shared PIC sysroot proof", web: "Web host",
     "process-bundles": "Shared process browser bundles", "browser-process": "Processes (${{ matrix.browser }})", hermes: "Opt-in Hermes paired program",
   });
@@ -765,7 +766,7 @@ function workflowString(value: unknown): string {
 }
 
 function nativeWorkflowStep(key: string, value: string, job = "rust"): unknown {
-  const parsed: unknown = Bun.YAML.parse(workflow);
+  const parsed: unknown = Bun.YAML.parse(job === "rust" ? `jobs:\n  rust:\n${rust}` : workflow);
   const steps: unknown = workflowField(workflowField(workflowField(parsed, "jobs"), job), "steps");
   if (!Array.isArray(steps)) throw new Error(`Expected ${job} steps`);
   const matches = steps.filter((item: unknown) => typeof item === "object" && item !== null && key in item && Reflect.get(item, key) === value);
