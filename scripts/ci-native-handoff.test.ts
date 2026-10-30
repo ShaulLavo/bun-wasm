@@ -125,8 +125,13 @@ function repository(directory: string): void {
   git(directory, "config", "user.name", "Fixture");
   git(directory, "config", "user.email", "fixture@example.invalid");
   writeFileSync(join(directory, "source"), "public source\n", { mode: 0o751 });
-  git(directory, "add", ".");
+  mkdirSync(join(directory, "fixtures/node_modules/public"), { recursive: true });
+  writeFileSync(join(directory, "fixtures/node_modules/public/index.ts"), "export const fixture = true;\n");
+  git(directory, "add", "-f", "source", "fixtures/node_modules/public/index.ts");
   git(directory, "commit", "-qm", "fixture");
+  mkdirSync(join(directory, "node_modules/private"), { recursive: true });
+  writeFileSync(join(directory, "node_modules/private/.npmrc"), "fixture-auth-do-not-package");
+  writeFileSync(join(directory, "fixtures/node_modules/public/.npmrc"), "fixture-auth-do-not-package");
 }
 function fixture(run: (root: string, env: Record<string, string>, invoke: (job: string, name: string, changes?: Record<string, string>) => SpawnSyncReturns<string>) => void): void {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-native-handoff-"));
@@ -200,6 +205,22 @@ test("real workflow scripts preserve bytes, file modes, symlinks, mtimes and ups
     expect(git(join(root, "temp/cargo/git/checkouts/public/abc"), "status", "--porcelain")).toBe("");
     expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("native-ready=true\n");
     expect(existsSync(join(root, "temp/source-verified"))).toBe(true);
+  });
+});
+
+test("tracked dependency fixtures survive while installed packages stay private", () => {
+  fixture((root, env, invoke) => {
+    const changes = prepareImport(root, env, invoke);
+    const imported = invoke("rust", unpackName, changes);
+    expect(imported.status, imported.stderr).toBe(0);
+    for (const path of ["repo/vendor/bun", "temp/cargo/git/checkouts/public/abc"]) {
+      const repository = join(root, path);
+      expect(readFileSync(join(repository, "fixtures/node_modules/public/index.ts"), "utf8")).toBe("export const fixture = true;\n");
+      expect(existsSync(join(repository, "node_modules/private"))).toBe(false);
+      expect(existsSync(join(repository, "fixtures/node_modules/public/.npmrc"))).toBe(false);
+      expect(git(repository, "status", "--porcelain", "--untracked-files=no")).toBe("");
+    }
+    expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("native-ready=true\n");
   });
 });
 

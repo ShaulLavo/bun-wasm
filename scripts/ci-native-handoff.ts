@@ -55,18 +55,38 @@ function metadataRoot(path: string): { root: string; rest: string } | undefined 
   const match = /^(.*(?:^|\/)\.git)(?:\/(.*))?$/.exec(path) ?? /^(git\/db\/[^/]+)(?:\/(.*))?$/.exec(path);
   return match ? { root: match[1]!, rest: match[2] ?? "" } : undefined;
 }
-function include(path: string): boolean {
-  if (path.split("/").includes("node_modules")) return false;
+function include(path: string, tracked: ReadonlySet<string>): boolean {
+  if (path.split("/").includes("node_modules") && !tracked.has(path)) return false;
   const metadata = metadataRoot(path);
   if (!metadata || !metadata.rest) return true;
   if (metadata.rest === "objects/info/alternates") throw new Error("External Git object alternates are not supported");
   return /^(?:HEAD|index|shallow|packed-refs)$/.test(metadata.rest) || /^(?:objects|refs)(?:\/|$)/.test(metadata.rest);
 }
+function ancestors(paths: Set<string>, path: string): void {
+  let prefix = "";
+  for (const part of safeRelative(path).split("/")) {
+    prefix = prefix ? `${prefix}/${part}` : part;
+    paths.add(prefix);
+  }
+}
+function trackDependencies(directory: string, path: string, tracked: Set<string>): void {
+  let metadata;
+  try { metadata = lstatSync(join(directory, ".git")); }
+  catch (error) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return; throw error; }
+  if (metadata.isSymbolicLink()) throw new Error("Git metadata must not follow external links");
+  if (!metadata.isDirectory()) throw new Error("Git metadata must be a private directory");
+  const files = execFileSync("git", ["-C", directory, "ls-files", "-z"], { encoding: "utf8" });
+  for (const file of files.split("\0")) {
+    if (!file.split("/").includes("node_modules")) continue;
+    ancestors(tracked, path === "." ? file : `${path}/${file}`);
+  }
+}
 function inventory(directory: string, roots: string[], archive: ArchiveName, repositories: GitDirectory[]): string[] {
   const paths: string[] = [];
+  const tracked = new Set<string>();
   function visit(path: string): void {
     safeRelative(path);
-    if (!include(path)) return;
+    if (!include(path, tracked)) return;
     const absolute = join(directory, path);
     const stat = lstatSync(absolute);
     const metadata = metadataRoot(path);
@@ -75,6 +95,7 @@ function inventory(directory: string, roots: string[], archive: ArchiveName, rep
     if (metadata?.rest === "") repositories.push({ archive, path, bare: !path.endsWith(".git") });
     paths.push(path);
     if (!stat.isDirectory()) return;
+    trackDependencies(absolute, path, tracked);
     for (const entry of readdirSync(absolute)) visit(path === "." ? entry : `${path}/${entry}`);
   }
   for (const root of roots) visit(root);

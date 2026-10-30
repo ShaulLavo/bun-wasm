@@ -94,7 +94,9 @@ Bun Git identity and clean tracked source, then runs the real `sync-bun.sh --che
 The archives preserve file modes, symlinks and mtimes. Source timestamp repair and
 all existing receipt, memory and toolchain guards still run. No import failure
 falls back to rebuilding or an older cache. No checkout `.git`, Git configuration,
-Cargo credentials, hooks, logs, environment dump or `node_modules` is transferred.
+Cargo credentials, hooks, logs, environment dump or untracked dependency installs are transferred.
+Git-tracked dependency fixtures remain public source, even under `node_modules`;
+their untracked siblings stay excluded.
 Only the Git objects, refs, HEAD, index and shallow metadata needed by public
 source verification cross the boundary. External Git object alternates and linked
 worktree metadata are rejected rather than followed.
