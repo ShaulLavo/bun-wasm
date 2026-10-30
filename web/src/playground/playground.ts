@@ -193,6 +193,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       const { bunLauncher } = await import("../bun-launcher");
       return bunLauncher(engine, {
         runtime, network, workerUrl: new URL(scoped ? "./__bunwasm/worker.js" : "./worker.js", location.href).href,
+        // web/build.ts emits the notification helper at the page root in both modes.
+        notificationWorkerUrl: new URL("./notification-worker.js", location.href).href,
         loadTools: () => loadWasm("bun-tools.wasm", () => {}).then(loaded => loaded.module),
       })(context, service);
     });

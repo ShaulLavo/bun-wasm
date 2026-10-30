@@ -68,7 +68,7 @@ export async function createRuntimeEngineScope(module: WebAssembly.Module, engin
     root.data = { filesystem: identity };
     const decoder = new TextDecoder();
     runtime.registerAdapter(adapter === "preview1" ? "preview1" : `bun:${engine}`,
-      adapter === "preview1" ? preview1Launcher({ workerUrl }) : bunLauncher(engine, { runtime, workerUrl }));
+      adapter === "preview1" ? preview1Launcher({ workerUrl }) : bunLauncher(engine, { runtime, workerUrl, notificationWorkerUrl: "./notification-worker.js" }));
     const executable = "/usr/libexec/engine-probe";
     await filesystem.mkdirp("/usr/libexec");
     await filesystem.writeFile(executable, new Uint8Array([1]));

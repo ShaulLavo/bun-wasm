@@ -4,6 +4,7 @@
 #[path = "../../bunwasm-cli/src/tool_args.rs"]
 mod tool_args;
 
+mod fs_watch;
 mod guest;
 mod linked;
 mod net;
@@ -54,6 +55,8 @@ pub struct Host {
     pub memory: Option<guest::GuestMemory>,
     pub trace: bool,
     pub processes: process::Processes,
+    /// `runtime_fs` guest filesystem watches.
+    pub watches: fs_watch::Watches,
     /// J3 installs the lease together with the group's imported shared memory.
     pub shm: Option<shm::MemberLease>,
     pub limits: StoreLimits,
@@ -359,6 +362,7 @@ fn run_module_instance(
     let mut processes =
         process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
     processes.join_memory_group(member.as_ref().map(shm::MemberLease::group));
+    let watches = fs_watch::Watches::new(net.notify());
     let host = Host {
         wasi: wasi.build_p1(),
         net,
@@ -366,6 +370,7 @@ fn run_module_instance(
         cancel: cancel.clone(),
         cwd,
         processes,
+        watches,
         shm: member,
         limits: StoreLimitsBuilder::new()
             .memory_size(memory_limit)

@@ -6,6 +6,7 @@ import { workerProcessState } from "waffle/proc/worker-client";
 import type { RunRequest } from "../src/bun-executor";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { importingModule, rootFixture } from "./process-root-fixture";
+import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 
@@ -22,7 +23,15 @@ test("third-party preview1 programs need source bytes or an explicit cooperative
 test("spawn requests keep their explicit executable without root-specific rewriting", async () => {
   const previousWorker = globalThis.Worker;
   const requests: RunRequest[] = [];
-  globalThis.Worker = class { postMessage(value: RunRequest) { requests.push(value); } terminate() {} } as unknown as typeof Worker;
+  globalThis.Worker = class {
+    readonly notification: boolean;
+    constructor(url: string | URL) { this.notification = isNotificationWorkerUrl(url); }
+    postMessage(value: RunRequest) {
+      if (this.notification || isNotificationBridgeRequest(value)) return;
+      requests.push(value);
+    }
+    terminate() {}
+  } as unknown as typeof Worker;
   const state = rootFixture();
   state.broker.register("/bin/bun", { adapter: "bun", module: importingModule("poll"), engine: "browser" });
   state.broker.register("/opt/bun/jsc/bin/bun", { adapter: "bun", module: importingModule("poll"), engine: "jsc" });
@@ -35,7 +44,7 @@ test("spawn requests keep their explicit executable without root-specific rewrit
       expect(supervisor.get(pid)!.request!.executable).toBe(executable);
       for (let turn = 0; turn < 100 && requests.length < (executable === "/bin/bun" ? 1 : 2); turn++) await new Promise(resolve => setTimeout(resolve, 0));
       const request = requests.at(-1)!;
-      expect(request).toMatchObject({ engine: executable === "/bin/bun" ? "browser" : "jsc", adapter: "bun",
+      expect({ engine: request.engine, adapter: request.adapter, args: request.args, env: request.env }).toMatchObject({ engine: executable === "/bin/bun" ? "browser" : "jsc", adapter: "bun",
         args: ["bun"], env: { PWD: "/", PATH: "/opt/bun/quickjs/bin:/bin", BUNWASM_EXEC_PATH: executable } });
       expect(request.net).toBeInstanceOf(SharedArrayBuffer);
       expect(workerProcessState(request.runtimeProcess!).pid).toBe(pid);

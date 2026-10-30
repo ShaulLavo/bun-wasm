@@ -15,6 +15,11 @@ import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objec
 export interface BunLauncherOptions {
   /** The module worker URL that runs createBunExecutor (worker.ts). */
   workerUrl: string;
+  /**
+   * The module worker URL running waffle/browser/notification-worker. Each Bun process gets one
+   * helper, so its network poll also wakes on filesystem commits for fs.watch.
+   */
+  notificationWorkerUrl: string;
   runtime: Runtime;
   network?: BunNetworkOptions;
   /** Optional tools artifact supplied by the embedding application, loaded only for lint/fmt. */
@@ -33,6 +38,11 @@ function base(): string {
  */
 function scopedWorker(workerUrl: string): boolean {
   return new URL(workerUrl, base()).pathname.endsWith("/__bunwasm/worker.js");
+}
+
+/** A worker bundled beside the Bun worker in the same output directory. */
+export function siblingWorkerUrl(workerUrl: string, name: string): string {
+  return new URL(`./${name}`, new URL(workerUrl, base())).href;
 }
 
 export function bunLauncher(engine: Engine, options: BunLauncherOptions): GuestLauncher {
@@ -101,6 +111,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     const memoryTelemetry = beginMemorySnapshot(engine, memoryTelemetryId, memoryCommandId(options.runtime, context.job));
     return service.launchWorker<RunRequest>(context, {
       workerUrl: options.workerUrl,
+      notificationWorkerUrl: options.notificationWorkerUrl,
       request: {
         engine, memoryTelemetry, adapter: "bun", module, linkPlan: programLinkPlan(module), interruptible: context.interruptible,
         args: context.request.argv, env: { ...bunEnvironment(context.request.env), PWD: context.request.cwd, BUNWASM_EXEC_PATH: normalize(context.request.executable, context.request.cwd) },
@@ -120,7 +131,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
 export function preview1Launcher(options: Pick<BunLauncherOptions, "workerUrl">): GuestLauncher {
   return async (context, service) => {
     return service.launchWorker(context, {
-      workerUrl: new URL("./preview1-worker.js", new URL(options.workerUrl, base())).href,
+      workerUrl: siblingWorkerUrl(options.workerUrl, "preview1-worker.js"),
       request: { module: context.module, args: context.request.argv, env: { ...context.request.env, PWD: context.request.cwd }, interruptible: context.interruptible },
     });
   };

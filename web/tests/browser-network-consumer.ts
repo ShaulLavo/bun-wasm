@@ -131,7 +131,7 @@ try {
   const out = join(scratch, "dist");
   const root = resolve(import.meta.dir, "../..");
   const entry = join(import.meta.dir, "browser-network-consumer-main.ts");
-  await buildBrowserEntries([entry, join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts")], out, { runtimeWorker: true });
+  await buildBrowserEntries([entry, join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts"), join(root, "web/src/notification-worker.ts")], out, { runtimeWorker: true });
   await buildClassicWorker(join(root, "web/src/sw.ts"), out, { __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(await previewWebsocketScript()) }, entry);
   await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./browser-network-consumer-main.js"></script>');
   server = Bun.serve({ hostname: "127.0.0.1", port, async fetch(request) {

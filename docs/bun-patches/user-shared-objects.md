@@ -28,6 +28,13 @@ guest entry. Revocation, cleanup, failed setup, engine construction failure and
 engine exit release the service or its broker lease. Engine attachment waits hold
 its pending-work count and wake its event loop exactly once when settled.
 
+Package consumers opt in through the root export `installBunSharedObjects(runtime)`
+(`src/shared-objects.ts`), which returns `{ close() }` and delegates to that same
+installation, so the launcher's route lookup reads the same WeakMap.
+`installBunAdapters` has no shared-object option and never installs the service:
+its `dispose()` keeps live processes running, while closing the service revokes
+their routes. The internal `installRuntimeSharedObjects` stays off the package root.
+
 There is no default runtime installation. Bootstrap forwards an explicitly supplied
 private service into the guest internal object. Each codec captures its own opt-in.
 Only source MessagePort and Worker startup codecs receive the service. Direct codecs,

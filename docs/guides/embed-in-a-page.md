@@ -39,11 +39,12 @@ Add `/// <reference types="vite/client" />` to your environment declarations for
 import { createRuntime } from "waffle";
 import { installBunAdapters } from "bun-wasm";
 import bunWorkerUrl from "bun-wasm/worker?worker&url";
+import notificationWorkerUrl from "bun-wasm/notification-worker?worker&url";
 
 // Skip createRuntime if your page already created the Runtime.
 const runtime = createRuntime({ filesystem: { workerURL: "/fs-worker.js", mode: "memory" } });
 
-const installation = await installBunAdapters(runtime, { workerUrl: bunWorkerUrl });
+const installation = await installBunAdapters(runtime, { workerUrl: bunWorkerUrl, notificationWorkerUrl });
 
 // Later, to unregister Bun. Running processes continue.
 installation.dispose();
@@ -69,6 +70,7 @@ Cross-Origin-Embedder-Policy: require-corp
 ```ts
 await installBunAdapters(runtime, {
 	workerUrl: bunWorkerUrl,
+	notificationWorkerUrl,
 	engine: "quickjs",
 	asset: { url: "https://example.com/<sha256>/bun.wasm", sha256: "<sha256>", bytes: 0 /* decompressed size */ },
 });

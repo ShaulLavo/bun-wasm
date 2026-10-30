@@ -191,34 +191,31 @@ test("return before consuming a pre-aborted iterator suppresses further reads", 
 });
 
 function productionBackend() {
-  let stamp = 0;
-  let failure: Error | undefined;
-  let poll: () => void = () => { throw new Error("No active watcher"); };
+  const reads: (Uint8Array | number)[] = [];
   let watcher: EventEmitter & { close(): void };
-  const timers = new Set<object>();
-  const stat = () => {
-    if (failure) throw failure;
-    return { ino: 1, size: stamp, mtimeMs: stamp, ctimeMs: stamp, isDirectory: () => false, isSymbolicLink: () => false };
-  };
+  const waiters = new Set<{ step(): unknown }>();
+  const open = new Set<number>();
+  const root = new Uint8Array(8);
+  root[0] = 1;
+  new DataView(root.buffer).setUint32(4, 0xffffffff, true);
   const factory = runInNewContext(backendSource, { AbortSignal });
   const backend = factory({
-    require: (name: string) => name === "events" ? EventEmitter : { Buffer },
-    timers: {
-      setInterval(callback: () => void) {
-        poll = callback;
-        const timer = { ref() {}, unref() {} };
-        timers.add(timer);
-        return timer;
-      },
-      clearInterval(timer: object) { expect(timers.delete(timer)).toBe(true); },
+    native: {
+      fsWatchOpen() { open.add(7); return 7; },
+      fsWatchRead: () => reads.shift() ?? -6,
+      fsWatchClose(id: number) { expect(open.delete(id)).toBe(true); return 0; },
     },
+    require: (name: string) => name === "events" ? EventEmitter : { Buffer },
+    addIoWaiter: (waiter: { step(): unknown }) => { waiters.add(waiter); return waiter; },
+    removeIoWaiter: (waiter: { step(): unknown }) => waiters.delete(waiter),
     nextTick: queueMicrotask,
-  })({ statSync: stat, lstatSync: stat, readdirSync: () => [], toPath: String, absolute: String });
+  })({ statSync: () => ({}), toPath: String, absolute: String });
   const watch = adapter()((...args: unknown[]) => { watcher = backend.watch(...args); return watcher; }, String);
+  const pump = () => { for (const waiter of Array.from(waiters)) waiter.step(); };
   return {
-    watch, handle: () => watcher, timers,
-    change() { stamp++; poll(); },
-    fail(error: Error) { failure = error; poll(); },
+    watch, handle: () => watcher, open,
+    change() { reads.push(root); pump(); },
+    fail() { reads.push(-29); pump(); },
   };
 }
 
@@ -233,12 +230,12 @@ test.each(["return", "abort", "error", "external-close", "break"] as const)("rea
   const iterator = iterable[Symbol.asyncIterator]();
   try {
     expect(backend.handle().listenerCount("change")).toBe(1);
-    expect(backend.timers.size).toBe(1);
+    expect(backend.open.size).toBe(1);
     const pending = iterator.next();
-    const error = new Error("poll EIO");
+    const error = new Error("aborted by test");
     if (end === "return") iterator.return();
     if (end === "abort") controller.abort(error);
-    if (end === "error") backend.fail(error);
+    if (end === "error") backend.fail();
     if (end === "external-close") backend.handle().close();
     if (end === "break") {
       backend.change();
@@ -247,11 +244,11 @@ test.each(["return", "abort", "error", "external-close", "break"] as const)("rea
       await consumeOne(iterable);
     }
     if (end === "abort") await expect(pending).rejects.toMatchObject({ name: "AbortError", code: "ABORT_ERR", cause: error });
-    if (end === "error") await expect(pending).rejects.toBe(error);
+    if (end === "error") await expect(pending).rejects.toMatchObject({ code: "EIO", syscall: "watch", path: "file.txt" });
     if (end === "return" || end === "external-close") expect(await pending).toEqual({ value: undefined, done: true });
     await Promise.resolve();
     expect(backend.handle().eventNames()).toEqual([]);
-    expect(backend.timers.size).toBe(0);
+    expect(backend.open.size).toBe(0);
     expect(getEventListeners(controller.signal, "abort")).toEqual([]);
     expect(await iterator.next()).toEqual({ value: undefined, done: true });
   } finally { iterator.return(); }

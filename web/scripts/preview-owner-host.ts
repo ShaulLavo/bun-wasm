@@ -241,10 +241,20 @@ export class OwnerSession implements SocketAliasOwner {
   }
   private upgrade(route: Route, request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (route.stage.kind !== "ready" || request.headers.upgrade?.toLowerCase() !== "websocket") { socket.destroy(); return; }
+    const method = request.method;
+    if (method === undefined) { socket.destroy(); return; }
     const grant = route.stage.authorization;
-    const raw = `${request.method} ${request.url} HTTP/1.1\r\n${request.rawHeaders.reduce((result, value, index) => result + (index % 2 ? `${value}\r\n` : `${value}: `), "")}\r\n`;
-    new NativeSocketExchange(socket, new TextEncoder().encode(raw), head, this.transport(route)).start({
+    const headers: [string, string][] = [];
+    for (let index = 0; index < request.rawHeaders.length; index += 2) {
+      const name = request.rawHeaders[index];
+      const value = request.rawHeaders[index + 1];
+      if (name === undefined || value === undefined) { socket.destroy(); return; }
+      headers.push([name, value]);
+    }
+    new NativeSocketExchange(socket, head, this.transport(route)).start({
       type: "socket", authorization: grant, url: new URL(request.url ?? "/", grant.origin).href,
+      method,
+      headers,
     });
   }
 }

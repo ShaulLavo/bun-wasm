@@ -162,7 +162,7 @@ process.exit(0);
     check(await previews.ready === "ready", "service worker ready");
     module = await WebAssembly.compileStreaming(fetch("./bun-guest.wasm"));
     await runtime.filesystem.mkdirp("/home/user"); await runtime.filesystem.flush();
-    const installation = await installBunAdapters(runtime, { workerUrl: new URL("./worker.js", location.href), module, network });
+    const installation = await installBunAdapters(runtime, { workerUrl: new URL("./worker.js", location.href), notificationWorkerUrl: new URL("./notification-worker.js", location.href), module, network });
     const service = await runtime.processes();
     const transport = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
     const state = workerProcessState(transport);

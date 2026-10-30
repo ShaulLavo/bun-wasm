@@ -32,7 +32,7 @@ afterEach(() => {
 
 async function launch(engine: "quickjs" | "jsc" | "browser", workerUrl: string) {
   const launches: Launch[] = [];
-  await bunLauncher(engine, { runtime, workerUrl })(context, service(launches));
+  await bunLauncher(engine, { runtime, workerUrl, notificationWorkerUrl: "./notification-worker.js" })(context, service(launches));
   return launches[0]!;
 }
 
@@ -86,7 +86,7 @@ for (const [workerUrl, expected] of [
 
 test("launchers do not add hidden executable rewriting", async () => {
   const launches: Launch[] = [];
-  await bunLauncher("jsc", { runtime, workerUrl: "./worker.js" })(context, service(launches));
+  await bunLauncher("jsc", { runtime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" })(context, service(launches));
   await preview1Launcher({ workerUrl: "./worker.js" })(context, service(launches));
   expect(launches.every(launch => launch.executableName === undefined)).toBe(true);
   expect(launches[0]!.request.args[0]).toBe("bun");
@@ -96,7 +96,7 @@ test("launchers do not add hidden executable rewriting", async () => {
 for (const engine of ["quickjs", "jsc", "browser"] as const) test(`${engine} lint/fmt selects tools without changing its process context or engine`, async () => {
   const tools = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   let loads = 0;
-  const launcher = bunLauncher(engine, { runtime, workerUrl: "./worker.js", async loadTools() { loads++; return tools; } });
+  const launcher = bunLauncher(engine, { runtime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js", async loadTools() { loads++; return tools; } });
   for (const args of [["lint", "input.ts"], ["--cwd", "/project", "fmt", "--check", "input.ts"]]) {
     const launches: Launch[] = [];
     const toolContext = { ...context, request: { ...context.request, argv: ["bun"].concat(args) } };
@@ -115,7 +115,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) test(`${engine} lin
 
 test("a rejected tools module prevents worker launch", async () => {
   const launches: Launch[] = [];
-  const launcher = bunLauncher("browser", { runtime, workerUrl: "./__bunwasm/worker.js", async loadTools() { throw new Error("tools integrity mismatch"); } });
+  const launcher = bunLauncher("browser", { runtime, workerUrl: "./__bunwasm/worker.js", notificationWorkerUrl: "./notification-worker.js", async loadTools() { throw new Error("tools integrity mismatch"); } });
   const toolContext = { ...context, request: { ...context.request, argv: ["bun", "lint", "input.ts"] } };
   await expect(launcher(toolContext, service(launches))).rejects.toThrow("tools integrity mismatch");
   expect(launches).toEqual([]);
@@ -125,7 +125,7 @@ test("a rejected tools module prevents worker launch", async () => {
 for (const executable of ["./bun", "../bin/bun", "/bin/../bin/bun"]) test(`admitted ${executable} has a canonical executable independent of argv[0]`, async () => {
   const launches: Launch[] = [];
   const admitted = { ...context, request: { ...context.request, executable, cwd: "/bin", argv: [executable, "-e", "0"] } };
-  await bunLauncher("browser", { runtime, workerUrl: "./worker.js" })(admitted, service(launches));
+  await bunLauncher("browser", { runtime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" })(admitted, service(launches));
   expect(launches[0]!.request.env.BUNWASM_EXEC_PATH).toBe("/bin/bun");
   expect(launches[0]!.request.args[0]).toBe(executable);
 });
@@ -137,7 +137,7 @@ test("the ordinary launcher forwards the prepared pair but keeps tools single-mo
   const prepared = await prepareQuickjsProgram(core, side);
   const launches: Launch[] = [];
   const tools = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
-  const launcher = bunLauncher("quickjs", { runtime, workerUrl: "./worker.js", loadTools: async () => tools });
+  const launcher = bunLauncher("quickjs", { runtime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js", loadTools: async () => tools });
   await launcher({ ...context, module: prepared }, service(launches));
   expect(launches[0]!.request.module).toBe(prepared);
   expect(launches[0]!.request.linkPlan).toEqual(programLinkPlan(prepared));
@@ -155,7 +155,7 @@ test("child launch selection retains each distinct QuickJS pair", async () => {
   const first = await prepareQuickjsProgram(core, side);
   const second = await prepareQuickjsProgram(core, sideB);
   const launches: Launch[] = [];
-  const launcher = bunLauncher("quickjs", { runtime, workerUrl: "./worker.js" });
+  const launcher = bunLauncher("quickjs", { runtime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" });
   await launcher({ ...context, module: first, identity: { ...context.identity, pid: 2, parentPid: 1 } }, service(launches));
   await launcher({ ...context, module: second, identity: { ...context.identity, pid: 3, parentPid: 1 } }, service(launches));
   expect(launches[0]!.request.linkPlan.libraries[0].source).toEqual(side);
@@ -190,7 +190,7 @@ for (const phase of ["success", "scope failure", "helper failure", "launch failu
   });
   if (phase === "launch failure") launcherService.launchWorker = () => { throw new Error(phase); };
   try {
-    const launching = bunLauncher("quickjs", { runtime: scopedRuntime, workerUrl: "./worker.js" })(context, launcherService);
+    const launching = bunLauncher("quickjs", { runtime: scopedRuntime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" })(context, launcherService);
     if (phase !== "success") await expect(launching).rejects.toThrow(phase);
     else { await launching; launches[0]!.cleanup!(); launches[0]!.cleanup!(); }
     expect(events).toEqual(phase === "scope failure" || phase === "helper failure" ? ["root-release"] : ["helper-dispose", "root-release"]);
@@ -210,7 +210,7 @@ test("revocation while awaiting a directory lease releases it without creating a
   let revoke = () => {};
   const revocable = { ...context, registerRevocation(hook: () => void) { revoke = hook; return () => {}; } };
   try {
-    const launching = bunLauncher("quickjs", { runtime: scopedRuntime, workerUrl: "./worker.js" })(revocable, service([]));
+    const launching = bunLauncher("quickjs", { runtime: scopedRuntime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" })(revocable, service([]));
     await requested.promise;
     revoke();
     directory.resolve({ handle: 19, release() { events.push("root-release"); } });

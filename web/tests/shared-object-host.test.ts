@@ -5,6 +5,7 @@ import { createSharedObjects } from "../src/shared-objects/service";
 import { bindSharedObjectHost } from "../src/shared-objects/host";
 import { installRuntimeSharedObjects, runtimeSharedObjectRoute, type SharedObjectRoute } from "../src/shared-objects/runtime";
 import { bunLauncher } from "../src/bun-launcher";
+import { installBunSharedObjects } from "../../src/shared-objects";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { networkPathScopeFixture, socketDirectoryFixture } from "./socket-runtime-fixture";
 import type { Runtime, RuntimeProcessContext, ProcessService } from "waffle";
@@ -64,7 +65,7 @@ async function launch(runtime: Runtime, context: RuntimeProcessContext, rejected
     cleanup.add(options.cleanup);
     return { terminate() {} };
   } } as unknown as ProcessService;
-  await bunLauncher("browser", { runtime, workerUrl: "./worker.js" })(context, service);
+  await bunLauncher("browser", { runtime, workerUrl: "./worker.js", notificationWorkerUrl: "./notification-worker.js" })(context, service);
   if (!launched) throw new Error("No native launch");
   return launched;
 }
@@ -114,6 +115,16 @@ test("launcher routes real native backing across processes of one runtime and cl
   expect(sender.inspect().closed).toBe(true);
   expect(receiver.inspect().closed).toBe(true);
   expect(installation.inspect()).toEqual({ clients: 0, objects: 0, waiting: 0 });
+});
+
+test("the public package install is the installation the launcher routes through", async () => {
+  const runtime = fixtureRuntime(), installation = installBunSharedObjects(runtime);
+  cleanup.add(installation.close);
+  const launched = await launch(runtime, processContext().context);
+  expect(launched.request.sharedObjects?.owner).toBeString();
+  expect(() => installRuntimeSharedObjects(runtime)).toThrow("already installed");
+  installation.close();
+  expect(runtimeSharedObjectRoute(runtime)).toBeUndefined();
 });
 
 test("launch failure rolls back route and revoked-before-attach closes late ports", async () => {

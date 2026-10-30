@@ -23,7 +23,7 @@ async function checkBunBundle(directory: string): Promise<void> {
     assert.equal(receipt.fixture, "bun-runtime-proc", "distinct Bun acceptance recipe required");
     assert.equal(receipt.source, await bunControllerHash(), "Bun controller source changed");
     const files = await bundleHashes(directory);
-    for (const name of ["index.html", "bun-runtime-proc-main.js", "worker.js", "fs-worker.js"]) assert.ok(files[name], `missing ${name}`);
+    for (const name of ["index.html", "bun-runtime-proc-main.js", "worker.js", "fs-worker.js", "notification-worker.js"]) assert.ok(files[name], `missing ${name}`);
     assert.deepEqual(files, receipt.files, "captured bundle bytes changed");
     assert.equal(await Bun.file(join(directory, "index.html")).text(), '<!doctype html><script type="module" src="./bun-runtime-proc-main.js"></script>', "wrong acceptance controller");
   } catch (error) {
@@ -50,7 +50,7 @@ export async function processBundle(fixture: Fixture, out: string): Promise<void
     return;
   }
   const entry = fixture === "supervisor" ? "process-browser-main" : fixture === "bun-runtime-proc" ? "bun-runtime-proc-main" : "runtime-proc-browser-main";
-  await buildBrowserEntries([join(web, `tests/${entry}.ts`), join(web, "src/worker.ts"), join(web, "src/fs-worker.ts")], out, { runtimeWorker: true });
+  await buildBrowserEntries([join(web, `tests/${entry}.ts`), join(web, "src/worker.ts"), join(web, "src/fs-worker.ts"), join(web, "src/notification-worker.ts")], out, { runtimeWorker: true });
   await Bun.write(join(out, "index.html"), `<!doctype html><script type="module" src="./${entry}.js"></script>`);
   if (fixture === "bun-runtime-proc") {
     await Bun.write(join(out, "bundle.json"), JSON.stringify({ fixture, source: await bunControllerHash(), files: await bundleHashes(out) }));

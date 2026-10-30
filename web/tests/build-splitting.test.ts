@@ -42,6 +42,20 @@ for (const fixture of [
   }
 });
 
+test("a scoped Bun worker finds every sibling worker under its scope", async () => {
+  const dir = await mkdtemp(join(import.meta.dir, "../node_modules/.scoped-siblings-test-"));
+  owned.push(dir);
+  const siblings = ["worker", "fs-worker", "preview1-worker", "notification-worker"];
+  await Bun.write(join(dir, "main.ts"), "console.log('page');");
+  for (const name of siblings) await Bun.write(join(dir, `${name}.ts`), `postMessage(${JSON.stringify(name)});`);
+  const out = join(dir, "dist");
+  await buildBrowserEntries([join(dir, "main.ts")].concat(siblings.map(name => join(dir, `${name}.ts`))), out);
+  for (const name of siblings) {
+    expect(await Bun.file(join(out, "__bunwasm", `${name}.js`)).text()).toBe(await Bun.file(join(out, `${name}.js`)).text());
+  }
+  expect(existsSync(join(out, "__bunwasm/main.js"))).toBe(false);
+});
+
 test("runtime-free entries do not require the runtime package", async () => {
   const dir = await mkdtemp(join(import.meta.dir, "../node_modules/.runtime-free-test-"));
   owned.push(dir);

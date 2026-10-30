@@ -25,10 +25,12 @@ controller is used.
 ```ts
 import { installBunAdapters } from "bun-wasm";
 import bunWorkerUrl from "bun-wasm/worker?worker&url";
+import notificationWorkerUrl from "bun-wasm/notification-worker?worker&url";
 
 // runtime is the same instance already owned by bash-web/the application.
 const installation = await installBunAdapters(runtime, {
   workerUrl: bunWorkerUrl,
+  notificationWorkerUrl, // one helper per Bun process; wakes fs.watch on filesystem commits
   engine: "browser", // default; quickjs/jsc need their matching guest module or descriptor
   // module: offlineCompiledModule,
   // wasmUrl: "https://your-immutable-store/<sha256>/bun.wasm.gz",
@@ -150,8 +152,9 @@ const worker = new Worker(new URL("bun-wasm/worker", import.meta.url), { type: "
 
 That form is a **bundler input**, not a native-browser bare URL. If the bundler does not transform
 it, it requests a path literally named `bun-wasm/worker` and will fail. Prefer Vite's `?worker&url`
-for an installer URL. With other build tools, explicitly bundle the `bun-wasm/worker` export and
-pass the emitted URL as `workerUrl`; do not point at the repository's `web/dist` directory.
+for an installer URL. With other build tools, explicitly bundle the `bun-wasm/worker` and
+`bun-wasm/notification-worker` exports and pass the emitted URLs as `workerUrl` and
+`notificationWorkerUrl`; do not point at the repository's `web/dist` directory.
 
 Serve the application with cross-origin isolation (`Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp`) so Waffle can use shared process state.

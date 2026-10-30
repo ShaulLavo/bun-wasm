@@ -87,7 +87,7 @@ async function scope(entries: Record<string, ExecutableRegistration>, options: R
       await filesystem.mkdirp("/home/user"); await filesystem.flush();
       const workerUrl = new URL("./worker.js", location.href).href;
       runtime.registerAdapter("preview1", preview1Launcher({ workerUrl }));
-      runtime.registerAdapter("bun:quickjs", bunLauncher("quickjs", { runtime, workerUrl }));
+      runtime.registerAdapter("bun:quickjs", bunLauncher("quickjs", { runtime, workerUrl, notificationWorkerUrl: "./notification-worker.js" }));
     }
     await filesystem.mkdirp("/bin");
     for (const [name, entry] of Object.entries(entries)) {
@@ -422,7 +422,7 @@ try {
       await owner.filesystem.mkdirp("/home/user"); await owner.filesystem.flush();
       const workerUrl = new URL("./worker.js", location.href).href;
       owner.registerAdapter("preview1", preview1Launcher({ workerUrl }));
-      owner.registerAdapter("bun:quickjs", bunLauncher("quickjs", { runtime: owner, workerUrl }));
+      owner.registerAdapter("bun:quickjs", bunLauncher("quickjs", { runtime: owner, workerUrl, notificationWorkerUrl: "./notification-worker.js" }));
       let sample = 0;
       benchmark = await measureProcessStarts(async (compiled, started) => {
         const executable = `bun-benchmark-${++sample}`;

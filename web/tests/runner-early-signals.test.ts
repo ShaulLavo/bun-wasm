@@ -8,6 +8,7 @@ import { startRun, type Run } from "../src/runner";
 import type { RunRequest } from "../src/bun-executor";
 import { fixtureFilesystemConnection } from "./process-runtime-fixture";
 import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
+import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 async function until(check: () => boolean) {
   for (let turn = 0; turn < 100; turn++) {
@@ -39,9 +40,18 @@ function fixture(explicit = true, deferNetwork = false) {
   let allocations = 0, releases = 0, stops = 0;
   let onAllocate = () => {};
   const releaseHelper = () => { releases++; events.push("network-release"); };
+  // A networked root also starts Waffle's notification relay; its stop is recorded separately.
   class RootWorker {
-    postMessage(request: RunRequest) { posts.push(request); }
-    terminate() { stops++; events.push("physical-stop"); }
+    readonly relay: boolean;
+    constructor(url: string | URL) { this.relay = isNotificationWorkerUrl(url); }
+    postMessage(request: unknown) {
+      if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
+      posts.push(request as RunRequest);
+    }
+    terminate() {
+      if (this.relay) { events.push("relay-stop"); return; }
+      stops++; events.push("physical-stop");
+    }
   }
   globalThis.Worker = RootWorker as unknown as typeof Worker;
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
@@ -112,6 +122,8 @@ for (const disposition of [1, 2]) test(`early explicit INT disposition ${disposi
     expect(state.releases()).toBe(1);
     expect(state.stops()).toBe(1);
     expect(state.events.indexOf("physical-stop")).toBeLessThan(state.events.indexOf("network-release"));
+    // The networked root's notification relay stops after the root's physical stop.
+    expect(state.events.indexOf("relay-stop")).toBeGreaterThan(state.events.indexOf("physical-stop"));
   } finally { await state.cleanup(run); }
 });
 
