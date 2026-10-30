@@ -1122,6 +1122,25 @@ mod tests {
         ENGINE.get_or_init(Engine::default)
     }
 
+    /// # Safety
+    /// The caller holds `memory` until the Store and every instance in it have dropped.
+    unsafe fn launch_test_core(
+        group: &MemoryGroup,
+        store: &mut Store<()>,
+        linker: &Linker<()>,
+        module: &Module,
+        memory: &SharedMemoryLease,
+        pid: u32,
+    ) -> (MemberLease, Instance, MemberImage, Placement) {
+        let lease = group.reserve(pid).unwrap().launch();
+        let placement = carve(&lease, &layout()).unwrap();
+        // SAFETY: forwarded to the caller's contract above.
+        let (instance, image) =
+            unsafe { instantiate_core(store, linker, module, &layout(), memory, &placement) }
+                .unwrap();
+        (lease, instance, image, placement)
+    }
+
     #[test]
     fn constant_immutable_core_exports_are_base_relative() {
         let relative = relative_exports(&image(CORE)).unwrap();
@@ -1138,13 +1157,9 @@ mod tests {
         let linker = Linker::new(&engine);
         let mut members = Vec::new();
         for pid in [1, 2] {
-            let lease = group.reserve(pid).unwrap().launch();
-            let placement = carve(&lease, &layout()).unwrap();
             // SAFETY: `memory` is declared before `store`, so it outlives the Store.
-            let (instance, image) = unsafe {
-                instantiate_core(&mut store, &linker, &module, &layout(), &memory, &placement)
-            }
-            .unwrap();
+            let (lease, instance, image, _) =
+                unsafe { launch_test_core(&group, &mut store, &linker, &module, &memory, pid) };
             members.push((lease, instance, image));
         }
         assert_ne!(members[0].2.memory_base, members[1].2.memory_base);
@@ -1203,13 +1218,9 @@ mod tests {
         let linker = Linker::new(&engine);
         let mut members = Vec::new();
         for pid in [1, 2] {
-            let lease = group.reserve(pid).unwrap().launch();
-            let placement = carve(&lease, &layout()).unwrap();
             // SAFETY: `memory` is declared before `store`, so it outlives the Store.
-            let (instance, image) = unsafe {
-                instantiate_core(&mut store, &linker, &module, &layout(), &memory, &placement)
-            }
-            .unwrap();
+            let (lease, instance, image, placement) =
+                unsafe { launch_test_core(&group, &mut store, &linker, &module, &memory, pid) };
             let low = global_u32(&mut store, &instance, "stack_low");
             let high = global_u32(&mut store, &instance, "stack_high");
             assert_eq!(low, page_address(placement.stack).unwrap());
