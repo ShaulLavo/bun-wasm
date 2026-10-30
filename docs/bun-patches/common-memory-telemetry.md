@@ -4,7 +4,7 @@
 | --- | --- | --- |
 | `crates/bunwasm-cli/memory-telemetry.c` and `build.rs` | Port | Original adapter around the existing WASI libc allocation ABI. No upstream allocator implementation is copied or changed. |
 | `crates/bunwasm-runtime/src/js/{process.ts,runtime.d.ts}` | Original adapter | Nullable memory values and derived RSS values preserve unknowns. No Bun or Node implementation copied. |
-| `web/src/memory-telemetry.ts`, executor and launchers | Host feature | Original readers and transport for core and engine snapshots. Uses Waffle's public linked-group API from the pinned package. |
+| `web/src/{memory-telemetry.ts,memory-channel.ts}`, executor and launchers | Host feature | Original readers and transport for core and engine snapshots. Uses Waffle's public linked-group API from the pinned package. |
 | `scripts/engine-producer.ts`, `producer-closure.ts` and guest receipt/profile helpers | Original adapter | Compose one core with the selected original engine receipts, record a source-matched launcher, and require the complete split or shared-group closure before qualification. No upstream implementation copied. |
 
 The core retains its existing WASI libc allocator. Linker wrapping observes
@@ -43,8 +43,28 @@ The getter only returns the frozen record, including after later frees or
 allocations. It never walks a heap. Live and peak retain the outer-boundary
 accounting above, so internal realloc temporary peaks remain unobserved.
 Neither capacity nor live bytes identify a largest free block, the allocator's
-growth request or result, or its rejection reason. The browser reader does not
-yet collect this separate export.
+growth request or result, or its rejection reason.
+
+The browser host reads this cached export into the separate
+`MemorySnapshot.frozenAllocatorFailure` field. It keeps the failed request's
+`bytes` and `category`, `previousUsableBytes`, `allocatorLiveBytes`,
+`allocatorPeakBytes`, `wasmCapacityBeforeBytes`, and `wasmCapacityAfterBytes`.
+Its `reason` is always `"unknown"`. The field is null before a recorded failure
+or when the export is unavailable. No current counters or terminal text fill
+missing frozen values. UINT64_MAX and values above JavaScript's exact integer
+range become null. Version, exact byte length, wasm32 pointer range, alignment,
+and bounds are checked before decoding. Unknown categories keep their raw code.
+The reader never refreshes this record or enters an engine to read it.
+
+The shared channel retains the first frozen record across engine failure and
+teardown, independently of allocator and engine failure fields. The page
+validates all frozen fields before retaining a frame. Raw process snapshots
+keep these details. Canonical aggregates still need authoritative root inventory
+and do not infer headroom or allocation cause from the frozen values.
+Maintained controls compile the real core wrappers and pass the frozen record
+through the browser reader and shared channel. Existing frozen guests and hosts
+are not changed. A future canonical build must include the new core and host
+together with the JSC hook and matching build receipts.
 
 The host reads JSC ABI 1 with exactly 24 u64 fields, QuickJS ABI 1 with
 exactly 12, and [Hermes ABI 1](hermes-memory-telemetry.md) with exactly eight.

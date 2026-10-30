@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createMemoryReader } from "../web/src/memory-telemetry.ts";
+import { createMemoryChannel, createMemoryPublisher, readMemoryChannel } from "../web/src/memory-channel.ts";
 
 const root = resolve(import.meta.dir, "..");
 const wrapped = ["malloc", "calloc", "realloc", "free", "aligned_alloc", "posix_memalign", "__libc_malloc", "__libc_calloc", "__libc_free"];
@@ -194,5 +196,26 @@ test("libc internal aliases share the same accounting as the exported allocator"
     expect(snapshot()[2]).toBe(0n);
     expect(snapshot()[7]).toBe(2n);
     expect(snapshot()[8]).toBe(2n);
+  });
+});
+
+test("compiled core frozen record reaches the browser reader and shared host channel", () => {
+  fixture((exports, snapshot) => {
+    const reader = createMemoryReader("quickjs", { exports });
+    const channel = createMemoryChannel();
+    const publisher = createMemoryPublisher(channel, reader);
+    expect(reader.sample().frozenAllocatorFailure).toBeNull();
+    const pointer = call(exports, "malloc", 4000);
+    const before = snapshot();
+    expect(call(exports, "realloc", pointer, 1048576)).toBe(0);
+    const failed = publisher.capture(false, true);
+    expect(failed?.frozenAllocatorFailure).toEqual({ bytes: 1048576, category: "libc.realloc",
+      previousUsableBytes: Number(before[2]), allocatorLiveBytes: Number(before[2]), allocatorPeakBytes: Number(before[3]),
+      wasmCapacityBeforeBytes: Number(before[9]), wasmCapacityAfterBytes: Number(snapshot()[9]), reason: "unknown" });
+    call(exports, "free", pointer);
+    const terminal = publisher.finish();
+    expect(terminal?.allocatorLiveBytes).toBe(0);
+    expect(terminal?.frozenAllocatorFailure).toEqual(failed?.frozenAllocatorFailure);
+    expect(readMemoryChannel(channel)).toEqual(terminal);
   });
 });

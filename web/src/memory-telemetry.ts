@@ -1,6 +1,14 @@
 import { createMemoryChannel, memoryChannelReady, readMemoryChannel, requestMemoryChannel } from "./memory-channel.js";
 export type TelemetryEngine = "quickjs" | "jsc" | "browser" | "hermes";
 export interface FailedAllocation { bytes: number | null; category: string }
+export interface FrozenAllocatorFailure extends FailedAllocation {
+  previousUsableBytes: number | null;
+  allocatorLiveBytes: number | null;
+  allocatorPeakBytes: number | null;
+  wasmCapacityBeforeBytes: number | null;
+  wasmCapacityAfterBytes: number | null;
+  reason: "unknown";
+}
 export interface MemoryCounters {
   wasmCapacityBytes: number | null;
   memoryLimitBytes: number | null;
@@ -19,6 +27,7 @@ export interface MemorySnapshot extends MemoryCounters, MemoryIdentity {
   time: number;
   terminal: boolean;
   allocatorFailure: FailedAllocation | null;
+  frozenAllocatorFailure: FrozenAllocatorFailure | null;
   engineFailure: FailedAllocation | null;
   engineCounters: Record<string, number | null>;
 }
@@ -46,12 +55,22 @@ function read(memory: WebAssembly.Memory, exports: WebAssembly.Exports, name: st
   const getter = exports[name];
   if (typeof getter !== "function") return null;
   const raw: unknown = getter();
-  if (typeof raw !== "number" || !Number.isInteger(raw)) throw new TypeError(`Invalid ${name} pointer`);
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < -2147483648 || raw > 0xffffffff) throw new TypeError(`Invalid ${name} pointer`);
   const pointer = raw >>> 0;
-  if (pointer % 8 || pointer > memory.buffer.byteLength - bytes) throw new RangeError(`Invalid ${name} bounds`);
+  if (!pointer || pointer % 8 || pointer > memory.buffer.byteLength - bytes) throw new RangeError(`Invalid ${name} bounds`);
   const view = new DataView(memory.buffer, pointer, bytes);
   if (view.getBigUint64(0, true) !== 1n || view.getBigUint64(8, true) !== BigInt(bytes)) throw new TypeError(`Invalid ${name} ABI`);
   return Array.from({ length: bytes / 8 }, (_, index) => view.getBigUint64(index * 8, true));
+}
+
+function readFrozenAllocatorFailure(memory: WebAssembly.Memory, exports: WebAssembly.Exports): FrozenAllocatorFailure | null {
+  const data = read(memory, exports, "bun_memory_failure_telemetry", 72);
+  if (!data) return null;
+  const request = failure(data[2], data[3], allocatorCategories);
+  if (!request) return null;
+  return { ...request, previousUsableBytes: count(data[4]), allocatorLiveBytes: count(data[5]),
+    allocatorPeakBytes: count(data[6]), wasmCapacityBeforeBytes: count(data[7]),
+    wasmCapacityAfterBytes: count(data[8]), reason: "unknown" };
 }
 
 interface EngineReadout { failure: FailedAllocation | null; heap: number | null; buffers: number | null; counters: Record<string, number | null> }
@@ -106,7 +125,8 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
       let data = engineReadout(engine, memory, side?.exports ?? {});
       const allocator = read(memory, core.exports, "bun_memory_telemetry", 80);
       const allocatorFailure = allocator ? failure(allocator[4], allocator[5], allocatorCategories) : null;
-      failed ||= Boolean(allocatorFailure || data?.failure);
+      const frozenAllocatorFailure = readFrozenAllocatorFailure(memory, core.exports);
+      failed ||= Boolean(allocatorFailure || frozenAllocatorFailure || data?.failure);
       if (refresh && !terminal && !failed) {
         const getter = side?.exports[`${engine}_memory_telemetry_refresh`];
         if (typeof getter === "function") {
@@ -123,7 +143,7 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
         allocatorLiveBytes: allocator ? count(allocator[2]) : null,
         allocatorPeakBytes: allocator ? count(allocator[3]) : null,
         jsHeapBytes: data?.heap ?? null, arrayBufferBytes: data?.buffers ?? null,
-        failedAllocation: data?.failure ?? allocatorFailure, allocatorFailure, engineFailure: data?.failure ?? null,
+        failedAllocation: data?.failure ?? allocatorFailure, allocatorFailure, frozenAllocatorFailure, engineFailure: data?.failure ?? null,
         engineCounters: data?.counters ?? {},
         notes: "Allocator counts outstanding libc usable bytes, including padding, from successful outer allocation calls. Realloc internal temporary peaks are not observed. VM counters overlap allocator bytes. JSC heap and ArrayBuffer counters are GC-accounted estimates; exact JSC backing stores and SWC bytes are unknown. Hermes heap includes allocated objects that may be unreachable; external bytes are GC-accounted, not an exact ArrayBuffer census. Cached engine counters reflect the last normal refresh. No forced GC.",
       };
@@ -150,7 +170,7 @@ export function beginMemorySnapshot(engine: TelemetryEngine, id: string, command
   commandOrders.set(commandId, order);
   const identity = { id, commandId, commandStartedAt, commandSequence: order };
   retained.set(id, { ...emptyCounters, ...identity, engine, time: Date.now(), terminal: false,
-    allocatorFailure: null, engineFailure: null, engineCounters: {} });
+    allocatorFailure: null, frozenAllocatorFailure: null, engineFailure: null, engineCounters: {} });
   trimTerminalSnapshots();
   if (typeof SharedArrayBuffer !== "function") return;
   const channel = createMemoryChannel();
@@ -202,6 +222,7 @@ function isMemorySnapshot(value: object): value is MemorySnapshot {
   if (!stringKeys.every(key => typeof Reflect.get(value, key) === "string")) return false;
   if (!byteKeys.every(key => isCounter(Reflect.get(value, key)))) return false;
   if (!["failedAllocation", "allocatorFailure", "engineFailure"].every(key => isFailure(Reflect.get(value, key)))) return false;
+  if (!isFrozenAllocatorFailure(Reflect.get(value, "frozenAllocatorFailure"))) return false;
   const engine: unknown = Reflect.get(value, "engine");
   if (typeof engine !== "string" || !["quickjs", "jsc", "browser", "hermes"].includes(engine)) return false;
   const time: unknown = Reflect.get(value, "time");
@@ -216,6 +237,13 @@ function isFailure(value: unknown): value is FailedAllocation | null {
   if (value === null) return true;
   return typeof value === "object" && "bytes" in value && isCounter(value.bytes)
     && "category" in value && typeof value.category === "string";
+}
+function isFrozenAllocatorFailure(value: unknown): value is FrozenAllocatorFailure | null {
+  if (value === null) return true;
+  if (!isFailure(value) || typeof value !== "object") return false;
+  if (Reflect.get(value, "reason") !== "unknown") return false;
+  return ["previousUsableBytes", "allocatorLiveBytes", "allocatorPeakBytes", "wasmCapacityBeforeBytes", "wasmCapacityAfterBytes"]
+    .every(key => isCounter(Reflect.get(value, key)));
 }
 async function requestMemorySnapshots(engine: TelemetryEngine, refresh: boolean): Promise<readonly MemorySnapshot[]> {
   const requested = Array.from(channels, ([id, channel]) => ({ id, channel, commandId: retained.get(id)?.commandId }))
