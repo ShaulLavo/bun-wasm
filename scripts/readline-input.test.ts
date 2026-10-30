@@ -25,7 +25,9 @@ function fixture() {
     },
   };
   internal.require("builtins");
-  const readline = factories["node:readline"]() as typeof import("node:readline");
+  const createReadline = factories["node:readline"];
+  if (!createReadline) throw new Error("Missing node:readline builtin factory");
+  const readline = createReadline() as typeof import("node:readline");
   function pump() { for (const task of tasks.splice(0)) task(); }
   return { input, output, readline, pump };
 }
