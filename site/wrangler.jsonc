@@ -1,9 +1,14 @@
 {
   // bun.sprockt.dev: the sandbox at /, the terminal playground at /playground/.
-  // Static assets only (no Worker code), on a Custom Domain.
+  // Only base-program requests enter the encoding adapter; other assets keep native routing.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "bun-wasm",
   "compatibility_date": "2026-10-15",
-  "assets": { "directory": "./dist" },
+  "main": "worker.ts",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/programs/base/*", "/playground/programs/base/*"]
+  },
   "routes": [{ "pattern": "bun.sprockt.dev", "custom_domain": true }]
 }

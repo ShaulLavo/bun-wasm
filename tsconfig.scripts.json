@@ -4,6 +4,7 @@
     "scripts/**/*.ts",
     "scripts/**/*.mts",
     "site/*.ts",
+    "site/generated/*.d.ts",
     "tests/check-worker-regressions.ts",
     "tests/install/package-options.ts",
     "tests/install/root-overrides.ts"

@@ -18,7 +18,7 @@ async function scratch() {
 async function stagedAssets(root: string, project: "web" | "sandbox" = "sandbox", env: Record<string, string> = {}) {
   const source = await Bun.file(new URL(`../../${project}/build.ts`, import.meta.url)).text();
   const start = source.indexOf("const engineBuilds:");
-  const end = project === "sandbox" ? source.indexOf("// ---------- the starter project") : source.indexOf("await buildShellAssets(");
+  const end = project === "sandbox" ? source.indexOf("\nfor (const template of templates)") : source.indexOf("await buildShellAssets(");
   if (start < 0 || end <= start) throw new Error(`${project} engine staging boundary missing`);
   const engineBlock = source.slice(start, end);
   const writeManifest = source.split("\n").find(line => line.startsWith('await Bun.write(join(out, "engine-builds.json")'));
