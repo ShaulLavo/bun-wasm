@@ -6,9 +6,6 @@ upstream paths and revisions, local changes, and reasons.
 [Scope and class definitions](bun-patches/scope.md) distinguish ports, host features,
 and upstream bugs. Add or update the relevant record, not this entrypoint.
 
-[JSC memory telemetry](bun-patches/jsc-memory-telemetry.md) classifies the nullable
-typed-array failure hook and its revision-pinned source replay control.
-
 The [migration map](../scripts/migrations/bun-patches-map.json) maps the former
 single-page anchors to their records. The deterministic splitter and proof are
 in [split-bun-patches.ts](../scripts/migrations/split-bun-patches.ts).
