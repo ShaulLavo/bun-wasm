@@ -135,6 +135,23 @@ for (const build of ["quickjs", "quickjs-minimal", "tools", "jsc"] as const) tes
   });
 });
 
+test("guest receipt binds the embedded shared lane and rejects hidden changes", async () => {
+  await withReceiptFixture(async (options, artifact) => {
+    const path = "web/src/shared-objects/lane.ts";
+    await mkdir(join(options.repository, "web/src/shared-objects"), { recursive: true });
+    await writeFile(join(options.repository, path), "export const sharedLaneInput = 1;\n");
+    fixtureGit(options.repository, "add", path);
+    fixtureGit(options.repository, "commit", "-m", "embedded shared lane input");
+    const inputs = await prepareGuestBuildInputs(options);
+    const repository = inputs.sourceManifest.groups.find(group => group.name === "repository");
+    expect(repository?.files.map(file => file.path)).toContain(path);
+    fixtureGit(options.repository, "update-index", "--assume-unchanged", path);
+    await writeFile(join(options.repository, path), "export const sharedLaneInput = 2;\n");
+    await expect(writeGuestBuildReceipt(options, artifact, inputs)).rejects.toThrow("differs from committed source");
+    expect(await Bun.file(`${artifact}.build.json`).exists()).toBe(false);
+  });
+});
+
 test("assume-unchanged cannot hide a modified committed build input", async () => {
   await withReceiptFixture(async options => {
     fixtureGit(options.repository, "update-index", "--assume-unchanged", "crates/fixture/src/lib.rs");

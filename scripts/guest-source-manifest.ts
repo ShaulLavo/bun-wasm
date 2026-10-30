@@ -145,7 +145,7 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
   const { repository, build, sysroot, sdk, waffle, boringssl, rustTargetLib } = options;
   const source = { head: git(repository, "rev-parse", "HEAD"), tree: git(repository, "rev-parse", "HEAD^{tree}") };
   const repositoryPaths = scope === "guest"
-    ? ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "package.json", "bun.lock", "crates", "third_party", "scripts", "patches", "jsc", "src/engine-kind.ts", "src/quickjs-program.ts", "web/src/native-direct-stream.ts"]
+    ? ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "env.sh", "package.json", "bun.lock", "crates", "third_party", "scripts", "patches", "jsc", "src/engine-kind.ts", "src/quickjs-program.ts", "web/src/native-direct-stream.ts", "web/src/shared-objects/lane.ts"]
     : scopedRepositoryPaths(scope);
   const groups = [await committedGroup("repository", repository, repositoryPaths, "reject", path => scope === "core" && /^(crates\/bunwasm-(engine-quickjs|engine-jsc|jsc|engine-hermes|hermes)\/|third_party\/rquickjs)/.test(path))];
   const bun = join(repository, "vendor/bun");
