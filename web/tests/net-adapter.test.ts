@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { createRuntimeNetwork } from "../node_modules/waffle/browser/net/runtime.ts";
 import { NetHost as RuntimeNetHost } from "waffle/browser/net/host";
+import { NetNamespace } from "waffle/browser/net/helper";
 import { AGAIN, BADF, Kind, type NetRequest, UNSUPPORTED } from "waffle/browser/net/protocol";
 import { createRing, RingWriter } from "waffle/browser/net/ring";
 import { NetHost } from "../src/net/host";
@@ -11,8 +12,8 @@ import { processRuntimeFixture } from "./process-runtime-fixture";
 
 const encode = (value: string) => new TextEncoder().encode(value);
 const decode = (value: Uint8Array) => new TextDecoder().decode(value);
-async function until(ready: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt++) {
+async function until(ready: () => boolean, attempts = 100): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     if (ready()) return;
     await Bun.sleep(1);
   }
@@ -198,7 +199,7 @@ test("Bun helper keeps installer cache policy outside the generic runtime", asyn
     },
   };
   const sab = createRing();
-  const helper = new NetHelper(sab);
+  const helper = new NetHelper(sab, await NetNamespace.create());
   const host = new RuntimeNetHost(sab, (request) => helper.handle(request));
   try {
     Object.defineProperty(globalThis, "caches", { configurable: true, value: { async open(name: string) { opened.push(name); return cache; } } });
@@ -292,7 +293,7 @@ test("network request guard accepts lookup options and refuses malformed lookup 
 
 
 test("the exact guest lookup factory decodes the real runtime helper result and closes once", async () => {
-  const owner = createRuntimeNetwork(() => {});
+  const owner = await createRuntimeNetwork(() => {});
   const ring = createRing();
   const helper = createBunNetworkHelper(owner.network, ring);
   const host = new NetHost(ring, req => dispatchBunNetwork(helper, { type: "net", req }));
@@ -335,4 +336,43 @@ test("the exact guest lookup factory decodes the real runtime helper result and 
     expect(closed).toHaveLength(1);
     expect(slots.lookup_head!(closed[0]!, 65536, 0)).toBe(BADF);
   } finally { helper.dispose(); owner.dispose(); }
+});
+
+
+async function fetchBody(host: RuntimeNetHost, handle: number): Promise<string> {
+  await until(() => typeof host.fetchHead(handle) !== "number", 1000);
+  let body: Uint8Array | number = AGAIN;
+  await until(() => { body = host.read(handle, 65536); return body instanceof Uint8Array; });
+  if (typeof body === "number") throw new Error("Expected early request body");
+  return decode(body);
+}
+
+test("standalone CLI helper handles requests sent immediately after initialization", async () => {
+  const ring = createRing();
+  const worker = new Worker(new URL("../scripts/net-helper.ts", import.meta.url).href);
+  try {
+    worker.postMessage({ type: "init", ring });
+    const host = new RuntimeNetHost(ring, (request, transfer = []) => worker.postMessage(request, transfer));
+    const bodies = ["first early request", "second early request"];
+    const handles = bodies.map(body => host.fetch(JSON.stringify({ url: `data:text/plain,${encodeURIComponent(body)}` })));
+    for (const [index, handle] of handles.entries()) {
+      expect(await fetchBody(host, handle)).toBe(bodies[index]);
+      host.close(handle);
+    }
+  } finally { await worker.terminate(); }
+});
+
+test("process fixture shares one awaited network capability across concurrent callers", async () => {
+  const runtime = processRuntimeFixture({});
+  try {
+    const [first, second] = await Promise.all([runtime.network(), runtime.network()]);
+    expect(first).toBe(second);
+  } finally { await runtime.dispose(); }
+});
+
+test("process fixture rejects network admission when disposal wins initialization", async () => {
+  const runtime = processRuntimeFixture({});
+  const pending = expect(runtime.network()).rejects.toThrow("Runtime is disposed");
+  try { await runtime.dispose(); await pending; }
+  finally { await runtime.dispose(); }
 });

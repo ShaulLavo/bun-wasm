@@ -3,6 +3,7 @@
 // browser uses a service worker for that). The wasm runs on the main thread, blocked, so this has
 // to be another thread.
 import { NetHelper } from "../src/net/helper";
+import { NetNamespace } from "waffle/browser/net/helper";
 import { createCliPreview } from "./cli-preview";
 import type { NetRequest } from "../src/net/protocol";
 
@@ -11,14 +12,18 @@ declare const self: Worker;
 type Init = { type: "init"; ring: SharedArrayBuffer };
 
 let helper: NetHelper | null = null;
+let initialization: Promise<void> = Promise.resolve();
 const servers = new Map<number, ReturnType<typeof Bun.serve>>();
 
-self.onmessage = (event: MessageEvent<Init | NetRequest>) => {
+self.onmessage = async (event: MessageEvent<Init | NetRequest>) => {
   const msg = event.data;
   if (msg.type === "init") {
-    helper = new NetHelper(msg.ring, { listening: serve, stopped: unserve });
+    initialization = NetNamespace.create().then(namespace => {
+      helper = new NetHelper(msg.ring, namespace, { listening: serve, stopped: unserve });
+    });
     return;
   }
+  await initialization;
   helper?.handle(msg);
 };
 

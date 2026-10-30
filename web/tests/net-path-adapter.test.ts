@@ -2,6 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import type { RuntimeNetwork } from "waffle";
 import { createFilesystemIdentity } from "waffle/fs/protocol";
 import { NetHost as RuntimeNetHost } from "waffle/browser/net/host";
+import { NetNamespace } from "waffle/browser/net/helper";
 
 import { NetHost } from "../src/net/host";
 import { NetHelper, createBunNetworkHelper, dispatchBunNetwork } from "../src/net/helper";
@@ -75,8 +76,8 @@ test("invalid UTF-8, out-of-range path bytes, and reserved flags report EINVAL w
   } finally { fixture.dispose(); }
 });
 
-test("Bun request admission forwards Unix requests and rejects malformed fields", () => {
-  const helper = new NetHelper(createRing());
+test("Bun request admission forwards Unix requests and rejects malformed fields", async () => {
+  const helper = new NetHelper(createRing(), await NetNamespace.create());
   const seen: unknown[] = [];
   const handle = spyOn(helper, "handle").mockImplementation(request => { seen.push(request); });
   try {
@@ -110,9 +111,9 @@ test("path call trampolines preserve their three- and two-argument signatures", 
 });
 
 
-test("Bun forwards the trusted guest scope without putting it in guest requests", () => {
+test("Bun forwards the trusted guest scope without putting it in guest requests", async () => {
   const ring = createRing();
-  const helper = new NetHelper(ring);
+  const helper = new NetHelper(ring, await NetNamespace.create());
   let captured: unknown;
   const network: RuntimeNetwork = {
     lookup: () => [],
