@@ -370,6 +370,8 @@ tests/fixtures/worker-execution/preload.cjs
 tests/fixtures/worker-node-executable/child.mjs
 tests/fixtures/worker-node-executable/index.mjs
 tests/fixtures/worker-node-executable/worker.cjs
+tests/hermes/fixtures/next-jest-worker/processChild.js
+tests/hermes/fixtures/next-jest-worker/threadChild.js
 tests/net-ws.mjs
 tests/servers/websocket.js
 tests/stack-depth.js
