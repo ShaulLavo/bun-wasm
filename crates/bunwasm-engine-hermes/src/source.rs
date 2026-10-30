@@ -6,13 +6,29 @@ const END: &str = "function end(){const main=eval(\"require\")(file);";
 const EXEC: &str = "function execMethod(method,args){const main=eval(\"require\")(file);";
 const PROCESS_WORKER: &str = "/node_modules/next/dist/compiled/jest-worker/processChild.js";
 const THREAD_WORKER: &str = "/node_modules/next/dist/compiled/jest-worker/threadChild.js";
+const NFT: &str = "/node_modules/next/dist/compiled/@vercel/nft/index.js";
+const NFT_GYP_BUILD: &str = "var runtimeRequire=true?eval(\"require\"):0;";
+const NFT_BINDINGS: &str = "var requireFunc=true?eval(\"require\"):0;";
 
 pub(crate) fn adapt<'a>(source: &'a str, filename: &str) -> Cow<'a, str> {
+    if filename.ends_with(NFT) {
+        return adapt_nft(source);
+    }
     if !filename.ends_with(PROCESS_WORKER) && !filename.ends_with(THREAD_WORKER) {
         return Cow::Borrowed(source);
     }
     if source.matches(END).count() != 1
         || source.matches(EXEC).count() != 1
+        || source.matches(EVAL_REQUIRE).count() != 2
+    {
+        return Cow::Borrowed(source);
+    }
+    Cow::Owned(source.replace(EVAL_REQUIRE, REQUIRE_VALUE))
+}
+
+fn adapt_nft(source: &str) -> Cow<'_, str> {
+    if source.matches(NFT_GYP_BUILD).count() != 1
+        || source.matches(NFT_BINDINGS).count() != 1
         || source.matches(EVAL_REQUIRE).count() != 2
     {
         return Cow::Borrowed(source);
