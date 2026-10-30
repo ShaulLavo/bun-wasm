@@ -15,11 +15,12 @@ const child = Bun.spawn([process.execPath, "-e", source], { stdin: "pipe", stdou
 const reader = child.stdout.getReader();
 const decoder = new TextDecoder();
 let output = "";
-const deadline = setTimeout(() => child.kill(), 5000);
+let expired = false;
+const deadline = setTimeout(() => { expired = true; child.kill(); }, 5000);
 async function until(marker: string) {
   while (!output.includes(marker)) {
     const next = await reader.read();
-    assert.equal(next.done, false, `child ended before ${marker}: ${output}`);
+    assert.equal(next.done, false, `child ended before ${marker}, deadline expired: ${expired}, output: ${output}`);
     output += decoder.decode(next.value, { stream: true });
   }
 }
@@ -28,7 +29,7 @@ try {
   await until("\n");
   const port = output.match(/PORT:(\d+)/)?.[1];
   assert.ok(port, output);
-  const response = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(3000) });
+  const response = await fetch(`http://127.0.0.1:${port}/`, { headers: { connection: "close" }, signal: AbortSignal.timeout(3000) });
   assert.equal(await response.text(), "served");
   child.stdin.write("first\n");
   await child.stdin.flush();

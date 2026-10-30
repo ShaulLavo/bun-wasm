@@ -36,17 +36,19 @@ test("readline consumes process.stdin lines before EOF without blocking other wo
   const f = fixture();
   const rl = f.readline.createInterface({ input: f.input });
   const lines: string[] = [];
+  let closed = false;
+  rl.on("close", () => { closed = true; });
   rl.on("line", line => lines.push(line));
   try {
     f.pump();
     f.input.write("first\nsecond");
     await tick();
     expect(lines).toEqual(["first"]);
-    expect(rl.closed).toBe(false);
+    expect(closed).toBe(false);
     f.input.end("\nlast");
     await tick();
     expect(lines).toEqual(["first", "second", "last"]);
-    expect(rl.closed).toBe(true);
+    expect(closed).toBe(true);
   } finally { rl.close(); f.input.destroy(); }
 });
 
@@ -54,6 +56,8 @@ test("question waits for one line from the supplied stream and leaves it open", 
   const f = fixture();
   const rl = f.readline.createInterface({ input: f.input, output: f.output });
   const answers: string[] = [];
+  let closed = false;
+  rl.on("close", () => { closed = true; });
   try {
     rl.question("Prompt: ", answer => answers.push(answer));
     f.pump();
@@ -62,7 +66,7 @@ test("question waits for one line from the supplied stream and leaves it open", 
     await tick();
     expect(answers).toEqual(["answer"]);
     expect(f.output.read()?.toString()).toBe("Prompt: ");
-    expect(rl.closed).toBe(false);
+    expect(closed).toBe(false);
   } finally { rl.close(); f.input.destroy(); f.output.destroy(); }
 });
 
@@ -70,12 +74,14 @@ test("stdin async iteration yields a line while the pipe remains open", async ()
   const f = fixture();
   const rl = f.readline.createInterface({ input: f.input });
   const iterator = rl[Symbol.asyncIterator]();
+  let closed = false;
+  rl.on("close", () => { closed = true; });
   try {
     const first = iterator.next();
     f.pump();
     f.input.write("first\n");
     expect(await first).toEqual({ done: false, value: "first" });
-    expect(rl.closed).toBe(false);
+    expect(closed).toBe(false);
     const last = iterator.next();
     f.input.end();
     expect((await last).done).toBe(true);
