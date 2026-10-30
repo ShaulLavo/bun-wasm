@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
 import { emptyCounters } from "../web/src/memory-telemetry.ts";
 import { actorSnapshot, verifyAllocation, verifyFailure, verifyChild, installActorObserver, selectActor } from "./verify-engine-memory-browser.ts";
@@ -145,5 +148,63 @@ test("proxy: binding validation rejects guessed, wrong and ambiguous actors", ()
   for (const observations of [[], [{ ...actor, authority: "latest-command" }], [{ ...actor, id: "" }], [{ ...actor, engine: "jsc" }],
     [actor, actor], [actor, { ...child, id: actor.id }], [{ ...actor, path: "/wrong.ts" }], [{ ...actor, error: "invalid launch" }]]) {
     expect(() => selectActor(observations, actor)).toThrow();
+  }
+});
+
+async function installStartupControls(): Promise<void> {
+  const childProcess = await import("node:child_process");
+  const { PassThrough } = await import("node:stream");
+  const { expect, mock, spyOn } = await import("bun:test");
+  class StartupServer extends childProcess.ChildProcess {
+    stdout = new PassThrough();
+    stderr = new PassThrough();
+    exitCode: number | null = null;
+    signalCode = null;
+    pid = 0;
+    kill() {
+      this.exitCode = 0;
+      this.emit("close");
+      return true;
+    }
+  }
+  const server = new StartupServer();
+  server.stdout.write("at http://127.0.0.1:1\n");
+  spyOn(childProcess, "spawn").mockReturnValue(server);
+  let connected = true;
+  const page = {
+    on() {},
+    addInitScript(_observer: unknown, options: unknown) {
+      expect(options).toEqual({
+        engine: "quickjs", executable: "/opt/bun/quickjs/bin/bun",
+        paths: ["/home/user/memory-producer.ts", "/home/user/memory-parent.ts", "/home/user/memory-child.ts"],
+      });
+      throw new Error("Startup reached initialized observer fixtures");
+    },
+  };
+  const browser = {
+    newContext: async () => ({ newPage: async () => page, close: async () => {} }),
+    close: async () => { connected = false; },
+    isConnected: () => connected,
+  };
+  mock.module("playwright", () => ({ chromium: { launch: async () => browser } }));
+}
+
+test("memory browser CLI initializes fixture paths before installing its observer", () => {
+  const output = mkdtempSync(join(tmpdir(), "bun-wasm-memory-startup-"));
+  try {
+    const preload = join(output, "startup-control.ts");
+    writeFileSync(preload, `await (${installStartupControls.toString()})();`);
+    const result = Bun.spawnSync([process.execPath, "--preload", preload,
+      join(import.meta.dir, "verify-engine-memory-browser.ts"), output], {
+      stdout: "pipe", stderr: "pipe", timeout: 10000,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("Startup reached initialized observer fixtures");
+    expect(result.stderr.toString()).not.toContain("before initialization");
+    expect(JSON.parse(readFileSync(join(output, "hook-cleanup.json"), "utf8"))).toEqual({
+      serverPid: 0, serverExited: true, browserClosed: true,
+    });
+  } finally {
+    rmSync(output, { recursive: true, force: true });
   }
 });
