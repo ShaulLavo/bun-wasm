@@ -121,15 +121,38 @@ export function hermesConsumerReceipt(repository: string, build: string) {
   };
 }
 
-/** A native archive is never refreshed here; its owner must supply a matching generation. */
+function compilerRepository(value: unknown): string {
+  if (!value || typeof value !== "object" || !("roots" in value)) throw new Error("Missing original compiler roots");
+  const roots = value.roots;
+  if (!roots || typeof roots !== "object" || !("repository" in roots)
+    || typeof roots.repository !== "string" || !isAbsolute(roots.repository)) throw new Error("Invalid original compiler repository");
+  return roots.repository;
+}
+
+function verifyCurrentHermesConsumer(repository: string, original: ReturnType<typeof hermesConsumerReceipt>): void {
+  repository = realpathSync(repository);
+  const { roots, inputs } = original.consumerInputs;
+  for (const input of inputs) {
+    if (input.root !== "repository") continue;
+    const current = consumerInput(join(repository, input.path), repository, roots.build);
+    const resolved = relative(roots.repository, input.realPath);
+    const expectedRealPath = insideRoot(resolved) ? resolve(repository, resolved) : input.realPath;
+    if (current.root !== "repository" || current.path !== input.path || current.realPath !== expectedRealPath
+      || current.sha256 !== input.sha256 || current.bytes !== input.bytes) throw new Error(`Hermes current compiler consumer input changed: ${input.path}`);
+  }
+}
+
+/** Recheck original compiler evidence, then bind the current checkout by input content. Never refresh the archive or receipt. */
 export function verifyHermesLibrary(repository: string, build: string, receiptPath: string): void {
   const value: unknown = JSON.parse(readFileSync(receiptPath, "utf8"));
   if (!value || typeof value !== "object" || !("sha256" in value) || !("bytes" in value) || !("shimSha256" in value)
     || !("shimSource" in value) || !("consumerInputs" in value)) throw new Error("Hermes VM receipt must identify archive bytes and compiler consumer inputs; a new matching native generation is required");
   const bytes = readFileSync(join(build, "wasi/lib/libhermesvm_bunwasm.a"));
-  let current: ReturnType<typeof hermesConsumerReceipt>;
-  try { current = hermesConsumerReceipt(repository, build); }
+  let original: ReturnType<typeof hermesConsumerReceipt>;
+  try { original = hermesConsumerReceipt(compilerRepository(value.consumerInputs), build); }
   catch (error) { throw new Error("Hermes compiler consumer inputs unavailable; a new matching native generation is required", { cause: error }); }
-  if (value.sha256 !== hash(bytes) || value.bytes !== bytes.byteLength || value.shimSha256 !== current.shimSha256
-    || value.shimSource !== current.shimSource || !isDeepStrictEqual(value.consumerInputs, current.consumerInputs)) throw new Error("Hermes archive or compiler consumer inputs changed; a new matching native generation is required");
+  if (value.sha256 !== hash(bytes) || value.bytes !== bytes.byteLength || value.shimSha256 !== original.shimSha256
+    || value.shimSource !== original.shimSource || !isDeepStrictEqual(value.consumerInputs, original.consumerInputs)) throw new Error("Hermes archive or compiler consumer inputs changed; a new matching native generation is required");
+  try { verifyCurrentHermesConsumer(repository, original); }
+  catch (error) { throw new Error("Hermes current compiler consumer inputs differ; a new matching native generation is required", { cause: error }); }
 }
