@@ -83,8 +83,9 @@ test("native preparation creates a coherent private root containing the original
   expect(statSync(prepared.root).isDirectory()).toBe(true);
   expect(readdirSync(prepared.root)).toEqual(["app"]);
   const fixture = fullstackApps.find(app => app.id === "fullstack-solidstart");
-  assert.ok(fixture);
-  expect(readFileSync(join(prepared.path, "app.config.ts"), "utf8")).toBe(fixture.files["app.config.ts"]);
+  const config = fixture?.files["app.config.ts"];
+  assert.ok(config);
+  expect(readFileSync(join(prepared.path, "app.config.ts"), "utf8")).toBe(config);
 }));
 
 test("native cases own disjoint writable tmp/cache and cannot mount each other's files", () => ownedScratch(async scratch => {
