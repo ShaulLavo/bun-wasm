@@ -11,9 +11,7 @@ crates/bunwasm-runtime/src/js/inspect.js
 crates/bunwasm-runtime/src/js/net.js
 crates/bunwasm-runtime/src/js/node_fs.js
 crates/bunwasm-runtime/src/js/node_net.js
-crates/bunwasm-runtime/src/js/node_stream_bindings.js
 crates/bunwasm-runtime/src/js/node_stream_core.js
-crates/bunwasm-runtime/src/js/node_stream_internals.js
 crates/bunwasm-runtime/src/js/node_stream_web.js
 crates/bunwasm-runtime/src/js/streams_polyfill.js
 crates/bunwasm-runtime/src/js/temporal.js
