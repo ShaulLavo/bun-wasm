@@ -151,7 +151,7 @@ test("proxy: binding validation rejects guessed, wrong and ambiguous actors", ()
   }
 });
 
-async function installStartupControls(): Promise<void> {
+async function installStartupControls(playwrightModule: string): Promise<void> {
   const childProcess = await import("node:child_process");
   const { PassThrough } = await import("node:stream");
   const { expect, mock, spyOn } = await import("bun:test");
@@ -186,14 +186,16 @@ async function installStartupControls(): Promise<void> {
     close: async () => { connected = false; },
     isConnected: () => connected,
   };
-  mock.module("playwright", () => ({ chromium: { launch: async () => browser } }));
+  const launch = async () => browser;
+  mock.module(playwrightModule, () => ({ chromium: { launch } }));
+  expect((await import(playwrightModule)).chromium.launch).toBe(launch);
 }
 
 test("memory browser CLI initializes fixture paths before installing its observer", () => {
   const output = mkdtempSync(join(tmpdir(), "bun-wasm-memory-startup-"));
   try {
     const preload = join(output, "startup-control.ts");
-    writeFileSync(preload, `await (${installStartupControls.toString()})();`);
+    writeFileSync(preload, `await (${installStartupControls.toString()})(${JSON.stringify(import.meta.resolve("playwright"))});`);
     const result = Bun.spawnSync([process.execPath, "--preload", preload,
       join(import.meta.dir, "verify-engine-memory-browser.ts"), output], {
       stdout: "pipe", stderr: "pipe", timeout: 10000,
