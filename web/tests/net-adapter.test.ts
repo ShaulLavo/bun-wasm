@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { createRuntimeNetwork } from "../node_modules/waffle/browser/net/runtime.ts";
 import { NetHost as RuntimeNetHost } from "waffle/browser/net/host";
-import { NetNamespace } from "waffle/browser/net/helper";
+import { NetNamespace } from "../node_modules/waffle/browser/net/helper.ts";
 import { AGAIN, BADF, Kind, type NetRequest, UNSUPPORTED } from "waffle/browser/net/protocol";
 import { createRing, RingWriter } from "waffle/browser/net/ring";
 import { NetHost } from "../src/net/host";
@@ -428,18 +428,22 @@ test("process fixture preserves helper failure identity and still disposes its n
   const network = await runtime.network();
   const stopped = new Error("listener cleanup failed");
   const helper = createBunNetworkHelper(network, createRing(), { stopped() { throw stopped; } });
-  const close = spyOn(helper, "dispose");
   const namespaceDispose = spyOn(NetNamespace.prototype, "dispose");
   try {
     helper.handle({ type: "listen", id: 1, host: "127.0.0.1", port: 0 });
     const failure: unknown = await runtime.dispose().catch(error => error);
     if (!(failure instanceof AggregateError)) throw new Error("Expected listener cleanup failure");
-    expect(failure.errors).toEqual([stopped]);
-    expect(close.mock.results[0]?.value).toBe(failure);
+    expect(cleanupFailures(failure)).toEqual([stopped]);
+    await expect(runtime.dispose()).rejects.toBe(failure);
     expect(namespaceDispose).toHaveBeenCalledTimes(1);
   } finally {
     await runtime.dispose().catch(() => {});
-    close.mockRestore();
     namespaceDispose.mockRestore();
   }
 });
+
+
+function cleanupFailures(error: unknown): unknown[] {
+  if (!(error instanceof AggregateError)) return [error];
+  return error.errors.flatMap(cleanupFailures);
+}

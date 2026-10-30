@@ -1,5 +1,4 @@
-import { NetHelper, NetNamespace } from "waffle/browser/net/helper";
-import type { RuntimeNetwork } from "waffle";
+import { createRuntimeNetwork } from "../node_modules/waffle/browser/net/runtime.ts";
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
 import { MemFS } from "waffle/fs/memory";
 import { connectFilesystemIdentity, type FilesystemIdentity } from "waffle/fs";
@@ -9,7 +8,8 @@ import { ProcessTable } from "waffle/proc/table";
 import { compileInterruptible } from "waffle/interrupt/loader";
 import { getVfsDescriptor } from "waffle";
 import { createProcessIdentity } from "waffle/browser/process-context";
-import type { Runtime, GuestLauncher, ProcessService, RuntimeFilesystem, RuntimeConsumer } from "waffle";
+import type { GuestLauncher, ProcessService, RuntimeFilesystem, RuntimeConsumer } from "waffle";
+import type { ProcessRuntime } from "../../src/process-runtime.js";
 
 /** A process-only fixture: no page owner, filesystem worker, browser cache or service locator.
  * Production composition is covered by the runtime facade tests; these inject explicit owners
@@ -17,7 +17,7 @@ import type { Runtime, GuestLauncher, ProcessService, RuntimeFilesystem, Runtime
  */
 export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, options: {
   activate?: () => Promise<typeof import("waffle/proc")>;
-} = {}): Runtime {
+} = {}): ProcessRuntime {
   const unused = (): never => { throw new Error("Unexpected filesystem operation in process-only fixture"); };
   let filesystem: RuntimeFilesystem = {
     vfs: getVfsDescriptor("memory"), state: { status: "ready" }, workspace: undefined, resolvePath: unused, ownershipLost: false, createIdentity: unused, fork: unused, connect: unused,
@@ -40,37 +40,18 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
   let activation: Promise<ProcessService> | undefined;
   let disposed = false;
   let disposal: Promise<void> | undefined;
-  let network: Promise<RuntimeNetwork> | undefined;
-  let namespace: NetNamespace | undefined;
+  let networkOwner: ReturnType<typeof createRuntimeNetwork> | undefined;
   const networkClosed = new Error("Runtime is disposed");
   const assertNetworkLive = () => { if (disposed) throw networkClosed; };
-  const helpers = new Set<NetHelper>();
-  async function initializeNetwork(): Promise<RuntimeNetwork> {
-    const initialized = await NetNamespace.create(assertNetworkLive);
-    namespace = initialized;
-    return { lookup() { throw new Error("Unexpected network lookup in process-only fixture"); }, createHelper({ ring, fetch, hooks }) {
-      assertNetworkLive();
-      const helper = new NetHelper(ring, fetch, hooks, initialized);
-      helpers.add(helper);
-      return helper;
-    } };
-  }
-  function disposeNetwork(errors: unknown[]): void {
-    for (const helper of helpers) {
-      try { helper.dispose(); } catch (error) { errors.push(error); }
-    }
-    helpers.clear();
-    try { namespace?.dispose(); } catch (error) { errors.push(error); }
-  }
   const consumers = new Set<RuntimeConsumer>();
   let service!: ProcessService;
   return {
     hostIdentity: null, filesystem, identities,
     async network() {
       assertNetworkLive();
-      const initialized = await (network ??= initializeNetwork());
+      const owner = await (networkOwner ??= createRuntimeNetwork(assertNetworkLive));
       assertNetworkLive();
-      return initialized;
+      return owner.network;
     },
     get disposed() { return disposed; },
     retainConsumer(consumer) {
@@ -126,7 +107,7 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
       try { broker?.suspend(); } catch (error) { errors.push(error); }
       void Promise.resolve().then(async () => {
         try { if (activation) await activation; } catch (error) { errors.push(error); }
-        try { if (network) await network; } catch (error) { if (error !== networkClosed) errors.push(error); }
+        try { if (networkOwner) await networkOwner; } catch (error) { if (error !== networkClosed) errors.push(error); }
         // This process-only fixture owns the same pre-admission fence, not a no-op lease.
         // A rejected fence prevents physical cleanup, as it does in the real page owner.
         const fences = await Promise.allSettled(retained.map(consumer => Promise.resolve().then(() => filesystem.quiesce(consumer.filesystem))));
@@ -135,7 +116,8 @@ export function processRuntimeFixture(overrides: Partial<RuntimeFilesystem>, opt
           const stops = await Promise.allSettled(retained.map(consumer => Promise.resolve().then(() => consumer.stop())));
           for (const result of stops) if (result.status === "rejected") errors.push(result.reason);
           consumers.clear();
-          disposeNetwork(errors);
+          try { await networkOwner?.then(owner => owner.dispose(), () => {}); }
+          catch (error) { errors.push(error); }
         }
         try {
           if (failures.length) await broker?.quiesce();

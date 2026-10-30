@@ -18,16 +18,20 @@ let stopped = false;
 const servers = new Map<number, ReturnType<typeof Bun.serve>>();
 process.once("exit", dispose);
 
-self.onmessage = async (event: MessageEvent<Init | NetRequest>) => {
+self.onmessage = (event: MessageEvent<Init | NetRequest>) => {
   const msg = event.data;
   if (msg.type === "init") {
     if (initialization) throw new Error("Network helper is already initialized");
-    initialization = initialize(msg.ring);
+    initialization = initialize(msg.ring).catch(reportWorkerError);
     return;
   }
-  await initialization;
-  helper?.handle(msg);
+  if (helper) helper.handle(msg);
+  else void initialization?.then(() => helper?.handle(msg)).catch(reportWorkerError);
 };
+
+function reportWorkerError(error: unknown): void {
+  queueMicrotask(() => { throw error; });
+}
 
 async function initialize(ring: SharedArrayBuffer): Promise<void> {
   namespace = await NetNamespace.create(() => {

@@ -1,4 +1,4 @@
-import type { Runtime } from "waffle";
+import type { ProcessRuntime } from "./process-runtime.js";
 import { FilesystemClient } from "waffle/fs/client";
 import { FilesystemError } from "waffle/fs/protocol";
 import { loadBunWasm, type LoadBunWasmOptions } from "./assets.js";
@@ -34,8 +34,8 @@ export interface BunAdapterInstallation {
   dispose(): void;
 }
 
-const installations = new WeakMap<Runtime, BunAdapterInstallation>();
-const installing = new WeakSet<Runtime>();
+const installations = new WeakMap<ProcessRuntime, BunAdapterInstallation>();
+const installing = new WeakSet<ProcessRuntime>();
 const executableMarker = new TextEncoder().encode("bun-wasm registered executable\n");
 const matchesMarker = (bytes: Uint8Array | undefined): boolean => bytes !== undefined
   && bytes.length === executableMarker.length && bytes.every((byte, index) => byte === executableMarker[index]);
@@ -66,7 +66,7 @@ async function rollbackExecutables(filesystem: FilesystemClient, created: string
 }
 
 /** Register Bun on a caller-owned Runtime, provisioning executable files without reserving a root. */
-export async function installBunAdapters(runtime: Runtime, options: BunAdapterOptions): Promise<BunAdapterInstallation> {
+export async function installBunAdapters(runtime: ProcessRuntime, options: BunAdapterOptions): Promise<BunAdapterInstallation> {
   if (installations.has(runtime) || installing.has(runtime)) throw new Error("bun-wasm adapters are already installed on this Runtime");
   if (!options?.workerUrl?.toString()) throw new TypeError("workerUrl is required");
   if (!options.notificationWorkerUrl?.toString()) throw new TypeError("notificationWorkerUrl is required");
