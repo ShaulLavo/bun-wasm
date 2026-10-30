@@ -114,7 +114,11 @@ async function runNative(paths: readonly string[]): Promise<number> {
   const count = Number(process.env.BUN_WASM_CHECK_JOBS ?? availableParallelism());
   if (!Number.isInteger(count) || count < 1) throw new Error(`Invalid BUN_WASM_CHECK_JOBS: ${String(count)}`);
   const env = { ...process.env, BUN_WASM_CI_CHECKS: "1" };
-  const results = await Promise.all(nativeGroups(paths, count).map(group => runBuffered(checkCommand("native", group), env)));
+  // Each test.sh would otherwise run the whole runtime suite again, in parallel.
+  const runtime = runCheck(["bash", join(root, "scripts/check-runtime.sh")], env);
+  if (runtime !== 0) return runtime;
+  const grouped = { ...env, BUN_WASM_RUNTIME_CHECKED: "1" };
+  const results = await Promise.all(nativeGroups(paths, count).map(group => runBuffered(checkCommand("native", group), grouped)));
   for (const result of results) process.stdout.write(result.output);
   return results.find(result => result.status !== 0)?.status ?? 0;
 }
