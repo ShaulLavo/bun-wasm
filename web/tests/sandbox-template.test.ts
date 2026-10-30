@@ -49,3 +49,11 @@ for (const template of templates) {
     });
   });
 }
+
+test("starter locks preserve the qualified Vite 8 graph", async () => {
+  for (const template of templates) {
+    const path = join(import.meta.dir, "../../sandbox", template.directory, "bun.lock");
+    const lock: unknown = Bun.JSONC.parse(await Bun.file(path).text());
+    expect(lock).toMatchObject({ packages: { vite: expect.arrayContaining(["vite@8.3.5"]), rolldown: expect.arrayContaining(["rolldown@1.2.16"]) } });
+  }
+});
