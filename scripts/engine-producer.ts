@@ -141,7 +141,7 @@ function workerProof(): void {
   const scratch = join(output, "smoke-tmp");
   copyFileSync(join(repository, "tests/shared-group/worker-alias.ts"), join(scratch, "worker-alias.ts"));
   const core = join(output, "dist/bun.wasm");
-  const result = spawnSync(launcher, ["--wasm", core, "--engine", `quickjs=${core}`, "--env", "PATH=/opt/bun/quickjs/bin:/bin:/usr/bin", "--dir", `${scratch}::/`, "--env", "PWD=/", "--env", "HOME=/", "--", "bun", "worker-alias.ts"], { cwd: scratch, env: environment, encoding: "utf8", timeout: 300000 });
+  const result = spawnSync(launcher, ["--wasm", core, "--engine", `quickjs=${core}`, "--env", "PATH=/opt/bun/quickjs/bin:/bin:/usr/bin", "--dir", `${scratch}::/`, "--env", "PWD=/", "--env", "HOME=/", "--", "run", "worker-alias.ts"], { cwd: scratch, env: environment, encoding: "utf8", timeout: 300000 });
   writeFileSync(join(output, "worker-proof.log"), result.stdout + result.stderr);
   if (result.error) throw result.error;
   verifyWorkerProof(result.stdout, result.status);

@@ -50,7 +50,7 @@ function fixture(run: (root: string, output: string, invoke: (command: string, p
     put("web/build.ts", 'import {readFileSync,writeFileSync,mkdirSync} from "node:fs";import {dirname} from "node:path";const dir=dirname(process.env.BUN_WASM);const names=["bun.wasm","quickjs.wasm","bun-jsc.wasm","jsc-engine.wasm","bun-hermes.wasm","hermes-engine.wasm"];mkdirSync("web/dist",{recursive:true});writeFileSync("web/dist/index.html","synthetic");writeFileSync("web/dist/engine-builds.json",JSON.stringify(Object.fromEntries(names.map(name=>[name,new Bun.CryptoHasher("sha256").update(readFileSync(dir+"/"+name)).digest("hex")]))));');
     const pass = workerProofLabels.map(label => `PASS ${label}`).join("\n");
     put("scripts/native-cargo.sh", `#!/bin/sh\nprintf 'launcher\\n' >> "$FIXTURE_LOG"\nmkdir -p "$CARGO_TARGET_DIR/release"\ncp "${root}/scripts/launcher-fixture.sh" "$CARGO_TARGET_DIR/release/bun-wasm"\n`, 0o700);
-    put("scripts/launcher-fixture.sh", `#!/bin/sh\ncase "$*" in *worker-alias.ts*) cat <<'PROOF'\n${pass}\nPROOF\n;; *) echo 'paired-smoke 42';; esac\n`, 0o700);
+    put("scripts/launcher-fixture.sh", `#!/bin/sh\ncase "$*" in *worker-alias.ts*) printf '%s\\n' "$@" > "$FIXTURE_LOG.worker-argv";; esac\ncase "$*" in *"-- run worker-alias.ts") cat <<'PROOF'\n${pass}\nPROOF\n;; *worker-alias.ts*) echo 'expected launcher operands: -- run worker-alias.ts' >&2; exit 1;; *) echo 'paired-smoke 42';; esac\n`, 0o700);
     put("tests/shared-group/worker-alias.ts", "// Synthetic fixture: never executed by these routing tests.\n"); put("crates/bunwasm-hermes/cpp/shim.cpp", "shim fixture");
     put(".gitignore", "dist/\nweb/dist/\n");
     execFileSync("git", ["init", "-q"], { cwd: root }); execFileSync("git", ["add", "."], { cwd: root });
@@ -108,6 +108,7 @@ test("a changed native heap shim refuses the prior VM generation before any reci
 test("canonical shared producer uses explicit profile and only QuickJS, keeps split artifacts out", () => {
   fixture((_root, output, invoke) => {
     const result = invoke("build", "shared-group"); expect(result.exitCode, result.stderr?.toString()).toBe(0);
+    expect(readFileSync(join(output, "../commands.log.worker-argv"), "utf8").trimEnd().split("\n").slice(-3)).toEqual(["--", "run", "worker-alias.ts"]);
     const manifest = JSON.parse(readFileSync(join(output, "manifest.json"), "utf8"));
     expect(manifest.profile).toBe("shared-group"); expect(manifest.engines).toEqual(["quickjs"]);
     expect(manifest.files.some((file: {path: string}) => /hermes|jsc|web\//.test(file.path))).toBe(false);
