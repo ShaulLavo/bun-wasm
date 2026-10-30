@@ -135,7 +135,7 @@ try {
   );
   await expectRun(page, `${name}: fetch to a CORS server`, "bun run net.ts", 0, ['json: {"ok":true,"list":[1,2,3]}', 'echo: 200 {"method":"POST","test":"abc","body":"posted"}', "cors: true"]);
 
-  // The terminal does not feed running programs: stdin is at end of input.
+  // A running command reads the live terminal, so give it a finite pipe: both lines, then EOF.
   await writeFile(
     page,
     `${HOME}/ask.ts`,
@@ -146,7 +146,7 @@ rl.on("line", (line) => lines.push(line));
 rl.on("close", () => console.log("readline closed:", JSON.stringify(lines)));
 `,
   );
-  await expectRun(page, `${name}: readline sees end of input`, "bun run ask.ts", 0, ["readline closed: []"]);
+  await expectRun(page, `${name}: readline sees end of input`, "printf 'a\\nb\\n' | bun run ask.ts", 0, ['readline closed: ["a","b"]']);
 
   const sinkFixture = new URL("../../tests/fixtures/array-buffer-sink/", import.meta.url);
   await writeFile(page, `${HOME}/sink.js`, await readFile(new URL("index.js", sinkFixture), "utf8"));
