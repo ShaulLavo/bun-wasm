@@ -28,8 +28,7 @@ declare namespace Tcp {
     tls?: boolean | object | null;
     unix?: unknown;
     socket: AnyHandlers<NoInfer<Data>>;
-    data?: Data;
-  };
+  } & (undefined extends Data ? { data?: Data } : { data: Data });
   type Socket<Data = undefined> = {
     data: Data;
     listener: Listener<Data> | undefined;

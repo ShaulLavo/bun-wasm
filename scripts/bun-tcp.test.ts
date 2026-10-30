@@ -266,7 +266,12 @@ const initializedListener = tcp.listen({ port: 0, data: { count: 1 }, socket: {}
 const initializedCount: number = initializedListener.data.count;
 tcp.listen({ port: 0, data: { count: 1 }, socket: { open(socket: { data: { count: number } }) { socket.data.count++; } } });
 tcp.connect({ port: 80, socket: {} }).then(socket => { const absent: undefined = socket.data; void absent; });
+const explicitListener = tcp.listen<{ n: number }>({ port: 0, data: { n: 1 }, socket: { open(socket) { socket.data.n++; } } });
+const explicitCount: number = explicitListener.data.n;
+tcp.connect<{ n: number }>({ port: 80, data: { n: 1 }, socket: {} }).then(socket => { const count: number = socket.data.n; void count; });
+tcp.listen<undefined>({ port: 0, socket: { open(socket) { const absent: undefined = socket.data; void absent; } } });
 void initializedCount;
+void explicitCount;
 `;
 
 function checkTypes(probe: string) {
@@ -298,6 +303,8 @@ const invalidProbes = [
   'tcp.listen({ port: 0, socket: { data(_socket, bytes: ArrayBuffer) {} } });',
   'tcp.connect({ port: 80, socket: { binaryType: "uint8array", data(_socket, bytes: ArrayBuffer) {} } });',
   'tcp.listen({ port: 0, socket: { binaryType: "arraybuffer", data(_socket, bytes: Uint8Array) {} } });',
+  'tcp.listen<{ n: number }>({ port: 0, socket: { open(socket) { socket.data.n; } } });',
+  'tcp.connect<{ n: number }>({ port: 80, socket: { open(socket) { socket.data.n; } } });',
 ];
 for (const probe of invalidProbes) {
   test(`factory types reject ${probe}`, () => {
