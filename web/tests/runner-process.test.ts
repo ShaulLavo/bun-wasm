@@ -17,6 +17,7 @@ import { DescriptorTable } from "waffle/core/descriptors";
 import { createFilesystemIdentity } from "waffle/fs";
 import { installRuntimeSharedObjects } from "../src/shared-objects/runtime";
 import { createSharedObjects } from "../src/shared-objects/service";
+import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 /** The shared signal words of the process a request roots. */
 const signalsOf = (request: RunRequest) => workerProcessState(request.runtimeProcess!).signals;
@@ -51,11 +52,12 @@ function isolatedRoot(isolated = true, engine: Engine = "browser", options: Para
   const quiescence = new Promise<void>(resolve => { release = resolve; });
   class FakeWorker {
     // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
-    constructor() { worker ??= this; }
+    constructor(url: string | URL) { if (!isNotificationWorkerUrl(url)) worker ??= this; }
     onerror: ((event: ErrorEvent) => void) | null = null;
     onmessage: ((event: MessageEvent) => void) | null = null;
     terminated = 0;
     postMessage(value: RunRequest) {
+      if (isNotificationBridgeRequest(value)) return;
       // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
       request ??= value; worker ??= this; const pid = pidOf(value); requests.set(pid, value); workers.set(pid, this);
       pending.get(pid)?.(value); posted();
@@ -368,7 +370,10 @@ test("concurrent roots on one runtime inherit independent engine PATHs without r
     request!: RunRequest;
     terminated = false;
     constructor() { workers.push(this); }
-    postMessage(request: RunRequest) { this.request = request; requests.set(pidOf(request), request); }
+    postMessage(request: RunRequest) {
+      if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
+      this.request = request; requests.set(pidOf(request), request);
+    }
     terminate() { this.terminated = true; }
   }
   async function received(pid: number): Promise<RunRequest> {
@@ -441,7 +446,10 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
     request?: RunRequest;
     terminated = false;
     constructor() { workers.push(this); }
-    postMessage(request: RunRequest) { this.request = request; }
+    postMessage(request: RunRequest) {
+      if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
+      this.request = request;
+    }
     terminate() { this.terminated = true; }
     exit() { this.onmessage?.({ data: { type: "exit", code: 0, sleep: "atomics" } } as MessageEvent); }
   }

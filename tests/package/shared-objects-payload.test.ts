@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import * as sourcePackage from "../../src/index";
+import { processRuntimeFixture } from "../../web/tests/process-runtime-fixture";
 
 const execute = promisify(execFile);
 test("packed source includes private shared-object imports without enabling a public service", async () => {
@@ -24,6 +25,19 @@ test("packed source includes private shared-object imports without enabling a pu
     const packed = await import(pathToFileURL(join(scratch, "package/src/index.ts")).href);
     expect(Object.keys(packed).sort()).toEqual(Object.keys(sourcePackage).sort());
     expect(packed.installBunAdapters).toBeFunction();
+    expect(packed.installBunSharedObjects).toBeFunction();
     expect("installRuntimeSharedObjects" in packed).toBe(false);
+    // The public install and the launcher's route lookup share the packed module's one WeakMap.
+    const routes = await import(pathToFileURL(join(scratch, "package/web/src/shared-objects/runtime.ts")).href);
+    const runtime = processRuntimeFixture({});
+    try {
+      expect(routes.runtimeSharedObjectRoute(runtime)).toBeUndefined();
+      const installation = packed.installBunSharedObjects(runtime);
+      const route = routes.runtimeSharedObjectRoute(runtime);
+      expect(route).toBeDefined();
+      route.close();
+      installation.close();
+      expect(routes.runtimeSharedObjectRoute(runtime)).toBeUndefined();
+    } finally { await runtime.dispose(); }
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }, 40_000);

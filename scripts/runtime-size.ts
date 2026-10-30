@@ -27,8 +27,9 @@ export function initialJavaScript(outputs: OutputGraph, roots: readonly string[]
   return Array.from(seen).sort();
 }
 
-// Waffle 0.0.67 adds descriptor reopening and publication checks: ~9,650 B gzip plus 334 B margin.
-const CORE_BUDGET_KIB = 9.75;
+// Waffle 0.0.103's public runtime graph measures 10,737 B gzip, including fs/guest-watch.ts.
+// Preserve the accepted 335 B whole-output headroom: 11,072 B (10.8125 KiB).
+const CORE_BUDGET_KIB = 10.8125;
 export function checkCoreBudget(gzipBytes: number): void {
   const budget = CORE_BUDGET_KIB * 1024;
   if (gzipBytes > budget) throw new Error(`core exceeds ${budget} B gzip budget by ${gzipBytes - budget} B; inspect runtime/core imports and the layer report`);

@@ -27,6 +27,11 @@ export class NetHost {
     this.host = new RuntimeNetHost(sab, send, writeFile, options);
   }
 
+  /** Waffle's host, for notification arming; Bun's ABI stays in this adapter. */
+  get runtime(): RuntimeNetHost {
+    return this.host;
+  }
+
   attach(memory: WebAssembly.Memory): void {
     this.memory = memoryViews(memory);
   }

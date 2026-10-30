@@ -5,6 +5,8 @@
   function absolute(value: unknown): string {
     if (typeof value !== "string") throw error(TypeError, "ERR_INVALID_ARG_TYPE", 'The "options.path" property must be of type string');
     if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)) throw error(Error, "EINVAL", "Socket path contains invalid Unicode");
+    // A leading NUL names Waffle's abstract namespace: classify before any cwd join.
+    if (value.startsWith("\0")) return value;
     if (!value || value.startsWith("/")) return value;
     const cwd = internal.native.cwd();
     return `${cwd.endsWith("/") ? cwd : cwd + "/"}${value}`;

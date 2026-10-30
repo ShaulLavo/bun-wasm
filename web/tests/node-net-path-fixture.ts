@@ -1,7 +1,8 @@
 import { networkFixture } from "./node-net-fixture";
 
-// Contract fixture only: Waffle 0.0.95 supplies stream bytes, and this fixture
-// supplies the pending Unix naming/address API. It proves no filesystem behavior.
+// Contract fixture only: Waffle supplies stream bytes, and this fixture supplies the
+// Unix naming/address API, including the abstract-name rules of Waffle's contract
+// (a leading NUL; at most 108 UTF-8 bytes). It proves no filesystem behavior.
 export function unixNetworkFixture() {
   const paths = new Map<string, { listener: number; port: unknown }>();
   const addresses = new Map<number, { local: string | null; peer: string | null }>();
@@ -23,7 +24,7 @@ export function unixNetworkFixture() {
       const code = validate(path);
       if (code) return fail(code, "connect");
       const binding = paths.get(path);
-      if (!binding) return fail("ENOENT", "connect");
+      if (!binding) return fail(path.startsWith("\0") ? "ECONNREFUSED" : "ENOENT", "connect");
       const client = Number(fixture.invoke("hostConnect", "127.0.0.1", binding.port));
       addresses.set(client, { local: null, peer: path });
       return client;
@@ -56,6 +57,7 @@ export function unixNetworkFixture() {
   };
   function fail(code: string, syscall: string) { failure = { code, syscall }; return -1; }
   function validate(path: string) {
+    if (path.startsWith("\0")) return path.length === 1 || new TextEncoder().encode(path).length > 108 ? "EINVAL" : undefined;
     if (path.includes("\0")) return "EINVAL";
     if (!path) return "ENOENT";
     return new TextEncoder().encode(path).length > 4096 ? "ENAMETOOLONG" : undefined;

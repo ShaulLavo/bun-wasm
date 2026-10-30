@@ -175,7 +175,7 @@ async function checkInstalledRelease(root: string) {
   if (!main) throw new Error("Missing main fixture");
   const runtime = resolveRuntimePackage(main);
   expect(runtime.metadata.version).toBe(release.version);
-  expect(Object.keys(runtime.metadata.exports)).toHaveLength(73);
+  expect(Object.keys(runtime.metadata.exports)).toHaveLength(76);
   for (const key of Object.keys(runtime.metadata.exports)) {
     const specifier = key === "." ? "waffle" : "waffle" + key.slice(1);
     expect(await Bun.file(runtime.source(specifier)).exists()).toBe(true);

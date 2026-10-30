@@ -13,6 +13,7 @@ import { readOutcome } from "waffle/proc/outcome";
 import { startRun, type RunOptions } from "../src/runner";
 import type { RunRequest } from "../src/worker";
 import type { SharedFilesystem } from "../src/shared-fs";
+import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 const notifyObserver = createNotifyObserver();
 
@@ -37,9 +38,12 @@ function fixture(module: WebAssembly.Module, options: Partial<RunOptions> | ((ru
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
   globalThis.Worker = class {
     // oxlint-disable-next-line typescript/no-this-alias -- Capture the actual fake worker or receiver for assertions outside this callback.
-    constructor(readonly url: string) { rootWorker ??= this; }
+    constructor(readonly url: string) { if (!isNotificationWorkerUrl(url)) rootWorker ??= this; }
     onmessage?: (event: { data: WorkerProcessMessage }) => void;
-    postMessage(request: RunRequest) { sent ??= request; requests.push(request); workerUrls.set(request, this.url); posted(); }
+    postMessage(request: RunRequest) {
+      if (isNotificationBridgeRequest(request)) return;
+      sent ??= request; requests.push(request); workerUrls.set(request, this.url); posted();
+    }
     terminate() {}
   } as unknown as typeof Worker;
   const filesystem = {
@@ -390,7 +394,7 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) for (const delivery
     globalThis.Worker = class {
       onmessage: ((event: MessageEvent) => void) | null = null;
       onerror: ((event: ErrorEvent) => void) | null = null;
-      postMessage(request: RunRequest) { requests.push(request); }
+      postMessage(request: RunRequest) { if (!isNotificationBridgeRequest(request)) requests.push(request); }
       terminate() {}
     } as unknown as typeof Worker;
     const state = registryFixture();

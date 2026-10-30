@@ -24,7 +24,7 @@ async function build() {
   for (const [folder, entry] of fixtures) {
     const out = join(directory, folder);
     await buildBrowserEntries([join(import.meta.dir, `${entry}.ts`), join(root, "web/src/worker.ts"),
-      join(root, "web/src/fs-worker.ts"), join(import.meta.dir, "safari-observers.ts"),
+      join(root, "web/src/fs-worker.ts"), join(root, "web/src/notification-worker.ts"), join(import.meta.dir, "safari-observers.ts"),
       join(import.meta.dir, "safari-open-descriptor-worker.ts"), join(import.meta.dir, "engine-interruption-worker.ts")], out, { runtimeWorker: true });
     await Bun.write(join(out, "index.html"), `<!doctype html><script src="./safari-observers.js"></script><script type="module" src="./${entry}.js"></script>`);
   }

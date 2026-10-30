@@ -81,7 +81,7 @@ export class NativeSocketExchange {
   private id = "";
   private ended = false;
   private accepted = false;
-  constructor(private readonly socket: Duplex, private readonly request: Uint8Array<ArrayBuffer>, private readonly head: Buffer, private readonly transport: NativeExchangeTransport) {}
+  constructor(private readonly socket: Duplex, private readonly head: Buffer, private readonly transport: NativeExchangeTransport) {}
 
   start(open: PreviewHostOpen): void {
     this.socket.pause();
@@ -105,7 +105,6 @@ export class NativeSocketExchange {
   private accept(): void {
     if (this.accepted) { this.finish(); return; }
     this.accepted = true;
-    this.transport.input(this.id, { type: "data", chunk: this.request });
     if (this.head.byteLength) this.transport.input(this.id, { type: "data", chunk: Uint8Array.from(this.head) });
     this.socket.resume();
   }

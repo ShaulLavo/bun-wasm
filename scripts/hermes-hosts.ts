@@ -77,7 +77,8 @@ async function browserSmoke(identity: { core: { path: string; sha256: string }; 
   const timeout = setTimeout(() => { console.error("Hermes host smoke timed out"); interrupted(); }, 120_000);
   let port: number | undefined;
   try {
-    await buildBrowserEntries([join(repository, "web/tests/hermes-host-page.ts"), join(repository, "web/src/worker.ts"), join(repository, "web/src/fs-worker.ts")], scratch, { runtimeWorker: true });
+    // The page's networked root starts the notification relay beside its worker (runner.ts).
+    await buildBrowserEntries([join(repository, "web/tests/hermes-host-page.ts"), join(repository, "web/src/worker.ts"), join(repository, "web/src/fs-worker.ts"), join(repository, "web/src/notification-worker.ts")], scratch, { runtimeWorker: true });
     await Bun.write(join(scratch, "index.html"), '<!doctype html><script type="module" src="./hermes-host-page.js"></script>');
     await Bun.write(join(scratch, "engine-builds.json"), JSON.stringify({ "bun-hermes.wasm": identity.core.sha256, "hermes-engine.wasm": identity.side.sha256 }));
     await Bun.write(join(scratch, "fixture.json"), JSON.stringify(await Promise.all(["hello.cts", "module.mts", "dependency.mts", "metadata.mts"].map(async path => ({ path, source: await Bun.file(join(fixtures, path)).text() })))));
