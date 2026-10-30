@@ -129,9 +129,17 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
     // Bun's own fatal-unwind type, which the engine interruption probes recognize.
     signalError(signal): never { throw new DefaultSignal(signal); },
     terminalSignal: error => error instanceof DefaultSignal ? error.signal : undefined,
-    instantiated({ instance, wasi, fs, checkActive }) {
+    async instantiated({ instance, wasi, fs, checkActive, notifications }) {
       netHost = req.net ? new NetHost(req.net, (net, transfer = []) => host.postMessage({ type: "net", req: net }, transfer), (path, bytes) => fs.writeFile(path, bytes), { shared: true }) : null;
       if (slots === "off") return;
+      // The network poll is where the guest loop sleeps; Waffle's notification set lets it also
+      // wake on filesystem commits, which is how fs.watch learns of a write without a timer.
+      if (netHost) {
+        if (!notifications) throw new Error("Bun networking requires the launcher's notificationWorkerUrl");
+        const set = await notifications.arm({ network: netHost.runtime });
+        checkActive();
+        netHost.runtime.attachNotifications(set, () => wasi.filesystemWatches);
+      }
       const memory = instance.exports.memory;
       if (!(memory instanceof WebAssembly.Memory)) throw new Error("bun-wasm has no memory");
       netHost?.attach(memory);

@@ -7,7 +7,8 @@ import type { ExecutableRegistry } from "waffle/proc/registry";
 import { ProcessSupervisor } from "waffle/proc/supervisor";
 import { installBunAdapters as installReal, type BunAdapterOptions, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
 const workerUrl = "https://example.test/worker.js";
-const installBunAdapters = (runtime: Runtime, options: Omit<BunAdapterOptions, "workerUrl"> & { workerUrl?: string | URL } = {}) => installReal(runtime, { workerUrl, ...options });
+const notificationWorkerUrl = "https://example.test/notification-worker.js";
+const installBunAdapters = (runtime: Runtime, options: Partial<BunAdapterOptions> = {}) => installReal(runtime, { workerUrl, notificationWorkerUrl, ...options });
 
 
 // Keep Runtime, filesystem transport/backend, executable admission and process supervisor real.

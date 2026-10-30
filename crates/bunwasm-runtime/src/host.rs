@@ -393,6 +393,34 @@ mod runtime_proc {
     }
 }
 
+/// Waffle's `runtime_fs` guest filesystem watches (Waffle docs/host-abi.md, "Guest filesystem
+/// watches"). Each call returns a positive WASI errno, 0 on success. Watch ids are process-local
+/// and are not descriptors.
+#[cfg(target_arch = "wasm32")]
+mod runtime_fs {
+    #[link(wasm_import_module = "runtime_fs")]
+    unsafe extern "C" {
+        pub fn watch_open(fd: i32, flags: i32, out_id: i32) -> i32;
+        pub fn watch_read(id: i32, buf: i32, len: i32, out_len: i32) -> i32;
+        pub fn watch_close(id: i32) -> i32;
+    }
+}
+
+/// Host builds (unit tests) have no runtime_fs namespace: every call is ENOSYS.
+#[cfg(not(target_arch = "wasm32"))]
+mod runtime_fs {
+    const NOSYS: i32 = 52;
+    pub unsafe fn watch_open(_: i32, _: i32, _: i32) -> i32 {
+        NOSYS
+    }
+    pub unsafe fn watch_read(_: i32, _: i32, _: i32, _: i32) -> i32 {
+        NOSYS
+    }
+    pub unsafe fn watch_close(_: i32) -> i32 {
+        NOSYS
+    }
+}
+
 /// Whether this build imports the `runtime_proc` namespace (every wasm32 build does).
 pub const PROCESS_ABI: bool = cfg!(target_arch = "wasm32");
 
@@ -525,6 +553,71 @@ pub fn proc_poll(subscriptions: &[u8], timeout_ms: i32) -> Result<Vec<u8>, i32> 
     Ok(events)
 }
 
+const WATCH_RECURSIVE: i32 = 1;
+const WATCH_IO: i32 = 29;
+const WATCH_NOBUFS: i32 = 42;
+
+thread_local! {
+    /// One 64 KiB read buffer, reused: a watch is read on every loop turn, usually to EAGAIN.
+    static WATCH_BUFFER: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0; 64 * 1024]);
+}
+
+/// Opens `path` (following a final symlink), watches that node and closes the temporary
+/// descriptor; the watch follows the node's identity. Returns the id or the positive errno.
+pub fn fs_watch_open(path: &str, recursive: bool) -> Result<u32, i32> {
+    use std::os::fd::AsRawFd;
+    let file =
+        std::fs::File::open(path).map_err(|error| error.raw_os_error().unwrap_or(WATCH_IO))?;
+    let flags = if recursive { WATCH_RECURSIVE } else { 0 };
+    let mut id = 0u32;
+    let errno = proc_call!(runtime_fs::watch_open(
+        file.as_raw_fd(),
+        flags,
+        ptr_mut(std::slice::from_mut(&mut id))
+    ));
+    if errno != 0 {
+        return Err(errno);
+    }
+    Ok(id)
+}
+
+/// One `watch_read`: whole records (empty at end of stream), or the positive errno
+/// (6 when nothing is pending). A record that doesn't fit grows the buffer and retries.
+pub fn fs_watch_read(id: u32) -> Result<Vec<u8>, i32> {
+    WATCH_BUFFER.with_borrow_mut(|buf| {
+        let mut read = watch_read_into(id, buf);
+        while let Err((WATCH_NOBUFS, needed)) = read {
+            if needed <= buf.len() {
+                return Err(WATCH_NOBUFS);
+            }
+            buf.resize(needed, 0);
+            read = watch_read_into(id, buf);
+        }
+        read.map(|len| buf[..len].to_vec())
+            .map_err(|(errno, _)| errno)
+    })
+}
+
+/// One `watch_read` into `buf`: the byte count, or the errno with the reported length.
+fn watch_read_into(id: u32, buf: &mut [u8]) -> Result<usize, (i32, usize)> {
+    let mut len = 0u32;
+    let errno = proc_call!(runtime_fs::watch_read(
+        id as i32,
+        ptr_mut(buf),
+        buf.len() as i32,
+        ptr_mut(std::slice::from_mut(&mut len))
+    ));
+    if errno != 0 {
+        return Err((errno, len as usize));
+    }
+    Ok(len as usize)
+}
+
+/// `watch_close`: 0, or the positive errno (8 for an unknown or closed id).
+pub fn fs_watch_close(id: u32) -> i32 {
+    proc_call!(runtime_fs::watch_close(id as i32))
+}
+
 /// `runtime_proc.signal(sig, mode)` (docs/host-abi.md, "Signal dispositions"). A selected default
 /// action unwinds through the host instead of returning.
 pub fn signal(signal: i32, operation: i32) -> i32 {
@@ -647,6 +740,13 @@ mod signal_tests {
         assert_eq!(proc_pipe(), Err(UNSUPPORTED));
         assert_eq!(proc_poll(&[], 0), Err(UNSUPPORTED));
         assert_eq!(signal(0, 4), UNSUPPORTED);
+    }
+
+    #[test]
+    fn filesystem_watches_report_enosys_without_the_runtime_fs_imports() {
+        assert_eq!(fs_watch_open(env!("CARGO_MANIFEST_DIR"), true), Err(52));
+        assert_eq!(fs_watch_read(1), Err(52));
+        assert_eq!(fs_watch_close(1), 52);
     }
 
     #[test]

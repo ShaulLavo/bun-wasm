@@ -60,10 +60,13 @@
     return typeof native.procPoll(internal.concatBytes(watched), timeout) !== "number";
   };
 
-  // Run each waiter once; returns whether anything made progress.
+  // Run each waiter once; returns whether anything made progress. Filesystem watches step
+  // first: a socket step can run a request handler synchronously, so a change already
+  // readable this turn reaches its listeners, and queues their deferred work, ahead of it.
   internal.pumpIo = function pumpIo() {
     let progressed = false;
-    for (const waiter of Array.from(waiters)) {
+    const turn = Array.from(waiters).sort((a, b) => Number(b.watch === true) - Number(a.watch === true));
+    for (const waiter of turn) {
       let result;
       try {
         result = waiter.step();

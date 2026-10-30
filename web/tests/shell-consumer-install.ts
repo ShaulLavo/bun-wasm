@@ -58,7 +58,7 @@ export async function bundleConsumer(root: string, directory: string, output: st
   await cp(join(root, "tests/shell-consumer"), app, { recursive: true });
   await execute(["node", join(directory, "node_modules/typescript/bin/tsc"), "-p", app], directory);
   const entry = join(app, "main.ts");
-  const built = await buildBrowserEntries([entry, join(app, "worker.ts"), join(app, "fs-worker.ts")], output);
+  const built = await buildBrowserEntries([entry, join(app, "worker.ts"), join(app, "fs-worker.ts"), join(app, "notification-worker.ts")], output);
   await buildClassicWorker(join(app, "sw.ts"), output, undefined, entry);
   await mkdir(join(output, "programs"), { recursive: true });
   const shellGuest = join(shell, "public/programs/shell-engine.wasm");

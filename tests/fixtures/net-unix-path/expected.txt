@@ -1,1 +1,4 @@
 unix path echo, half-close and unlink ok
+abstract listen, worker and child echo ok
+abstract http socketPath ok
+relative NUL path still EINVAL

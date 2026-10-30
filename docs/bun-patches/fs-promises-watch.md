@@ -15,8 +15,8 @@ and the original signal reason. Pre-aborted signals open no watcher. Terminal
 paths detach change, error, close and signal listeners, clear the closed watcher
 reference and finish pending reads. The iterator no longer retains the backend
 snapshot after completion. The real callback-backend regression covers return,
-abort, polling error, external close and a for-await break. The adapter
-adds no filesystem polling, subscription, native operation or Waffle protocol.
+abort, read error, external close and a for-await break. The adapter
+adds no subscription, native operation or Waffle protocol of its own.
 The existing [callback backend's limits](portable-filesystem-watcher.md) apply.
 
 Vinxi 0.5.8 `lib/build.js:426` imports `runtime/sh.js` before spawning a router

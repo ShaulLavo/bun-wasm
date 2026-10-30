@@ -50,3 +50,29 @@ test("Node adapter uses released Runtime100 socket nodes, streams, half-close an
     try { helper?.dispose(); } finally { root?.release(); client.dispose(); await runtime.dispose(); }
   }
 });
+
+test("Node adapter binds and dials an abstract name on the released Runtime network namespace", async () => {
+  const runtime = createRuntime({ filesystem: { mode: "memory", workerURL: new URL("./fs-worker.js", import.meta.resolve("waffle/browser/shared-fs")) } });
+  const ring = createRing();
+  let helper: ReturnType<typeof createBunNetworkHelper> | undefined;
+  let worker: Worker | undefined;
+  const completion = Promise.withResolvers<unknown>();
+  const timeout = setTimeout(() => completion.reject(new Error("Released abstract socket fixture timed out")), 4000);
+  try {
+    helper = createBunNetworkHelper(await runtime.network(), ring);
+    const session = helper;
+    worker = new Worker(new URL("./fixtures/node-net-path-released-worker.ts", import.meta.url), { type: "module" });
+    worker.onmessage = ({ data }: MessageEvent<Reply>) => {
+      if (data.kind === "net") return dispatchBunNetwork(session, { type: "net", req: data.req });
+      if (data.kind === "done") return completion.resolve(data.value);
+      if (data.kind === "error") completion.reject(new Error(data.error));
+    };
+    worker.onerror = event => completion.reject(new Error(event.message));
+    worker.postMessage({ ring, mode: "abstract" });
+    expect(await completion.promise).toEqual({ address: "\0bun-adapter.sock", response: "after EOF:abstract", closed: true, refused: "ECONNREFUSED" });
+  } finally {
+    clearTimeout(timeout);
+    worker?.terminate();
+    try { helper?.dispose(); } finally { await runtime.dispose(); }
+  }
+});

@@ -9,11 +9,13 @@ import { FilesystemService } from "waffle/fs/service";
 import { createFilesystemConnection, FilesystemError } from "waffle/fs/protocol";
 import { installBunAdapters as installReal, BunWasmExecutableConflictError } from "../../src/bun-adapter.js";
 import type { BunAdapterOptions } from "../../src/index.js";
+import { runtimeSharedObjectRoute } from "../../web/src/shared-objects/runtime.js";
 const workerUrl = "https://example.test/worker.js";
+const notificationWorkerUrl = "https://example.test/notification-worker.js";
 // @ts-expect-error Hermes is a playground-only engine, not a package adapter engine.
-const packageHermesOptions: BunAdapterOptions = { workerUrl, engine: "hermes" };
+const packageHermesOptions: BunAdapterOptions = { workerUrl, notificationWorkerUrl, engine: "hermes" };
 void packageHermesOptions;
-const installBunAdapters = (runtime: Runtime, options: Omit<BunAdapterOptions, "workerUrl"> & { workerUrl?: string | URL } = {}) => installReal(runtime, { workerUrl, ...options });
+const installBunAdapters = (runtime: Runtime, options: Partial<BunAdapterOptions> = {}) => installReal(runtime, { workerUrl, notificationWorkerUrl, ...options });
 
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
@@ -113,6 +115,12 @@ test("failed registration rolls back only this installation", async () => {
   (await installBunAdapters(f.runtime)).dispose();
 });
 
+test("installation requires the notification helper worker", async () => {
+  const f = fixture();
+  await expect(installBunAdapters(f.runtime, { notificationWorkerUrl: "" })).rejects.toThrow("notificationWorkerUrl is required");
+  expect(f.adapters.size).toBe(0);
+});
+
 test("every engine forwards to the production process worker", async () => {
   const f = fixture();
   const install = await installBunAdapters(f.runtime, { module });
@@ -133,7 +141,7 @@ test("every engine forwards to the production process worker", async () => {
     const context = { outcome: outcomeWord(), registerRevocation: () => () => {}, module, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: { PATH: "/bin" }, cwd: "/" } };
     for (const [name, launch] of f.adapters) {
       await launch(context as never, service as never);
-      expect(launches.at(-1)).toMatchObject({ workerUrl, request: { engine: name.slice(4), module, args: ["bun", "-e", "0"], env: { BUNWASM_EXEC_PATH: "/bin/bun", PATH: "/bin" } } });
+      expect(launches.at(-1)).toMatchObject({ workerUrl, notificationWorkerUrl, request: { engine: name.slice(4), module, args: ["bun", "-e", "0"], env: { BUNWASM_EXEC_PATH: "/bin/bun", PATH: "/bin" } } });
       expect(directory).toHaveBeenLastCalledWith("/");
       expect(releases.at(-1)).toBe(0);
       launches.at(-1)?.cleanup?.();
@@ -249,4 +257,11 @@ for (const engine of ["quickjs", "jsc", "browser"] as const) test(`default ${eng
     if (typeof program?.module !== "function") throw new Error("Expected lazy module registration");
     expect(await program.module()).toBe(module);
   } finally { installed.dispose(); }
+});
+
+test("installing the adapters alone installs no shared-object service", async () => {
+  const f = fixture();
+  const install = await installBunAdapters(f.runtime);
+  try { expect(runtimeSharedObjectRoute(f.runtime as unknown as Runtime)).toBeUndefined(); }
+  finally { install.dispose(); }
 });

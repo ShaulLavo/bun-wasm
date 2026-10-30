@@ -9,6 +9,8 @@ import { ENGINES, loadWasm, MODULE_SCOPE } from "./engine-loader";
 import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, type RuntimeNetworkHelper } from "./net/helper";
 import { createRing } from "./net/ring";
 import { SubprocessBroker, type ExecutableRegistration } from "./subprocess-broker";
+import { siblingWorkerUrl } from "./bun-launcher.js";
+import { createNotificationBridge, type NotificationBridge } from "waffle/browser/notification-relay";
 import { isToolCommand } from "./tool-command";
 import { ENGINE_BIN, bunEnvironment, engineEnvironment } from "../../src/executable-paths.js";
 import { claimOutcome, readOutcome, type OutcomeWord } from "waffle/proc/outcome";
@@ -101,6 +103,12 @@ function acceptRootSharedConnection(route: SharedObjectRoute | undefined, messag
   }
 }
 
+/** Fences the relay and stops its worker after the root worker's physical stop, as Waffle's
+ * process broker does; a failed stop is reported, never retried. */
+function releaseNotifications(bridge: NotificationBridge | undefined): void {
+  void bridge?.dispose().catch(error => console.error("bun-wasm: notification relay stop failed", error));
+}
+
 /** Starts `bun <args>` in a fresh worker, rooting a process tree in the page's runtime. */
 export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const ring = options.adapter !== "preview1" && globalThis.crossOriginIsolated === true ? createRing() : null;
@@ -115,6 +123,8 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const filesystemIdentity = (options.runtimeProcess?.data as { filesystem?: import("waffle/fs").FilesystemIdentity } | undefined)?.filesystem;
   const pid = options.runtime.identities.pid(), job = options.runtime.identities.job();
   const memoryTelemetryId = crypto.randomUUID();
+  const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
+  let notifications: NotificationBridge | undefined;
   let request: RunRequest;
   try {
     request = {
@@ -152,7 +162,6 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   }
   let rootOutcome: OutcomeWord | null = null;
   let rootPid = pid, rootJob = job;
-  const workerUrl = new URL(options.moduleScope ? `${MODULE_SCOPE}worker.js` : "./worker.js", location.href).href;
   let rootAcknowledged = false;
   let rootQuiescence: Promise<void> | undefined;
   let rootStopped = false;
@@ -178,6 +187,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     lookupChannel?.port2.close();
     disposeLookup?.();
     worker?.terminate();
+    releaseNotifications(notifications);
     try { helper?.dispose(); }
     finally { socketRoot?.release(); socketRoot = undefined; if (moduleCache) void caches.delete(moduleCache); }
   };
@@ -371,7 +381,14 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       if (preparationStopped()) return;
     }
     if (!preparationStopped() && worker) {
-      const transfers = [request.filesystem.port].concat(request.lookupPort ? [request.lookupPort] : []);
+      // A networked root sleeps in the network poll; Waffle's page-owned notification relay
+      // wakes it on filesystem commits, as launchWorker arranges for every child process.
+      // A relay created after the physical stop would have no later stop to release it.
+      if (ring && !workerStopped) {
+        notifications = createNotificationBridge(siblingWorkerUrl(workerUrl, "notification-worker.js"));
+        request.notifications = notifications.connection;
+      }
+      const transfers = [request.filesystem.port].concat(request.lookupPort ? [request.lookupPort] : [], request.notifications ? [request.notifications.port] : []);
       request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob));
       worker.postMessage(request, transfers);
       watchOutcome();

@@ -24,7 +24,7 @@ async function bundle(config: Parameters<typeof Bun.build>[0]): Promise<Awaited<
 }
 
 // Bundle each browser realm independently and mirror worker chunks into its scope.
-const page = await buildBrowserEntries([join(here, "src/main.ts"), join(web, "src/worker.ts"), join(web, "src/fs-worker.ts")], out, { runtimeWorker: true });
+const page = await buildBrowserEntries([join(here, "src/main.ts"), join(web, "src/worker.ts"), join(web, "src/fs-worker.ts"), join(web, "src/notification-worker.ts")], out, { runtimeWorker: true });
 // The service worker stays standalone and classic for Safari.
 const sw = await buildClassicWorker(join(web, "src/sw.ts"), out, {
   __PREVIEW_SOCKET_SCRIPT__: JSON.stringify(await previewWebsocketScript()),

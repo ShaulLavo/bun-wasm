@@ -32,7 +32,7 @@ export async function bundleProduct(root: string, installation: string, output: 
   const app = join(output, "../app");
   await cp(join(root, "tests/shell-product"), app, { recursive: true, errorOnExist: true, force: false, filter: path => !path.endsWith("fixtures.ts") && !path.endsWith(".test.ts") });
   await symlink(join(installation, "node_modules"), join(app, "node_modules"), "dir");
-  const entries = ["main.ts", "worker.ts", "fs-worker.ts"].map(name => join(app, name));
+  const entries = ["main.ts", "worker.ts", "fs-worker.ts", "notification-worker.ts"].map(name => join(app, name));
   const exports: unknown = Reflect.get(shellMetadata, "exports");
   const tail = Boolean(exports && typeof exports === "object" && "./utilities/tail" in exports);
   if (tail) await Bun.write(join(app, "tail-install.ts"), 'import type { Runtime } from "waffle"; import { installTail } from "bash-web/utilities/tail"; export const install = (runtime: Runtime) => installTail(runtime, { wasmUrl: "./programs/tail.wasm", workerUrl: "./shell-worker.js" });');

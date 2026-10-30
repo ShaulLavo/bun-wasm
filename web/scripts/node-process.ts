@@ -154,6 +154,7 @@ export function createNodeProcess(options: NodeProcessOptions) {
       const proc = Object.fromEntries(Object.entries(abi.imports).map(([name, fn]) => [name, guard(fn)]));
       proc.close = fd => descriptors.close(fd!) ? 0 : -8;
       imports.runtime_proc = proc;
+      imports.runtime_fs = watchImports(memory, descriptors, guard);
       installDescriptors(imports, memory, descriptors, preopenCount, client, isSignalPending, guard);
       const original = imports.wasi_snapshot_preview1.sock_send!;
       let dispatch: ReturnType<typeof installHostSlotsViaImport> = null;
@@ -190,6 +191,28 @@ function nativeDescriptor(entry: Descriptor | undefined): number | undefined {
   return entry && "nodeWasiFd" in entry.resource ? (entry.resource as NativeResource).nodeWasiFd : undefined;
 }
 
+/** Waffle's `runtime_fs` watch ABI over this host's descriptor table (adapted from Waffle 0.0.103
+ * `Wasi.watchOpen`/`watchRead`; docs/bun-patches/portable-filesystem-watcher.md). Node WASI
+ * serves the real filesystem and has no change source, so this host answers as Waffle's Wasi
+ * does for a filesystem without `watches`: a valid file or directory reports ENOTSUP, and no
+ * watch id ever exists for read or close. */
+function watchImports(memory: () => WebAssembly.Memory, descriptors: DescriptorTable,
+  guard: (fn: (...args: number[]) => number) => (...args: number[]) => number): WebAssembly.ModuleImports {
+  const EBADF = 8, EFAULT = 21, EINVAL = 28, ENOTSUP = 58;
+  const fits = (...ranges: [number, number][]) => ranges.every(([at, length]) => (at >>> 0) + length <= memory().buffer.byteLength);
+  return {
+    watch_open: guard((fd, flags, out) => {
+      if (!fits([out!, 4])) return EFAULT;
+      if ((flags! >>> 0) & ~1) return EINVAL;
+      const entry = descriptors.get(fd! >>> 0);
+      if (!entry) return EBADF;
+      return entry.resource.kind === "file" || entry.resource.kind === "directory" ? ENOTSUP : EINVAL;
+    }),
+    watch_read: guard((_id, buf, len, out) => fits([buf!, len! >>> 0], [out!, 4]) ? EBADF : EFAULT),
+    watch_close: guard(() => EBADF),
+  };
+}
+
 /** One guest namespace owns both process capabilities and private Node WASI handles. Native
  * numbers never escape path_open or enter fd_renumber: even a reused native handle cannot alias
  * a pipe, and closing/replacing a guest binding releases only its own open description. */
@@ -201,7 +224,16 @@ function installDescriptors(imports: NodeWasiImports, memory: () => WebAssembly.
   const native = (fd: number, directory: boolean): NativeResource => directory
     ? { kind: "directory", handle: fd, nodeWasiFd: fd }
     : { kind: "file", handle: fd, nodeWasiFd: fd, offset: 0, append: false };
-  const description = (fd: number, directory: boolean) => new OpenDescription(native(fd, directory), () => { original.fd_close!(fd); });
+  const description = (fd: number, directory: boolean) => new OpenDescription(native(fd, directory), () => release(fd));
+  // Until wasi.start() binds memory, Node WASI rejects every call. Only preopens exist then,
+  // and the unstarted instance's own table still owns and releases them.
+  const release = (fd: number) => {
+    try { original.fd_close!(fd); }
+    catch (error) {
+      const notStarted = typeof error === "object" && error !== null && "code" in error && error.code === "ERR_WASI_NOT_STARTED";
+      if (!notStarted) throw error;
+    }
+  };
   const all = (1n << 30n) - 1n;
   for (let index = 0; index < preopenCount; index++) {
     const fd = 3 + index, opened = description(fd, true);

@@ -165,7 +165,7 @@ for (const item of authorities) test(`preview upgrade preserves virtual authorit
   expect(request).toStartWith(`${item.requestLine}\r\n`);
   expect(request.match(/^host:/gim)).toHaveLength(1);
   expect(request).toContain(`\r\nhost: ${item.host}\r\n`);
-  expect(request).toContain(`\r\norigin: ${new URL(item.origin).origin}\r\n`);
+  expect(request).toContain(`\r\norigin: http://localhost:${item.port}\r\n`);
   expect(request).toContain("\r\nsec-websocket-protocol: fixture-hmr\r\n");
   expect(socket.url).toBe(item.input);
   const open = opened(socket);
