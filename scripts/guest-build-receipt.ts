@@ -1,11 +1,13 @@
-import { captureProgramInputs, parseProgramReceipt, verifyProgramReceipt, type ProgramBuildReceipt } from "./guest-core-receipt.ts";
-import { parseProgramFiles, programKind, programKindForBuild, programProfile, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
+import { captureProgramInputs, inputProfile, parseProgramReceipt, verifyProgramReceipt, type ProgramBuildReceipt } from "./guest-core-receipt.ts";
+import { importedMemory, parseProgramFiles, programKind, programKindForBuild, programProfile, sharedGroupPair, verifyProgramSide, type ProgramFiles } from "../src/engine-kind.ts";
 import { basename, dirname, join, resolve } from "node:path";
 import { captureSourceManifest, git, guestBuilds, guestToolEnvironment, hash, run, sourceOptions, type GuestBuild, type SourceManifest, type SourceOptions } from "./guest-source-manifest.ts";
+import { parseProgramProfile, verifySharedSysroot, verifySplitSysroot, type ProgramProfile } from "./src/program-profile.ts";
 
 const root = resolve(import.meta.dir, "..");
 
 export interface GuestBuildInputs {
+  readonly profile?: "shared-group";
   readonly bunHead: string;
   readonly bunTree: string;
   readonly sysrootReceiptSha256: string;
@@ -34,12 +36,27 @@ export function parseArtifactIdentity(value: unknown): ArtifactIdentity {
   return { artifactSha256: value.artifactSha256, artifactBytes: value.artifactBytes };
 }
 
-async function readInputs(options: SourceOptions): Promise<GuestBuildInputs> {
+function receiptProfile(value: unknown): ProgramProfile {
+  if (value === undefined) return "split";
+  if (value === "shared-group") return value;
+  throw new Error("Guest receipt profile must be shared-group or omitted for split");
+}
+
+function checkProfile(build: GuestBuild, profile: ProgramProfile): void {
+  if (profile === "shared-group" && programKindForBuild(build) !== "quickjs") throw new Error("Only QuickJS supports shared-group guest composition");
+}
+
+async function readInputs(options: SourceOptions, profile: ProgramProfile): Promise<GuestBuildInputs> {
   const { repository, sysroot } = options;
+  checkProfile(options.build, profile);
+  if (process.env.BUN_WASM_PROGRAM_PROFILE && parseProgramProfile(process.env.BUN_WASM_PROGRAM_PROFILE) !== profile) throw new Error("Composed profile differs from build environment");
+  if (profile === "shared-group") verifySharedSysroot(sysroot);
+  else verifySplitSysroot(sysroot);
   const vendor = join(repository, "vendor/bun");
   if (git(vendor, "status", "--porcelain", "--untracked-files=normal")) throw new Error("Guest source changed during the build: vendor/bun has local changes");
   const sourceManifest = await captureSourceManifest(options);
   return {
+    ...(profile === "shared-group" ? { profile } : {}),
     bunHead: git(vendor, "rev-parse", "HEAD"),
     bunTree: git(vendor, "rev-parse", "HEAD^{tree}"),
     sysrootReceiptSha256: hash(await Bun.file(join(sysroot, "bun-wasm-sysroot.json")).bytes()),
@@ -47,40 +64,45 @@ async function readInputs(options: SourceOptions): Promise<GuestBuildInputs> {
   };
 }
 
-export async function prepareGuestBuildInputs(options: SourceOptions): Promise<GuestBuildInputs> {
+export async function prepareGuestBuildInputs(options: SourceOptions, profile: ProgramProfile = "split"): Promise<GuestBuildInputs> {
+  checkProfile(options.build, profile);
   run(["bash", join(options.repository, "scripts/sync-bun.sh"), "--check"], options.repository);
-  return readInputs(options);
+  return readInputs(options, profile);
 }
 
 export async function writeGuestBuildReceipt(options: SourceOptions, artifact: string, inputs: GuestBuildInputs): Promise<GuestBuildReceipt> {
-  const current = await readInputs(options);
+  const profile = receiptProfile(inputs.profile);
+  const current = await readInputs(options, profile);
   const unchanged = current.bunHead === inputs.bunHead && current.bunTree === inputs.bunTree
     && current.sysrootReceiptSha256 === inputs.sysrootReceiptSha256 && current.sourceManifestSha256 === inputs.sourceManifestSha256;
   if (!unchanged) throw new Error("Guest source or toolchain changed during the build");
   if (basename(artifact) !== guestBuilds[inputs.sourceManifest.build].artifact) throw new Error("Guest artifact name does not match selected build");
   const bytes = await Bun.file(artifact).bytes();
-  const fields = await receiptProgram(options, bytes, dirname(artifact));
+  const fields = await receiptProgram(options, bytes, dirname(artifact), profile);
   const receipt = { ...inputs, ...fields };
   verifyGuestBuildReceipt(bytes, receipt);
   await Bun.write(`${artifact}.build.json`, JSON.stringify(receipt, null, 2) + "\n");
   return receipt;
 }
 
-async function programIdentity(build: GuestBuild, bytes: Uint8Array, directory: string): Promise<ProgramFiles<ArtifactIdentity>> {
+async function programIdentity(build: GuestBuild, bytes: Uint8Array, directory: string, profile: ProgramProfile): Promise<ProgramFiles<ArtifactIdentity>> {
   const kind = programKindForBuild(build);
-  if (programKind(new WebAssembly.Module(Uint8Array.from(bytes))) !== kind) throw new Error("Guest build does not match core engine declaration");
+  const coreModule = new WebAssembly.Module(Uint8Array.from(bytes));
+  if (programKind(coreModule) !== kind) throw new Error("Guest build does not match core engine declaration");
   const core = artifactIdentity(bytes);
   if (kind === "single") return { kind, core };
   const side = await Bun.file(join(directory, programProfile(kind).side)).bytes();
   verifyProgramSide(kind, new WebAssembly.Module(side));
+  if (sharedGroupPair(coreModule, side) !== (profile === "shared-group")) throw new Error("Guest bytes differ from composed profile");
   return { kind, core, side: artifactIdentity(side) };
 }
 
-async function receiptProgram(options: SourceOptions, bytes: Uint8Array, directory: string): Promise<ReceiptProgram> {
-  const program = await programIdentity(options.build, bytes, directory);
+async function receiptProgram(options: SourceOptions, bytes: Uint8Array, directory: string, profile: ProgramProfile): Promise<ReceiptProgram> {
+  checkProfile(options.build, profile);
+  const program = await programIdentity(options.build, bytes, directory, profile);
   if (program.kind === "single") return { program };
   const sidePath = join(directory, programProfile(program.kind).side);
-  const current = await captureProgramInputs(options, program.kind);
+  const current = await captureProgramInputs(options, program.kind, undefined, profile);
   const engineOrigin = verifyProgramReceipt(await Bun.file(sidePath).bytes(), await Bun.file(`${sidePath}.engine.json`).json(), current);
   return { program, engineOrigin, engineInputSha256: current.contentSha256 };
 }
@@ -96,6 +118,7 @@ export async function verifyGuestCompanions(receipt: GuestBuildReceipt, director
   if (program.kind === "single") return;
   const side = await Bun.file(join(directory, programProfile(program.kind).side)).bytes();
   verifyProgramSide(program.kind, new WebAssembly.Module(side));
+  if ((importedMemory(side)?.shared ?? false) !== (receiptProfile(receipt.profile) === "shared-group")) throw new Error("Companion differs from guest receipt profile");
   if (!("engineOrigin" in receipt)) throw new Error("Missing engine origin receipt");
   verifyProgramReceipt(side, receipt.engineOrigin, receipt.engineOrigin.inputs);
   const identity = artifactIdentity(side);
@@ -145,16 +168,22 @@ export function verifyGuestBuildReceipt(bytes: Uint8Array, value: unknown): asse
     if (!digest(value[field], length)) throw new Error(`Invalid guest build receipt: ${field}`);
   }
   verifyManifest(value.sourceManifest);
+  const profile = receiptProfile(value.profile);
+  checkProfile(value.sourceManifest.build, profile);
   if (hash(JSON.stringify(value.sourceManifest)) !== value.sourceManifestSha256) throw new Error("Guest source manifest digest mismatch");
   const sysroot = value.sourceManifest.groups.find(group => group.name === "sysroot");
   if (sysroot?.files.find(file => file.path === "bun-wasm-sysroot.json")?.sha256 !== value.sysrootReceiptSha256) throw new Error("Guest sysroot receipt differs from source manifest");
   if ("quickjs" in value || "artifactSha256" in value || "artifactBytes" in value) throw new Error("Legacy guest receipt fields are not supported");
   const program = parseProgramFiles(value.program, parseArtifactIdentity);
   if (program.core.artifactBytes !== bytes.byteLength || program.core.artifactSha256 !== hash(bytes)) throw new Error("Guest build receipt does not match artifact bytes");
-  if (program.kind !== programKindForBuild(value.sourceManifest.build)
-    || program.kind !== programKind(new WebAssembly.Module(Uint8Array.from(bytes)))) throw new Error("Guest build/program engine mismatch");
+  if (program.kind !== programKindForBuild(value.sourceManifest.build)) throw new Error("Guest build/program engine mismatch");
+  const coreModule = new WebAssembly.Module(Uint8Array.from(bytes));
+  if (program.kind !== programKind(coreModule)) throw new Error("Guest build/program engine mismatch");
+  const groups = WebAssembly.Module.customSections(coreModule, "dylink.0").length;
+  if (groups > 1 || (groups === 1) !== (profile === "shared-group") || (importedMemory(bytes)?.shared ?? false) !== (profile === "shared-group")) throw new Error("Core differs from guest receipt profile");
   if (program.kind !== "single") {
     const origin = parseProgramReceipt(value.engineOrigin);
+    if (inputProfile(origin.inputs) !== profile) throw new Error("Engine origin differs from composed guest profile");
     if (origin.inputs.scope !== program.kind || origin.inputs.contentSha256 !== value.engineInputSha256
       || origin.artifact.artifactSha256 !== program.side.artifactSha256 || origin.artifact.artifactBytes !== program.side.artifactBytes) throw new Error("Guest engine origin/input identity mismatch");
   } else if ("engineOrigin" in value || "engineInputSha256" in value) throw new Error("Single module cannot have engine provenance");
@@ -163,22 +192,23 @@ export function verifyGuestBuildReceipt(bytes: Uint8Array, value: unknown): asse
 if (import.meta.main) {
   const sysroot = process.env.BUN_WASM_SYSROOT;
   if (!sysroot) throw new Error("Source env.sh before building a guest");
-  const [command, argument, snapshot] = process.argv.slice(2);
+  const [command, argument, snapshot, ...extra] = process.argv.slice(2);
+  if (extra.length) throw new Error("Unexpected guest receipt arguments");
   if (command === "environment") {
     console.log(guestToolEnvironment(root));
   } else if (command === "inputs" && isGuestBuild(argument)) {
-    console.log(JSON.stringify(await prepareGuestBuildInputs(sourceOptions(root, sysroot, argument))));
+    console.log(JSON.stringify(await prepareGuestBuildInputs(sourceOptions(root, sysroot, argument), parseProgramProfile(snapshot))));
   } else if (command === "write" && argument && snapshot) {
     const inputs: unknown = await Bun.file(snapshot).json();
     const bytes = await Bun.file(argument).bytes();
     if (!record(inputs)) throw new Error("Invalid guest build inputs");
     verifyManifest(inputs.sourceManifest);
     const options = sourceOptions(root, sysroot, inputs.sourceManifest.build);
-    const fields = await receiptProgram(options, bytes, dirname(argument));
+    const fields = await receiptProgram(options, bytes, dirname(argument), receiptProfile(inputs.profile));
     const receipt = { ...inputs, ...fields };
     verifyGuestBuildReceipt(bytes, receipt);
     await writeGuestBuildReceipt(sourceOptions(root, sysroot, receipt.sourceManifest.build), argument, receipt);
   } else {
-    throw new Error("Usage: guest-build-receipt.ts environment | inputs BUILD | write ARTIFACT INPUTS_FILE");
+    throw new Error("Usage: guest-build-receipt.ts environment | inputs BUILD [split|shared-group] | write ARTIFACT INPUTS_FILE");
   }
 }

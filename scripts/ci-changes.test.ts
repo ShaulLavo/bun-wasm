@@ -271,6 +271,8 @@ for (const event of ["pull_request", "push"]) {
   test(`Hermes paths select its blocking job through an actual ${event} diff`, () => {
     const selected = selectionOutput(base, commitInput("hermes/build.sh"), event);
     expect(selected).toBe("rust=true\njsc=false\nshared=false\nhermes=true");
+    expect(selectionOutput(base, commitInput("scripts/producer-closure.ts"), event))
+      .toBe("rust=true\njsc=false\nshared=false\nhermes=true");
     expect(selectionOutput(base, commitInput("docs/hermes-engine.md"), event))
       .toBe("rust=false\njsc=false\nshared=false\nhermes=false");
   });

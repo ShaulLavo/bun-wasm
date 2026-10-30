@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { hermesConsumerReceipt } from "../scripts/producer-closure.ts";
 import { execFileSync } from "node:child_process";
 
 const root = process.argv[2];
@@ -98,7 +99,10 @@ const source = join(root, "hermes");
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const revision = execFileSync("git", ["-C", source, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 assert.equal(revision, "c36356f416ee19bb0d54c2e7ecb3c5fb0538a065");
+// Read the retained compiler depfiles only after the native build has completed.
+writeFileSync(join(root, "wasi/shim-dependencies.txt"), execFileSync("ninja", ["-C", join(root, "wasi"), "-t", "deps"], { maxBuffer: 64 * 1024 * 1024 }));
 const receipt = {
+  ...hermesConsumerReceipt(join(import.meta.dirname, ".."), root),
   library,
   source,
   revision,
