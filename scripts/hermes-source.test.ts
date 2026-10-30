@@ -11,3 +11,8 @@ test("Hermes worker fixture creates scratch under the preopened working director
   const source = readFileSync(resolve(import.meta.dir, "../tests/hermes/jest-worker-require.cts"), "utf8");
   expect(source).toContain('fs.mkdtempSync(path.join(process.cwd(), "hermes-jest-require-"))');
 });
+
+test("Hermes NFT fixture creates scratch under the preopened working directory", () => {
+  const source = readFileSync(resolve(import.meta.dir, "../tests/hermes/nft-require.cts"), "utf8");
+  expect(source).toContain('fs.mkdtempSync(path.join(process.cwd(), "hermes-nft-require-"))');
+});
