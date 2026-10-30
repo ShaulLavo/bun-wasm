@@ -3,7 +3,7 @@ use bun_js_parser::BunwasmSplice as Span;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-pub const PREPARE_VERSION: u32 = 5;
+pub const PREPARE_VERSION: u32 = 6;
 
 // Shared with source_prepare.ts. Every insertion is newline-free.
 pub const TEXT: &[&str] = &[
@@ -25,6 +25,7 @@ pub const TEXT: &[&str] = &[
     "__bunwasm_evalArg(eval, ",
     "__bunwasm_dynamicImport",
     ", \"eval-indirect\")",
+    "__bunwasm_evalSpread(eval, ",
 ];
 
 #[derive(Default)]
@@ -248,20 +249,20 @@ fn eval_edits(edits: &mut Edits, source: &str, spans: &[Span], call: usize, indi
             call: parent,
             start,
             end,
-            spread: false,
-        } if *parent == call => Some((*start, *end)),
+            spread,
+        } if *parent == call => Some((*start, *end, *spread)),
         _ => None,
     });
-    let Some((start, end)) = argument else {
+    let Some((start, end, spread)) = argument else {
         return;
     };
-    if source[start..end]
-        .trim_start()
-        .starts_with("__bunwasm_evalArg(")
+    let argument_source = source[start..end].trim_start();
+    if argument_source.starts_with("__bunwasm_evalArg(")
+        || argument_source.starts_with("__bunwasm_evalSpread(")
     {
         return;
     }
-    edits.open(start, end, 15);
+    edits.open(start, end, if spread { 18 } else { 15 });
     edits.close(end, start, if indirect { 17 } else { 1 });
 }
 
@@ -298,9 +299,11 @@ fn already_prepared(source: &str, spans: &[Span]) -> bool {
         Span::Prologue { end, .. } => source[end..]
             .trim_start()
             .starts_with("let __bunwasm_s = 0;"),
-        Span::Argument { start, end, .. } => source[start..end]
-            .trim_start()
-            .starts_with("__bunwasm_evalArg("),
+        Span::Argument { start, end, .. } => {
+            let argument = source[start..end].trim_start();
+            argument.starts_with("__bunwasm_evalArg(")
+                || argument.starts_with("__bunwasm_evalSpread(")
+        }
         _ => false,
     })
 }
@@ -402,4 +405,22 @@ pub fn function(args: &[String], kind: &str, hooks: bool) -> Vec<Value> {
         .into_iter()
         .map(|range| result(&text, edits.clone(), range, None, &spans))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn prepares_first_spread_eval_argument_once() {
+        let direct = super::prepare("eval(...xs)", "script");
+        assert_eq!(direct["version"], json!(super::PREPARE_VERSION));
+        assert_eq!(direct["edits"], json!([8, 0, 18, 10, 0, 1]));
+
+        let indirect = super::prepare("(0, eval)(...xs)", "script");
+        assert_eq!(indirect["edits"], json!([13, 0, 18, 15, 0, 17]));
+
+        let prepared = super::prepare("eval(...__bunwasm_evalSpread(eval, xs))", "script");
+        assert_eq!(prepared["edits"], json!([]));
+    }
 }

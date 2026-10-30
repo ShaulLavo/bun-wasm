@@ -1,9 +1,10 @@
-From d803f38a9765af09495eb667eaecba0105f3a5d5 Mon Sep 17 00:00:00 2001
+From c503148c4a1a429afe75f279ac5507c9dc0fce4d Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 29 Oct 2026 14:01:56 +0200
 Subject: [PATCH] wasm: collect runtime source splices and prepare eval
  arguments
 
+Co-Authored-By: Kimi Code <noreply@moonshot.cn>
 ---
  src/js_parser/lexer.rs                |  6 +++++
  src/js_parser/lib.rs                  | 38 +++++++++++++++++++++++++++
@@ -13,8 +14,8 @@ Subject: [PATCH] wasm: collect runtime source splices and prepare eval
  src/js_parser/parse/parse_property.rs |  4 +++
  src/js_parser/parse/parse_stmt.rs     | 14 ++++++++++
  src/js_parser/parse/parse_suffix.rs   | 12 +++++++++
- src/js_printer/lib.rs                 |  7 ++++-
- 9 files changed, 119 insertions(+), 1 deletion(-)
+ src/js_printer/lib.rs                 | 16 +++++++++--
+ 9 files changed, 127 insertions(+), 2 deletions(-)
 
 diff --git a/src/js_parser/lexer.rs b/src/js_parser/lexer.rs
 index 063d2206..7bd3ca9a 100644
@@ -368,28 +369,36 @@ index 76c1603f..ada55198 100644
          let target = *left;
          *left = p.new_expr(
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index d84ed54d..5a87c8ad 100644
+index af472a84..4d6328e3 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
-@@ -3681,7 +3681,12 @@ pub(crate) mod __gated_printer {
+@@ -3720,7 +3720,19 @@ pub(crate) mod __gated_printer {
                      let args = e.args.slice();
  
                      if !args.is_empty() {
-+                        let prepare_eval = bunwasm_await_hooks()
-+                            && (e.is_direct_eval || is_unbound_eval)
-+                            && !matches!(args[0].data, ExprData::ESpread(_));
-+                        if prepare_eval { self.print(b"__bunwasm_evalArg(eval, "); }
-                         self.print_expr(args[0], Level::Comma, ExprFlag::none());
+-                        self.print_expr(args[0], Level::Comma, ExprFlag::none());
++                        let prepare_eval = bunwasm_await_hooks() && (e.is_direct_eval || is_unbound_eval);
++                        let spread_eval = prepare_eval && matches!(args[0].data, ExprData::ESpread(_));
++                        if spread_eval { self.add_source_mapping(args[0].loc); }
++                        if prepare_eval {
++                            self.print(if spread_eval { b"...__bunwasm_evalSpread(eval, ".as_slice() } else { b"__bunwasm_evalArg(eval, ".as_slice() });
++                        }
++                        if spread_eval {
++                            let ExprData::ESpread(spread) = args[0].data else { unreachable!() };
++                            self.print_expr(spread.value, Level::Comma, ExprFlag::none());
++                        } else {
++                            self.print_expr(args[0], Level::Comma, ExprFlag::none());
++                        }
 +                        if prepare_eval { self.print(if is_unbound_eval { b", \"eval-indirect\")".as_slice() } else { b")".as_slice() }); }
                          for arg in &args[1..] {
                              self.print(b",");
                              self.print_space();
-@@ -7916,7 +7921,7 @@ fn bunwasm_import(start: usize, end: usize, specifier: Option<&[u8]>) {
+@@ -7975,7 +7987,7 @@ fn bunwasm_import(start: usize, end: usize, specifier: Option<&[u8]>) {
  pub static BUNWASM_AWAIT_HOOKS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
  
  /// Version of the shapes above; the runtime keys cached hooked text on it.
 -pub const BUNWASM_HOOKS_VERSION: u32 = 3;
-+pub const BUNWASM_HOOKS_VERSION: u32 = 5;
++pub const BUNWASM_HOOKS_VERSION: u32 = 6;
  
  #[inline]
  fn bunwasm_await_hooks() -> bool {

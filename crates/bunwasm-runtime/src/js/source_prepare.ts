@@ -4,7 +4,7 @@
   type RawPrepared = Omit<Prepared, "edits" | "columns"> & { edits: number[]; columns: number[] };
   const native = internal.native;
   const hooks = native.engine === "host" && native.contextHooks;
-  const version = native.engine === "host" ? native.prepareVersion : 5;
+  const version = native.engine === "host" ? native.prepareVersion : 6;
   function threadId(): number {
     const config: unknown = JSON.parse(process.env?.BUNWASM_WORKER_INIT || "null");
     if (!config || typeof config !== "object" || !("route" in config) || !Array.isArray(config.route)) return 0;
@@ -28,6 +28,7 @@
     "} finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } ",
     " } finally { __bunwasm_exited(__bunwasm_c); } }", "{ try { __bunwasm_entered(__bunwasm_c); ",
     "} finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } }", "__bunwasm_evalArg(eval, ", "", ", \"eval-indirect\")",
+    "__bunwasm_evalSpread(eval, ",
   ];
   function hasWork(source: string): boolean {
     return source.includes("await") || source.includes("yield") || source.includes("eval") || source.includes("\\u") || source.includes("import");
@@ -174,6 +175,18 @@
     }
     return column - correction;
   }
+  function prepareEvalArgument(source: unknown, origin: string): unknown {
+    if (typeof source !== "string") return source;
+    const name = internal.require("builtins")["bun:jsc"]().callerSourceOrigin();
+    return prepareText(source, "eval", origin, name ?? undefined);
+  }
+  function *prepareEvalSpread(iterable: Iterable<unknown>, origin: string): Generator<unknown> {
+    let first = true;
+    for (const value of iterable) {
+      yield first ? prepareEvalArgument(value, origin) : value;
+      first = false;
+    }
+  }
   internal.prepareText = prepareText;
   internal.prepareFunctionArgs = prepareFunctionArgs;
   internal.preparedColumns = columns;
@@ -182,9 +195,12 @@
     // oxlint-disable-next-line no-eval -- Direct calls must retain the realm intrinsic as their callee.
     const NativeEval = eval;
     internal.defineGlobal("__bunwasm_evalArg", (callee: unknown, source: unknown, origin = "eval-direct") => {
-      if (callee !== NativeEval || typeof source !== "string") return source;
-      const name = internal.require("builtins")["bun:jsc"]().callerSourceOrigin();
-      return prepareText(source, "eval", origin, name ?? undefined);
+      if (callee !== NativeEval) return source;
+      return prepareEvalArgument(source, origin);
+    });
+    internal.defineGlobal("__bunwasm_evalSpread", (callee: unknown, source: unknown, origin = "eval-direct") => {
+      if (callee !== NativeEval) return source;
+      return prepareEvalSpread(source as Iterable<unknown>, origin);
     });
   } else if (native.engine === "host") internal.defineGlobal("__bunwasm_evalArg", (_callee: unknown, source: unknown) => source);
   return { prepareText, prepareFunctionArgs };

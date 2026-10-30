@@ -53,6 +53,44 @@ function lexicalEval() {
   assert.equal(eval('"use strict"; typeof local'), "number");
 }
 lexicalEval();
+const spread = Function("values", "storage", "return eval(...values)");
+const spreadSource = "(async () => { await 0; return storage.getStore(); })()";
+assert.deepEqual(await Promise.all(["spread-A", "spread-B"].map(name => storage.run(name, () =>
+  spread([spreadSource, "ignored"], storage)))), ["spread-A", "spread-B"]);
+assert.equal(spread([], storage), undefined);
+const spreadVar = Function("values", "eval(...values); return answer;");
+assert.equal(spreadVar(["var answer = 12"]), 12);
+const spreadStrict = Function("values", "local", "return eval(...values)");
+assert.equal(spreadStrict(['"use strict"; typeof local'], 9), "number");
+const indirectSpread = Function("values", "return (0, eval)(...values)");
+Object.defineProperty(globalThis, "__bunwasmSpreadContext", { configurable: true, value: () => storage.getStore() });
+try {
+  const source = "(async () => { await 0; return globalThis.__bunwasmSpreadContext(); })()";
+  assert.deepEqual(await Promise.all(["indirect-A", "indirect-B"].map(name => storage.run(name, () =>
+    indirectSpread([source])))), ["indirect-A", "indirect-B"]);
+} finally {
+  delete (globalThis as Record<string, unknown>).__bunwasmSpreadContext;
+}
+const customSpread = Function("values", "return eval(...values)");
+const nativeGlobalEval = globalThis.eval;
+const customCalls: unknown[][] = [];
+try {
+  globalThis.eval = (...values: unknown[]) => {
+    customCalls.push(values);
+    return "custom";
+  };
+  assert.equal(customSpread(["await 0", 19]), "custom");
+  assert.deepEqual(customCalls, [["await 0", 19]]);
+} finally {
+  globalThis.eval = nativeGlobalEval;
+}
+const iterationFailure = { marker: "same rejection" };
+const badSpread = {
+  [Symbol.iterator]() {
+    return { next() { throw iterationFailure; } };
+  },
+};
+assert.throws(() => spread(badSpread, storage), (error: unknown) => error === iterationFailure);
 const varLeak = Function('eval("var answer = 11"); return answer;');
 assert.equal(varLeak(), 11);
 const shadow = Function("eval", 'return eval("await unchanged");');
