@@ -34,7 +34,7 @@
       if (name === "bun" || name.startsWith("node:") || name.startsWith("bun:")) return internal.builtin(name);
       throw unsupported(`module ${name}`);
     }
-    const factory = native.evalScript(source, `bun-builtin:${name}`);
+    const factory = native.evalBuiltin(source, `bun-builtin:${name}`);
     loading.add(id);
     try {
       const exports = factory(intrinsics);

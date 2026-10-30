@@ -35,12 +35,20 @@ fn eval_runtime_builtin<E: Engine>(
     filename: &str,
     first_line: i32,
 ) -> Result<E::Value, E::Value> {
-    if let Some(name) = filename.strip_prefix("bun-builtin:") {
-        return measurement::measure(e.name(), "builtin-eval", name, code.len(), || {
-            e.eval_script(code, filename, first_line)
-        });
-    }
-    e.eval_script(code, filename, first_line)
+    let name = filename.strip_prefix("bun-builtin:").unwrap_or("generated");
+    measurement::measure(e.name(), "builtin-eval", name, code.len(), || {
+        e.eval_script(code, filename, first_line)
+    })
+}
+
+fn eval_arguments<E: Engine>(e: &E, args: &[E::Value]) -> Result<(String, String, i32), E::Value> {
+    let code = arg_str(e, args, 0)?;
+    let filename = arg_str(e, args, 1).unwrap_or_else(|_| "evalmachine.<anonymous>".to_owned());
+    let first_line = match args.get(2).map(|value| e.to_val(value)) {
+        Some(Val::Num(line)) => line as i32,
+        _ => 1,
+    };
+    Ok((code, filename, first_line))
 }
 
 pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str, ValueFn<E>)> {
@@ -66,13 +74,14 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
     list.push((
         "evalScript",
         Rc::new(|e: &E, args: &[E::Value]| {
-            let code = arg_str(e, args, 0)?;
-            let filename =
-                arg_str(e, args, 1).unwrap_or_else(|_| "evalmachine.<anonymous>".to_owned());
-            let first_line = match args.get(2).map(|value| e.to_val(value)) {
-                Some(Val::Num(line)) => line as i32,
-                _ => 1,
-            };
+            let (code, filename, first_line) = eval_arguments(e, args)?;
+            e.eval_script(&code, &filename, first_line)
+        }),
+    ));
+    list.push((
+        "evalBuiltin",
+        Rc::new(|e: &E, args: &[E::Value]| {
+            let (code, filename, first_line) = eval_arguments(e, args)?;
             eval_runtime_builtin(e, &code, &filename, first_line)
         }),
     ));

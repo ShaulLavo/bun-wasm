@@ -38,6 +38,11 @@ stable module name, source bytes, process-local id, parent id, elapsed nanosecon
 success/error status. Source text is never logged. The runtime retains only counters
 and the active parent, with no per-module history.
 
+The internal builtin loader uses the private `evalBuiltin` operation for
+`builtin-eval` records. Generic `evalScript` calls remain unmeasured even when user
+code supplies a filename starting with `bun-builtin:`. The filename alone never
+classifies user code as a runtime builtin.
+
 | Stage | What its inclusive time covers |
 | --- | --- |
 | `source-load` | Runtime polyfill source retrieval across the core/side boundary, including transport and allocation. Bytes are zero because length is unavailable before retrieval. |
@@ -83,11 +88,14 @@ implemented here.
 
 Run `bun test scripts/measure-runtime-js.test.ts`. Test the standalone Rust helper by
 including `runtime_js_measurement.rs` as a module in a tiny `rustc --test` harness.
-Tests cover disabled clocks/emission, nested parent restoration, errors and panic
-unwinding. This does not verify a built three-engine binary.
+Tests cover disabled clocks and emission, nested parent restoration, errors, and panic
+unwinding. The TypeScript checks also exercise the real builtin loader, keep generic
+evaluation outside builtin measurements, and verify blocking CI discovery. The
+quality check manifest selects these tests. This does not verify a built three-engine binary.
 
-The single future build input is the source diff adding these maintained scopes to
-`value_natives.rs` and its adjacent helper, consumed by the existing canonical producer.
+The single future build input includes the shared evaluator, its adjacent helper,
+the builtin loader and its native declaration, the measurement script, its tests,
+and the quality check manifest. The existing canonical producer consumes this source.
 No second producer or engine cache should be created. Preserve this d505 baseline and
 collect matching opt-in/off samples from that one canonical build before deciding
 whether compilation is a significant cost worth replacing with bytecode.
