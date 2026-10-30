@@ -13,4 +13,8 @@ while IFS= read -r -d '' path; do
     package.json|bun.lock|web/package.json|web/bun.lock|sandbox/package.json|sandbox/bun.lock|scripts/waffle-release-inputs.json|scripts/build-bash-web-shell.sh) ;;
     *) echo "::error::Dependency updater changed a forbidden path: $path" >&2; exit 1 ;;
   esac
+  if ! git cat-file -e "HEAD:$path"; then
+    echo "::error::Dependency updater may only update existing pin records: $path" >&2
+    exit 1
+  fi
 done < <(changed_paths "$@")
