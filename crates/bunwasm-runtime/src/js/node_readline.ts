@@ -109,10 +109,10 @@
       let wake: Callback | undefined;
       const onLine = (line: unknown) => { lines.push(String(line)); wake?.(); };
       const onClose = () => { done = true; wake?.(); };
-      const nextLine = async () => {
+      async function nextLine() {
         while (!done && !lines.length) await new Promise<void>(resolve => { wake = resolve; });
         return lines.shift();
-      };
+      }
       this.on("line", onLine);
       this.on("close", onClose);
       try {
