@@ -5,6 +5,8 @@ import { captureProgramInputs, parseProgramInputs, verifyProgramReceipt } from "
 import { artifactIdentity } from "../../scripts/guest-build-receipt";
 import { fixtureGit, withReceiptFixture } from "./guest-receipt-fixture";
 import { quickjsPair } from "./quickjs-plan-fixture";
+import { appendCustomSection, ENGINE_SECTION } from "../../src/engine-kind.ts";
+import { hash } from "../../scripts/guest-source-manifest.ts";
 
 for (const kind of ["quickjs", "jsc"] as const) test(`${kind} reusable side retains origin across a core-only change`, async () => {
   await withReceiptFixture(async options => {
@@ -67,6 +69,36 @@ test("input and final-byte changes cannot be relabeled as reusable output", asyn
     expect(() => verifyProgramReceipt(side.slice(1), receipt, inputs)).toThrow("artifact bytes");
     expect(() => verifyProgramReceipt(side, { ...receipt, inputs: { ...inputs, scope: "quickjs" } }, inputs)).toThrow("compatibility mismatch");
     expect(() => parseProgramInputs({ ...inputs, source: { ...inputs.source, head: "unrecorded" } })).toThrow("snapshot");
+  });
+});
+
+test("program compatibility failures report exact original and expected input identities", async () => {
+  await withReceiptFixture(async options => {
+    const origin = await captureProgramInputs(options, "core", { features: ["engine-split"] });
+    const tagged = quickjsPair().core;
+    const tagBytes = appendCustomSection(new Uint8Array(), ENGINE_SECTION, new TextEncoder().encode("quickjs")).byteLength;
+    const core = tagged.subarray(0, tagged.length - tagBytes);
+    const receipt = { schema: 1, inputs: origin, artifact: artifactIdentity(core) };
+    const header = join(options.sysroot, "include/stdio.h");
+    await writeFile(header, "changed transferred header\n");
+    const expected = await captureProgramInputs(options, "core", { features: ["engine-split"] });
+    let message = "";
+    try { verifyProgramReceipt(core, receipt, expected); }
+    catch (error) { message = error instanceof Error ? error.message : String(error); }
+    expect(message).toStartWith("Program input compatibility mismatch\n");
+    const diagnostic: unknown = JSON.parse(message.slice(message.indexOf("\n") + 1));
+    expect(diagnostic).toMatchObject({
+      original: { source: origin.source, contentSha256: origin.contentSha256 },
+      expected: { source: expected.source, contentSha256: expected.contentSha256 },
+      differences: [
+        { path: ["groups", "sysroot", "files", "include/stdio.h", "sha256"], original: hash("fixture\n"), expected: hash("changed transferred header\n") },
+        { path: ["groups", "sysroot", "files", "include/stdio.h", "bytes"], original: 8, expected: 27 },
+      ],
+    });
+    expect(() => verifyProgramReceipt(core.slice(1), receipt, expected)).toThrow("artifact bytes");
+    await writeFile(header, "fixture\n");
+    const restored = await captureProgramInputs(options, "core", { features: ["engine-split"] });
+    expect(verifyProgramReceipt(core, receipt, restored)).toEqual(receipt);
   });
 });
 
