@@ -15,5 +15,7 @@ pub extern "C" fn hermes_register() {
 #[unsafe(no_mangle)]
 pub extern "C" fn hermes_run(session: u32) -> i32 {
     assert_eq!(unsafe { hermes_ctor_value() }, 42, "side constructors once");
-    driver::run::<vm::Hermes>(session)
+    let code = driver::run::<vm::Hermes>(session);
+    unsafe { bunwasm_hermes::bh_stop_memory_telemetry() };
+    code
 }
