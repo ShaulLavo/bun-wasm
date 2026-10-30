@@ -45,7 +45,9 @@ export function createMemoryPublisher(buffer: SharedArrayBuffer, reader: Reader)
   let publishing = false;
   let firstFailure: MemorySnapshot | undefined;
   let lastEngine: MemorySnapshot | undefined;
+  let frozenAllocatorFailure: MemorySnapshot["frozenAllocatorFailure"] = null;
   function retain(snapshot: MemorySnapshot): MemorySnapshot {
+    frozenAllocatorFailure ??= snapshot.frozenAllocatorFailure;
     if (snapshot.jsHeapBytes !== null) lastEngine = snapshot;
     if (snapshot.failedAllocation && (!firstFailure || !firstFailure.engineFailure && snapshot.engineFailure)) firstFailure = snapshot;
     return { ...snapshot,
@@ -54,6 +56,7 @@ export function createMemoryPublisher(buffer: SharedArrayBuffer, reader: Reader)
       engineCounters: snapshot.jsHeapBytes === null && lastEngine ? lastEngine.engineCounters : snapshot.engineCounters,
       engineFailure: snapshot.engineFailure ?? firstFailure?.engineFailure ?? null,
       allocatorFailure: snapshot.allocatorFailure ?? firstFailure?.allocatorFailure ?? null,
+      frozenAllocatorFailure,
       failedAllocation: firstFailure?.failedAllocation ?? snapshot.failedAllocation,
       notes: "Failure and last normal engine counters survive runtime teardown after a cached host read. " + snapshot.notes,
     };
