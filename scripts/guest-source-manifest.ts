@@ -41,8 +41,8 @@ export interface SourceOptions {
   readonly hermesBuild: string;
 }
 
-export function run(command: string[], cwd: string): string {
-  const result = Bun.spawnSync(command, { cwd, stdin: "ignore", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
+export function run(command: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): string {
+  const result = Bun.spawnSync(command, { cwd, stdin: "ignore", env: { ...env, GIT_OPTIONAL_LOCKS: "0" } });
   if (result.exitCode !== 0) throw new Error(`Guest source check failed: ${result.stderr.toString()}`);
   return result.stdout.toString().trim();
 }
@@ -123,7 +123,9 @@ async function committedGroup(name: string, repository: string, paths: readonly 
 async function tool(name: string, path: string, repository: string) {
   const physical = await realpath(path);
   const flags = name === "rustc" ? ["-vV"] : name === "cargo" ? ["-Vv"] : name === "rust-lld" ? ["-flavor", "wasm", "--version"] : ["--version"];
-  return { name, path: physical, sha256: (await fingerprint(physical)).sha256, version: run([path].concat(flags), repository) };
+  const env = { ...process.env };
+  delete env.LLD_REPRODUCE;
+  return { name, path: physical, sha256: (await fingerprint(physical)).sha256, version: run([path].concat(flags), repository, env) };
 }
 
 async function verifySysrootInputs(options: SourceOptions, groups: readonly InputGroup[]): Promise<void> {
@@ -139,7 +141,7 @@ async function verifySysrootInputs(options: SourceOptions, groups: readonly Inpu
 
 export type ProgramInputScope = "core" | "quickjs" | "jsc" | "hermes";
 
-export async function captureSourceManifest(options: SourceOptions, scope: "guest" | ProgramInputScope = "guest"): Promise<SourceManifest> {
+export async function captureSourceManifest(options: SourceOptions, scope: "guest" | ProgramInputScope = "guest", includeBuildStd = false): Promise<SourceManifest> {
   const { repository, build, sysroot, sdk, waffle, boringssl, rustTargetLib } = options;
   const source = { head: git(repository, "rev-parse", "HEAD"), tree: git(repository, "rev-parse", "HEAD^{tree}") };
   const repositoryPaths = scope === "guest"
@@ -157,7 +159,7 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
   groups.push(await group("sysroot", sysroot, ["bun-wasm-sysroot.json", "include", "lib"], [sdk]));
   groups.push(await group("sdk", sdk, ["VERSION", "lib/clang"]));
   groups.push(await group("rust-target", rustTargetLib, ["."]));
-  if (programKindForBuild(build) !== "single") {
+  if (programKindForBuild(build) !== "single" || includeBuildStd) {
     if (!options.rustSourceLib) throw new Error("Engine program build requires Rust build-std source inputs");
     groups.push(await group("rust-build-std", options.rustSourceLib, ["."]));
   }

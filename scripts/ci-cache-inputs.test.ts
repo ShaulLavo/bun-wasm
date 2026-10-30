@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
+import { nativePipeline } from "./ci-native-pipeline";
 
 function field(value: unknown, key: string): unknown {
   if (typeof value !== "object" || value === null || !(key in value)) throw new Error(`Missing workflow field: ${key}`);
@@ -21,7 +22,10 @@ function jobSteps(job: string): unknown[] {
   if (!Array.isArray(steps)) throw new Error("Expected workflow steps");
   return steps;
 }
-const stepList = jobSteps("rust");
+const pipeline: unknown = Bun.YAML.parse(`jobs:\n  rust:\n${nativePipeline(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")).ordered}`);
+const orderedSteps = field(field(field(pipeline, "jobs"), "rust"), "steps");
+if (!Array.isArray(orderedSteps)) throw new Error("Expected ordered native steps");
+const stepList = orderedSteps;
 const producerSteps = jobSteps("jsc-prebuild");
 function step(key: string, value: string, list: readonly unknown[] = stepList): unknown {
   const found = list.filter(item => typeof item === "object" && item !== null && key in item && Reflect.get(item, key) === value);

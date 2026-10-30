@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { checkDelayedStop, checkRootSignals, checkPipelineReader } from "./shell-stop-check";
+import { checkClearTyping } from "./shell-clear-check";
 import { pinnedBashWeb } from "../../scripts/bash-web-guests";
 
 const port = Number(process.env.SITE_SHELL_PORT);
@@ -55,6 +56,7 @@ async function exercise(page: Page, engine: string) {
     return fs === runtime.filesystem && await runtime.processes() === await runtime.processes();
   });
   assert.equal(shared, true, "Editor and shell borrow one runtime filesystem and process service");
+  await checkClearTyping(page, output ? `${output}/${engine}-clear-typed.png` : undefined);
   await page.locator(".xterm-helper-textarea").focus();
   await page.keyboard.type("echo unfinished draft");
   await page.evaluate(async () => {

@@ -754,3 +754,10 @@ Qualify one explicitly selected, receipt-bound guest from reviewed source throug
 the full network matrix and existing publication gates before changing the
 published descriptor. Reuse that build across gates. Keep the current failures,
 HTTP/WebSocket/backpressure assertions and old reviewed-hash evidence intact.
+
+## Unix path socket guest gate and diagnostic follow-up
+
+Status: Approved. Found by the Browser103 (`b978ffda`) smoke triage.
+
+- **Real-provider guest gate.** No maintained gate runs the `net-unix-path` guest fixture with a real provider. The Node test host (`web/scripts/node-host.ts`, `node-net.mjs`) installs no `listen_path` or `connect_path` slot, so it is not a valid host for that fixture; its "no error" failure there is expected. `web/tests/node-net-path-released.test.ts` proves Waffle's `NetHost` path provider, not a guest. Add a browser page harness, like the `browser-wasm-transfer` page, that runs the fixture through `startRun` and Waffle `NetHost`. Run it as a maintained gate on an explicitly selected guest.
+- **Unsupported-slot diagnostic.** When a host lacks the path slots, `net_path.ts` `listen` and `connect` discard the native's negative code and report `hostError(0, …)`, which reads "no error". Report the missing capability instead, for example ENOTSUP. This changes guest runtime source, so it belongs to the next guest source unit. Do not patch it into a frozen guest.

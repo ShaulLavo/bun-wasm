@@ -153,7 +153,7 @@ for (const path of ["scripts/check-encoded-slice.ts", "tests/encoded-slice/probe
 }
 
 test("the EncodedSlice proof blocks native CI once after existing tool and vendor setup", () => {
-  const rust = workflow.split("\n  rust:\n")[1]!.split("\n  package:\n")[0]!;
+  const rust = workflow.split("\n  native-quality:\n")[1]!.split("\n  rust:\n")[0]!;
   const name = "      - name: Blocking EncodedSlice address regression";
   const step = rust.split(name)[1]?.split("\n      - ")[0];
   expect(step?.trim()).toBe("run: |\n          source env.sh\n          bun scripts/check-encoded-slice.ts");
@@ -272,6 +272,8 @@ for (const event of ["pull_request", "push"]) {
   test(`Hermes paths select its blocking job through an actual ${event} diff`, () => {
     const selected = selectionOutput(base, commitInput("hermes/build.sh"), event);
     expect(selected).toBe("rust=true\njsc=false\nshared=false\nhermes=true");
+    expect(selectionOutput(base, commitInput("scripts/producer-closure.ts"), event))
+      .toBe("rust=true\njsc=false\nshared=false\nhermes=true");
     expect(selectionOutput(base, commitInput("docs/hermes-engine.md"), event))
       .toBe("rust=false\njsc=false\nshared=false\nhermes=false");
   });

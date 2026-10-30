@@ -5,6 +5,8 @@
 // response by n milliseconds, to measure what network round trips cost a remote user.
 import { existsSync, readFileSync } from "node:fs";
 import { join, normalize, resolve } from "node:path";
+import { brotliDecompressSync } from "node:zlib";
+import { acceptedEncodings, type Encoding } from "../scripts/accept-encoding";
 import { PreviewOwnerHost } from "./scripts/preview-owner-host";
 
 const root = process.env.ROOT ? resolve(process.env.ROOT) : join(import.meta.dir, "dist");
@@ -39,6 +41,47 @@ function cacheControl(pathname: string): string {
   return values.length ? values.join(", ") : pathname.endsWith(".html") ? "no-store" : "no-cache";
 }
 
+type Representation = { encoding: Encoding; file: ReturnType<typeof Bun.file> };
+
+
+async function wasmResponse(path: string, acceptEncoding: string | null, headers: Record<string, string>): Promise<Response> {
+  headers["vary"] = "Accept-Encoding";
+  const preference = acceptedEncodings(acceptEncoding);
+  if (!preference) return new Response("invalid Accept-Encoding", { status: 400, headers });
+  const available = new Map<Encoding, Representation>();
+  const variants: { encoding: Encoding; suffix: string }[] = [
+    { encoding: "br", suffix: ".br" }, { encoding: "gzip", suffix: ".gz" }, { encoding: "identity", suffix: "" },
+  ];
+  for (const { encoding, suffix } of variants) {
+    const file = Bun.file(path + suffix);
+    if (await file.exists()) available.set(encoding, { encoding, file });
+  }
+  const identity = available.get("identity") ?? available.get("gzip") ?? available.get("br");
+  if (!identity) return new Response("not found", { status: 404, headers });
+  available.set("identity", identity);
+  headers["content-type"] = "application/wasm";
+  for (const encoding of preference) {
+    const source = available.get(encoding);
+    if (source) return wasmRepresentation(encoding, source, headers);
+  }
+  return new Response(null, { status: 406, headers });
+}
+
+async function wasmRepresentation(encoding: Encoding, source: Representation, headers: Record<string, string>): Promise<Response> {
+  if (encoding === "identity" && source.encoding !== "identity") {
+    const bytes = new Uint8Array(await source.file.arrayBuffer());
+    const body = source.encoding === "gzip" ? Bun.gunzipSync(bytes) : brotliDecompressSync(bytes);
+    return new Response(body, { headers });
+  }
+  if (encoding !== "identity") headers["content-encoding"] = encoding;
+  if (encoding === "gzip") {
+    // gzip's trailer holds the uncompressed size (mod 2^32), for the progress bar.
+    const trailer = new DataView(await source.file.slice(source.file.size - 4).arrayBuffer());
+    headers["x-uncompressed-length"] = String(trailer.getUint32(0, true));
+  }
+  return new Response(source.file, { headers });
+}
+
 const server = Bun.serve({
   port,
   hostname: process.env.HOST ?? "127.0.0.1",
@@ -50,29 +93,13 @@ const server = Bun.serve({
     let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");
     if (path.endsWith("/")) path += "index.html";
     const headers: Record<string, string> = { "cache-control": cacheControl(url.pathname) };
-    // .wasm files may be published only as their .gz twin (Mesh apps cap source size).
-    const gz = Bun.file(join(root, `${path}.gz`));
-    if (path.endsWith(".wasm") && (await gz.exists())) {
-      if (isolate) {
-        headers["cross-origin-opener-policy"] = "same-origin";
-        headers["cross-origin-embedder-policy"] = "require-corp";
-      }
-      headers["content-type"] = "application/wasm";
-      if (!/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "")) {
-        return new Response(Bun.gunzipSync(new Uint8Array(await gz.arrayBuffer())), { headers });
-      }
-      // gzip's trailer holds the uncompressed size (mod 2^32), for the progress bar.
-      const trailer = new DataView(await gz.slice(gz.size - 4).arrayBuffer());
-      headers["content-encoding"] = "gzip";
-      headers["x-uncompressed-length"] = String(trailer.getUint32(0, true));
-      return new Response(gz, { headers });
-    }
-    const file = Bun.file(join(root, path));
-    if (!(await file.exists())) return new Response("not found", { status: 404 });
     if (isolate) {
       headers["cross-origin-opener-policy"] = "same-origin";
       headers["cross-origin-embedder-policy"] = "require-corp";
     }
+    if (path.endsWith(".wasm")) return wasmResponse(join(root, path), req.headers.get("accept-encoding"), headers);
+    const file = Bun.file(join(root, path));
+    if (!(await file.exists())) return new Response("not found", { status: 404 });
     return new Response(file, { headers });
   },
 });

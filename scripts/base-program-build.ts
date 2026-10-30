@@ -32,7 +32,7 @@ export function baseProgramAssets(consumerEntry: string): Bun.BunPlugin {
 
 async function copyFamily(entry: string, family: string, output: string) {
   const directory = join(dirname(entry), "../dist");
-  const assets = (await readdir(directory)).filter(name => name.endsWith(".wasm"));
+  const assets = (await readdir(directory)).filter(name => /\.wasm(?:\.(?:br|gz))?$/.test(name));
   if (!assets.length) throw new Error(`Program family has no packed WASM: ${family}`);
   for (const name of assets)
     await Bun.write(join(output, "programs/base", family, "dist", name), Bun.file(join(directory, name)));
