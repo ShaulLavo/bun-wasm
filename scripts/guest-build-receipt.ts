@@ -87,12 +87,13 @@ export async function writeGuestBuildReceipt(options: SourceOptions, artifact: s
 
 async function programIdentity(build: GuestBuild, bytes: Uint8Array, directory: string, profile: ProgramProfile): Promise<ProgramFiles<ArtifactIdentity>> {
   const kind = programKindForBuild(build);
-  if (programKind(new WebAssembly.Module(Uint8Array.from(bytes))) !== kind) throw new Error("Guest build does not match core engine declaration");
+  const coreModule = new WebAssembly.Module(Uint8Array.from(bytes));
+  if (programKind(coreModule) !== kind) throw new Error("Guest build does not match core engine declaration");
   const core = artifactIdentity(bytes);
   if (kind === "single") return { kind, core };
   const side = await Bun.file(join(directory, programProfile(kind).side)).bytes();
   verifyProgramSide(kind, new WebAssembly.Module(side));
-  if (sharedGroupPair(new WebAssembly.Module(Uint8Array.from(bytes)), side) !== (profile === "shared-group")) throw new Error("Guest bytes differ from composed profile");
+  if (sharedGroupPair(coreModule, side) !== (profile === "shared-group")) throw new Error("Guest bytes differ from composed profile");
   return { kind, core, side: artifactIdentity(side) };
 }
 
@@ -175,9 +176,10 @@ export function verifyGuestBuildReceipt(bytes: Uint8Array, value: unknown): asse
   if ("quickjs" in value || "artifactSha256" in value || "artifactBytes" in value) throw new Error("Legacy guest receipt fields are not supported");
   const program = parseProgramFiles(value.program, parseArtifactIdentity);
   if (program.core.artifactBytes !== bytes.byteLength || program.core.artifactSha256 !== hash(bytes)) throw new Error("Guest build receipt does not match artifact bytes");
-  if (program.kind !== programKindForBuild(value.sourceManifest.build)
-    || program.kind !== programKind(new WebAssembly.Module(Uint8Array.from(bytes)))) throw new Error("Guest build/program engine mismatch");
-  const groups = WebAssembly.Module.customSections(new WebAssembly.Module(Uint8Array.from(bytes)), "dylink.0").length;
+  if (program.kind !== programKindForBuild(value.sourceManifest.build)) throw new Error("Guest build/program engine mismatch");
+  const coreModule = new WebAssembly.Module(Uint8Array.from(bytes));
+  if (program.kind !== programKind(coreModule)) throw new Error("Guest build/program engine mismatch");
+  const groups = WebAssembly.Module.customSections(coreModule, "dylink.0").length;
   if (groups > 1 || (groups === 1) !== (profile === "shared-group") || (importedMemory(bytes)?.shared ?? false) !== (profile === "shared-group")) throw new Error("Core differs from guest receipt profile");
   if (program.kind !== "single") {
     const origin = parseProgramReceipt(value.engineOrigin);
