@@ -6,14 +6,17 @@ use bun_core::String as BunString;
 // ── libc ──────────────────────────────────────────────────────────────────
 
 /// `bun_core::ffi::errno_ptr` links this name on targets without
-/// `__errno_location`; wasi-libc exposes `errno` itself.
+/// `__errno_location`. wasi-libc's own accessor returns the calling program's
+/// `errno` whether it is a plain global or, in a shared-group member, thread-local:
+/// a plain `static` declaration of a thread-local `errno` resolves to its offset
+/// in the TLS block, not to its address.
 #[unsafe(no_mangle)]
 extern "C" fn errno_location() -> *mut c_int {
     unsafe extern "C" {
-        static mut errno: c_int;
+        fn __errno_location() -> *mut c_int;
     }
-    // SAFETY: address of wasi-libc's errno.
-    &raw mut errno
+    // SAFETY: wasi-libc's accessor has no preconditions.
+    unsafe { __errno_location() }
 }
 
 // ── WTF strings: never created without JavaScriptCore ─────────────────────

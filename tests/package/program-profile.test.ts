@@ -220,6 +220,30 @@ test("a shared-group core exports no linker stack or heap layout; split keeps ev
   for (const name of ["__stack_low", "__stack_high", "__heap_base"]) expect(exports).toContain(name);
 });
 
+test("core errno goes through wasi-libc's accessor, never a plain declaration of a thread-local", () => {
+  for (const path of ["crates/bunwasm-glue/src/extra.rs", "crates/bunwasm-posix/src/lib.rs"]) {
+    const source = readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
+    expect(source).not.toMatch(/static\s+(mut\s+)?errno\b/);
+    expect(source).toContain("fn __errno_location() -> *mut c_int;");
+  }
+});
+
+test("a shared-group QuickJS side defines std's thread-local errno and wraps each errno-setting core call std makes", () => {
+  const script = readFileSync(new URL("../../scripts/build-engine-quickjs.sh", import.meta.url), "utf8");
+  const list = /group_errno_wraps=\(([^)]*)\)\n    link_profile=\(--shared-memory\)/.exec(script)?.[1];
+  if (!list) throw new Error("Missing shared-group errno wraps");
+  const wraps = list.split(" ");
+  expect(wraps).toEqual(["write", "writev", "clock_gettime", "getcwd"]);
+  expect(script).toMatch(/split\) ;;/);
+  expect(script).toMatch(/for name in "\$\{group_errno_wraps\[@\]\}"; do link_profile\+=\("--wrap=\$name"\); done/);
+  expect(script).toContain('error: side std imports errno-setting core functions without an errno wrap');
+  expect(script).toContain('"$out/engine-init.o" "${group_objects[@]}" "$archive"');
+  const shim = readFileSync(new URL("../../crates/bunwasm-engine-quickjs/group-errno.c", import.meta.url), "utf8");
+  expect(shim).toMatch(/^_Thread_local int errno;$/m);
+  expect(Array.from(shim.matchAll(/^\S[^;=]*?\b__wrap_(\w+)\(/gm), match => match[1])).toEqual(wraps);
+  expect(Array.from(shim.matchAll(/^\S[^;=]*?\b__real_(\w+)\(/gm), match => match[1])).toEqual(wraps);
+});
+
 test("telemetry remains unconditional for both link profiles with every allocator wrapper", () => {
   const main = cliBuildFunction("main");
   expect(main).toMatch(/memory_telemetry\(\);\s*if shared_group\(\) \{\s*shared_group_link\(\);\s*} else \{/);
