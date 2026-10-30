@@ -217,3 +217,10 @@ test("a trailing destination slash does not create the file path as a directory"
   await expect(fs.promises.cp(from, to + "/")).rejects.toThrow();
   expect(host.existsSync(to)).toBe(false);
 });
+
+test("an abstract socket name is not a filesystem path: unlink rejects its NUL before any native call", () => {
+  const { fs, native } = fixture();
+  const unlink = Object.assign(() => { throw new Error("unlink reached the native filesystem"); });
+  Object.assign(native, { unlink, rm: unlink });
+  expect(() => fs.unlinkSync("\0nuxt-vite-node.sock")).toThrow(expect.objectContaining({ code: "ERR_INVALID_ARG_VALUE" }));
+});

@@ -142,7 +142,7 @@ test.each(["pull_request", "push"])("shared proof changes select only the dedica
 });
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-const quality = workflow.split("\n  quality:\n")[1]!.split("\n  rust:\n")[0]!;
+const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-prebuild:\n")[0]!;
 
 for (const path of ["scripts/check-encoded-slice.ts", "tests/encoded-slice/probe.rs"]) {
   test.each(["pull_request", "push"])(`${path} selects the blocking EncodedSlice native proof for %s`, event => {

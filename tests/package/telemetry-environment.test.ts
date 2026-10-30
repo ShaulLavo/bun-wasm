@@ -13,6 +13,7 @@ import { DescriptorTable } from "waffle/core/descriptors";
 
 const module = new WebAssembly.Module(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0));
 const workerUrl = new URL("../../web/tests/fixtures/telemetry-environment-worker.ts", import.meta.url).href;
+const notificationWorkerUrl = new URL("../../src/notification-worker-entry.ts", import.meta.url).href;
 
 function stringRecord(value: unknown): value is Record<string, string> {
   return value !== null && typeof value === "object" && !Array.isArray(value) && Object.values(value).every(entry => typeof entry === "string");
@@ -68,7 +69,7 @@ async function admittedEnvironment(env: Record<string, string>, engine: "browser
   let installation: Awaited<ReturnType<typeof installBunAdapters>> | undefined;
   try {
     const selected = engine === "browser" ? module : await prepareProgram({ kind: engine, ...quickjsPair(engine) });
-    installation = await installBunAdapters(fixture.runtime, { engine, module: selected, workerUrl });
+    installation = await installBunAdapters(fixture.runtime, { engine, module: selected, workerUrl, notificationWorkerUrl });
     const service = await fixture.runtime.processes();
     const pid = fixture.runtime.identities.pid();
     const transport = createWorkerProcessTransport({ pid, job: fixture.runtime.identities.job(), identity: fixture.runtime.identities.buffer });

@@ -10,6 +10,9 @@ keys, input hashes, build commands and required checks keep their existing guard
 Validated main checkpoints can still be saved before a later unrelated failure.
 Exact hits are not saved again. Bash-web uses separate restore/save actions so
 its post-job action cannot create a large PR-scoped archive.
+The sysroot and JSC prebuild caches are restored and saved only by the
+`JSC C/C++ prebuild` job. It hands both trees to the native job as a one-day run
+artifact, not as a cache, so the hand-off writes no PR-scoped cache archive.
 
 GitHub restricts a pull request's merge-ref cache to that pull request. Copies
 stored there consume the repository's cache allowance but cannot warm other PRs.

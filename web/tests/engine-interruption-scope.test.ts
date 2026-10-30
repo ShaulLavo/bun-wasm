@@ -10,13 +10,14 @@ import { createRuntimeEngineScope } from "./engine-interruption-scope";
 import { setSignalDisposition, takeSignal } from "waffle/proc/signals";
 import { attachPipePublicationRegistry, type PipePublicationRegistryHandle } from "waffle/proc/pipes";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
+import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 /** Keep production page ownership, allocator, filesystem admission and launchRuntime intact.
  * Only guest execution is fake; real filesystem admission uses the in-memory service.
  */
 function runtimeRealm() {
   const NativeWorker = globalThis.Worker;
-  const workers: FakeWorker[] = [], filesystemWorkers: FakeWorker[] = [];
+  const workers: FakeWorker[] = [], filesystemWorkers: FakeWorker[] = [], notificationWorkers: FakeWorker[] = [];
   const ports = new Set<MessagePort>(), closedPorts = new Set<MessagePort>();
   const filesystemURL = "https://example.test/filesystem-worker.js";
   let runtime: Runtime;
@@ -28,7 +29,10 @@ function runtimeRealm() {
     request?: RunRequest;
     stopped = false;
     private readonly ownedPorts = new Set<MessagePort>();
-    constructor(url: string | URL) { (String(url) === filesystemURL ? filesystemWorkers : workers).push(this); }
+    constructor(url: string | URL) {
+      const target = String(url) === filesystemURL ? filesystemWorkers : isNotificationWorkerUrl(url) ? notificationWorkers : workers;
+      target.push(this);
+    }
     addEventListener() {}
     private own(port: MessagePort) {
       if (!ports.has(port)) {
@@ -39,6 +43,7 @@ function runtimeRealm() {
       this.ownedPorts.add(port);
     }
     postMessage(message: RunRequest | { connect: FilesystemConnection }) {
+      if (isNotificationBridgeRequest(message)) { this.own(message.port); return; }
       if ("connect" in message) {
         const service = message.connect.port;
         this.own(service);
@@ -56,7 +61,7 @@ function runtimeRealm() {
   }
   const restore = () => {
     // Emergency teardown cannot turn an ownership assertion green: assertions run before this.
-    for (const worker of filesystemWorkers.concat(workers)) if (!worker.stopped) worker.terminate();
+    for (const worker of filesystemWorkers.concat(workers, notificationWorkers)) if (!worker.stopped) worker.terminate();
     for (const port of ports) if (!closedPorts.has(port)) port.close();
     globalThis.Worker = NativeWorker;
   };
@@ -72,7 +77,7 @@ function runtimeRealm() {
         try {
           await runtime.dispose();
           expect(filesystemWorkers).toHaveLength(1);
-          expect(filesystemWorkers.concat(workers).every(worker => worker.stopped)).toBe(true);
+          expect(filesystemWorkers.concat(workers, notificationWorkers).every(worker => worker.stopped)).toBe(true);
           expect(Array.from(ports).every(port => closedPorts.has(port))).toBe(true);
         } finally { restore(); }
       })();

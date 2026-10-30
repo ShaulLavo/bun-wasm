@@ -27,7 +27,7 @@ const deadline = setTimeout(() => { console.error("Wasm transfer gate timed out"
 let port: number | undefined;
 try {
   const out = join(scratch, "dist");
-  await buildBrowserEntries([join(root, "web/tests/wasm-transfer-page.ts"), join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts")], out, { runtimeWorker: true });
+  await buildBrowserEntries([join(root, "web/tests/wasm-transfer-page.ts"), join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts"), join(root, "web/src/notification-worker.ts")], out, { runtimeWorker: true });
   await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./wasm-transfer-page.js"></script>');
   const worker = await Bun.build({ entrypoints: [join(fixture, "worker.ts")], target: "browser", format: "esm", external: ["node:*"], minify: false });
   assert.ok(worker.success, String(worker.logs));

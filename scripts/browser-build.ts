@@ -183,13 +183,16 @@ export async function buildBrowserEntries(entrypoints: string[], outdir: string,
   // chunk (including dynamic chunks and their maps), not just today's static closure.
   for (const output of result.outputs) {
     const path = relative(outdir, output.path);
-    if (!(path === "worker.js" || path === "worker.js.map" || path === "fs-worker.js" || path === "fs-worker.js.map" || path === "preview1-worker.js" || path === "preview1-worker.js.map" || path.startsWith("chunks/"))) continue;
+    if (!(scopedSiblings.has(path.replace(/\.map$/, "")) || path.startsWith("chunks/"))) continue;
     await Bun.write(join(outdir, "__bunwasm", path), output);
     const network = Bun.file(join(dirname(output.path), "network.wasm"));
     if (path.endsWith(".js") && await network.exists()) await Bun.write(join(outdir, "__bunwasm", dirname(path), "network.wasm"), network);
   }
   return result;
 }
+
+// Workers a scoped Bun worker reaches as siblings of its own URL (siblingWorkerUrl).
+const scopedSiblings = new Set(["worker.js", "fs-worker.js", "preview1-worker.js", "notification-worker.js"]);
 
 /** Keep service workers standalone classic scripts for Safari. Never split this build. */
 export function buildClassicWorker(entrypoint: string, outdir: string, define?: Record<string, string>, consumerEntry = entrypoint) {

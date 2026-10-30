@@ -638,8 +638,10 @@ fn admitted_import_cancellation_interrupts_only_its_member_before_stop_release()
     let mut wasi = wasmtime_wasi::WasiCtxBuilder::new();
     stdio.install(&mut wasi, cancel.clone());
     let processes = process::Processes::new(runtime.clone(), stdio, net.notify(), cancel.clone());
+    let watches = crate::fs_watch::Watches::new(net.notify());
     let host = Host {
         wasi: wasi.build_p1(),
+        watches,
         net,
         memory: None,
         trace: false,

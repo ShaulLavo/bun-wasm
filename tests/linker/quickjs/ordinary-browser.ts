@@ -46,11 +46,11 @@ try {
   await execute("tar", ["-xzf", archive, "-C", consumer], { timeout: 10_000 });
   await symlink(join(consumer, "package"), join(consumer, "node_modules/bun-wasm"));
   await symlink(resolve(root, "node_modules/waffle"), join(consumer, "node_modules/waffle"));
-  for (const [source, name] of [["ordinary-main.ts", "main.ts"], ["ordinary-worker.ts", "worker.ts"], ["ordinary-fs-worker.ts", "fs-worker.ts"]]) {
+  for (const [source, name] of [["ordinary-main.ts", "main.ts"], ["ordinary-worker.ts", "worker.ts"], ["ordinary-fs-worker.ts", "fs-worker.ts"], ["ordinary-notification-worker.ts", "notification-worker.ts"]]) {
     assert(source && name);
     await copyFile(join(import.meta.dir, source), join(consumer, name));
   }
-  const built = await buildBrowserEntries(["main.ts", "worker.ts", "fs-worker.ts"].map(name => join(consumer, name)), output);
+  const built = await buildBrowserEntries(["main.ts", "worker.ts", "fs-worker.ts", "notification-worker.ts"].map(name => join(consumer, name)), output);
   const inputs = Object.keys(built.metafile.inputs);
   assert(inputs.some(path => path.includes("/package/src/bun-adapter.ts")), "installed Bun adapter input");
   assert(inputs.some(path => path.includes("/package/web/src/worker.ts")), "installed production worker input");

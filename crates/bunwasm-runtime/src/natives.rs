@@ -1488,6 +1488,23 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
         })
     });
     t.add("procClose", |a| Ok(host::proc_close(a.i32(0)?).into()));
+    // runtime_fs watches: ids and records for fs_watch.ts, failures as negative WASI errnos.
+    t.add("fsWatchOpen", |a| {
+        Ok(match host::fs_watch_open(a.str(0)?, a.bool(1)) {
+            Ok(id) => (id as f64).into(),
+            Err(errno) => (-errno).into(),
+        })
+    });
+    t.add("fsWatchRead", |a| {
+        Ok(match host::fs_watch_read(a.u32(0)?) {
+            Ok(bytes) if bytes.is_empty() => 0.into(),
+            Ok(bytes) => Val::Bytes(bytes),
+            Err(errno) => (-errno).into(),
+        })
+    });
+    t.add("fsWatchClose", |a| {
+        Ok((-host::fs_watch_close(a.u32(0)?)).into())
+    });
     t.add("procRead", |a| {
         let cap = a
             .opt_num(1)

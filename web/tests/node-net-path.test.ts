@@ -52,7 +52,33 @@ test("relative paths keep symlink-sensitive dots and use the current cwd", async
   } finally { await fixture.dispose(); }
 });
 
-const failures: [string, string][] = [["/tmp/missing.sock", "ENOENT"], ["", "ENOENT"], ["\0abstract", "EINVAL"], ["/tmp/a\0suffix", "EINVAL"], ["/" + "é".repeat(2048), "ENAMETOOLONG"]];
+test("a leading NUL names an abstract socket without a cwd join; other NULs still join and fail", async () => {
+  const fixture = unixNetworkFixture();
+  try {
+    let received = "";
+    const server = fixture.own(fixture.net.createServer({ allowHalfOpen: true }, socket => {
+      fixture.own(socket).on("data", bytes => { received += bytes.toString(); });
+      socket.on("end", () => socket.end(`echo:${received}`));
+    })).listen("\0nuxt-x.sock");
+    const client = fixture.own(fixture.net.createConnection("\0nuxt-x.sock"));
+    let response = "";
+    client.on("data", bytes => { response += bytes.toString(); });
+    client.end("ping");
+    await fixture.pump();
+    await fixture.pump();
+    expect(server.address()).toBe("\0nuxt-x.sock");
+    expect(response).toBe("echo:ping");
+    const relative = fixture.own(fixture.net.createServer());
+    const errors: unknown[] = [];
+    relative.on("error", error => errors.push(error));
+    relative.listen("rel\0x");
+    await fixture.pump();
+    expect(errors).toMatchObject([{ code: "EINVAL", syscall: "listen", address: "rel\0x" }]);
+    expect(fixture.calls).toEqual([["listen", "\0nuxt-x.sock", 1], ["connect", "\0nuxt-x.sock"], ["listen", "/work/project/rel\0x", 1]]);
+  } finally { await fixture.dispose(); }
+});
+
+const failures: [string, string][] = [["/tmp/missing.sock", "ENOENT"], ["", "ENOENT"], ["\0abstract", "ECONNREFUSED"], ["/tmp/a\0suffix", "EINVAL"], ["rel\0x", "EINVAL"], ["/" + "é".repeat(2048), "ENAMETOOLONG"]];
 for (const [path, code] of failures) {
   test(`path connect reports ${code} through error then close`, async () => {
     const fixture = unixNetworkFixture();
@@ -114,6 +140,25 @@ test("HTTP listens on a filesystem path and requests use socketPath, keeping URL
       expect(errors).toEqual([]);
       expect(body).toBe("url=/module?id=2");
       expect(fixture.calls).toEqual([["listen", "/tmp/vite-node.sock", 1], ["connect", "/tmp/vite-node.sock"]]);
+    } finally { request.destroy(); server.closeAllConnections(); server.close(); }
+  } finally { await fixture.dispose(); }
+});
+
+test("HTTP socketPath carries an abstract name unchanged", async () => {
+  const fixture = unixNetworkFixture();
+  try {
+    const server = fixture.http.createServer((request, response) => response.end(`url=${request.url}`));
+    server.listen("\0nuxt-vite-node");
+    await fixture.pump();
+    let body = "";
+    const request = fixture.http.get({ socketPath: "\0nuxt-vite-node", path: "/module", agent: false }, response => {
+      response.on("data", bytes => { body += bytes.toString(); });
+    });
+    try {
+      await fixture.pump();
+      expect(server.address()).toBe("\0nuxt-vite-node");
+      expect(body).toBe("url=/module");
+      expect(fixture.calls).toEqual([["listen", "\0nuxt-vite-node", 1], ["connect", "\0nuxt-vite-node"]]);
     } finally { request.destroy(); server.closeAllConnections(); server.close(); }
   } finally { await fixture.dispose(); }
 });

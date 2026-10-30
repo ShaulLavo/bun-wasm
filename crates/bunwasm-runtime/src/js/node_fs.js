@@ -893,7 +893,7 @@
     throw Object.assign(new Error("fs.watch is not supported in bun-wasm"), { code: "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM" });
   }
 
-  const { watch, FSWatcher } = internal.require("fs_watch")({ statSync, lstatSync, readdirSync, toPath, absolute });
+  const { watch, FSWatcher } = internal.require("fs_watch")({ statSync, toPath, absolute });
   promises.watch = (path, options) => internal.require("fs_promises_watch")(watch, toPath)(path, options);
   const fs = Object.assign({}, sync, callbackApi, {
     promises,

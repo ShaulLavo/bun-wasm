@@ -7,7 +7,7 @@ import type { SignalTransport } from "waffle/proc/signals";
 import type { Runtime, ProcessService, RuntimeSupervisor } from "waffle";
 import type { WorkerProcessMessage, WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { FilesystemIdentity } from "waffle/fs";
-import { bunLauncher, preview1Launcher } from "./bun-launcher.js";
+import { bunLauncher, preview1Launcher, siblingWorkerUrl } from "./bun-launcher.js";
 import type { BunNetworkOptions } from "./net/helper.js";
 import type { Engine } from "./bun-executor.js";
 
@@ -125,5 +125,6 @@ export function installBunAdapters(runtime: Runtime, workerUrl: string, loadTool
   if (installedAdapters.has(runtime)) return;
   installedAdapters.add(runtime);
   runtime.registerAdapter("preview1", preview1Launcher({ workerUrl }));
-  for (const engine of ["quickjs", "jsc", "browser", "hermes"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, loadTools, runtime, network }));
+  const notificationWorkerUrl = siblingWorkerUrl(workerUrl, "notification-worker.js");
+  for (const engine of ["quickjs", "jsc", "browser", "hermes"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network }));
 }

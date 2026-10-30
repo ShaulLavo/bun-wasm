@@ -7,6 +7,7 @@ import { DescriptorTable } from "waffle/core/descriptors";
 import { WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { startRun } from "../src/runner";
 import type { RunRequest, WorkerMessage } from "../src/bun-executor";
+import { isNotificationBridgeRequest } from "./notification-worker-fixture";
 
 async function until(check: () => boolean): Promise<void> {
   for (let turn = 0; turn < 100; turn++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 0)); }
@@ -29,6 +30,7 @@ for (const alreadyFinishing of [false, true]) test(`page disposal fences two roo
     constructor(url: string | URL) { this.filesystem = String(url).includes("fs-worker"); workers.push(this); }
     addEventListener() {}
     postMessage(message: RunRequest | { connect: FilesystemConnection }) {
+      if (isNotificationBridgeRequest(message)) { ports.push(message.port); return; }
       if ("connect" in message) { ports.push(message.connect.port); this.service.connect(message.connect); } else this.request = message;
     }
     terminate() { this.terminated++; events.push(this.filesystem ? "filesystem:stop" : "process:stop"); }

@@ -510,6 +510,8 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
     let write = original(linker, store, "fd_write")?;
     let fdstat = original(linker, store, "fd_fdstat_get")?;
     let filestat = original(linker, store, "fd_filestat_get")?;
+    // Wasmtime's own fd_filestat_get, taken before this file shadows it, over private scratch.
+    let watch_stat = original(linker, store, "fd_filestat_get")?;
     let prestat = original(linker, store, "fd_prestat_get")?;
     let open = original(linker, store, "path_open")?;
     let poll = original(linker, store, "poll_oneoff")?;
@@ -940,6 +942,111 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
             Ok(0)
         },
     )?;
+    install_watches(linker, &namespace, watch_stat, poll_scratch)?;
     linker.allow_shadowing(false);
+    Ok(())
+}
+
+/// The node a file or directory descriptor holds: its preview1 `filestat.ino` (an identity, see
+/// `fs_watch::node_identity`), read through Wasmtime's own `fd_filestat_get` into private
+/// scratch memory. Renaming, replacing or renumbering never changes it.
+fn descriptor_node(
+    stat: &Delegated,
+    caller: &mut Caller<'_, Host>,
+    scratch: wasmtime::Memory,
+    actual: i32,
+) -> Result<Result<u64, i32>> {
+    let result = call_values_in(
+        stat,
+        caller,
+        &[Val::I32(actual), Val::I32(0)],
+        Some(scratch),
+    )?;
+    if result != 0 {
+        return Ok(Err(result));
+    }
+    // filestat: dev u64, ino u64, filetype u8 (3 directory, 4 regular file).
+    let filestat = &scratch.data(&*caller)[..24];
+    if !matches!(filestat[16], 3 | 4) {
+        return Ok(Err(crate::fs_watch::INVAL));
+    }
+    Ok(Ok(u64::from_le_bytes(filestat[8..16].try_into().unwrap())))
+}
+
+/// Waffle's `runtime_fs` guest filesystem watches (positive WASI errnos, process-local ids).
+fn install_watches(
+    linker: &mut Linker<Host>,
+    namespace: &Arc<Mutex<Namespace>>,
+    stat: Delegated,
+    scratch: wasmtime::Memory,
+) -> Result<()> {
+    use crate::fs_watch::{BADF, FAULT, INVAL, NOBUFS, Read};
+    let state = namespace.clone();
+    linker.func_wrap(
+        "runtime_fs",
+        "watch_open",
+        move |mut caller: Caller<'_, Host>, fd: i32, flags: i32, out: i32| -> Result<i32> {
+            let memory = memory(&mut caller)?;
+            let Some(output) = span(memory.len(&caller), out, 4) else {
+                return Ok(FAULT);
+            };
+            if flags as u32 & !1 != 0 {
+                return Ok(INVAL);
+            }
+            let mut state = state.lock().unwrap();
+            state.initialize(&mut caller)?;
+            // Pipes and terminals are runtime_proc streams, not files or directories.
+            if caller.data().processes.owns(fd) {
+                return Ok(INVAL);
+            }
+            let Some(&actual) = state.files.get(&fd) else {
+                return Ok(BADF);
+            };
+            drop(state);
+            let node = match descriptor_node(&stat, &mut caller, scratch, actual)? {
+                Ok(node) => node,
+                Err(errno) => return Ok(errno),
+            };
+            match caller.data_mut().watches.open(node, flags & 1 != 0) {
+                Ok(id) => {
+                    store_word(&memory, &mut caller, output.start, id)?;
+                    Ok(0)
+                }
+                Err(errno) => Ok(errno),
+            }
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_fs",
+        "watch_read",
+        |mut caller: Caller<'_, Host>, id: i32, buf: i32, len: i32, out: i32| -> Result<i32> {
+            let memory = memory(&mut caller)?;
+            let size = memory.len(&caller);
+            let (Some(buffer), Some(output)) =
+                (span(size, buf, len as u32 as usize), span(size, out, 4))
+            else {
+                return Ok(FAULT);
+            };
+            let (errno, written) = match caller.data_mut().watches.read(id as u32, buffer.len()) {
+                Read::Records(bytes) => {
+                    memory
+                        .write(&mut caller, buffer.start, &bytes)
+                        .context("validated watch buffer")?;
+                    (0, bytes.len() as u32)
+                }
+                Read::Short(needed) => (NOBUFS, needed),
+                Read::Errno(errno) => return Ok(errno),
+            };
+            store_word(&memory, &mut caller, output.start, written)?;
+            Ok(errno)
+        },
+    )?;
+    linker.func_wrap(
+        "runtime_fs",
+        "watch_close",
+        |mut caller: Caller<'_, Host>, id: i32| -> i32 {
+            caller.data_mut().watches.close(id as u32)
+        },
+    )?;
     Ok(())
 }

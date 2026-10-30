@@ -137,7 +137,7 @@ async function setup() {
   registration = await navigator.serviceWorker.register("./sw.js", { scope: "./__preview/" });
   await activated(registration);
   const module = await WebAssembly.compileStreaming(fetch("./bun-guest.wasm"));
-  installation = await installBunAdapters(runtime, { module, workerUrl: new URL("./worker.js", location.href), network: {
+  installation = await installBunAdapters(runtime, { module, workerUrl: new URL("./worker.js", location.href), notificationWorkerUrl: new URL("./notification-worker.js", location.href), network: {
     listening(port, helper) { listeners.set(port, helper); router.register(port, helper); },
     stopped(port, helper) { if (listeners.get(port) === helper) listeners.delete(port); router.unregister(port, helper); },
   } });

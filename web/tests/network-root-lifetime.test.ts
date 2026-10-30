@@ -5,6 +5,7 @@ import type { RuntimeNetwork, RuntimeNetworkHelper } from "waffle";
 import { startRun } from "../src/runner";
 import type { RunRequest, WorkerMessage } from "../src/bun-executor";
 import { processRuntimeFixture, fixtureFilesystemConnection } from "./process-runtime-fixture";
+import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 
 function fixture(constructionFailure = false, directory?: Promise<{ handle: number; release(): void }>) {
   const previousWorker = globalThis.Worker;
@@ -19,9 +20,18 @@ function fixture(constructionFailure = false, directory?: Promise<{ handle: numb
   class FakeWorker {
     onmessage: ((event: MessageEvent<WorkerMessage>) => void) | null = null;
     onerror: ((event: ErrorEvent) => void) | null = null;
-    constructor() { if (constructionFailure) throw new Error("network worker construction failed"); workers.push(this); }
-    postMessage(request: RunRequest) { posted.resolve(request); }
-    terminate() { events.push("physical-stop"); }
+    // A networked root also starts Waffle's notification relay; its stop is recorded separately.
+    readonly relay: boolean;
+    constructor(url: string | URL) {
+      if (constructionFailure) throw new Error("network worker construction failed");
+      this.relay = isNotificationWorkerUrl(url);
+      if (!this.relay) workers.push(this);
+    }
+    postMessage(request: unknown) {
+      if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
+      posted.resolve(request as RunRequest);
+    }
+    terminate() { events.push(this.relay ? "relay-stop" : "physical-stop"); }
   }
   globalThis.Worker = FakeWorker as unknown as typeof Worker;
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/") });
@@ -65,7 +75,7 @@ test("root worker failure keeps its session until the filesystem physical-stop f
     expect(helper?.listenerFor(31991)).toBeGreaterThan(0);
     state.gate.resolve();
     expect(await run.done).toMatchObject({ code: 1 });
-    expect(state.events).toEqual(["physical-stop", "network-release", "directory-release"]);
+    expect(state.events).toEqual(["physical-stop", "relay-stop", "network-release", "directory-release"]);
   } finally { await state.dispose(); }
 });
 
@@ -119,7 +129,7 @@ test("root helper receives its guest filesystem scope and releases the root afte
     state.worker!.onerror!({ preventDefault() {}, message: "stop" } as ErrorEvent);
     state.gate.resolve();
     await run.done;
-    expect(state.events).toEqual(["physical-stop", "directory-release"]);
+    expect(state.events).toEqual(["physical-stop", "relay-stop", "directory-release"]);
   } finally { create.mockRestore(); await state.dispose(); }
 });
 
