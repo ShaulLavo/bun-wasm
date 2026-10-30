@@ -52,8 +52,6 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.main) await main();
-
 async function waitMarker(page: Page, engine: string, marker: string): Promise<void> {
   for (let attempt = 0; attempt < 300; attempt++) {
     if ((await terminalText(page)).includes(marker)) return;
@@ -262,3 +260,5 @@ async function verifyFailedChild(page: Page, engine: "quickjs" | "jsc") {
   assert.deepEqual(await fixtureActor(page, engine, childPath), child);
   return { actors: { parent, child }, live, failure, terminal };
 }
+
+if (import.meta.main) await main();
