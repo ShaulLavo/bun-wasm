@@ -865,23 +865,21 @@
   defineGlobal("console", internal.require("console"));
   defineGlobal("Bun", internal.require("bun"));
   defineLazyGlobal("Buffer", () => internal.require("buffer").Buffer);
-  if (typeof globalThis.Intl === "undefined") {
-    // QuickJS has no Intl: a small en-US one (intl.js), which the engine's
-    // own toLocaleString methods then defer to.
+  function hasRealIntl() {
+    if (native.engine === "host") return true;
+    if (typeof globalThis.Intl === "undefined") return false;
+    try {
+      // JSC's WASI build has ICU but only root/English data. Check behavior,
+      // not just constructor presence, so those partial builds get FormatJS.
+      return new Intl.NumberFormat("de-DE").format(1234.5) === "1.234,5" &&
+        new Intl.PluralRules("he").select(2) === "two";
+    } catch {
+      return false;
+    }
+  }
+  const installIntlFallback = !hasRealIntl();
+  if (installIntlFallback) {
     defineLazyGlobal("Intl", () => internal.require("intl"));
-    defineHidden(Number.prototype, {
-      toLocaleString(locales, options) {
-        return new globalThis.Intl.NumberFormat(locales, options).format(Number(this));
-      },
-    });
-    defineHidden(Date.prototype, {
-      toLocaleDateString(locales, options) {
-        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ year: "numeric", month: "numeric", day: "numeric" }, options)).format(this);
-      },
-      toLocaleTimeString(locales, options) {
-        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ hour: "numeric", minute: "2-digit", second: "2-digit" }, options)).format(this);
-      },
-    });
   }
   defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
   if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
@@ -896,6 +894,24 @@
   }
   if (process.env.BUNWASM_IPC_CHANNEL) internal.require("child_ipc").initialize();
   if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
+
+  // Temporal probes Date's native locale methods during initialization. Install
+  // these wrappers last so that probe does not eagerly load the Intl bundle.
+  if (installIntlFallback) {
+    defineHidden(Number.prototype, {
+      toLocaleString(locales, options) {
+        return new globalThis.Intl.NumberFormat(locales, options).format(Number(this));
+      },
+    });
+    defineHidden(Date.prototype, {
+      toLocaleDateString(locales, options) {
+        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ year: "numeric", month: "numeric", day: "numeric" }, options)).format(this);
+      },
+      toLocaleTimeString(locales, options) {
+        return new globalThis.Intl.DateTimeFormat(locales, Object.assign({ hour: "numeric", minute: "2-digit", second: "2-digit" }, options)).format(this);
+      },
+    });
+  }
 
   return internal;
 })
