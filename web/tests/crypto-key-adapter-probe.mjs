@@ -23,7 +23,7 @@ const internal = {
 };
 load(root+"crypto.js")(internal);
 const c = internal.crypto;
-const path = process.env.NODE_CRYPTO_KEYS_SOURCE || root+"crypto_keys.js";
+const path = process.env.NODE_CRYPTO_KEYS_SOURCE || root+"crypto_keys.ts";
 const keys = load(path)(internal)(Buffer, (a,encoding)=>Buffer.from(a,encoding), timingSafeEqual);
 const data = new Uint8Array([1,2,3]);
 let failures = 0;
@@ -87,6 +87,20 @@ await check("RSA validates the padding value it uses", () => {
  const options = {key:privateKey,get padding(){reads++;return reads === 1 ? 999 : 1;}};
  assert.throws(() => keys.sign("sha256",data,options),e=>/ERR_OSSL_/.test(e.code));
  assert.equal(reads,1);
+});
+await check("Writable write/end/on signing and verification", async () => {
+ const signer=keys.createSign("sha256");
+ let finished=0;
+ const done=new Promise(resolve=>signer.on("finish",()=>{finished++;resolve();}));
+ signer.write(data);
+ signer.end();
+ await done;
+ const signature=signer.sign(privateKey);
+ const verifier=keys.createVerify("sha256");
+ verifier.write(data);
+ verifier.end();
+ assert(verifier.verify(publicKey,signature));
+ assert.equal(finished,1);
 });
 assert.equal(provider, webcrypto.subtle);
 console.log("failures",failures);
