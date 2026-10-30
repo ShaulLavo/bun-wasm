@@ -11,6 +11,7 @@ const missing = { name: "ReferenceError", message: "Property 'require' doesn't e
 const originalCwd = process.cwd();
 try {
   assert.equal(Object.hasOwn(globalThis, "require"), false);
+  // oxlint-disable-next-line no-eval -- Observe global scope rather than the CommonJS parameter.
   assert.equal((0, eval)("typeof require"), "undefined");
   fs.mkdirSync(nftDirectory, { recursive: true });
   fs.writeFileSync(path.join(directory, "target.cts"), 'module.exports = "wrong cwd";');
@@ -28,6 +29,7 @@ try {
   fs.writeFileSync(nft, source + 'eval("require");');
   assert.throws(() => require(nft), missing);
   assert.equal(Object.hasOwn(globalThis, "require"), false);
+  // oxlint-disable-next-line no-eval -- Observe global scope rather than the CommonJS parameter.
   assert.equal((0, eval)("typeof require"), "undefined");
   console.log("nft module-relative require ok");
 } finally {
