@@ -1,4 +1,6 @@
-import { createRuntimeNetwork } from "../node_modules/waffle/browser/net/runtime.ts";
+const { createRuntimeNetwork }: typeof import("../../node_modules/waffle/browser/net/runtime.ts") = await import(
+  new URL("./browser/net/runtime.ts", import.meta.resolve("waffle/package.json")).href
+);
 import { BrowserProcessBroker } from "waffle/browser/process-broker";
 import { MemFS } from "waffle/fs/memory";
 import { connectFilesystemIdentity, type FilesystemIdentity } from "waffle/fs";
