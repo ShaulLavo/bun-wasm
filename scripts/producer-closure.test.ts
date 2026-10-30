@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hash } from "./guest-source-manifest.ts";
@@ -137,12 +137,15 @@ test("generation binds repository, upstream, generated and external SDK headers 
     mkdirSync(join(repository, "crates/bunwasm-hermes/cpp"), { recursive: true });
     mkdirSync(join(build, "wasi/lib"), { recursive: true });
     mkdirSync(join(build, "hermes")); mkdirSync(sdk);
+    const overlay = join(build, "wasi/sysroot-include");
+    symlinkSync(sdk, overlay, "dir");
     const paths = [join(repository, "crates/bunwasm-hermes/cpp/shim.cpp"), join(repository, "crates/bunwasm-hermes/cpp/memory-telemetry.h"), join(build, "hermes/upstream.h"), join(build, "wasi/generated.h"), join(sdk, "stddef.h")];
     for (const path of paths) writeFileSync(path, "synthetic compiler input\n");
+    paths.push(join(overlay, "stddef.h"));
     writeFileSync(join(build, "wasi/lib/libhermesvm_bunwasm.a"), "archive fixture");
-    writeFileSync(join(build, "wasi/shim-dependencies.txt"), `shim.cpp.o: #deps 5, deps mtime 1 (VALID)\n${paths.map(path => `    ${path}`).join("\n")}\n\nunused.o: #deps 1, deps mtime 1 (STALE)\n    /unrelated/not/consumed.h\n\n`);
+    writeFileSync(join(build, "wasi/shim-dependencies.txt"), `shim.cpp.o: #deps 6, deps mtime 1 (VALID)\n${paths.map(path => `    ${path}`).join("\n")}\n\nunused.o: #deps 1, deps mtime 1 (STALE)\n    /unrelated/not/consumed.h\n\n`);
     const original = hermesConsumerReceipt(repository, build);
-    expect(original.consumerInputs.inputs.map(input => input.root).sort()).toEqual(["absolute", "build", "build", "repository", "repository"]);
+    expect(original.consumerInputs.inputs.map(input => input.root).sort()).toEqual(["absolute", "build", "build", "build", "repository", "repository"]);
     const receipt = join(root, "original.json");
     writeFileSync(receipt, JSON.stringify({ sha256: hash("archive fixture"), bytes: 15, ...original }));
     const script = `import {hermesConsumerReceipt,verifyHermesLibrary} from ${JSON.stringify(join(import.meta.dir, "producer-closure.ts"))}; verifyHermesLibrary(process.argv[1],process.argv[2],process.argv[3]); process.stdout.write(JSON.stringify(hermesConsumerReceipt(process.argv[1],process.argv[2])));`;
@@ -152,6 +155,33 @@ test("generation binds repository, upstream, generated and external SDK headers 
     writeFileSync(join(sdk, "stddef.h"), "changed SDK input\n");
     expect(() => verifyHermesLibrary(repository, build, receipt)).toThrow(/new matching native generation/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("compiler header aliases bind their resolved file and reject retargeting or content drift", () => {
+  hermesFixture((root, receipt) => {
+    const first = join(root, "sdk-first"), second = join(root, "sdk-second");
+    mkdirSync(first); mkdirSync(second);
+    for (const directory of [first, second]) writeFileSync(join(directory, "stddef.h"), "same SDK header\n");
+    const overlay = join(root, "wasi/sysroot-include");
+    symlinkSync(first, overlay, "dir");
+    const metadata = join(root, "wasi/shim-dependencies.txt");
+    writeFileSync(metadata, readFileSync(metadata, "utf8").replace("#deps 4", "#deps 5").trimEnd() + `\n    ${join(overlay, "stddef.h")}\n\n`);
+    const captured = hermesConsumerReceipt(root, root);
+    expect(captured.consumerInputs.inputs.find(input => input.path === "wasi/sysroot-include/stddef.h"))
+      .toMatchObject({ realPath: join(first, "stddef.h"), sha256: hash("same SDK header\n"), bytes: 16 });
+    writeFileSync(receipt, JSON.stringify({ sha256: hash("archive fixture"), bytes: 15, ...captured }));
+    const original = readFileSync(receipt, "utf8");
+    expect(() => verifyHermesLibrary(root, root, receipt)).not.toThrow();
+    unlinkSync(overlay); symlinkSync(second, overlay, "dir");
+    expect(() => verifyHermesLibrary(root, root, receipt)).toThrow(/new matching native generation/);
+    unlinkSync(overlay); symlinkSync(first, overlay, "dir");
+    writeFileSync(join(first, "stddef.h"), "changed SDK header\n");
+    expect(() => verifyHermesLibrary(root, root, receipt)).toThrow(/new matching native generation/);
+    unlinkSync(join(first, "stddef.h"));
+    expect(() => verifyHermesLibrary(root, root, receipt)).toThrow(/new matching native generation/);
+    expect(readFileSync(receipt, "utf8")).toBe(original);
+    expect(readFileSync(join(root, "wasi/lib/libhermesvm_bunwasm.a"), "utf8")).toBe("archive fixture");
+  });
 });
 
 test("shared proof requires all declared checks once and in order, with a successful exit", () => {

@@ -88,13 +88,12 @@ function compilerDependencies(text: string, directory: string, shim: string): Co
 
 function consumerInput(path: string, repository: string, build: string) {
   const canonical = realpathSync(path);
-  if (canonical !== path) throw new Error(`Compiler dependency path differs from its real path: ${path}`);
-  const bytes = readFileSync(path);
+  const bytes = readFileSync(canonical);
   const repositoryPath = relative(repository, path);
   const buildPath = relative(build, path);
-  if (insideRoot(repositoryPath)) return { root: "repository", path: repositoryPath, sha256: hash(bytes), bytes: bytes.length };
-  if (insideRoot(buildPath)) return { root: "build", path: buildPath, sha256: hash(bytes), bytes: bytes.length };
-  return { root: "absolute", path, sha256: hash(bytes), bytes: bytes.length };
+  if (insideRoot(repositoryPath)) return { root: "repository", path: repositoryPath, realPath: canonical, sha256: hash(bytes), bytes: bytes.length };
+  if (insideRoot(buildPath)) return { root: "build", path: buildPath, realPath: canonical, sha256: hash(bytes), bytes: bytes.length };
+  return { root: "absolute", path, realPath: canonical, sha256: hash(bytes), bytes: bytes.length };
 }
 
 function insideRoot(path: string): boolean {

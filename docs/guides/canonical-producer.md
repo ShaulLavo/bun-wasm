@@ -24,7 +24,9 @@ reusable manifest. This does not run the full application acceptance suites.
 The Hermes VM receipt is the `vm-library.json` that `hermes/check-build.ts` writes
 after the native build. It identifies `sha256`, `bytes`, `shimSha256` and
 `consumerInputs`: every source and header the compiler read for the shim, from
-`ninja -t deps`. Archive bytes, the current shim and every consumer input must
+`ninja -t deps`. Each input records both the compiler path and its resolved
+file, so sysroot header aliases are allowed but retargeting them invalidates
+the receipt. Archive bytes, the current shim and every consumer input must
 match. A changed shim or header requires a matching native generation, even if
 an older archive exists; receipts without `consumerInputs` are refused. The
 native library owner must also admit its complete source/tool/flag closure
