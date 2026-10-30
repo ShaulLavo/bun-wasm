@@ -117,6 +117,8 @@ test("core rejects a VM dependency before compilation and rejects incompatible r
   fixture((_root, shell, log) => {
     expect(shell("scripts/build-bun-core.sh", { RECIPE_DEPENDENCY: "└── bunwasm-jsc v0.0.0" }).exitCode).not.toBe(0);
     expect(log()).not.toContain("selected-cargo|build");
+    expect(shell("scripts/build-bun-core.sh", { RECIPE_DEPENDENCY: "└── bunwasm-hermes v0.0.0" }).exitCode).not.toBe(0);
+    expect(log()).not.toContain("selected-cargo|build");
     success(shell("scripts/build-bun-core.sh"));
     expect(shell("scripts/build-bun-core.sh", { REJECT_RECEIPT: "1" }).exitCode).not.toBe(0);
     expect(log().match(/^selected-cargo\|build /gm)?.length).toBe(1);
@@ -133,6 +135,7 @@ test("JSC side uses PIC build-std and spills the VM side before conversion; stri
     expect(first).toContain("-DENGINE_CTOR_VALUE=jsc_ctor_value");
     expect(first).toContain("--shared --Bsymbolic --no-export-dynamic --gc-sections --no-entry");
     expect(first).toContain("--export=jsc_register --export=jsc_run");
+    expect(first).toContain("--export=jsc_memory_telemetry --export=jsc_memory_telemetry_refresh");
     expect(first).not.toContain("crt1");
     expect(first).not.toContain("-lc ");
     expect(first.indexOf("--spill-pointers")).toBeLessThan(first.indexOf("engine-explicit-init.ts jsc"));
