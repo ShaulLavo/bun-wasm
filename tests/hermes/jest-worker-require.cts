@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const directory = fs.mkdtempSync(path.join(process.env.TMPDIR || "/tmp", "hermes-jest-require-"));
+const directory = fs.mkdtempSync(path.join(process.cwd(), "hermes-jest-require-"));
 const workerDirectory = path.join(directory, "node_modules/next/dist/compiled/jest-worker");
 const worker = path.join(workerDirectory, "processChild.js");
 const replies: unknown[] = [];
