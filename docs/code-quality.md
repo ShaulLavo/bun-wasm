@@ -139,7 +139,7 @@ private executor is configured.
   `process-bench-baseline.ts` compiles against a frozen Git snapshot in the benchmark
   runner. Its retired imports are deliberately unresolved in the current tree; it
   stays linted and clone-scanned, but is excluded from the current-API type project.
-- jscpd 5.4.1 checks owned TS, JS and Rust together. Exact scans use mild token
+- jscpd 5.4.1 checks owned TS, TSX, JS and Rust together. Exact scans use mild token
   matching, at least 100 tokens and 10 lines. Structural function comparison uses
   `--similarity 0.8` and at least 40 AST nodes. The larger node floor avoids
   trivial getter/forwarder matches. jscpd itself omits test functions from its
@@ -216,6 +216,19 @@ scanner count to 196. The migration preserves the original runtime AST and token
 positions instead of extracting shared code. `scripts/runtime-assert-util.test.ts`
 pins that proof, and the typed-adapter copy probe still rejects new duplication.
 This remains a separate one-for-one format migration, not room for a different clone.
+
+The site's two pages are separate Remix 3 apps over different page models. Their
+root components are one recorded structural clone (`887d24fd0e8ffb40`, 15 lines):
+each subscribes to its own model's `change` event and lays out its own header and
+panes. Sharing that would need a generic root taking a model and children, a layer
+that saves one line.
+
+Components can be shared between the pages. The terminal Copy button lives in
+`web/src/copy-button.tsx`; the sandbox bundles it with `web/`'s install of
+`@remix-run/component`, as it already bundles `bash-web` and the `waffle-*`
+programs from `web/`. That second install adds 1,247 bytes of JSX, mixin and `on`
+code to the sandbox page (+1,364 bytes raw, +468 gzipped on the built `main.js`).
+The button works on both built pages in Chromium.
 
 Integrating the already-converted events module with typed util also migrates the
 existing 12-line events/util error-formatting clone from `33ad45a23a9c5c95` to
