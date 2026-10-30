@@ -59,6 +59,20 @@ impl Fixture {
         }
         seen
     }
+    /// Wait, without reading, until the backend has delivered an event matching `last` into
+    /// the watch's inbox; the wake and the 5 s bound are `expect`'s.
+    fn delivered(&mut self, id: u32, last: impl Fn(&EventKind) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let inbox = self.watches.open[&id].inbox.lock().unwrap();
+            if inbox.events.iter().flatten().any(|event| last(&event.kind)) {
+                return;
+            }
+            drop(inbox);
+            assert!(std::time::Instant::now() < deadline, "no delivery matched in 5 s");
+            self.net.poll(1000);
+        }
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -192,13 +206,12 @@ fn identical_unread_records_coalesce() {
     for value in 1..20 {
         fs::write(&file, value.to_string()).unwrap();
     }
-    let seen = f.expect(id, (CHANGE, None));
-    assert_eq!(
-        seen.iter()
-            .filter(|record| **record == (CHANGE, None))
-            .count(),
-        1
-    );
+    // Coalescing joins records that are still unread; one read between two deliveries yields
+    // two. notify delivers one watch's events in kernel order on one thread, so the rename's
+    // delivery follows every write's, and reading only after it leaves them unread together.
+    fs::rename(&file, f.root.join("moved.txt")).unwrap();
+    f.delivered(id, |kind| matches!(kind, EventKind::Modify(ModifyKind::Name(_))));
+    assert_eq!(f.drain(id), [(CHANGE, None), (RENAME, None)]);
 }
 
 #[test]
