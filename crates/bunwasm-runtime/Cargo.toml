@@ -33,6 +33,10 @@ sha2 = "0.10"
 md5 = { package = "md-5", version = "0.10" }
 hmac = "0.12"
 getrandom = "0.3"
+icu_collator = "2.4.0"
+icu_locale_core = "2.4.0"
+icu_locale_fallback = "2.4.0"
+icu_provider = "2.4.0"
 encoding_rs = "0.8"
 bun_brotli_sys = { path = "../../vendor/bun/src/brotli_sys" }
 libsqlite3-sys = { version = "0.38", features = ["bundled"] }

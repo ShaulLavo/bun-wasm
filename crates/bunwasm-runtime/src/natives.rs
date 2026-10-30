@@ -441,6 +441,7 @@ pub fn table(state: &Rc<State>) -> Table {
     crate::archive::install(&mut t);
     install_crypto(&mut t);
     install_url(&mut t);
+    crate::intl::install(&mut t);
     install_host(&mut t, state);
     crate::sqlite::install(&mut t);
     crate::wasm::install(&mut t);
