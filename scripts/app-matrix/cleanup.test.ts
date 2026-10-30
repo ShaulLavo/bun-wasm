@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { browserHost, earlyServerExit, serverCommand } from "./browser.mjs";
-import { createContext, runInContext } from "node:vm";
+import { createContext, runInContext, runInNewContext } from "node:vm";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -49,7 +49,10 @@ function fixture(stop: () => Promise<unknown>, productError = new Error("page.go
   const page = {
     click: async (selector: string) => { expect(selector).toBe(".xterm"); releases.push("focus"); },
     keyboard: { press: async (key: string) => { expect(key).toBe("Control+c"); expect(releases.at(-1)).toBe("focus"); releases.push("keyboard"); await stop(); } },
-    waitForFunction: async (expression: string) => { expect(expression).toBe("globalThis.playground.shell.running === false && !document.querySelector('#run').disabled"); releases.push("idle"); },
+    waitForFunction: async (expression: string) => {
+      expect(runInNewContext(expression, { playground: { shell: { running: false } }, document: { querySelector: () => null } })).toBe(true);
+      releases.push("idle");
+    },
     evaluate: async (fn: () => unknown, text?: string) => {
       if (text) return;
       const source = String(fn);

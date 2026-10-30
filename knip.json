@@ -91,7 +91,7 @@
         "tests/persistence-browser-{main,worker}.ts",
         "tests/process-{bench-baseline,browser-main}.ts",
         "tests/runtime-proc-browser-main.ts",
-        "tests/fixtures/{editor-execution,filesystem-lifecycle,safari-driver-listener,startup-filesystem}.ts",
+        "tests/fixtures/{editor-execution,filesystem-lifecycle,safari-driver-listener,site-assets-host,startup-filesystem}.ts",
         "tests/bun-runtime-proc-main.ts",
         "tests/wasm-transfer-page.ts",
         "tests/hermes-host-page.ts",
@@ -106,7 +106,8 @@
         "guest-tests/**/*.ts"
       ],
       "ignoreDependencies": [
-        "benchmark"
+        "benchmark",
+        "miniflare"
       ],
       "ignoreUnresolved": [
         "../src/subprocess.js"
@@ -133,6 +134,7 @@
     }
   },
   "ignoreBinaries": [
+    "ninja",
     "unshare",
     "rustc",
     "ss",
