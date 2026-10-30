@@ -227,7 +227,7 @@ const listener = tcp.listen({
     data: null, error: null, connectError: null, close: null,
   },
 });
-const nullData: null | undefined = listener.data;
+const nullData: null = listener.data;
 const sameListener: typeof listener = listener.ref();
 listener.reload({ socket: { open: null, close: null } });
 listener.stop(false);
@@ -241,7 +241,7 @@ const clientPromise = tcp.connect({
   },
 });
 clientPromise.then(client => {
-  const clientData: string | undefined = client.data;
+  const clientData: string = client.data;
   client.write("text");
   client.write(new ArrayBuffer(2));
   client.write(new SharedArrayBuffer(2));
@@ -252,6 +252,21 @@ clientPromise.then(client => {
 });
 void nullData;
 void sameListener;
+tcp.listen({ port: 0, socket: { data(_socket, bytes) { bytes.toString("utf8"); } } });
+tcp.listen({ port: 0, socket: { data(_socket, bytes: BunWasm.BufferBytes) { bytes.toString("utf8"); } } });
+tcp.listen({ port: 0, socket: { binaryType: "buffer", data(_socket, bytes: BunWasm.BufferBytes) { bytes.toString("utf8"); } } });
+tcp.listen({ port: 0, socket: { binaryType: null, data(_socket, bytes: BunWasm.BufferBytes) { bytes.toString("utf8"); } } });
+tcp.connect({ port: 80, socket: { binaryType: "uint8array", data(_socket, bytes: Uint8Array) { bytes.subarray(1); } } });
+tcp.listen({ port: 0, socket: { binaryType: "arraybuffer", data(_socket, bytes: ArrayBuffer) { bytes.slice(1); } } });
+tcp.connect({ port: 80, data: { count: 1 }, socket: { open(socket) { socket.data.count++; } } }).then(socket => {
+  const count: number = socket.data.count;
+  void count;
+});
+const initializedListener = tcp.listen({ port: 0, data: { count: 1 }, socket: {} });
+const initializedCount: number = initializedListener.data.count;
+tcp.listen({ port: 0, data: { count: 1 }, socket: { open(socket: { data: { count: number } }) { socket.data.count++; } } });
+tcp.connect({ port: 80, socket: {} }).then(socket => { const absent: undefined = socket.data; void absent; });
+void initializedCount;
 `;
 
 function checkTypes(probe: string) {
@@ -280,6 +295,9 @@ const invalidProbes = [
   'tcp.listen({ hostname: 123, port: 0, socket: {} });',
   'clientPromise.then(client => client.write(null));',
   'tcp.listen({ hostname: "localhost", port: 0, socket: { close(_socket, code: string) {} } });',
+  'tcp.listen({ port: 0, socket: { data(_socket, bytes: ArrayBuffer) {} } });',
+  'tcp.connect({ port: 80, socket: { binaryType: "uint8array", data(_socket, bytes: ArrayBuffer) {} } });',
+  'tcp.listen({ port: 0, socket: { binaryType: "arraybuffer", data(_socket, bytes: Uint8Array) {} } });',
 ];
 for (const probe of invalidProbes) {
   test(`factory types reject ${probe}`, () => {

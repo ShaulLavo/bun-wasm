@@ -2,12 +2,12 @@ declare namespace Tcp {
   type Buffer = BunWasm.BufferBytes & Uint8Array<ArrayBuffer>;
   type BinaryData = ArrayBufferView | (ArrayBufferLike & { buffer?: undefined; byteOffset?: undefined });
   type Payload = string | BinaryData;
-  type ReceivedData = Buffer | Uint8Array<ArrayBuffer> | ArrayBuffer;
   type BinaryType = "arraybuffer" | "buffer" | "uint8array";
-  type Handlers<Data = unknown> = {
-    binaryType?: BinaryType | null;
+  type ReceivedData<Binary extends BinaryType | null | undefined> = Binary extends "arraybuffer" ? ArrayBuffer : Binary extends "uint8array" ? Uint8Array<ArrayBuffer> : Buffer;
+  type AnyReceivedData = ReceivedData<BinaryType>;
+  type Dispatch<Data> = (socket: Socket<Data>, data: AnyReceivedData) => unknown;
+  type CommonHandlers<Data> = {
     open?: ((socket: Socket<Data>) => unknown) | null;
-    data?: ((socket: Socket<Data>, data: ReceivedData) => unknown) | null;
     end?: ((socket: Socket<Data>) => unknown) | null;
     drain?: ((socket: Socket<Data>) => unknown) | null;
     timeout?: ((socket: Socket<Data>) => unknown) | null;
@@ -15,16 +15,23 @@ declare namespace Tcp {
     close?: ((socket: Socket<Data>, code: 0 | 1) => unknown) | null;
     connectError?: ((socket: Socket<Data>, error: Error) => unknown) | null;
   };
-  type Options<Data = unknown> = {
+  type Handlers<Data, Binary extends BinaryType | null | undefined> = CommonHandlers<Data> & {
+    binaryType?: Binary;
+    data?: ((socket: Socket<Data>, data: ReceivedData<Binary>) => unknown) | null;
+  };
+  type AnyHandlers<Data> = Handlers<Data, "buffer" | null | undefined> |
+    (Handlers<Data, "uint8array"> & { binaryType: "uint8array" }) |
+    (Handlers<Data, "arraybuffer"> & { binaryType: "arraybuffer" });
+  type Options<Data = undefined> = {
     hostname?: string | false | 0 | null;
     port?: number | string;
     tls?: boolean | object | null;
     unix?: unknown;
-    socket: Handlers<Data>;
+    socket: AnyHandlers<NoInfer<Data>>;
     data?: Data;
   };
-  type Socket<Data = unknown> = {
-    data: Data | undefined;
+  type Socket<Data = undefined> = {
+    data: Data;
     listener: Listener<Data> | undefined;
     readonly remoteAddress: string | undefined;
     readonly localPort: number | undefined;
@@ -43,10 +50,10 @@ declare namespace Tcp {
     reload(options: Pick<Options<Data>, "socket">): void;
   };
   type OpenableSocket<Data> = Socket<Data> & { _open(): void };
-  type Listener<Data = unknown> = {
+  type Listener<Data = undefined> = {
     hostname: string;
     readonly port: number;
-    data: Data | undefined;
+    data: Data;
     _sockets: Set<Socket<Data>>;
     stop(force?: boolean): void;
     ref(): Listener<Data>;
@@ -111,7 +118,7 @@ declare namespace Tcp {
       let handlers = options.socket;
       let ended = false;
       const result: Tcp.Socket<Data> & { _open?: () => void } = {
-        data: options.data,
+        data: options.data as Data,
         listener,
         get remoteAddress() { return socket.remoteAddress; },
         get localPort() { return socket.localPort; },
@@ -143,10 +150,11 @@ declare namespace Tcp {
       };
       sockets.add(result);
       socket.on("data", bytes => {
-        let data: Tcp.ReceivedData = bytes;
+        let data: Tcp.AnyReceivedData = bytes;
         if (handlers.binaryType === "arraybuffer") data = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
         else if (handlers.binaryType === "uint8array") data = new Uint8Array(bytes);
-        if (handlers.data) handlers.data(result, data);
+        // The binaryType branches above pair each callback with its payload.
+        if (handlers.data) (handlers.data as Tcp.Dispatch<Data>)(result, data);
       });
       socket.on("end", () => { if (handlers.end) handlers.end(result); });
       socket.on("drain", () => { if (handlers.drain) handlers.drain(result); });
@@ -166,13 +174,13 @@ declare namespace Tcp {
       if (options.unix || options.tls) throw error(Error, "ENOTSUP", "Unix sockets and TLS sockets are not supported in bun-wasm");
       port(options.port);
     }
-    function listen<Data>(options: Tcp.Options<Data>): Tcp.Listener<Data> {
+    function listen<Data = undefined>(options: Tcp.Options<Data>): Tcp.Listener<Data> {
       validate(options);
       const hostname = options.hostname || "0.0.0.0";
       const handle = listenOrThrow(hostname, port(options.port));
       const owned = new Set<Tcp.Socket<Data>>();
       const listener: Tcp.Listener<Data> = {
-        hostname, port: native.hostLocalPort(handle), data: options.data,
+        hostname, port: native.hostLocalPort(handle), data: options.data as Data,
         _sockets: owned,
         stop(force = false) {
           waiters.delete(accepting);
@@ -193,7 +201,7 @@ declare namespace Tcp {
       });
       return listener;
     }
-    function connect<Data>(options: Tcp.Options<Data>): Promise<Tcp.Socket<Data>> {
+    function connect<Data = undefined>(options: Tcp.Options<Data>): Promise<Tcp.Socket<Data>> {
       validate(options);
       return new Promise((resolve, reject) => {
         const socket = new Socket();
