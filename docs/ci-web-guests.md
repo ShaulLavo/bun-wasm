@@ -48,3 +48,10 @@ host-engine guest build, in its own target and `dist/bun-jsc.wasm*` outputs. Its
 wait step, cache save and embedding checks come before the native fixture checks
 and the tools build, and every later guest gate and final save still waits for it.
 See `docs/code-quality.md`.
+
+The prerequisite `Native quality checkpoint` job owns the one native Cargo
+restore and quality compile/test step. The native job imports its same-run,
+source-bound state before any guest producer or fixture. Both jobs verify the
+original JSC prebuild/sysroot artifact. Guest ownership remains in `rust`,
+including the runtime probes that compile isolated Rust fixtures. No Web case,
+controller, receipt check or native fixture moved to a tool-free consumer.
