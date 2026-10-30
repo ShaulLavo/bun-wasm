@@ -400,8 +400,23 @@ fn a_name_swapped_at_the_registration_boundary_cannot_redirect_the_descriptor_li
     // The old binding: resolve the descriptor's current name, then register that name. A swap
     // between the two steps registers the other file, and swapping back hides it from a check.
     let resolved = fs::read_link(format!("/proc/self/fd/{}", held.as_raw_fd())).unwrap();
-    let (by_name, registered) = registered_after_swap(&resolved, swap);
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (_release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let mut by_name = notify::recommended_watcher(move |_: notify::Result<Event>| {
+        let _ = entered_tx.send(());
+        let _ = release_rx.recv();
+    })
+    .unwrap();
+    swap();
+    by_name
+        .watch(&resolved, RecursiveMode::NonRecursive)
+        .unwrap();
+    let registered = inotify_inodes();
     restore();
+    entered_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    eprintln!("held inode {held_inode}, other inode {other_inode}; first control callback blocked");
     assert_eq!(
         node_identity(&resolved.metadata().unwrap()),
         node,
