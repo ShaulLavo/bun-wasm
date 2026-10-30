@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { artifactIdentity, verifyGuestBuildReceipt, verifyGuestCompanions } from "./guest-build-receipt";
 
 const root = resolve(import.meta.dir, "..");
-const fixtures = ["tests/fixtures/astro-http2-response", "tests/fixtures/shared-array-buffer", "tests/jsc-embedding/growable-memory"];
+const fixtures = ["tests/fixtures/astro-http2-response", "tests/fixtures/shared-array-buffer", "tests/fixtures/strings-above-512mib", "tests/jsc-embedding/growable-memory"];
 const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
 function git(...args: string[]): string {

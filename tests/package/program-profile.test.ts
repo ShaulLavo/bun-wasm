@@ -199,9 +199,11 @@ test("telemetry remains unconditional for both link profiles with every allocato
   const main = cliBuildFunction("main");
   expect(main).toMatch(/memory_telemetry\(\);\s*if shared_group\(\) \{\s*shared_group_link\(\);\s*} else \{/);
   expect(main.indexOf("memory_telemetry();")).toBeLessThan(main.indexOf('CARGO_FEATURE_ENGINE_SPLIT'));
-  for (const flag of ["-zstack-size=8388608", "--max-memory=536870912", "--export-table", "--growable-table"]) {
+  for (const flag of ["-zstack-size=8388608", "--export-table", "--growable-table"]) {
     expect(main).toContain(`cargo:rustc-link-arg-bin=bun=${flag}`);
   }
+  // Both profiles link at the one memory maximum (crates/bunwasm-cli/max-memory.txt).
+  expect(main).toMatch(/"cargo:rustc-link-arg-bin=bun=--max-memory=\{\}",\s*max_memory::MAX_MEMORY_BYTES\s*\);\s*memory_telemetry\(\);/);
   const telemetry = cliBuildFunction("memory_telemetry");
   for (const name of ["malloc", "calloc", "realloc", "free", "aligned_alloc", "posix_memalign", "__libc_malloc", "__libc_calloc", "__libc_free"]) {
     expect(telemetry).toContain(`"${name}"`);

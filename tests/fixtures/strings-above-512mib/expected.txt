@@ -1,0 +1,6 @@
+memory above 512 MiB true
+latin1 above 512 MiB true identical true
+utf8 above 512 MiB true identical true
+utf16le above 512 MiB true identical true
+outputs 4 identical true
+ballast intact true

@@ -79,6 +79,20 @@ export function importedMemory(bytes: Uint8Array): { shared: boolean; maximum: n
   return undefined;
 }
 
+/** The declared maximum of a module's own or imported memory in bytes, or undefined without one. */
+export function memoryMaximumBytes(bytes: Uint8Array): number | undefined {
+  const module: Cursor = { bytes, at: 8 };
+  while (module.at < bytes.length) {
+    const id = bytes[module.at++];
+    const size = readUnsigned(module);
+    const section: Cursor = { bytes: bytes.subarray(module.at, module.at + size), at: 0 };
+    module.at += size;
+    const limits = id === 2 ? memoryImport(section) : id === 5 && readUnsigned(section) > 0 ? readLimits(section) : undefined;
+    if (limits) return limits.maximum === undefined ? undefined : limits.maximum * 65536;
+  }
+  return undefined;
+}
+
 function memoryImport(imports: Cursor): { shared: boolean; maximum: number | undefined } | undefined {
   for (let count = readUnsigned(imports); count > 0; count--) {
     const name = `${readName(imports)}.${readName(imports)}`;

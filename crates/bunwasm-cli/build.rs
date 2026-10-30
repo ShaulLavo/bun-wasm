@@ -1,4 +1,7 @@
 //! Link settings for bun.wasm.
+#[path = "max_memory.rs"]
+mod max_memory;
+
 fn main() {
     println!("cargo:rerun-if-env-changed=BUN_WASM_SYSROOT");
     println!("cargo:rerun-if-env-changed=BUN_WASM_PROGRAM_PROFILE");
@@ -6,15 +9,17 @@ fn main() {
     if !target.starts_with("wasm32") {
         return;
     }
+    // Both profiles: the declared maximum of the core's own or imported memory.
+    println!(
+        "cargo:rustc-link-arg-bin=bun=--max-memory={}",
+        max_memory::MAX_MEMORY_BYTES
+    );
     memory_telemetry();
     if shared_group() {
         shared_group_link();
     } else {
         // Bun's parser recurses deeply: 8 MiB of stack.
         println!("cargo:rustc-link-arg-bin=bun=-zstack-size=8388608");
-        // Bun's string pointer tags use the top three address bits on wasm32, so
-        // linear memory must stay below 512 MiB.
-        println!("cargo:rustc-link-arg-bin=bun=--max-memory=536870912");
         // The bun_wasm host ABI (docs/host-abi.md): hosts install networking
         // functions into the exported, growable table and record their indices
         // in the slots `bun_wasm_host_slots` points at.
@@ -56,7 +61,7 @@ fn shared_group() -> bool {
 }
 
 /// A PIE member image: the host supplies its memory, table, bases and stack, and the
-/// 512 MiB string-tag ceiling becomes the declared maximum of the imported group memory.
+/// memory maximum (`max-memory.txt`) becomes the declared maximum of the imported group memory.
 fn shared_group_link() {
     assert!(
         std::env::var_os("CARGO_FEATURE_ENGINE_SPLIT").is_some(),

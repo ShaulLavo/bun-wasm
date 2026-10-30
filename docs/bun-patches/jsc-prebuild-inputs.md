@@ -136,9 +136,11 @@ The context adapter sets one marker, no block warm-up/concurrent GC or JIT,
 polling traps and no optional profiler/continuous worker. This is a port of
 selected WebKit platform behavior and an original configuration adapter.
 
-The configuration adapter sets `forceRAMSize` to 512 MiB, matching the loader's
-shared guest-memory cap instead of the unsupported WASI physical-page query's
-wrapped RAM estimate. This reports the actual memory budget; it does not remove
+The configuration adapter sets `forceRAMSize` to the guest memory maximum
+(`BUN_WASM_MAX_MEMORY`, passed by `crates/bunwasm-jsc/build.rs` from
+`crates/bunwasm-cli/max-memory.txt`; 1 GiB at stage 1) instead of the unsupported WASI physical-page query's
+wrapped RAM estimate. This reports the configured maximum, not memory a device
+can supply; a larger value makes JSC collect later. It does not remove
 cross-boundary copies or establish that allocation-heavy applications fit.
 The retained prepolicy fixture actually passed sync survivor/finalizer checks
 then aborted on the unserved bare async request at API unlock. Real-loader hello passed before the allocation-state repair; the allocation
