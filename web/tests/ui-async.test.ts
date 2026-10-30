@@ -7,6 +7,7 @@ import { deferred, filesystem, filesystemFixture as pageFilesystem, method, mode
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const pageCleanups: (() => Promise<void>)[] = [];
+const projectPackage = JSON.stringify({ scripts: { dev: "vite", build: "vite build" } });
 afterEach(async () => { for (const cleanup of pageCleanups.splice(0)) await cleanup(); });
 
 async function pageFixture(sources?: Record<string, string>, fixture = pageFilesystem()) {
@@ -158,7 +159,7 @@ test("sandbox reset cancels debounced writes and locks the editor before replaci
 });
 
 test("sandbox reset waits for the stopped guest and durable template before reloading", async () => {
-  const page = await pageFixture({ "index.html": "template" });
+  const page = await pageFixture({ "index.html": "template", "package.json": projectPackage });
   const sandbox = new page.Sandbox("");
   sandbox.start();
   const stopped = deferred<{ code: number }>();
@@ -167,7 +168,7 @@ test("sandbox reset waits for the stopped guest and durable template before relo
   const discard = sandbox.editor!.discard.bind(sandbox.editor);
   spyOn(sandbox.editor!, "discard").mockImplementation(() => { events.push("discard"); discard(); });
   Reflect.set(sandbox, "run", { done: stopped.promise, kill() { events.push("stop"); } });
-  page.boundary.fetch = async () => { events.push("template:true"); return new Response(JSON.stringify({ files: { "index.html": "template" } })); };
+  page.boundary.fetch = async () => { events.push("template:true"); return new Response(JSON.stringify({ files: { "index.html": "template", "package.json": projectPackage } })); };
   page.boundary.location.reload = () => { events.push("reload"); };
   page.fixture.checkpoints.push(checkpoint);
   const resetting = sandbox.reset();
@@ -190,27 +191,26 @@ test("sandbox reports failed filesystem saves and rejects explicit flush", async
   expect(editor.saveState).toEqual({ text: "not saved: Error: filesystem unavailable", kind: "error" });
 });
 
-test("sandbox HMR notifications stay ordered and stale replies do not replace the latest status", async () => {
-  const { sandbox, sandboxEditor: editor } = await editorFixture("sandbox");
+test("sandbox stale durability replies do not replace the latest save status", async () => {
+  const { sandbox, sandboxEditor: editor, fixture } = await editorFixture("sandbox");
+  fixture.control.holdWrites = false;
   await editor.open("file.ts");
   editor.setText("first");
   editor.setText("second");
-  const first = deferred<void>();
-  const sent: string[][] = [];
+  const checkpoint = deferred<void>();
   const statuses: string[] = [];
   sandbox.addEventListener("change", () => { if (editor.saveState.text !== "editing…") statuses.push(editor.saveState.text); });
-  const helper = { notifyFileChanged(...args: string[]) { sent.push(args); return sent.length === 1 ? first.promise : Promise.resolve(); } };
-  Reflect.set(sandbox, "server", { updates: Promise.resolve(), helper });
-  const sendUpdate = method<(path: string, revision: number) => Promise<void>>(sandbox, "sendUpdate");
-  const older = sendUpdate("file.ts", 1);
-  const newer = sendUpdate("file.ts", 2);
-  await Promise.resolve();
-  expect(sent).toEqual([["/home/user/app/file.ts"]]);
+  const save = method<(fs: ReturnType<typeof filesystem>, path: string, text: string, revision: number) => Promise<void>>(sandbox, "save");
+  fixture.checkpoints.push(checkpoint);
+  const older = save(filesystem(fixture), "file.ts", "first", 1);
+  await turn();
   expect(statuses).toEqual([]);
-  first.resolve();
-  await Promise.all([older, newer]);
-  expect(sent).toEqual([["/home/user/app/file.ts"], ["/home/user/app/file.ts"]]);
+  await save(filesystem(fixture), "file.ts", "second", 2);
   expect(statuses).toEqual(["saved"]);
+  checkpoint.resolve();
+  await older;
+  expect(statuses).toEqual(["saved"]);
+  expect(fixture.files.get("/home/user/app/file.ts")).toBe("second");
 });
 
 async function seedPlayground(page: Awaited<ReturnType<typeof pageFixture>>) {
@@ -247,13 +247,11 @@ test("persisted pagehide keeps shared-object installation for the next command",
 });
 
 test("sandbox reload preserves its workspace and only an explicit reset replaces the template", async () => {
-  const template = { "index.html": "original page", "src/main.ts": "original code", "removed.ts": "remove me", "package.json": "{}", "node_modules/react/index.js": "dependency" };
+  const template = { "index.html": "original page", "src/main.ts": "original code", "removed.ts": "remove me", "package.json": projectPackage };
   const page = await pageFixture(template);
   const { files, control } = page.fixture;
   const load = (reset = false) => page.loadTemplate(filesystem(page.fixture), "/home/user/app", "template.json", reset);
-  const changed = () => page.dependenciesChanged(filesystem(page.fixture), "/home/user/app", template);
   await load();
-  expect(await changed()).toBe(false);
   expect(files.get("/home/user/app/src/main.ts")).toBe("original code");
   expect(control.checkpoints).toBe(1);
   files.set("/home/user/app/src/main.ts", "saved edit");
@@ -261,7 +259,6 @@ test("sandbox reload preserves its workspace and only an explicit reset replaces
   files.set("/home/user/app/custom.ts", "new file");
   files.set("/home/user/app/package.json", '{"edited":true}');
   await load();
-  expect(await changed()).toBe(true);
   expect(files.get("/home/user/app/src/main.ts")).toBe("saved edit");
   expect(files.has("/home/user/app/removed.ts")).toBe(false);
   expect(files.get("/home/user/app/custom.ts")).toBe("new file");
@@ -271,17 +268,11 @@ test("sandbox reload preserves its workspace and only an explicit reset replaces
   expect(files.has("/home/user/app/removed.ts")).toBe(true);
   expect(files.has("/home/user/app/custom.ts")).toBe(false);
   expect(control.checkpoints).toBe(2);
-  expect(await changed()).toBe(false);
-  files.set("/home/user/app/node_modules/added/index.js", "added dependency");
-  expect(await changed()).toBe(true);
-  files.delete("/home/user/app/node_modules/added/index.js");
-  files.delete("/home/user/app/node_modules/react/index.js");
-  expect(await changed()).toBe(true);
 });
 
 for (const app of ["web", "sandbox"] as const) {
   test(`${app} reload retries a seed interrupted after its directory and first file persisted`, async () => {
-    const sources = { "index.html": "page", "first.ts": "first file", "second.ts": "second file" };
+    const sources = { "index.html": "page", "first.ts": "first file", "second.ts": "second file", "package.json": projectPackage };
     const page = await pageFixture(sources);
     const { fs, files, control } = page.fixture;
     const workspace = app === "web" ? "/home/user" : "/home/user/app";
@@ -306,7 +297,7 @@ for (const app of ["web", "sandbox"] as const) {
 }
 
 test("sandbox reload completes a reset interrupted after persisting only part of its template", async () => {
-  const page = await pageFixture({ "index.html": "template page", "first.ts": "template first", "second.ts": "template second" });
+  const page = await pageFixture({ "index.html": "template page", "first.ts": "template first", "second.ts": "template second", "package.json": projectPackage });
   const { files, control } = page.fixture;
   const load = (reset = false) => page.loadTemplate(filesystem(page.fixture), "/home/user/app", "template.json", reset);
   await load();
@@ -325,7 +316,7 @@ test("sandbox reload completes a reset interrupted after persisting only part of
   expect(files.has("/home/user/app/first.ts")).toBe(false);
 });
 
-test("sandbox only wakes HMR after the durable save and never on checkpoint failure", async () => {
+test("sandbox confirms durable saves without replaying edits through the network helper", async () => {
   const { sandbox, sandboxEditor: editor, fixture } = await editorFixture("sandbox");
   fixture.control.holdWrites = false;
   const checkpoint = deferred<void>();
@@ -340,10 +331,10 @@ test("sandbox only wakes HMR after the durable save and never on checkpoint fail
   expect(notifications).toEqual([]);
   checkpoint.resolve();
   await saving;
-  expect(notifications).toEqual(["/home/user/app/file.ts"]);
+  expect(notifications).toEqual([]);
   fixture.fs.flush = async () => { throw failure; };
   await expect(editor.flush("file.ts")).rejects.toBe(failure);
-  expect(notifications).toEqual(["/home/user/app/file.ts"]);
+  expect(notifications).toEqual([]);
 });
 
 class ControlledFilesystemBackend extends MemoryBackend {
@@ -459,8 +450,8 @@ test("shared filesystem flush reports failed writes and permits later writes", a
   expect(decoder.decode(await fs.readFile("/file"))).toBe("second");
 });
 
-test("sandbox Restart is available while the initial dev server is still running", async () => {
-  const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app" });
+test("sandbox Restart cancels a pending install without launching its stale dev command", async () => {
+  const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
   const sandbox = new page.Sandbox("");
   sandbox.start();
   sandbox.restart();
@@ -474,6 +465,13 @@ test("sandbox Restart is available while the initial dev server is still running
   await turn();
   expect(page.runs).toHaveLength(2);
   expect(page.runs[0]!.kills).toEqual([9]);
+  expect(page.runs[0]!.args).toEqual(["install"]);
+  page.runs[0]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs).toHaveLength(2);
+  page.runs[1]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs[2]!.args).toEqual(["run", "dev"]);
   expect(page.boundary.location.reloads).toBe(0);
   expect(sandbox.failure).toBeUndefined();
 });
@@ -513,4 +511,24 @@ test("sandbox takeover locks workspace controls and Restart reloads the saved wo
   expect(markup.match(/<button[^>]*id="restart"[^>]*>/)?.[0]).not.toContain("disabled");
   sandbox.restart();
   expect(page.boundary.location.reloads).toBe(1);
+});
+
+test("sandbox stops on a failed install and only launches dev after a successful retry", async () => {
+  const page = await pageFixture({ "package.json": projectPackage, "src/App.tsx": "app" });
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  method<() => void>(sandbox, "terminalOpened")();
+  await turn();
+  expect(page.runs[0]!.args).toEqual(["install"]);
+  page.runs[0]!.done.resolve({ code: 1 });
+  await turn();
+  expect(page.runs).toHaveLength(1);
+  expect(sandbox.serverState.state).toBe("down");
+  expect(sandbox.serverState.text).toContain("install stopped (exit 1)");
+  sandbox.restart();
+  await turn();
+  expect(page.runs[1]!.args).toEqual(["install"]);
+  page.runs[1]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs[2]!.args).toEqual(["run", "dev"]);
 });

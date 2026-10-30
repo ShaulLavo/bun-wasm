@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { installHmrConnection, waitForHmrConnection } from "./hmr-connection.ts";
 
 const { chromium }: typeof import("playwright") = await import(process.env.PLAYWRIGHT ?? "playwright");
-const connected = "[Bun] Hot-module-reloading socket connected, waiting for changes...";
+const connected = "[vite] connected.";
 
 test("HMR readiness belongs to the target document across tabs and navigation", async () => {
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(request) {
@@ -18,26 +18,26 @@ test("HMR readiness belongs to the target document across tabs and navigation", 
     const tab = await context.newPage();
     await owner.goto(server.url.href);
     await tab.goto(server.url.href);
-    await owner.evaluate(text => console.info(text), connected);
+    await owner.evaluate(text => console.debug(text), connected);
     await expect(waitForHmrConnection(tab, null, 150)).rejects.toThrow();
-    await tab.evaluate(text => console.info(text), connected);
+    await tab.evaluate(text => console.debug(text), connected);
     await waitForHmrConnection(tab);
-    await tab.evaluate(() => console.warn("[Bun] Hot-module-reloading socket disconnected, reconnecting..."));
+    await tab.evaluate(() => console.log("[vite] server connection lost. Polling for restart..."));
     await expect(waitForHmrConnection(tab, null, 150)).rejects.toThrow();
-    await tab.evaluate(() => console.info("[Bun] Reconnected"));
+    await tab.evaluate(() => console.debug("[vite] connected."));
     await waitForHmrConnection(tab);
     await tab.reload();
     await expect(waitForHmrConnection(tab, null, 150)).rejects.toThrow();
-    await tab.evaluate(text => console.info(text), connected);
+    await tab.evaluate(text => console.debug(text), connected);
     await waitForHmrConnection(tab);
     await expect(waitForHmrConnection(owner, "#preview", 150)).rejects.toThrow();
     const frame = owner.frames().find(frame => frame.parentFrame() !== null);
     if (!frame) throw new Error("Missing preview frame");
-    await frame.evaluate(text => console.info(text), connected);
+    await frame.evaluate(text => console.debug(text), connected);
     await waitForHmrConnection(owner, "#preview");
     await frame.goto(new URL("/frame?restarted", server.url).href);
     await expect(waitForHmrConnection(owner, "#preview", 150)).rejects.toThrow();
-    await frame.evaluate(text => console.info(text), connected);
+    await frame.evaluate(text => console.debug(text), connected);
     await waitForHmrConnection(owner, "#preview");
   } finally {
     try { await browser?.close(); }

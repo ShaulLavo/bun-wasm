@@ -7,7 +7,7 @@ function App() {
   return (
     <main className="app">
       <h1>Hello from bun.wasm</h1>
-      <p className="tagline">This React app is served by Bun, running in your browser.</p>
+      <p className="tagline">Vite serves this React app through Bun, running in your browser.</p>
       <button className="counter" onClick={() => setCount((n) => n + 1)}>
         count is {count}
       </button>

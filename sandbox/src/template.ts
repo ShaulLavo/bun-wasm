@@ -1,22 +1,21 @@
 import type { Runtime } from "waffle";
-import { decode } from "../../web/src/fs";
 import { measureStartup } from "../../web/src/startup";
 
 type Filesystem = Runtime["filesystem"];
-export type TemplateSources = Record<string, string>;
+type TemplateSources = Record<string, string>;
 
-function templateFiles(text: string): TemplateSources | null {
+export function templateFiles(text: string): TemplateSources | null {
   try {
     const value: unknown = JSON.parse(text);
     if (!value || typeof value !== "object" || !("files" in value)) return null;
     const files = value.files;
-    if (!files || typeof files !== "object") return null;
+    if (!files || typeof files !== "object" || Array.isArray(files)) return null;
     const output: TemplateSources = {};
     for (const [path, source] of Object.entries(files)) {
-      if (typeof source !== "string") return null;
+      if (typeof source !== "string" || !projectPath(path)) return null;
       output[path] = source;
     }
-    return typeof output["index.html"] === "string" ? output : null;
+    return typeof output["package.json"] === "string" && projectManifest(output["package.json"]) ? output : null;
   } catch { return null; }
 }
 
@@ -44,17 +43,17 @@ export async function loadTemplate(fs: Filesystem, app: string, templateFile: st
   return files;
 }
 
-function isDependency(path: string): boolean {
-  return path === "package.json" || path.startsWith("node_modules/");
+function projectManifest(text: string): boolean {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (!value || typeof value !== "object" || !("scripts" in value)) return false;
+    const scripts = value.scripts;
+    if (!scripts || typeof scripts !== "object") return false;
+    return "dev" in scripts && typeof scripts.dev === "string" && scripts.dev.trim() !== ""
+      && "build" in scripts && typeof scripts.build === "string" && scripts.build.trim() !== "";
+  } catch { return false; }
 }
 
-/** A persisted or program-written dependency edit must also invalidate the bundle cache. */
-export async function dependenciesChanged(fs: Filesystem, app: string, sources: TemplateSources): Promise<boolean> {
-  const paths = (await fs.listFiles(app)).map((path) => path.slice(app.length + 1)).filter(isDependency);
-  if (paths.length !== Object.keys(sources).filter(isDependency).length) return true;
-  for (const path of paths) {
-    const data = await fs.readFile(`${app}/${path}`);
-    if (!data || decode(data) !== sources[path]) return true;
-  }
-  return false;
+function projectPath(path: string): boolean {
+  return !path.includes("\0") && !path.includes("\\") && path.split("/").every(part => part !== "" && part !== "." && part !== "..");
 }

@@ -96,7 +96,7 @@ scripts/app-matrix.sh --apps=express,koa,hono,fastify \
 ```
 
 Build `site/`, serve its `dist/` with an explicit free port through `web/serve.ts`,
-and run `node sandbox/tests/hmr-check.mjs <local-url>` for the HMR gate.
+and run `node sandbox/tests/hmr-check.ts <local-url>` for the HMR gate.
 
 ## Current results
 
