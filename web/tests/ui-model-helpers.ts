@@ -95,7 +95,7 @@ let identity = 0;
 export async function models(fixture = filesystemFixture(), sources: Record<string, string> = { "index.ts": "example", "deleted.ts": "delete me" }) {
   const listeners: ((event: { persisted: boolean }) => void)[] = [];
   const loads: string[] = [];
-  const runs: { done: ReturnType<typeof deferred<{ code: number }>>; kills: number[] }[] = [];
+  const runs: { args: string[]; done: ReturnType<typeof deferred<{ code: number }>>; kills: number[] }[] = [];
   let runtime = { filesystem: filesystem(fixture), disposed: false, dispose: async () => {}, processes: async () => {}, registerAdapter: () => () => {}, registerProgram: () => () => {} };
   const boundary = {
     ...stateModule, ...viewModule, EditorView: View, EditorState,
@@ -109,8 +109,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     HostedPreviews: class {},
     linkLocalUrls() {}, openTerminal() {},
     Shell: class { static async create(options: { onState(state: "ready"): void }) { options.onState("ready"); return { running: false, dispose: async () => {}, submit: async () => {}, input() {}, resize() {} }; } },
-    readDeps: async () => null, writeDeps: async () => {}, depsCacheKey: () => null,
-    startRun: () => { const run = { done: deferred<{ code: number }>(), kills: [] as number[] }; runs.push(run); return { done: run.done.promise, kill: (signal: number) => run.kills.push(signal) }; },
+    startRun: (options: { args: string[] }) => { const run = { args: options.args, done: deferred<{ code: number }>(), kills: [] as number[] }; runs.push(run); return { done: run.done.promise, kill: (signal: number) => run.kills.push(signal) }; },
     examples: sources, HOME: "/home/user",
     location: { href: "https://example.test/", reloads: 0, reload() { this.reloads++; }, assign() {} },
     requestIdleCallback: () => 0,
@@ -127,7 +126,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     waffle: ["createRuntime"], "browser-programs": ["BrowserPrograms"],
     "engine-loader": ["ENGINES", "WasmMissing", "isEngine", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
-    "terminal-mount": ["openTerminal"], "deps-cache": ["readDeps", "writeDeps", "depsCacheKey"],
+    "terminal-mount": ["openTerminal"],
     "runner": ["startRun"], "shell": ["Shell"], "examples": ["examples", "HOME"],
   };
   const result = await Bun.build({
@@ -145,7 +144,7 @@ export { Playground } from ${JSON.stringify(`${root}web/src/playground/playgroun
 export { Sandbox } from ${JSON.stringify(`${root}sandbox/src/sandbox.ts`)};
 export { Editor as PlaygroundEditor } from ${JSON.stringify(`${root}web/src/playground/editor.ts`)};
 export { Editor as SandboxEditor } from ${JSON.stringify(`${root}sandbox/src/editor.ts`)};
-export { loadTemplate, dependenciesChanged } from ${JSON.stringify(`${root}sandbox/src/template.ts`)};
+export { loadTemplate } from ${JSON.stringify(`${root}sandbox/src/template.ts`)};
 export { runtimeSharedObjectRoute } from ${JSON.stringify(`${root}web/src/shared-objects/runtime.ts`)};`, loader: "ts", resolveDir: root }));
       build.onResolve({ filter: /.*/ }, args => {
         if (args.path.startsWith("@remix-run/component")) return { path: `${root}web/node_modules/@remix-run/component/dist/${(args.path.split("/")[2] ?? "index").replace("jsx-dev-runtime", "jsx-runtime")}.js` };
@@ -167,7 +166,6 @@ export { runtimeSharedObjectRoute } from ${JSON.stringify(`${root}web/src/shared
     PlaygroundEditor: typeof import("../src/playground/editor").Editor;
     SandboxEditor: typeof import("../../sandbox/src/editor").Editor;
     loadTemplate: typeof import("../../sandbox/src/template").loadTemplate;
-    dependenciesChanged: typeof import("../../sandbox/src/template").dependenciesChanged;
     runtimeSharedObjectRoute(runtime: Pick<Runtime, "filesystem" | "disposed">): ReturnType<typeof import("../src/shared-objects/runtime").runtimeSharedObjectRoute>;
   };
   return { ...exports, fixture, get runtime() { return runtime; }, listeners, loads, runs, boundary, async cleanup() { for (const listener of listeners) listener({ persisted: false }); Reflect.deleteProperty(globalThis, key); for (const run of runs) run.done.resolve({ code: 0 }); await rm(scratch, { recursive: true }); } };
