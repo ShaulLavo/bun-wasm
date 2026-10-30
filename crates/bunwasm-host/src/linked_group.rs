@@ -83,7 +83,7 @@ pub(super) fn admit(bytes: &[u8], core: bool) -> Result<Profile> {
         return Ok(Profile::Split);
     }
     let what = if core { "core" } else { "side" };
-    if let Some(problem) = shape_problems(&summary).first() {
+    if let Some(problem) = shape_problems(&summary, core).first() {
         bail!("memory group {what}: {problem}");
     }
     ensure!(
@@ -109,8 +109,8 @@ pub(super) fn admit(bytes: &[u8], core: bool) -> Result<Profile> {
 }
 
 /// Whole-image shape: one imported memory and table, the stack pointer, dylink memory-info,
-/// and import-info that names imported env functions.
-fn shape_problems(summary: &Summary) -> Vec<String> {
+/// and import-info that names imported env functions or, for a core only, the host stack bounds.
+fn shape_problems(summary: &Summary, core: bool) -> Vec<String> {
     let mut problems = summary.problems.clone();
     if !summary.dylink {
         problems.push("group image requires dylink.0".into());
@@ -126,8 +126,9 @@ fn shape_problems(summary: &Summary) -> Vec<String> {
     }
     for (module, name) in &summary.import_info {
         let function = summary.env_functions.contains(name);
+        // Only a core's bounds are bound by the host (instantiate_core); a side would never get them.
         let stack_bound =
-            HOST_STACK_BOUNDS.contains(&name.as_str()) && summary.got_data.contains(name);
+            core && HOST_STACK_BOUNDS.contains(&name.as_str()) && summary.got_data.contains(name);
         if module != "env" || !(function || stack_bound) {
             problems.push(format!(
                 "import-info {module}.{name} must name an imported env function or a host stack bound imported from GOT.mem"
@@ -218,6 +219,9 @@ fn import_problem(import: &wasmparser::Import<'_>, summary: &mut Summary) -> Opt
     if module.starts_with("GOT.") && (!got || !matches!(import.ty, TypeRef::Global(_))) {
         return Some(format!("unsupported {module}.{name}"));
     }
+    if module == "GOT.mem" {
+        summary.got_data.insert(name.to_owned());
+    }
     match import.ty {
         TypeRef::Func(_) => {
             if module == "env" {
@@ -246,12 +250,7 @@ fn import_problem(import: &wasmparser::Import<'_>, summary: &mut Summary) -> Opt
             (!shape || !named)
                 .then(|| format!("memory import {module}.{name} must be a 32-bit env.memory"))
         }
-        TypeRef::Global(global) => {
-            if module == "GOT.mem" {
-                summary.got_data.insert(name.to_owned());
-            }
-            global_problem(module, name, global, summary)
-        }
+        TypeRef::Global(global) => global_problem(module, name, global, summary),
         TypeRef::Tag(_) => Some("tag imports are unsupported".into()),
     }
 }
@@ -1147,6 +1146,19 @@ mod tests {
             ..CORE
         });
         assert_eq!(admit(&bytes, true).unwrap(), Profile::SharedGroup);
+        // The same bounds in a side are refused: the host binds them for cores only.
+        let side = image(Image {
+            shape: Shape::StackBounds,
+            maximum: Some(65_536),
+            ..CORE
+        });
+        let error = admit(&side, false).expect_err("side stack bounds admitted");
+        assert!(
+            format!("{error:#}").contains(
+                "memory group side: import-info env.__stack_low must name an imported env function"
+            ),
+            "{error:#}"
+        );
         let module = Module::new(&engine, bytes).unwrap();
         let mut store = Store::new(&engine, ());
         let linker = Linker::new(&engine);
