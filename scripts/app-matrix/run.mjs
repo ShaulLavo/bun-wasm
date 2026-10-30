@@ -15,6 +15,7 @@ import { networkGuardStage, runProductBrowserCase } from "./product-campaign.ts"
 import { guestProvenance, verifyPlaygroundBuilds } from "./product-provenance.ts";
 import { memorySampler } from "./memory.ts";
 import { boundedCleanup, HarnessCleanupError } from "./cleanup.ts";
+import { guestCommand as buildGuestCommand } from "./guest-command.ts";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
 if (interfaces.some(line => line.split(":")[0].trim() !== "lo")) throw new Error("Use scripts/app-matrix.sh in its loopback-only network namespace");
@@ -50,7 +51,9 @@ for (const id of requested) if (!apps.some(app => app.id === id)) throw new Erro
 const selected = apps.filter(app => requested.includes(app.id));
 const wasmName = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm", hermes: "bun-hermes.wasm" };
 for (const engine of options.engines) if (!existsSync(join(root, "dist", wasmName[engine]))) throw new Error(`Build dist/${wasmName[engine]} first`);
-if (options.engines.includes("quickjs") && !existsSync(join(root, "dist/quickjs.wasm"))) throw new Error("Build the matching dist/quickjs.wasm first");
+for (const [engine, side] of Object.entries({ quickjs: "quickjs.wasm", jsc: "jsc-engine.wasm", hermes: "hermes-engine.wasm" })) {
+  if (options.engines.includes(engine) && !existsSync(join(root, "dist", side))) throw new Error(`Build the matching dist/${side} first`);
+}
 if (options.hosts.includes("native") && options.engines.some(engine => engine !== "browser") && !existsSync(options.launcher)) throw new Error(`Build launcher ${options.launcher} first`);
 if (options.hosts.includes("playground") && !existsSync(join(root, "web/dist/index.html"))) throw new Error("Build web/ first");
 if (existsSync(join(options.output, "results.json"))) throw new Error("Results already exist; choose another --output");
@@ -130,12 +133,9 @@ async function freePort() {
 }
 
 function guestCommand(engine, project, args, port) {
-  const env = { PWD: "/", HOME: "/", TMPDIR: "/tmp", PORT: String(port), NO_COLOR: "1", CI: "1", NEXT_TELEMETRY_DISABLED: "1", ASTRO_TELEMETRY_DISABLED: "1", PRISMA_HIDE_UPDATE_MESSAGE: "1", PRISMA_ENGINES_MIRROR: `${mirror.base}/blocked-prisma-engines`, BUN_INSTALL_CACHE_DIR: "/.cache", BUN_WASM_TRACE_EXIT: "1" };
-  const dirs = ["--dir", `${project}::/`];
-  const vars = Object.entries(env).flatMap(([key, value]) => ["--env", `${key}=${value}`]);
   const wasm = artifacts[engine].path;
   const host = engine === "browser" ? ["node", "--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net", "--wasm", wasm] : [launcher, "--wasm", wasm];
-  return host.concat(dirs, vars, ["--"], args);
+  return buildGuestCommand({ host, project, args, port, registry: mirror.base });
 }
 
 function record(app, engine, host, stage, command, result) {
@@ -278,7 +278,7 @@ try {
     const name = wasmName[engine];
     const core = readFileSync(join(root, "dist", name));
     const kind = programKind(new WebAssembly.Module(core));
-    const expected = engine === "quickjs" || engine === "jsc" ? engine : "single";
+    const expected = engine === "browser" ? "single" : engine;
     if (kind !== expected) throw new Error(`Selected ${engine} core declares ${kind}`);
     const stage = (name, bytes) => {
       const path = join(scratch, name);
@@ -303,7 +303,7 @@ try {
   launcher = join(scratch, "bun-wasm");
   if (existsSync(options.launcher)) copyFileSync(options.launcher, launcher);
   launcherDigest = existsSync(launcher) ? sha256(readFileSync(launcher)) : null;
-  runnerSources = Object.fromEntries(["run.mjs", "apps.mjs", "registry.mjs", "browser.mjs", "cleanup.ts", "browser-environment.ts", "preview-paths.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
+  runnerSources = Object.fromEntries(["run.mjs", "guest-command.ts", "apps.mjs", "registry.mjs", "browser.mjs", "cleanup.ts", "browser-environment.ts", "preview-paths.ts", "registry-request.ts", "checks.mjs", "classify.ts", "isolate.mjs", "exit-provenance.ts", "hmr.ts", "browser-diagnostics.ts", "server-fixtures.ts", "server-contract.ts", "server-browser.ts", "product-browser.ts", "product-campaign.ts", "product-types.ts", "product-report.ts", "product-provenance.ts", "memory.ts"].concat(options.product ? ["product.ts", "product-next.ts", "product-fullstack.ts", "product-vite.ts", "product-tools.ts", "product-servers.ts"] : []).map(path => [path, sha256(readFileSync(join(root, "scripts/app-matrix", path)))]));
   playgroundBuilds = existsSync(join(root, "web/dist/engine-builds.json")) ? JSON.parse(readFileSync(join(root, "web/dist/engine-builds.json"), "utf8")) : null;
   if (options.product && options.hosts.includes("playground")) verifyPlaygroundBuilds(playgroundBuilds, Object.fromEntries(options.engines.flatMap(engine => [[wasmName[engine], artifacts[engine].sha256]].concat(artifacts[engine].side ? [[artifacts[engine].side.name, artifacts[engine].side.sha256]] : []))));
   mirror = await registry({ directory: options.cache, record: options.record });

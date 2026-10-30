@@ -35,7 +35,7 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   const requested = new URL(url, location.href);
   const name = requested.pathname;
   if (name.replace(/\.gz$/, "").endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
-  for (const kind of ["quickjs", "jsc"] as const) {
+  for (const kind of ["quickjs", "jsc", "hermes"] as const) {
     const standard = new URL(ENGINES[kind].wasm, location.href);
     if (requested.origin === standard.origin && requested.pathname.replace(/\.gz$/, "") === standard.pathname) return loadPaired(url, kind, progress);
   }

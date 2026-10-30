@@ -20,3 +20,27 @@ Settings: `BUN_WASM_HERMES_OPT` (`none` default, `user`, `all`) and
 `BUN_WASM_HERMES_MAX_HEAP_MIB` (default 384). Heap exhaustion is fatal (exit 134).
 
 Provenance: [engine program](bun-patches/hermes-engine-program.md).
+## Hosts
+
+The browser loader accepts `?engine=hermes` when the web build contains both files.
+`HERMES_WASM` selects the core for `web/build.ts`; its companion must be in the same directory.
+Hermes stays outside the engine menu and default adapter registrations.
+
+Package installations select Hermes explicitly:
+
+```ts
+await installBunAdapters(runtime, { engine: "hermes", asset: hermesPair, workerUrl });
+```
+
+`hermesPair` has `kind: "hermes"` and the usual integrity descriptors for `core` and `side`.
+The package rejects a different core declaration. Executables live in `/opt/bun/hermes/bin`.
+The Node/Bun fixture host accepts `--wasm PATH` and optional `--engine hermes=PATH`.
+
+`bun scripts/hermes-hosts.ts dist/bun-hermes.wasm RESULT.json` checks package loading,
+actual Node and Bun fixture execution, and the browser loader in headless Chromium.
+`--node-only` omits Chromium; `--metadata-only` checks direct `import.meta.main` instead of
+repeating hello and imported-module checks. The runner removes its temporary host resources.
+Hermes VM telemetry is unavailable and stays null; core capacity is reported separately.
+
+The path-filtered Hermes CI job reuses the native job's common core, sysroot and launcher.
+It builds the opt-in side and runs native eval/serve and Node/Bun module smoke checks.

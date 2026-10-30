@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/bun-tcp.test.ts",
+  "localRuntime": true
+}

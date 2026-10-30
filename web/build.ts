@@ -89,6 +89,10 @@ if (!(await copyWasm(browserSource, "bun-browser.wasm"))) {
 
 const hermesSource = resolve(here, process.env.HERMES_WASM ?? "../dist/bun-hermes.wasm");
 await copyWasm(hermesSource, "bun-hermes.wasm");
+const hermesEngineSource = join(dirname(hermesSource), "hermes-engine.wasm");
+if (existsSync(hermesSource) && !(await copyWasm(hermesEngineSource, "hermes-engine.wasm"))) {
+  throw new Error(`Hermes core requires its matching side module: ${hermesEngineSource}`);
+}
 
 const toolsSource = resolve(here, process.env.BUN_TOOLS_WASM ?? "../dist/bun-tools.wasm");
 if (!(await copyWasm(toolsSource, "bun-tools.wasm"))) {

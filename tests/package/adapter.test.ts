@@ -1,3 +1,5 @@
+import { quickjsPair } from "./quickjs-plan-fixture.ts";
+import { prepareProgram } from "../../src/assets.ts";
 import { processRuntimeFixture } from "../../web/tests/process-runtime-fixture";
 import { networkPathScopeFixture, socketDirectoryFixture } from "../../web/tests/socket-runtime-fixture";
 import { outcomeWord } from "waffle/proc/outcome";
@@ -12,10 +14,8 @@ import type { BunAdapterOptions } from "../../src/index.js";
 import { runtimeSharedObjectRoute } from "../../web/src/shared-objects/runtime.js";
 const workerUrl = "https://example.test/worker.js";
 const notificationWorkerUrl = "https://example.test/notification-worker.js";
-// @ts-expect-error Hermes is a playground-only engine, not a package adapter engine.
-const packageHermesOptions: BunAdapterOptions = { workerUrl, notificationWorkerUrl, engine: "hermes" };
-void packageHermesOptions;
-const installBunAdapters = (runtime: Runtime, options: Partial<BunAdapterOptions> = {}) => installReal(runtime, { workerUrl, notificationWorkerUrl, ...options });
+type FixtureOptions = Omit<BunAdapterOptions, "workerUrl" | "notificationWorkerUrl"> & { workerUrl?: string | URL; notificationWorkerUrl?: string | URL };
+const installBunAdapters = (runtime: Runtime, options: FixtureOptions = {}) => installReal(runtime, { workerUrl, notificationWorkerUrl, ...options });
 
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
@@ -246,16 +246,37 @@ for (const conflict of [false, true]) {
   });
 }
 
-for (const engine of ["quickjs", "jsc", "browser"] as const) test(`default ${engine} nodejs registration uses its selected module`, async () => {
+for (const engine of ["quickjs", "jsc", "browser", "hermes"] as const) test(`default ${engine} nodejs registration uses its selected module`, async () => {
   const f = fixture();
-  const installed = await installBunAdapters(f.runtime, { engine, module });
+  const selected = engine === "browser" ? module : await prepareProgram({ kind: engine, ...quickjsPair(engine) });
+  const installed = await installBunAdapters(f.runtime, { engine, module: selected });
   try {
     const bin = engine === "browser" ? "/bin" : `/opt/bun/${engine}/bin`;
     const program = f.programs.get(`${bin}/nodejs`);
     expect(program?.adapter).toBe(`bun:${engine}`);
     expect(f.files.has(`${bin}/nodejs`)).toBe(true);
     if (typeof program?.module !== "function") throw new Error("Expected lazy module registration");
-    expect(await program.module()).toBe(module);
+    expect(await program.module()).toBe(selected);
+  } finally { installed.dispose(); }
+});
+
+test("Hermes adapters require an explicit engine and matching assets", async () => {
+  const f = fixture();
+  await expect(installBunAdapters(f.runtime, { engine: "hermes" })).rejects.toThrow("requires its matching guest");
+  expect(f.adapters.size).toBe(0);
+  const installed = await installBunAdapters(f.runtime, { engine: "hermes", module });
+  try { expect(Array.from(f.adapters.keys())).toEqual(["bun:quickjs", "bun:jsc", "bun:browser", "bun:hermes"]); }
+  finally { installed.dispose(); }
+  expect(f.adapters.size).toBe(0);
+});
+
+test("Hermes package registration rejects another engine at actual module admission", async () => {
+  const f = fixture();
+  const installed = await installBunAdapters(f.runtime, { engine: "hermes", module });
+  try {
+    const program = f.programs.get("/opt/bun/hermes/bin/bun");
+    if (typeof program?.module !== "function") throw new Error("Missing lazy program");
+    await expect(program.module()).rejects.toThrow("Selected hermes core declares single");
   } finally { installed.dispose(); }
 });
 

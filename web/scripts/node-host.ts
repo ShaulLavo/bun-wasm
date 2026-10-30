@@ -1,7 +1,6 @@
 // Headless Node fixture host. Guests always execute in workers; the main thread owns the
 // responsive Waffle process supervisor, descriptor transfers, and shared-pipe relays.
 import { writeSync } from "node:fs";
-import { registerHooks } from "node:module";
 import * as http from "node:http";
 import * as https from "node:https";
 import * as net from "node:net";
@@ -21,6 +20,7 @@ import { createNodeAsyncContext } from "./async-context.ts";
 import { createNodeProcess, type NodeWasiImports } from "./node-process.ts";
 import { loadNodeProgram, linkNodeProgram, startNodeProgram } from "./node-linked.ts";
 import { createNodeWorker } from "./node-worker.ts";
+import { isPairedEngine, type PairedEngine } from "../../src/engine-kind.ts";
 import type { LinkPlanSource, LinkedGroup } from "waffle/link";
 
 const STACK_MB = 32, GUEST_STACK_KIB = "6144";
@@ -28,7 +28,7 @@ const STACK_MB = 32, GUEST_STACK_KIB = "6144";
 const nodeProcess = process;
 interface Settings {
   wasmPath: string;
-  engines: Partial<Record<"quickjs" | "jsc", string>>;
+  engines: Partial<Record<PairedEngine, string>>;
   stackMb: number;
   withNet: boolean;
   preopens: Record<string, string>;
@@ -59,7 +59,7 @@ function settings(): Settings {
     if (arg === "--wasm") result.wasmPath = argv[++i]!;
     else if (arg === "--engine") {
       const value = argv[++i] ?? "", equal = value.indexOf("="), engine = value.slice(0, equal);
-      if ((engine !== "quickjs" && engine !== "jsc") || equal < 0 || !value.slice(equal + 1)) throw new Error("--engine requires quickjs=PATH or jsc=PATH");
+      if (!isPairedEngine(engine) || equal < 0 || !value.slice(equal + 1)) throw new Error("--engine requires quickjs=PATH, jsc=PATH or hermes=PATH");
       result.engines[engine] = resolve(value.slice(equal + 1));
     }
     else if (arg === "--net") result.withNet = true;
@@ -90,11 +90,11 @@ async function main() {
   const programs = new Map<WebAssembly.Module, LinkPlanSource>();
   if (base.linkPlan) programs.set(baseModule, base.linkPlan);
   const module = await nodeModule({ args: config.args, baseModule, wasmPath: config.wasmPath });
-  const engines: Partial<Record<"quickjs" | "jsc", WebAssembly.Module>> = {};
-  for (const engine of ["quickjs", "jsc"] as const) {
+  const engines: Partial<Record<PairedEngine, WebAssembly.Module>> = {};
+  for (const engine of ["quickjs", "jsc", "hermes"] as const) {
     const path = config.engines[engine];
     if (!path) continue;
-    const program = await loadNodeProgram(path);
+    const program = await loadNodeProgram(path, engine);
     engines[engine] = program.module;
     if (program.linkPlan) programs.set(program.module, program.linkPlan);
   }
@@ -164,7 +164,7 @@ async function run(data: GuestData) {
       postMessage: message => parentPort!.postMessage(message), finish,
     });
     const wasi = new WASI({ version: "preview1", args: request?.argv ?? ["bun"].concat(args), env: processHost.env, preopens: config.preopens, returnOnExit: true });
-    const imports = wasi.getImportObject() as NodeWasiImports;
+    const imports: NodeWasiImports = { wasi_snapshot_preview1: wasi.wasiImport };
     let instance: WebAssembly.Instance;
     if (config.withNet) cliFetch = installCliFetch(imports, () => instance, processHost.client.wake);
     const host = processHost.install(imports, () => instance, cliFetch?.call);
@@ -187,6 +187,7 @@ async function run(data: GuestData) {
     await globalThis.fetch("data:,").catch(() => {});
     const nodeFetch = globalThis.fetch.bind(globalThis);
     const prefix = "bunwasm:/m/", sources = new Map<string, string>();
+    const { registerHooks } = await import("node:module");
     registerHooks({
       resolve: (specifier, context, next) => specifier.startsWith(prefix) ? { url: specifier, shortCircuit: true } : next(specifier, context),
       load: (url, context, next) => url.startsWith(prefix) ? { format: "module", source: sources.get(url)!, shortCircuit: true } : next(url, context),
