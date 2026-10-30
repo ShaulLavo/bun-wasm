@@ -51,7 +51,7 @@ pub(super) enum Profile {
 #[derive(Default)]
 struct Summary {
     dylink: bool,
-    memory_info: bool,
+    memory_info: Option<MemInfo>,
     needed: bool,
     start: bool,
     memory_export: bool,
@@ -115,7 +115,7 @@ fn shape_problems(summary: &Summary, core: bool) -> Vec<String> {
     if !summary.dylink {
         problems.push("group image requires dylink.0".into());
     }
-    if summary.dylink && !summary.memory_info {
+    if summary.dylink && summary.memory_info.is_none() {
         problems.push("dylink.0 lacks memory-info".into());
     }
     if summary.memories != 1 || summary.tables != 1 {
@@ -314,12 +314,12 @@ fn read_dylink(subsection: Dylink0Subsection<'_>, summary: &mut Summary) {
     match subsection {
         Dylink0Subsection::MemInfo(info) => {
             let aligned = info.memory_alignment <= 31 && info.table_alignment <= 31;
-            if summary.memory_info || !aligned {
+            if summary.memory_info.is_some() || !aligned {
                 summary
                     .problems
                     .push("dylink.0 memory-info is duplicated or misaligned".into());
             }
-            summary.memory_info = true;
+            summary.memory_info = Some(info);
         }
         Dylink0Subsection::Needed(names) => summary.needed |= !names.is_empty(),
         Dylink0Subsection::ImportInfo(records) => read_import_info(&records, summary),
@@ -375,11 +375,23 @@ impl CoreLayout {
         side: &Module,
     ) -> Result<Self> {
         Ok(Self {
-            layout: super::layout(bytes)?,
+            layout: core_layout(bytes)?,
             relative: relative_exports(bytes)?,
             preview1: Preview1View::new(engine, &[core, side], MAX_PAGES)?,
         })
     }
+}
+
+fn core_layout(bytes: &[u8]) -> Result<MemInfo> {
+    let summary = summarize(bytes)?;
+    let layout = summary
+        .memory_info
+        .context("memory group core has no dylink.0 memory layout")?;
+    ensure!(
+        layout.memory_alignment <= 31 && layout.table_alignment <= 31,
+        "memory group core alignment exceeds wasm32"
+    );
+    Ok(layout)
 }
 
 fn relative_exports(bytes: &[u8]) -> Result<HashSet<String>> {
@@ -1033,6 +1045,33 @@ mod tests {
         };
         assert_eq!(admit(&image(split), true).unwrap(), Profile::Split);
         assert_eq!(admit(&image(split), false).unwrap(), Profile::Split);
+    }
+
+    #[test]
+    fn core_layout_accepts_wasm_ld_import_info_metadata() {
+        let engine = engine();
+        let bytes = image(Image {
+            shape: Shape::StackBounds,
+            ..CORE
+        });
+        assert_eq!(admit(&bytes, true).unwrap(), Profile::SharedGroup);
+        let core = Module::new(&engine, &bytes).unwrap();
+        let side = Module::new(
+            &engine,
+            image(Image {
+                maximum: Some(65_536),
+                ..CORE
+            }),
+        )
+        .unwrap();
+
+        let layout = CoreLayout::read(&engine, &bytes, &core, &side)
+            .expect("validated core import-info must not be reparsed as a split side")
+            .layout;
+        assert_eq!(layout.memory_size, 8);
+        assert_eq!(layout.memory_alignment, 2);
+        assert_eq!(layout.table_size, 0);
+        assert_eq!(layout.table_alignment, 0);
     }
 
     #[test]
