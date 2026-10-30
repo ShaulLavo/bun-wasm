@@ -106,6 +106,8 @@ test("embeds the converted runtime factories under their original names", async 
   expect(result.stderr.match(/runtime-js phase=bun_wrap /g)).toHaveLength(1);
   expect(result.stderr.match(/runtime-js phase=direct_stream /g)).toHaveLength(1);
   expect(table).toContain('("direct_stream", include_str!(');
+  expect(result.stderr.match(/runtime-js phase=shared_lane /g)).toHaveLength(1);
+  expect(table).toContain('("shared_lane", include_str!(');
   expect(table).toContain('("glob", include_str!(');
   expect(table).toContain('("bun_builtin_globals", include_str!(');
   // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.

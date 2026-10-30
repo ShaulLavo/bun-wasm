@@ -4,6 +4,8 @@
 // the destination as soon as its commit returns, so a reply posted before a user Atomics.notify
 // reaches the woken receiver's synchronous receive without any broker hop. Decoding it still needs
 // every shared backing it names: one the destination doesn't hold yet attaches through its event loop.
+// This file is also the wasm engines' runtime module `shared_lane` (scripts/generate-shared-lane.ts),
+// where a memory-group FUTEX watch replaces `Atomics.waitAsync`.
 const atomicLoad = Atomics.load, atomicStore = Atomics.store, atomicAdd = Atomics.add, atomicNotify = Atomics.notify, atomicWaitAsync = Atomics.waitAsync;
 const NativeTextEncoder = TextEncoder, NativeTextDecoder = TextDecoder;
 const encoder = new NativeTextEncoder(), decoder = new NativeTextDecoder("utf-8", { fatal: true });
@@ -32,13 +34,27 @@ export interface SharedLane {
   watch(ready: () => void): () => void;
 }
 
+/**
+ * Calls `changed` from the event loop once word `index` of `header` may differ from `observed`,
+ * or after a notify on it; at most once per arm. Returns a cancel.
+ */
+export type SharedLaneWaiter = (header: Int32Array, index: number, observed: number, changed: () => void) => () => void;
+
+function waitAsync(header: Int32Array, index: number, observed: number, changed: () => void) {
+  let active = true;
+  const waiting = atomicWaitAsync(header, index, observed);
+  if (waiting.async) void waiting.value.then(() => { if (active) changed(); });
+  else queueMicrotask(() => { if (active) changed(); });
+  return () => { active = false; };
+}
+
 export function createSharedLaneBuffer(): SharedArrayBuffer {
   return new SharedArrayBuffer(sharedLaneBytes);
 }
 
 function align(bytes: number) { return (bytes + 3) & ~3; }
 
-export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1): SharedLane {
+export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, wait: SharedLaneWaiter = waitAsync): SharedLane {
   if (buffer.byteLength !== sharedLaneBytes) throw new DOMException("Invalid shared lane size", "DataCloneError");
   const inbound = ring(buffer, side), outbound = ring(buffer, side === 0 ? 1 : 0);
   let reserved = false;
@@ -78,11 +94,9 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1): SharedLa
   }
   function watch(ready: () => void) {
     let active = true;
+    let cancel = () => {};
     function arm(observed: number) {
-      if (!active) return;
-      const waiting = atomicWaitAsync(inbound.header, signalIndex, observed);
-      if (waiting.async) void waiting.value.then(changed);
-      else queueMicrotask(changed);
+      if (active) cancel = wait(inbound.header, signalIndex, observed, changed);
     }
     function changed() {
       if (!active) return;
@@ -92,7 +106,7 @@ export function openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1): SharedLa
     arm(atomicLoad(inbound.header, signalIndex));
     return () => {
       if (!active) return;
-      active = false;
+      active = false; cancel();
       atomicAdd(inbound.header, signalIndex, 1); atomicNotify(inbound.header, signalIndex);
     };
   }

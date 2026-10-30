@@ -523,7 +523,8 @@ fn process_functions(store: &mut Store<Host>) -> Vec<Func> {
                     return Ok(crate::process::FAULT);
                 };
                 let polled = view(&mut caller, &memory, &[input], |parts, host| {
-                    host.processes.poll(parts[0], timeout)
+                    host.processes
+                        .poll_with(parts[0], timeout, |_| false, host.shm.as_ref())
                 })?;
                 match polled {
                     Ok(events) => {
@@ -598,6 +599,13 @@ pub fn add_import(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<
                 host.processes.access_start(path, cwd, mode)
             })
         },
+    )?;
+    // Waffle's `runtime_proc.getpid`: the caller's own runtime pid, the one its parent's spawn
+    // returned and memory-group pins are routed to.
+    linker.func_wrap(
+        "runtime_proc",
+        "getpid",
+        |caller: Caller<'_, Host>| -> i32 { caller.data().processes.pid },
     )?;
     // Waffle's process-identity import: the full byte count, written only when it fits.
     linker.func_wrap(

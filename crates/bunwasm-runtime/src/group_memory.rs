@@ -101,6 +101,8 @@ mod exports {
         fn futex_wait32(addr: u32, expected: i32, timeout_ns: i64) -> i32;
         fn futex_wait64(addr: u32, expected: i64, timeout_ns: i64) -> i32;
         fn futex_wake(addr: u32, count: u32) -> i32;
+        fn futex_watch(addr: u32, expected: i32, out: *mut u32) -> i32;
+        fn futex_unwatch(id: u32) -> i32;
     }
 
     /// Typed arrays over a backing need at most 8-byte alignment; regions are page-aligned.
@@ -211,6 +213,17 @@ mod exports {
     #[unsafe(no_mangle)]
     pub extern "C" fn bun_futex_wake(addr: u32, count: u32) -> i32 {
         unsafe { futex_wake(addr, count) }
+    }
+
+    /// A FUTEX watch for poll kind 7 (shared lanes); writes its id to `out`.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn bun_futex_watch(addr: u32, expected: i32, out: *mut u32) -> i32 {
+        unsafe { futex_watch(addr, expected, out) }
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn bun_futex_unwatch(id: u32) -> i32 {
+        unsafe { futex_unwatch(id) }
     }
 }
 

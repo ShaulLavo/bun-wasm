@@ -211,3 +211,77 @@ fn publish_during_scan(
     assert_eq!(p.write(write, b"x"), 1);
     false
 }
+
+fn group_members() -> (
+    crate::shm::MemoryGroup,
+    crate::shm::MemberLease,
+    crate::shm::MemberLease,
+) {
+    let group = crate::shm::MemoryGroup::new(
+        &wasmtime::Engine::default(),
+        crate::shm::GroupPolicy::default(),
+        crate::shm::GroupBackingBudget::new(1 << 30),
+    )
+    .unwrap();
+    let watcher = group.reserve(1).unwrap().launch();
+    let waker = group.reserve(2).unwrap().launch();
+    (group, watcher, waker)
+}
+
+/// Poll kind 7: another member's `futex_wake` ends the watcher's wait through its own
+/// notify, not the 10 ms rescan, and the hit stays ready (non-consuming) until unwatched.
+#[test]
+fn futex_watch_hit_from_another_member_wakes_poll_at_once() {
+    let p = processes();
+    let (group, watcher, waker) = group_members();
+    let waker = Arc::new(waker);
+    let start = Instant::now();
+    for round in 0..ROUNDS {
+        let notify = std::task::Waker::from(p.notify.clone());
+        let id = watcher.watch_waking(64, 0, notify).unwrap();
+        let subscriptions = subscription(7, id.raw() as i32, u64::from(round));
+        let remote = waker.clone();
+        let hit = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1));
+            assert_eq!(remote.wake(64, 1).unwrap(), 1);
+        });
+        let events = p
+            .poll_with(&subscriptions, 1000, |_| false, Some(&watcher))
+            .unwrap();
+        hit.join().unwrap();
+        assert_eq!(events.len(), 16);
+        assert_eq!(
+            u64::from_le_bytes(events[..8].try_into().unwrap()),
+            u64::from(round)
+        );
+        assert_eq!(u32::from_le_bytes(events[8..12].try_into().unwrap()), 7);
+        let again = p.poll_with(&subscriptions, 0, |_| false, Some(&watcher));
+        assert_eq!(
+            again.unwrap(),
+            events,
+            "a hit is level-triggered until unwatch"
+        );
+        watcher.unwatch(id).unwrap();
+    }
+    assert_not_periodic(start.elapsed());
+    assert_eq!(group.snapshot().watches, 0);
+}
+
+#[test]
+fn futex_poll_outside_a_group_or_for_a_foreign_watch_fails() {
+    let p = processes();
+    let (_group, watcher, other) = group_members();
+    let id = watcher.watch(64, 0).unwrap();
+    let subscriptions = subscription(7, id.raw() as i32, 1);
+    assert_eq!(p.poll(&subscriptions, 0), Err(INVAL));
+    assert_eq!(
+        p.poll_with(&subscriptions, 0, |_| false, Some(&other)),
+        Err(BADF)
+    );
+    assert!(
+        p.poll_with(&subscriptions, 0, |_| false, Some(&watcher))
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(p.poll(&subscription(8, 0, 1), 0), Err(INVAL));
+}

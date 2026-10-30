@@ -12,8 +12,8 @@ const nativeFiles = new Set([
   "scripts/check-quickjs-async-context.ts", "scripts/fixtures/quickjs-async-context.c", "scripts/fixtures/quickjs-async-context.ts",
   "tests/memory-telemetry.test.ts",
   "scripts/check-quickjs-memory-telemetry.ts", "scripts/fixtures/quickjs-memory-telemetry.c",
-  // Embedded in bun.wasm as the runtime module `direct_stream`.
-  "web/src/native-direct-stream.ts",
+  // Embedded in bun.wasm as the runtime modules `direct_stream` and `shared_lane`.
+  "web/src/native-direct-stream.ts", "web/src/shared-objects/lane.ts",
 ]);
 const nativeCheckInputs = discoverChecks().flatMap(checkInputPaths);
 const nativeCheckManifests = /^checks\/(?:native|runtime)-[a-z0-9-]+\.json$/;

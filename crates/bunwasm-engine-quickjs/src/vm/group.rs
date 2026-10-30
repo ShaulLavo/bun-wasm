@@ -4,7 +4,9 @@
 //! so its bytes have the same address in every member. QuickJS retains a backing for each
 //! SharedArrayBuffer object (`sab_alloc` or `sab_dup`) and releases it in the finalizer
 //! (`sab_free`). The transfer natives pin a backing for one message, route the pin to the
-//! receiving process and accept it there as a new object over the same bytes.
+//! receiving process and accept it there as a new object over the same bytes. A FUTEX
+//! watch on a buffer word lets the event loop sleep in poll (kind 7) until another member
+//! notifies it: shared lanes use it in place of `Atomics.waitAsync`.
 
 use std::any::Any;
 use std::ffi::c_void;
@@ -23,6 +25,8 @@ unsafe extern "C" {
     fn bun_shm_route(pin: u32, pid: u32) -> i32;
     fn bun_shm_unpin(pin: u32) -> i32;
     fn bun_shm_accept(pin: u32, out: *mut [u32; 2]) -> i32;
+    fn bun_futex_watch(addr: u32, expected: i32, out: *mut u32) -> i32;
+    fn bun_futex_unwatch(id: u32) -> i32;
 }
 
 unsafe extern "C" fn sab_alloc(_: *mut c_void, size: qjs::size_t) -> *mut c_void {
@@ -73,6 +77,17 @@ fn number<E: Engine>(e: &E, args: &[E::Value], index: usize) -> Result<u32, E::V
     }
 }
 
+fn int32<E: Engine>(e: &E, args: &[E::Value], index: usize) -> Result<i32, E::Value> {
+    match args.get(index).map(|value| e.to_val(value)) {
+        Some(Val::Num(value))
+            if value.fract() == 0.0 && (-2147483648.0..=2147483647.0).contains(&value) =>
+        {
+            Ok(value as i32)
+        }
+        _ => Err(e.error_value(&NativeError::type_error("expected a 32-bit integer"))),
+    }
+}
+
 fn status<E: Engine>(e: &E, status: i32, what: &str) -> Result<E::Value, E::Value> {
     if status < 0 {
         return Err(e.error_value(&clone_error(format!(
@@ -96,8 +111,8 @@ fn engine_value<E: Engine>(value: V) -> E::Value {
         .expect("QuickJS value")
 }
 
-/// `shmPin(sab) -> pin`: a transit pin on the buffer's region, owned by this member.
-fn pin<E: Engine>(e: &E, args: &[E::Value]) -> Result<E::Value, E::Value> {
+/// The group address and byte length of the SharedArrayBuffer in `args[0]`.
+fn backing<E: Engine>(e: &E, args: &[E::Value]) -> Result<(u32, u32), E::Value> {
     let q = quickjs(e);
     let Some(buffer) = args.first().map(|value| {
         (value as &dyn Any)
@@ -112,8 +127,14 @@ fn pin<E: Engine>(e: &E, args: &[E::Value]) -> Result<E::Value, E::Value> {
     if data.is_null() {
         return Err(engine_value::<E>(q.ctx().catch()));
     }
+    Ok((data as usize as u32, size as u32))
+}
+
+/// `shmPin(sab) -> pin`: a transit pin on the buffer's region, owned by this member.
+fn pin<E: Engine>(e: &E, args: &[E::Value]) -> Result<E::Value, E::Value> {
+    let (data, _) = backing(e, args)?;
     let mut pin = 0;
-    let result = unsafe { bun_shm_pin(data as usize as u32, &mut pin) };
+    let result = unsafe { bun_shm_pin(data, &mut pin) };
     if result < 0 {
         return status(e, result, "SharedArrayBuffer publication");
     }
@@ -160,9 +181,37 @@ fn accept<E: Engine>(e: &E, args: &[E::Value]) -> Result<E::Value, E::Value> {
     created
 }
 
+/// `futexWatch(sab, byteOffset, expected) -> id`: a watch on the aligned 32-bit word at
+/// `byteOffset`, ready (poll kind 7) once it differs from `expected` or a wake hits it.
+fn watch<E: Engine>(e: &E, args: &[E::Value]) -> Result<E::Value, E::Value> {
+    let (data, size) = backing(e, args)?;
+    let offset = number(e, args, 1)?;
+    let expected = int32(e, args, 2)?;
+    if offset % 4 != 0 || u64::from(offset) + 4 > u64::from(size) {
+        return Err(e.error_value(&NativeError::range_error("invalid watched word")));
+    }
+    let mut id = 0;
+    let result = unsafe { bun_futex_watch(data + offset, expected, &mut id) };
+    if result < 0 {
+        return status(e, result, "Shared lane watch");
+    }
+    Ok(e.value_from(Val::Num(f64::from(id))))
+}
+
 pub(crate) fn natives<E: Engine>() -> Vec<(&'static str, ValueFn<E>)> {
     vec![
         ("shmPin", Rc::new(pin::<E>) as ValueFn<E>),
+        ("futexWatch", Rc::new(watch::<E>)),
+        (
+            "futexUnwatch",
+            Rc::new(|e: &E, args: &[E::Value]| {
+                status(
+                    e,
+                    unsafe { bun_futex_unwatch(number(e, args, 0)?) },
+                    "Shared lane unwatch",
+                )
+            }),
+        ),
         ("shmAccept", Rc::new(accept::<E>)),
         (
             "shmRoute",

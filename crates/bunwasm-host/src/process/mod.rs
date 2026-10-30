@@ -912,6 +912,19 @@ impl Processes {
         timeout: i32,
         is_file: impl Fn(i32) -> bool,
     ) -> Result<Vec<u8>, i32> {
+        self.poll_with(subscriptions, timeout, is_file, None)
+    }
+
+    /// `poll_with_files` for a guest that may be a memory-group member: kind 7 (FUTEX) reports
+    /// its watch's readiness and is `INVAL` outside a group. A hit watch wakes this process's
+    /// `notify`, so the wait ends at once.
+    pub fn poll_with(
+        &self,
+        subscriptions: &[u8],
+        timeout: i32,
+        is_file: impl Fn(i32) -> bool,
+        member: Option<&crate::shm::MemberLease>,
+    ) -> Result<Vec<u8>, i32> {
         if timeout < -1 || !subscriptions.len().is_multiple_of(16) {
             return Err(INVAL);
         }
@@ -919,7 +932,7 @@ impl Processes {
             .as_chunks::<16>()
             .0
             .iter()
-            .any(|sub| u32::from_le_bytes(sub[..4].try_into().unwrap()) > 6)
+            .any(|sub| u32::from_le_bytes(sub[..4].try_into().unwrap()) > 7)
         {
             return Err(INVAL);
         }
@@ -944,6 +957,7 @@ impl Processes {
                     },
                     3 => return Err(NOSYS), // native WASI filesystem I/O completes synchronously
                     4 => (self.job_empty(id)?, false),
+                    7 => (member.ok_or(INVAL)?.poll_watch(id as u32)?, false),
                     5 => (self.access_ready(id)?, false),
                     6 => match self.start_status(id) {
                         AGAIN => (false, false),

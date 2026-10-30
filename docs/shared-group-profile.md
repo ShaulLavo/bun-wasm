@@ -72,3 +72,19 @@ through atomic cells and owned copies. The group backing outlives the member's S
 member is released once its thread has stopped and its instances are destroyed. A fatal signal
 interrupts a member blocked in a futex wait.
 
+
+## Workers in a group
+
+A SharedArrayBuffer is a group region, so a buffer posted to a Worker or to a worker's parent is
+the same bytes in the receiver. The sender pins the region and routes the pin to the receiving
+process's pid (`runtime_proc.getpid`); other destinations get `DataCloneError`. A message that is
+never read because its port closed first gives its pins back.
+
+A MessagePort whose ends sit in different members carries its messages in a shared lane: the
+browser engine's pair of 1 MiB rings (`web/src/shared-objects/lane.ts`) in a group buffer. A
+message committed to a lane before `Atomics.notify` is complete when the waiter wakes, whatever
+the control pipe holds, which is what esbuild's synchronous API needs. The event loop sleeps on a
+lane as poll kind 7 (a FUTEX watch). A lane is created only when the far end's process is known.
+A message the lane cannot take, because it is full, larger than the ring, or carries ports, uses
+the control pipe in sequence order; such a reply is not complete at wake. Moving a port that has
+a lane to a process whose pid this process does not know gets `DataCloneError`.

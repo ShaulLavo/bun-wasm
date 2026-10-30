@@ -620,11 +620,13 @@ pub fn install(linker: &mut Linker<Host>, store: &mut Store<Host>) -> Result<()>
                 .context("validated subscriptions")?;
             let mut state = state.lock().unwrap();
             state.initialize(&mut caller)?;
-            match caller
-                .data()
-                .processes
-                .poll_with_files(&subscriptions, timeout, |fd| state.files.contains_key(&fd))
-            {
+            let host = caller.data();
+            match host.processes.poll_with(
+                &subscriptions,
+                timeout,
+                |fd| state.files.contains_key(&fd),
+                host.shm.as_ref(),
+            ) {
                 Ok(events) => {
                     memory
                         .write(&mut caller, output.start, &events)

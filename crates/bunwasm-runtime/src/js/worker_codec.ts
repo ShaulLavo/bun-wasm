@@ -312,12 +312,20 @@
     function encode(value: unknown, transfer?: unknown, forbidden?: readonly string[]) {
       const plan = prepare(value, transfer, forbidden); plan.commit(); return plan.graph;
     }
+    /** Releases the shared objects of a message that will never be decoded (memory groups). */
+    function discard(value: unknown) {
+      if (!sharedObjects?.discard) return;
+      let references: BunWasm.SharedReference[];
+      try { references = sharedReferences(validateGraph(value, 0, Boolean(hooks.buffer), true)); }
+      catch { return; }
+      if (references.length) sharedObjects.discard(references);
+    }
     function wait(value: unknown, ready: () => void) {
       const graph = validateGraph(value, 0, Boolean(hooks.buffer), Boolean(sharedObjects));
       const references = sharedReferences(graph);
       return references.length ? sharedObjects!.wait(references, ready) : null;
     }
-    return { encode, decode, prepare, wait };
+    return { encode, decode, prepare, wait, discard };
   }
 
   function sharedReferences(graph: Graph): BunWasm.SharedReference[] {
