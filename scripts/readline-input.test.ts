@@ -1,9 +1,29 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { PassThrough } from "node:stream";
 import type { Interface } from "node:readline";
 import { runInNewContext } from "node:vm";
+
+const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-readline-input-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+const emitted = new Map<string, string>();
+
+function moduleSource(name: string): string {
+  const cached = emitted.get(name);
+  if (cached !== undefined) return cached;
+  const typed = new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url);
+  if (!existsSync(typed)) return readFileSync(new URL(`../crates/bunwasm-runtime/src/js/${name}.js`, import.meta.url), "utf8");
+  const output = join(scratch, `${name}.js`);
+  const result = Bun.spawnSync(["node", fileURLToPath(new URL("./transpile-runtime.ts", import.meta.url)), fileURLToPath(typed), output]);
+  expect(result.exitCode, result.stderr.toString()).toBe(0);
+  const source = readFileSync(output, "utf8");
+  emitted.set(name, source);
+  return source;
+}
 
 function fixture() {
   const input = new PassThrough();
@@ -18,10 +38,7 @@ function fixture() {
     require(name: string): unknown {
       if (name === "dns") return {};
       if (name === "events") return EventEmitter;
-      const typed = new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url);
-      const path = existsSync(typed) ? typed : new URL(`../crates/bunwasm-runtime/src/js/${name}.js`, import.meta.url);
-      const code = new Bun.Transpiler({ loader: existsSync(typed) ? "ts" : "js" }).transformSync(`globalThis.factory = ${readFileSync(path, "utf8")}`);
-      return runInNewContext(code, context)(internal);
+      return runInNewContext(moduleSource(name), context)(internal);
     },
   };
   internal.require("builtins");
