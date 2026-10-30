@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { WASI } from "node:wasi";
 import { join } from "node:path";
+import { maxMemoryBytes } from "../../../scripts/src/program-profile.ts";
 
 const directory = process.argv[2];
 assert(directory, "artifact directory is required");
@@ -141,7 +142,8 @@ assert(large > 0);
 assert(memory.buffer.byteLength > beforeGrowth);
 assert(new Uint8Array(memory.buffer, sentinel, 128).every((value) => value === 0xa5));
 initializeFree(engine, "quickjs_rust_free", large, beforeGrowth * 2, 16);
-const failed = call(core, "realloc", sentinel, 536870912);
+// The core links at the guest memory maximum, so a block that size can never fit.
+const failed = call(core, "realloc", sentinel, maxMemoryBytes());
 assert.equal(failed, 0);
 assert(new Uint8Array(memory.buffer, sentinel, 128).every((value) => value === 0xa5));
 initializeFree(core, "free", sentinel);

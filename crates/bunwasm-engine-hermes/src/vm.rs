@@ -568,8 +568,8 @@ fn eval_flags(source: &str, filename: &str) -> u32 {
     flags
 }
 
-/// Hermes's GC heap cap (`BUN_WASM_HERMES_MAX_HEAP_MIB`, default 384). The 512 MiB linear
-/// memory also holds the compiler, malloc and the core.
+/// Hermes's GC heap cap (`BUN_WASM_HERMES_MAX_HEAP_MIB`, default 384). The guest's one shared
+/// linear memory also holds the compiler, malloc and the core.
 fn max_heap_mib() -> u32 {
     std::env::var("BUN_WASM_HERMES_MAX_HEAP_MIB")
         .ok()

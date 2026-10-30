@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
+import { maxMemoryBytes } from "./src/program-profile.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const vendor = resolve(process.argv[2] ?? join(root, "vendor/bun"));
@@ -67,13 +68,16 @@ ${selected}
 ${sentinels}
 ${stringMethods}
 }
-${probe.replaceAll("PROBE_UTF8", `${flagPrefix}_UTF8${flagSuffix}`).replaceAll("PROBE_GLOBAL", `${flagPrefix}_GLOBAL${flagSuffix}`).replaceAll("PROBE_UTF16", `${flagPrefix}_UTF16${flagSuffix}`)}
+${probe.replaceAll("PROBE_MAX_MEMORY", String(maxMemoryBytes())).replaceAll("PROBE_UTF8", `${flagPrefix}_UTF8${flagSuffix}`).replaceAll("PROBE_GLOBAL", `${flagPrefix}_GLOBAL${flagSuffix}`).replaceAll("PROBE_UTF16", `${flagPrefix}_UTF16${flagSuffix}`)}
 `;
 
-function run(command: string, args: string[]): void {
-  const result = spawnSync(command, args, { stdio: "inherit", timeout: 60_000 });
+function run(command: string, args: string[], input?: string): string {
+  const stdin = input === undefined ? "inherit" : "pipe";
+  const result = spawnSync(command, args, { input, stdio: [stdin, "pipe", "inherit"], encoding: "utf8", timeout: 60_000 });
+  process.stdout.write(result.stdout ?? "");
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} exited ${result.status}`);
+  return result.stdout;
 }
 
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-encoded-slice-"));
@@ -86,9 +90,12 @@ try {
   const native = join(scratch, "native");
   run("rustc", ["--edition=2024", input, "-o", native]);
   run(native, []);
+  // The wasm32 probe links at the guest memory maximum and places real strings above 512 MiB.
+  // The host writes stdin into memory there and reads its fd_write line from there.
   const wasm = join(scratch, "probe.wasm");
-  run("rustc", ["--edition=2024", "--target", "wasm32-wasip1", input, "-o", wasm]);
-  run("wasmtime", ["run", wasm]);
+  run("rustc", ["--edition=2024", "--target", "wasm32-wasip1", "-C", `link-arg=--max-memory=${maxMemoryBytes()}`, input, "-o", wasm]);
+  const written = run("wasmtime", ["run", wasm], "high fd_read: bun-wasm\n");
+  if (!written.includes("high fd_write: caf\u00e9 \u6771\u4eac \u2713\n")) throw new Error("Missing the fd_write line written from above 512 MiB");
 } finally {
   cleanup();
 }

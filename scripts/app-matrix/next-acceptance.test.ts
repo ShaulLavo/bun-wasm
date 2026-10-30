@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import ts from "typescript-api";
+import { temporaryPathFailures } from "../ci-temp-guard";
 import { acceptanceBudget, acceptanceTimeouts, timeoutOptions } from "./next-acceptance-options";
 import { registryReceipt } from "./next-acceptance-registry";
 import { runAcceptancePhase } from "./next-acceptance-phase";
@@ -95,6 +96,11 @@ test("real launcher preserves exact dev/build/start argv", () => {
     writeFileSync(join(scratch, "launch.ts"), readFileSync(join(import.meta.dir, "../../examples/next-acceptance/launch.ts")));
     for (const args of [["dev", "--webpack", "--hostname", "127.0.0.1", "--port", "43701"], ["build", "--webpack"], ["start", "--hostname", "127.0.0.1", "--port", "43701"]]) verifyLauncher(scratch, bin, args);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
+});
+
+test("native reference scratch uses the configured temporary root", () => {
+  const path = join(import.meta.dir, "next-acceptance-reference.ts");
+  expect(temporaryPathFailures(path, readFileSync(path, "utf8"))).toEqual([]);
 });
 
 function verifyLauncher(directory: string, bin: string, args: string[]) {

@@ -427,6 +427,17 @@ pub fn table(state: &Rc<State>) -> Table {
     });
     crate::glob::install(&mut t);
     crate::semver::install(&mut t);
+    t.add("bunStringRoundTrip", |a| {
+        bun_string_round_trip(a.bytes(0)?, a.str(1)?)
+    });
+    // The size of the one linear memory the core and every engine side allocate from, read by
+    // the core itself: engines report process.memoryUsage().rss differently (JSC: null).
+    #[cfg(target_arch = "wasm32")]
+    t.add("linearMemoryBytes", |_| {
+        Ok(Val::Num(
+            (core::arch::wasm32::memory_size(0) * 65_536) as f64,
+        ))
+    });
     crate::parse_env::install(&mut t);
     crate::node_path::install(&mut t);
     install_encoding(&mut t);
@@ -440,6 +451,33 @@ pub fn table(state: &Rc<State>) -> Table {
     crate::wasm::install(&mut t);
     t.constants.push(("platformInfo", platform_info()));
     t
+}
+
+/// bun:internal-for-testing: wrap a fresh copy of `bytes` in Bun's own `String` and decode it
+/// again through Bun's `EncodedSlice`. Reports where the decoded bytes live, so a guest can
+/// prove real Bun strings work above the old 512 MiB pointer-tag boundary.
+fn bun_string_round_trip(bytes: &[u8], encoding: &str) -> NativeResult {
+    let owned = bytes.to_vec();
+    let words: Vec<u16> = match encoding {
+        "utf16le" => owned
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let string = match encoding {
+        "latin1" => bun_core::String::ascii(&owned),
+        "utf8" => bun_core::String::borrow_utf8(&owned),
+        "utf16le" => bun_core::String::borrow_utf16(&words),
+        _ => return Err(NativeError::type_error("unsupported encoding")),
+    };
+    let decoded = string.byte_slice();
+    Ok(Val::Object(vec![
+        ("address".into(), Val::Num(decoded.as_ptr() as usize as f64)),
+        ("bytes".into(), Val::Bytes(decoded.to_vec())),
+    ]))
 }
 
 fn ok() -> NativeResult {
@@ -2111,5 +2149,36 @@ mod descriptor_kind_tests {
         assert_eq!(descriptor_mode(0o100600, 3).unwrap(), 0o100600);
         assert_eq!(descriptor_mode(0o040700, 4).unwrap(), 0o040700);
         assert_eq!(descriptor_mode(0, -8).unwrap_err().raw_os_error(), Some(8));
+    }
+}
+
+#[cfg(test)]
+mod bun_string_round_trip_tests {
+    use super::bun_string_round_trip;
+    use crate::data::Val;
+
+    fn decoded(bytes: &[u8], encoding: &str) -> Vec<u8> {
+        let Val::Object(fields) = bun_string_round_trip(bytes, encoding).unwrap() else {
+            panic!("round trip returns an object");
+        };
+        assert!(
+            matches!(fields[0], (ref name, Val::Num(address)) if name == "address" && address > 0.0)
+        );
+        let (name, Val::Bytes(bytes)) = &fields[1] else {
+            panic!("round trip returns bytes");
+        };
+        assert_eq!(name, "bytes");
+        bytes.clone()
+    }
+
+    #[test]
+    fn every_encoding_decodes_its_own_bytes() {
+        let latin1 = [b'c', b'a', b'f', 0xe9];
+        assert_eq!(decoded(&latin1, "latin1"), latin1);
+        let utf8 = "東京 ✓".as_bytes();
+        assert_eq!(decoded(utf8, "utf8"), utf8);
+        let utf16: Vec<u8> = "🦊é".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(decoded(&utf16, "utf16le"), utf16);
+        assert!(bun_string_round_trip(b"x", "ucs2").is_err());
     }
 }

@@ -14,12 +14,33 @@ export type ProgramProfile = "split" | "shared-group";
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const C_FEATURES = "-fPIC -matomics -mbulk-memory -mmutable-globals";
 
-/** Bun's wasm32 string tags use address bits 29-31, so a member's group stays below 512 MiB. */
-export const SHARED_GROUP_MAX_PAGES = 8192;
+const PAGE_BYTES = 65536;
 
-/** The core's exact link arguments, shared with crates/bunwasm-cli/build.rs. */
+/**
+ * One line of decimal bytes: a page multiple, at most 2 GiB (browser hosts still read i32
+ * addresses as signed above that). Mirrors crates/bunwasm-cli/max_memory.rs, the Rust reader.
+ */
+export function parseMaxMemory(text: string): number {
+  if (!/^[0-9]+\n$/.test(text)) throw new Error("max-memory.txt holds one line of decimal bytes");
+  const bytes = Number(text.slice(0, -1));
+  if (bytes <= 0 || bytes % PAGE_BYTES !== 0 || bytes > 2 ** 31) throw new Error("max-memory.txt must be a page multiple in (0, 2 GiB]");
+  return bytes;
+}
+
+/** The wasm32 memory maximum of every Bun guest, from its one authority (docs/memory-ceiling.md). */
+export function maxMemoryBytes(): number {
+  return parseMaxMemory(readFileSync(join(ROOT, "crates/bunwasm-cli/max-memory.txt"), "utf8"));
+}
+
+/** The page maximum a shared-group core declares for its imported group memory. */
+export function sharedGroupMaxPages(): number {
+  return maxMemoryBytes() / PAGE_BYTES;
+}
+
+/** The core's exact link arguments, in crates/bunwasm-cli/build.rs order. */
 export function sharedGroupCoreLink(): string[] {
-  return readFileSync(join(ROOT, "crates/bunwasm-cli/shared-group-link.txt"), "utf8").split("\n").filter(Boolean);
+  const list = readFileSync(join(ROOT, "crates/bunwasm-cli/shared-group-link.txt"), "utf8").split("\n").filter(Boolean);
+  return [`--max-memory=${maxMemoryBytes()}`].concat(list);
 }
 
 export const SHARED_GROUP_SIDE_LINK = ["--shared", "--shared-memory", "--Bsymbolic", "--no-export-dynamic", "--gc-sections", "--no-entry",
@@ -132,12 +153,17 @@ function linkProof(mapPath: string, output: string): void {
 
 if (import.meta.main) {
   const [command, kind, output] = process.argv.slice(2);
+  // Shell consumers read the maximum here, so they get the same validation before they configure or link.
+  if (command === "max-memory" && !kind) {
+    console.log(maxMemoryBytes());
+    process.exit(0);
+  }
   if (command === "link-proof" && kind && output) {
     linkProof(kind, output);
     process.exit(0);
   }
   const sysroot = process.env.BUN_WASM_SYSROOT;
-  if (command !== "environment" || (kind !== "core" && kind !== "quickjs") || !sysroot) throw new Error("Usage: BUN_WASM_SYSROOT=... program-profile.ts environment core|quickjs | link-proof MAP OUTPUT");
+  if (command !== "environment" || (kind !== "core" && kind !== "quickjs") || !sysroot) throw new Error("Usage: BUN_WASM_SYSROOT=... program-profile.ts environment core|quickjs | link-proof MAP OUTPUT | max-memory");
   if (process.env.BUN_WASM_SHARED_SYSROOT !== sysroot) throw new Error("shared-group builds set BUN_WASM_SHARED_SYSROOT and BUN_WASM_SYSROOT to the same J2 sysroot");
   verifySharedSysroot(sysroot);
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";

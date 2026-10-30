@@ -400,7 +400,7 @@ fn a_name_swapped_at_the_registration_boundary_cannot_redirect_the_descriptor_li
     // The old binding: resolve the descriptor's current name, then register that name. A swap
     // between the two steps registers the other file, and swapping back hides it from a check.
     let resolved = fs::read_link(format!("/proc/self/fd/{}", held.as_raw_fd())).unwrap();
-    let (by_name, registered) = registered_after_swap(&resolved, swap);
+    let (mut by_name, registered) = registered_after_swap(&resolved, swap);
     restore();
     assert_eq!(
         node_identity(&resolved.metadata().unwrap()),
@@ -409,6 +409,8 @@ fn a_name_swapped_at_the_registration_boundary_cannot_redirect_the_descriptor_li
     );
     assert!(registered.contains(&other_inode), "{registered:?}");
     assert!(!registered.contains(&held_inode), "{registered:?}");
+    // Drop only queues shutdown. Remove the control watch before observing process-wide inodes.
+    by_name.unwatch(&resolved).unwrap();
     drop(by_name);
     // The binding: the duplicated descriptor's link resolves to the held inode under the same swap.
     let (descriptor, _) = node_descriptor(node).unwrap();

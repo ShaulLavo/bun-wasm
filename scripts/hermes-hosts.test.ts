@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture.ts";
 import { loadNodeProgram } from "../web/scripts/node-linked.ts";
-import { programKind, programProfile } from "../src/engine-kind.ts";
+import { memoryMaximumBytes, programKind, programProfile } from "../src/engine-kind.ts";
 import { prepareProgram } from "../src/assets.ts";
 import { createMemoryReader } from "../web/src/memory-telemetry.ts";
 
@@ -48,7 +48,7 @@ test("package preparation uses the Hermes initializer profile without defaulting
 test("Hermes memory stays unknown while core capacity remains separate", () => {
   const { core } = quickjsPair("hermes");
   const instance = new WebAssembly.Instance(new WebAssembly.Module(core), { runtime_proc: { signal: () => 0 } });
-  const reader = createMemoryReader("hermes", instance);
+  const reader = createMemoryReader("hermes", instance, undefined, memoryMaximumBytes(core) ?? null);
   const snapshot = reader.sample(true);
   expect(snapshot.engine).toBe("hermes");
   expect(snapshot.wasmCapacityBytes).toBe(65536);
