@@ -23,7 +23,7 @@ const internal = {
 };
 load(root+"crypto.js")(internal);
 const c = internal.crypto;
-const path = process.env.NODE_CRYPTO_KEYS_SOURCE || root+"crypto_keys.js";
+const path = process.env.NODE_CRYPTO_KEYS_SOURCE || root+"crypto_keys.ts";
 const keys = load(path)(internal)(Buffer, (a,encoding)=>Buffer.from(a,encoding), timingSafeEqual);
 const data = new Uint8Array([1,2,3]);
 let failures = 0;
