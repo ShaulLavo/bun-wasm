@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { captureProgramInputs, parseProgramInputs, verifyProgramReceipt } from "../../scripts/guest-core-receipt";
+import { captureProgramInputs, parseProgramInputs, verifyProgramReceipt, type ProgramBuildReceipt } from "../../scripts/guest-core-receipt";
 import { artifactIdentity } from "../../scripts/guest-build-receipt";
 import { fixtureGit, withReceiptFixture } from "./guest-receipt-fixture";
 import { quickjsPair } from "./quickjs-plan-fixture";
@@ -78,7 +78,7 @@ test("program compatibility failures report exact original and expected input id
     const tagged = quickjsPair().core;
     const tagBytes = appendCustomSection(new Uint8Array(), ENGINE_SECTION, new TextEncoder().encode("quickjs")).byteLength;
     const core = tagged.subarray(0, tagged.length - tagBytes);
-    const receipt = { schema: 1, inputs: origin, artifact: artifactIdentity(core) };
+    const receipt = { schema: 1, inputs: origin, artifact: artifactIdentity(core) } satisfies ProgramBuildReceipt;
     const header = join(options.sysroot, "include/stdio.h");
     await writeFile(header, "changed transferred header\n");
     const expected = await captureProgramInputs(options, "core", { features: ["engine-split"] });
