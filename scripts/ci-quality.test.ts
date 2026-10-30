@@ -136,7 +136,7 @@ test("the refined Cargo cache keeps Cargo inputs and leaves JSC-only inputs to t
   const cargoKeys = rust.split("\n").filter(line => /native-cargo-v2-/.test(line));
   expect(cargoKeys).toHaveLength(3);
   for (const key of cargoKeys) {
-    expect(key).toContain("scripts/build-wasi-sysroot.ts");
+    expect(key.includes("scripts/build-wasi-sysroot.ts")).toBe(key.trim().startsWith("key:"));
     expect(key).toContain("jsc/wasi-jsc.cmake");
     expect(key).toContain("scripts/check-cmake-cache.cmake");
     expect(key).not.toContain("scripts/check-wasi-cmake-cache.sh");
@@ -269,7 +269,7 @@ test("native Cargo patch releases and Rust edits restore a previously saved comp
 test("native compatibility changes cannot select the prior Cargo cache", () => {
   const keys = nativeKeyTemplates(nativeCargoNamespace);
   const saved = fixtureCacheKey(keys.save, nativeCacheFiles);
-  for (const path of Object.keys(nativeCacheFiles).filter(path => !path.includes("Cargo.") && !path.endsWith("engine_jsc.rs") && !["crates/bunwasm-cli/build.rs", "third_party/rquickjs-sys/quickjs/quickjs.c", "scripts/build-bun-tools.sh", ".github/workflows/ci.yml", "env.sh", "bun.lock"].includes(path))) {
+  for (const path of Object.keys(nativeCacheFiles).filter(path => !path.includes("Cargo.") && !path.endsWith("engine_jsc.rs") && !["crates/bunwasm-cli/build.rs", "third_party/rquickjs-sys/quickjs/quickjs.c", "scripts/build-bun-tools.sh", "scripts/build-wasi-sysroot.ts", ".github/workflows/ci.yml", "env.sh", "bun.lock"].includes(path))) {
     const files = changedCacheFile(path);
     expect(fixtureCacheKey(keys.primary, files)).not.toBe(saved);
     expect(saved.startsWith(fixtureCacheKey(keys.prefix, files))).toBe(false);
@@ -1033,6 +1033,49 @@ test("native v4 fallback still excludes incompatible environment and toolchain i
     expect(saved.startsWith(expandNativeKey(prefix, changed))).toBe(false);
   }
 });
+
+for (const namespace of [nativeCargoNamespace, "native-v4"]) {
+  test(`${namespace} rejects actual Bun patch and native toolchain mutations`, () => {
+    const keys = nativeKeyTemplates(namespace);
+    const inputs = nativeCacheInputs(keys.primary);
+    const patch = Array.from(inputs.keys()).find(path => path.startsWith("patches/bun/") && path.endsWith(".patch"));
+    if (!patch) throw new Error("Missing native Bun patch input");
+    const saved = expandNativeKey(keys.save, inputs);
+    for (const path of [patch, ".cargo/config.toml", "rust-toolchain.toml", "jsc/wasi-jsc.cmake"]) {
+      const changed = new Map(inputs);
+      changed.set(path, Buffer.concat([readFileSync(new URL(`../${path}`, import.meta.url)), Buffer.from("\nnative compatibility mutation\n")]));
+      expect(expandNativeKey(keys.primary, changed), path).not.toBe(saved);
+      expect(expandNativeKey(keys.save, changed), path).toBe(expandNativeKey(keys.primary, changed));
+      expect(saved.startsWith(expandNativeKey(keys.prefix, changed)), path).toBe(false);
+    }
+  });
+
+  test(`${namespace} keeps shared-only libc patches out of ordinary native identities`, () => {
+    const keys = nativeKeyTemplates(namespace);
+    const inputs = nativeCacheInputs(keys.primary);
+    const saved = expandNativeKey(keys.save, inputs);
+    for (const path of ["patches/wasi-libc/group-grow.patch", "patches/wasi-libc/.gitattributes"]) {
+      const changed = new Map(inputs);
+      changed.set(path, Buffer.concat([readFileSync(new URL(`../${path}`, import.meta.url)), Buffer.from("\nshared-only mutation\n")]));
+      expect(expandNativeKey(keys.primary, changed), path).toBe(saved);
+      expect(expandNativeKey(keys.save, changed), path).toBe(saved);
+      expect(saved.startsWith(expandNativeKey(keys.prefix, changed)), path).toBe(true);
+    }
+  });
+
+  test(`${namespace} refines sysroot builder identity while receipt-compatible native work remains restorable`, () => {
+    const keys = nativeKeyTemplates(namespace);
+    const inputs = nativeCacheInputs(keys.primary);
+    const saved = expandNativeKey(keys.save, inputs);
+    const path = "scripts/build-wasi-sysroot.ts";
+    const changed = new Map(inputs);
+    changed.set(path, Buffer.concat([readFileSync(new URL(`../${path}`, import.meta.url)), Buffer.from("\n// shared-only builder mutation\n")]));
+    const requested = expandNativeKey(keys.primary, changed);
+    expect(requested).not.toBe(saved);
+    expect(expandNativeKey(keys.save, changed)).toBe(requested);
+    expect(saved.startsWith(expandNativeKey(keys.prefix, changed))).toBe(true);
+  });
+}
 
 const prebuildStepName = "Build or verify the JSC prebuild";
 

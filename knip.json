@@ -4,6 +4,10 @@
     ".": {
       "entry": [
         "scripts/app-matrix/run.mjs",
+        "scripts/app-matrix/engine-memory-hook.ts",
+        "scripts/engine-producer.ts",
+        "scripts/replay-engine-lineage.ts",
+        "scripts/verify-engine-memory-browser.ts",
         "scripts/app-matrix/vinext-probe.ts",
         "scripts/fixtures/vinext-probe-control.ts",
         "scripts/app-matrix/reclassify.mjs",
@@ -11,6 +15,7 @@
         "scripts/app-matrix/next-acceptance-reference.ts",
         "scripts/app-matrix/*.test.{ts,mjs}",
         "tests/package/*.test.ts",
+        "tests/memory-telemetry.test.ts",
         "tests/check-worker-regressions.ts",
         "scripts/app-matrix/isolate.mjs",
         "scripts/bench/error-construction.js",
@@ -30,6 +35,7 @@
         "scripts/check-await-observer.ts",
         "scripts/check-encoded-slice.ts",
         "scripts/check-quickjs-async-context.ts",
+        "scripts/check-quickjs-memory-telemetry.ts",
         "scripts/crypto-review-vectors.mjs",
         "scripts/generate-*.{ts,mjs}",
         "scripts/guest-core-receipt.ts",
@@ -44,6 +50,7 @@
         "scripts/test-*.mjs",
         "scripts/transpile-runtime.ts",
         "scripts/vendor-node-streams.mjs",
+        "scripts/vendor-intl.ts",
         "scripts/wasm-size-breakdown.ts",
         "scripts/stream-polyfill-node-hooks.ts",
         "scripts/http-suite-report.ts",
@@ -90,7 +97,7 @@
         "tests/worker-bootstrap-browser-main.ts"
       ],
       "project": [
-        "src/**/*.{ts,js}",
+        "src/**/*.{ts,tsx,js}",
         "scripts/**/*.{ts,mjs}",
         "tests/**/*.{ts,mjs,js}",
         "guest-tests/**/*.ts"
@@ -108,7 +115,7 @@
         "tests/*.{test.ts,mjs,js}"
       ],
       "project": [
-        "src/**/*.ts",
+        "src/**/*.{ts,tsx}",
         "tests/**/*.{ts,mjs,js}"
       ],
       "ignoreDependencies": [

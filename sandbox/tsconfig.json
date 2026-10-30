@@ -9,7 +9,9 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@remix-run/component"
   },
   "include": ["src", "build.ts", "template/dev.ts"]
 }

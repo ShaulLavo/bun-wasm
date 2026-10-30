@@ -27,18 +27,27 @@ fn produced_quickjs_out(root: &Path) -> PathBuf {
         .expect("QuickJS library produced from the current source")
 }
 
-#[test]
-fn async_context_native_contracts() {
+fn native_contracts(script: &str) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .unwrap();
     let produced = produced_quickjs_out(&root);
     let status = std::process::Command::new("node")
-        .arg(root.join("scripts/check-quickjs-async-context.ts"))
+        .arg(root.join(script))
         .current_dir(&root)
         .env("BUN_WASM_QUICKJS_OUT_DIR", produced)
         .status()
-        .expect("run native QuickJS async-context contracts");
-    assert!(status.success(), "native QuickJS async-context contracts");
+        .expect("run native QuickJS contracts");
+    assert!(status.success(), "native QuickJS contracts: {script}");
+}
+
+#[test]
+fn async_context_native_contracts() {
+    native_contracts("scripts/check-quickjs-async-context.ts");
+}
+
+#[test]
+fn memory_telemetry_native_contracts() {
+    native_contracts("scripts/check-quickjs-memory-telemetry.ts");
 }

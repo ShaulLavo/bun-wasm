@@ -20,6 +20,8 @@ const emitted = readFileSync(output, "utf8");
 // Invert only the approved executable deltas. The pinned original AST hash guards the remainder.
 function originalSyntax(text: string): string {
   const replacements: [RegExp, string, number][] = [
+    [/resourceUsage: \(\) => \{\n      const rss = native\.memoryUsage\(\)\.rss;\n      return \{ userCPUTime: 0, systemCPUTime: 0, maxRSS: rss === null \? null : rss \/ 1024 \};\n    \}/g, "resourceUsage: () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: native.memoryUsage().rss / 1024 })", 1],
+    [/availableMemory: \(\) => \{\n      const rss = native\.memoryUsage\(\)\.rss;\n      return rss === null \? null : 4294967296 - rss;\n    \}/g, "availableMemory: () => 4294967296 - native.memoryUsage().rss", 1],
     [/execArgv: native\.execArgv\(\)/g, "execArgv: []", 1],
     [/  function makeReader\(\) \{\n    return internal\.require\("process_stdin"\)\(\);\n  \}\n/g, readFileSync(join(root, "scripts/fixtures/process-reader-before.txt"), "utf8"), 1],
     [/  function validateCursorCallback[\s\S]*?(?=  \/\/ stdout\/stderr:)/g, "", 1],
@@ -58,7 +60,7 @@ function syntax(text: string): string {
 }
 const original = originalSyntax(emitted);
 
-test("only approved staging, captured-failure, execArgv, execve and cursor changes affect the pinned process AST", () => {
+test("only approved staging, captured-failure, execArgv, execve, cursor and nullable memory changes affect the pinned process AST", () => {
   expect(createHash("sha256").update(syntax(original)).digest("hex")).toBe("392f346ac5d0efd2ad0b59a01bd8c8e34cb3e58a09f1d9fd2f53fbb4f37352d9");
   expect(emitted).toContain('"use strict";');
   expect(emitted).not.toContain("finally");
@@ -231,7 +233,7 @@ test("accepts raw environment/hooks and the real process native shapes", () => {
 const raw: unknown = n.env()[Symbol()]; i.workerEnvChange?.("accessor", raw);
 const main: boolean = i.require("worker_threads").isMainThread;
 n.writeStdout("x", true); n.writeStderr(new Uint8Array()); n.chdir("/");
-const rss: number = n.memoryUsage().rss; const bytes: Uint8Array = n.readStdin();
+const rss: number | null = n.memoryUsage().rss; const bytes: Uint8Array = n.readStdin();
 i.require("process_signals")(i.require("events").prototype, new Map());`);
   expect(result.stdout.toString()).toBe("");
   expect(result.exitCode).toBe(0);
@@ -275,3 +277,27 @@ for (const engine of ["bun", "node"]) {
     expect(result.stdout.toString()).toBe(`PASS native pipe process controls ${engine}\n`);
   });
 }
+
+for (const rss of [null, 2048]) test(`derived process memory preserves ${rss === null ? "unknown" : "known"} RSS`, () => {
+  const internal = {
+    native: {
+      platformInfo: { version: "test", revision: "test", arch: "wasm32" },
+      env: () => ({}), argv: () => ["bun"], execArgv: () => [], execPath: () => "/bin/bun",
+      hostSignal() { return 0; }, memoryUsage: () => ({ rss }),
+    },
+    require(name: string) {
+      if (name === "events") return function EventEmitter() {};
+      if (name === "process_signals") return () => () => false;
+      throw new Error(name);
+    },
+  };
+  const factory: unknown = runInContext(emitted, createContext({ Error, TypeError }));
+  assert.equal(typeof factory, "function");
+  if (typeof factory !== "function") throw new Error("missing process factory");
+  const process: unknown = factory(internal);
+  assert(process !== null && typeof process === "object");
+  const resources: unknown = Reflect.get(process, "resourceUsage")();
+  assert(resources !== null && typeof resources === "object");
+  expect(Reflect.get(resources, "maxRSS")).toBe(rss === null ? null : 2);
+  expect(Reflect.get(process, "availableMemory")()).toBe(rss === null ? null : 4294965248);
+});

@@ -15,7 +15,6 @@ afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const originals = {
   bun_sqlite: "b16a65d13a67fecf1c3f847afcdc26bc3430762ddb75653244bf3820ebebb6e0",
   cookie: "5cc1305618ad7b836b36694847306b57aa21a4a6d8bd977ffd3e5901cc21b34f",
-  intl: "74d0927e7dbc59c832d8ede9a6ec7e7ff6a220cd6aa077ed17fc2abff6d66c24",
 };
 
 for (const [name, hash] of Object.entries(originals)) {

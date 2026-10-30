@@ -24,7 +24,7 @@ missing FIFO type for kind 1 only. The native Wasmtime adapters in
 namespace without reading a payload or moving a file cursor. Closed descriptors return BADF;
 files, directories, terminals and runtime pipes remain distinct through duplication and remapping.
 
-`web/src/main.ts` and `sandbox/src/main.ts` use the public `fast|safe|memory` mode contract.
+`web/src/playground/playground.ts` and `sandbox/src/sandbox.ts` use the public `fast|safe|memory` mode contract.
 Their outer startup handlers share `web/src/startup.ts` to expose typed failures even when
 construction fails before a filesystem exists. Both pages retain the existing workspace
 names and never switch stores on failure. The original editor-gate fixture in

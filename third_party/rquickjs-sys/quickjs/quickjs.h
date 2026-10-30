@@ -602,10 +602,30 @@ typedef struct JSMemoryUsage {
     int64_t c_func_count, array_count;
     int64_t fast_array_count, fast_array_elements;
     int64_t binary_object_count, binary_object_size;
+    /* bun-wasm: attached backing stores, excluding WebAssembly.Memory aliases. */
+    int64_t array_buffer_count, array_buffer_size;
 } JSMemoryUsage;
 
 JS_EXTERN void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s);
 JS_EXTERN void JS_DumpMemoryUsage(FILE *fp, const JSMemoryUsage *s, JSRuntime *rt);
+
+/* bun-wasm: fixed-layout cache. UINT64_MAX means unknown; no readout allocates. */
+typedef struct JSBunwasmMemoryTelemetry {
+    uint64_t abi_version, byte_size, refresh_sequence;
+    uint64_t malloc_size, memory_used_size, array_buffer_size, array_buffer_count;
+    uint64_t wasm_capacity, failed_size, failed_category, failed_size_known, counters_valid;
+} JSBunwasmMemoryTelemetry;
+JS_EXTERN const JSBunwasmMemoryTelemetry *JS_bunwasm_MemoryTelemetry(JSRuntime *rt);
+JS_EXTERN const JSBunwasmMemoryTelemetry *JS_bunwasm_RefreshMemoryTelemetry(JSRuntime *rt);
+
+/* bun-wasm: first failed request, captured before exception construction. */
+#define JS_BUNWASM_ALLOC_MALLOC 1
+#define JS_BUNWASM_ALLOC_CALLOC 2
+#define JS_BUNWASM_ALLOC_REALLOC 3
+#define JS_BUNWASM_ALLOC_ARRAY_BUFFER 4
+JS_EXTERN uint32_t JS_bunwasm_GetAllocationFailure(JSRuntime *rt,
+                                                 uint64_t *size, bool *size_known);
+JS_EXTERN void JS_bunwasm_ClearAllocationFailure(JSRuntime *rt);
 
 /* atom support */
 #define JS_ATOM_NULL 0

@@ -327,6 +327,12 @@ typedef struct JSValueLink {
 struct JSRuntime {
     JSMallocFunctions mf;
     JSMallocState malloc_state;
+    /* bun-wasm: no allocation or JS values in the failure path. */
+    JSBunwasmMemoryTelemetry bunwasm_memory_telemetry;
+    uint64_t bunwasm_failed_size;
+    uint32_t bunwasm_failed_category;
+    uint32_t bunwasm_allocation_category;
+    bool bunwasm_failed_size_known;
     JSArenaState arena_state;
     const char *rt_info;
 
@@ -2000,6 +2006,38 @@ static void js_arena_free_all(JSRuntime *rt)
     }
 }
 
+/* bun-wasm: preserve the original request through error construction and readout. */
+static void js_bunwasm_record_allocation_failure(JSRuntime *rt, uint64_t size,
+                                                bool known, uint32_t category)
+{
+    if (rt->bunwasm_failed_category)
+        return;
+    rt->bunwasm_failed_size = size;
+    rt->bunwasm_failed_size_known = known;
+    rt->bunwasm_failed_category = rt->bunwasm_allocation_category ?
+        rt->bunwasm_allocation_category : category;
+    rt->bunwasm_memory_telemetry.failed_size = known ? size : UINT64_MAX;
+    rt->bunwasm_memory_telemetry.failed_category = rt->bunwasm_failed_category;
+    rt->bunwasm_memory_telemetry.failed_size_known = known;
+}
+
+uint32_t JS_bunwasm_GetAllocationFailure(JSRuntime *rt, uint64_t *size, bool *size_known)
+{
+    *size = rt->bunwasm_failed_size;
+    *size_known = rt->bunwasm_failed_size_known;
+    return rt->bunwasm_failed_category;
+}
+
+void JS_bunwasm_ClearAllocationFailure(JSRuntime *rt)
+{
+    rt->bunwasm_failed_size = 0;
+    rt->bunwasm_failed_size_known = false;
+    rt->bunwasm_failed_category = 0;
+    rt->bunwasm_memory_telemetry.failed_size = UINT64_MAX;
+    rt->bunwasm_memory_telemetry.failed_category = 0;
+    rt->bunwasm_memory_telemetry.failed_size_known = 0;
+}
+
 void *js_calloc_rt(JSRuntime *rt, size_t count, size_t size)
 {
     void *ptr;
@@ -2008,22 +2046,26 @@ void *js_calloc_rt(JSRuntime *rt, size_t count, size_t size)
     /* Do not allocate zero bytes: behavior is platform dependent */
     assert(count != 0 && size != 0);
 
-    if (size > 0)
-        if (unlikely(count != (count * size) / size))
-            return NULL;
+    if (unlikely(count > SIZE_MAX / size)) {
+        js_bunwasm_record_allocation_failure(rt, 0, false, JS_BUNWASM_ALLOC_CALLOC);
+        return NULL;
+    }
 
     s = &rt->malloc_state;
     /* When malloc_limit is 0 (unlimited), malloc_limit - 1 will be SIZE_MAX. */
     if (unlikely(s->malloc_size + (count * size) > s->malloc_limit - 1))
-        return NULL;
+        goto fail;
 
     ptr = js_arena_calloc(rt, count, size);
     if (!ptr)
-        return NULL;
+        goto fail;
 
     s->malloc_count++;
     s->malloc_size += js_arena_usable_size(rt, ptr) + MALLOC_OVERHEAD;
     return ptr;
+ fail:
+    js_bunwasm_record_allocation_failure(rt, count * size, true, JS_BUNWASM_ALLOC_CALLOC);
+    return NULL;
 }
 
 void *js_malloc_rt(JSRuntime *rt, size_t size)
@@ -2038,15 +2080,18 @@ void *js_malloc_rt(JSRuntime *rt, size_t size)
     s = &rt->malloc_state;
     /* When malloc_limit is 0 (unlimited), malloc_limit - 1 will be SIZE_MAX. */
     if (unlikely(s->malloc_size + size > s->malloc_limit - 1))
-        return NULL;
+        goto fail;
 
     ptr = js_arena_malloc(rt, size);
     if (!ptr)
-        return NULL;
+        goto fail;
 
     s->malloc_count++;
     s->malloc_size += js_arena_usable_size(rt, ptr) + MALLOC_OVERHEAD;
     return ptr;
+ fail:
+    js_bunwasm_record_allocation_failure(rt, size, true, JS_BUNWASM_ALLOC_MALLOC);
+    return NULL;
 }
 
 void js_free_rt(JSRuntime *rt, void *ptr)
@@ -2075,7 +2120,11 @@ void *js_realloc_rt(JSRuntime *rt, void *ptr, size_t size)
     if (!ptr) {
         if (size == 0)
             return NULL;
-        return js_malloc_rt(rt, size);
+        uint32_t category = rt->bunwasm_allocation_category;
+        rt->bunwasm_allocation_category = category ? category : JS_BUNWASM_ALLOC_REALLOC;
+        ptr = js_malloc_rt(rt, size);
+        rt->bunwasm_allocation_category = category;
+        return ptr;
     }
     if (unlikely(size == 0)) {
         js_free_rt(rt, ptr);
@@ -2085,14 +2134,17 @@ void *js_realloc_rt(JSRuntime *rt, void *ptr, size_t size)
     s = &rt->malloc_state;
     /* When malloc_limit is 0 (unlimited), malloc_limit - 1 will be SIZE_MAX. */
     if (s->malloc_size + size - old_size > s->malloc_limit - 1)
-        return NULL;
+        goto fail;
 
     ptr = js_arena_realloc(rt, ptr, size);
     if (!ptr)
-        return NULL;
+        goto fail;
 
     s->malloc_size += js_arena_usable_size(rt, ptr) - old_size;
     return ptr;
+ fail:
+    js_bunwasm_record_allocation_failure(rt, size, true, JS_BUNWASM_ALLOC_REALLOC);
+    return NULL;
 }
 
 size_t js_malloc_usable_size_rt(JSRuntime *rt, const void *ptr)
@@ -2365,6 +2417,12 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     rt = mf->js_calloc(opaque, 1, sizeof(JSRuntime));
     if (!rt)
         return NULL;
+    rt->bunwasm_memory_telemetry = (JSBunwasmMemoryTelemetry) {
+        .abi_version = 1, .byte_size = sizeof(JSBunwasmMemoryTelemetry),
+        .malloc_size = UINT64_MAX, .memory_used_size = UINT64_MAX,
+        .array_buffer_size = UINT64_MAX, .array_buffer_count = UINT64_MAX,
+        .wasm_capacity = UINT64_MAX, .failed_size = UINT64_MAX,
+    };
     rt->mf = *mf;
     if (!rt->mf.js_malloc_usable_size) {
         /* use dummy function if none provided */
@@ -7685,6 +7743,15 @@ static void compute_value_size(JSValue val, JSMemoryUsage_helper *hp)
     }
 }
 
+/* bun-wasm: typed views share this object; borrowed wasm memory is capacity. */
+static void js_bunwasm_count_array_buffer(JSMemoryUsage *s, JSArrayBuffer *abuf)
+{
+    if (!abuf || !abuf->data || abuf->detached || abuf->wasm_memory)
+        return;
+    s->array_buffer_count++;
+    s->array_buffer_size += abuf->byte_length;
+}
+
 void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
 {
     struct list_head *el, *el1;
@@ -7886,6 +7953,7 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
         case JS_CLASS_SHARED_ARRAY_BUFFER: /* u.array_buffer */
             {
                 JSArrayBuffer *abuf = p->u.array_buffer;
+                js_bunwasm_count_array_buffer(s, abuf);
                 if (abuf) {
                     s->memory_used_count += 1;
                     s->memory_used_size += sizeof(*abuf);
@@ -7975,6 +8043,30 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
     s->memory_used_size += s->atom_size + s->str_size +
         s->obj_size + s->prop_size + s->shape_size +
         s->js_func_size + s->js_func_code_size + s->js_func_pc2line_size;
+}
+
+/* bun-wasm: accessor only returns cached bytes, including a failure latched in-place. */
+const JSBunwasmMemoryTelemetry *JS_bunwasm_MemoryTelemetry(JSRuntime *rt)
+{
+    return &rt->bunwasm_memory_telemetry;
+}
+
+/* bun-wasm: call only at a normal boundary, never while unwinding a trap or OOM. */
+const JSBunwasmMemoryTelemetry *JS_bunwasm_RefreshMemoryTelemetry(JSRuntime *rt)
+{
+    JSMemoryUsage usage;
+    JSBunwasmMemoryTelemetry *cache = &rt->bunwasm_memory_telemetry;
+    JS_ComputeMemoryUsage(rt, &usage);
+    cache->malloc_size = usage.malloc_size;
+    cache->memory_used_size = usage.memory_used_size;
+    cache->array_buffer_size = usage.array_buffer_size;
+    cache->array_buffer_count = usage.array_buffer_count;
+#if defined(__wasm__)
+    cache->wasm_capacity = (uint64_t)__builtin_wasm_memory_size(0) * 65536;
+#endif
+    cache->refresh_sequence++;
+    cache->counters_valid = 1;
+    return cache;
 }
 
 void JS_DumpMemoryUsage(FILE *fp, const JSMemoryUsage *s, JSRuntime *rt)
@@ -59433,6 +59525,32 @@ static uint8_t const typed_array_size_log2[JS_TYPED_ARRAY_COUNT] = {
     1, 2, 3                 // Float16Array, Float32Array, Float64Array
 };
 
+static void *js_bunwasm_shared_array_buffer_mallocz(JSContext *ctx, size_t size)
+{
+    JSRuntime *rt = ctx->rt;
+    void *ptr = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque, size);
+    if (!ptr) {
+        js_bunwasm_record_allocation_failure(rt, size, true, JS_BUNWASM_ALLOC_ARRAY_BUFFER);
+        JS_ThrowOutOfMemory(ctx);
+        return NULL;
+    }
+    memset(ptr, 0, size);
+    return ptr;
+}
+
+/* bun-wasm: tag backing requests before the wrappers construct an error. */
+static void *js_bunwasm_array_buffer_mallocz(JSContext *ctx, size_t size)
+{
+    JSRuntime *rt = ctx->rt;
+    void *ptr;
+    rt->bunwasm_allocation_category = JS_BUNWASM_ALLOC_ARRAY_BUFFER;
+    ptr = js_calloc_rt(rt, 1, size);
+    rt->bunwasm_allocation_category = 0;
+    if (!ptr)
+        JS_ThrowOutOfMemory(ctx);
+    return ptr;
+}
+
 static JSValue js_array_buffer_constructor3(JSContext *ctx,
                                             JSValueConst new_target,
                                             uint64_t len, uint64_t *max_len,
@@ -59486,14 +59604,12 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
             // TOOD(bnoordhuis) resizing backing memory for SABs atomically
             // is hard so we cheat and allocate |maxByteLength| bytes upfront
             sab_alloc_len = max_len ? *max_len : len;
-            abuf->data = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque,
-                                                 max_int(sab_alloc_len, 1));
+            abuf->data = js_bunwasm_shared_array_buffer_mallocz(ctx, max_int(sab_alloc_len, 1));
             if (!abuf->data)
                 goto fail;
-            memset(abuf->data, 0, sab_alloc_len);
         } else {
             /* the allocation must be done after the object creation */
-            abuf->data = js_mallocz(ctx, max_int(len, 1));
+            abuf->data = js_bunwasm_array_buffer_mallocz(ctx, max_int(len, 1));
             if (!abuf->data)
                 goto fail;
         }
@@ -59505,7 +59621,7 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
         if (buf) {
             abuf->data = buf;
         } else {
-            abuf->data = js_mallocz(ctx, 1);
+            abuf->data = js_bunwasm_array_buffer_mallocz(ctx, 1);
             if (!abuf->data)
                 goto fail;
             realloc_func = js_array_buffer_realloc;
@@ -59531,7 +59647,11 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
 static void *js_array_buffer_realloc(JSRuntime *rt, void *opaque, void *ptr,
                                      size_t size)
 {
-    return js_realloc_rt(rt, ptr, size);
+    void *result;
+    rt->bunwasm_allocation_category = JS_BUNWASM_ALLOC_ARRAY_BUFFER;
+    result = js_realloc_rt(rt, ptr, size);
+    rt->bunwasm_allocation_category = 0;
+    return result;
 }
 
 static JSValue js_array_buffer_constructor2(JSContext *ctx,
