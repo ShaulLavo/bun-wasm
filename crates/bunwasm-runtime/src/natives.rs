@@ -555,6 +555,23 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
     });
 }
 
+#[cfg(test)]
+mod mkdir_tests;
+
+fn mkdir_recursive(path: &str) -> io::Result<Option<String>> {
+    let mut first = None;
+    let mut current = String::new();
+    for part in path.split('/').filter(|p| !p.is_empty()) {
+        current = format!("{current}/{part}");
+        if fs::metadata(&current).is_ok() {
+            continue;
+        }
+        fs::create_dir(&current)?;
+        first.get_or_insert_with(|| current.clone());
+    }
+    Ok(first)
+}
+
 fn install_fs(t: &mut Table) {
     t.add("readFile", |a| {
         let path = a.str(0)?;
@@ -601,17 +618,7 @@ fn install_fs(t: &mut Table) {
             fs::create_dir(path).map_err(|e| io_error(e, "mkdir", Some(path)))?;
             return Ok(Val::Null);
         }
-        // Node returns the first directory actually created.
-        let mut first = None;
-        let mut current = String::new();
-        for part in path.split('/').filter(|p| !p.is_empty()) {
-            current = format!("{current}/{part}");
-            if fs::metadata(&current).is_ok() {
-                continue;
-            }
-            fs::create_dir(&current).map_err(|e| io_error(e, "mkdir", Some(path)))?;
-            first.get_or_insert_with(|| current.clone());
-        }
+        let first = mkdir_recursive(path).map_err(|e| io_error(e, "mkdir", Some(path)))?;
         Ok(first.map_or(Val::Null, Val::Str))
     });
     t.add("readdir", |a| {
