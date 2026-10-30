@@ -17,6 +17,7 @@ use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
+use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -555,6 +556,32 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
     });
 }
 
+#[cfg(test)]
+mod mkdir_tests;
+
+fn mkdir_recursive(path: &str) -> io::Result<Option<String>> {
+    let mut pending = vec![Path::new(path)];
+    let mut first = None;
+    while let Some(current) = pending.pop() {
+        let Err(error) = fs::create_dir(current) else {
+            first = first.or(Some(current));
+            continue;
+        };
+        if error.kind() == io::ErrorKind::AlreadyExists
+            && fs::metadata(current).is_ok_and(|metadata| metadata.is_dir())
+        {
+            continue;
+        }
+        if error.kind() != io::ErrorKind::NotFound {
+            return Err(error);
+        }
+        let parent = current.parent().ok_or(error)?;
+        pending.push(current);
+        pending.push(parent);
+    }
+    Ok(first.map(|path| path.to_string_lossy().into_owned()))
+}
+
 fn install_fs(t: &mut Table) {
     t.add("readFile", |a| {
         let path = a.str(0)?;
@@ -601,17 +628,7 @@ fn install_fs(t: &mut Table) {
             fs::create_dir(path).map_err(|e| io_error(e, "mkdir", Some(path)))?;
             return Ok(Val::Null);
         }
-        // Node returns the first directory actually created.
-        let mut first = None;
-        let mut current = String::new();
-        for part in path.split('/').filter(|p| !p.is_empty()) {
-            current = format!("{current}/{part}");
-            if fs::metadata(&current).is_ok() {
-                continue;
-            }
-            fs::create_dir(&current).map_err(|e| io_error(e, "mkdir", Some(path)))?;
-            first.get_or_insert_with(|| current.clone());
-        }
+        let first = mkdir_recursive(path).map_err(|e| io_error(e, "mkdir", Some(path)))?;
         Ok(first.map_or(Val::Null, Val::Str))
     });
     t.add("readdir", |a| {
