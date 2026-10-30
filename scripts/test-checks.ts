@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { availableParallelism } from "node:os";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -85,9 +86,42 @@ export function runCheck(command: readonly string[], env = process.env): number 
   return child.status ?? 1;
 }
 
-function runOwner(owner: string): void {
+// Each test.sh run has its own scratch directory and test server, so fixture groups run side by side.
+export function nativeGroups(paths: readonly string[], count: number): string[][] {
+  const size = Math.max(1, Math.min(count, paths.length));
+  const groups = Array.from({ length: size }, (): string[] => []);
+  paths.forEach((path, index) => groups[index % size]!.push(path));
+  return groups;
+}
+
+function runBuffered(command: readonly string[], env: NodeJS.ProcessEnv): Promise<{ status: number; output: Buffer }> {
+  const [executable, ...args] = command;
+  if (!executable) throw new Error("Missing check command");
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"], env });
+    const chunks: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => chunks.push(chunk));
+    child.on("error", reject);
+    child.on("close", (status, signal) => {
+      if (signal) reject(new Error(`Check runner terminated by ${signal}`));
+      else resolvePromise({ status: status ?? 1, output: Buffer.concat(chunks) });
+    });
+  });
+}
+
+async function runNative(paths: readonly string[]): Promise<number> {
+  const count = Number(process.env.BUN_WASM_CHECK_JOBS ?? availableParallelism());
+  if (!Number.isInteger(count) || count < 1) throw new Error(`Invalid BUN_WASM_CHECK_JOBS: ${String(count)}`);
+  const env = { ...process.env, BUN_WASM_CI_CHECKS: "1" };
+  const results = await Promise.all(nativeGroups(paths, count).map(group => runBuffered(checkCommand("native", group), env)));
+  for (const result of results) process.stdout.write(result.output);
+  return results.find(result => result.status !== 0)?.status ?? 0;
+}
+
+async function runOwner(owner: string): Promise<void> {
   for (const batch of checkBatches(owner)) {
-    const status = runCheck(checkCommand(owner, batch), owner === "native" ? { ...process.env, BUN_WASM_CI_CHECKS: "1" } : process.env);
+    const status = owner === "native" ? await runNative(batch) : runCheck(checkCommand(owner, batch), process.env);
     if (status === 0) continue;
     process.exitCode = status;
     return;
@@ -98,5 +132,5 @@ if (import.meta.main) {
   const [owner, mode] = process.argv.slice(2);
   if (!owner || (mode !== undefined && mode !== "--list")) throw new Error("Usage: test-checks.ts <owner|local-runtime> [--list]");
   if (mode === "--list") console.log(selectChecks(owner).join("\n"));
-  else runOwner(owner);
+  else await runOwner(owner);
 }

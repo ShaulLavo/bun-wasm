@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { discoverChecks, automaticChecks, checkCommand, selectChecks } from "./test-checks";
+import { discoverChecks, automaticChecks, checkCommand, nativeGroups, selectChecks } from "./test-checks";
 import { oldSelections, proveCheckMigration } from "./migrations/discover-checks";
 import { qualityGates } from "./quality";
 import { rustTestPackages } from "./rust-test-packages";
@@ -61,6 +61,16 @@ test("owned Rust formatting blocks before native setup and has no late duplicate
   expect(rust.match(/quality-rust\.ts --checks-only/g)).toHaveLength(1);
   expect(rust).not.toContain("bun run quality --native");
   expect(rust).toContain("bun run quality:wasi");
+});
+
+test("native fixture groups cover every fixture once across parallel runs", () => {
+  const paths = selectChecks("native");
+  for (const count of [1, 2, 4, 1000]) {
+    const groups = nativeGroups(paths, count);
+    expect(groups).toHaveLength(Math.min(count, paths.length));
+    expect(groups.every(group => group.length > 0)).toBe(true);
+    expect(groups.flat().toSorted()).toEqual(paths.toSorted());
+  }
 });
 
 test("native fixture smoke selects the typed runtime behavior without another build", () => {
