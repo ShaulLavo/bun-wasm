@@ -2,11 +2,12 @@
 // service worker from web/src, each engine's wasm (gzipped), and the React and vanilla template sources.
 // BUN_WASM, JSC_WASM and BUN_BROWSER_WASM override the default ../dist/{bun,bun-jsc,bun-browser}.wasm.
 // BUN_TOOLS_WASM overrides ../dist/bun-tools.wasm; BASH_WEB_GUESTS_DIR overrides ../dist for bash-web guests (scripts/build-bash-web-shell.sh).
-import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { previewWebsocketScript } from "../web/preview-build";
 import { buildBrowserEntries, buildClassicWorker, buildShellAssets } from "../scripts/browser-build";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { templates } from "./src/template-catalog";
+import { templateFiles } from "./template-files";
 
 const here = import.meta.dir;
 const web = resolve(here, "../web");
@@ -55,17 +56,6 @@ if (await copyWasm(jscSource, "bun-jsc.wasm")) {
 await copyWasm(resolve(here, process.env.BUN_BROWSER_WASM ?? "../dist/bun-browser.wasm"), "bun-browser.wasm");
 
 await copyWasm(resolve(here, process.env.BUN_TOOLS_WASM ?? "../dist/bun-tools.wasm"), "bun-tools.wasm");
-
-async function templateFiles(directory: string, base = directory): Promise<Record<string, string>> {
-  const files: Record<string, string> = {};
-  for (const name of readdirSync(directory).sort()) {
-    if (name === "node_modules" || name === "dist") continue;
-    const path = join(directory, name);
-    if (statSync(path).isDirectory()) Object.assign(files, await templateFiles(path, base));
-    else files[relative(base, path)] = await Bun.file(path).text();
-  }
-  return files;
-}
 
 for (const template of templates) {
   const files = await templateFiles(join(here, template.directory));

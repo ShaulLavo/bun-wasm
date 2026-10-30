@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { templateFiles as exportTemplateFiles } from "../../sandbox/template-files";
 import { defaultTemplate, selectTemplate, templates } from "../../sandbox/src/template-catalog";
 import { templateFiles } from "../../sandbox/src/template";
 
@@ -37,8 +40,7 @@ test("project paths cannot escape or alias the workspace root", () => {
 for (const template of templates) {
   test(`${template.label} has a source-only Vite 8 project with real package scripts`, async () => {
     const root = join(import.meta.dir, "../../sandbox", template.directory);
-    const files: Record<string, string> = {};
-    for (const path of new Bun.Glob("**/*").scanSync({ cwd: root, onlyFiles: true })) files[path] = await Bun.file(join(root, path)).text();
+    const files = await exportTemplateFiles(root);
     expect(templateFiles(JSON.stringify({ files }))).toEqual(files);
     expect(files[template.editorFile]).toBeDefined();
     expect(Object.keys(files).some(path => path.startsWith("node_modules/"))).toBe(false);
@@ -62,4 +64,23 @@ test("project parsing preserves ordinary files named __proto__", () => {
   const files = Object.fromEntries([["package.json", packageJson], ["__proto__", "ordinary project file"]]);
   const parsed = templateFiles(JSON.stringify({ files }));
   expect(parsed?.["__proto__"]).toBe("ordinary project file");
+});
+
+test("source export preserves special filenames through project parsing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-template-export-"));
+  try {
+    const expected = Object.fromEntries([
+      ["package.json", packageJson], ["__proto__", "ordinary project file"],
+      ["constructor", "ordinary constructor file"], ["nested/source.ts", "export const value = 1;"],
+    ]);
+    mkdirSync(join(root, "nested"));
+    for (const [path, source] of Object.entries(expected)) writeFileSync(join(root, path), source);
+    for (const directory of ["node_modules", "dist"]) mkdirSync(join(root, directory));
+    writeFileSync(join(root, "node_modules/private.ts"), "private install");
+    writeFileSync(join(root, "dist/output.js"), "generated output");
+    const files = await exportTemplateFiles(root);
+    expect(Object.keys(files).sort()).toEqual(Object.keys(expected).sort());
+    expect(templateFiles(JSON.stringify({ files }))).toEqual(expected);
+    expect(Object.hasOwn(files, "__proto__")).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
