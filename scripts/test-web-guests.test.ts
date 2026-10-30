@@ -8,7 +8,7 @@ import { needsJsc, needsRust } from "./ci-changes";
 import { prepareWebGuestFixtures, webGuestArtifacts, webGuestEngines } from "./test-web-guests";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-const prebuild = workflow.split("\n  jsc-prebuild:\n")[1]!.split("\n  rust:\n")[0]!;
+const prebuild = workflow.split("\n  jsc-prebuild:\n")[1]!.split("\n  native-quality:\n")[0]!;
 const rust = workflow.split("\n  rust:\n")[1]!.split("\n  package:\n")[0]!;
 const web = workflow.split("\n  web:\n")[1]!.split("\n  process-bundles:\n")[0]!;
 
@@ -87,7 +87,7 @@ function nativeStepNames(id = "rust"): string[] {
 }
 
 test("the existing native producer owns each guest group once, after completed cache checkpoints", () => {
-  const names = nativeStepNames();
+  const names = nativeStepNames("native-quality").concat(nativeStepNames());
   const consumers = ["Build the single tools fixture in the existing native target", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)"];
   const saves = ["Save the JSC Cargo cache once per input revision", "Save the refined native Cargo cache once per input revision", "Save the native quality checkpoint"];
   for (const name of consumers.concat(saves)) expect(names.filter(value => value === name)).toHaveLength(1);
@@ -156,7 +156,7 @@ test("engine-specific changes keep their own native gates", () => {
 
 test("the prebuild job saves its completed cache, and the native job imports it before every guest gate", () => {
   const producer = nativeStepNames("jsc-prebuild");
-  const names = nativeStepNames();
+  const names = nativeStepNames("native-quality").concat(nativeStepNames());
   const owner = "Build or verify the JSC prebuild";
   const importer = "Import the verified JSC prebuild and sysroot";
   expect(producer.filter(value => value === owner)).toHaveLength(1);
@@ -164,7 +164,7 @@ test("the prebuild job saves its completed cache, and the native job imports it 
   expect(producer.indexOf("Package the verified prebuild and sysroot")).toBe(producer.indexOf(owner) + 2);
   expect(names).not.toContain(owner);
   const later = ["Blocking native quality checks", "Blocking JSC embedding and allocation checks", "Build one host-engine guest for real-browser source cache acceptance", "Build the single tools fixture in the existing native target", "Blocking Web guest cases (QuickJS and host engine)", "Blocking Web guest case (JSC)", "Save the JSC Cargo cache once per input revision", "Save the refined native Cargo cache once per input revision", "Save the native quality checkpoint"];
-  expect(names.filter(value => value === importer)).toHaveLength(1);
+  expect(names.filter(value => value === importer)).toHaveLength(2);
   for (const step of later) {
     expect(names.filter(value => value === step)).toHaveLength(1);
     expect(names.indexOf(step)).toBeGreaterThan(names.indexOf(importer));

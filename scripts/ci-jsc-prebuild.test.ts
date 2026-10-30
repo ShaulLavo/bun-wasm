@@ -20,6 +20,7 @@ const source = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.u
 const jobs = record(record(Bun.YAML.parse(source)).jobs);
 const producer = record(jobs["jsc-prebuild"]);
 const native = record(jobs.rust);
+const checkpoint = record(jobs["native-quality"]);
 
 function steps(job: Job): Job[] {
   if (!Array.isArray(job.steps)) throw new Error("Expected job steps");
@@ -67,7 +68,7 @@ function jobRuns(job: Job, needs: Readonly<Record<string, Need>>, cancelled: boo
 
 function guard(result: string): number | null {
   return spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", run(native, guardName)], {
-    env: { ...process.env, JSC_PREBUILD_RESULT: result }, encoding: "utf8", timeout: 3000,
+    env: { ...process.env, JSC_PREBUILD_RESULT: result, NATIVE_QUALITY_RESULT: "success" }, encoding: "utf8", timeout: 3000,
   }).status;
 }
 
@@ -75,7 +76,7 @@ test("the prebuild job runs for every native selection, independent of the JSC e
   expect(producer.needs).toBe("quality");
   expect(producer.if).toBe("needs.quality.outputs.rust == 'true'");
   expect(JSON.stringify(producer)).not.toContain("needs.quality.outputs.jsc");
-  expect(native.needs).toEqual(["quality", "jsc-prebuild"]);
+  expect(native.needs).toEqual(["quality", "jsc-prebuild", "native-quality"]);
   // A native-only change still builds the tools fixture, which links the prebuild.
   for (const [path, jsc] of [["crates/bunwasm-runtime/src/engine_quickjs.rs", false], ["jsc/configure.sh", true], ["scripts/build-jsc.sh", true]] satisfies [string, boolean][]) {
     expect(needsRust([path])).toBe(true);
@@ -93,7 +94,7 @@ function checkGraph({ quality, rust, jsc, outcome, cancelled }: GraphCase) {
   const qualityNeed = { result: quality, outputs: { rust, jsc, hermes: "false", shared: "false" } };
   const prebuildRuns = jobRuns(producer, { quality: qualityNeed }, cancelled);
   const prebuild = { result: prebuildRuns ? outcome : "skipped" };
-  const nativeRuns = jobRuns(native, { quality: qualityNeed, "jsc-prebuild": prebuild }, cancelled);
+  const nativeRuns = jobRuns(native, { quality: qualityNeed, "jsc-prebuild": prebuild, "native-quality": { result: prebuild.result } }, cancelled);
   const selected = quality === "success" && rust === "true" && !cancelled;
   expect(prebuildRuns).toBe(selected);
   // Skipping is reserved for the change filter, a failed quality job or a cancelled run.
@@ -127,6 +128,7 @@ test("both jobs run byte-identical setup, so the native job can re-verify in the
   const producerShared = shared(producer);
   expect(producerShared).toHaveLength(14);
   expect(producerShared).toEqual(shared(native));
+  expect(producerShared).toEqual(shared(checkpoint));
   const nativePaths = run(native, "Configure private JSC build paths");
   expect(run(producer, "Configure private JSC build paths")).toBe(nativePaths.slice(0, nativePaths.indexOf("\n")));
   expect(run(native, "Configure private JSC build paths")).toContain('JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"\n');
@@ -152,7 +154,7 @@ test("one job owns the sysroot and prebuild builds and caches; the native job on
   const download = steps(native).findIndex(item => item.uses === "actions/download-artifact@v4" && record(item.with).name === "jsc-prebuild");
   expect(download).toBe(names.indexOf(importName) - 1);
   expect(names.indexOf("Configure private JSC build paths")).toBe(download - 1);
-  for (const later of ["Build patched WASI sysroot", "Identify effective native build environment", "Identify JSC prebuild inputs", "Blocking native quality checks", "Build the single tools fixture in the existing native target"]) {
+  for (const later of ["Build patched WASI sysroot", "Identify effective native build environment", "Identify JSC prebuild inputs", "Build the single tools fixture in the existing native target"]) {
     expect(names.indexOf(later)).toBeGreaterThan(names.indexOf(importName));
   }
   expect(run(native, "Build patched WASI sysroot")).toContain("bun scripts/build-wasi-sysroot.ts");
