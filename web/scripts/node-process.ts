@@ -229,7 +229,10 @@ function installDescriptors(imports: NodeWasiImports, memory: () => WebAssembly.
   // and the unstarted instance's own table still owns and releases them.
   const release = (fd: number) => {
     try { original.fd_close!(fd); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ERR_WASI_NOT_STARTED") throw error; }
+    catch (error) {
+      const notStarted = typeof error === "object" && error !== null && "code" in error && error.code === "ERR_WASI_NOT_STARTED";
+      if (!notStarted) throw error;
+    }
   };
   const all = (1n << 30n) - 1n;
   for (let index = 0; index < preopenCount; index++) {
