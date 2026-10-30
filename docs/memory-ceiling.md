@@ -94,7 +94,8 @@ native `WebAssembly.Memory` is outside this maximum.
   fails it, and so does a 512 MiB link.
 - `tests/fixtures/strings-above-512mib` runs on the produced guests: QuickJS in
   the native fixture checks and JSC in `scripts/jsc-embedding.ts`, both blocking.
-  It fills memory past 560 MiB with 16 MiB blocks, so later 17 MiB allocations
+  It fills memory past 560 MiB with 16 MiB blocks, measured by the core's
+  `linearMemoryBytes` because engines report `rss` differently (JSC: null), so later 17 MiB allocations
   come from above them. `bunStringRoundTrip` (`bun:internal-for-testing`) wraps
   such a copy in Bun's own `String`, decodes it through `EncodedSlice`, and
   reports the address; the fixture requires it at or above `2**29` with identical

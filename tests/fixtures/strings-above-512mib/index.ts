@@ -2,7 +2,7 @@
 // wasm32 pointer tags used to corrupt them. Blocking on QuickJS (native checks) and JSC
 // (scripts/jsc-embedding.ts). The guest's linear memory maximum is 1 GiB.
 import { createHash } from "node:crypto";
-import { bunStringRoundTrip } from "bun:internal-for-testing";
+import { bunStringRoundTrip, linearMemoryBytes } from "bun:internal-for-testing";
 
 const MiB = 2 ** 20;
 const BOUNDARY = 2 ** 29;
@@ -19,15 +19,17 @@ async function outputs(): Promise<string[]> {
 
 const before = await outputs();
 
-// Live ballast in 16 MiB blocks until memory passes 560 MiB. The allocator gives each block the
+// Live ballast in 16 MiB blocks until memory passes 560 MiB. The core and the engine allocate
+// from one linear memory and one malloc, so the core reads that memory's size; engines report
+// process.memoryUsage().rss differently (JSC reports null). The allocator gives each block the
 // smallest free chunk that fits, so afterwards no free chunk below the ballast reaches 16 MiB.
 const ballast: Uint8Array[] = [];
-while (process.memoryUsage().rss < 560 * MiB) {
+while (linearMemoryBytes() < 560 * MiB) {
   const block = new Uint8Array(16 * MiB);
   block.fill(ballast.length & 0xff);
   ballast.push(block);
 }
-console.log("memory above 512 MiB", process.memoryUsage().rss > 512 * MiB);
+console.log("memory above 512 MiB", linearMemoryBytes() > 512 * MiB);
 
 // Each payload is larger than any hole left below the ballast, so Bun's String is built over
 // fresh memory past it and decoded through EncodedSlice there.

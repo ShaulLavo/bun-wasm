@@ -426,6 +426,14 @@ pub fn table(state: &Rc<State>) -> Table {
     t.add("bunStringRoundTrip", |a| {
         bun_string_round_trip(a.bytes(0)?, a.str(1)?)
     });
+    // The size of the one linear memory the core and every engine side allocate from, read by
+    // the core itself: engines report process.memoryUsage().rss differently (JSC: null).
+    #[cfg(target_arch = "wasm32")]
+    t.add("linearMemoryBytes", |_| {
+        Ok(Val::Num(
+            (core::arch::wasm32::memory_size(0) * 65_536) as f64,
+        ))
+    });
     crate::parse_env::install(&mut t);
     crate::node_path::install(&mut t);
     install_encoding(&mut t);

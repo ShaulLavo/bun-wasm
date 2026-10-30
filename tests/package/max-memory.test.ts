@@ -96,3 +96,13 @@ test("the QuickJS linker test refuses an out-of-range maximum before anything el
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// JSC (and Hermes) report process.memoryUsage().rss as null, so `rss < limit` never ends there and
+// the ballast filled the whole 1 GiB on JSC. The fixture measures the one linear memory instead.
+test("the high-address fixture stops on the shared linear memory, not an engine's rss", () => {
+  const fixture = read("tests/fixtures/strings-above-512mib/index.ts");
+  expect(fixture).not.toMatch(/memoryUsage\(\)\.rss\s*[<>]/);
+  expect(fixture).toContain("while (linearMemoryBytes() < 560 * MiB)");
+  expect(read("crates/bunwasm-runtime/src/natives.rs")).toContain('t.add("linearMemoryBytes"');
+  expect(read("crates/bunwasm-runtime/src/js/builtins.js")).toContain("linearMemoryBytes: () => native.linearMemoryBytes()");
+});
