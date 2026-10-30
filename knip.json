@@ -44,6 +44,7 @@
         "scripts/test-*.mjs",
         "scripts/transpile-runtime.ts",
         "scripts/vendor-node-streams.mjs",
+        "scripts/vendor-intl.ts",
         "scripts/wasm-size-breakdown.ts",
         "scripts/stream-polyfill-node-hooks.ts",
         "scripts/http-suite-report.ts",
