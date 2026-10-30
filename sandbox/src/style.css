@@ -105,11 +105,22 @@ select {
 #engine,
 #template,
 #file-select {
-  background: var(--bg);
+  background-color: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 4px 6px;
   font-size: 13px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%238b8fa3' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-position: right 10px center;
+  background-repeat: no-repeat;
+  background-size: 12px 12px;
+  padding: 4px 30px 4px 10px;
+}
+
+#engine,
+#template {
+  line-height: inherit;
 }
 
 #reset,
@@ -478,4 +489,15 @@ a.nav:hover {
 
 #copy-terminal:hover {
   border-color: var(--dim);
+}
+
+@media (forced-colors: active) {
+  #engine,
+  #template,
+  #file-select {
+    appearance: auto;
+    -webkit-appearance: auto;
+    background-image: none;
+    padding: 4px 6px;
+  }
 }
