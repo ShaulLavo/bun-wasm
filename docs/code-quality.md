@@ -77,9 +77,42 @@ archives and CMake state. `bun scripts/build-wasi-sysroot.ts` then verifies the
 imported sysroot against the native job's own tools. The prebuild log joins the
 always-run guest diagnostic upload.
 
-The native job keeps its 60-minute guard. The prebuild job has 45 minutes: a cold
-prebuild took up to 1739s on the slower runner class, plus setup, the sysroot and
-the hand-off. Every phase, fixture and runtime timeout keeps its own limit.
+The `Native quality checkpoint` job has a 45-minute guard. It runs the complete
+native quality step and the existing main-only quality cache checkpoint. It alone
+restores native Cargo state. It packs that target, Cargo registry/git sources,
+dependency checker, and prepared Bun/BoringSSL sources into a one-day run artifact.
+The existing native job keeps its name and 60-minute guard, imports this state,
+and runs all the remaining producers, compiler-backed runtime probes and fixtures.
+The JSC prebuild keeps its 45-minute guard. Individual timeouts do not change.
+
+The native handoff binds a closed three-archive list and digests to the run,
+producer attempt, source SHA/tree, absolute paths, effective tool/flag fingerprint,
+sysroot receipt and original JSC artifact digest. The consumer rejects foreign,
+missing or corrupt state and existing destination roots before importing. It
+reconstructs minimal Git configuration without credentials, verifies the restored
+Bun Git identity and clean tracked source, then runs the real `sync-bun.sh --check`.
+The archives preserve file modes, symlinks and mtimes. Source timestamp repair and
+all existing receipt, memory and toolchain guards still run. No import failure
+falls back to rebuilding or an older cache. No checkout `.git`, Git configuration,
+Cargo credentials, hooks, logs, environment dump or `node_modules` is transferred.
+Only the Git objects, refs, HEAD, index and shallow metadata needed by public
+source verification cross the boundary. External Git object alternates and linked
+worktree metadata are rejected rather than followed.
+
+On a failed-jobs-only retry, a successful quality job can remain from an earlier
+attempt. The consumer selects the artifact and expected attempt from that actual
+producer's outputs, not its own current attempt. The manifest still requires the
+same run, source and toolchain. A rerun of the quality producer creates an
+attempt-specific artifact and publishes its new digest only after packaging.
+A needed failed, cancelled or skipped quality producer explicitly fails the
+existing native check. Documentation-only selection and downstream Hermes and
+Processes conditions are unchanged.
+
+Cold-run evidence reached Web checks at 59m50s, including 24m59s of native quality.
+The partition leaves 34m51s of that observed work in the consumer, before transfer
+cost and unfinished Web checks. These are partitions, not measured after timings.
+Actual archive bytes, transfer cost, Cargo freshness and cold compliance must be
+recorded from the first real handoff. A warm run is not cold proof.
 
 One Cargo build overlaps others. Right after the native quality checkpoint,
 `Start the JSC Cargo guest build` runs `build-bun-jsc.sh` in its own session at

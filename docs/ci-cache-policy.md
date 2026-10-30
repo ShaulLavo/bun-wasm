@@ -10,6 +10,12 @@ keys, input hashes, build commands and required checks keep their existing guard
 Validated main checkpoints can still be saved before a later unrelated failure.
 Exact hits are not saved again. Bash-web uses separate restore/save actions so
 its post-job action cannot create a large PR-scoped archive.
+The native Cargo restore and main-only v4 quality checkpoint belong to
+`Native quality checkpoint`. Its run artifact transfers compiled state to the
+existing native job. That job does not restore over the handoff. Its original
+main-only v2 final save uses the original restore hit/matched-key outputs passed
+from the quality producer. All primary and compatibility key inputs stay intact.
+
 The sysroot and JSC prebuild caches are restored and saved only by the
 `JSC C/C++ prebuild` job. It hands both trees to the native job as a one-day run
 artifact, not as a cache, so the hand-off writes no PR-scoped cache archive.
@@ -37,3 +43,10 @@ without cancelling another lane's jobs. Cache cleanup uses reviewed exact IDs,
 with key, ref and size recorded before deletion. Preserve main archives, active
 compiled warm caches and unrelated cache categories. Recheck the inventory after
 deletions because old workflows may replenish PR copies.
+
+For the native quality boundary, run
+`bun test scripts/ci-native-handoff.test.ts` and
+`bun scripts/migrations/prove-native-quality-handoff.ts`.
+The latter restores the original files after each guard-removal mutation and
+rejects a non-green baseline. It runs only the tiny controller/workflow suites,
+not native or guest builds. Run it alone in an exclusive checkout.
