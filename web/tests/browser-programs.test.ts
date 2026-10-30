@@ -9,6 +9,7 @@ import { createWorkerProcessTransport, WorkerProcessClient, type WorkerProcessMe
 import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
 import { createWorkerPipeCodec } from "waffle/proc/worker-pipes";
 import { BrowserPrograms } from "../src/browser-programs";
+import waffleRelease from "../../scripts/waffle-release-inputs.json";
 
 const urls = {
   worker: new URL(import.meta.resolve("waffle/browser/preview1-worker")),
@@ -171,7 +172,7 @@ test("closing during installation removes its markers and refuses a late ready r
 });
 
 test("base families and Bun resolve one physical Waffle package", async () => {
-  const expected = "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.103/waffle-0.0.103.tgz";
+  const expected = waffleRelease.url;
   const physical = await physicalRuntime("waffle");
   const baseEntry = Bun.resolveSync("waffle-base", import.meta.dir);
   const baseRoot = await packageRoot(baseEntry);
