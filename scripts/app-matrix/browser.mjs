@@ -186,7 +186,7 @@ export async function browserHost({ root, options, launch, stop }) {
       if (errors.length) throw new Error(errors.join("\n"));
     } catch (error) {
       productError = error;
-      checked = { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server"), productError: String(error), browserDiagnostics: diagnostics() };
+      checked = { status: "fail", observations: checked?.observations ?? [], timedOut: error?.name === "TimeoutError", ...failure(String(error), "server"), productError: String(error), browserDiagnostics: diagnostics() };
     }
     try { await closeContext(page.context(), productError); }
     catch (error) {

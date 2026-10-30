@@ -12,6 +12,7 @@ function nativeControl(project: string, broken: string) {
   const source = join(project, "src/routes/index.tsx");
   const visits: string[] = [];
   const waits: string[] = [];
+  const pageErrors: Array<(error: Error) => void> = [];
   const frames: Array<(event: { payload: string }) => void> = [];
   const sockets: Array<(value: typeof socket) => void> = [];
   const marker = "bun-wasm product matrix";
@@ -32,11 +33,21 @@ function nativeControl(project: string, broken: string) {
       if (!readFileSync(source, "utf8").includes(text)) throw new Error("source marker differs");
       if (text !== marker && broken !== "hmr") emit('{"type":"update","updates":[{"type":"js-update","path":"/src/routes/index.tsx"}]}');
     },
-    async click() { if (broken !== "client-interaction") count++; },
+    async click() {
+      if (broken === "client-pageerror") {
+        const error = new Error("Client action threw");
+        for (const listener of pageErrors) listener(error);
+        return;
+      }
+      if (broken !== "client-interaction") count++;
+    },
     async count() { return 0; },
   });
   const page = {
-    on(event: string, listener: (value: typeof socket) => void) { if (event === "websocket") sockets.push(listener); },
+    on(event: string, listener: (value: typeof socket | Error) => void) {
+      if (event === "websocket") sockets.push(value => listener(value));
+      if (event === "pageerror") pageErrors.push(error => listener(error));
+    },
     async goto(url: string) {
       visits.push(url);
       query = new URL(url).searchParams.get("value") ?? "initial";
@@ -131,3 +142,16 @@ test("native SolidStart still rejects a source edit without a WebSocket update",
   expect(run.original).toBe(true);
   expect(run.closed).toBe(1);
 });
+
+for (const name of ["dev", "start"]) {
+  test(`native SolidStart ${name} keeps attempted observations when an action emits a page error`, async () => {
+    const run = await runNative(stage(name), "client-pageerror");
+    expect(run.result.status).toBe("fail");
+    expect("productError" in run.result && run.result.productError).toContain("Client action threw");
+    const expected = name === "dev" ? ["hmr", "ssr-query", "query-dom", "client-interaction"] : ["ssr-query", "query-dom", "client-interaction"];
+    expect(run.rows.map(row => [row.stage, row.status])).toEqual(expected.map(id => [id, id === "client-interaction" ? "fail" : "pass"]));
+    expect(run.rows.find(row => row.stage === "client-interaction")).toMatchObject({ blocker: "Error: counter did not change" });
+    expect(run.original).toBe(true);
+    expect(run.closed).toBe(1);
+  });
+}
