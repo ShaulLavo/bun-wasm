@@ -181,15 +181,13 @@ fn a_full_queue_becomes_one_terminal_overflow_then_end_of_stream() {
     for index in 0..=QUEUE {
         fs::write(f.root.join(format!("f{index}")), "x").unwrap();
     }
-    // Wait until every create has been delivered, then let one drain see them all.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while f.watches.open[&id].inbox.lock().unwrap().events.len() <= QUEUE {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "notifications did not arrive"
-        );
-        f.net.poll(100);
-    }
+    // The last rename follows every create on notify's one watcher thread. Unlike a raw event
+    // count, its delivery proves that one drain will see every encoded record while still unread.
+    let last = f.root.join(format!("f{QUEUE}"));
+    fs::rename(last, f.root.join("last")).unwrap();
+    f.delivered(id, |kind| {
+        matches!(kind, EventKind::Modify(ModifyKind::Name(_)))
+    });
     assert_eq!(f.drain(id), vec![(OVERFLOW, None)]);
     assert_eq!(f.watches.read(id, 4096), Read::Records(Vec::new()));
     fs::write(f.root.join("after"), "x").unwrap();
