@@ -9,14 +9,15 @@ import { projectFiles } from "./apps.mjs";
 import { fullstackApps } from "./product-fullstack";
 import { HarnessCleanupError } from "./cleanup";
 
-function ownedScratch(run: (scratch: string) => Promise<void>): Promise<void> {
+async function ownedScratch(run: (scratch: string) => Promise<void>): Promise<void> {
   const scratch = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-namespace-"));
-  return run(scratch).finally(() => { rmSync(scratch, { recursive: true, force: true }); });
+  try { await run(scratch); }
+  finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 
 function runner(scratch: string, execute: () => Promise<unknown> = async () => ({ status: "pass" })) {
   const source = readFileSync(new URL("./run.mjs", import.meta.url), "utf8");
-  const declarations = ["prepare", "nativeApp"].map(name => {
+  const declarations = ["prepare", "nativeStages", "nativeApp"].map(name => {
     const match = source.match(new RegExp(`^(?:async )?function ${name}\\([\\s\\S]*?^}`, "m"));
     assert.ok(match, `Missing native ${name}`);
     return match[0];
@@ -78,11 +79,12 @@ test("native preparation creates a coherent private root containing the original
   const namespace = mounts(run.command(value));
   expect(namespace.get("/")).toBe(prepared.root);
   expect(namespace.get("/app")).toBe(prepared.path);
-  expect(namespace.has(scratch)).toBe(false);
+  expect(Array.from(namespace.values())).toEqual([prepared.root, prepared.path]);
   expect(statSync(prepared.root).isDirectory()).toBe(true);
   expect(readdirSync(prepared.root)).toEqual(["app"]);
   const fixture = fullstackApps.find(app => app.id === "fullstack-solidstart");
-  expect(readFileSync(join(prepared.path, "app.config.ts"), "utf8")).toBe(fixture?.files["app.config.ts"]);
+  assert.ok(fixture);
+  expect(readFileSync(join(prepared.path, "app.config.ts"), "utf8")).toBe(fixture.files["app.config.ts"]);
 }));
 
 test("native cases own disjoint writable tmp/cache and cannot mount each other's files", () => ownedScratch(async scratch => {
@@ -106,9 +108,18 @@ test("native cases own disjoint writable tmp/cache and cannot mount each other's
 }));
 
 test("a failed native stage removes only its owned case root", () => ownedScratch(async scratch => {
-  const run = runner(scratch, async () => { throw new Error("forced native stage failure"); });
+  const failure = new Error("forced native stage failure");
+  const run = runner(scratch, async () => { throw failure; });
   run.prepare("unrelated-case");
-  await expect(run.run()).rejects.toThrow("forced native stage failure");
+  await expect(run.run()).rejects.toBe(failure);
+  expect(existsSync(join(scratch, "fullstack-solidstart-quickjs"))).toBe(false);
+  expect(existsSync(join(scratch, "unrelated-case"))).toBe(true);
+}));
+
+test("successful native stages remove only their owned case root", () => ownedScratch(async scratch => {
+  const run = runner(scratch);
+  run.prepare("unrelated-case");
+  await run.run();
   expect(existsSync(join(scratch, "fullstack-solidstart-quickjs"))).toBe(false);
   expect(existsSync(join(scratch, "unrelated-case"))).toBe(true);
 }));
