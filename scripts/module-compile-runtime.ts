@@ -55,7 +55,7 @@ function productionRuntime(filename: string, compiledWrapper?: string, realHost 
   const runtime = bootstrap({
     engine: "host",
     contextHooks: false,
-    prepareVersion: 5,
+    prepareVersion: 6,
     preparedColumns: mapping.preparedColumns,
     preparedSourceURL: mapping.preparedSourceURL,
     preparedSourceName: mapping.preparedSourceName,

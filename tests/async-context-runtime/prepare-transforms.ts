@@ -30,6 +30,8 @@ const cases = [
   'function f(x) { return eval(x); }',
   'function f(x) { return (eval)(x); }',
   'function f(x) { return (0, eval)(x); }',
+  'function f(xs) { return eval(...xs); }',
+  'function f(xs) { return (0, eval)(...xs); }',
   'async function f(x) { const s = "é😀\ud800"; try { return await x; } finally {} }',
 ];
 cases.push('; async function emptyPrefix(x) { ; try { return await x; } finally {} }');
@@ -47,7 +49,6 @@ assert.ok(!staticBlock.includes("let __bunwasm_s"), staticBlock);
 const directive = prepare(cases[13]);
 assert.ok(directive.indexOf('"use strict"') < directive.indexOf("let __bunwasm_s"), directive);
 assert.equal(prepare('eval?.("x")'), 'eval?.("x")');
-assert.equal(prepare('eval(...xs)'), 'eval(...xs)');
 assert.equal(prepare('function invalid() { await @; }'), 'function invalid() { await @; }');
 assert.equal(prepare('"no work"'), '"no work"');
 assert.equal(prepare('new.target; super.x', "eval"), 'new.target; super.x');

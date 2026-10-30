@@ -209,7 +209,7 @@ Everything else, including the transpiler, resolver, `bun test`, `bun build`, sq
 
 Runtime-built JavaScript uses insertion-only preparation through Bun's parser.
 This includes all four dynamic constructors, their prototype `.constructor`
-routes, direct and `(0, eval)` calls, `vm.Script`, vm contexts, `vm.compileFunction`,
+routes, direct and `(0, eval)` calls, including spread arguments, `vm.Script`, vm contexts, `vm.compileFunction`,
 and the complete CommonJS `_compile` wrapper. A native continuation provider
 bypasses the hooks. Constructor argument conversion happens once, in order;
 preparation never wraps an awaited value in an extra promise or thenable.
@@ -247,7 +247,7 @@ semantics.
 - G4: `with (proxy)` sees hook-name lookups.
 - G5: catch-binding destructuring and defaults run before the handler hook.
 - G6: `await using` implicit suspension is unhooked and counted.
-- G7: aliased, member, optional and spread eval calls are unprepared. Spread eval is counted.
+- G7: aliased, member and optional eval calls are unprepared.
 - G8: the async-generator `.throw` wrapper changes its function identity.
 
 Host-originated job entry, raw polyfill awaits and a passing Next/HMR

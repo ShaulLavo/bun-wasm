@@ -49,7 +49,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
   };
   const empty = new Set(["stack_trace", "exit_provenance", "loop_scheduler", "builtins", "bun_builtin_globals", "function", "fake_timers"]);
   const native = {
-    engine: "host", contextHooks: false, prepareVersion: 5,
+    engine: "host", contextHooks: false, prepareVersion: 6,
     mainPath: () => "/entry.ts", now: () => performance.now(), getAsyncContext() {}, setAsyncContext() {},
     base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
     base64Decode: (text: string) => new Uint8Array(Buffer.from(text, "base64")),
