@@ -1,10 +1,49 @@
 import { programKindForBuild, programProfile } from "../../src/engine-kind";
+import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { expect, test } from "bun:test";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { prepareGuestBuildInputs, verifyGuestBuildReceipt, verifyGuestCompanions, writeGuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import { guestBuilds, hash } from "../../scripts/guest-source-manifest.ts";
-import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture, stageProgramFixture, wasm } from "./guest-receipt-fixture.ts";
+import { fixtureGit, receiptCli, withCliReceiptFixture, withReceiptFixture, stageProgramFixture, fixtureReceipt, wasm } from "./guest-receipt-fixture.ts";
+
+async function countCoreModules(core: Uint8Array, action: () => unknown): Promise<number> {
+  const constructor = WebAssembly.Module;
+  const coreHash = hash(core);
+  let constructions = 0;
+  WebAssembly.Module = new Proxy(constructor, {
+    construct(target, args: unknown[]) {
+      const bytes = args[0];
+      if (ArrayBuffer.isView(bytes) && hash(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)) === coreHash) constructions++;
+      return Reflect.construct(target, args);
+    },
+  });
+  try {
+    await action();
+    return constructions;
+  } finally {
+    WebAssembly.Module = constructor;
+  }
+}
+
+test("guest receipt verification constructs its core module once", async () => {
+  const { core, side } = quickjsPair();
+  const receipt = fixtureReceipt(core, "quickjs", side);
+  const constructions = await countCoreModules(core, () => verifyGuestBuildReceipt(core, receipt));
+  expect(constructions).toBe(1);
+});
+
+test("guest receipt composition constructs one core module per identity and verification", async () => {
+  await withReceiptFixture(async options => {
+    const selected = { ...options, build: "quickjs" } satisfies typeof options;
+    const artifact = join(options.repository, "dist", guestBuilds.quickjs.artifact);
+    await stageProgramFixture(selected, artifact, "quickjs");
+    const inputs = await prepareGuestBuildInputs(selected);
+    const core = await Bun.file(artifact).bytes();
+    const constructions = await countCoreModules(core, () => writeGuestBuildReceipt(selected, artifact, inputs));
+    expect(constructions).toBe(2);
+  });
+});
 
 test("guest receipt binds committed repository, selected engine, consumed inputs, tools and exact final bytes", async () => {
   await withReceiptFixture(async (options, artifact) => {

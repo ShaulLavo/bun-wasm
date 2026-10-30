@@ -133,6 +133,7 @@
     }
   },
   "ignoreBinaries": [
+    "ninja",
     "unshare",
     "rustc",
     "ss",

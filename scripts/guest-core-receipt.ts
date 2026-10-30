@@ -193,7 +193,9 @@ export async function captureProgramInputs(options: SourceOptions, scope: Progra
   const core = scope === "core" ? coreSelection(selection) : undefined;
   const profile = core ? core.profile ?? "split" : engineProfile;
   const sharedSysroot = profile === "shared-group" ? verifySharedSysroot(options.sysroot) : (verifySplitSysroot(options.sysroot), undefined);
-  const manifest = await captureSourceManifest(options, scope);
+  const buildStd = profile === "shared-group";
+  const captured = buildStd ? { ...options, rustSourceLib: buildStdSource(options) } : options;
+  const manifest = await captureSourceManifest(captured, scope, buildStd);
   if (sharedSysroot) {
     const content = sharedGroupContent(options, scope, manifest, sharedSysroot, core);
     return { schema: 1, scope, source: manifest.source, content, contentSha256: hash(JSON.stringify(content)) };
@@ -206,6 +208,13 @@ export async function captureProgramInputs(options: SourceOptions, scope: Progra
       link: ["--shared", "--Bsymbolic", "--no-export-dynamic", "--gc-sections", "--no-entry", "--import-memory=env,memory", "--import-table", "--allow-undefined"], spillPointers: scope === "jsc", smokeExports: false };
   const content = { selection: selected, command, groups: manifest.groups, tools: manifest.tools, omissions: manifest.omissions };
   return { schema: 1, scope, source: manifest.source, content, contentSha256: hash(JSON.stringify(content)) };
+}
+
+function buildStdSource(options: SourceOptions): string {
+  if (options.rustSourceLib) return options.rustSourceLib;
+  const rustc = options.tools.rustc;
+  if (!rustc) throw new Error("Shared-group inputs need the pinned Rust compiler");
+  return join(run([rustc, "--print", "sysroot"], options.repository), "lib/rustlib/src/rust/library");
 }
 
 /** Shared-group inputs: the exact flags, link, sysroot identity and profile, never a split field set. */
