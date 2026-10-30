@@ -17,7 +17,7 @@ test("native quality has a bounded checkpoint before the unchanged final native 
 
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readlinkSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
@@ -173,7 +173,7 @@ function runFixture(root: string, run: Parameters<typeof fixture>[0]): void {
 }
 function prepareImport(root: string, env: Record<string, string>, invoke: Parameters<Parameters<typeof fixture>[0]>[2]): Record<string, string> {
   const packed = invoke("native-quality", packName);
-  expect(packed.status, packed.stderr).toBe(0);
+  expect(packed.status, packed.stderr.slice(0, 8000)).toBe(0);
   const values = Object.fromEntries(readFileSync(env.GITHUB_OUTPUT!, "utf8").trim().split("\n").map(row => row.split("=")));
   for (const path of ["repo/target", "repo/vendor/bun", "repo/vendor/boringssl", "temp/cargo/registry", "temp/cargo/git", "temp/cargo/bin/cargo-machete"]) rmSync(join(root, path), { recursive: true, force: true });
   writeFileSync(env.GITHUB_OUTPUT!, "");
@@ -221,6 +221,42 @@ test("tracked dependency fixtures survive while installed packages stay private"
       expect(git(repository, "status", "--porcelain", "--untracked-files=no")).toBe("");
     }
     expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("native-ready=true\n");
+  });
+});
+
+function largeTrackedSource(directory: string, listing: string): void {
+  const path = join(directory, ...Array.from({ length: 5 }, (_, index) => `source-${index}-${"x".repeat(210)}`));
+  mkdirSync(path, { recursive: true });
+  for (let index = 0; index < 1024; index++) writeFileSync(join(path, `${index}.ts`), "");
+  git(directory, "add", "--", path);
+  git(directory, "commit", "-qm", "large tracked source inventory");
+  const output = openSync(listing, "w");
+  try { execFileSync("git", ["-C", directory, "ls-files", "-z"], { stdio: ["ignore", output, "pipe"] }); }
+  finally { closeSync(output); }
+  expect(statSync(listing).size).toBeGreaterThan(1024 * 1024);
+}
+
+test("large tracked source inventories preserve dependency fixtures without overflowing Git output", () => {
+  fixture((root, env, invoke) => {
+    const repository = join(root, "repo/vendor/bun");
+    writeFileSync(join(repository, "node_modules/public.ts"), "public root fixture\n");
+    mkdirSync(join(repository, "fixtures/exact"));
+    writeFileSync(join(repository, "fixtures/exact/node_modules"), "public exact-name fixture\n");
+    git(repository, "add", "-f", "node_modules/public.ts", "fixtures/exact/node_modules");
+    largeTrackedSource(repository, join(root, "tracked-paths"));
+    const verifier = join(root, "repo/scripts/sync-bun.sh");
+    writeFileSync(verifier, readFileSync(verifier, "utf8").replace(/^BUN_COMMIT=[a-f0-9]{40}$/m, `BUN_COMMIT=${git(repository, "rev-parse", "HEAD")}`));
+    const changes = prepareImport(root, env, invoke);
+    const imported = invoke("rust", unpackName, changes);
+    expect(imported.status, imported.stderr).toBe(0);
+    expect(readFileSync(join(repository, "fixtures/node_modules/public/index.ts"), "utf8")).toBe("export const fixture = true;\n");
+    expect(readFileSync(join(repository, "node_modules/public.ts"), "utf8")).toBe("public root fixture\n");
+    expect(readFileSync(join(repository, "fixtures/exact/node_modules"), "utf8")).toBe("public exact-name fixture\n");
+    expect(existsSync(join(repository, "fixtures/node_modules/public/.npmrc"))).toBe(false);
+    expect(existsSync(join(repository, "node_modules/private"))).toBe(false);
+    expect(git(repository, "status", "--porcelain", "--untracked-files=no")).toBe("");
+    expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("native-ready=true\n");
+    expect(existsSync(join(root, "temp/source-verified"))).toBe(true);
   });
 });
 

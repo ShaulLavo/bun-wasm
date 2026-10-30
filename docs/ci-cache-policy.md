@@ -15,6 +15,9 @@ The native Cargo restore and main-only v4 quality checkpoint belong to
 existing native job. That job does not restore over the handoff. Its original
 main-only v2 final save uses the original restore hit/matched-key outputs passed
 from the quality producer. All primary and compatibility key inputs stay intact.
+The handoff queries Git only for tracked `node_modules` fixture paths, not the
+entire source inventory. Public tracked fixtures survive without buffering all
+upstream path names. Untracked installs and credential files stay excluded.
 
 The sysroot and JSC prebuild caches are restored and saved only by the
 `JSC C/C++ prebuild` job. It hands both trees to the native job as a one-day run

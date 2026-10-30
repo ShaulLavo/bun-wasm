@@ -75,7 +75,7 @@ function trackDependencies(directory: string, path: string, tracked: Set<string>
   catch (error) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return; throw error; }
   if (metadata.isSymbolicLink()) throw new Error("Git metadata must not follow external links");
   if (!metadata.isDirectory()) throw new Error("Git metadata must be a private directory");
-  const files = execFileSync("git", ["-C", directory, "ls-files", "-z"], { encoding: "utf8" });
+  const files = execFileSync("git", ["-C", directory, "ls-files", "-z", "--", ":(glob)**/node_modules", ":(glob)**/node_modules/**"], { encoding: "utf8" });
   for (const file of files.split("\0")) {
     if (!file.split("/").includes("node_modules")) continue;
     ancestors(tracked, path === "." ? file : `${path}/${file}`);

@@ -18,6 +18,7 @@ const mutations: [string, string, string, string][] = [
   ["prebuild overlay", workflow, '          [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]\n', ""],
   ["prebuild stamp unchecked", workflow, "          source jsc/common.sh\n          check_jsc_inputs_stamp\n", ""],
   ["prebuild group unowned", workflow, "          set -m\n          (\n            set +m\n", "          (\n"],
+  ["unbounded tracked source listing", controller, '"ls-files", "-z", "--", ":(glob)**/node_modules", ":(glob)**/node_modules/**"', '"ls-files", "-z"'],
   ["tracked dependency fixtures omitted", controller, 'path.split("/").includes("node_modules") && !tracked.has(path)', 'path.split("/").includes("node_modules")'],
   ["untracked installs included", controller, 'path.split("/").includes("node_modules") && !tracked.has(path)', "false"],
   ["native manifest unchecked", controller, 'await hash(join(bundle, "manifest.json")) !== process.env.NATIVE_QUALITY_MANIFEST_SHA256', "false"],
