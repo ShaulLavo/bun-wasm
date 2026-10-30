@@ -5,14 +5,14 @@ function negotiationHeaders(metadata: Headers): Headers {
   const vary = headers.get("vary");
   if (!vary?.split(",").some(value => ["*", "accept-encoding"].includes(value.trim().toLowerCase())))
     headers.set("vary", vary ? `${vary}, Accept-Encoding` : "Accept-Encoding");
-  const cache = headers.get("cache-control");
-  if (!cache?.split(",").some(value => value.trim().toLowerCase() === "no-transform"))
-    headers.set("cache-control", cache ? `${cache}, no-transform` : "no-transform");
   return headers;
 }
 
 function represented(response: Response, metadata: Headers, encoding: Encoding): Response {
   const headers = negotiationHeaders(metadata);
+  const cache = headers.get("cache-control");
+  if (encoding !== "identity" && !cache?.split(",").some(value => value.trim().toLowerCase() === "no-transform"))
+    headers.set("cache-control", cache ? `${cache}, no-transform` : "no-transform");
   for (const field of ["content-length", "etag", "last-modified", "content-range", "accept-ranges"]) {
     const value = response.headers.get(field);
     if (value === null) headers.delete(field);
@@ -21,7 +21,7 @@ function represented(response: Response, metadata: Headers, encoding: Encoding):
   headers.set("content-type", "application/wasm");
   if (encoding === "identity") headers.delete("content-encoding");
   else headers.set("content-encoding", encoding);
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers, encodeBody: "manual" });
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers, encodeBody: encoding === "identity" ? "automatic" : "manual" });
 }
 
 function negotiationError(status: number, metadata: Headers): Response {

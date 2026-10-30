@@ -10,6 +10,7 @@ import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "
 const wasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
 const brotli = brotliCompressSync(wasm);
 const gzip = gzipSync(wasm);
+const rawOnly = Buffer.concat([wasm, Buffer.from([0, 0x80, 0x80, 0x08]), Buffer.alloc(128 * 1024)]);
 const program = "/programs/base/waffle-coreutils/dist/ls.wasm";
 let root: string;
 let origin: string;
@@ -63,7 +64,7 @@ beforeAll(async () => {
   await Bun.write(join(assets, "playground/index.html"), "<h1>playground</h1>");
   await Bun.write(join(assets, "chunks/chunk-a1.js"), "export const x = 1;");
   await Bun.write(join(assets, "unrelated.wasm"), wasm);
-  await Bun.write(join(assets, program.replace("ls.wasm", "raw-only.wasm")), wasm);
+  await Bun.write(join(assets, program.replace("ls.wasm", "raw-only.wasm")), rawOnly);
   await Bun.write(join(assets, "programs/base/readme.txt"), "unencoded static file");
   const payload = randomBytes(1024 * 1024);
   payload[0] = 0;
@@ -145,7 +146,7 @@ test.each(preferences)("Worker negotiates %s and sends the selected bytes unchan
   expect(response.headers["content-encoding"]).toBe(expected);
   expect(response.headers["content-type"]).toBe("application/wasm");
   if (response.headers["content-length"] !== undefined) expect(response.headers["content-length"]).toBe(String(response.body.length));
-  expect(response.headers["cache-control"]).toBe("public, max-age=60, no-transform");
+  expect(response.headers["cache-control"]).toBe(expected ? "public, max-age=60, no-transform" : "public, max-age=60");
   expect(response.headers["vary"]?.toLowerCase()).toContain("origin");
   expect(response.headers["vary"]?.toLowerCase()).toContain("accept-encoding");
   expect(response.headers["cross-origin-opener-policy"]).toBe("same-origin");
@@ -181,10 +182,32 @@ test("Worker handles nested playground URLs and queries without changing logical
   expect(response.body).toEqual(brotli);
 });
 
-test("Worker falls back to raw when a sidecar is absent, but honors identity refusal", async () => {
+test.each(["br,gzip", "br;q=0,gzip"])("raw-only programs retain native compression for %s", async accept => {
   const raw = program.replace("ls.wasm", "raw-only.wasm");
-  expect((await get(raw, "br,gzip")).body).toEqual(wasm);
+  expect(WebAssembly.validate(rawOnly)).toBe(true);
+  const direct = await get(raw, accept);
+  expect(direct.status).toBe(200);
+  expect(direct.body).toEqual(rawOnly);
+  expect(direct.headers["cache-control"]).not.toContain("no-transform");
+  expect(direct.headers["vary"]?.toLowerCase()).toContain("accept-encoding");
+  const native = await get(raw, accept, { origin: nativeOrigin });
+  const worker = await get(raw, accept, { origin: publicOrigin });
+  expect(worker.status).toBe(native.status);
+  expect(worker.headers["content-encoding"]).toBe(native.headers["content-encoding"]);
+  expect(worker.headers["content-encoding"]).toBe(accept.startsWith("br;q=0") ? "gzip" : "br");
+  expect(worker.body).toEqual(native.body);
+  expect(worker.body.length).toBeLessThan(rawOnly.length / 2);
+  const decoded = worker.headers["content-encoding"] === "br" ? brotliDecompressSync(worker.body) : gunzipSync(worker.body);
+  expect(decoded).toEqual(rawOnly);
+});
+
+test("raw-only programs preserve identity requests and refusals", async () => {
+  const raw = program.replace("ls.wasm", "raw-only.wasm");
+  const identity = await get(raw, "identity", { origin: publicOrigin });
+  expect(identity.headers["content-encoding"]).toBeUndefined();
+  expect(identity.body).toEqual(rawOnly);
   expect((await get(raw, "br,gzip,identity;q=0")).status).toBe(406);
+  expect((await get(raw, "*;q=0")).status).toBe(406);
 });
 
 test("Worker preserves HEAD and native asset range behavior", async () => {
