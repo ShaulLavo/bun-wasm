@@ -56,6 +56,12 @@ range become null. Version, exact byte length, wasm32 pointer range, alignment,
 and bounds are checked before decoding. Unknown categories keep their raw code.
 The reader never refreshes this record or enters an engine to read it.
 
+`memoryLimitBytes` comes from the linked core's declared maximum, whose build
+input is the single authority in `crates/bunwasm-cli/max-memory.txt`. It stays
+separate from current capacity and frozen failure-time capacity. If the core
+has no declared maximum, the reader keeps the limit unknown. See the
+[memory ceiling contract](../memory-ceiling.md).
+
 The shared channel retains the first frozen record across engine failure and
 teardown, independently of allocator and engine failure fields. The page
 validates all frozen fields before retaining a frame. Raw process snapshots
@@ -64,7 +70,12 @@ and do not infer headroom or allocation cause from the frozen values.
 Maintained controls compile the real core wrappers and pass the frozen record
 through the browser reader and shared channel. Existing frozen guests and hosts
 are not changed. A future canonical build must include the new core and host
-together with the JSC hook and matching build receipts.
+together with the JSC hook and matching build receipts. Native archive reuse
+must pass the producer's original compiler-input provenance checks. For Hermes,
+those checks recheck the original dependency metadata and bytes, then compare
+current repository inputs by content and resolved path. Unrelated checkout
+changes do not require a new archive, while changed compiler inputs do. This
+source integration supplies no new archive, stamp, composed guest, or receipt.
 
 The host reads JSC ABI 1 with exactly 24 u64 fields, QuickJS ABI 1 with
 exactly 12, and [Hermes ABI 1](hermes-memory-telemetry.md) with exactly eight.

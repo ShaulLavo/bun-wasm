@@ -2,13 +2,14 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { memoryMaximumBytes } from "../src/engine-kind.ts";
 import { createMemoryReader } from "../web/src/memory-telemetry.ts";
 import { createMemoryChannel, createMemoryPublisher, readMemoryChannel } from "../web/src/memory-channel.ts";
 
 const root = resolve(import.meta.dir, "..");
 const wrapped = ["malloc", "calloc", "realloc", "free", "aligned_alloc", "posix_memalign", "__libc_malloc", "__libc_calloc", "__libc_free"];
 
-function fixture(run: (exports: WebAssembly.Exports, snapshot: () => bigint[]) => void): void {
+function fixture(run: (exports: WebAssembly.Exports, snapshot: () => bigint[], limitBytes: number | null) => void): void {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-memory-"));
   try {
     const output = join(directory, "allocator.wasm");
@@ -20,7 +21,8 @@ function fixture(run: (exports: WebAssembly.Exports, snapshot: () => bigint[]) =
       "-Wl,-z,stack-size=16384", "-Wl,--export=malloc_usable_size", "-Wl,--export=bun_memory_telemetry",
     ].concat(wrapped.flatMap(name => [`-Wl,--wrap=${name}`, `-Wl,--export=${name}`]), ["-o", output]));
     expect(built.exitCode, built.stderr.toString()).toBe(0);
-    const module = new WebAssembly.Module(readFileSync(output));
+    const bytes = readFileSync(output);
+    const module = new WebAssembly.Module(bytes);
     const imports: WebAssembly.Imports = {};
     for (const entry of WebAssembly.Module.imports(module)) {
       const namespace = imports[entry.module] ??= {};
@@ -35,7 +37,7 @@ function fixture(run: (exports: WebAssembly.Exports, snapshot: () => bigint[]) =
       const view = new DataView(memory.buffer, pointer, 80);
       return Array.from({ length: 10 }, (_, index) => view.getBigUint64(index * 8, true));
     };
-    run(exports, snapshot);
+    run(exports, snapshot, memoryMaximumBytes(bytes) ?? null);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -200,21 +202,24 @@ test("libc internal aliases share the same accounting as the exported allocator"
 });
 
 test("compiled core frozen record reaches the browser reader and shared host channel", () => {
-  fixture((exports, snapshot) => {
-    const reader = createMemoryReader("quickjs", { exports });
+  fixture((exports, snapshot, limitBytes) => {
+    const reader = createMemoryReader("quickjs", { exports }, undefined, limitBytes);
     const channel = createMemoryChannel();
     const publisher = createMemoryPublisher(channel, reader);
     expect(reader.sample().frozenAllocatorFailure).toBeNull();
+    expect(reader.sample().memoryLimitBytes).toBe(262144);
     const pointer = call(exports, "malloc", 4000);
     const before = snapshot();
     expect(call(exports, "realloc", pointer, 1048576)).toBe(0);
     const failed = publisher.capture(false, true);
+    expect(failed?.memoryLimitBytes).toBe(limitBytes);
     expect(failed?.frozenAllocatorFailure).toEqual({ bytes: 1048576, category: "libc.realloc",
       previousUsableBytes: Number(before[2]), allocatorLiveBytes: Number(before[2]), allocatorPeakBytes: Number(before[3]),
       wasmCapacityBeforeBytes: Number(before[9]), wasmCapacityAfterBytes: Number(snapshot()[9]), reason: "unknown" });
     call(exports, "free", pointer);
     const terminal = publisher.finish();
     expect(terminal?.allocatorLiveBytes).toBe(0);
+    expect(terminal?.memoryLimitBytes).toBe(limitBytes);
     expect(terminal?.frozenAllocatorFailure).toEqual(failed?.frozenAllocatorFailure);
     expect(readMemoryChannel(channel)).toEqual(terminal);
   });

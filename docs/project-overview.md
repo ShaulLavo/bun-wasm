@@ -69,7 +69,7 @@ Bun's Rust crates and a runtime written in this repo make up the `bun` guest, `w
 
 Pre-1.0 and experimental. The package is `bun-wasm` 0.0.61, marked private, and is not on npm. You install it as a Git dependency. The repository has no tags or releases.
 
-- Memory: each guest is capped at 512 MiB.
+- Memory: each guest is capped at 1 GiB.
 - Threads: each guest is single-threaded. Workers are separate guests.
 - Network: browsers get `fetch` (with CORS) and servers behind preview URLs. Raw outbound TCP, TLS sockets and Unix sockets do not work.
 - No native addons. Nothing starts a native executable in the browser.

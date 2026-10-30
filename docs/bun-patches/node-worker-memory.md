@@ -20,7 +20,7 @@ The Node fixture host previously capped every worker's old-generation heap at
 TypeScript-checking child exceeded that heap and exited 126. A native worker
 observer captured `ERR_WORKER_OUT_OF_MEMORY` before the guest process exited.
 
-Workers now default to 512 MiB. Explicit caller resource limits still override
+Workers now default to the guest memory maximum (`crates/bunwasm-cli/max-memory.txt`, 1 GiB). Explicit caller resource limits still override
 that default. The stack remains at least the host's configured size, preserving
 a larger caller stack. These rules apply to every Node-host worker, without
 inspecting application paths.

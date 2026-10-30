@@ -112,7 +112,8 @@ function engineReadout(engine: TelemetryEngine, memory: WebAssembly.Memory, expo
   };
 }
 
-export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side?: WebAssembly.Instance, identity?: MemoryIdentity) {
+/** `limitBytes` is the core's declared memory maximum (crates/bunwasm-cli/max-memory.txt at link time). */
+export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side: WebAssembly.Instance | undefined, limitBytes: number | null, identity?: MemoryIdentity) {
   const id = identity?.id ?? crypto.randomUUID();
   const provenance = identity ? { id, commandId: identity.commandId, commandStartedAt: identity.commandStartedAt, commandSequence: identity.commandSequence }
     : { id, commandId: id, commandStartedAt: Date.now(), commandSequence: 0 };
@@ -139,7 +140,7 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
       return {
         ...emptyCounters, ...provenance, engine, terminal, time: Date.now(),
         wasmCapacityBytes: memory.buffer.byteLength,
-        memoryLimitBytes: allocator ? 536870912 : null,
+        memoryLimitBytes: allocator ? limitBytes : null,
         allocatorLiveBytes: allocator ? count(allocator[2]) : null,
         allocatorPeakBytes: allocator ? count(allocator[3]) : null,
         jsHeapBytes: data?.heap ?? null, arrayBufferBytes: data?.buffers ?? null,

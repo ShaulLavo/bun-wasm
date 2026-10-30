@@ -28,8 +28,8 @@ use crate::shm::{
     SharedMemoryLease,
 };
 
-/// Bun's wasm32 string tags use address bits 29-31, so a Bun group stays below 512 MiB.
-pub(super) const MAX_PAGES: u64 = 8192;
+/// A Bun group's address space: the guest memory maximum (`max-memory.txt`) every core declares.
+pub(super) const MAX_PAGES: u64 = crate::max_memory::MAX_MEMORY_BYTES / PAGE as u64;
 /// The Bun parser's stack. A PIE member's stack is carved by its host.
 pub(super) const STACK_BYTES: u32 = 8 << 20;
 const PAGE: u32 = 65_536;
@@ -433,7 +433,7 @@ impl Drop for Admission {
     }
 }
 
-/// A Bun group: the 512 MiB string-tag ceiling as its address space, the service's other
+/// A Bun group: the guest memory maximum as its address space, the service's other
 /// defaults (16 members including pending, parallelism 1).
 fn bun_policy() -> GroupPolicy {
     GroupPolicy {
@@ -868,6 +868,15 @@ mod tests {
             },
             Image {
                 maximum: Some(65_536),
+                ..CORE
+            },
+            // A core linked for another capacity stage: the maximum must match exactly.
+            Image {
+                maximum: Some(MAX_PAGES / 2),
+                ..CORE
+            },
+            Image {
+                maximum: Some(MAX_PAGES * 2),
                 ..CORE
             },
             Image {

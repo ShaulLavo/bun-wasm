@@ -27,19 +27,20 @@ atomics.
 
 ## Memory ceiling
 
-Bun's wasm32 string tags use address bits 29-31, so every Bun member must stay below 512 MiB.
-The core declares its imported memory with an 8192-page maximum, so a group memory with a larger
-maximum cannot instantiate it.
+A group's address space is the guest memory maximum, `crates/bunwasm-cli/max-memory.txt`
+(1 GiB, 16384 pages, at stage 1; see [Memory ceiling](memory-ceiling.md)). The core declares its
+imported memory with exactly that page maximum, so a group memory with another maximum cannot
+instantiate it, and a core linked for another stage is refused.
 
 Waffle's `memoryGroups.maximumPages` and `stackBytes` are runtime-wide options: every group in
 one `createRuntime()` uses the same policy. A runtime that hosts Bun groups must opt in with
-`createRuntime({ memoryGroups: { maximumPages: 8192, stackBytes: 8 << 20 } })`, and that also caps
-every other group in the same runtime at 512 MiB. Waffle's defaults (4 GiB, 1 MiB stacks) still
+`createRuntime({ memoryGroups: { maximumPages: 16384, stackBytes: 8 << 20 } })`, and that also caps
+every other group in the same runtime at 1 GiB. Waffle's defaults (4 GiB, 1 MiB stacks) still
 apply to runtimes that don't set them. A Waffle runtime left at the defaults cannot admit a Bun
-core: the import check fails. There is no fallback. One consequence: a 1 GiB nested memory
-(Rolldown's addon) cannot be a region of a Bun group.
+core: the import check fails. There is no fallback. One consequence: stock Rolldown's 1 GiB initial nested memory cannot be a
+region of a 1 GiB Bun group, because the members need room too. That needs the 2 GiB stage.
 
-On wasmtime, a Bun group is an `shm::MemoryGroup` created with `GroupPolicy { maximum_pages: 8192, .. }`; the service default (65536) refuses the core the same way.
+On wasmtime, a Bun group is an `shm::MemoryGroup` created with `GroupPolicy { maximum_pages }` at the guest maximum; the service default (65536) refuses the core the same way.
 
 ## Initialization
 
@@ -57,15 +58,15 @@ On wasmtime, a Bun group is an `shm::MemoryGroup` created with `GroupPolicy { ma
 
 `bunwasm-host` and Waffle's link loader refuse a group image that contains `memory.grow` or an
 opcode they cannot decode, exports a memory, needs a shared library, still has a start section,
-or imports an unshared memory or one whose maximum is not 8192 pages. A pair whose halves disagree
+or imports an unshared memory or one whose maximum is not the guest maximum in pages. A pair whose halves disagree
 on the profile is refused. A group core cannot run as a single module. There is no bypass.
 
 Receipts of one profile never verify against inputs of the other.
 
 ## Processes on the native host
 
-A shared-group program started by `bun-wasm` becomes the first member of a new group (8192
-pages) on one runtime-wide backing budget. A worker it spawns reserves its slot in the parent's
+A shared-group program started by `bun-wasm` becomes the first member of a new group (the
+guest maximum) on one runtime-wide backing budget. A worker it spawns reserves its slot in the parent's
 group before the worker thread exists, and gets `EAGAIN` when the group is full. Any other spawn
 of a group program starts its own group. Host imports read and write a member's memory only
 through atomic cells and owned copies. The group backing outlives the member's Store, and the

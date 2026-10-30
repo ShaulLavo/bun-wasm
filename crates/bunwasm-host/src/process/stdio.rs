@@ -286,6 +286,9 @@ pub struct Stdio {
     pub memory_limit: usize,
 }
 
+/// A guest's Store memory limit unless its Worker sets `resourceLimits`: the memory maximum.
+pub const DEFAULT_MEMORY_LIMIT: usize = crate::max_memory::MAX_MEMORY_BYTES as usize;
+
 impl Stdio {
     pub fn inherited() -> Self {
         use super::descriptors::Endpoint;
@@ -304,7 +307,7 @@ impl Stdio {
             .into_iter()
             .collect(),
             pid: 0,
-            memory_limit: 512 << 20,
+            memory_limit: DEFAULT_MEMORY_LIMIT,
         }
     }
     pub fn install(&self, wasi: &mut wasmtime_wasi::WasiCtxBuilder, cancel: Arc<Cancellation>) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { importedMemory } from "../../src/engine-kind.ts";
-import { SHARED_GROUP_MAX_PAGES, type ProgramProfile } from "./program-profile.ts";
+import { sharedGroupMaxPages, type ProgramProfile } from "./program-profile.ts";
 
 function readU32(bytes: Uint8Array, cursor: { offset: number }): number {
     let value = 0;
@@ -139,7 +139,7 @@ export function convertCoreInitializers(bytes: Uint8Array): Uint8Array<ArrayBuff
     assert.equal(WebAssembly.Module.customSections(module, "dylink.0").length, 1, "PIE core has one dylink.0 section");
     assert.deepEqual(WebAssembly.Module.imports(module).filter((entry) => entry.kind === "memory"),
         [{ module: "env", name: "memory", kind: "memory" }], "PIE core imports the group memory");
-    assert.deepEqual(importedMemory(input), { shared: true, maximum: SHARED_GROUP_MAX_PAGES }, "group memory is shared below the string-tag ceiling");
+    assert.deepEqual(importedMemory(input), { shared: true, maximum: sharedGroupMaxPages() }, "group memory is shared at the guest memory maximum");
     const original = exportsOf(exportSection.payload);
     assert(!original.some((entry) => entry.kind === 2), "PIE core must not export memory");
     assert(!original.some((entry) => entry.name === "core_initialize_memory"), "core is already converted");
