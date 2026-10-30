@@ -8,6 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::task::Waker;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -298,6 +299,13 @@ pub struct PinId(u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WatchId(u32);
 
+impl WatchId {
+    /// The id the guest sees (`futex_watch` output, poll kind 7 subscription id).
+    pub fn raw(self) -> u32 {
+        self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WaiterId(u64);
 
@@ -409,6 +417,8 @@ struct Watch {
     expected: i32,
     sequence: u64,
     pending: bool,
+    /// Wakes the member's poll when a `futex_wake` hits this watch.
+    waker: Option<Waker>,
 }
 
 struct Waiter {
@@ -942,7 +952,13 @@ impl GroupInner {
         Ok(Chunk { page, pages })
     }
 
-    fn watch(&self, member: MemberId, addr: u32, expected: i32) -> Result<WatchId, Errno> {
+    fn watch(
+        &self,
+        member: MemberId,
+        addr: u32,
+        expected: i32,
+        waker: Option<Waker>,
+    ) -> Result<WatchId, Errno> {
         validate_span(&self.backing.memory, addr, 4)?;
         let mut state = self.lock();
         Self::receives(&state, member)?;
@@ -960,6 +976,7 @@ impl GroupInner {
                 expected,
                 sequence,
                 pending: true,
+                waker,
             },
         );
         Ok(id)
@@ -1067,15 +1084,20 @@ impl GroupInner {
         let mut watchers = watchers;
         watchers.sort_by_key(|(_, sequence)| *sequence);
         let mut watch_count = 0;
+        let mut wakers = Vec::new();
         for (id, _) in watchers.into_iter().take(remaining) {
             if let Some(watch) = state.watches.get_mut(&id) {
                 watch.pending = false;
                 watch_count += 1;
+                wakers.extend(watch.waker.clone());
             }
         }
         drop(state);
         for waiter in &woken {
             waiter.ready.notify_one();
+        }
+        for waker in wakers {
+            waker.wake();
         }
         Ok((live_count + watch_count) as u32)
     }
@@ -1225,7 +1247,12 @@ impl MemberLease {
     }
 
     pub fn watch(&self, addr: u32, expected: i32) -> Result<WatchId, Errno> {
-        self.group.watch(self.member, addr, expected)
+        self.group.watch(self.member, addr, expected, None)
+    }
+
+    /// A watch whose hit also wakes `waker`: the member's poll, which reports it as kind 7.
+    pub fn watch_waking(&self, addr: u32, expected: i32, waker: Waker) -> Result<WatchId, Errno> {
+        self.group.watch(self.member, addr, expected, Some(waker))
     }
 
     pub fn unwatch(&self, id: WatchId) -> Result<(), Errno> {
@@ -1234,6 +1261,11 @@ impl MemberLease {
 
     pub fn watch_ready(&self, id: WatchId) -> Result<bool, Errno> {
         self.group.watch_ready(self.member, id)
+    }
+
+    /// Poll kind 7 readiness of the watch with the guest's `id`, as a poll errno on failure.
+    pub fn poll_watch(&self, id: u32) -> Result<bool, i32> {
+        self.watch_ready(WatchId(id)).map_err(Errno::result)
     }
 }
 
@@ -1639,11 +1671,17 @@ pub fn futex_wake(member: &MemberLease, addr: u32, count: u32) -> i32 {
         .map_or_else(Errno::result, |count| count as i32)
 }
 
-pub fn futex_watch(member: &MemberLease, addr: u32, expected: i32, out: u32) -> i32 {
+pub fn futex_watch(
+    member: &MemberLease,
+    addr: u32,
+    expected: i32,
+    out: u32,
+    waker: Option<Waker>,
+) -> i32 {
     if let Err(error) = output_span(member, out, 1) {
         return error.result();
     }
-    match member.watch(addr, expected) {
+    match member.group.watch(member.member, addr, expected, waker) {
         Ok(id) => {
             write_words(&member.group.backing.memory, out, &[id.0]);
             0
@@ -1773,9 +1811,11 @@ pub fn add_imports(linker: &mut Linker<Host>) -> Result<()> {
         "runtime_shm",
         "futex_watch",
         |caller: Caller<'_, Host>, addr: u32, expected: i32, out: u32| {
-            host_member(caller.data()).map_or_else(
+            let host = caller.data();
+            let waker = Waker::from(host.net.notify());
+            host_member(host).map_or_else(
                 |error| error,
-                |member| futex_watch(member, addr, expected, out),
+                |member| futex_watch(member, addr, expected, out, Some(waker)),
             )
         },
     )?;

@@ -386,7 +386,7 @@ fn invalid_output_spans_leave_regions_holds_pins_and_watches_unchanged() {
         Errno::Inval.result()
     );
     assert_eq!(
-        futex_watch(&owner, region.addr, 0, out_of_bounds),
+        futex_watch(&owner, region.addr, 0, out_of_bounds, None),
         Errno::Inval.result()
     );
     assert_eq!(group.snapshot(), before);
@@ -703,4 +703,44 @@ fn stale_cancellation_cannot_target_a_reused_member_slot() {
     let second = WaitThread::spawn(second);
     assert_eq!(owner.wake(region.addr, 1).unwrap(), 1);
     assert_eq!(second.outcome(), WaitResult::Ok);
+}
+
+struct CountWake(AtomicU32);
+
+impl std::task::Wake for CountWake {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_hit_watch_wakes_its_poller_once_and_member_release_drops_it() {
+    let group = group();
+    let owner = member(&group, 1);
+    let other = member(&group, 2);
+    let region = owner.group.create(owner.member, 64, 16).unwrap();
+    let count = Arc::new(CountWake(AtomicU32::new(0)));
+    let watch = owner
+        .watch_waking(region.addr, 0, Waker::from(count.clone()))
+        .unwrap();
+    assert_eq!(
+        other.wake(region.addr + 4, 1).unwrap(),
+        0,
+        "another address"
+    );
+    assert_eq!(count.0.load(Ordering::SeqCst), 0);
+    assert_eq!(other.wake(region.addr, u32::MAX).unwrap(), 1);
+    assert_eq!(count.0.load(Ordering::SeqCst), 1);
+    assert_eq!(other.wake(region.addr, u32::MAX).unwrap(), 0, "hit once");
+    assert_eq!(count.0.load(Ordering::SeqCst), 1);
+    assert!(owner.poll_watch(watch.raw()).unwrap());
+    assert_eq!(other.poll_watch(watch.raw()), Err(Errno::BadF.result()));
+    assert_eq!(group.snapshot().watches, 1);
+    owner.physical_stopped();
+    assert_eq!(
+        group.snapshot().watches,
+        0,
+        "member release drops its watches"
+    );
+    drop(other);
 }

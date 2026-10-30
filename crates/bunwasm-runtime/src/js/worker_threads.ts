@@ -10,6 +10,15 @@
   // A worker's startup pins are routed to it only once spawn returns its pid; the child must not
   // accept them before then (awaitPublication). The bound is a failure deadline, not a retry.
   const PUBLICATION_DEADLINE_MS = 60_000;
+  // A group lane is a region its far end must accept, so it is created only while a transfer to
+  // a known destination process is being prepared. A lane a port already has is always reopened.
+  let laneDestination = false;
+  let ownPid: number | undefined;
+  /** This member's runtime pid, the destination of pins it posts to itself. */
+  function groupPid() {
+    ownPid ??= (native as unknown as BunWasm.GroupSharedNatives).procGetpid();
+    return ownPid;
+  }
   const process = internal.require("process");
   const EventEmitter = internal.require("events");
   const clone = internal.require("structured_clone").structuredClone;
@@ -58,7 +67,12 @@
     const path = parseRoute(value.route);
     if (typeof value.envGroup !== "string" || !Array.isArray(value.argv) || !value.argv.every(arg => typeof arg === "string") || !Array.isArray(value.execArgv) || !value.execArgv.every(arg => typeof arg === "string")) throw new TypeError("Invalid worker initialization");
     return { route: path, envGroup: value.envGroup, argv: value.argv, execArgv: value.execArgv,
-      graph: value.graph, resourceLimits: limits(value.resourceLimits), web: webOptions(value.web), attach: value.attach === true };
+      graph: value.graph, resourceLimits: limits(value.resourceLimits), web: webOptions(value.web), attach: value.attach === true, parent: parentPid(value.parent) };
+  }
+  function parentPid(value: unknown) {
+    if (value === undefined) return null;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new TypeError("Invalid worker parent");
+    return value;
   }
   function webOptions(value: unknown): BunWasm.WebWorkerOptions | null {
     if (value === undefined || value === null) return null;
@@ -160,10 +174,34 @@
     root({ kind: "closed", id: snapshot.id });
     for (const [, graph] of snapshot.pending) discardPendingTransfers(graph);
   }
+  /**
+   * A group message that will never be decoded. Its sender already published the `moving` of
+   * every port it carries, so retire them here, or the root keeps them ownerless and queues their
+   * peers' packets forever; and give back its pins. Tolerates a malformed graph.
+   */
+  function dropUndelivered(graph: unknown) {
+    codec.discard(graph);
+    for (const id of movedPorts(graph)) root({ kind: "closed", id });
+  }
+  function movedPorts(graph: unknown, ids: string[] = []): string[] {
+    const nodes = graph && typeof graph === "object" ? (graph as { nodes?: unknown }).nodes : undefined;
+    if (!Array.isArray(nodes)) return ids;
+    for (const node of nodes) {
+      if (!Array.isArray(node) || node[0] !== "port" || !node[1] || typeof node[1] !== "object") continue;
+      const { id, pending } = node[1] as { id?: unknown; pending?: unknown };
+      if (typeof id === "string") ids.push(id);
+      for (const nested of Array.isArray(pending) ? pending : []) movedPorts(Array.isArray(nested) ? nested[1] : undefined, ids);
+    }
+    return ids;
+  }
   function routePacket(body: Record<string, unknown>) {
     if (typeof body.id !== "string") return;
     const endpoint = owners.get(body.id);
-    if (!endpoint) return;
+    if (!endpoint) {
+      // The destination port is gone for good: nobody will decode this packet.
+      if (groupTransfer && body.kind === "port-data") dropUndelivered(body.graph);
+      return;
+    }
     if (!endpoint.owner || !endpoint.ready) {
       const packets = pending.get(body.id) || [];
       packets.push(body); pending.set(body.id, packets); return;
@@ -244,6 +282,7 @@
   }
   function decodeReceived(graph: Graph) {
     const routes = internal.sharedObjects?.routes;
+    if (groupTransfer && !restoringLocally) return decodeGroupPacket(graph);
     if (!routes?.enabled || restoringLocally) return messagePacket(codec.decode(graph));
     if (!routes.tryTransaction(() => registerLocalTransfers(graph), () => {})) return null;
     const created: MessagePort[] = [];
@@ -252,9 +291,23 @@
     catch (error) { for (const port of created) portOps.discard(port); discardPendingTransfers(graph); throw error; }
     finally { restoredPorts = null; restoringLocally = false; }
   }
-  function sharedLanes() {
+  /** A group packet that fails to decode (a receipt failed, say) is dropped like an undelivered one. */
+  function decodeGroupPacket(graph: Graph) {
+    const created: MessagePort[] = [];
+    restoredPorts = created;
+    try { return messagePacket(codec.decode(graph)); }
+    catch (error) { for (const port of created) portOps.discard(port); dropUndelivered(graph); throw error; }
+    finally { restoredPorts = null; }
+  }
+  function sharedLanes(creating = false) {
     const shared = internal.sharedObjects;
-    return shared?.routes?.enabled ? shared.lanes : undefined;
+    if (shared?.routes?.enabled) return shared.lanes;
+    return groupTransfer && (!creating || laneDestination) ? shared?.lanes : undefined;
+  }
+  function carriesPorts(graph: Graph) { return graph.nodes.some(node => node[0] === "port"); }
+  function discardLane(io: BunWasm.SharedLane) {
+    try { io.drain(text => dropUndelivered((JSON.parse(text) as { graph?: unknown }).graph)); }
+    catch { /* a corrupt ring holds nothing this process can release */ }
   }
   function pump() {
     const shared = internal.sharedObjects;
@@ -331,11 +384,13 @@
     #closeLane(closed: boolean) {
       const state = this.#state;
       if (!state?.lane) return;
+      // A group peer pinned its messages to this process: release those it will never read.
+      if (closed && groupTransfer) discardLane(state.lane.io);
       if (closed) state.lane.io.close();
       state.lane.stop(); state.lane = null;
     }
     #ensureLane() {
-      const state = this.#value(), lanes = sharedLanes();
+      const state = this.#value(), lanes = sharedLanes(true);
       const other = state.peer === null ? undefined : localPorts.get(state.peer);
       if (state.lane || !lanes || !other) return;
       if (!other.#state || other.#state.lane) return;
@@ -355,9 +410,20 @@
       });
       if (arrived && !defer && state.phase === "open") port.#accept();
     }
-    /** Reserves a packet on the lane, visible to the peer's owner once committed; null when the lane is full. */
-    #laneFrame(packet: Record<string, unknown>) {
-      return this.#value().lane?.io.reserve(JSON.stringify(packet)) ?? null;
+    /**
+     * Reserves a packet on the lane, visible to the peer's owner once committed; null when the lane
+     * is full. A memory-group port keeps its control-pipe route, so there a packet the lane cannot
+     * take (full, larger than the ring, or carrying ports) takes the pipe, in sequence order.
+     * Ports go by pipe because their `moving` record does: a lane would let the destination bind
+     * one before the root learns it left.
+     */
+    #laneFrame(packet: { kind: string; sequence: number; graph?: Graph }) {
+      const lane = this.#value().lane;
+      if (!lane) return null;
+      if (!groupTransfer) return lane.io.reserve(JSON.stringify(packet));
+      if (packet.graph && carriesPorts(packet.graph)) return null;
+      try { return lane.io.reserve(JSON.stringify(packet)); }
+      catch { return null; }
     }
     /** Sends this end's close behind its lane data; false when it must take the broker. A closed peer needs none. */
     #laneClose(sent: number) {
@@ -384,10 +450,11 @@
         if (internal.sharedObjects?.routes?.enabled) registerLocalTransfers(graph);
         return null;
       }
-      if (!state.lane) { root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph }); return null; }
       const frame = this.#laneFrame({ kind: "port-data", sequence, graph });
-      if (!frame) throw cloneError("MessagePort lane is full: the receiver has not read 1 MiB of earlier messages");
-      return frame;
+      if (frame) return frame;
+      if (state.lane && !groupTransfer) throw cloneError("MessagePort lane is full: the receiver has not read 1 MiB of earlier messages");
+      root({ kind: "port-data", id: state.peer, from: state.id, sequence, graph });
+      return null;
     }
     #value() { if (!this.#state) throw cloneError("MessagePort is detached"); return this.#state; }
     #snapshot(version = this.#value().version): Snapshot {
@@ -438,7 +505,7 @@
     }
     static #receivePacket(port: MessagePort, kind: string, sequence: number, graph: unknown, defer = false) {
       const state = port.#state;
-      if (!state || state.phase === "closed") return;
+      if (!state || state.phase === "closed") { if (groupTransfer && kind === "port-data") dropUndelivered(graph); return; }
       if (kind === "port-close") {
         // A broker terminal can count fewer packets than the lane carried: take the lane's first.
         MessagePort.#drainLane(port, true);
@@ -450,7 +517,10 @@
         if (!Array.isArray(value.nodes) || typeof value.root !== "number") throw new Error("Invalid graph");
         state.pending.set(sequence, graph as Graph);
         if (!defer) port.#accept();
-      } catch (error) { internal.realTimers.setImmediate(() => port.dispatchEvent(new MessageEvent("messageerror", { data: error }))); }
+      } catch (error) {
+        if (groupTransfer) dropUndelivered(graph);
+        internal.realTimers.setImmediate(() => port.dispatchEvent(new MessageEvent("messageerror", { data: error })));
+      }
     }
     #accept() {
       const state = this.#value();
@@ -516,14 +586,20 @@
       const lane = other ? null : state.lane;
       // Refuse before preparing: past this point only plan.commit may fail, and it aborts the plan.
       if (lane && internal.sharedObjects?.routes?.retired(state.peer)) throw cloneError("MessagePort peer is closed");
+      // A message to a closed group peer is dropped, as the root drops it, before anything is pinned.
+      if (groupTransfer && lane?.io.peerClosed()) return;
       const list = transfers(transfer);
       const packet = { data: value, ports: list.filter(item => item instanceof MessagePort) };
-      const plan = codec.prepare(packet, list, [state.id, state.peer]);
+      const destination = groupTransfer ? (other ? groupPid() : groupDestinations.get(this)) : undefined;
+      let plan: ReturnType<BunWasm.WorkerCodec["prepare"]>;
+      laneDestination = destination !== undefined && !other;
+      try { plan = codec.prepare(packet, list, [state.id, state.peer]); }
+      finally { laneDestination = false; }
       const sequence = state.sent;
       // The lane frame becomes visible only after transfers and detachment commit. Ports it
       // carries stay in the custody of the lane's destination port until restored.
       const staged: { frame: { commit(): void; abort(): void } | null } = { frame: null };
-      try { plan.commit(() => { staged.frame = this.#stagePacket(plan.graph, sequence, other); }, lane ? state.peer : undefined, other ? undefined : groupDestinations.get(this)); }
+      try { plan.commit(() => { staged.frame = this.#stagePacket(plan.graph, sequence, other); }, lane ? state.peer : undefined, destination); }
       catch (error) { staged.frame?.abort(); throw error; }
       staged.frame?.commit();
       state.sent++;
@@ -577,7 +653,7 @@
       if (!state || state.phase !== "open") return;
       state.phase = "closing";
       this.#attachmentWait?.(); this.#attachmentWait = null;
-      for (const graph of state.pending.values()) discardPendingTransfers(graph);
+      for (const graph of state.pending.values()) { discardPendingTransfers(graph); codec.discard(graph); }
       MessagePort.#closeQueuedPorts(state.queue);
       state.queue = []; state.pending.clear(); this.unref();
       if (!state.batch) internal.realTimers.setImmediate(() => this.#finishLocalClose(state));
@@ -602,6 +678,8 @@
       state.phase = "closed";
       this.#attachmentWait?.(); this.#attachmentWait = null;
       this.#closeLane(true);
+      // Messages that arrived while closing are never read: release what they pinned here.
+      if (groupTransfer) for (const graph of state.pending.values()) dropUndelivered(graph);
       state.queue = []; state.pending.clear(); this.unref(); localPorts.delete(state.id);
       root({ kind: "closed", id: state.id });
       internal.realTimers.setImmediate(() => this.#finishClose(state));
@@ -805,12 +883,15 @@
       const [publicPort, childPort] = portOps.pair();
       this.#port = publicPort;
       let transferPlan: ReturnType<BunWasm.WorkerCodec["prepare"]>;
+      // Everything here goes to the child's process, whose pid spawn returns.
+      laneDestination = groupTransfer;
       try { transferPlan = codec.prepare([options.workerData, Array.from(environmentData), childPort], transfers(options.transferList).concat([childPort])); }
       catch (error) { publicPort.close(); childPort.close(); throw error; }
+      finally { laneDestination = false; }
       const graph = transferPlan.graph;
       const group = options.env === SHARE_ENV ? envGroup : routeKey(this.#path);
       env.BUNWASM_WORKER_INIT = JSON.stringify({ route: this.#path, envGroup: group, argv: [process.execPath, target.name].concat(argv), execArgv: exec.argv, graph, resourceLimits: this.resourceLimits, web,
-        ...(groupTransfer ? { attach: true } : {}) });
+        ...(groupTransfer ? { attach: true, parent: groupPid() } : {}) });
       const memoryLimitMb = (this.resourceLimits.maxOldGenerationSizeMb || 0) + (this.resourceLimits.maxYoungGenerationSizeMb || 0);
       let child: BunWasm.WorkerChild;
       try { child = internal.require("spawn").spawn([process.execPath].concat(exec.conditions, target.argv, argv), {
@@ -1008,6 +1089,8 @@
     const initial = codec.decode(config.graph);
     if (!Array.isArray(initial) || initial.length !== 3 || !(initial[2] instanceof MessagePort) || !Array.isArray(initial[1])) throw new Error("Invalid worker initial data");
     exports.workerData = initial[0]; parentPort = initial[2]; exports.parentPort = parentPort;
+    // parentPort's peer is the parent's private Worker port, which never moves.
+    if (config.parent !== null) groupDestinations.set(parentPort, config.parent);
     for (const pair of initial[1]) if (Array.isArray(pair) && pair.length === 2) environmentData.set(pair[0], pair[1]);
     process.argv = config.argv; process.execArgv = config.execArgv;
     if (config.web) internal.require("bun").isMainThread = false;
@@ -1047,11 +1130,17 @@
   internal.workerEnvChange = (key, value) => { if (!applyingEnv) root({ kind: "env", source: route, group: envGroup, key, value }); };
   internal.addIoWaiter({
     get ref() { return Boolean(parentChannel && (parentChannel.pending || parentPort?.hasRef()) || Array.from(children.values()).some(child => child.ref)); },
-    step() { return pump() ? "progress" : false; },
-    // Every open control channel: the idle loop wakes for a frame from any of them.
+    step() {
+      // Fired group lane watches re-arm first; their lanes are drained by pump.
+      const fired = internal.sharedObjects?.lanes?.poll?.() || false;
+      return pump() || fired ? "progress" : false;
+    },
+    // Every open control channel and group lane: the idle loop wakes for a frame from any of them.
     subscriptions() {
       const list = parentChannel ? [parentChannel.subscriptions()] : [];
       for (const child of children.values()) list.push(child.watch());
+      const lanes = internal.sharedObjects?.lanes?.subscriptions?.();
+      if (lanes) list.push(lanes);
       return internal.concatBytes(list);
     },
     fail(error) { if (parentChannel) internal.workerError?.(error); },

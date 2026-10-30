@@ -71,6 +71,13 @@ pub fn embed(manifest: &Path, out: &Path) {
         &manifest.join("../../web/src/native-direct-stream.ts"),
         out,
     );
+    generate(
+        &mut table,
+        "shared_lane",
+        &manifest.join("../../scripts/generate-shared-lane.ts"),
+        &manifest.join("../../web/src/shared-objects/lane.ts"),
+        out,
+    );
     table.push_str("];\n");
     fs::write(out.join("polyfills.rs"), table).unwrap();
 }

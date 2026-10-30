@@ -1487,6 +1487,9 @@ fn install_host(t: &mut Table, state: &Rc<State>) {
             Err(code) => code.into(),
         })
     });
+    // A memory-group member names itself as the destination of its child's pins.
+    #[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+    t.add("procGetpid", |_| Ok(host::proc_getpid().into()));
     let st = state.clone();
     t.add("hostSignal", move |a| {
         Ok(st.signal(a.i32(0)?, a.i32(1)?).into())

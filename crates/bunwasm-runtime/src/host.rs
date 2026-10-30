@@ -328,6 +328,9 @@ mod runtime_proc {
         pub fn kill_job(job: i32, sig: i32) -> i32;
         pub fn poll(subs_ptr: i32, n: i32, timeout_ms: i32, out_ptr: i32) -> i32;
         pub fn signal(sig: i32, mode: i32) -> i32;
+        /// Waffle's `runtime_proc.getpid`, imported only by a shared-group core.
+        #[cfg(target_feature = "atomics")]
+        pub fn getpid() -> i32;
     }
     #[link(wasm_import_module = "wasi_snapshot_preview1")]
     unsafe extern "C" {
@@ -506,6 +509,13 @@ pub fn proc_kill(pid: i32, signal: i32) -> i32 {
 
 pub fn proc_kill_job(job: i32, signal: i32) -> i32 {
     proc_call!(runtime_proc::kill_job(job, signal))
+}
+
+/// This process's own runtime pid: what its parent's spawn returned, and the destination a
+/// memory-group member routes pins to.
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+pub fn proc_getpid() -> i32 {
+    proc_call!(runtime_proc::getpid())
 }
 
 /// Waits on 16-byte subscriptions and returns the 16-byte events that fired (possibly none).

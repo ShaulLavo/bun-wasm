@@ -60,10 +60,24 @@ declare namespace BunWasm {
     shmRoute(pin: number, pid: number): number;
     shmUnpin(pin: number): number;
     shmAccept(pin: number, byteLength: number): SharedArrayBuffer;
+    /** A FUTEX watch (poll kind 7) on the 32-bit word at `byteOffset`; returns its id. */
+    futexWatch(buffer: SharedArrayBuffer, byteOffset: number, expected: number): number;
+    futexUnwatch(id: number): number;
+    /** This member's runtime pid (Waffle `runtime_proc.getpid`), a core native. */
+    procGetpid(): number;
   }
+  /** `waitAsync` replacement for a shared lane: `changed` runs at most once per arm. */
+  type SharedLaneWaiter = (header: Int32Array, index: number, observed: number, changed: () => void) => () => void;
   interface SharedObjects {
     readonly mailbox?: { drain(consume: (bytes: Uint8Array) => void | boolean): number; close(): void };
-    readonly lanes?: { create(): SharedArrayBuffer; open(buffer: SharedArrayBuffer, side: 0 | 1): SharedLane };
+    readonly lanes?: {
+      create(): SharedArrayBuffer;
+      open(buffer: SharedArrayBuffer, side: 0 | 1): SharedLane;
+      /** Memory-group lanes: the event loop's poll kind 7 subscriptions for open lanes. */
+      subscriptions?(): Uint8Array;
+      /** Memory-group lanes: re-arm fired watches; true when any fired. */
+      poll?(): boolean;
+    };
     readonly routes?: {
       readonly owner: string;
       readonly enabled: boolean;
@@ -78,6 +92,8 @@ declare namespace BunWasm {
     read(reference: SharedReference): SharedArrayBuffer;
     readWasm?(reference: SharedReference): WebAssembly.Module | WebAssembly.Memory;
     wait(references: readonly SharedReference[], ready: () => void): (() => void) | null;
+    /** Memory groups: release routed references of a message that is never decoded. */
+    discard?(references: readonly SharedReference[]): void;
   }
   interface WorkerCodec {
     /** `destination` is the receiving process's pid when the sender knows it (memory-group routing). */
@@ -85,6 +101,7 @@ declare namespace BunWasm {
     encode(value: unknown, transfer?: unknown, forbidden?: readonly string[]): WorkerGraph;
     decode(value: unknown): unknown;
     wait(value: unknown, ready: () => void): (() => void) | null;
+    discard(value: unknown): void;
   }
   interface WorkerErrorData { graph: WorkerGraph; code: unknown; }
   interface WorkerLimits {
@@ -177,6 +194,10 @@ declare namespace BunWasm {
     require(name: "process"): GuestProcess;
     require(name: "worker_codec"): { create(hooks: WorkerCodecHooks): WorkerCodec };
     require(name: "group_shared_objects"): SharedObjects;
+    require(name: "shared_lane"): {
+      createSharedLaneBuffer(): SharedArrayBuffer;
+      openSharedLane(buffer: SharedArrayBuffer, side: 0 | 1, wait?: SharedLaneWaiter): SharedLane;
+    };
     require(name: "worker_channel"): { open(input: number, output: number): WorkerChannel };
     require(name: "worker_threads"): { isMainThread: boolean; initialize(): void; Worker: new(filename: unknown, options?: unknown) => ThreadWorker };
     require(name: "net"): NetWaiterModule;

@@ -66,6 +66,16 @@ returns `-ENOTSUP`; there is no private-memory or legacy-protocol fallback.
 Member launch abortion, failed physical stop and successful physical stop are
 separate operations.
 
+### Poll kind 7 and process identity
+
+`runtime_proc.poll` on both the guest slot path and the preview1 delegate path accepts kind 7
+for a group member and answers it from `MemberLease::poll_watch`; outside a group it is
+`-EINVAL`, and another member's watch is `-EBADF`, as in Waffle. A watch registered by the guest
+import stores the polling process's `Notify` as a `Waker`; the `futex_wake` that hits it wakes
+that waker after the group lock is released, so the poll returns at once instead of at its
+10 ms rescan. A member's release drops its watches. `runtime_proc.getpid` returns the process's
+own pid, the one its parent's spawn returned (Waffle `docs/host-abi.md` "PID").
+
 The J11a nested imports `wait32`, `wait64` and `notify` call the same member lease
 methods as the guest ABI. The nested adapter owns its additional plain-memory
 rule: waiting on plain memory traps and notification returns zero before entering
@@ -75,6 +85,6 @@ this shared-memory service.
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [Native memory-group service](#native-memory-group-service) | Host feature | Original Wasmtime shared-memory owner, exact routed-pin/watch ABI, unified futex queue and standalone concurrency tests. |
+| [Native memory-group service](#native-memory-group-service) | Host feature | Original Wasmtime shared-memory owner, exact routed-pin/watch ABI, unified futex queue and standalone concurrency tests. Poll kind 7 with a waking watch and `runtime_proc.getpid` mirror Waffle's contract (`docs/host-abi.md` "Memory group imports", "PID"); no Waffle code copied. |
 
 [Ledger scope and pinned revisions](scope.md).

@@ -164,7 +164,7 @@ const GROUP_UNEXPORTED: [&str; 5] = [
 ];
 
 /// The core's memory-group service for its engine side (bunwasm-runtime `group_memory`).
-const GROUP_MEMORY_EXPORTS: [&str; 10] = [
+const GROUP_MEMORY_EXPORTS: [&str; 12] = [
     "bun_shm_create",
     "bun_shm_retain",
     "bun_shm_release",
@@ -175,6 +175,8 @@ const GROUP_MEMORY_EXPORTS: [&str; 10] = [
     "bun_futex_wait32",
     "bun_futex_wait64",
     "bun_futex_wake",
+    "bun_futex_watch",
+    "bun_futex_unwatch",
 ];
 
 fn memory_telemetry() {
