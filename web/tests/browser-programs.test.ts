@@ -9,7 +9,7 @@ import { createWorkerProcessTransport, WorkerProcessClient, type WorkerProcessMe
 import { createRuntimeTerminalCodec } from "waffle/browser/runtime-terminals";
 import { createWorkerPipeCodec } from "waffle/proc/worker-pipes";
 import { BrowserPrograms } from "../src/browser-programs";
-import waffleRelease from "../../scripts/waffle-release-inputs.json";
+import release from "../../scripts/waffle-release-inputs.json";
 
 const urls = {
   worker: new URL(import.meta.resolve("waffle/browser/preview1-worker")),
@@ -124,7 +124,7 @@ test("one app install publishes PATH metadata without guest downloads; which and
     expect(programs.ready()).toBe(first);
     const installed = await first;
     expect(installed.path).toBe("/usr/local/bin:/usr/bin:/bin");
-    expect(basePrograms).toHaveLength(24);
+    expect(basePrograms).toHaveLength(25);
     for (const program of basePrograms) expect((await runtime.filesystem.lookup(program.path))?.kind).toBe("file");
     expect(fetches).toEqual([]);
     const root = await consumerRoot(runtime);
@@ -172,15 +172,14 @@ test("closing during installation removes its markers and refuses a late ready r
 });
 
 test("base families and Bun resolve one physical Waffle package", async () => {
-  const expected = waffleRelease.url;
+  const expected = release.url;
   const physical = await physicalRuntime("waffle");
   const baseEntry = Bun.resolveSync("waffle-base", import.meta.dir);
   const baseRoot = await packageRoot(baseEntry);
   await assertPackageRuntime("waffle-base", import.meta.dir, physical, expected);
   for (const name of ["waffle-coreutils", "waffle-findutils", "waffle-grep", "waffle-ripgrep", "waffle-sed"])
     await assertPackageRuntime(name, join(baseRoot, "package.json"), physical, expected);
-  // The merged Bash source pin declares its historical Waffle peer; its physical runtime resolves to this release.
-  await assertPackageRuntime("bash-web", import.meta.dir, physical, "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.99/waffle-0.0.99.tgz");
+  await assertPackageRuntime("bash-web", import.meta.dir, physical, expected);
 });
 
 async function assertPackageRuntime(name: string, scope: string, physical: string, expectedPeer: string) {

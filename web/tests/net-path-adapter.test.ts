@@ -2,6 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import type { RuntimeNetwork } from "waffle";
 import { createFilesystemIdentity } from "waffle/fs/protocol";
 import { NetHost as RuntimeNetHost } from "waffle/browser/net/host";
+import { NetNamespace } from "waffle/browser/net/helper";
 
 import { NetHost } from "../src/net/host";
 import { NetHelper, createBunNetworkHelper, dispatchBunNetwork } from "../src/net/helper";
@@ -75,8 +76,9 @@ test("invalid UTF-8, out-of-range path bytes, and reserved flags report EINVAL w
   } finally { fixture.dispose(); }
 });
 
-test("Bun request admission forwards Unix requests and rejects malformed fields", () => {
-  const helper = new NetHelper(createRing());
+test("Bun request admission forwards Unix requests and rejects malformed fields", async () => {
+  const namespace = await NetNamespace.create();
+  const helper = new NetHelper(createRing(), namespace);
   const seen: unknown[] = [];
   const handle = spyOn(helper, "handle").mockImplementation(request => { seen.push(request); });
   try {
@@ -92,7 +94,7 @@ test("Bun request admission forwards Unix requests and rejects malformed fields"
       { ...requests[0], path: 1 }, { ...requests[0], unlinkOnClose: 1 },
       { ...requests[1], reply: new SharedArrayBuffer(8) }, { ...requests[2], reply: undefined },
     ]) expect(() => dispatchBunNetwork(helper, { type: "net", req })).toThrow("Invalid Bun network request");
-  } finally { handle.mockRestore(); helper.dispose(); }
+  } finally { handle.mockRestore(); try { helper.dispose(); } finally { namespace.dispose(); } }
 });
 
 
@@ -110,9 +112,10 @@ test("path call trampolines preserve their three- and two-argument signatures", 
 });
 
 
-test("Bun forwards the trusted guest scope without putting it in guest requests", () => {
+test("Bun forwards the trusted guest scope without putting it in guest requests", async () => {
   const ring = createRing();
-  const helper = new NetHelper(ring);
+  const namespace = await NetNamespace.create();
+  const helper = new NetHelper(ring, namespace);
   let captured: unknown;
   const network: RuntimeNetwork = {
     lookup: () => [],
@@ -122,5 +125,5 @@ test("Bun forwards the trusted guest scope without putting it in guest requests"
   try {
     expect(createBunNetworkHelper(network, ring, { pathScope })).toBe(helper);
     expect(captured).toMatchObject({ pathScope });
-  } finally { helper.dispose(); }
+  } finally { try { helper.dispose(); } finally { namespace.dispose(); } }
 });

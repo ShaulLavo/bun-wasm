@@ -1,4 +1,4 @@
-import type { Runtime } from "waffle";
+import type { ProcessRuntime } from "../../src/process-runtime.js";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
 import { DescriptorTable } from "waffle/core/descriptors";
 import { createWorkerProcessTransport, WorkerProcessClient, type WorkerProcessMessage, type WorkerProcessTransport } from "waffle/proc/worker-client";
@@ -8,7 +8,10 @@ import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-
 
 /** A page-side broker, its fake runtime, and a worker-side client for the root process it adopts.
  * The client posts into `messages` instead of a worker, so a test delivers each one explicitly. */
-export function rootFixture(options?: SubprocessBrokerOptions & { activate?: () => Promise<typeof import("waffle/proc")> }) {
+export function rootFixture(
+  options?: SubprocessBrokerOptions & { activate?: () => Promise<typeof import("waffle/proc")> },
+  prepare?: (root: WorkerProcessTransport) => ConstructorParameters<typeof WorkerProcessClient>[0]["prepareSpawn"],
+) {
   const ports: MessagePort[] = [];
   const filesystem = {
     connect(identity: object) {
@@ -20,7 +23,7 @@ export function rootFixture(options?: SubprocessBrokerOptions & { activate?: () 
     revoke: revokeFilesystem, client: { sweep() {} },
     async quiesce(identity: Parameters<typeof revokeFilesystem>[0]) { revokeFilesystem(identity); },
   } as unknown as SharedFilesystem;
-  const runtime: Runtime = processRuntimeFixture(filesystem, { activate: options?.activate });
+  const runtime: ProcessRuntime = processRuntimeFixture(filesystem, { activate: options?.activate });
   const root: WorkerProcessTransport = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
   root.data = { filesystem: createFilesystemIdentity() };
   const broker = new SubprocessBroker("http://localhost/worker.js", runtime, options);
@@ -32,7 +35,7 @@ export function rootFixture(options?: SubprocessBrokerOptions & { activate?: () 
       throw new Error("unexpected export");
     }, import() { throw new Error("unexpected import"); }, discard() {} },
     postMessage: message => messages.push(message),
-    prepareSpawn: () => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (root.data as { pipeRegistry: unknown }).pipeRegistry } }),
+    prepareSpawn: prepare?.(root) ?? (() => ({ data: { filesystem: createFilesystemIdentity(), pipeRegistry: (root.data as { pipeRegistry: unknown }).pipeRegistry } })),
   });
   return { root, runtime, broker, client, messages, descriptors,
     async dispose() { broker.dispose(); descriptors.dispose(); try { await runtime.dispose(); } finally { for (const port of ports) port.close(); } } };

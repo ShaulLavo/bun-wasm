@@ -1,6 +1,7 @@
+import { rootFixture } from "./process-root-fixture";
 import { createNotifyObserver } from "./notify-observer";
 import { socketRuntimeFixture as processRuntimeFixture } from "./socket-runtime-fixture";
-import type { Runtime } from "waffle";
+import type { ProcessRuntime } from "../../src/process-runtime.js";
 import { expect, spyOn, test } from "bun:test";
 import { createFilesystemIdentity, revokeFilesystem } from "waffle/fs";
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
@@ -22,7 +23,7 @@ function imported(name: string, namespace = "runtime_proc"): WebAssembly.Module 
   const imports = [1].concat(text(namespace), text(name), [0, 0]);
   return new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 0x60, 0, 0, 2, imports.length].concat(imports)));
 }
-function fixture(module: WebAssembly.Module, options: Partial<RunOptions> | ((runtime: Runtime) => Partial<RunOptions>) = {}) {
+function fixture(module: WebAssembly.Module, options: Partial<RunOptions> | ((runtime: ProcessRuntime) => Partial<RunOptions>) = {}) {
   const originalWorker = globalThis.Worker;
   const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
   const originalIsolation = Object.getOwnPropertyDescriptor(globalThis, "crossOriginIsolated");
@@ -165,37 +166,12 @@ test("UI signals freeze canonical root pipe publication only for fatal actions",
 });
 
 function registryFixture(options?: ConstructorParameters<typeof SubprocessBroker>[2] & { activate?: () => Promise<typeof import("waffle/proc")> }) {
-  const ports: MessagePort[] = [];
-  const filesystem = {
-    connect(identity: object) {
-      const channel = new MessageChannel();
-      channel.port2.close();
-      ports.push(channel.port1);
-      return { ...identity, port: channel.port1 };
-    },
-    revoke: revokeFilesystem, client: { sweep() {} },
-    async quiesce(identity: Parameters<typeof revokeFilesystem>[0]) { revokeFilesystem(identity); },
-  } as unknown as SharedFilesystem;
-  const runtime = processRuntimeFixture(filesystem, { activate: options?.activate });
-  const root = createWorkerProcessTransport({ pid: runtime.identities.pid(), job: runtime.identities.job(), identity: runtime.identities.buffer });
-  root.data = { filesystem: createFilesystemIdentity() };
-  const broker = new SubprocessBroker("http://localhost/worker.js", runtime, options);
-  const descriptors = new DescriptorTable();
-  const messages: WorkerProcessMessage[] = [];
-  const client = new WorkerProcessClient({ transport: root, descriptors,
-    codec: { export(descriptor) {
-      if (descriptor.resource.kind === "terminal") return { kind: "web-terminal", target: 2 };
-      throw new Error("unexpected export");
-    }, import() { throw new Error("unexpected import"); }, discard() {} },
-    postMessage: message => messages.push(message),
-    prepareSpawn(pid) {
-      const pipeRegistry = (root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry;
-      const registry = attachPipePublicationRegistry(pipeRegistry);
-      registry.registerProcess(pid);
-      return { data: { filesystem: createFilesystemIdentity(), pipeRegistry }, cancel: () => registry.collectProcess(pid) };
-    },
+  return rootFixture(options, root => pid => {
+    const pipeRegistry = (root.data as { pipeRegistry: PipePublicationRegistryHandle }).pipeRegistry;
+    const registry = attachPipePublicationRegistry(pipeRegistry);
+    registry.registerProcess(pid);
+    return { data: { filesystem: createFilesystemIdentity(), pipeRegistry }, cancel: () => registry.collectProcess(pid) };
   });
-  return { root, runtime, broker, client, messages, descriptors, async dispose() { broker.dispose(); descriptors.dispose(); try { await runtime.dispose(); } finally { for (const port of ports) port.close(); } } };
 }
 
 for (const path of ["supervisor", "dispose"] as const) test(`${path} freezes root-created pipe endpoints absent from supervisor descriptors`, async () => {

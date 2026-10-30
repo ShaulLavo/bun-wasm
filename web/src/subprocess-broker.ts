@@ -4,7 +4,8 @@
 import type { ProcessExit } from "waffle/proc";
 import { checkedSignal } from "waffle/proc/types";
 import type { SignalTransport } from "waffle/proc/signals";
-import type { Runtime, ProcessService, RuntimeSupervisor } from "waffle";
+import type { ProcessService, RuntimeSupervisor } from "waffle";
+import type { ProcessRuntime } from "../../src/process-runtime.js";
 import type { WorkerProcessMessage, WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { FilesystemIdentity } from "waffle/fs";
 import { bunLauncher, preview1Launcher, siblingWorkerUrl } from "./bun-launcher.js";
@@ -31,7 +32,7 @@ export class SubprocessBroker {
   private disposed = false;
   private service?: ProcessService;
   private root?: SignalTransport & { pid: number; job: number };
-  constructor(workerUrl: string, private runtime: Runtime, private options: SubprocessBrokerOptions = {}) {
+  constructor(workerUrl: string, private runtime: ProcessRuntime, private options: SubprocessBrokerOptions = {}) {
     installBunAdapters(runtime, workerUrl, options.loadTools, options.network);
   }
 
@@ -118,10 +119,10 @@ export class SubprocessBroker {
   private report(error: unknown): void { console.error("bun-wasm: process controller failed", error); }
 }
 
-const programFiles = new WeakMap<Runtime, Promise<void>>();
-const installedAdapters = new WeakSet<Runtime>();
+const programFiles = new WeakMap<ProcessRuntime, Promise<void>>();
+const installedAdapters = new WeakSet<ProcessRuntime>();
 /** Immutable engine-qualified registrations; concurrent runs never replace a global engine alias. */
-export function installBunAdapters(runtime: Runtime, workerUrl: string, loadTools?: () => Promise<WebAssembly.Module>, network?: BunNetworkOptions): void {
+export function installBunAdapters(runtime: ProcessRuntime, workerUrl: string, loadTools?: () => Promise<WebAssembly.Module>, network?: BunNetworkOptions): void {
   if (installedAdapters.has(runtime)) return;
   installedAdapters.add(runtime);
   runtime.registerAdapter("preview1", preview1Launcher({ workerUrl }));

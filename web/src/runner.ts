@@ -4,7 +4,7 @@ import { programLinkPlan } from "../../src/assets.js";
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
 // and the sandbox (../sandbox/).
 
-import type { Runtime } from "waffle";
+import type { ProcessRuntime } from "../../src/process-runtime.js";
 import { ENGINES, loadWasm, MODULE_SCOPE } from "./engine-loader";
 import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, type RuntimeNetworkHelper } from "./net/helper";
 import { createRing } from "./net/ring";
@@ -34,7 +34,7 @@ export interface RunOptions {
   args: string[];
   env: Record<string, string>;
   /** Shared service owned by the page, also used by editor and shell. */
-  runtime: Runtime;
+  runtime: ProcessRuntime;
   network?: BunNetworkOptions;
   /** From registerModuleScope(): run the worker under ./__bunwasm/. */
   moduleScope: boolean;
@@ -69,7 +69,7 @@ function slotsMode(): RunRequest["slots"] {
   return value === "table" || value === "off" ? value : "imports";
 }
 
-const registeredPrograms = new WeakMap<Runtime, Set<string>>();
+const registeredPrograms = new WeakMap<ProcessRuntime, Set<string>>();
 
 function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<string>, engine: Engine, module: Extract<ExecutableRegistration, { adapter: "bun" }>["module"]): void {
   for (const command of ["bun", "node", "nodejs"]) {
