@@ -146,7 +146,9 @@ role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `1
 - `src/subprocess-broker.ts`, `src/bun-launcher.ts`: Bun's composition over that service. The
   launchers start one worker per `bun:<engine>` or `preview1` process; the broker adopts a run's
   root and forwards generic requests and signals without rewriting executable names.
-- `src/main.ts`: layout, editor tabs, Run button.
+- `src/main.ts` renders the page's Remix 3 components from `src/playground/`. `playground.ts` owns
+  the page's one runtime, the workspace, bun.wasm and the shell; `editor.ts` owns the CodeMirror
+  documents. The `.tsx` files render the header, editor tabs and terminal pane.
 
 The guest gets `/` preopened and `PWD=/home/user`. WASI has no working directory of its own, so
 bun.wasm must `chdir($PWD)` at startup for relative paths to resolve from `/home/user`.

@@ -92,7 +92,7 @@
         "tests/worker-bootstrap-browser-main.ts"
       ],
       "project": [
-        "src/**/*.{ts,js}",
+        "src/**/*.{ts,tsx,js}",
         "scripts/**/*.{ts,mjs}",
         "tests/**/*.{ts,mjs,js}",
         "guest-tests/**/*.ts"
@@ -110,7 +110,7 @@
         "tests/*.{test.ts,mjs,js}"
       ],
       "project": [
-        "src/**/*.ts",
+        "src/**/*.{ts,tsx}",
         "tests/**/*.{ts,mjs,js}"
       ],
       "ignoreDependencies": [

@@ -9,60 +9,7 @@
     <link rel="stylesheet" href="./main.css" />
   </head>
   <body>
-    <div id="app">
-      <header>
-        <h1><span class="logo" aria-hidden="true">🥟</span> bun<span class="dim">.wasm</span> <span class="product">sandbox</span></h1>
-        <span id="status" role="status" aria-live="polite"></span>
-        <a class="nav" href="./playground/" title="Terminal playground: bun test, bun build, bun:sqlite">Playground</a>
-        <label class="engine template-choice">
-          <span class="label">Template</span>
-          <select id="template" aria-label="App template" title="App template">
-            <option value="react">React</option>
-            <option value="vanilla">Vanilla TS</option>
-          </select>
-        </label>
-        <label class="engine">
-          <span class="label">Engine</span>
-          <select id="engine" aria-label="JavaScript engine" title="JavaScript engine (restarts the dev server)">
-            <option value="browser">Browser (native)</option>
-            <option value="quickjs">QuickJS</option>
-            <option value="jsc">JSC</option>
-          </select>
-        </label>
-        <button id="reset" type="button" title="Discard this workspace and restore its template">Reset template</button>
-        <button id="restart" type="button" title="Restart the dev server">↻ Restart</button>
-      </header>
-      <main>
-        <nav class="pane files" aria-label="Files">
-          <div class="pane-title">Files</div>
-          <ul id="tree" role="tree"></ul>
-        </nav>
-        <section class="pane editor-pane" aria-label="Editor">
-          <div class="bar">
-            <select id="file-select" aria-label="File"></select>
-            <span id="file-name"></span>
-            <span id="save-state" aria-live="polite"></span>
-          </div>
-          <div id="editor"></div>
-        </section>
-        <section class="pane preview-pane" aria-label="Preview">
-          <div class="bar">
-            <span class="dot" id="server-dot" aria-hidden="true"></span>
-            <a id="preview-url" target="_blank" rel="noopener" title="Open the preview in a new tab">starting dev server…</a>
-            <a id="open-preview" href="#" target="_blank" rel="noopener" title="Open the preview in a new tab">↗</a>
-          </div>
-          <iframe id="preview" title="App preview"></iframe>
-        </section>
-        <section class="pane terminal-pane" aria-label="Dev server output">
-          <div class="bar">
-            <span>Terminal</span>
-            <span class="dim">bun ./index.html</span>
-            <button id="copy-terminal" type="button" title="Copy terminal output, including scrollback" aria-live="polite">Copy</button>
-          </div>
-          <div id="terminal"></div>
-        </section>
-      </main>
-    </div>
+    <div id="app"></div>
     <script type="module" src="./main.js"></script>
   </body>
 </html>
