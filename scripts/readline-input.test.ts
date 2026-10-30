@@ -116,3 +116,113 @@ test("close before scheduled startup does not attach input listeners", () => {
   expect(attachedListeners(f.input)).toEqual(baseline);
   f.input.destroy();
 });
+
+
+test("readline decodes UTF-8 across binary chunks and flushes incomplete input", async () => {
+  const f = fixture();
+  const rl = f.readline.createInterface({ input: f.input });
+  const lines: string[] = [];
+  rl.on("line", line => lines.push(line));
+  try {
+    f.pump();
+    f.input.write(Buffer.from([0xe2]));
+    f.input.write(Buffer.from([0x82, 0xac, 0x0a, 0xef, 0xbb]));
+    f.input.write(Buffer.from([0xbf, 0x0a]));
+    f.input.end(Buffer.from([0xe2]));
+    await tick();
+    expect(lines).toEqual(["€", "\ufeff", "�"]);
+  } finally { rl.close(); f.input.destroy(); }
+});
+
+test("readline preserves an input stream's existing string encoding", async () => {
+  const f = fixture();
+  f.input.setEncoding("utf8");
+  const rl = f.readline.createInterface({ input: f.input });
+  const lines: string[] = [];
+  rl.on("line", line => lines.push(line));
+  try {
+    f.pump();
+    f.input.end("decoded €\n");
+    await tick();
+    expect(lines).toEqual(["decoded €"]);
+    expect(f.input.readableEncoding).toBe("utf8");
+  } finally { rl.close(); f.input.destroy(); }
+});
+
+test("pause before scheduled attachment holds buffered lines until resume", async () => {
+  const f = fixture();
+  const rl = f.readline.createInterface({ input: f.input });
+  const lines: string[] = [];
+  rl.on("line", line => lines.push(line));
+  try {
+    rl.pause();
+    f.pump();
+    f.input.write("held\n");
+    await tick();
+    expect(lines).toEqual([]);
+    rl.resume();
+    await tick();
+    expect(lines).toEqual(["held"]);
+  } finally { rl.close(); f.input.destroy(); }
+});
+
+test("prompt resumes a previously paused reader", async () => {
+  const f = fixture();
+  const rl = f.readline.createInterface({ input: f.input });
+  const lines: string[] = [];
+  rl.on("line", line => lines.push(line));
+  try {
+    f.pump();
+    rl.pause();
+    rl.prompt();
+    f.input.write("hello\n");
+    await tick();
+    expect(lines).toEqual(["hello"]);
+  } finally { rl.close(); f.input.destroy(); }
+});
+
+test("question resumes a previously paused reader", async () => {
+  const f = fixture();
+  const rl = f.readline.createInterface({ input: f.input });
+  const answers: string[] = [];
+  rl.on("line", () => {});
+  try {
+    f.pump();
+    rl.pause();
+    rl.question("Answer: ", answer => answers.push(answer));
+    f.input.write("hello\n");
+    await tick();
+    expect(answers).toEqual(["hello"]);
+  } finally { rl.close(); f.input.destroy(); }
+});
+
+test("an overlapping question preserves the first callback and allows reentrant questions", async () => {
+  const f = fixture();
+  const rl = f.readline.createInterface({ input: f.input });
+  const answers: string[] = [];
+  const second = (answer: string) => answers.push(`next:${answer}`);
+  const first = (answer: string) => { answers.push(`first:${answer}`); rl.question("Next: ", second); };
+  try {
+    rl.question("First: ", first);
+    rl.question("Ignored: ", answer => answers.push(`overwritten:${answer}`));
+    f.pump();
+    f.input.write("one\ntwo\n");
+    await tick();
+    expect(answers).toEqual(["first:one", "next:two"]);
+  } finally { rl.close(); f.input.destroy(); }
+});
+
+test("promise questions preserve the outstanding answer owner", async () => {
+  const f = fixture();
+  const rl = f.readline.promises.createInterface({ input: f.input });
+  let secondAnswered = false;
+  try {
+    const first = rl.question("First: ");
+    void rl.question("Second: ").then(() => { secondAnswered = true; });
+    f.pump();
+    f.input.write("one\n");
+    await tick();
+    expect(secondAnswered).toBe(false);
+    expect(await first).toBe("one");
+  } finally { rl.close(); f.input.destroy(); }
+});

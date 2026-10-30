@@ -16,10 +16,15 @@
     _prompt: string;
     _pendingQuestion: Answer | null = null;
     _started = false;
+    _attached = false;
+    _paused = false;
     _buffered = "";
-    _onData = (chunk: unknown) => this._consume(String(chunk));
+    _decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+    _onData = (chunk: unknown) => this._consume(chunk instanceof Uint8Array
+      ? this._decoder.decode(chunk, { stream: true }) : this._decoder.decode() + String(chunk));
     _onEnd = () => {
-      if (this._buffered) this._deliver(this._buffered);
+      this._consume(this._decoder.decode());
+      if (this._buffered && !this.closed) this._deliver(this._buffered);
       this._buffered = "";
       this.close();
     };
@@ -41,9 +46,11 @@
     }
     _pump() {
       if (this.closed) return;
+      this._attached = true;
       this.input.on("data", this._onData);
       this.input.on("end", this._onEnd);
-      this.input.resume();
+      if (this._paused) this.input.pause();
+      else this.input.resume();
     }
     _consume(chunk: string) {
       this._buffered += chunk;
@@ -67,19 +74,26 @@
       if (this.closed) return;
       if (typeof options === "function") callback = line => options(line);
       if (!callback) throw new TypeError("The callback argument must be a function");
+      if (this._pendingQuestion) { this.resume(); return; }
       this._pendingQuestion = callback;
       this.output?.write(query);
-      this._start();
+      this.resume();
     }
     prompt() {
       this.output?.write(this._prompt);
-      this._start();
+      this.resume();
     }
     setPrompt(prompt: string) { this._prompt = prompt; }
     getPrompt() { return this._prompt; }
     write(data: string) { this.output?.write(data); }
-    pause() { this.input.pause(); return this; }
-    resume() { this.input.resume(); return this; }
+    pause() { this._paused = true; this.input.pause(); return this; }
+    resume() {
+      if (this.closed) return this;
+      this._paused = false;
+      this._start();
+      if (this._attached) this.input.resume();
+      return this;
+    }
     close() {
       if (this.closed) return;
       this.closed = true;
