@@ -42,8 +42,14 @@ acceptance evidence.
 Every Bun launcher passes a `notificationWorkerUrl` (Waffle's
 `browser/notification-worker` bundle). The playground bundles
 `web/src/notification-worker.ts` beside its Bun worker. Package callers bundle
-`bun-wasm/notification-worker` and pass it to `installBunAdapters`. A networked Bun
-process without a notification scope fails its launch; there is no polling fallback.
+`bun-wasm/notification-worker` and pass it to `installBunAdapters`. A page-started root
+(`web/src/runner.ts` `startRun`) posts its own request, so it creates the same page-owned
+relay with Waffle's `createNotificationBridge` when the run is networked. It transfers the
+relay's port, and stops the relay after the root worker's physical stop, as Waffle's process
+broker does for children. Both use the `notification-worker.js` sibling of the Bun worker, so
+the browser build mirrors that sibling into the scoped `__bunwasm/` directory beside
+`fs-worker.js` and `preview1-worker.js`. A networked Bun process without a notification scope
+fails its launch; there is no polling fallback.
 
 Both `watch(path, callback)` and `watch(path, options, callback)` register the
 original callback directly, matching Node v22.14.0 `lib/fs.js` `watch()` and

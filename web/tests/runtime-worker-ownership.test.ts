@@ -7,6 +7,7 @@ import { createFilesystemIdentity, revokeFilesystem, type FilesystemIdentity } f
 import { createWorkerProcessTransport, WorkerProcessClient, workerProcessState, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import { SubprocessBroker } from "../src/subprocess-broker";
 import { startRun } from "../src/runner";
+import { isNotificationBridgeRequest, isNotificationWorkerUrl } from "./notification-worker-fixture";
 import type { SharedFilesystem } from "../src/shared-fs";
 import type { RunRequest, WorkerMessage } from "../src/worker";
 
@@ -279,14 +280,20 @@ for (const early of [false, true]) test(`explicit generic runner roots preserve 
   let sent!: RunRequest;
   let posted!: () => void;
   const ready = new Promise<void>(resolve => { posted = resolve; });
-  let terminated = 0;
+  let terminated = 0, relayStops = 0;
   let connections = 0;
   const requestedAtRevocation: number[] = [];
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("http://localhost/") });
   Object.defineProperty(globalThis, "crossOriginIsolated", { configurable: true, value: true });
+  // A networked root also starts Waffle's notification relay once its request is posted.
   globalThis.Worker = class {
-    postMessage(request: RunRequest) { sent = request; posted(); }
-    terminate() { terminated++; }
+    readonly relay: boolean;
+    constructor(url: string | URL) { this.relay = isNotificationWorkerUrl(url); }
+    postMessage(request: unknown) {
+      if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
+      sent = request as RunRequest; posted();
+    }
+    terminate() { if (this.relay) relayStops++; else terminated++; }
   } as unknown as typeof Worker;
   const filesystem = {
     connect(value: FilesystemIdentity) { expect(value.owner).toBe(identity.owner); connections++; return { ...value, port: channel.port1 }; },
@@ -320,6 +327,7 @@ for (const early of [false, true]) test(`explicit generic runner roots preserve 
     expect(() => workerProcessState(transport)).toThrow("collected");
     await Promise.resolve();
     expect(terminated).toBe(1);
+    expect(relayStops).toBe(early ? 0 : 1);
   } finally {
     try { run?.kill(9); await run?.done; await runtime.dispose(); }
     finally {

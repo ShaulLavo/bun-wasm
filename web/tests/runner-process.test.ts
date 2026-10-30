@@ -370,7 +370,10 @@ test("concurrent roots on one runtime inherit independent engine PATHs without r
     request!: RunRequest;
     terminated = false;
     constructor() { workers.push(this); }
-    postMessage(request: RunRequest) { this.request = request; requests.set(pidOf(request), request); }
+    postMessage(request: RunRequest) {
+      if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
+      this.request = request; requests.set(pidOf(request), request);
+    }
     terminate() { this.terminated = true; }
   }
   async function received(pid: number): Promise<RunRequest> {
@@ -443,7 +446,10 @@ test("Preview1 roots keep independent explicit modules and 100 launches register
     request?: RunRequest;
     terminated = false;
     constructor() { workers.push(this); }
-    postMessage(request: RunRequest) { this.request = request; }
+    postMessage(request: RunRequest) {
+      if (isNotificationBridgeRequest(request)) { request.port.close(); return; }
+      this.request = request;
+    }
     terminate() { this.terminated = true; }
     exit() { this.onmessage?.({ data: { type: "exit", code: 0, sleep: "atomics" } } as MessageEvent); }
   }
