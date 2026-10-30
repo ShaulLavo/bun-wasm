@@ -84,31 +84,32 @@ test("the prebuild job runs for every native selection, independent of the JSC e
   expect(needsRust(["docs/code-quality.md"])).toBe(false);
 });
 
+type GraphCase = { quality: string; rust: string; jsc: string; outcome: string; cancelled: boolean };
+
+const graphCases: GraphCase[] = ["success", "failure"].flatMap(quality => ["true", "false"].flatMap(rust => ["true", "false"].flatMap(jsc =>
+  ["success", "failure", "cancelled"].flatMap(outcome => [false, true].map(cancelled => ({ quality, rust, jsc, outcome, cancelled }))))));
+
+function checkGraph({ quality, rust, jsc, outcome, cancelled }: GraphCase) {
+  const qualityNeed = { result: quality, outputs: { rust, jsc, hermes: "false", shared: "false" } };
+  const prebuildRuns = jobRuns(producer, { quality: qualityNeed }, cancelled);
+  const prebuild = { result: prebuildRuns ? outcome : "skipped" };
+  const nativeRuns = jobRuns(native, { quality: qualityNeed, "jsc-prebuild": prebuild }, cancelled);
+  const selected = quality === "success" && rust === "true" && !cancelled;
+  expect(prebuildRuns).toBe(selected);
+  // Skipping is reserved for the change filter, a failed quality job or a cancelled run.
+  expect(nativeRuns).toBe(selected);
+  if (!nativeRuns) return;
+  expect(guard(prebuild.result)).toBe(outcome === "success" ? 0 : 1);
+  if (outcome === "success") return;
+  // Later consumers of native outputs do not run after a failed native job.
+  const hermes = { ...qualityNeed, outputs: { ...qualityNeed.outputs, hermes: "true" } };
+  expect(jobRuns(record(jobs.hermes), { quality: hermes, rust: { result: "failure" } }, cancelled)).toBe(false);
+}
+
 test("the native check fails, never skips, when its selected prebuild did not succeed", () => {
   expect(steps(native)[0]?.name).toBe(guardName);
-  for (const quality of ["success", "failure"]) {
-    for (const rust of ["true", "false"]) {
-      for (const jsc of ["true", "false"]) {
-        for (const outcome of ["success", "failure", "cancelled"]) {
-          for (const cancelled of [false, true]) {
-            const qualityNeed = { result: quality, outputs: { rust, jsc, hermes: "false", shared: "false" } };
-            const prebuildRuns = jobRuns(producer, { quality: qualityNeed }, cancelled);
-            const prebuild = { result: prebuildRuns ? outcome : "skipped" };
-            const nativeRuns = jobRuns(native, { quality: qualityNeed, "jsc-prebuild": prebuild }, cancelled);
-            const selected = quality === "success" && rust === "true" && !cancelled;
-            expect(prebuildRuns).toBe(selected);
-            // Skipping is reserved for the change filter, a failed quality job or a cancelled run.
-            expect(nativeRuns).toBe(selected);
-            if (nativeRuns) expect(guard(prebuild.result)).toBe(outcome === "success" ? 0 : 1);
-            const nativeResult = !nativeRuns ? "skipped" : outcome === "success" ? "success" : "failure";
-            // Later consumers of native outputs do not run after a failed native job.
-            const hermes = { ...qualityNeed, outputs: { ...qualityNeed.outputs, hermes: "true" } };
-            if (nativeResult === "failure") expect(jobRuns(record(jobs.hermes), { quality: hermes, rust: { result: nativeResult } }, cancelled)).toBe(false);
-          }
-        }
-      }
-    }
-  }
+  expect(graphCases).toHaveLength(48);
+  for (const graphCase of graphCases) checkGraph(graphCase);
   for (const result of ["failure", "cancelled", "skipped", ""]) expect(guard(result)).toBe(1);
 });
 
@@ -126,7 +127,8 @@ test("both jobs run byte-identical setup, so the native job can re-verify in the
   const producerShared = shared(producer);
   expect(producerShared).toHaveLength(14);
   expect(producerShared).toEqual(shared(native));
-  expect(run(producer, "Configure private JSC build paths")).toBe(run(native, "Configure private JSC build paths").split("\n")[0]);
+  const nativePaths = run(native, "Configure private JSC build paths");
+  expect(run(producer, "Configure private JSC build paths")).toBe(nativePaths.slice(0, nativePaths.indexOf("\n")));
   expect(run(native, "Configure private JSC build paths")).toContain('JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"\n');
   // The producer compiles no Rust and needs no upstream Bun sources.
   expect(JSON.stringify(producer)).not.toContain("rust-toolchain");
@@ -324,8 +326,7 @@ for (const archive of ["prebuild.tar.zst", "sysroot.tar.zst"]) {
     const { digest } = produce(h);
     const path = join(bundle(h), archive);
     const bytes = readFileSync(path);
-    bytes[bytes.length - 1] ^= 1;
-    writeFileSync(path, bytes);
+    writeFileSync(path, bytes.map((byte, index) => index === bytes.length - 1 ? byte ^ 1 : byte));
     expectRejectedBeforeExtraction(h, consume(h, digest));
     rmSync(path);
     expectRejectedBeforeExtraction(h, consume(h, digest));

@@ -223,7 +223,7 @@ const checkpointBoundaries = [
 
 function boundaryCommands(failure: string, cancelled: boolean, controller = true, boundaries: readonly (readonly [string, string])[] = checkpointBoundaries, list: readonly unknown[] = stepList): string {
   const ordered = boundaries.toSorted((left, right) => position(left[0], list) - position(right[0], list));
-  expect(ordered).toEqual(boundaries);
+  expect<readonly (readonly [string, string])[]>(ordered).toEqual(boundaries);
   return ordered.map(([name, marker]) => {
     const item = named(name, list);
     if (name.startsWith("Save ")) {
