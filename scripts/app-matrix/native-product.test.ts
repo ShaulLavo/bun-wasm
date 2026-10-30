@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { browserHost } from "./browser.mjs";
-import { completeObservations } from "./product-browser";
+import { completeObservations, type ProductPage } from "./product-browser";
 import { fullstackApps } from "./product-fullstack";
 import type { ProductCommand } from "./product-types";
 
@@ -22,7 +22,7 @@ function nativeControl(project: string, broken: string) {
     on(_event: string, listener: (event: { payload: string }) => void) { frames.push(listener); },
   };
   const emit = (payload: string) => { for (const listener of frames) listener({ payload }); };
-  const locator = (selector: string, text = "") => ({
+  const locator = (selector: string, text = ""): ReturnType<ProductPage["locator"]> => ({
     filter: ({ hasText }: { hasText: string }) => locator(selector, hasText),
     async waitFor() {
       waits.push(`${selector}:${text}`);
@@ -33,6 +33,7 @@ function nativeControl(project: string, broken: string) {
       if (text !== marker && broken !== "hmr") emit('{"type":"update","updates":[{"type":"js-update","path":"/src/routes/index.tsx"}]}');
     },
     async click() { if (broken !== "client-interaction") count++; },
+    async count() { return 0; },
   });
   const page = {
     on(event: string, listener: (value: typeof socket) => void) { if (event === "websocket") sockets.push(listener); },
@@ -79,7 +80,7 @@ async function runNative(command: ProductCommand, broken = "") {
     });
     const result = await host.checkPage("http://native.invalid/", command.check, directory, 100);
     return {
-      result, rows: completeObservations(command.check, result.observations ?? [], result),
+      result, rows: completeObservations(command.check, "observations" in result ? result.observations : [], result),
       visits: chromium.state.visits, waits: chromium.state.waits, closed: chromium.state.closed(),
       original: readFileSync(join(directory, "src/routes/index.tsx"), "utf8") === fixture.files["src/routes/index.tsx"],
     };
@@ -107,7 +108,7 @@ for (const name of ["dev", "start"]) {
     expect(run.waits).toContain("#count:1");
     expect(run.original).toBe(true);
     expect(run.closed).toBe(1);
-    if (name === "dev") expect(run.result.assertion).toContain('source edit renders "bun-wasm product matrix updated" after a Vite WebSocket update');
+    if (name === "dev") expect("assertion" in run.result && run.result.assertion).toContain('source edit renders "bun-wasm product matrix updated" after a Vite WebSocket update');
   });
 }
 
@@ -125,7 +126,7 @@ for (const broken of ["ssr-query", "client-interaction"]) {
 test("native SolidStart still rejects a source edit without a WebSocket update", async () => {
   const run = await runNative(stage("dev"), "hmr");
   expect(run.result.status).toBe("fail");
-  expect(run.result.blocker).toContain("Source edit rendered without a Vite WebSocket update");
+  expect("blocker" in run.result && run.result.blocker).toContain("Source edit rendered without a Vite WebSocket update");
   expect(run.rows.every(row => row.status === "blocked")).toBe(true);
   expect(run.original).toBe(true);
   expect(run.closed).toBe(1);
