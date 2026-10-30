@@ -18,7 +18,7 @@
     "@remix-run/component": "1.1.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#3e4e62cdd187451d3520c2f50e7626934cd2d815",
+    "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#565fbe98772a2c378eed9a02f0f37ff88474ef56",
     "codemirror": "^6.0.2",
     "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.105/waffle-0.0.105.tgz",
     "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/waffle-base-0.0.13.tgz"

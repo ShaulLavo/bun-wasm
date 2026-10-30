@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 import { sha256 } from "./registry.mjs";
+import { stageIsolationInputs } from "./isolation-fixture.ts";
 
 const root = resolve(import.meta.dir, "../..");
 function launch(args, env = {}) {
@@ -30,11 +31,12 @@ function fixture() {
   try {
     cpSync(join(root, "scripts/app-matrix"), join(directory, "scripts/app-matrix"), { recursive: true });
     mkdirSync(join(directory, "dist"));
-    writeFileSync(join(directory, "dist/bun.wasm"), "fixture");
     mkdirSync(join(directory, "web/dist"), { recursive: true });
+    stageIsolationInputs(root, directory);
     mkdirSync(join(directory, "web/tests"), { recursive: true });
     cpSync(join(root, "web/tests/playground.mjs"), join(directory, "web/tests/playground.mjs"), { recursive: true });
     cpSync(join(root, "web/tests/foreground.ts"), join(directory, "web/tests/foreground.ts"));
+    cpSync(join(root, "web/tests/stop-shell.ts"), join(directory, "web/tests/stop-shell.ts"));
     mkdirSync(join(directory, "owned-scratch"));
     // The runner records its own checkout revision before executing any stages.
     for (const args of [
