@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { runInNewContext } from "node:vm";
 import { selectChecks } from "./test-checks";
-import { firstFsSource, parseFirstFs, parseRuntimeScopes } from "./measure-runtime-js";
+import { firstFsSource, measurementArgs, parseFirstFs, parseRuntimeScopes, verifyMeasurementClosure } from "./measure-runtime-js";
+import { launcherReceipt, producerArtifactPaths, producerEngines } from "./producer-closure.ts";
 
 test("first-fs workload validates the actual module and cached identity", () => {
   const result = spawnSync(process.execPath, ["-e", firstFsSource], { encoding: "utf8" });
@@ -63,4 +67,64 @@ test("the generated builtin loader alone selects trusted builtin evaluation", ()
 
 test("runtime measurement tests have a blocking quality owner", () => {
   expect(selectChecks("quality")).toContain("scripts/measure-runtime-js.test.ts");
+});
+
+function closureFixture(run: (root: string, manifest: ReturnType<typeof writeClosureFixture>) => void): void {
+  const root = mkdtempSync(join(tmpdir(), "runtime-measurement-"));
+  try { run(root, writeClosureFixture(root)); }
+  finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+function writeClosureFixture(root: string) {
+  const source = { head: "a".repeat(40), tree: "b".repeat(40) };
+  for (const path of producerArtifactPaths("split")) {
+    const file = join(root, path);
+    mkdirSync(join(file, ".."), { recursive: true });
+    writeFileSync(file, `synthetic identity fixture ${path}`, { mode: 0o700 });
+  }
+  const path = join(root, "launcher/bun-wasm"), receipt = `${path}.launcher.json`;
+  const launcher = { path, receipt, ...launcherReceipt(path, source) };
+  writeFileSync(receipt, JSON.stringify(launcher));
+  const files = producerArtifactPaths("split").map(path => {
+    const bytes = readFileSync(join(root, path));
+    return { path, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
+  });
+  const manifest = { schema: 1, status: "reusable", profile: "split", engines: producerEngines("split"), source, launcher, files };
+  writeFileSync(join(root, "manifest.json"), JSON.stringify(manifest));
+  return manifest;
+}
+
+test("measurement consumes the current complete closure and original launcher receipt without writing", () => {
+  closureFixture((root, manifest) => {
+    const before = readFileSync(join(root, "manifest.json"), "utf8");
+    const closure = verifyMeasurementClosure(root);
+    expect(closure.source).toEqual(manifest.source);
+    expect(closure.artifacts).toHaveLength(manifest.files.length);
+    expect(readFileSync(join(root, "manifest.json"), "utf8")).toBe(before);
+    expect(closure.launcher.sha256).toBe(manifest.launcher.artifact.sha256);
+    writeFileSync(join(root, "dist/hermes-engine.wasm"), "changed companion");
+    expect(() => verifyMeasurementClosure(root)).toThrow("Producer artifact changed");
+  });
+});
+
+test("measurement rejects incomplete and mismatched producer identities before execution", () => {
+  closureFixture((root, manifest) => {
+    const save = (value: unknown) => writeFileSync(join(root, "manifest.json"), JSON.stringify(value));
+    save({ ...manifest, files: manifest.files.slice(1) });
+    expect(() => verifyMeasurementClosure(root)).toThrow("Missing producer manifest artifact");
+    save({ ...manifest, source: { ...manifest.source, head: "c".repeat(40) } });
+    expect(() => verifyMeasurementClosure(root)).toThrow("Launcher source");
+    save({ ...manifest, profile: "shared-group" });
+    expect(() => verifyMeasurementClosure(root)).toThrow("three-engine split closure");
+    save({ ...manifest, launcher: { ...manifest.launcher, path: "/changed" } });
+    expect(() => verifyMeasurementClosure(root)).toThrow("Manifest launcher differs");
+    save(manifest);
+    mkdirSync(join(root, ".producer-lock"));
+    expect(() => verifyMeasurementClosure(root)).toThrow("Producer is active");
+  });
+});
+
+test("measurement invocation follows canonical producer core paths and explicit guest opt-in", () => {
+  expect(measurementArgs("/closure", "hermes", "1", false)).toEqual(["--wasm", "/closure/dist/bun-hermes.wasm", "--", "-e", "1"]);
+  expect(measurementArgs("/closure", "quickjs", "1", true)).toEqual(["--wasm", "/closure/dist/bun.wasm", "--env", "BUN_WASM_MEASURE_RUNTIME_JS=1", "--", "-e", "1"]);
 });

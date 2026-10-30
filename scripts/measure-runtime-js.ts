@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
+import { programProfile, type PairedEngine } from "../src/engine-kind.ts";
+import { producerEngines, requireClosureFiles, verifyLauncher } from "./producer-closure.ts";
 
 export const firstFsSource = `
 const now = performance.now.bind(performance);
@@ -73,21 +76,37 @@ function sourceIdentity(value: unknown) {
 function artifactRecord(value: unknown) {
   if (typeof value !== "object" || value === null || !("path" in value) || !("bytes" in value) || !("sha256" in value)) throw new Error("Invalid artifact record");
   if (typeof value.path !== "string" || typeof value.bytes !== "number" || typeof value.sha256 !== "string") throw new Error("Invalid artifact fields");
+  if (!value.path || value.path.startsWith("/") || value.path.split("/").includes("..")) throw new Error("Unsafe artifact path");
   return { path: value.path, bytes: value.bytes, sha256: value.sha256 };
 }
 
-function verifyDelivery(directory: string) {
-  const manifestPath = join(directory, "DELIVERY.json");
+export function verifyMeasurementClosure(directory: string) {
+  const unit = resolve(directory);
+  if (existsSync(join(unit, ".producer-lock"))) throw new Error("Producer is active; cannot measure a changing closure");
+  const manifestPath = join(unit, "manifest.json");
   const value: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
-  if (typeof value !== "object" || value === null || !("files" in value) || !Array.isArray(value.files)) throw new Error("Invalid delivery");
-  const artifacts = value.files.map(artifactRecord).filter(file => /^dist\/.*\.wasm(?:\..*json)?$/.test(file.path));
-  if (artifacts.length === 0) throw new Error("Delivery has no Wasm artifacts");
-  const verified = artifacts.map(file => {
-    const actual = fingerprint(join(directory, file.path));
-    if (actual.sha256 !== file.sha256 || actual.bytes !== file.bytes) throw new Error(`Delivery changed: ${actual.path}`);
+  if (!value || typeof value !== "object" || !("schema" in value) || value.schema !== 1
+    || !("status" in value) || value.status !== "reusable" || !("files" in value) || !Array.isArray(value.files)) throw new Error("Invalid reusable producer closure");
+  if (!("profile" in value) || value.profile !== "split" || !("engines" in value)
+    || !isDeepStrictEqual(value.engines, producerEngines("split"))) throw new Error("Measurement requires the canonical three-engine split closure");
+  const files = value.files.map(artifactRecord);
+  requireClosureFiles("split", files);
+  const artifacts = files.map(file => {
+    const actual = fingerprint(join(unit, file.path));
+    if (actual.sha256 !== file.sha256 || actual.bytes !== file.bytes) throw new Error(`Producer artifact changed: ${actual.path}`);
     return actual;
   });
-  return { source: sourceIdentity(value), manifest: fingerprint(manifestPath), artifacts: verified };
+  const source = sourceIdentity(value);
+  const launcher = join(unit, "launcher/bun-wasm");
+  const receipt = `${launcher}.launcher.json`;
+  const verified = verifyLauncher(launcher, JSON.parse(readFileSync(receipt, "utf8")), source);
+  if (!("launcher" in value) || !isDeepStrictEqual(value.launcher, { path: launcher, receipt, ...verified })) throw new Error("Manifest launcher differs from its original receipt");
+  return { source, manifest: fingerprint(manifestPath), launcher: fingerprint(launcher), launcherReceipt: fingerprint(receipt), artifacts };
+}
+
+export function measurementArgs(unit: string, engine: PairedEngine, source: string, enabled: boolean): string[] {
+  const optIn = enabled ? ["--env", "BUN_WASM_MEASURE_RUNTIME_JS=1"] : [];
+  return ["--wasm", join(unit, "dist", programProfile(engine).core)].concat(optIn, ["--", "-e", source]);
 }
 
 function cacheFiles(directory: string): { files: number; bytes: number } {
@@ -108,21 +127,10 @@ function main() {
   statSync(cache);
   const unit = resolve(unitArg), output = resolve(outputArg);
   statSync(output);
-  const launcher = join(unit, "launcher/bun-wasm");
-  const launcherReceipt: unknown = JSON.parse(readFileSync(`${launcher}.launcher.json`, "utf8"));
-  const actualLauncher = fingerprint(launcher);
-  if (typeof launcherReceipt !== "object" || launcherReceipt === null || !("artifact" in launcherReceipt)) throw new Error("Missing launcher receipt");
-  const artifact = launcherReceipt.artifact;
-  if (typeof artifact !== "object" || artifact === null || !("sha256" in artifact) || !("bytes" in artifact) || artifact.sha256 !== actualLauncher.sha256 || artifact.bytes !== actualLauncher.bytes) throw new Error("Launcher changed");
-  const engines = [
-    { name: "quickjs", file: "bun.wasm" },
-    { name: "jsc", file: "bun-jsc.wasm" },
-    { name: "hermes", file: "bun-hermes.wasm" },
-  ];
-  const deliveries = engines.map(engine => ({ engine: engine.name, ...verifyDelivery(join(unit, "deliveries", engine.name)) }));
-  const source = sourceIdentity(launcherReceipt);
-  if (deliveries.some(delivery => delivery.source.head !== source.head || delivery.source.tree !== source.tree)) throw new Error("Launcher and delivery sources differ");
-  writeFileSync(join(output, "inputs.json"), JSON.stringify({ source, launcher: actualLauncher, launcherReceipt: fingerprint(`${launcher}.launcher.json`), deliveries, measurementEnabled: process.env.BUN_WASM_MEASURE_RUNTIME_JS === "1", cache, cacheBefore: cacheFiles(cache), cachePolicy: "Existing shared Wasmtime cache, unchanged policy; cache hits and native compilation time are not attributed" }, null, 2) + "\n");
+  const closure = verifyMeasurementClosure(unit);
+  const launcher = closure.launcher.path;
+  const engines = producerEngines("split");
+  writeFileSync(join(output, "inputs.json"), JSON.stringify({ ...closure, measurementEnabled: process.env.BUN_WASM_MEASURE_RUNTIME_JS === "1", cache, cacheBefore: cacheFiles(cache), cachePolicy: "Existing shared Wasmtime cache, unchanged policy; cache hits and native compilation time are not attributed" }, null, 2) + "\n");
   for (let repetition = 0; repetition < 3; repetition++) {
     const order = repetition % 2 === 0 ? engines : engines.toReversed();
     for (const engine of order) runPair(unit, launcher, engine, repetition, output);
@@ -130,17 +138,16 @@ function main() {
   writeFileSync(join(output, "cache-after.json"), JSON.stringify(cacheFiles(cache)) + "\n");
 }
 
-function runPair(unit: string, launcher: string, engine: { name: string; file: string }, repetition: number, output: string) {
+function runPair(unit: string, launcher: string, engine: PairedEngine, repetition: number, output: string) {
   for (const workload of ["eval1", "first-fs"]) {
-    const optIn = process.env.BUN_WASM_MEASURE_RUNTIME_JS === "1" ? ["--env", "BUN_WASM_MEASURE_RUNTIME_JS=1"] : [];
-    const args = ["--wasm", join(unit, "deliveries", engine.name, "dist", engine.file)].concat(optIn, ["--", "-e", workload === "eval1" ? "1" : firstFsSource]);
+    const args = measurementArgs(unit, engine, workload === "eval1" ? "1" : firstFsSource, process.env.BUN_WASM_MEASURE_RUNTIME_JS === "1");
     const start = performance.now();
     const result = spawnSync(launcher, args, { encoding: "utf8", cwd: process.cwd() });
     const wallMs = performance.now() - start;
-    const record = { engine: engine.name, repetition, workload, args, wallMs, status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr };
-    writeFileSync(join(output, `${engine.name}-${repetition}-${workload}.json`), JSON.stringify(record, null, 2) + "\n");
+    const record = { engine, repetition, workload, args, wallMs, status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr };
+    writeFileSync(join(output, `${engine}-${repetition}-${workload}.json`), JSON.stringify(record, null, 2) + "\n");
     if (result.error) throw result.error;
-    if (result.status !== 0) throw new Error(`${engine.name} ${workload} failed; see raw record`);
+    if (result.status !== 0) throw new Error(`${engine} ${workload} failed; see raw record`);
     console.log(JSON.stringify({ ...record, firstFs: workload === "first-fs" ? parseFirstFs(result.stdout) : null, runtimeScopes: parseRuntimeScopes(result.stderr) }));
   }
 }

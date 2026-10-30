@@ -4,9 +4,10 @@ Measure before considering engine bytecode. Preserve lazy modules. A source inve
 is not a list of modules parsed during startup.
 
 The native baseline uses the producer's original launcher smoke invocation. It verifies
-the launcher and per-engine Wasm files against their original receipts, requires matching
-source identities, and records receipt/artifact hashes in `inputs.json`. Keep that file
-with the samples. The delivery's engine receipt binds the exact engine/build inputs;
+the current split producer closure at `manifest.json`, hashes every listed artifact,
+requires the complete three-engine artifact registry, and checks the launcher against
+its original receipt and the closure source identity. It records those hashes in
+`inputs.json`. Keep that file with the samples. The closure's engine receipts bind the exact engine/build inputs;
 module names and evaluated byte lengths identify individual runtime records.
 
 Run through the normal bench queue when higher-priority Next work is idle. Use an
@@ -19,7 +20,9 @@ BUN_WASM_CACHE_DIR=/path/to/existing/wasmtime-cache \
   nice -n 10 bun scripts/measure-runtime-js.ts /path/to/original-producer-unit /path/to/results
 ```
 
-The script runs three fresh processes per workload per engine, alternating engine order.
+An active `.producer-lock` is rejected. The script reads `dist/` directly from the
+canonical closure and uses the producer's engine registry. It runs three fresh processes
+per workload per engine, alternating engine order.
 `eval1` runs exactly `-e 1`. `first-fs` times the first `require("fs")` in the guest and
 checks cached identity on a repeat. All raw stdout, stderr and invocations are retained.
 There are no fixture files, services or routes to remove. The heavy runner owns process
@@ -96,6 +99,6 @@ quality check manifest selects these tests. This does not verify a built three-e
 The single future build input includes the shared evaluator, its adjacent helper,
 the builtin loader and its native declaration, the measurement script, its tests,
 and the quality check manifest. The existing canonical producer consumes this source.
-No second producer or engine cache should be created. Preserve this d505 baseline and
+No second producer or engine cache should be created. Preserve the retained baseline and
 collect matching opt-in/off samples from that one canonical build before deciding
 whether compilation is a significant cost worth replacing with bytecode.
