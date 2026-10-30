@@ -37,6 +37,31 @@ export function parseProgramReceipt(value: unknown): ProgramBuildReceipt {
   return { schema: 1, inputs: parseProgramInputs(value.inputs), artifact: { artifactSha256: value.artifact.artifactSha256, artifactBytes: value.artifact.artifactBytes } };
 }
 
+function diagnosticFields(value: unknown): Record<string, unknown> | undefined {
+  if (record(value)) return value;
+  if (!Array.isArray(value)) return;
+  const entries: [string, unknown][] = [];
+  for (const item of value) {
+    if (!record(item)) return;
+    const key = typeof item.name === "string" ? item.name : item.path;
+    if (typeof key !== "string") return;
+    entries.push([key, item]);
+  }
+  const fields = Object.fromEntries(entries);
+  return Object.keys(fields).length === entries.length ? fields : undefined;
+}
+
+interface InputDifference { readonly path: readonly string[]; readonly original: unknown; readonly expected: unknown }
+function inputDifferences(original: unknown, expected: unknown, path: readonly string[] = []): InputDifference[] {
+  if (JSON.stringify(original) === JSON.stringify(expected)) return [];
+  const before = diagnosticFields(original);
+  const after = diagnosticFields(expected);
+  if (!before || !after) return [{ path, original, expected }];
+  const keys = new Set(Object.keys(before).concat(Object.keys(after)));
+  const differences = Array.from(keys).flatMap(key => inputDifferences(before[key], after[key], path.concat([key])));
+  return differences.length ? differences : [{ path, original, expected }];
+}
+
 export function verifyProgramReceipt(bytes: Uint8Array, value: unknown, expected: ProgramInputSnapshot): ProgramBuildReceipt {
   const receipt = parseProgramReceipt(value);
   if (receipt.artifact.artifactSha256 !== hash(bytes) || receipt.artifact.artifactBytes !== bytes.byteLength) throw new Error("Program receipt does not match artifact bytes");
@@ -46,7 +71,12 @@ export function verifyProgramReceipt(bytes: Uint8Array, value: unknown, expected
   const module = new WebAssembly.Module(Uint8Array.from(bytes));
   if (receipt.inputs.scope === "core") tagProgramCore(bytes, "quickjs");
   else verifyProgramSide(receipt.inputs.scope, module);
-  if (receipt.inputs.contentSha256 !== expected.contentSha256) throw new Error("Program input compatibility mismatch");
+  if (receipt.inputs.contentSha256 !== expected.contentSha256) {
+    const identity = (inputs: ProgramInputSnapshot) => ({ source: inputs.source, contentSha256: inputs.contentSha256 });
+    throw new Error("Program input compatibility mismatch\n" + JSON.stringify({
+      original: identity(receipt.inputs), expected: identity(expected), differences: inputDifferences(receipt.inputs.content, expected.content),
+    }, null, 2));
+  }
   return receipt;
 }
 

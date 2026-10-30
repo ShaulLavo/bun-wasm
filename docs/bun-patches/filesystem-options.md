@@ -10,6 +10,18 @@ Native Unix opens pass `O_SYNC` and `O_DSYNC` to the OS. WASI retains those mode
 
 Bigint stat calls serialize integer metadata with `Val::BigUint` before any float conversion. Timestamp nanoseconds and integer milliseconds use decimal strings across the engine-neutral boundary, then the Stats constructor turns them into BigInts. This also represents negative timestamps and timestamps outside a 64-bit nanosecond range. Dates convert milliseconds to numbers only for the Date API. Normal Stats retain numeric fields and omit nanoseconds. Each path stat serializes one metadata snapshot: Unix uses `std::fs::Metadata` and its metadata extensions; WASI uses one libc `stat` or `lstat` result. Descriptor serialization likewise takes fields from one snapshot and retains the existing process-host FIFO mode correction. WASI has no birth timestamp, so it remains zero rather than being inferred from another filesystem call.
 
+`src/natives/wasi_metadata.rs` is an original metadata adapter. Preview1 reports
+file types without POSIX permission bits. WASI Stats therefore present `0644`
+for files and special descriptors, `0755` for directories, and `0777` for
+symlinks, retaining the reported type. The same mapping reaches numeric and
+bigint path, link, and descriptor Stats. Unix Stats keep the real host mode.
+These presentation bits do not grant rights or change open, read, or write
+enforcement. Without a read bit, chokidar rejects existing readable config files
+during directory scans and reports them removed. The standalone native test
+exercises the production mapping without building an engine or guest.
+The `fs-stat-presentation` guest fixture checks readable file, directory, link,
+descriptor, and bigint Stats through the public filesystem APIs.
+
 The reference contracts are Node's `lib/fs.js`, `lib/internal/fs/utils.js` and `lib/internal/fs/cp/{cp,cp-sync}.js` at Node v24.22.1, and Bun 1.4.4's public filesystem APIs, observed as executable controls rather than copied source. Supplied reproductions audited bun-wasm `72d1394484dcd64b051f63f230ad70bfaf2769ae`; this change starts at `114b84c3a7b0f9c57df5e2daff5aa9d4d645ea3f`.
 
 Waffle at `b20fad173ebaa225cb87c51776f35edaaafd4a40` already supplies create, exclusive, truncate and append semantics. NONBLOCK support remains Waffle #111; unsupported open bits fail explicitly here. Link-count accuracy remains Waffle #115. Cold persistent-file hydration remains Waffle #112. Bigint representation does not repair incorrect underlying metadata. This change does not implement those capabilities in the consumer.

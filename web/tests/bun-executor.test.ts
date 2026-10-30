@@ -143,6 +143,7 @@ test("a ready browser guest exits with the status its engine host reports", asyn
 
 for (const [label, options] of [
   ["a non-browser engine", { engine: "quickjs" as const }],
+  ["the opt-in Hermes engine", { engine: "hermes" as const }],
   ["a preview1 run", { adapter: "preview1" as const }],
   ["a guest that is not ready", { ready: 0 }],
 ] as const) test(`${label} never starts the browser engine host`, async () => {

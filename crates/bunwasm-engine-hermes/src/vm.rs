@@ -27,6 +27,25 @@ use crate::engine::{
     Engine, ErrorKind, ModuleHost, ModuleSource, NativeError, PromiseState, Record, Val, ValueFn,
 };
 
+/// Cached bytes only; does not enter the VM, including after a failed refresh.
+#[unsafe(no_mangle)]
+pub extern "C" fn hermes_memory_telemetry() -> *const sys::MemoryTelemetry {
+    unsafe { sys::bh_memory_telemetry() }
+}
+
+/// Only normal idle/poll boundaries may refresh a live VM from the host.
+#[unsafe(no_mangle)]
+pub extern "C" fn hermes_memory_telemetry_refresh() -> *const sys::MemoryTelemetry {
+    unsafe { sys::bh_refresh_memory_telemetry() }
+}
+
+fn memory_counter(bytes: u64) -> Val {
+    if bytes == u64::MAX {
+        return Val::Null;
+    }
+    Val::Num(bytes as f64)
+}
+
 thread_local! {
     static NATIVES: RefCell<HashMap<u32, ValueFn<Hermes>>> = RefCell::new(HashMap::new());
     static NEXT_NATIVE: Cell<u32> = const { Cell::new(1) };
@@ -916,14 +935,13 @@ impl Engine for Hermes {
     /// `wasmCapacity`; process RSS and a buffer census are not available (`null`). Heap
     /// exhaustion is fatal, so failed allocations come from the shared allocator's latch.
     fn memory_usage(&self) -> Val {
-        let (mut used, mut size, mut external) = (0.0, 0.0, 0.0);
-        // SAFETY: valid out-parameters; reads counters without collecting.
-        unsafe { sys::bh_heap_info(&mut used, &mut size, &mut external) };
+        // SAFETY: normal JS execution; the shim reads counters without collecting.
+        let snapshot = unsafe { *hermes_memory_telemetry_refresh() };
         Record::new()
             .set("rss", Val::Null)
-            .set("heapTotal", size)
-            .set("heapUsed", used)
-            .set("external", external)
+            .set("heapTotal", memory_counter(snapshot.heap_capacity))
+            .set("heapUsed", memory_counter(snapshot.heap_used))
+            .set("external", memory_counter(snapshot.external))
             .set("arrayBuffers", Val::Null)
             .set("arrayBufferCount", Val::Null)
             .set("wasmCapacity", wasm_capacity())

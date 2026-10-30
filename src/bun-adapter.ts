@@ -5,8 +5,9 @@ import { loadBunWasm, type LoadBunWasmOptions } from "./assets.js";
 
 import type { BunNetworkOptions } from "../web/src/net/helper.js";
 import { bunLauncher } from "../web/src/bun-launcher.js";
+import { isPairedEngine, programKind, type PairedEngine } from "./engine-kind.js";
 import { ENGINE_BIN } from "./executable-paths.js";
-export type Engine = "quickjs" | "jsc" | "browser";
+export type Engine = PairedEngine | "browser";
 
 export class BunWasmExecutableConflictError extends Error {
   readonly code = "BUN_WASM_EXECUTABLE_CONFLICT";
@@ -70,7 +71,7 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
   if (!options?.workerUrl?.toString()) throw new TypeError("workerUrl is required");
   if (!options.notificationWorkerUrl?.toString()) throw new TypeError("notificationWorkerUrl is required");
   const engine = options.engine ?? "browser";
-  if (!["quickjs", "jsc", "browser"].includes(engine)) throw new TypeError(`Unknown Bun engine: ${engine}`);
+  if (engine !== "browser" && !isPairedEngine(engine)) throw new TypeError(`Unknown Bun engine: ${engine}`);
   if (engine !== "browser" && !options.module && !options.asset) {
     throw new TypeError(`${engine} requires its matching guest module or asset descriptor`);
   }
@@ -91,10 +92,17 @@ export async function installBunAdapters(runtime: Runtime, options: BunAdapterOp
     // every installer operation observes only its own completion, including EEXIST.
     await runtime.filesystem.resolvePath("/");
     filesystem = new FilesystemClient(runtime.filesystem.fork());
-    for (const name of ["quickjs", "jsc", "browser"] as const) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), notificationWorkerUrl: options.notificationWorkerUrl.toString(), runtime, network: options.network })));
+    const adapters: readonly Engine[] = engine === "hermes" ? ["quickjs", "jsc", "browser", "hermes"] : ["quickjs", "jsc", "browser"];
+    for (const name of adapters) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), notificationWorkerUrl: options.notificationWorkerUrl.toString(), runtime, network: options.network })));
     for (const name of names) unregisters.push(runtime.registerProgram(name, {
       adapter: `bun:${engine}`, cooperative: true,
-      module: () => loadBunWasm(options),
+      module: async () => {
+        const module = await loadBunWasm(options);
+        const expected = engine === "browser" ? "single" : engine;
+        const declared = programKind(module);
+        if (declared !== expected) throw new TypeError(`Selected ${engine} core declares ${declared}`);
+        return module;
+      },
     }));
     // Check every path before creating any files, so a conflict cannot leave a partial install.
     for (const name of names) {

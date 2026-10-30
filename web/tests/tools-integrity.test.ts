@@ -7,6 +7,9 @@ const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes)
 
 test("missing Hermes artifacts try compressed and plain URLs without fallback", async () => {
   const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const originalBuilds = Object.getOwnPropertyDescriptor(globalThis, "__bunwasmBuilds");
+  const fingerprint = "0".repeat(64);
+  Object.defineProperty(globalThis, "__bunwasmBuilds", { configurable: true, value: { "bun-hermes.wasm": fingerprint, "hermes-engine.wasm": fingerprint } });
   const requested: string[] = [];
   const fetch = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (input: Parameters<typeof globalThis.fetch>[0]) => {
     requested.push(String(input));
@@ -18,9 +21,11 @@ test("missing Hermes artifacts try compressed and plain URLs without fallback", 
     const loading = loadWasm(ENGINES.hermes.wasm, () => {});
     await expect(loading).rejects.toBeInstanceOf(WasmMissing);
     await expect(loading).rejects.toThrow("bun-hermes.wasm: HTTP 404");
-    expect(requested).toEqual(["bun-hermes.wasm.gz", "bun-hermes.wasm"]);
+    expect(requested).toEqual([`bun-hermes.wasm.gz?v=${fingerprint}`, "bun-hermes.wasm"]);
   } finally {
     fetch.mockRestore();
+    if (originalBuilds) Object.defineProperty(globalThis, "__bunwasmBuilds", originalBuilds);
+    else Reflect.deleteProperty(globalThis, "__bunwasmBuilds");
     if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation);
     else Reflect.deleteProperty(globalThis, "location");
   }
