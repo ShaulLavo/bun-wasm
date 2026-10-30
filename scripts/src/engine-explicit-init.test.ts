@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { convertCoreInitializers, convertEngineInitializers } from "./engine-explicit-init.ts";
+import { sharedGroupMaxPages } from "./program-profile.ts";
 
 function u32(value: number): number[] {
   const bytes: number[] = [];
@@ -22,8 +23,8 @@ function section(id: number, payload: number[]): number[] {
 
 type Limits = readonly number[];
 const UNSHARED: Limits = [0, 1];
-// flags 3 (shared, has maximum), minimum 1, maximum 8192 pages.
-const GROUP: Limits = [3, 1].concat(u32(8192));
+// flags 3 (shared, has maximum), minimum 1, maximum: the guest memory maximum in pages.
+const GROUP: Limits = [3, 1].concat(u32(sharedGroupMaxPages()));
 
 function fixture(options: { memory?: boolean; limits?: Limits; table?: boolean; stack?: boolean; start?: boolean; relocationKind?: number; conflicting?: boolean } = {}): Uint8Array<ArrayBuffer> {
   const imports: number[][] = [];
@@ -115,10 +116,13 @@ test("a shared-group core's start becomes core_initialize_memory and nothing els
   expect(() => convertCoreInitializers(output)).toThrow();
 });
 
-test("core conversion refuses anything but a PIE group image below the string-tag ceiling", () => {
+test("core conversion refuses anything but a PIE group image at the guest memory maximum", () => {
   const fixtures = [
     coreFixture({ limits: UNSHARED }),
     coreFixture({ limits: [3, 1].concat(u32(65536)) }),
+    // A core linked for another capacity stage.
+    coreFixture({ limits: [3, 1].concat(u32(sharedGroupMaxPages() / 2)) }),
+    coreFixture({ limits: [3, 1].concat(u32(sharedGroupMaxPages() * 2)) }),
     coreFixture({ dylink: false }),
     coreFixture({ exportMemory: true }),
     coreFixture({ start: false }),

@@ -4,7 +4,7 @@ Class **Port**. Upstream is Bun `9510e74152073d850a18758ca41114d8f214ffa6`,
 `src/bun_core/string/mod.rs`. Patch
 `0019-wasm-store-32-bit-string-flags-beside-the-pointer.patch` replaces patch 0001's
 32-bit pointer flags with design A's full pointer, length, and flags byte.
-The configured memory maximum remains 512 MiB.
+This patch kept the configured maximum at 512 MiB; stage 1 then raised it to 1 GiB.
 
 `flags`, `with_flag`, and `addr` hide the width-specific storage. Const
 construction and lifetime detachment keep the flags, as do truncation and

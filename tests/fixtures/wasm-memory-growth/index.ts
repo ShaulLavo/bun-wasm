@@ -1,4 +1,4 @@
-// Go's wasm runtime (esbuild-wasm) grows its memory in 4 MiB arenas. Inside the 512 MiB wasm32
+// Go's wasm runtime (esbuild-wasm) grows its memory in 4 MiB arenas. Inside the wasm32
 // guest a WebAssembly.Memory must be able to reach 200 MiB, which needs each growth to reserve
 // only what it adds rather than doubling its reservation.
 const memory = new WebAssembly.Memory({ initial: 321 });

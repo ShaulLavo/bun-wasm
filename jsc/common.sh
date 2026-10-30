@@ -2,6 +2,9 @@
 set -euo pipefail
 JSC_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$JSC_SRC/.." && pwd)"
+# The jsc shell links at bun-wasm's guest memory maximum (docs/memory-ceiling.md); configure.sh
+# reads it through scripts/src/program-profile.ts, and the input hash covers the file.
+JSC_MAX_MEMORY_FILE="$REPO/crates/bunwasm-cli/max-memory.txt"
 # shellcheck source=/dev/null
 source "$REPO/env.sh"
 JSC_BUILD_DIR="${JSC_BUILD_DIR:-/work/tmp/bun-wasm-jsc}"
@@ -66,6 +69,8 @@ jsc_inputs_hash() {
       printf 'embedded/%s=' "$file"
       sha256sum "$JSC_CONFIG_DIR/$file" | cut -d' ' -f1 || return 1
     done
+    printf 'crates/bunwasm-cli/max-memory.txt='
+    sha256sum "$JSC_MAX_MEMORY_FILE" | cut -d' ' -f1 || return 1
     jsc_source_hashes || return 1
     printf 'patched-sysroot/receipt\n'
     cat "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" || return 1

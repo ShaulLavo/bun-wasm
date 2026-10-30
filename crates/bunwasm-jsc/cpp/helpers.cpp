@@ -9,6 +9,10 @@
 // or built-in names like `node:fs` and `bun`.
 #include "config.h"
 
+#ifndef BUN_WASM_MAX_MEMORY
+#error "BUN_WASM_MAX_MEMORY comes from crates/bunwasm-jsc/build.rs"
+#endif
+
 #include "APICast.h"
 #include "JSContextRef.h"
 #include "JSObjectRef.h"
@@ -197,9 +201,9 @@ JSGlobalContextRef bunjsc_create_context()
     // Native Bun enables the SharedArrayBuffer constructor (ZigGlobalObject.cpp). Its storage
     // stays in this guest; the worker codec refuses to send it to another one.
     JSC::initialize([] {
-        // Shared guest memory is capped at 512 MiB; WASI physical-page sysconf
-        // is unsupported and wraps into a larger, incorrect RAM estimate.
-        JSC::Options::forceRAMSize() = 512 * MB;
+        // The guest's memory maximum (crates/bunwasm-cli/max-memory.txt, passed by build.rs);
+        // WASI physical-page sysconf is unsupported and wraps into a larger, incorrect RAM estimate.
+        JSC::Options::forceRAMSize() = BUN_WASM_MAX_MEMORY;
         JSC::Options::useSharedArrayBuffer() = true;
         JSC::Options::numberOfGCMarkers() = 1;
         JSC::Options::useWarmUpMarkedBlocks() = false;

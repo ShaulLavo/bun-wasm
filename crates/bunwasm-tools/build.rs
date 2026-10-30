@@ -1,3 +1,6 @@
+#[path = "../bunwasm-cli/max_memory.rs"]
+mod max_memory;
+
 fn main() {
     println!("cargo:rerun-if-env-changed=BUN_WASM_SYSROOT");
     let package = "../../vendor/bun/package.json";
@@ -14,9 +17,10 @@ fn main() {
     if std::env::var("TARGET").unwrap() != "wasm32-wasip1" {
         return;
     }
+    let max_memory = format!("--max-memory={}", max_memory::MAX_MEMORY_BYTES);
     for flag in [
         "-zstack-size=8388608",
-        "--max-memory=536870912",
+        max_memory.as_str(),
         "--export-table",
         "--growable-table",
         "--export=bun_wasm_host_slots",
