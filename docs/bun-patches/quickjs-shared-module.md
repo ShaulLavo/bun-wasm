@@ -62,7 +62,7 @@ once, after core constructors. Do not also invoke the old implicit start path.
 
 The smoke tests a real VM, patched helpers, pending jobs, interrupts, shared-stack
 nesting, owned ops echo, cross-boundary allocation, real core growth, and the
-512 MiB ceiling. The result and exact module hashes are written to the selected
+guest memory maximum. The result and exact module hashes are written to the selected
 build directory. That directory belongs to the caller and can be removed once
 artifact consumers have stopped. The raw smoke is separate from the production CLI acceptance below.
 

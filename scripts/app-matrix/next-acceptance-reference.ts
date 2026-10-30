@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
 import { dirname } from "node:path";
@@ -13,7 +14,7 @@ import { routeCases, runRouteCase, overlappingRequests } from "./next-acceptance
 
 const reports = resolve(process.argv[2] ?? "/work/reports/wave-20261029/bun/next01/native-reference");
 const port = Number(process.env.NEXT_REFERENCE_PORT ?? "43702");
-const scratch = mkdtempSync("/work/tmp/bun-wasm-next01-reference-");
+const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-nref-"));
 process.env.TMPDIR = join(scratch, "t");
 mkdirSync(process.env.TMPDIR);
 const fixture = resolve(import.meta.dir, "../../examples/next-acceptance");

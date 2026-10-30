@@ -3,4 +3,3 @@
 --import-memory
 --shared-memory
 --import-table
---max-memory=536870912

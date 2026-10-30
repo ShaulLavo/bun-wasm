@@ -177,7 +177,7 @@ fn arbitrary_bindings_are_retained_and_not_implicitly_inherited() {
         Stdio {
             fds,
             pid: 7,
-            memory_limit: 512 << 20,
+            memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
         },
         crate::net::Net::new().notify(),
         Arc::default(),
@@ -193,7 +193,7 @@ fn arbitrary_bindings_are_retained_and_not_implicitly_inherited() {
         Stdio {
             fds: Descriptors::new(),
             pid: 8,
-            memory_limit: 512 << 20,
+            memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
         },
         crate::net::Net::new().notify(),
         Arc::default(),
@@ -398,7 +398,7 @@ fn owner_chain_authority_survives_reaping_intermediate_jobs() {
         Stdio {
             fds: Descriptors::new(),
             pid: 9,
-            memory_limit: 512 << 20,
+            memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
         },
         crate::net::Net::new().notify(),
         Arc::default(),
@@ -544,7 +544,7 @@ fn executable_access_is_live_consuming_and_process_owned() {
         Stdio {
             fds: Descriptors::new(),
             pid: 7,
-            memory_limit: 512 << 20,
+            memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
         },
         crate::net::Net::new().notify(),
         Arc::default(),
@@ -643,7 +643,7 @@ fn process_drop_retires_pending_access_requests_and_teardown_removes_files() {
             Stdio {
                 fds: Descriptors::new(),
                 pid: 7,
-                memory_limit: 512 << 20,
+                memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
             },
             crate::net::Net::new().notify(),
             Arc::default(),
@@ -777,7 +777,7 @@ fn signaled_child_endpoint_teardown_precedes_safe_wait_and_preserves_queued_outp
         Stdio {
             fds,
             pid: 7,
-            memory_limit: 512 << 20,
+            memory_limit: stdio::DEFAULT_MEMORY_LIMIT,
         },
         parent.notify.clone(),
         cancel.clone(),
