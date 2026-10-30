@@ -18,3 +18,17 @@ test("source attribution separates UI, lazy service and required process stubs",
     expect(report.processService).toEqual(["../node_modules/waffle/proc/supervisor.ts"]);
   } finally { await rm(scratch, { recursive: true, force: true }); }
 });
+
+test("page components and models count as UI", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "bun-wasm-light-map-"));
+  const file = join(scratch, "main.js");
+  try {
+    await Bun.write(`${file}.map`, JSON.stringify({
+      sources: ["../src/playground/playground.ts", "../src/app.tsx", "../src/sandbox.ts", "../src/runner.ts"],
+      mappings: "AAAA,ICAA,ICAA,ICAA",
+    }));
+    const report = await sourceAttribution(file, "aaaaBBBBccccDDDD");
+    expect(report.uiSources).toEqual(["../src/playground/playground.ts", "../src/app.tsx", "../src/sandbox.ts"]);
+    expect(report.runtime.bytes).toBe(4);
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+});

@@ -14,6 +14,7 @@ fn main() {
         "cargo:rustc-link-arg-bin=bun=--max-memory={}",
         max_memory::MAX_MEMORY_BYTES
     );
+    memory_telemetry();
     if shared_group() {
         shared_group_link();
     } else {
@@ -119,7 +120,46 @@ fn split_entry() {
     }
 }
 
-/// The split entry joins the core's link, so a shared-group core needs it PIC with atomics.
+fn memory_telemetry() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("memory-telemetry.c");
+    let object =
+        std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("memory-telemetry.o");
+    let compiler = std::env::var("CC_wasm32_wasip1").expect("source env.sh");
+    let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");
+    let status = std::process::Command::new(compiler)
+        .args([
+            "--target=wasm32-wasip1",
+            &format!("--sysroot={sysroot}"),
+            "-O2",
+            "-fno-builtin",
+            "-c",
+        ])
+        .args(entry_flags())
+        .arg(&source)
+        .arg("-o")
+        .arg(&object)
+        .status()
+        .unwrap();
+    assert!(status.success(), "compile memory telemetry");
+    println!("cargo:rerun-if-changed={}", source.display());
+    println!("cargo:rustc-link-arg-bin=bun={}", object.display());
+    for name in [
+        "malloc",
+        "calloc",
+        "realloc",
+        "free",
+        "aligned_alloc",
+        "posix_memalign",
+        "__libc_malloc",
+        "__libc_calloc",
+        "__libc_free",
+    ] {
+        println!("cargo:rustc-link-arg-bin=bun=--wrap={name}");
+    }
+    println!("cargo:rustc-link-arg-bin=bun=--export=bun_memory_telemetry");
+}
+
+/// Both C objects join the core link, so shared-group needs them PIC with atomics.
 fn entry_flags() -> &'static [&'static str] {
     if shared_group() {
         &["-fPIC", "-matomics", "-mbulk-memory", "-mmutable-globals"]

@@ -20,10 +20,21 @@ const actualTrampoline = { ...await import("../src/net/trampoline") };
 const actualControl = { ...await import("waffle/proc/control") };
 const actualLink = { ...await import("waffle/link") };
 let linkedFinishFailure: Error | undefined;
-mock.module("waffle/link", () => ({ ...actualLink, linkedWorkerHooks() {
-  const hooks = actualLink.linkedWorkerHooks();
-  return { ...hooks, beforeFinish() {
-    hooks.beforeFinish?.();
+let linkedInitializationFailure: Error | undefined;
+let linkedAllocatorCore: WebAssembly.Instance | undefined;
+let linkedDisposals = 0;
+let linkedSideReads = 0;
+mock.module("waffle/link", () => ({ ...actualLink, instantiateLinkPlan(...args: Parameters<typeof actualLink.instantiateLinkPlan>) {
+  const group = actualLink.instantiateLinkPlan(...args);
+  return { ...group, entry: linkedAllocatorCore ?? group.entry,
+    libraries: linkedAllocatorCore ? group.libraries.map(library => ({ ...library, instance: { exports: {
+      quickjs_memory_telemetry() { linkedSideReads++; throw Error("faulted side read"); },
+      jsc_memory_telemetry_refresh() { linkedSideReads++; throw Error("faulted side refresh"); },
+    } } })) : group.libraries,
+    initialize() { if (linkedInitializationFailure) throw linkedInitializationFailure; group.initialize(); },
+    dispose() {
+    linkedDisposals++;
+    group.dispose();
     if (linkedFinishFailure) throw linkedFinishFailure;
   } };
 } }));
@@ -609,3 +620,42 @@ for (const kind of ["quickjs", "jsc"] as const) {
   const failures = kind === "jsc" ? ["none", "linked", "lookup"] as const : ["none", "linked", "shared", "lookup"] as const;
   for (const failure of failures) test(`${kind} composed executor releases all owners after ${failure} failure`, () => assertComposedCleanup(failure, kind));
 }
+
+for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer failure retains cached allocator diagnostics without entering the side`, async () => {
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const pair = quickjsPair(engine);
+  const module = await prepareProgram({ kind: engine, ...pair });
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const view = new DataView(memory.buffer);
+  for (const [index, value] of [1n, 80n, 128n, 256n, 1048576n, 1n, 1n, 1n, 0n, 65536n].entries()) view.setBigUint64(128 + index * 8, value, true);
+  linkedAllocatorCore = { exports: { memory, _start() {}, bun_memory_telemetry: () => 128 } };
+  linkedInitializationFailure = new WebAssembly.RuntimeError("initializer allocation failure");
+  linkedDisposals = 0; linkedSideReads = 0;
+  const connection = createFilesystemConnection();
+  const messages: WorkerMessage[] = [];
+  const request: RunRequest = { engine, module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
+    filesystem: connection.client, trace: false, net: null, moduleCache: null, slots: "off" };
+  const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage(message) { messages.push(message); }, fetch: globalThis.fetch };
+  const executor = createBunExecutor(request, host);
+  try {
+    await bootstrap(request, { ...executor, setup(context) {
+      context.fs.preopen = () => 1; context.fs.retain = keepFixtureReference; context.fs.release = keepFixtureReference;
+      executor.setup?.(context);
+    } }, host);
+    const message = messages.find(message => message.type === "bun-memory");
+    if (!message || message.type !== "bun-memory") throw new Error("initializer diagnostics lost");
+    expect(message.snapshot.allocatorFailure).toEqual({ bytes: 1048576, category: "libc.malloc" });
+    expect(message.snapshot.allocatorLiveBytes).toBe(128);
+    expect(message.snapshot.jsHeapBytes).toBeNull();
+    expect(message.snapshot.terminal).toBe(true);
+    expect(linkedSideReads).toBe(0);
+    expect(linkedDisposals).toBe(1);
+    executor.beforeFinish?.();
+    expect(linkedDisposals).toBe(1);
+  } finally {
+    linkedAllocatorCore = undefined; linkedInitializationFailure = undefined;
+    connection.client.port.close(); connection.server.port.close();
+  }
+});

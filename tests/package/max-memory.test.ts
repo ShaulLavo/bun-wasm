@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { maxMemoryBytes, parseMaxMemory, sharedGroupCoreLink, sharedGroupMaxPages } from "../../scripts/src/program-profile.ts";
+import { memoryMaximumBytes } from "../../src/engine-kind.ts";
 
 // docs/memory-ceiling.md: crates/bunwasm-cli/max-memory.txt is the one authority for the wasm32
 // memory maximum. Every consumer derives from it; none keeps its own number.
@@ -55,9 +56,9 @@ test("every consumer reads the authority", () => {
 });
 
 test("no consumer keeps its own capacity number", () => {
-  // Separate programs with their own smaller memory, not Bun guests: the bash-web shell and
-  // the shared sysroot's synthetic C proof member.
-  expect(tracked("--max-memory=[0-9]")).toEqual(["scripts/build-bash-web-shell.sh", "scripts/test-shared-sysroot.sh"]);
+  // Separate programs with their own smaller memory, not Bun guests: the bash-web shell, the
+  // shared sysroot's synthetic C proof member and the allocator telemetry test's C object.
+  expect(tracked("--max-memory=[0-9]")).toEqual(["scripts/build-bash-web-shell.sh", "scripts/test-shared-sysroot.sh", "tests/memory-telemetry.test.ts"]);
   expect(tracked("forceRAMSize\\(\\) = [0-9]")).toEqual([]);
   expect(tracked("536870912|512 << 20|MAX_PAGES: u64 = [0-9]|SHARED_GROUP_MAX_PAGES")
     .filter(path => !path.startsWith("third_party/") && !path.startsWith(".internal/"))).toEqual([]);
@@ -105,4 +106,24 @@ test("the high-address fixture stops on the shared linear memory, not an engine'
   expect(fixture).toContain("while (linearMemoryBytes() < 560 * MiB)");
   expect(read("crates/bunwasm-runtime/src/natives.rs")).toContain('t.add("linearMemoryBytes"');
   expect(read("crates/bunwasm-runtime/src/js/builtins.js")).toContain("linearMemoryBytes: () => native.linearMemoryBytes()");
+});
+
+const leb = (value: number): number[] => value < 0x80 ? [value] : [(value & 0x7f) | 0x80].concat(leb(value >>> 7));
+const section = (id: number, payload: number[]) => [id].concat(leb(payload.length), payload);
+const name = (text: string) => leb(text.length).concat(Array.from(new TextEncoder().encode(text)));
+const module = (...sections: number[][]) => Uint8Array.from([0, 97, 115, 109, 1, 0, 0, 0].concat(...sections));
+
+// Allocator telemetry reports the linked core's own declared maximum, never a constant of its own.
+test("memory telemetry's limit is the core's declared maximum", () => {
+  const pages = sharedGroupMaxPages();
+  const defined = module(section(5, [1, 1, 1].concat(leb(pages))));
+  const imported = module(section(2, [1].concat(name("env"), name("memory"), [2, 3, 1], leb(pages))));
+  for (const bytes of [defined, imported]) {
+    expect(WebAssembly.validate(bytes)).toBe(true);
+    expect(memoryMaximumBytes(bytes)).toBe(maxMemoryBytes());
+  }
+  expect(memoryMaximumBytes(module(section(5, [1, 0, 1])))).toBeUndefined();
+  expect(memoryMaximumBytes(module())).toBeUndefined();
+  expect(read("web/src/bun-executor.ts")).toContain("memoryMaximumBytes(req.linkPlan.core.source) ?? null");
+  expect(read("web/src/memory-telemetry.ts")).toContain("memoryLimitBytes: allocator ? limitBytes : null");
 });

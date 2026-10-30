@@ -417,7 +417,7 @@ declare namespace BunWasm {
     writeStdout(bytes: string | Uint8Array, flush?: boolean): void;
     writeStderr(bytes: string | Uint8Array, flush?: boolean): void;
     readStdin(): Uint8Array;
-    memoryUsage(): { rss: number; heapTotal: number; heapUsed: number; external: number; arrayBuffers: number };
+    memoryUsage(): { rss: number | null; heapTotal: number | null; heapUsed: number | null; external: number | null; arrayBuffers: number | null; arrayBufferCount?: number | null; wasmCapacity?: number | null; failedAllocation?: { size: number | null; category: string } | null };
   }
   interface Internal {
     nextTick(callback: Function, ...args: unknown[]): void;

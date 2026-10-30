@@ -18,7 +18,9 @@ function fields(segment: string): number[] {
   return output;
 }
 function isUi(source: string): boolean {
-  return /node_modules\/(?!waffle\/)/.test(source) || /(?:^|\/)(?:main|shell|examples|terminal-copy|terminal-links|deps-cache|startup-output)\.ts$/.test(source);
+  // Page code: the Remix components and the page models under web/src/playground and sandbox/src.
+  return /node_modules\/(?!waffle\/)/.test(source) || /\.tsx$|(?:^|\/)playground\//.test(source)
+    || /(?:^|\/)(?:main|shell|examples|terminal-copy|terminal-links|terminal-mount|viewport|sandbox|editor|template|deps-cache|startup-output)\.ts$/.test(source);
 }
 function isProcessService(source: string): boolean {
   const match = /(?:^|\/)(?:proc|browser)\/([^/]+)\.(?:ts|js)$/.exec(source);

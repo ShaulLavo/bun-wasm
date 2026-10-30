@@ -142,6 +142,21 @@ function nativeFingerprint(root: string, environment: Record<string, string> = {
   return { status: result.status, output: readFileSync(output, "utf8") };
 }
 
+function nativeRestorePrefixes(output: string): string[] {
+  const hash = /^hash=([a-f0-9]{64})\n$/.exec(output)?.[1];
+  if (!hash) throw new Error("Missing effective native fingerprint");
+  return ["native-cargo-cache", "native-cache"].map(id => {
+    const template = string(field(field(byId(id), "with"), "restore-keys"));
+    expect(template).toContain("${{ steps.native-inputs.outputs.hash }}");
+    return template.replaceAll("${{ steps.native-inputs.outputs.hash }}", hash);
+  });
+}
+
+function expectNativeRestoreMiss(before: string, after: string) {
+  const prefixes = nativeRestorePrefixes(before);
+  for (const [index, prefix] of nativeRestorePrefixes(after).entries()) expect(prefix).not.toBe(prefixes[index]);
+}
+
 test("extracted native input shell rejects failed probes and keys effective flags, not raw env bytes", () => {
   shellFixture(root => {
     mkdirSync(join(root, "bin"));
@@ -160,9 +175,13 @@ test("extracted native input shell rejects failed probes and keys effective flag
       expect(changed.status).toBe(0);
       expect(changed.output).not.toBe(before.output);
     }
-    expect(nativeFingerprint(root, { PROBE_VERSION: "changed" }).output).not.toBe(before.output);
+    const changedTools = nativeFingerprint(root, { PROBE_VERSION: "changed" });
+    expect(changedTools.output).not.toBe(before.output);
+    expectNativeRestoreMiss(before.output, changedTools.output);
     writeFileSync(join(root, "bun-wasm-sysroot.json"), '{"verified":"changed SDK/sysroot ABI"}');
-    expect(nativeFingerprint(root).output).not.toBe(before.output);
+    const changedReceipt = nativeFingerprint(root);
+    expect(changedReceipt.output).not.toBe(before.output);
+    expectNativeRestoreMiss(before.output, changedReceipt.output);
     writeFileSync(join(root, "bun-wasm-sysroot.json"), '{"verified":"sysroot"}');
     for (const tool of ["cc", "c++", "rustc", "cargo", "cmake", "ninja"]) {
       expect(nativeFingerprint(root, { FAIL_TOOL: tool })).toEqual({ status: 1, output: "" });

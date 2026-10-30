@@ -92,6 +92,9 @@ export function browserBuildConfig(entrypoints: string[], outdir: string, option
     splitting: options.splitting ?? true,
     minify: true, sourcemap: "linked", metafile: true,
     naming: { entry: "[name].[ext]", chunk: "chunks/[name]-[hash].[ext]", asset: "[name]-[hash].[ext]" },
+    // The pages' components use Remix's JSX. Bun 1.4.4 drops tsconfig's jsxImportSource once a
+    // plugin resolves relative imports (the runtime plugin below), so the build states it too.
+    jsx: { runtime: "automatic", importSource: "@remix-run/component" },
     plugins: [baseProgramAssets(main), {
       name: "consumer-runtime-package",
       setup(build) {

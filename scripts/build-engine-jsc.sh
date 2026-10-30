@@ -43,7 +43,8 @@ PATH="$(dirname "$(command -v node)"):$PATH_NO_BINARYEN" $CAGE "$GUEST_CARGO" bu
 "$WASI_SDK_PATH/bin/wasm-ld" --shared --Bsymbolic --no-export-dynamic --gc-sections --no-entry \
   --import-memory=env,memory --import-table --allow-undefined \
   --export=jsc_ctor_value --export=__stack_pointer --export=__wasm_call_ctors \
-  --export=jsc_register --export=jsc_run -Map="$out/engine-link.map" \
+  --export=jsc_register --export=jsc_run \
+  --export=jsc_memory_telemetry --export=jsc_memory_telemetry_refresh -Map="$out/engine-link.map" \
   -o "$out/engine.implicit.wasm" "$out/engine-init.o" "$CARGO_TARGET_DIR/wasm32-wasip1/release/libbunwasm_engine_jsc.a"
 "$root/jsc/finalize.sh" "$out/engine.implicit.wasm" "$out/engine.spilled.wasm"
 node "$root/scripts/src/engine-explicit-init.ts" jsc "$out/engine.spilled.wasm" "$side"
