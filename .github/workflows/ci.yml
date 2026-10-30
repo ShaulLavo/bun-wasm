@@ -81,7 +81,11 @@ jobs:
     needs: quality
     if: needs.quality.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Whole-job guard only; every phase, fixture and runtime timeout is unchanged.
+    # A legitimately cold pipeline exceeds 60 min on the slower runner class: cold
+    # native quality alone took 1489s (PR 390) and its warm-JSC cold runs took up to
+    # 3595s, while a cold JSC prebuild takes 1013-1739s. Warm runs finish in ~14-18 min.
+    timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"

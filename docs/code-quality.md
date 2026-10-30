@@ -66,6 +66,12 @@ prebuild save follows it. On main that wait also runs after an earlier failure, 
 completed cold prebuild is still saved. A cold prebuild no longer adds its 17-29
 minutes to native quality. The log joins the always-run guest diagnostic upload.
 
+The native job's `timeout-minutes: 90` is a whole-job guard for legitimately cold
+pipelines, not a check budget. Cold native quality took 1489s on PR 390 and cold
+native runs with a warm JSC prebuild took up to 3595s on the slower runner class, so
+60 minutes cut off real cold work. Warm runs take about 14-18 minutes. Every phase,
+fixture and runtime timeout keeps its own limit.
+
 One Cargo build overlaps others. Right after the native quality checkpoint,
 `Start the JSC Cargo guest build` runs `build-bun-jsc.sh` in its own session at
 `nice -n 19`. It writes only the private JSC Cargo target, `dist/bun-jsc.wasm*`
