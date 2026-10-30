@@ -11,7 +11,7 @@ export function TerminalPane(handle: Handle<{ sandbox: Sandbox }>) {
       <section class="pane terminal-pane" aria-label="Dev server output">
         <div class="bar">
           <span>Terminal</span>
-          <span class="dim">bun ./index.html</span>
+          <span class="dim">bun run dev</span>
           <CopyButton term={term} />
         </div>
         {term ? <TerminalHost key="term" term={term} sandbox={sandbox} /> : <div id="terminal" />}

@@ -1,0 +1,1 @@
+PASS readline serves HTTP and delivers lines before stdin EOF

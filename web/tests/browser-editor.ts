@@ -286,7 +286,7 @@ try {
     "src/App.tsx": "export default 'original template';",
     "src/App.css": "h1 { color: blue; }",
     "deleted.ts": "delete me",
-    "package.json": "{}",
+    "package.json": JSON.stringify({ scripts: { dev: "vite --host 0.0.0.0", build: "vite build" } }),
   } })], { type: "application/json" }));
   server = Bun.serve({
     hostname: "127.0.0.1", port: Number(process.env.EDITOR_PORT ?? 0),
