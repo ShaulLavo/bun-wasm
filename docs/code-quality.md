@@ -56,21 +56,16 @@ process-request JSON compiled into host tests also select native checks.
 Browser-only and documentation changes install no Rust toolchain or SDK.
 
 After the patched sysroot and input timestamps are ready, the native job restores
-both private JSC caches, then `Start the JSC prebuild beside native quality` builds
-or verifies the JSC C/C++ prebuild in its own session while native quality and the
-common core build. It reads none of their files. A fresh `bash -e` shell writes the
-`verified` marker only after the build and its input-stamp check succeed.
-`Build or verify the JSC prebuild` waits for that marker after the common core,
-before the JSC Cargo guest and the tools fixture need the prebuild, and the main-only
-prebuild save follows it. On main that wait also runs after an earlier failure, so a
-completed cold prebuild is still saved. A cold prebuild no longer adds its 17-29
-minutes to native quality. The log joins the always-run guest diagnostic upload.
+both private JSC caches, then builds or verifies the JSC C/C++ prebuild in its own
+process group and saves it before any native check runs. Cancellation kills and
+reaps only that group; its log joins the always-run guest diagnostic upload.
 
 The native job's `timeout-minutes: 90` is a whole-job guard for legitimately cold
-pipelines, not a check budget. Cold native quality took 1489s on PR 390 and cold
-native runs with a warm JSC prebuild took up to 3595s on the slower runner class, so
-60 minutes cut off real cold work. Warm runs take about 14-18 minutes. Every phase,
-fixture and runtime timeout keeps its own limit.
+pipelines, not a check budget. PR 390 spent 1739s on a cold JSC prebuild and 1489s on
+cold native quality before the common core, and cold native runs with a warm prebuild
+took up to 3595s on the slower runner class, so 60 minutes cut off real cold work.
+Warm runs take about 14-18 minutes. Every phase, fixture and runtime timeout keeps
+its own limit.
 
 One Cargo build overlaps others. Right after the native quality checkpoint,
 `Start the JSC Cargo guest build` runs `build-bun-jsc.sh` in its own session at

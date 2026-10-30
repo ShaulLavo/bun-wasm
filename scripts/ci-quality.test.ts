@@ -647,8 +647,7 @@ test("completed producers seed caches before unrelated guest gates", () => {
   const jscCargoSave = rust.indexOf("name: Save the JSC Cargo cache");
   const nativeSave = rust.indexOf("name: Save the refined native Cargo cache");
   expect(prebuildSave).toBeGreaterThan(rust.indexOf("name: Build or verify the JSC prebuild"));
-  expect(prebuildSave).toBeLessThan(rust.indexOf("name: Start the JSC Cargo guest build"));
-  expect(prebuildSave).toBeLessThan(rust.indexOf("name: Build the single tools fixture"));
+  expect(prebuildSave).toBeLessThan(rust.indexOf("name: Blocking native quality checks"));
   expect(bootstrapSave).toBeGreaterThan(rust.indexOf("name: Blocking native quality checks"));
   expect(prebuildSave).toBeLessThan(rust.indexOf("name: Build native fixtures"));
   expect(bootstrapSave).toBeLessThan(rust.indexOf("name: Build native fixtures"));
@@ -1088,11 +1087,10 @@ for (const namespace of [nativeCargoNamespace, "native-v4"]) {
   });
 }
 
-const prebuildStartName = "Start the JSC prebuild beside native quality";
 const prebuildStepName = "Build or verify the JSC prebuild";
 
-function stepScript(name: string): string {
-  return workflowString(workflowField(nativeWorkflowStep("name", name), "run"));
+function prebuildScript(): string {
+  return workflowString(workflowField(nativeWorkflowStep("name", prebuildStepName), "run"));
 }
 
 function replaceWorkload(script: string, functionName: string, body: string): string {
@@ -1101,25 +1099,26 @@ function replaceWorkload(script: string, functionName: string, body: string): st
   return script.replace(pattern, () => `${functionName}() {\n${body}\n}`);
 }
 
-test("ordered producers keep every blocking native command and build JSC beside native work", () => {
-  const script = stepScript(prebuildStartName);
-  const start = nativeWorkflowStep("name", prebuildStartName);
-  expect(workflowField(start, "shell")).toBe("bash");
-  expect(start).not.toHaveProperty("if");
-  expect(workflowField(start, "env")).toEqual({
+test("ordered producers keep every blocking native command and save JSC before native work", () => {
+  const script = prebuildScript();
+  const step = nativeWorkflowStep("name", prebuildStepName);
+  expect(workflowField(step, "shell")).toBe("bash");
+  expect(step).not.toHaveProperty("if");
+  expect(workflowField(step, "env")).toEqual({
     CI_JSC_PREBUILD_HIT: "${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}",
   });
-  const before = rust.slice(0, rust.indexOf(`name: ${prebuildStartName}`));
+  const before = rust.slice(0, rust.indexOf(`name: ${prebuildStepName}`));
   for (const prerequisite of ["Build patched WASI sysroot", "Preserve unchanged build-script input timestamps", "Configure private JSC build paths", "id: jsc-prebuild-cache", "id: jsc-cargo-cache"]) {
     expect(before).toContain(prerequisite);
   }
   const native = nativeScript() + ["Build native fixtures after the cache checkpoint", "Blocking native fixture checks"]
-    .map(name => stepScript(name)).join("");
+    .map(name => workflowString(workflowField(nativeWorkflowStep("name", name), "run"))).join("");
   const commands = ["bun scripts/quality-rust.ts --checks-only", "bun run quality:wasi", "bun scripts/quality-input-times.ts", "cargo test --locked", "cargo build --release --locked -j 2 -p bunwasm-host", "CARGO_BUILD_JOBS=2 bash scripts/build.sh", "bun scripts/test-checks.ts native", "bun tests/install/package-options.ts", "bun tests/install/root-overrides.ts"];
   const positions = commands.map(command => native.indexOf(command));
   expect(positions).toEqual(positions.toSorted((a, b) => a - b));
   for (const command of commands) expect(native.split(command)).toHaveLength(2);
   expect(native).toContain('export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"');
+  expect(native).toContain("CARGO_BUILD_JOBS=2 bash scripts/build.sh");
   expect(native.match(/bash scripts\/build\.sh/g)).toHaveLength(1);
   expect(native).not.toContain("guest-build-receipt.ts inputs quickjs");
   expect(native).not.toContain("build-bun-core.sh");
@@ -1127,50 +1126,102 @@ test("ordered producers keep every blocking native command and build JSC beside 
   expect(script).toContain("check_jsc_inputs_stamp");
   expect(script.match(/bash scripts\/build-jsc.sh/g)).toHaveLength(1);
   expect(script).not.toContain("cargo");
-  expect(script).toContain("setsid bash -eo pipefail -c");
-  expect(script).toContain('> "$RUNNER_TEMP/jsc-prebuild.log" 2>&1 < /dev/null &\necho "$!" > "$state/pid"');
-  expect(script).not.toContain("wait ");
-  // The prebuild runs beside native quality and the common core, then is verified and
-  // saved before its first consumer; on main a native failure still waits and saves it.
-  const order = (name: string) => rust.indexOf(`name: ${name}\n`);
-  expect(order(prebuildStartName)).toBeLessThan(order("Blocking native quality checks"));
-  expect(order(prebuildStepName)).toBeGreaterThan(order("Build the common engine core once"));
-  expect(order(prebuildStepName)).toBeLessThan(order("Start the JSC Cargo guest build"));
-  const verify = nativeWorkflowStep("name", prebuildStepName);
-  expect(workflowField(verify, "if")).toBe("${{ !cancelled() && (success() || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}");
-  expect(workflowField(verify, "shell")).toBe("bash");
-  const names = nativeStepNames();
-  expect(names.indexOf("Save the JSC prebuild cache once per input revision")).toBe(names.indexOf(prebuildStepName) + 1);
+  expect(script.indexOf("trap cleanup EXIT")).toBeLessThan(script.indexOf("set -m"));
+  expect(script).toContain(') > "$jsc_log" 2>&1 &\njsc_pid=$!');
+  expect(script).toContain("set +m\n  trap - EXIT INT TERM\n  run_jsc_prebuild");
+  expect(script).toContain('wait "$jsc_pid"\n[[ "$(cat "$jsc_completion")" == verified ]]\necho "jsc-ready=true" >> "$GITHUB_OUTPUT"');
+  expect(script).not.toContain("tee");
+  const save = rust.indexOf("name: Save the JSC prebuild cache");
+  expect(save).toBeGreaterThan(rust.indexOf(`name: ${prebuildStepName}`));
+  expect(save).toBeLessThan(rust.indexOf("name: Blocking native quality checks"));
 });
 
-function nativeStepNames(): string[] {
-  const steps = workflowField(workflowField(workflowField(Bun.YAML.parse(workflow), "jobs"), "rust"), "steps");
-  if (!Array.isArray(steps)) throw new Error("Missing native steps");
-  return steps.map((step: unknown) => typeof step === "object" && step !== null && "name" in step && typeof step.name === "string" ? step.name : "");
-}
-
 function nativeScript(): string {
-  return stepScript("Blocking native quality checks");
+  return workflowString(workflowField(nativeWorkflowStep("name", "Blocking native quality checks"), "run"));
 }
 
-type PrebuildRun = { status: number | null; ready: boolean; log: string; output: string };
+type PrebuildControl = { jscStatus?: number; signal?: "SIGINT" | "SIGTERM" };
 
-// Runs the extracted launch, lets the detached worker finish, then the extracted wait.
-async function runPrebuild(directory: string, start: string, env: Record<string, string> = {}): Promise<PrebuildRun> {
-  const environment = { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, "outputs"), CI_JSC_PREBUILD_HIT: "false", ...env };
-  const launched = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", start], { cwd: directory, env: environment, encoding: "utf8", timeout: 5000 });
-  expect(launched.status).toBe(0);
-  const pid = Number(readFileSync(join(directory, "jsc-prebuild", "pid"), "utf8"));
-  const deadline = Date.now() + 5000;
-  while (processExists(pid) && Date.now() < deadline) await Bun.sleep(5);
-  expect(processExists(pid)).toBe(false);
-  const waited = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript(prebuildStepName)], { cwd: directory, env: environment, encoding: "utf8", timeout: 5000 });
-  const outputs = join(directory, "outputs");
-  return {
-    status: waited.status, output: waited.stdout,
-    ready: existsSync(outputs) && readFileSync(outputs, "utf8") === "jsc-ready=true\n",
-    log: readFileSync(join(directory, "jsc-prebuild.log"), "utf8"),
-  };
+async function waitForControlFile(path: string): Promise<string> {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const value = await Bun.file(path).exists() ? readFileSync(path, "utf8") : "";
+    if (value) return value;
+    await Bun.sleep(5);
+  }
+  throw new Error(`Synthetic prebuild did not reach ${path}`);
+}
+
+function controlledPrebuild(): string {
+  const jsc = `
+  printf '%s' "$BASHPID" > "$RUNNER_TEMP/jsc-pid"
+  printf 'prebuild stderr retained\\n' >&2
+  bash -c 'printf "%s" "$$" > "$RUNNER_TEMP/descendant-pid"; exec sleep 30' &
+  descendant=$!
+  while [[ ! -f "$RUNNER_TEMP/jsc-release" ]]; do sleep 0.01; done
+  if [[ "$(cat "$RUNNER_TEMP/jsc-release")" == 0 ]]; then
+    kill "$descendant"
+    wait "$descendant" || true
+  fi
+  printf 'jsc-done\\n' >> "$RUNNER_TEMP/events"
+  return "$(cat "$RUNNER_TEMP/jsc-release")"`;
+  return replaceWorkload(prebuildScript(), "run_jsc_prebuild", jsc);
+}
+
+async function checkPrebuildControl(control: PrebuildControl) {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-owned-prebuild-"));
+  const child = Bun.spawn(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", controlledPrebuild()], {
+    env: { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, "outputs"), CI_JSC_PREBUILD_HIT: "false" },
+    stdin: "pipe", stdout: "pipe", stderr: "pipe",
+  });
+  const outsider = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+  const output = new Response(child.stdout).text();
+  const errors = new Response(child.stderr).text();
+  try {
+    await waitForControlFile(join(directory, "descendant-pid"));
+    await releasePrebuildControl(control, directory, child);
+    const status = await waitForControlExit(child);
+    expect(status).toBe(control.signal === "SIGINT" ? 130 : control.signal === "SIGTERM" ? 143 : control.jscStatus || 0);
+    expect(outsider.exitCode).toBeNull();
+    expect(await errors).not.toContain("unbound variable");
+    await assertPrebuildOutcome(control, directory, await output);
+  } finally {
+    // The fallback kills only the group whose PID the synthetic workload recorded.
+    const pidFile = join(directory, "jsc-pid");
+    if (await Bun.file(pidFile).exists()) signalOwnedGroup(Number(readFileSync(pidFile, "utf8")));
+    if (child.exitCode === null) child.kill("SIGKILL");
+    outsider.kill();
+    await Promise.all([child.exited, outsider.exited, output, errors]);
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+async function waitForControlExit(child: ReturnType<typeof Bun.spawn>): Promise<number> {
+  const deadline = Date.now() + 3000;
+  while (child.exitCode === null && Date.now() < deadline) await Bun.sleep(5);
+  if (child.exitCode === null) throw new Error("Owned prebuild did not exit");
+  return child.exited;
+}
+
+function signalOwnedGroup(pid: number) {
+  if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error(`Invalid owned process group: ${pid}`);
+  try { process.kill(-pid, "SIGKILL"); }
+  catch (error) { if (!(error instanceof Error) || !("code" in error) || error.code !== "ESRCH") throw error; }
+}
+
+async function releasePrebuildControl(control: PrebuildControl, directory: string, child: ReturnType<typeof Bun.spawn>) {
+  if (control.signal) { child.kill(control.signal); return; }
+  writeFileSync(join(directory, "jsc-release"), String(control.jscStatus ?? 0));
+}
+
+async function assertPrebuildOutcome(control: PrebuildControl, directory: string, output: string) {
+  expect(await Bun.file(join(directory, "outputs")).exists()).toBe(!control.signal && !control.jscStatus);
+  expect(output).toContain("prebuild stderr retained");
+  expect(readFileSync(join(directory, "jsc-prebuild.log"), "utf8")).toContain("prebuild stderr retained");
+  for (const file of ["jsc-pid", "descendant-pid"]) {
+    const pid = Number(readFileSync(join(directory, file), "utf8"));
+    await waitForProcessExit(pid);
+  }
 }
 
 function processExists(pid: number): boolean {
@@ -1181,44 +1232,21 @@ function processExists(pid: number): boolean {
   }
 }
 
-for (const [label, body, ready] of [
-  ["prebuild completes", "  echo prebuild-output >&2", true],
-  ["prebuild fails", "  echo prebuild-output >&2\n  return 42", false],
-  ["an intermediate command fails", "  echo prebuild-output >&2\n  false\n  echo continued-after-failure", false],
-  ["the worker is terminated", "  echo prebuild-output >&2\n  kill -TERM \"$BASHPID\"\n  sleep 30", false],
-] satisfies [string, string, boolean][]) {
-  test(`extracted background prebuild lifecycle: ${label}`, async () => {
-    const directory = mkdtempSync(join(tmpdir(), "bun-wasm-background-prebuild-"));
-    try {
-      const result = await runPrebuild(directory, replaceWorkload(stepScript(prebuildStartName), "run_jsc_prebuild", body));
-      expect(result.status).toBe(ready ? 0 : 1);
-      expect(result.ready).toBe(ready);
-      expect(result.log).toContain("prebuild-output");
-      expect(result.output).toContain("prebuild-output");
-      expect(result.log).not.toContain("continued-after-failure");
-      expect(readdirSync(join(directory, "jsc-prebuild")).toSorted()).toEqual(ready ? ["completion", "pid"] : ["pid"]);
-    } finally { rmSync(directory, { recursive: true, force: true }); }
-  }, 15000);
+async function waitForProcessExit(pid: number) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (!processExists(pid)) return;
+    await Bun.sleep(5);
+  }
+  throw new Error(`Owned process ${pid} survived cleanup`);
 }
 
-test("the prebuild wait fails closed when its worker never launched or left no log", () => {
-  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-prebuild-wait-"));
-  try {
-    const run = () => spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript(prebuildStepName)], {
-      env: { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, "outputs") }, encoding: "utf8", timeout: 5000,
-    });
-    expect(run().status).not.toBe(0);
-    mkdirSync(join(directory, "jsc-prebuild"));
-    // Above Linux's largest pid_max, so the recorded worker is gone.
-    writeFileSync(join(directory, "jsc-prebuild", "pid"), String(2 ** 22 + 1));
-    writeFileSync(join(directory, "jsc-prebuild", "completion"), "verified\n");
-    expect(run().status).not.toBe(0);
-    writeFileSync(join(directory, "jsc-prebuild.log"), "worker log\n");
-    writeFileSync(join(directory, "jsc-prebuild", "completion"), "verifie");
-    expect(run().status).not.toBe(0);
-    expect(existsSync(join(directory, "outputs"))).toBe(false);
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-});
+for (const [label, control] of [
+  ["prebuild completes", {}], ["prebuild fails", { jscStatus: 42 }],
+  ["cancel with SIGINT", { signal: "SIGINT" }], ["cancel with SIGTERM", { signal: "SIGTERM" }],
+] satisfies [string, PrebuildControl][]) {
+  test(`extracted ordered prebuild lifecycle: ${label}`, () => checkPrebuildControl(control), 10000);
+}
 
 test("the owned scheduling fragment changes exact native keys without widening fallback compatibility", () => {
   const changedWorkflow = workflow.replace("          run_native_checks\n", "          run_native_checks # changed producer\n");
@@ -1237,9 +1265,8 @@ test("the owned scheduling fragment changes exact native keys without widening f
   }
 });
 
-
 for (const hit of [false, true]) {
-  test(`extracted JSC branch propagates ${hit ? "stamp validation" : "builder"} failure before advertising completion`, async () => {
+  test(`extracted JSC branch propagates ${hit ? "stamp validation" : "builder"} failure before advertising completion`, () => {
     const directory = mkdtempSync(join(tmpdir(), "bun-wasm-prebuild-branch-"));
     try {
       mkdirSync(join(directory, "jsc"));
@@ -1247,13 +1274,15 @@ for (const hit of [false, true]) {
       writeFileSync(join(directory, "env.sh"), "export JSC_CHILD_ONLY=private\n");
       writeFileSync(join(directory, "jsc/common.sh"), 'check_jsc_inputs_stamp() { echo stamp-rejected >&2; return 43; }\n');
       writeFileSync(join(directory, "scripts/build-jsc.sh"), 'echo build-rejected >&2\nexit 44\n');
-      const result = await runPrebuild(directory, stepScript(prebuildStartName), { CI_JSC_PREBUILD_HIT: String(hit) });
-      expect(result.status).toBe(1);
-      expect(result.ready).toBe(false);
-      expect(result.log).toContain(hit ? "stamp-rejected" : "build-rejected");
-      expect(result.log).not.toContain(hit ? "build-rejected" : "stamp-rejected");
+      const script = prebuildScript();
+      const env = { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, "outputs"), CI_JSC_PREBUILD_HIT: String(hit) };
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], { cwd: directory, env, encoding: "utf8", timeout: 3000 });
+      expect(result.status).toBe(hit ? 43 : 44);
+      expect(Bun.spawnSync(["test", "!", "-e", join(directory, "outputs")]).exitCode).toBe(0);
+      expect(result.stdout).toContain(hit ? "stamp-rejected" : "build-rejected");
+      expect(result.stdout).not.toContain(hit ? "build-rejected" : "stamp-rejected");
     } finally { rmSync(directory, { recursive: true, force: true }); }
-  }, 15000);
+  });
 }
 
 test("extracted foreground commands fail on an intermediate pipeline, not just the last command", () => {
@@ -1265,6 +1294,35 @@ test("extracted foreground commands fail on an intermediate pipeline, not just t
     });
     expect(result.status).toBe(1);
     expect(result.stdout).not.toContain("masked-failure");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("cancellation between fork and PID capture still reaps the sole owned group", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-prebuild-fork-signal-"));
+  try {
+    const script = controlledPrebuild().replace('jsc_pid=$!', () => 'while [[ ! -s "$RUNNER_TEMP/descendant-pid" ]]; do sleep 0.01; done\n  kill -TERM "$$"\n  jsc_pid=$!');
+    expect(script).not.toBe(controlledPrebuild());
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+      env: { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, "outputs") }, encoding: "utf8", timeout: 3000,
+    });
+    expect(result.status).toBe(143);
+    await assertPrebuildOutcome({ signal: "SIGTERM" }, directory, result.stdout);
+  } finally {
+    const pidFile = join(directory, "jsc-pid");
+    if (await Bun.file(pidFile).exists()) signalOwnedGroup(Number(readFileSync(pidFile, "utf8")));
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed diagnostic display cannot replace the real prebuild exit status", () => {
+  const directory = mkdtempSync(join(tmpdir(), "bun-wasm-prebuild-status-"));
+  try {
+    const script = replaceWorkload(prebuildScript(), "run_jsc_prebuild", "  return 42")
+      .replace('cat "$jsc_log"', "false");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+      env: { ...process.env, RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, "outputs") }, encoding: "utf8", timeout: 3000,
+    });
+    expect(result.status).toBe(42);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 

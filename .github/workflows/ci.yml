@@ -82,9 +82,10 @@ jobs:
     if: needs.quality.outputs.rust == 'true'
     runs-on: ubuntu-latest
     # Whole-job guard only; every phase, fixture and runtime timeout is unchanged.
-    # A legitimately cold pipeline exceeds 60 min on the slower runner class: cold
-    # native quality alone took 1489s (PR 390) and its warm-JSC cold runs took up to
-    # 3595s, while a cold JSC prebuild takes 1013-1739s. Warm runs finish in ~14-18 min.
+    # A legitimately cold pipeline exceeds 60 min on the slower runner class: PR 390
+    # spent 1739s on the cold JSC prebuild and 1489s on cold native quality before the
+    # common core, and cold native runs with a warm prebuild took up to 3595s.
+    # Warm runs finish in about 14-18 min.
     timeout-minutes: 90
     env:
       CARGO_INCREMENTAL: "0"
@@ -401,10 +402,8 @@ jobs:
           key: jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-${{ hashFiles('scripts/build-bun-jsc.sh', 'scripts/build-engine-jsc.sh', 'scripts/build-bun-core.sh', 'scripts/build-engine-quickjs.sh', 'scripts/build.sh', 'scripts/quickjs-core-exports.txt', 'scripts/src/engine-explicit-init.ts', 'scripts/src/engine-init.c', 'scripts/guest-core-receipt.ts', 'scripts/guest-engine-receipt.ts', 'scripts/guest-build-receipt.ts', 'scripts/jsc-embedding.ts', 'tests/linker/**', 'Cargo.*', 'crates/**', 'third_party/rquickjs-sys/quickjs/quickjs.c', 'env.sh', 'scripts/quality*.ts') }}
           restore-keys: |
             jsc-cargo-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.native-inputs.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('.cargo/**', 'rust-toolchain.toml', 'patches/**', 'third_party/**', 'scripts/sync-*.sh', 'scripts/check-cmake-cache.cmake', 'scripts/src/engine-init.c', 'crates/**/build.rs', 'crates/**/*.c', 'crates/**/*.h', 'crates/**/*.cpp', '!crates/bunwasm-cli/build.rs', '!crates/bunwasm-cli/entry-split.c', '!third_party/rquickjs-sys/quickjs/quickjs.c') }}-
-      # The C/C++ prebuild shares no files with native quality or the common core, so it
-      # builds beside them in its own session. `Build or verify the JSC prebuild` waits for
-      # it before its first consumer and saves it on main even after a native failure.
-      - name: Start the JSC prebuild beside native quality
+      - name: Build or verify the JSC prebuild
+        id: jsc-producer
         shell: bash
         env:
           CI_JSC_PREBUILD_HIT: ${{ steps.jsc-prebuild-cache.outputs.cache-matched-key != '' }}
@@ -418,13 +417,46 @@ jobs:
             source jsc/common.sh
             check_jsc_inputs_stamp
           }
-          state="$RUNNER_TEMP/jsc-prebuild"
-          mkdir "$state"
-          export -f run_jsc_prebuild
-          # A fresh -e shell: the marker exists only after every prebuild command succeeded.
-          setsid bash -eo pipefail -c 'start=$SECONDS; run_jsc_prebuild; echo "JSC prebuild took $((SECONDS - start))s"; printf "verified\n" > "$1/completion.tmp"; mv "$1/completion.tmp" "$1/completion"' \
-            jsc-prebuild "$state" > "$RUNNER_TEMP/jsc-prebuild.log" 2>&1 < /dev/null &
-          echo "$!" > "$state/pid"
+          jsc_pid=
+          jsc_completion=
+          jsc_log="$RUNNER_TEMP/jsc-prebuild.log"
+          cleanup() {
+            status=$?
+            trap - EXIT INT TERM
+            # $! also covers a signal between the fork and PID assignment.
+            jsc_pid=${jsc_pid:-${!:-}}
+            if [[ -n "$jsc_pid" ]]; then
+              kill -TERM -- "-$jsc_pid" 2>/dev/null || true
+              kill -KILL -- "-$jsc_pid" 2>/dev/null || true
+              wait "$jsc_pid" 2>/dev/null || true
+            fi
+            if [[ -n "$jsc_completion" ]]; then rm -f -- "$jsc_completion" || true; fi
+            if [[ -f "$jsc_log" ]]; then cat "$jsc_log" || true; fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          jsc_completion=$(mktemp "$RUNNER_TEMP/jsc-completion-XXXXXX")
+          # Only this child owns a process group; its descendants inherit it.
+          set -m
+          (
+            set +m
+            trap - EXIT INT TERM
+            run_jsc_prebuild
+            printf 'verified\n' > "$jsc_completion"
+          ) > "$jsc_log" 2>&1 &
+          jsc_pid=$!
+          set +m
+          wait "$jsc_pid"
+          [[ "$(cat "$jsc_completion")" == verified ]]
+          echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
+      - name: Save the JSC prebuild cache once per input revision
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/jsc/prebuild
+          key: jsc-prebuild-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts') }}
 
       - name: Blocking native quality checks
         id: native-producers
@@ -468,22 +500,6 @@ jobs:
           source env.sh
           export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common"
           CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh
-      - name: Build or verify the JSC prebuild
-        id: jsc-producer
-        if: ${{ !cancelled() && (success() || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
-        shell: bash
-        run: |
-          state="$RUNNER_TEMP/jsc-prebuild"
-          while [[ ! -e "$state/completion" ]] && kill -0 "$(cat "$state/pid")" 2>/dev/null; do sleep 2; done
-          cat "$RUNNER_TEMP/jsc-prebuild.log"
-          [[ "$(cat "$state/completion")" == verified ]]
-          echo "jsc-ready=true" >> "$GITHUB_OUTPUT"
-      - name: Save the JSC prebuild cache once per input revision
-        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.jsc-producer.outputs.jsc-ready == 'true' && steps.jsc-prebuild-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/jsc/prebuild
-          key: jsc-prebuild-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.jsc-inputs.outputs.hash }}-${{ hashFiles('scripts/build-wasi-sysroot.ts') }}
       # Each side reuses the completed common core and owns its target and outputs.
       # JSC builds at low priority beside QuickJS and host-engine work; timed checks
       # start only after the background producer finishes.

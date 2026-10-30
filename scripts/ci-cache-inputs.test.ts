@@ -45,15 +45,13 @@ test("native-only selections provision the tools JSC prerequisite without enabli
     expect(needsJsc([path])).toBe(false);
   }
   expect(field(field(field(workflow, "jobs"), "rust"), "if")).toBe("needs.quality.outputs.rust == 'true'");
-  for (const prerequisite of [named("Configure private JSC build paths"), byId("jsc-inputs"), byId("jsc-prebuild-cache"), named("Start the JSC prebuild beside native quality")]) {
+  for (const prerequisite of [named("Configure private JSC build paths"), byId("jsc-inputs"), byId("jsc-prebuild-cache"), byId("jsc-producer")]) {
     expect(prerequisite).not.toHaveProperty("if");
   }
-  expect(string(field(byId("jsc-producer"), "if"))).not.toContain("needs.quality.outputs.jsc");
   const tools = named("Build the single tools fixture in the existing native target");
   expect(tools).not.toHaveProperty("if");
-  expect(position("Start the JSC prebuild beside native quality")).toBeLessThan(position("Blocking native quality checks"));
   expect(position("Build or verify the JSC prebuild")).toBeLessThan(stepList.indexOf(tools));
-  expect(position("Save the JSC prebuild cache once per input revision")).toBeLessThan(stepList.indexOf(tools));
+  expect(position("Save the JSC prebuild cache once per input revision")).toBeLessThan(position("Blocking native quality checks"));
   for (const engine of [byId("jsc-cargo-cache"), named("Build the JSC Cargo guest"), named("Blocking JSC embedding and allocation checks"), named("Blocking Web guest case (JSC)")]) {
     expect(field(engine, "if")).toBe("needs.quality.outputs.jsc == 'true'");
   }
@@ -110,7 +108,14 @@ function shellFixture(run: (root: string) => void) {
 }
 
 test("ordered producers advertise completion only after successful commands", () => {
-  shellFixture(root => assertProducerCompletion(root, "Blocking native quality checks", "run_native_checks", "native-ready"));
+  shellFixture(root => {
+    for (const [name, functionName, outputName] of [
+      ["Build or verify the JSC prebuild", "run_jsc_prebuild", "jsc-ready"],
+      ["Blocking native quality checks", "run_native_checks", "native-ready"],
+    ] satisfies [string, string, string][]) {
+      assertProducerCompletion(root, name, functionName, outputName);
+    }
+  });
 });
 
 function assertProducerCompletion(root: string, name: string, functionName: string, outputName: string) {
@@ -187,11 +192,10 @@ test("extracted native input shell rejects failed probes and keys effective flag
 });
 
 const checkpointBoundaries = [
-  ["Start the JSC prebuild beside native quality", "run_jsc_prebuild"],
+  ["Build or verify the JSC prebuild", "run_jsc_prebuild"],
+  ["Save the JSC prebuild cache once per input revision", "jsc"],
   ["Blocking native quality checks", "run_native_checks"],
   ["Save the native quality checkpoint", "native"],
-  ["Build or verify the JSC prebuild", ""],
-  ["Save the JSC prebuild cache once per input revision", "jsc"],
   ["Start the JSC Cargo guest build", ""],
   ["Build native fixtures after the cache checkpoint", ""],
   ["Build the JSC Cargo guest", ""],
@@ -203,67 +207,71 @@ const checkpointBoundaries = [
   ["Blocking Web guest cases (QuickJS and host engine)", ""],
 ] satisfies [string, string][];
 
-// Models a main push: a failed step skips default-gated steps, while steps whose condition
-// survives failure still run. A cancellation (143) stops the controller.
-function afterFailure(item: unknown): string {
-  const condition = typeof item === "object" && item !== null && "if" in item ? string(field(item, "if")) : "";
-  if (!condition.includes("!cancelled()")) return "false";
-  if (condition.includes("(success() || (github.event_name == 'push' && github.ref == 'refs/heads/main'))")) return "true";
-  const ready = /steps\.[\w-]+\.outputs\.([\w-]+-ready) == 'true'/.exec(condition)?.[1];
-  return ready ? `grep -qx '${ready}=true' "$GITHUB_OUTPUT"` : "false";
-}
-
-function boundaryCommands(failure: string, cancelled: boolean): string {
+function boundaryCommands(failure: string, cancelled: boolean, controller = true): string {
   const ordered = checkpointBoundaries.toSorted((left, right) => position(left[0]) - position(right[0]));
   expect(ordered).toEqual(checkpointBoundaries);
   return ordered.map(([name, marker]) => {
     const item = named(name);
-    let command: string;
     if (name.startsWith("Save ")) {
       expect(field(item, "uses")).toBe("actions/cache/save@v4");
-      command = `printf '%s\\n' '${marker}' >> "$CHECKPOINT_RECORDS"`;
-    } else {
-      const body = name === failure ? cancelled ? 'kill -TERM "$$"; sleep 30' : "exit 42" : "true";
-      const original = string(field(item, "run"));
-      // The real wait runs against the real background launch with a stubbed workload.
-      const real = name === "Build or verify the JSC prebuild" && name !== failure;
-      const script = real ? original : marker ? original.replace(new RegExp(`^${marker}\\(\\) {\\n[^]*?^}`, "m"), () => `${marker}() {\n  ${body}\n}`) : body;
-      command = `bash -eo pipefail -c '${script.replaceAll("'", "'\\''")}'`;
+      return `printf '%s\\n' '${marker}' >> "$CHECKPOINT_RECORDS"`;
     }
-    return `if [[ -z "$failed" ]] || ${afterFailure(item)}; then ${command} || { status=$?; [[ $status != 143 ]] || exit 143; failed=\${failed:-$status}; }; fi`;
-  }).join("\n").replace(/^/, "failed=\n").concat('\nexit "${failed:-0}"');
+    const signal = controller ? 'kill -TERM "$$"; sleep 30' : 'kill -TERM "$BASHPID"';
+    const body = name === failure ? cancelled ? signal : "exit 42" : "true";
+    const original = string(field(item, "run"));
+    const script = marker ? original.replace(new RegExp(`^${marker}\\(\\) {\\n[^]*?^}`, "m"), () => `${marker}() {\n  ${body}\n}`) : body;
+    return `bash -eo pipefail -c '${script.replaceAll("'", "'\\''")}'`;
+  }).join("\n");
 }
 
-for (const [failure, failed, cancelled] of [
-  ["Build or verify the JSC prebuild", ["native"], ["native"]],
-  ["Blocking native quality checks", ["jsc"], []],
-  ["Build native fixtures after the cache checkpoint", ["native", "jsc"], ["native", "jsc"]],
-  ["Build the JSC Cargo guest", ["native", "jsc"], ["native", "jsc"]],
-  ["Blocking JSC embedding and allocation checks", ["native", "jsc", "jsc-cargo"], ["native", "jsc", "jsc-cargo"]],
-  ["Blocking native fixture checks", ["native", "jsc", "jsc-cargo"], ["native", "jsc", "jsc-cargo"]],
-  ["Build the single tools fixture in the existing native target", ["native", "jsc", "jsc-cargo"], ["native", "jsc", "jsc-cargo"]],
-  ["Blocking Web guest cases (QuickJS and host engine)", ["native", "jsc", "jsc-cargo", "native-final"], ["native", "jsc", "jsc-cargo", "native-final"]],
-] satisfies [string, string[], string[]][]) {
-  test(`extracted workflow retains completed checkpoint records when ${failure} fails or is cancelled`, () => {
-    shellFixture(root => {
-      assertCheckpointRecords(root, failure, false, failed);
-      assertCheckpointRecords(root, failure, true, cancelled);
+for (const [failure, expected] of [
+  ["Build or verify the JSC prebuild", []],
+  ["Blocking native quality checks", ["jsc"]],
+  ["Build native fixtures after the cache checkpoint", ["jsc", "native"]],
+  ["Build the JSC Cargo guest", ["jsc", "native"]],
+  ["Blocking JSC embedding and allocation checks", ["jsc", "native", "jsc-cargo"]],
+  ["Blocking native fixture checks", ["jsc", "native", "jsc-cargo"]],
+  ["Build the single tools fixture in the existing native target", ["jsc", "native", "jsc-cargo"]],
+  ["Blocking Web guest cases (QuickJS and host engine)", ["jsc", "native", "jsc-cargo", "native-final"]],
+] satisfies [string, string[]][]) {
+  test(`extracted workflow retains earlier checkpoint records when ${failure} fails or is cancelled`, () => {
+    shellFixture(root => assertCheckpointRecords(root, failure, expected));
+  });
+}
+
+function assertCheckpointRecords(root: string, failure: string, expected: readonly string[]) {
+  for (const cancelled of [false, true]) {
+    const records = join(root, "checkpoint-records");
+    writeFileSync(records, "");
+    const output = join(root, "outputs");
+    writeFileSync(output, "");
+    const result = spawnSync("bash", ["-eo", "pipefail", "-c", boundaryCommands(failure, cancelled)], {
+      env: { ...process.env, RUNNER_TEMP: root, GITHUB_OUTPUT: output, CHECKPOINT_RECORDS: records }, timeout: 3000,
     });
-  });
+    expect(result.signal === "SIGTERM" ? 143 : result.status).toBe(cancelled ? 143 : 42);
+    expect<readonly string[]>(readFileSync(records, "utf8").trim().split("\n").filter(Boolean)).toEqual(expected);
+    const completions = ["jsc", "native"].filter(producer => expected.includes(producer)).map(producer => `${producer}-ready=true\n`).join("");
+    expect(readFileSync(output, "utf8")).toBe(completions);
+    expect(readdirSync(root).filter(name => name.startsWith("jsc-completion-"))).toEqual([]);
+  }
 }
 
-function assertCheckpointRecords(root: string, failure: string, cancelled: boolean, expected: readonly string[]) {
-  rmSync(join(root, "jsc-prebuild"), { recursive: true, force: true });
-  const records = join(root, "checkpoint-records");
-  writeFileSync(records, "");
-  const output = join(root, "outputs");
-  writeFileSync(output, "");
-  const result = spawnSync("bash", ["-o", "pipefail", "-c", boundaryCommands(failure, cancelled)], {
-    env: { ...process.env, RUNNER_TEMP: root, GITHUB_OUTPUT: output, CHECKPOINT_RECORDS: records }, timeout: 10000,
+for (const ignoreWaitFailure of [false, true]) test(`terminated JSC worker cannot advertise completion with ${ignoreWaitFailure ? "forced-success" : "native"} wait`, () => {
+  shellFixture(root => {
+    const output = join(root, "outputs"), records = join(root, "checkpoints");
+    writeFileSync(output, "");
+    writeFileSync(records, "");
+    const original = boundaryCommands("Build or verify the JSC prebuild", true, false);
+    const script = ignoreWaitFailure ? original.replace('wait "$jsc_pid"\n', 'wait "$jsc_pid" || true\n') : original;
+    expect(script === original).toBe(!ignoreWaitFailure);
+    const result = spawnSync("bash", ["-eo", "pipefail", "-c", script], {
+      env: { ...process.env, RUNNER_TEMP: root, GITHUB_OUTPUT: output, CHECKPOINT_RECORDS: records }, timeout: 3000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(output, "utf8")).toBe("");
+    expect(readFileSync(records, "utf8")).toBe("");
+    expect(readdirSync(root).filter(name => name.startsWith("jsc-completion-"))).toEqual([]);
   });
-  expect(result.signal === "SIGTERM" ? 143 : result.status).toBe(cancelled ? 143 : 42);
-  expect<readonly string[]>(readFileSync(records, "utf8").trim().split("\n").filter(Boolean)).toEqual(expected);
-  const completions = ["native", "jsc"].filter(producer => expected.includes(producer)).map(producer => `${producer}-ready=true\n`).join("");
-  expect(readFileSync(output, "utf8")).toBe(completions);
-  expect(readdirSync(join(root, "jsc-prebuild"))).toContain("pid");
-}
+});
