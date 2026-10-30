@@ -136,9 +136,9 @@ for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-req
 
 test.each(["pull_request", "push"])("shared proof changes select only the dedicated job through a real %s diff", event => {
   expect(selectionOutput(base, commitInput("scripts/shared-sysroot-proof.ts"), event))
-    .toBe("rust=false\njsc=false\nshared=true");
+    .toBe("rust=false\njsc=false\nshared=true\nhermes=false");
   expect(selectionOutput(base, commitInput("docs/code-quality.md"), event))
-    .toBe("rust=false\njsc=false\nshared=false");
+    .toBe("rust=false\njsc=false\nshared=false\nhermes=false");
 });
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -265,5 +265,14 @@ for (const path of ["crates/bunwasm-host/src/linked.rs", "crates/bunwasm-engine-
     expect(needsRust([path])).toBe(true);
     expect(needsJsc([path])).toBe(false);
     expect(select(base, commitInput(path), event)).toBe("rust=true\njsc=false");
+  });
+}
+
+for (const event of ["pull_request", "push"]) {
+  test(`Hermes paths select its blocking job through an actual ${event} diff`, () => {
+    const selected = selectionOutput(base, commitInput("hermes/build.sh"), event);
+    expect(selected).toBe("rust=true\njsc=false\nshared=false\nhermes=true");
+    expect(selectionOutput(base, commitInput("docs/hermes-engine.md"), event))
+      .toBe("rust=false\njsc=false\nshared=false\nhermes=false");
   });
 }

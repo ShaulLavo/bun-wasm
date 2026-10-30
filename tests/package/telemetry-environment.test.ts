@@ -1,3 +1,5 @@
+import { prepareProgram } from "../../src/assets.ts";
+import { quickjsPair } from "./quickjs-plan-fixture.ts";
 import { expect, test } from "bun:test";
 import { installBunAdapters } from "../../src/bun-adapter";
 import { ENGINE_BIN, engineEnvironment } from "../../src/executable-paths";
@@ -65,7 +67,8 @@ async function admittedEnvironment(env: Record<string, string>, engine: "browser
   const pending: Promise<void>[] = [];
   let installation: Awaited<ReturnType<typeof installBunAdapters>> | undefined;
   try {
-    installation = await installBunAdapters(fixture.runtime, { engine, module, workerUrl });
+    const selected = engine === "browser" ? module : await prepareProgram({ kind: engine, ...quickjsPair(engine) });
+    installation = await installBunAdapters(fixture.runtime, { engine, module: selected, workerUrl });
     const service = await fixture.runtime.processes();
     const pid = fixture.runtime.identities.pid();
     const transport = createWorkerProcessTransport({ pid, job: fixture.runtime.identities.job(), identity: fixture.runtime.identities.buffer });

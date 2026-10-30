@@ -5,17 +5,18 @@ import { Wasi } from "waffle/core";
 import { MemFS } from "waffle/fs/memory";
 import { instantiateLinkPlan, prepareLinkPlan, type LinkPlanSource, type LinkedGroup } from "waffle/link";
 import { engineLinkPlan } from "../../src/quickjs-program.ts";
-import { programKind, programProfile } from "../../src/engine-kind.ts";
+import { programKind, programProfile, type PairedEngine } from "../../src/engine-kind.ts";
 
 export interface NodeProgram {
   readonly module: WebAssembly.Module;
   readonly linkPlan?: LinkPlanSource;
 }
 
-export async function loadNodeProgram(path: string): Promise<NodeProgram> {
+export async function loadNodeProgram(path: string, expected?: PairedEngine): Promise<NodeProgram> {
   const bytes = readFileSync(path);
   const module = await WebAssembly.compile(bytes);
   const kind = programKind(module);
+  if (expected !== undefined && kind !== expected) throw new TypeError(`Selected ${expected} core declares ${kind}`);
   if (kind === "single") return { module };
   const side = readFileSync(join(dirname(path), programProfile(kind).side));
   const plan = await prepareLinkPlan(await engineLinkPlan({ kind, core: bytes, side }));

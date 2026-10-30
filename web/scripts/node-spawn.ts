@@ -16,7 +16,7 @@ import { drainDiagnostic } from "waffle/browser/diagnostic";
 import { ProcessErrno, ProcessError } from "waffle/proc/types";
 
 export const nodeExecutables = ["/bin/bun", "/bin/node", "/bin/nodejs"] as const;
-export type NodeEngineModules = Partial<Record<"quickjs" | "jsc", WebAssembly.Module>>;
+export type NodeEngineModules = Partial<Record<import("../../src/engine-kind.ts").PairedEngine, WebAssembly.Module>>;
 
 /** Resolve guest path components before normalization: file/.. must remain ENOTDIR.
  * Symlink targets live in the guest namespace, just as they do in preview1. */
@@ -60,7 +60,7 @@ function nodeExecutableLookup(preopens: Record<string, string>, absolute: string
 export function createNodeExecutableRegistry(module: WebAssembly.Module, preopens: Record<string, string>, engines: NodeEngineModules = {}): ExecutableRegistry {
   const registry = new ExecutableRegistry(path => nodeExecutableLookup(preopens, path));
   for (const name of nodeExecutables) registry.register(name, { module, adapter: "bun" });
-  for (const engine of ["quickjs", "jsc"] as const) {
+  for (const engine of ["quickjs", "jsc", "hermes"] as const) {
     const module = engines[engine];
     if (module) for (const name of ["bun", "node", "nodejs"]) registry.register(`/opt/bun/${engine}/bin/${name}`, { module, adapter: "bun" });
   }
@@ -76,7 +76,7 @@ function nodeExecutableFiles(preopens: Record<string, string>, engines: NodeEngi
   try {
     mkdirSync(join(root, "bin")); mkdirSync(join(root, "opt/bun"), { recursive: true });
     for (const name of ["bun", "node", "nodejs"]) writeFileSync(join(root, "bin", name), new Uint8Array());
-    for (const engine of ["quickjs", "jsc"] as const) {
+    for (const engine of ["quickjs", "jsc", "hermes"] as const) {
       if (!engines[engine]) continue;
       const bin = join(root, "opt/bun", engine, "bin"); mkdirSync(bin, { recursive: true });
       for (const name of ["bun", "node", "nodejs"]) writeFileSync(join(bin, name), new Uint8Array());

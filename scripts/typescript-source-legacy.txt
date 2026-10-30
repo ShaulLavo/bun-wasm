@@ -3,10 +3,8 @@ crates/bunwasm-runtime/src/js/buffer.js
 crates/bunwasm-runtime/src/js/builtins.js
 crates/bunwasm-runtime/src/js/bun.js
 crates/bunwasm-runtime/src/js/bun_console_constructor.js
-crates/bunwasm-runtime/src/js/bun_tcp.js
 crates/bunwasm-runtime/src/js/bun_test.js
 crates/bunwasm-runtime/src/js/crypto.js
-crates/bunwasm-runtime/src/js/crypto_keys.js
 crates/bunwasm-runtime/src/js/html_server.js
 crates/bunwasm-runtime/src/js/inspect.js
 crates/bunwasm-runtime/src/js/net.js

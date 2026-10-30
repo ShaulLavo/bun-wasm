@@ -118,6 +118,9 @@ type StatMetadata = fs::Metadata;
 #[cfg(target_os = "wasi")]
 type StatMetadata = libc::stat;
 
+#[cfg(target_os = "wasi")]
+mod wasi_metadata;
+
 fn metadata_record(
     integers: [(&str, u64); 8],
     signed: [(&str, i64); 2],
@@ -188,7 +191,7 @@ fn stat_record(stat: &StatMetadata, bigint: bool) -> Val {
         [
             ("dev", stat.st_dev),
             ("ino", stat.st_ino),
-            ("mode", u64::from(stat.st_mode)),
+            ("mode", u64::from(wasi_metadata::mode(stat.st_mode))),
             ("nlink", stat.st_nlink),
             ("uid", u64::from(stat.st_uid)),
             ("gid", u64::from(stat.st_gid)),
