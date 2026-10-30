@@ -17,6 +17,7 @@ use std::mem::ManuallyDrop;
 use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
+use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -559,17 +560,26 @@ fn install_process(t: &mut Table, state: &Rc<State>) {
 mod mkdir_tests;
 
 fn mkdir_recursive(path: &str) -> io::Result<Option<String>> {
+    let mut pending = vec![Path::new(path)];
     let mut first = None;
-    let mut current = String::new();
-    for part in path.split('/').filter(|p| !p.is_empty()) {
-        current = format!("{current}/{part}");
-        if fs::metadata(&current).is_ok() {
+    while let Some(current) = pending.pop() {
+        let Err(error) = fs::create_dir(current) else {
+            first = first.or(Some(current));
+            continue;
+        };
+        if error.kind() == io::ErrorKind::AlreadyExists
+            && fs::metadata(current).is_ok_and(|metadata| metadata.is_dir())
+        {
             continue;
         }
-        fs::create_dir(&current)?;
-        first.get_or_insert_with(|| current.clone());
+        if error.kind() != io::ErrorKind::NotFound {
+            return Err(error);
+        }
+        let parent = current.parent().ok_or(error)?;
+        pending.push(current);
+        pending.push(parent);
     }
-    Ok(first)
+    Ok(first.map(|path| path.to_string_lossy().into_owned()))
 }
 
 fn install_fs(t: &mut Table) {
