@@ -695,7 +695,7 @@ test("Binaryen remains pinned while runtime tool identity owns JSC reuse", () =>
 });
 
 test("source cache runs in real browsers using one source-built host guest", () => {
-  const processes = workflow.split("\n  browser-process:\n")[1]!;
+  const processes = workflow.split("\n  browser-process:\n")[1]!.split("\n  hermes:\n")[0]!;
   expect(rust).toContain("--no-default-features --features engine-host,bun-build");
   expect(rust).toContain("uses: actions/upload-artifact@v4");
   expect(processes).toContain("uses: actions/download-artifact@v4");
@@ -715,7 +715,7 @@ test("source cache runs in real browsers using one source-built host guest", () 
 test("Bun acceptance has one distinct shared producer and no per-browser build", () => {
   const producer = readFileSync(new URL("../web/scripts/ci-process-bundles.ts", import.meta.url), "utf8");
   const controller = readFileSync(new URL("../web/tests/bun-runtime-proc-browser.ts", import.meta.url), "utf8");
-  const processes = workflow.split("\n  browser-process:\n")[1]!;
+  const processes = workflow.split("\n  browser-process:\n")[1]!.split("\n  hermes:\n")[0]!;
   const acceptance = processes.split("      - name: Real Bun source cache in one Waffle browser runtime\n")[1]!;
   expect(producer).toContain('["supervisor", "runtime-proc", "interrupt", "bun-runtime-proc"]');
   expect(producer).toContain('fixture === "bun-runtime-proc" ? "bun-runtime-proc-main"');
