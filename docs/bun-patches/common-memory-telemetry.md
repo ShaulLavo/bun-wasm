@@ -31,6 +31,21 @@ none, then malloc, calloc, realloc, aligned_alloc, and posix_memalign.
 Reading the record neither allocates nor enters a VM. A trap before an allocator
 returns cannot establish an allocation failure and must not be reported as one.
 
+`bun_memory_failure_telemetry` returns nine little-endian u64 fields, 72 bytes.
+They are ABI version 1, byte length, first failed request bytes, category,
+previous allocation's usable bytes, allocator live bytes, allocator peak bytes,
+Wasm capacity before the call, and capacity after the failed call. It freezes
+with the same first failure as the 80-byte record. Before failure, the category
+is zero and all values after the header except category are unknown.
+Previous usable bytes are zero for calls other than realloc and for realloc
+with a null pointer. Capacity before the call is recorded only for realloc.
+The getter only returns the frozen record, including after later frees or
+allocations. It never walks a heap. Live and peak retain the outer-boundary
+accounting above, so internal realloc temporary peaks remain unobserved.
+Neither capacity nor live bytes identify a largest free block, the allocator's
+growth request or result, or its rejection reason. The browser reader does not
+yet collect this separate export.
+
 The host reads JSC ABI 1 with exactly 24 u64 fields, QuickJS ABI 1 with
 exactly 12, and [Hermes ABI 1](hermes-memory-telemetry.md) with exactly eight.
 It preserves each engine's accounting semantics. JSC's GC-accounted
