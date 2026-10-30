@@ -221,6 +221,9 @@ async function verify(): Promise<void> {
 }
 if (import.meta.main) {
   if (command !== "build" && command !== "verify") throw new Error("Usage: engine-producer.ts build|verify [split|shared-group]");
+  if (command === "build" && profile === "shared-group" && !existsSync(join(repository, "tests/shared-group/worker-alias.ts"))) {
+    throw new Error("Shared-group production is unavailable in this source checkout; its native implementation and worker proof must land together");
+  }
   const lock = join(output, ".producer-lock");
   if (command === "verify" || existsSync(manifestPath)) {
     if (existsSync(lock)) throw new Error("Producer is active; cannot verify a changing closure");

@@ -107,6 +107,21 @@ test.each(["shim.cpp", "memory-telemetry.h"])("a changed native %s refuses the p
   });
 });
 
+test("unavailable shared-group production refuses before inputs, recipes or launcher work", () => {
+  fixture((root, output, invoke) => {
+    rmSync(join(root, "tests/shared-group/worker-alias.ts"));
+    execFileSync("git", ["add", "-A"], { cwd: root });
+    execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "remove unavailable worker proof"], { cwd: root });
+    const result = invoke("build", "shared-group");
+    expect(result.exitCode).not.toBe(0);
+    expect(existsSync(join(output, "../commands.log"))).toBe(false);
+    expect(existsSync(join(output, "inputs/programs.json"))).toBe(false);
+    expect(existsSync(join(output, "manifest.json"))).toBe(false);
+    expect(existsSync(join(output, ".producer-lock"))).toBe(false);
+    expect(result.stderr?.toString()).toContain("Shared-group production is unavailable");
+  });
+});
+
 test("canonical shared producer uses explicit profile and only QuickJS, keeps split artifacts out", () => {
   fixture((_root, output, invoke) => {
     const result = invoke("build", "shared-group"); expect(result.exitCode, result.stderr?.toString()).toBe(0);

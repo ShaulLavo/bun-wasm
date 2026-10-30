@@ -36,29 +36,26 @@ launcher instead, set `BUN_WASM_LAUNCHER` and
 `BUN_WASM_LAUNCHER_RECEIPT`; the original receipt must match the current source
 and executable bytes. The staged launcher and receipt are part of the manifest.
 
-## Shared-group QuickJS
+## Shared-group QuickJS is unavailable in this branch
 
-Set both sysroot variables before sourcing `env.sh`:
+This branch retains the shared-group types and receipt contract, but does not
+include the native worker implementation or `tests/shared-group/worker-alias.ts`.
+Shared-group build requests fail before input inventory, recipes or launcher work
+when the proof fixture is missing. Use this branch for split production only.
+Do not bypass the rejection by adding a placeholder proof.
 
-```sh
-export BUN_WASM_SHARED_SYSROOT=/absolute/admitted/shared-pic/sysroot
-export BUN_WASM_SYSROOT=$BUN_WASM_SHARED_SYSROOT
-source env.sh
-export BUN_WASM_ENGINE_ROOT=/absolute/different/output
-bun scripts/engine-producer.ts build shared-group
-bun scripts/engine-producer.ts verify shared-group
-```
-
-This profile admits only QuickJS. It records the imported shared-memory profile,
-build-std source inputs and original core/side receipts, checks that no stock C++
-runtime member was selected, and runs the native `worker-alias.ts` proof.
+The shared-group contract admits only QuickJS. A qualified closure must record
+the imported shared-memory profile, build-std source inputs and original
+core/side receipts. It must select no stock C++ runtime member and pass the native
+`worker-alias.ts` proof.
 It does not qualify JSC, Hermes, browser shared workers, a memory-limit change or
 a full application. Split and shared-group outputs never verify against each
 other. No capacity or runtime policy is selected by this producer interface.
 
-For manual composition, `guest-build-receipt.ts inputs quickjs shared-group`
-records the explicit profile. `write ARTIFACT INPUTS_FILE` takes the profile from
-that snapshot; a write-time override is refused. Split inputs omit the field.
+The retained metadata command `guest-build-receipt.ts inputs quickjs shared-group`
+records the explicit profile. It does not enable shared-group production here.
+`write ARTIFACT INPUTS_FILE` takes the profile from that snapshot; a write-time
+override is refused. Split inputs omit the field.
 
 ## Verification and consumers
 
