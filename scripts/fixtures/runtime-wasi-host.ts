@@ -45,7 +45,7 @@ const native = {
     evaluated.push(id);
     return fs.readFileSync(source, "utf8");
   },
-  evalScript(source: string) { return runInThisContext(source); },
+  evalBuiltin(source: string) { return runInThisContext(source); },
 };
 function builtin(name: string): unknown {
   if (name === "node:fs") return fs;
