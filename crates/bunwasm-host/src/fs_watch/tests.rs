@@ -69,7 +69,10 @@ impl Fixture {
                 return;
             }
             drop(inbox);
-            assert!(std::time::Instant::now() < deadline, "no delivery matched in 5 s");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no delivery matched in 5 s"
+            );
             self.net.poll(1000);
         }
     }
@@ -210,7 +213,9 @@ fn identical_unread_records_coalesce() {
     // two. notify delivers one watch's events in kernel order on one thread, so the rename's
     // delivery follows every write's, and reading only after it leaves them unread together.
     fs::rename(&file, f.root.join("moved.txt")).unwrap();
-    f.delivered(id, |kind| matches!(kind, EventKind::Modify(ModifyKind::Name(_))));
+    f.delivered(id, |kind| {
+        matches!(kind, EventKind::Modify(ModifyKind::Name(_)))
+    });
     assert_eq!(f.drain(id), [(CHANGE, None), (RENAME, None)]);
 }
 
