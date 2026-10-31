@@ -36,7 +36,7 @@ function observeNativeResult(value: unknown): void {
   observeNativeRecord(value);
 }
 function observeNativeRequest(request: IDBRequest<unknown>): void {
-  request.addEventListener("success", () => observeNativeResult(request.result), { once: true });
+  request.addEventListener("success", () => observeNativeResult(request.result));
 }
 // Count all readonly data-store requests, then classify returned records by their bytes.
 // The key shape is not a safe payload discriminator: byte-bearing records must stay visible
@@ -187,6 +187,65 @@ async function snapshotInterrupted() {
   const wanted = oldShape ? 17 : 34, size = oldShape ? 1024 * 1024 : 8 * 1024 * 1024;
   return { state: bytes.length === size && bytes.every(byte => byte === wanted) && sentinel.length === 3 && sentinel.every(byte => byte === wanted) ? oldShape ? "old" : "new" : "partial", files, size: bytes.length, metadata };
 }
+function nativeDelta(before: ReturnType<typeof counters>) {
+  return {
+    nativeDataRequests: nativeDataRequests - before.nativeDataRequests,
+    nativeMetadataRecords: nativeMetadataRecords - before.nativeMetadataRecords,
+    nativePayloadRequests: nativePayloadRequests - before.nativePayloadRequests,
+    nativePayloadBytes: nativePayloadBytes - before.nativePayloadBytes,
+  };
+}
+function requestResult<T>(request: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("payload accounting request failed"));
+  });
+}
+function openControlDatabase(name: string): Promise<IDBDatabase> {
+  const request = indexedDB.open(name, 1);
+  request.onupgradeneeded = () => request.result.createObjectStore("data");
+  return requestResult(request);
+}
+function seedControlDatabase(database: IDBDatabase): Promise<void> {
+  const transaction = database.transaction("data", "readwrite");
+  const store = transaction.objectStore("data");
+  store.put({ chunks: 1, size: 3 }, "a-metadata");
+  store.put({ bytes: new Uint8Array([1, 2, 3]) }, "string-key");
+  store.put(new Uint8Array([4, 5, 6]), "z-payload");
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error ?? new Error("payload accounting write failed"));
+  });
+}
+function readControlCursor(database: IDBDatabase): Promise<IDBValidKey[]> {
+  const request = database.transaction("data", "readonly").objectStore("data").openCursor();
+  const keys: IDBValidKey[] = [];
+  return new Promise((resolve, reject) => {
+    request.onerror = () => reject(request.error ?? new Error("payload accounting cursor failed"));
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return resolve(keys);
+      keys.push(cursor.key);
+      cursor.continue();
+    };
+  });
+}
+async function stringKeyPayloadControl() {
+  const before = counters();
+  const name = `bunwasm-payload-accounting-${crypto.randomUUID()}`;
+  const database = await openControlDatabase(name);
+  try {
+    await seedControlDatabase(database);
+    const value = await requestResult(database.transaction("data", "readonly").objectStore("data").get("string-key"));
+    if (byteLength(value) !== 3) throw new Error("string-key payload control returned wrong bytes");
+    const after = counters(), delta = nativeDelta(before);
+    const keys = await readControlCursor(database);
+    return { before, after, delta, cursor: { keys, delta: nativeDelta(after) } };
+  } finally {
+    database.close();
+    await requestResult(indexedDB.deleteDatabase(name));
+  }
+}
 const commands: Record<string, (args: any) => Promise<unknown>> = {
   async storageTestNames({ storage = "indexeddb", filter }: { storage?: "indexeddb" | "opfs"; filter?: string } = {}) {
     const registered = storage === "opfs" ? opfsStorageTests() : storageTests();
@@ -245,49 +304,7 @@ const commands: Record<string, (args: any) => Promise<unknown>> = {
     await backend!.flush();
   },
   inspectInterrupted: snapshotInterrupted,
-  async stringKeyPayloadControl() {
-    const before = counters();
-    const name = `bunwasm-payload-accounting-${crypto.randomUUID()}`;
-    const opened = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(name, 1);
-      request.onupgradeneeded = () => request.result.createObjectStore("data");
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error ?? new Error("payload accounting database open failed"));
-    });
-    try {
-      const write = opened.transaction("data", "readwrite");
-      const written = new Promise<void>((resolve, reject) => {
-        write.oncomplete = () => resolve();
-        write.onabort = () => reject(write.error ?? new Error("payload accounting write failed"));
-      });
-      write.objectStore("data").put({ bytes: new Uint8Array([1, 2, 3]) }, "string-key");
-      await written;
-      const read = opened.transaction("data", "readonly").objectStore("data").get("string-key");
-      const value = await new Promise<unknown>((resolve, reject) => {
-        read.onsuccess = () => resolve(read.result);
-        read.onerror = () => reject(read.error ?? new Error("payload accounting read failed"));
-      });
-      if (byteLength(value) !== 3) throw new Error("string-key payload control returned wrong bytes");
-      const after = counters();
-      return {
-        before,
-        after,
-        delta: {
-          nativeDataRequests: after.nativeDataRequests - before.nativeDataRequests,
-          nativeMetadataRecords: after.nativeMetadataRecords - before.nativeMetadataRecords,
-          nativePayloadRequests: after.nativePayloadRequests - before.nativePayloadRequests,
-          nativePayloadBytes: after.nativePayloadBytes - before.nativePayloadBytes,
-        },
-      };
-    } finally {
-      opened.close();
-      await new Promise<void>((resolve, reject) => {
-        const request = indexedDB.deleteDatabase(name);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error ?? new Error("payload accounting cleanup failed"));
-      });
-    }
-  },
+  stringKeyPayloadControl,
   async seedChunkedPayload() {
     const size = 3 * 64 * 1024 + 17;
     const data = payload(size, 0);
