@@ -129,6 +129,19 @@ async function exercise(page: Page, engine: string) {
   assert.equal(await checkDelayedStop(page, base, "chromium", engine), true);
   await checkRootSignals(page, base, "chromium", engine);
   await checkPipelineReader(page, base, "chromium", engine);
+  const columns = await page.evaluate(() => Reflect.get(globalThis, "playground").term.cols);
+  await page.setViewportSize({ width: 900, height: 700 });
+  await page.waitForFunction(previous => Reflect.get(globalThis, "playground").term.cols !== previous, columns);
+  await command(page, "echo RESIZE_RECOVERED");
+  await contains(page, "RESIZE_RECOVERED");
+  await ready(page);
+  await command(page, "exit");
+  await page.getByRole("button", { name: "Reload" }).waitFor();
+  await Promise.all([page.waitForNavigation(), page.getByRole("button", { name: "Reload" }).click()]);
+  await page.waitForFunction(() => !!Reflect.get(globalThis, "playground")?.shell && !document.querySelector<HTMLButtonElement>("#run")?.disabled);
+  await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
+  await command(page, "echo RESTART_RECOVERED");
+  await contains(page, "RESTART_RECOVERED");
   return { engine, ok: true, sourceHead, sourceDirty, shellIdentity, builds, transcript };
 }
 async function reportFailure(page: Page, engine: string): Promise<void> {
