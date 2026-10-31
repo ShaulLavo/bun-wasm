@@ -184,6 +184,7 @@ async function unpack(state: Context, bundle: string): Promise<void> {
     mkdirSync(item.directory, { recursive: true });
     shell('zstd -dc "$1" | tar --no-same-owner -xpf - -C "$2"', join(bundle, item.name), item.directory);
     for (const repository of manifest.repositories.filter(repository => repository.archive === item.name)) restoreGit(item.directory, repository);
+    rmSync(join(bundle, item.name));
   }
   const bun = join(state.workspace, "vendor/bun");
   if (git(bun, "rev-parse", "HEAD") !== manifest.bun.head || git(bun, "rev-parse", "HEAD^{tree}") !== manifest.bun.tree) throw new Error("Restored Bun Git identity mismatch");
