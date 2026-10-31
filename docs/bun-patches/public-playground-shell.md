@@ -50,6 +50,14 @@ the first Bun child launch. The graph gate checks contributing bundle inputs
 with normalized paths, requires that lazy launcher to be reachable from the page,
 and keeps Bun execution and process-service implementations out of initial JS.
 
+Waffle 0.0.106 at `d49714f8e4fb04cfcf47eb2a5b24cfbafdfe315a` re-exports
+`CommandStdioError` from `packages/waffle/index.ts`. Its `proc/command.ts` has no
+imports or executable setup, only interfaces, types and that inert error class.
+The original startup classifier treats this exact module as data, while counting
+its bytes. A maintained syntax check rejects added imports, static initialization
+or other executable declarations. Both real app graphs must still defer the
+command runner, command stdio, supervisor, registry and browser process broker.
+
 An explicitly supplied Bash source path must already match the selected commit.
 The producer rejects a mismatch without replacing that caller-owned checkout.
 
