@@ -1,0 +1,79 @@
+import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { createContext, runInContext } from "node:vm";
+import { createScriptEvaluation } from "../src/script-evaluation.ts";
+import { productionHostEvaluation } from "../../scripts/module-compile-runtime.ts";
+
+function evaluator() {
+  const context = createContext({});
+  return createScriptEvaluation(
+    (source, filename) => runInContext(source, context, { filename }),
+    (_filename, line, column) => [line * 2, column * 2],
+  );
+}
+
+test("the real builtin loader can evaluate and cache a factory through the host natives", () => {
+  const source = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/bun_builtins.ts", import.meta.url), "utf8");
+  const factory: unknown = runInContext(new Bun.Transpiler({ target: "browser" }).transformSync(`globalThis.runtimeFactory = ${source}`, "ts"), createContext({}));
+  if (typeof factory !== "function") throw new Error("Missing runtime factory");
+  const loader: unknown = factory({
+    bunBuiltinGlobals: { Array, Error, Function, Map, Object, Proxy, RangeError, Reflect, Set, String, Symbol, TypeError, URIError },
+    native: {
+      ...evaluator(),
+      bunBuiltinNames: () => ["fixture"],
+      bunBuiltinSource: () => '(function (intrinsics) { "use strict"; return { answer: intrinsics.String(42), receiver: this }; })',
+      evalScript() { throw new Error("Builtins must use the trusted evaluator operation"); },
+    },
+  });
+  if (!loader || typeof loader !== "object" || !("require" in loader) || typeof loader.require !== "function") throw new Error("Missing builtin loader");
+  const first: unknown = loader.require("fixture");
+  expect(first).toEqual({ answer: "42", receiver: undefined });
+  expect(loader.require("fixture")).toBe(first);
+});
+
+test("builtin evaluation shares line offsets and resets stale offsets before evaluation", () => {
+  const native = evaluator();
+  const filename = "bun-builtin:fixture";
+  native.evalBuiltin("42", filename, 9);
+  expect(native.mapPosition(filename, 2, 3)).toEqual([10, 3]);
+  native.evalScript("42", filename);
+  expect(native.mapPosition(filename, 2, 3)).toEqual([4, 6]);
+  native.evalScript("42", filename, 6);
+  expect(() => native.evalBuiltin('throw new Error("builtin failure")', filename)).toThrow("builtin failure");
+  expect(native.mapPosition(filename, 2, 3)).toEqual([4, 6]);
+});
+
+test("builtin evaluation preserves the source filename on thrown errors", () => {
+  const native = evaluator();
+  try {
+    native.evalBuiltin('\nthrow new Error("builtin failure")', "bun-builtin:fixture");
+    throw new Error("Expected builtin evaluation to throw");
+  } catch (error) {
+    expect(error).toHaveProperty("stack", expect.stringContaining("bun-builtin:fixture:2"));
+  }
+});
+
+test("generic evaluation still accepts user values and builtin-looking filenames", () => {
+  const native = evaluator();
+  expect(native.evalScript({ toString: () => "40 + 2" }, "bun-builtin:user-input")).toBe(42);
+  expect(native.evalScript("42")).toBe(42);
+  expect(native.mapPosition("unseen.ts", 2, 3)).toEqual([4, 6]);
+});
+
+test("trusted builtin evaluation preserves prepared columns and filenames through the real host projection", () => {
+  const native = productionHostEvaluation((_filename, line, column) => [line * 2, column * 2]);
+  const filename = native.preparedSourceURL(6, "bun-builtin:fixture", [2, 4, 3], "builtin-combination");
+  expect(native.preparedSourceName(filename)).toBe("bun-builtin:fixture");
+  expect(native.preparedSourceOrigin(filename)).toBe("builtin-combination");
+  expect(native.correctPreparedColumn(filename, 2, 12)).toBe(9);
+  expect(() => native.evalBuiltin('1;\nthrow new Error("prepared builtin failure")', filename, 9)).toThrow("prepared builtin failure");
+  expect(native.mapPosition(filename, 2, 12)).toEqual([2, 9]);
+  const named = "bun-builtin:named";
+  native.preparedColumns.set(named, { version: 6, columns: Int32Array.of(2, 4, 3) });
+  expect(native.evalBuiltin("42", named, 9)).toBe(42);
+  expect(native.mapPosition(named, 2, 12)).toEqual([10, 9]);
+  expect(native.evalScript("42", named)).toBe(42);
+  expect(native.mapPosition(named, 2, 12)).toEqual([4, 18]);
+  native.preparedColumns.clear();
+  expect(native.mapPosition(filename, 2, 12)).toEqual([2, 9]);
+});

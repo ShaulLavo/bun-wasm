@@ -336,6 +336,7 @@ declare namespace BunWasm {
     bunBuiltinHookName(id: number): string;
     bunBuiltinErrorCode(id: number): string;
     evalScript(source: string, filename: string, firstLine?: number): (intrinsics: Record<string, unknown>) => unknown;
+    evalBuiltin(source: string, filename: string, firstLine?: number): (intrinsics: Record<string, unknown>) => unknown;
     isPromise(value: unknown): boolean;
     isProxy(value: unknown): boolean;
     isError(value: unknown): boolean;

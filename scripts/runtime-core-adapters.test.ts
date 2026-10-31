@@ -38,7 +38,7 @@ function syntaxHash(source: string) {
   return createHash("sha256").update(JSON.stringify(syntax(file))).digest("hex");
 }
 
-function withoutWasiConstants(source: string) {
+function withoutBuiltinLoaderDeltas(source: string) {
   const file = ts.createSourceFile("runtime.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
   const properties: ts.PropertyAssignment[] = [];
   function visit(node: ts.Node) {
@@ -51,7 +51,10 @@ function withoutWasiConstants(source: string) {
   if (!property) throw new Error("Missing WASI filesystem constants hook");
   expect(property.getText(file).replace(/\s/g, "")).toBe('processBindingConstants:{getfs(){returninternal.require("node_fs").fs.constants;},}');
   expect(source[property.end]).toBe(",");
-  return source.slice(0, property.pos) + source.slice(property.end + 1);
+  const builtinEvaluation = 'native.evalBuiltin(source, `bun-builtin:${name}`)';
+  expect(source.split(builtinEvaluation)).toHaveLength(2);
+  return (source.slice(0, property.pos) + source.slice(property.end + 1))
+    .replace(builtinEvaluation, 'native.evalScript(source, `bun-builtin:${name}`)');
 }
 
 function stackDescriptorRecords(source: string): { target: string; properties: string[]; nullPrototype: boolean }[] {
@@ -101,7 +104,7 @@ function defineStackWithNullPrototype(fields: PropertyDescriptor): { stack?: unk
   return target;
 }
 
-// Hashes pin the original emitted syntax; stack descriptors and the WASI constants hook have explicit deltas.
+// Hashes pin the original emitted syntax; stack descriptors, WASI constants and trusted builtin evaluation have explicit deltas.
 // The stack_trace hash also covers the call-site predicates React's stack collector calls.
 const originalTokens = {
   stack_trace: "2010256fc4e837a044bc5c90d1fc93cb6af774b7a80ad79fe4fe6d3d40a6c5aa",
@@ -148,7 +151,7 @@ test("null-prototype descriptors ignore synthetic inherited descriptor fields", 
 for (const [name, hash] of Object.entries(originalTokens)) {
   test(`stripped ${name} keeps every original executable token`, () => {
     const source = emit(name);
-    expect(syntaxHash(name === "bun_builtins" ? withoutWasiConstants(source) : source)).toBe(hash);
+    expect(syntaxHash(name === "bun_builtins" ? withoutBuiltinLoaderDeltas(source) : source)).toBe(hash);
   });
 
   test(`embedded ${name} does not grow after TypeScript erasure`, () => {
@@ -180,7 +183,7 @@ test("emitted builtin loader keeps caches, private symbols and unsupported error
       bunBuiltinSource: (id: number) => id === 1 ? undefined : String(id),
       bunBuiltinHookName: () => "js2native_wrap_missing",
       bunBuiltinErrorCode: () => "ERR_INVALID_URI",
-      evalScript(source: string) {
+      evalBuiltin(source: string) {
         evaluations++;
         if (source === "2") return (hooks: { createInternalModuleById(id: number): unknown }) => hooks.createInternalModuleById(2);
         return (hooks: Record<string, unknown>) => hooks;
