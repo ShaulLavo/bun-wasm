@@ -43,6 +43,8 @@ pub struct Module {
     /// `import * as ns` bindings and their import records, so `export { ns }`
     /// re-exports the namespace.
     star_imports: Vec<(Ref, u32)>,
+    /// Default imports are absent from Bun's non-bundling `named_imports` map.
+    default_imports: Vec<(Ref, u32)>,
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -95,6 +97,12 @@ impl Module {
                 .push((alias.to_owned(), request, "*".to_owned()));
             return;
         }
+        if let Some(&(_, record)) = self.default_imports.iter().find(|(local, _)| *local == r) {
+            let request = self.request(ast, record);
+            self.indirect
+                .push((alias.to_owned(), request, "default".to_owned()));
+            return;
+        }
         let Some(import) = ast.named_imports.get(&r) else {
             self.locals.push((alias.to_owned(), Self::name_of(ast, r)));
             return;
@@ -137,7 +145,7 @@ pub fn prepare(ast: &mut js_ast::Ast<'_>, arena: &Arena) -> Module {
     };
     let statements = ast.parts.iter().flat_map(|part| part.stmts.slice());
     for stmt in statements {
-        record_star_import(&mut module, *stmt);
+        record_import_bindings(&mut module, *stmt);
     }
     for part in 0..ast.parts.len() {
         let stmts = ast.parts[part].stmts.slice_mut();
@@ -148,10 +156,15 @@ pub fn prepare(ast: &mut js_ast::Ast<'_>, arena: &Arena) -> Module {
     module
 }
 
-fn record_star_import(module: &mut Module, stmt: Stmt) {
+fn record_import_bindings(module: &mut Module, stmt: Stmt) {
     let StmtData::SImport(st) = stmt.data else {
         return;
     };
+    if let Some(default) = st.default_name {
+        module
+            .default_imports
+            .push((default.ref_, st.import_record_index));
+    }
     if st.star_name_loc.is_empty() {
         return;
     }
@@ -399,6 +412,33 @@ mod tests {
             record.contains("return (0, __bunwasm_ns0_0.a)();"),
             "{record}"
         );
+    }
+
+    #[test]
+    fn default_import_reexport_uses_the_dependency_binding() {
+        let source = "import EventEmitter from './index.cjs';\nexport { EventEmitter };\nexport default EventEmitter;\n";
+        let record = register_one(source, "/index.mjs");
+        assert!(
+            record.contains(r#"x:[["EventEmitter",0,"default"]]"#),
+            "{record}"
+        );
+        assert!(
+            !record.contains(r#""EventEmitter":()=>EventEmitter"#),
+            "{record}"
+        );
+        assert!(record.contains("= __bunwasm_ns0_0.default;"), "{record}");
+    }
+
+    #[test]
+    fn default_import_reexports_are_order_independent_and_preserve_aliases() {
+        let source =
+            "export { value as renamed, value as default };\nimport value from './lib.mjs';\n";
+        let record = register_one(source, "/forward.mjs");
+        assert!(
+            record.contains(r#"x:[["renamed",0,"default"],["default",0,"default"]]"#),
+            "{record}"
+        );
+        assert!(record.contains("__bunwasm_m.l({});"), "{record}");
     }
 
     #[test]

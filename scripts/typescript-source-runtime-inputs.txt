@@ -66,6 +66,11 @@ tests/fixtures/crypto-secret-key/index.js
 tests/fixtures/crypto-sha1-jwk/index.js
 tests/fixtures/crypto-vectors/index.js
 tests/fixtures/data-formats/index.js
+tests/fixtures/default-import-reexport/cjs.mjs
+tests/fixtures/default-import-reexport/esm.mjs
+tests/fixtures/default-import-reexport/index.mjs
+tests/fixtures/default-import-reexport/lib.cjs
+tests/fixtures/default-import-reexport/lib.mjs
 tests/fixtures/engine-esm-imports/index.mjs
 tests/fixtures/engine-esm-imports/lib/counter.mjs
 tests/fixtures/engine-modules/node_modules/tiny-pkg/index.js
