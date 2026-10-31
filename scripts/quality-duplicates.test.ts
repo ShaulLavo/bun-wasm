@@ -28,6 +28,8 @@ test.each([
   ["empty reason", { reasons: { [first]: "", [second]: "second reason" } }, "trimmed"],
   ["whitespace-only reason", { reasons: { [first]: "   ", [second]: "second reason" } }, "trimmed"],
   ["multiline reason", { reasons: { [first]: "first\nreason", [second]: "second reason" } }, "single-line"],
+  ["Unicode line separator reason", { reasons: { [first]: "first\u2028reason", [second]: "second reason" } }, "single-line"],
+  ["Unicode paragraph separator reason", { reasons: { [first]: "first\u2029reason", [second]: "second reason" } }, "single-line"],
   ["non-string reason", { reasons: { [first]: 1, [second]: "second reason" } }, "trimmed"],
   ["orphan reason", { reasons: { [first]: "first reason", [second]: "second reason", [added]: "orphan" } }, "orphan"],
   ["wrong version", { version: 2 }, "version"],

@@ -58,7 +58,7 @@ function parseReasons(value: unknown, fingerprints: Readonly<Record<string, numb
       throw new Error(`baseline.reasons has orphan fingerprint: ${fingerprint}`);
     if (typeof reason !== "string" || reason.length === 0 || reason !== reason.trim())
       throw new Error(`baseline reason for ${fingerprint} must be a trimmed, nonempty string`);
-    if (/[\r\n]/.test(reason)) throw new Error(`baseline reason for ${fingerprint} must be single-line`);
+    if (/[\r\n\u2028\u2029]/.test(reason)) throw new Error(`baseline reason for ${fingerprint} must be single-line`);
     reasons[fingerprint] = reason;
   }
   for (const fingerprint of Object.keys(fingerprints)) {
