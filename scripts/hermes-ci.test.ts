@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsHermes, needsRust } from "./ci-changes.ts";
 import { discoverChecks } from "./test-checks.ts";
+import { captureProgramInputs, verifyProgramReceipt, type ProgramBuildReceipt } from "./guest-core-receipt.ts";
+import { artifactIdentity } from "./guest-build-receipt.ts";
+import { appendCustomSection, ENGINE_SECTION } from "../src/engine-kind.ts";
+import { quickjsPair } from "../tests/package/quickjs-plan-fixture.ts";
+import { withReceiptFixture } from "../tests/package/guest-receipt-fixture.ts";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const hermes = workflow.split("\n  hermes:\n")[1]!;
@@ -40,6 +45,47 @@ test("one blocking Hermes job consumes the existing core and sysroot without com
   expect(hermes).toContain("--node-only");
   expect(workflow).toContain("shared: ${{ steps.changes.outputs.shared }}");
   expect(workflow).toContain("\n  shared-sysroot:\n");
+});
+
+test("Hermes custody archives the compiled Bun codegen and admits it before VM work", async () => {
+  const producer = rust.indexOf("test -s vendor/bun/build/debug/codegen/build_options.rs");
+  const archive = rust.indexOf('tar -C vendor/bun -czf "$RUNNER_TEMP/hermes-inputs/bun-codegen.tar.gz"');
+  const restore = hermes.indexOf('tar -xzf "$RUNNER_TEMP/hermes-inputs/bun-codegen.tar.gz" -C vendor/bun');
+  const admit = hermes.indexOf("name: Admit the completed common core before Hermes VM work");
+  const vm = hermes.indexOf("name: Build or verify the pinned Hermes VM");
+  const side = hermes.indexOf("name: Build only the Hermes side");
+  expect(producer).toBeGreaterThan(-1);
+  expect(archive).toBeGreaterThan(producer);
+  expect(restore).toBeGreaterThan(-1);
+  expect(admit).toBeGreaterThan(restore);
+  expect(admit).toBeLessThan(vm);
+  expect(vm).toBeLessThan(side);
+  expect(hermes.match(/guest-core-receipt\.ts tag "\$RUNNER_TEMP\/hermes-inputs\/bun-core\.wasm" hermes dist\/bun-hermes\.wasm/g)).toHaveLength(1);
+
+  await withReceiptFixture(async options => {
+    const generated = join(options.repository, "vendor/bun/build/debug/codegen/build_options.rs");
+    const archiveRoot = mkdtempSync(join(tmpdir(), "hermes-core-codegen-"));
+    try {
+      const archive = join(archiveRoot, "bun-codegen.tar.gz");
+      const producerResult = spawnSync("tar", ["-C", join(options.repository, "vendor/bun"), "-czf", archive, "build/debug/codegen"], { encoding: "utf8" });
+      expect(producerResult.status, producerResult.stderr).toBe(0);
+      const origin = await captureProgramInputs(options, "core", { features: ["engine-split", "bun-transpiler", "bun-build"] });
+      expect(JSON.stringify(origin.content)).toContain("build/debug/codegen/build_options.rs");
+      const tagged = quickjsPair().core;
+      const tagBytes = appendCustomSection(new Uint8Array(), ENGINE_SECTION, new TextEncoder().encode("quickjs")).byteLength;
+      const core = tagged.subarray(0, tagged.length - tagBytes);
+      const receipt = { schema: 1, inputs: origin, artifact: artifactIdentity(core) } satisfies ProgramBuildReceipt;
+      writeFileSync(generated, "consumer regeneration\n");
+      const changed = await captureProgramInputs(options, "core", { features: ["engine-split", "bun-transpiler", "bun-build"] });
+      expect(() => verifyProgramReceipt(core, receipt, changed)).toThrow(/compatibility mismatch/);
+      const restoreResult = spawnSync("tar", ["-xzf", archive, "-C", join(options.repository, "vendor/bun")], { encoding: "utf8" });
+      expect(restoreResult.status, restoreResult.stderr).toBe(0);
+      const restored = await captureProgramInputs(options, "core", { features: ["engine-split", "bun-transpiler", "bun-build"] });
+      expect(verifyProgramReceipt(core, receipt, restored)).toEqual(receipt);
+    } finally {
+      rmSync(archiveRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 test("Hermes VM and side caches follow the compiler, sysroot, library and shared driver inputs", () => {

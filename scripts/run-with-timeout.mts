@@ -1,16 +1,23 @@
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { constants } from "node:os";
+import { join } from "node:path";
 import { enableSubreaper } from "./linux-subreaper.mts";
 import { setTimeout as delay } from "node:timers/promises";
 
 await enableSubreaper();
 
 type ProcessIdentity = { pid: number; parent: number; group: number; session: number; birth: string; state: string };
-const [seconds, command, ...args] = process.argv.slice(2);
+const inputs = process.argv.slice(2);
+const state = inputs[0] === "--state" ? inputs[1] : undefined;
+if (inputs[0] === "--state") {
+  if (!state || process.platform !== "linux") throw new Error("Background state requires a directory and Linux process identity");
+  inputs.splice(0, 2);
+}
+const [seconds, command, ...args] = inputs;
 const timeout = Number(seconds) * 1000;
 if (!command || !Number.isFinite(timeout) || timeout <= 0) {
-  throw new Error("Usage: run-with-timeout.mts <seconds> <command> [args...]");
+  throw new Error("Usage: run-with-timeout.mts [--state <directory>] <seconds> <command> [args...]");
 }
 const owned = new Map<number, ProcessIdentity>();
 let root: ProcessIdentity | undefined;
@@ -103,13 +110,25 @@ const handlers = ([ ["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129] ] as cons
 });
 let tracker: ReturnType<typeof setInterval> | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
-try {
+function receipt(name: string, contents: string) {
+  if (!state) return;
+  const path = join(state, name);
+  writeFileSync(`${path}.tmp`, contents);
+  renameSync(`${path}.tmp`, path);
+}
+async function execute(command: string): Promise<number> {
+  if (state && existsSync(join(state, "stop"))) return 143;
   const child = spawn(command, args, { stdio: "inherit", detached: true });
   if (child.pid !== undefined) {
     root = snapshot().find(row => row.pid === child.pid && row.parent === process.pid);
     capture();
   }
-  tracker = setInterval(() => capture(), 50);
+  tracker = setInterval(() => {
+    capture();
+    if (!state || !existsSync(join(state, "stop"))) return;
+    interrupted ??= 143;
+    void stop();
+  }, 50);
   timer = setTimeout(() => {
     timedOut = true;
     diagnoseTimeout();
@@ -121,10 +140,17 @@ try {
   });
   clearTimeout(timer);
   await stop();
-  process.exitCode = timedOut ? 124 : interrupted ?? status;
+  return timedOut ? 124 : interrupted ?? status;
+}
+try {
+  if (state) receipt("identity.json", JSON.stringify(linuxProcess(process.pid)));
+  process.exitCode = await execute(command);
 } finally {
   clearTimeout(timer);
   clearInterval(tracker);
-  try { await stop(); }
+  try {
+    await stop();
+    receipt("status", `${process.exitCode ?? 1}\n`);
+  }
   finally { for (const { signal, handler } of handlers) process.off(signal, handler); }
 }

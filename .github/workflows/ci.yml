@@ -1012,11 +1012,7 @@ jobs:
           JOBS: "2"
           CAGE: ""
         run: |
-          state="$RUNNER_TEMP/jsc-guest"
-          mkdir "$state"
-          setsid nice -n 19 bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; echo "$status" > "$1/status"' \
-            jsc-guest "$state" > "$state/build.log" 2>&1 < /dev/null &
-          echo "$!" > "$state/pid"
+          bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; exit "$status"'
       - name: Build native fixtures after the cache checkpoint
         run: |
           source env.sh
@@ -1032,6 +1028,8 @@ jobs:
           source env.sh
           mkdir -p "$RUNNER_TEMP/hermes-inputs"
           cp "$CARGO_TARGET_DIR/split-common/bun-core.wasm" "$CARGO_TARGET_DIR/split-common/bun-core.wasm.core.json" "$CARGO_TARGET_DIR/release/bun-wasm" "$RUNNER_TEMP/hermes-inputs/"
+          test -s vendor/bun/build/debug/codegen/build_options.rs
+          tar -C vendor/bun -czf "$RUNNER_TEMP/hermes-inputs/bun-codegen.tar.gz" build/debug/codegen
           tar -C "$WASM_TOOLS" -czf "$RUNNER_TEMP/hermes-inputs/sysroot.tar.gz" bun-wasm-sysroot-patched
           mkdir -p "$CARGO_HOME/registry" "$CARGO_HOME/git"
           tar -C "$CARGO_HOME" -czf "$RUNNER_TEMP/hermes-inputs/cargo-sources.tar.gz" registry git
@@ -1070,10 +1068,11 @@ jobs:
       - name: Build the JSC Cargo guest
         if: needs.quality.outputs.jsc == 'true'
         run: |
-          state="$RUNNER_TEMP/jsc-guest"
-          while [[ ! -s "$state/status" ]] && kill -0 "$(cat "$state/pid")" 2>/dev/null; do sleep 2; done
-          cat "$state/build.log"
-          test "$(cat "$state/status")" = 0
+          bun scripts/ci-jsc-worker.ts wait "$RUNNER_TEMP/jsc-guest"
+      - name: Stop the JSC Cargo guest build
+        if: ${{ always() && needs.quality.outputs.jsc == 'true' }}
+        run: |
+          bun scripts/ci-jsc-worker.ts stop "$RUNNER_TEMP/jsc-guest"
       - name: Save the JSC Cargo cache once per input revision
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.jsc == 'true' && steps.jsc-cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -1642,6 +1641,7 @@ jobs:
         run: |
           mkdir -p "$WASM_TOOLS"
           tar -xzf "$RUNNER_TEMP/hermes-inputs/sysroot.tar.gz" -C "$WASM_TOOLS"
+          tar -xzf "$RUNNER_TEMP/hermes-inputs/bun-codegen.tar.gz" -C vendor/bun
           mkdir -p "$CARGO_HOME"
           tar -xzf "$RUNNER_TEMP/hermes-inputs/cargo-sources.tar.gz" -C "$CARGO_HOME"
           chmod +x "$RUNNER_TEMP/hermes-inputs/bun-wasm"
@@ -1657,6 +1657,14 @@ jobs:
         with:
           path: ${{ env.HERMES_BUILD_DIR }}
           key: hermes-vm-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.hermes-sysroot-inputs.outputs.hash }}-${{ hashFiles('hermes/**', 'crates/bunwasm-hermes/**', 'scripts/build-wasi-sysroot.ts', 'scripts/waffle-release-inputs.*', 'env.sh', 'bun.lock') }}
+      - name: Admit the completed common core before Hermes VM work
+        run: |
+          source env.sh
+          guest_environment=$(bun scripts/guest-build-receipt.ts environment)
+          eval "$guest_environment"
+          unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS
+          mkdir -p dist
+          bun scripts/guest-core-receipt.ts tag "$RUNNER_TEMP/hermes-inputs/bun-core.wasm" hermes dist/bun-hermes.wasm
       - name: Build or verify the pinned Hermes VM
         run: |
           source env.sh
@@ -1679,7 +1687,7 @@ jobs:
           key: hermes-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.hermes-sysroot-inputs.outputs.hash }}-${{ hashFiles('Cargo.*', '.cargo/**', 'rust-toolchain.toml', 'hermes/**', 'crates/**', 'scripts/src/engine-*', 'scripts/build-engine-hermes.sh', 'scripts/guest-*.ts', 'scripts/build-wasi-sysroot.ts', 'scripts/waffle-release-inputs.*', 'env.sh', 'bun.lock') }}
           restore-keys: |
             hermes-side-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.host-tools.outputs.hash }}-${{ steps.hermes-sysroot-inputs.outputs.hash }}-
-      - name: Build only the Hermes side and admit the existing core
+      - name: Build only the Hermes side
         run: |
           source env.sh
           guest_environment=$(bun scripts/guest-build-receipt.ts environment)
@@ -1688,8 +1696,6 @@ jobs:
           inputs=$(mktemp "$RUNNER_TEMP/hermes-guest-inputs-XXXXXX")
           trap 'rm -f -- "$inputs"' EXIT
           bun scripts/guest-build-receipt.ts inputs hermes > "$inputs"
-          mkdir -p dist
-          bun scripts/guest-core-receipt.ts tag "$RUNNER_TEMP/hermes-inputs/bun-core.wasm" hermes dist/bun-hermes.wasm
           bash scripts/build-engine-hermes.sh
           cp "$HERMES_ENGINE_BUILD_DIR/engine.wasm" dist/hermes-engine.wasm
           cp "$HERMES_ENGINE_BUILD_DIR/engine.wasm.engine.json" dist/hermes-engine.wasm.engine.json
