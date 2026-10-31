@@ -204,3 +204,54 @@ test("NativeHTTPExchange rejects a deliberately closed gzip chunked 500 without 
   expect(direct.errors[0]).toMatch(/mid-response|closed/i);
   await expectClosed(target);
 });
+
+function throwingEndExchange() {
+  const events: string[] = [];
+  const sendError = new Error("Preview owner queue limit");
+  let output: (message: PreviewHostOutput) => void = () => { throw new Error("Exchange has not opened"); };
+  const transport: NativeExchangeTransport = {
+    open(_open, onOutput) { output = onOutput; return "exchange"; },
+    input(_id, message) {
+      events.push(message.type);
+      if (message.type === "end") throw sendError;
+    },
+    retire() { events.push("retire"); },
+    connected() { return true; },
+  };
+  const request = new Request("http://127.0.0.1:3137/");
+  const pending = new NativeHTTPExchange(request, transport).start({
+    type: "http", authorization: { owner: "owner", port: 3137, origin: request.url, capability: "capability" },
+    url: request.url, method: request.method, headers: [], body: null,
+  });
+  return { events, sendError, pending, output: (message: PreviewHostOutput) => output(message) };
+}
+
+test("cancellation retires exactly once when the end-send fails", async () => {
+  const control = throwingEndExchange();
+  control.output({ type: "head", status: 500, statusText: "Internal Server Error", headers: [] });
+  const response = await control.pending;
+  await expect(response.body!.cancel()).rejects.toBe(control.sendError);
+  expect(control.events).toEqual(["end", "retire"]);
+  control.output({ type: "end" });
+  expect(control.events).toEqual(["end", "retire"]);
+});
+
+test("response completion settles its reader when the end-send fails", async () => {
+  const control = throwingEndExchange();
+  control.output({ type: "head", status: 500, statusText: "Internal Server Error", headers: [] });
+  const response = await control.pending;
+  const reader = response.body!.getReader();
+  const pendingRead = reader.read();
+  expect(() => control.output({ type: "end" })).toThrow(control.sendError);
+  expect(control.events).toEqual(["end", "retire"]);
+  expect(await pendingRead).toEqual({ done: true, value: undefined });
+  reader.releaseLock();
+});
+
+test("a pre-header rejection settles its response when the end-send fails", async () => {
+  const control = throwingEndExchange();
+  const rejection = control.pending.catch((error: unknown) => error);
+  expect(() => control.output({ type: "error", message: "upstream failed" })).toThrow(control.sendError);
+  expect(control.events).toEqual(["end", "retire"]);
+  expect(await rejection).toEqual(new Error("Preview dispatcher rejected request"));
+});
