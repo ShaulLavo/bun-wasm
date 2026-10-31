@@ -93,11 +93,36 @@ the startup shared buffer and transferred `MessagePort` with `useAtomics=false`,
 async test, thread-pool test, and intentional rejection all pass through the maintained app matrix.
 
 
+### Node WASI descriptor delegation
+
+`web/scripts/node-process.ts` uses the public `installNodeWasiDescriptors` and
+`nodeWasiDescriptor` exports from `waffle/proc/node-wasi`. The pinned package is
+Waffle 0.0.105 at `a03b2a51f8a5eb40d1b93820f0f129867110b6c2`, with upstream
+source in `packages/waffle/proc/node-wasi.ts`. Bun keeps no local descriptor
+translation or polling implementation.
+
+The remaining close adapter is original Bun startup-cleanup policy. Waffle
+captures the supplied preview1 `fd_close` for native-handle release and replaces
+the guest-facing import with its descriptor-table close. Bun decorates that input
+to ignore only `ERR_WASI_NOT_STARTED`. Before `wasi.start` binds memory, Node WASI
+still owns its preopens, and Bun must release its process host after startup
+failure. Other thrown values propagate unchanged. Waffle retains ownership of
+reference counts, native releases, descriptor allocation, rights and polling.
+Bun still owns native stdio, worker control pipes and its no-watch `runtime_fs`
+answers. No Waffle or Node implementation is copied or patched.
+
+The real Node fixture `web/tests/fixtures/node-descriptors.ts` covers unstarted
+preopen cleanup, close error identity, exactly-once release, rights and ordinary
+descriptor operations with pipe and file stdio. The existing `node-runtime-fs`
+fixture also disposes a host before WASI starts.
+
+
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
 | [`waffle/proc/`, browser and Bun process adapters](#browser-process-service) | Host feature | Original process supervisor, executable registry including nodejs, jobs, registered signal dispositions including Node/Bun's ignored SIGPIPE default, immutable final-kind query and byte-sized exit statuses. |
+| [`web/scripts/node-process.ts`](#node-wasi-descriptor-delegation) | Host feature | Original Bun startup-close policy over the public pinned Waffle descriptor adapter; no copied generic translation or polling. |
 | [`web/src/playground/playground.ts`, `web/src/runner.ts`, shared-object root activation](#browser-process-service) | Host feature | Original page-owned runtime installation and per-root shared-object route activation, native connect acceptance, late-port rejection, and teardown; verified by the real browser Vitest worker pool. |
 
 [Ledger scope and pinned revisions](scope.md).

@@ -7,6 +7,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { WASI } from "node:wasi";
 import { Worker } from "node:worker_threads";
 import { OpenDescription } from "waffle/core/descriptors";
+import { nodeWasiDescriptor } from "waffle/proc/node-wasi";
 import { createWorkerProcessTransport, type WorkerProcessMessage } from "waffle/proc/worker-client";
 import type { SpawnRequest } from "waffle/proc/types";
 import { WorkerPipeBroker } from "waffle/proc/worker-pipes";
@@ -23,7 +24,8 @@ const all = (1n << 29n) - 1n;
 const owned: ReturnType<typeof createNodeProcess>[] = [];
 const pipeBroker = new WorkerPipeBroker();
 const scratch = process.argv[2] ?? mkdtempSync(join(process.env.BUN_WASM_SCRATCH_ROOT ?? tmpdir(), "bun-wasm-node-fds-"));
-function setup(preopenCount = 0, transport = createWorkerProcessTransport(), env: Record<string, string> = {}) {
+function setup(preopenCount = 0, transport = createWorkerProcessTransport(), env: Record<string, string> = {},
+  options: { start?: boolean; beforeInstall?(imports: NodeWasiImports): void } = {}) {
   const messages: WorkerProcessMessage[] = [];
   const host = createNodeProcess({ transport, preopenCount, env,
     postMessage(message) {
@@ -35,11 +37,12 @@ function setup(preopenCount = 0, transport = createWorkerProcessTransport(), env
   const preopens = Object.fromEntries(Array.from({ length: preopenCount }, (_, i) => [`/mount-${i}`, scratch]));
   const wasi = new WASI({ version: "preview1", preopens, env: host.env, args: [], returnOnExit: true });
   const imports = wasi.getImportObject() as NodeWasiImports;
+  options.beforeInstall?.(imports);
   const nativeStat = { fd_fdstat_get: imports.wasi_snapshot_preview1.fd_fdstat_get!, fd_filestat_get: imports.wasi_snapshot_preview1.fd_filestat_get! };
   let instance: WebAssembly.Instance;
   const { proc } = host.install(imports, () => instance);
   instance = new WebAssembly.Instance(guest, imports);
-  wasi.start(instance as Parameters<typeof wasi.start>[0]);
+  if (options.start !== false) wasi.start(instance as Parameters<typeof wasi.start>[0]);
   const memory = instance.exports.memory as WebAssembly.Memory;
   const view = () => new DataView(memory.buffer);
   const bytes = () => new Uint8Array(memory.buffer);
@@ -104,8 +107,58 @@ function checkStdioMetadata(f: ReturnType<typeof setup>, guest: number, native: 
     if (name === "fd_fdstat_get") assert.equal(f.view().getBigUint64(264, true), f.host.descriptors.get(guest)!.rightsBase);
   }
 }
+function failNativeClose(imports: NodeWasiImports, closed: number[], failure: unknown) {
+  const close = imports.wasi_snapshot_preview1.fd_close!;
+  imports.wasi_snapshot_preview1.fd_close = fd => {
+    closed.push(fd!);
+    const result = close(fd!);
+    if (fd === 3) throw failure;
+    return result;
+  };
+}
+function checkReleaseError(operation: "close" | "dispose", failure: unknown) {
+  const closed: number[] = [];
+  const host = setup(2, createWorkerProcessTransport(), {}, {
+    beforeInstall: imports => failNativeClose(imports, closed, failure),
+  });
+  const run = () => operation === "close" ? host.call("fd_close", 3) : host.host.dispose();
+  assert.throws(run, (error: unknown) => {
+    if (operation === "close") assert.equal(error, failure);
+    else { assert.ok(error instanceof AggregateError); assert.deepEqual(error.errors, [failure]); }
+    return true;
+  });
+  assert.equal(host.host.descriptors.get(3), undefined);
+  assert.doesNotThrow(() => host.host.dispose());
+  assert.deepEqual(closed, [3, 4], "each native handle is closed once, even after an error");
+}
+function checkReleasePolicy() {
+  const early = setup(2, createWorkerProcessTransport(), {}, { start: false });
+  const descriptions = [3, 4].map(fd => early.host.descriptors.get(fd)!.description);
+  assert.throws(() => early.nativeStat.fd_fdstat_get(3, 128), { code: "ERR_WASI_NOT_STARTED" });
+  assert.doesNotThrow(() => early.host.dispose(), "startup failure before wasi.start still cleans up");
+  for (const [index, description] of descriptions.entries()) {
+    assert.equal(description.references, 0);
+    assert.equal(early.host.descriptors.get(index + 3), undefined);
+  }
+  assert.doesNotThrow(() => early.host.dispose(), "startup cleanup is idempotent");
+
+  const failures = [Object.assign(new Error("native close failure"), { code: "EIO" }), new Error("no errno"), "non-Error close failure"];
+  for (const operation of ["close", "dispose"] as const) {
+    for (const failure of failures) checkReleaseError(operation, failure);
+  }
+}
 try {
+  checkReleasePolicy();
   const stdio = setup();
+  assert.equal(stdio.call("fd_read", 1, 192, 1, 200), 76, "stdout has no read right");
+  const [reduced, writer] = stdio.pipe();
+  assert.equal(stdio.call("fd_fdstat_set_rights", reduced, 0n, 0n), 0);
+  assert.equal(stdio.call("fd_read", reduced, 192, 1, 200), 76);
+  assert.equal(stdio.call("fd_fdstat_set_rights", reduced, 2n, 0n), 76, "rights cannot grow");
+  assert.equal(stdio.call("fd_fdstat_set_flags", writer, 0), 0);
+  assert.equal(stdio.call("fd_fdstat_set_flags", writer, 1), 58);
+  assert.equal(stdio.call("fd_seek", writer, 0n, 0, 160), 70);
+  assert.equal(stdio.poll([{ type: 1, fd: reduced }]).events[0]!.error, 76);
   for (const fd of [1, 2, 0]) checkStdioMetadata(stdio, fd, fd);
   const duplicate = stdio.proc.dup!(1);
   assert.ok(duplicate > 2);
@@ -150,6 +203,7 @@ try {
     const openedResource = child.host.descriptors.get(opened)!.resource;
     assert.ok("nodeWasiFd" in openedResource);
     assert.equal(openedResource.nodeWasiFd, controls.input);
+    assert.equal(nodeWasiDescriptor(child.host.descriptors.get(opened)), controls.input);
     assert.equal(fileContents(child, opened), "file-data");
     assert.equal(child.call("fd_fdstat_get", controls.input, 128), 0);
     assert.equal(child.view().getUint8(128), 6);
@@ -265,7 +319,11 @@ try {
   parent.host.descriptors.inherit(91, { description: unsupported, resource: unsupported.resource, rightsBase: all, rightsInheriting: 0n });
   assert.equal(parent.spawn(fixture.request), -8);
   assert.equal(parent.messages.filter(message => message.operation === "spawn").length, 1);
-  console.log("Node descriptor translation, dynamic controls, churn, renumber, isolation and shared BADF checks passed");
+  const success = encoder.encode("Node descriptor translation, startup cleanup, close errors, rights, dynamic controls, churn, renumber, isolation and shared BADF checks passed\n");
+  stdio.bytes().set(success, 4096);
+  stdio.view().setUint32(192, 4096, true); stdio.view().setUint32(196, success.length, true);
+  assert.equal(stdio.call("fd_write", 1, 192, 1, 200), 0, "native stdio writes through preview1");
+  assert.equal(stdio.view().getUint32(200, true), success.length);
 } finally {
   try { for (const host of owned.toReversed()) host.dispose(); }
   finally { pipeBroker.dispose(); rmSync(scratch, { recursive: true, force: true }); }
