@@ -197,7 +197,8 @@ pub fn fetch(meta: &[u8], body: &[u8]) -> i32 {
 fn read_sized(slot_id: Slot, handle: i32) -> Result<Vec<u8>, i32> {
     let mut buf = vec![0u8; 1024];
     loop {
-        let n = call(slot_id, [handle, ptr_mut(&mut buf), buf.len() as i32, 0]).ok_or(UNSUPPORTED)?;
+        let n =
+            call(slot_id, [handle, ptr_mut(&mut buf), buf.len() as i32, 0]).ok_or(UNSUPPORTED)?;
         if n < 0 {
             return Err(n);
         }
