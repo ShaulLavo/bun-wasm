@@ -12,8 +12,11 @@ function fixture(engine: "jsc" | "quickjs") {
   const put = (base: number, index: number, value: bigint) => view.setBigUint64(base + index * 8, value, true);
   for (let index = 0; index < 24; index++) put(256, index, 0xffffffffffffffffn);
   put(128, 0, 1n); put(128, 1, 80n); put(128, 2, 10000n); put(128, 3, 20000n); put(128, 5, 0n);
-  put(256, 0, 1n); put(256, 1, engine === "jsc" ? 192n : 96n); put(256, 2, 1n);
+  put(256, 0, 1n); put(256, 1, engine === "jsc" ? 192n : 128n); put(256, 2, 1n);
   put(256, engine === "jsc" ? 21 : 9, 0n);
+  if (engine === "quickjs") {
+    put(256, 12, 0n); put(256, 13, 5000n); put(256, 14, 10000n); put(256, 15, 6000n);
+  }
   let refreshes = 0;
   let trap = false;
   const core = { exports: { memory, bun_memory_telemetry: () => 128 } };
@@ -80,10 +83,15 @@ test("a refresh trap disables all subsequent refreshes and cached reading surviv
 test("QuickJS backing stores, first failure and unknown values retain their separate meanings", () => {
   const f = fixture("quickjs");
   f.put(256, 3, 6000n); f.put(256, 5, 2048n); f.put(256, 6, 2n); f.put(256, 11, 1n);
+  f.put(256, 12, 3n); f.put(256, 13, 5000n); f.put(256, 14, 10000n); f.put(256, 15, 6000n);
   const value = f.reader.sample(true);
   expect(value.arrayBufferBytes).toBe(2048);
   expect(value.engineCounters.mallocBytes).toBe(6000);
   expect(value.engineCounters.arrayBufferCount).toBe(2);
+  expect(value.engineCounters.automaticGcCount).toBe(3);
+  expect(value.engineCounters.mallocBytesAfterAutomaticGc).toBe(5000);
+  expect(value.engineCounters.mallocGcThreshold).toBe(10000);
+  expect(value.engineCounters.currentMallocBytes).toBe(6000);
   expect(value.wasmCapacityBytes).toBe(65536);
   expect(value.failedAllocation).toBeNull();
 });

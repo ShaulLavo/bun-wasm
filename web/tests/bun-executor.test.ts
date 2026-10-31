@@ -684,3 +684,23 @@ for (const engine of ["quickjs", "jsc"] as const) test(`${engine} initializer fa
     connection.client.port.close(); connection.server.port.close();
   }
 });
+
+test("each armed JSC instance gets a fresh allocation-boundary generation; others keep their environment", () => {
+  const connection = createFilesystemConnection();
+  const runtimeProcess = createWorkerProcessTransport({ pid: 1, job: 1 });
+  const inherited = { BUN_WASM_JSC_ALLOCATION_BOUNDARY: "1", BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7" };
+  const request = (engine: RunRequest["engine"], env: Record<string, string>): RunRequest => ({ engine, module: guest(1), args: ["bun"], env,
+    filesystem: connection.client, runtimeProcess, trace: false, net: null, moduleCache: null });
+  try {
+    const env = (req: RunRequest) => createBunExecutor(req).env?.(req);
+    const generations = Array.from({ length: 64 }, () => env(request("jsc", inherited))?.BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION);
+    for (const generation of generations) {
+      expect(generation).toMatch(/^[1-9][0-9]*$/);
+      expect(Number.isSafeInteger(Number(generation))).toBe(true);
+    }
+    expect(generations).not.toContain("7");
+    expect(new Set(generations).size).toBe(generations.length);
+    expect(env(request("quickjs", inherited))).toEqual(inherited);
+    expect(env(request("jsc", { BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7" }))).toEqual({ BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: "7" });
+  } finally { connection.client.port.close(); connection.server.port.close(); }
+});

@@ -47,6 +47,37 @@ pub extern "C" fn jsc_memory_telemetry_refresh() -> *const BunjscMemoryTelemetry
     jsc_memory_telemetry()
 }
 
+/// Returns the cached allocation-boundary record only. Safe after a failed allocation or trap.
+#[unsafe(no_mangle)]
+pub extern "C" fn jsc_allocation_boundary() -> *const BunjscAllocationBoundary {
+    unsafe { bunjsc_allocation_boundary() }
+}
+
+/// `BUN_WASM_JSC_ALLOCATION_BOUNDARY=1` arms the diagnostic in this process's VM before any program
+/// code runs, under the host's per-instance `BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION`. The
+/// process stops when the generation is missing or the control allocation is not acknowledged.
+fn qualify_allocation_boundary(context: JSContextRef) {
+    let requested = std::env::var_os("BUN_WASM_JSC_ALLOCATION_BOUNDARY");
+    if requested.is_none_or(|value| value != "1") {
+        return;
+    }
+    // Zero is never a generation: the C++ arm rejects it as absent.
+    let generation = std::env::var("BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION")
+        .ok()
+        .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    // SAFETY: the context was created by bunjsc_create_context and its API lock is held.
+    let state = unsafe { bunjsc_allocation_boundary_qualify(context, generation) };
+    if state == BUNJSC_BOUNDARY_SUBJECT_ARMED {
+        return;
+    }
+    let rejection = unsafe { (*jsc_allocation_boundary()).rejection };
+    panic!(
+        "JSC allocation boundary control not acknowledged: state {state}, rejection {rejection}"
+    );
+}
+
 fn memory_counter(bytes: u64) -> Val {
     if bytes == u64::MAX {
         return Val::Null;
@@ -470,6 +501,7 @@ impl Engine for Jsc {
             // adapter enables polling only at saved interpreter trap points.
             unsafe { bunjsc_set_interrupt_handler(c, true) };
         }
+        qualify_allocation_boundary(c);
         #[cfg(test)]
         install_regression_natives(&Jsc);
         Jsc

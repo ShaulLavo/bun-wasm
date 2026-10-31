@@ -69,6 +69,7 @@
     "web/src/tool-command.ts",
     "web/src/bun-executor.ts",
     "web/src/memory-telemetry.ts",
+    "web/src/jsc-allocation-boundary.ts",
     "web/src/memory-channel.ts"
   ],
   "scripts": {
