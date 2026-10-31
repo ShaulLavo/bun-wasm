@@ -7,15 +7,50 @@ import { runStorageTests, storageTests } from "waffle/testing/storage-browser";
 import { runOpfsStorageTests, opfsStorageTests } from "waffle/testing/opfs-storage-browser";
 
 let backend: PersistentBackend | undefined;
-let reads = 0, readBytes = 0, commits = 0, nativePayloadRequests = 0;
-// Count real readonly payload operations as well as the storage adapter calls: an eager
-// getAll()/cursor inside load() must not be able to masquerade as an index-only open.
+let reads = 0, readBytes = 0, commits = 0;
+let nativeDataRequests = 0, nativeMetadataRecords = 0, nativePayloadRequests = 0, nativePayloadBytes = 0;
+function byteLength(value: unknown): number {
+  if (value instanceof Uint8Array) return value.byteLength;
+  if (!value || typeof value !== "object" || !("bytes" in value)) return 0;
+  const bytes = value.bytes;
+  return bytes instanceof Uint8Array ? bytes.byteLength : 0;
+}
+function observeNativeRecord(value: unknown): void {
+  const bytes = byteLength(value);
+  if (bytes > 0) {
+    nativePayloadRequests++;
+    nativePayloadBytes += bytes;
+    return;
+  }
+  if (value !== undefined && value !== null) nativeMetadataRecords++;
+}
+function observeNativeResult(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const record of value) observeNativeRecord(record);
+    return;
+  }
+  if (value && typeof value === "object" && "value" in value && "key" in value) {
+    observeNativeRecord(value.value);
+    return;
+  }
+  observeNativeRecord(value);
+}
+function observeNativeRequest(request: IDBRequest<unknown>): void {
+  request.addEventListener("success", () => observeNativeResult(request.result), { once: true });
+}
+// Count all readonly data-store requests, then classify returned records by their bytes.
+// The key shape is not a safe payload discriminator: byte-bearing records must stay visible
+// even when a storage format gives them a string key.
 for (const method of ["get", "getAll", "openCursor"] as const) {
   const original = IDBObjectStore.prototype[method];
   Object.defineProperty(IDBObjectStore.prototype, method, { value: new Proxy(original, {
     apply(target, store: IDBObjectStore, args) {
-      if (store.name === "data" && store.transaction.mode === "readonly") nativePayloadRequests++;
-      return Reflect.apply(target, store, args);
+      const request = Reflect.apply(target, store, args) as IDBRequest<unknown>;
+      if (store.name === "data" && store.transaction.mode === "readonly") {
+        nativeDataRequests++;
+        observeNativeRequest(request);
+      }
+      return request;
     },
   }) });
 }
@@ -95,7 +130,7 @@ if (typeof FileSystemDirectoryHandle !== "undefined") {
     return timedNativeAsync(`${this.name}.removeEntry`, () => removeEntry.call(this, name, options));
   };
 }
-function counters() { return { reads, readBytes, nativePayloadRequests, activeHandles, peakHandles, openedHandles }; }
+function counters() { return { reads, readBytes, nativeDataRequests, nativeMetadataRecords, nativePayloadRequests, nativePayloadBytes, activeHandles, peakHandles, openedHandles }; }
 // Observe the real browser transaction boundary, after checksumming/serialization, rather
 // than adding production test hooks or merely closing before persistence starts.
 const transaction = IDBDatabase.prototype.transaction;
@@ -170,7 +205,7 @@ const commands: Record<string, (args: any) => Promise<unknown>> = {
   },
   async open({ name, storage: backendName = "indexeddb" }: { name: string; storage?: "indexeddb" | "opfs" }) {
     if (backend) await backend.close();
-    reads = 0; readBytes = 0; commits = 0; nativePayloadRequests = 0; announceCommit = false; crashBoundary = undefined;
+    reads = 0; readBytes = 0; commits = 0; nativeDataRequests = 0; nativeMetadataRecords = 0; nativePayloadRequests = 0; nativePayloadBytes = 0; announceCommit = false; crashBoundary = undefined;
     storageName = backendName; peakHandles = activeHandles; openedHandles = 0; payloadFlushes = 0; snapshotFlushes = 0; nativeTimings = {}; persistBatches = [];
     const start = performance.now();
     const storage = backendName === "opfs" ? await OpfsStorage.open(name) : await IndexedDBStorage.open(name);
@@ -210,6 +245,62 @@ const commands: Record<string, (args: any) => Promise<unknown>> = {
     await backend!.flush();
   },
   inspectInterrupted: snapshotInterrupted,
+  async stringKeyPayloadControl() {
+    const before = counters();
+    const name = `bunwasm-payload-accounting-${crypto.randomUUID()}`;
+    const opened = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(name, 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("data");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error ?? new Error("payload accounting database open failed"));
+    });
+    try {
+      const write = opened.transaction("data", "readwrite");
+      const written = new Promise<void>((resolve, reject) => {
+        write.oncomplete = () => resolve();
+        write.onabort = () => reject(write.error ?? new Error("payload accounting write failed"));
+      });
+      write.objectStore("data").put({ bytes: new Uint8Array([1, 2, 3]) }, "string-key");
+      await written;
+      const read = opened.transaction("data", "readonly").objectStore("data").get("string-key");
+      const value = await new Promise<unknown>((resolve, reject) => {
+        read.onsuccess = () => resolve(read.result);
+        read.onerror = () => reject(read.error ?? new Error("payload accounting read failed"));
+      });
+      if (byteLength(value) !== 3) throw new Error("string-key payload control returned wrong bytes");
+      const after = counters();
+      return {
+        before,
+        after,
+        delta: {
+          nativeDataRequests: after.nativeDataRequests - before.nativeDataRequests,
+          nativeMetadataRecords: after.nativeMetadataRecords - before.nativeMetadataRecords,
+          nativePayloadRequests: after.nativePayloadRequests - before.nativePayloadRequests,
+          nativePayloadBytes: after.nativePayloadBytes - before.nativePayloadBytes,
+        },
+      };
+    } finally {
+      opened.close();
+      await new Promise<void>((resolve, reject) => {
+        const request = indexedDB.deleteDatabase(name);
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error ?? new Error("payload accounting cleanup failed"));
+      });
+    }
+  },
+  async seedChunkedPayload() {
+    const size = 3 * 64 * 1024 + 17;
+    const data = payload(size, 0);
+    await write("/chunked.bin", data);
+    await backend!.flush();
+    return { path: "/chunked.bin", bytes: data.length };
+  },
+  async readChunkedPayload() {
+    const expected = 3 * 64 * 1024 + 17;
+    const data: Uint8Array = await execute("readFile", ["/chunked.bin"]);
+    if (!valid(data, 0, expected)) throw new Error("chunked payload integrity failure");
+    return { bytes: data.length, ...counters() };
+  },
   async createCorpus() {
     const start = performance.now();
     let bytes = 0, payloadPrepareMs = 0, checkpointMs = 0;

@@ -41,7 +41,7 @@ async function call(page: Page, method: string, ...args: unknown[]): Promise<any
 async function direct(page: Page, command: string, args?: unknown): Promise<any> { return call(page, "direct", command, args); }
 try {
   const checkPersistenceCase = async () => {
-    scratch = await mkdtemp(resolve(import.meta.dir, "../node_modules/.persistence-browser-"));
+    scratch = await mkdtemp(join(process.env.PERSISTENCE_SCRATCH_ROOT ?? "/work/tmp", "bun-wasm-persistence-"));
     const out = join(scratch!, "dist"), main = join(scratch!, "main.ts");
     await Bun.write(main, `import ${JSON.stringify(resolve(import.meta.dir, "persistence-browser-main.ts"))};`);
     const entries = [main, resolve(import.meta.dir, "../src/fs-worker.ts")].concat(pageOnly ? [] : [resolve(import.meta.dir, "persistence-browser-worker.ts")]);
@@ -69,7 +69,46 @@ try {
         const databases = [prefix];
         const row: any = { browser: name, version: browser.version(), reload: false, checks: [] };
         report.browsers.push(row);
+        const checkPayloadAccounting = async () => {
+          assert.equal(storage, "indexeddb", "payload accounting uses IndexedDB only");
+          const database = `${prefix}-payload-accounting`;
+          databases.push(database);
+          await direct(page, "open", { name: database, storage });
+          const seeded = await direct(page, "seedChunkedPayload");
+          const stringKey = await direct(page, "stringKeyPayloadControl");
+          assert.equal(stringKey.delta.nativeDataRequests, 1, "string-key control must issue one native data request");
+          assert.equal(stringKey.delta.nativePayloadRequests, 1, "byte-bearing string-key records must count as payload");
+          assert.equal(stringKey.delta.nativePayloadBytes, 3, "string-key payload bytes must be measured");
+          assert.equal(stringKey.delta.nativeMetadataRecords, 0, "string-key payload must not be counted as metadata");
+          await direct(page, "close");
+          await page.reload();
+          await page.waitForFunction(() => (globalThis as any).persistenceHarness);
+          const reopened = await direct(page, "open", { name: database, storage });
+          assert.equal(reopened.reads, 0, "index reopen must not issue logical payload reads");
+          assert.equal(reopened.readBytes, 0, "index reopen must not load logical payload bytes");
+          assert.equal(reopened.nativePayloadRequests, 0, "index reopen must not issue native payload requests");
+          assert.equal(reopened.nativePayloadBytes, 0, "index reopen must not load native payload bytes");
+          assert.ok(reopened.nativeDataRequests > 0, "index reopen must retain total native data request accounting");
+          assert.equal(reopened.nativeDataRequests, reopened.nativeMetadataRecords, "index reopen requests must be metadata records only");
+          const payloadRead = await direct(page, "readChunkedPayload");
+          assert.equal(payloadRead.bytes, seeded.bytes, "chunked payload control must return all bytes");
+          assert.equal(payloadRead.reads, 1, "positive payload control must issue one logical read");
+          assert.equal(payloadRead.readBytes, seeded.bytes, "positive payload control must report all logical bytes");
+          assert.ok(payloadRead.nativePayloadRequests > 0, "positive payload control must issue native payload requests");
+          assert.equal(payloadRead.nativePayloadBytes, seeded.bytes, "positive payload control must report native payload bytes");
+          assert.ok(payloadRead.nativeMetadataRecords > 0, "positive payload control must retain manifest metadata accounting");
+          assert.equal(payloadRead.nativeDataRequests, payloadRead.nativeMetadataRecords + payloadRead.nativePayloadRequests, "total native requests must equal classified records");
+          row.payloadAccounting = { seeded, stringKey, reopened, payloadRead };
+          row.checks.push("indexeddb-chunked-payload-accounting-index-reopen-and-positive-read");
+          await direct(page, "close");
+        };
         try {
+          if (process.env.PERSIST_PAYLOAD_ACCOUNTING === "1") {
+            await checkPayloadAccounting();
+            assert.deepEqual(errors, []);
+            console.log(`${name} ${browser!.version()}: focused IndexedDB payload accounting passed`);
+            return;
+          }
           if (!pageOnly) {
             row.storageTests = await direct(page, "storageTests", { storage, filter: process.env.PERSIST_STORAGE_FILTER });
             assert.ok(row.storageTests.length > 0, "selected storage contract suite must execute cases");
