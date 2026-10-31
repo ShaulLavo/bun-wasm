@@ -26,7 +26,7 @@ async function check(browserName, engine, url) {
       external.push(route.request().url());
       return route.abort();
     });
-    await page.goto(`${url}?engine=${engine}`);
+    await page.goto(`${url}?engine=${engine}&prompt=off`);
     assert.match(await ready(page), /ready/);
     await writeFile(page, '/home/user/package.json', JSON.stringify({ dependencies: { esbuild: '0.25.12' } }));
     await writeFile(page, '/home/user/bunfig.toml', `[install]\nregistry = ${JSON.stringify(mirror.base)}\n`);

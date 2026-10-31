@@ -11,7 +11,15 @@ import { chromium, type Browser, type Page } from "playwright";
 import { sourceAttribution } from "./measure-light-sources";
 import type { openTerminal } from "../web/src/terminal-mount";
 
-type ObservedDemo = { term: Parameters<typeof openTerminal>[0]; shell?: { submit(command: string): Promise<void> } };
+type ObservedDemo = {
+  term: Parameters<typeof openTerminal>[0];
+  shell?: {
+    readonly state: string;
+    readonly lastPrompt: unknown;
+    readonly running: boolean;
+    submit(command: string): Promise<void>;
+  };
+};
 
 interface Capture {
   prompt: number | null;
@@ -106,7 +114,9 @@ function instrument(app: string): void {
     const buffer = demo.term.buffer.active;
     const text = Array.from({ length: buffer.length }, (_, index) => buffer.getLine(index)?.translateToString() ?? "").join("\n");
     if (app === "web" && text.includes("LIGHT_OUTPUT_" + "OK")) state.output ??= performance.now();
-    if (app !== "web" || state.prompt !== null || !text.includes("user@bun:")) return;
+    if (app !== "web" || state.prompt !== null) return;
+    const shell = demo.shell;
+    if (!shell || shell.state !== "ready" || shell.lastPrompt === undefined || shell.running) return;
     state.prompt = performance.now();
     queueMicrotask(submit);
   }
@@ -125,6 +135,7 @@ function instrument(app: string): void {
       write = value.term.write.bind(value.term);
       value.term.write = writeOutput;
       value.term.onWriteParsed(parsed);
+      value.term.write("", parsed);
     },
   });
 }
@@ -152,6 +163,7 @@ async function summarize(rows: Download[], capture: Capture, root: string, app: 
     return { bytes: total.bytes + (file?.runtime?.bytes ?? 0), gzip: total.gzip + (file?.runtime?.gzip ?? 0) };
   }, { bytes: 0, gzip: 0 });
   return {
+    promptMode: app === "web" ? "default-on-public-receipt" : "not-applicable",
     promptMs: capture.prompt, firstSpawnMs: capture.spawn, firstOutputMs: capture.output,
     spawnToOutputMs: capture.output === null ? null : capture.output - split,
     commandCompleteMs: capture.complete, previewReadyMs: capture.previewReady, workers: capture.workers,

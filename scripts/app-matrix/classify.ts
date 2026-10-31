@@ -18,10 +18,18 @@ type ComparedRow<Row extends ComparisonRow> = Row | (Omit<Row, "category" | "pas
 export function stageOutput(log: string, command: string): string {
   // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
   const lines = log.replace(/\x1b\[[0-9;]*m/g, "").split("\n");
-  const start = lines.findLastIndex(line => line.endsWith(`user@bun:~$ ${command}`));
+  const start = lines.findLastIndex(line => plainPromptCommand(line, command));
   if (start === -1) throw new Error(`Missing stage boundary for ${command}`);
-  const end = lines.findIndex((line, index) => index > start && /user@bun:~\$/.test(line));
+  const end = lines.findIndex((line, index) => index > start && plainPrompt(line));
   return lines.slice(start + 1, end === -1 ? undefined : end).join("\n");
+}
+
+function plainPrompt(line: string): boolean {
+  return /^(?:\[\d+\] )?\$(?: |$)/.test(line);
+}
+
+function plainPromptCommand(line: string, command: string): boolean {
+  return line.replace(/^\[\d+\] /, "") === `$ ${command}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

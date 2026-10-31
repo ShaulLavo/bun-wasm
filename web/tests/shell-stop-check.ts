@@ -4,7 +4,7 @@ import { ready, run, writeFile } from "./playground.mjs";
 import { stopShell } from "./stop-shell";
 
 export async function checkDelayedStop(page: Page, base: string, browser: string, engine: string): Promise<boolean> {
-  await page.goto(`${base}?mode=memory&engine=${engine}`);
+  await page.goto(`${base}?mode=memory&engine=${engine}&prompt=off`);
   assert.match(await ready(page), /ready/);
   await writeFile(page, "/home/user/forever.ts", 'const fs = require("node:fs"); process.on("SIGINT", () => { console.log("STOP_DELAYED"); setInterval(() => { if (fs.existsSync("/home/user/stop-release")) process.exit(130); }, 10); }); setInterval(() => {}, 1000); console.log("STOP_READY");');
   const done = page.evaluate(() => {
@@ -39,7 +39,7 @@ async function waitForMarker(page: Page, marker: string): Promise<void> {
 
 export async function checkRootSignals(page: Page, base: string, browser: string, engine: string): Promise<void> {
   for (const mode of ["handled", "handled7", "default", "removed", "once"]) {
-    await page.goto(`${base}?mode=memory&engine=${engine}`);
+    await page.goto(`${base}?mode=memory&engine=${engine}&prompt=off`);
     assert.match(await ready(page), /ready/);
     await page.evaluate(async () => {
       const state = Reflect.get(globalThis, "playground");
@@ -79,7 +79,7 @@ export async function checkRootSignals(page: Page, base: string, browser: string
 
 
 export async function checkPipelineReader(page: Page, base: string, browser: string, engine: string): Promise<void> {
-  await page.goto(`${base}?mode=memory&engine=${engine}`);
+  await page.goto(`${base}?mode=memory&engine=${engine}&prompt=off`);
   assert.match(await ready(page), /ready/);
   await writeFile(page, "/home/user/pipe-left.ts", 'process.on("SIGINT", () => { console.error("PIPE_LEFT_EXIT0"); process.exit(0); }); setInterval(() => {}, 1000); console.error("PIPE_LEFT_READY");');
   await writeFile(page, "/home/user/pipe-right.ts", 'process.on("SIGINT", () => console.error("PIPE_RIGHT_HANDLED")); process.stdin.setEncoding("utf8"); let input = ""; process.stdin.on("data", data => { input += data; if (!input.includes(String.fromCharCode(10)) && !input.includes(String.fromCharCode(13))) return; console.log("PIPE_READER:" + input.trim()); process.exit(0); }); setInterval(() => {}, 1000); console.error("PIPE_RIGHT_READY");');

@@ -34,7 +34,7 @@ try {
     const page = await browser.newPage();
     const httpErrors: string[] = [];
     page.on("response", response => { if (response.status() >= 400 && response.url().includes("/__bunwasm/m/")) httpErrors.push(`${response.status()} sw=${response.fromServiceWorker()} ${response.url()}`); });
-    await page.goto(`${url}?engine=browser`);
+    await page.goto(`${url}?engine=browser&prompt=off`);
     assert.match(await ready(page), /ready/);
     await writeFile(page, "/home/user/module-retry.ts", program);
     const checked = await run(page, "bun run module-retry.ts");

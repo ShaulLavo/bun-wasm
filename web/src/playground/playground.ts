@@ -27,6 +27,8 @@ export type Failure = "startup" | "ownership" | "shell";
 // The default (browser) runs the program in the browser's own JS engine, with bun-browser.wasm for
 // the transpiler and natives; ?engine=quickjs and ?engine=jsc run the whole runtime in wasm.
 const DEFAULT_ENGINE: Engine = "browser";
+// The guest does not expose an admitted Bun version to this page, so the prompt must not guess one.
+const HOST_VERSIONS = {};
 
 /** The playground page: one Waffle runtime, the ~ workspace, bun.wasm, and an interactive bash-web shell. */
 export class Playground extends TypedEventTarget<{ change: Event }> {
@@ -158,6 +160,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     });
 
     const wasmReady = this.loadEngine();
+    const promptModule = this.params.get("prompt") === "off" ? undefined : import("bash-web/prompt");
     // Browser-engine children need the module scope even when their parent uses QuickJS or JSC.
     const moduleScope: Promise<boolean> = registerModuleScope();
     // Networking needs SharedArrayBuffer: without cross-origin isolation bun.wasm gets no fetch slots.
@@ -206,13 +209,20 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     }
     await fs.flush();
     const { BrowserSession } = await import("bash-web/session");
+    const prompt = (await promptModule)?.createPrompt({
+      filesystem: runtime.filesystem,
+      versions: HOST_VERSIONS,
+      file: true,
+      logger: (message: string, error?: unknown) => console.warn(`[prompt] ${message}`, error ?? ""),
+    });
     const shell = this.shell = await BrowserSession.create({
       runtime, cwd: HOME,
-      env: { HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "\x1b[32muser@bun\x1b[0m:\x1b[34m~\x1b[0m$ " },
+      env: { HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "$ " },
       cols: term.cols, rows: term.rows,
       wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
       workerUrl: new URL("./shell-worker.js", location.href),
       lineEditor: { mode: "zsh" },
+      prompt,
       onOutput: bytes => term.write(bytes),
       onState: (state, detail) => this.shellChanged(state, detail),
     });

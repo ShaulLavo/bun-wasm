@@ -30,7 +30,7 @@ async function checkBrowser(browserName, runtime, url) {
     return route.abort();
   });
   try {
-    await page.goto(`${url}?engine=${runtime}`);
+    await page.goto(`${url}?engine=${runtime}&prompt=off`);
     assert.match(await ready(page), /ready/);
     await writeFile(page, "/home/user/package.json", '{"name":"browser-install-fixture"}\n');
     await writeFile(page, "/home/user/bunfig.toml", `[install]\nregistry = ${JSON.stringify(registry.base)}\n`);

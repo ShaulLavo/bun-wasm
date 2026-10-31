@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { checkDelayedStop, checkRootSignals, checkPipelineReader } from "./shell-stop-check";
 import { checkClearTyping, checkRunReplacesMultilineDraft } from "./shell-clear-check";
+import { checkPrompt } from "./shell-prompt-check";
 import { pinnedBashWeb } from "../../scripts/bash-web-guests";
 
 const port = Number(process.env.SITE_SHELL_PORT);
@@ -62,6 +63,7 @@ async function exercise(page: Page, engine: string) {
     return fs === runtime.filesystem && await runtime.processes() === await runtime.processes();
   });
   assert.equal(shared, true, "Editor and shell borrow one runtime filesystem and process service");
+  const prompt = await checkPrompt(page, "chromium", engine);
   await checkClearTyping(page, output ? `${output}/${engine}-clear-typed.png` : undefined);
   await checkRunReplacesMultilineDraft(page);
   await page.locator(".xterm-helper-textarea").focus();
@@ -132,10 +134,13 @@ async function exercise(page: Page, engine: string) {
     await page.screenshot({ path: `${output}/${engine}-keyboard-repl.png`, fullPage: true });
   }
   const builds: unknown = await page.evaluate(() => Reflect.get(globalThis, "__bunwasmBuilds"));
-  console.log(JSON.stringify({ partial: true, engine, check: "keyboard-repl-builtin", sourceHead, sourceDirty, shellIdentity, builds, transcript }));
+  console.log(JSON.stringify({ partial: true, engine, check: "keyboard-repl-builtin", sourceHead, sourceDirty, shellIdentity, builds, prompt, transcript }));
   assert.equal(await checkDelayedStop(page, base, "chromium", engine), true);
   await checkRootSignals(page, base, "chromium", engine);
   await checkPipelineReader(page, base, "chromium", engine);
+  await page.goto(`${base}?mode=memory&engine=${engine}`);
+  await page.waitForFunction(() => !!Reflect.get(globalThis, "playground"));
+  await ready(page);
   await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
   const columns = await page.evaluate(() => Reflect.get(globalThis, "playground").term.cols);
   await page.setViewportSize({ width: 900, height: 700 });
@@ -150,7 +155,7 @@ async function exercise(page: Page, engine: string) {
   await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
   await command(page, "echo RESTART_RECOVERED");
   await contains(page, "RESTART_RECOVERED");
-  return { engine, ok: true, sourceHead, sourceDirty, shellIdentity, builds, transcript };
+  return { engine, ok: true, sourceHead, sourceDirty, shellIdentity, builds, prompt, transcript };
 }
 async function reportFailure(page: Page, engine: string): Promise<void> {
   if (output) await page.screenshot({ path: `${output}/${engine}-failure.png`, fullPage: true });

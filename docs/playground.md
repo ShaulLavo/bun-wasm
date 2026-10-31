@@ -141,6 +141,9 @@ role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `1
 - `bash-web/session`: `BrowserSession` connects xterm input, resize, output, and shell state
   to the page-owned runtime. bash-web owns the input queue, output batching, display newline
   conversion, and interactive shell. The playground selects zsh-style editing by default.
+  The default prompt is provided by `bash-web/prompt` from the same borrowed filesystem; it reads
+  `$HOME/.config/bash-web/prompt.json` when present. Use `?prompt=off` only for transcript or
+  measurement controls that require the plain `$ ` fallback.
 - `src/runner.ts`: loading an engine's wasm and starting one `bun …` run in a worker with its
   networking; the sandbox (../sandbox/) uses it too. Every run roots a generic Waffle process
   tree, so the root, its children and the shell spawn through the page runtime's one service.

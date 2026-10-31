@@ -77,6 +77,8 @@ export function filesystemFixture() {
 }
 
 type FilesystemFixture = ReturnType<typeof filesystemFixture>;
+type PromptOptions = Parameters<typeof import("bash-web/prompt").createPrompt>[0];
+type SessionOptions = Pick<import("bash-web/session").SessionOptions, "runtime" | "prompt" | "env" | "lineEditor">;
 export function filesystem(fixture: FilesystemFixture): Runtime["filesystem"] { return fixture.fs; }
 
 class TerminalFixture {
@@ -96,6 +98,8 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
   const listeners: ((event: { persisted: boolean }) => void)[] = [];
   const loads: string[] = [];
   const runs: { args: string[]; done: ReturnType<typeof deferred<{ code: number }>>; kills: number[] }[] = [];
+  const promptCreates: PromptOptions[] = [];
+  const sessionCreates: SessionOptions[] = [];
   let runtime = { filesystem: filesystem(fixture), disposed: false, dispose: async () => {}, processes: async () => {}, registerAdapter: () => () => {}, registerProgram: () => () => {} };
   const boundary = {
     ...stateModule, ...viewModule, EditorView: View, EditorState,
@@ -108,7 +112,17 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     Previews: class { ready = Promise.resolve("ready"); register() {} unregister() {} url() { return "https://preview.test/"; } },
     HostedPreviews: class {},
     linkLocalUrls() {}, openTerminal() {},
-    BrowserSession: class { static async create(options: { onState(state: "ready"): void }) { options.onState("ready"); return { running: false, dispose: async () => {}, submit: async () => {}, input() {}, resize() {} }; } },
+    createPrompt: (options: PromptOptions) => {
+      promptCreates.push(options);
+      return { variables: [], prepare() {}, render: async (context: { readonly ps1: string }) => context.ps1 };
+    },
+    BrowserSession: class {
+      static async create(options: SessionOptions & { onState(state: "ready"): void }) {
+        sessionCreates.push(options);
+        options.onState("ready");
+        return { running: false, dispose: async () => {}, submit: async () => {}, input() {}, resize() {} };
+      }
+    },
     startRun: (options: { args: string[] }) => { const run = { args: options.args, done: deferred<{ code: number }>(), kills: [] as number[] }; runs.push(run); return { done: run.done.promise, kill: (signal: number) => run.kills.push(signal) }; },
     examples: sources, HOME: "/home/user",
     location: { href: "https://example.test/", reloads: 0, reload() { this.reloads++; }, assign() {} },
@@ -127,7 +141,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     "engine-loader": ["ENGINES", "WasmMissing", "isEngine", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
     "terminal-mount": ["openTerminal"],
-    "runner": ["startRun"], "bash-web/session": ["BrowserSession"], "examples": ["examples", "HOME"],
+    "runner": ["startRun"], "bash-web/session": ["BrowserSession"], "bash-web/prompt": ["createPrompt"], "examples": ["examples", "HOME"],
   };
   const result = await Bun.build({
     entrypoints: ["ui-entry"], target: "bun", format: "esm",
@@ -168,7 +182,7 @@ export { runtimeSharedObjectRoute } from ${JSON.stringify(`${root}web/src/shared
     loadTemplate: typeof import("../../sandbox/src/template").loadTemplate;
     runtimeSharedObjectRoute(runtime: Pick<Runtime, "filesystem" | "disposed">): ReturnType<typeof import("../src/shared-objects/runtime").runtimeSharedObjectRoute>;
   };
-  return { ...exports, fixture, get runtime() { return runtime; }, listeners, loads, runs, boundary, async cleanup() { for (const listener of listeners) listener({ persisted: false }); Reflect.deleteProperty(globalThis, key); for (const run of runs) run.done.resolve({ code: 0 }); await rm(scratch, { recursive: true }); } };
+  return { ...exports, fixture, get runtime() { return runtime; }, listeners, loads, runs, promptCreates, sessionCreates, boundary, async cleanup() { for (const listener of listeners) listener({ persisted: false }); Reflect.deleteProperty(globalThis, key); for (const run of runs) run.done.resolve({ code: 0 }); await rm(scratch, { recursive: true }); } };
 }
 
 export function method<T extends (...args: never[]) => unknown>(target: object, name: string): T {
