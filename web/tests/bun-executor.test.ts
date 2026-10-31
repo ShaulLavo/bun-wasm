@@ -1,7 +1,7 @@
 import { afterAll, expect, mock, spyOn, test } from "bun:test";
 import { createFilesystemConnection, revokeFilesystem } from "waffle/fs";
 import { controlAdd, controlLoad } from "waffle/proc/control";
-import { WasiExit } from "waffle/core";
+import { WasiExit, type Wasi } from "waffle/core";
 import { claimOutcome, readOutcome } from "waffle/proc/outcome";
 import { createWorkerProcessTransport, workerProcessState } from "waffle/proc/worker-client";
 import { bootstrap, type RuntimeWorkerHost } from "waffle/browser/worker";
@@ -13,6 +13,7 @@ import { guest, PROCESS_IMPORTS } from "../../scripts/fixtures/shared-objects/ex
 import { createSharedObjectBroker } from "../src/shared-objects/broker";
 import type { SharedObjectService } from "../src/shared-objects/service";
 import { installLookupServer } from "../src/net/lookup";
+import { createMemoryChannel, memoryChannelReady, requestMemoryChannel } from "../src/memory-channel";
 
 // The Bun executor is Waffle's bootstrap plus Bun policy. These tests run the real bootstrap with
 // an injected host and a hand-assembled guest; only the browser engine host is replaced.
@@ -25,6 +26,7 @@ let linkedInitializationFailure: Error | undefined;
 let linkedAllocatorCore: WebAssembly.Instance | undefined;
 let linkedDisposals = 0;
 let linkedSideReads = 0;
+let linkedInitializeProbe: ((wasi: Wasi) => void) | undefined;
 mock.module("waffle/link", () => ({ ...actualLink, instantiateLinkPlan(...args: Parameters<typeof actualLink.instantiateLinkPlan>) {
   const group = actualLink.instantiateLinkPlan(...args);
   return { ...group, entry: linkedAllocatorCore ?? group.entry,
@@ -32,7 +34,11 @@ mock.module("waffle/link", () => ({ ...actualLink, instantiateLinkPlan(...args: 
       quickjs_memory_telemetry() { linkedSideReads++; throw Error("faulted side read"); },
       jsc_memory_telemetry_refresh() { linkedSideReads++; throw Error("faulted side refresh"); },
     } } })) : group.libraries,
-    initialize() { if (linkedInitializationFailure) throw linkedInitializationFailure; group.initialize(); },
+    initialize() {
+      if (linkedInitializeProbe) linkedInitializeProbe(args[1].wasi);
+      if (linkedInitializationFailure) throw linkedInitializationFailure;
+      group.initialize();
+    },
     dispose() {
     linkedDisposals++;
     group.dispose();
@@ -478,6 +484,59 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
     } finally { observeWait = undefined; connection.client.port.close(); connection.server.port.close(); }
   });
 }
+
+function importedFunctionModule(namespace: string, name: string): WebAssembly.Module {
+  const encoder = new TextEncoder();
+  const bytes = (value: string) => [value.length].concat(Array.from(encoder.encode(value)));
+  const type = [1, 4, 1, 0x60, 0, 0];
+  const imported = [1].concat(bytes(namespace), bytes(name), [0, 0]);
+  return new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0].concat(type, 2, imported.length).concat(imported)));
+}
+
+for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${boundary} keeps the refresh observer after initialization`, async () => {
+  const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
+  const { prepareProgram, programLinkPlan } = await import("../../src/assets");
+  const pair = quickjsPair("quickjs");
+  const module = await prepareProgram({ kind: "quickjs", ...pair });
+  const channel = createMemoryChannel();
+  const memoryTelemetry = { id: crypto.randomUUID(), commandId: "memory-test", commandStartedAt: Date.now(), commandSequence: 1, buffer: channel };
+  const connection = createFilesystemConnection();
+  const request: RunRequest = { engine: "quickjs", module, linkPlan: programLinkPlan(module), args: ["bun"], env: {},
+    filesystem: connection.client, trace: false, net: null, moduleCache: null, slots: "off", memoryTelemetry };
+  const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
+    postMessage() {}, async fetch() { throw new Error("unexpected fetch"); } };
+  let observed: WebAssembly.ImportValue | undefined;
+  let originalImports: Wasi["imports"] | undefined;
+  let observation: { restored: boolean; before: boolean; after: boolean } | undefined;
+  linkedInitializeProbe = wasi => {
+    const imported = wasi.imports(importedFunctionModule("env", boundary), { env: { [boundary]: () => 0 } });
+    observed = imported.env?.[boundary];
+  };
+  const executor = createBunExecutor(request, host);
+  try {
+    await bootstrap(request, { ...executor,
+      setup(context) {
+        context.fs.preopen = () => 1; context.fs.retain = () => {}; context.fs.release = () => {};
+        executor.setup?.(context);
+      },
+      instantiated(context) { originalImports = context.wasi.imports; },
+      run(context) {
+        if (typeof observed !== "function") throw new Error("initializer did not capture side import");
+        const generation = requestMemoryChannel(channel, true);
+        const before = memoryChannelReady(channel, generation, true);
+        observed();
+        observation = { restored: context.wasi.imports === originalImports, before,
+          after: memoryChannelReady(channel, generation, true) };
+        return 0;
+      },
+    }, host);
+    expect(observation).toEqual({ restored: true, before: false, after: true });
+  } finally {
+    linkedInitializeProbe = undefined;
+    executor.beforeFinish?.();
+    connection.client.port.close(); connection.server.port.close();
+  }
+});
 
 for (const kind of ["quickjs", "jsc"] as const) test(`${kind} executor initializes the shared side once and releases its table range`, async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");

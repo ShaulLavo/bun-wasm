@@ -86,7 +86,10 @@ allocator bytes and must not be added to them.
 
 Only normal phase samples may invoke engine refresh. A detected failure or
 terminal cleanup permanently disables refresh for that process. Terminal
-snapshots use cached getters before linked-group disposal. The Next hook reads
+snapshots use cached getters before linked-group disposal. The executor observes
+side imports during `group.initialize()`, when Waffle creates the side instances,
+and restores the WASI import resolver in `finally`. The observer stays on each
+resolved import after initialization. The Next hook reads
 host diagnostics, never process.memoryUsage or other JS on a faulted guest,
 and never requests GC. Counter and process identities remain in its result.
 
