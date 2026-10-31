@@ -45,10 +45,10 @@ async function browserRequest(probe: RequestProbe) {
       const text = decoder.decode(part.value, { stream: true });
       body += text;
       chunks.push({ text, timeMs: performance.now() - started });
-      if (probe.mode === "cancel-after-first") return { kind: "cancelled", status: response.status, body, chunks };
+      if (probe.mode === "cancel-after-first") return { kind: "cancelled", status: response.status, body, chunks, bytesRead: state.bytesRead };
     }
     state = { stage: "eof", sequence: state.sequence, status: state.status, bytesRead: state.bytesRead, eofObserved: true };
-    return { kind: "complete", status: response.status, body: body + decoder.decode(), chunks };
+    return { kind: "complete", status: response.status, body: body + decoder.decode(), chunks, bytesRead: state.bytesRead };
   } catch (error) {
     throw new Error(`${String(error)}; ${failureContext()}`);
   } finally {

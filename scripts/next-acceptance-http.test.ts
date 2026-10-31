@@ -7,7 +7,7 @@ import { runAcceptancePhase } from "./app-matrix/next-acceptance-phase";
 import { chromium, type Page } from "playwright";
 import { runRouteCase } from "./app-matrix/next-acceptance-cases";
 
-type Mode = "ok" | "http500" | "no-eof" | "fetch-stall" | "body-stall" | "compile-error" | "compile-poll-nonmatching";
+type Mode = "ok" | "http500" | "no-eof" | "fetch-stall" | "body-stall" | "compile-error" | "compile-poll-nonmatching" | "compile-poll-binary";
 interface Resources {
   mode: Mode;
   active: Set<Request>;
@@ -23,7 +23,7 @@ function stream(request: Request, resources: Resources): Response {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      const text = resources.mode === "body-stall" ? '{"body":' : resources.mode === "compile-error" || resources.mode === "compile-poll-nonmatching" ? "broken" : "NEXT-01 early\n";
+      const text = resources.mode === "body-stall" ? '{"body":' : resources.mode === "compile-error" || isCompilePolling(resources.mode) ? "broken" : "NEXT-01 early\n";
       controller.enqueue(new TextEncoder().encode(text));
       if (resources.mode === "body-stall") return;
       timer = setTimeout(() => finishStream(request, resources, controller), 250);
@@ -36,17 +36,32 @@ function stream(request: Request, resources: Resources): Response {
       resources.cancellations++;
     },
   });
-  const status = resources.mode === "http500" || resources.mode === "compile-error" || resources.mode === "compile-poll-nonmatching" ? 500 : request.method === "POST" ? 201 : 200;
+  const status = resources.mode === "http500" || resources.mode === "compile-error" || isCompilePolling(resources.mode) ? 500 : request.method === "POST" ? 201 : 200;
   return new Response(body, { status, headers: { "content-type": "text/plain" } });
 }
 
 function finishStream(request: Request, resources: Resources, controller: ReadableStreamDefaultController<Uint8Array>) {
   if (resources.mode === "compile-error") return;
-  if (resources.mode === "compile-poll-nonmatching" && resources.dynamicPolls > 1) return;
+  if (isCompilePolling(resources.mode) && resources.dynamicPolls > 1) return;
   controller.enqueue(new TextEncoder().encode("NEXT-01 late\n"));
   if (resources.mode === "no-eof") return;
   controller.close();
   resources.active.delete(request);
+}
+
+function isCompilePolling(mode: Mode) {
+  return mode === "compile-poll-nonmatching" || mode === "compile-poll-binary";
+}
+
+function completedPoll(request: Request, resources: Resources): Response | undefined {
+  if (!isCompilePolling(resources.mode)) return;
+  resources.dynamicPolls++;
+  if (resources.dynamicPolls !== 1) return;
+  resources.active.delete(request);
+  if (resources.mode !== "compile-poll-binary") return new Response("not a compile error", { status: 500, headers: { "content-type": "text/plain" } });
+  const bytes = new Uint8Array(1024 * 1024).fill(97);
+  bytes[0] = 255;
+  return new Response(bytes, { status: 500, headers: { "content-type": "text/plain" } });
 }
 
 function pending(request: Request, resources: Resources): Promise<Response> {
@@ -61,20 +76,15 @@ function pending(request: Request, resources: Resources): Promise<Response> {
 
 function serve(request: Request, resources: Resources): Response | Promise<Response> {
   const path = new URL(request.url).pathname;
-  if ((resources.mode === "compile-error" || resources.mode === "compile-poll-nonmatching") && path === "/dynamic") {
+  if ((resources.mode === "compile-error" || isCompilePolling(resources.mode)) && path === "/dynamic") {
     if (!resources.compileSourceIsBroken) {
       resources.restoredDynamicRequests++;
       resources.active.delete(request);
       return new Response("<!doctype html><title>probe</title>", { headers: { "content-type": "text/html" } });
     }
     resources.active.add(request);
-    if (resources.mode === "compile-poll-nonmatching") {
-      resources.dynamicPolls++;
-      if (resources.dynamicPolls === 1) {
-        resources.active.delete(request);
-        return new Response("not a compile error", { status: 500, headers: { "content-type": "text/plain" } });
-      }
-    }
+    const completed = completedPoll(request, resources);
+    if (completed) return completed;
     return stream(request, resources);
   }
   if (!path.startsWith("/api/")) return new Response("<!doctype html><title>probe</title>", { headers: { "content-type": "text/html" } });
@@ -181,6 +191,31 @@ test("compile-error polling retains the last complete nonmatching response", asy
     expect(resources.restoredDynamicRequests).toBe(0);
     await released(resources);
   });
+}, 20000);
+
+test("compile-error polling carries raw bytes without re-encoding a large completed body", async () => {
+  const encode = TextEncoder.prototype.encode;
+  let fullBodyEncodes = 0;
+  TextEncoder.prototype.encode = function(this: TextEncoder, input?: string) {
+    if (input && input.length >= 1024 * 1024) fullBodyEncodes++;
+    return encode.call(this, input);
+  };
+  try {
+    await fixture("compile-poll-binary", async (page, base, resources) => {
+      await page.goto(base);
+      let contents = "server-original";
+      const source = {
+        read: async () => contents,
+        write: async (_path: string, next: string) => { contents = next; resources.compileSourceIsBroken = next.includes("broken"); },
+      };
+      const error = await rejected(compileErrorRecovery(page, base, source, 700));
+      expect(error).toMatch(/last completed compile-error poll: request sequence=1, status=500, bytes=1048576, matched=false/);
+      expect(fullBodyEncodes).toBe(0);
+      expect(contents).toBe("server-original");
+      expect(resources.restoredDynamicRequests).toBe(0);
+      await released(resources);
+    });
+  } finally { TextEncoder.prototype.encode = encode; }
 }, 20000);
 
 test("compile-error recovery restores source after a partial 500 without EOF", async () => {

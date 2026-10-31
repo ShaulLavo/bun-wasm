@@ -79,7 +79,7 @@ async function waitCompileError(page: Page, url: string, deadline: number) {
     try {
       const response = await requestProbe(page, { url, deadline, expectedStatus: null, sequence: ++requestSequence });
       const matched = response.status === 500 && /broken|Unexpected token|Parsing ecmascript/i.test(response.body);
-      lastPoll = { requestSequence, status: response.status, bytes: new TextEncoder().encode(response.body).byteLength, matched };
+      lastPoll = { requestSequence, status: response.status, bytes: response.bytesRead, matched };
       if (matched) return;
     } catch (error) {
       throw new Error(`${String(error)}${formatLastPoll(lastPoll)}`, { cause: error });
