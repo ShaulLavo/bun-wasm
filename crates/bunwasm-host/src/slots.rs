@@ -541,8 +541,10 @@ fn process_functions(store: &mut Store<Host>) -> Vec<Func> {
 
 /// bash-web's shell guest imports two small namespaces besides runtime_proc. On this host it is
 /// never the terminal owner: it reads inherited stdio, reports 80x24 geometry and owns no phase.
-/// The native filesystem has no Waffle inode metadata, so the permission query answers ENOTSUP
-/// (docs/host-abi.md "Inode permission query" allows it) and the shell treats access as unknown.
+/// The prompt hooks use bash-web's no-provider contract: unavailable text operations return -1,
+/// while the output position is the neutral value 0. The native filesystem has no Waffle inode
+/// metadata, so the permission query answers ENOTSUP (docs/host-abi.md "Inode permission query"
+/// allows it) and the shell treats access as unknown.
 pub fn add_shell_imports(linker: &mut Linker<Host>) -> Result<()> {
     linker.func_wrap("shell_terminal", "inherited_fd", |index: i32| -> i32 {
         if (0..3).contains(&index) { index } else { -1 }
@@ -550,6 +552,20 @@ pub fn add_shell_imports(linker: &mut Linker<Host>) -> Result<()> {
     linker.func_wrap("shell_terminal", "columns", || -> i32 { 80 })?;
     linker.func_wrap("shell_terminal", "rows", || -> i32 { 24 })?;
     linker.func_wrap("shell_terminal", "phase", |_: i32, _: i32| {})?;
+    linker.func_wrap("shell_terminal", "prompt_names", |_: i32, _: i32| -> i32 {
+        -1
+    })?;
+    linker.func_wrap(
+        "shell_terminal",
+        "prompt",
+        |_: i32, _: i32, _: i32, _: i32, _: i32| -> i32 { -1 },
+    )?;
+    linker.func_wrap(
+        "shell_terminal",
+        "prompt_update",
+        |_: i32, _: i32, _: i32| -> i32 { -1 },
+    )?;
+    linker.func_wrap("shell_terminal", "output_position", || -> i32 { 0 })?;
     linker.func_wrap(
         "runtime_fs",
         "path_permissions_get",

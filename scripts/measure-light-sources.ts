@@ -26,7 +26,7 @@ function isProcessService(source: string): boolean {
   const match = /(?:^|\/)(?:proc|browser)\/([^/]+)\.(?:ts|js)$/.exec(source);
   if (!match) return /\/subprocess\.(?:ts|js)$/.test(source);
   if (source.includes("/browser/")) return ["process-broker", "worker-pipes", "worker-client"].includes(match[1]!);
-  return !["identity", "stub", "intrinsics", "control", "directory", "outcome", "start-errno", "start-failure", "wait-status", "signals", "types"].includes(match[1]!);
+  return !["identity", "stub", "intrinsics", "control", "directory", "outcome", "start-errno", "start-failure", "wait-status", "signals", "types", "command"].includes(match[1]!);
 }
 export async function sourceAttribution(path: string, code: string) {
   const mapFile = Bun.file(`${path}.map`);

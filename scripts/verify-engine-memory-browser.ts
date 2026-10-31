@@ -90,7 +90,10 @@ export function installActorObserver({ engine, executable, paths }: { engine: En
     const argv: unknown[] = message.args;
     if (!paths.includes(String(argv[2]))) return result;
     const telemetry: unknown = Reflect.get(message, "memoryTelemetry");
-    const valid = argv.length === 3 && argv[0] === executable && argv[1] === "run" && Reflect.get(message, "engine") === engine
+    const env: unknown = Reflect.get(message, "env");
+    // The launcher preserves shell argv[0] and overwrites this authority from the admitted executable.
+    const executableMatches = env && typeof env === "object" && Reflect.get(env, "BUNWASM_EXEC_PATH") === executable;
+    const valid = executableMatches && argv.length === 3 && (argv[0] === "bun" || argv[0] === executable) && argv[1] === "run" && Reflect.get(message, "engine") === engine
       && telemetry && typeof telemetry === "object" && "id" in telemetry && typeof telemetry.id === "string" && telemetry.id.length > 0
       && "buffer" in telemetry && telemetry.buffer instanceof SharedArrayBuffer;
     observations.push(valid ? { authority: "host-worker-launch", id: telemetry.id, engine, path: argv[2] }
