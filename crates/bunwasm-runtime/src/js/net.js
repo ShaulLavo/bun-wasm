@@ -1124,17 +1124,19 @@
         this._connections = new Set();
       }
       listen(...args) {
-        const [opts, callback] = internal.require("net_address")._normalizeArgs(args);
-        const targetPort = opts.path === undefined ? internal.require("net_port").httpPort(opts.port) : undefined;
-        this._pipeName = opts.path;
+        const address = internal.require("net_address");
+        const [opts, callback] = address._normalizeArgs(args);
+        const tcp = address.isTcpListenOptions(opts);
+        const targetPort = tcp ? internal.require("net_port").httpPort(opts.port) : undefined;
+        this._pipeName = tcp ? undefined : opts.path;
         if (callback) this.once("listening", callback);
         try {
-          this._listener = opts.path === undefined ? listenOrThrow(opts.host || "0.0.0.0", targetPort) : internal.require("net_path").listen(opts.path, hostError);
+          this._listener = tcp ? listenOrThrow(opts.host || "0.0.0.0", targetPort) : internal.require("net_path").listen(opts.path, hostError);
         } catch (err) {
           internal.nextTick(() => this.emit("error", err));
           return this;
         }
-        this._port = opts.path === undefined ? native.hostLocalPort(this._listener) : undefined;
+        this._port = tcp ? native.hostLocalPort(this._listener) : undefined;
         this._host = opts.host || "::";
         this.listening = true;
         internal.require("net_listener").start(this, {

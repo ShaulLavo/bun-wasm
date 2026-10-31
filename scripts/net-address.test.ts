@@ -33,6 +33,7 @@ type AddressModule = {
     parse(input: unknown): SocketAddress | undefined;
   };
   _normalizeArgs(args: unknown[]): unknown[];
+  isTcpListenOptions(value: { path?: unknown; port?: unknown }): boolean;
   port(value?: unknown): number;
   error<T extends Error>(Ctor: new(message: string) => T, code: string, message: string): T & { code: string };
   getDefaultAutoSelectFamily(): boolean;
@@ -164,6 +165,15 @@ test("SocketAddress rejects invalid addresses, ports and flow labels", () => {
   expect(thrownBy(() => new address.SocketAddress({ address: "127.1" }))).toMatchObject({ code: "ERR_INVALID_ADDRESS" });
   expect(thrownBy(() => new address.SocketAddress({ port: 65536 }))).toMatchObject({ name: "RangeError", code: "ERR_SOCKET_BAD_PORT" });
   expect(thrownBy(() => new address.SocketAddress({ family: "ipv6", flowlabel: 0x100000 }))).toMatchObject({ name: "RangeError", code: "ERR_OUT_OF_RANGE" });
+});
+
+test("listen overload selection keeps port presence ahead of a false socket path", () => {
+  expect(address.isTcpListenOptions({})).toBe(true);
+  expect(address.isTcpListenOptions({ path: "/tmp/bun.sock" })).toBe(false);
+  expect(address.isTcpListenOptions({ path: false, port: "3137" })).toBe(true);
+  expect(address.isTcpListenOptions({ path: "/tmp/bun.sock", port: undefined })).toBe(true);
+  expect(address.isTcpListenOptions({ path: "/tmp/bun.sock", port: false })).toBe(false);
+  expect(address.isTcpListenOptions({ path: undefined })).toBe(true);
 });
 
 test("argument normalization preserves socket paths, ports, hosts and callbacks", () => {

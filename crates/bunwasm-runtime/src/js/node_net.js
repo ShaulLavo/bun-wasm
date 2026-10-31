@@ -5,7 +5,7 @@
     const { Duplex } = internal.builtin("node:stream");
     const EventEmitter = internal.require("events");
     const { Buffer } = internal.require("buffer");
-    const { _normalizeArgs, port, error } = internal.require("net_address");
+    const { _normalizeArgs, isTcpListenOptions, port, error } = internal.require("net_address");
 
     class Socket extends Duplex {
       constructor(options = {}) {
@@ -272,10 +272,11 @@
         if (this.listening) throw error(Error, "ERR_SERVER_ALREADY_LISTEN", "Listen method has been called more than once without closing");
         const [options, callback] = _normalizeArgs(args);
         if (args[0] && typeof args[0] === "object" && !("port" in options) && !("path" in options)) throw error(TypeError, "ERR_INVALID_ARG_VALUE", `The argument 'options' must have the property "port" or "path". Received ${JSON.stringify(options)}`);
-        const targetPort = options.path === undefined ? port(options.port) : undefined;
-        this._pipeName = options.path;
+        const tcp = isTcpListenOptions(options);
+        const targetPort = tcp ? port(options.port ?? 0) : undefined;
+        this._pipeName = tcp ? undefined : options.path;
         if (callback) this.once("listening", callback);
-        try { this._listener = options.path === undefined ? listenOrThrow(options.host || "0.0.0.0", targetPort) : internal.require("net_path").listen(options.path, hostError); }
+        try { this._listener = tcp ? listenOrThrow(options.host || "0.0.0.0", targetPort) : internal.require("net_path").listen(options.path, hostError); }
         catch (err) { internal.nextTick(() => this.emit("error", err)); return this; }
         this.listening = true;
         this._closing = false;
