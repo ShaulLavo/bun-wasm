@@ -19,6 +19,7 @@
 // Rust code exactly, including the places where Bun does NOT count output.
 (function (internal) {
   "use strict";
+  const { native } = internal;
 
   const INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
   const objectToString = Object.prototype.toString;
