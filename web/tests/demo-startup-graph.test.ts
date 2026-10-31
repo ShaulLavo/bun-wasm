@@ -36,6 +36,21 @@ for (const app of ["web", "sandbox"]) test(`${app} keeps Bun execution lazy alon
     expect(command.some(path => path.endsWith(`/web/src/${execution}`))).toBe(true);
     expect(eager.some(path => path.endsWith("/bash-web/src/runtime/shell-host.ts"))).toBe(false);
     if (app === "web") expect(command.some(path => path.endsWith("/bash-web/src/runtime/shell-host.ts"))).toBe(true);
+    if (app === "web") {
+      const promptOutputs = Object.keys(outputs).filter(path => Object.keys(outputs[path]!.inputs).some(input => resolve(input).endsWith("/bash-web/src/prompt/index.ts")));
+      expect(promptOutputs.length).toBeGreaterThan(0);
+      const promptStatic = sources(initialJavaScript(outputs, promptOutputs));
+      expect(promptStatic.some(path => path.endsWith("/bash-web/src/prompt/index.ts"))).toBe(true);
+      for (const suffix of ["/bash-web/src/prompt/sources/status.ts", "/bash-web/src/prompt/sources/objects.ts", "/bash-web/src/prompt/config/file.ts"]) {
+        expect(eager.some(path => path.endsWith(suffix))).toBe(false);
+        expect(promptStatic.some(path => path.endsWith(suffix))).toBe(false);
+        expect(Object.keys(result.metafile!.inputs).some(path => resolve(path).endsWith(suffix))).toBe(true);
+      }
+      const playground = await Bun.file(resolve(root, "web/src/playground/playground.ts")).text();
+      expect(playground).toContain('this.params.get("prompt") === "off" ? undefined : import("bash-web/prompt")');
+      expect(playground).toContain('PS1: "$ "');
+      expect(playground).toContain("versions: HOST_VERSIONS");
+    }
     if (app === "web") expect(Object.keys(result.metafile!.inputs).some(path => resolve(path).endsWith("/web/src/runner.ts"))).toBe(false);
     const filesystem = Object.keys(outputs).find(path => path.endsWith("/fs-worker.js"));
     expect(filesystem).toBeDefined();

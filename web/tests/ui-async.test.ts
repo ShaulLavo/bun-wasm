@@ -532,3 +532,29 @@ test("sandbox stops on a failed install and only launches dev after a successful
   await turn();
   expect(page.runs[2]!.args).toEqual(["run", "dev"]);
 });
+
+test("playground passes the borrowed filesystem and truthful prompt options to the public session", async () => {
+  const page = await pageFixture();
+  const playground = new page.Playground("");
+  method<() => void>(playground, "terminalOpened")();
+  await playground.start();
+  const prompt = page.promptCreates[0];
+  const session = page.sessionCreates[0];
+  expect(prompt).toBeDefined();
+  expect(session).toBeDefined();
+  expect(prompt?.filesystem).toBe(page.runtime.filesystem);
+  expect(prompt?.versions).toEqual({});
+  expect(prompt?.file).toBe(true);
+  expect(prompt?.logger).toEqual(expect.any(Function));
+  expect(session?.runtime).toBe(page.runtime);
+  expect(session?.prompt).toBeDefined();
+});
+
+test("playground prompt-off arm skips the provider while keeping the session prompt empty", async () => {
+  const page = await pageFixture();
+  const playground = new page.Playground("?prompt=off");
+  method<() => void>(playground, "terminalOpened")();
+  await playground.start();
+  expect(page.promptCreates).toEqual([]);
+  expect(page.sessionCreates[0]?.prompt).toBeUndefined();
+});

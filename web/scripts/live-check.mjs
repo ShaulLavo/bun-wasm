@@ -21,7 +21,10 @@ for (const [name, type, ctx] of [["desktop-chromium", chromium, { viewport: { wi
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.goto(url);
-  await waitFor(page, /user@bun:~\$/);
+  await page.waitForFunction(() => {
+    const shell = Reflect.get(Reflect.get(globalThis, "playground"), "shell");
+    return shell.state === "ready" && shell.lastPrompt !== undefined && !shell.running;
+  });
   const isolated = await page.evaluate(() => crossOriginIsolated);
   const t0 = Date.now();
   await run(page, "bun run index.ts");

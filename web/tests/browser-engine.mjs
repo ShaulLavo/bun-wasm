@@ -35,7 +35,7 @@ async function expectRun(page, label, command, code, want = [], not = []) {
 async function runBrowser(name, type, options, appUrl, fixtureBase) {
   const browser = await s.launch(type);
   const context = await browser.newContext(options);
-  const visit = await firstVisit(context, `${appUrl}?engine=${engine}`);
+  const visit = await firstVisit(context, `${appUrl}?engine=${engine}&prompt=off`);
   try {
     await checkPage(name, await context.newPage(), visit, fixtureBase);
   } finally {
