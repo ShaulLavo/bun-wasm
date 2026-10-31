@@ -2,23 +2,32 @@
   "version": 1,
   "fingerprints": {
     "2b938f69a6954424": 1,
-    "41dc4092ec59f279": 1,
     "432876565c1cd6b7": 1,
     "59a6a46ccf0c0efe": 1,
-    "62b11766d46330cc": 1,
     "6441e6aa7f059159": 1,
     "6485299ec919e0b2": 1,
     "7ae2633925a39989": 1,
-    "824fb065a4a9cdf6": 1,
-    "85cdd83fd20b1ad5": 1,
     "887d24fd0e8ffb40": 1,
-    "9806d10810168734": 1,
-    "a13dc7ce00dc8891": 1,
     "ac31b533f4367a57": 1,
     "bf6ffaf3957ce426": 1,
     "c42db0df7f590c4e": 1,
     "e871ba083982025e": 1,
     "f35a9b37be0e8d3c": 1,
     "f3e9976f51876be5": 1
+  },
+  "reasons": {
+    "2b938f69a6954424": "Upstream port: separate Bun CompressionStreamCoder deflate and inflate steps retain z_stream setup beside codec-specific member, flush, and error handling.",
+    "432876565c1cd6b7": "Plan D01: replace the copied local error-formatting adapters in assert, util and events with one internal factory while preserving each inspector and negative-zero policy.",
+    "59a6a46ccf0c0efe": "Plan D05: share browser-test disposal after preserving interruption-during-launch, idempotence, signal exit codes and each test deadline.",
+    "6441e6aa7f059159": "Plan M03: move the repeated HMR frame queue and wait loop to one typed helper; callers continue to own their sockets and cleanup.",
+    "6485299ec919e0b2": "Generated upstream: vendor-node-streams.mjs emits Node v26.7.0 lib/internal/webstreams/adapters.js writable and duplex paths; edit the generator or upstream inputs, not this output.",
+    "7ae2633925a39989": "Plan M01: share the repeated spawnSync timeout-result assertions without merging the distinct timeout-race arrangements.",
+    "887d24fd0e8ffb40": "Plan D06: remove the repeated Remix model subscription through a shared typed page binding, only after preserving each page model and DOM tree.",
+    "ac31b533f4367a57": "Upstream ABI declarations: two required upstream import declarations have different symbols/signatures and already call one shared missing(BYTECODE); there is no second implementation to extract.",
+    "bf6ffaf3957ce426": "Plan D03: give runtime, public transpiler and Bun AST loader translation one shared domain owner instead of maintaining equal variant tables across crate boundaries.",
+    "c42db0df7f590c4e": "Plan M04: share only bootstrap setup and linked-poll import capture in the two executor tests; retain both real run callbacks and descriptor readiness assertions.",
+    "e871ba083982025e": "Plan D04: share the owned child-start helper after characterizing stdout readiness, early error/exit and cleanup ownership for both browser runners.",
+    "f35a9b37be0e8d3c": "Plan D01: replace the copied local describeReceived branches in events and util while keeping events inspect fallback and util depth -1 behavior.",
+    "f3e9976f51876be5": "Plan M02: share the Bun package-version reader and cargo version emission between the JSC and runtime build scripts."
   }
 }
