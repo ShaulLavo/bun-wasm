@@ -106,6 +106,23 @@ async function stalePid() {
     await new Promise(resolve => unrelated.once("exit", resolve));
   }
 }
+async function unregisteredState() {
+  const state = join(scratch, "jsc-guest");
+  if (scenario === "failed-supervisor") {
+    const starting = await run("Start the JSC Cargo guest build", { NODE_OPTIONS: `--import=${join(scratch, "missing-preload.mjs")}` });
+    assert.notEqual(starting.code, 0);
+    assert.match(starting.stderr, /did not register its identity/);
+    assert.match(starting.stderr, /ERR_MODULE_NOT_FOUND/);
+  } else { mkdirSync(state); }
+  assert(!existsSync(join(state, "identity.json")));
+  assert(!existsSync(join(state, "status")));
+  const started = performance.now();
+  assert.equal((await run("Stop the JSC Cargo guest build")).code, 0);
+  assert.equal((await run("Stop the JSC Cargo guest build")).code, 0);
+  assert(existsSync(join(state, "stop")));
+  assert(!existsSync(join(scratch, "invocations")), "build started without a registered supervisor");
+  console.info(JSON.stringify({ scenario, stopMs: performance.now() - started, buildStarted: false }));
+}
 async function ordinary() {
   assert.equal((await run("Start the JSC Cargo guest build")).code, 0);
   if (scenario === "early-failure") {
@@ -142,7 +159,8 @@ async function ordinary() {
 }
 assert.match(workflow, /name: Stop the JSC Cargo guest build\n\s+if: \$\{\{ always\(\) &&/);
 await prepare();
-if (scenario === "startup-race") await startupRace();
+if (scenario === "empty-state" || scenario === "failed-supervisor") await unregisteredState();
+else if (scenario === "startup-race") await startupRace();
 else if (scenario === "stale-pid") await stalePid();
 else if (scenario === "never-started") {
   assert.equal((await run("Stop the JSC Cargo guest build")).code, 0);

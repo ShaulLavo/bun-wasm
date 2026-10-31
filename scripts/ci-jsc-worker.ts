@@ -56,7 +56,7 @@ async function stop(state: string): Promise<void> {
   const deadline = performance.now() + 10000;
   while (status(state) === undefined) {
     const record = identity(state);
-    if (record && !alive(record)) return;
+    if (!record || !alive(record)) return;
     if (performance.now() >= deadline) throw new Error("JSC supervisor did not finish teardown");
     await delay(50);
   }

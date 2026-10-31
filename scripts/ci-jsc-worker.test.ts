@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 const linuxTest = process.platform === "linux" ? test : test.skip;
 
-for (const scenario of ["success", "build-failure", "early-failure", "intervening-failure", "cancellation", "cancellation-int", "startup-race", "stale-pid", "never-started", "stubborn-descendant"] as const) {
+for (const scenario of ["success", "build-failure", "early-failure", "intervening-failure", "cancellation", "cancellation-int", "startup-race", "stale-pid", "never-started", "empty-state", "failed-supervisor", "stubborn-descendant"] as const) {
   linuxTest(`JSC Cargo worker ${scenario} uses the extracted workflow and leaves no processes`, async () => {
     const scratch = await mkdtemp(join(process.env.TMPDIR ?? tmpdir(), "bun-wasm-jsc-worker-"));
     try {
