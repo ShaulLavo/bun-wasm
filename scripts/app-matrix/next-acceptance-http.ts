@@ -40,16 +40,15 @@ async function browserRequest(probe: RequestProbe) {
     state = { stage: "body", sequence: state.sequence, status: state.status, bytesRead: 0, eofObserved: false };
     while (true) {
       const part = await reader.read();
-      if (part.done) {
-        state = { stage: "eof", sequence: state.sequence, status: state.status, bytesRead: state.bytesRead, eofObserved: true };
-        return { kind: "complete", status: response.status, body: body + decoder.decode(), chunks };
-      }
-      state = { stage: "body", sequence: state.sequence, status: state.status, bytesRead: state.bytesRead + part.value.byteLength, eofObserved: false };
+      if (part.done) break;
+      state.bytesRead += part.value.byteLength;
       const text = decoder.decode(part.value, { stream: true });
       body += text;
       chunks.push({ text, timeMs: performance.now() - started });
       if (probe.mode === "cancel-after-first") return { kind: "cancelled", status: response.status, body, chunks };
     }
+    state = { stage: "eof", sequence: state.sequence, status: state.status, bytesRead: state.bytesRead, eofObserved: true };
+    return { kind: "complete", status: response.status, body: body + decoder.decode(), chunks };
   } catch (error) {
     throw new Error(`${String(error)}; ${failureContext()}`);
   } finally {
