@@ -423,4 +423,19 @@ mod tests {
         let prepared = super::prepare("eval(...__bunwasm_evalSpread(eval, xs))", "script");
         assert_eq!(prepared["edits"], json!([]));
     }
+
+    #[test]
+    fn prepares_vm_context_scripts_from_the_shared_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/vm-context-prepare.json"
+        ))
+        .unwrap();
+        for case in fixture["cases"].as_array().unwrap() {
+            let source = case["source"].as_str().unwrap();
+            let prepared = super::prepare(source, "vm-context");
+            let actual = json!({ "edits": prepared["edits"], "scope": prepared["scope"], "fallback": prepared["fallback"] });
+            let expected = json!({ "edits": case["edits"], "scope": case["scope"], "fallback": case["fallback"] });
+            assert_eq!(actual, expected, "{}", case["name"]);
+        }
+    }
 }
