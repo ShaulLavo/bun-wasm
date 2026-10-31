@@ -1012,11 +1012,7 @@ jobs:
           JOBS: "2"
           CAGE: ""
         run: |
-          state="$RUNNER_TEMP/jsc-guest"
-          mkdir "$state"
-          setsid nice -n 19 bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; echo "$status" > "$1/status"' \
-            jsc-guest "$state" > "$state/build.log" 2>&1 < /dev/null &
-          echo "$!" > "$state/pid"
+          bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash -c 'start=$SECONDS; source env.sh && export BUN_CORE_BUILD_DIR="$CARGO_TARGET_DIR/split-common" && bash scripts/build-bun-jsc.sh; status=$?; echo "JSC guest build took $((SECONDS - start))s"; exit "$status"'
       - name: Build native fixtures after the cache checkpoint
         run: |
           source env.sh
@@ -1070,10 +1066,11 @@ jobs:
       - name: Build the JSC Cargo guest
         if: needs.quality.outputs.jsc == 'true'
         run: |
-          state="$RUNNER_TEMP/jsc-guest"
-          while [[ ! -s "$state/status" ]] && kill -0 "$(cat "$state/pid")" 2>/dev/null; do sleep 2; done
-          cat "$state/build.log"
-          test "$(cat "$state/status")" = 0
+          bun scripts/ci-jsc-worker.ts wait "$RUNNER_TEMP/jsc-guest"
+      - name: Stop the JSC Cargo guest build
+        if: ${{ always() && needs.quality.outputs.jsc == 'true' }}
+        run: |
+          bun scripts/ci-jsc-worker.ts stop "$RUNNER_TEMP/jsc-guest"
       - name: Save the JSC Cargo cache once per input revision
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.quality.outputs.jsc == 'true' && steps.jsc-cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
