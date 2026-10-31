@@ -1,0 +1,5 @@
+-pie
+--experimental-pic
+--import-memory
+--shared-memory
+--import-table

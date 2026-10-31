@@ -1,5 +1,5 @@
 // The preview runs the runtime's existing WebSocket implementation over a MessagePort TCP stream.
-import websocketFactory from "../../crates/bunwasm-runtime/src/js/websocket.js";
+import websocketFactory from "bun-wasm:websocket";
 
 const nativeWebSocket = globalThis.WebSocket;
 const script = document.currentScript;
@@ -88,8 +88,7 @@ class Connection {
     this.acceptInput = input;
     const digest = await crypto.subtle.digest("SHA-1", encoder.encode(input));
     if (!this.closed) accepts.set(input, btoa(String.fromCharCode(...new Uint8Array(digest))));
-    const forwarded = request.replace(/^host:[^\r\n]*/im, `host: ${location.host}`);
-    return encoder.encode(forwarded.replace(/\r\n\r\n$/, `\r\norigin: ${location.origin}\r\n\r\n`));
+    return encoder.encode(request.replace(/\r\n\r\n$/, `\r\norigin: http://localhost:${previewPort}\r\n\r\n`));
   }
 
   startReading(): void {}

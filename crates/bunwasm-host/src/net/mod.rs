@@ -8,6 +8,7 @@
 
 mod error;
 mod fetch;
+mod resolver;
 mod tcp;
 #[cfg(test)]
 mod tests;
@@ -30,13 +31,32 @@ pub struct Notify {
 
 impl Notify {
     fn new() -> Arc<Self> {
-        Arc::new(Notify { generation: Mutex::new(0), changed: Condvar::new() })
+        Arc::new(Notify {
+            generation: Mutex::new(0),
+            changed: Condvar::new(),
+        })
     }
 
     /// Called by background threads after they changed a handle's state.
     pub fn bump(&self) {
         *self.generation.lock().unwrap() += 1;
         self.changed.notify_all();
+    }
+
+    /// The change counter. Read it before checking readiness, so a change made during the
+    /// check still ends the following [`Notify::wait_past`].
+    pub fn generation(&self) -> u64 {
+        *self.generation.lock().unwrap()
+    }
+
+    /// Waits until something bumps the counter past `seen`, or `timeout` passes.
+    pub fn wait_past(&self, seen: u64, timeout: Duration) {
+        let generation = self.generation.lock().unwrap();
+        drop(
+            self.changed
+                .wait_timeout_while(generation, timeout, |now| *now == seen)
+                .unwrap(),
+        );
     }
 }
 
@@ -82,6 +102,7 @@ enum Handle {
     Fetch(fetch::Fetch),
     Listener(tcp::Listener),
     Conn(tcp::Conn),
+    Lookup(resolver::Lookup),
 }
 
 pub struct Net {
@@ -123,7 +144,11 @@ impl Net {
 
     fn require_handle(&self) -> Result<(), ErrorInfo> {
         if self.next_handle >= crate::process::FIRST_HANDLE {
-            return Err(ErrorInfo::new("Error", "bun-wasm network handle space exhausted", Some("EAGAIN")));
+            return Err(ErrorInfo::new(
+                "Error",
+                "bun-wasm network handle space exhausted",
+                Some("EAGAIN"),
+            ));
         }
         Ok(())
     }
@@ -143,7 +168,8 @@ impl Net {
     }
 
     pub fn poll(&mut self, timeout_ms: i32) -> i32 {
-        let deadline = (timeout_ms >= 0).then(|| Instant::now() + Duration::from_millis(timeout_ms as u64));
+        let deadline =
+            (timeout_ms >= 0).then(|| Instant::now() + Duration::from_millis(timeout_ms as u64));
         let mut generation = self.notify.generation.lock().unwrap();
         while *generation == self.seen {
             match deadline {
@@ -153,7 +179,12 @@ impl Net {
                     if now >= deadline {
                         return 0;
                     }
-                    generation = self.notify.changed.wait_timeout(generation, deadline - now).unwrap().0;
+                    generation = self
+                        .notify
+                        .changed
+                        .wait_timeout(generation, deadline - now)
+                        .unwrap()
+                        .0;
                 }
             }
         }
@@ -162,7 +193,9 @@ impl Net {
     }
 
     pub fn fetch(&mut self, meta: &[u8], body: &[u8]) -> i32 {
-        if let Err(error) = self.require_handle() { return self.fail(error); }
+        if let Err(error) = self.require_handle() {
+            return self.fail(error);
+        }
         match fetch::Fetch::start(&self.clients, meta, body, self.notify.clone()) {
             Ok(request) => self.insert(Handle::Fetch(request)),
             Err(error) => self.fail(error),
@@ -172,6 +205,23 @@ impl Net {
     pub fn fetch_head(&mut self, handle: i32) -> Output {
         match self.handles.get(&handle) {
             Some(Handle::Fetch(request)) => request.head(),
+            _ => Output::Code(BADF),
+        }
+    }
+
+    pub fn lookup(&mut self, hostname: &str, family: i32, hints: i32) -> i32 {
+        if let Err(error) = self.require_handle() {
+            return self.fail(error);
+        }
+        match resolver::Lookup::start(hostname, family, hints, self.notify.clone()) {
+            Ok(lookup) => self.insert(Handle::Lookup(lookup)),
+            Err(error) => self.fail(error),
+        }
+    }
+
+    pub fn lookup_head(&mut self, handle: i32) -> Output {
+        match self.handles.get(&handle) {
+            Some(Handle::Lookup(lookup)) => lookup.head(),
             _ => Output::Code(BADF),
         }
     }
@@ -194,6 +244,7 @@ impl Net {
     pub fn close(&mut self, handle: i32) -> i32 {
         match self.handles.remove(&handle) {
             Some(Handle::Fetch(request)) => request.abort(),
+            Some(Handle::Lookup(_)) => {}
             Some(Handle::Listener(listener)) => listener.close(),
             Some(Handle::Conn(conn)) => {
                 conn.close();
@@ -206,7 +257,9 @@ impl Net {
     }
 
     pub fn listen(&mut self, host: &str, port: i32) -> i32 {
-        if let Err(error) = self.require_handle() { return self.fail(error); }
+        if let Err(error) = self.require_handle() {
+            return self.fail(error);
+        }
         match tcp::Listener::bind(host, port, self.notify.clone()) {
             Ok(listener) => self.insert(Handle::Listener(listener)),
             Err(error) => self.fail(error),
@@ -226,7 +279,9 @@ impl Net {
             Some(Handle::Listener(listener)) => listener,
             _ => return BADF,
         };
-        if let Err(error) = self.require_handle() { return self.fail(error); }
+        if let Err(error) = self.require_handle() {
+            return self.fail(error);
+        }
         match listener.accept() {
             Some(conn) => self.insert(Handle::Conn(conn)),
             None => AGAIN,
@@ -235,7 +290,10 @@ impl Net {
 
     pub fn shutdown(&mut self, handle: i32) -> i32 {
         match self.handles.get(&handle) {
-            Some(Handle::Conn(conn)) => { conn.shutdown(); 0 }
+            Some(Handle::Conn(conn)) => {
+                conn.shutdown();
+                0
+            }
             _ => BADF,
         }
     }
@@ -246,14 +304,22 @@ impl Net {
             Some(Handle::Listener(listener)) => Some(listener.local_addr()),
             _ => return Output::Code(BADF),
         };
-        address.map_or(Output::Code(AGAIN), |addr| Output::Bytes(tcp::addr_json(addr)))
+        address.map_or(Output::Code(AGAIN), |addr| {
+            Output::Bytes(tcp::addr_json(addr))
+        })
     }
 
     pub fn connect(&mut self, host: &str, port: i32) -> i32 {
         if !(0..=65535).contains(&port) {
-            return self.fail(ErrorInfo::new("RangeError", format!("Port should be >= 0 and < 65536. Received {port}."), Some("ERR_SOCKET_BAD_PORT")));
+            return self.fail(ErrorInfo::new(
+                "RangeError",
+                format!("Port should be >= 0 and < 65536. Received {port}."),
+                Some("ERR_SOCKET_BAD_PORT"),
+            ));
         }
-        if let Err(error) = self.require_handle() { return self.fail(error); }
+        if let Err(error) = self.require_handle() {
+            return self.fail(error);
+        }
         let conn = tcp::Conn::connect(host.to_string(), port as u16, self.notify.clone());
         self.insert(Handle::Conn(conn))
     }
@@ -263,11 +329,16 @@ impl Net {
             (0, _) => self.last_error.clone(),
             (_, Some(Handle::Fetch(request))) => request.error(),
             (_, Some(Handle::Conn(conn))) => conn.error(),
+            (_, Some(Handle::Lookup(lookup))) => lookup.error(),
             (_, Some(Handle::Listener(_))) => None,
             (_, None) => return Output::Code(BADF),
         };
         let error = error.unwrap_or_else(|| {
-            ErrorInfo::new("Error", format!("network operation failed for handle {handle}"), Some("ERR_NETWORK"))
+            ErrorInfo::new(
+                "Error",
+                format!("network operation failed for handle {handle}"),
+                Some("ERR_NETWORK"),
+            )
         });
         Output::Bytes(error.to_json())
     }
@@ -299,6 +370,7 @@ impl Drop for Net {
                 Handle::Fetch(request) => request.abort(),
                 Handle::Listener(listener) => listener.close(),
                 Handle::Conn(conn) => conn.close(),
+                Handle::Lookup(_) => {}
             }
         }
     }

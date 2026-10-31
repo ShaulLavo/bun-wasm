@@ -1,0 +1,6 @@
+{
+  "owner": "web",
+  "path": "scripts/v8-serialization.test.ts",
+  "localRuntime": true,
+  "batch": "10-web"
+}

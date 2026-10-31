@@ -3,24 +3,26 @@ name = "bunwasm-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Bun-compatible JS runtime for wasm32-wasip1, on QuickJS-ng or JavaScriptCore behind an Engine trait"
+description = "Bun-compatible JS runtime for wasm32-wasip1 with a linked engine program"
 
 [features]
-default = ["engine-quickjs"]
-# The JS engine (exactly one): QuickJS-ng, or Bun's JavaScriptCore.
-engine-quickjs = ["dep:rquickjs"]
-engine-jsc = ["dep:bunwasm-jsc"]
+default = ["engine-split"]
+# The linked engine program supplies the VM; the core owns process and data services.
+engine-split = []
 # The host's own JS engine (browser/Node): see docs/engine-browser.md.
 engine-host = []
 
 [dependencies]
 bunwasm-crypto-sys = { path = "../bunwasm-crypto-sys" }
+bun_dotenv = { path = "../../vendor/bun/src/dotenv" }
 bun_glob = { path = "../../vendor/bun/src/glob" }
 bun_semver = { path = "../../vendor/bun/src/semver" }
 bunwasm-semver = { path = "../bunwasm-semver" }
 bun_sys = { path = "../../vendor/bun/src/sys" }
-bunwasm-jsc = { path = "../bunwasm-jsc", optional = true }
-rquickjs = { version = "0.13", default-features = false, features = ["std", "loader", "array-buffer"], optional = true }
+bun_node_path = { path = "../../vendor/bun/src/node_path" }
+bytemuck = "1"
+bun_core = { path = "../../vendor/bun/src/bun_core" }
+bun_paths = { path = "../../vendor/bun/src/paths" }
 bun_wyhash = { path = "../../vendor/bun/src/wyhash" }
 bun_zstd = { path = "../../vendor/bun/src/zstd" }
 zstd-sys = { version = "=2.0.16", default-features = false, features = ["no_asm"] }
@@ -28,9 +30,13 @@ url = "2"
 serde_json = { version = "1", features = ["preserve_order"] }
 sha1 = "0.10"
 sha2 = "0.10"
-md-5 = "0.10"
+md5 = { package = "md-5", version = "0.10" }
 hmac = "0.12"
 getrandom = "0.3"
+icu_collator = "2.4.0"
+icu_locale_core = "2.4.0"
+icu_locale_fallback = "2.4.0"
+icu_provider = "2.4.0"
 encoding_rs = "0.8"
 bun_brotli_sys = { path = "../../vendor/bun/src/brotli_sys" }
 libsqlite3-sys = { version = "0.38", features = ["bundled"] }
@@ -57,6 +63,7 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 pkcs8 = { version = "0.10", features = ["alloc"] }
 spki = { version = "0.7", features = ["alloc"] }
 signature = "2"
+
 
 [dev-dependencies]
 bunwasm-glue = { path = "../bunwasm-glue" }

@@ -1,4 +1,5 @@
 import {readFileSync} from "node:fs";
+import {stripTypeScriptTypes} from "node:module";
 import {fileURLToPath} from "node:url";
 import {webcrypto, randomBytes, timingSafeEqual, generateKeyPairSync} from "node:crypto";
 import * as stream from "node:stream";
@@ -7,7 +8,8 @@ const root = fileURLToPath(new URL("../../crates/bunwasm-runtime/src/js/", impor
 const provider = webcrypto.subtle;
 const signMetadata = {name:provider.sign.name, length:provider.sign.length};
 const beforeSign = provider.sign.bind(provider), beforeVerify = provider.verify.bind(provider);
-const load = path => (0, eval)(readFileSync(path, "utf8"));
+// oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
+const load = path => (0, eval)(path.endsWith(".ts") ? stripTypeScriptTypes(readFileSync(path, "utf8"), {mode:"strip"}) : readFileSync(path, "utf8"));
 const internal = {
  native:{subtleCrypto:provider, CryptoKey:globalThis.CryptoKey, SubtleCrypto:globalThis.SubtleCrypto,
   randomBytes:n=>new Uint8Array(randomBytes(n)),
@@ -17,11 +19,11 @@ const internal = {
  },
  builtin:()=>stream,
  toUint8:a=>ArrayBuffer.isView(a)?new Uint8Array(a.buffer,a.byteOffset,a.byteLength):new Uint8Array(a),
- require:name=>load(root+name+".js")(internal),
+ require:name=>load(root+name+(name==="crypto_host_keys"?".ts":".js"))(internal),
 };
 load(root+"crypto.js")(internal);
 const c = internal.crypto;
-const path = process.env.NODE_CRYPTO_KEYS_SOURCE || root+"crypto_keys.js";
+const path = process.env.NODE_CRYPTO_KEYS_SOURCE || root+"crypto_keys.ts";
 const keys = load(path)(internal)(Buffer, (a,encoding)=>Buffer.from(a,encoding), timingSafeEqual);
 const data = new Uint8Array([1,2,3]);
 let failures = 0;
@@ -85,6 +87,20 @@ await check("RSA validates the padding value it uses", () => {
  const options = {key:privateKey,get padding(){reads++;return reads === 1 ? 999 : 1;}};
  assert.throws(() => keys.sign("sha256",data,options),e=>/ERR_OSSL_/.test(e.code));
  assert.equal(reads,1);
+});
+await check("Writable write/end/on signing and verification", async () => {
+ const signer=keys.createSign("sha256");
+ let finished=0;
+ const done=new Promise(resolve=>signer.on("finish",()=>{finished++;resolve();}));
+ signer.write(data);
+ signer.end();
+ await done;
+ const signature=signer.sign(privateKey);
+ const verifier=keys.createVerify("sha256");
+ verifier.write(data);
+ verifier.end();
+ assert(verifier.verify(publicKey,signature));
+ assert.equal(finished,1);
 });
 assert.equal(provider, webcrypto.subtle);
 console.log("failures",failures);

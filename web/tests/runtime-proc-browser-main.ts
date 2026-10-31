@@ -1,7 +1,10 @@
 import { createRuntime, type ProcessAdmissionEvent, type Runtime } from "waffle";
+import { cliShimFixture } from "./cli-shim-fixture";
 import { startRun, type Run } from "../src/runner";
+import { installBunAdapters } from "../src/subprocess-broker";
 import { createWorkerProcessTransport, workerProcessDirectoryId, workerProcessState } from "waffle/proc/worker-client";
 import { runtimeProcChecks, runtimeProcFixture, runtimeProcStages, runtimeProcJobWaitChecks, runtimeProcJobWaitFixture, runtimeProcJobWaitStages } from "./runtime-proc-fixtures";
+import { observeRuntimeProcWorker, type RuntimeProcABIObservation } from "./runtime-proc-worker-observer";
 
 // Diagnostic only: identify the exact BufferSource representation rejected by an engine.
 // This never changes the guest, retries an operation, or relaxes a process assertion.
@@ -25,7 +28,7 @@ function decodeFingerprint() {
 // unchanged. The descendants' final poll is suspended until the shell's real blocking wait_job
 // reaches Atomics.wait; a scheduler pause therefore cannot accidentally turn this into a ready-job
 // fast-path test. Observing the actual blocking branch is stronger than an elapsed-time guess.
-async function instrumentJobWaitWorker(sourceURL: string) {
+async function instrumentJobWaitWorker(sourceURL: string, jobWait: boolean) {
   const scope = globalThis as unknown as DedicatedWorkerGlobalScope;
   let gate: Int32Array | undefined, waitingJob: number | undefined, loaded = false;
   const pending: MessageEvent[] = [];
@@ -56,7 +59,7 @@ async function instrumentJobWaitWorker(sourceURL: string) {
       pending.push(event); event.stopImmediatePropagation();
     }
   });
-  Reflect.set(Atomics, "wait", (...args: unknown[]) => {
+  if (jobWait) Reflect.set(Atomics, "wait", (...args: unknown[]) => {
     if (waitingJob !== undefined && gate && Atomics.compareExchange(gate, 0, 0, 1) === 0) {
       scope.postMessage({ type: "job-wait-test-blocking-entry", job: waitingJob });
       Atomics.notify(gate, 0);
@@ -66,7 +69,7 @@ async function instrumentJobWaitWorker(sourceURL: string) {
   Reflect.set(WebAssembly, "Instance", class extends NativeInstance {
     constructor(module: WebAssembly.Module, imports: WebAssembly.Imports = {}) {
       const runtime = imports.runtime_proc;
-      if (runtime) {
+      if (runtime && jobWait) {
         const waitJob = runtime.wait_job, poll = runtime.poll, read = runtime.read, interrupted = runtime.interrupted;
         // Preserve each return value rather than guessing whether a failed readExact saw EOF,
         // an errno, or a legal zero-ready wake. These messages never change the ABI result.
@@ -122,25 +125,65 @@ let admissionReports = 0;
 let ioReports = 0;
 const NativeWorker = globalThis.Worker;
 const activeWorkers = new Set<Worker>();
+// Waffle prestarts idle process workers that receive no request until a spawn takes one.
+// Guest and filesystem workers are the ones the page has posted to.
+const requestedWorkers = new WeakSet<Worker>();
+const busyWorkers = () => Array.from(activeWorkers).filter(worker => requestedWorkers.has(worker)).length;
 const messages: string[] = [];
 const exits: { worker: number; type: string; code: number; message?: string }[] = [];
 const reaps: { job: number; completedGuests: typeof exits }[] = [];
 const workerErrors: { worker: number; message: string; filename: string; lineno: number; colno: number }[] = [];
+const terminalWorkers: {
+  worker: number; url: string; terminal?: Int32Array;
+  doorbellCount: number; doorbellTimes: number[]; abiReports: number; abiCalls: RuntimeProcABIObservation[];
+}[] = [];
+const workerTerminal = new WeakMap<Worker, typeof terminalWorkers[number]>();
+let heartbeatLast = performance.now(), heartbeatMaxGap = 0, heartbeatTicks = 0;
+const heartbeat = setInterval(() => {
+  const now = performance.now();
+  heartbeatMaxGap = Math.max(heartbeatMaxGap, now - heartbeatLast);
+  heartbeatLast = now;
+  heartbeatTicks++;
+}, 50);
+function terminalDiagnostics() {
+  return {
+    heartbeat: { intervalMs: 50, ticks: heartbeatTicks, maxGapMs: Math.max(heartbeatMaxGap, performance.now() - heartbeatLast) },
+    workers: terminalWorkers.map(({ terminal, doorbellTimes, abiCalls, ...worker }) => ({
+      ...worker, doorbellTimes: doorbellTimes.slice(), abiCalls: abiCalls.slice(),
+      header: terminal && Array.from({ length: 8 }, (_, index) => Atomics.load(terminal, index)),
+    })),
+  };
+}
 let workersCreated = 0;
 globalThis.Worker = class extends NativeWorker {
   constructor(url: string | URL, options?: WorkerOptions) {
     const sourceURL = new URL(url, location.href);
     let bootstrapURL: string | undefined;
-    if (jobWaitGate && /\/(?:preview1-)?worker\.js$/.test(sourceURL.pathname)) {
-      bootstrapURL = URL.createObjectURL(new Blob([`await (${instrumentJobWaitWorker.toString()})(${JSON.stringify(sourceURL.href)})`], { type: "text/javascript" }));
+    if (/\/(?:preview1-)?worker\.js$/.test(sourceURL.pathname)) {
+      bootstrapURL = URL.createObjectURL(new Blob([
+        jobWaitScenario ? "" : `(${observeRuntimeProcWorker.toString()})();`,
+        `await (${instrumentJobWaitWorker.toString()})(${JSON.stringify(sourceURL.href)}, ${jobWaitScenario})`,
+      ], { type: "text/javascript" }));
       bootstrapURLs.add(bootstrapURL);
     }
     super(bootstrapURL ?? url, options); activeWorkers.add(this); const worker = ++workersCreated;
+    const terminal: typeof terminalWorkers[number] = { worker, url: sourceURL.href, doorbellCount: 0, doorbellTimes: [], abiReports: 0, abiCalls: [] };
+    if (terminalWorkers.length < 32) { terminalWorkers.push(terminal); workerTerminal.set(this, terminal); }
     this.addEventListener("error", event => {
       workerErrors.push({ worker, message: event.message, filename: event.filename, lineno: event.lineno, colno: event.colno });
     });
     this.addEventListener("message", event => {
       const { data } = event;
+      if (data.type === "terminal-output") {
+        terminal.doorbellCount++;
+        if (terminal.doorbellTimes.length === 24) terminal.doorbellTimes.shift();
+        terminal.doorbellTimes.push(performance.now());
+      }
+      if (data.type === "proc-abi-observation") {
+        terminal.abiReports++;
+        if (terminal.abiCalls.length === 24) terminal.abiCalls.shift();
+        terminal.abiCalls.push(data);
+      }
       if (data.type === "job-wait-test-blocking-entry") {
         blockingWaitEntries.push(data.job); event.stopImmediatePropagation(); return;
       }
@@ -167,7 +210,16 @@ globalThis.Worker = class extends NativeWorker {
       }
       if (data.type === "exit" || data.type === "error") exits.push({ worker, type: data.type, code: data.code, message: data.message });
     });
-    if (bootstrapURL) this.postMessage({ type: "job-wait-test-gate", gate: jobWaitGate });
+    if (bootstrapURL && jobWaitGate) super.postMessage({ type: "job-wait-test-gate", gate: jobWaitGate });
+  }
+  override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions) {
+    requestedWorkers.add(this);
+    const terminal = workerTerminal.get(this);
+    if (terminal && message && typeof message === "object" && "terminalOutput" in message && message.terminalOutput instanceof SharedArrayBuffer) {
+      terminal.terminal = new Int32Array(message.terminalOutput, 0, 8);
+    }
+    if (Array.isArray(options)) super.postMessage(message, options);
+    else super.postMessage(message, options);
   }
   override terminate() { activeWorkers.delete(this); super.terminate(); }
 };
@@ -180,6 +232,26 @@ async function until(condition: () => boolean, label: string) {
   while (!condition()) { if (performance.now() >= deadline) throw new Error(`${label} timed out`); await pause(); }
 }
 
+async function checkForegroundStops(runtime: Runtime): Promise<number[]> {
+  const codes: number[] = [];
+  for (const signal of [2, 9] as const) {
+    let output = "";
+    const foreground = startRun({ engine: "browser", adapter: "preview1", runtime,
+      module: new WebAssembly.Module(cliShimFixture("wait")), args: ["foreground-stop"], env: {}, moduleScope: false,
+    }, { stdout(bytes) { output += new TextDecoder().decode(bytes); }, stderr(bytes) { throw new Error(new TextDecoder().decode(bytes)); } });
+    try {
+      await until(() => output === "runner-ready\n", "foreground guest reached signal polling");
+      foreground.kill(signal);
+      const outcome = await foreground.done;
+      equal(outcome.error, undefined, "foreground stop did not crash");
+      equal(outcome.code, 128 + signal, "foreground signal exit");
+      codes.push(outcome.code);
+    } finally { foreground.kill(9); }
+    await until(() => busyWorkers() === 1, "foreground worker released before next run");
+  }
+  return codes;
+}
+
 let runtime: Runtime | undefined;
 let run: Run | undefined;
 let settled = false;
@@ -190,6 +262,7 @@ let stdout = "", stderr = "";
 Reflect.set(globalThis, "runtimeProcDiagnostics", () => result ?? {
   stdout, stderr, messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns,
   admissions, admissionReportsAtFailure: admissionReports, admissionReports, workerErrors, bufferDecode,
+  terminalDiagnostics: terminalDiagnostics(),
   cleanup: { activeWorkers: activeWorkers.size, workersCreated },
 });
 try {
@@ -206,7 +279,15 @@ try {
   const jobWait = parameters.has("job-wait");
   const checks = jobWait ? runtimeProcJobWaitChecks : runtimeProcChecks;
   const stages = jobWait ? runtimeProcJobWaitStages : runtimeProcStages;
-  const module = new WebAssembly.Module(jobWait ? runtimeProcJobWaitFixture() : runtimeProcFixture());
+  // This original preview1 fixture is not Bun. Give it its own admitted marker and
+  // executable registration rather than accidentally loading the real /bin/bun guest.
+  const executable = "/fixtures/runtime-proc";
+  const module = new WebAssembly.Module(jobWait ? runtimeProcJobWaitFixture(executable) : runtimeProcFixture(executable));
+  await runtime.filesystem.mkdirp("/fixtures");
+  await runtime.filesystem.writeFile(executable, "original byte-encoded preview1 fixture");
+  await runtime.filesystem.flush();
+  installBunAdapters(runtime, new URL("./worker.js", location.href).href);
+  runtime.registerProgram(executable, { adapter: "preview1", module, cooperative: true });
   const explicit = parameters.has("explicit");
   // Omitting runtimeProcess is intentional: a generic root must be recognized from real imports,
   // not only when a privileged caller already knows to manufacture the transport.
@@ -244,15 +325,19 @@ try {
   }
   if (workersCreated < (jobWait ? 6 : 3)) throw new Error(`expected real filesystem and all guest workers, saw ${workersCreated}`);
   // Completion acknowledges guest descriptor release. The run and broker must stop both guests.
-  await until(() => activeWorkers.size === 1, "completed guests terminated before filesystem disposal");
+  await until(() => busyWorkers() === 1, "completed guests terminated before filesystem disposal");
+  const stopCodes = jobWait ? [] : await checkForegroundStops(runtime);
   await runtime.dispose(); runtime = undefined;
   await until(() => activeWorkers.size === 0, "all task-created workers terminated");
-  result = { ok: true, mode: explicit ? "explicit" : "automatic", scenario: jobWait ? "job-wait" : "pipes", checks, stdout,
+  result = { ok: true, mode: explicit ? "explicit" : "automatic", scenario: jobWait ? "job-wait" : "pipes", checks, stdout, stopCodes,
+    terminalDiagnostics: terminalDiagnostics(),
     messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, admissions, admissionReports, workerErrors, bufferDecode, cleanup: { activeWorkers: activeWorkers.size, workersCreated } };
 } catch (error) {
   result = { ok: false, stdout, stderr, messages, exits, reaps, blockingWaitEntries, ioCalls, ioReports, launches, spawns, admissions, admissionReportsAtFailure: admissionReports, workerErrors, bufferDecode,
+    terminalDiagnostics: terminalDiagnostics(),
     error: error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error) };
 } finally {
+  clearInterval(heartbeat);
   if (run && !settled) {
     run.kill(9);
     let timeout: ReturnType<typeof setTimeout> | undefined;

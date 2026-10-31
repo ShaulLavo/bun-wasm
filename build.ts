@@ -9,7 +9,9 @@ const result = await Bun.build({
   entrypoints: [
     join(import.meta.dir, "src/index.ts"),
     join(import.meta.dir, "src/worker-entry.ts"),
+    join(import.meta.dir, "src/notification-worker-entry.ts"),
     join(import.meta.dir, "src/assets.ts"),
+    join(import.meta.dir, "src/engine-kind.ts"),
   ],
   outdir: out,
   format: "esm",

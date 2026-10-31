@@ -1,0 +1,8 @@
+a start
+b start
+c sync
+c job
+b end
+d after b
+a end
+main d ready

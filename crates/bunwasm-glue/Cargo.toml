@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Rust definitions of the C/C++ symbols vendored Bun crates expect (JSC/WTF, simdutf, highway, mimalloc)"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(bun_sema_mimalloc)'] }
+
 [dependencies]
 bstr = "1"
 bun_ast = { path = "../../vendor/bun/src/ast" }

@@ -1,85 +1,39 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EditorState } from "@codemirror/state";
-import { Shell } from "../src/shell";
+import { SharedFilesystem } from "waffle/browser/shared-fs";
+import { FilesystemClient, FilesystemError, FilesystemService, MemoryBackend, createFilesystemConnection } from "waffle/fs";
+import { deferred, filesystem, filesystemFixture as pageFilesystem, method, models, turn } from "./ui-model-helpers";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
-const transpiler = new Bun.Transpiler({ loader: "ts" });
+const pageCleanups: (() => Promise<void>)[] = [];
+const projectPackage = JSON.stringify({ scripts: { dev: "vite", build: "vite build" } });
+afterEach(async () => { for (const cleanup of pageCleanups.splice(0)) await cleanup(); });
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
-  return { promise, resolve, reject };
+async function pageFixture(sources?: Record<string, string>, fixture = pageFilesystem()) {
+  const page = await models(fixture, sources);
+  pageCleanups.push(page.cleanup);
+  return page;
 }
 
-// This tree represents the durable image after every successful mutation: background
-// persistence may publish any prefix of startup, before its explicit final checkpoint.
-function seedTreeFixture() {
-  const files = new Map<string, string>();
-  const directories = new Set<string>();
-  const fs = {
-    beforeWrite: undefined as ((path: string) => void) | undefined,
-    checkpoints: 0,
-    async mkdirp(path: string) {
-      const parts = path.split("/").filter(Boolean);
-      for (let length = 1; length <= parts.length; length++) directories.add(`/${parts.slice(0, length).join("/")}`);
-    },
-    async lookup(path: string) { return directories.has(path) ? { kind: "dir" } : files.has(path) ? { kind: "file" } : undefined; },
-    async writeFile(path: string, text: string) {
-      await fs.mkdirp(path.slice(0, path.lastIndexOf("/")));
-      fs.beforeWrite?.(path);
-      files.set(path, text);
-    },
-    async remove(path: string) {
-      for (const key of files.keys()) if (key === path || key.startsWith(`${path}/`)) files.delete(key);
-      for (const key of directories) if (key === path || key.startsWith(`${path}/`)) directories.delete(key);
-    },
-    async flush() { fs.checkpoints++; },
-  };
-  return { fs, files, directories };
-}
-
-class View {
-  state: EditorState;
-  constructor(options: { state?: EditorState }) { this.state = options.state ?? EditorState.create(); }
-  setState(state: EditorState) { this.state = state; }
-}
-
-// Exercise the actual UI classes without booting their wasm engines, terminal, or DOM.
-// Only rendering/extensions are replaced; open/save/sync/scheduling execute unchanged.
 async function editorFixture(app: "web" | "sandbox") {
-  const source = await Bun.file(new URL(app === "web" ? "../src/main.ts" : "../../sandbox/src/main.ts", import.meta.url)).text();
-  const end = app === "web" ? "const editor = new Editor" : "// ---------- file tree ----------";
-  const code = source.slice(source.indexOf("class Editor {"), source.indexOf(end));
-  const reads = new Map<string, ReturnType<typeof deferred<Uint8Array | undefined>>>();
-  const writes: { path: string; text: string; done: ReturnType<typeof deferred<void>> }[] = [];
+  const page = await pageFixture();
+  const { fixture } = page;
+  fixture.control.holdWrites = true;
+  fixture.fs.readFile = async path => fixture.reads.get(path)?.promise ?? encoder.encode(path);
+  const playgroundEditor = new page.PlaygroundEditor(filesystem(fixture), { run: async () => {}, report(error) { throw error; }, changed() {} });
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  const sandboxEditor = sandbox.editor!;
+  pageCleanups.push(async () => { sandboxEditor.discard(); });
   const statuses: string[] = [];
-  const checkpoints: ReturnType<typeof deferred<void>>[] = [];
-  const fs = {
-    readFile(path: string) { return reads.get(path)?.promise ?? Promise.resolve(encoder.encode(path)); },
-    writeFile(path: string, text: string) {
-      const done = deferred<void>();
-      writes.push({ path, text, done });
-      return done.promise;
-    },
-    listFiles: async () => [],
-    flush: () => checkpoints.shift()?.promise ?? Promise.resolve(),
+  sandbox.addEventListener("change", () => { statuses.push(sandboxEditor.saveState.text); });
+  const editor = app === "web" ? playgroundEditor : sandboxEditor;
+  return {
+    ...page, editor, playgroundEditor, sandboxEditor, sandbox,
+    save: (path: string) => app === "web" ? playgroundEditor.save() : sandboxEditor.flush(path),
+    statuses,
   };
-  const saveCode = app === "sandbox"
-    ? source.slice(source.indexOf("async function save("), source.indexOf("function reportError("))
-    : "";
-  const env = {
-    fs, EditorState, EditorView: View, HOME: "/home/user", decode: (bytes: Uint8Array) => decoder.decode(bytes),
-    abs: (path: string) => `/home/user/app/${path}`, fileName: {}, fileSelect: {}, tree: { select() {} },
-    setSaveState: (text: string) => statuses.push(text), SAVE_DELAY_MS: 350,
-    server: null, run: null, unsent: new Map(), sendUpdate() {},
-  };
-  const Editor = new Function(...Object.keys(env), `${transpiler.transformSync(`let editRevision = 0; ${saveCode} ${code}`)}; return Editor;`)(...Object.values(env));
-  Editor.prototype.extensions = () => [];
-  Editor.prototype.renderTabs = async () => {};
-  const editor = new Editor({});
-  return { editor, reads, writes, statuses, checkpoints };
 }
 
 for (const app of ["web", "sandbox"] as const) {
@@ -88,9 +42,9 @@ for (const app of ["web", "sandbox"] as const) {
     const absolute = (name: string) => app === "web" ? `/home/user/${name}` : `/home/user/app/${name}`;
 
     test("the latest open wins without saving the previous view under a pending path", async () => {
-      const { editor, reads } = await editorFixture(app);
+      const { editor, fixture: { reads } } = await editorFixture(app);
       await editor.open(path("initial.ts"));
-      editor.view.state = EditorState.create({ doc: "unsaved initial" });
+      editor.view.setState(EditorState.create({ doc: "unsaved initial" }));
       const older = deferred<Uint8Array | undefined>();
       const newer = deferred<Uint8Array | undefined>();
       reads.set(absolute("older.ts"), older);
@@ -109,7 +63,7 @@ for (const app of ["web", "sandbox"] as const) {
     });
 
     test("selecting the current file cancels an outstanding open", async () => {
-      const { editor, reads } = await editorFixture(app);
+      const { editor, fixture: { reads } } = await editorFixture(app);
       await editor.open(path("initial.ts"));
       const pending = deferred<Uint8Array | undefined>();
       reads.set(absolute("pending.ts"), pending);
@@ -123,100 +77,105 @@ for (const app of ["web", "sandbox"] as const) {
 }
 
 test("playground save completion belongs to its original file, not the newly selected tab", async () => {
-  const { editor, writes } = await editorFixture("web");
+  const { playgroundEditor: editor, fixture: { writes } } = await editorFixture("web");
   await editor.open("/home/user/a.ts");
-  editor.view.state = EditorState.create({ doc: "edited A" });
+  editor.view.setState(EditorState.create({ doc: "edited A" }));
   const saving = editor.save();
   await editor.open("/home/user/b.ts");
   writes[0]!.done.resolve();
   await saving;
   expect(writes[0]!.path).toBe("/home/user/a.ts");
-  expect(editor.saved.get("/home/user/a.ts")).toBe("edited A");
-  expect(editor.saved.get("/home/user/b.ts")).toBe("/home/user/b.ts");
+  await editor.open("/home/user/a.ts");
+  expect(editor.view.state.doc.toString()).toBe("edited A");
+  expect(editor.dirty("/home/user/a.ts")).toBe(false);
+  await editor.open("/home/user/b.ts");
+  expect(editor.view.state.doc.toString()).toBe("/home/user/b.ts");
+  expect(editor.dirty("/home/user/b.ts")).toBe(false);
 });
 
 for (const app of ["web", "sandbox"] as const) {
   test(`${app} save stays dirty until its durable checkpoint resolves`, async () => {
-    const { editor, writes, statuses, checkpoints } = await editorFixture(app);
+    const { editor, playgroundEditor, sandboxEditor, statuses, save, fixture: { writes, checkpoints } } = await editorFixture(app);
     const path = app === "web" ? "/home/user/a.ts" : "src/main.ts";
     await editor.open(path);
-    editor.view.state = EditorState.create({ doc: "durable edit" });
+    editor.view.setState(EditorState.create({ doc: "durable edit" }));
     const checkpoint = deferred<void>();
     checkpoints.push(checkpoint);
     let completed = false;
-    const saving = (app === "web" ? editor.save() : editor.flush(path)).then(() => { completed = true; });
+    const saving = save(path).then(() => { completed = true; });
     writes[0]!.done.resolve();
-    // Let every continuation of the memory write run while storage is still pending.
-    await Bun.sleep(0);
+    await turn();
     expect(completed).toBe(false);
-    if (app === "web") expect(editor.dirty(path)).toBe(true);
+    if (app === "web") expect(playgroundEditor.dirty(path)).toBe(true);
     else expect(statuses).not.toContain("saved");
     checkpoint.resolve();
     await saving;
-    if (app === "web") expect(editor.saved.get(path)).toBe("durable edit");
-    else expect(statuses.at(-1)).toBe("saved");
+    expect(editor.view.state.doc.toString()).toBe("durable edit");
+    if (app === "web") expect(playgroundEditor.dirty(path)).toBe(false);
+    else expect(sandboxEditor.saveState).toEqual({ text: "saved", kind: "ok" });
   });
 
   test(`${app} failed durability checkpoint never marks the edit saved`, async () => {
-    const { editor, writes, statuses, checkpoints } = await editorFixture(app);
+    const { editor, playgroundEditor, sandboxEditor, statuses, save, fixture: { writes, checkpoints } } = await editorFixture(app);
     const path = app === "web" ? "/home/user/a.ts" : "src/main.ts";
     await editor.open(path);
-    editor.view.state = EditorState.create({ doc: "must remain dirty" });
+    editor.view.setState(EditorState.create({ doc: "must remain dirty" }));
     const checkpoint = deferred<void>();
     checkpoints.push(checkpoint);
-    // Keep the deliberately rejected backend promise observed even against the old save path.
-    void checkpoint.promise.catch(() => {});
-    const saving: Promise<unknown> = (app === "web" ? editor.save() : editor.flush(path)).catch((error: unknown) => error);
+    const saving = save(path).catch((error: unknown) => error);
     writes[0]!.done.resolve();
-    await Bun.sleep(0);
+    await turn();
     checkpoint.reject(new Error("storage full"));
     expect(await saving).toEqual(new Error("storage full"));
-    if (app === "web") expect(editor.dirty(path)).toBe(true);
-    else expect(statuses.at(-1)).toBe("not saved: Error: storage full");
+    if (app === "web") expect(playgroundEditor.dirty(path)).toBe(true);
+    else expect(sandboxEditor.saveState).toEqual({ text: "not saved: Error: storage full", kind: "error" });
     expect(statuses).not.toContain("saved");
   });
 }
 
 test("playground sync preserves edits made while a filesystem read is pending", async () => {
-  const { editor, reads } = await editorFixture("web");
+  const { playgroundEditor: editor, fixture: { reads } } = await editorFixture("web");
   await editor.open("/home/user/a.ts");
   const reading = deferred<Uint8Array | undefined>();
   reads.set("/home/user/a.ts", reading);
   const syncing = editor.syncFromFs();
-  editor.view.state = EditorState.create({ doc: "typed during read" });
+  editor.view.setState(EditorState.create({ doc: "typed during read" }));
   reading.resolve(encoder.encode("external change"));
   await syncing;
   expect(editor.view.state.doc.toString()).toBe("typed during read");
 });
 
 test("sandbox reset cancels debounced writes and locks the editor before replacing files", async () => {
-  const { editor, writes } = await editorFixture("sandbox");
+  const { sandboxEditor: editor, fixture: { writes } } = await editorFixture("sandbox");
   await editor.open("src/main.ts");
-  editor.schedule("src/main.ts");
-  expect(editor.timers.size).toBe(1);
+  editor.setText("pending edit");
+  const timers: unknown = Reflect.get(editor, "timers");
+  expect(timers).toBeInstanceOf(Map);
+  expect(timers instanceof Map && timers.size).toBe(1);
   editor.discard();
-  expect(editor.timers.size).toBe(0);
+  expect(timers instanceof Map && timers.size).toBe(0);
   expect(editor.view.state.readOnly).toBe(true);
   expect(writes).toEqual([]);
 });
 
 test("sandbox reset waits for the stopped guest and durable template before reloading", async () => {
-  const source = await Bun.file(new URL("../../sandbox/src/main.ts", import.meta.url)).text();
-  const code = source.slice(source.indexOf("async function resetTemplate("), source.indexOf("resetButton.addEventListener("));
-  const stopped = deferred<void>();
+  const page = await pageFixture({ "index.html": "template", "package.json": projectPackage });
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  const stopped = deferred<{ code: number }>();
   const checkpoint = deferred<void>();
   const events: string[] = [];
-  const env = {
-    editor: { discard() { events.push("discard"); } }, run: { done: stopped.promise },
-    stopDevServer() { events.push("stop"); },
-    loadTemplate(reset: boolean) { events.push(`template:${reset}`); return checkpoint.promise; },
-    location: { reload() { events.push("reload"); } },
-  };
-  const reset = new Function(...Object.keys(env), `${transpiler.transformSync(code)}; return resetTemplate;`)(...Object.values(env));
-  const resetting = reset();
+  const discard = sandbox.editor!.discard.bind(sandbox.editor);
+  spyOn(sandbox.editor!, "discard").mockImplementation(() => { events.push("discard"); discard(); });
+  Reflect.set(sandbox, "run", { done: stopped.promise, kill() { events.push("stop"); } });
+  page.boundary.fetch = async () => { events.push("template:true"); return new Response(JSON.stringify({ files: { "index.html": "template", "package.json": projectPackage } })); };
+  page.boundary.location.reload = () => { events.push("reload"); };
+  page.fixture.checkpoints.push(checkpoint);
+  const resetting = sandbox.reset();
+  expect(sandbox.resetting).toBe(true);
   expect(events).toEqual(["discard", "stop"]);
-  stopped.resolve();
-  await Bun.sleep(0);
+  stopped.resolve({ code: 0 });
+  await turn();
   expect(events).toEqual(["discard", "stop", "template:true"]);
   checkpoint.resolve();
   await resetting;
@@ -224,152 +183,113 @@ test("sandbox reset waits for the stopped guest and durable template before relo
 });
 
 test("sandbox reports failed filesystem saves and rejects explicit flush", async () => {
-  const { editor, writes, statuses } = await editorFixture("sandbox");
+  const { sandboxEditor: editor, fixture: { writes } } = await editorFixture("sandbox");
   await editor.open("src/main.ts");
   const saving = editor.flush("src/main.ts");
   writes[0]!.done.reject(new Error("filesystem unavailable"));
   await expect(saving).rejects.toThrow("filesystem unavailable");
-  expect(statuses.at(-1)).toBe("not saved: Error: filesystem unavailable");
+  expect(editor.saveState).toEqual({ text: "not saved: Error: filesystem unavailable", kind: "error" });
 });
 
-test("sandbox HMR notifications stay ordered and stale replies do not replace the latest status", async () => {
-  const source = await Bun.file(new URL("../../sandbox/src/main.ts", import.meta.url)).text();
-  const code = source.slice(source.indexOf("async function sendUpdate("), source.indexOf("async function save("));
-  const first = deferred<void>();
-  const sent: string[][] = [];
+test("sandbox stale durability replies do not replace the latest save status", async () => {
+  const { sandbox, sandboxEditor: editor, fixture } = await editorFixture("sandbox");
+  fixture.control.holdWrites = false;
+  await editor.open("file.ts");
+  editor.setText("first");
+  editor.setText("second");
+  const checkpoint = deferred<void>();
   const statuses: string[] = [];
-  const server = {
-    updates: Promise.resolve(),
-    helper: { notifyFileChanged(...args: string[]) { sent.push(args); return sent.length === 1 ? first.promise : Promise.resolve(); } },
-  };
-  const sendUpdate = new Function("server", "abs", "setSaveState", `${transpiler.transformSync(`let editRevision = 2; ${code}`)}; return sendUpdate;`)(server, (path: string) => path, (text: string) => statuses.push(text));
-  const older = sendUpdate("file.ts", 1);
-  const newer = sendUpdate("file.ts", 2);
-  await Promise.resolve();
-  expect(sent).toEqual([["file.ts"]]);
+  sandbox.addEventListener("change", () => { if (editor.saveState.text !== "editing…") statuses.push(editor.saveState.text); });
+  const save = method<(fs: ReturnType<typeof filesystem>, path: string, text: string, revision: number) => Promise<void>>(sandbox, "save");
+  fixture.checkpoints.push(checkpoint);
+  const older = save(filesystem(fixture), "file.ts", "first", 1);
+  await turn();
   expect(statuses).toEqual([]);
-  first.resolve();
-  await Promise.all([older, newer]);
-  expect(sent).toEqual([["file.ts"], ["file.ts"]]);
+  await save(filesystem(fixture), "file.ts", "second", 2);
   expect(statuses).toEqual(["saved"]);
+  checkpoint.resolve();
+  await older;
+  expect(statuses).toEqual(["saved"]);
+  expect(fixture.files.get("/home/user/app/file.ts")).toBe("second");
 });
 
-test("playground storage selection defaults to IndexedDB and requires an explicit OPFS query", async () => {
-  const source = await Bun.file(new URL("../src/main.ts", import.meta.url)).text();
-  const selector = source.match(/^const storage = .*;$/m)![0];
-  const select = new Function("params", `${transpiler.transformSync(selector)} return storage;`);
-  expect(select(new URLSearchParams())).toBe("indexeddb");
-  expect(select(new URLSearchParams("storage=opfs"))).toBe("opfs");
-  expect(select(new URLSearchParams("storage=unknown"))).toBe("indexeddb");
-});
+async function seedPlayground(page: Awaited<ReturnType<typeof pageFixture>>) {
+  const playground = new page.Playground("");
+  void playground.start();
+  await turn();
+  return playground;
+}
 
 test("playground only seeds examples in a new home, preserving changes and deletions on reload", async () => {
-  const source = await Bun.file(new URL("../src/main.ts", import.meta.url)).text();
-  const code = source.slice(source.indexOf("const runtime = createRuntime"), source.indexOf("// ---------- bun.wasm ----------"));
-  const files = new Map<string, string>();
-  const directories = new Set<string>();
-  let checkpoints = 0;
-  const fs = {
-    async mkdirp(path: string) { directories.add(path); },
-    async lookup(path: string) { return directories.has(path) ? { kind: "dir" } : undefined; },
-    async writeFile(path: string, text: string) { files.set(path, text); },
-    async remove(path: string) {
-      for (const key of files.keys()) if (key.startsWith(`${path}/`)) files.delete(key);
-      for (const key of directories) if (key === path || key.startsWith(`${path}/`)) directories.delete(key);
-    },
-    async flush() { checkpoints++; },
-  };
-  const startup = new Function("createRuntime", "HOME", "examples", "storage", `return (async () => { ${transpiler.transformSync(code)} })();`);
-  const start = () => startup(() => ({ filesystem: fs }), "/home/user", { "index.ts": "example", "deleted.ts": "delete me" }, "indexeddb");
-  await start();
+  const page = await pageFixture();
+  const { files, control } = page.fixture;
+  await seedPlayground(page);
   expect(files.get("/home/user/index.ts")).toBe("example");
-  expect(checkpoints).toBe(1);
+  expect(control.checkpoints).toBe(1);
   files.set("/home/user/index.ts", "saved edit");
   files.delete("/home/user/deleted.ts");
-  await start();
+  await seedPlayground(page);
   expect(files.get("/home/user/index.ts")).toBe("saved edit");
   expect(files.has("/home/user/deleted.ts")).toBe(false);
-  expect(checkpoints).toBe(1);
+  expect(control.checkpoints).toBe(1);
+});
+
+test("persisted pagehide keeps shared-object installation for the next command", async () => {
+  const page = await pageFixture();
+  await seedPlayground(page);
+  expect(page.listeners.length).toBeGreaterThan(0);
+  for (const listener of page.listeners) listener({ persisted: true });
+  const nextCommand = page.runtimeSharedObjectRoute(page.runtime);
+  expect(nextCommand).toBeDefined();
+  nextCommand!.close();
+  for (const listener of page.listeners) listener({ persisted: false });
+  expect(page.runtimeSharedObjectRoute(page.runtime)).toBeUndefined();
 });
 
 test("sandbox reload preserves its workspace and only an explicit reset replaces the template", async () => {
-  const source = await Bun.file(new URL("../../sandbox/src/main.ts", import.meta.url)).text();
-  const code = source.slice(source.indexOf("function templateFiles("), source.indexOf("// ---------- terminal ----------"));
-  const files = new Map<string, string>();
-  const directories = new Set<string>();
-  const template = { "index.html": "original page", "src/main.ts": "original code", "removed.ts": "remove me", "package.json": "{}", "node_modules/react/index.js": "dependency" };
-  let checkpoints = 0;
-  const fs = {
-    async mkdirp(path: string) { directories.add(path); },
-    async lookup(path: string) { return directories.has(path) ? { kind: "dir" } : undefined; },
-    async writeFile(path: string, text: string) { files.set(path, text); directories.add("/home/user/app"); },
-    async remove(path: string) {
-      for (const key of files.keys()) if (key.startsWith(`${path}/`)) files.delete(key);
-      for (const key of directories) if (key === path || key.startsWith(`${path}/`)) directories.delete(key);
-    },
-    async flush() { checkpoints++; },
-    async listFiles() { return Array.from(files.keys()); },
-    async readFile(path: string) { const text = files.get(path); return text === undefined ? undefined : encoder.encode(text); },
-  };
-  const env = {
-    fs, APP: "/home/user/app", abs: (path: string) => `/home/user/app/${path}`,
-    rel: (path: string) => path.slice("/home/user/app/".length), decode: (bytes: Uint8Array) => decoder.decode(bytes),
-    templateFile: "template.json", measureStartup() {},
-    fetch: async () => ({ ok: true, text: async () => JSON.stringify({ files: template }) }),
-  };
-  const { load, changed } = new Function(...Object.keys(env), `${transpiler.transformSync(code)}; return { load: loadTemplate, changed: dependenciesChanged };`)(...Object.values(env));
+  const template = { "index.html": "original page", "src/main.ts": "original code", "removed.ts": "remove me", "package.json": projectPackage };
+  const page = await pageFixture(template);
+  const { files, control } = page.fixture;
+  const load = (reset = false) => page.loadTemplate(filesystem(page.fixture), "/home/user/app", "template.json", reset);
   await load();
-  expect(await changed()).toBe(false);
   expect(files.get("/home/user/app/src/main.ts")).toBe("original code");
-  expect(checkpoints).toBe(1);
+  expect(control.checkpoints).toBe(1);
   files.set("/home/user/app/src/main.ts", "saved edit");
   files.delete("/home/user/app/removed.ts");
   files.set("/home/user/app/custom.ts", "new file");
-  files.set("/home/user/app/package.json", "{\"edited\":true}");
+  files.set("/home/user/app/package.json", '{"edited":true}');
   await load();
-  expect(await changed()).toBe(true);
   expect(files.get("/home/user/app/src/main.ts")).toBe("saved edit");
   expect(files.has("/home/user/app/removed.ts")).toBe(false);
   expect(files.get("/home/user/app/custom.ts")).toBe("new file");
-  expect(checkpoints).toBe(1);
+  expect(control.checkpoints).toBe(1);
   await load(true);
   expect(files.get("/home/user/app/src/main.ts")).toBe("original code");
   expect(files.has("/home/user/app/removed.ts")).toBe(true);
   expect(files.has("/home/user/app/custom.ts")).toBe(false);
-  expect(checkpoints).toBe(2);
-  expect(await changed()).toBe(false);
-  files.set("/home/user/app/node_modules/added/index.js", "added dependency");
-  expect(await changed()).toBe(true);
-  files.delete("/home/user/app/node_modules/added/index.js");
-  files.delete("/home/user/app/node_modules/react/index.js");
-  expect(await changed()).toBe(true);
+  expect(control.checkpoints).toBe(2);
 });
 
 for (const app of ["web", "sandbox"] as const) {
   test(`${app} reload retries a seed interrupted after its directory and first file persisted`, async () => {
-    const source = await Bun.file(new URL(app === "web" ? "../src/main.ts" : "../../sandbox/src/main.ts", import.meta.url)).text();
-    const code = app === "web"
-      ? source.slice(source.indexOf("const runtime = createRuntime"), source.indexOf("// ---------- bun.wasm ----------"))
-      : source.slice(source.indexOf("function templateFiles("), source.indexOf("// ---------- terminal ----------"));
-    const { fs, files } = seedTreeFixture();
+    const sources = { "index.html": "page", "first.ts": "first file", "second.ts": "second file", "package.json": projectPackage };
+    const page = await pageFixture(sources);
+    const { fs, files, control } = page.fixture;
     const workspace = app === "web" ? "/home/user" : "/home/user/app";
-    const sources = { "index.html": "page", "first.ts": "first file", "second.ts": "second file" };
-    const env = {
-      createRuntime: () => ({ filesystem: fs }), fs, HOME: workspace, APP: workspace, examples: sources, storage: "indexeddb",
-      setStatus() {}, templateFile: "template.json", measureStartup() {},
-      abs: (path: string) => `${workspace}/${path}`,
-      fetch: async () => ({ ok: true, text: async () => JSON.stringify({ files: sources }) }),
+    const startup = async () => {
+      if (app === "sandbox") return page.loadTemplate(filesystem(page.fixture), workspace, "template.json");
+      const model = await seedPlayground(page);
+      if (model.failure) throw new Error(model.status.text);
     };
-    const startup = new Function(...Object.keys(env), `return async () => { ${transpiler.transformSync(code)} ${app === "sandbox" ? "await loadTemplate();" : ""} };`)(...Object.values(env));
-    fs.beforeWrite = path => { if (path.endsWith("/second.ts")) throw new Error("interrupted seed"); };
+    control.beforeWrite = path => { if (path.endsWith("/second.ts")) throw new Error("interrupted seed"); };
     await expect(startup()).rejects.toThrow("interrupted seed");
     expect(await fs.lookup(workspace)).toBeDefined();
     expect(files.get(`${workspace}/first.ts`)).toBe("first file");
     expect(files.has(`${workspace}/second.ts`)).toBe(false);
-    fs.beforeWrite = undefined;
+    control.beforeWrite = undefined;
     await startup();
     expect(files.get(`${workspace}/second.ts`)).toBe("second file");
-    expect(fs.checkpoints).toBe(1);
+    expect(control.checkpoints).toBe(1);
     files.delete(`${workspace}/first.ts`);
     await startup();
     expect(files.has(`${workspace}/first.ts`)).toBe(false);
@@ -377,24 +297,17 @@ for (const app of ["web", "sandbox"] as const) {
 }
 
 test("sandbox reload completes a reset interrupted after persisting only part of its template", async () => {
-  const source = await Bun.file(new URL("../../sandbox/src/main.ts", import.meta.url)).text();
-  const code = source.slice(source.indexOf("function templateFiles("), source.indexOf("// ---------- terminal ----------"));
-  const { fs, files } = seedTreeFixture();
-  const sources = { "index.html": "template page", "first.ts": "template first", "second.ts": "template second" };
-  const env = {
-    fs, APP: "/home/user/app", abs: (path: string) => `/home/user/app/${path}`,
-    templateFile: "template.json", measureStartup() {},
-    fetch: async () => ({ ok: true, text: async () => JSON.stringify({ files: sources }) }),
-  };
-  const load = new Function(...Object.keys(env), `${transpiler.transformSync(code)}; return loadTemplate;`)(...Object.values(env));
+  const page = await pageFixture({ "index.html": "template page", "first.ts": "template first", "second.ts": "template second", "package.json": projectPackage });
+  const { files, control } = page.fixture;
+  const load = (reset = false) => page.loadTemplate(filesystem(page.fixture), "/home/user/app", "template.json", reset);
   await load();
   files.set("/home/user/app/first.ts", "user edit");
   files.set("/home/user/app/custom.ts", "custom file");
-  fs.beforeWrite = path => { if (path.endsWith("/second.ts")) throw new Error("interrupted reset"); };
+  control.beforeWrite = path => { if (path.endsWith("/second.ts")) throw new Error("interrupted reset"); };
   await expect(load(true)).rejects.toThrow("interrupted reset");
   expect(files.get("/home/user/app/first.ts")).toBe("template first");
   expect(files.has("/home/user/app/second.ts")).toBe(false);
-  fs.beforeWrite = undefined;
+  control.beforeWrite = undefined;
   await load();
   expect(files.get("/home/user/app/second.ts")).toBe("template second");
   expect(files.has("/home/user/app/custom.ts")).toBe(false);
@@ -403,126 +316,219 @@ test("sandbox reload completes a reset interrupted after persisting only part of
   expect(files.has("/home/user/app/first.ts")).toBe(false);
 });
 
-test("sandbox only wakes HMR after the durable save and never on checkpoint failure", async () => {
-  const source = await Bun.file(new URL("../../sandbox/src/main.ts", import.meta.url)).text();
-  const code = source.slice(source.indexOf("async function save("), source.indexOf("function reportError("));
+test("sandbox confirms durable saves without replaying edits through the network helper", async () => {
+  const { sandbox, sandboxEditor: editor, fixture } = await editorFixture("sandbox");
+  fixture.control.holdWrites = false;
   const checkpoint = deferred<void>();
   const failure = new Error("durability unavailable");
   const notifications: string[] = [];
-  const fs = { writeFile: async () => {}, flush: () => checkpoint.promise };
-  const env = { fs, server: {}, abs: (path: string) => path, sendUpdate: async (path: string) => { notifications.push(path); }, rememberEdit() {} };
-  const save = new Function(...Object.keys(env), `${transpiler.transformSync(code)}; return save;`)(...Object.values(env));
-  const saving = save("file.ts", "new text", 1);
-  await Bun.sleep(0);
+  Reflect.set(sandbox, "server", { updates: Promise.resolve(), helper: { notifyFileChanged: async (path: string) => { notifications.push(path); } } });
+  fixture.checkpoints.push(checkpoint);
+  await editor.open("file.ts");
+  editor.view.setState(EditorState.create({ doc: "new text" }));
+  const saving = editor.flush("file.ts");
+  await turn();
   expect(notifications).toEqual([]);
   checkpoint.resolve();
   await saving;
-  expect(notifications).toEqual(["file.ts"]);
-  fs.flush = async () => { throw failure; };
-  await expect(save("file.ts", "not durable", 2)).rejects.toBe(failure);
-  expect(notifications).toEqual(["file.ts"]);
+  expect(notifications).toEqual([]);
+  fixture.fs.flush = async () => { throw failure; };
+  await expect(editor.flush("file.ts")).rejects.toBe(failure);
+  expect(notifications).toEqual([]);
 });
 
-test("shell discards filesystem completion after the line was submitted", async () => {
-  const lookup = deferred<undefined>();
-  const shell = new Shell({ cols: 100, onData() {}, write() {}, writeln() {} } as never, {
-    fs: { lookup: () => lookup.promise } as never,
-    runBun: async () => 0, kill() {}, changed() {}, open() {}, info: () => [],
+class ControlledFilesystemBackend extends MemoryBackend {
+  readonly writeEntered = deferred<void>();
+  readonly flushEntered = deferred<void>();
+  write: Promise<void> | undefined;
+  checkpoint = Promise.resolve();
+  prepare(operation: string): Promise<void> | undefined {
+    if (operation !== "writeFile" || !this.write) return;
+    const pending = this.write;
+    this.write = undefined;
+    this.writeEntered.resolve();
+    return pending;
+  }
+  flush(): Promise<void> {
+    this.flushEntered.resolve();
+    return this.checkpoint;
+  }
+}
+
+const filesystemCleanups: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const cleanup of filesystemCleanups.splice(0)) await cleanup();
+});
+
+function filesystemFixture() {
+  const connection = createFilesystemConnection();
+  const backend = new ControlledFilesystemBackend();
+  const service = new FilesystemService(backend);
+  const client = new FilesystemClient(connection.client);
+  const operations: string[] = [];
+  const asyncCall = client.asyncCall.bind(client);
+  const requests = spyOn(client, "asyncCall").mockImplementation((...args) => {
+    operations.push(args[0]);
+    return asyncCall(...args);
   });
-  const ui = shell as unknown as { line: string; cursor: number; busy: boolean; complete(): Promise<void> };
-  ui.line = "cat f";
-  ui.cursor = ui.line.length;
-  const completing = ui.complete();
-  ui.busy = true;
-  lookup.resolve({ kind: "dir", children: new Map([["file.ts", { kind: "file" }]]) } as never);
-  await completing;
-  expect(ui.line).toBe("cat f");
-});
-
-async function filesystemFixture() {
-  const source = await Bun.file(new URL(import.meta.resolve("waffle/browser/shared-fs"))).text();
-  const code = source.slice(source.indexOf("export class SharedFilesystem")).replace("export class", "class");
-  const Filesystem = new Function(`${transpiler.transformSync(code)}; return SharedFilesystem;`)();
-  const fs = Object.create(Filesystem.prototype);
-  fs.writes = Promise.resolve();
-  return fs;
+  const fs: SharedFilesystem = Object.assign(Object.create(SharedFilesystem.prototype), {
+    client, writes: Promise.resolve(),
+  });
+  filesystemCleanups.push(async () => {
+    requests.mockRestore();
+    try { await service.drainForOwner(); }
+    finally {
+      client.dispose();
+      service.dispose();
+      connection.server.port.close();
+    }
+  });
+  service.connect(connection.server);
+  return { fs, backend, operations };
 }
 
 test("shared filesystem reads drain writes without requesting storage checkpoints", async () => {
-  const fs = await filesystemFixture();
+  const { fs, backend, operations } = filesystemFixture();
   const write = deferred<void>();
-  const operations: string[] = [];
-  fs.client = { asyncCall: (operation: string) => { operations.push(operation); return operation === "writeFile" ? write.promise : Promise.resolve(); } };
+  backend.write = write.promise;
   const writing = fs.writeFile("/file", "memory-first");
   const reading = fs.readFile("/file");
   const lookup = fs.lookup("/file");
   const listing = fs.listFiles();
-  await Bun.sleep(0);
-  expect(operations).toEqual(["writeFile"]);
-  write.resolve();
-  await Promise.all([writing, reading, lookup, listing]);
-  expect(operations).toEqual(["writeFile", "readFile", "lookup", "listFiles"]);
+  try {
+    await backend.writeEntered.promise;
+    expect(operations).toEqual(["writeFile"]);
+    write.resolve();
+    const [, contents, entry, files] = await Promise.all([writing, reading, lookup, listing]);
+    expect(operations).toEqual(["writeFile", "readFile", "lookup", "listFiles"]);
+    expect(decoder.decode(contents)).toBe("memory-first");
+    expect(entry?.kind).toBe("file");
+    expect(files).toContain("/file");
+  } finally { write.resolve(); }
 });
 
 test("shared filesystem flush waits for pending writes and a durable service checkpoint", async () => {
-  const fs = await filesystemFixture();
+  const { fs, backend, operations } = filesystemFixture();
   const write = deferred<void>();
   const checkpoint = deferred<void>();
-  const operations: string[] = [];
-  fs.client = { asyncCall: (operation: string) => { operations.push(operation); return operation === "writeFile" ? write.promise : checkpoint.promise; } };
+  backend.write = write.promise;
+  backend.checkpoint = checkpoint.promise;
   const writing = fs.writeFile("/file", "durable");
   let completed = false;
   const saving = fs.flush().then(() => { completed = true; });
-  await Bun.sleep(0);
-  expect(operations).toEqual(["writeFile"]);
-  write.resolve();
-  await writing;
-  await Bun.sleep(0);
-  expect(operations).toEqual(["writeFile", "flush"]);
-  expect(completed).toBe(false);
-  checkpoint.resolve();
-  await saving;
+  try {
+    await backend.writeEntered.promise;
+    expect(operations).toEqual(["writeFile"]);
+    write.resolve();
+    await writing;
+    await backend.flushEntered.promise;
+    expect(operations).toEqual(["writeFile", "flush"]);
+    expect(completed).toBe(false);
+    checkpoint.resolve();
+    await saving;
+    expect(completed).toBe(true);
+    expect(decoder.decode(await fs.readFile("/file"))).toBe("durable");
+  } finally { write.resolve(); checkpoint.resolve(); }
 });
 
 test("shared filesystem flush reports failed writes and permits later writes", async () => {
-  const fs = await filesystemFixture();
-  const failure = new Error("failed editor save");
-  fs.client = { asyncCall: async () => { throw failure; } };
-  await expect(fs.writeFile("/file", "first")).rejects.toBe(failure);
+  const { fs, backend, operations } = filesystemFixture();
+  const write = deferred<void>();
+  backend.write = write.promise;
+  const writing = fs.writeFile("/file", "first");
+  await backend.writeEntered.promise;
+  write.reject(new FilesystemError(51, "failed editor save"));
+  // The service transports errors, so the page owns the decoded error, not the backend object.
+  const failure = await writing.catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(FilesystemError);
+  expect(failure).toHaveProperty("errno", 51);
   await expect(fs.flush()).rejects.toBe(failure);
-  fs.client = { asyncCall: async () => {} };
+  expect(operations).toEqual(["writeFile"]);
   await fs.writeFile("/file", "second");
   await fs.flush();
+  expect(operations).toEqual(["writeFile", "writeFile", "flush"]);
+  expect(decoder.decode(await fs.readFile("/file"))).toBe("second");
 });
 
-test("sandbox Restart is available while the initial dev server is still running", async () => {
-  const source = await Bun.file(new URL("../../sandbox/src/main.ts", import.meta.url)).text();
-  const state = source.match(/^let startup:.*$/m)![0];
-  const listener = source.slice(source.indexOf('restartButton.addEventListener("click"'), source.indexOf("async function resetTemplate("));
-  const boot = source.slice(source.indexOf("async function boot("), source.indexOf("Object.assign(globalThis, { sandbox:"));
-  const initialization = deferred<void>(), launched = deferred<void>(), guest = deferred<void>();
-  let click = () => {}, starts = 0;
-  const failures: unknown[] = [];
-  const env = {
-    fs: { mkdirp: () => initialization.promise, lookup: async () => ({ kind: "file" }), listFiles: async () => [] },
-    restartButton: { addEventListener(_event: string, listener: () => void) { click = listener; } },
-    location: { reload() { throw new Error("A running server should restart without reloading the workspace"); } },
-    term: { write() {} }, setServerState() {}, setStatus() {},
-    loadTemplate: async () => {}, loadWasm: async () => ({}),
-    tree: { render: async () => {} }, editor: { open: async () => {} },
-    abs: (path: string) => path, rel: (path: string) => path, START_FILE: "src/App.tsx",
-    wasmUrl: "fixture.wasm", engine: "browser", ENGINES: { browser: { name: "browser" } }, WasmMissing: Error,
-    startDevServer() { starts++; launched.resolve(); return guest.promise; },
-    showStartupFailure: (error: unknown) => failures.push(error), reportError: (error: unknown) => failures.push(error),
-  };
-  new Function(...Object.keys(env), transpiler.transformSync(`${state}\nlet wasm = null;\n${listener}\n${boot}`))(...Object.values(env));
-  try {
-    click();
-    expect(starts).toBe(0);
-    initialization.resolve();
-    await launched.promise;
-    click();
-    expect(starts).toBe(2);
-    expect(failures).toEqual([]);
-  } finally { initialization.resolve(); guest.resolve(); }
+test("sandbox Restart cancels a pending install without launching its stale dev command", async () => {
+  const page = await pageFixture({ "index.html": "page", "src/App.tsx": "app", "package.json": projectPackage });
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  sandbox.restart();
+  expect(page.runs).toHaveLength(0);
+  method<() => void>(sandbox, "terminalOpened")();
+  await turn();
+  expect(page.runs).toHaveLength(1);
+  const markup = await page.renderSandbox(sandbox);
+  expect(markup.match(/<button[^>]*id="restart"[^>]*>/)?.[0]).not.toContain("disabled");
+  sandbox.restart();
+  await turn();
+  expect(page.runs).toHaveLength(2);
+  expect(page.runs[0]!.kills).toEqual([9]);
+  expect(page.runs[0]!.args).toEqual(["install"]);
+  page.runs[0]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs).toHaveLength(2);
+  page.runs[1]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs[2]!.args).toEqual(["run", "dev"]);
+  expect(page.boundary.location.reloads).toBe(0);
+  expect(sandbox.failure).toBeUndefined();
+});
+
+test("playground reports storage waiting, locks after takeover, and offers the saved-workspace reload", async () => {
+  const page = await pageFixture();
+  const playground = new page.Playground("");
+  method<() => void>(playground, "terminalOpened")();
+  await playground.start();
+  expect(playground.ready).toBe(true);
+  expect(playground.locked).toBe(false);
+  page.fixture.fs.onStateChange?.({ status: "waiting" });
+  expect(playground.status.text).toContain("Waiting for this workspace");
+  page.fixture.fs.ownershipLost = true;
+  page.fixture.fs.onOwnershipLost?.();
+  expect(playground.failure).toBe("ownership");
+  expect(playground.locked).toBe(true);
+  expect(playground.status.text).toContain("Unsaved changes");
+  const markup = await page.renderPlayground(playground);
+  expect(markup).toContain('title="Open the latest saved workspace"');
+  expect(markup.match(/<select[^>]*id="engine"[^>]*>/)?.[0]).toContain("disabled");
+  expect(markup.match(/<button[^>]*id="run"[^>]*>/)?.[0]).not.toContain("disabled");
+});
+
+test("sandbox takeover locks workspace controls and Restart reloads the saved workspace", async () => {
+  const page = await pageFixture();
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  page.fixture.fs.ownershipLost = true;
+  page.fixture.fs.onOwnershipLost?.();
+  expect(sandbox.failure).toBe("startup");
+  expect(sandbox.status.text).toContain("Unsaved changes");
+  const markup = await page.renderSandbox(sandbox);
+  expect(markup).toContain('title="Open the latest saved workspace"');
+  expect(markup.match(/<select[^>]*id="engine"[^>]*>/)?.[0]).toContain("disabled");
+  expect(markup.match(/<button[^>]*id="reset"[^>]*>/)?.[0]).toContain("disabled");
+  expect(markup.match(/<button[^>]*id="restart"[^>]*>/)?.[0]).not.toContain("disabled");
+  sandbox.restart();
+  expect(page.boundary.location.reloads).toBe(1);
+});
+
+test("sandbox stops on a failed install and only launches dev after a successful retry", async () => {
+  const page = await pageFixture({ "package.json": projectPackage, "src/App.tsx": "app" });
+  const sandbox = new page.Sandbox("");
+  sandbox.start();
+  method<() => void>(sandbox, "terminalOpened")();
+  await turn();
+  expect(page.runs[0]!.args).toEqual(["install"]);
+  page.runs[0]!.done.resolve({ code: 1 });
+  await turn();
+  expect(page.runs).toHaveLength(1);
+  expect(sandbox.serverState.state).toBe("down");
+  expect(sandbox.serverState.text).toContain("install stopped (exit 1)");
+  sandbox.restart();
+  await turn();
+  expect(page.runs[1]!.args).toEqual(["install"]);
+  page.runs[1]!.done.resolve({ code: 0 });
+  await turn();
+  expect(page.runs[2]!.args).toEqual(["run", "dev"]);
 });

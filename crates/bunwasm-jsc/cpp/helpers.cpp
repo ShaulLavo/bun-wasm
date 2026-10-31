@@ -9,6 +9,10 @@
 // or built-in names like `node:fs` and `bun`.
 #include "config.h"
 
+#ifndef BUN_WASM_MAX_MEMORY
+#error "BUN_WASM_MAX_MEMORY comes from crates/bunwasm-jsc/build.rs"
+#endif
+
 #include "APICast.h"
 #include "JSContextRef.h"
 #include "JSObjectRef.h"
@@ -34,6 +38,8 @@
 #include "TopExceptionScope.h"
 #include "SourceProvider.h"
 #include "VM.h"
+#include "Options.h"
+#include "WASIMemoryTelemetry.h"
 #include <wtf/URL.h>
 #include <string>
 
@@ -47,9 +53,17 @@ char* bunjsc_host_resolve(const char* specifier, const char* referrer, JSValueRe
 char* bunjsc_host_fetch(const char* key, JSValueRef* exception);
 void bunjsc_host_init_meta(JSValueRef meta, const char* key, JSValueRef* exception);
 void bunjsc_host_free(char*);
+void bunjsc_host_uncaught(JSContextRef, JSValueRef);
 // Polls fatal host cancellation without entering JS or consuming handled signals.
 // True requests native, uncatchable termination after the callback has returned.
 bool bunjsc_host_interrupt();
+}
+
+extern "C" void Bun__reportUnhandledError(JSGlobalObject* globalObject, EncodedJSValue encoded)
+{
+    JSLockHolder lock(globalObject->vm());
+    JSValue value = JSValue::decode(encoded);
+    bunjsc_host_uncaught(toRef(globalObject), toRef(globalObject, value));
 }
 
 static std::string utf8(const String& s)
@@ -184,7 +198,25 @@ extern "C" {
 // A global context whose global object has the module loader hooks above.
 JSGlobalContextRef bunjsc_create_context()
 {
-    JSC::initialize();
+    // Native Bun enables the SharedArrayBuffer constructor (ZigGlobalObject.cpp). Its storage
+    // stays in this guest; the worker codec refuses to send it to another one.
+    JSC::initialize([] {
+        // The guest's memory maximum (crates/bunwasm-cli/max-memory.txt, passed by build.rs);
+        // WASI physical-page sysconf is unsupported and wraps into a larger, incorrect RAM estimate.
+        JSC::Options::forceRAMSize() = BUN_WASM_MAX_MEMORY;
+        JSC::Options::useSharedArrayBuffer() = true;
+        JSC::Options::numberOfGCMarkers() = 1;
+        JSC::Options::useWarmUpMarkedBlocks() = false;
+        JSC::Options::useConcurrentGC() = false;
+        JSC::Options::useConcurrentJIT() = false;
+        JSC::Options::usePollingTraps() = true;
+        JSC::Options::collectContinuously() = false;
+        JSC::Options::useSamplingProfiler() = false;
+        JSC::Options::useICStats() = false;
+        JSC::Options::useSuperSampler() = false;
+        JSC::Options::useTextMarkers() = false;
+        JSC::Options::useProfiler() = false;
+    });
     Ref<VM> vm = VM::createContextGroup();
     JSLockHolder locker(vm.ptr());
     // The default method table (private to JSGlobalObject), read off a plain global object,
@@ -277,6 +309,44 @@ bool bunjsc_drain_microtasks(JSContextRef ctx)
     return pending;
 }
 
+void bunjsc_report_unhandled_error(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* globalObject = toJS(ctx);
+    JSLockHolder lock(globalObject->vm());
+    Bun__reportUnhandledError(globalObject, JSValue::encode(toJS(globalObject, value)));
+}
+
+BunjscMemoryTelemetry* bunjsc_memory_telemetry()
+{
+    return bunjsc_cached_memory_telemetry();
+}
+
+void bunjsc_refresh_memory_telemetry(JSContextRef ctx)
+{
+    VM& vm = toJS(ctx)->vm();
+    JSLockHolder lock(vm);
+    auto& snapshot = *bunjsc_memory_telemetry();
+    snapshot.heapUsed = vm.heap.size();
+    snapshot.heapTotal = vm.heap.capacity();
+    snapshot.extraMemory = vm.heap.extraMemorySize();
+    snapshot.arrayBufferBytes = vm.heap.arrayBufferSize();
+    if (vm.heap.lastCollectionScope())
+        snapshot.heapAfterLastCollection = vm.heap.sizeAfterLastCollection();
+    if (vm.heap.hasCompletedFullCollection()) {
+        snapshot.heapBeforeLastFullCollection = vm.heap.sizeBeforeLastFullCollection();
+        snapshot.heapAfterLastFullCollection = vm.heap.sizeAfterLastFullCollection();
+    }
+    snapshot.totalBytesAllocated = vm.heap.totalBytesAllocated();
+    snapshot.allocationBudgetThisCycle = vm.heap.allocationBudgetThisCycle();
+    snapshot.gcMaxHeapSize = Options::gcMaxHeapSize();
+    snapshot.smallHeapSize = Options::smallHeapSize();
+    snapshot.largeHeapSize = Options::largeHeapSize();
+    snapshot.gcEnabled = Options::useGC();
+    snapshot.generationalGcEnabled = Options::useGenerationalGC();
+    snapshot.concurrentGcEnabled = Options::useConcurrentGC();
+    ++snapshot.snapshotSequence;
+}
+
 void bunjsc_collect_garbage(JSContextRef ctx)
 {
     VM& vm = toJS(ctx)->vm();
@@ -362,12 +432,55 @@ bool bunjsc_is_detachable_buffer(JSContextRef ctx, JSValueRef value)
     return buffer && !buffer->impl()->isDetached() && buffer->impl()->isDetachable();
 }
 
+// A typed array's, DataView's or ArrayBuffer's bytes, left unpinned.
+// JSObjectGet{TypedArray,ArrayBuffer}BytesPtr pin and lock the buffer for good,
+// so every buffer native code read or filled could never be transferred.
+// Callers copy or fill the bytes before any JavaScript runs.
+uint8_t* bunjsc_buffer_bytes(JSContextRef ctx, JSValueRef value, size_t* length)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    JSValue js = toJS(global, value);
+    std::span<uint8_t> bytes;
+    if (auto* view = dynamicDowncast<JSArrayBufferView>(js)) {
+        if (!view->isOutOfBounds())
+            bytes = { static_cast<uint8_t*>(view->vector()), view->byteLength() };
+    } else if (auto* buffer = dynamicDowncast<JSArrayBuffer>(js))
+        bytes = buffer->impl()->mutableSpan();
+    *length = bytes.size();
+    return bytes.data();
+}
+
 void bunjsc_detach_buffer(JSContextRef ctx, JSValueRef value)
 {
     JSGlobalObject* global = toJS(ctx);
     JSLockHolder lock(global->vm());
     auto* buffer = dynamicDowncast<JSArrayBuffer>(toJS(global, value));
     buffer->impl()->detach(global->vm());
+}
+
+// A WebAssembly.Memory buffer over bytes another owner keeps alive. makeWasmMemory
+// pins it, so transfer() and structured transfer refuse it, as for JSC's own wasm memories.
+JSValueRef bunjsc_wasm_memory_buffer(JSContextRef ctx, uint8_t* data, size_t length)
+{
+    JSGlobalObject* global = toJS(ctx);
+    VM& vm = global->vm();
+    JSLockHolder lock(vm);
+    auto buffer = ArrayBuffer::createFromBytes({ data, length }, createSharedTask<void(void*)>([](void*) { }));
+    buffer->makeWasmMemory();
+    return toRef(global, JSArrayBuffer::create(vm, global->arrayBufferStructure(ArrayBufferSharingMode::Default), WTF::move(buffer)));
+}
+
+// ArrayBuffer::detach accepts pinned wasm memories; it empties every view of the buffer.
+bool bunjsc_detach_wasm_memory_buffer(JSContextRef ctx, JSValueRef value)
+{
+    JSGlobalObject* global = toJS(ctx);
+    JSLockHolder lock(global->vm());
+    auto* buffer = dynamicDowncast<JSArrayBuffer>(toJS(global, value));
+    if (!buffer || !buffer->impl()->isWasmMemory())
+        return false;
+    buffer->impl()->detach(global->vm());
+    return true;
 }
 
 // The async context (AsyncLocalStorage frame): JSGlobalObject's

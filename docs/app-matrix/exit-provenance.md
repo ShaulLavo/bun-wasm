@@ -20,9 +20,9 @@ consumption without starting it. A `data` or `readable` listener, `resume()`, or
 async iteration still starts reading.
 
 SvelteKit dev next reached `fs.watch`. The runtime now supplies an original
-polling watcher over the existing filesystem operations. Its timer owns process
-liveness and closes through the same path for explicit close and abort. The
-[adapter record](../bun-patches.md#portable-filesystem-watcher) states its limits.
+watcher over runtime filesystem watches. Its I/O waiter owns process liveness
+and closes through the same path for explicit close and abort. The
+[adapter record](../bun-patches/portable-filesystem-watcher.md#portable-filesystem-watcher) states its limits.
 
 ## Exit records
 

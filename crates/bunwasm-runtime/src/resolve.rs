@@ -28,26 +28,86 @@ pub enum Resolved {
 /// Node built-ins we know by name. Some are only stubs that throw on use, but
 /// every one of them can be imported.
 pub const NODE_BUILTINS: &[&str] = &[
-    "assert", "assert/strict", "async_hooks", "buffer", "child_process", "cluster", "console",
-    "constants", "crypto", "dgram", "diagnostics_channel", "dns", "dns/promises", "domain",
-    "events", "fs", "fs/promises", "http", "http2", "https", "inspector", "module", "net", "os",
-    "path", "path/posix", "path/win32", "perf_hooks", "process", "punycode", "querystring",
-    "readline", "readline/promises", "repl", "stream", "stream/promises", "stream/web",
-    "string_decoder", "sys", "test", "timers", "timers/promises", "tls", "tty", "url", "util",
-    "util/types", "v8", "vm", "wasi", "worker_threads", "zlib",
+    "assert",
+    "assert/strict",
+    "async_hooks",
+    "buffer",
+    "child_process",
+    "cluster",
+    "console",
+    "constants",
+    "crypto",
+    "dgram",
+    "diagnostics_channel",
+    "dns",
+    "dns/promises",
+    "domain",
+    "events",
+    "fs",
+    "fs/promises",
+    "http",
+    "http2",
+    "https",
+    "inspector",
+    "module",
+    "net",
+    "os",
+    "path",
+    "path/posix",
+    "path/win32",
+    "perf_hooks",
+    "process",
+    "punycode",
+    "querystring",
+    "readline",
+    "readline/promises",
+    "repl",
+    "stream",
+    "stream/consumers",
+    "stream/promises",
+    "stream/web",
+    "string_decoder",
+    "sys",
+    "test",
+    "timers",
+    "timers/promises",
+    "tls",
+    "trace_events",
+    "tty",
+    "url",
+    "util",
+    "util/types",
+    "v8",
+    "vm",
+    "wasi",
+    "worker_threads",
+    "zlib",
 ];
 
-const BUN_BUILTINS: &[&str] = &["bun", "bun:jsc", "bun:test", "bun:sqlite", "bun:ffi", "bun:wrap", "bun:internal-for-testing", "ws"];
+const BUN_BUILTINS: &[&str] = &[
+    "bun",
+    "bun:jsc",
+    "bun:test",
+    "bun:sqlite",
+    "bun:ffi",
+    "bun:wrap",
+    "bun:internal-for-testing",
+    "ws",
+];
 
 /// Extensions probed for extensionless specifiers, in Bun's order.
-const EXTENSIONS: &[&str] = &[".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts", ".json"];
+const EXTENSIONS: &[&str] = &[
+    ".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".mts", ".cts", ".json",
+];
 
 pub fn builtin_name(spec: &str) -> Option<String> {
     if spec.starts_with("bun:plugin:") || BUN_BUILTINS.contains(&spec) {
         return Some(spec.to_owned());
     }
     let bare = spec.strip_prefix("node:").unwrap_or(spec);
-    NODE_BUILTINS.contains(&bare).then(|| format!("node:{bare}"))
+    NODE_BUILTINS
+        .contains(&bare)
+        .then(|| format!("node:{bare}"))
 }
 
 /// Lexically normalize an absolute POSIX path (`.`/`..`/duplicate slashes).
@@ -103,8 +163,12 @@ pub fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        let hex = bytes.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok());
-        let decoded = hex.filter(|_| bytes[i] == b'%').and_then(|h| u8::from_str_radix(h, 16).ok());
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok());
+        let decoded = hex
+            .filter(|_| bytes[i] == b'%')
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
         match decoded {
             Some(b) => {
                 out.push(b);
@@ -119,8 +183,8 @@ pub fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-#[derive(Default)]
 pub struct Resolver {
+    custom_conditions: Rc<[String]>,
     object_modules: RefCell<HashMap<String, String>>,
     next_object_module: Cell<u64>,
     /// package.json contents by directory (`None` = no package.json there).
@@ -139,8 +203,20 @@ pub struct ResolveNote {
 }
 
 impl Resolver {
+    #[cfg(test)]
     pub fn new() -> Self {
-        Self::default()
+        Self::with_conditions(Vec::new())
+    }
+
+    pub fn with_conditions(conditions: Vec<String>) -> Self {
+        Self {
+            custom_conditions: conditions.into(),
+            object_modules: RefCell::new(HashMap::new()),
+            next_object_module: Cell::new(0),
+            package_json: RefCell::new(HashMap::new()),
+            package_errors: RefCell::new(HashMap::new()),
+            notes: RefCell::new(Vec::new()),
+        }
     }
 
     pub fn register_object_module(&self, name: &str) -> String {
@@ -173,28 +249,41 @@ impl Resolver {
             return Err(format!("Cannot find module '{spec}' from '{from}'"));
         }
         if spec.starts_with("data:") && !spec[5..].contains(',') {
-            return Err(format!("Cannot resolve invalid data URL '{spec}' from '{from}'"));
+            return Err(format!(
+                "Cannot resolve invalid data URL '{spec}' from '{from}'"
+            ));
         }
-        let from_dir = if from.ends_with('/') { from.trim_end_matches('/') } else { dirname(from) };
+        let from_dir = if from.ends_with('/') {
+            from.trim_end_matches('/')
+        } else {
+            dirname(from)
+        };
         let from_dir = if from_dir.is_empty() { "/" } else { from_dir };
 
         if spec.starts_with("file:") {
             let path = file_url_to_path(spec).ok_or_else(|| format!("Invalid file URL: {spec}"))?;
-            return self.resolve_path(&path, kind).ok_or_else(|| not_found_module(spec, from));
+            return self
+                .resolve_path(&path, kind)
+                .ok_or_else(|| not_found_module(spec, from));
         }
         if is_relative_or_absolute(spec) {
             let path = join(from_dir, spec);
-            return self.resolve_path(&path, kind).ok_or_else(|| not_found_module(spec, from));
+            return self
+                .resolve_path(&path, kind)
+                .ok_or_else(|| not_found_module(spec, from));
         }
         if spec.starts_with('#') {
-            return self.resolve_imports_field(spec, from_dir, kind).ok_or_else(|| not_found_module(spec, from));
+            return self
+                .resolve_imports_field(spec, from_dir, kind)
+                .ok_or_else(|| not_found_module(spec, from));
         }
-        self.resolve_package(spec, from_dir, kind)
-            .ok_or_else(|| if spec.contains('/') {
+        self.resolve_package(spec, from_dir, kind).ok_or_else(|| {
+            if spec.contains('/') {
                 not_found_module(spec, from)
             } else {
                 format!("Cannot find package '{spec}' from '{from}'")
-            })
+            }
+        })
     }
 
     pub fn notes(&self) -> Vec<ResolveNote> {
@@ -203,14 +292,20 @@ impl Resolver {
 
     /// Resolve an absolute path as a file or directory.
     fn resolve_path(&self, path: &str, kind: Kind) -> Option<Resolved> {
-        self.resolve_file(path).or_else(|| self.resolve_directory(path, kind)).map(Resolved::File)
+        self.resolve_file(path)
+            .or_else(|| self.resolve_directory(path, kind))
+            .map(Resolved::File)
     }
 
     fn resolve_file(&self, path: &str) -> Option<String> {
         if is_file(path) {
             return Some(path.to_owned());
         }
-        if let Some(found) = EXTENSIONS.iter().map(|ext| format!("{path}{ext}")).find(|p| is_file(p)) {
+        if let Some(found) = EXTENSIONS
+            .iter()
+            .map(|ext| format!("{path}{ext}"))
+            .find(|p| is_file(p))
+        {
             return Some(found);
         }
         // TypeScript-style imports: "./foo.js" may name "./foo.ts".
@@ -222,23 +317,29 @@ impl Resolver {
             "cjs" => &["cts"],
             _ => &[],
         };
-        alternates.iter().map(|alt| format!("{stem}.{alt}")).find(|p| is_file(p))
+        alternates
+            .iter()
+            .map(|alt| format!("{stem}.{alt}"))
+            .find(|p| is_file(p))
     }
 
     fn resolve_directory(&self, dir: &str, kind: Kind) -> Option<String> {
         if !is_dir(dir) {
             return None;
         }
-        if let Some(pkg) = self.package_json_in(dir) {
-            if let Some(found) = self.resolve_main_fields(dir, &pkg, kind) {
-                return Some(found);
-            }
+        if let Some(pkg) = self.package_json_in(dir)
+            && let Some(found) = self.resolve_main_fields(dir, &pkg, kind)
+        {
+            return Some(found);
         }
         self.resolve_index(dir)
     }
 
     fn resolve_index(&self, dir: &str) -> Option<String> {
-        EXTENSIONS.iter().map(|ext| format!("{dir}/index{ext}")).find(|p| is_file(p))
+        EXTENSIONS
+            .iter()
+            .map(|ext| format!("{dir}/index{ext}"))
+            .find(|p| is_file(p))
     }
 
     /// `main` field of a package without `exports`. Like Bun's runtime,
@@ -249,9 +350,14 @@ impl Resolver {
             Kind::Require => &["main"],
         };
         for field in fields {
-            let Some(main) = pkg.get(*field).and_then(Json::as_str) else { continue };
+            let Some(main) = pkg.get(*field).and_then(Json::as_str) else {
+                continue;
+            };
             let path = join(dir, main);
-            if let Some(found) = self.resolve_file(&path).or_else(|| self.resolve_index(&path)) {
+            if let Some(found) = self
+                .resolve_file(&path)
+                .or_else(|| self.resolve_index(&path))
+            {
                 return Some(found);
             }
         }
@@ -261,16 +367,17 @@ impl Resolver {
     fn resolve_package(&self, spec: &str, from_dir: &str, kind: Kind) -> Option<Resolved> {
         let (name, subpath) = package_name(spec);
         // A package can import itself by name through its own `exports`.
-        if let Some(found) = self.resolve_self_reference(name, &subpath, from_dir, kind) {
-            return Some(Resolved::File(found));
+        if let Some((pkg_dir, pkg)) = self.self_reference_package(name, from_dir) {
+            return self
+                .resolve_in_package(&pkg_dir, Some(&pkg), &subpath, kind)
+                .map(Resolved::File);
         }
         let mut dir = from_dir.to_owned();
         loop {
             let candidate = format!("{}/node_modules/{name}", dir.trim_end_matches('/'));
-            if is_dir(&candidate) {
-                if let Some(found) = self.resolve_in_package(&candidate, &subpath, kind) {
-                    return Some(Resolved::File(found));
-                }
+            match self.resolve_package_candidate(&candidate, &subpath, kind) {
+                PackageCandidate::Selected(found) => return found.map(Resolved::File),
+                PackageCandidate::Unresolved => (),
             }
             if dir == "/" {
                 return None;
@@ -279,22 +386,41 @@ impl Resolver {
         }
     }
 
-    fn resolve_self_reference(&self, name: &str, subpath: &str, from_dir: &str, kind: Kind) -> Option<String> {
-        let (pkg_dir, pkg) = self.nearest_package_json(from_dir)?;
-        if pkg.get("name").and_then(Json::as_str) != Some(name) {
-            return None;
+    fn resolve_package_candidate(&self, dir: &str, subpath: &str, kind: Kind) -> PackageCandidate {
+        if !is_dir(dir) {
+            return PackageCandidate::Unresolved;
         }
-        let exports = pkg.get("exports")?;
-        resolve_exports(&pkg_dir, exports, subpath, kind).filter(|p| is_file(p))
+        let pkg = self.package_json_in(dir);
+        let found = self.resolve_in_package(dir, pkg.as_deref(), subpath, kind);
+        // Exports select this package even when its chosen target cannot resolve.
+        // Bun still searches ancestors for unresolved legacy main/index lookups.
+        if found.is_some() || pkg.as_deref().and_then(package_exports).is_some() {
+            return PackageCandidate::Selected(found);
+        }
+        PackageCandidate::Unresolved
     }
 
-    fn resolve_in_package(&self, pkg_dir: &str, subpath: &str, kind: Kind) -> Option<String> {
-        let pkg = self.package_json_in(pkg_dir);
-        if let Some(exports) = pkg.as_ref().and_then(|p| p.get("exports")) {
-            return resolve_exports(pkg_dir, exports, subpath, kind).filter(|p| is_file(p));
+    fn self_reference_package(&self, name: &str, from_dir: &str) -> Option<(String, Rc<Json>)> {
+        let (pkg_dir, pkg) = self.nearest_package_json(from_dir)?;
+        if pkg.get("name").and_then(Json::as_str) != Some(name) || package_exports(&pkg).is_none() {
+            return None;
+        }
+        Some((pkg_dir, pkg))
+    }
+
+    fn resolve_in_package(
+        &self,
+        pkg_dir: &str,
+        pkg: Option<&Json>,
+        subpath: &str,
+        kind: Kind,
+    ) -> Option<String> {
+        if let Some(exports) = pkg.and_then(package_exports) {
+            return resolve_exports(pkg_dir, exports, subpath, kind, &self.custom_conditions)
+                .filter(|p| is_file(p));
         }
         if subpath == "." {
-            if let Some(found) = pkg.as_ref().and_then(|p| self.resolve_main_fields(pkg_dir, p, kind)) {
+            if let Some(found) = pkg.and_then(|p| self.resolve_main_fields(pkg_dir, p, kind)) {
                 return Some(found);
             }
             return self.resolve_index(pkg_dir);
@@ -310,9 +436,17 @@ impl Resolver {
     fn resolve_imports_field(&self, spec: &str, from_dir: &str, kind: Kind) -> Option<Resolved> {
         let (pkg_dir, pkg) = self.nearest_package_json(from_dir)?;
         let imports = pkg.get("imports")?.as_object()?;
-        let target = match_subpath_map(imports, spec, kind)?;
+        let target = match_subpath_map(
+            imports,
+            spec,
+            kind,
+            TargetMap::Imports,
+            &self.custom_conditions,
+        )
+        .into_path()?;
         if target.starts_with("./") {
-            return Some(Resolved::File(join(&pkg_dir, &target))).filter(|r| matches!(r, Resolved::File(p) if is_file(p)));
+            return Some(Resolved::File(join(&pkg_dir, &target)))
+                .filter(|r| matches!(r, Resolved::File(p) if is_file(p)));
         }
         // An import map entry may point at a package or built-in.
         self.resolve(&target, &format!("{pkg_dir}/"), kind).ok()
@@ -326,7 +460,9 @@ impl Resolver {
             return cached.clone();
         }
         let parsed = self.read_package_json(dir).map(Rc::new);
-        self.package_json.borrow_mut().insert(dir.to_owned(), parsed.clone());
+        self.package_json
+            .borrow_mut()
+            .insert(dir.to_owned(), parsed.clone());
         parsed
     }
 
@@ -336,14 +472,42 @@ impl Resolver {
         match serde_json::from_str::<Json>(&text) {
             Ok(value) => Some(value),
             Err(error) => {
-                let prefix = if error.is_eof() { text.trim_end() } else { &text };
-                let line = if error.is_eof() { prefix.lines().count().max(1) } else { error.line() };
-                let line_text = prefix.lines().nth(line.saturating_sub(1)).unwrap_or("").to_owned();
-                let column = if error.is_eof() { line_text.len() + 1 } else { error.column() };
-                let message = if error.is_eof() { "Unexpected end of file".to_owned() } else { error.to_string() };
-                let note = ResolveNote { file, line_text, line, column, message };
+                let prefix = if error.is_eof() {
+                    text.trim_end()
+                } else {
+                    &text
+                };
+                let line = if error.is_eof() {
+                    prefix.lines().count().max(1)
+                } else {
+                    error.line()
+                };
+                let line_text = prefix
+                    .lines()
+                    .nth(line.saturating_sub(1))
+                    .unwrap_or("")
+                    .to_owned();
+                let column = if error.is_eof() {
+                    line_text.len() + 1
+                } else {
+                    error.column()
+                };
+                let message = if error.is_eof() {
+                    "Unexpected end of file".to_owned()
+                } else {
+                    error.to_string()
+                };
+                let note = ResolveNote {
+                    file,
+                    line_text,
+                    line,
+                    column,
+                    message,
+                };
                 self.notes.borrow_mut().push(note.clone());
-                self.package_errors.borrow_mut().insert(dir.to_owned(), note);
+                self.package_errors
+                    .borrow_mut()
+                    .insert(dir.to_owned(), note);
                 None
             }
         }
@@ -376,7 +540,11 @@ impl Resolver {
 }
 
 fn is_relative_or_absolute(spec: &str) -> bool {
-    spec.starts_with('/') || spec.starts_with("./") || spec.starts_with("../") || spec == "." || spec == ".."
+    spec.starts_with('/')
+        || spec.starts_with("./")
+        || spec.starts_with("../")
+        || spec == "."
+        || spec == ".."
 }
 
 fn not_found_module(spec: &str, from: &str) -> String {
@@ -397,69 +565,226 @@ fn package_name(spec: &str) -> (&str, String) {
     }
 }
 
-fn conditions(kind: Kind) -> &'static [&'static str] {
+fn builtin_condition(kind: Kind, condition: &str) -> bool {
     match kind {
-        Kind::Import => &["bun", "node", "import", "default"],
-        Kind::Require => &["bun", "node", "require", "default"],
+        Kind::Import => matches!(condition, "bun" | "node" | "import" | "default"),
+        Kind::Require => matches!(condition, "bun" | "node" | "require" | "default"),
+    }
+}
+
+fn package_exports(pkg: &Json) -> Option<&Json> {
+    pkg.get("exports").filter(|exports| !exports.is_null())
+}
+
+enum PackageCandidate {
+    Unresolved,
+    Selected(Option<String>),
+}
+
+#[derive(Clone, Copy)]
+enum TargetMap {
+    Exports,
+    Imports,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PackageTarget {
+    Unmatched,
+    Null,
+    Invalid,
+    Path(String),
+}
+
+impl PackageTarget {
+    fn into_path(self) -> Option<String> {
+        match self {
+            Self::Path(path) => Some(path),
+            Self::Unmatched | Self::Null | Self::Invalid => None,
+        }
     }
 }
 
 /// Node's PACKAGE_EXPORTS_RESOLVE.
-fn resolve_exports(pkg_dir: &str, exports: &Json, subpath: &str, kind: Kind) -> Option<String> {
+fn resolve_exports(
+    pkg_dir: &str,
+    exports: &Json,
+    subpath: &str,
+    kind: Kind,
+    custom_conditions: &[String],
+) -> Option<String> {
     let is_subpath_map = exports
         .as_object()
         .is_some_and(|map| map.keys().next().is_some_and(|k| k.starts_with('.')));
     let target = if is_subpath_map {
-        match_subpath_map(exports.as_object()?, subpath, kind)?
+        match_subpath_map(
+            exports.as_object()?,
+            subpath,
+            kind,
+            TargetMap::Exports,
+            custom_conditions,
+        )
     } else if subpath == "." {
-        resolve_target(exports, kind, None)?
+        resolve_target(exports, kind, None, TargetMap::Exports, custom_conditions)
     } else {
         return None;
     };
-    Some(join(pkg_dir, &target))
+    Some(join(pkg_dir, &target.into_path()?))
 }
 
-/// Match `key` against a subpath map (`exports` or `imports`), including
-/// `*` patterns; returns the chosen target string.
-fn match_subpath_map(map: &serde_json::Map<String, Json>, key: &str, kind: Kind) -> Option<String> {
+/// Match exact keys before patterns, ordered by prefix length then full key length.
+fn match_subpath_map(
+    map: &serde_json::Map<String, Json>,
+    key: &str,
+    kind: Kind,
+    target_map: TargetMap,
+    custom_conditions: &[String],
+) -> PackageTarget {
     if let Some(target) = map.get(key).filter(|_| !key.contains('*')) {
-        return resolve_target(target, kind, None);
+        return resolve_target(target, kind, None, target_map, custom_conditions);
     }
-    // Longest prefix wins among "./prefix*suffix" patterns.
-    let mut best: Option<(&str, &Json, String)> = None;
+    let mut best: Option<(&str, &Json, &str)> = None;
     for (pattern, target) in map {
-        let Some((prefix, suffix)) = pattern.split_once('*') else { continue };
-        if !key.starts_with(prefix) || !key.ends_with(suffix) || key.len() < prefix.len() + suffix.len() {
+        let Some((prefix, suffix)) = pattern.split_once('*') else {
+            continue;
+        };
+        if suffix.contains('*')
+            || !key.starts_with(prefix)
+            || !key.ends_with(suffix)
+            || key.len() <= prefix.len() + suffix.len()
+        {
             continue;
         }
-        let captured = key[prefix.len()..key.len() - suffix.len()].to_owned();
-        if best.as_ref().is_none_or(|(p, _, _)| prefix.len() > p.len()) {
-            best = Some((prefix, target, captured));
+        let captured = &key[prefix.len()..key.len() - suffix.len()];
+        if best
+            .as_ref()
+            .is_none_or(|(p, _, _)| pattern_priority(pattern) > pattern_priority(p))
+        {
+            best = Some((pattern, target, captured));
         }
     }
     if let Some((_, target, captured)) = best {
-        return resolve_target(target, kind, Some(&captured));
+        return resolve_pattern_target(target, captured, kind, target_map, custom_conditions);
     }
     // Legacy folder mappings: "./dir/": "./lib/dir/".
-    map.iter()
+    let folder = map
+        .iter()
         .filter(|(k, _)| k.ends_with('/') && key.starts_with(k.as_str()))
-        .max_by_key(|(k, _)| k.len())
-        .and_then(|(k, target)| resolve_target(target, kind, None).map(|t| format!("{t}{}", &key[k.len()..])))
+        .max_by_key(|(k, _)| k.len());
+    let Some((folder, target)) = folder else {
+        return PackageTarget::Unmatched;
+    };
+    match resolve_target(target, kind, None, target_map, custom_conditions) {
+        PackageTarget::Path(path) => PackageTarget::Path(format!("{path}{}", &key[folder.len()..])),
+        other => other,
+    }
 }
 
-fn resolve_target(target: &Json, kind: Kind, captured: Option<&str>) -> Option<String> {
-    match target {
-        Json::String(s) => Some(match captured {
-            Some(c) => s.replace('*', c),
-            None => s.clone(),
-        }),
-        Json::Array(items) => items.iter().find_map(|t| resolve_target(t, kind, captured)),
-        Json::Object(map) => map
-            .iter()
-            .filter(|(cond, _)| conditions(kind).contains(&cond.as_str()))
-            .find_map(|(_, t)| resolve_target(t, kind, captured)),
-        _ => None,
+fn resolve_pattern_target(
+    target: &Json,
+    captured: &str,
+    kind: Kind,
+    target_map: TargetMap,
+    custom_conditions: &[String],
+) -> PackageTarget {
+    if invalid_target_segments(captured) {
+        return PackageTarget::Invalid;
     }
+    resolve_target(target, kind, Some(captured), target_map, custom_conditions)
+}
+
+fn pattern_priority(pattern: &str) -> (usize, usize) {
+    (pattern.find('*').unwrap_or(pattern.len()), pattern.len())
+}
+
+fn resolve_target(
+    target: &Json,
+    kind: Kind,
+    captured: Option<&str>,
+    target_map: TargetMap,
+    custom_conditions: &[String],
+) -> PackageTarget {
+    match target {
+        Json::Null => PackageTarget::Null,
+        Json::String(path) => resolve_string_target(path, captured, target_map),
+        Json::Array(items) => {
+            resolve_target_array(items, kind, captured, target_map, custom_conditions)
+        }
+        Json::Object(map) => {
+            resolve_target_conditions(map, kind, captured, target_map, custom_conditions)
+        }
+        _ => PackageTarget::Invalid,
+    }
+}
+
+fn resolve_string_target(
+    path: &str,
+    captured: Option<&str>,
+    target_map: TargetMap,
+) -> PackageTarget {
+    let path = match captured {
+        Some(captured) => path.replace('*', captured),
+        None => path.to_owned(),
+    };
+    if let Some(relative) = path.strip_prefix("./") {
+        return if invalid_target_segments(relative) {
+            PackageTarget::Invalid
+        } else {
+            PackageTarget::Path(path)
+        };
+    }
+    if matches!(target_map, TargetMap::Exports) || is_relative_or_absolute(&path) || path.is_empty()
+    {
+        return PackageTarget::Invalid;
+    }
+    PackageTarget::Path(path)
+}
+
+fn invalid_target_segments(path: &str) -> bool {
+    percent_decode(path)
+        .split(['/', '\\'])
+        .any(|part| part == "." || part == ".." || part.eq_ignore_ascii_case("node_modules"))
+}
+
+fn resolve_target_array(
+    items: &[Json],
+    kind: Kind,
+    captured: Option<&str>,
+    target_map: TargetMap,
+    custom_conditions: &[String],
+) -> PackageTarget {
+    if items.is_empty() {
+        return PackageTarget::Null;
+    }
+    let mut last = PackageTarget::Unmatched;
+    for target in items {
+        match resolve_target(target, kind, captured, target_map, custom_conditions) {
+            PackageTarget::Path(path) => return PackageTarget::Path(path),
+            PackageTarget::Unmatched => (),
+            other => last = other,
+        }
+    }
+    last
+}
+
+fn resolve_target_conditions(
+    map: &serde_json::Map<String, Json>,
+    kind: Kind,
+    captured: Option<&str>,
+    target_map: TargetMap,
+    custom_conditions: &[String],
+) -> PackageTarget {
+    map.iter()
+        .filter(|(condition, _)| {
+            builtin_condition(kind, condition)
+                || custom_conditions.iter().any(|custom| custom == *condition)
+        })
+        .find_map(|(_, target)| {
+            match resolve_target(target, kind, captured, target_map, custom_conditions) {
+                PackageTarget::Unmatched => None,
+                selected => Some(selected),
+            }
+        })
+        .unwrap_or(PackageTarget::Unmatched)
 }
 
 #[cfg(test)]
@@ -469,10 +794,17 @@ mod tests {
     #[test]
     fn names() {
         assert_eq!(package_name("lodash"), ("lodash", ".".to_owned()));
-        assert_eq!(package_name("lodash/fp/map"), ("lodash", "./fp/map".to_owned()));
+        assert_eq!(
+            package_name("lodash/fp/map"),
+            ("lodash", "./fp/map".to_owned())
+        );
         assert_eq!(package_name("@a/b/c"), ("@a/b", "./c".to_owned()));
         assert_eq!(normalize("/a/./b/../c//d"), "/a/c/d");
         assert_eq!(dirname("/a/b.js"), "/a");
         assert_eq!(dirname("/b.js"), "/");
     }
 }
+
+#[cfg(test)]
+#[path = "resolve_tests.rs"]
+mod package_tests;

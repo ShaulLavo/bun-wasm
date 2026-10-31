@@ -1,6 +1,6 @@
 {
   "name": "bun-wasm",
-  "version": "0.0.2",
+  "version": "0.0.61",
   "private": true,
   "type": "module",
   "exports": {
@@ -18,6 +18,13 @@
       "node": "./dist/package/worker-entry.js",
       "default": "./src/worker-entry.ts"
     },
+    "./notification-worker": {
+      "types": "./src/notification-worker-entry.ts",
+      "bun": "./src/notification-worker-entry.ts",
+      "browser": "./src/notification-worker-entry.ts",
+      "node": "./dist/package/notification-worker-entry.js",
+      "default": "./src/notification-worker-entry.ts"
+    },
     "./asset": {
       "types": "./src/assets.ts",
       "bun": "./src/assets.ts",
@@ -32,42 +39,71 @@
     "prepare.ts",
     "README.md",
     "src/index.ts",
+    "src/process-runtime.ts",
     "src/assets.ts",
+    "src/quickjs-program.ts",
+    "src/engine-kind.ts",
     "src/bun-adapter.ts",
+    "src/shared-objects.ts",
     "src/guest-asset.generated.ts",
     "src/worker-entry.ts",
+    "src/notification-worker-entry.ts",
     "web/src/worker.ts",
     "web/src/engine-host.js",
+    "web/src/script-evaluation.ts",
     "web/src/engine-host.d.ts",
     "web/src/crypto-host.js",
     "web/src/crypto-inputs.js",
     "web/src/default-signal.ts",
+    "web/src/bun-terminal.ts",
     "web/src/promise-reactions.ts",
     "web/src/buffer-transfer.ts",
+    "web/src/shared-objects",
     "web/src/native-stream-state.ts",
+    "web/src/native-direct-stream.ts",
     "web/src/content-modules.ts",
-    "web/src/subprocess.ts",
-    "web/src/worker-pipes.ts",
-    "web/src/net"
+    "web/src/net",
+    "src/executable-paths.ts",
+    "web/src/bun-launcher.ts",
+    "web/src/tool-command.ts",
+    "web/src/bun-executor.ts",
+    "web/src/memory-telemetry.ts",
+    "web/src/memory-channel.ts"
   ],
   "scripts": {
     "build": "bun build.ts",
     "prepare": "bun prepare.ts",
     "check": "tsc -p tsconfig.package.json",
     "test": "bun test ./tests/package/*.test.ts",
+    "test:http:lifecycle": "bun scripts/http-response-lifecycle.ts",
     "generate-guest": "bun scripts/guest-artifact.ts",
-    "publish-guest": "bun scripts/publish-guest.ts"
+    "publish-guest": "bun scripts/publish-guest.ts",
+    "quality": "bun scripts/quality.ts",
+    "quality:lint": "oxlint --deny-warnings",
+    "quality:types": "tsc -p tsconfig.scripts.json && tsc -p web/tsconfig.quality.json && tsc -p sandbox/tsconfig.quality.json",
+    "quality:unused": "knip --no-progress",
+    "quality:duplicates": "jscpd --config .jscpd.json --baseline .jscpd-baseline.json --fail-on-new-clones 0 --fail-on-empty",
+    "quality:probes": "bun scripts/test-checks.ts quality",
+    "quality:rust": "bun scripts/quality-rust.ts",
+    "quality:wasi": "bun scripts/quality-wasi.ts",
+    "test:browser:shell-consumer": "bun web/tests/browser-shell-consumer.ts chromium firefox",
+    "bench:light-startup": "bun scripts/measure-light-startup.ts",
+    "bench:engines": "bun scripts/bench-engines.ts"
   },
   "peerDependencies": {
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e41f4cdd6eaa376888b4eb24d6557789b98b59f9"
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.105/waffle-0.0.105.tgz",
+    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/waffle-base-0.0.13.tgz"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
-    "typescript": "^7.0.2",
+    "typescript": "7.0.2",
+    "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "git+https://github.com/ShaulLavo/waffle.git#e41f4cdd6eaa376888b4eb24d6557789b98b59f9"
-  },
-  "trustedDependencies": [
-    "waffle"
-  ]
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.105/waffle-0.0.105.tgz",
+    "jscpd": "5.4.1",
+    "knip": "6.41.0",
+    "oxlint": "1.88.0",
+    "wrangler": "4.151.0",
+    "playwright": "1.64.1"
+  }
 }

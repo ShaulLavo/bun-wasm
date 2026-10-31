@@ -7,6 +7,14 @@ const state = { paused: false, resume: () => {}, failWriteAfter: (count: number)
 Object.assign(globalThis, { startupFilesystem: state });
 
 export class SharedFilesystem extends Filesystem {
+  constructor(options: ConstructorParameters<typeof Filesystem>[0] = {}, onStartupStage?: ConstructorParameters<typeof Filesystem>[1]) {
+    if (!new URLSearchParams(location.search).has("wait-startup")) {
+      super(options, onStartupStage);
+      return;
+    }
+    if (options.mode !== "fast") throw new Error("Editor waiting control requires fast mode");
+    super({ ...options, whenBusy: "wait" }, onStartupStage);
+  }
   // Fault the real owner: page capabilities deliberately cannot be monkey-patched.
   override async writeFile(path: string, text: string | Uint8Array, append = false): Promise<void> {
     if (writesUntilFailure !== undefined && --writesUntilFailure === 0) {
@@ -17,6 +25,10 @@ export class SharedFilesystem extends Filesystem {
   }
   override async mkdirp(path: string): Promise<void> {
     await super.mkdirp(path);
+    if (path === "/tmp" && new URLSearchParams(location.search).has("fail-startup") && !sessionStorage.getItem("startup-failed")) {
+      sessionStorage.setItem("startup-failed", "1");
+      throw new Error("injected filesystem startup failure");
+    }
     if (!pause || path !== "/tmp") return;
     sessionStorage.setItem("startup-paused", "1");
     state.paused = true;

@@ -1,10 +1,12 @@
+import { controlLoad } from "waffle/proc/control";
+import { createSignalState } from "waffle/proc/signals";
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { createNodeSignalController } from "../scripts/node-signals.ts";
 
-const eventsSource = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/events.js", import.meta.url), "utf8");
-const processSource = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/process.js", import.meta.url), "utf8");
+const eventsSource = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__eventsFactory = ${readFileSync(new URL("../../crates/bunwasm-runtime/src/js/events.ts", import.meta.url), "utf8")}`);
+const processSource = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__processFactory = ${readFileSync(new URL("../../crates/bunwasm-runtime/src/js/process.ts", import.meta.url), "utf8")}`);
 const processSignalsSource = new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.__signalFactory = ${readFileSync(new URL("../../crates/bunwasm-runtime/src/js/process_signals.ts", import.meta.url), "utf8")}`);
 
 class GuestExit extends Error {
@@ -18,13 +20,15 @@ function fixture() {
   const ticks: (() => void)[] = [];
   const writes: unknown[][] = [];
   let writeError: Error | undefined;
+  let cancelIoWaitersCalls = 0;
   let selected: { status: number; signal: number } | undefined;
   const context = createContext({ TextEncoder, TextDecoder, Uint8Array, Error });
   const internal = {
     native: {
       platformInfo: { version: "test", revision: "test", arch: "wasm32" },
-      env: () => ({}), argv: () => ["bun"], cwd: () => "/", isatty: () => false,
+      env: () => ({}), argv: () => ["bun"], execArgv: () => [], execPath: () => "/bin/bun", cwd: () => "/", isatty: () => false,
       writeStdout(...args: unknown[]) { writes.push(args); if (writeError) throw writeError; }, writeStderr() {},
+      closeAllDirs() {},
       exit(code: number): never { throw new GuestExit(code); },
       hostSignal(signal: number, mode: number) {
         if (signal === 0) {
@@ -52,6 +56,7 @@ function fixture() {
       },
     },
     nextTick(callback: (...args: unknown[]) => void, ...args: unknown[]) { ticks.push(() => callback(...args)); },
+    cancelIoWaiters() { cancelIoWaitersCalls++; },
     emitExit() {},
     traceExit() {},
     require(name: string) {
@@ -60,12 +65,14 @@ function fixture() {
       throw new Error(`unexpected polyfill ${name}`);
     },
     pumpSignals: undefined as undefined | (() => boolean),
+    workerError: undefined as undefined | ((error: unknown) => void),
   };
   const events = runInContext(eventsSource, context)(internal);
   const process = runInContext(processSource, context)(internal);
   context.process = process;
   return {
     process, events, internal, changes, dispositions, pending, context, writes,
+    cancelIoWaitersCalls: () => cancelIoWaitersCalls,
     writeFails(error: Error) { writeError = error; },
     ticks() { while (ticks.length) ticks.shift()!(); },
     selected: () => selected,
@@ -77,6 +84,10 @@ function fixture() {
     pump() { return internal.pumpSignals!(); },
   };
 }
+
+test("process.noDeprecation defaults to false", () => {
+  expect(fixture().process.noDeprecation).toBe(false);
+});
 
 test("JS guests start with SIGPIPE ignored like Node and Bun", () => {
   const f = fixture();
@@ -96,7 +107,7 @@ test("unrelated removeAllListeners preserves the initial SIGPIPE ignore", () => 
 
 test("generic Node controllers retain preview1 SIGPIPE default", () => {
   const controller = createNodeSignalController();
-  expect(Atomics.load(new Int32Array(controller.buffers.signalState), 13)).toBe(0);
+  expect(controlLoad(createSignalState(controller.buffers.signalState), 13)).toBe(0);
 });
 
 for (const [name, signal] of [["SIGINT", 2], ["SIGTERM", 15], ["SIGPIPE", 13]] as const) {
@@ -250,6 +261,10 @@ test("SIGKILL cannot acquire a handler and self KILL remains fatal", () => {
 const bootstrapSource = readFileSync(new URL("../../crates/bunwasm-runtime/src/js/bootstrap.js", import.meta.url), "utf8");
 function errorFixture() {
   const f = fixture();
+  f.context.printed = [];
+  f.context.forwarded = [];
+  f.internal.workerError = (error: unknown) => f.context.forwarded.push(error);
+
   // Execute the actual bootstrap error-policy section against the actual process/EventEmitter.
   const start = bootstrapSource.indexOf("  internal.handleUncaught =");
   const end = bootstrapSource.indexOf("  internal.emitBeforeExit", start);
@@ -259,20 +274,65 @@ function errorFixture() {
     const native = internal.native;
     const listenerCount = name => process.listenerCount(name);
     const emitExit = internal.emitExit;
-    const printFatal = () => {};
+    const printFatal = (error) => printed.push(error);
     ${bootstrapSource.slice(start, end)}
   })()`, f.context);
-  return f as typeof f & { internal: typeof f.internal & {
+  return f as typeof f & { context: typeof f.context & { printed: unknown[]; forwarded: unknown[] }; internal: typeof f.internal & {
     handleUncaught(error: unknown): boolean;
-    handleRejection(error: unknown): boolean;
+    handleRejection(error: unknown, promise: unknown): boolean;
   }};
 }
+
+test("worker error forwarding suppresses duplicate uncaught printing", () => {
+  const f = errorFixture();
+  const error = new Error("worker failure");
+  expect(f.internal.handleUncaught(error)).toBe(false);
+  expect(f.context.forwarded).toEqual([error]);
+  expect(f.context.printed).toEqual([]);
+});
+
+test("worker error forwarding suppresses duplicate rejection printing", () => {
+  const f = errorFixture();
+  const error = new Error("worker rejection");
+  expect(f.internal.handleRejection(error, Promise.resolve())).toBe(false);
+  expect(f.context.forwarded).toEqual([error]);
+  expect(f.context.printed).toEqual([]);
+});
+
 const epipe = () => Object.assign(new Error("broken pipe"), { code: "EPIPE", errno: -32, syscall: "write" });
+
+
+function exitErrorFixture() {
+  const f = fixture();
+  f.context.printed = [];
+  f.context.forwarded = [];
+  f.internal.workerError = (error: unknown) => f.context.forwarded.push(error);
+  const start = bootstrapSource.indexOf("  function emitExit(");
+  const end = bootstrapSource.indexOf("  function listenerCount", start);
+  if (start < 0 || end < 0) throw new Error("bootstrap exit section missing");
+  f.context.internal = f.internal;
+  runInContext(`(() => {
+    const native = internal.native;
+    const printError = error => printed.push(error);
+    ${bootstrapSource.slice(start, end)}
+  })()`, f.context);
+  return f as typeof f & { context: typeof f.context & { printed: unknown[]; forwarded: unknown[] }; internal: typeof f.internal & { emitExit(code: number): void } };
+}
+
+test("worker exit-listener errors are forwarded without duplicate local printing", () => {
+  const f = exitErrorFixture();
+  const error = new Error("exit failure");
+  f.process.on("exit", () => { throw error; });
+  f.internal.emitExit(0);
+  expect(f.cancelIoWaitersCalls()).toBe(2);
+  expect(f.context.forwarded).toEqual([error]);
+  expect(f.context.printed).toEqual([]);
+});
 
 for (const method of ["handleUncaught", "handleRejection"] as const) {
   test(`${method} escaping EPIPE reports the error under SIGPIPE's ignored Node default`, () => {
     const f = errorFixture();
-    expect(f.internal[method](epipe())).toBe(false);
+    expect(method === "handleRejection" ? f.internal[method](epipe(), undefined) : f.internal[method](epipe())).toBe(false);
     expect(f.selected()).toBeUndefined();
     expect(f.changes).toEqual([]);
     expect(f.process.exitCode).toBe(method === "handleUncaught" ? 1 : undefined);
@@ -283,7 +343,7 @@ for (const method of ["handleUncaught", "handleRejection"] as const) {
     f.process.on("SIGPIPE", () => seen.push("SIGPIPE"));
     f.process.on("SIGINT", () => seen.push("SIGINT"));
     f.send(2);
-    expect(f.internal[method](epipe())).toBe(false);
+    expect(method === "handleRejection" ? f.internal[method](epipe(), undefined) : f.internal[method](epipe())).toBe(false);
     expect(seen).toEqual([]);
     expect(f.pending.has(2)).toBe(true);
     expect(f.pending.has(13)).toBe(false);
@@ -296,7 +356,7 @@ for (const method of ["handleUncaught", "handleRejection"] as const) {
     const errors: unknown[] = [];
     f.process.on(event, (error: unknown) => errors.push(error));
     const error = epipe();
-    expect(f.internal[method](error)).toBe(true);
+    expect(method === "handleRejection" ? f.internal[method](error, undefined) : f.internal[method](error)).toBe(true);
     expect(errors).toEqual([error]);
     expect(f.changes).toEqual([]);
     expect(f.selected()).toBeUndefined();

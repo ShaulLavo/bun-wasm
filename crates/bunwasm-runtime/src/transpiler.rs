@@ -82,16 +82,40 @@ pub enum ModuleImportKind {
 /// settings lookups). Errors are returned as a human readable message, which
 /// the runtime throws as a `SyntaxError`-like error in JS.
 pub trait Transpiler {
-    fn public_transpile(&self, _source: &[u8], _options: &str, _action: &str, _loader: &str) -> Result<String, String> {
+    fn public_transpile(
+        &self,
+        _source: &[u8],
+        _options: &str,
+        _action: &str,
+        _loader: &str,
+    ) -> Result<String, String> {
         Err("Bun.Transpiler needs Bun's parser, which this bun.wasm was built without".to_owned())
     }
 
-    fn function_imports(&self, _args: &[String], _kind: &str) -> Result<Vec<Vec<usize>>, String> {
-        Err("generated imports need Bun's parser".to_owned())
+    fn prepare_source(&self, _source: &str, _goal: &str) -> Result<String, String> {
+        Err("source preparation needs Bun's parser".to_owned())
     }
 
-    fn parse_data(&self, _source: &[u8], format: &str) -> Result<String, crate::engine::NativeError> {
-        Err(crate::engine::NativeError::error(format!("{format}.parse needs Bun's parser, which this bun.wasm was built without")))
+    fn prepare_function(
+        &self,
+        _args: &[String],
+        _kind: &str,
+        _hooks: bool,
+    ) -> Result<String, String> {
+        Err("function preparation needs Bun's parser".to_owned())
+    }
+
+    /// Version of the async-context hooks printed into transpiled code for
+    /// the browser engine, or 0 when none are. Cached printed text is keyed
+    /// on it.
+    fn hooks_version(&self) -> u32 {
+        0
+    }
+
+    fn parse_data(&self, _source: &[u8], format: &str) -> Result<String, crate::data::NativeError> {
+        Err(crate::data::NativeError::error(format!(
+            "{format}.parse needs Bun's parser, which this bun.wasm was built without"
+        )))
     }
 
     fn transpile(&self, source: &str, path: &str, loader: Loader) -> Result<String, String>;
@@ -99,8 +123,24 @@ pub trait Transpiler {
     /// Like [`Transpiler::transpile`], plus the source map v3 `mappings`
     /// string (one source: the input) when the transpiler records one. The
     /// runtime uses it to report original positions in stack traces.
-    fn transpile_with_map(&self, source: &str, path: &str, loader: Loader) -> Result<Transpiled, String> {
-        self.transpile(source, path, loader).map(|code| Transpiled { code, ..Default::default() })
+    fn transpile_with_map(
+        &self,
+        source: &str,
+        path: &str,
+        loader: Loader,
+    ) -> Result<Transpiled, String> {
+        self.transpile(source, path, loader).map(|code| Transpiled {
+            code,
+            ..Default::default()
+        })
+    }
+
+    /// Print an ES module as a registration record for engines without native
+    /// module support. The optional mappings map record positions to source.
+    fn register(&self, _source: &str, path: &str) -> Result<Transpiled, String> {
+        Err(format!(
+            "module registration for {path} needs Bun's parser, which this bun.wasm was built without"
+        ))
     }
 
     /// Semantic imports for the host engine's module URL and dynamic-import hooks.
@@ -114,7 +154,9 @@ pub trait Transpiler {
     /// (after an optional comment line); imports become `require()` calls with
     /// live bindings. `mappings` maps it back to the file.
     fn esm_to_cjs(&self, path: &str) -> Result<Transpiled, String> {
-        Err(format!("require() of ES module {path} needs Bun's bundler, which this bun.wasm was built without"))
+        Err(format!(
+            "require() of ES module {path} needs Bun's bundler, which this bun.wasm was built without"
+        ))
     }
 
     /// `Bun.build`: Bun's bundler. Writes the outputs when `outdir` is set
@@ -124,11 +166,17 @@ pub trait Transpiler {
     }
 
     fn dev_server_open(&self, _path: &str) -> Result<DevServerResult, String> {
-        Err("HTML development needs Bun's bundler, which this bun.wasm was built without".to_owned())
+        Err(
+            "HTML development needs Bun's bundler, which this bun.wasm was built without"
+                .to_owned(),
+        )
     }
 
     fn dev_server_rebuild(&self, _id: u32, _changed: &[String]) -> Result<DevServerResult, String> {
-        Err("HTML development needs Bun's bundler, which this bun.wasm was built without".to_owned())
+        Err(
+            "HTML development needs Bun's bundler, which this bun.wasm was built without"
+                .to_owned(),
+        )
     }
 
     fn dev_server_close(&self, _id: u32) {}

@@ -14,6 +14,20 @@ def record(path, error, excerpt=""):
 
 
 class Classification(unittest.TestCase):
+    def test_partial_refresh_preserves_unmeasured_rows(self):
+        previous = [{"file": "unmeasured", "error": "retain"}, {"file": "now-passing"}, {"file": "still-failing", "error": "old"}]
+        latest = [{"file": "still-failing", "error": "new"}, {"file": "new-failure"}]
+        merged = report.merge_measured_failures(previous, latest, ["now-passing", "still-failing", "new-failure"])
+        self.assertEqual(merged, [{"file": "new-failure"}, {"file": "still-failing", "error": "new"}, {"file": "unmeasured", "error": "retain"}])
+
+    def test_partial_refresh_rejects_duplicate_selection(self):
+        with self.assertRaises(ValueError):
+            report.merge_measured_failures([], [], ["duplicate", "duplicate"])
+
+    def test_partial_refresh_rejects_unmeasured_failure(self):
+        with self.assertRaises(ValueError):
+            report.merge_measured_failures([], [{"file": "outside"}], ["inside"])
+
     def test_data_url_is_not_an_uninstalled_package(self):
         item = record("js/node/string-module.test.js", "error: Cannot find package 'data:text'")
         self.assertEqual(report.classify(item, "", {})[1], "data URL module loading")

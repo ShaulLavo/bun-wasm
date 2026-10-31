@@ -1,0 +1,113 @@
+# JSC engine program
+
+This is a source integration record based on bun-wasm
+`a145d02013c5020888c7ef63910f63636c52cc64`. It does not establish a real
+JSC pair, native PIC closure, or runtime admission.
+
+## Classification
+
+| Source | Class | Origin and change |
+| --- | --- | --- |
+| `crates/bunwasm-engine-jsc/src/vm.rs` | Port | Exact move of this repository's original `crates/bunwasm-runtime/src/engine_jsc.rs` at the baseline above. No upstream implementation copied. |
+| `crates/bunwasm-engine-jsc/src/lib.rs`, `Cargo.toml` | Port | Original registration and entry adapter compiling the QuickJS-owned generic program sources with the JSC VM. |
+| `crates/bunwasm-engine-quickjs/src/{driver,allocator,transport,client}.rs` and shared `program.rs`, `loader.rs`, `natives.rs`, `value_natives.rs` | Port | Existing repository algorithms at the baseline, with a generic driver and extracted core-backed allocation and transport storage. Both engine crates compile one source implementation. |
+| `crates/bunwasm-runtime/src/{engine,data,ops,split_api}.rs` | Port | Existing engine and plain-data contracts included by the side. Core retains process state and services without a VM dependency. No VM values cross the transport. |
+| `crates/bunwasm-host/src/linked.rs`, `src/engine-kind.ts`, `src/quickjs-program.ts`, consumer and receipt adapters | Host feature | Original engine declaration, fixed companion profile, paired byte identity, and pre-entry admission adapters. No parser or upstream loader implementation copied. |
+
+## Adapter and upstream boundaries
+
+The moved VM adapter calls the C API declared in
+`crates/bunwasm-jsc/src/sys.rs` and the existing original wrappers in
+`crates/bunwasm-jsc/src/lib.rs` and `cpp/helpers.cpp`. Their upstream API and
+private-header reference is Bun's WebKit fork at
+`3d3257150c40a1aabdc5f8b48d5b33d0413674cb`, under
+`Source/JavaScriptCore/API/`, `runtime/`, `heap/`, and `interpreter/`.
+These bindings and helpers are adapters to those APIs, not copied WebKit
+implementations. This extraction changes their build ownership, not their
+C API, private-header behavior, or upstream pin. Existing WebKit patch provenance
+remains in [the patch series](bun-patch-series.md),
+[interruption](engine-interruption.md), and
+[finalizer dispatch](jsc-finalizer-dispatch.md).
+
+The shared driver retains one event loop. The JSC side owns its context,
+protected values, roots, callbacks, module handoffs, and pending jobs for the
+whole process. The runtime's direct-State JSC runner is removed. No new common
+rlib, second runtime instance, VM destructor, or context reset is introduced.
+The existing runtime host API remains version 2.
+
+The [shared producer record](quickjs-shared-module.md#shared-producer-source)
+owns the converter and core producer provenance. The
+[JSC recipe record](jsc-prebuild-inputs.md#jsc-program-recipes) owns native PIC
+flags, the existing helper, and the JSC producer. Those original adapters do
+not duplicate WebKit source. Engine input compatibility retains the full
+workspace `Cargo.lock` conservatively; it does not narrow the lock graph.
+
+## Source contract and delivery limits
+
+`bun-wasm-engine` is authoritative. Paired cores require exactly one exact
+`quickjs` or `jsc` tag and a bind function. Missing tags have no fallback.
+JSC's pair is `bun-jsc.wasm` plus `jsc-engine.wasm`; the existing prebuild shell
+is a different artifact. The async `engineLinkPlan` accepts paired files only,
+snapshots the bytes, and uses the selected fixed initializer profile.
+Receipts bind core and side byte identities to engine origin and compatible
+current inputs. One common core is compiled and optimized before decoration
+in the source recipe. Captured-command controls do not prove that production
+execution has occurred.
+
+The current generated default descriptor is `null`. A qualified default or an
+explicit owner delivery decision is required before merge. No new artifact,
+release tag, URL, or hash is supplied by this source checkpoint.
+
+Real PIC/native C++ closure, process-clock members, shared stack and allocator,
+constructors, pointer spilling, Binaryen finalization, GC, promises, callback
+reentry, and native/Node/browser admission remain separate actual-pair gates.
+Captured-value roots are described below. Source review and synthetic controls
+do not establish a real-pair pass.
+
+## Captured values and immediate native error reporting
+
+`vm.rs::array_items` snapshots owned `JsVal` roots, including the input array,
+and borrows that complete snapshot through recursive conversion. A getter can
+clear the array and force collection without leaving later captured elements
+unprotected. This uses the existing C API protection adapter; no new root
+representation is introduced. The staged getter regression calls the real
+`Bun.gc(true)` during conversion. A pre-fix runtime failure is not claimed;
+conservative stack discovery can make reproduction sensitive to stack layout.
+
+The original C++ adapter now defines the side-local strong
+`Bun__reportUnhandledError(JSGlobalObject*, EncodedJSValue)`. Under
+`JSLockHolder` it decodes with `JSValue::decode` and converts through
+`APICast.h::toRef`, including `JSAPIValueWrapper` for wasm32 primitives.
+The Rust callback immediately protects the resulting `JSValueRef`, then calls
+the required `ModuleHost::uncaught` boundary. `Core<E>` delegates to its
+existing `Core::uncaught`/bootstrap `handleUncaught`; promise rejection queues
+and the VM-free common core are not used to store or decode this VM value.
+The upstream references remain the pinned WebKit `runtime/JSMicrotask.cpp`,
+`runtime/JSCJSValue.h`, and `API/APICast.h`. No upstream implementation is
+copied into this original adapter.
+
+The API-value reporter wrapper permits embedding callers to enter that exact
+C++ symbol without casting an encoded i64 to a pointer. Guest regression hooks
+are installed only in the Rust `cfg(test)` build, never in the production JS
+surface or export profile. The manual fixtures cover the captured second
+array item, object identity/handled continuation with real GC, primitive
+wrapper/fatal exit, and the existing errors-in-handler fallback. They are
+staged until an actual JSC test side is admitted; their presence or typecheck
+is not a runtime pass or production artifact qualification.
+
+## WebAssembly memory view adapters
+
+The original `cpp/helpers.cpp` and `src/sys.rs` adapters expose WebKit's
+`ArrayBuffer::createFromBytes`, `makeWasmMemory`, `isWasmMemory`, and `detach`
+through the JSC engine trait. The upstream reference is the same pinned
+WebKit `Source/JavaScriptCore/runtime/ArrayBuffer.{h,cpp}` and
+`JSArrayBuffer.h`; no implementation was copied. The external bytes remain
+owned by the common core's Wasmi store, and the adapter's deallocator does
+not free them. The WebAssembly-memory flag blocks user transfer while the
+polyfill detaches an older growth generation before exposing its replacement.
+
+The shared engine value native accepts a memory resource identity and obtains
+a bounds-checked span from core; JavaScript does not supply an address. These
+are original repository adapters. Their lifetime, session-end, growth and
+reentry requirements are tested on actual engine pairs separately from the
+out-of-process mirror harness in `tests/wasm-tables`.

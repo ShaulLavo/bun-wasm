@@ -1,7 +1,7 @@
 const AUTH_OPTION = /:(?:_authToken|_auth|_?username|_password)=/i;
 const CREDENTIAL_HEADERS = ["authorization", "proxy-authorization", "cookie", "cookie2", "www-authenticate"];
 
-export function packageRedirect(current: URL, location: string, headers: Headers): URL {
+function packageRedirect(current: URL, location: string, headers: Headers): URL {
   const next = new URL(location, current);
   if (!["https:", "http:"].includes(next.protocol) || next.username || next.password || next.search || AUTH_OPTION.test(next.href)) {
     throw new Error("Credential-bearing or unsupported package redirect URL");

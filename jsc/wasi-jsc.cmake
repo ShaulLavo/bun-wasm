@@ -1,6 +1,10 @@
 # CMake toolchain for JavaScriptCore (PORT=JSCOnly, C loop) on wasm32-wasip1 with wasi-sdk.
 # Compiler flags, the shim and the link flags are passed by jsc/configure.sh.
 set(WASI_SDK_PREFIX "$ENV{WASI_SDK_PATH}" CACHE PATH "wasi-sdk root")
+if(NOT EXISTS "$ENV{BUN_WASM_SYSROOT}/bun-wasm-sysroot.json")
+  message(FATAL_ERROR "Build the patched sysroot with scripts/build-wasi-sysroot.ts first")
+endif()
+set(CMAKE_SYSROOT "$ENV{BUN_WASM_SYSROOT}" CACHE PATH "Waffle patched guest sysroot" FORCE)
 list(APPEND CMAKE_MODULE_PATH "${WASI_SDK_PREFIX}/share/cmake")
 
 set(CMAKE_SYSTEM_NAME WASI)

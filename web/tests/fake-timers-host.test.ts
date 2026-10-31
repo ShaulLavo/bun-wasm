@@ -2,15 +2,18 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "../src/buffer-transfer.ts";
+import { SLOT_NAMES } from "../src/net/trampoline.ts";
+import { createScriptEvaluation } from "../src/script-evaluation.ts";
 
 const source = readFileSync(new URL("../src/engine-host.js", import.meta.url), "utf8")
   .replace(/^import .*;\n/gm, "")
   .replace("export function startEngineHost", "function startEngineHost");
 
 test("restoring guest Date replaces an armed host wakeup with the earlier real timer", async () => {
-  const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, transferArrayBuffers, isWasmMemoryBuffer });
+  const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, isWasmMemoryBuffer, transferArrayBuffers, createScriptEvaluation, SLOT_NAMES });
   const EngineHost = runInContext(source + "\nEngineHost;", context);
   const host = Object.assign(Object.create(EngineHost.prototype), {
+    o: {},
     exited: false, timer: null, timerAt: Infinity,
   });
   const realDate = runInContext("Date", context);
@@ -35,10 +38,11 @@ test("restoring guest Date replaces an armed host wakeup with the earlier real t
 });
 
 test("the browser fake checkpoint drains runtime nextTicks synchronously", () => {
-  const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, transferArrayBuffers, isWasmMemoryBuffer });
+  const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, isWasmMemoryBuffer, transferArrayBuffers, createScriptEvaluation, SLOT_NAMES });
   const EngineHost = runInContext(source + "\nEngineHost;", context);
   let drained = false;
   const host = Object.assign(Object.create(EngineHost.prototype), {
+    o: {},
     tickQueued: true,
     internal: { runTicks() { drained = true; } },
     guard<T>(callback: () => T) { return callback(); },

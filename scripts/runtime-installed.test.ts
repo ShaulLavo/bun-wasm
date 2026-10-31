@@ -108,12 +108,13 @@ test("browser builds resolve Waffle through the installed consumer package", asy
     const installed = resolveRuntimePackage(entry);
     expect(installed.metadata.name).toBe("waffle");
     expect(installed.relativeInput(installed.source("waffle/core"))).toBe("core/index.ts");
-    const { outdir, ...config } = browserBuildConfig([entry], join(scratch, "dist"), { runtimeWorker: true });
+    const { outdir: _outdir, ...config } = browserBuildConfig([entry], join(scratch, "dist"), { runtimeWorker: true });
     const result = await Bun.build(config);
     if (!result.success) throw new Error(result.logs.map(String).join("\n"));
     const inputs = Object.keys(result.metafile!.inputs);
     expect(inputs.some(input => installed.relativeInput(input)?.startsWith("core/"))).toBe(true);
-    expect(inputs.some(input => input.includes("/runtime/"))).toBe(false);
+    // No copy of the retired in-repo runtime/ tree; installed packages (bash-web's src/runtime/) are fine.
+    expect(inputs.some(input => !input.includes("node_modules/") && input.split("/").includes("runtime"))).toBe(false);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
     scratches.delete(scratch);

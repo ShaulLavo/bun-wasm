@@ -1,7 +1,7 @@
 use std::ffi::{CStr, c_void};
 use std::ptr::{self, NonNull};
 
-use crate::engine::{Args, NativeError, NativeResult, Record, Val};
+use crate::data::{Args, NativeError, NativeResult, Record, Val};
 use crate::natives::Table;
 use bunwasm_crypto_sys::x509 as ffi;
 
@@ -357,7 +357,9 @@ fn ip_name(bytes: &[u8]) -> String {
     }
     if bytes.len() == 16 {
         return bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| format!("{:X}", u16::from_be_bytes([pair[0], pair[1]])))
             .collect::<Vec<_>>()
             .join(":");

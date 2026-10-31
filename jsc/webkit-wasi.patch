@@ -475,3 +475,322 @@ diff --git i/Source/JavaScriptCore/runtime/VMTraps.h w/Source/JavaScriptCore/run
  #if ENABLE(SIGNAL_BASED_VM_TRAPS)
      RefPtr<SignalSender> m_signalSender;
  #endif
+diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+--- a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
++++ b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+@@ -107,6 +107,13 @@
+
+ static RefPtr<BufferMemoryHandle> tryAllocateResizableMemory(VM* vm, size_t sizeInBytes, size_t maxByteLength)
+ {
++#if OS(WASI)
++    // WASI has no virtual reservation/protection for resizable backing stores.
++    UNUSED_PARAM(vm);
++    UNUSED_PARAM(sizeInBytes);
++    UNUSED_PARAM(maxByteLength);
++    return nullptr;
++#else
+     // Make sure malloc actually allocates something, but not too much. We use null to mean that the buffer is detached.
+     size_t initialBytes = roundUpToMultipleOf<PageCount::pageSize>(sizeInBytes);
+     if (!initialBytes)
+@@ -150,6 +157,7 @@
+     constexpr bool writable = false;
+     OSAllocator::protect(slowMemory + initialBytes, maximumBytes - initialBytes, readable, writable);
+     return adoptRef(*new BufferMemoryHandle(slowMemory, initialBytes, maximumBytes, PageCount::fromBytes(initialBytes), PageCount::fromBytes(maximumBytes), MemorySharingMode::Shared, MemoryMode::BoundsChecking));
++#endif
+ }
+
+ ArrayBufferContents::ArrayBufferContents(void* data, size_t sizeInBytes, std::optional<size_t> maxByteLength, ArrayBufferDestructorFunction&& destructor)
+diff --git a/Source/JavaScriptCore/heap/Collector.cpp b/Source/JavaScriptCore/heap/Collector.cpp
+--- a/Source/JavaScriptCore/heap/Collector.cpp
++++ b/Source/JavaScriptCore/heap/Collector.cpp
+@@ -227,2 +227,6 @@
+     m_lastGrantedTicket++;
++#if OS(WASI)
++    RELEASE_ASSERT_WITH_MESSAGE(!m_threadIsWorking, "WASI single-agent GC cannot use a collector worker");
++    RELEASE_ASSERT_WITH_MESSAGE(m_heap.m_worldState.load() & Heap::mutatorHasConnBit, "WASI single-agent GC request must retain the mutator conn");
++#endif
+     if (!(m_heap.m_worldState.load() & Heap::mutatorHasConnBit))
+diff --git a/Source/JavaScriptCore/heap/Heap.cpp b/Source/JavaScriptCore/heap/Heap.cpp
+--- a/Source/JavaScriptCore/heap/Heap.cpp
++++ b/Source/JavaScriptCore/heap/Heap.cpp
+@@ -1821,2 +1821,20 @@
+
++#if OS(WASI)
++    bool inlineCycle = m_mutatorState == MutatorState::Collecting
++        || m_collector->m_currentPhase != CollectorPhase::NotRunning
++        || m_collector->m_nextPhase != CollectorPhase::NotRunning;
++    if (inlineCycle) {
++        if (synchronousness != Async) [[unlikely]] {
++            dataLogLn("WASI_SINGLE_AGENT_GC_SYNC_REENTRY");
++            RELEASE_ASSERT_NOT_REACHED();
++        }
++        m_collector->requestCollection(request);
++        return;
++    }
++    // Allocation-triggered async requests enter under AllocatingScope; the existing
++    // CollectingScope saves and restores that state around inline collection.
++    RELEASE_ASSERT_WITH_MESSAGE(m_mutatorState == MutatorState::Running
++        || (synchronousness == Async && m_mutatorState == MutatorState::Allocating),
++        "WASI single-agent GC requires a running or asynchronously allocating mutator");
++#endif
+     stopIfNecessary();
+@@ -1826,2 +1844,6 @@
+         waitForCollection(ticket);
++#if OS(WASI)
++    else
++        stopIfNecessary();
++#endif
+ }
+@@ -1839,2 +1861,8 @@
+         collectAsync(request);
++#if OS(WASI)
++        if (m_mutatorState == MutatorState::Collecting
++            || m_collector->m_currentPhase != CollectorPhase::NotRunning
++            || m_collector->m_nextPhase != CollectorPhase::NotRunning)
++            return;
++#endif
+         stopIfNecessary();
+@@ -2106,2 +2134,13 @@
+ {
++#if OS(WASI)
++    if (m_collector->hasOutstandingRequest()) [[unlikely]] {
++        dataLogLn("WASI_SINGLE_AGENT_GC_RELEASE_PENDING");
++        RELEASE_ASSERT_NOT_REACHED();
++    }
++    if (m_collector->m_currentPhase != CollectorPhase::NotRunning
++        || m_collector->m_nextPhase != CollectorPhase::NotRunning) [[unlikely]] {
++        dataLogLn("WASI_SINGLE_AGENT_GC_RELEASE_TRANSITION");
++        RELEASE_ASSERT_NOT_REACHED();
++    }
++#endif
+     for (;;) {
+@@ -2161,2 +2200,5 @@
+     Locker locker { *m_collector->m_threadLock };
++#if OS(WASI)
++    RELEASE_ASSERT_WITH_MESSAGE(!m_collector->hasOutstandingRequestWithLock(), "WASI single-agent GC cannot relinquish a pending conn");
++#endif
+     if (m_collector->hasOutstandingRequestWithLock()) {
+diff --git a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
+--- a/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
++++ b/Source/WTF/wtf/posix/ThreadingPOSIX.cpp
+@@ -415,2 +415,9 @@
+ {
++#if OS(WASI)
++    UNUSED_PARAM(context);
++    UNUSED_PARAM(stackSpec);
++    UNUSED_PARAM(qos);
++    UNUSED_PARAM(schedulingPolicy);
++    RELEASE_ASSERT_WITH_MESSAGE(false, "WASI single-agent engine has no thread lifecycle");
++#else
+     pthread_t threadHandle;
+@@ -458,2 +465,3 @@
+     return true;
++#endif
+ }
+@@ -583,2 +591,5 @@
+ {
++#if OS(WASI)
++    RELEASE_ASSERT_WITH_MESSAGE(false, "WASI single-agent engine has no thread lifecycle");
++#else
+     pthread_t handle;
+@@ -605,2 +616,3 @@
+     return joinResult;
++#endif
+ }
+@@ -609,2 +621,5 @@
+ {
++#if OS(WASI)
++    RELEASE_ASSERT_WITH_MESSAGE(false, "WASI single-agent engine has no thread lifecycle");
++#else
+     Locker locker { m_mutex };
+@@ -616,2 +631,3 @@
+         didBecomeDetached();
++#endif
+ }
+diff --git a/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h b/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h
+new file mode 100644
+--- /dev/null
++++ b/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h
+@@ -0,0 +1,101 @@
++#pragma once
++
++#include <cstdint>
++#include <limits>
++
++constexpr uint64_t bunjscUnknownMemory = std::numeric_limits<uint64_t>::max();
++
++// Every field is a little-endian u64 in the shared wasm memory.
++struct BunjscMemoryTelemetry {
++    uint64_t abiVersion { 1 };
++    uint64_t byteLength { sizeof(BunjscMemoryTelemetry) };
++    uint64_t snapshotSequence { 0 };
++    uint64_t heapUsed { bunjscUnknownMemory };
++    uint64_t heapTotal { bunjscUnknownMemory };
++    uint64_t extraMemory { bunjscUnknownMemory };
++    uint64_t arrayBufferBytes { bunjscUnknownMemory };
++    uint64_t heapAfterLastCollection { bunjscUnknownMemory };
++    uint64_t heapBeforeLastFullCollection { bunjscUnknownMemory };
++    uint64_t heapAfterLastFullCollection { bunjscUnknownMemory };
++    uint64_t totalBytesAllocated { bunjscUnknownMemory };
++    uint64_t gcMaxHeapSize { bunjscUnknownMemory };
++    uint64_t smallHeapSize { bunjscUnknownMemory };
++    uint64_t largeHeapSize { bunjscUnknownMemory };
++    uint64_t gcEnabled { bunjscUnknownMemory };
++    uint64_t generationalGcEnabled { bunjscUnknownMemory };
++    uint64_t concurrentGcEnabled { bunjscUnknownMemory };
++    uint64_t allocationSequence { 0 };
++    uint64_t activeAllocationBytes { bunjscUnknownMemory };
++    uint64_t activeAllocationCategory { 0 };
++    uint64_t failedAllocationBytes { bunjscUnknownMemory };
++    uint64_t failedAllocationCategory { 0 };
++    uint64_t failedAllocationSequence { 0 };
++    uint64_t allocationBudgetThisCycle { bunjscUnknownMemory };
++};
++
++inline constinit BunjscMemoryTelemetry bunjscTelemetry;
++inline constinit uint32_t bunjscAllocationDepth { 0 };
++
++inline BunjscMemoryTelemetry* bunjsc_cached_memory_telemetry()
++{
++    return &bunjscTelemetry;
++}
++
++extern "C" inline void bunjsc_telemetry_allocation_begin(uint64_t bytes, uint32_t category)
++{
++    if (bunjscAllocationDepth++)
++        return;
++    ++bunjscTelemetry.allocationSequence;
++    bunjscTelemetry.activeAllocationBytes = bytes;
++    bunjscTelemetry.activeAllocationCategory = category;
++}
++
++inline void bunjsc_telemetry_allocation_failed()
++{
++    if (bunjscTelemetry.failedAllocationSequence != bunjscTelemetry.allocationSequence) {
++        bunjscTelemetry.failedAllocationBytes = bunjscTelemetry.activeAllocationBytes;
++        bunjscTelemetry.failedAllocationCategory = bunjscTelemetry.activeAllocationCategory;
++        bunjscTelemetry.failedAllocationSequence = bunjscTelemetry.allocationSequence;
++    }
++}
++
++extern "C" inline void bunjsc_telemetry_allocation_end(bool failed)
++{
++    if (failed)
++        bunjsc_telemetry_allocation_failed();
++    if (--bunjscAllocationDepth)
++        return;
++    bunjscTelemetry.activeAllocationBytes = bunjscUnknownMemory;
++    bunjscTelemetry.activeAllocationCategory = 0;
++}
++
++namespace JSC {
++
++// Nullable failure can be recorded before an OOM exception that may not unwind.
++class WASIMemoryAllocationScope {
++public:
++    enum Category : uint32_t { TypedArray = 1, ArrayBuffer = 2 };
++    enum class FailurePolicy { ReportFailure, ObserveOnly };
++
++    WASIMemoryAllocationScope(uint64_t bytes, Category category, FailurePolicy policy = FailurePolicy::ReportFailure)
++        : m_failed(policy == FailurePolicy::ReportFailure)
++    {
++        bunjsc_telemetry_allocation_begin(bytes, category);
++    }
++
++    WASIMemoryAllocationScope(const WASIMemoryAllocationScope&) = delete;
++    WASIMemoryAllocationScope& operator=(const WASIMemoryAllocationScope&) = delete;
++
++    ~WASIMemoryAllocationScope()
++    {
++        bunjsc_telemetry_allocation_end(m_failed);
++    }
++
++    void succeed() { m_failed = false; }
++    void fail() { bunjsc_telemetry_allocation_failed(); }
++
++private:
++    bool m_failed;
++};
++
++} // namespace JSC
+diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp b/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
+--- a/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
++++ b/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
+@@ -36,2 +36,6 @@
+
++#if OS(WASI)
++#include "WASIMemoryTelemetry.h"
++#endif
++
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+@@ -66,2 +70,5 @@
+     ASSERT(!isResizableOrGrowableSharedTypedArrayIncludingDataView(structure->classInfoForCells()));
++#if OS(WASI)
++    WASIMemoryAllocationScope allocation(static_cast<uint64_t>(length) * elementSize, WASIMemoryAllocationScope::TypedArray);
++#endif
+
+@@ -78,2 +85,5 @@
+         m_mode = FastTypedArray;
++#if OS(WASI)
++        allocation.succeed();
++#endif
+
+@@ -106,2 +116,5 @@
+     m_mode = OversizeTypedArray;
++#if OS(WASI)
++    allocation.succeed();
++#endif
+ }
+diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+--- a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
++++ b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
+@@ -43,2 +43,6 @@
+
++#if OS(WASI)
++#include "WASIMemoryTelemetry.h"
++#endif
++
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+@@ -208,2 +213,5 @@
+ {
++#if OS(WASI)
++    WASIMemoryAllocationScope allocation(static_cast<uint64_t>(numElements) * elementByteSize, WASIMemoryAllocationScope::ArrayBuffer);
++#endif
+     CheckedSize sizeInBytes = numElements;
+@@ -235,2 +243,5 @@
+     m_destructor = ArrayBuffer::primitiveGigacageDestructor();
++#if OS(WASI)
++    allocation.succeed();
++#endif
+ }
+diff --git a/Source/JavaScriptCore/heap/Heap.h b/Source/JavaScriptCore/heap/Heap.h
+--- a/Source/JavaScriptCore/heap/Heap.h
++++ b/Source/JavaScriptCore/heap/Heap.h
+@@ -400,2 +400,5 @@
+     size_t sizeAfterLastCollection() const { return m_sizeAfterLastCollect; }
++#if OS(WASI)
++    bool hasCompletedFullCollection() const { return static_cast<bool>(m_lastFullGCEndTime); }
++#endif
+     // Everything the mutator has allocated (cells and reported extra memory), the current cycle included. Mutator thread only.
+diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
+--- a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
++++ b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h
+@@ -42,2 +42,5 @@
+ #include <wtf/text/MakeString.h>
++#if OS(WASI)
++#include "WASIMemoryTelemetry.h"
++#endif
+
+@@ -58,2 +61,6 @@
+ {
++#if OS(WASI)
++    WASIMemoryAllocationScope request(static_cast<uint64_t>(length) * sizeof(typename Adaptor::Type),
++        WASIMemoryAllocationScope::TypedArray, WASIMemoryAllocationScope::FailurePolicy::ObserveOnly);
++#endif
+     VM& vm = globalObject->vm();
+@@ -63,2 +70,5 @@
+     if (!context) {
++#if OS(WASI)
++        request.fail();
++#endif
+         throwOutOfMemoryError(globalObject, scope);

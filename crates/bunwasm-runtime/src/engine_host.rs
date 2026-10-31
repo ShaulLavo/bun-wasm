@@ -23,7 +23,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::engine::{Args, DataFn, NativeError, Record, Val};
+use crate::data::{Args, DataFn, NativeError, Record, Val};
 use crate::modules;
 use crate::natives::Table;
 use crate::resolve::{self, Kind, Resolved};
@@ -172,9 +172,16 @@ pub(crate) fn init(entry: Entry, state: Rc<State>, main_path: String) -> i32 {
         Entry::Test(args) => Record::new()
             .set("kind", "test")
             .set("main", main_path)
-            .set("args", Val::Array(args.iter().map(|a| Val::from(a.as_str())).collect())),
+            .set(
+                "args",
+                Val::Array(args.iter().map(|a| Val::from(a.as_str())).collect()),
+            ),
     };
-    let host = Host { functions: table.functions, constants: table.constants, entry: entry.into() };
+    let host = Host {
+        functions: table.functions,
+        constants: table.constants,
+        entry: entry.into(),
+    };
     HOST.with(|h| *h.borrow_mut() = Some(Rc::new(host)));
     0
 }
@@ -193,10 +200,10 @@ fn set_result(v: &Val) {
 
 fn error_val(err: &NativeError) -> Val {
     let kind = match err.kind {
-        crate::engine::ErrorKind::Error => "Error",
-        crate::engine::ErrorKind::TypeError => "TypeError",
-        crate::engine::ErrorKind::RangeError => "RangeError",
-        crate::engine::ErrorKind::SyntaxError => "SyntaxError",
+        crate::data::ErrorKind::Error => "Error",
+        crate::data::ErrorKind::TypeError => "TypeError",
+        crate::data::ErrorKind::RangeError => "RangeError",
+        crate::data::ErrorKind::SyntaxError => "SyntaxError",
     };
     Record::new()
         .set("kind", kind)
@@ -233,8 +240,19 @@ pub extern "C" fn bunwasm_result_len() -> u32 {
 pub extern "C" fn bunwasm_describe() -> i32 {
     let h = host();
     let names = Val::Array(h.functions.iter().map(|(n, _)| Val::from(*n)).collect());
-    let constants = Val::Object(h.constants.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect());
-    set_result(&Record::new().set("natives", names).set("constants", constants).set("entry", h.entry.clone()).into());
+    let constants = Val::Object(
+        h.constants
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect(),
+    );
+    set_result(
+        &Record::new()
+            .set("natives", names)
+            .set("constants", constants)
+            .set("entry", h.entry.clone())
+            .into(),
+    );
     0
 }
 
@@ -251,7 +269,9 @@ pub unsafe extern "C" fn bunwasm_call(index: u32, ptr: *mut u8, len: u32) -> i32
     drop(input);
     let f = host().functions.get(index as usize).map(|(_, f)| f.clone());
     let Some(f) = f else {
-        set_result(&error_val(&NativeError::error(format!("bun-wasm: no native #{index}"))));
+        set_result(&error_val(&NativeError::error(format!(
+            "bun-wasm: no native #{index}"
+        ))));
         return 1;
     };
     match f(Args(&args)) {
@@ -269,13 +289,21 @@ pub unsafe extern "C" fn bunwasm_call(index: u32, ptr: *mut u8, len: u32) -> i32
 /// Natives only the host engine needs: module sources ready for the host's
 /// native ES module loader, CommonJS wrappers, polyfill sources.
 fn install_host_natives(t: &mut Table, state: &Rc<State>) {
+    t.constants.push((
+        "prepareVersion",
+        Val::from(state.transpiler.hooks_version()),
+    ));
     let st = state.clone();
     t.add("hostModuleSource", move |a| module_source(&st, a.str(0)?));
     let st = state.clone();
     t.add("hostCjsSource", move |a| {
         let path = a.str(0)?;
         let (code, _) = st.load_source(path)?;
-        let (wrapped, first_line) = modules::cjs_wrapper(&host_dynamic_imports(&code, path, &st.host_imports(path, &code)?));
+        let (wrapped, first_line) = modules::cjs_wrapper(&host_dynamic_imports(
+            &code,
+            path,
+            &st.host_imports(path, &code)?,
+        ));
         // Our wrapper's two header lines sit above the file's line 1.
         if first_line == -1 {
             st.record_line_offset(path, 2);
@@ -288,7 +316,9 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) {
         let out = st.esm_as_cjs(path)?;
         Ok(host_dynamic_imports(&out.code, path, &out.imports).into())
     });
-    t.add("polyfillSource", |a| Ok(modules::polyfill_source(a.str(0)?).map(Val::from).into()));
+    t.add("polyfillSource", |a| {
+        Ok(modules::polyfill_source(a.str(0)?).map(Val::from).into())
+    });
     let st = state.clone();
     t.add("flushOutput", move |_| {
         st.flush();
@@ -299,9 +329,16 @@ fn install_host_natives(t: &mut Table, state: &Rc<State>) {
 /// `import(...)` in code evaluated as a script (CommonJS) goes through the
 /// host's dynamic-import hook, like in ES modules (engine-host.js): the
 /// engine would resolve it against the host's own URL.
-fn host_dynamic_imports(code: &str, from: &str, imports: &[crate::transpiler::ModuleImport]) -> String {
+fn host_dynamic_imports(
+    code: &str,
+    from: &str,
+    imports: &[crate::transpiler::ModuleImport],
+) -> String {
     use crate::transpiler::ModuleImportKind;
-    let spans: Vec<_> = imports.iter().filter(|s| matches!(s.kind, ModuleImportKind::Dynamic)).collect();
+    let spans: Vec<_> = imports
+        .iter()
+        .filter(|s| matches!(s.kind, ModuleImportKind::Dynamic))
+        .collect();
     if spans.is_empty() {
         return code.to_owned();
     }
@@ -352,7 +389,9 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
     use crate::transpiler::ModuleImportKind;
     let offset = source.len() - code.len();
     for span in state.host_imports(path, &code)?.iter() {
-        let mut rec = Record::new().set("start", (span.start + offset) as f64).set("end", (span.end + offset) as f64);
+        let mut rec = Record::new()
+            .set("start", (span.start + offset) as f64)
+            .set("end", (span.end + offset) as f64);
         let specifier = match &span.kind {
             ModuleImportKind::Dynamic => {
                 rec.push("kind", "dynamic");
@@ -362,7 +401,7 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
             ModuleImportKind::Static(specifier) => specifier,
         };
         rec.push("kind", "static");
-        match state.resolver.resolve(&specifier, path, Kind::Import) {
+        match state.resolver.resolve(specifier, path, Kind::Import) {
             Ok(Resolved::Builtin(b)) => rec.push("key", b),
             Ok(Resolved::File(f)) => rec.push("key", f),
             Err(msg) => {
@@ -372,7 +411,11 @@ fn module_source(state: &Rc<State>, path: &str) -> Result<Val, NativeError> {
         }
         imports.push(rec.into());
     }
-    Ok(Record::new().set("format", "esm").set("code", source).set("imports", Val::Array(imports)).into())
+    Ok(Record::new()
+        .set("format", "esm")
+        .set("code", source)
+        .set("imports", Val::Array(imports))
+        .into())
 }
 
 #[cfg(test)]

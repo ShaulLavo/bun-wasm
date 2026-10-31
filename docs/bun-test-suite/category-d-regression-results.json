@@ -1,0 +1,388 @@
+{
+  "selection": "Fully passing files in the unchanged-main 720-file QuickJS replay",
+  "engines": [
+    {
+      "engine": "quickjs",
+      "initial": {
+        "files": 82,
+        "fully_passing": 82,
+        "passed": 1472,
+        "failed": 0,
+        "timeouts": 0
+      },
+      "investigated": []
+    },
+    {
+      "engine": "jsc",
+      "initial": {
+        "files": 82,
+        "fully_passing": 81,
+        "passed": 1471,
+        "failed": 1,
+        "timeouts": 0
+      },
+      "investigated": [
+        {
+          "initial": {
+            "file": "js/web/workers/message-port-context-destroy-leak.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          },
+          "unchanged_main": {
+            "file": "js/web/workers/message-port-context-destroy-leak.test.ts",
+            "fully_passing": true,
+            "timed_out": false,
+            "counts": {
+              "pass": 1,
+              "fail": 0
+            }
+          },
+          "recheck": {
+            "file": "js/web/workers/message-port-context-destroy-leak.test.ts",
+            "fully_passing": true,
+            "timed_out": false,
+            "counts": {
+              "pass": 1,
+              "fail": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "engine": "browser",
+      "initial": {
+        "files": 82,
+        "fully_passing": 71,
+        "passed": 1275,
+        "failed": 14,
+        "timeouts": 5
+      },
+      "investigated": [
+        {
+          "initial": {
+            "file": "cli/format/bunfig.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 53,
+              "fail": 0
+            }
+          },
+          "unchanged_main": {
+            "file": "cli/format/bunfig.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 63,
+              "fail": 0
+            }
+          },
+          "recheck": {
+            "file": "cli/format/bunfig.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 62,
+              "fail": 0
+            }
+          }
+        },
+        {
+          "initial": {
+            "file": "cli/format/glob.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 19,
+              "fail": 5
+            }
+          },
+          "unchanged_main": {
+            "file": "cli/format/glob.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 19,
+              "fail": 4
+            }
+          },
+          "recheck": {
+            "file": "cli/format/glob.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 19,
+              "fail": 5
+            }
+          }
+        },
+        {
+          "initial": {
+            "file": "cli/format/oxfmt-cli/oxfmt-cli.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 106,
+              "fail": 0
+            }
+          },
+          "unchanged_main": {
+            "file": "cli/format/oxfmt-cli/oxfmt-cli.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 108,
+              "fail": 0
+            }
+          },
+          "recheck": {
+            "file": "cli/format/oxfmt-cli/oxfmt-cli.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 98,
+              "fail": 0
+            }
+          }
+        },
+        {
+          "initial": {
+            "file": "cli/install/test-dev-peer-dependency-priority.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 1,
+              "fail": 3
+            }
+          },
+          "unchanged_main": {
+            "file": "cli/install/test-dev-peer-dependency-priority.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 1,
+              "fail": 3
+            }
+          },
+          "recheck": {
+            "file": "cli/install/test-dev-peer-dependency-priority.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 1,
+              "fail": 3
+            }
+          }
+        },
+        {
+          "initial": {
+            "file": "cli/lint/glob.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 55,
+              "fail": 0
+            }
+          },
+          "unchanged_main": {
+            "file": "cli/lint/glob.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 59,
+              "fail": 0
+            }
+          },
+          "recheck": {
+            "file": "cli/lint/glob.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 48,
+              "fail": 0
+            }
+          }
+        },
+        {
+          "initial": {
+            "file": "cli/lint/hints.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 57,
+              "fail": 0
+            }
+          },
+          "unchanged_main": {
+            "file": "cli/lint/hints.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 54,
+              "fail": 0
+            }
+          },
+          "recheck": {
+            "file": "cli/lint/hints.test.ts",
+            "fully_passing": false,
+            "timed_out": true,
+            "counts": {
+              "pass": 50,
+              "fail": 0
+            }
+          }
+        },
+        {
+          "initial": {
+            "file": "regression/issue/11793.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          },
+          "unchanged_main": {
+            "file": "regression/issue/11793.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          },
+          "recheck": {
+            "file": "regression/issue/11793.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          }
+        },
+        {
+          "initial": {
+            "file": "regression/issue/24387.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          },
+          "unchanged_main": {
+            "file": "regression/issue/24387.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          },
+          "recheck": {
+            "file": "regression/issue/24387.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          }
+        },
+        {
+          "initial": {
+            "file": "regression/issue/28170.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          },
+          "unchanged_main": {
+            "file": "regression/issue/28170.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          },
+          "recheck": {
+            "file": "regression/issue/28170.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          }
+        },
+        {
+          "initial": {
+            "file": "regression/issue/36577.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 2
+            }
+          },
+          "unchanged_main": {
+            "file": "regression/issue/36577.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 2
+            }
+          },
+          "recheck": {
+            "file": "regression/issue/36577.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 2
+            }
+          }
+        },
+        {
+          "initial": {
+            "file": "regression/issue/40561.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          },
+          "unchanged_main": {
+            "file": "regression/issue/40561.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          },
+          "recheck": {
+            "file": "regression/issue/40561.test.ts",
+            "fully_passing": false,
+            "timed_out": false,
+            "counts": {
+              "pass": 0,
+              "fail": 1
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

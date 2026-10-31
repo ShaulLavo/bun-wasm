@@ -13,22 +13,93 @@ const source = readFileSync(`${scratch}/codec.js`, "utf8");
 
 function codec() {
   let restored = 0;
+  const processEnv = new Proxy({ CENSUS_VALUE: "kept" }, {});
+  const ordinaryProxy = new Proxy({ value: "rejected" }, {});
+  const proxies = new Set<object>([processEnv, ordinaryProxy]);
   const factory = runInNewContext(source, {
-    ArrayBuffer, Uint8Array, Map, Set, Date, RegExp, DataView, Error, TypeError, RangeError,
-    Number, String, Boolean, DOMException, EventTarget,
+    ArrayBuffer, Uint8Array, Map, Set, Date, RegExp, DataView, Error, TypeError, RangeError, SyntaxError, ReferenceError, URIError, EvalError,
+    Number, String, Boolean, DOMException, EventTarget, Blob, Promise, Symbol, Proxy,
   });
-  const implementation = factory({ native: {
-    base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
-    base64Decode: (value: string) => new Uint8Array(Buffer.from(value, "base64")),
-    transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
-  } }).create({
+  const implementation = factory({
+    native: {
+      base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
+      base64Decode: (value: string) => new Uint8Array(Buffer.from(value, "base64")),
+      transferArrayBuffers: (buffers: ArrayBuffer[]) => structuredClone(undefined, { transfer: buffers }),
+    },
+    require(name: string) {
+      if (name === "process") return { env: processEnv };
+      throw new Error(`Unexpected module ${name}`);
+    },
+    isProxy(value: unknown) { return typeof value === "object" && value !== null && proxies.has(value); },
+  }).create({
     isPort: () => false,
     prepare() { throw new Error("Unexpected transfer"); },
     restore(value: unknown) { restored++; return value; },
     activate() {},
   });
-  return { implementation, restored: () => restored };
+  return { implementation, restored: () => restored, processEnv, ordinaryProxy };
 }
+
+
+test("process.env keeps object cloning when its tag says Promise, Error, or BigInt", () => {
+  const { implementation, processEnv } = codec();
+  for (const value of ["Promise", "Error", "BigInt"]) {
+    Object.defineProperty(processEnv, Symbol.toStringTag, { configurable: true, value });
+    const output = implementation.decode(implementation.encode(processEnv));
+    expect(output).toEqual({ CENSUS_VALUE: "kept" });
+  }
+});
+
+test("ordinary proxies remain uncloneable", () => {
+  const { implementation, ordinaryProxy } = codec();
+  expect(() => implementation.encode(ordinaryProxy)).toThrow("The object cannot be cloned");
+});
+
+test("error fields match Bun structuredClone after JSON graph serialization", () => {
+  const { implementation } = codec();
+  const fields: [string, unknown][] = [["name", undefined], ["name", 7], ["message", undefined],
+    ["message", null], ["message", 42], ["stack", undefined], ["stack", null], ["stack", 1n], ["stack", ""]];
+  for (const [key, value] of fields) {
+    const error = new Error("diagnostic");
+    Object.defineProperty(error, key, { configurable: true, value });
+    const expected = structuredClone(error);
+    const output = implementation.decode(JSON.parse(JSON.stringify(implementation.encode(error))));
+    expect(output).toBeInstanceOf(Error);
+    if (!(output instanceof Error)) throw new Error("Expected a cloned Error");
+    expect(output.name).toBe(expected.name);
+    expect(output.message).toBe(expected.message);
+    expect(output.stack).toBe(expected.stack);
+  }
+});
+
+test("error names use Bun's standard constructors and fallback for custom or inherited names", () => {
+  const { implementation } = codec();
+  for (const name of ["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "URIError", "EvalError",
+    "CustomError", "constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    const error = Object.assign(new Error("payload"), { name });
+    const expected = structuredClone(error);
+    const output = implementation.decode(implementation.encode(error));
+    expect(output).toBeInstanceOf(Error);
+    if (!(output instanceof Error)) throw new Error("Expected a cloned Error");
+    expect(Object.getPrototypeOf(output)).toBe(Object.getPrototypeOf(expected));
+    expect(output.name).toBe(expected.name);
+    expect(output.message).toBe(expected.message);
+    expect(output.stack).toBe(expected.stack);
+  }
+});
+
+test("incoming error graphs reject non-normalized fields before restoring ports", () => {
+  const { implementation, restored } = codec();
+  const fields: [number, unknown][] = [[1, 7], [2, null], [3, 1n], [4, 99]];
+  for (const [index, value] of fields) {
+    const node: unknown[] = ["error", "Error", "diagnostic", "stack", 3];
+    node[index] = value;
+    const snapshot = { id: "a", peer: "b", version: 1, sent: 0, received: 0, pending: [], closing: null, closed: false };
+    const graph = { root: 0, nodes: [["array", 2, [["0", 1], ["1", 2]]], ["port", snapshot, 4], node, ["undefined"], ["array", 0, []]] };
+    expect(() => implementation.decode(graph)).toThrow("Invalid worker message graph");
+  }
+  expect(restored()).toBe(0);
+});
 
 test("worker graph preserves cycles, map keys and shared typed-array buffers", () => {
   const { implementation } = codec();
@@ -97,7 +168,7 @@ test("a closed worker input pipe still drains the final incoming control frame",
   const factory = channelFactory();
   const incoming: (Uint8Array | number)[] = [new TextEncoder().encode('{"kind":"exiting"}\n'), 0];
   const channel = factory({ native: {
-    hostWrite: () => -1, hostRead: () => incoming.shift() ?? 0, hostClose() {},
+    procWrite: () => -64, procRead: () => incoming.shift() ?? 0, procClose() {},
   } }).open(1, 2);
   const frames: unknown[] = [];
   expect(() => channel.send({ kind: "late-message" })).not.toThrow();
@@ -111,7 +182,7 @@ test("truncated worker framing fails once", () => {
   const factory = channelFactory();
   const incoming: (Uint8Array | number)[] = [new TextEncoder().encode('{"kind":'), 0];
   const channel = factory({ native: {
-    hostWrite: () => -2, hostRead: () => incoming.shift() ?? 0, hostClose() {},
+    procWrite: () => -6, procRead: () => incoming.shift() ?? 0, procClose() {},
   } }).open(1, 2);
   expect(() => channel.pump(() => {})).toThrow("Incomplete worker message");
   expect(() => channel.pump(() => {})).not.toThrow();
@@ -121,7 +192,7 @@ test("closing a failed worker channel discards a partial trailing frame", () => 
   const factory = channelFactory();
   const incoming: (Uint8Array | number)[] = [new TextEncoder().encode('{bad}\npartial'), 0];
   const channel = factory({ native: {
-    hostWrite: () => -2, hostRead: () => incoming.shift() ?? 0, hostClose() {},
+    procWrite: () => -6, procRead: () => incoming.shift() ?? 0, procClose() {},
   } }).open(1, 2);
   expect(() => channel.pump(() => {})).toThrow();
   channel.close();

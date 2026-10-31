@@ -9,8 +9,9 @@ declare namespace BunWasm {
     mainArg(): string;
     setMainPath(path: string): void;
   }
+  interface ScriptRuntimeCommand { kind: "script"; name: string; args: string[]; }
   interface Internal {
     mainPath: string;
-    require(name: "package_scripts"): { resolve(requested: string): string; spawnArguments(argv: string[], directory: unknown): string[] };
+    require(name: "package_scripts"): { resolve(requested: string): string | ScriptRuntimeCommand; run(command: ScriptRuntimeCommand): Promise<void>; spawnArguments(argv: string[], directory: unknown): string[] };
   }
 }

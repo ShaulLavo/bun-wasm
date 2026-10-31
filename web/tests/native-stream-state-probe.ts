@@ -16,7 +16,7 @@ if (mode === "own" || mode === "browser") {
 if (mode === "own") {
   for (const name of ["ReadableStream", "WritableStream"] as const) {
     const Ctor = globalThis[name];
-    globalThis[name] = new Proxy(Ctor, {
+    Reflect.set(globalThis, name, new Proxy(Ctor, {
       construct(target, args, newTarget) {
         const stream = Reflect.construct(target, args, newTarget);
         // Use assignment, just like the native Node 24/25 constructors.
@@ -24,7 +24,7 @@ if (mode === "own") {
         stream[errorKey] = () => {};
         return stream;
       },
-    });
+    }));
   }
 }
 const before = { ReadableStream, WritableStream, TransformStream };
@@ -35,49 +35,52 @@ const errorHooks = [Reflect.get(readable, errorKey), Reflect.get(writable, error
 const { installNativeStreamState } = await import("../src/native-stream-state.ts");
 const dispose = installNativeStreamState();
 try {
-  const stream = new ReadableStream({ start(controller) { controller.close(); } });
-  const hasNativeHooks = hooks[0] !== undefined;
-  // The guest stream bindings validate capability on prototypes before loading.
-  for (const Ctor of [ReadableStream, WritableStream]) {
-    assert.ok(closedKey in Ctor.prototype);
-    assert.ok(errorKey in Ctor.prototype);
-  }
-  for (const name of ["ReadableStream", "WritableStream", "TransformStream"] as const) {
-    assert.equal(globalThis[name] === before[name], hasNativeHooks);
-    assert.equal(globalThis[name].prototype, before[name].prototype);
-  }
-  if (hasNativeHooks) {
-    assert.equal(Reflect.get(readable, closedKey), hooks[0]);
-    assert.equal(Reflect.get(writable, closedKey), hooks[1]);
-    assert.equal(Reflect.get(readable, errorKey), errorHooks[0]);
-    assert.equal(Reflect.get(writable, errorKey), errorHooks[1]);
-    if (mode === "own") {
-      for (const stream of [readable, writable]) {
-        assert.ok(Object.hasOwn(stream, closedKey));
-        assert.ok(Object.hasOwn(stream, errorKey));
+  const checkInstalledStreamHooks = async () => {
+    const stream = new ReadableStream({ start(controller) { controller.close(); } });
+    const hasNativeHooks = hooks[0] !== undefined;
+    // The guest stream bindings validate capability on prototypes before loading.
+    for (const Ctor of [ReadableStream, WritableStream]) {
+      assert.ok(closedKey in Ctor.prototype);
+      assert.ok(errorKey in Ctor.prototype);
+    }
+    for (const name of ["ReadableStream", "WritableStream", "TransformStream"] as const) {
+      assert.equal(globalThis[name] === before[name], hasNativeHooks);
+      assert.equal(globalThis[name].prototype, before[name].prototype);
+    }
+    if (hasNativeHooks) {
+      assert.equal(Reflect.get(readable, closedKey), hooks[0]);
+      assert.equal(Reflect.get(writable, closedKey), hooks[1]);
+      assert.equal(Reflect.get(readable, errorKey), errorHooks[0]);
+      assert.equal(Reflect.get(writable, errorKey), errorHooks[1]);
+      if (mode === "own") {
+        for (const stream of [readable, writable]) {
+          assert.ok(Object.hasOwn(stream, closedKey));
+          assert.ok(Object.hasOwn(stream, errorKey));
+        }
       }
     }
-  }
-  assert.ok(stream instanceof native.ReadableStream);
-  assert.equal(stream.locked, false);
-  await Reflect.get(stream, closedKey).promise;
-  const sink = new WritableStream();
-  await sink.close();
-  await Reflect.get(sink, closedKey).promise;
-  const transform = new TransformStream();
-  const reader = transform.readable.getReader();
-  const writer = transform.writable.getWriter();
-  await writer.close();
-  assert.equal((await reader.read()).done, true);
-  reader.releaseLock();
-  writer.releaseLock();
-  if (mode !== "own") {
-    const errored = new ReadableStream();
-    const failure = new Error("native bridge error");
-    const completion = Reflect.get(errored, closedKey).promise;
-    Reflect.apply(Reflect.get(errored, errorKey), errored, [failure]);
-    await assert.rejects(completion, error => error === failure);
-  }
+    assert.ok(stream instanceof native.ReadableStream);
+    assert.equal(stream.locked, false);
+    await Reflect.get(stream, closedKey).promise;
+    const sink = new WritableStream();
+    await sink.close();
+    await Reflect.get(sink, closedKey).promise;
+    const transform = new TransformStream();
+    const reader = transform.readable.getReader();
+    const writer = transform.writable.getWriter();
+    await writer.close();
+    assert.equal((await reader.read()).done, true);
+    reader.releaseLock();
+    writer.releaseLock();
+    if (mode !== "own") {
+      const errored = new ReadableStream();
+      const failure = new Error("native bridge error");
+      const completion = Reflect.get(errored, closedKey).promise;
+      Reflect.apply(Reflect.get(errored, errorKey), errored, [failure]);
+      await assert.rejects(completion, error => error === failure);
+    }
+  };
+  await checkInstalledStreamHooks();
 } finally {
   dispose();
   await writable.close();

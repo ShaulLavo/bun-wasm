@@ -1,103 +1,360 @@
-From 4ceda2c2868d3a7703c7737ddd9de7244ec384df Mon Sep 17 00:00:00 2001
+From 9031854313cf16a8ec112bfe20309fe82b5777f6 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 15 Oct 2026 09:15:42 +0300
-Subject: [PATCH 08/12] wasm: optional await hooks in the printer for a host
+Subject: [PATCH 08/16] wasm: optional await hooks in the printer for a host
  engine without AsyncContext
 
-BUNWASM_AWAIT_HOOKS (off by default) prints `await x` as
-`__bunwasm_resume(__bunwasm_capture(), await x)` and wraps `for await`
-loops so their body and the code after them see the context captured at the
-loop's start. bun-wasm's browser engine turns it on around its runtime
-transpiles to carry AsyncLocalStorage across await.
+BUNWASM_AWAIT_HOOKS (off by default) prints async-context hooks so a host
+JS engine without AsyncContext can carry AsyncLocalStorage across
+suspensions, rejected awaits included. bun-wasm's browser engine turns it
+on around its runtime transpiles.
+
+An async body without its own `try` or `for await` prints `await x` as
+`__bunwasm_resume(__bunwasm_capture(), await x)`. Any other async body (an
+"S body", including a module top level that awaits) declares
+`let __bunwasm_s = 0;` after its directives and prints:
+
+- `await x` as `__bunwasm_resumed(await __bunwasm_id(x, __bunwasm_s =
+  __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0)`, so a rejection
+  leaves the frame of the suspension in `__bunwasm_s`;
+- `__bunwasm_caught(__bunwasm_s, __bunwasm_s = 0);` first in every
+  `catch` and `finally` block, which re-enters that frame;
+- async generator `yield x` as `__bunwasm_id(yield __bunwasm_id(x,
+  __bunwasm_s = __bunwasm_capture()), __bunwasm_s = 0)`;
+- `for await` as `{ let __bunwasm_c; try { for await (... of __bunwasm_c =
+  __bunwasm_iterate(y)) { try { __bunwasm_entered(__bunwasm_c); body }
+  finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } } } finally
+  { __bunwasm_exited(__bunwasm_c); } }`. The runtime's iterator record
+  notes the frame only once `next()`/`return()` returned, so a method that
+  throws synchronously leaves nothing pending, and the outer finally runs
+  after the iterator closed on every exit, labeled ones included. Only the
+  outermost label opens the block, so labeled `continue` still targets the
+  loop.
+
+BUNWASM_HOOKS_VERSION (3) versions these shapes.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- src/js_printer/lib.rs | 85 ++++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 84 insertions(+), 1 deletion(-)
+ src/js_printer/lib.rs | 343 ++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 333 insertions(+), 10 deletions(-)
 
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index 0e71d390..41580732 100644
+index 0e71d390..14a59011 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
-@@ -2136,6 +2136,26 @@ pub(crate) mod __gated_printer {
+@@ -1631,6 +1631,59 @@ pub(crate) mod __gated_printer {
+     pub(crate) fn slice_of<'a, T>(p: js_ast::StoreSlice<T>) -> &'a [T] {
+         p.slice()
+     }
++
++    /// `BUNWASM_FN_*` flags for a body about to be printed (see
++    /// BUNWASM_AWAIT_HOOKS). Every function body enters its own flags, sync
++    /// ones included, so a nested function never touches an outer
++    /// `__bunwasm_s`.
++    pub(crate) fn bunwasm_fn_flags(is_async: bool, is_generator: bool, stmts: &[Stmt]) -> u8 {
++        if !is_async || !bunwasm_await_hooks() || !bunwasm_has_handler(stmts) {
++            return 0;
++        }
++        if is_generator {
++            BUNWASM_FN_S | BUNWASM_FN_ASYNC_GENERATOR
++        } else {
++            BUNWASM_FN_S
++        }
++    }
++
++    /// Whether these statements (nested functions excluded) hold a `try` or a
++    /// `for await`. Iterative: else-if chains can be arbitrarily deep.
++    pub(crate) fn bunwasm_has_handler(stmts: &[Stmt]) -> bool {
++        let mut pending: Vec<Stmt> = stmts.to_vec();
++        while let Some(stmt) = pending.pop() {
++            match &stmt.data {
++                StmtData::STry(_) => return true,
++                StmtData::SForOf(s) if s.is_await => return true,
++                StmtData::SForOf(s) => pending.push(s.body),
++                StmtData::SBlock(s) => pending.extend_from_slice(slice_of(s.stmts)),
++                StmtData::SIf(s) => pending.extend([s.yes].into_iter().chain(s.no)),
++                StmtData::SFor(s) => pending.push(s.body),
++                StmtData::SForIn(s) => pending.push(s.body),
++                StmtData::SWhile(s) => pending.push(s.body),
++                StmtData::SDoWhile(s) => pending.push(s.body),
++                StmtData::SWith(s) => pending.push(s.body),
++                StmtData::SLabel(s) => pending.push(s.stmt),
++                StmtData::SSwitch(s) => {
++                    pending.extend(slice_of(s.cases).iter().flat_map(|case| slice_of(case.body).iter().copied()))
++                }
++                _ => {}
++            }
++        }
++        false
++    }
++
++    pub(crate) fn bunwasm_directive_count(stmts: &[Stmt]) -> usize {
++        stmts.iter().take_while(|s| matches!(s.data, StmtData::SDirective(_))).count()
++    }
++
++    /// The statement a chain of labels ends in.
++    pub(crate) fn bunwasm_unlabeled(mut stmt: Stmt) -> Stmt {
++        while let StmtData::SLabel(s) = &stmt.data {
++            stmt = s.stmt;
++        }
++        stmt
++    }
+     /// `EnumSet<T>` field-style mutation helper.
+     #[inline(always)]
+     fn set_flag<T: enumset::EnumSetType>(set: &mut enumset::EnumSet<T>, flag: T, on: bool) {
+@@ -2136,6 +2189,107 @@ pub(crate) mod __gated_printer {
              }
          }
  
 +        /// bun-wasm `for await` hooks (see BUNWASM_AWAIT_HOOKS): open a block
-+        /// holding the context at the loop's start.
++        /// holding the loop's record (`__bunwasm_iterate`), and a `try` whose
++        /// `finally` runs after the iterator closed on every exit.
 +        fn print_bunwasm_loop_start(&mut self) {
 +            self.print_indent();
 +            self.print(b"{");
 +            self.print_space();
-+            self.print(b"const __bunwasm_ctx = __bunwasm_capture();");
++            self.print(b"let __bunwasm_c;");
++            self.print_space();
++            self.print(b"try {");
 +            self.print_newline();
 +        }
 +
-+        /// Restore that context after the loop and close the block.
++        /// Re-enter the frame of the loop's last pending `next()` or `return()`
++        /// await, if one completed or rejected, and close the block.
 +        fn print_bunwasm_loop_end(&mut self) {
 +            self.print_indent();
-+            self.print(b"__bunwasm_resume(__bunwasm_ctx);");
++            self.print(b"} finally {");
++            self.print_space();
++            self.print(b"__bunwasm_exited(__bunwasm_c);");
++            self.print_space();
++            self.print(b"}");
 +            self.print_newline();
 +            self.print_indent();
 +            self.print(b"}");
 +            self.print_newline();
 +        }
 +
++        /// A hooked `for await` body: it starts in the frame its `next()` was
++        /// called in, and a rejected await inside it re-enters its own frame
++        /// before the loop closes the iterator.
++        fn print_bunwasm_loop_body(&mut self, body: Stmt) {
++            let single = [body];
++            let stmts: &[Stmt] = match &body.data {
++                StmtData::SBlock(block) => slice_of(block.stmts),
++                _ => &single,
++            };
++            self.print_space();
++            self.print(b"{");
++            self.print_newline();
++            self.indent();
++            self.print_indent();
++            self.print(b"try");
++            self.print_space();
++            self.print_block_with_hook(body.loc, &[], b"__bunwasm_entered(__bunwasm_c);", stmts);
++            self.print_space();
++            self.print(b"finally");
++            self.print_space();
++            self.print(b"{");
++            self.print_space();
++            self.print(b"__bunwasm_caught(__bunwasm_s, __bunwasm_s = 0);");
++            self.print_space();
++            self.print(b"}");
++            self.print_newline();
++            self.unindent();
++            self.print_indent();
++            self.print(b"}");
++            self.print_newline();
++        }
++
++        /// `{ before; hook after }`: `hook` is one statement printed between
++        /// two runs of the block's own statements.
++        fn print_block_with_hook(&mut self, loc: bun_ast::Loc, before: &[Stmt], hook: &[u8], after: &[Stmt]) {
++            self.add_source_mapping(loc);
++            self.print(b"{");
++            self.print_newline();
++            self.indent();
++            self.print_block_body(before);
++            self.print_semicolon_if_needed();
++            self.print_indent();
++            self.print(hook);
++            self.print_newline();
++            self.needs_semicolon = false;
++            self.print_block_body(after);
++            self.unindent();
++            self.print_indent();
++            self.print(b"}");
++            self.needs_semicolon = false;
++        }
++
++        /// A function body: an S body (see BUNWASM_AWAIT_HOOKS) declares
++        /// `__bunwasm_s` after its directive prologue.
++        fn print_fn_body(&mut self, loc: bun_ast::Loc, stmts: &[Stmt]) {
++            if bunwasm_fn() & BUNWASM_FN_S == 0 {
++                self.print_block(loc, stmts, None);
++                return;
++            }
++            let prologue = bunwasm_directive_count(stmts);
++            self.print_block_with_hook(loc, &stmts[..prologue], b"let __bunwasm_s = 0;", &stmts[prologue..]);
++        }
++
++        /// A `catch` or `finally` block; in an S body it first re-enters the
++        /// frame of a suspension that just ended abruptly.
++        fn print_handler_block(&mut self, loc: bun_ast::Loc, stmts: &[Stmt]) {
++            if bunwasm_fn() & BUNWASM_FN_S == 0 {
++                self.print_block(loc, stmts, None);
++                return;
++            }
++            self.print_block_with_hook(loc, &[], b"__bunwasm_caught(__bunwasm_s, __bunwasm_s = 0);", stmts);
++        }
++
          pub(crate) fn print_body(&mut self, stmt: Stmt) {
              match &stmt.data {
                  StmtData::SBlock(block) => {
-@@ -4375,9 +4395,19 @@ pub(crate) mod __gated_printer {
+@@ -2502,6 +2656,12 @@ pub(crate) mod __gated_printer {
+         }
+ 
+         pub(crate) fn print_func(&mut self, func: &G::Fn) {
++            let stmts = slice_of(func.body.stmts);
++            let _hooks = bunwasm_enter_fn(bunwasm_fn_flags(
++                func.flags.contains(G::FnFlags::IsAsync),
++                func.flags.contains(G::FnFlags::IsGenerator),
++                stmts,
++            ));
+             self.print_fn_args(
+                 Some(func.open_parens_loc),
+                 slice_of(func.args),
+@@ -2509,7 +2669,7 @@ pub(crate) mod __gated_printer {
+                 false,
+             );
+             self.print_space();
+-            self.print_block(func.body.loc, slice_of(func.body.stmts), None);
++            self.print_fn_body(func.body.loc, stmts);
+         }
+ 
+         pub(crate) fn print_class(&mut self, class: &G::Class) {
+@@ -2534,6 +2694,7 @@ pub(crate) mod __gated_printer {
+                     self.print(b"static");
+                     self.print_space();
+                     let csb = item.class_static_block_ref().unwrap();
++                    let _hooks = bunwasm_enter_fn(0);
+                     self.print_block(csb.loc, csb.stmts.slice(), None);
+                     self.print_newline();
+                     continue;
+@@ -3810,6 +3971,7 @@ pub(crate) mod __gated_printer {
+                         self.print_space();
+                     }
+ 
++                    let _hooks = bunwasm_enter_fn(bunwasm_fn_flags(e.is_async, false, slice_of(e.body.stmts)));
+                     self.print_fn_args(
+                         if e.is_async { None } else { Some(expr.loc) },
+                         &e.args,
+@@ -3830,7 +3992,7 @@ pub(crate) mod __gated_printer {
+                     }
+ 
+                     if !was_printed {
+-                        self.print_block(e.body.loc, slice_of(e.body.stmts), None);
++                        self.print_fn_body(e.body.loc, slice_of(e.body.stmts));
+                     }
+ 
+                     if wrap {
+@@ -4375,9 +4537,30 @@ pub(crate) mod __gated_printer {
  
                      self.print_space_before_identifier();
                      self.add_source_mapping(expr.loc);
+-                    self.print(b"await");
+-                    self.print_space();
+-                    self.print_expr(e.value, Level::Prefix.sub(1), ExprFlag::none());
 +                    let hooks = bunwasm_await_hooks();
-+                    if hooks {
++                    if hooks && bunwasm_fn() & BUNWASM_FN_S != 0 {
++                        // The operand runs first, then the capture, right
++                        // before the suspension. `__bunwasm_id` hands the
++                        // operand itself to `await`. A rejection skips
++                        // `__bunwasm_resumed` and leaves the frame in
++                        // `__bunwasm_s` for the handler that catches it.
++                        self.print(b"__bunwasm_resumed(await __bunwasm_id(");
++                        self.print_expr(e.value, Level::Comma, ExprFlag::none());
++                        self.print(b", __bunwasm_s = __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0)");
++                    } else if hooks {
 +                        // Arguments run in order: the context is captured
 +                        // before the suspension and restored after it.
 +                        self.print(b"__bunwasm_resume(__bunwasm_capture(),");
 +                        self.print_space();
-+                    }
-                     self.print(b"await");
-                     self.print_space();
-                     self.print_expr(e.value, Level::Prefix.sub(1), ExprFlag::none());
-+                    if hooks {
++                        self.print(b"await");
++                        self.print_space();
++                        self.print_expr(e.value, Level::Prefix.sub(1), ExprFlag::none());
 +                        self.print(b")");
++                    } else {
++                        self.print(b"await");
++                        self.print_space();
++                        self.print_expr(e.value, Level::Prefix.sub(1), ExprFlag::none());
 +                    }
  
                      if wrap {
                          self.print(b")");
-@@ -5886,6 +5916,13 @@ pub(crate) mod __gated_printer {
+@@ -4391,6 +4574,14 @@ pub(crate) mod __gated_printer {
+ 
+                     self.print_space_before_identifier();
+                     self.add_source_mapping(expr.loc);
++                    // An async generator's `yield x` awaits `x`: a rejection
++                    // reaches its handlers from a job, like `await`'s.
++                    let hooked = e.value.is_some()
++                        && bunwasm_await_hooks()
++                        && bunwasm_fn() == BUNWASM_FN_S | BUNWASM_FN_ASYNC_GENERATOR;
++                    if hooked {
++                        self.print(b"__bunwasm_id(");
++                    }
+                     self.print(b"yield");
+ 
+                     if let Some(val) = &e.value {
+@@ -4398,7 +4589,13 @@ pub(crate) mod __gated_printer {
+                             self.print(b"*");
+                         }
+                         self.print_space();
+-                        self.print_expr(*val, Level::Yield, ExprFlag::none());
++                        if hooked {
++                            self.print(b"__bunwasm_id(");
++                            self.print_expr(*val, Level::Comma, ExprFlag::none());
++                            self.print(b", __bunwasm_s = __bunwasm_capture()), __bunwasm_s = 0)");
++                        } else {
++                            self.print_expr(*val, Level::Yield, ExprFlag::none());
++                        }
+                     }
+ 
+                     if wrap {
+@@ -5886,6 +6083,14 @@ pub(crate) mod __gated_printer {
                      self.print_body(s.body);
                  }
                  StmtData::SForOf(s) => {
-+                    // bun-wasm: `{ const c = capture(); for await (…) { resume(c); body } resume(c); }`
-+                    // (a label goes right before `for`: SLabel prints the outer block).
++                    // bun-wasm: the hooked `for await` of BUNWASM_AWAIT_HOOKS. A
++                    // `for await` always makes its body an S body. A label goes
++                    // right before `for`: SLabel prints the outer block.
 +                    let labeled = BUNWASM_LABELED.with(|l| l.replace(false));
-+                    let hooks = s.is_await && bunwasm_await_hooks();
++                    let hooks = s.is_await && bunwasm_await_hooks() && bunwasm_fn() & BUNWASM_FN_S != 0;
 +                    if hooks && !labeled {
 +                        self.print_bunwasm_loop_start();
 +                    }
                      self.print_indent();
                      self.print_space_before_identifier();
                      self.add_source_mapping(stmt.loc);
-@@ -5903,7 +5940,25 @@ pub(crate) mod __gated_printer {
+@@ -5901,9 +6106,25 @@ pub(crate) mod __gated_printer {
+                     self.print_space_before_identifier();
+                     self.print(b"of");
                      self.print_space();
-                     self.print_expr(s.value, Level::Comma, ExprFlag::none());
+-                    self.print_expr(s.value, Level::Comma, ExprFlag::none());
++                    if hooks {
++                        // The loop iterates a record that gets the iterator
++                        // with the same reads and calls, and notes the frame
++                        // each time `next()` or `return()` returns.
++                        self.print(b"__bunwasm_c = __bunwasm_iterate(");
++                        self.print_expr(s.value, Level::Comma, ExprFlag::none());
++                        self.print(b")");
++                    } else {
++                        self.print_expr(s.value, Level::Comma, ExprFlag::none());
++                    }
                      self.print(b")");
 -                    self.print_body(s.body);
 +                    if hooks {
-+                        self.print_space();
-+                        self.print(b"{");
-+                        self.print_newline();
-+                        self.indent();
-+                        self.print_indent();
-+                        self.print(b"__bunwasm_resume(__bunwasm_ctx);");
-+                        self.print_newline();
-+                        self.print_stmt(s.body).expect("unreachable");
-+                        self.unindent();
-+                        self.print_indent();
-+                        self.print(b"}");
-+                        self.print_newline();
++                        self.print_bunwasm_loop_body(s.body);
 +                        if !labeled {
 +                            self.print_bunwasm_loop_end();
 +                        }
@@ -107,18 +364,24 @@ index 0e71d390..41580732 100644
                  }
                  StmtData::SWhile(s) => {
                      self.print_indent();
-@@ -5933,9 +5988,19 @@ pub(crate) mod __gated_printer {
+@@ -5933,9 +6154,25 @@ pub(crate) mod __gated_printer {
                      }
                      self.print_space_before_identifier();
                      self.add_source_mapping(stmt.loc);
-+                    let hooked_loop = bunwasm_await_hooks() && matches!(s.stmt.data, StmtData::SForOf(f) if f.is_await);
++                    // Only the outermost label of a hooked `for await` opens its
++                    // block; inner labels pass the flag on to the loop.
++                    let inherited = BUNWASM_LABELED.with(|l| l.replace(false));
++                    let hooked_loop = !inherited
++                        && bunwasm_await_hooks()
++                        && bunwasm_fn() & BUNWASM_FN_S != 0
++                        && matches!(bunwasm_unlabeled(s.stmt).data, StmtData::SForOf(f) if f.is_await);
 +                    if hooked_loop {
 +                        self.print_bunwasm_loop_start();
 +                        self.print_indent();
 +                    }
                      self.print_symbol(s.name.ref_);
                      self.print(b":");
-+                    BUNWASM_LABELED.with(|l| l.set(hooked_loop));
++                    BUNWASM_LABELED.with(|l| l.set(hooked_loop || inherited));
                      self.print_body(s.stmt);
 +                    BUNWASM_LABELED.with(|l| l.set(false));
 +                    if hooked_loop {
@@ -127,28 +390,122 @@ index 0e71d390..41580732 100644
                  }
                  StmtData::STry(s) => {
                      self.print_indent();
-@@ -7581,6 +7646,24 @@ pub type BufferPrinter = Writer<BufferWriter>;
+@@ -5956,14 +6193,14 @@ pub(crate) mod __gated_printer {
+                             self.print(b")");
+                         }
+                         self.print_space();
+-                        self.print_block(catch.body_loc, slice_of(catch.body), None);
++                        self.print_handler_block(catch.body_loc, slice_of(catch.body));
+                     }
+ 
+                     if let Some(finally) = &s.finally {
+                         self.print_space();
+                         self.print(b"finally");
+                         self.print_space();
+-                        self.print_block(finally.loc, slice_of(finally.stmts), None);
++                        self.print_handler_block(finally.loc, slice_of(finally.stmts));
+                     }
+ 
+                     self.print_newline();
+@@ -7581,6 +7818,72 @@ pub type BufferPrinter = Writer<BufferWriter>;
  // Format / GenerateSourceMap
  // ───────────────────────────────────────────────────────────────────────────
  
-+/// bun-wasm: print every `await x` as
-+/// `__bunwasm_resume(__bunwasm_capture(), await x)` and give `for await`
-+/// loops the same hooks, so a host JS engine without AsyncContext can carry
-+/// AsyncLocalStorage across `await`. Off unless the runtime turns it on
-+/// around a print (the browser engine build); never on for `bun build`.
++/// bun-wasm: print `await`, `catch`/`finally`, async generator `yield` and
++/// `for await` with hooks, so a host JS engine without AsyncContext can carry
++/// AsyncLocalStorage across suspensions, rejected ones included. Off unless
++/// the runtime turns it on around a print (the browser engine build).
++///
++/// An async body whose own statements (nested functions excluded) hold a
++/// `try` or a `for await` is an *S body*: it declares `let __bunwasm_s = 0;`
++/// after its directives, holding the frame captured at the pending (or just
++/// rejected) suspension, and its handlers re-enter that frame:
++///
++/// - `await x` -> `__bunwasm_resumed(await __bunwasm_id(x, __bunwasm_s = __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0)`
++/// - `catch (e) {` / `finally {` -> `… { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0);`
++/// - `yield x` (async generator) -> `__bunwasm_id(yield __bunwasm_id(x, __bunwasm_s = __bunwasm_capture()), __bunwasm_s = 0)`
++/// - `for await (… of y) body` -> `{ let __bunwasm_c; try { for await (… of __bunwasm_c = __bunwasm_iterate(y)) { try { __bunwasm_entered(__bunwasm_c); body } finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } } } finally { __bunwasm_exited(__bunwasm_c); } }`
++///
++/// `__bunwasm_iterate` gets the iterator itself, with the same reads and calls,
++/// and records the frame only once `next()` or `return()` has returned, right
++/// before the implicit await: an iterator method that throws synchronously
++/// leaves nothing pending. The outer `finally` runs after the iterator closed
++/// on every exit, labeled `break`/`continue` included.
++///
++/// Every other async body keeps `__bunwasm_resume(__bunwasm_capture(), await x)`:
++/// a rejection leaves it without running more of its code. Bump
++/// `BUNWASM_HOOKS_VERSION` whenever a printed shape changes.
 +pub static BUNWASM_AWAIT_HOOKS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
++
++/// Version of the shapes above; the runtime keys cached hooked text on it.
++pub const BUNWASM_HOOKS_VERSION: u32 = 3;
 +
 +#[inline]
 +fn bunwasm_await_hooks() -> bool {
 +    BUNWASM_AWAIT_HOOKS.load(core::sync::atomic::Ordering::Relaxed)
 +}
 +
++/// The body being printed declares `__bunwasm_s`.
++const BUNWASM_FN_S: u8 = 1;
++/// ... and is an async generator's (its `yield`s get hooks).
++const BUNWASM_FN_ASYNC_GENERATOR: u8 = 2;
++
 +thread_local! {
 +    /// The statement being printed is the body of a label: a `for await` there
 +    /// can't be wrapped in a block (labeled `continue` needs the loop).
 +    static BUNWASM_LABELED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
++    /// `BUNWASM_FN_*` flags of the innermost function (or module top level)
++    /// being printed.
++    static BUNWASM_FN: core::cell::Cell<u8> = const { core::cell::Cell::new(0) };
++}
++
++#[inline]
++fn bunwasm_fn() -> u8 {
++    BUNWASM_FN.with(|f| f.get())
++}
++
++/// Restores the enclosing function's flags when a body is done printing.
++struct BunwasmFnScope(u8);
++
++impl Drop for BunwasmFnScope {
++    fn drop(&mut self) {
++        BUNWASM_FN.with(|f| f.set(self.0));
++    }
++}
++
++fn bunwasm_enter_fn(flags: u8) -> BunwasmFnScope {
++    BunwasmFnScope(BUNWASM_FN.with(|f| f.replace(flags)))
 +}
 +
  #[derive(Clone, Copy, PartialEq, Eq)]
  pub enum Format {
      Esm,
+@@ -7843,8 +8146,28 @@ pub fn print_ast<'a, W: WriterTrait, const ASCII_ONLY: bool, const GENERATE_SOUR
+         }
+     }
+ 
++    // bun-wasm: a module whose top level awaits and has a `try` or a
++    // `for await` is an S body (BUNWASM_AWAIT_HOOKS).
++    let top_level_hooks = if bunwasm_await_hooks()
++        && !tree.top_level_await_keyword.is_empty()
++        && tree
++            .parts
++            .iter()
++            .any(|part| self::__gated_printer::bunwasm_has_handler(slice_of(part.stmts)))
++    {
++        BUNWASM_FN_S
++    } else {
++        0
++    };
++    let _hooks = bunwasm_enter_fn(top_level_hooks);
++    let mut declare_s = top_level_hooks != 0;
+     for part in tree.parts.iter() {
+         for stmt in slice_of(part.stmts).iter() {
++            if declare_s && !matches!(stmt.data, js_ast::stmt::Data::SDirective(_)) {
++                printer.print(b"let __bunwasm_s = 0;");
++                printer.print_newline();
++                declare_s = false;
++            }
+             printer.print_stmt(*stmt)?;
+             printer.print_semicolon_if_needed();
+         }

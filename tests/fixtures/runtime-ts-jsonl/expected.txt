@@ -1,0 +1,2 @@
+JSONL scalar, nested, partial and invalid tokens
+JSONL byte views, BOM, offsets, coercion and errors

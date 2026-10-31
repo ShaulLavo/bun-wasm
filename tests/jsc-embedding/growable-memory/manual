@@ -1,0 +1,1 @@
+JSC WASI rejects resizable backing stores with a catchable error. Native Bun supports them.

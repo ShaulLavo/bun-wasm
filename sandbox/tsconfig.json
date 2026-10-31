@@ -4,12 +4,14 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "lib": ["ES2023", "ES2024.SharedMemory", "DOM", "DOM.Iterable", "WebWorker"],
     "types": ["bun"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@remix-run/component"
   },
   "include": ["src", "build.ts", "template/dev.ts"]
 }

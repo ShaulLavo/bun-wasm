@@ -2,18 +2,22 @@
 # CMake configure of JavaScriptCore for wasm32-wasip1: JSCOnly port, C loop interpreter (no JIT,
 # no WebAssembly), system malloc, static libraries, Bun's JSC additions on.
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
+# The guest memory maximum, through its validating reader before anything is configured.
+max_memory=$(bun "$REPO/scripts/src/program-profile.ts" max-memory)
 mkdir -p "$JSC_OBJ"
+bash "$REPO/scripts/check-wasi-cmake-cache.sh" "$JSC_OBJ" "$JSC_TOOLCHAIN_FILE"
 build_shim
-flags="-include $JSC_CONFIG_SHIM_DIR/wasi-compat.h -msimd128 -DSIMDE_FLOAT16_API=1 \
+flags="-fPIC -include $JSC_CONFIG_SHIM_DIR/wasi-compat.h -msimd128 -DSIMDE_FLOAT16_API=1 \
 -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_GETPID"
-# The jsc shell's link. 512 MiB: the cap bun-wasm links with (Bun's string pointer tags).
+# The jsc shell's link, at bun-wasm's guest memory maximum (its file is part of jsc_inputs_hash).
 ldflags="-lwasi-emulated-mman -lwasi-emulated-signal -lwasi-emulated-process-clocks -lwasi-emulated-getpid \
--Wl,-z,stack-size=8388608 -Wl,--max-memory=536870912"
+-Wl,-z,stack-size=8388608 -Wl,--max-memory=$max_memory"
 cd "$JSC_OBJ"
 $CAGE cmake -G Ninja "$WEBKIT_DIR" \
   -DCMAKE_TOOLCHAIN_FILE="$JSC_TOOLCHAIN_FILE" \
   -DPORT=JSCOnly \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_C_FLAGS_RELEASE="-O2 -DNDEBUG=1" \
   -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG=1" \
   -DENABLE_STATIC_JSC=ON \

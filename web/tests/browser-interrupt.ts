@@ -10,10 +10,9 @@ import { loadavg, tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import type { Browser, Page } from "playwright";
 import { cleanupInterruptResources, finishInterruptCleanup } from "waffle/testing/interrupt-browser-runner-control";
-import { resolveRuntimePackage } from "../../scripts/browser-build";
+import { processBundle } from "../scripts/ci-process-bundles";
 
 const root = resolve(import.meta.dir, "../..");
-const runtimePackage = resolveRuntimePackage(import.meta.filename);
 const args = process.argv.slice(2), benchmark = args.includes("--benchmark");
 const names = args.filter(name => name !== "--benchmark"); if (!names.length) names.push("chromium", "firefox");
 for (const name of names) assert.ok(["chromium", "firefox", "webkit", "safari"].includes(name), `unknown browser ${name}`);
@@ -89,6 +88,7 @@ function abort(message: string, code: number): void {
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => abort(`interrupt browser gate received ${signal}`, signal === "SIGINT" ? 130 : 143));
 const deadline = setTimeout(() => abort("interrupt browser gate exceeded deadline", 1), Number(process.env.INTERRUPT_TIMEOUT_MS ?? 600_000));
 try {
+  const checkInterruptCase = async () => {
   const preexisting = Bun.spawn(["ps", "-eo", "pid,comm"], { stdout: "pipe", stderr: "inherit" });
   const browserProcesses = (await new Response(preexisting.stdout).text()).split("\n").filter(line => /Safari|safaridriver|WebKit|chromium|firefox|chrome/.test(line));
   assert.equal(await preexisting.exited, 0);
@@ -97,14 +97,12 @@ try {
   scratch = await (scratchCreation = mkdtemp(join(process.env.INTERRUPT_SCRATCH_ROOT ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir()), "bun-wasm-interrupt-")));
   if (stopping) throw new Error("interrupt browser setup was cancelled");
   process.env.TMPDIR = scratch;
-  const out = join(scratch, "dist");
-  const built = await Bun.build({ entrypoints: [join(runtimePackage.physical, "tests/interrupt-browser.ts"), join(runtimePackage.physical, "tests/fixtures/interrupt-browser-worker.ts")], outdir: out, target: "browser", format: "esm", splitting: true, minify: true, naming: { entry: "[name].[ext]", chunk: "chunks/[name]-[hash].[ext]" } });
-  assert.ok(built.success, built.logs.map(String).join("\n"));
-  await Bun.write(join(out, "index.html"), '<!doctype html><title>Interrupt gate</title><script type="module" src="/interrupt-browser.js"></script>');
+  const out = join(scratch!, "dist");
+  await processBundle("interrupt", out);
   let prototypeSha256: string | undefined;
   if (benchmark) {
     const source = await Bun.file(artifacts.prototype!).text(); prototypeSha256 = new Bun.CryptoHasher("sha256").update(source).digest("hex");
-    const prototypeSource = join(scratch, "prototype.ts"); await Bun.write(prototypeSource, source);
+    const prototypeSource = join(scratch!, "prototype.ts"); await Bun.write(prototypeSource, source);
     const baseline = await Bun.build({ entrypoints: [prototypeSource], outdir: out, target: "browser", format: "esm", minify: true });
     assert.ok(baseline.success, baseline.logs.map(String).join("\n"));
   }
@@ -117,18 +115,26 @@ try {
     if (!file.startsWith(out + sep) || !await Bun.file(file).exists()) return new Response(null, { status: 404, headers });
     return new Response(Bun.file(file), { headers });
   } });
-  report.resources = { scratch, port: server.port, artifacts: benchmark ? artifacts : null, prototypeSha256, platform: process.platform, arch: process.arch, bun: Bun.version, loadAverage: loadavg() };
+  report.resources = { scratch, port: server!.port, artifacts: benchmark ? artifacts : null, prototypeSha256, platform: process.platform, arch: process.arch, bun: Bun.version, loadAverage: loadavg() };
   for (const name of names) {
-    const url = `http://127.0.0.1:${server.port}/`;
+    const checkInterruptCase = async () => {
+    const url = `http://127.0.0.1:${server!.port}/`;
     if (name === "safari") {
       // Never issue a session request to an existing driver's listener.
       const probe = Bun.spawn(["/usr/sbin/lsof", "-nP", `-iTCP:${driverPort}`, "-sTCP:LISTEN"], { stdout: "pipe", stderr: "ignore" });
       const listeners = await new Response(probe.stdout).text(); await probe.exited;
       assert.equal(listeners, "", `Safari driver port ${driverPort} already occupied`);
       driver = Bun.spawn(["/usr/bin/safaridriver", "--port", String(driverPort)], { stdout: "ignore", stderr: "inherit" });
-      for (let attempt = 0; ; attempt++) {
-        try { await webdriver("/status"); break; } catch (error) { if (attempt >= 50 || driver.exitCode !== null) throw error; await Bun.sleep(100); }
-      }
+      const waitForSafariDriver = async () => {
+        for (let attempt = 0; ; attempt++) {
+          try { await webdriver("/status"); return; }
+          catch (error) {
+            if (attempt >= 50 || driver!.exitCode !== null) throw error;
+            await Bun.sleep(100);
+          }
+        }
+      };
+      await waitForSafariDriver();
       const opened = await webdriver("/session", "POST", { capabilities: { alwaysMatch: { browserName: "safari" } } }); session = opened.sessionId;
       await webdriver(`/session/${session}/timeouts`, "POST", { script: 600_000, pageLoad: 30_000, implicit: 0 });
       await webdriver(`/session/${session}/url`, "POST", { url });
@@ -137,12 +143,12 @@ try {
       const row = { browser: "safari", version: opened.capabilities.browserVersion, ...result }; report.results.push(row); console.log(JSON.stringify(row));
       await safariEvaluate("await globalThis.interruptHarness.clean();return true;");
       await webdriver(`/session/${session}`, "DELETE"); session = undefined;
-      driver.kill("SIGTERM"); await driver.exited; driver = undefined;
+      driver!.kill("SIGTERM"); await driver!.exited; driver = undefined;
     } else {
       const require = createRequire(join(process.env.INTERRUPT_PLAYWRIGHT_ROOT ?? join(root, "web"), "package.json"));
       const playwright = await import(pathToFileURL(require.resolve("playwright")).href) as typeof import("playwright");
       const engine = playwright[name as "chromium" | "firefox" | "webkit"];
-      launching = engine.launch({ headless: true, downloadsPath: join(scratch, "downloads"), tracesDir: join(scratch, "traces") }); browser = await launching;
+      launching = engine.launch({ headless: true, downloadsPath: join(scratch!, "downloads"), tracesDir: join(scratch!, "traces") }); browser = await launching;
       page = await browser.newPage(); const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
       await page.goto(url);
@@ -153,7 +159,13 @@ try {
       await page.evaluate(async () => await (globalThis as any).interruptHarness.clean());
       await browser.close(); browser = undefined; launching = undefined; page = undefined;
     }
+
+    };
+    await checkInterruptCase();
   }
+
+  };
+  await checkInterruptCase();
 } catch (error) { report.error ??= error instanceof Error ? error.stack : String(error); throw error; }
 finally {
   clearTimeout(deadline);

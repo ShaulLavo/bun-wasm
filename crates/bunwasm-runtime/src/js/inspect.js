@@ -1409,11 +1409,12 @@
   function parseJscFrameLine(line) {
     const m = /^(.*?)@(.*):(\d+):(\d+)$/.exec(line);
     if (!m || m[2].startsWith("bun-wasm:")) return null;
+    const generated = native.engine === "host" && native.preparedSourceName(m[2]) !== undefined;
     const url = typeof internal.displayName === "function" ? internal.displayName(m[2]) : m[2];
     let [file, lineNo, column] = [url, Number(m[3]), Number(m[4])];
-    const mapped = typeof internal.mapPosition === "function" ? internal.mapPosition(file, lineNo, column) : undefined;
+    const mapped = typeof internal.mapPosition === "function" ? internal.mapPosition(generated ? m[2] : file, lineNo, column) : undefined;
     if (mapped) [lineNo, column] = mapped;
-    column = calleeColumn(file, lineNo, column);
+    if (!generated) column = calleeColumn(file, lineNo, column);
     const topLevel = m[1] === "global code" || m[1] === "module code" || m[1] === "eval code" || m[1] === "__bunwasm_cjs__";
     return { name: topLevel ? "" : m[1] || "<anonymous>", file, line: lineNo, column };
   }
@@ -1540,6 +1541,7 @@
     } catch {
       return undefined;
     }
+    // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
     if (!desc || typeof desc.value !== "string" || /[^\x00-\xff]/.test(desc.value)) return undefined;
     return desc.value;
   }
@@ -1946,12 +1948,16 @@ function createNodeInspect(internal) {
   });
 
   const strEscapeSequencesRegExp =
+    // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
     /[\x00-\x1f\x27\x5c\x7f-\x9f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
   const strEscapeSequencesReplacer =
+    // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
     /[\x00-\x1f\x27\x5c\x7f-\x9f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
   const strEscapeSequencesRegExpSingle =
+    // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
     /[\x00-\x1f\x5c\x7f-\x9f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
   const strEscapeSequencesReplacerSingle =
+    // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
     /[\x00-\x1f\x5c\x7f-\x9f]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
   const newLineSplitRegExp = /(?<=\n)/;
   const keyStrRegExp = /^[a-zA-Z_][a-zA-Z_0-9]*$/;
@@ -2345,7 +2351,7 @@ function createNodeInspect(internal) {
             seq += regexpString.slice(i, i + 2);
             i += 2;
           } else if (next >= "0" && next <= "9") {
-            while (i < length && regexpString[i] >= "0" && regexpString[i] <= "9") seq += regexpString[i++];
+            seq += readDigits();
           }
         }
       }
@@ -3696,6 +3702,7 @@ function createNodeInspect(internal) {
     let totalLength = output.length + start;
     if (totalLength + output.length > ctx.breakLength) return false;
     for (const entry of output) {
+      // oxlint-disable-next-line no-control-regex -- Protocol parsing intentionally matches control bytes.
       totalLength += ctx.colors ? entry.replace(/\u001B\[\d\d?m/g, "").length : entry.length;
       if (totalLength > ctx.breakLength) return false;
     }

@@ -31,6 +31,8 @@
   const NO_PROCESSES = "WASI has no processes";
   const NO_NETWORK = "WASI has no network access";
 
+  const dns = internal.require("dns");
+
   // --- os -------------------------------------------------------------------
 
   function osModule() {
@@ -211,39 +213,7 @@
   // --- timers ---------------------------------------------------------------
 
   function timersPromises() {
-    const t = internal.timers;
-    const abortError = (signal) => Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR", cause: signal.reason });
-    function delayed(schedule) {
-      return (value, options = {}) =>
-        new Promise((resolve, reject) => {
-          const { signal } = options;
-          if (signal && signal.aborted) {
-            reject(abortError(signal));
-            return;
-          }
-          const handle = schedule(() => resolve(value));
-          if (options.ref === false && handle.unref) handle.unref();
-          if (signal) signal.addEventListener("abort", () => {
-            t.clearTimeout(handle);
-            t.clearImmediate(handle);
-            reject(abortError(signal));
-          });
-        });
-    }
-    const setTimeoutP = (ms, value, options) => delayed((cb) => t.setTimeout(cb, ms))(value, options);
-    const setImmediateP = (value, options) => delayed((cb) => t.setImmediate(cb))(value, options);
-    async function* setIntervalP(ms, value) {
-      for (;;) {
-        await setTimeoutP(ms);
-        yield value;
-      }
-    }
-    return {
-      setTimeout: setTimeoutP,
-      setImmediate: setImmediateP,
-      setInterval: setIntervalP,
-      scheduler: { wait: (ms, options) => setTimeoutP(ms, undefined, options), yield: () => setImmediateP() },
-    };
+    return internal.require("timer_promises");
   }
 
   function timersModule() {
@@ -298,7 +268,7 @@
         this.filename = typeof options === "string" ? options : options.filename || "evalmachine.<anonymous>";
       }
       runInThisContext() {
-        return native.evalScript(this.code, this.filename);
+        return native.evalScript(internal.prepareText(this.code, "script", "vm-script", this.filename), this.filename);
       }
       runInContext(context) {
         return runWith(this.code, context, this.filename);
@@ -310,8 +280,11 @@
     // Not a real separate realm: globals resolve through the context object
     // first (`with`), then fall back to this realm's globals.
     function runWith(code, context, filename) {
+      if (!("globalThis" in context) && Object.isExtensible(context)) {
+        Object.defineProperty(context, "globalThis", { value: context, writable: true, configurable: true });
+      }
       const runner = native.evalScript(`(function (__ctx, __code) { with (__ctx) { return eval(__code); } })`, filename);
-      return runner(context, String(code));
+      return runner(context, internal.prepareText(String(code), "eval", "vm-context", filename));
     }
     return {
       Script,
@@ -320,7 +293,7 @@
       runInNewContext: (code, context, options) => new Script(code, options).runInNewContext(context),
       createContext: (context = {}) => context,
       isContext: (value) => value !== null && typeof value === "object",
-      compileFunction: (code, params = []) => native.evalScript(`(function (${params.join(", ")}) {\n${code}\n})`),
+      compileFunction: (code, params = [], options = {}) => native.evalScript(internal.prepareText(`(function (${params.join(", ")}) {\n${code}\n})`, "wrapper", "vm-compileFunction", options.filename), options.filename),
     };
   }
 
@@ -456,145 +429,6 @@
     };
   }
 
-  // --- readline -------------------------------------------------------------
-
-  // Lines come from reading all of stdin (or the given input's data events).
-  function readlineModule() {
-    const EventEmitter = internal.require("events");
-    let stdinLines = null;
-    function takeStdinLine() {
-      if (stdinLines === null) {
-        const text = native.utf8Decode(native.readStdin());
-        stdinLines = text.split(/\r?\n/);
-        if (stdinLines[stdinLines.length - 1] === "") stdinLines.pop();
-      }
-      return stdinLines.length ? stdinLines.shift() : null;
-    }
-    class Interface extends EventEmitter {
-      constructor(input, output) {
-        super();
-        const opts = input && input.input ? input : { input, output };
-        this.input = opts.input;
-        this.output = opts.output;
-        this.terminal = false;
-        this.line = "";
-        this.closed = false;
-        this._prompt = opts.prompt === undefined ? "> " : opts.prompt;
-        this._pendingQuestion = null;
-        this._started = false;
-        this.on("newListener", (event) => {
-          if (event === "line") this._start();
-        });
-      }
-      _start() {
-        if (this._started) return;
-        this._started = true;
-        internal.realTimers.setImmediate(() => this._pump());
-      }
-      _pump() {
-        if (this.input && this.input !== globalThis.process.stdin && typeof this.input.on === "function") {
-          let buffered = "";
-          this.input.on("data", (chunk) => {
-            buffered += String(chunk);
-            const parts = buffered.split(/\r?\n/);
-            buffered = parts.pop();
-            for (const line of parts) this._deliver(line);
-          });
-          this.input.on("end", () => {
-            if (buffered) this._deliver(buffered);
-            this.close();
-          });
-          return;
-        }
-        for (let line = takeStdinLine(); line !== null && !this.closed; line = takeStdinLine()) this._deliver(line);
-        this.close();
-      }
-      _deliver(line) {
-        if (this._pendingQuestion) {
-          const cb = this._pendingQuestion;
-          this._pendingQuestion = null;
-          cb(line);
-          return;
-        }
-        this.emit("line", line);
-      }
-      question(query, options, callback) {
-        if (typeof options === "function") callback = options;
-        if (this.output && this.output.write) this.output.write(query);
-        const line = takeStdinLine();
-        internal.realTimers.setImmediate(() => callback(line === null ? "" : line));
-      }
-      prompt() {
-        if (this.output && this.output.write) this.output.write(this._prompt);
-        this._start();
-      }
-      setPrompt(prompt) {
-        this._prompt = prompt;
-      }
-      getPrompt() {
-        return this._prompt;
-      }
-      write(data) {
-        if (this.output && this.output.write) this.output.write(data);
-      }
-      pause() {
-        return this;
-      }
-      resume() {
-        return this;
-      }
-      close() {
-        if (this.closed) return;
-        this.closed = true;
-        this.emit("close");
-      }
-      async *[Symbol.asyncIterator]() {
-        this._started = true;
-        if (this.input && this.input !== globalThis.process.stdin && typeof this.input.on === "function") {
-          const lines = [];
-          let done = false;
-          let wake = null;
-          this._started = false;
-          this.on("line", (l) => {
-            lines.push(l);
-            if (wake) wake();
-          });
-          this.on("close", () => {
-            done = true;
-            if (wake) wake();
-          });
-          while (!done || lines.length) {
-            if (lines.length) yield lines.shift();
-            else await new Promise((r) => (wake = r));
-          }
-          return;
-        }
-        for (let line = takeStdinLine(); line !== null && !this.closed; line = takeStdinLine()) yield line;
-        this.close();
-      }
-    }
-    const createInterface = (input, output) => new Interface(input, output);
-    const promises = {
-      Interface,
-      createInterface(input, output) {
-        const rl = new Interface(input, output);
-        const ask = rl.question.bind(rl);
-        rl.question = (query) => new Promise((resolve) => ask(query, resolve));
-        return rl;
-      },
-    };
-    return {
-      Interface,
-      createInterface,
-      promises,
-      clearLine: (stream, dir, cb) => (cb && cb(), true),
-      clearScreenDown: (stream, cb) => (cb && cb(), true),
-      cursorTo: (stream, x, y, cb) => (typeof y === "function" ? y() : cb && cb(), true),
-      moveCursor: (stream, dx, dy, cb) => (cb && cb(), true),
-      emitKeypressEvents() {},
-    };
-  }
-
   // --- portable Node streams -----------------------------------------------------
 
   function streamModule() {
@@ -679,10 +513,11 @@
     "node:querystring": () => internal.require("bun_builtins").require("node:querystring"),
     "node:async_hooks": asyncHooksModule,
     "node:diagnostics_channel": diagnosticsChannelModule,
-    "node:readline": readlineModule,
+    "node:readline": lazy("node_readline"),
     "node:readline/promises": () => internal.builtin("node:readline").promises,
     "node:stream": streamModule,
     "node:stream/promises": () => internal.builtin("node:stream").promises,
+    "node:stream/consumers": lazy("stream_consumers"),
     "node:stream/web": () => internal.require("streams"),
     "node:perf_hooks": () => ({
       performance: globalThis.performance,
@@ -707,22 +542,28 @@
     "node:net": () => Object.assign(internal.require("net").nodeNet(), internal.require("net_address")),
     "node:tls": () => unsupportedModule("tls", NO_NETWORK, ["connect", "createServer", "createSecureContext", "TLSSocket", "Server", "checkServerIdentity"], { rootCertificates: [], DEFAULT_MIN_VERSION: "TLSv1.2", DEFAULT_MAX_VERSION: "TLSv1.3", DEFAULT_ECDH_CURVE: "auto" }),
     "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
-    "node:dns": () => unsupportedModule("dns", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "resolveMx", "resolveTxt", "resolveSrv", "resolveNs", "resolveCname", "reverse", "lookupService", "Resolver"], { promises: internal.builtin("node:dns/promises"), getServers: () => [], setServers() {}, setDefaultResultOrder() {} }),
-    "node:dns/promises": () => unsupportedModule("dns.promises", NO_NETWORK, ["lookup", "resolve", "resolve4", "resolve6", "reverse", "Resolver"]),
+    "node:dns": () => dns.module(),
+    "node:dns/promises": () => dns.promises(),
     "node:http": () => httpModule("http"),
     "node:https": () => httpModule("https"),
-    "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {} }),
+    "node:http2": () => unsupportedModule("http2", NO_NETWORK, ["createServer", "createSecureServer", "connect"], { constants: {}, Http2ServerRequest: internal.require("http2_request"), Http2ServerResponse: internal.require("http2_response") }),
     "node:zlib": zlibModule,
-    "node:inspector": () => unsupportedModule("inspector", "no debugger", ["open", "close", "url", "waitForDebugger", "Session"], { console: globalThis.console }),
-    "node:repl": () => unsupportedModule("repl", "no interactive terminal", ["start", "REPLServer"]),
+    // Node's contract when built without tracing. Bun and Node also reject it in workers.
+    "node:trace_events": () => {
+      throw Object.assign(new Error("Trace events are unavailable"), { code: "ERR_TRACE_EVENTS_UNAVAILABLE" });
+    },
+    "node:inspector": () => Object.assign(
+      unsupportedModule("inspector", "no debugger", ["open", "waitForDebugger", "Session"], { console: globalThis.console }),
+      { close() {}, url() { return undefined; } },
+    ),
+    "node:repl": () => internal.require("node_repl"),
     "node:v8": () => ({
       getHeapStatistics: () => ({ total_heap_size: native.memoryUsage().heapTotal, used_heap_size: native.memoryUsage().heapUsed, heap_size_limit: 4294967296 }),
-      serialize: thrower("v8.serialize", "no V8 serializer"),
-      deserialize: thrower("v8.deserialize", "no V8 serializer"),
+      ...internal.require("v8"),
       setFlagsFromString() {},
       cachedDataVersionTag: () => 0,
     }),
-    "node:wasi": () => unsupportedModule("wasi", "nested WASI instances are not supported", ["WASI"]),
+    "node:wasi": () => internal.require("bun_builtins").require("node:wasi"),
     "node:domain": () => unsupportedModule("domain", "domains are deprecated and not implemented", ["create", "createDomain", "Domain"]),
     "node:punycode": () => internal.require("bun_builtins").require("node:punycode"),
     bun: () => globalThis.Bun,
@@ -774,8 +615,12 @@
     }),
     "bun:internal-for-testing": () => ({
       isASANEnabled: () => false,
+      preparation: () => internal.preparation,
+      prepareSource: (...args) => internal.prepareText(...args),
       semverIntersects: (left, right) => native.semverIntersects(`${left}`, `${right}`),
       directoryCount: () => native.directoryCount(),
+      bunStringRoundTrip: (bytes, encoding) => native.bunStringRoundTrip(bytes, encoding),
+      linearMemoryBytes: () => native.linearMemoryBytes(),
     }),
     "node:test": () => internal.require("node_test"),
     "bun:test": () => internal.require("bun_test").exports,

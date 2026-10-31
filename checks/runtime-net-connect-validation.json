@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/net-connect-validation.test.ts",
+  "localRuntime": true
+}

@@ -49,9 +49,13 @@ try {
     assert.equal(manifest.name, 'esbuild-wasm');
     assert.equal(manifest.version, '0.25.12');
     for (const check of checks) {
+const checkEsbuildFixture = async () => {
       try { console.log(engine, check, await run(engine, ['run', `/${check}`])); }
       catch (error) { failures.push(error); console.error(error.message); }
-    }
+
+};
+await checkEsbuildFixture();
+}
     if (!checks.includes('check.cjs')) continue;
     assert.match(await run(engine, ['run', '/node_modules/esbuild/bin/esbuild', '--version']), /0\.25\.12/);
     await run(engine, ['run', '/node_modules/esbuild/bin/esbuild', '/entry.ts', '--bundle', '--outfile=/cli.js']);

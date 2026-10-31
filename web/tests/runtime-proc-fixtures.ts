@@ -66,6 +66,16 @@ function readExact(fd: number[], length: number, stage: number, onEmpty?: number
     check(get(8).concat(c(length), get(7), [0x6b, 0x4b]), 0, stage),
     get(7), get(8), [0x6a, 0x22, 7], c(length), [0x49, 0x0d, 0, 0x0b]);
 }
+// Terminal writes are immediate, including the first write before the page grants credit.
+// Poll writable after AGAIN, and advance only by an accepted prefix. All other results fail.
+function writeExact(fd: number[], pointer: number, length: number, stage: number): number[] {
+  return c(0).concat(set(7), [0x03, 0x40],
+    call(1, fd, c(pointer).concat(get(7), [0x6a]), c(length).concat(get(7), [0x6b])), set(8),
+    get(8), c(-6), [0x46, 0x04, 0x40], poll(fd, 1, stage, false, []), [0x0c, 1, 0x0b],
+    check(get(8).concat(c(0), [0x4c]), 0, stage),
+    check(get(8).concat(c(length), get(7), [0x6b, 0x4b]), 0, stage),
+    get(7), get(8), [0x6a, 0x22, 7], c(length), [0x49, 0x0d, 0, 0x0b]);
+}
 // JSON numbers occupy ten spaces, populated right-to-left without relying on allocated fd values.
 function jsonNumber(local: number, end: number): number[] {
   return get(local).concat(set(7), c(end), set(8), [0x03, 0x40],
@@ -73,9 +83,9 @@ function jsonNumber(local: number, end: number): number[] {
     get(8), c(1), [0x6b], set(8), get(7), c(10), [0x6e, 0x22, 7, 0x0d, 0, 0x0b]);
 }
 
-export function runtimeProcFixture(): Uint8Array<ArrayBuffer> {
+export function runtimeProcFixture(executable = "/bin/bun"): Uint8Array<ArrayBuffer> {
   const slots = { read: "@read@", write: "@write@", alias: "@alias@" };
-  let request = JSON.stringify({ executable: "bun", argv: ["abi-child"], env: { PWD: "/" }, cwd: "/", job: 1,
+  let request = JSON.stringify({ executable, argv: ["abi-child"], env: { PWD: "/" }, cwd: "/", job: 1,
     fds: [{ child: 0, parent: slots.read }, { child: 1, parent: slots.write }, { child: 10, parent: slots.alias },
       { child: 2, parent: 2 }, { child: 11, parent: 1 }] });
   const positions: number[] = [];
@@ -106,11 +116,11 @@ export function runtimeProcFixture(): Uint8Array<ArrayBuffer> {
     poll(get(5), 0, 57), readExact(get(5), 4, 58), check(load(4096), 0x676e6f70, 59),
     poll(get(5), 0, 60, true), check(read(get(5), 1), 0, 61), poll(get(6), 2, 62),
     check(call(5, get(6), c(640)), 0, 63), check(load(640), 0, 64), check(load(644), 23, 65),
-    close(get(5), 66), check(write(c(1), 777, 16), 16, 67));
+    close(get(5), 66), writeExact(c(1), 777, 16, 67));
   const child = close(c(1), 80).concat(check(write(c(10), 768, 1), 1, 81), poll(c(0), 0, 82),
     readExact(c(0), 4, 83), check(load(4096), 0x676e6970, 84), poll(c(0), 0, 85, true),
     check(read(c(0), 1), 0, 86), close(c(0), 87), check(write(c(10), 773, 4), 4, 88), close(c(10), 89),
-    check(write(c(11), 793, 13), 13, 90), check(write(c(2), 806, 13), 13, 91), close(c(11), 92), close(c(2), 93), call(9, c(23)));
+    writeExact(c(11), 793, 13, 90), writeExact(c(2), 806, 13, 91), close(c(11), 92), close(c(2), 93), call(9, c(23)));
   // argc == 1 identifies a recursively launched child; root runner supplies [bun, abi-parent].
   const body = [1, 9, 0x7f].concat(check(call(10, c(32), c(36)), 0, 40), load(32), c(1),
     [0x46, 0x04, 0x40], child, [0x05], parent, [0x0b, 0x0b]);
@@ -154,10 +164,10 @@ export const runtimeProcJobWaitStages: Readonly<Record<number, string>> = {
  * argc selects each real recursively launched guest. Job ids and inherited descriptors are filled
  * in guest memory, not injected by the browser. The two descendants hold their writer after the
  * leader exits and handle TERM without exiting until the shell releases their safe-exit gate. */
-export function runtimeProcJobWaitFixture(): Uint8Array<ArrayBuffer> {
+export function runtimeProcJobWaitFixture(executable = "/bin/bun"): Uint8Array<ArrayBuffer> {
   const memory = new Uint8Array(4096), encoder = new TextEncoder();
   function request(pointer: number, argc: number, fds: { child: number; parent: number | string }[], job: number | string = 0) {
-    let json = JSON.stringify({ executable: "bun", argv: Array.from({ length: argc }, () => "job"), env: { PWD: "/" }, cwd: "/", job, fds });
+    let json = JSON.stringify({ executable, argv: Array.from({ length: argc }, () => "job"), env: { PWD: "/" }, cwd: "/", job, fds });
     const slots: Record<string, number> = {};
     for (;;) {
       const match = /"@([a-z]+)@"/.exec(json);
@@ -181,8 +191,8 @@ export function runtimeProcJobWaitFixture(): Uint8Array<ArrayBuffer> {
     check(get(local).concat(c(0), [0x48]), 0, 102));
   const pipe = (pointer: number, reader: number, writer: number) => check(call(2, c(pointer)), 0, 101)
     .concat(load(pointer), set(reader), load(pointer + 4), set(writer));
-  const result = (code: number) => check(load(640), code, 120).concat(check(load(644), 0x23456789, 119));
-  const jobPending = () => store(640, c(0x12345678)).concat(store(644, c(0x23456789)),
+  const result = (code: number) => check(load(640), 0, 119).concat(check(load(644), code, 120), check(load(648), 0x3456789a, 119));
+  const jobPending = () => store(640, c(0x12345678)).concat(store(644, c(0x23456789)), store(648, c(0x3456789a)),
     check(call(12, get(13), c(1), c(640)), -6, 110), check(load(640), 0x12345678, 111), check(load(644), 0x23456789, 111),
     store(256, c(4)), store(260, get(13)), store(264, c(12345)), store(268, c(0)),
     check(call(7, c(256), c(1), c(0), c(512)), 0, 112));

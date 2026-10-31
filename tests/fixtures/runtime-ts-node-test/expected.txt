@@ -1,0 +1,2 @@
+bun test vVERSION
+node:test aliases, options, async callbacks and hooks

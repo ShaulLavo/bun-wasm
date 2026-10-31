@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+// oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
 const adapter = eval(readFileSync("runtime.js", "utf8"));
+// oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
 const builtinGlobals = eval(readFileSync("globals.js", "utf8"))();
 
 function check(name, phase) {

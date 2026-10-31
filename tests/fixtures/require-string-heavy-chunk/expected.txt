@@ -1,0 +1,2 @@
+chunk MiB 5.4 modules 700 sample 8000
+linear memory growth under 12 MiB true

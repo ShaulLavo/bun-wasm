@@ -1,0 +1,1 @@
+absolute self-spawn, fork and Worker preserve the admitted executable without PATH

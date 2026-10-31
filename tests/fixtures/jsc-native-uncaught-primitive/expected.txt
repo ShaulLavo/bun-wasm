@@ -1,0 +1,2 @@
+native primitive identity and GC
+native primitive fatal exit 1

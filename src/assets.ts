@@ -1,11 +1,27 @@
-import { BUN_WASM_ASSET } from "./guest-asset.generated.js";
-export { BUN_WASM_ASSET } from "./guest-asset.generated.js";
+import { prepareLinkPlan, type LinkPlanSource } from "waffle/link";
+import { engineLinkPlan } from "./quickjs-program.ts";
+import { parseProgramFiles, programKind, type ProgramFiles } from "./engine-kind.ts";
+import { BUN_WASM_ASSET } from "./guest-asset.generated.ts";
+export { BUN_WASM_ASSET } from "./guest-asset.generated.ts";
 
 /** Immutable guest metadata. The SHA-256 and byte count cover decompressed Wasm bytes. */
-export interface BunWasmAsset {
+export interface BunWasmFile {
   readonly url: string;
   readonly sha256: string;
   readonly bytes: number;
+}
+
+export type BunWasmAsset = ProgramFiles<BunWasmFile>;
+
+export function parseBunWasmAsset(value: unknown): BunWasmAsset {
+  return parseProgramFiles(value, file => {
+    if (!file || typeof file !== "object" || !("url" in file) || typeof file.url !== "string"
+      || !("sha256" in file) || typeof file.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(file.sha256)
+      || !("bytes" in file) || typeof file.bytes !== "number" || !Number.isSafeInteger(file.bytes) || file.bytes < 8) {
+      throw new BunWasmAssetError("Guest descriptor requires a URL, SHA-256 hash and a valid byte count");
+    }
+    return { url: file.url, sha256: file.sha256, bytes: file.bytes };
+  });
 }
 
 export class BunWasmAssetError extends Error {
@@ -134,7 +150,7 @@ async function readLimited(stream: ReadableStream<Uint8Array<ArrayBuffer>>, limi
       if (result.value.byteLength === 0) continue;
       length += result.value.byteLength;
       if (length > limit) {
-        try { await reader.cancel(); } catch { /* the size error is the useful failure */ }
+        await reader.cancel().catch(() => {});
         throw new BunWasmAssetError(`Guest byte count exceeds the declared size of ${limit} bytes`);
       }
       chunks.push(new Uint8Array(result.value));
@@ -151,21 +167,61 @@ async function readLimited(stream: ReadableStream<Uint8Array<ArrayBuffer>>, limi
   return bytes;
 }
 
-/** Verify before compilation so a changed CDN response can never execute as the expected guest. */
+const programs = new WeakMap<WebAssembly.Module, LinkPlanSource>();
+
+export async function prepareProgram(files: ProgramFiles<Uint8Array>): Promise<WebAssembly.Module> {
+  if (files.kind === "single") {
+    const module = await WebAssembly.compile(Uint8Array.from(files.core));
+    if (programKind(module) !== "single") throw new BunWasmAssetError("Paired core requires its matching prepared side module");
+    return module;
+  }
+  try {
+    const plan = await prepareLinkPlan(await engineLinkPlan(files));
+    programs.set(plan.entryModule, plan.toSource());
+    return plan.entryModule;
+  } catch (error) {
+    if (error instanceof TypeError || error instanceof WebAssembly.CompileError) {
+      throw new BunWasmAssetError(error.message);
+    }
+    throw error;
+  }
+}
+
+/** Existing explicit QuickJS callers use the same strict preparation owner. */
+export function prepareQuickjsProgram(core: Uint8Array, side: Uint8Array): Promise<WebAssembly.Module> {
+  return prepareProgram({ kind: "quickjs", core, side });
+}
+
+export function programLinkPlan(module: WebAssembly.Module): LinkPlanSource | undefined {
+  const plan = programs.get(module);
+  if (!plan && programKind(module) !== "single") {
+    throw new BunWasmAssetError("Paired core requires its matching prepared side module");
+  }
+  return plan;
+}
+
 export async function loadBunWasm(options: LoadBunWasmOptions = {}): Promise<WebAssembly.Module> {
-  if (options.module) return options.module;
+  if (options.module) {
+    programLinkPlan(options.module);
+    return options.module;
+  }
   const asset = options.asset ?? BUN_WASM_ASSET;
   if (!asset) throw new BunWasmAssetError("No matching Bun guest has been published; provide asset or module");
-  // Snapshot caller-provided metadata before invoking any awaitable callback. An asset object is
-  // caller-owned, so rereading it after fetch would allow a concurrent mutation to change the
-  // integrity contract midway through loading.
-  const expectedHash = asset.sha256;
-  const expectedBytes = asset.bytes;
-  const url = options.wasmUrl?.toString() ?? asset.url;
+  const files = parseBunWasmAsset(asset);
+  const core = { ...files.core, url: options.wasmUrl?.toString() ?? files.core.url };
+  const fetch = options.fetch ?? globalThis.fetch;
+  const bytes = await loadFile(core, fetch);
+  if (files.kind !== "single") return prepareProgram({ kind: files.kind, core: bytes, side: await loadFile(files.side, fetch) });
+  return prepareProgram({ kind: "single", core: bytes });
+}
+
+/** Verify before compilation so a changed CDN response cannot execute as the expected guest. */
+async function loadFile(asset: BunWasmFile, fetch: (url: string) => Promise<Response>): Promise<Uint8Array<ArrayBuffer>> {
+  const { url, sha256: expectedHash, bytes: expectedBytes } = asset;
   if (!/^[a-f0-9]{64}$/.test(expectedHash) || !Number.isSafeInteger(expectedBytes) || expectedBytes < 8) {
     throw new BunWasmAssetError("Guest descriptor requires a SHA-256 hash and a valid byte count");
   }
-  const response = await (options.fetch ?? globalThis.fetch)(url);
+  const response = await fetch(url);
   if (!response.ok) throw new BunWasmAssetError(`${url}: HTTP ${response.status}`);
   const limited = await openLimitedBody(response, expectedBytes + COMPRESSED_SIZE_MARGIN);
   const body = limited.prefix[0] === 0x1f && limited.prefix[1] === 0x8b
@@ -176,5 +232,5 @@ export async function loadBunWasm(options: LoadBunWasmOptions = {}): Promise<Web
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
   if (hash !== expectedHash) throw new BunWasmAssetError(`Guest SHA-256 mismatch: expected ${expectedHash}, received ${hash}`);
-  return WebAssembly.compile(bytes);
+  return bytes;
 }

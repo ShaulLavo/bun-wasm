@@ -1,0 +1,23 @@
+{
+  "name": "bun-wasm-next-acceptance",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "16.4.3",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "@next/swc-wasm-nodejs": "16.4.3"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "22.18.10",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2"
+  }
+}

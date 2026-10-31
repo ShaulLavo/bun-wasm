@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/crypto-keys.test.ts",
+  "localRuntime": true
+}

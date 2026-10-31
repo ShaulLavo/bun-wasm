@@ -171,7 +171,10 @@ fn listen_reports_address_in_use() {
     assert_eq!(net.listen("127.0.0.1", port), ERROR);
     let error = json(net.error(0));
     assert_eq!(error["code"], "EADDRINUSE");
-    assert_eq!(error["message"], format!("Failed to start server. Is port {port} in use?"));
+    assert_eq!(
+        error["message"],
+        format!("Failed to start server. Is port {port} in use?")
+    );
 }
 
 #[test]
@@ -225,14 +228,17 @@ fn fetch_reports_reason_phrase_and_decodes_gzip() {
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     gz.write_all(b"hello gzip").unwrap();
     let body = gz.finish().unwrap();
-    let mut response =
-        format!("HTTP/1.1 418 I'm a Teapot\r\ncontent-encoding: gzip\r\ncontent-length: {}\r\n\r\n", body.len())
-            .into_bytes();
+    let mut response = format!(
+        "HTTP/1.1 418 I'm a Teapot\r\ncontent-encoding: gzip\r\ncontent-length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
     response.extend_from_slice(&body);
     let port = http_server(Box::leak(response.into_boxed_slice()));
 
     let mut net = Net::new();
-    let meta = format!(r#"{{"method":"GET","url":"http://127.0.0.1:{port}/x","headers":[["x-a","1"]]}}"#);
+    let meta =
+        format!(r#"{{"method":"GET","url":"http://127.0.0.1:{port}/x","headers":[["x-a","1"]]}}"#);
     let handle = net.fetch(meta.as_bytes(), b"");
     assert!(handle > 0);
     let head = loop {
@@ -248,6 +254,89 @@ fn fetch_reports_reason_phrase_and_decodes_gzip() {
     assert_eq!(head["redirected"], false);
     assert_eq!(read_all(&mut net, handle), b"hello gzip");
     assert_eq!(net.close(handle), 0);
+}
+
+fn fetch_head_ready(net: &mut Net, fetch: i32) -> i32 {
+    match net.fetch_head(fetch) {
+        Output::Code(code) => code,
+        Output::Bytes(_) => 0,
+    }
+}
+
+fn waiting_fetch(net: &mut Net) -> (i32, i32, i32) {
+    let listener = net.listen("127.0.0.1", 0);
+    assert!(listener > 0);
+    let port = net.local_port(listener);
+    let meta = format!(r#"{{"url":"http://127.0.0.1:{port}/"}}"#);
+    let fetch = net.fetch(meta.as_bytes(), b"");
+    assert!(fetch > 0);
+    let peer = wait(net, |net| net.accept(listener));
+    assert!(peer > 0);
+    let mut request = Vec::new();
+    let mut buf = [0u8; 4096];
+    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+        let count = wait(net, |net| net.read(peer, &mut buf));
+        assert!(count > 0);
+        request.extend_from_slice(&buf[..count as usize]);
+    }
+    (fetch, listener, peer)
+}
+
+/// Keep the peer open without a complete response, then close only the fetch
+/// handle. The peer must observe EOF before it sends any more response bytes.
+fn assert_fetch_abort_disconnects(after_headers: bool) {
+    let mut net = Net::new();
+    let (fetch, listener, peer) = waiting_fetch(&mut net);
+    let mut buf = [0u8; 4096];
+    if after_headers {
+        let headers = b"HTTP/1.1 200 OK\r\nContent-Length: 1024\r\n\r\n";
+        assert_eq!(net.write(peer, headers), headers.len() as i32);
+        assert_eq!(wait(&mut net, |net| fetch_head_ready(net, fetch)), 0);
+    }
+    assert_eq!(net.close(fetch), 0);
+    assert_eq!(wait(&mut net, |net| net.read(peer, &mut buf)), 0);
+    assert_eq!(net.close(fetch), BADF);
+    assert_eq!(net.close(peer), 0);
+    assert_eq!(net.close(listener), 0);
+    net.flush_closed(Duration::from_secs(1));
+    assert!(net.handles.is_empty());
+}
+
+#[test]
+fn fetch_abort_disconnects_before_response_headers() {
+    assert_fetch_abort_disconnects(false);
+}
+
+#[test]
+fn fetch_abort_disconnects_during_response_body_read() {
+    assert_fetch_abort_disconnects(true);
+}
+
+#[test]
+fn fetch_abort_does_not_cancel_another_pending_request() {
+    let mut net = Net::new();
+    let (cancelled, first_listener, first_peer) = waiting_fetch(&mut net);
+    let (active, second_listener, second_peer) = waiting_fetch(&mut net);
+    let mut buf = [0u8; 4096];
+    assert_eq!(net.close(cancelled), 0);
+    assert_eq!(wait(&mut net, |net| net.read(first_peer, &mut buf)), 0);
+    assert!(matches!(net.fetch_head(active), Output::Code(AGAIN)));
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+    assert_eq!(net.write(second_peer, response), response.len() as i32);
+    assert_eq!(wait(&mut net, |net| fetch_head_ready(net, active)), 0);
+    assert_eq!(json(net.fetch_head(active))["status"], 200);
+    assert_eq!(read_all(&mut net, active), b"ok");
+    for handle in [
+        active,
+        first_peer,
+        second_peer,
+        first_listener,
+        second_listener,
+    ] {
+        assert_eq!(net.close(handle), 0);
+    }
+    net.flush_closed(Duration::from_secs(1));
+    assert!(net.handles.is_empty());
 }
 
 #[test]
@@ -269,4 +358,88 @@ fn fetch_errors() {
 
     assert_eq!(net.fetch(br#"{"url":"ftp://x/"}"#, b""), ERROR);
     assert_eq!(json(net.error(0))["code"], "ERR_INVALID_ARG_VALUE");
+}
+
+#[test]
+fn notify_wait_past_ends_on_a_bump_made_before_or_during_the_wait() {
+    let notify = Notify::new();
+    let seen = notify.generation();
+    let bumper = notify.clone();
+    let thread = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        bumper.bump();
+    });
+    let started = Instant::now();
+    notify.wait_past(seen, Duration::from_secs(10));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    thread.join().unwrap();
+
+    // A change between reading the generation and waiting is not lost.
+    let seen = notify.generation();
+    notify.bump();
+    let started = Instant::now();
+    notify.wait_past(seen, Duration::from_secs(10));
+    assert!(started.elapsed() < Duration::from_secs(5));
+
+    // Without a change the wait ends at its timeout.
+    let started = Instant::now();
+    notify.wait_past(notify.generation(), Duration::from_millis(20));
+    assert!(started.elapsed() >= Duration::from_millis(20));
+}
+
+#[test]
+fn lookup_publishes_ordered_family_results_wakes_poll_and_is_repeatable_until_close() {
+    let mut net = Net::new();
+    let handle = net.lookup("localhost", 6, 0);
+    assert!(handle > 0);
+    let first = loop {
+        match net.lookup_head(handle) {
+            Output::Code(AGAIN) => {
+                assert_eq!(net.poll(5000), 1);
+            }
+            output => break output,
+        }
+    };
+    let bytes = match first {
+        Output::Bytes(bytes) => bytes,
+        Output::Code(code) => panic!("unexpected lookup result {code}"),
+    };
+    let repeat = match net.lookup_head(handle) {
+        Output::Bytes(bytes) => bytes,
+        Output::Code(code) => panic!("unexpected repeated lookup result {code}"),
+    };
+    assert_eq!(bytes, repeat);
+    let value = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
+    assert!(
+        value["addresses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|address| address["family"] == 6)
+    );
+    assert_eq!(net.close(handle), 0);
+    assert_eq!(net.close(handle), BADF);
+    assert!(matches!(net.lookup_head(handle), Output::Code(BADF)));
+}
+
+#[test]
+fn lookup_error_preserves_hostname_and_getaddrinfo_metadata_until_close() {
+    let mut net = Net::new();
+    let hostname = "bun-wasm-native-dns.invalid";
+    let handle = net.lookup(hostname, 0, 0);
+    assert!(handle > 0);
+    loop {
+        match net.lookup_head(handle) {
+            Output::Code(AGAIN) => assert_eq!(net.poll(5000), 1),
+            Output::Code(ERROR) => break,
+            Output::Bytes(_) => panic!("unexpected successful lookup"),
+            Output::Code(code) => panic!("unexpected lookup status {code}"),
+        }
+    }
+    let error = json(net.error(handle));
+    assert_eq!(error["code"], "ENOTFOUND");
+    assert_eq!(error["syscall"], "getaddrinfo");
+    assert_eq!(error["hostname"], hostname);
+    assert_eq!(net.close(handle), 0);
+    assert!(matches!(net.error(handle), Output::Code(BADF)));
 }

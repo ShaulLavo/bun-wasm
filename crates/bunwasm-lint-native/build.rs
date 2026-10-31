@@ -6,6 +6,7 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-env-changed=JSC_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=WASI_SDK_PATH");
+    println!("cargo:rerun-if-env-changed=BUN_WASM_SYSROOT");
     if env::var("TARGET").unwrap() != "wasm32-wasip1" {
         return;
     }
@@ -53,6 +54,7 @@ extern "C" void bunwasm_yarr_initialize() {{ WTF::initialize(); using namespace 
 
     let obj = jsc.join("build/jsc");
     let sdk = PathBuf::from(env::var("WASI_SDK_PATH").expect("source env.sh"));
+    let sysroot = PathBuf::from(env::var("BUN_WASM_SYSROOT").expect("source env.sh"));
     let database = obj.join("compile_commands.json");
     println!("cargo:rerun-if-changed={}", database.display());
     let entries: serde_json::Value = serde_json::from_slice(&fs::read(database).unwrap()).unwrap();
@@ -85,10 +87,15 @@ extern "C" void bunwasm_yarr_initialize() {{ WTF::initialize(); using namespace 
             "JavaScriptCore/DerivedSources/yarr/YarrCanonicalizeUnicode.cpp",
         )));
     for (index, path) in paths.enumerate() {
-        println!("cargo:rerun-if-changed={}", path.display());
+        // Index 0 is yarr.cpp, written above by this script; watching it would rerun the
+        // script on every build. Its inputs are watched where they are read.
+        if index > 0 {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
         let object = out.join(format!("yarr-{index}.o"));
         let status = Command::new(sdk.join("bin/clang++"))
             .args(&flags)
+            .arg(format!("--sysroot={}", sysroot.display()))
             .arg("-c")
             .arg(path)
             .arg("-o")
@@ -108,7 +115,7 @@ extern "C" void bunwasm_yarr_initialize() {{ WTF::initialize(); using namespace 
         .status()
         .unwrap();
     assert!(status.success());
-    link(&out, &obj, &jsc, &sdk);
+    link(&out, &obj, &jsc, &sysroot);
 }
 
 // Yarr's VM-free interpreter reads three options. Initialize the defaults from
@@ -152,13 +159,14 @@ fn compiler_flags(command: &str) -> Vec<String> {
     let mut words = command.split_whitespace().skip(1);
     while let Some(word) = words.next() {
         match word {
-            "-o" | "-c" | "-MF" | "-MT" => {
+            "-o" | "-c" | "-MF" | "-MT" | "--sysroot" => {
                 words.next();
             }
             "-include" | "-isystem" | "-iquote" | "-I" => {
                 flags.extend([word.to_owned(), words.next().unwrap().to_owned()])
             }
             "-MD" => {}
+            word if word.starts_with("--sysroot=") => {}
             word if word.starts_with('-') => flags.push(word.replace("\\\"", "\"")),
             _ => {}
         }
@@ -166,14 +174,14 @@ fn compiler_flags(command: &str) -> Vec<String> {
     flags
 }
 
-fn link(out: &Path, obj: &Path, jsc: &Path, sdk: &Path) {
+fn link(out: &Path, obj: &Path, jsc: &Path, sysroot: &Path) {
     for directory in [
         out.to_path_buf(),
         obj.join("lib"),
         jsc.join("icu/prefix/lib"),
         jsc.join("shim"),
-        sdk.join("share/wasi-sysroot/lib/wasm32-wasip1/noeh"),
-        sdk.join("share/wasi-sysroot/lib/wasm32-wasip1"),
+        sysroot.join("lib/wasm32-wasip1/noeh"),
+        sysroot.join("lib/wasm32-wasip1"),
     ] {
         println!("cargo:rustc-link-search=native={}", directory.display());
     }

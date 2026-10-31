@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use libsqlite3_sys as ffi;
 
-use crate::engine::{Args, NativeError, NativeResult, Val};
+use crate::data::{Args, NativeError, NativeResult, Val};
 use crate::natives::Table;
 
 type Result<T> = std::result::Result<T, NativeError>;
@@ -92,7 +92,9 @@ impl Registry {
     /// Finalize a statement; a closed database whose last statement this was
     /// is closed for real.
     fn finalize(&mut self, id: u32, by_close: bool) {
-        let Some(stmt) = self.stmts.get_mut(&id) else { return };
+        let Some(stmt) = self.stmts.get_mut(&id) else {
+            return;
+        };
         if stmt.ptr.is_null() {
             return;
         }
@@ -105,8 +107,13 @@ impl Registry {
     }
 
     fn close_if_drained(&mut self, db_id: u32) {
-        let busy = self.stmts.values().any(|s| s.db == db_id && !s.ptr.is_null());
-        let Some(db) = self.dbs.get_mut(&db_id) else { return };
+        let busy = self
+            .stmts
+            .values()
+            .any(|s| s.db == db_id && !s.ptr.is_null());
+        let Some(db) = self.dbs.get_mut(&db_id) else {
+            return;
+        };
         if !db.closed || db.ptr.is_null() || busy {
             return;
         }
@@ -130,35 +137,113 @@ macro_rules! code_names {
 
 /// `SQLITE_CONSTRAINT_UNIQUE` and friends for an extended result code.
 fn code_name(code: c_int) -> Option<&'static str> {
-    code_names!(code,
-        SQLITE_ERROR, SQLITE_INTERNAL, SQLITE_PERM, SQLITE_ABORT, SQLITE_BUSY, SQLITE_LOCKED,
-        SQLITE_NOMEM, SQLITE_READONLY, SQLITE_INTERRUPT, SQLITE_IOERR, SQLITE_CORRUPT,
-        SQLITE_NOTFOUND, SQLITE_FULL, SQLITE_CANTOPEN, SQLITE_PROTOCOL, SQLITE_EMPTY, SQLITE_SCHEMA,
-        SQLITE_TOOBIG, SQLITE_CONSTRAINT, SQLITE_MISMATCH, SQLITE_MISUSE, SQLITE_NOLFS, SQLITE_AUTH,
-        SQLITE_FORMAT, SQLITE_RANGE, SQLITE_NOTADB, SQLITE_NOTICE, SQLITE_WARNING,
-        SQLITE_ERROR_MISSING_COLLSEQ, SQLITE_ERROR_RETRY, SQLITE_ERROR_SNAPSHOT,
-        SQLITE_IOERR_READ, SQLITE_IOERR_SHORT_READ, SQLITE_IOERR_WRITE, SQLITE_IOERR_FSYNC,
-        SQLITE_IOERR_DIR_FSYNC, SQLITE_IOERR_TRUNCATE, SQLITE_IOERR_FSTAT, SQLITE_IOERR_UNLOCK,
-        SQLITE_IOERR_RDLOCK, SQLITE_IOERR_DELETE, SQLITE_IOERR_BLOCKED, SQLITE_IOERR_NOMEM,
-        SQLITE_IOERR_ACCESS, SQLITE_IOERR_CHECKRESERVEDLOCK, SQLITE_IOERR_LOCK, SQLITE_IOERR_CLOSE,
-        SQLITE_IOERR_DIR_CLOSE, SQLITE_IOERR_SHMOPEN, SQLITE_IOERR_SHMSIZE, SQLITE_IOERR_SHMLOCK,
-        SQLITE_IOERR_SHMMAP, SQLITE_IOERR_SEEK, SQLITE_IOERR_DELETE_NOENT, SQLITE_IOERR_MMAP,
-        SQLITE_IOERR_GETTEMPPATH, SQLITE_IOERR_CONVPATH, SQLITE_IOERR_VNODE, SQLITE_IOERR_AUTH,
-        SQLITE_IOERR_BEGIN_ATOMIC, SQLITE_IOERR_COMMIT_ATOMIC, SQLITE_IOERR_ROLLBACK_ATOMIC,
-        SQLITE_IOERR_DATA, SQLITE_IOERR_CORRUPTFS, SQLITE_IOERR_IN_PAGE,
-        SQLITE_LOCKED_SHAREDCACHE, SQLITE_LOCKED_VTAB, SQLITE_BUSY_RECOVERY, SQLITE_BUSY_SNAPSHOT,
-        SQLITE_BUSY_TIMEOUT, SQLITE_CANTOPEN_NOTEMPDIR, SQLITE_CANTOPEN_ISDIR,
-        SQLITE_CANTOPEN_FULLPATH, SQLITE_CANTOPEN_CONVPATH, SQLITE_CANTOPEN_DIRTYWAL,
-        SQLITE_CANTOPEN_SYMLINK, SQLITE_CORRUPT_VTAB, SQLITE_CORRUPT_SEQUENCE, SQLITE_CORRUPT_INDEX,
-        SQLITE_READONLY_RECOVERY, SQLITE_READONLY_CANTLOCK, SQLITE_READONLY_ROLLBACK,
-        SQLITE_READONLY_DBMOVED, SQLITE_READONLY_CANTINIT, SQLITE_READONLY_DIRECTORY,
-        SQLITE_ABORT_ROLLBACK, SQLITE_CONSTRAINT_CHECK, SQLITE_CONSTRAINT_COMMITHOOK,
-        SQLITE_CONSTRAINT_FOREIGNKEY, SQLITE_CONSTRAINT_FUNCTION, SQLITE_CONSTRAINT_NOTNULL,
-        SQLITE_CONSTRAINT_PRIMARYKEY, SQLITE_CONSTRAINT_TRIGGER, SQLITE_CONSTRAINT_UNIQUE,
-        SQLITE_CONSTRAINT_VTAB, SQLITE_CONSTRAINT_ROWID, SQLITE_CONSTRAINT_PINNED,
-        SQLITE_CONSTRAINT_DATATYPE, SQLITE_NOTICE_RECOVER_WAL, SQLITE_NOTICE_RECOVER_ROLLBACK,
-        SQLITE_NOTICE_RBU, SQLITE_WARNING_AUTOINDEX, SQLITE_AUTH_USER,
-        SQLITE_OK_LOAD_PERMANENTLY, SQLITE_OK_SYMLINK,
+    code_names!(
+        code,
+        SQLITE_ERROR,
+        SQLITE_INTERNAL,
+        SQLITE_PERM,
+        SQLITE_ABORT,
+        SQLITE_BUSY,
+        SQLITE_LOCKED,
+        SQLITE_NOMEM,
+        SQLITE_READONLY,
+        SQLITE_INTERRUPT,
+        SQLITE_IOERR,
+        SQLITE_CORRUPT,
+        SQLITE_NOTFOUND,
+        SQLITE_FULL,
+        SQLITE_CANTOPEN,
+        SQLITE_PROTOCOL,
+        SQLITE_EMPTY,
+        SQLITE_SCHEMA,
+        SQLITE_TOOBIG,
+        SQLITE_CONSTRAINT,
+        SQLITE_MISMATCH,
+        SQLITE_MISUSE,
+        SQLITE_NOLFS,
+        SQLITE_AUTH,
+        SQLITE_FORMAT,
+        SQLITE_RANGE,
+        SQLITE_NOTADB,
+        SQLITE_NOTICE,
+        SQLITE_WARNING,
+        SQLITE_ERROR_MISSING_COLLSEQ,
+        SQLITE_ERROR_RETRY,
+        SQLITE_ERROR_SNAPSHOT,
+        SQLITE_IOERR_READ,
+        SQLITE_IOERR_SHORT_READ,
+        SQLITE_IOERR_WRITE,
+        SQLITE_IOERR_FSYNC,
+        SQLITE_IOERR_DIR_FSYNC,
+        SQLITE_IOERR_TRUNCATE,
+        SQLITE_IOERR_FSTAT,
+        SQLITE_IOERR_UNLOCK,
+        SQLITE_IOERR_RDLOCK,
+        SQLITE_IOERR_DELETE,
+        SQLITE_IOERR_BLOCKED,
+        SQLITE_IOERR_NOMEM,
+        SQLITE_IOERR_ACCESS,
+        SQLITE_IOERR_CHECKRESERVEDLOCK,
+        SQLITE_IOERR_LOCK,
+        SQLITE_IOERR_CLOSE,
+        SQLITE_IOERR_DIR_CLOSE,
+        SQLITE_IOERR_SHMOPEN,
+        SQLITE_IOERR_SHMSIZE,
+        SQLITE_IOERR_SHMLOCK,
+        SQLITE_IOERR_SHMMAP,
+        SQLITE_IOERR_SEEK,
+        SQLITE_IOERR_DELETE_NOENT,
+        SQLITE_IOERR_MMAP,
+        SQLITE_IOERR_GETTEMPPATH,
+        SQLITE_IOERR_CONVPATH,
+        SQLITE_IOERR_VNODE,
+        SQLITE_IOERR_AUTH,
+        SQLITE_IOERR_BEGIN_ATOMIC,
+        SQLITE_IOERR_COMMIT_ATOMIC,
+        SQLITE_IOERR_ROLLBACK_ATOMIC,
+        SQLITE_IOERR_DATA,
+        SQLITE_IOERR_CORRUPTFS,
+        SQLITE_IOERR_IN_PAGE,
+        SQLITE_LOCKED_SHAREDCACHE,
+        SQLITE_LOCKED_VTAB,
+        SQLITE_BUSY_RECOVERY,
+        SQLITE_BUSY_SNAPSHOT,
+        SQLITE_BUSY_TIMEOUT,
+        SQLITE_CANTOPEN_NOTEMPDIR,
+        SQLITE_CANTOPEN_ISDIR,
+        SQLITE_CANTOPEN_FULLPATH,
+        SQLITE_CANTOPEN_CONVPATH,
+        SQLITE_CANTOPEN_DIRTYWAL,
+        SQLITE_CANTOPEN_SYMLINK,
+        SQLITE_CORRUPT_VTAB,
+        SQLITE_CORRUPT_SEQUENCE,
+        SQLITE_CORRUPT_INDEX,
+        SQLITE_READONLY_RECOVERY,
+        SQLITE_READONLY_CANTLOCK,
+        SQLITE_READONLY_ROLLBACK,
+        SQLITE_READONLY_DBMOVED,
+        SQLITE_READONLY_CANTINIT,
+        SQLITE_READONLY_DIRECTORY,
+        SQLITE_ABORT_ROLLBACK,
+        SQLITE_CONSTRAINT_CHECK,
+        SQLITE_CONSTRAINT_COMMITHOOK,
+        SQLITE_CONSTRAINT_FOREIGNKEY,
+        SQLITE_CONSTRAINT_FUNCTION,
+        SQLITE_CONSTRAINT_NOTNULL,
+        SQLITE_CONSTRAINT_PRIMARYKEY,
+        SQLITE_CONSTRAINT_TRIGGER,
+        SQLITE_CONSTRAINT_UNIQUE,
+        SQLITE_CONSTRAINT_VTAB,
+        SQLITE_CONSTRAINT_ROWID,
+        SQLITE_CONSTRAINT_PINNED,
+        SQLITE_CONSTRAINT_DATATYPE,
+        SQLITE_NOTICE_RECOVER_WAL,
+        SQLITE_NOTICE_RECOVER_ROLLBACK,
+        SQLITE_NOTICE_RBU,
+        SQLITE_WARNING_AUTOINDEX,
+        SQLITE_AUTH_USER,
+        SQLITE_OK_LOAD_PERMANENTLY,
+        SQLITE_OK_SYMLINK,
     )
 }
 
@@ -167,7 +252,9 @@ fn lossy(text: *const c_char) -> String {
         return String::new();
     }
     // SAFETY: SQLite returns NUL-terminated strings valid until the next call.
-    unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned()
+    unsafe { CStr::from_ptr(text) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Bun's `SQLiteError` for the connection's last error: the message, a
@@ -178,7 +265,11 @@ fn sqlite_error(db: *mut ffi::sqlite3) -> NativeError {
     }
     // SAFETY: `db` is a connection handle (open or failed to open).
     let (code, offset, message) = unsafe {
-        (ffi::sqlite3_extended_errcode(db), ffi::sqlite3_error_offset(db), lossy(ffi::sqlite3_errmsg(db)))
+        (
+            ffi::sqlite3_extended_errcode(db),
+            ffi::sqlite3_error_offset(db),
+            lossy(ffi::sqlite3_errmsg(db)),
+        )
     };
     let mut err = NativeError::error(message).named("SQLiteError");
     if let Some(name) = code_name(code) {
@@ -199,7 +290,9 @@ fn bind_value(stmt: *mut ffi::sqlite3_stmt, index: c_int, value: &Val) -> Result
         Val::Bool(b) => unsafe { ffi::sqlite3_bind_int(stmt, index, *b as c_int) },
         Val::Num(f) => {
             let f = *f;
-            let integral = f.fract() == 0.0 && f.abs() < 9007199254740992.0 && !(f == 0.0 && f.is_sign_negative());
+            let integral = f.fract() == 0.0
+                && f.abs() < 9007199254740992.0
+                && !(f == 0.0 && f.is_sign_negative());
             match integral {
                 true => unsafe { ffi::sqlite3_bind_int64(stmt, index, f as i64) },
                 false => unsafe { ffi::sqlite3_bind_double(stmt, index, f) },
@@ -218,10 +311,26 @@ fn bind_value(stmt: *mut ffi::sqlite3_stmt, index: c_int, value: &Val) -> Result
             )
         },
         Val::Bytes(bytes) => {
-            let data = if bytes.is_empty() { c"".as_ptr().cast() } else { bytes.as_ptr().cast() };
-            unsafe { ffi::sqlite3_bind_blob64(stmt, index, data, bytes.len() as u64, ffi::SQLITE_TRANSIENT()) }
+            let data = if bytes.is_empty() {
+                c"".as_ptr().cast()
+            } else {
+                bytes.as_ptr().cast()
+            };
+            unsafe {
+                ffi::sqlite3_bind_blob64(
+                    stmt,
+                    index,
+                    data,
+                    bytes.len() as u64,
+                    ffi::SQLITE_TRANSIENT(),
+                )
+            }
         }
-        _ => return Err(NativeError::type_error("Binding expected string, TypedArray, boolean, number, bigint or null")),
+        _ => {
+            return Err(NativeError::type_error(
+                "Binding expected string, TypedArray, boolean, number, bigint or null",
+            ));
+        }
     };
     if rc != ffi::SQLITE_OK {
         let db = unsafe { ffi::sqlite3_db_handle(stmt) };
@@ -256,13 +365,21 @@ fn column(stmt: *mut ffi::sqlite3_stmt, i: c_int, safe: bool) -> Val {
             ffi::SQLITE_TEXT => {
                 let data = ffi::sqlite3_column_text(stmt, i);
                 let len = ffi::sqlite3_column_bytes(stmt, i) as usize;
-                let bytes = if data.is_null() { &[][..] } else { std::slice::from_raw_parts(data, len) };
+                let bytes = if data.is_null() {
+                    &[][..]
+                } else {
+                    std::slice::from_raw_parts(data, len)
+                };
                 Val::Str(String::from_utf8_lossy(bytes).into_owned())
             }
             ffi::SQLITE_BLOB => {
                 let data = ffi::sqlite3_column_blob(stmt, i).cast::<u8>();
                 let len = ffi::sqlite3_column_bytes(stmt, i) as usize;
-                Val::Bytes(if data.is_null() { Vec::new() } else { std::slice::from_raw_parts(data, len).to_vec() })
+                Val::Bytes(if data.is_null() {
+                    Vec::new()
+                } else {
+                    std::slice::from_raw_parts(data, len).to_vec()
+                })
             }
             _ => Val::Null,
         }
@@ -278,7 +395,11 @@ fn raw_column(stmt: *mut ffi::sqlite3_stmt, i: c_int) -> Val {
             ffi::SQLITE_TEXT | ffi::SQLITE_BLOB => {
                 let data = ffi::sqlite3_column_blob(stmt, i).cast::<u8>();
                 let len = ffi::sqlite3_column_bytes(stmt, i) as usize;
-                if data.is_null() { Vec::new() } else { std::slice::from_raw_parts(data, len).to_vec() }
+                if data.is_null() {
+                    Vec::new()
+                } else {
+                    std::slice::from_raw_parts(data, len).to_vec()
+                }
             }
             _ => return Val::Null,
         }
@@ -289,7 +410,9 @@ fn raw_column(stmt: *mut ffi::sqlite3_stmt, i: c_int) -> Val {
 fn column_names(stmt: *mut ffi::sqlite3_stmt) -> Vec<String> {
     // SAFETY: `stmt` is live.
     let count = unsafe { ffi::sqlite3_column_count(stmt) };
-    (0..count).map(|i| lossy(unsafe { ffi::sqlite3_column_name(stmt, i) })).collect()
+    (0..count)
+        .map(|i| lossy(unsafe { ffi::sqlite3_column_name(stmt, i) }))
+        .collect()
 }
 
 /// How rows come back to JS.
@@ -311,7 +434,13 @@ fn row(stmt: *mut ffi::sqlite3_stmt, names: &[String], shape: Shape, safe: bool)
             .collect();
         return Val::Array(values);
     }
-    Val::Object(names.iter().enumerate().map(|(i, name)| (name.clone(), column(stmt, i as c_int, safe))).collect())
+    Val::Object(
+        names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.clone(), column(stmt, i as c_int, safe)))
+            .collect(),
+    )
 }
 
 fn step(stmt: *mut ffi::sqlite3_stmt) -> Result<bool> {
@@ -330,8 +459,16 @@ fn step(stmt: *mut ffi::sqlite3_stmt) -> Result<bool> {
 
 fn changes(db: *mut ffi::sqlite3, before: i64, safe: bool) -> Val {
     // SAFETY: `db` is open.
-    let (after, rowid) = unsafe { (ffi::sqlite3_total_changes64(db), ffi::sqlite3_last_insert_rowid(db)) };
-    Val::Array(vec![Val::Num((after - before) as f64), integer(rowid, safe)])
+    let (after, rowid) = unsafe {
+        (
+            ffi::sqlite3_total_changes64(db),
+            ffi::sqlite3_last_insert_rowid(db),
+        )
+    };
+    Val::Array(vec![
+        Val::Num((after - before) as f64),
+        integer(rowid, safe),
+    ])
 }
 
 // --- natives ----------------------------------------------------------------
@@ -341,7 +478,14 @@ fn prepare_raw(db: *mut ffi::sqlite3, sql: &str, flags: u32) -> Result<*mut ffi:
     let mut stmt = ptr::null_mut();
     // SAFETY: `db` is open; SQLite reads `sql.len()` bytes.
     let rc = unsafe {
-        ffi::sqlite3_prepare_v3(db, sql.as_ptr().cast(), sql.len() as c_int, flags, &mut stmt, ptr::null_mut())
+        ffi::sqlite3_prepare_v3(
+            db,
+            sql.as_ptr().cast(),
+            sql.len() as c_int,
+            flags,
+            &mut stmt,
+            ptr::null_mut(),
+        )
     };
     if rc != ffi::SQLITE_OK {
         return Err(sqlite_error(db));
@@ -364,7 +508,11 @@ const SKIPPED: fn(u8) -> bool = |c| c == b' ' || c == b';' || (b'\t'..=b'\r').co
 /// Prepare the next statement of `bytes` at `offset`. Returns the statement
 /// (null for text without one, e.g. a comment) and the bytes consumed, or
 /// None when only separators are left.
-fn prepare_next(db: *mut ffi::sqlite3, bytes: &[u8], offset: &mut usize) -> Result<Option<(Transient, usize)>> {
+fn prepare_next(
+    db: *mut ffi::sqlite3,
+    bytes: &[u8],
+    offset: &mut usize,
+) -> Result<Option<(Transient, usize)>> {
     while *offset < bytes.len() && SKIPPED(bytes[*offset]) {
         *offset += 1;
     }
@@ -376,7 +524,16 @@ fn prepare_next(db: *mut ffi::sqlite3, bytes: &[u8], offset: &mut usize) -> Resu
     let mut tail: *const c_char = ptr::null();
     // SAFETY: `db` is open; SQLite reads `rest.len()` bytes and points
     // `tail` into them.
-    let rc = unsafe { ffi::sqlite3_prepare_v3(db, rest.as_ptr().cast(), rest.len() as c_int, 0, &mut stmt, &mut tail) };
+    let rc = unsafe {
+        ffi::sqlite3_prepare_v3(
+            db,
+            rest.as_ptr().cast(),
+            rest.len() as c_int,
+            0,
+            &mut stmt,
+            &mut tail,
+        )
+    };
     if rc != ffi::SQLITE_OK {
         return Err(sqlite_error(db));
     }
@@ -432,7 +589,9 @@ fn exec(reg: &Shared, id: u32, sql: &str, values: Option<&[Val]>, safe: bool) ->
         offset += consumed.max(1);
     }
     if !executed {
-        return Err(throw_error("Query contained no valid SQL statement; likely empty query."));
+        return Err(throw_error(
+            "Query contained no valid SQL statement; likely empty query.",
+        ));
     }
     Ok(changes(db, before, safe))
 }
@@ -443,7 +602,11 @@ fn param_names(stmt: *mut ffi::sqlite3_stmt) -> Val {
     let names = (1..=count)
         .map(|i| {
             let name = unsafe { ffi::sqlite3_bind_parameter_name(stmt, i) };
-            if name.is_null() { Val::Null } else { Val::Str(lossy(name)) }
+            if name.is_null() {
+                Val::Null
+            } else {
+                Val::Str(lossy(name))
+            }
         })
         .collect();
     Val::Array(names)
@@ -473,11 +636,13 @@ fn handle(a: &Args<'_>, i: usize) -> Result<u32> {
 fn install_databases(t: &mut Table, reg: &Shared) {
     let r = reg.clone();
     t.add("sqlite.open", move |a| {
-        let path = CString::new(a.str(0)?).map_err(|_| NativeError::type_error("Expected a path without NUL bytes"))?;
+        let path = CString::new(a.str(0)?)
+            .map_err(|_| NativeError::type_error("Expected a path without NUL bytes"))?;
         let flags = a.i32(1)?;
         let mut db = ptr::null_mut();
         // SAFETY: valid C strings; `db` receives a connection (even on error).
-        let rc = unsafe { ffi::sqlite3_open_v2(path.as_ptr(), &mut db, flags, c"unix-none".as_ptr()) };
+        let rc =
+            unsafe { ffi::sqlite3_open_v2(path.as_ptr(), &mut db, flags, c"unix-none".as_ptr()) };
         if rc != ffi::SQLITE_OK {
             let err = sqlite_error(db);
             unsafe { sqlite3_close_v2(db) };
@@ -486,7 +651,12 @@ fn install_databases(t: &mut Table, reg: &Shared) {
         // SAFETY: `db` is open.
         unsafe {
             ffi::sqlite3_extended_result_codes(db, 1);
-            ffi::sqlite3_db_config(db, ffi::SQLITE_DBCONFIG_DEFENSIVE, 1, ptr::null_mut::<c_int>());
+            ffi::sqlite3_db_config(
+                db,
+                ffi::SQLITE_DBCONFIG_DEFENSIVE,
+                1,
+                ptr::null_mut::<c_int>(),
+            );
         }
         Ok(r.borrow_mut().add_db(db).into())
     });
@@ -500,7 +670,13 @@ fn install_databases(t: &mut Table, reg: &Shared) {
         // SAFETY: opens an empty in-memory database, then hands it a copy of
         // the image in SQLite's own allocation (freed on close).
         unsafe {
-            if ffi::sqlite3_open_v2(c":memory:".as_ptr(), &mut db, ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE, ptr::null()) != ffi::SQLITE_OK {
+            if ffi::sqlite3_open_v2(
+                c":memory:".as_ptr(),
+                &mut db,
+                ffi::SQLITE_OPEN_READWRITE | ffi::SQLITE_OPEN_CREATE,
+                ptr::null(),
+            ) != ffi::SQLITE_OK
+            {
                 sqlite3_close_v2(db);
                 return Err(throw_error("Failed to open SQLite"));
             }
@@ -510,12 +686,15 @@ fn install_databases(t: &mut Table, reg: &Shared) {
                 return Err(throw_error("Failed to allocate memory"));
             }
             ptr::copy_nonoverlapping(bytes.as_ptr(), image, bytes.len());
-            let mut flags = ffi::SQLITE_DESERIALIZE_FREEONCLOSE | ffi::SQLITE_DESERIALIZE_RESIZEABLE;
+            let mut flags =
+                ffi::SQLITE_DESERIALIZE_FREEONCLOSE | ffi::SQLITE_DESERIALIZE_RESIZEABLE;
             if a.bool(1) {
                 flags |= ffi::SQLITE_DESERIALIZE_READONLY;
             }
             let len = bytes.len() as i64;
-            if ffi::sqlite3_deserialize(db, c"main".as_ptr(), image, len, len, flags as u32) != ffi::SQLITE_OK {
+            if ffi::sqlite3_deserialize(db, c"main".as_ptr(), image, len, len, flags)
+                != ffi::SQLITE_OK
+            {
                 let err = sqlite_error(db);
                 sqlite3_close_v2(db);
                 return Err(err);
@@ -527,7 +706,8 @@ fn install_databases(t: &mut Table, reg: &Shared) {
     let r = reg.clone();
     t.add("sqlite.serialize", move |a| {
         let db = r.borrow().open_db(handle(&a, 0)?)?;
-        let schema = CString::new(a.str(1)?).map_err(|_| NativeError::type_error("Expected a schema name"))?;
+        let schema = CString::new(a.str(1)?)
+            .map_err(|_| NativeError::type_error("Expected a schema name"))?;
         let mut size: i64 = 0;
         // SAFETY: `db` is open; the returned buffer is ours to free.
         let bytes = unsafe {
@@ -574,13 +754,20 @@ fn install_databases(t: &mut Table, reg: &Shared) {
         Ok((unsafe { ffi::sqlite3_get_autocommit(db) } == 0).into())
     });
     let r = reg.clone();
-    t.add("sqlite.firstParamNames", move |a| first_param_names(&r, handle(&a, 0)?, a.str(1)?));
+    t.add("sqlite.firstParamNames", move |a| {
+        first_param_names(&r, handle(&a, 0)?, a.str(1)?)
+    });
     let r = reg.clone();
-    t.add("sqlite.exec", move |a| exec(&r, handle(&a, 0)?, a.str(1)?, a.array(2), a.bool(3)));
+    t.add("sqlite.exec", move |a| {
+        exec(&r, handle(&a, 0)?, a.str(1)?, a.array(2), a.bool(3))
+    });
     let r = reg.clone();
     t.add("sqlite.prepare", move |a| {
         let id = handle(&a, 0)?;
-        let db = r.borrow().open_db(id).map_err(|_| NativeError::range_error("Cannot use a closed database"))?;
+        let db = r
+            .borrow()
+            .open_db(id)
+            .map_err(|_| NativeError::range_error("Cannot use a closed database"))?;
         let stmt = prepare_raw(db, a.str(1)?, a.u32(2)?)?;
         if stmt.is_null() {
             return Err(NativeError::range_error("Invalid SQL statement"));
@@ -588,7 +775,16 @@ fn install_databases(t: &mut Table, reg: &Shared) {
         let mut reg = r.borrow_mut();
         reg.next_id += 1;
         let h = reg.next_id;
-        reg.stmts.insert(h, Stmt { ptr: stmt, db: id, owned: a.bool(3), finalized_by_close: false, executed: false });
+        reg.stmts.insert(
+            h,
+            Stmt {
+                ptr: stmt,
+                db: id,
+                owned: a.bool(3),
+                finalized_by_close: false,
+                executed: false,
+            },
+        );
         Ok(h.into())
     });
 }
@@ -674,11 +870,15 @@ fn install_statements(t: &mut Table, reg: &Shared) {
         Ok(Val::Undefined)
     });
     let r = reg.clone();
-    t.add("sqlite.paramNames", move |a| Ok(param_names(r.borrow().live_stmt(handle(&a, 0)?)?)));
+    t.add("sqlite.paramNames", move |a| {
+        Ok(param_names(r.borrow().live_stmt(handle(&a, 0)?)?))
+    });
     let r = reg.clone();
     t.add("sqlite.columns", move |a| {
         let stmt = r.borrow().live_stmt(handle(&a, 0)?)?;
-        Ok(Val::Array(column_names(stmt).into_iter().map(Val::Str).collect()))
+        Ok(Val::Array(
+            column_names(stmt).into_iter().map(Val::Str).collect(),
+        ))
     });
     let r = reg.clone();
     t.add("sqlite.columnTypes", move |a| {
@@ -704,14 +904,20 @@ fn install_statements(t: &mut Table, reg: &Shared) {
         let id = handle(&a, 0)?;
         let stmt = r.borrow().live_stmt(id)?;
         if !r.borrow().stmts.get(&id).is_some_and(|s| s.executed) {
-            return Err(throw_error("Statement must be executed before accessing declaredTypes"));
+            return Err(throw_error(
+                "Statement must be executed before accessing declaredTypes",
+            ));
         }
         // SAFETY: `stmt` is live.
         let count = unsafe { ffi::sqlite3_column_count(stmt) };
         let types = (0..count)
             .map(|i| {
                 let decl = unsafe { ffi::sqlite3_column_decltype(stmt, i) };
-                if decl.is_null() { Val::Null } else { Val::Str(lossy(decl)) }
+                if decl.is_null() {
+                    Val::Null
+                } else {
+                    Val::Str(lossy(decl))
+                }
             })
             .collect();
         Ok(Val::Array(types))
@@ -736,7 +942,11 @@ fn install_statements(t: &mut Table, reg: &Shared) {
     let r = reg.clone();
     t.add("sqlite.isFinalized", move |a| {
         let id = handle(&a, 0)?;
-        Ok(r.borrow().stmts.get(&id).is_none_or(|s| s.ptr.is_null()).into())
+        Ok(r.borrow()
+            .stmts
+            .get(&id)
+            .is_none_or(|s| s.ptr.is_null())
+            .into())
     });
     let r = reg.clone();
     t.add("sqlite.finalize", move |a| {

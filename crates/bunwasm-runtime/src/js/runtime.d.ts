@@ -1,5 +1,59 @@
 declare namespace BunWasm {
+  type FunctionKind = "normal" | "async" | "generator" | "async-generator";
+  type PrepareGoal = "script" | "eval" | "wrapper";
+  interface PreparedSource {
+    version: number;
+    alreadyPrepared: boolean;
+    edits: Int32Array;
+    columns: Int32Array;
+    fallback: string | null;
+    spreadEval: number;
+    unhookedAwaitUsing: number;
+  }
+  interface PreparedColumns { version: number; columns: Int32Array; }
+  interface Internal {
+    mainPath: string;
+    prepareText(source: string, goal: PrepareGoal, origin: string, name?: string): string;
+    prepareFunctionArgs(args: string[], kind: FunctionKind, name?: string): string[];
+    preparedColumns: Map<string, PreparedColumns>;
+    preparation: {
+      version: number; realm: string; counters: Record<string, number>;
+      correctPosition(name: string, line: number, column: number): number;
+      cacheBytes(): number; columnBytes(): number;
+    };
+  }
   interface Native {
+    readonly prepareVersion: number;
+    readonly contextHooks: boolean;
+    readonly preparedColumns: Map<string, PreparedColumns>;
+    preparedSourceURL(version: number, name: string, columns: readonly number[], origin: string): string;
+    preparedSourceName(filename: unknown): string | undefined;
+    preparedSourceOrigin(filename: unknown): string | undefined;
+    correctPreparedColumn(filename: string, line: number, column: number): number;
+    prepareSource(source: string, goal: PrepareGoal): string;
+    prepareFunction(args: readonly string[], kind: FunctionKind, hooks: boolean): string;
+    resolve(specifier: string, referrer: string, require: boolean): string;
+    importModule(path: string): Promise<unknown>;
+    utf8Encode(value: string): Uint8Array<ArrayBuffer>;
+    nodePath: {
+      resolveWindows(cwd: Uint8Array, paths: Uint8Array[]): Uint8Array;
+      lexical(windows: boolean, operation: "isAbsolute", path: Uint8Array): boolean;
+      lexical(windows: boolean, operation: "parse", path: Uint8Array): Record<"root" | "dir" | "base" | "ext" | "name", Uint8Array>;
+      lexical(windows: boolean, operation: "basename" | "dirname" | "extname" | "normalize", path: Uint8Array, suffix?: Uint8Array): Uint8Array;
+      join(windows: boolean, paths: Uint8Array[]): Uint8Array;
+      relative(windows: boolean, from: Uint8Array, to: Uint8Array): Uint8Array;
+    };
+    hostCaps: Record<string, boolean>;
+    hostLocalAddr(handle: number): string | number;
+    hostListenPath(path: string, flags: number): number;
+    hostConnectPath(path: string): number;
+    hostLookupStart?(hostname: string, family: 0 | 4 | 6, hints: number): number;
+    hostLookupHead?(handle: number): string | number;
+    /** Browser host only: switch the attached terminal session between raw and cooked input.
+     * Returns a Waffle terminal failure code, or undefined when the mode changed. */
+    terminalSetRawMode?(raw: boolean): string | undefined;
+    hostLookup?: (hostname: string, family: 0 | 4 | 6, hints: number) => Promise<Array<{ address: string; family: 4 | 6 }>>;
+    hostClose(handle: number): number;
     registerObjectModule(name: string): string;
     clearObjectModules(): void;
     readonly engine: "quickjs" | "jsc" | "host";
@@ -16,6 +70,9 @@ declare namespace BunWasm {
   type GlobScanOptions = Parameters<Native["globScan"]> extends [pattern: string, ...options: infer Options] ? Options : never;
 
   interface Internal {
+    defineGlobal(name: string, value: unknown): void;
+    require(name: "builtins"): { "bun:jsc": () => { callerSourceOrigin(): string | null } };
+    require(name: "node_url"): { fileURLToPath(url: string | URL): string };
     readonly native: Native;
     readonly builtinFactories: Record<string, () => object>;
     readonly realTimers: {
@@ -24,9 +81,25 @@ declare namespace BunWasm {
       setImmediate(callback: () => void): unknown;
       clearImmediate(handle: unknown): void;
     };
+    require(name: "net_address"): {
+      isIP(value: string): 0 | 4 | 6;
+      isIPv6(value: string): boolean;
+      port(value?: unknown): number;
+      error<T extends Error>(Ctor: new(message: string) => T, code: string, message: string): T & { code: string };
+    };
     require(name: "path"): { resolve(...paths: string[]): string; dirname(path: string): string; basename(path: string): string };
     runInContext(context: unknown, callback: (...args: unknown[]) => unknown, receiver: unknown, args: unknown[]): unknown;
     handleUncaught(error: unknown): boolean;
+  }
+  interface AsyncResourceOptions { triggerAsyncId?: number; requireManualDestroy?: boolean }
+  interface AsyncResource {
+    runInAsyncScope<Args extends unknown[], Result>(callback: (...args: Args) => Result, receiver: unknown, ...args: Args): Result;
+    asyncId(): number;
+    triggerAsyncId(): number;
+    emitDestroy(): this;
+  }
+  interface Internal {
+    builtin(name: "node:async_hooks"): { AsyncResource: { new(type: string, options?: AsyncResourceOptions): AsyncResource } };
   }
   type EventListener = (...args: unknown[]) => void;
   interface NodeEmitter {
@@ -45,14 +118,35 @@ declare namespace BunWasm {
     setMaxListeners(this: object, count: number): unknown;
   }
   interface Internal {
-    require(name: "events"): { new(): NodeEmitter; call(target: object): void; prototype: NodeEmitter };
+    require(name: "events"): { new(options?: { captureRejections?: boolean }): NodeEmitter; call(target: object): void; prototype: NodeEmitter };
+    require(name: "v8"): { serialize(value: unknown): BufferBytes; deserialize(value: unknown): unknown };
     require(name: "structured_clone"): { structuredClone(value: unknown, options?: unknown): unknown };
     messagePortRefs: number;
     isMarkedAsUntransferable?: (value: unknown) => boolean;
   }
 }
 
-declare const process: { cwd(): string };
+declare namespace BunWasm {
+  interface ColorStream { hasColors?(): boolean; isTTY?: boolean }
+  interface RuntimeProcess {
+    cwd(): string;
+    nextTick?(callback: (this: unknown, ...args: unknown[]) => unknown, ...args: unknown[]): void;
+    emitWarning?(warning: Error): void;
+    emitWarning?(message: string, kind?: string, code?: string): void;
+    noDeprecation?: boolean;
+    throwDeprecation?: boolean;
+    pid?: number;
+    env?: Record<string, string | undefined>;
+    stdout?: ColorStream;
+    stderr?: WorkerWritable;
+    argv?: string[];
+  }
+}
+
+declare var process: BunWasm.RuntimeProcess & {
+  stdout: BunWasm.WorkerWritable;
+  stderr: BunWasm.WorkerWritable;
+};
 declare const Buffer: unknown;
 declare function setImmediate(callback: () => void): unknown;
 
@@ -61,6 +155,7 @@ declare namespace BunWasm {
   interface BufferConstructor {
     from(data: unknown, encodingOrOffset?: string | number, length?: number): BufferBytes;
     isEncoding(encoding: string): boolean;
+    isBuffer(value: unknown): value is BufferBytes;
   }
   interface CompressionTransform extends NodeEmitter {
     readonly destroyed: boolean;
@@ -101,6 +196,7 @@ declare namespace BunWasm {
       /** Bun's CompressionStreamCoder: (format, decompress, highWaterMark, level). */
       webCodec(format: string, decompress: boolean, highWaterMark: number, level?: number): number;
       webStep(handle: number, data: Uint8Array, finish: boolean): { bytes: Uint8Array; more: boolean };
+      decoder(label: string, fatal: boolean, ignoreBOM: boolean): { id: number; encoding: string };
       push(handle: number, data: Uint8Array, last: boolean): string;
       release(handle: number): void;
     };
@@ -115,16 +211,16 @@ declare namespace BunWasm {
     describe(value: unknown): string;
     nextTick(callback: (...args: unknown[]) => void, ...args: unknown[]): void;
     toUint8(value: ArrayBuffer | ArrayBufferView): Uint8Array;
-    concatBytes(chunks: Uint8Array[]): Uint8Array;
+    concatBytes(chunks: readonly Uint8Array[]): Uint8Array<ArrayBuffer>;
     require(name: "buffer"): { Buffer: BufferConstructor; kMaxLength?: number };
     require(name: "bun"): { isMainThread: boolean; write(path: unknown, data: Uint8Array): Promise<number> };
     builtin(name: "node:stream"): {
       Transform: CompressionConstructor;
-      Readable: new(options: { read(): void }) => WorkerReadable;
-      Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: () => void): void }) => WorkerWritable;
+      Readable: new(options: { read(): void; highWaterMark?: number; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => NodeReadable;
+      Writable: new(options: { write(chunk: unknown, encoding: string, callback: (error?: unknown) => void): void; final(callback: (error?: unknown) => void): void; destroy?(error: unknown, callback: (error?: unknown) => void): void }) => WorkerWritable;
     };
   }
-  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void } } }
+  interface Internal { web: { Response: { _setUrl(response: Response, url: string): void }; URLSearchParams: new (init: object) => URLSearchParams } }
   type HTMLHandlerKind = "element" | "comments" | "text" | "doctype" | "end" | "endTag";
   interface HTMLStepEvent { handler: number; kind: HTMLHandlerKind }
   interface HTMLStep { output: Uint8Array; event?: HTMLStepEvent }
@@ -142,6 +238,33 @@ declare namespace BunWasm {
     htmlStep(id: number, action: "write" | "end" | "resume", bytes: Uint8Array): HTMLStep;
     htmlToken<K extends keyof HTMLTokenValues>(id: number, action: K, value: string, html: boolean, extra?: string | number): HTMLTokenValues[K];
     htmlClose(id: number): void;
+  }
+}
+
+declare namespace BunWasm {
+  type DataFormat = "JSON" | "JSONC" | "JSON5" | "TOML" | "YAML";
+  type TestCallback = () => unknown;
+  type TestRegistrar = (name: string, callback?: TestCallback, timeout?: number) => unknown;
+  type TestHook = (callback: TestCallback, timeout?: number) => unknown;
+  interface Native {
+    /** `fatal` throws on invalid UTF-8 instead of substituting U+FFFD. */
+    utf8Decode(bytes: Uint8Array, fatal?: boolean): string;
+  }
+  interface Internal {
+    require(name: "formats"): { parse(input: unknown, format: DataFormat): unknown };
+    require(name: "bun_test"): { exports: {
+      test: TestRegistrar & Record<"skip" | "todo" | "only", TestRegistrar>;
+      describe(name: string, callback: () => unknown): unknown;
+    } & Record<"beforeAll" | "afterAll" | "beforeEach" | "afterEach", TestHook> };
+  }
+  interface Native {
+    /** Host of `http://<domain>/` as the URL crate parses it, or "" when it does not parse. */
+    domainToASCII(domain: string): string;
+    /** Validated, normalized hostname with IDNA labels decoded, or "" for invalid input. */
+    domainToUnicode(domain: string): string;
+  }
+  interface Internal {
+    builtin(name: "node:querystring"): { parse(query: string): Record<string, unknown>; stringify(query: object): string };
   }
 }
 
@@ -174,3 +297,203 @@ declare namespace BunWasm {
     x509(op: "checkIssued" | "verify", data: Uint8Array, other: Uint8Array): boolean;
   }
 }
+
+declare function __bunwasm_dynamicImport(from: string): (specifier: string) => Promise<unknown>;
+declare namespace BunWasm {
+  interface StackFrame { file: string; name: string; line: number; column: number }
+  interface InspectOptions {
+    showHidden?: boolean; depth?: number | null; colors?: boolean; customInspect?: boolean;
+    showProxy?: boolean; maxArrayLength?: number | null; maxStringLength?: number | null;
+    breakLength?: number; compact?: boolean | number; sorted?: boolean | ((a: string, b: string) => number);
+    getters?: boolean | "get" | "set"; numericSeparator?: boolean;
+  }
+  interface InspectFunction {
+    (value: unknown, options?: InspectOptions): string;
+    defaultOptions?: InspectOptions;
+    colors?: Record<string, number[]>;
+    styles?: Record<string, string>;
+  }
+  interface ConsoleInspector {
+    nodeInspect: InspectFunction;
+    parseStack(raw: unknown): StackFrame[];
+  }
+  interface StackCallSite {
+    getFileName(): string;
+    getFunctionName(): string | null;
+    getFunction(): unknown;
+    getLineNumber(): number;
+    getColumnNumber(): number;
+    isNative(): boolean;
+    isConstructor(): boolean;
+    isToplevel(): boolean;
+    isAsync(): boolean;
+    isPromiseAll(): boolean;
+    getPromiseIndex(): number | null;
+  }
+  interface Native {
+    bunBuiltinNames(): string[];
+    bunBuiltinSource(id: number): string | undefined;
+    bunBuiltinHookName(id: number): string;
+    bunBuiltinErrorCode(id: number): string;
+    evalScript(source: string, filename: string, firstLine?: number): (intrinsics: Record<string, unknown>) => unknown;
+    isPromise(value: unknown): boolean;
+    isProxy(value: unknown): boolean;
+    isError(value: unknown): boolean;
+  }
+  interface Internal {
+    bunBuiltinGlobals: Record<string, unknown> & {
+      Array: ArrayConstructor; Error: ErrorConstructor; Function: FunctionConstructor;
+      Map: MapConstructor; Object: ObjectConstructor; Proxy: ProxyConstructor;
+      RangeError: RangeErrorConstructor; Reflect: typeof Reflect; Set: SetConstructor;
+      String: StringConstructor; Symbol: SymbolConstructor; TypeError: TypeErrorConstructor;
+      URIError: URIErrorConstructor;
+    };
+    builtin(name: "node:fs"): ShellFs;
+    builtin(name: "node:os" | "node:crypto" | "node:zlib"): { readonly constants: object };
+    builtin(name: string): unknown;
+    defineHidden(target: object, values: object): void;
+    mappedCallSites: WeakSet<object>;
+    formatCallSite(site: StackCallSite): string;
+    require(name: "inspect"): ConsoleInspector;
+  }
+  interface ShellFs {
+    readonly constants: object;
+  }
+}
+
+interface ErrorConstructor {
+  captureStackTrace(target: object, constructorOpt?: Function): void;
+  prepareStackTrace: ((target: object, raw: unknown) => unknown) | undefined;
+}
+
+declare namespace BunWasm {
+  interface FormatTemporalValue {
+    toString(options: { calendarName: string; timeZoneName: string }): string;
+  }
+  interface FormatInstant extends FormatTemporalValue {
+    epochNanoseconds: bigint;
+    toZonedDateTimeISO(offset: string): FormatTemporalValue;
+  }
+  interface Native {
+    /** Serialized tagged graph from bunwasm-transpiler/src/data.rs. */
+    parseData(bytes: Uint8Array, format: DataFormat): string;
+  }
+  interface Internal {
+    require(name: "yaml_coercion"): (value: unknown) => unknown;
+    require(name: "formats_limit"): { checkSize(input: { readonly byteLength: number }): void };
+    toUint8(value: ArrayBuffer | SharedArrayBuffer | ArrayBufferView): Uint8Array;
+  }
+}
+
+// Runtime Blob is installed by web.js, with synchronous access to its stored bytes.
+interface Blob { _bytes(): Uint8Array }
+
+declare var Bun: {
+  inspect(value: unknown): string;
+  stringWidth(value: string, options?: { ambiguousIsNarrow?: boolean; countAnsiEscapeCodes?: boolean }): number;
+};
+declare var Temporal: {
+  Instant: { from(value: string): BunWasm.FormatInstant };
+  PlainDate: { from(value: string): BunWasm.FormatTemporalValue };
+  PlainDateTime: { from(value: string): BunWasm.FormatTemporalValue };
+  PlainTime: { from(value: string): BunWasm.FormatTemporalValue };
+  ZonedDateTime: { from(value: string): BunWasm.FormatTemporalValue };
+};
+
+declare namespace BunWasm {
+  /** Exactly the values admitted by typeof callback === "function", with no argument validation. */
+  type ProcessWriteCallback = Function;
+  type ProcessCursorCallback = (error?: unknown) => void;
+  interface ProcessWriter extends NodeEmitter {
+    fd: number; writable: boolean; destroyed: boolean; isTTY: boolean; columns: number; rows: number;
+    write(chunk: unknown, encoding?: unknown, callback?: unknown): boolean;
+    end(chunk?: unknown, encoding?: unknown, callback?: unknown): ProcessWriter;
+    cork(): void; uncork(): void; setDefaultEncoding(): ProcessWriter;
+    clearLine(direction: number, callback?: ProcessCursorCallback): boolean;
+    clearScreenDown(callback?: ProcessCursorCallback): boolean;
+    cursorTo(x?: number, y?: number | ProcessCursorCallback, callback?: ProcessCursorCallback): boolean;
+    moveCursor(dx: number, dy: number, callback?: ProcessCursorCallback): boolean;
+    getColorDepth(): number; hasColors(): boolean; getWindowSize(): number[];
+    _writableState: { ended: boolean };
+  }
+  interface NodeReadable extends WorkerReadable {
+    readonly destroyed: boolean;
+    readonly readableLength: number;
+    readonly readableEnded: boolean;
+    readable: boolean;
+    setEncoding(encoding: unknown): this;
+    resume(): this; pause(): this;
+    read(size?: number): string | BufferBytes | null;
+    [Symbol.asyncIterator](): AsyncGenerator<string | BufferBytes>;
+  }
+  interface ProcessReader extends NodeReadable {
+    fd: number; isTTY: boolean; readable: boolean;
+    isRaw: boolean;
+    setRawMode(raw: boolean): ProcessReader;
+    ref(): ProcessReader; unref(): ProcessReader;
+    [Symbol.asyncIterator](): AsyncGenerator<string | BufferBytes>;
+  }
+  interface ProcessWarningOptions { type?: unknown; code?: unknown }
+  interface Native {
+    readonly platformInfo: { version: string; revision: string; arch: string };
+    /** Starts as strings; the process Proxy permits raw Symbol values and accessor results. */
+    env(): Record<PropertyKey, unknown>;
+    argv(): string[];
+    execArgv(): string[];
+    execPath(): string;
+    chdir(path: string): void;
+    nanoseconds(): number;
+    isatty(fd: number): boolean;
+    writeStdout(bytes: string | Uint8Array, flush?: boolean): void;
+    writeStderr(bytes: string | Uint8Array, flush?: boolean): void;
+    readStdin(): Uint8Array;
+    memoryUsage(): { rss: number | null; heapTotal: number | null; heapUsed: number | null; external: number | null; arrayBuffers: number | null; arrayBufferCount?: number | null; wasmCapacity?: number | null; failedAllocation?: { size: number | null; category: string } | null };
+  }
+  interface Internal {
+    nextTick(callback: Function, ...args: unknown[]): void;
+    fakeTimers?: { elapsedNanoseconds: number };
+    emitExit(code: number): void;
+    finalizeWorkerChildren?: () => void;
+    traceExit(reason: string, code: number): void;
+    getMainModule(): unknown;
+    listenerChanged?: (target: object, name?: string | symbol) => void;
+    require(name: "process_stdin"): () => ProcessReader;
+    require(name: "process_signals"): (process: NodeEmitter, names: ReadonlyMap<number, readonly string[]>) => () => boolean;
+    pumpSignals?: () => boolean;
+    /** The byte helper accepts arbitrary input and throws for unsupported shapes. */
+    toUint8(value: unknown): Uint8Array;
+  }
+}
+
+declare namespace BunWasm {
+  type StreamGlobals = Pick<typeof globalThis,
+    "ReadableStream" | "ReadableStreamDefaultReader" | "ReadableStreamBYOBReader" | "ReadableStreamBYOBRequest" |
+    "ReadableByteStreamController" | "ReadableStreamDefaultController" | "WritableStream" | "WritableStreamDefaultWriter" |
+    "WritableStreamDefaultController" | "TransformStream" | "TransformStreamDefaultController" |
+    "ByteLengthQueuingStrategy" | "CountQueuingStrategy" | "TextEncoderStream" | "TextDecoderStream" |
+    "CompressionStream" | "DecompressionStream">;
+  type PortableStreams = Omit<StreamGlobals, "TextEncoderStream" | "TextDecoderStream" | "CompressionStream" | "DecompressionStream">;
+  interface CompressionStreamPair {
+    readonly readable: ReadableStream<Uint8Array>;
+    readonly writable: WritableStream<unknown>;
+  }
+  interface WebCompressionConstructor {
+    new(format: unknown, options?: unknown): CompressionStreamPair;
+    readonly prototype: object;
+  }
+  type CompressionAdapters = {
+    CompressionStream: WebCompressionConstructor;
+    DecompressionStream: WebCompressionConstructor;
+  };
+  interface Internal {
+    require(name: "streams_polyfill"): PortableStreams;
+    require(name: "compression_streams"): {
+      create(Transform: typeof TransformStream, Readable?: typeof ReadableStream, Writable?: typeof WritableStream): CompressionAdapters;
+      decode(body: ReadableStream<Uint8Array>, encoding: string | null | undefined): ReadableStream<Uint8Array>;
+    };
+    /** web.js validates arbitrary input and throws before returning bytes. */
+    toUint8(value: unknown): Uint8Array;
+  }
+}
+
+interface String { toWellFormed(): string }

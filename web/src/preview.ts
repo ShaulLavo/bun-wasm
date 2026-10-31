@@ -7,12 +7,18 @@ export { activated } from "waffle/browser/service-worker";
 export type PreviewState = "ready" | "unsupported" | "failed";
 
 export class Previews extends PreviewRouter {
-  /** Resolves once the service worker can intercept preview URLs (or registration failed). */
-  readonly ready: Promise<PreviewState>;
+  private registration: Promise<PreviewState> | undefined;
+  private readonly workerScope: string | undefined;
 
-  constructor() {
-    super({ baseURL: location.href, prefix: PREVIEW_DIR });
-    this.ready = this.registerWorker();
+  /** First preview use registers its scope; module loading owns its separate eager scope. */
+  get ready(): Promise<PreviewState> {
+    return this.registration ??= this.registerWorker();
+  }
+
+  constructor(options: ConstructorParameters<typeof PreviewRouter>[0] = { baseURL: location.href, prefix: PREVIEW_DIR }) {
+    super(options);
+    this.workerScope = "prefix" in options ? new URL(`${options.prefix}/`, options.baseURL).href : undefined;
+    if ("mode" in options && options.mode === "root") this.registration = Promise.resolve("ready");
   }
 
   private async registerWorker(): Promise<PreviewState> {
@@ -22,7 +28,7 @@ export class Previews extends PreviewRouter {
     container.startMessages();
     try {
       // Keep the playground itself outside this worker's scope (and COOP/COEP untouched).
-      const registration = await container.register("./sw.js", { scope: `./${PREVIEW_DIR}/` });
+      const registration = await container.register("./sw.js", { scope: this.workerScope });
       await activated(registration);
       return "ready";
     } catch (err) {

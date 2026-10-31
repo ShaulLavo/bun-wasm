@@ -45,7 +45,8 @@ pub unsafe extern "C" fn mmap(
         let mut done = 0usize;
         while done < len {
             // SAFETY: ptr..ptr+len is our allocation.
-            let n = unsafe { libc::pread(fd, ptr.add(done).cast(), len - done, off + done as off_t) };
+            let n =
+                unsafe { libc::pread(fd, ptr.add(done).cast(), len - done, off + done as off_t) };
             if n < 0 {
                 // SAFETY: allocated above with this layout.
                 unsafe { dealloc(ptr, layout) };

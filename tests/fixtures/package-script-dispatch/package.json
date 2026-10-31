@@ -1,0 +1,29 @@
+{
+  "type": "module",
+  "scripts": {
+    "test": "bun test ./sample.test.ts",
+    "failed-test": "bun test ./failure.test.ts",
+    "evaluate": "node -e \"console.log(42)\"",
+    "print": "node -p \"21 * 2\"",
+    "ok": "node ./app.ts",
+    "bun-file": "bun app.ts",
+    "app.ts": "node -e \"console.log(42)\"",
+    "bun-alias": "bun run app.ts",
+    "bin-script": "tool baked",
+    "alias": "MODE=outer bun --smol run inspect first",
+    "inspect": "MARK=inner node ./inspect.ts second",
+    "exit": "node -e \"process.exit(17)\"",
+    "cli-flags": "bun --no-install --smol run -p \"21 * 2\"",
+    "node-file": "node test tail",
+    "node-alias-file": "node inspect tail",
+    "nodejs-file": "nodejs ./app.ts",
+    "nodejs-eval": "nodejs -e \"console.log(42)\"",
+    "nodejs-named-file": "nodejs test tail",
+    "nodejs-exit": "nodejs -e \"process.exit(17)\"",
+    "shell-syntax": "printf '%s\\n' one && echo \"two $npm_lifecycle_event\" | bun ./upper.ts; false || echo three",
+    "prehooked": "echo pre",
+    "hooked": "echo main",
+    "posthooked": "echo post",
+    "env-bin": "envtool baked"
+  }
+}

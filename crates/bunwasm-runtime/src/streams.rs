@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use encoding_rs::{CoderResult, Decoder, DecoderResult, Encoding};
 
-use crate::engine::{NativeError, Record, Val};
+use crate::data::{NativeError, Record, Val};
 use crate::natives::Table;
 
 use crate::compression::{Handle, Mode, Options, WebCoder, WebFormat};
@@ -110,12 +110,12 @@ pub fn install(table: &mut Table) {
             return Err(NativeError::type_error("zlib binding closed"));
         };
         let mut output = Vec::new();
-        let size = a.u32(3)? as usize;
-        output.try_reserve_exact(size).map_err(|_| crate::compression::out_of_memory())?;
-        output.resize(size, 0);
-        let (available_in, available_out) = handle.write(a.bytes(1)?, a.i32(2)?, &mut output)?;
-        output.truncate(size - available_out);
-        Ok(Record::new().set("bytes", Val::Bytes(output)).set("availIn", available_in as f64).into())
+        let (available_in, _) =
+            handle.write_into(a.bytes(1)?, a.i32(2)?, a.u32(3)? as usize, &mut output)?;
+        Ok(Record::new()
+            .set("bytes", Val::Bytes(output))
+            .set("availIn", available_in as f64)
+            .into())
     });
     let r = resources.clone();
     table.add("streams.params", move |a| {
@@ -129,7 +129,8 @@ pub fn install(table: &mut Table) {
     // Bun's CompressionStreamCoder: (format, decompress, highWaterMark, level).
     let r = resources.clone();
     table.add("streams.webCodec", move |a| {
-        let format = WebFormat::parse(a.str(0)?).ok_or_else(|| NativeError::type_error("Unsupported compression format"))?;
+        let format = WebFormat::parse(a.str(0)?)
+            .ok_or_else(|| NativeError::type_error("Unsupported compression format"))?;
         let high_water_mark = a.opt_num(2).unwrap_or(65536.0) as usize;
         let level = a.opt_num(3).map(|n| n as i32);
         let coder = WebCoder::new(format, a.bool(1), high_water_mark, level)?;
@@ -142,10 +143,129 @@ pub fn install(table: &mut Table) {
             return Err(NativeError::type_error("Compression stream is closed"));
         };
         let (bytes, more) = coder.step(a.bytes(1)?, a.bool(2))?;
-        Ok(Record::new().set("bytes", Val::Bytes(bytes)).set("more", more).into())
+        Ok(Record::new()
+            .set("bytes", Val::Bytes(bytes))
+            .set("more", more)
+            .into())
     });
     table.add("streams.release", move |a| {
         resources.borrow_mut().values.remove(&a.u32(0)?);
         Ok(Val::Undefined)
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compression::convert;
+    use crate::compression::tests::measure;
+    use crate::data::Args;
+
+    /// webpack's pack cache streams ask for 100 MiB per write (FileMiddleware's chunkSize).
+    const WEBPACK_CHUNK: usize = 100 << 20;
+    const PAIRS: [(&str, &str); 5] = [
+        ("gzip", "gunzip"),
+        ("deflate", "inflate"),
+        ("deflateRaw", "inflateRaw"),
+        ("brotliEncode", "brotliDecode"),
+        ("zstdCompress", "zstdDecompress"),
+    ];
+
+    fn call(table: &Table, name: &str, args: Vec<Val>) -> Val {
+        let (_, function) = table
+            .functions
+            .iter()
+            .find(|(key, _)| *key == name)
+            .expect("streams native");
+        function(Args(&args)).expect(name)
+    }
+
+    fn codec(table: &Table, mode: &str) -> Val {
+        call(table, "streams.codec", vec![mode.into()])
+    }
+
+    /// One `handle.write()` with `room` bytes of output space: (bytes, availIn).
+    fn write(table: &Table, id: &Val, input: &[u8], flush: i32, room: usize) -> (Vec<u8>, f64) {
+        let args = vec![
+            id.clone(),
+            Val::Bytes(input.to_vec()),
+            Val::Num(f64::from(flush)),
+            Val::Num(room as f64),
+        ];
+        let Val::Object(fields) = call(table, "streams.write", args) else {
+            panic!("write record");
+        };
+        let mut bytes = Vec::new();
+        let mut available_in = f64::NAN;
+        for (key, value) in fields {
+            match (key.as_str(), value) {
+                ("bytes", Val::Bytes(value)) => bytes = value,
+                ("availIn", Val::Num(value)) => available_in = value,
+                _ => {}
+            }
+        }
+        (bytes, available_in)
+    }
+
+    /// The sync convenience functions' loop with `chunk`-byte writes.
+    fn convert_all(mode: &str, input: &[u8], chunk: usize) -> Vec<u8> {
+        let mode = Mode::parse(mode).unwrap();
+        let options = Options::default();
+        convert(
+            mode,
+            &options,
+            input,
+            mode.finish_flush(),
+            chunk,
+            usize::MAX,
+        )
+        .unwrap()
+    }
+
+    fn sample(len: usize) -> Vec<u8> {
+        (0..len).map(|i| ((i % 251) ^ (i / 4093)) as u8).collect()
+    }
+
+    #[test]
+    fn large_out_lengths_allocate_what_the_codec_writes() {
+        let plain = sample(3 << 20);
+        let mut table = Table::default();
+        install(&mut table);
+        for (encode, decode) in PAIRS {
+            let finish = Mode::parse(encode).unwrap().finish_flush();
+            let packed = convert_all(encode, &plain, 16384);
+            let id = codec(&table, decode);
+            let ((bytes, available_in), largest, _) =
+                measure(|| write(&table, &id, &packed, finish, WEBPACK_CHUNK));
+            assert!(bytes == plain && available_in == 0.0, "{decode} output");
+            assert!(largest < 16 << 20, "{decode} allocated {largest} bytes");
+            let (bytes, largest, _) = measure(|| convert_all(decode, &packed, WEBPACK_CHUNK));
+            assert!(bytes == plain, "{decode} sync output");
+            assert!(
+                largest < 16 << 20,
+                "{decode} sync allocated {largest} bytes"
+            );
+            let id = codec(&table, encode);
+            let ((bytes, available_in), largest, _) =
+                measure(|| write(&table, &id, &plain, finish, WEBPACK_CHUNK));
+            assert!(available_in == 0.0, "{encode} input");
+            assert!(
+                convert_all(decode, &bytes, 16384) == plain,
+                "{encode} round trip"
+            );
+            assert!(largest < 16 << 20, "{encode} allocated {largest} bytes");
+        }
+    }
+
+    #[test]
+    fn a_member_ending_on_a_piece_boundary_does_not_end_the_write() {
+        let member = convert_all("gzip", &sample(1 << 20), 16384);
+        let mut table = Table::default();
+        install(&mut table);
+        let id = codec(&table, "gunzip");
+        let input = [member.as_slice(), member.as_slice()].concat();
+        let (bytes, available_in) = write(&table, &id, &input, 4, WEBPACK_CHUNK);
+        assert_eq!(available_in, 0.0);
+        assert!(bytes == [sample(1 << 20), sample(1 << 20)].concat());
+    }
 }

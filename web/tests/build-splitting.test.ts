@@ -9,21 +9,30 @@ import { initialJavaScript } from "../../scripts/runtime-size";
 const owned: string[] = [];
 afterEach(async () => { await Promise.all(owned.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
 
-test("split main/worker graph has all static and dynamic chunks in the worker scope", async () => {
+for (const fixture of [
+  { name: "realm-local inline shared code", lazy: "export const lazy = 'dynamic chunk';", chunks: 1, initial: 1 },
+  { name: "worker-local static and dynamic chunks", lazy: "import { shared } from './shared'; export const lazy = shared('dynamic chunk');", chunks: 2, initial: 2 },
+]) test(`${fixture.name} preserves the complete worker scope`, async () => {
   const dir = await mkdtemp(join(import.meta.dir, "../node_modules/.split-test-"));
   owned.push(dir);
   await Bun.write(join(dir, "shared.ts"), "export const shared = (value: string) => value.toUpperCase();");
-  await Bun.write(join(dir, "lazy.ts"), "export const lazy = 'dynamic chunk';");
+  await Bun.write(join(dir, "lazy.ts"), fixture.lazy);
   await Bun.write(join(dir, "main.ts"), "import { shared } from './shared'; console.log(shared('page'));");
   await Bun.write(join(dir, "worker.ts"), "import { shared } from './shared'; postMessage([shared('worker'), (await import('./lazy')).lazy]);");
   const out = join(dir, "dist");
   const result = await buildBrowserEntries([join(dir, "main.ts"), join(dir, "worker.ts")], out);
   const chunks = result.outputs.filter((output) => output.kind === "chunk");
-  expect(chunks.length).toBeGreaterThanOrEqual(2);
+  expect(chunks).toHaveLength(fixture.chunks);
   const outputs = result.metafile!.outputs;
   const workerKey = Object.keys(outputs).find((path) => path.endsWith("/worker.js"))!;
   const initial = initialJavaScript(outputs, [workerKey]);
-  expect(initial).toHaveLength(2); // bootstrap plus shared chunk, not the dynamic chunk
+  expect(initial).toHaveLength(fixture.initial);
+  const mainKey = Object.keys(outputs).find((path) => path.endsWith("/main.js"))!;
+  expect(initialJavaScript(outputs, [mainKey])).toEqual([mainKey]);
+  const initialCode = (await Promise.all(initial.map((path) => Bun.file(join(out, path)).text()))).join("\n");
+  expect(initialCode).toContain("toUpperCase");
+  expect(initialCode).not.toContain("dynamic chunk");
+  expect(initialCode).not.toContain("DYNAMIC CHUNK");
   expect(initial.some((path) => path.endsWith("/worker.js"))).toBe(true);
   expect(await Bun.file(join(out, "__bunwasm/worker.js")).text()).toBe(await Bun.file(join(out, "worker.js")).text());
   for (const chunk of chunks) {
@@ -31,6 +40,20 @@ test("split main/worker graph has all static and dynamic chunks in the worker sc
     expect(path).toStartWith("chunks/");
     expect(await Bun.file(join(out, "__bunwasm", path)).text()).toBe(await chunk.text());
   }
+});
+
+test("a scoped Bun worker finds every sibling worker under its scope", async () => {
+  const dir = await mkdtemp(join(import.meta.dir, "../node_modules/.scoped-siblings-test-"));
+  owned.push(dir);
+  const siblings = ["worker", "fs-worker", "preview1-worker", "notification-worker"];
+  await Bun.write(join(dir, "main.ts"), "console.log('page');");
+  for (const name of siblings) await Bun.write(join(dir, `${name}.ts`), `postMessage(${JSON.stringify(name)});`);
+  const out = join(dir, "dist");
+  await buildBrowserEntries([join(dir, "main.ts")].concat(siblings.map(name => join(dir, `${name}.ts`))), out);
+  for (const name of siblings) {
+    expect(await Bun.file(join(out, "__bunwasm", `${name}.js`)).text()).toBe(await Bun.file(join(out, `${name}.js`)).text());
+  }
+  expect(existsSync(join(out, "__bunwasm/main.js"))).toBe(false);
 });
 
 test("runtime-free entries do not require the runtime package", async () => {
@@ -92,4 +115,23 @@ test("service worker remains a standalone classic script alongside split entries
   const source = await result.outputs[0]!.text();
   expect(new Bun.Transpiler({ loader: "js" }).scan(source).imports).toEqual([]);
   expect(source).not.toMatch(/\bexport\s/);
+});
+
+
+test("lazy worker chunks never import their worker entry again", async () => {
+  const dir = await mkdtemp(join(import.meta.dir, "../node_modules/.worker-identity-test-"));
+  owned.push(dir);
+  await Bun.write(join(dir, "main.ts"), "console.log('page');");
+  await Bun.write(join(dir, "worker.ts"), "export class Token {} self.onmessage = async () => postMessage((await import('./lazy')).make() instanceof Token);");
+  await Bun.write(join(dir, "lazy.ts"), "import { Token } from './worker'; export const make = () => new Token();");
+  const out = join(dir, "dist");
+  const result = await buildBrowserEntries([join(dir, "main.ts"), join(dir, "worker.ts")], out);
+  const outputs = result.metafile!.outputs;
+  const worker = Object.keys(outputs).find(path => path.endsWith("/worker.js"))!;
+  expect(outputs[worker]!.imports).toHaveLength(1);
+  for (const output of Object.values(outputs)) expect(output.imports.some(imported => imported.path === worker)).toBe(false);
+  expect(result.outputs.some(output => output.path.includes("bunwasm-worker-anchor"))).toBe(false);
+  expect(await Bun.file(join(out, "bunwasm-worker-anchor.js")).exists()).toBe(false);
+  expect(Object.keys(result.metafile!.inputs).some(path => path.includes("bunwasm-worker-anchor"))).toBe(false);
+  expect(initialJavaScript(outputs, [worker]).length).toBeGreaterThan(1);
 });

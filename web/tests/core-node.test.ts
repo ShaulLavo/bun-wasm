@@ -2,7 +2,16 @@ import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 
 test('plain Node can consume the JS memory helper through the existing host adapters', () => {
-  const source = `await import(${JSON.stringify(new URL('../src/subprocess.ts', import.meta.url).href)});`;
+  const source = `await import(${JSON.stringify(new URL('../scripts/node-process.ts', import.meta.url).href)});`;
+  const result = spawnSync('node', ['--input-type=module', '-e', source], { encoding: 'utf8' });
+  expect(result.stderr).toBe('');
+  expect(result.status).toBe(0);
+});
+
+test('plain Node imports paired program and asset TypeScript sources without a resolver hook', () => {
+  const program = new URL('../../src/quickjs-program.ts', import.meta.url).href;
+  const assets = new URL('../../src/assets.ts', import.meta.url).href;
+  const source = `const program = await import(${JSON.stringify(program)}); const assets = await import(${JSON.stringify(assets)}); if (typeof program.engineLinkPlan !== "function" || typeof assets.prepareProgram !== "function") throw new Error("Missing source entry");`;
   const result = spawnSync('node', ['--input-type=module', '-e', source], { encoding: 'utf8' });
   expect(result.stderr).toBe('');
   expect(result.status).toBe(0);
@@ -19,7 +28,10 @@ test('browser memory gate source assets still exist after runtime extraction', a
   const source = readFileSync(script, 'utf8');
   const assets = Array.from(source.matchAll(/readFileSync\(new URL\("([^"]+)", import\.meta\.url\)/g), match => match[1]);
   expect(assets.length).toBeGreaterThan(0);
-  for (const path of assets) expect(existsSync(new URL(path, script))).toBe(true);
+  for (const path of assets) {
+    if (!path) throw new Error("Missing captured source asset");
+    expect(existsSync(new URL(path, script))).toBe(true);
+  }
 });
 
 test('unbundled headless hosts load with their installed runtime package', async () => {
@@ -29,12 +41,12 @@ test('unbundled headless hosts load with their installed runtime package', async
   const { tmpdir } = await import('node:os');
   const { fileURLToPath } = await import('node:url');
   const { resolveRuntimePackage } = await import('../../scripts/browser-build');
-  const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? process.env.TMPDIR ?? (existsSync('/work/tmp') ? '/work/tmp' : tmpdir());
+  const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? process.env.TMPDIR ?? tmpdir();
   const dir = await mkdtemp(join(base, 'bun-wasm-node-clean-'));
   try {
     for (const path of ['web/package.json',
       'web/src/crypto-inputs.js', 'web/src/crypto-host.js', 'web/src/content-modules.ts', 'web/src/promise-reactions.ts',
-      'web/scripts/node-host.mjs', 'web/scripts/node-child.ts', 'web/scripts/node-child-supervisor.ts', 'web/scripts/node-signals.ts', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-process.ts', 'web/scripts/node-install-net.mjs', 'web/src/subprocess.ts', 'web/src/tool-command.ts', 'web/src/net/trampoline.ts', 'web/src/net/package-fetch.ts', 'web/src/worker-pipes.ts', 'web/src/buffer-transfer.ts', 'web/src/engine-host.js', 'web/src/native-stream-state.ts']) {
+      'web/src/tool-command.ts', 'web/scripts/node-host.mjs', 'web/scripts/node-host.ts', 'web/scripts/async-context.ts', 'web/scripts/node-worker.ts', 'web/scripts/node-linked.ts', 'src/quickjs-program.ts', 'src/engine-kind.ts', 'web/scripts/node-signals.ts', 'web/scripts/node-stdio.ts', 'web/scripts/node-spawn.ts', 'web/scripts/node-process.ts', 'web/scripts/node-install-net.mjs', 'web/src/net/trampoline.ts', 'web/src/net/lookup.ts', 'web/src/net/package-fetch.ts', 'web/src/buffer-transfer.ts', 'web/src/engine-host.js', 'web/src/script-evaluation.ts', 'web/src/shared-objects/host.ts', 'web/src/shared-objects/protocol.ts', 'web/src/native-stream-state.ts', 'web/src/native-direct-stream.ts']) {
       const target = join(dir, path);
       await mkdir(dirname(target), { recursive: true });
       await copyFile(new URL(`../../${path}`, import.meta.url), target);
@@ -48,7 +60,7 @@ test('unbundled headless hosts load with their installed runtime package', async
     });
     expect(existsSync(join(dir, 'runtime'))).toBe(false);
     expect(existsSync(join(dir, 'web/node_modules/waffle/dist/core/memory-views.js'))).toBe(true);
-    const imports = ['web/src/engine-host.js', 'web/src/subprocess.ts', 'web/src/tool-command.ts', 'web/scripts/node-install-net.mjs', 'web/scripts/node-stdio.ts', 'web/scripts/node-process.ts'];
+    const imports = ['web/src/engine-host.js', 'web/scripts/node-spawn.ts', 'web/scripts/node-install-net.mjs', 'web/scripts/node-stdio.ts', 'web/scripts/node-process.ts'];
     const load = spawnSync('node', ['--input-type=module', '-e', `for (const path of ${JSON.stringify(imports)}) await import('./' + path);`], { cwd: dir, encoding: 'utf8' });
     expect(load.stderr).toBe('');
     expect(load.status).toBe(0);

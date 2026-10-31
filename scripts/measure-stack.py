@@ -6,6 +6,7 @@ host's wasm call stack ran out first. See docs/stack-limits.md.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -48,26 +49,30 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--engine', choices=['quickjs', 'jsc', 'browser'], default='quickjs')
     parser.add_argument('--wasm', type=Path, help='module to measure (default: dist/ for the engine)')
-    parser.add_argument('--host', choices=['wasmtime', 'launcher', 'node'], default='wasmtime')
-    parser.add_argument('--launcher', type=Path, help='bun-wasm launcher binary for --host launcher')
-    parser.add_argument('--stack-kib', type=int, help="host wasm call stack (wasmtime max-wasm-stack, the Node host's Worker stack)")
+    parser.add_argument('--host', choices=['launcher', 'node'], help='default: launcher for QuickJS/JSC, node for browser')
+    parser.add_argument('--launcher', type=Path, default=Path(os.environ.get('BUN_WASM_LAUNCHER', str(Path(os.environ.get('CARGO_TARGET_DIR', '/work/tmp/bun-wasm-target')) / 'release/bun-wasm'))), help='bun-wasm launcher binary for --host launcher')
+    parser.add_argument('--stack-kib', type=int, help="host wasm call stack (native launcher, or the Node host's Worker stack)")
     parser.add_argument('--budget-kib', type=int, help="QuickJS stack budget passed as BUN_WASM_STACK_KIB")
     parser.add_argument('--max', type=int, default=200000, help='deepest nesting tried')
     parser.add_argument('modes', nargs='*', default=MODES)
     args = parser.parse_args()
+    args.host = args.host or ('node' if args.engine == 'browser' else 'launcher')
+    if args.engine == 'browser' and args.host != 'node':
+        parser.error('--engine browser requires --host node')
+    if args.stack_kib is not None and args.stack_kib <= 0:
+        parser.error('--stack-kib must be positive')
+    if args.host == 'launcher' and args.stack_kib is not None:
+        os.environ['BUN_WASM_HOST_STACK_KIB'] = str(args.stack_kib)
     name = {'quickjs': 'bun', 'jsc': 'bun-jsc', 'browser': 'bun-browser'}[args.engine]
     wasm = str(args.wasm or ROOT / 'dist' / (name + '.wasm'))
     preopen = str(ROOT / 'tests') + '::/'
-    env = ['--env', f'BUN_WASM_STACK_KIB={args.budget_kib}'] if args.budget_kib else []
+    env = ['--env', 'PWD=/'] + (['--env', f'BUN_WASM_STACK_KIB={args.budget_kib}'] if args.budget_kib else [])
     if args.host == 'launcher':
-        command = [str(args.launcher), '--wasm', wasm, '--dir', preopen] + env + ['run', '/stack-depth.js']
+        command = [str(args.launcher), '--wasm', wasm, '--dir', preopen] + env + ['--', 'run', '/stack-depth.js']
     elif args.host == 'node':
         # The guest runs in node-host.mjs's Worker, whose stack --stack-mb sets.
         flags = ['--stack-mb', f'{args.stack_kib / 1024:g}'] if args.stack_kib else []
         command = ['node', '--no-warnings', str(ROOT / 'web/scripts/node-host.mjs')] + flags + ['--wasm', wasm, '--dir', preopen] + env + ['--', 'run', '/stack-depth.js']
-    else:
-        flags = ['-W', f'max-wasm-stack={args.stack_kib * 1024}'] if args.stack_kib else []
-        command = ['wasmtime', 'run'] + flags + env + ['--dir', preopen, wasm, 'run', '/stack-depth.js']
     results = {mode: capacity(command, mode, min(args.max, MAX.get(mode, args.max))) for mode in args.modes}
     print(json.dumps({'engine': args.engine, 'wasm': wasm, 'host': args.host, 'stack_kib': args.stack_kib,
                       'budget_kib': args.budget_kib, 'results': results}))

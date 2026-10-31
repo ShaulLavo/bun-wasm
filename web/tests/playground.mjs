@@ -104,7 +104,7 @@ export async function ready(page, ms = 120000) {
   // A final status means the page is usable: its shell, editor and filesystem are published.
   const published = await page.evaluate(() => Boolean(globalThis.playground));
   if (!published) throw new Error("page reported a final status before globalThis.playground was ready");
-  return page.textContent("#status");
+  return (await page.textContent("#status")) ?? "";
 }
 
 export async function terminalText(page) {
@@ -141,21 +141,4 @@ export async function run(page, command, ms = 60000) {
   // The command's own prompt line is before[-1]; the new prompt is the last line.
   const output = lines.slice(before, -1).join("\n");
   return { ...result, output };
-}
-
-/** Clicks Run on `path` (opened in the editor) and measures click-to-exit wall time in the page. */
-export async function clickRun(page, path, ms = 60000) {
-  return page.evaluate(
-    async ([p, timeout]) => {
-      const { shell, editor } = globalThis.playground;
-      await editor.open(p);
-      const button = document.querySelector("#run");
-      const t0 = performance.now();
-      button.click();
-      // Saving is asynchronous; the disabled button also covers the save-to-submit gap.
-      while ((button.disabled || shell.running) && performance.now() - t0 < timeout) await new Promise((r) => setTimeout(r, 1));
-      return { ms: performance.now() - t0, code: button.disabled || shell.running ? null : shell.lastExit };
-    },
-    [path, ms],
-  );
 }

@@ -2,8 +2,16 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$root/env.sh"
+for tool in bun cargo wasmtime node mktemp diff rm; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "transpiler example requires '$tool' on PATH" >&2
+    exit 127
+  fi
+done
+if [[ "${1:-}" == --check-tools ]]; then exit 0; fi
+bun "$root/scripts/build-wasi-sysroot.ts"
 cd "$root"
-scratch="$(mktemp -d /work/tmp/bun-wasm-transpiler-example-XXXXXX)"
+scratch="$(mktemp -d "${RUNNER_TEMP:-$TMPDIR}/bun-wasm-transpiler-example-XXXXXX")"
 trap 'rm -rf "$scratch"' EXIT
 trap 'exit 130' INT TERM
 cargo build -j "${JOBS:-8}" --release --target wasm32-wasip1 -p bunwasm-transpiler --examples
@@ -22,4 +30,9 @@ assert.equal(map.version, 3);
 assert.ok(map.mappings.length > 0);
 assert.ok(map.sourcesContent[0].includes(': number'));
 JS
-echo 'transpiler examples: compile, generated code and source map pass'
+# The browser engine's async-context hooks (vendor patch 0008), printed exactly.
+hooks="$root/tests/transpiler-hooks"
+wasmtime run --dir "$hooks::/" "$example" --await-hooks /input.mjs > "$scratch/hooks.mjs"
+diff -u "$hooks/expected.mjs" "$scratch/hooks.mjs"
+node --check "$scratch/hooks.mjs"
+echo 'transpiler examples: compile, generated code, source map and await hooks pass'

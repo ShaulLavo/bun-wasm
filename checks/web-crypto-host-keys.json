@@ -1,0 +1,5 @@
+{
+  "owner": "web",
+  "path": "scripts/crypto-host-keys.test.ts",
+  "batch": "10-web"
+}

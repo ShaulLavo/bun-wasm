@@ -1,5 +1,5 @@
 import { posix } from "node:path";
-import { failure } from "./classify.mjs";
+import { failure } from "./classify.ts";
 
 export async function checkCommand(command, result, read) {
   const check = command.check;
@@ -35,6 +35,6 @@ async function packageProblem(name, version, read) {
   try { metadata = JSON.parse(await read(path)); }
   catch { return `Missing or invalid installed package ${path}`; }
   if (metadata?.name !== name || metadata?.version !== version) return `Installed package mismatch ${name}@${version}`;
-  if (typeof metadata.main === "string" && !(await read(posix.join("node_modules", name, metadata.main)))?.length) return `Missing installed package main ${name}/${metadata.main}`;
+  if (typeof metadata.main === "string" && metadata.main.length > 0 && !(await read(posix.join("node_modules", name, metadata.main)))?.length) return `Missing installed package main ${name}/${metadata.main}`;
   return null;
 }

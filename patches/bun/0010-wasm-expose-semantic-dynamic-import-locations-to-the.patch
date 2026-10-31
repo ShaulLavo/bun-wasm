@@ -1,7 +1,7 @@
-From cd95fa7a13b3f13be73e512b38ec111c1c228084 Mon Sep 17 00:00:00 2001
+From f8853e139ee4ebbc8d5e4e61d985b1e08e371ec4 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Fri, 16 Oct 2026 01:46:27 +0300
-Subject: [PATCH 10/12] wasm: expose semantic dynamic import locations to the
+Subject: [PATCH 10/16] wasm: expose semantic dynamic import locations to the
  host
 
 ---
@@ -60,10 +60,10 @@ index f862d5ad..b37952e9 100644
          // const comments = try p.lexer.comments_to_preserve_before.toOwnedSlice();
          p.lexer.comments_to_preserve_before.clear();
 diff --git a/src/js_printer/lib.rs b/src/js_printer/lib.rs
-index 41580732..015fbba1 100644
+index 14a59011..d84ed54d 100644
 --- a/src/js_printer/lib.rs
 +++ b/src/js_printer/lib.rs
-@@ -3021,7 +3021,7 @@ pub(crate) mod __gated_printer {
+@@ -3162,7 +3162,7 @@ pub(crate) mod __gated_printer {
  
              // Allow it to fail at runtime, if it should
              if module_type != bundle_opts::Format::InternalBakeDev {
@@ -72,7 +72,7 @@ index 41580732..015fbba1 100644
                  self.print_import_record_path(record);
              } else {
                  self.print_symbol(self.options.hmr_ref);
-@@ -3648,7 +3648,7 @@ pub(crate) mod __gated_printer {
+@@ -3789,7 +3789,7 @@ pub(crate) mod __gated_printer {
                              self.print_symbol(self.options.hmr_ref);
                              self.print(b".dynamicImport(");
                          } else {
@@ -81,7 +81,7 @@ index 41580732..015fbba1 100644
                          }
                          // TODO: leading_interior_comments
                          self.print_expr(e.expr, Level::Comma, ExprFlag::none());
-@@ -6554,15 +6554,32 @@ pub(crate) mod __gated_printer {
+@@ -6726,15 +6726,32 @@ pub(crate) mod __gated_printer {
              Ok(())
          }
  
@@ -114,7 +114,7 @@ index 41580732..015fbba1 100644
          }
  
          #[inline]
-@@ -7646,6 +7663,60 @@ pub type BufferPrinter = Writer<BufferWriter>;
+@@ -7818,6 +7835,60 @@ pub type BufferPrinter = Writer<BufferWriter>;
  // Format / GenerateSourceMap
  // ───────────────────────────────────────────────────────────────────────────
  
@@ -172,6 +172,6 @@ index 41580732..015fbba1 100644
 +    });
 +}
 +
- /// bun-wasm: print every `await x` as
- /// `__bunwasm_resume(__bunwasm_capture(), await x)` and give `for await`
- /// loops the same hooks, so a host JS engine without AsyncContext can carry
+ /// bun-wasm: print `await`, `catch`/`finally`, async generator `yield` and
+ /// `for await` with hooks, so a host JS engine without AsyncContext can carry
+ /// AsyncLocalStorage across suspensions, rejected ones included. Off unless

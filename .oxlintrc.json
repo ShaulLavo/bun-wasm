@@ -1,0 +1,76 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error"
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "vendor/**",
+    "third_party/**",
+    "dist/**",
+    "**/dist/**",
+    "**/generated/**",
+    "src/guest-asset.generated.ts",
+    "tests/fixtures/**",
+    "tests/build/**",
+    "tests/jsc/**",
+    "tests/transpiler-hooks/expected.mjs",
+    "crates/bunwasm-runtime/src/js/temporal.js",
+    "crates/bunwasm-runtime/src/js/intl.js",
+    "crates/bunwasm-runtime/src/js/streams_polyfill.js",
+    "crates/bunwasm-runtime/src/js/node_stream_core.js",
+    "crates/bunwasm-runtime/src/js/ws_builtin.js",
+    "crates/bunwasm-runtime/src/js/bun_console_constructor.js"
+  ],
+  "rules": {
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_"
+      }
+    ],
+    "max-depth": [
+      "error",
+      3
+    ],
+    "complexity": [
+      "error",
+      40
+    ],
+    "no-unused-expressions": [
+      "error",
+      {
+        "allowShortCircuit": true
+      }
+    ],
+    "no-constant-condition": [
+      "error",
+      {
+        "checkLoops": false
+      }
+    ],
+    "no-restricted-globals": [
+      "error",
+      {
+        "name": "name",
+        "message": "Use a local descriptive name or qualify the intended browser global with globalThis.name."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "crates/bunwasm-runtime/src/js/*"
+      ],
+      "rules": {
+        "no-unused-expressions": "off"
+      }
+    }
+  ],
+  "plugins": [
+    "typescript",
+    "oxc"
+  ]
+}

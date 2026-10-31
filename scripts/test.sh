@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end fixtures: build dist/bun.wasm, run every tests/fixtures/<name>
-# under wasmtime and diff stdout (and the exit code) against expectations.
+# through the runtime_proc-capable hosts and diff stdout (and the exit code).
 #
 # A fixture directory holds:
 #   index.{js,mjs,cjs,ts,tsx}   entry point (run as `bun run /index.*`)
@@ -10,8 +10,8 @@
 #   cmd                         optional: bun arguments replacing `run /index.*`, one per line
 #   stdin                       optional file piped to stdin
 #   expected_stderr.txt         optional expected stderr (e.g. `bun test` reports)
-#   host                        optional marker: run under the bun-wasm launcher
-#                               (crates/bunwasm-host, networking ABI) instead of wasmtime;
+#   host                        optional marker: start the local networking test server;
+#                               all native-engine fixtures use crates/bunwasm-host.
 #                               TEST_SERVER=http://127.0.0.1:<port> points at
 #                               tests/servers/http.ts, which this script starts
 #   show                        optional list of files (one per line) the run creates; their
@@ -31,20 +31,25 @@
 # `--update` runs native Bun in the scratch copy, where absolute paths would
 # land on the real filesystem.
 #
-#   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc] [name...]
+#   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc|hermes|browser] [--context native|hooks] [name...]
 #     --engine jsc      run dist/bun-jsc.wasm (JavaScriptCore; scripts/build-bun-jsc.sh)
+#     --engine hermes   run dist/bun-hermes.wasm (Hermes, opt-in; scripts/build-bun-hermes.sh)
 #     --engine browser  run dist/bun-browser.wasm with Node's V8 as the host engine
 #                       (web/scripts/node-host.mjs; docs/engine-browser.md)
+#     --context hooks   with --engine browser: carry AsyncLocalStorage with the printed
+#                       hooks instead of Node's, as a browser does
 #     --update   regenerate expected.txt with native `bun` (review the diff!)
 set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "$root/env.sh"
-"$root/scripts/check-runtime.sh" || exit $?
+# test-checks.ts runs the runtime checks once before starting parallel fixture groups.
+[[ "${BUN_WASM_RUNTIME_CHECKED:-0}" == 1 ]] || "$root/scripts/check-runtime.sh" || exit $?
 
 build=1
 update=0
 engine=quickjs
+context=native
 names=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,6 +57,8 @@ while [[ $# -gt 0 ]]; do
     --update) update=1 ;;
     --engine) engine="$2"; shift ;;
     --engine=*) engine="${1#--engine=}" ;;
+    --context) context="$2"; shift ;;
+    --context=*) context="${1#--context=}" ;;
     *) names+=("$1") ;;
   esac
   shift
@@ -60,11 +67,17 @@ done
 case "$engine" in
   quickjs) wasm="$root/dist/bun.wasm"; build_script="$root/scripts/build.sh" ;;
   jsc) wasm="$root/dist/bun-jsc.wasm"; build_script="$root/scripts/build-bun-jsc.sh" ;;
+  hermes) wasm="$root/dist/bun-hermes.wasm"; build_script="$root/scripts/build-bun-hermes.sh" ;;
   browser) wasm="$root/dist/bun-browser.wasm"; build_script="$root/scripts/build-bun-browser.sh" ;;
-  *) echo "unknown engine $engine (quickjs, jsc or browser)"; exit 2 ;;
+  *) echo "unknown engine $engine (quickjs, jsc, hermes or browser)"; exit 2 ;;
+esac
+case "$context" in
+  native) ;;
+  hooks) [[ $engine == browser ]] || { echo "--context hooks needs --engine browser"; exit 2; } ;;
+  *) echo "unknown context $context (native or hooks)"; exit 2 ;;
 esac
 
-scratch="$(mktemp -d /work/tmp/bun-wasm-runtime-test-XXXXXX)"
+scratch="$(mktemp -d "$TMPDIR/bun-wasm-runtime-test-XXXXXX")"
 server_pid=""
 trap 'if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null; fi; rm -rf "$scratch"' EXIT INT TERM
 
@@ -76,8 +89,8 @@ if [[ $build == 1 && $update == 0 ]]; then
   }
 fi
 
-# Networking fixtures need the native launcher and the local test server.
-launcher="$CARGO_TARGET_DIR/release/bun-wasm"
+# Every native-engine guest imports runtime_proc, including non-network fixtures.
+launcher="${BUN_WASM_LAUNCHER:-$CARGO_TARGET_DIR/release/bun-wasm}"
 start_test_server() {
   [[ -n "$server_pid" ]] && return 0
   bun "$root/tests/servers/http.ts" >"$scratch/server.port" 2>"$scratch/server.err" &
@@ -89,9 +102,18 @@ start_test_server() {
   TEST_SERVER="http://127.0.0.1:$(head -1 "$scratch/server.port")"
   export TEST_SERVER
 }
-if [[ $build == 1 && $update == 0 ]] && compgen -G "$root/tests/fixtures/*/host" >/dev/null; then
+if [[ $build == 1 && $update == 0 && $engine != browser ]]; then
   (cd "$root" && cargo build -j "${JOBS:-12}" --release -p bunwasm-host >"$scratch/host-build.log" 2>&1) ||
     { tail -30 "$scratch/host-build.log"; echo "launcher build failed"; exit 1; }
+  "$root/scripts/build-bash-web-shell.sh" >"$scratch/shell-build.log" 2>&1 ||
+    { tail -30 "$scratch/shell-build.log"; echo "bash-web shell build failed"; exit 1; }
+fi
+# Package scripts, Bun.$ and bun exec run in bash-web's shell at /bin/sh and /bin/bash.
+shell_wasm="${BUN_WASM_SHELL:-$root/dist/bash-web-shell.wasm}"
+env_wasm="${BUN_WASM_ENV_UTILITY:-$root/dist/bash-web-env.wasm}"
+if [[ $update == 0 && $engine != browser && ! ( -f "$shell_wasm" && -f "$env_wasm" ) ]]; then
+  echo "missing $shell_wasm or $env_wasm; run scripts/build-bash-web-shell.sh"
+  exit 1
 fi
 
 if [[ ${#names[@]} == 0 ]]; then
@@ -123,10 +145,22 @@ entry_of() {
   done
 }
 
+native_bun=""
+[[ $update == 0 ]] || native_bun="$(bun -p process.execPath)"
+
 pass=0
 fail=0
 failed=()
 for name in "${names[@]}"; do
+  if [[ $update == 0 && "$name" == http-response-lifecycle ]]; then
+    if BUN_WASM_LAUNCHER="$launcher" bun "$root/scripts/http-response-lifecycle.ts" "$engine" "$scratch/http-response-lifecycle"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      failed+=("$name")
+    fi
+    continue
+  fi
   if [[ $update == 0 && "$name" == worker-review ]]; then
     if node "$root/tests/check-worker-regressions.ts" --engine "$engine" --wasm "$wasm"; then
       pass=$((pass + 1))
@@ -138,6 +172,15 @@ for name in "${names[@]}"; do
   fi
   if [[ $update == 0 && "$name" == fs-empty-read ]]; then
     if python3 "$root/tests/test-empty-stdin.py" --engine "$engine" --wasm "$wasm"; then
+      pass=$((pass + 1))
+    else
+      fail=$((fail + 1))
+      failed+=("$name")
+    fi
+    continue
+  fi
+  if [[ $update == 0 && "$name" == stdout-busy-loop ]]; then
+    if node --no-warnings "$root/tests/test-stdout-busy-loop.ts" --engine "$engine" --wasm "$wasm"; then
       pass=$((pass + 1))
     else
       fail=$((fail + 1))
@@ -197,7 +240,13 @@ for name in "${names[@]}"; do
   if [[ $update == 1 ]]; then
     native_cmd=("${cmd[@]}")
     [[ ! -f "$work/cmd" ]] && native_cmd=(run "./$entry")
-    (cd "$work" && AGENT=0 CLAUDECODE= HOME=/ bun "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+    (cd "$work" && AGENT=0 CLAUDECODE= HOME=/ "$native_bun" "${native_cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+    code=$?
+    if [[ "$code" != "$expected_exit" ]]; then
+      echo "native Bun failed $name (exit $code, expected $expected_exit)"
+      cat "$scratch/err"
+      exit 1
+    fi
     show_files "$work" "$scratch/out"
     # Native runs live in the scratch dir; inside wasm the fixture is `/`.
     sed -e "s#$work/#/#g" -e "s#$work#/#g" "$scratch/out" | normalize >"$src/expected.txt"
@@ -213,16 +262,13 @@ for name in "${names[@]}"; do
     [[ $is_host == 1 ]] && net_flag=(--net)
     gc_flags=()
     [[ ! -f "$src/expose-gc" ]] || gc_flags=(--expose-gc)
-    (cd "$work" && timeout 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" "${net_flag[@]}" --dir "$work::/" \
+    (cd "$work" && timeout 60 node "${gc_flags[@]}" --no-warnings "$root/web/scripts/node-host.mjs" --wasm "$wasm" --context "$context" "${net_flag[@]}" --dir "$work::/" \
       --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=node --env "TEST_SERVER=${TEST_SERVER:-}" -- \
       "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
-  elif [[ $is_host == 1 ]]; then
-    (cd "$work" && BUN_WASM="$wasm" timeout 60 "$launcher" --dir "$work::/" --env PWD=/ --env HOME=/ \
-      --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=$TEST_SERVER" \
-      "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   else
-    (cd "$work" && timeout 60 wasmtime run --dir "$work::/" --env PWD=/ --env HOME=/ --env BUNWASM_TEST=1 \
-      "$wasm" "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
+    (cd "$work" && timeout 60 "$launcher" --wasm "$wasm" --engine "$engine=$wasm" --shell "$shell_wasm" --env-utility "$env_wasm" --env "PATH=/opt/bun/$engine/bin:/bin:/usr/bin" --dir "$work::/" --env PWD=/ --env HOME=/ \
+      --env BUNWASM_TEST=1 --env BUNWASM_TEST_HOST=native --env "TEST_SERVER=${TEST_SERVER:-}" -- \
+      "${cmd[@]}" "${args[@]}" <"$stdin_file" >"$scratch/out" 2>"$scratch/err")
   fi
   code=$?
   show_files "$work" "$scratch/out"

@@ -1,0 +1,234 @@
+From fd60914442c9563675e78e8f1fe4602fb5f34c66 Mon Sep 17 00:00:00 2001
+From: Shaul Lavochkin <shaul9191@gmail.com>
+Date: Thu, 29 Oct 2026 16:21:28 +0200
+Subject: [PATCH] wasm: store 32-bit string flags beside the pointer
+
+---
+ src/bun_core/string/mod.rs | 116 +++++++++++++++++++++++++------------
+ 1 file changed, 78 insertions(+), 38 deletions(-)
+
+diff --git a/src/bun_core/string/mod.rs b/src/bun_core/string/mod.rs
+index 6a13f016..40197873 100644
+--- a/src/bun_core/string/mod.rs
++++ b/src/bun_core/string/mod.rs
+@@ -1178,51 +1178,87 @@ const TAG_GLOBAL_BIT: usize = 1usize << 62;
+ const TAG_UTF16_BIT: usize = 1usize << 63;
+ #[cfg(target_pointer_width = "64")]
+ const UNTAG_MASK: usize = (1usize << 53) - 1;
+-// wasm32: linear memory is capped at 512 MiB (`--max-memory`), so the top
+-// three address bits are free for the tags.
+-#[cfg(target_pointer_width = "32")]
+-const TAG_UTF8_BIT: usize = 1usize << 29;
+-#[cfg(target_pointer_width = "32")]
+-const TAG_GLOBAL_BIT: usize = 1usize << 30;
+-#[cfg(target_pointer_width = "32")]
+-const TAG_UTF16_BIT: usize = 1usize << 31;
+-#[cfg(target_pointer_width = "32")]
+-const UNTAG_MASK: usize = (1usize << 29) - 1;
++const FLAG_UTF8: u8 = 1;
++const FLAG_GLOBAL: u8 = 2;
++const FLAG_UTF16: u8 = 4;
+ 
+-/// `{tagged ptr, len}` with encoding bits (Latin-1 / UTF-8 / UTF-16 / global)
+-/// in the pointer's high byte; borrows `'a`. Also the [`String`] union arm.
++/// Borrowed string view and [`String`] union arm. Encoding and allocation
++/// flags use the pointer's high byte on 64-bit, a separate byte on 32-bit.
+ #[repr(C)]
+ #[derive(Clone, Copy)]
+ pub struct EncodedSlice<'a> {
+-    /// Tagged pointer — never dereference directly; use `untagged_ptr()`.
++    /// Tagged only on 64-bit. Always access through `untagged_ptr()`.
+     _unsafe_ptr_do_not_use: *const u8,
+     pub len: usize,
++    #[cfg(target_pointer_width = "32")]
++    flags: u8,
+     _marker: PhantomData<&'a [u8]>,
+ }
+ crate::assert_ffi_layout!(EncodedSlice<'static>, 16, 8);
++#[cfg(target_pointer_width = "32")]
++const _: () = {
++    assert!(size_of::<EncodedSlice>() == 12 && align_of::<EncodedSlice>() == 4);
++    assert!(size_of::<String>() == 16 && align_of::<String>() == 4);
++};
+ 
+ impl<'a> EncodedSlice<'a> {
+     pub const EMPTY: Self = Self::from_tagged_ptr(b"".as_ptr(), 0);
+ 
+-    /// Construct from an already-tagged pointer + length pair. `ptr` is stored
+-    /// verbatim — tag bits are not touched. Caller vouches for `'a`.
++    /// Store `ptr` verbatim. It already carries flags on 64-bit; on 32-bit
++    /// this constructs an unflagged view. Caller vouches for `'a`.
+     #[inline]
+     pub(crate) const fn from_tagged_ptr(ptr: *const u8, len: usize) -> Self {
+         Self {
+             _unsafe_ptr_do_not_use: ptr,
+             len,
++            #[cfg(target_pointer_width = "32")]
++            flags: 0,
+             _marker: PhantomData,
+         }
+     }
+     #[inline(always)]
+     const fn detach_lifetime(self) -> EncodedSlice<'static> {
+-        EncodedSlice::from_tagged_ptr(self._unsafe_ptr_do_not_use, self.len)
++        EncodedSlice {
++            _marker: PhantomData,
++            ..self
++        }
+     }
+ 
+-    /// Raw tagged pointer (top-bit flags intact). Do **not** dereference.
+     #[inline]
+-    const fn tagged_ptr(self) -> *const u8 {
+-        self._unsafe_ptr_do_not_use
++    fn flags(self) -> u8 {
++        #[cfg(target_pointer_width = "32")]
++        {
++            self.flags
++        }
++        #[cfg(target_pointer_width = "64")]
++        {
++            let tags = TAG_UTF8_BIT | TAG_GLOBAL_BIT | TAG_UTF16_BIT;
++            ((self._unsafe_ptr_do_not_use as usize & tags) >> 61) as u8
++        }
++    }
++    #[inline]
++    fn with_flag(mut self, bit: u8) -> Self {
++        #[cfg(target_pointer_width = "32")]
++        {
++            self.flags |= bit;
++        }
++        #[cfg(target_pointer_width = "64")]
++        {
++            self._unsafe_ptr_do_not_use =
++                ((self._unsafe_ptr_do_not_use as usize) | ((bit as usize) << 61)) as *const u8;
++        }
++        self
++    }
++    #[inline]
++    fn addr(self) -> *const u8 {
++        #[cfg(target_pointer_width = "32")]
++        {
++            self._unsafe_ptr_do_not_use
++        }
++        #[cfg(target_pointer_width = "64")]
++        {
++            Self::untagged(self._unsafe_ptr_do_not_use)
++        }
+     }
+     #[inline]
+     pub const fn is_empty(self) -> bool {
+@@ -1230,21 +1266,22 @@ impl<'a> EncodedSlice<'a> {
+     }
+     #[inline]
+     pub fn is_16bit(self) -> bool {
+-        (self._unsafe_ptr_do_not_use as usize) & TAG_UTF16_BIT != 0
++        self.flags() & FLAG_UTF16 != 0
+     }
+     #[inline]
+     pub fn is_utf8(self) -> bool {
+-        (self._unsafe_ptr_do_not_use as usize) & TAG_UTF8_BIT != 0
++        self.flags() & FLAG_UTF8 != 0
+     }
+     #[inline]
+     pub fn is_globally_allocated(self) -> bool {
+-        (self._unsafe_ptr_do_not_use as usize) & TAG_GLOBAL_BIT != 0
++        self.flags() & FLAG_GLOBAL != 0
+     }
+     #[inline]
+-    fn mark(&mut self, bit: usize) {
+-        self._unsafe_ptr_do_not_use = ((self._unsafe_ptr_do_not_use as usize) | bit) as *const u8;
++    fn mark(&mut self, bit: u8) {
++        *self = self.with_flag(bit);
+     }
+-    /// Strip the flag bits — truncate to the low 53 bits.
++    /// Strip the 64-bit pointer flags, retaining the low 53 bits.
++    #[cfg(target_pointer_width = "64")]
+     #[inline]
+     pub fn untagged(ptr: *const u8) -> *const u8 {
+         ((ptr as usize) & UNTAG_MASK) as *const u8
+@@ -1255,32 +1292,32 @@ impl<'a> EncodedSlice<'a> {
+     pub const fn latin1(s: &'a [u8]) -> Self {
+         Self::from_tagged_ptr(s.as_ptr(), s.len())
+     }
+-    /// Borrow UTF-8 bytes (sets the UTF-8 ptr-tag).
++    /// Borrow UTF-8 bytes (sets the UTF-8 flag).
+     #[inline]
+     pub fn utf8(s: &'a [u8]) -> Self {
+         let mut slice = Self::latin1(s);
+-        slice.mark(TAG_UTF8_BIT);
++        slice.mark(FLAG_UTF8);
+         slice
+     }
+-    /// Borrow UTF-16 code units (sets the 16-bit ptr-tag).
++    /// Borrow UTF-16 code units (sets the 16-bit flag).
+     #[inline]
+     pub fn utf16(s: &'a [u16]) -> Self {
+         let mut slice = Self::from_tagged_ptr(s.as_ptr().cast(), s.len());
+-        slice.mark(TAG_UTF16_BIT);
++        slice.mark(FLAG_UTF16);
+         slice
+     }
+ 
+     /// Wrap a globally-allocated UTF-16 buffer whose ownership is being
+-    /// handed to C++: sets the 16-bit and global ptr-tags.
++    /// handed to C++: sets the 16-bit and global flags.
+     #[inline]
+     pub fn utf16_global(s: &'a [u16]) -> Self {
+         let mut slice = Self::utf16(s);
+-        slice.mark(TAG_GLOBAL_BIT);
++        slice.mark(FLAG_GLOBAL);
+         slice
+     }
+ 
+     /// Borrow `slice`; if it contains any non-ASCII byte, sets the UTF-8
+-    /// ptr-tag.
++    /// flag.
+     #[inline]
+     pub fn from_bytes(slice: &'a [u8]) -> Self {
+         if !strings::is_all_ascii(slice) {
+@@ -1292,7 +1329,7 @@ impl<'a> EncodedSlice<'a> {
+ 
+     #[inline]
+     fn untagged_ptr(self) -> *const u8 {
+-        Self::untagged(self.tagged_ptr())
++        self.addr()
+     }
+     /// 8-bit byte view (Latin-1 or UTF-8). Caller must ensure `!is_16bit()`.
+     #[inline]
+@@ -1466,16 +1503,16 @@ impl<'a> EncodedSlice<'a> {
+         if self.is_16bit() {
+             let mut out = Self::utf16(&self.utf16_slice()[start_index..end_index]);
+             if self.is_globally_allocated() {
+-                out.mark(TAG_GLOBAL_BIT);
++                out.mark(FLAG_GLOBAL);
+             }
+             return out;
+         }
+         let mut out = Self::latin1(&self.slice()[start_index..end_index]);
+         if self.is_utf8() {
+-            out.mark(TAG_UTF8_BIT);
++            out.mark(FLAG_UTF8);
+         }
+         if self.is_globally_allocated() {
+-            out.mark(TAG_GLOBAL_BIT);
++            out.mark(FLAG_GLOBAL);
+         }
+         out
+     }
+@@ -1483,10 +1520,13 @@ impl<'a> EncodedSlice<'a> {
+     pub fn substring(self, start_index: usize) -> Self {
+         self.substring_with_len(start_index.min(self.len), self.len)
+     }
+-    /// Clamp `len`, preserving the pointer (and its tag bits) verbatim.
++    /// Clamp `len`, preserving the pointer and flags verbatim.
+     #[inline]
+     pub(crate) fn trunc(self, len: usize) -> Self {
+-        Self::from_tagged_ptr(self.tagged_ptr(), self.len.min(len))
++        Self {
++            len: self.len.min(len),
++            ..self
++        }
+     }
+     /// Borrowed-or-owned UTF-8: borrows when UTF-8-tagged or all-ASCII 8-bit,
+     /// transcodes UTF-16 and Latin-1 with high bytes.

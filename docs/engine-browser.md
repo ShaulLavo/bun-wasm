@@ -27,6 +27,14 @@ Build it with `scripts/build-bun-browser.sh`, which compiles `bunwasm-cli` with 
 
 The host side is one plain-JS ES module, `web/src/engine-host.js`, used both by the playground worker (`web/src/worker.ts`) and by the headless runner (`web/scripts/node-host.mjs`).
 
+## AsyncLocalStorage and native continuations
+
+The Node host supplies `EngineHostOptions.asyncContext` using Node's native `AsyncLocalStorage`. The runtime stores its frame in that continuation slot. Native promise jobs capture and restore it, including raw awaits in direct eval and `new Function` bodies. The host's synthetic await hooks become no-ops on this path, and its promise wrappers leave context entry and exit to Node.
+
+Browser workers have no equivalent public continuation API. Their source hooks cannot preserve exact request context for dynamically evaluated async code. In particular, Next.js development Webpack chunks can lose the request store during metadata resolution and throw E696. Run the whole process on QuickJS for this workload: select `?engine=quickjs` in the playground, or supply the matching QuickJS guest with `engine: "quickjs"` to `installBunAdapters`. QuickJS runs inside Wasm without JIT, so execution can be slower. Selecting it does not repair the browser-native engine.
+
+The [metadata continuation regression](bun-patches/next-metadata-context.md) preserves the captured functions and distinguishes the two-segment failure from the resolving layout-only control. It does not establish the cause of a particular live HTTP response.
+
 ## How the Engine trait maps onto the host
 
 The QuickJS and JSC engines implement the `Engine` trait (`crates/bunwasm-runtime/src/engine.rs`) inside the wasm. The browser engine cannot do that, because its values live outside the wasm. The split is the one the trait already draws:
@@ -152,7 +160,11 @@ The host engine exposes neither, so the browser engine reconstructs both:
   - Promises settled elsewhere (`new Promise`, async functions, runtime APIs) print as `<pending>`.
 - **AsyncLocalStorage across `await`:**
   - For this build, Bun's printer (patch `0008`) prints `await x` as `__bunwasm_resume(__bunwasm_capture(), await x)`. Arguments evaluate in order, so the context is captured before the suspension and restored when the function resumes.
-  - `for await` loops get the same hooks: `{ const c = capture(); for await (…) { resume(c); … } resume(c); }`.
+  - A rejected `await` throws before `resume` runs, so an async body whose own statements hold a `try` or a `for await` (an *S body*, including a module top level that awaits) gets a different shape. It declares `let __bunwasm_s = 0;` after its directives. Its awaits become `__bunwasm_resumed(await __bunwasm_id(x, __bunwasm_s = __bunwasm_capture()), __bunwasm_s, __bunwasm_s = 0)`, which awaits `x` itself (no extra `then` or `constructor` reads, no extra jobs) and leaves the captured frame in `__bunwasm_s` when `x` rejects. Every `catch` and `finally` block starts with `__bunwasm_caught(__bunwasm_s, __bunwasm_s = 0)`, which re-enters that frame. A synchronous throw finds `__bunwasm_s === 0` and keeps the current frame.
+  - Async generator `yield x` in an S body is printed as `__bunwasm_id(yield __bunwasm_id(x, __bunwasm_s = __bunwasm_capture()), __bunwasm_s = 0)`. `%AsyncGeneratorPrototype%.throw` is wrapped so the handlers it runs synchronously keep the caller's frame; the wrapper keeps `name` and `length`, but its `toString()` is no longer native code.
+  - `for await` prints as `{ let __bunwasm_c; try { for await (… of __bunwasm_c = __bunwasm_iterate(y)) { try { __bunwasm_entered(__bunwasm_c); … } finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } } } finally { __bunwasm_exited(__bunwasm_c); } }`. `__bunwasm_iterate` gets the iterator itself with the reads and calls of `GetIterator` (a sync iterable stays sync, so the engine still adapts it) and notes the frame only once `next()` or `return()` has returned, right before the implicit await. An async iterator method that throws synchronously therefore leaves nothing pending. For a sync iterable the engine's adapter turns such a throw into a rejection the loop awaits, and awaits on close even when the iterator has no `return`, so the record notes the frame in those cases too. The body starts in its `next()` frame; a rejected await in the body re-enters its own frame before the iterator closes; the outer `finally` runs after the iterator closed on every exit, labeled `break` and `continue` to an enclosing loop or block included, and re-enters the frame of the last `next()` or `return()`. Labels stay on the loop.
+  - `__bunwasm_s`, `__bunwasm_c` and the other `__bunwasm_*` names are reserved in printed code. The shapes have a version (`describe().prepareVersion`), which keys the runtime's cached printed sources.
+  - Known gaps, measured against Node by `tests/async-context-rejection`: a rejection out of `yield*` caught in the delegating generator sees the frame at delegation start (G1); an async generator's `finally` after `return()` from another frame sees its last `yield`'s frame (G2); destructuring or defaults in `catch (pattern)` run before the hook (G5); `await using` is not hooked (G6); a rejected `return x` in an async generator reaches its handlers without a hook.
   - Plain `.js` files that contain `await` go through the transpiler in this build so that they get the hooks, and their stacks stay source-mapped.
   - `then` callbacks, timers, ticks and immediates carry their own context.
   - The TC39 AsyncContext proposal (`AsyncContext.Variable`) would make the hooks unnecessary. It was at stage 2 at the time of writing and no engine we target ships it, even behind a flag.
@@ -166,11 +178,13 @@ The host engine exposes neither, so the browser engine reconstructs both:
 - `startEngineHost` with module hooks serving the program's ES modules;
 - with `--net` (fixtures marked `host`): real sockets and an HTTP client (`node-net.mjs`); otherwise Node's `fetch` as the host fetch.
 
+`--context hooks` (`node-host.mjs --context hooks`) leaves out Node's native `AsyncLocalStorage` slot, so AsyncLocalStorage depends on the printed hooks exactly as in a browser.
+
 Node is the closest headless stand-in for a worker: it has V8, ES modules from `data:` URLs, `MessageChannel`, `fetch` and `process` events. Bun can't host it, because its `Bun` global is not configurable and the polyfills must replace it.
 
 `scripts/test-host-profile.sh` builds the exact `--no-default-features --features engine-host,bun-build` profile and runs eval plus TypeScript static and dynamic imports. Run it through the build slot wrapper.
 
-`scripts/bench-module-preparation.mjs <wasm>` measures the actual `hostModuleSource` ABI on 242 KB plain JS, JS with await, and TypeScript inputs. It reports medians across 15 fresh paths and 31 cached preparations per input. Run it through the light slot wrapper on before/after artifacts. It owns and removes its temporary fixtures. These are module-preparation timings in Node, not browser startup timings.
+`scripts/bench-module-preparation.mjs <wasm> [hostModuleSource|hostCjsSource]` measures the actual module-preparation ABI on 242 KB plain JS, JS with await, and TypeScript inputs. Its TypeScript harness runs the guest in a worker with the headless host's real process imports and descriptor table; the main thread keeps the shared process broker responsive. It reports medians across 15 fresh paths and 31 cached preparations per input. Run it through the light slot wrapper on before/after artifacts. It stops its worker and removes temporary fixtures on success, failure, interruption or its 120-second deadline. `--check` validates the host source wrapper without a Wasm artifact. These are module-preparation timings in Node, not browser startup timings.
 
 The browser side is covered by `scripts/test-web.sh`, which includes `web/tests/browser-engine.mjs` in Chromium and WebKit, and by `web/tests/bench-engines.mjs` for timings.
 
@@ -181,7 +195,7 @@ These follow from running on a standard JS engine without engine hooks. Every fi
 | what | browser engine |
 |---|---|
 | Promise state | Known only for promises settled where the host sees it (see above). Others print as `<pending>`, and `Bun.peek` returns them unchanged. |
-| AsyncLocalStorage | Carried across `await` by the transpiler hooks. Code that skips the transpiler (`eval`, `new Function`) and native jobs (see above) are not covered. |
+| AsyncLocalStorage | Carried across `await`, rejected awaits, async generators and `for await` by the transpiler hooks, with the gaps listed above. Runtime-built constructor/eval/vm/module code is prepared as described below; unwrapped native job entry remains separate. |
 | `require()` of an ES module | A converted CommonJS copy, separate from the ES module instance if the file is also imported. |
 | Import cycles | Need the module store (a service worker in the browser). Without it, a cycle is an error. |
 | Proxy detection, Map/Set iterator entries in `console.log` | Inspection prints less, e.g. a Proxy prints as its target. |
@@ -190,3 +204,52 @@ These follow from running on a standard JS engine without engine hooks. Every fi
 | `process.nextTick` vs `await` continuations | Ticks run before `.then`/`queueMicrotask` callbacks queued earlier, but not before `await` continuations queued earlier. |
 
 Everything else, including the transpiler, resolver, `bun test`, `bun build`, sqlite, fetch, timers, the file system, stdin and exit codes, matches the other engines on the fixture suite.
+
+### Runtime-built source and async context
+
+Runtime-built JavaScript uses insertion-only preparation through Bun's parser.
+This includes all four dynamic constructors, their prototype `.constructor`
+routes, direct and `(0, eval)` calls, including spread arguments, `vm.Script`, vm contexts, `vm.compileFunction`,
+and the complete CommonJS `_compile` wrapper. A native continuation provider
+bypasses the hooks. Constructor argument conversion happens once, in order;
+preparation never wraps an awaited value in an extra promise or thenable.
+
+The text cache key contains the guest preparation version, process/thread realm,
+parse goal with constructor argument lengths, map policy, and source payload.
+Only edit and column vectors are cached, never functions or request stores.
+The cache is bounded to 16 MiB and skips entries over 4 MiB. Named column tables
+replace prior entries after HMR and are bounded separately. Constructors use
+unique self-contained sourceURL fragments instead of mutable caller-name tables.
+Their metadata stays with live generated code, including nested closures and error
+frames, without retaining functions in the cache. The original explicit name and
+caller provenance are retained; relative source-map URLs keep their original base.
+`sourceURL` and
+`sourceMappingURL` comments survive unchanged. Lines stay exact. The runtime's
+stack formatter corrects inserted columns before existing source-map offsets.
+A debugger, or an app that replaces `Error.prepareStackTrace`, may see the
+generated source identity and raw shifted
+columns on lines containing hooks. WebKit currently omits coordinates entirely
+for the tested async direct-eval frame, even without preparation. Its prepared
+frame matches that native control; the column table itself remains available.
+
+`BUN_WASM_PREPARE_TRACE=1` prints preparation version, realm, goal, map policy,
+origin, name, byte count, edit count, duration, cache hits, and parse fallback.
+`bun:internal-for-testing` exposes preparation counters and the text preparation
+entry point used by regression tests. Parse failures evaluate the original text,
+so the engine remains responsible for its own syntax errors.
+
+The following bounded gaps remain. These are not full-language continuation
+semantics.
+
+- G1: an async generator's `yield*` rejection handler sees the delegation-start frame.
+- G2: async generator `finally` after `return()` can see the last yield's frame.
+- G3: a global accessor named `eval` is read twice; `with (proxy)` sees extra callee lookups.
+- G4: `with (proxy)` sees hook-name lookups.
+- G5: catch-binding destructuring and defaults run before the handler hook.
+- G6: `await using` implicit suspension is unhooked and counted.
+- G7: aliased, member and optional eval calls are unprepared.
+- G8: the async-generator `.throw` wrapper changes its function identity.
+
+Host-originated job entry, raw polyfill awaits and a passing Next/HMR
+context gate remain separate work. User-created data/blob modules and
+`importScripts` outside the loader are not prepared.

@@ -81,6 +81,7 @@
     #encoding;
     #fatal;
     #ignoreBOM;
+    #bomSeen = false;
     #pending = null;
     constructor(label = "utf-8", options = {}) {
       const encoding = DECODER_LABELS[String(label).trim().toLowerCase()];
@@ -111,21 +112,28 @@
         bytes = joined;
         this.#pending = null;
       }
-      if (options.stream && this.#encoding === "utf-8") {
+      const stream = Boolean(options.stream);
+      if (stream && this.#encoding === "utf-8") {
         const tail = incompleteUtf8Tail(bytes);
         if (tail > 0) {
           this.#pending = bytes.slice(bytes.length - tail);
           bytes = bytes.subarray(0, bytes.length - tail);
         }
       }
-      return this.#decodeBytes(bytes);
+      try {
+        return this.#decodeBytes(bytes);
+      } finally {
+        if (!stream) this.#bomSeen = false;
+      }
     }
     #decodeBytes(bytes) {
-      if (this.#encoding === "utf-16le") return native.utf16leDecode(bytes.slice());
       if (this.#encoding === "windows-1252") return native.latin1Decode(bytes.slice());
-      let text = native.utf8Decode(bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice(), this.#fatal);
-      if (!this.#ignoreBOM && text.charCodeAt(0) === 0xfeff) text = text.slice(1);
-      return text;
+      const text = this.#encoding === "utf-16le"
+        ? native.utf16leDecode(bytes.slice())
+        : native.utf8Decode(bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice(), this.#fatal);
+      if (this.#bomSeen || text.length === 0) return text;
+      this.#bomSeen = true;
+      return !this.#ignoreBOM && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
     }
   }
 
@@ -154,6 +162,8 @@
   }
 
   // --- URLSearchParams / URL --------------------------------------------------
+
+  const { toUSVString, initFromObject, convertMethodArgs } = internal.require("url_search_params");
 
   // application/x-www-form-urlencoded byte serializer.
   function formEncode(str) {
@@ -196,7 +206,7 @@
         this.#list = initFromObject(init);
         return;
       }
-      const str = String(init);
+      const str = toUSVString(init);
       this.#list = parseQuery(str.startsWith("?") ? str.slice(1) : str);
     }
     static _attach(params, url) {
@@ -212,32 +222,34 @@
       return this.#list.length;
     }
     append(name, value) {
-      this.#list.push([String(name), String(value)]);
+      this.#list.push([toUSVString(name), toUSVString(value)]);
       this.#update();
     }
     delete(name, value) {
-      const n = String(name);
-      this.#list = this.#list.filter(([k, v]) => k !== n || (value !== undefined && v !== String(value)));
+      const [n, val] = convertMethodArgs(() => this.#list, name, value);
+      this.#list = this.#list.filter(([k, v]) => k !== n || (val !== undefined && v !== val));
       this.#update();
     }
     get(name) {
-      const hit = this.#list.find(([k]) => k === String(name));
+      const [n] = convertMethodArgs(() => this.#list, name);
+      const hit = this.#list.find(([k]) => k === n);
       return hit ? hit[1] : null;
     }
     getAll(name) {
-      return this.#list.filter(([k]) => k === String(name)).map(([, v]) => v);
+      const [n] = convertMethodArgs(() => this.#list, name);
+      return this.#list.filter(([k]) => k === n).map(([, v]) => v);
     }
     has(name, value) {
-      const n = String(name);
-      return this.#list.some(([k, v]) => k === n && (value === undefined || v === String(value)));
+      const [n, val] = convertMethodArgs(() => this.#list, name, value);
+      return this.#list.some(([k, v]) => k === n && (val === undefined || v === val));
     }
     set(name, value) {
-      const n = String(name);
+      const [n, val] = convertMethodArgs(() => this.#list, name, value, true);
       const i = this.#list.findIndex(([k]) => k === n);
       if (i < 0) {
-        this.#list.push([n, String(value)]);
+        this.#list.push([n, val]);
       } else {
-        this.#list[i][1] = String(value);
+        this.#list[i][1] = val;
         this.#list = this.#list.filter(([k], j) => k !== n || j <= i);
       }
       this.#update();
@@ -268,17 +280,6 @@
     get [Symbol.toStringTag]() {
       return "URLSearchParams";
     }
-  }
-
-  function initFromObject(init) {
-    if (typeof init[Symbol.iterator] === "function") {
-      return Array.from(init, (pair) => {
-        const entry = Array.from(pair);
-        if (entry.length !== 2) throw new TypeError("Each query pair must be an iterable [name, value] tuple");
-        return [String(entry[0]), String(entry[1])];
-      });
-    }
-    return Object.keys(init).map((k) => [k, String(init[k])]);
   }
 
   // Component array, or undefined when the input doesn't parse.
@@ -704,7 +705,7 @@
       this.#type = type;
     }
     async text() {
-      return native.utf8Decode(this._bytes());
+      return new TextDecoder().decode(this._bytes());
     }
     async json() {
       return JSON.parse(await this.text());
@@ -764,14 +765,15 @@
   const streamWeb = internal.require("streams");
   const { ReadableStream } = streamWeb;
 
+  const bodyStreams = internal.require("body_streams");
   internal.makeByteStream = function makeByteStream(bytes) {
-    return new ReadableStream({
+    return bodyStreams.remember(new ReadableStream({
       type: "bytes",
       start(controller) {
         if (bytes.length > 0) controller.enqueue(new Uint8Array(bytes));
         controller.close();
       },
-    });
+    }), bytes);
   };
 
   // --- Headers / Request / Response -------------------------------------------
@@ -885,7 +887,8 @@
     }
     if (body instanceof Blob) return { bytes: body._bytes(), type: body.type || null };
     if (ArrayBuffer.isView(body) || body instanceof ArrayBuffer) return { bytes: new Uint8Array(toUint8(body)), type: null };
-    if (body instanceof ReadableStream) return { stream: body, bytes: null, type: null };
+    if (body instanceof ReadableStream) return { stream: body, bytes: bodyStreams.bytes(body) || null, type: null };
+    if (typeof body[Symbol.asyncIterator] === "function") return { stream: bodyStreams.fromAsyncIterable(body), type: null };
     return { bytes: native.utf8Encode(String(body)), type: "text/plain;charset=utf-8" };
   }
 
@@ -903,7 +906,7 @@
       return this._body || new Uint8Array(0);
     },
     async text() {
-      return native.utf8Decode(await this._consume());
+      return new TextDecoder().decode(await this._consume());
     },
     async json() {
       return JSON.parse(await this.text());
@@ -932,7 +935,6 @@
     if (extracted.type && !headers.has("content-type")) headers.set("content-type", extracted.type);
   }
 
-  const STATUS_TEXT = { 200: "OK", 201: "Created", 204: "No Content", 301: "Moved Permanently", 302: "Found", 304: "Not Modified", 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 500: "Internal Server Error" };
 
   class Response {
     #status;
@@ -1007,9 +1009,7 @@
       return this._stream;
     }
     clone() {
-      if (this.bodyUsed || this._stream?.locked) throw new TypeError("Body already used");
-      let body = this._body;
-      if (this._stream) [this._stream, body] = this._stream.tee();
+      const body = bodyStreams.clone(this);
       const copy = new Response(body, { status: this.#status, statusText: this.#statusText, headers: this.#headers });
       copy.#url = this.#url;
       return copy;
@@ -1040,13 +1040,14 @@
       this.#method = String(init.method || (source && source.method) || "GET").toUpperCase();
       this.#headers = new Headers(init.headers || (source && source.headers));
       this.#signal = init.signal || (source && source.signal) || new AbortController().signal;
-      this.#redirect = init.redirect || "follow";
+      this.#redirect = init.redirect || (source && source.redirect) || "follow";
       defineInternalBody(this);
-      const body = init.body !== undefined ? init.body : source ? source._body : null;
+      const replacementBody = init.body;
+      const body = replacementBody !== undefined ? replacementBody : source ? source._stream || source._body : null;
       if (body !== null && body !== undefined && (this.#method === "GET" || this.#method === "HEAD")) {
         throw new TypeError("Request with a GET or HEAD method cannot have a body.");
       }
-      initBody(this, body, this.#headers);
+      initBody(this, source && replacementBody === undefined ? bodyStreams.transfer(source) : body, this.#headers);
     }
     get url() {
       return this.#url;
@@ -1073,9 +1074,7 @@
       return this._stream;
     }
     clone() {
-      if (this.bodyUsed || this._stream?.locked) throw new TypeError("Body already used");
-      let body = this._body;
-      if (this._stream) [this._stream, body] = this._stream.tee();
+      const body = bodyStreams.clone(this);
       return new Request(this, { body });
     }
     get [Symbol.toStringTag]() {

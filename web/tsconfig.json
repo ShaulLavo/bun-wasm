@@ -3,13 +3,15 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
+    "lib": ["ES2023", "ES2024.SharedMemory", "DOM", "DOM.Iterable", "WebWorker"],
     "types": ["bun"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@remix-run/component"
   },
-  "include": ["src", "scripts", "build.ts", "serve.ts", "tests/browser-startup-safari.ts", "tests/browser-filesystem-lifecycle.ts", "tests/fixtures/filesystem-lifecycle.ts", "tests/fixtures/startup-filesystem.ts", "tests/browser-process.ts", "tests/process-browser-main.ts", "tests/process-fixtures.ts", "tests/process-fixtures.test.ts", "tests/process-benchmark.ts", "tests/foreground.ts", "tests/foreground.test.ts", "tests/browser-interrupt.ts"]
+  "include": ["src", "scripts", "build.ts", "serve.ts", "tests/browser-startup-safari.ts", "tests/browser-filesystem-lifecycle.ts", "tests/fixtures/filesystem-lifecycle.ts", "tests/fixtures/startup-filesystem.ts", "tests/browser-process.ts", "tests/process-browser-main.ts", "tests/process-fixtures.ts", "tests/process-fixtures.test.ts", "tests/process-benchmark.ts", "tests/foreground.ts", "tests/foreground.test.ts", "tests/browser-interrupt.ts", "tests/bench-commands.ts"]
 }

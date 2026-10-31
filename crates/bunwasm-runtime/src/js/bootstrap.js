@@ -4,7 +4,7 @@
 (function (native) {
   "use strict";
 
-  const internal = { native };
+  const internal = { native, sharedObjects: native.sharedObjects };
 
   // Engine hooks for the formatter (inspect.js) and util.types.
   function isModuleNamespace(value) {
@@ -82,6 +82,7 @@
   function formatCallSite(site) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
     const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
+    const generated = native.engine === "host" && native.preparedSourceName(rawFile) !== undefined;
     const file = internal.displayName ? internal.displayName(rawFile, typeof site.isEval === "function" && site.isEval()) : rawFile;
     const name = site.getFunctionName();
     // A syntax error's location: no function, just file:line:col.
@@ -91,9 +92,9 @@
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
     if (line !== null && file && !internal.mappedCallSites?.has(site)) {
-      const mapped = native.mapPosition(file, line, col);
+      const mapped = native.mapPosition(generated ? rawFile : file, line, col);
       if (mapped) [line, col] = mapped;
-      if (isV8) col = pastNew(file, line, col);
+      if (isV8 && !generated) col = pastNew(file, line, col);
     }
     // Module and script top-level code prints bare, like JSC.
     const topLevel = isV8 ? !name && v8TopLevel(site) : isTopLevel(site.getFunction());
@@ -448,6 +449,8 @@
   // Replaced by net.js when a networking host is present.
   internal.ioPending = () => 0;
   internal.pumpIo = () => false;
+  internal.removeIoWaiter = () => {};
+  internal.cancelIoWaiters = () => {};
   internal.require("loop_scheduler");
 
   // --- process.nextTick -------------------------------------------------------
@@ -517,6 +520,7 @@
 
   const moduleCache = Object.create(null);
   let mainModule;
+  const compileModule = internal.require("module_compile");
 
   class Module {
     constructor(id, parent) {
@@ -529,18 +533,21 @@
       this.paths = nodeModulePaths(this.path);
       defineHidden(this, { parent });
     }
+    _compile(content, filename) {
+      return callModuleWrapper(this, compileModule(content, filename), filename);
+    }
     require(spec) {
       if (typeof spec === "string" && spec.startsWith("internal/") && globalThis.process.env.BUN_FEATURE_FLAG_INTERNAL_FOR_TESTING === "1") {
         const exposed = internal.require("node_stream_internals").modules;
         if (Object.prototype.hasOwnProperty.call(exposed, spec)) return exposed[spec];
       }
-      return requireFrom(spec, this.filename);
+      return requireFrom(spec, this);
     }
   }
 
   function nodeModulePaths(dir) {
     const paths = [];
-    let current = dir;
+    let current = dir.startsWith("/") ? dir : internal.require("path").posix.resolve(native.cwd(), dir);
     for (;;) {
       if (basename(current) !== "node_modules") paths.push((current === "/" ? "" : current) + "/node_modules");
       if (current === "/") break;
@@ -601,35 +608,38 @@
     topLevelFunctions.add(wrapper);
     const require = makeRequire(path, mod);
     if (wrapper.length !== 6) {
-      wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
-      return;
+      return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path));
     }
     const meta = Object.create(null);
     internal.initImportMeta(meta, path, mod === mainModule);
-    wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
+    return wrapper.call(mod.exports, mod.exports, require, mod, path, dirname(path), meta);
   }
 
-  function resolveFrom(spec, fromPath) {
+  function resolveFrom(spec, parent, options) {
     if (typeof spec !== "string") {
       const err = new TypeError(`The "id" argument must be of type string. Received ${internal.describe(spec)}`);
       err.code = "ERR_INVALID_ARG_TYPE";
       throw err;
     }
-    return native.resolve(spec, fromPath, true);
+    return internal.builtin("node:module")._resolveFilename(spec, parent, false, options);
   }
 
-  function requireFrom(spec, fromPath) {
-    const resolved = resolveFrom(spec, fromPath);
+  function requireFrom(spec, parent) {
+    const resolved = typeof spec === "string" && spec.startsWith("node:")
+      ? native.resolve(spec, parent.filename, true)
+      : resolveFrom(spec, parent);
     if (isBuiltinId(resolved)) return internal.builtin(resolved);
     return loadModule(resolved, null).exports;
   }
 
   function makeRequire(fromPath, mod) {
+    const parent = mod || new Module(fromPath, undefined);
     function require(spec) {
-      return mod ? mod.require(spec) : requireFrom(spec, fromPath);
+      return parent.require(spec);
     }
-    require.resolve = function resolve(spec) {
-      return resolveFrom(spec, fromPath);
+    require.resolve = function resolve(spec, options) {
+      const resolved = resolveFrom(spec, parent, options);
+      return resolved === "node:" + spec ? spec : resolved;
     };
     require.resolve.paths = function paths(spec) {
       return isBuiltinId(spec) ? null : nodeModulePaths(dirname(fromPath));
@@ -648,7 +658,8 @@
   internal.importNonEsm = function importNonEsm(path, format) {
     const exports = loadModule(path, format).exports;
     if (format === "cjs" && exports !== null && typeof exports === "object" && exports.__esModule) {
-      return [exports, exports.default];
+      const hasDefault = Object.prototype.hasOwnProperty.call(exports, "default");
+      return [exports, hasDefault ? exports.default : exports];
     }
     return [exports, exports];
   };
@@ -679,8 +690,13 @@
   };
 
   internal.runMain = function runMain(requested) {
-    const path = internal.require("package_scripts").resolve(requested);
-    if (!native.exists(path)) {
+    const scripts = internal.require("package_scripts");
+    const stdin = requested.endsWith("/[stdin]") && native.mainArg() === "-";
+    const path = stdin ? requested : scripts.resolve(requested);
+    if (typeof path !== "string") return scripts.run(path);
+    if (!stdin && !native.exists(path)) {
+      // A worker's missing entry reaches its parent as Node's require error, as in Bun.
+      if (internal.workerError) throw Object.assign(new Error(`Cannot find module '${path}'`), { code: "MODULE_NOT_FOUND" });
       const err = new Error(`Module not found "${native.mainArg() || path}"`);
       err.code = "ERR_MODULE_NOT_FOUND";
       err.__bunwasmPlain = true;
@@ -732,7 +748,7 @@
     let text;
     try {
       text = internal.require("inspect").formatError(err);
-    } catch (formatErr) {
+    } catch (_formatErr) {
       text = fallbackErrorText(err);
     }
     native.writeStderr(text.endsWith("\n") ? text : text + "\n");
@@ -749,14 +765,24 @@
     const process = globalThis.process;
     if (!process || process._exiting) return;
     process._exiting = true;
-    try {
-      process.emit("exit", code);
-    } catch (err) {
+    internal.cancelIoWaiters();
+    function reportExitError(err) {
       // An exception inside an exit handler is itself fatal.
       if (internal.workerError) internal.workerError(err);
       process.exitCode = 1;
-      printError(err);
+      if (!internal.workerError) printError(err);
+    }
+    try {
+      process.emit("exit", code);
+    } catch (err) {
+      reportExitError(err);
     } finally {
+      try {
+        internal.finalizeWorkerChildren?.();
+      } catch (err) {
+        reportExitError(err);
+      }
+      internal.cancelIoWaiters();
       if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
       native.closeAllDirs();
     }
@@ -792,7 +818,7 @@
     }
     if (internal.workerError) internal.workerError(err);
     internal.traceExit("uncaught-exception", 1, err);
-    printFatal(err);
+    if (!internal.workerError) printFatal(err);
     globalThis.process.exitCode = 1;
     emitExit(1);
     return false;
@@ -805,7 +831,7 @@
     }
     if (internal.workerError) internal.workerError(reason);
     internal.traceExit("unhandled-rejection", 1, reason);
-    printFatal(reason);
+    if (!internal.workerError) printFatal(reason);
     // Bun reports exit code 0 to "exit" listeners here (and still exits 1).
     emitExit(0);
     return false;
@@ -815,7 +841,7 @@
     if (listenerCount("beforeExit") === 0) return false;
     const process = globalThis.process;
     process.emit("beforeExit", process.exitCode || 0);
-    return refedTimers > 0 || immediates.length > 0 || tickQueue.length > 0;
+    return refedTimers > 0 || immediates.length > 0 || tickQueue.length > 0 || internal.ioPending() > 0;
   };
 
   internal.beforeExit = function beforeExit() {
@@ -840,10 +866,40 @@
   defineGlobal("console", internal.require("console"));
   defineGlobal("Bun", internal.require("bun"));
   defineLazyGlobal("Buffer", () => internal.require("buffer").Buffer);
-  if (typeof globalThis.Intl === "undefined") {
-    // QuickJS has no Intl: a small en-US one (intl.js), which the engine's
-    // own toLocaleString methods then defer to.
+  function hasRealIntl() {
+    if (native.engine === "host") return true;
+    if (typeof globalThis.Intl === "undefined") return false;
+    try {
+      // JSC's WASI build has ICU but only root/English data. Check behavior,
+      // not just constructor presence, so those partial builds get FormatJS.
+      return new Intl.NumberFormat("de-DE").format(1234.5) === "1.234,5" &&
+        new Intl.PluralRules("he").select(2) === "two";
+    } catch {
+      return false;
+    }
+  }
+  const installIntlFallback = !hasRealIntl();
+  if (installIntlFallback) {
     defineLazyGlobal("Intl", () => internal.require("intl"));
+  }
+  defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
+  if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
+  defineLazyGlobal("HTMLRewriter", () => internal.require("html_rewriter").HTMLRewriter);
+  internal.require("builtins");
+  internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
+  internal.require("source_prepare");
+  internal.require("function");
+  internal.fakeTimers = internal.require("fake_timers");
+  // Networking factories require the installed web globals.
+  if (native.hostCaps?.lookup_start && native.hostCaps?.lookup_head) {
+    internal.require("host_lookup").install();
+  }
+  if (process.env.BUNWASM_IPC_CHANNEL) internal.require("child_ipc").initialize();
+  if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
+
+  // Temporal probes Date's native locale methods during initialization. Install
+  // these wrappers last so that probe does not eagerly load the Intl bundle.
+  if (installIntlFallback) {
     defineHidden(Number.prototype, {
       toLocaleString(locales, options) {
         return new globalThis.Intl.NumberFormat(locales, options).format(Number(this));
@@ -858,14 +914,6 @@
       },
     });
   }
-  defineLazyGlobal("structuredClone", () => internal.require("structured_clone").structuredClone);
-  if (typeof globalThis.WebAssembly === "undefined") defineLazyGlobal("WebAssembly", () => internal.require("webassembly"));
-  defineLazyGlobal("HTMLRewriter", () => internal.require("html_rewriter").HTMLRewriter);
-  internal.require("builtins");
-  internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
-  internal.require("function");
-  internal.fakeTimers = internal.require("fake_timers");
-  if (process.env.BUNWASM_WORKER_INIT) internal.require("worker_threads").initialize();
 
   return internal;
 })

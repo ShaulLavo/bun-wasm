@@ -8,13 +8,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { chromium, firefox, webkit, type Browser, type Page } from "playwright";
-import { buildBrowserEntries } from "../../scripts/browser-build";
+import { processBundle } from "../scripts/ci-process-bundles";
 import { runtimeProcChecks, runtimeProcJobWaitChecks } from "./runtime-proc-fixtures";
 import { runtimeProcFailure } from "./runtime-proc-browser-diagnostics";
 
 type RuntimeProcResult = Record<string, unknown> & {
   ok: boolean;
   checks: string[];
+  stopCodes: number[];
   admissionReports: number;
   cleanup: { activeWorkers: number };
   teardown: { forcedWorkers: number; activeWorkers: number };
@@ -55,6 +56,7 @@ function cleanup(): Promise<void> {
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => { void cleanup().finally(() => process.exit(1)); });
 const deadline = setTimeout(() => { console.error("runtime_proc browser gate timed out"); void cleanup().finally(() => process.exit(1)); }, Math.max(120_000, names.length * iterations * modes.length * scenarios.length * 40_000));
 try {
+  const checkRuntimeProcCase = async () => {
   const base = process.env.RUNNER_TEMP ?? process.env.SCRATCH ?? originalTmpdir ?? (existsSync("/work/tmp") ? "/work/tmp" : tmpdir());
   scratch = await (scratchCreation = mkdtemp(join(base, "bun-wasm-runtime-proc-browser-")));
   process.env.TMPDIR = scratch;
@@ -62,12 +64,9 @@ try {
   // A captured pre-wiring bundle can run after implementation changes without checking out or
   // modifying shared source. External bundles are caller-owned and are never removed by this gate.
   const captured = process.env.BUN_WASM_RUNTIME_PROC_BUNDLE;
-  const out = captured ? resolve(captured) : join(scratch, "dist"), root = resolve(import.meta.dir, "../..");
+  const out = captured ? resolve(captured) : join(scratch, "dist");
   if (captured) assert.ok(await Bun.file(join(out, "index.html")).exists(), "captured bundle needs index.html");
-  else {
-    await buildBrowserEntries([join(import.meta.dir, "runtime-proc-browser-main.ts"), join(root, "web/src/worker.ts"), join(root, "web/src/fs-worker.ts")], out, { runtimeWorker: true });
-    await Bun.write(join(out, "index.html"), '<!doctype html><script type="module" src="./runtime-proc-browser-main.js"></script>');
-  }
+  else await processBundle("runtime-proc", out);
   server = Bun.serve({ hostname: "127.0.0.1", port: 0,
     async fetch(request) {
       const url = new URL(request.url);
@@ -82,7 +81,9 @@ try {
   for (const name of names) {
     launch = types[name as keyof typeof types].launch({ headless: true, downloadsPath: join(scratch, "downloads"), tracesDir: join(scratch, "traces") });
     browser = await launch;
-    repeatedRuns: for (let iteration = 1; iteration <= iterations; iteration++) for (const scenario of scenarios) for (const mode of modes) {
+    const cases: { iteration: number; scenario: string; mode: string }[] = Array.from({ length: iterations }, (_, index) => index + 1).flatMap(iteration =>
+      scenarios.flatMap(scenario => modes.map(mode => ({ iteration, scenario, mode }))));
+    for (const { iteration, scenario, mode } of cases) {
       const page: Page = await browser.newPage();
       const errors: string[] = [];
       page.on("pageerror", error => errors.push(error.message));
@@ -97,22 +98,27 @@ try {
         result = completed;
         assert.equal(completed.ok, true, JSON.stringify(completed));
         assert.deepEqual(completed.checks, Array.from<string>(scenario === "job-wait" ? runtimeProcJobWaitChecks : runtimeProcChecks));
+        assert.deepEqual(completed.stopCodes, scenario === "pipes" ? [130, 137] : []);
         assert.equal(completed.cleanup.activeWorkers, 0);
         assert.equal(completed.teardown.forcedWorkers, 0);
         assert.equal(completed.teardown.activeWorkers, 0);
         assert.deepEqual(errors, []);
         console.log(JSON.stringify({ browser: name, version: browser.version(), iteration, mode, scenario, ok: true,
-          checks: completed.checks, admissionReports: completed.admissionReports, cleanup: completed.cleanup, teardown: completed.teardown, pageErrors: errors }));
+          checks: completed.checks, stopCodes: completed.stopCodes, admissionReports: completed.admissionReports, cleanup: completed.cleanup, teardown: completed.teardown, pageErrors: errors }));
       } catch (error) {
         failed = true;
         console.error(await runtimeProcFailure({ browser: name, version: browser.version(), iteration, mode, scenario, pageErrors: errors }, error, result,
           () => page.evaluate(() => (globalThis as any).runtimeProcDiagnostics?.())));
         console.error(error);
-        if (iterations > 1) break repeatedRuns;
+
       } finally { await page.close(); }
+      if (failed && iterations > 1) break;
     }
     await browser.close(); browser = undefined; launch = undefined;
     if (failed && iterations > 1) break;
   }
   assert.equal(failed, false, "real worker runtime_proc regression gate failed (see mode results above)");
+
+  };
+  await checkRuntimeProcCase();
 } finally { clearTimeout(deadline); await cleanup(); console.log("cleanup: owned browsers closed, ephemeral listener stopped, scratch removed"); }

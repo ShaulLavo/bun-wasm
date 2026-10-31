@@ -6,7 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 paths=(Source/JavaScriptCore Source/WTF Source/bmalloc Source/cmake Source/ThirdParty/unifdef
   Source/ThirdParty/xdgmime Tools/Scripts Tools/cmake)
 
-if [[ ! -d "$WEBKIT_DIR/.git" ]]; then
+if [[ ! -e "$WEBKIT_DIR/.git" ]]; then
   git init -q "$WEBKIT_DIR"
   git -C "$WEBKIT_DIR" remote add origin https://github.com/oven-sh/WebKit.git
   git -C "$WEBKIT_DIR" config remote.origin.promisor true
@@ -18,7 +18,7 @@ if [[ "$(git -C "$WEBKIT_DIR" rev-parse HEAD 2>/dev/null)" != "$WEBKIT_COMMIT" ]
   git -C "$WEBKIT_DIR" checkout -q --detach "$WEBKIT_COMMIT"
 fi
 if git -C "$WEBKIT_DIR" apply --check "$JSC_SRC/webkit-wasi.patch" 2>/dev/null; then
-  git -C "$WEBKIT_DIR" apply "$JSC_SRC/webkit-wasi.patch"
+  git -C "$WEBKIT_DIR" apply --index "$JSC_SRC/webkit-wasi.patch"
   echo "webkit: applied webkit-wasi.patch"
 elif git -C "$WEBKIT_DIR" apply --reverse --check "$JSC_SRC/webkit-wasi.patch" 2>/dev/null; then
   echo "webkit: patch already applied"

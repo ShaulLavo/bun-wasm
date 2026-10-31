@@ -1,0 +1,314 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { createRegistry, packageFixture } from "./registry.mjs";
+
+const root = resolve(import.meta.dir, "../..");
+const scratch = mkdtempSync(join(process.env.BUN_WASM_TEST_TMP ?? tmpdir(), "bun-wasm-root-overrides-"));
+const children = new Set<ReturnType<typeof spawn>>();
+let registry: Awaited<ReturnType<typeof createRegistry>> | undefined;
+let cleaned = false;
+
+async function cleanup() {
+  if (cleaned) return;
+  cleaned = true;
+  for (const child of children) child.kill("SIGKILL");
+  await registry?.close();
+  rmSync(scratch, { recursive: true, force: true });
+}
+
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => void cleanup().then(() => process.exit(130)));
+process.on("exit", () => {
+  for (const child of children) child.kill("SIGKILL");
+  rmSync(scratch, { recursive: true, force: true });
+});
+
+function project(name: string, manifest: object) {
+  const directory = join(scratch, name);
+  mkdirSync(directory);
+  save(directory, manifest);
+  return directory;
+}
+
+function save(directory: string, manifest: object) {
+  writeFileSync(join(directory, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function contents(directory: string, path = "bun.lock") {
+  return readFileSync(join(directory, path), "utf8");
+}
+
+function installed(directory: string, name: string) {
+  return JSON.parse(contents(directory, `node_modules/${name}/package.json`)).version;
+}
+
+async function run(directory: string, args: string[], expected = 0) {
+  assert.ok(registry);
+  const engine = process.env.INSTALL_ENGINE ?? "quickjs";
+  const native = process.env.INSTALL_NATIVE_BUN === "1";
+  const wasm = resolve(root, "dist", engine === "quickjs" ? "bun.wasm" : `bun-${engine}.wasm`);
+  const executable = native ? process.execPath : engine === "browser" ? Bun.which("node") : process.env.BUN_WASM_LAUNCHER;
+  assert.ok(executable, "Set BUN_WASM_LAUNCHER for embedded engines");
+  const guest = ["--wasm", wasm, "--dir", `${directory}::/`, "--env", "PWD=/", "--env", "HOME=/", "--env", `NPM_CONFIG_REGISTRY=${registry.base}`, "--env", "BUN_INSTALL_CACHE_DIR=/cache", "--"].concat(args);
+  // Package scripts run in bash-web's shell guest (scripts/build-bash-web-shell.sh).
+  const argv = native ? args : engine === "browser" ? ["--no-warnings", join(root, "web/scripts/node-host.mjs"), "--net"].concat(guest) : ["--shell", resolve(root, "dist/bash-web-shell.wasm"), "--env-utility", resolve(root, "dist/bash-web-env.wasm")].concat(guest);
+  const child = spawn(executable, argv, { cwd: directory, env: { ...process.env, NPM_CONFIG_REGISTRY: registry.base, BUN_INSTALL_CACHE_DIR: join(directory, "cache") }, stdio: ["ignore", "pipe", "pipe"] });
+  children.add(child);
+  let stdout = "", stderr = "";
+  child.stdout?.on("data", bytes => { stdout += bytes; });
+  child.stderr?.on("data", bytes => { stderr += bytes; });
+  const deadline = setTimeout(() => child.kill("SIGKILL"), 60000);
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  }).finally(() => { clearTimeout(deadline); children.delete(child); });
+  assert.equal(code, expected, `${args.join(" ")}\n${stdout}${stderr}`);
+  return { stdout, stderr };
+}
+
+function lockedSelector(directory: string) {
+  const lock = Bun.JSONC.parse(contents(directory));
+  assert.ok(lock && typeof lock === "object" && "packages" in lock);
+  const packages = lock.packages;
+  assert.ok(packages && typeof packages === "object" && "selector-fits" in packages);
+  assert.ok(Array.isArray(packages["selector-fits"]));
+  return packages["selector-fits"][0];
+}
+
+async function selectors() {
+  const dependencies = { "selector-fits": "<2.0.0", "@fixture/selected": "<2.0.0", "selector-misses": "^2.0.0" };
+  const overrides = { "selector-fits@^1.0.0": "0.5.0", "@fixture/selected@^1": "0.5.0", "selector-misses@^1": "0.5.0" };
+  const directory = project("selectors", { name: "root", dependencies, overrides });
+  await run(directory, ["install"]);
+  assert.equal(installed(directory, "selector-fits"), "0.5.0");
+  assert.equal(installed(directory, "@fixture/selected"), "0.5.0");
+  assert.equal(installed(directory, "selector-misses"), "2.0.0");
+  const lock = contents(directory);
+  const parsed = Bun.JSONC.parse(lock);
+  assert.ok(parsed && typeof parsed === "object" && "overrides" in parsed, "root overrides persist");
+  rmSync(join(directory, "node_modules"), { recursive: true, force: true });
+  await run(directory, ["install", "--frozen-lockfile"]);
+  assert.equal(installed(directory, "selector-fits"), "0.5.0");
+  assert.equal(contents(directory), lock);
+}
+
+async function invalidSelectors() {
+  const rows = ["^99999999999999999999", "^1 || ^99999999999999999999", "latest", "", "^2"];
+  for (const [index, selector] of rows.entries()) {
+    const directory = project(`invalid-${index}`, { dependencies: { "selector-fits": "<2.0.0" }, overrides: { [`selector-fits@${selector}`]: "0.5.0" } });
+    await run(directory, ["install", "--lockfile-only"]);
+    assert.equal(lockedSelector(directory), "selector-fits@1.0.0", selector);
+    const lock = contents(directory);
+    await run(directory, ["install", "--lockfile-only", "--frozen-lockfile"]);
+    assert.equal(contents(directory), lock);
+  }
+}
+
+async function skippedSelectors() {
+
+  for (const [index, selector] of ["^1 && <2", "1.2.3.4"].entries()) {
+    const directory = project(`skipped-${index}`, { dependencies: { "selector-fits": "<2.0.0" }, overrides: { [`selector-fits@${selector}`]: "0.5.0" } });
+    await run(directory, ["install", "--lockfile-only"]);
+    assert.equal(lockedSelector(directory), "selector-fits@1.0.0");
+  }
+}
+
+async function transitive() {
+  const directory = project("transitive", { dependencies: { "uses-one": "1.0.0", "uses-two": "1.0.0", "uses-latest": "1.0.0", "uses-scoped": "1.0.0" }, overrides: { versioned: "2.0.0", "@fixture/selected": "0.5.0" } });
+  await run(directory, ["install"]);
+  assert.equal(installed(directory, "versioned"), "2.0.0");
+  assert.equal(installed(directory, "@fixture/selected"), "0.5.0");
+  assert.equal(existsSync(join(directory, "node_modules/uses-one/node_modules/versioned")), false);
+  const lock = contents(directory);
+  await run(directory, ["install", "--frozen-lockfile"]);
+  assert.equal(contents(directory), lock);
+}
+
+async function changed() {
+  assert.ok(registry);
+  registry.latest.set("versioned", "1.1.0");
+  const dependencies = { "uses-one": "1.0.0", "uses-latest": "1.0.0", "selector-fits": "<2.0.0" };
+  const directory = project("changed", { dependencies });
+  await run(directory, ["install"]);
+  assert.equal(installed(directory, "versioned"), "1.1.0");
+  for (const overrides of [{ versioned: "2.0.0" }, { versioned: "1.0.0" }, { "versioned@^1": "1.0.0" }, {}]) {
+    const lock = contents(directory);
+    const previous = installed(directory, "versioned");
+    save(directory, { dependencies, overrides });
+    const manifest = contents(directory, "package.json");
+    const before: number = registry.requests.length;
+    const result = await run(directory, ["install", "--frozen-lockfile"], 1);
+    assert.match(result.stderr, /lockfile.*frozen/);
+    assert.equal(contents(directory), lock);
+    assert.equal(contents(directory, "package.json"), manifest);
+    assert.equal(installed(directory, "versioned"), previous);
+    if (process.env.INSTALL_NATIVE_BUN !== "1") assert.ok(registry.requests.slice(before).every(request => !request.path.startsWith("/tarballs/")));
+    const production = await run(directory, ["install", "--production", "--frozen-lockfile"], 1);
+    assert.match(production.stderr, /lockfile.*frozen/);
+    assert.equal(contents(directory), lock);
+    await run(directory, ["install"]);
+    const expected = "versioned" in overrides ? overrides.versioned : "1.1.0";
+    assert.equal(installed(directory, "versioned"), expected);
+    if ("versioned@^1" in overrides) assert.equal(installed(directory, "uses-one/node_modules/versioned"), "1.0.0");
+    const saved = contents(directory);
+    await run(directory, ["install", "--frozen-lockfile"]);
+    assert.equal(contents(directory), saved);
+  }
+}
+
+async function unaffectedPins() {
+  assert.ok(registry);
+  registry.latest.set("versioned", "1.0.0");
+  const dependencies = { versioned: "latest", "uses-latest": "1.0.0", "selector-fits": "^1" };
+  const directory = project("unaffected", { dependencies });
+  await run(directory, ["install"]);
+  registry.latest.set("versioned", "2.0.0");
+  save(directory, { dependencies, overrides: { "selector-fits": "0.5.0" } });
+  await run(directory, ["install"]);
+  assert.equal(installed(directory, "selector-fits"), "0.5.0");
+  assert.equal(installed(directory, "versioned"), "1.0.0");
+  const lock = contents(directory);
+  await run(directory, ["install", "--frozen-lockfile"]);
+  assert.equal(contents(directory), lock);
+}
+
+async function targets() {
+  assert.ok(registry);
+  registry.latest.set("versioned", "1.0.0");
+  const directory = project("targets", { dependencies: { "selector-fits": "^1" }, overrides: { "selector-fits": "npm:versioned@2.0.0" } });
+  await run(directory, ["install"]);
+  assert.equal(installed(directory, "selector-fits"), "2.0.0");
+  await run(directory, ["install", "--frozen-lockfile"]);
+  const tagged = project("tag", { dependencies: { versioned: "^2" }, overrides: { versioned: "latest" } });
+  await run(tagged, ["install"]);
+  assert.equal(installed(tagged, "versioned"), "1.0.0");
+  const lock = contents(tagged);
+  registry.latest.set("versioned", "2.0.0");
+  await run(tagged, ["install", "--frozen-lockfile"]);
+  assert.equal(installed(tagged, "versioned"), "1.0.0");
+  assert.equal(contents(tagged), lock);
+
+  const transitiveAlias = project("transitive-alias", { dependencies: { "uses-one": "1.0.0", "uses-two": "1.0.0" }, overrides: { versioned: "npm:@fixture/selected@0.5.0" } });
+  await run(transitiveAlias, ["install"]);
+  assert.equal(installed(transitiveAlias, "versioned"), "0.5.0");
+  assert.equal(existsSync(join(transitiveAlias, "node_modules/uses-one/node_modules/versioned")), false);
+  const aliasLock = contents(transitiveAlias);
+  await run(transitiveAlias, ["install", "--frozen-lockfile"]);
+  assert.equal(contents(transitiveAlias), aliasLock);
+
+  registry.latest.set("versioned", "1.0.0");
+  const transitiveTag = project("transitive-tag", { dependencies: { "uses-one": "1.0.0", "uses-two": "1.0.0" }, overrides: { versioned: "latest" } });
+  await run(transitiveTag, ["install"]);
+  assert.equal(installed(transitiveTag, "versioned"), "1.0.0");
+  const tagLock = contents(transitiveTag);
+  registry.latest.set("versioned", "2.0.0");
+  await run(transitiveTag, ["install", "--frozen-lockfile"]);
+  assert.equal(installed(transitiveTag, "versioned"), "1.0.0");
+  assert.equal(contents(transitiveTag), tagLock);
+}
+
+async function unaffectedAliasPins() {
+  assert.ok(registry);
+  for (const transitive of [false, true]) {
+    registry.latest.set("versioned", "1.0.0");
+    const dependencies = transitive ? { "uses-alias": "1.0.0" } : { alias: "npm:versioned@latest" };
+    const directory = project(`unaffected-alias-${transitive}`, { dependencies });
+    await run(directory, ["install"]);
+    assert.equal(installed(directory, "alias"), "1.0.0");
+    registry.latest.set("versioned", "2.0.0");
+    const lock = contents(directory);
+    save(directory, { dependencies, overrides: { versioned: "2.0.0" } });
+    const manifest = contents(directory, "package.json");
+    await run(directory, ["install", "--frozen-lockfile"], 1);
+    assert.equal(contents(directory), lock);
+    assert.equal(contents(directory, "package.json"), manifest);
+    assert.equal(installed(directory, "alias"), "1.0.0");
+    await run(directory, ["install"]);
+    assert.equal(installed(directory, "alias"), "1.0.0", `unrelated alias tag pin, transitive=${transitive}`);
+    const saved = contents(directory);
+    await run(directory, ["install", "--frozen-lockfile"]);
+    assert.equal(contents(directory), saved);
+  }
+}
+
+async function rootLocalTargets() {
+  for (const workspace of [false, true]) {
+    const directory = project(`root-local-${workspace}`, {
+      ...(workspace ? { workspaces: ["parent"] } : { dependencies: { parent: "file:./parent" } }),
+      overrides: { "selector-fits": "file:./replacement" },
+    });
+    mkdirSync(join(directory, "parent"));
+    save(join(directory, "parent"), { name: "parent", version: "1.0.0", dependencies: { "selector-fits": "^1", declared: "file:./declared" } });
+    mkdirSync(join(directory, "parent/declared"));
+    save(join(directory, "parent/declared"), { name: "declared", version: "1.0.0" });
+    mkdirSync(join(directory, "replacement"));
+    save(join(directory, "replacement"), { name: "selector-fits", version: "0.5.0" });
+    await run(directory, ["install"]);
+    const lock = contents(directory);
+    assert.match(lock, /selector-fits@(?:file|link):(?:\.\/)?replacement/);
+    assert.doesNotMatch(lock, /selector-fits@(?:file|link):(?:\.\/)?parent\/replacement/);
+    assert.match(lock, /declared@(?:file|link):(?:\.\/)?parent\/declared/);
+    await run(directory, ["install", "--frozen-lockfile"]);
+    assert.equal(contents(directory), lock);
+  }
+}
+
+async function aliasSelectors() {
+  const dependencies = { alias: "npm:versioned@<2", "@fixture/alias": "npm:@fixture/selected@^1", other: "npm:versioned@1.0.0", "uses-alias": "1.0.0", "uses-alias-range": "1.0.0" };
+  const overrides = { "alias@npm:versioned@^1": "npm:selector-fits@0.5.0", "@fixture/alias@npm:@fixture/selected@^1": "npm:selector-fits@0.5.0", "other@npm:@fixture/selected@^1": "0.5.0", "selected@npm:versioned@^1": "npm:selector-fits@0.5.0", versioned: "2.0.0" };
+  const directory = project("alias-selectors", { dependencies, overrides });
+  await run(directory, ["install"]);
+  assert.equal(installed(directory, "alias"), "0.5.0");
+  assert.equal(installed(directory, "@fixture/alias"), "0.5.0");
+  assert.equal(installed(directory, "other"), "1.0.0");
+  assert.equal(installed(directory, "selected"), "0.5.0");
+  const parsed = Bun.JSONC.parse(contents(directory));
+  assert.ok(parsed && typeof parsed === "object" && "overrides" in parsed);
+  const stored = parsed.overrides;
+  assert.ok(stored && typeof stored === "object" && "alias@npm:versioned@^1" in stored && "@fixture/alias@npm:@fixture/selected@^1" in stored);
+  assert.deepEqual(stored["alias@npm:versioned@^1"], { ".": "npm:selector-fits@0.5.0" });
+  assert.deepEqual(stored["@fixture/alias@npm:@fixture/selected@^1"], { ".": "npm:selector-fits@0.5.0" });
+  const lock = contents(directory);
+  await run(directory, ["install", "--frozen-lockfile"]);
+  assert.equal(contents(directory), lock);
+  save(directory, { dependencies, overrides: { ...overrides, "alias@npm:versioned@^1": "npm:selector-fits@2.0.0" } });
+  const manifest = contents(directory, "package.json");
+  await run(directory, ["install", "--frozen-lockfile"], 1);
+  assert.equal(contents(directory), lock);
+  assert.equal(contents(directory, "package.json"), manifest);
+  assert.equal(installed(directory, "alias"), "0.5.0");
+  await run(directory, ["install"]);
+  assert.equal(installed(directory, "alias"), "2.0.0");
+  const changed = contents(directory);
+  await run(directory, ["install", "--frozen-lockfile"]);
+  assert.equal(contents(directory), changed);
+}
+
+async function invalidAliasSelectors() {
+  for (const [index, selector] of ["npm:versioned@^99999999999999999999", "npm:versioned@latest", "npm:versioned@", "npm:versioned@^2"].entries()) {
+    const directory = project(`invalid-alias-${index}`, { dependencies: { alias: "npm:versioned@1.0.0" }, overrides: { [`alias@${selector}`]: "npm:selector-fits@0.5.0" } });
+    await run(directory, ["install"]);
+    assert.equal(installed(directory, "alias"), "1.0.0", selector);
+    const lock = contents(directory);
+    await run(directory, ["install", "--frozen-lockfile"]);
+    assert.equal(contents(directory), lock);
+  }
+}
+
+try {
+  const packages = ["selector-fits", "selector-misses", "@fixture/selected"].flatMap(name => ["0.5.0", "1.0.0", "2.0.0"].map(version => packageFixture(name, version)));
+  registry = await createRegistry(packages.concat([packageFixture("uses-scoped", "1.0.0", { dependencies: { "@fixture/selected": "^1" } }), packageFixture("uses-alias", "1.0.0", { dependencies: { alias: "npm:versioned@latest" } }), packageFixture("uses-alias-range", "1.0.0", { dependencies: { selected: "npm:versioned@<2" } })]));
+  for (const test of [selectors, invalidSelectors, skippedSelectors, transitive, changed, unaffectedPins, targets, unaffectedAliasPins, rootLocalTargets, aliasSelectors, invalidAliasSelectors]) {
+    if (process.env.INSTALL_CASE && process.env.INSTALL_CASE !== test.name) continue;
+    if (process.env.INSTALL_NATIVE_BUN === "1" && test === skippedSelectors) {
+      console.log("SKIP skippedSelectors: portable parser flags reject tokens native Bun accepts");
+      continue;
+    }
+    await test();
+    console.log(`PASS ${test.name}`);
+  }
+} finally {
+  await cleanup();
+}

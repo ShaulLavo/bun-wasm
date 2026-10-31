@@ -1,0 +1,5 @@
+{
+  "owner": "runtime",
+  "path": "scripts/astro-circular-reexport.test.ts",
+  "localRuntime": true
+}

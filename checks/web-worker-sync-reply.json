@@ -1,0 +1,6 @@
+{
+  "owner": "web",
+  "path": "scripts/worker-sync-reply.test.ts",
+  "localRuntime": true,
+  "batch": "10-web"
+}

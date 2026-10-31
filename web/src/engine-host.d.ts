@@ -1,6 +1,8 @@
 // Types for engine-host.js (plain JS): runs the program in the worker's own JS engine after
 // bun-browser.wasm's `_start` returned with `bunwasm_ready() === 1`.
 
+import type { SharedObjectService } from "./shared-objects/service";
+
 export interface EngineHostOptions {
   /** The bun-browser.wasm instance, after `_start` returned. */
   instance: WebAssembly.Instance;
@@ -12,6 +14,9 @@ export interface EngineHostOptions {
    * modules get `moduleUrls` URLs.
    */
   modules?: { url(key: string): string; put(url: string, source: string): void | Promise<void> };
+  /** The attached terminal session's input mode, when this process reads keyboard input. Returns
+   * Waffle's failure code, or undefined once the mode changed. */
+  terminal?: { setRawMode(raw: boolean): string | undefined };
   /** The fetch exposed to user code (without it, fetch rejects). */
   fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   /**
@@ -23,6 +28,18 @@ export interface EngineHostOptions {
     natives: Record<string, (...args: never[]) => unknown>;
     caps: Record<string, boolean>;
     onNews(cb: () => void): void;
+  };
+  /**
+   * The process wake word that pipe and child changes publish on (Waffle's worker process state).
+   * While the program waits on I/O, the event loop wakes on it instead of only rescanning.
+   */
+  processWake?: Int32Array;
+  /** Private backing service. Supplying it does not enable guest codec/startup decoding. */
+  sharedObjects?: SharedObjectService;
+  /** Engine-native continuation slot. Promise and await jobs must capture and restore it. */
+  asyncContext?: {
+    get(): unknown;
+    set(frame: unknown): void;
   };
   /** Called exactly once when the program ends (process.exit, uncaught error, empty event loop). */
   onExit(code: number): void;

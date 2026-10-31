@@ -1,3 +1,4 @@
+import { createScriptEvaluation } from "./script-evaluation.ts";
 import { observePromise } from "./promise-reactions.ts";
 import { installNativeStreamState } from "./native-stream-state.ts";
 import { oversizedCryptoInput } from "./crypto-inputs.js";
@@ -5,6 +6,9 @@ import { installHostCrypto } from "./crypto-host.js";
 import { memoryViews } from "waffle/core/memory-views";
 import { isWasmMemoryBuffer, transferArrayBuffers } from "./buffer-transfer.ts";
 import { ContentModules } from "./content-modules.ts";
+import { SLOT_NAMES } from "./net/trampoline.ts";
+import { trackLookup } from "./net/lookup.ts";
+import { bindSharedObjectHost } from "./shared-objects/host.ts";
 
 // The host engine (docs/engine-browser.md): run bun-wasm's runtime on the JS engine of
 // whatever runs this file (a browser Web Worker: V8 or JavaScriptCore with JIT; Node for
@@ -25,6 +29,8 @@ import { ContentModules } from "./content-modules.ts";
 // Plain JS (no TypeScript) so Node can import it directly.
 
 // The host's own versions of what the polyfills replace on globalThis.
+/** Capability flags the host answers for; the wasm owns all the others. */
+const NETWORK_CAPS = new Set(SLOT_NAMES);
 const nativeSubtleCrypto = globalThis.crypto?.subtle;
 const NativeDOMException = globalThis.DOMException;
 const NativeCryptoKey = globalThis.CryptoKey;
@@ -41,7 +47,65 @@ const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
 const nativeDateNow = globalThis.Date.now.bind(globalThis.Date);
 const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
+
+// A `for await` loop's iterator record, made by `__bunwasm_iterate` with the
+// reads and calls of GetIterator(iterable, async) and given to the loop in
+// place of the iterable; a sync iterable stays sync, so the engine still
+// adapts it. It notes the frame once `next()` or `return()` has returned,
+// right before the loop's implicit await suspends: an async iterator method
+// that throws synchronously leaves nothing pending. The engine's adapter for
+// a sync iterator turns such a throw into a rejection the loop awaits, and
+// awaits on close even without `return`, so a sync record notes the frame in
+// those cases too. A frame already pending (a sync iterator closed because
+// its value rejected) is kept.
+const noFrame = Symbol("no frame");
+function iteratorMethod(iterable, key) {
+  const method = iterable[key];
+  if (method === undefined || method === null) return undefined;
+  if (typeof method !== "function") throw new TypeError(`${String(key)} is not a function`);
+  return method;
+}
+function forAwaitRecord(iterable, frame) {
+  const asyncMethod = iteratorMethod(iterable, Symbol.asyncIterator);
+  const key = asyncMethod ? Symbol.asyncIterator : Symbol.iterator;
+  const method = asyncMethod ?? iteratorMethod(iterable, Symbol.iterator);
+  if (method === undefined) throw new TypeError("object is not async iterable");
+  const iterator = Reflect.apply(method, iterable, []);
+  if ((typeof iterator !== "object" || iterator === null) && typeof iterator !== "function") {
+    throw new TypeError(`Result of the ${String(key)} method is not an object`);
+  }
+  const next = iterator.next;
+  const sync = key === Symbol.iterator;
+  const note = () => {
+    if (record.pending === noFrame) record.pending = frame();
+  };
+  const call = (method) => {
+    if (!sync) {
+      const result = Reflect.apply(method, iterator, []);
+      note();
+      return result;
+    }
+    try {
+      return Reflect.apply(method, iterator, []);
+    } finally {
+      note();
+    }
+  };
+  const record = {
+    pending: noFrame,
+    next: () => call(next),
+    get return() {
+      const close = iterator.return;
+      if (typeof close === "function") return () => call(close);
+      if (sync) note();
+      return close;
+    },
+  };
+  return Object.defineProperty(Object.setPrototypeOf(record, null), key, { value: () => record });
+}
 const nativeGc = typeof globalThis.gc === "function" ? globalThis.gc.bind(globalThis) : null;
+const nativeAtomicsLoad = Atomics.load;
+const nativeWaitAsync = typeof Atomics.waitAsync === "function" ? Atomics.waitAsync : null;
 const NativeMessageChannel = globalThis.MessageChannel;
 const NativeAbortController = globalThis.AbortController;
 const NativePromise = globalThis.Promise;
@@ -54,6 +118,7 @@ const nativeAddEventListener = typeof globalThis.addEventListener === "function"
 
 const utf8 = new NativeTextEncoder();
 const fromUtf8 = new NativeTextDecoder();
+const wireFromUtf8 = new NativeTextDecoder("utf-8", { ignoreBOM: true });
 
 // --- the value encoding (engine_host.rs encode/decode) ------------------------------------
 
@@ -195,7 +260,7 @@ class Reader {
         return n;
       }
       case T.STR:
-        return fromUtf8.decode(this.raw().slice());
+        return wireFromUtf8.decode(this.raw().slice());
       case T.BYTES:
         // Copied out: wasm memory can grow (and detach) on the next call.
         return this.raw().slice();
@@ -209,7 +274,7 @@ class Reader {
         const n = this.u32();
         const out = {};
         for (let i = 0; i < n; i++) {
-          const k = fromUtf8.decode(this.raw().slice());
+          const k = wireFromUtf8.decode(this.raw().slice());
           out[k] = this.value();
         }
         return out;
@@ -280,13 +345,20 @@ class ExitSignal {
  *   networking: the bun_wasm ABI (docs/host-abi.md) as the JS functions net.js
  *   calls (hostListen, hostRead, …), which slots they cover, and a way to be
  *   told when any handle may have changed
+ * @param {{setRawMode(raw: boolean): string | undefined}} [o.terminal]  the attached terminal
+ *   session's input mode, when this process reads keyboard input
+ * @param {Int32Array} [o.processWake]  the process wake word that pipe and child changes publish on;
+ *   the loop waits on it while the program waits on I/O
+ * @param {import("./shared-objects/service").SharedObjectService} [o.sharedObjects] private backing transport
  * @returns {Promise<number>} the exit code (if onExit returns)
  */
 export function startEngineHost(o) {
   return new Promise((resolve) => {
-    const host = new EngineHost(o, resolve);
-    host.disposeNativeStreams = installNativeStreamState();
-    host.start();
+    try {
+      const host = new EngineHost(o, resolve);
+      host.disposeNativeStreams = installNativeStreamState();
+      host.start();
+    } catch (error) { o.sharedObjects?.close(); throw error; }
   });
 }
 
@@ -315,6 +387,7 @@ class EngineHost {
     }) : null;
     this.handoffs = new Map();
     this.asyncContext = undefined;
+    this.wakeArmed = false;
     if (NativeMessageChannel) {
       this.channel = new NativeMessageChannel();
       this.channel.port1.onmessage = () => {
@@ -343,6 +416,8 @@ class EngineHost {
     // worker bundle it lives in) are internal, like the polyfills.
     internal.displayName = (file, evalFrame = false) => {
       if (typeof file !== "string") return file;
+      const generated = native.preparedSourceName(file);
+      if (generated !== undefined) return generated;
       const path = this.paths.get(file);
       if (path) return path;
       if (evalFrame) return file;
@@ -351,7 +426,7 @@ class EngineHost {
     this.installGlobals();
     this.wrapPromiseJobs();
     this.watchRejections();
-    this.runEntry();
+    this.startEntry();
     this.schedule(0);
     return undefined;
   }
@@ -383,18 +458,22 @@ class EngineHost {
     // Networking: the bun_wasm ABI functions net.js calls (native.host*),
     // implemented in JS by the host (o.net), not by wasm slots.
     const net = this.o.net;
-    native.hostCaps = Object.fromEntries(Object.keys(native.hostCaps || {}).map((k) => [k, Boolean(net && net.caps[k])]));
+    // The host decides the network capabilities. Everything else the wasm reports (such as its
+    // runtime_proc process calls, imported directly) is the guest's own and stays as it is.
+    native.hostCaps = Object.fromEntries(Object.entries(native.hostCaps || {}).map(([k, v]) => [k, NETWORK_CAPS.has(k) ? Boolean(net && net.caps[k]) : v]));
     if (net) {
       Object.assign(native, net.natives);
+      if (native.hostLookup) native.hostLookup = trackLookup(native.hostLookup, promise => this.track(promise));
       net.onNews(() => this.schedule(0));
     }
+    if (this.o.terminal) native.terminalSetRawMode = raw => this.o.terminal.setRawMode(raw);
     native.engine = "host";
     this.installSubtleCrypto();
     native.subtleCrypto = nativeSubtleCrypto;
     native.DOMException = NativeDOMException;
     native.CryptoKey = NativeCryptoKey;
     native.SubtleCrypto = NativeSubtleCrypto;
-    Object.assign(native, this.valueNatives());
+    Object.assign(native, this.valueNatives(native.mapPosition));
     return native;
   }
 
@@ -416,9 +495,17 @@ class EngineHost {
     }
   }
 
-  valueNatives() {
+  valueNatives(mapPosition) {
     const host = this;
+    const shared = this.o?.sharedObjects;
     return {
+      contextHooks: !host.o.asyncContext,
+      ...createScriptEvaluation((code, filename) => host.evalAt(code, filename), mapPosition),
+      sharedObjects: shared ? bindSharedObjectHost(shared, {
+        active: () => !host.exited,
+        pending: delta => { host.pendingAsync += delta; },
+        wake: () => host.schedule(0),
+      }) : undefined,
       exit(code) {
         const status = (code | 0) & 0xff;
         host.exit(status);
@@ -449,9 +536,6 @@ class EngineHost {
       importModule(spec) {
         return host.importKey(spec);
       },
-      evalScript(code, filename) {
-        return host.evalAt(NativeString(code), filename || "evalmachine.<anonymous>");
-      },
       loadPolyfill(name) {
         return host.evalPolyfill(name);
       },
@@ -468,9 +552,9 @@ class EngineHost {
       isError: (v) => (typeof Error.isError === "function" ? Error.isError(v) : v instanceof Error),
       iteratorEntries: () => undefined,
       ownKeysInOrder: () => undefined,
-      // Carried through timers and ticks by the polyfills; not across await.
-      getAsyncContext: () => host.asyncContext,
+      getAsyncContext: () => host.o.asyncContext ? host.o.asyncContext.get() : host.asyncContext,
       setAsyncContext: (v) => {
+        if (host.o.asyncContext) return host.o.asyncContext.set(v);
         host.asyncContext = v;
       },
       gc: () => nativeGc?.(),
@@ -495,6 +579,7 @@ class EngineHost {
   // Indirect eval: global scope, sloppy unless the code says otherwise; the
   // sourceURL names the file in stack traces.
   evalAt(code, filename) {
+    // oxlint-disable-next-line no-eval -- Exercise the runtime classic-script factory or engine evaluator.
     return (0, eval)(`${code}\n//# sourceURL=${filename}`);
   }
 
@@ -619,25 +704,91 @@ class EngineHost {
       ),
     );
     hidden("__bunwasm_wrap", (key) => host.handoffs.get(key));
-    // AsyncLocalStorage across `await`: the transpiler prints `await x` as
-    // `__bunwasm_resume(__bunwasm_capture(), await x)` for this engine.
-    // A resumed context would stay set for whatever runs after the function
-    // suspends again or returns; jobs the host wraps (then callbacks, timers,
-    // ticks) set their own, and a microtask puts the previous one back if
-    // nothing changed it meanwhile.
-    hidden("__bunwasm_capture", () => host.asyncContext);
-    hidden("__bunwasm_resume", (saved, value) => {
-      const ambient = host.asyncContext;
-      if (ambient !== saved) {
-        host.asyncContext = saved;
-        nativeQueueMicrotask(() => {
-          if (host.asyncContext === saved) host.asyncContext = ambient;
-        });
-      }
-      return value;
-    });
+    this.installContextHooks(hidden);
     // Without a networking host, user code gets the host's own fetch.
     if (this.o.fetch && !this.native.hostCaps.fetch) this.installFetch(this.o.fetch);
+  }
+
+  // AsyncLocalStorage across suspensions. For this engine the transpiler
+  // prints hooks around `await`, async generator `yield`, `for await`, and the
+  // `catch` and `finally` blocks that can observe a rejected await (vendor
+  // patch 0008, docs/engine-browser.md). A resumed frame would stay set for
+  // whatever runs after the function suspends again or returns; jobs the host
+  // wraps (then callbacks, timers, ticks) set their own, and a microtask puts
+  // the previous one back if nothing changed it meanwhile.
+  installContextHooks(hidden) {
+    const host = this;
+    const id = (value) => value;
+    // A native continuation provider already scopes every job, including raw
+    // eval. Its post-getter frame must not be replaced with the printer's
+    // earlier frame, so every hook is inert.
+    if (this.o.asyncContext) {
+      hidden("__bunwasm_capture", () => undefined);
+      hidden("__bunwasm_resume", (_saved, value) => value);
+      hidden("__bunwasm_resumed", id);
+      hidden("__bunwasm_caught", () => {});
+      hidden("__bunwasm_id", id);
+      hidden("__bunwasm_iterate", id);
+      hidden("__bunwasm_entered", () => {});
+      hidden("__bunwasm_exited", () => {});
+      return;
+    }
+    const enter = (saved) => {
+      const ambient = host.asyncContext;
+      if (ambient === saved) return;
+      host.asyncContext = saved;
+      nativeQueueMicrotask(() => {
+        if (host.asyncContext === saved) host.asyncContext = ambient;
+      });
+    };
+    // `__bunwasm_resume(__bunwasm_capture(), await x)` in a function without
+    // handlers; `__bunwasm_resumed(await __bunwasm_id(x, s = capture()), s, s = 0)`
+    // in one whose `catch`/`finally` blocks start with `__bunwasm_caught(s, s = 0)`.
+    // `s` is 0 while no suspension is pending, else the frame it began in.
+    hidden("__bunwasm_capture", () => host.asyncContext);
+    hidden("__bunwasm_resume", (saved, value) => {
+      enter(saved);
+      return value;
+    });
+    hidden("__bunwasm_resumed", (value, saved) => {
+      enter(saved);
+      return value;
+    });
+    // A generator's throw() runs its handlers synchronously in the caller's
+    // frame, not the one its pending `yield` captured.
+    let syncGeneratorResume = 0;
+    hidden("__bunwasm_caught", (saved) => {
+      if (saved !== 0 && syncGeneratorResume === 0) enter(saved);
+    });
+    hidden("__bunwasm_id", id);
+    // `for await`: `{ let c; try { for await (… of c = __bunwasm_iterate(y)) {
+    // try { __bunwasm_entered(c); … } finally { __bunwasm_caught(s, s = 0); } } }
+    // finally { __bunwasm_exited(c); } }`. The body starts in the frame its
+    // `next()` was called in; the loop leaves, after the iterator closed, in
+    // the frame of its last `next()` or `return()`.
+    const reenter = (record) => {
+      const saved = record.pending;
+      record.pending = noFrame;
+      if (saved !== noFrame) enter(saved);
+    };
+    hidden("__bunwasm_iterate", (iterable) => forAwaitRecord(iterable, () => host.asyncContext));
+    hidden("__bunwasm_entered", reenter);
+    hidden("__bunwasm_exited", (record) => {
+      if (record !== undefined) reenter(record);
+    });
+    const asyncGeneratorPrototype = Object.getPrototypeOf(Object.getPrototypeOf((async function* () {})()));
+    const nativeThrow = asyncGeneratorPrototype.throw;
+    const { throw: wrapped } = {
+      throw(value) {
+        syncGeneratorResume++;
+        try {
+          return nativeThrow.call(this, value);
+        } finally {
+          syncGeneratorResume--;
+        }
+      },
+    };
+    Object.defineProperty(asyncGeneratorPrototype, "throw", { value: wrapped });
   }
 
   // User code gets the host's real fetch, adapted to the runtime's Response.
@@ -710,10 +861,11 @@ class EngineHost {
     };
     const wrap = (fn, box, rejects) => {
       const context = host.asyncContext;
+      const nativeContext = host.o.asyncContext;
       return (value) => {
         if (host.tickQueued) host.drainTicks();
         const previous = host.asyncContext;
-        host.asyncContext = context;
+        if (!nativeContext) host.asyncContext = context;
         try {
           // A missing handler does what the default one would.
           if (typeof fn !== "function") {
@@ -728,7 +880,7 @@ class EngineHost {
           states.set(box.promise, { state: "rejected", value: err });
           throw err;
         } finally {
-          host.asyncContext = previous;
+          if (!nativeContext) host.asyncContext = previous;
         }
       };
     };
@@ -805,6 +957,23 @@ class EngineHost {
     }
   }
 
+  startEntry() {
+    const startup = this.internal.workerStartup;
+    if (!startup) { this.runEntry(); return; }
+    this.pendingAsync++;
+    nativePromiseThen(startup.ready, () => {
+      this.pendingAsync--;
+      if (this.exited) return;
+      this.runEntry();
+      this.schedule(0);
+    }, error => {
+      this.pendingAsync--;
+      if (this.exited) return;
+      this.uncaught(error);
+      if (!this.exited) this.exit(1);
+    });
+  }
+
   runEntry() {
     const { entry, internal } = this;
     let started;
@@ -874,6 +1043,8 @@ class EngineHost {
   // then decide when to come back.
   pump() {
     if (this.exited) return;
+    // Read before stepping I/O, so a change published meanwhile still ends the next wait.
+    const observedWake = this.o.processWake ? nativeAtomicsLoad(this.o.processWake, 0) : 0;
     this.guard(() => this.internal.pumpSignals(), false);
     if (this.exited) return;
     if (this.testComplete) return this.finish();
@@ -887,6 +1058,7 @@ class EngineHost {
     if (this.exited) return;
     if (next >= 0 || this.pendingAsync > 0 || io > 0) this.idleWait = false;
     if (next === 0) return this.schedule(0);
+    if (io > 0) this.wakeOnProcessChange(observedWake);
     // A sender may be another worker, so shared pending signals do not necessarily post a
     // message here. Only bound waits that already keep the guest alive; handlers alone must
     // not create a timer or stop an otherwise idle program from finishing.
@@ -896,6 +1068,20 @@ class EngineHost {
       return undefined;
     }
     return this.finish();
+  }
+
+  // Pipe and child changes publish on the process wake word: run the loop for them rather than
+  // waiting out the bounded rescan. Other sources still rely on that rescan.
+  wakeOnProcessChange(observed) {
+    const word = this.o.processWake;
+    if (!word || !nativeWaitAsync || this.wakeArmed) return;
+    const wait = nativeWaitAsync(word, 0, observed);
+    if (!wait.async) return this.schedule(0);
+    this.wakeArmed = true;
+    nativePromiseThen(wait.value, () => {
+      this.wakeArmed = false;
+      this.schedule(0);
+    });
   }
 
   finish() {
@@ -947,6 +1133,8 @@ class EngineHost {
   exit(code) {
     if (this.exited) return;
     this.exited = true;
+    this.internal?.workerStartup?.cancel();
+    this.o.sharedObjects?.close();
     this.disposeNativeStreams?.();
     this.native.closeAllDirs();
     this.flush();

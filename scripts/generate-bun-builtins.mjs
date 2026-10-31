@@ -2,7 +2,6 @@ import { createRequire } from "node:module";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from "node:fs";
 import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -13,7 +12,8 @@ const build = resolve(process.argv[2] ?? "");
 const check = process.argv.includes("--check");
 const destination = join(root, "crates/bunwasm-runtime/generated/builtins");
 const selection = JSON.parse(readFileSync(join(root, "scripts/bun-builtins.json"), "utf8"));
-const revision = execFileSync("git", ["-C", bun, "log", "-1", "--format=%H", "--", "src/js", "src/codegen", "src/jsc/modules/NativeModuleList.h", "src/jsc/bindings/ErrorCode.ts"], { encoding: "utf8" }).trim();
+const revision = readFileSync(join(root, "scripts/sync-bun.sh"), "utf8").match(/^BUN_COMMIT=([0-9a-f]{40})$/m)?.[1];
+if (!revision) throw new Error("Missing pinned Bun source revision");
 const hash = text => createHash("sha256").update(text).digest("hex");
 const blob = readFileSync(join(build, "codegen/InternalModuleRegistryConstants.bin"));
 if (blob.subarray(0, 8).toString() !== "BUNBLTNS" || blob.readUInt32LE(8) !== 1) {
@@ -90,10 +90,13 @@ function collectErrors(node) {
 }
 collectErrors(errorsTree);
 const selected = new Set();
+const explicitlySelected = new Set(selection.modules);
 function include(name) {
   const id = names.indexOf(name);
   if (id < 0) throw new Error(`Unknown builtin ${name}`);
   if (id >= count || selected.has(id)) return;
+  const publicModule = name === "bun" || name.startsWith("node:") || name.startsWith("bun:");
+  if (publicModule && !explicitlySelected.has(name)) return;
   const original = readFileSync(join(bun, "src/js", upstream(id)), "utf8");
   if (/process\.arch/.test(original)) throw new Error(`Architecture-specialized builtin needs a WASI codegen policy: ${name}`);
   selected.add(id);

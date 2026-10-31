@@ -327,6 +327,12 @@ typedef struct JSValueLink {
 struct JSRuntime {
     JSMallocFunctions mf;
     JSMallocState malloc_state;
+    /* bun-wasm: no allocation or JS values in the failure path. */
+    JSBunwasmMemoryTelemetry bunwasm_memory_telemetry;
+    uint64_t bunwasm_failed_size;
+    uint32_t bunwasm_failed_category;
+    uint32_t bunwasm_allocation_category;
+    bool bunwasm_failed_size_known;
     JSArenaState arena_state;
     const char *rt_info;
 
@@ -350,6 +356,8 @@ struct JSRuntime {
     struct list_head gc_zero_ref_count_list;
     struct list_head tmp_obj_list; /* used during GC */
     JSGCPhaseEnum gc_phase : 8;
+    /* bun-wasm: which cycle-collector pass is marking WeakMap values */
+    uint8_t weak_value_pass;
     size_t malloc_gc_threshold;
 #ifdef ENABLE_DUMPS // JS_DUMP_LEAKS
     struct list_head string_list; /* list of JSString.link */
@@ -648,6 +656,8 @@ typedef struct JSWeakRefRecord {
 typedef struct JSMapRecord {
     int ref_count; /* used during enumeration to avoid freeing the record */
     bool empty; /* true if the record is deleted */
+    /* bun-wasm: a WeakMap value's reference was restored in this GC */
+    bool gc_restored;
     struct JSMapState *map;
     struct list_head link;
     struct list_head hash_link;
@@ -663,6 +673,7 @@ typedef struct JSMapState {
     uint32_t hash_size; /* must be a power of two */
     uint32_t record_count_threshold; /* count at which a hash table
                                         resize is needed */
+    struct JSObject *owner; /* bun-wasm: the WeakMap/WeakSet object */
 } JSMapState;
 
 enum
@@ -892,7 +903,17 @@ typedef struct JSFunctionBytecode {
     int pc2line_len;
     uint8_t *pc2line_buf;
     char *source;
+    /* bun-wasm: when set, `source` points into this text shared by every
+       function of one parse instead of owning a private copy */
+    struct JSSharedSource *source_owner;
 } JSFunctionBytecode;
+
+/* bun-wasm: the source span of one parse, shared by its functions */
+typedef struct JSSharedSource {
+    int ref_count;
+    int len;
+    char buf[];
+} JSSharedSource;
 
 typedef struct JSBoundFunction {
     JSValue func_obj;
@@ -946,6 +967,9 @@ typedef struct JSArrayBuffer {
     uint8_t detached;
     uint8_t immutable;
     uint8_t shared; /* if shared, the array buffer cannot be detached */
+    /* bun-wasm: a WebAssembly.Memory view of bytes owned elsewhere; JS cannot
+       transfer or detach it, only JS_bunwasm_DetachWasmMemoryBuffer can */
+    uint8_t wasm_memory;
     uint8_t *data; /* NULL if detached */
     struct list_head array_list;
     void *opaque;
@@ -1982,6 +2006,38 @@ static void js_arena_free_all(JSRuntime *rt)
     }
 }
 
+/* bun-wasm: preserve the original request through error construction and readout. */
+static void js_bunwasm_record_allocation_failure(JSRuntime *rt, uint64_t size,
+                                                bool known, uint32_t category)
+{
+    if (rt->bunwasm_failed_category)
+        return;
+    rt->bunwasm_failed_size = size;
+    rt->bunwasm_failed_size_known = known;
+    rt->bunwasm_failed_category = rt->bunwasm_allocation_category ?
+        rt->bunwasm_allocation_category : category;
+    rt->bunwasm_memory_telemetry.failed_size = known ? size : UINT64_MAX;
+    rt->bunwasm_memory_telemetry.failed_category = rt->bunwasm_failed_category;
+    rt->bunwasm_memory_telemetry.failed_size_known = known;
+}
+
+uint32_t JS_bunwasm_GetAllocationFailure(JSRuntime *rt, uint64_t *size, bool *size_known)
+{
+    *size = rt->bunwasm_failed_size;
+    *size_known = rt->bunwasm_failed_size_known;
+    return rt->bunwasm_failed_category;
+}
+
+void JS_bunwasm_ClearAllocationFailure(JSRuntime *rt)
+{
+    rt->bunwasm_failed_size = 0;
+    rt->bunwasm_failed_size_known = false;
+    rt->bunwasm_failed_category = 0;
+    rt->bunwasm_memory_telemetry.failed_size = UINT64_MAX;
+    rt->bunwasm_memory_telemetry.failed_category = 0;
+    rt->bunwasm_memory_telemetry.failed_size_known = 0;
+}
+
 void *js_calloc_rt(JSRuntime *rt, size_t count, size_t size)
 {
     void *ptr;
@@ -1990,22 +2046,26 @@ void *js_calloc_rt(JSRuntime *rt, size_t count, size_t size)
     /* Do not allocate zero bytes: behavior is platform dependent */
     assert(count != 0 && size != 0);
 
-    if (size > 0)
-        if (unlikely(count != (count * size) / size))
-            return NULL;
+    if (unlikely(count > SIZE_MAX / size)) {
+        js_bunwasm_record_allocation_failure(rt, 0, false, JS_BUNWASM_ALLOC_CALLOC);
+        return NULL;
+    }
 
     s = &rt->malloc_state;
     /* When malloc_limit is 0 (unlimited), malloc_limit - 1 will be SIZE_MAX. */
     if (unlikely(s->malloc_size + (count * size) > s->malloc_limit - 1))
-        return NULL;
+        goto fail;
 
     ptr = js_arena_calloc(rt, count, size);
     if (!ptr)
-        return NULL;
+        goto fail;
 
     s->malloc_count++;
     s->malloc_size += js_arena_usable_size(rt, ptr) + MALLOC_OVERHEAD;
     return ptr;
+ fail:
+    js_bunwasm_record_allocation_failure(rt, count * size, true, JS_BUNWASM_ALLOC_CALLOC);
+    return NULL;
 }
 
 void *js_malloc_rt(JSRuntime *rt, size_t size)
@@ -2020,15 +2080,18 @@ void *js_malloc_rt(JSRuntime *rt, size_t size)
     s = &rt->malloc_state;
     /* When malloc_limit is 0 (unlimited), malloc_limit - 1 will be SIZE_MAX. */
     if (unlikely(s->malloc_size + size > s->malloc_limit - 1))
-        return NULL;
+        goto fail;
 
     ptr = js_arena_malloc(rt, size);
     if (!ptr)
-        return NULL;
+        goto fail;
 
     s->malloc_count++;
     s->malloc_size += js_arena_usable_size(rt, ptr) + MALLOC_OVERHEAD;
     return ptr;
+ fail:
+    js_bunwasm_record_allocation_failure(rt, size, true, JS_BUNWASM_ALLOC_MALLOC);
+    return NULL;
 }
 
 void js_free_rt(JSRuntime *rt, void *ptr)
@@ -2057,7 +2120,11 @@ void *js_realloc_rt(JSRuntime *rt, void *ptr, size_t size)
     if (!ptr) {
         if (size == 0)
             return NULL;
-        return js_malloc_rt(rt, size);
+        uint32_t category = rt->bunwasm_allocation_category;
+        rt->bunwasm_allocation_category = category ? category : JS_BUNWASM_ALLOC_REALLOC;
+        ptr = js_malloc_rt(rt, size);
+        rt->bunwasm_allocation_category = category;
+        return ptr;
     }
     if (unlikely(size == 0)) {
         js_free_rt(rt, ptr);
@@ -2067,14 +2134,17 @@ void *js_realloc_rt(JSRuntime *rt, void *ptr, size_t size)
     s = &rt->malloc_state;
     /* When malloc_limit is 0 (unlimited), malloc_limit - 1 will be SIZE_MAX. */
     if (s->malloc_size + size - old_size > s->malloc_limit - 1)
-        return NULL;
+        goto fail;
 
     ptr = js_arena_realloc(rt, ptr, size);
     if (!ptr)
-        return NULL;
+        goto fail;
 
     s->malloc_size += js_arena_usable_size(rt, ptr) - old_size;
     return ptr;
+ fail:
+    js_bunwasm_record_allocation_failure(rt, size, true, JS_BUNWASM_ALLOC_REALLOC);
+    return NULL;
 }
 
 size_t js_malloc_usable_size_rt(JSRuntime *rt, const void *ptr)
@@ -2347,6 +2417,12 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     rt = mf->js_calloc(opaque, 1, sizeof(JSRuntime));
     if (!rt)
         return NULL;
+    rt->bunwasm_memory_telemetry = (JSBunwasmMemoryTelemetry) {
+        .abi_version = 1, .byte_size = sizeof(JSBunwasmMemoryTelemetry),
+        .malloc_size = UINT64_MAX, .memory_used_size = UINT64_MAX,
+        .array_buffer_size = UINT64_MAX, .array_buffer_count = UINT64_MAX,
+        .wasm_capacity = UINT64_MAX, .failed_size = UINT64_MAX,
+    };
     rt->mf = *mf;
     if (!rt->mf.js_malloc_usable_size) {
         /* use dummy function if none provided */
@@ -7248,19 +7324,89 @@ void JS_MarkValue(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
     }
 }
 
+/* bun-wasm: a WeakMap entry is an ephemeron. Its value stays alive only
+   while both the key and the map are alive. QuickJS marked the value as a
+   child of the key alone, so a value that reaches its own map (webpack's
+   per-compilation ModuleGraph keyed by long-lived dependencies) kept every
+   old map and everything it reaches alive for the key's lifetime.
+
+   The decref pass still attributes the record's reference to the key. The
+   scan pass restores it, making the value live, only once both key and map
+   are known live; whichever of the two is scanned second does it. The
+   restore pass gives back the remaining references of entries with a dead
+   key or map so that gc_free_cycles sees consistent counts. */
+#define WEAK_VALUE_PASS_NONE 0
+#define WEAK_VALUE_PASS_DECREF 1
+#define WEAK_VALUE_PASS_SCAN 2
+#define WEAK_VALUE_PASS_RESTORE 3
+
+static bool weak_map_owner_live(JSMapState *s)
+{
+    return JS_REF_COUNT(&s->owner->header) > 0;
+}
+
 static void mark_weak_map_value(JSRuntime *rt, JSWeakRefRecord *first_weak_ref, JS_MarkFunc *mark_func) {
     JSWeakRefRecord *wr;
     JSMapRecord *mr;
     JSMapState *s;
 
     for (wr = first_weak_ref; wr != NULL; wr = wr->next_weak_ref) {
-        if (wr->kind == JS_WEAK_REF_KIND_MAP) {
-            mr = wr->u.map_record;
-            s = mr->map;
-            assert(s->is_weak);
-            assert(!mr->empty); /* no iterator on WeakMap/WeakSet */
-            JS_MarkValue(rt, mr->value, mark_func);
+        if (wr->kind != JS_WEAK_REF_KIND_MAP)
+            continue;
+        mr = wr->u.map_record;
+        s = mr->map;
+        assert(s->is_weak);
+        assert(!mr->empty); /* no iterator on WeakMap/WeakSet */
+        switch (rt->weak_value_pass) {
+        case WEAK_VALUE_PASS_DECREF:
+            mr->gc_restored = false;
+            break;
+        case WEAK_VALUE_PASS_SCAN: /* the key is live */
+            if (mr->gc_restored || !weak_map_owner_live(s))
+                continue;
+            mr->gc_restored = true;
+            break;
+        case WEAK_VALUE_PASS_RESTORE: /* the key is dead */
+            if (mr->gc_restored)
+                continue;
+            mr->gc_restored = true;
+            break;
         }
+        JS_MarkValue(rt, mr->value, mark_func);
+    }
+}
+
+/* The map side of the scan and restore passes (see mark_weak_map_value).
+   `key_live` tells whether the record's key object is live in this pass. */
+static void mark_weak_map_records(JSRuntime *rt, JSGCObjectHeader *gp,
+                                  bool restore, JS_MarkFunc *mark_func)
+{
+    JSObject *p = (JSObject *)gp;
+    JSMapState *s;
+    struct list_head *el;
+    JSMapRecord *mr;
+    bool key_live;
+
+    if (JS_GC_TYPE(gp) != JS_GC_OBJ_TYPE_JS_OBJECT ||
+        (p->class_id != JS_CLASS_WEAKMAP && p->class_id != JS_CLASS_WEAKSET))
+        return;
+    s = p->u.map_state;
+    if (!s)
+        return;
+    list_for_each(el, &s->records) {
+        mr = list_entry(el, JSMapRecord, link);
+        /* Symbol keys are not GC objects: their values were never decreffed. */
+        if (mr->empty || mr->gc_restored || JS_VALUE_GET_TAG(mr->key) != JS_TAG_OBJECT)
+            continue;
+        /* After the scan, live objects have mark 0 and dead ones mark 1. */
+        if (restore)
+            key_live = JS_GC_MARK(&JS_VALUE_GET_OBJ(mr->key)->header) == 0;
+        else
+            key_live = JS_REF_COUNT(&JS_VALUE_GET_OBJ(mr->key)->header) > 0;
+        if (!key_live)
+            continue;
+        mr->gc_restored = true;
+        JS_MarkValue(rt, mr->value, mark_func);
     }
 }
 
@@ -7392,6 +7538,7 @@ static void gc_decref(JSRuntime *rt)
     /* decrement the refcount of all the children of all the GC
        objects and move the GC objects with zero refcount to
        tmp_obj_list */
+    rt->weak_value_pass = WEAK_VALUE_PASS_DECREF;
     list_for_each_safe(el, el1, &rt->gc_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
         assert(JS_GC_MARK(p) == 0);
@@ -7427,18 +7574,23 @@ static void gc_scan(JSRuntime *rt)
     JSGCObjectHeader *p;
 
     /* keep the objects with a refcount > 0 and their children. */
+    rt->weak_value_pass = WEAK_VALUE_PASS_SCAN;
     list_for_each(el, &rt->gc_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
         assert(JS_REF_COUNT(p) > 0);
         JS_GC_MARK(p) = 0; /* reset the mark for the next GC call */
         mark_children(rt, p, gc_scan_incref_child);
+        mark_weak_map_records(rt, p, false, gc_scan_incref_child);
     }
 
     /* restore the refcount of the objects to be deleted. */
+    rt->weak_value_pass = WEAK_VALUE_PASS_RESTORE;
     list_for_each(el, &rt->tmp_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
         mark_children(rt, p, gc_scan_incref_child2);
+        mark_weak_map_records(rt, p, true, gc_scan_incref_child2);
     }
+    rt->weak_value_pass = WEAK_VALUE_PASS_NONE;
 }
 
 static void gc_free_cycles(JSRuntime *rt)
@@ -7565,7 +7717,10 @@ static void compute_bytecode_size(JSFunctionBytecode *b, JSMemoryUsage_helper *h
         hp->js_func_code_size += b->byte_code_len;
     }
     memory_used_count++;
-    js_func_size += b->source_len + 1;
+    if (b->source_owner)
+        js_func_size += (b->source_owner->len + 1) / b->source_owner->ref_count;
+    else
+        js_func_size += b->source_len + 1;
     if (b->pc2line_len) {
         memory_used_count++;
         hp->js_func_pc2line_count += 1;
@@ -7586,6 +7741,15 @@ static void compute_value_size(JSValue val, JSMemoryUsage_helper *hp)
         /* should track JSBigInt usage */
         break;
     }
+}
+
+/* bun-wasm: typed views share this object; borrowed wasm memory is capacity. */
+static void js_bunwasm_count_array_buffer(JSMemoryUsage *s, JSArrayBuffer *abuf)
+{
+    if (!abuf || !abuf->data || abuf->detached || abuf->wasm_memory)
+        return;
+    s->array_buffer_count++;
+    s->array_buffer_size += abuf->byte_length;
 }
 
 void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
@@ -7789,6 +7953,7 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
         case JS_CLASS_SHARED_ARRAY_BUFFER: /* u.array_buffer */
             {
                 JSArrayBuffer *abuf = p->u.array_buffer;
+                js_bunwasm_count_array_buffer(s, abuf);
                 if (abuf) {
                     s->memory_used_count += 1;
                     s->memory_used_size += sizeof(*abuf);
@@ -7878,6 +8043,30 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
     s->memory_used_size += s->atom_size + s->str_size +
         s->obj_size + s->prop_size + s->shape_size +
         s->js_func_size + s->js_func_code_size + s->js_func_pc2line_size;
+}
+
+/* bun-wasm: accessor only returns cached bytes, including a failure latched in-place. */
+const JSBunwasmMemoryTelemetry *JS_bunwasm_MemoryTelemetry(JSRuntime *rt)
+{
+    return &rt->bunwasm_memory_telemetry;
+}
+
+/* bun-wasm: call only at a normal boundary, never while unwinding a trap or OOM. */
+const JSBunwasmMemoryTelemetry *JS_bunwasm_RefreshMemoryTelemetry(JSRuntime *rt)
+{
+    JSMemoryUsage usage;
+    JSBunwasmMemoryTelemetry *cache = &rt->bunwasm_memory_telemetry;
+    JS_ComputeMemoryUsage(rt, &usage);
+    cache->malloc_size = usage.malloc_size;
+    cache->memory_used_size = usage.memory_used_size;
+    cache->array_buffer_size = usage.array_buffer_size;
+    cache->array_buffer_count = usage.array_buffer_count;
+#if defined(__wasm__)
+    cache->wasm_capacity = (uint64_t)__builtin_wasm_memory_size(0) * 65536;
+#endif
+    cache->refresh_sequence++;
+    cache->counters_valid = 1;
+    return cache;
 }
 
 void JS_DumpMemoryUsage(FILE *fp, const JSMemoryUsage *s, JSRuntime *rt)
@@ -21497,6 +21686,7 @@ static bool js_async_function_resume(JSContext *ctx, JSAsyncFunctionData *s)
     bool is_success = true;
     JSValue func_ret, ret2;
 
+ resume:
     func_ret = async_func_resume(ctx, &s->func_state);
     if (JS_IsException(func_ret)) {
     fail:
@@ -21537,6 +21727,12 @@ static bool js_async_function_resume(JSContext *ctx, JSAsyncFunctionData *s)
             promise = js_promise_resolve(ctx, ctx->promise_ctor,
                                          1, vc(&value), 0);
             JS_FreeValue(ctx, value);
+            if (JS_IsException(promise) &&
+                !JS_IsUncatchableError(ctx->rt->current_exception)) {
+                /* bun-wasm: deliver PromiseResolve errors at the suspended await. */
+                s->func_state.throw_flag = true;
+                goto resume;
+            }
             if (JS_IsException(promise))
                 goto fail;
             if (js_async_function_resolve_create(ctx, s, resolving_funcs)) {
@@ -22370,8 +22566,11 @@ typedef struct JSFunctionDef {
     int col_num;
     DynBuf pc2line;
 
-    char *source;  /* raw source, utf-8 encoded */
+    /* raw source, utf-8 encoded. bun-wasm: borrowed from the parse input
+       until js_share_function_sources() points it into source_owner */
+    char *source;
     int source_len;
+    JSSharedSource *source_owner;
 
     JSModuleDef *module; /* != NULL when parsing a module */
 } JSFunctionDef;
@@ -25155,7 +25354,11 @@ static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_
             if (is_regexp_allowed(last_tok)) {
                 s->buf_ptr -= tok_len;
                 if (js_parse_regexp(s)) {
-                    /* XXX: should clear the exception */
+                    /* bun-wasm: the lookahead only guesses that this is a
+                       regexp. The real parse reports any genuine error, so a
+                       pending one here would surface at a later, unrelated
+                       JS_HasException check (an ES module import). */
+                    JS_FreeValue(s->ctx, JS_GetException(s->ctx));
                     goto done;
                 }
             }
@@ -25170,7 +25373,8 @@ static int js_parse_skip_parens_token(JSParseState *s, int *pbits, bool no_line_
             last_tok = s->token.val;
         }
         if (next_token(s)) {
-            /* XXX: should clear the exception generated by next_token() */
+            /* bun-wasm: as above, the real parse reports this error again. */
+            JS_FreeValue(s->ctx, JS_GetException(s->ctx));
             break;
         }
         if (level <= 1) {
@@ -25959,11 +26163,8 @@ static __exception int js_parse_class(JSParseState *s, bool is_class_expr,
     put_u32(fd->byte_code.buf + ctor_cpool_offset, ctor_fd->parent_cpool_idx);
 
     /* store the class source code in the constructor. */
-    js_free(ctx, ctor_fd->source);
     ctor_fd->source_len = s->buf_ptr - class_start_ptr;
-    ctor_fd->source = js_strndup(ctx, (const char *)class_start_ptr, ctor_fd->source_len);
-    if (!ctor_fd->source)
-        goto fail;
+    ctor_fd->source = (char *)class_start_ptr;
 
     /* consume the '}' */
     if (next_token(s))
@@ -31049,7 +31250,7 @@ static JSVarRef *js_get_local_export_var_ref1(JSContext *ctx, JSModuleDef *m,
         if (add_resolve_entry(ctx, s, m, mi->import_name) < 0)
             return NULL;
         m1 = m->req_module_entries[mi->req_module_idx].module;
-        if (js_resolve_export1(ctx, &res_m, &res_me, m1, mi->import_name, s) ==
+        if (js_resolve_export(ctx, &res_m, &res_me, m1, mi->import_name) ==
                 JS_RESOLVE_RES_FOUND &&
             res_me->local_name != JS_ATOM__star_)
             return js_get_local_export_var_ref1(ctx, res_m, res_me, s);
@@ -32164,6 +32365,7 @@ static JSValue js_async_module_execution_rejected(JSContext *ctx, JSValueConst t
     module->eval_has_exception = true;
     module->eval_exception = js_dup(error);
     module->status = JS_MODULE_STATUS_EVALUATED;
+    module->async_evaluation = false; /* bun-wasm: as in upstream QuickJS */
 
     for(i = 0; i < module->async_parent_modules_count; i++) {
         JSModuleDef *m = module->async_parent_modules[i];
@@ -32230,6 +32432,9 @@ static JSValue js_async_module_execution_fulfilled(JSContext *ctx, JSValueConst 
                 JS_FreeValue(ctx, m_obj);
                 JS_FreeValue(ctx, error);
             } else {
+                /* bun-wasm: finished, as in the spec and upstream QuickJS
+                   2fd48bf; a later importer must not wait for it again. */
+                m->async_evaluation = false;
                 js_set_module_evaluated(ctx, m);
             }
         }
@@ -33090,6 +33295,62 @@ static void free_bytecode_atoms(JSRuntime *rt,
 
 #ifndef QJS_DISABLE_PARSER
 
+static void js_shared_source_free(JSRuntime *rt, JSSharedSource *text)
+{
+    if (text && --text->ref_count == 0)
+        js_free_rt(rt, text);
+}
+
+static void js_source_span(JSFunctionDef *fd, const char **lo, const char **hi)
+{
+    struct list_head *el;
+
+    if (fd->source) {
+        if (!*lo || fd->source < *lo)
+            *lo = fd->source;
+        if (!*hi || fd->source + fd->source_len > *hi)
+            *hi = fd->source + fd->source_len;
+    }
+    list_for_each(el, &fd->child_list)
+        js_source_span(list_entry(el, JSFunctionDef, link), lo, hi);
+}
+
+static void js_source_attach(JSFunctionDef *fd, const char *lo, JSSharedSource *text)
+{
+    struct list_head *el;
+
+    if (fd->source) {
+        fd->source = text->buf + (fd->source - lo);
+        fd->source_owner = text;
+        text->ref_count++;
+    }
+    list_for_each(el, &fd->child_list)
+        js_source_attach(list_entry(el, JSFunctionDef, link), lo, text);
+}
+
+/* bun-wasm: QuickJS kept a private copy of every function's text for
+   Function.prototype.toString, so nested functions stored their source once
+   per enclosing level. Copy the span covering all functions of this parse
+   once instead; each bytecode keeps a reference. */
+static int js_share_function_sources(JSContext *ctx, JSFunctionDef *fd)
+{
+    const char *lo = NULL, *hi = NULL;
+    JSSharedSource *text;
+
+    js_source_span(fd, &lo, &hi);
+    if (!lo)
+        return 0;
+    text = js_malloc(ctx, sizeof(*text) + (hi - lo) + 1);
+    if (!text)
+        return -1;
+    text->ref_count = 0;
+    text->len = hi - lo;
+    memcpy(text->buf, lo, hi - lo);
+    text->buf[hi - lo] = '\0';
+    js_source_attach(fd, lo, text);
+    return 0;
+}
+
 static void js_free_function_def(JSContext *ctx, JSFunctionDef *fd)
 {
     int i;
@@ -33143,7 +33404,7 @@ static void js_free_function_def(JSContext *ctx, JSFunctionDef *fd)
     JS_FreeAtom(ctx, fd->filename);
     dbuf_free(&fd->pc2line);
 
-    js_free(ctx, fd->source);
+    js_shared_source_free(ctx->rt, fd->source_owner);
 
     if (fd->parent) {
         /* remove in parent list */
@@ -37136,6 +37397,8 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
     b->pc2line_len = fd->pc2line.size;
     b->source = fd->source;
     b->source_len = fd->source_len;
+    b->source_owner = fd->source_owner;
+    fd->source_owner = NULL;
 
     if (fd->scopes != fd->def_scope_array)
         js_free(ctx, fd->scopes);
@@ -37208,7 +37471,10 @@ static void free_function_bytecode(JSRuntime *rt, JSFunctionBytecode *b)
     JS_FreeAtomRT(rt, b->func_name);
     JS_FreeAtomRT(rt, b->filename);
     js_free_rt(rt, b->pc2line_buf);
-    js_free_rt(rt, b->source);
+    if (b->source_owner)
+        js_shared_source_free(rt, b->source_owner);
+    else
+        js_free_rt(rt, b->source);
 
     remove_gc_object(&b->header);
     if (rt->gc_phase == JS_GC_PHASE_REMOVE_CYCLES && JS_REF_COUNT(b) != 0) {
@@ -37808,9 +38074,7 @@ static __exception int js_parse_function_decl2(JSParseState *s,
             /* the end of the function source code is after the last
                 token of the function source stored into s->last_ptr */
             fd->source_len = s->last_ptr - ptr;
-            fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
-            if (!fd->source)
-                goto fail;
+            fd->source = (char *)ptr;
 
             goto done;
         }
@@ -37846,9 +38110,7 @@ static __exception int js_parse_function_decl2(JSParseState *s,
 
         /* save the function source code */
         fd->source_len = s->buf_ptr - ptr;
-        fd->source = js_strndup(ctx, (const char *)ptr, fd->source_len);
-        if (!fd->source)
-            goto fail;
+        fd->source = (char *)ptr;
 
         if (next_token(s)) {
             /* consume the '}' */
@@ -38253,6 +38515,8 @@ static JSValue __JS_EvalInternal(JSContext *ctx, JSValueConst this_obj,
     fd->body_scope = fd->scope_level;
 
     err = js_parse_program(s);
+    if (!err)
+        err = js_share_function_sources(ctx, fd);
     if (err) {
     fail:
         free_token(s, &s->token);
@@ -53273,6 +53537,7 @@ static JSValue js_map_constructor(JSContext *ctx, JSValueConst new_target,
         goto fail;
     init_list_head(&s->records);
     s->is_weak = is_weak;
+    s->owner = JS_VALUE_GET_OBJ(obj);
     JS_SetOpaqueInternal(obj, s);
     s->hash_size = 1;
     s->hash_table = js_malloc(ctx, sizeof(s->hash_table[0]) * s->hash_size);
@@ -55846,17 +56111,22 @@ static JSValue js_promise_resolve_thenable_job(JSContext *ctx,
                                                int argc, JSValueConst *argv)
 {
     JSValueConst promise, thenable, then;
-    JSValue args[2], res;
+    JSValue args[2], res, saved_context;
     JSRuntime *rt;
 
     promise_trace(ctx, "js_promise_resolve_thenable_job\n");
 
-    assert(argc == 3);
+    assert(argc == 4);
+    /* bun-wasm: the then getter may have changed the enqueue context. */
+    saved_context = ctx->async_context;
+    ctx->async_context = js_dup(argv[3]);
     promise = argv[0];
     thenable = argv[1];
     then = argv[2];
-    if (js_create_resolving_functions(ctx, args, promise) < 0)
-        return JS_EXCEPTION;
+    if (js_create_resolving_functions(ctx, args, promise) < 0) {
+        res = JS_EXCEPTION;
+        goto done;
+    }
     rt = ctx->rt;
     if (rt->promise_hook) {
         rt->promise_hook(ctx, JS_PROMISE_HOOK_BEFORE, promise, JS_UNDEFINED,
@@ -55874,6 +56144,9 @@ static JSValue js_promise_resolve_thenable_job(JSContext *ctx,
     }
     JS_FreeValue(ctx, args[0]);
     JS_FreeValue(ctx, args[1]);
+ done:
+    JS_FreeValue(ctx, ctx->async_context);
+    ctx->async_context = saved_context;
     return res;
 }
 
@@ -55956,7 +56229,7 @@ static JSValue js_promise_resolve_function_call(JSContext *ctx,
 {
     JSObject *p = JS_VALUE_GET_OBJ(func_obj);
     JSPromiseFunctionData *s;
-    JSValueConst args[3];
+    JSValueConst args[4];
     JSValueConst resolution;
     JSValue then;
     bool is_reject;
@@ -55998,7 +56271,8 @@ static JSValue js_promise_resolve_function_call(JSContext *ctx,
         args[0] = s->promise;
         args[1] = resolution;
         args[2] = then;
-        JS_EnqueueJob(ctx, js_promise_resolve_thenable_job, 3, args);
+        args[3] = ctx->async_context;
+        JS_EnqueueJob(ctx, js_promise_resolve_thenable_job, 4, args);
         JS_FreeValue(ctx, then);
     }
     return JS_UNDEFINED;
@@ -59251,6 +59525,32 @@ static uint8_t const typed_array_size_log2[JS_TYPED_ARRAY_COUNT] = {
     1, 2, 3                 // Float16Array, Float32Array, Float64Array
 };
 
+static void *js_bunwasm_shared_array_buffer_mallocz(JSContext *ctx, size_t size)
+{
+    JSRuntime *rt = ctx->rt;
+    void *ptr = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque, size);
+    if (!ptr) {
+        js_bunwasm_record_allocation_failure(rt, size, true, JS_BUNWASM_ALLOC_ARRAY_BUFFER);
+        JS_ThrowOutOfMemory(ctx);
+        return NULL;
+    }
+    memset(ptr, 0, size);
+    return ptr;
+}
+
+/* bun-wasm: tag backing requests before the wrappers construct an error. */
+static void *js_bunwasm_array_buffer_mallocz(JSContext *ctx, size_t size)
+{
+    JSRuntime *rt = ctx->rt;
+    void *ptr;
+    rt->bunwasm_allocation_category = JS_BUNWASM_ALLOC_ARRAY_BUFFER;
+    ptr = js_calloc_rt(rt, 1, size);
+    rt->bunwasm_allocation_category = 0;
+    if (!ptr)
+        JS_ThrowOutOfMemory(ctx);
+    return ptr;
+}
+
 static JSValue js_array_buffer_constructor3(JSContext *ctx,
                                             JSValueConst new_target,
                                             uint64_t len, uint64_t *max_len,
@@ -59304,14 +59604,12 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
             // TOOD(bnoordhuis) resizing backing memory for SABs atomically
             // is hard so we cheat and allocate |maxByteLength| bytes upfront
             sab_alloc_len = max_len ? *max_len : len;
-            abuf->data = rt->sab_funcs.sab_alloc(rt->sab_funcs.sab_opaque,
-                                                 max_int(sab_alloc_len, 1));
+            abuf->data = js_bunwasm_shared_array_buffer_mallocz(ctx, max_int(sab_alloc_len, 1));
             if (!abuf->data)
                 goto fail;
-            memset(abuf->data, 0, sab_alloc_len);
         } else {
             /* the allocation must be done after the object creation */
-            abuf->data = js_mallocz(ctx, max_int(len, 1));
+            abuf->data = js_bunwasm_array_buffer_mallocz(ctx, max_int(len, 1));
             if (!abuf->data)
                 goto fail;
         }
@@ -59323,7 +59621,7 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
         if (buf) {
             abuf->data = buf;
         } else {
-            abuf->data = js_mallocz(ctx, 1);
+            abuf->data = js_bunwasm_array_buffer_mallocz(ctx, 1);
             if (!abuf->data)
                 goto fail;
             realloc_func = js_array_buffer_realloc;
@@ -59333,6 +59631,7 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
     abuf->detached = false;
     abuf->immutable = false;
     abuf->shared = (class_id == JS_CLASS_SHARED_ARRAY_BUFFER);
+    abuf->wasm_memory = false;
     abuf->opaque = opaque;
     abuf->realloc_func = realloc_func;
     if (alloc_flag && buf)
@@ -59348,7 +59647,11 @@ static JSValue js_array_buffer_constructor3(JSContext *ctx,
 static void *js_array_buffer_realloc(JSRuntime *rt, void *opaque, void *ptr,
                                      size_t size)
 {
-    return js_realloc_rt(rt, ptr, size);
+    void *result;
+    rt->bunwasm_allocation_category = JS_BUNWASM_ALLOC_ARRAY_BUFFER;
+    result = js_realloc_rt(rt, ptr, size);
+    rt->bunwasm_allocation_category = 0;
+    return result;
 }
 
 static JSValue js_array_buffer_constructor2(JSContext *ctx,
@@ -59400,7 +59703,28 @@ bool JS_bunwasm_IsArrayBufferLike(JSValueConst obj) {
 
 bool JS_bunwasm_IsDetachableArrayBuffer(JSValueConst obj) {
     JSArrayBuffer *buffer = JS_GetOpaque(obj, JS_CLASS_ARRAY_BUFFER);
-    return buffer && !buffer->detached;
+    return buffer && !buffer->detached && !buffer->wasm_memory;
+}
+
+/* A non-resizable WebAssembly.Memory buffer over 'len' bytes at 'buf', which
+   another owner keeps alive. Without a realloc function QuickJS never frees them. */
+JSValue JS_bunwasm_NewWasmMemoryBuffer(JSContext *ctx, uint8_t *buf, size_t len)
+{
+    JSValue obj = JS_NewArrayBuffer(ctx, buf, len, 0, NULL, NULL, false);
+    JSArrayBuffer *abuf = JS_GetOpaque(obj, JS_CLASS_ARRAY_BUFFER);
+    if (abuf)
+        abuf->wasm_memory = true;
+    return obj;
+}
+
+/* Detach a WebAssembly.Memory buffer and its views; false for other values. */
+bool JS_bunwasm_DetachWasmMemoryBuffer(JSContext *ctx, JSValueConst obj)
+{
+    JSArrayBuffer *abuf = JS_GetOpaque(obj, JS_CLASS_ARRAY_BUFFER);
+    if (!abuf || !abuf->wasm_memory)
+        return false;
+    JS_DetachArrayBuffer(ctx, obj);
+    return true;
 }
 
 /* create a new ArrayBuffer of length 'len' and copy 'buf' to it */
@@ -59733,6 +60057,8 @@ static JSValue js_array_buffer_transfer(JSContext *ctx, JSValueConst this_val,
         return JS_EXCEPTION;
     if (abuf->shared)
         return JS_ThrowTypeError(ctx, "cannot transfer a SharedArrayBuffer");
+    if (abuf->wasm_memory)
+        return JS_ThrowTypeError(ctx, "cannot transfer a WebAssembly.Memory buffer");
     // Spec (ArrayBufferCopyAndDetach): the newLength argument must be
     // coerced (its valueOf observed) before the buffer's detachability /
     // immutability is checked, so side effects of coercion are visible.

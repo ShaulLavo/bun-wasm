@@ -39,9 +39,12 @@ def command(directory: Path, script: str) -> list[str]:
             "--wasm", str(args.wasm.resolve()), "--dir", f"{directory}::/",
             "--env", "PWD=/", "--", "run", f"/{script}",
         ]
-    launcher = Path(os.environ["CARGO_TARGET_DIR"]) / "release/bun-wasm"
+    # The same launcher scripts/test.sh selects.
+    launcher = Path(os.environ.get("BUN_WASM_LAUNCHER") or Path(os.environ["CARGO_TARGET_DIR"]) / "release/bun-wasm")
     return [
-        str(launcher), "--wasm", str(args.wasm.resolve()), "--dir", f"{directory}::/",
+        str(launcher), "--wasm", str(args.wasm.resolve()),
+        "--engine", f"{args.engine}={args.wasm.resolve()}",
+        "--env", f"PATH=/opt/bun/{args.engine}/bin:/bin:/usr/bin", "--dir", f"{directory}::/",
         "--env", "PWD=/", "run", f"/{script}",
     ]
 
@@ -142,7 +145,7 @@ def check_batch(directory: Path, fd: int):
     print(f"PASS pipe-closed-output {args.engine}/{host}: fd={fd} batch callbacks/identity/order/state/survival in {time.monotonic() - started:.3f}s")
 
 
-with tempfile.TemporaryDirectory(prefix="bun-wasm-closed-output-", dir="/work/tmp") as directory:
+with tempfile.TemporaryDirectory(prefix="bun-wasm-closed-output-", dir=tempfile.gettempdir()) as directory:
     work = Path(directory)
     for name in ("index.js", "large.js", "batch.ts", "callback.ts"):
         (work / name).write_bytes((FIXTURE / name).read_bytes())

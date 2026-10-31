@@ -491,10 +491,12 @@ pub struct JSMemoryUsage {
     pub fast_array_elements: i64,
     pub binary_object_count: i64,
     pub binary_object_size: i64,
+    pub array_buffer_count: i64,
+    pub array_buffer_size: i64,
 }
 #[allow(clippy::unnecessary_operation, clippy::identity_op)]
 const _: () = {
-    ["Size of JSMemoryUsage"][::core::mem::size_of::<JSMemoryUsage>() - 208usize];
+    ["Size of JSMemoryUsage"][::core::mem::size_of::<JSMemoryUsage>() - 224usize];
     ["Alignment of JSMemoryUsage"][::core::mem::align_of::<JSMemoryUsage>() - 8usize];
     ["Offset of field: JSMemoryUsage::malloc_size"]
         [::core::mem::offset_of!(JSMemoryUsage, malloc_size) - 0usize];
@@ -548,6 +550,10 @@ const _: () = {
         [::core::mem::offset_of!(JSMemoryUsage, binary_object_count) - 192usize];
     ["Offset of field: JSMemoryUsage::binary_object_size"]
         [::core::mem::offset_of!(JSMemoryUsage, binary_object_size) - 200usize];
+    ["Offset of field: JSMemoryUsage::array_buffer_count"]
+        [::core::mem::offset_of!(JSMemoryUsage, array_buffer_count) - 208usize];
+    ["Offset of field: JSMemoryUsage::array_buffer_size"]
+        [::core::mem::offset_of!(JSMemoryUsage, array_buffer_size) - 216usize];
 };
 unsafe extern "C" {
     pub fn JS_ComputeMemoryUsage(rt: *mut JSRuntime, s: *mut JSMemoryUsage);
