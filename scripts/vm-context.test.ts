@@ -1,21 +1,35 @@
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runInThisContext } from "node:vm";
 
 const source = readFileSync(new URL("../crates/bunwasm-runtime/src/js/builtins.js", import.meta.url), "utf8");
 const installBuiltins = runInThisContext(source, { filename: "bun-wasm:builtins" });
+const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-vm-context-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+let installPreparation: (internal: object) => unknown;
+beforeAll(() => {
+  const factory = join(scratch, "source_prepare.js");
+  const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", new URL("./transpile-runtime.ts", import.meta.url).pathname,
+    new URL("../crates/bunwasm-runtime/src/js/source_prepare.ts", import.meta.url).pathname, factory], { stdout: "pipe", stderr: "pipe" });
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr.toString()).toBe("");
+  installPreparation = runInThisContext(readFileSync(factory, "utf8"), { filename: "bun-wasm:source_prepare" });
+});
 
 type VmModule = typeof import("node:vm");
 
 function vmModule(): VmModule {
   const internal = {
-    native: { evalScript: (code: string) => runInThisContext(code) },
+    native: { engine: "quickjs", evalScript: (code: string) => runInThisContext(code) },
     builtinFactories: {} as Record<string, () => unknown>,
     require(name: string) {
       if (name === "dns") return {};
       throw new Error(`Unexpected eager builtin: ${name}`);
     },
   };
+  installPreparation(internal);
   installBuiltins(internal);
   return internal.builtinFactories["node:vm"]!() as VmModule;
 }

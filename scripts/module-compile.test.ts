@@ -8,11 +8,15 @@ import { productionHostEvaluation } from "./module-compile-runtime.ts";
 const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-module-compile-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 const factory = join(scratch, "module_compile.js");
-const env = { ...process.env, BUNWASM_MODULE_COMPILE_FACTORY: factory };
+const prepareFactory = join(scratch, "source_prepare.js");
+const env = { ...process.env, BUNWASM_MODULE_COMPILE_FACTORY: factory, BUNWASM_SOURCE_PREPARE_FACTORY: prepareFactory };
 beforeAll(() => {
-  const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", new URL("./transpile-runtime.ts", import.meta.url).pathname, new URL("../crates/bunwasm-runtime/src/js/module_compile.ts", import.meta.url).pathname, factory], { stdout: "pipe", stderr: "pipe" });
-  expect(result.exitCode).toBe(0);
-  expect(result.stderr.toString()).toBe("");
+  for (const [name, destination] of [["module_compile", factory], ["source_prepare", prepareFactory]] satisfies [string, string][]) {
+    const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", new URL("./transpile-runtime.ts", import.meta.url).pathname,
+      new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url).pathname, destination], { stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toString()).toBe("");
+  }
 });
 const probe = new URL("./module-compile-probe.ts", import.meta.url).pathname;
 
@@ -69,4 +73,22 @@ test("real Host evaluator isolates offsets, reuses filenames, and preserves ordi
   expect(native.mapPosition("/first.cjs", 3, 7)).toEqual([13, 8]);
   expect(native.mapPosition("/second.cjs", 5, 7)).toEqual([3, 7]);
   expect(calls).toEqual(["/ordinary.cjs", "/first.cjs"]);
+});
+
+test("generated source identities keep live constructor columns independent of named maps", () => {
+  const evaluator = productionHostEvaluation(() => { throw new Error("generated frames must not use caller file mappings"); });
+  const first = evaluator.preparedSourceURL(5, "/same-caller.ts", [3, 1, 39], "/creator.ts");
+  const second = evaluator.preparedSourceURL(5, "/same-caller.ts", [3, 1, 45], "/creator.ts");
+  expect(first).not.toBe(second);
+  expect(first.startsWith("/same-caller.ts#")).toBe(true);
+  expect(evaluator.preparedSourceName(first)).toBe("/same-caller.ts");
+  expect(evaluator.preparedSourceOrigin(first)).toBe("/creator.ts");
+  expect(evaluator.mapPosition(first, 3, 55)).toEqual([3, 16]);
+  evaluator.preparedColumns.set("/same-caller.ts", { version: 5, columns: Int32Array.of(3, 1, 45) });
+  expect(evaluator.mapPosition(first, 3, 55)).toEqual([3, 16]);
+  const originalURL = "https://example.test/debug/original.js";
+  const mappedURL = evaluator.preparedSourceURL(5, originalURL, [3, 1, 39], "/creator.ts");
+  expect(new URL("original.js.map", mappedURL).href).toBe(new URL("original.js.map", originalURL).href);
+  evaluator.preparedColumns.clear();
+  expect(evaluator.mapPosition(first, 3, 55)).toEqual([3, 16]);
 });

@@ -1409,11 +1409,12 @@
   function parseJscFrameLine(line) {
     const m = /^(.*?)@(.*):(\d+):(\d+)$/.exec(line);
     if (!m || m[2].startsWith("bun-wasm:")) return null;
+    const generated = native.engine === "host" && native.preparedSourceName(m[2]) !== undefined;
     const url = typeof internal.displayName === "function" ? internal.displayName(m[2]) : m[2];
     let [file, lineNo, column] = [url, Number(m[3]), Number(m[4])];
-    const mapped = typeof internal.mapPosition === "function" ? internal.mapPosition(file, lineNo, column) : undefined;
+    const mapped = typeof internal.mapPosition === "function" ? internal.mapPosition(generated ? m[2] : file, lineNo, column) : undefined;
     if (mapped) [lineNo, column] = mapped;
-    column = calleeColumn(file, lineNo, column);
+    if (!generated) column = calleeColumn(file, lineNo, column);
     const topLevel = m[1] === "global code" || m[1] === "module code" || m[1] === "eval code" || m[1] === "__bunwasm_cjs__";
     return { name: topLevel ? "" : m[1] || "<anonymous>", file, line: lineNo, column };
   }

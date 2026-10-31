@@ -54,7 +54,7 @@ test("preparation rejects missing tools and mismatched or corrupted receipt byte
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("all eight artifact-backed cases leave the fixture-free Web glob", () => {
+test("all artifact-backed cases leave the fixture-free Web glob", () => {
   const node = readFileSync(new URL("../web/tests/node-process.test.ts", import.meta.url), "utf8");
   const net = readFileSync(new URL("../web/tests/net.test.ts", import.meta.url), "utf8");
   expect(node).not.toContain("skipIf");
@@ -65,7 +65,7 @@ test("all eight artifact-backed cases leave the fixture-free Web glob", () => {
   const compose = readFileSync(new URL("../web/guest-tests/compose.ts", import.meta.url), "utf8");
   expect(quickjs.match(/test\(/g)).toHaveLength(2);
   expect(quickjs).toContain("for (const fallback of [false, true])");
-  expect(browser.match(/test\(/g)).toHaveLength(3);
+  expect(browser.match(/test\(/g)).toHaveLength(5);
   expect(compose).not.toContain("skipIf");
   expect(compose).toContain("child lint routed");
   expect(compose).toContain('INSTALL_CASES: "aliases"');
@@ -152,6 +152,10 @@ test("engine-specific changes keep their own native gates", () => {
     expect(needsJsc([path])).toBe(false);
   }
   expect(needsJsc(["web/guest-tests/jsc.test.ts"])).toBe(true);
+  for (const path of ["tests/async-context-runtime/prepare-probe.ts", "tests/async-context-rejection/index.ts", "web/src/script-evaluation.ts"]) {
+    expect(needsRust([path])).toBe(true);
+    expect(needsJsc([path])).toBe(false);
+  }
 });
 
 test("the prebuild job saves its completed cache, and the native job imports it before every guest gate", () => {

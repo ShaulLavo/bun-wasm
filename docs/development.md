@@ -11,7 +11,7 @@ The native build runs on Linux x86_64. The CI job "Rust workspace tests (QuickJS
 | Rust | nightly `nightly-2026-09-15`, pinned in `rust-toolchain.toml`, with the `wasm32-wasip1` target | Every crate |
 | WASI SDK | 34.0 | C and C++ parts: QuickJS, SQLite, BoringSSL, JavaScriptCore |
 | Bun | 1.4.4 | Build scripts, tests, the web apps |
-| Node.js | 24 or later | Runtime TypeScript transpile step, host scripts |
+| Node.js | 26 or later | Runtime TypeScript transpile step, host scripts and lexical spread eval |
 | cmake, ninja, nasm, clang, libclang-dev, pkg-config, ruby, gperf, bison | Current distro packages | Native dependency builds |
 | Binaryen | 133 | `wasm-opt`. The JSC guest requires it. The other builds use it when present. |
 

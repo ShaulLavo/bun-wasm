@@ -7,17 +7,21 @@ import { join } from "node:path";
 const directory = mkdtempSync(join(tmpdir(), "bun-wasm-next-webpack-resolve-"));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
 const factory = join(directory, "module_compile.js");
+const prepareFactory = join(directory, "source_prepare.js");
 beforeAll(() => {
-  const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", new URL("./transpile-runtime.ts", import.meta.url).pathname, new URL("../crates/bunwasm-runtime/src/js/module_compile.ts", import.meta.url).pathname, factory], { stdout: "pipe", stderr: "pipe" });
-  expect(result.exitCode).toBe(0);
-  expect(result.stderr.toString()).toBe("");
+  for (const [name, destination] of [["module_compile", factory], ["source_prepare", prepareFactory]] satisfies [string, string][]) {
+    const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", new URL("./transpile-runtime.ts", import.meta.url).pathname,
+      new URL(`../crates/bunwasm-runtime/src/js/${name}.ts`, import.meta.url).pathname, destination], { stdout: "pipe", stderr: "pipe" });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.toString()).toBe("");
+  }
 });
 
 for (const mode of ["native", "runtime", "runtime-host"]) {
   for (const contract of ["next", "hooks"]) {
     test(`node ${mode} resolves ${contract} through the mutable Module hook`, () => {
       const result = Bun.spawnSync(["node", "--disable-warning=ExperimentalWarning", new URL("./next-webpack-resolve-probe.ts", import.meta.url).pathname, mode, directory, contract], {
-        stdout: "pipe", stderr: "pipe", env: { ...process.env, BUNWASM_MODULE_COMPILE_FACTORY: factory },
+        stdout: "pipe", stderr: "pipe", env: { ...process.env, BUNWASM_MODULE_COMPILE_FACTORY: factory, BUNWASM_SOURCE_PREPARE_FACTORY: prepareFactory },
       });
       expect(result.stderr.toString()).toBe("");
       expect(result.exitCode).toBe(0);

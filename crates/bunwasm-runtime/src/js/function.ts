@@ -13,39 +13,20 @@
     },
   });
 
-  function replaceImports(source: string, offsets: number[], replacement: string): string {
-    for (const offset of offsets.sort((a, b) => b - a)) {
-      source = source.slice(0, offset) + replacement + source.slice(offset + 6);
-    }
-    return source;
-  }
-
-  function argumentsWithImports(Native: Function, args: readonly unknown[], kind: BunWasm.FunctionKind): string[] {
+  function prepareArguments(args: readonly unknown[], kind: BunWasm.FunctionKind): string[] {
     const strings = Array.from(args, value => `${value}`);
-    const hasImports = strings.some(value => value.includes("import"));
-    if (!hasImports && native.engine !== "host") return strings;
-    // Keep the engine's parameter/body validation and SyntaxError behavior.
-    Reflect.apply(Native, undefined, strings);
     const origin = callerSourceOrigin();
-    if (origin === null) return strings;
-    const path = origin.startsWith("file:") ? internal.require("node_url").fileURLToPath(origin) : origin;
-    let result = strings;
-    if (hasImports) {
-      const offsets = native.functionImports(strings, kind);
-      const replacement = `(function(){})[${JSON.stringify(helper)}](${JSON.stringify(path)})`;
-      result = strings.map((source, argument) => replaceImports(source, offsets[argument], replacement));
-    }
-    if (native.engine === "host" && result.length > 0) result[result.length - 1] += `\n//# sourceURL=${path}`;
-    return result;
+    const path = origin?.startsWith("file:") ? internal.require("node_url").fileURLToPath(origin) : origin;
+    return internal.prepareFunctionArgs(strings, kind, path ?? undefined);
   }
 
   function constructor(Native: Function, kind: BunWasm.FunctionKind) {
     const wrapped = new Proxy(Native, {
       apply(target, receiver, args) {
-        return Reflect.apply(target, receiver, argumentsWithImports(target, args, kind));
+        return Reflect.apply(target, receiver, prepareArguments(args, kind));
       },
       construct(target, args, newTarget) {
-        return Reflect.construct(target, argumentsWithImports(target, args, kind), newTarget);
+        return Reflect.construct(target, prepareArguments(args, kind), newTarget);
       },
     });
     Object.defineProperty(Native.prototype, "constructor", { value: wrapped, configurable: true, writable: true });

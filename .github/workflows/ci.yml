@@ -32,7 +32,7 @@ jobs:
           bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '26'
       - name: Resolve immutable comparison refs
         id: refs
         env:
@@ -337,7 +337,7 @@ jobs:
           bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '26'
       - uses: actions/cache/restore@v4
         id: rustup-cache
         with:
@@ -710,7 +710,7 @@ jobs:
           bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '26'
       - uses: actions/cache/restore@v4
         id: rustup-cache
         with:
@@ -1150,7 +1150,7 @@ jobs:
           bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '26'
       - uses: actions/cache/restore@v4
         with:
           path: ~/.bun/install/cache
@@ -1311,7 +1311,7 @@ jobs:
           bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '26'
       - uses: actions/cache/restore@v4
         with:
           path: ~/.bun/install/cache
@@ -1508,7 +1508,7 @@ jobs:
           bun-version: 1.4.4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '26'
       - uses: actions/cache/restore@v4
         id: rustup-cache
         with:
