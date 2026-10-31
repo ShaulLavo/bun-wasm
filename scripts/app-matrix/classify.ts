@@ -25,7 +25,7 @@ export function stageOutput(log: string, command: string): string {
 }
 
 function plainPrompt(line: string): boolean {
-  return /^(?:\[\d+\] )?\$(?: |$)/.test(line);
+  return /^(?:\[\d+\] )?\$[ \t\r]*$/.test(line);
 }
 
 function plainPromptCommand(line: string, command: string): boolean {

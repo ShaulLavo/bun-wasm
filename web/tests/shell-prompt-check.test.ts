@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { Runtime } from "waffle";
-import { armPromptReadBarrier, assertPreservedDraft, type PromptSnapshot } from "./shell-prompt-check";
+import { armPromptReadBarrier, assertActivePromptWrap, assertPreservedDraft, installPromptReadBudget, type PromptSnapshot } from "./shell-prompt-check";
 
 function filesystem() {
   const calls: { receiver: unknown; path: string }[] = [];
@@ -154,4 +154,93 @@ test("draft control rejects escaped generations, caret drift and duplicated prom
   const duplicate = snapshot("[!]");
   const rows = duplicate.rows.concat([{ text: "❯ echo typed", wrapped: false, cells: [] }]);
   expect(() => assertPreservedDraft(snapshot(""), { ...duplicate, rows, cursorRow: 2 })).toThrow();
+});
+
+test("unrelated and restored reads return the exact original promise", async () => {
+  const result = Promise.resolve(new Uint8Array([7]));
+  const source: Pick<Runtime["filesystem"], "readFile"> = { readFile: () => result };
+  const barrier = armPromptReadBarrier(source, "/tracked");
+  const installed = source.readFile;
+  try {
+    expect(source.readFile("/other")).toBe(result);
+    barrier.restore();
+    expect(installed.call(source, "/tracked")).toBe(result);
+  } finally { barrier.restore(); }
+  await result;
+});
+
+function configFilesystem(previous?: Uint8Array) {
+  const path = "/home/user/.config/bash-web/prompt.json";
+  const files = new Map<string, string | Uint8Array>();
+  if (previous) files.set(path, previous);
+  const source: Parameters<typeof installPromptReadBudget>[0] = {
+    async readFile(name) {
+      const contents = files.get(name);
+      return typeof contents === "string" ? new TextEncoder().encode(contents) : contents;
+    },
+    async writeFile(name, contents) { files.set(name, contents); },
+    async remove(name) { return files.delete(name); },
+    async mkdirp() {},
+  };
+  return { source, files, path };
+}
+
+for (const previous of [undefined, new TextEncoder().encode(' {"newline":false}\n')]) {
+  test(`selected-read budget restores exact prior config bytes: ${previous !== undefined}`, async () => {
+    const fixture = configFilesystem(previous);
+    const restore = await installPromptReadBudget(fixture.source);
+    try {
+      expect(JSON.parse(new TextDecoder().decode(await fixture.source.readFile(fixture.path)))).toEqual({ backgroundMs: 60000 });
+    } finally { await restore(); }
+    expect(fixture.files.get(fixture.path)).toBe(previous);
+  });
+}
+
+test("selected-read budget rolls back failed installation", async () => {
+  const previous = new TextEncoder().encode('{"newline":false}');
+  const fixture = configFilesystem(previous);
+  const failure = new Error("fixture write failed");
+  const original = fixture.source.writeFile;
+  fixture.source.writeFile = async (path, contents) => {
+    if (typeof contents === "string") throw failure;
+    return original(path, contents);
+  };
+  await expect(installPromptReadBudget(fixture.source)).rejects.toBe(failure);
+  expect(fixture.files.get(fixture.path)).toBe(previous);
+});
+
+test("serialized budget fixture preserves config and barrier cleanup waits for the held read", async () => {
+  const install: typeof installPromptReadBudget = new Function(`return (${installPromptReadBudget.toString()});`)();
+  const fixture = configFilesystem();
+  const restore = await install(fixture.source);
+  const barrier = armPromptReadBarrier(fixture.source, "/tracked");
+  const pending = fixture.source.readFile("/tracked");
+  await barrier.entered;
+  try { throw new Error("fixture assertion failed"); }
+  catch { /* Cleanup must also finish when an assertion interrupts the fixture. */ }
+  finally {
+    barrier.restore();
+    if (barrier.blocked) await barrier.finished;
+    await restore();
+  }
+  await pending;
+  expect(barrier.blocked).toBe(false);
+  expect(fixture.files.has(fixture.path)).toBe(false);
+});
+
+test("narrow-wrap control rejects historical wraps outside the active prompt", () => {
+  const active = snapshot("");
+  const history: PromptSnapshot["rows"][number][] = [
+    { text: "old output", wrapped: false, cells: [] },
+    { text: "old continuation", wrapped: true, cells: [] },
+  ];
+  const rows = history.concat(active.rows);
+  expect(() => assertActivePromptWrap({ ...active, rows, cursorRow: 3 })).toThrow("Active narrow prompt");
+  const wrapped = rows.slice(0, 3).concat([
+    { text: "directory continuation", wrapped: true, cells: [] },
+    { text: "❯ echo typed", wrapped: false, cells: [] },
+  ]);
+  expect(() => assertActivePromptWrap({ ...active, rows: wrapped, cursorRow: 4 })).not.toThrow();
+  const draft = rows.concat([{ text: "typed continuation", wrapped: true, cells: [] }]);
+  expect(() => assertActivePromptWrap({ ...active, rows: draft, cursorRow: 4 })).not.toThrow();
 });

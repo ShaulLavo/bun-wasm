@@ -73,7 +73,7 @@ for (const [output, category] of categories) {
 
 test("stage output uses the last exact command and preserves body whitespace until the next prompt", () => {
   const command = "bun run dev";
-  const log = `$ ${command}\nError: old\n$ bun install\nignored\n\u001b[32m$ ${command}\u001b[0m\n  Error: current  \n\n[1] $ bun run next\nError: later`;
+  const log = `$ ${command}\nError: old\n$ bun install\nignored\n\u001b[32m$ ${command}\u001b[0m\n  Error: current  \n\n[1] $ \n[1] $ bun run next\nError: later`;
   expect(stageOutput(log, command)).toBe("  Error: current  \n");
   expect(stageOutput(`$ ${command}\nraw\r\nlast\n`, command)).toBe("raw\r\nlast\n");
   expect(stageOutput(`$ ${command}`, command)).toBe("");
@@ -169,3 +169,9 @@ test("plain stage anchors reject multiline providers and command suffixes inside
   expect(() => stageOutput("$ printed $ bun run dev\nbody", "bun run dev")).toThrow("Missing stage boundary");
   expect(stageOutput("[130] $ bun run dev\nbody\n[1] $ ", "bun run dev")).toBe("body");
 });
+
+for (const body of ["$ body output", "[1] $ body output"]) {
+  test(`stage output keeps dollar-prefixed application output: ${body}`, () => {
+    expect(stageOutput(`$ bun run dev\n${body}\nmore output\n[1] $ `, "bun run dev")).toBe(`${body}\nmore output`);
+  });
+}

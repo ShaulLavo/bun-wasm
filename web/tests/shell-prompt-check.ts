@@ -32,13 +32,14 @@ export function armPromptReadBarrier(filesystem: Pick<Runtime["filesystem"], "re
   const entered = new Promise<void>(resolve => { resolveEntered = resolve; });
   const released = new Promise<void>(resolve => { resolveReleased = resolve; });
   const finished = new Promise<void>(resolve => { resolveFinished = resolve; });
-  const intercepted: ReadFile = async function(this: Runtime["filesystem"], ...args) {
+  const intercepted: ReadFile = function(this: Runtime["filesystem"], ...args) {
     if (restored || args[0] !== path) return original.apply(this, args);
     blocked = true;
     resolveEntered();
-    await released;
-    try { return await original.apply(this, args); }
-    finally { blocked = false; resolveFinished(); }
+    return released.then(() => original.apply(this, args)).finally(() => {
+      blocked = false;
+      resolveFinished();
+    });
   };
   Object.defineProperty(filesystem, "readFile", { configurable: true, writable: true, value: intercepted });
   return {
@@ -53,6 +54,25 @@ export function armPromptReadBarrier(filesystem: Pick<Runtime["filesystem"], "re
       resolveReleased();
     },
   };
+}
+
+/** The fixture budget is temporary; the page's production defaults never change. */
+export async function installPromptReadBudget(filesystem: Pick<Runtime["filesystem"], "readFile" | "writeFile" | "remove" | "mkdirp">): Promise<() => Promise<void>> {
+  const path = "/home/user/.config/bash-web/prompt.json";
+  const previous = await filesystem.readFile(path);
+  const restore = async () => {
+    await filesystem.remove(path);
+    if (previous !== undefined) await filesystem.writeFile(path, previous);
+  };
+  await filesystem.mkdirp("/home/user/.config/bash-web");
+  try {
+    await filesystem.remove(path);
+    await filesystem.writeFile(path, '{"backgroundMs":60000}');
+  } catch (error) {
+    await restore();
+    throw error;
+  }
+  return restore;
 }
 
 type Cell = { readonly text: string; readonly fg: number; readonly rgb: boolean; readonly bold: boolean };
@@ -90,6 +110,16 @@ export function activePrompt(snapshot: PromptSnapshot): string[] {
   const character = lines.findLastIndex(line => line.includes("❯"));
   if (character <= 0) throw new Error("The provider must draw a directory line and a character line");
   return lines.slice(character - 1);
+}
+
+export function assertActivePromptWrap(snapshot: PromptSnapshot): void {
+  const rows = snapshot.rows.slice(0, snapshot.cursorRow + 1);
+  let character = rows.findLastIndex(row => row.text.includes("❯"));
+  while (character > 0 && rows[character]?.wrapped) character--;
+  let directory = character - 1;
+  while (directory > 0 && rows[directory]?.wrapped) directory--;
+  assert.ok(directory >= 0, "Active prompt has a directory and character line");
+  assert.ok(rows.slice(directory + 1).some(row => row.wrapped), "Active narrow prompt actually soft-wraps");
 }
 
 export function assertPreservedDraft(before: PromptSnapshot, after: PromptSnapshot): void {
@@ -206,18 +236,34 @@ async function updatedStatus(page: Page, generation: string): Promise<void> {
 }
 
 async function pendingUpdate(page: Page, name: string, draft: string, interrupt: boolean) {
-  const root = await prepareRepository(page, name);
-  await installBarrier(page, `${root}/tracked.txt`);
-  try { return await exercisePendingUpdate(page, root, draft, interrupt); }
-  finally {
-    await page.evaluate(() => {
-      const barrier: PromptReadBarrier = Reflect.get(globalThis, "promptReadBarrier");
-      barrier.restore();
+  await page.evaluate(`async () => {
+    globalThis.restorePromptReadBudget = await (${installPromptReadBudget.toString()})(globalThis.playground.fs);
+  }`);
+  try {
+    const root = await prepareRepository(page, name);
+    await installBarrier(page, `${root}/tracked.txt`);
+    return await exercisePendingUpdate(page, root, draft, interrupt);
+  } finally {
+    await restorePendingFixture(page);
+    await submit(page, "cd /home/user");
+  }
+}
+
+async function restorePendingFixture(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const barrier: PromptReadBarrier | undefined = Reflect.get(globalThis, "promptReadBarrier");
+    const restoreBudget: () => Promise<void> = Reflect.get(globalThis, "restorePromptReadBudget");
+    try {
+      barrier?.restore();
+      if (barrier?.blocked) await barrier.finished;
+    } finally {
+      await restoreBudget();
       Reflect.deleteProperty(globalThis, "promptReadBarrier");
       Reflect.deleteProperty(globalThis, "promptCapture");
       Reflect.deleteProperty(globalThis, "promptLines");
-    });
-  }
+      Reflect.deleteProperty(globalThis, "restorePromptReadBudget");
+    }
+  });
 }
 
 async function exercisePendingUpdate(page: Page, root: string, draft: string, interrupt: boolean) {
@@ -274,7 +320,7 @@ async function checkNarrowPrompt(page: Page) {
   try {
     const result = await pendingUpdate(page, "narrow-repository-that-wraps-the-first-line", "echo narrow", false);
     assert.equal(result.kind, "redraw");
-    assert.ok(result.before.rows.some(row => row.wrapped), "Narrow prompt actually soft-wraps");
+    assertActivePromptWrap(result.before);
     assert.match(activePrompt(result.before)[0] ?? "", /🥟/, "Width control includes the default Bun emoji");
     return result;
   } finally {
