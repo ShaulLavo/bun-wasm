@@ -146,10 +146,9 @@ main {
   flex: 1;
   min-width: 0;
   margin: 6px 0 6px 8px;
-  padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg);
+  background-color: var(--bg);
   color: inherit;
   font: 13px ui-monospace, "SF Mono", Menlo, monospace;
 }
@@ -300,13 +299,23 @@ main {
 #engine {
   flex: none;
   max-width: 11em;
-  padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg, #15171c);
+  background-color: var(--bg, #15171c);
   color: inherit;
   font: inherit;
   font-size: 13px;
+}
+
+#engine,
+#file-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%238b8fa3' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-position: right 10px center;
+  background-repeat: no-repeat;
+  background-size: 12px 12px;
+  padding: 4px 30px 4px 10px;
 }
 
 a.nav {
@@ -359,5 +368,15 @@ a.nav:hover {
 
   #file-select {
     display: block;
+  }
+}
+
+@media (forced-colors: active) {
+  #engine,
+  #file-select {
+    appearance: auto;
+    -webkit-appearance: auto;
+    background-image: none;
+    padding: 4px 6px;
   }
 }

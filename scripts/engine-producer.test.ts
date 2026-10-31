@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { maxMemoryBytes } from "./src/program-profile.ts";
 
 const repository = resolve(import.meta.dir, "..");
 const recorder = `#!/usr/bin/env bash
@@ -13,6 +14,7 @@ case "$tool" in
     script=\${1##*/}; shift
     command=\${1:-}; shift || true
     case "$script:$command" in
+      program-profile.ts:max-memory) exec "$REAL_BUN" "$RECIPE_ROOT/scripts/src/program-profile.ts" max-memory ;;
       guest-build-receipt.ts:environment)
         printf 'export GUEST_CARGO=%q RUSTC=%q\\n' "$RECIPE_BIN/selected-cargo" "$RECIPE_BIN/selected-rustc" ;;
       guest-core-receipt.ts:inputs|guest-engine-receipt.ts:inputs)
@@ -56,7 +58,7 @@ function fixture(run: (root: string, shell: (script: string, env?: Record<string
     const logPath = join(root, "commands.log");
     const shell = (script: string, env: Record<string, string> = {}, args: string[] = []) => Bun.spawnSync(["bash", join(root, script)].concat(args), {
       cwd: root,
-      env: { ...process.env, QUICKJS_SMOKE_EXPORTS: "0", ...env, RECIPE_ROOT: root, RECIPE_BIN: bin, RECIPE_LOG: logPath,
+      env: { ...process.env, QUICKJS_SMOKE_EXPORTS: "0", ...env, RECIPE_ROOT: root, RECIPE_BIN: bin, RECIPE_LOG: logPath, REAL_BUN: process.execPath,
         PATH: `${bin}:/usr/bin:/bin`, CAGE: "", JSC_BUILD_DIR: join(root, "native"),
         JSC_ENGINE_BUILD_DIR: join(root, "side"), QUICKJS_BUILD_DIR: join(root, "quickjs"),
         BUN_CORE_BUILD_DIR: join(root, "core"), TMPDIR: join(root, "t") },
@@ -68,8 +70,9 @@ function fixture(run: (root: string, shell: (script: string, env?: Record<string
 }
 
 function prepare(root: string): void {
-  for (const directory of ["scripts/src", "jsc/shim", "sdk/bin", "t", "native/build/jsc/lib"]) mkdirSync(join(root, directory), { recursive: true });
-  for (const file of ["scripts/build.sh", "scripts/build-bun-jsc.sh", "scripts/build-bun-core.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "jsc/configure.sh", "jsc/finalize.sh", "jsc/common.sh"]) {
+  for (const directory of ["scripts/src", "jsc/shim", "sdk/bin", "t", "native/build/jsc/lib", "crates/bunwasm-cli"]) mkdirSync(join(root, directory), { recursive: true });
+  for (const file of ["scripts/build.sh", "scripts/build-bun-jsc.sh", "scripts/build-bun-core.sh", "scripts/build-engine-jsc.sh", "scripts/build-engine-quickjs.sh", "jsc/configure.sh", "jsc/finalize.sh", "jsc/common.sh",
+    "crates/bunwasm-cli/max-memory.txt", "scripts/src/program-profile.ts"]) {
     copyFileSync(join(repository, file), join(root, file));
   }
   for (const tool of ["bun", "selected-cargo", "selected-rustc", "cargo", "rustc", "clang", "clang++", "wasm-ld", "wasm-opt", "wasm-tools", "node", "git", "cmake"]) {
@@ -194,5 +197,16 @@ test("WebKit configure and each shim member request PIC without merging the shim
     for (const line of compiles) expect(line).toContain("-fPIC -O2 -c");
     expect(log()).toContain("wasi-compat.o");
     expect(log()).toContain("madvise.o");
+    expect(log()).toContain(`-Wl,--max-memory=${maxMemoryBytes()}`);
+  });
+});
+
+test("WebKit configure refuses a memory maximum above 2 GiB before configuring anything", () => {
+  fixture((root, shell, log) => {
+    writeFileSync(join(root, "crates/bunwasm-cli/max-memory.txt"), "2147549184\n");
+    const result = shell("jsc/configure.sh");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr?.toString()).toContain("max-memory.txt must be a page multiple in (0, 2 GiB]");
+    expect(log().split("\n").filter(line => /^(clang|llvm-ar|cmake)\|/.test(line))).toEqual([]);
   });
 });

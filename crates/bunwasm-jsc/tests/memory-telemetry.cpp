@@ -132,6 +132,21 @@ static void checkObservedConstruction()
     assert(failedVector.failedAllocationSequence == 2);
 }
 
+static void checkExplicitFailure(uint64_t bytes)
+{
+    JSC::WASIMemoryAllocationScope request(bytes, JSC::WASIMemoryAllocationScope::TypedArray,
+        JSC::WASIMemoryAllocationScope::FailurePolicy::ObserveOnly);
+    request.fail();
+    request.fail();
+    const auto& failed = *bunjsc_cached_memory_telemetry();
+    assert(failed.failedAllocationBytes == bytes);
+    assert(failed.failedAllocationCategory == 1);
+    assert(failed.failedAllocationSequence == 1);
+    assert(failed.activeAllocationBytes == bytes);
+    assert(failed.activeAllocationCategory == 1);
+    assert(bunjscAllocationDepth == 1);
+}
+
 int main(int argc, char** argv)
 {
     assert(argc == 2);
@@ -151,6 +166,10 @@ int main(int argc, char** argv)
         checkRepeatedFailure();
     else if (!std::strcmp(argv[1], "observed-construction"))
         checkObservedConstruction();
+    else if (!std::strcmp(argv[1], "explicit-failure"))
+        checkExplicitFailure(136);
+    else if (!std::strcmp(argv[1], "unknown-failure"))
+        checkExplicitFailure(bunjscUnknownMemory);
     else
         return EXIT_FAILURE;
     std::puts(argv[1]);

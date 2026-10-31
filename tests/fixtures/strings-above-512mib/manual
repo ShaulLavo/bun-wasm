@@ -1,0 +1,1 @@
+bunStringRoundTrip is a bun-wasm test native, and the addresses are wasm32 guest addresses, so native Bun cannot produce this output.

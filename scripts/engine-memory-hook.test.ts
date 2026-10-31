@@ -3,6 +3,9 @@ import { beginMemorySnapshot, createMemoryReader, emptyCounters, endMemorySnapsh
 import { createMemoryChannel, createMemoryPublisher, memoryChannelReady, observeMemoryImports, readMemoryChannel, requestMemoryChannel } from "../web/src/memory-channel.ts";
 import { aggregate, selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
 
+// Passed through as the core's declared maximum; any page multiple shows it is not a constant.
+const LIMIT_BYTES = 7 * 65536;
+
 function fixture(engine: "jsc" | "quickjs") {
   const memory = new WebAssembly.Memory({ initial: 1 });
   const view = new DataView(memory.buffer);
@@ -23,7 +26,7 @@ function fixture(engine: "jsc" | "quickjs") {
       return 256;
     },
   } };
-  return { memory, core, side, put, reader: createMemoryReader(engine, core, side), refreshes: () => refreshes, trap: () => { trap = true; } };
+  return { memory, core, side, put, reader: createMemoryReader(engine, core, side, LIMIT_BYTES), refreshes: () => refreshes, trap: () => { trap = true; } };
 }
 
 test("normal JSC refresh preserves overlapping estimates, unknowns, and the exact 192-byte ABI", () => {
@@ -32,6 +35,7 @@ test("normal JSC refresh preserves overlapping estimates, unknowns, and the exac
   const sample = f.reader.sample(true);
   expect(sample.allocatorLiveBytes).toBe(10000);
   expect(sample.allocatorPeakBytes).toBe(20000);
+  expect(sample.memoryLimitBytes).toBe(LIMIT_BYTES);
   expect(sample.jsHeapBytes).toBe(3000);
   expect(sample.arrayBufferBytes).toBeNull();
   expect(sample.swcBytes).toBeNull();
@@ -180,7 +184,7 @@ test("a late shared frame cannot resurrect a process ended while a phase sample 
   const id = crypto.randomUUID();
   const transport = beginMemorySnapshot("quickjs", id);
   if (!transport) throw new Error("missing shared transport");
-  const publisher = createMemoryPublisher(transport.buffer, createMemoryReader("quickjs", f.core, f.side, transport));
+  const publisher = createMemoryPublisher(transport.buffer, createMemoryReader("quickjs", f.core, f.side, LIMIT_BYTES, transport));
   publisher.capture(false, true);
   const getter: unknown = Reflect.get(globalThis, "__bunMemorySnapshots");
   if (typeof getter !== "function") throw new Error("missing host sampler");
@@ -196,7 +200,7 @@ test("a late frame cannot replace a new command record using the same diagnostic
   const id = crypto.randomUUID();
   const transport = beginMemorySnapshot("quickjs", id, "old-record");
   if (!transport) throw new Error("missing shared transport");
-  createMemoryPublisher(transport.buffer, createMemoryReader("quickjs", f.core, f.side, transport)).capture(false, true);
+  createMemoryPublisher(transport.buffer, createMemoryReader("quickjs", f.core, f.side, LIMIT_BYTES, transport)).capture(false, true);
   const getter: unknown = Reflect.get(globalThis, "__bunMemorySnapshots");
   if (typeof getter !== "function") throw new Error("missing host sampler");
   const pending: unknown = getter("quickjs", true);
@@ -213,7 +217,7 @@ test("clock ties never choose an aggregate scope without a caller root", () => {
   const currentId = crypto.randomUUID();
   try {
     if (!old) throw new Error("missing shared transport");
-    const oldSnapshot = createMemoryReader("quickjs", f.core, f.side, old).finish();
+    const oldSnapshot = createMemoryReader("quickjs", f.core, f.side, LIMIT_BYTES, old).finish();
     recordMemorySnapshot({ type: "bun-memory", snapshot: { ...oldSnapshot, failedAllocation: { bytes: 1, category: "old" } } });
     endMemorySnapshot(old.id);
     beginMemorySnapshot("quickjs", currentId);
@@ -233,4 +237,116 @@ test("a root scope with a missing opaque member or a broken parent edge stays un
   expect(selectMemorySnapshots([root], "quickjs", "root", [inventory]).attribution.kind).toBe("unknown");
   const broken = { ...inventory, members: [{ pid: 1, parentPid: 0, telemetryId: "root", terminal: false }, { pid: 2, parentPid: 3, telemetryId: "child", terminal: false }] };
   expect(selectMemorySnapshots([root, { ...root, id: "child" }], "quickjs", "root", [broken]).attribution.kind).toBe("unknown");
+});
+
+function frozenFixture(limitBytes: number | null = LIMIT_BYTES) {
+  const f = fixture("quickjs");
+  for (let index = 0; index < 9; index++) f.put(512, index, 0xffffffffffffffffn);
+  f.put(512, 0, 1n); f.put(512, 1, 72n); f.put(512, 3, 0n);
+  const core = { exports: { ...f.core.exports, bun_memory_failure_telemetry: () => 512 } };
+  return { ...f, core, reader: createMemoryReader("quickjs", core, f.side, limitBytes) };
+}
+
+function latchFrozen(f: ReturnType<typeof frozenFixture>) {
+  [1n, 72n, 100000n, 3n, 40012n, 80024n, 160048n, 196608n, 196608n]
+    .forEach((value, index) => f.put(512, index, value));
+}
+
+test("frozen allocator state is cached separately from current allocator and engine failures", () => {
+  const f = frozenFixture();
+  expect(f.reader.sample().frozenAllocatorFailure).toBeNull();
+  latchFrozen(f);
+  f.put(128, 4, 100000n); f.put(128, 5, 3n);
+  f.put(256, 8, 99999n); f.put(256, 9, 3n);
+  f.trap();
+  const snapshot = f.reader.sample(true);
+  expect(snapshot.frozenAllocatorFailure).toEqual({ bytes: 100000, category: "libc.realloc",
+    previousUsableBytes: 40012, allocatorLiveBytes: 80024, allocatorPeakBytes: 160048,
+    wasmCapacityBeforeBytes: 196608, wasmCapacityAfterBytes: 196608, reason: "unknown" });
+  expect(snapshot.allocatorFailure).toEqual({ bytes: 100000, category: "libc.realloc" });
+  expect(snapshot.engineFailure).toEqual({ bytes: 99999, category: "quickjs.realloc" });
+  expect(snapshot.allocatorLiveBytes).toBe(10000);
+  expect(snapshot.memoryLimitBytes).toBe(LIMIT_BYTES);
+  expect(f.refreshes()).toBe(0);
+  f.memory.grow(1);
+  const terminal = f.reader.finish();
+  expect(terminal.wasmCapacityBytes).toBe(2 * 65536);
+  expect(terminal.memoryLimitBytes).toBe(LIMIT_BYTES);
+  expect(terminal.frozenAllocatorFailure).toEqual(snapshot.frozenAllocatorFailure);
+  const canonical = selectMemorySnapshots([snapshot], "quickjs");
+  expect(canonical.allocatorLiveBytes).toBeNull();
+  expect(canonical.attribution.kind).toBe("unknown");
+  expect(canonical.rawProcesses).toEqual([snapshot]);
+});
+
+test("frozen capacity cannot establish an unknown declared memory maximum", () => {
+  const f = frozenFixture(null);
+  latchFrozen(f);
+  const snapshot = f.reader.sample();
+  expect(snapshot.memoryLimitBytes).toBeNull();
+  expect(snapshot.frozenAllocatorFailure?.wasmCapacityAfterBytes).toBe(196608);
+  expect(snapshot.wasmCapacityBytes).toBe(65536);
+});
+
+test("frozen unknown and unsafe u64 values stay null without a rejection reason", () => {
+  const f = frozenFixture();
+  latchFrozen(f);
+  f.put(512, 2, 0xffffffffffffffffn); f.put(512, 3, 999n);
+  f.put(512, 4, 9007199254740992n); f.put(512, 5, 0n);
+  f.put(512, 6, 9007199254740991n); f.put(512, 7, 0xffffffffffffffffn);
+  expect(f.reader.sample().frozenAllocatorFailure).toEqual({ bytes: null, category: "unknown.999",
+    previousUsableBytes: null, allocatorLiveBytes: 0, allocatorPeakBytes: Number.MAX_SAFE_INTEGER,
+    wasmCapacityBeforeBytes: null, wasmCapacityAfterBytes: 196608, reason: "unknown" });
+  expect(f.reader.sample(true).engineFailure).toBeNull();
+  expect(f.refreshes()).toBe(0);
+  expect(fixture("quickjs").reader.sample().frozenAllocatorFailure).toBeNull();
+});
+
+test("frozen reader rejects unsupported ABI and malformed pointers without wrapping them", () => {
+  const f = frozenFixture();
+  f.put(512, 0, 2n);
+  expect(() => f.reader.sample()).toThrow("ABI");
+  f.put(512, 0, 1n); f.put(512, 1, 80n);
+  expect(() => f.reader.sample()).toThrow("ABI");
+  for (const pointer of [0, -1, -2147483649, 4294967808, 512.5, NaN, Infinity, 516, 65528]) {
+    const core = { exports: { ...f.core.exports, bun_memory_failure_telemetry: () => pointer } };
+    expect(() => createMemoryReader("quickjs", core, f.side, LIMIT_BYTES).sample()).toThrow();
+  }
+});
+
+test("frozen record survives channel teardown and validates at the host boundary", () => {
+  const f = frozenFixture();
+  latchFrozen(f);
+  const transport = beginMemorySnapshot("quickjs", crypto.randomUUID());
+  if (!transport) throw new Error("missing shared transport");
+  const reader = createMemoryReader("quickjs", f.core, f.side, LIMIT_BYTES, transport);
+  let disposed = false;
+  const publisher = createMemoryPublisher(transport.buffer, {
+    sample: (refresh) => reader.sample(refresh),
+    finish: () => ({ ...reader.finish(), frozenAllocatorFailure: disposed ? null : reader.sample().frozenAllocatorFailure }),
+  });
+  try {
+    const initial = publisher.capture(false, true);
+    expect(initial?.id).toBe(transport.id);
+    expect(initial?.commandId).toBe(transport.commandId);
+    expect(initial?.commandSequence).toBe(transport.commandSequence);
+    expect(initial?.memoryLimitBytes).toBe(LIMIT_BYTES);
+    f.put(256, 8, 99999n); f.put(256, 9, 3n);
+    publisher.capture(false, true);
+    disposed = true;
+    const terminal = publisher.finish();
+    expect(terminal?.id).toBe(transport.id);
+    expect(terminal?.memoryLimitBytes).toBe(LIMIT_BYTES);
+    expect(terminal?.frozenAllocatorFailure).toEqual(initial?.frozenAllocatorFailure);
+    expect(terminal?.engineFailure).toEqual({ bytes: 99999, category: "quickjs.realloc" });
+    expect(readMemoryChannel(transport.buffer)).toEqual(terminal);
+    expect(recordMemorySnapshot({ type: "bun-memory", snapshot: terminal })).toBe(true);
+    for (const invalid of [undefined, {}, { ...initial?.frozenAllocatorFailure, reason: "limit" },
+      { ...initial?.frozenAllocatorFailure, previousUsableBytes: -1 },
+      { ...initial?.frozenAllocatorFailure, bytes: Number.MAX_SAFE_INTEGER + 1 }]) {
+      expect(() => recordMemorySnapshot({ type: "bun-memory", snapshot: { ...terminal, frozenAllocatorFailure: invalid } })).toThrow();
+    }
+  } finally { endMemorySnapshot(transport.id); }
+  expect(retainedMemorySnapshots().find(value => value.id === transport.id)?.frozenAllocatorFailure)
+    .toEqual(f.reader.sample().frozenAllocatorFailure);
 });

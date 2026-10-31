@@ -647,7 +647,7 @@ impl Processes {
                     .unwrap_or(usize::MAX)
                     .saturating_mul(1 << 20)
             })
-            .unwrap_or(512 << 20);
+            .unwrap_or(stdio::DEFAULT_MEMORY_LIMIT);
         request.env.insert("PWD".into(), request.cwd.clone());
         let (runtime, notify, cancellation) =
             (self.runtime.clone(), self.notify.clone(), cancel.clone());

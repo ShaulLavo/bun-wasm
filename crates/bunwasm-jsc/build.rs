@@ -9,6 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "../bunwasm-cli/max_memory.rs"]
+mod max_memory;
+
 fn main() {
     let target = env::var("TARGET").unwrap_or_default();
     println!("cargo:rerun-if-env-changed=JSC_BUILD_DIR");
@@ -130,6 +133,11 @@ fn compile_helpers(sdk: &Path, sysroot: &Path, obj: &Path, manifest: &Path, out:
     let status = Command::new(sdk.join("bin/clang++"))
         .args(&flags)
         .arg("-fPIC")
+        // JSC sizes its heap from this (`forceRAMSize`), so it follows the guest's memory maximum.
+        .arg(format!(
+            "-DBUN_WASM_MAX_MEMORY={}",
+            max_memory::MAX_MEMORY_BYTES
+        ))
         .arg(format!("--sysroot={}", sysroot.display()))
         .arg("-c")
         .arg(&src)
