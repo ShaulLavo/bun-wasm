@@ -614,6 +614,8 @@ typedef struct JSBunwasmMemoryTelemetry {
     uint64_t abi_version, byte_size, refresh_sequence;
     uint64_t malloc_size, memory_used_size, array_buffer_size, array_buffer_count;
     uint64_t wasm_capacity, failed_size, failed_category, failed_size_known, counters_valid;
+    /* bun-wasm: automatic threshold-GC state and the live allocator counter. */
+    uint64_t automatic_gc_count, malloc_size_after_automatic_gc, malloc_gc_threshold, current_malloc_size;
 } JSBunwasmMemoryTelemetry;
 JS_EXTERN const JSBunwasmMemoryTelemetry *JS_bunwasm_MemoryTelemetry(JSRuntime *rt);
 JS_EXTERN const JSBunwasmMemoryTelemetry *JS_bunwasm_RefreshMemoryTelemetry(JSRuntime *rt);
