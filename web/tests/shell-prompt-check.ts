@@ -86,7 +86,7 @@ export interface PromptSnapshot {
 }
 
 /** This runs in the page, reads public xterm cells, and flushes every queued write first. */
-export async function snapshotPrompt(): Promise<PromptSnapshot> {
+async function snapshotPrompt(): Promise<PromptSnapshot> {
   const { term, shell }: ObservedPlayground = Reflect.get(globalThis, "playground");
   await new Promise<void>(resolve => term.write("", resolve));
   const buffer = term.buffer.active;
@@ -101,7 +101,7 @@ export async function snapshotPrompt(): Promise<PromptSnapshot> {
   return { rows, cursorX: buffer.cursorX, cursorRow: buffer.baseY + buffer.cursorY, cols: term.cols, generation: String(shell.lastPrompt?.generation) };
 }
 
-export function activePrompt(snapshot: PromptSnapshot): string[] {
+function activePrompt(snapshot: PromptSnapshot): string[] {
   const lines: string[] = [];
   for (const row of snapshot.rows.slice(0, snapshot.cursorRow + 1)) {
     if (row.wrapped && lines.length) lines[lines.length - 1] += row.text;
