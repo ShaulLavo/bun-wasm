@@ -26,7 +26,31 @@ pub const TEXT: &[&str] = &[
     "__bunwasm_dynamicImport",
     ", \"eval-indirect\")",
     "__bunwasm_evalSpread(eval, ",
+    "return ",
 ];
+
+/// Goal "vm-context": `TEXT[19]` before the final top-level expression statement.
+const COMPLETION: usize = 19;
+// Goal "vm-context" kinds past `TEXT`, whose text names the hygienic scope parameter `s`
+// (source_prepare.ts `scoped`).
+/// `${s}.`
+const SCOPE_READ: usize = 20;
+/// `${s}_typeof.`
+const SCOPE_TYPEOF: usize = 21;
+/// `(0, ${s}.`, closed by kind 1 after the name.
+const SCOPE_CALL: usize = 22;
+/// Replaces the name: `${name}: ${s}.${name}`.
+const SCOPE_SHORTHAND: usize = 23;
+
+fn inserted_len(kind: usize, deleted: usize, scope: &str) -> usize {
+    match kind {
+        SCOPE_READ => scope.len() + 1,
+        SCOPE_TYPEOF => scope.len() + "_typeof.".len(),
+        SCOPE_CALL => scope.len() + "(0, .".len(),
+        SCOPE_SHORTHAND => deleted + scope.len() + ": .".len(),
+        _ => TEXT[kind].len() - deleted,
+    }
+}
 
 #[derive(Default)]
 struct Body {
@@ -266,24 +290,168 @@ fn eval_edits(edits: &mut Edits, source: &str, spans: &[Span], call: usize, indi
     edits.close(end, start, if indirect { 17 } else { 1 });
 }
 
+fn options() -> bun_js_parser::ParserOptions<'static> {
+    let mut options = bun_js_parser::ParserOptions::init(Default::default(), bun_ast::Loader::Js);
+    options.features.top_level_await = false;
+    options.features.no_macros = true;
+    options.suppress_warnings_about_weird_code = true;
+    options
+}
+
 fn parse(source: &str) -> Result<(Vec<Span>, Vec<usize>), String> {
     let arena = bun_alloc::Arena::new();
     let mut memory = bun_ast::ASTMemoryAllocator::borrowing(&arena);
     let _scope = memory.enter();
     let input = bun_ast::Source::init_path_string(b"<prepare.js>", source.as_bytes());
-    let mut options = bun_js_parser::ParserOptions::init(Default::default(), bun_ast::Loader::Js);
-    options.features.top_level_await = false;
-    options.features.no_macros = true;
-    options.suppress_warnings_about_weird_code = true;
     let mut log = bun_ast::Log::init();
     let define = Default::default();
-    let parser = bun_js_parser::Parser::init(options, &mut log, &input, &define, &arena)
+    let parser = bun_js_parser::Parser::init(options(), &mut log, &input, &define, &arena)
         .map_err(|error| format!("{error:?}"))?;
     let ((result, imports), spans) = bun_js_parser::with_bunwasm_splices(|| {
         bun_js_parser::with_bunwasm_dynamic_imports(|| parser.parse_only(|_| ()))
     });
     result.map_err(|error| format!("{error:?}"))?;
     Ok((spans, imports))
+}
+
+/// What the parse pass knows about a context script's top level.
+struct Script {
+    /// The final top-level expression statement, which `return`s the completion value.
+    completion: Option<usize>,
+    /// A parameter name no scope in the source declares.
+    scope: String,
+}
+
+fn script(parsed: &bun_js_parser::parse::parse_entry::ParsedOnly) -> Result<Script, &'static str> {
+    use bun_ast::stmt::Data as S;
+    for stmt in parsed.stmts {
+        let exported = match stmt.data {
+            S::SImport(_) => return Err("Cannot use import statement outside a module"),
+            S::SReturn(_) => return Err("Illegal return statement"),
+            S::SLocal(local) => local.is_export,
+            S::SClass(class) => class.is_export,
+            S::SFunction(function) => function
+                .func
+                .flags
+                .contains(bun_ast::flags::Function::IsExport),
+            data => data.tag().is_export_like() && !matches!(data, S::SEmpty(_)),
+        };
+        if exported {
+            return Err("Unexpected token 'export'");
+        }
+    }
+    let completion = parsed
+        .stmts
+        .iter()
+        .rev()
+        .find(|stmt| !matches!(stmt.data, S::SEmpty(_) | S::SFunction(_)))
+        .filter(|stmt| matches!(stmt.data, S::SExpr(_)))
+        .map(|stmt| stmt.loc.start as usize);
+    let scope = (0..)
+        .map(|suffix| match suffix {
+            0 => "__bunwasm_vm".to_owned(),
+            _ => format!("__bunwasm_vm{suffix}"),
+        })
+        .find(|name| {
+            !parsed.declares(name.as_bytes())
+                && !parsed.declares(format!("{name}_typeof").as_bytes())
+        })
+        .expect("a finite source declares finitely many names");
+    Ok(Script { completion, scope })
+}
+
+fn first_error(log: &bun_ast::Log) -> Option<String> {
+    log.msgs
+        .iter()
+        .find(|msg| matches!(msg.kind, bun_ast::Kind::Err))
+        .map(|msg| String::from_utf8_lossy(&msg.data.text).into_owned())
+}
+
+/// Parses `source` as a script twice: once for its statements, once through the visit pass, whose
+/// binder records the references no declaration in the source binds.
+fn parse_context(source: &str) -> Result<(Script, Vec<Span>), String> {
+    let arena = bun_alloc::Arena::new();
+    let mut memory = bun_ast::ASTMemoryAllocator::borrowing(&arena);
+    let _scope = memory.enter();
+    let input = bun_ast::Source::init_path_string(b"<prepare.js>", source.as_bytes());
+    let define = Default::default();
+    let mut log = bun_ast::Log::init();
+    let parsed = bun_js_parser::Parser::init(options(), &mut log, &input, &define, &arena)
+        .and_then(|parser| parser.parse_only(script));
+    let script = match parsed {
+        Ok(script) => script?,
+        Err(error) => return Err(first_error(&log).unwrap_or_else(|| format!("{error:?}"))),
+    };
+    let mut log = bun_ast::Log::init();
+    let parser = bun_js_parser::Parser::init(options(), &mut log, &input, &define, &arena)
+        .map_err(|error| format!("{error:?}"))?;
+    // Syntax errors already failed the first parse. What the visit pass logs (an assignment to a
+    // constant) throws when it runs, so its error doesn't reject the script; the visit completes first.
+    let (_, spans) = bun_js_parser::with_bunwasm_splices(|| parser.parse());
+    Ok((script, spans))
+}
+
+fn context_edits(spans: &[Span]) -> Edits {
+    let at = |wanted: fn(&Span) -> Option<usize>| {
+        spans
+            .iter()
+            .filter_map(wanted)
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let callees = at(|span| match span {
+        Span::Callee(at) => Some(*at),
+        _ => None,
+    });
+    let typeofs = at(|span| match span {
+        Span::Typeof(at) => Some(*at),
+        _ => None,
+    });
+    let shorthands = at(|span| match span {
+        Span::Shorthand(at) => Some(*at),
+        _ => None,
+    });
+    let mut edits = Edits::default();
+    for span in spans {
+        let Span::Free { start, end } = *span else {
+            continue;
+        };
+        let kind = if shorthands.contains(&start) {
+            SCOPE_SHORTHAND
+        } else if typeofs.contains(&start) {
+            SCOPE_TYPEOF
+        } else if callees.contains(&start) {
+            SCOPE_CALL
+        } else {
+            SCOPE_READ
+        };
+        let deleted = if kind == SCOPE_SHORTHAND {
+            end - start
+        } else {
+            0
+        };
+        edits.0.push((start, deleted, kind, 1));
+        if kind == SCOPE_CALL {
+            edits.0.push((end, 0, 1, 1));
+        }
+    }
+    edits
+}
+
+/// Goal "vm-context": every reference that no declaration in `source` binds becomes a member of
+/// the scope parameter, and the final top-level expression statement returns its value.
+fn prepare_context(source: &str) -> Value {
+    let range = 0..source.len();
+    let (script, spans) = match parse_context(source) {
+        Ok(parsed) => parsed,
+        Err(error) => return result(source, Edits::default(), range, Some(error), &[], ""),
+    };
+    let mut edits = context_edits(&spans);
+    if let Some(at) = script.completion {
+        edits.0.push((at, 0, COMPLETION, 0));
+    }
+    let mut value = result(source, edits, range, None, &[], &script.scope);
+    value["scope"] = json!(script.scope);
+    value
 }
 
 fn already_prepared(source: &str, spans: &[Span]) -> bool {
@@ -314,6 +482,7 @@ fn result(
     range: std::ops::Range<usize>,
     fallback: Option<String>,
     spans: &[Span],
+    scope: &str,
 ) -> Value {
     edits.0.sort_by_key(|edit| (edit.0, edit.3));
     edits.0.dedup();
@@ -327,6 +496,7 @@ fn result(
     {
         let prefix = &source[range.start..at];
         let offset = prefix.encode_utf16().count();
+        let delete = source[at..at + delete].encode_utf16().count();
         triples.extend([offset as i32, delete as i32, kind as i32]);
         let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
         let column = prefix
@@ -337,7 +507,7 @@ fn result(
             .count()
             + 1;
         let inserted = inserted_by_line.entry(line).or_default();
-        let length = TEXT[kind].len() - delete;
+        let length = inserted_len(kind, delete, scope);
         columns.extend([line as i32, (column + *inserted) as i32, length as i32]);
         *inserted += length;
     }
@@ -347,6 +517,9 @@ fn result(
 }
 
 pub fn prepare(source: &str, goal: &str) -> Value {
+    if goal == "vm-context" {
+        return prepare_context(source);
+    }
     let (text, start) = if goal == "eval" {
         (
             format!("({{__bunwasm_e(){{\n{source}\n}}}})"),
@@ -357,10 +530,15 @@ pub fn prepare(source: &str, goal: &str) -> Value {
     };
     let range = start..start + source.len();
     match parse(&text) {
-        Ok((spans, imports)) => {
-            result(&text, collect(&text, &spans, &imports), range, None, &spans)
-        }
-        Err(error) => result(&text, Edits::default(), range, Some(error), &[]),
+        Ok((spans, imports)) => result(
+            &text,
+            collect(&text, &spans, &imports),
+            range,
+            None,
+            &spans,
+            "",
+        ),
+        Err(error) => result(&text, Edits::default(), range, Some(error), &[], ""),
     }
 }
 
@@ -392,7 +570,7 @@ pub fn function(args: &[String], kind: &str, hooks: bool) -> Vec<Value> {
         Err(error) => {
             return ranges
                 .into_iter()
-                .map(|range| result(&text, Edits::default(), range, Some(error.clone()), &[]))
+                .map(|range| result(&text, Edits::default(), range, Some(error.clone()), &[], ""))
                 .collect();
         }
     };
@@ -403,7 +581,7 @@ pub fn function(args: &[String], kind: &str, hooks: bool) -> Vec<Value> {
     };
     ranges
         .into_iter()
-        .map(|range| result(&text, edits.clone(), range, None, &spans))
+        .map(|range| result(&text, edits.clone(), range, None, &spans, ""))
         .collect()
 }
 

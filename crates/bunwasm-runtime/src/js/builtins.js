@@ -278,11 +278,13 @@
       }
     }
     // Not a real separate realm: globals resolve through the context object
-    // first (`with`), then fall back to this realm's globals.
+    // first (`with`; Hermes has no `with`, see vm_context.ts), then fall back
+    // to this realm's globals.
     function runWith(code, context, filename) {
       if (!("globalThis" in context) && Object.isExtensible(context)) {
         Object.defineProperty(context, "globalThis", { value: context, writable: true, configurable: true });
       }
+      if (native.engine === "hermes") return internal.require("vm_context").run(String(code), context, filename);
       const runner = native.evalScript(`(function (__ctx, __code) { with (__ctx) { return eval(__code); } })`, filename);
       return runner(context, internal.prepareText(String(code), "eval", "vm-context", filename));
     }

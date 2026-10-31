@@ -28,8 +28,16 @@
     "} finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } ",
     " } finally { __bunwasm_exited(__bunwasm_c); } }", "{ try { __bunwasm_entered(__bunwasm_c); ",
     "} finally { __bunwasm_caught(__bunwasm_s, __bunwasm_s = 0); } }", "__bunwasm_evalArg(eval, ", "", ", \"eval-indirect\")",
-    "__bunwasm_evalSpread(eval, ",
+    "__bunwasm_evalSpread(eval, ", "return ",
   ];
+  // Kinds past `text` name the context script's hygienic scope parameter (prepare.rs SCOPE_*).
+  function scoped(kind: number, scope: string | undefined, replaced: string): string {
+    if (scope === undefined) throw new Error(`source preparation kind ${kind} has no scope`);
+    if (kind === 20) return `${scope}.`;
+    if (kind === 21) return `${scope}_typeof.`;
+    if (kind === 22) return `(0, ${scope}.`;
+    return `${replaced}: ${scope}.${replaced}`;
+  }
   function hasWork(source: string): boolean {
     return source.includes("await") || source.includes("yield") || source.includes("eval") || source.includes("\\u") || source.includes("import");
   }
@@ -107,7 +115,8 @@
       const at = edits[index];
       const unchanged = source.slice(previous, at);
       advance(mapping, unchanged);
-      const inserted = edits[index + 2] === 16 ? replacement : text[edits[index + 2]];
+      const kind = edits[index + 2];
+      const inserted = kind === 16 ? replacement : kind < text.length ? text[kind] : scoped(kind, value.scope, source.slice(at, at + edits[index + 1]));
       mapping.columns.push(mapping.position.line, mapping.position.column, inserted.length - edits[index + 1]);
       result += unchanged + inserted;
       mapping.position.column += inserted.length;
@@ -135,6 +144,14 @@
     const prepared = records(source, goal, () => [compact(JSON.parse(native.prepareSource(parseable(source), goal)))]);
     trace(origin, name, source.length, prepared.values, prepared.hit, start, goal);
     return apply(source, prepared.values[0], name);
+  }
+  function prepareContextScript(source: string, name: string): string {
+    const start = performance.now();
+    const prepared = records(source, "vm-context", () => [compact(JSON.parse(native.prepareSource(parseable(source), "vm-context")))]);
+    trace("vm-context", name, source.length, prepared.values, prepared.hit, start, "vm-context");
+    const value = prepared.values[0];
+    if (value.fallback !== null) throw new SyntaxError(value.fallback);
+    return `(function (${value.scope}, ${value.scope}_typeof) {\n${apply(source, value, name)}\n})`;
   }
   function constructorSource(args: string[], name: string | undefined, table: number[]): string[] {
     if (native.engine !== "host" || args.length === 0) return args;
@@ -189,6 +206,7 @@
   }
   internal.prepareText = prepareText;
   internal.prepareFunctionArgs = prepareFunctionArgs;
+  internal.prepareContextScript = prepareContextScript;
   internal.preparedColumns = columns;
   internal.preparation = { counters, version, realm, correctPosition, cacheBytes: () => bytes, columnBytes: () => columnBytes };
   if (hooks) {
