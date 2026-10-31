@@ -2,24 +2,29 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { compileErrorRecovery } from "./app-matrix/next-acceptance-edits";
 import { runAcceptancePhase } from "./app-matrix/next-acceptance-phase";
 import { chromium, type Page } from "playwright";
 import { runRouteCase } from "./app-matrix/next-acceptance-cases";
 
-type Mode = "ok" | "http500" | "no-eof" | "fetch-stall" | "body-stall";
+type Mode = "ok" | "http500" | "no-eof" | "fetch-stall" | "body-stall" | "compile-error" | "compile-poll-nonmatching" | "compile-poll-binary";
 interface Resources {
   mode: Mode;
   active: Set<Request>;
   timers: Set<ReturnType<typeof setTimeout>>;
   aborts: number;
   cancellations: number;
+  compileSourceIsBroken: boolean;
+  dynamicPolls: number;
+  restoredDynamicRequests: number;
 }
 
 function stream(request: Request, resources: Resources): Response {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(new TextEncoder().encode(resources.mode === "body-stall" ? '{"body":' : "NEXT-01 early\n"));
+      const text = resources.mode === "body-stall" ? '{"body":' : resources.mode === "compile-error" || isCompilePolling(resources.mode) ? "broken" : "NEXT-01 early\n";
+      controller.enqueue(new TextEncoder().encode(text));
       if (resources.mode === "body-stall") return;
       timer = setTimeout(() => finishStream(request, resources, controller), 250);
       resources.timers.add(timer);
@@ -31,14 +36,32 @@ function stream(request: Request, resources: Resources): Response {
       resources.cancellations++;
     },
   });
-  return new Response(body, { status: resources.mode === "http500" ? 500 : request.method === "POST" ? 201 : 200, headers: { "content-type": "text/plain" } });
+  const status = resources.mode === "http500" || resources.mode === "compile-error" || isCompilePolling(resources.mode) ? 500 : request.method === "POST" ? 201 : 200;
+  return new Response(body, { status, headers: { "content-type": "text/plain" } });
 }
 
 function finishStream(request: Request, resources: Resources, controller: ReadableStreamDefaultController<Uint8Array>) {
+  if (resources.mode === "compile-error") return;
+  if (isCompilePolling(resources.mode) && resources.dynamicPolls > 1) return;
   controller.enqueue(new TextEncoder().encode("NEXT-01 late\n"));
   if (resources.mode === "no-eof") return;
   controller.close();
   resources.active.delete(request);
+}
+
+function isCompilePolling(mode: Mode) {
+  return mode === "compile-poll-nonmatching" || mode === "compile-poll-binary";
+}
+
+function completedPoll(request: Request, resources: Resources): Response | undefined {
+  if (!isCompilePolling(resources.mode)) return;
+  resources.dynamicPolls++;
+  if (resources.dynamicPolls !== 1) return;
+  resources.active.delete(request);
+  if (resources.mode !== "compile-poll-binary") return new Response("not a compile error", { status: 500, headers: { "content-type": "text/plain" } });
+  const bytes = new Uint8Array(1024 * 1024).fill(97);
+  bytes[0] = 255;
+  return new Response(bytes, { status: 500, headers: { "content-type": "text/plain" } });
 }
 
 function pending(request: Request, resources: Resources): Promise<Response> {
@@ -53,6 +76,17 @@ function pending(request: Request, resources: Resources): Promise<Response> {
 
 function serve(request: Request, resources: Resources): Response | Promise<Response> {
   const path = new URL(request.url).pathname;
+  if ((resources.mode === "compile-error" || isCompilePolling(resources.mode)) && path === "/dynamic") {
+    if (!resources.compileSourceIsBroken) {
+      resources.restoredDynamicRequests++;
+      resources.active.delete(request);
+      return new Response("<!doctype html><title>probe</title>", { headers: { "content-type": "text/html" } });
+    }
+    resources.active.add(request);
+    const completed = completedPoll(request, resources);
+    if (completed) return completed;
+    return stream(request, resources);
+  }
   if (!path.startsWith("/api/")) return new Response("<!doctype html><title>probe</title>", { headers: { "content-type": "text/html" } });
   resources.active.add(request);
   if (resources.mode === "fetch-stall") return pending(request, resources);
@@ -63,7 +97,7 @@ function serve(request: Request, resources: Resources): Response | Promise<Respo
 
 async function fixture(mode: Mode, operation: (page: Page, base: string, resources: Resources) => Promise<void>) {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-nh-"));
-  const resources: Resources = { mode, active: new Set(), timers: new Set(), aborts: 0, cancellations: 0 };
+  const resources: Resources = { mode, active: new Set(), timers: new Set(), aborts: 0, cancellations: 0, compileSourceIsBroken: false, dynamicPolls: 0, restoredDynamicRequests: 0 };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => serve(request, resources) });
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
@@ -115,6 +149,7 @@ test("stream probe requires EOF and aborts an unfinished body", async () => {
   await fixture("no-eof", async (page, base, resources) => {
     const error = await rejected(probe(page, base, "stream-cancel", 700));
     expect(error).toMatch(/deadline|timeout|abort/i);
+    expect(error).toMatch(/stage=body; status=200; bytes read=\d+; EOF observed=false/);
     await released(resources);
     expect(resources.cancellations).toBeGreaterThan(0);
   });
@@ -124,6 +159,8 @@ test("evaluated fetch has a deadline that aborts the actual request", async () =
   await fixture("fetch-stall", async (page, base, resources) => {
     const error = await rejected(probe(page, base, "get-post", 200));
     expect(error).toMatch(/deadline|timeout|abort/i);
+    expect(error).toMatch(/stage=fetch; bytes read=0; EOF observed=false/);
+    expect(error).not.toMatch(/status=/);
     await released(resources);
     expect(resources.aborts).toBeGreaterThan(0);
   });
@@ -133,8 +170,67 @@ test("evaluated JSON reader has a deadline that cancels its body", async () => {
   await fixture("body-stall", async (page, base, resources) => {
     const error = await rejected(probe(page, base, "get-post", 200));
     expect(error).toMatch(/deadline|timeout|abort/i);
+    expect(error).toMatch(/stage=body; status=201; bytes read=8; EOF observed=false/);
     await released(resources);
     expect(resources.cancellations).toBeGreaterThan(0);
+  });
+}, 20000);
+
+test("compile-error polling retains the last complete nonmatching response", async () => {
+  await fixture("compile-poll-nonmatching", async (page, base, resources) => {
+    await page.goto(base);
+    let contents = "server-original";
+    const source = {
+      read: async () => contents,
+      write: async (_path: string, next: string) => { contents = next; resources.compileSourceIsBroken = next.includes("broken"); },
+    };
+    const error = await rejected(compileErrorRecovery(page, base, source, 700));
+    expect(error).toMatch(/HTTP probe request sequence=2; stage=body; status=500; bytes read=6; EOF observed=false/);
+    expect(error).toMatch(/last completed compile-error poll: request sequence=1, status=500, bytes=19, matched=false/);
+    expect(contents).toBe("server-original");
+    expect(resources.restoredDynamicRequests).toBe(0);
+    await released(resources);
+  });
+}, 20000);
+
+test("compile-error polling carries raw bytes without re-encoding a large completed body", async () => {
+  const encode = TextEncoder.prototype.encode;
+  let fullBodyEncodes = 0;
+  TextEncoder.prototype.encode = function(this: TextEncoder, input?: string) {
+    if (input && input.length >= 1024 * 1024) fullBodyEncodes++;
+    return encode.call(this, input);
+  };
+  try {
+    await fixture("compile-poll-binary", async (page, base, resources) => {
+      await page.goto(base);
+      let contents = "server-original";
+      const source = {
+        read: async () => contents,
+        write: async (_path: string, next: string) => { contents = next; resources.compileSourceIsBroken = next.includes("broken"); },
+      };
+      const error = await rejected(compileErrorRecovery(page, base, source, 700));
+      expect(error).toMatch(/last completed compile-error poll: request sequence=1, status=500, bytes=1048576, matched=false/);
+      expect(fullBodyEncodes).toBe(0);
+      expect(contents).toBe("server-original");
+      expect(resources.restoredDynamicRequests).toBe(0);
+      await released(resources);
+    });
+  } finally { TextEncoder.prototype.encode = encode; }
+}, 20000);
+
+test("compile-error recovery restores source after a partial 500 without EOF", async () => {
+  await fixture("compile-error", async (page, base, resources) => {
+    await page.goto(base);
+    let contents = "server-original";
+    const source = {
+      read: async () => contents,
+      write: async (_path: string, next: string) => { contents = next; resources.compileSourceIsBroken = next.includes("broken"); },
+    };
+    const error = await rejected(compileErrorRecovery(page, base, source, 700));
+    expect(error).toMatch(/HTTP probe request sequence=1; stage=body; status=500; bytes read=6; EOF observed=false/);
+    expect(contents).toBe("server-original");
+    expect(resources.restoredDynamicRequests).toBe(0);
+    await released(resources);
   });
 }, 20000);
 
