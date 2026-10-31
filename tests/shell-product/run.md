@@ -8,10 +8,12 @@ framework, installs its dependencies, or answers preview requests.
 ## Inputs
 
 Prepare a consumer directory containing the public `bash-web`, `bun-wasm`,
-`waffle`, and `playwright` packages. Both consumers must declare the same exact
-Waffle Git peer, resolve the same physical package, and retain the selected full
-Git commits in `bun.lock`. Build the installed shell's worker, runtime-backed
-shell guest, and utility guests. Do not use the shell CLI guest or edit package
+`waffle`, and `playwright` packages. Runtime, families, Bash, and Bun must
+declare the same positive safe-integer
+`waffleHostInterface`. Both consumers and every installed family must resolve
+the same physical runtime. The lock must contain one runtime entry and retain
+the exact selected dependency edges. Build the installed shell's worker,
+runtime-backed shell guest, and utility guests. Do not use the shell CLI guest or edit package
 manifests to bypass a peer mismatch. The browser command compiles no guest.
 
 The Bun guest needs its producer `.build.json` and an independently accepted
@@ -37,9 +39,13 @@ bun /work/platform-production/heavy/current/run.js --class browser shell-product
   bun web/tests/browser-shell-product.ts
 ```
 
-The Bun package selects the exact Waffle peer. Published archives must match
+The checked development pin selects the exact Waffle archive.
+A wildcard Waffle peer controls placement only, not compatibility. Published
+archives must match
 `scripts/waffle-release-inputs.json`, including SHA-256, byte size and source
-commit. Shell must declare the identical peer. `SHELL_PRODUCT_WAFFLE_COMMIT`,
+commit. Shell and Bun may use wildcard placement peers. An exact historical
+peer must match the selected runtime, including its full Git commit.
+`SHELL_PRODUCT_WAFFLE_COMMIT`,
 when set, asserts that source commit. Historical Git peers require a full commit
 whose repository root is an installable Waffle package; private workspace roots
 are rejected. New runtime pins use published child-package archives.
@@ -50,7 +56,9 @@ historical repository root or `packages/waffle` in the monorepo. This never
 changes the installed peer identity or qualifies adoption of that host variant.
 Preparation retains `.shell-product-host.json` beside `bun.lock`, recording the
 exact peer URL, Shell, peer source, host and network inputs. The browser checks
-that record and both consumers' physical runtime resolution before bundling.
+that record, the host-interface integer, and all consumers' physical runtime
+resolution before bundling. Missing, malformed, or mismatched package metadata
+fails before any fixture build. Never add metadata to installed old packages.
 
 `PLAYWRIGHT` can select an already installed driver. Without it, the driver is
 loaded from the prepared consumer. `SHELL_PRODUCT_TIMEOUT_MS` sets each command,
@@ -69,6 +77,14 @@ redirection, exit status and boolean lists, cwd, package tools piped to grep, an
 an inline `PORT=3001` override. Raw terminal output and screenshots are retained.
 Task asset/registry servers, browsers, copied app sources, and scratch are removed
 on completion or interruption. The prepared packages and shared caches remain.
+
+The host-interface guard cannot accept the older metadata-free packages. Keep
+this migration in a draft branch until runtime 0.0.106 and programs 0.0.14 finish
+once through the existing exact-peer route. Then the upstream owner must publish
+a metadata-bearing runtime and a verified `waffle-program-release/2` family
+rebind, with unchanged artifact and receipt evidence. Update the checked archive,
+source, builder, patch, and family pins to those real assets before merging or
+running consumer acceptance. No unreleased pin is a substitute.
 
 ## Select the workflow
 

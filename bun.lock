@@ -17,7 +17,7 @@
         "wrangler": "4.151.0",
       },
       "peerDependencies": {
-        "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.105/waffle-0.0.105.tgz",
+        "waffle": "*",
         "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/waffle-base-0.0.13.tgz",
       },
     },
