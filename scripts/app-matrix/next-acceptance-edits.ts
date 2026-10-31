@@ -73,10 +73,23 @@ export async function compileErrorRecovery(page: Page, base: string, source: Gue
 
 
 async function waitCompileError(page: Page, url: string, deadline: number) {
+  let requestSequence = 0;
+  let lastPoll: { requestSequence: number; status: number; bytes: number; matched: boolean } | undefined;
   while (Date.now() < deadline) {
-    const response = await requestProbe(page, { url, deadline, expectedStatus: null });
-    if (response.status === 500 && /broken|Unexpected token|Parsing ecmascript/i.test(response.body)) return;
+    try {
+      const response = await requestProbe(page, { url, deadline, expectedStatus: null, sequence: ++requestSequence });
+      const matched = response.status === 500 && /broken|Unexpected token|Parsing ecmascript/i.test(response.body);
+      lastPoll = { requestSequence, status: response.status, bytes: new TextEncoder().encode(response.body).byteLength, matched };
+      if (matched) return;
+    } catch (error) {
+      throw new Error(`${String(error)}${formatLastPoll(lastPoll)}`, { cause: error });
+    }
     await page.waitForTimeout(50);
   }
-  throw new Error("Compile-error response deadline exceeded");
+  throw new Error(`Compile-error response deadline exceeded${formatLastPoll(lastPoll)}`);
+}
+
+function formatLastPoll(lastPoll: { requestSequence: number; status: number; bytes: number; matched: boolean } | undefined) {
+  if (!lastPoll) return "";
+  return `; last completed compile-error poll: request sequence=${lastPoll.requestSequence}, status=${lastPoll.status}, bytes=${lastPoll.bytes}, matched=${lastPoll.matched}`;
 }
