@@ -1,4 +1,4 @@
-import type { Shell as PlaygroundShell } from "../../src/shell";
+import type { SessionOptions } from "bash-web/session";
 
 /** A loaded but nonexecuting module at the artifact-free editor boundary. */
 export async function loadEditorEngine() {
@@ -11,7 +11,7 @@ export class EditorOnlyShell {
   readonly running = false;
   readonly lastExit = 0;
 
-  static async create(options: Parameters<typeof PlaygroundShell.create>[0]): Promise<EditorOnlyShell> {
+  static async create(options: SessionOptions): Promise<EditorOnlyShell> {
     options.onState("ready");
     return new EditorOnlyShell();
   }

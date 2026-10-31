@@ -12,7 +12,7 @@ import type { BunNetworkOptions } from "../net/helper";
 import { Previews } from "../preview";
 import { installRuntimeSharedObjects } from "../shared-objects/runtime";
 import { getVfsDescriptor, UNSAVED_CHANGES_LOST, WORKSPACE_TAKEN_OVER } from "../shared-fs";
-import type { Shell } from "../shell";
+import type { BrowserSession, SessionState } from "bash-web/session";
 import { errorText } from "../startup";
 import { commandChunks } from "../startup-cache";
 import { openTerminal } from "../terminal-mount";
@@ -20,7 +20,6 @@ import { linkLocalUrls } from "../terminal-links";
 import { Editor } from "./editor";
 
 type Filesystem = Runtime["filesystem"];
-type ShellState = Parameters<Parameters<typeof Shell.create>[0]["onState"]>[0];
 export type Status = { text: string; kind: "" | "ok" | "error" };
 /** Why Run became Reload. Startup and ownership failures also lock the workspace controls. */
 export type Failure = "startup" | "ownership" | "shell";
@@ -42,8 +41,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
   private terminalOpened!: () => void;
   private readonly terminalOpen = new Promise<void>((resolve) => { this.terminalOpened = resolve; });
   private fs?: Filesystem;
-  private shell?: Shell;
-  private shellState: ShellState = "starting";
+  private shell?: BrowserSession;
+  private shellState: SessionState = "starting";
   private runPending = false;
   private message: Status = { text: "", kind: "" };
 
@@ -206,8 +205,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       await fs.writeFile(path, "bun-wasm registered executable\n");
     }
     await fs.flush();
-    const { Shell } = await import("../shell");
-    const shell = this.shell = await Shell.create({
+    const { BrowserSession } = await import("bash-web/session");
+    const shell = this.shell = await BrowserSession.create({
       runtime, cwd: HOME,
       env: { HOME, USER: "user", PATH: `${bin}:${programs.path}`, TERM: "xterm-256color", COLORTERM: "truecolor", TMPDIR: "/tmp", PS1: "\x1b[32muser@bun\x1b[0m:\x1b[34m~\x1b[0m$ " },
       cols: term.cols, rows: term.rows,
@@ -245,7 +244,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     }
   }
 
-  private shellChanged(state: ShellState, detail?: string): void {
+  private shellChanged(state: SessionState, detail?: string): void {
     this.shellState = state;
     if (state === "ready") void this.editor?.syncFromFs().catch(this.report);
     if (state === "failed" || state === "exited") {
