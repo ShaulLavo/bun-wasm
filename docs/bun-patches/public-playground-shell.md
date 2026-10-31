@@ -2,8 +2,8 @@
 
 | Area | Classification | Source | Local change | Reason |
 | --- | --- | --- | --- | --- |
-| `web/src/shell.ts`, `web/src/playground/playground.ts` | Original Bun consumer adapter | bash-web public shell/bridge API at `0bf41ec6d7f149c77ec2ad00a97b5b9928b4a2e0 (merged PR176; CI run 40886275313)`; existing private playground `src/session.ts` and `src/main.ts` integration | Connect xterm input, resize, output, signals and shell state to the page-owned Waffle runtime | Bun REPL and child processes need a live terminal instead of output-only runs |
-| `crates/bunwasm-host/src/slots.rs::add_shell_imports` | Original native shell ABI adapter | bash-web `shell_terminal` imports at the same merged source | Bind rows and the two-argument phase/status notification to inherited native stdio with fixed 80x24 geometry | The current shell must instantiate for native package scripts; phase notifications do not own native process cancellation |
+| `web/src/playground/playground.ts` | Original Bun consumer adapter | Public `bash-web/session` entry at the exact bash-web revision pinned in the package manifests and shell builder | Pass the borrowed Waffle runtime, asset URLs, zsh editor option, terminal callbacks, and geometry to `BrowserSession.create` | Share the maintained session implementation instead of copying its input queue, bridge pump, or newline handling |
+| `crates/bunwasm-host/src/slots.rs::add_shell_imports` | Original native shell ABI adapter | bash-web `shell_terminal` imports at `0bf41ec6d7f149c77ec2ad00a97b5b9928b4a2e0` | Bind rows and the two-argument phase/status notification to inherited native stdio with fixed 80x24 geometry | The current shell must instantiate for native package scripts; phase notifications do not own native process cancellation |
 | `crates/bunwasm-host/src/process/mod.rs`, `slots.rs::add_import` | Original native process ABI adapter | Waffle `docs/host-abi.md` and `packages/waffle/browser/worker.ts` at `ea051e5e9061bcd2bfed6faf363be0f21d211acc` (`waffle-v0.0.100`, `programs-v0.0.8`) | Capture sorted launch descriptors and expose `runtime_proc.inherited_fd` with the specified `-ENOENT` terminator | The released env utility forwards real inherited descriptors to npm-bin shebang commands |
 | Staged `env.wasm` | Host feature, unchanged upstream artifact | Waffle `packages/coreutils/dist/env.wasm`, `programs-v0.0.8`, source `ea051e5e9061bcd2bfed6faf363be0f21d211acc` | Copy to the native launcher guest path; no implementation changes | bash-web delegates external programs to the released Waffle families |
 
@@ -18,17 +18,18 @@ actual VFS persistence descriptor. This remains discoverable without redefining
 Bash's `help`. The artifact-free editor gate replaces only engine/Shell execution
 at build time; real runtime, filesystem, editor and page information code remain.
 
-The session follows the existing private playground's bridge pump and bounded
-input queue. xterm stays the public playground's terminal. `TerminalNewlines`
-comes from bash-web. No upstream shell or OS implementation is copied or patched.
-The page registers its existing Bun launcher for the selected engine and tools
-before starting the shell. The Run button submits an absolute editor path so
-shell `cd` does not change which file it runs.
+The playground imports `BrowserSession` from `bash-web/session`. The session owns
+its bounded input queue, bridge pump, iOS output batching, and display newline
+conversion. xterm remains the terminal view. Its output callback writes the final
+bytes directly, without applying `TerminalNewlines` again. No local session copy
+or upstream shell implementation remains in the consumer.
 
-The earlier bash-web pin sent `shellTerminal` and `terminalAdmission`, while
-Bun accepts `terminalContext` and `terminalInput`. This consumer pins
-the prompt-status API, Waffle 0.0.100 and base-program 0.0.8 tuple together. The shell guest
-builder uses the same shell revision as both browser applications.
+The page registers its Bun launcher for the selected engine and tools before
+starting the session. Run calls `submit()` with an absolute editor path, so shell
+`cd` does not change which file runs. The public session replaces the entire
+edited draft with Ctrl+E, Ctrl+U, and Ctrl+K, including multiline zsh drafts.
+The runtime and program tuple is recorded in `scripts/waffle-release-inputs.json`;
+the shell builder uses the same exact bash-web revision as both applications.
 
 The new shell revision delegates `env` to the published Waffle coreutils family.
 `scripts/build-bash-web-shell.sh` builds only the shell and stages the matching
@@ -36,14 +37,13 @@ family `env.wasm`; the existing receipt still hashes both staged guests.
 `scripts/waffle-release-inputs.json` records the published runtime/program
 archives and unchanged libc builder/patch hashes for the selected tuple.
 
-The consumer awaits bash-web's authoritative `waitForPrompt()` receipt for
-startup and each serialized host submission. Receipt generations make a prompt
-published before the waiter safe. Status comes from the shell, including builtins;
-there is no prompt parsing, injected status command or child-exit inference.
-Normal terminal input and accepted-prefix retries carry the command and Enter.
-Before publishing readiness or resolving a submission, the consumer drains the
-bridge's available output into the terminal view. The prompt receipt alone does
-not acknowledge that page-side handoff; captures still await xterm's write callback.
+`BrowserSession.create()` waits for the first atomic prompt receipt, and
+`submit()` waits for the next receipt and queued output handoff. The playground
+uses `onState` and `running`; the session exposes `lastExit` and `lastPrompt`
+without parsing prompt text or inferring status from child exits. bash-web owns input retries and bridge
+output draining. xterm still parses writes asynchronously, so browser captures
+await its write callback. Session disposal stops the shell but preserves the
+borrowed page runtime.
 
 The interactive shell starts during page setup, while the Bun launcher loads on
 the first Bun child launch. The graph gate checks contributing bundle inputs
