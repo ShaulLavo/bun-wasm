@@ -138,8 +138,9 @@ role: fetches use Bun's fetch (no CORS) and guest servers also listen on real `1
   as it happens, and uses the live filesystem service.
   Ctrl-C sends SIGINT: an ordinary program stops immediately with 130; a registered handler may
   clean up and retain its own exit code. A second stop request sends SIGKILL. Completed writes remain visible.
-- `src/shell.ts`: line editing, history, Tab completion, `;`/`&&`, `>`/`>>`, and the builtins
-  `ls cat echo cd pwd mkdir rm mv touch edit clear history help`.
+- `bash-web/session`: `BrowserSession` connects xterm input, resize, output, and shell state
+  to the page-owned runtime. bash-web owns the input queue, output batching, display newline
+  conversion, and interactive shell. The playground selects zsh-style editing by default.
 - `src/runner.ts`: loading an engine's wasm and starting one `bun …` run in a worker with its
   networking; the sandbox (../sandbox/) uses it too. Every run roots a generic Waffle process
   tree, so the root, its children and the shell spawn through the page runtime's one service.

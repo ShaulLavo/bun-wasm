@@ -43,7 +43,13 @@ async function contains(page: Page, text: string): Promise<void> {
   await page.waitForFunction(text => Reflect.get(globalThis, "siteShellScreen")().includes(text), text, { timeout: 30000 });
 }
 async function ready(page: Page): Promise<void> {
-  await page.waitForFunction(() => !Reflect.get(globalThis, "playground").shell.running && !document.querySelector<HTMLButtonElement>("#run")?.disabled);
+  await page.waitForFunction(() => {
+    const { shell } = Reflect.get(globalThis, "playground");
+    return shell.state === "ready" && shell.lastPrompt !== undefined && !shell.running;
+  });
+}
+async function runButtonReady(page: Page): Promise<void> {
+  await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>("#run")?.disabled);
 }
 async function exercise(page: Page, engine: string) {
   const base = `http://127.0.0.1:${port}/playground/`;
@@ -109,6 +115,7 @@ async function exercise(page: Page, engine: string) {
   await command(page, "printf 'RECOVERED_%s\\n' yes");
   await contains(page, "RECOVERED_yes");
   await ready(page);
+  await runButtonReady(page);
   await page.locator("#run").click();
   await contains(page, "Hello, world.");
   await ready(page);
@@ -129,6 +136,20 @@ async function exercise(page: Page, engine: string) {
   assert.equal(await checkDelayedStop(page, base, "chromium", engine), true);
   await checkRootSignals(page, base, "chromium", engine);
   await checkPipelineReader(page, base, "chromium", engine);
+  await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
+  const columns = await page.evaluate(() => Reflect.get(globalThis, "playground").term.cols);
+  await page.setViewportSize({ width: 900, height: 700 });
+  await page.waitForFunction(previous => Reflect.get(globalThis, "playground").term.cols !== previous, columns);
+  await command(page, "echo RESIZE_RECOVERED");
+  await contains(page, "RESIZE_RECOVERED");
+  await ready(page);
+  await command(page, "exit");
+  await page.getByRole("button", { name: "Reload" }).waitFor();
+  await Promise.all([page.waitForNavigation(), page.getByRole("button", { name: "Reload" }).click()]);
+  await page.waitForFunction(() => !!Reflect.get(globalThis, "playground")?.shell && !document.querySelector<HTMLButtonElement>("#run")?.disabled);
+  await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
+  await command(page, "echo RESTART_RECOVERED");
+  await contains(page, "RESTART_RECOVERED");
   return { engine, ok: true, sourceHead, sourceDirty, shellIdentity, builds, transcript };
 }
 async function reportFailure(page: Page, engine: string): Promise<void> {

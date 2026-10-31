@@ -6,6 +6,31 @@ type Release = typeof release;
 type Download = (url: string) => Promise<Response>;
 const hash = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 
+type HostInterface = number & { readonly __brand: "WaffleHostInterface" };
+
+export function parseHostInterface(value: unknown, source: string): HostInterface {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)
+    throw new Error(`${source}: waffleHostInterface must be a positive safe integer`);
+  return value as HostInterface;
+}
+
+export function packageHostInterface(metadata: unknown, source: string): HostInterface {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata))
+    throw new Error(`${source}: missing waffleHostInterface package metadata`);
+  return parseHostInterface("waffleHostInterface" in metadata ? metadata.waffleHostInterface : undefined, source);
+}
+
+export function assertExactHostInterface(required: HostInterface, provided: HostInterface, source: string): void {
+  if (required !== provided)
+    throw new Error(`${source}: waffleHostInterface ${required} does not match runtime ${provided}`);
+}
+
+function archiveHostInterface(archive: string): HostInterface {
+  const result = Bun.spawnSync(["tar", "-xOf", archive, "package/package.json"], { stdout: "pipe", stderr: "pipe" });
+  if (result.exitCode !== 0) throw new Error(`Missing Waffle archive package metadata: ${archive}`);
+  return packageHostInterface(JSON.parse(result.stdout.toString()), archive);
+}
+
 export function waffleNativeDirectory(): string {
   const tools = process.env.WASM_TOOLS;
   if (!tools) throw new Error("Source env.sh before resolving Waffle native inputs");
@@ -39,6 +64,7 @@ export async function prepareWaffleReleaseArchive(
   if (peer !== selected.url) throw new Error("Waffle release pin does not match its checked source inputs");
   await pinnedFile(archive, selected.url, selected.sha256, download);
   if (Bun.file(archive).size !== selected.bytes) throw new Error("Waffle release archive size mismatch");
+  assertExactHostInterface(parseHostInterface(selected.hostInterface, "Waffle release inputs"), archiveHostInterface(archive), archive);
   return archive;
 }
 
@@ -53,6 +79,9 @@ export async function prepareWaffleNativeInputs(
   const installed = dirname(Bun.resolveSync("waffle/package.json", repository));
   const metadata = await Bun.file(join(installed, "package.json")).json();
   if (metadata.name !== "waffle" || metadata.version !== selected.version) throw new Error("Installed Waffle identity does not match the pinned release");
+  const required = parseHostInterface(selected.hostInterface, "Waffle release inputs");
+  assertExactHostInterface(packageHostInterface(manifest, "Bun package"), required, "Bun package");
+  assertExactHostInterface(packageHostInterface(metadata, "Installed Waffle"), required, "Installed Waffle");
   const archive = join(dirname(directory), "runtime.tgz");
   await prepareWaffleReleaseArchive(manifest.devDependencies.waffle, archive, download, selected);
   if (hash(await Bun.file(join(installed, "scripts/build-wasi-libc.sh")).bytes()) !== selected.files["scripts/build-wasi-libc.sh"])
@@ -61,6 +90,7 @@ export async function prepareWaffleNativeInputs(
     const url = `https://raw.githubusercontent.com/ShaulLavo/waffle/${selected.sourceCommit}/${selected.packagePath}/${path}`;
     await pinnedFile(join(directory, path), url, sha256, download);
   }
+  assertExactHostInterface(packageHostInterface(await Bun.file(join(directory, "package.json")).json(), "Waffle source package"), required, "Waffle source package");
   return directory;
 }
 
