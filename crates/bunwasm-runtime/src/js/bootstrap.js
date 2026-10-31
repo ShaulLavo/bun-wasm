@@ -82,6 +82,7 @@
   function formatCallSite(site) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
     const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
+    const generated = native.engine === "host" && native.preparedSourceName(rawFile) !== undefined;
     const file = internal.displayName ? internal.displayName(rawFile, typeof site.isEval === "function" && site.isEval()) : rawFile;
     const name = site.getFunctionName();
     // A syntax error's location: no function, just file:line:col.
@@ -91,9 +92,9 @@
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
     if (line !== null && file && !internal.mappedCallSites?.has(site)) {
-      const mapped = native.mapPosition(file, line, col);
+      const mapped = native.mapPosition(generated ? rawFile : file, line, col);
       if (mapped) [line, col] = mapped;
-      if (isV8) col = pastNew(file, line, col);
+      if (isV8 && !generated) col = pastNew(file, line, col);
     }
     // Module and script top-level code prints bare, like JSC.
     const topLevel = isV8 ? !name && v8TopLevel(site) : isTopLevel(site.getFunction());
@@ -546,7 +547,7 @@
 
   function nodeModulePaths(dir) {
     const paths = [];
-    let current = dir;
+    let current = dir.startsWith("/") ? dir : internal.require("path").posix.resolve(native.cwd(), dir);
     for (;;) {
       if (basename(current) !== "node_modules") paths.push((current === "/" ? "" : current) + "/node_modules");
       if (current === "/") break;
@@ -886,6 +887,7 @@
   defineLazyGlobal("HTMLRewriter", () => internal.require("html_rewriter").HTMLRewriter);
   internal.require("builtins");
   internal.bunBuiltinGlobals = internal.require("bun_builtin_globals");
+  internal.require("source_prepare");
   internal.require("function");
   internal.fakeTimers = internal.require("fake_timers");
   // Networking factories require the installed web globals.

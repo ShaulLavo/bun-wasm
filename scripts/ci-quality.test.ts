@@ -18,6 +18,15 @@ const quality = workflow.split("\n  quality:\n")[1]!.split("\n  jsc-prebuild:\n"
 const { prebuild, ordered: rust } = nativePipeline(workflow);
 const importStepName = "Import the verified JSC prebuild and sysroot";
 
+test("CI uses a Node host that preserves direct spread eval scope", () => {
+  const versions = Array.from(workflow.matchAll(/^\s+node-version: '([^']+)'$/gm), match => match[1]);
+  expect(versions.length).toBeGreaterThan(0);
+  expect(versions.every(version => version === "26")).toBe(true);
+  const reference = spawnSync("node", ["-e", 'process.stdout.write(String(Function("values", "storage", "return eval(...values)")(["storage"], 17)))'], { encoding: "utf8" });
+  expect(reference.status, reference.stderr).toBe(0);
+  expect(reference.stdout).toBe("17");
+});
+
 test("JavaScript quality does not set up or compile Rust", () => {
   expect(quality).toContain("bun run quality --javascript");
   expect(quality).not.toContain("rust-toolchain");
