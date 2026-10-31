@@ -1,0 +1,347 @@
+{
+  "cases": [
+    {
+      "name": "next manifest",
+      "source": "globalThis.__RSC_MANIFEST=(globalThis.__RSC_MANIFEST||{});globalThis.__RSC_MANIFEST[\"/p\"]={a:process.env.X}",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 20, 27, 0, 20, 58, 0, 19, 58, 0, 20, 93, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "webpack magic comment",
+      "source": "(function(){return {webpackMode:\"eager\"};})()",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19],
+      "fallback": null
+    },
+    {
+      "name": "typeof missing",
+      "source": "typeof window",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 7, 0, 21],
+      "fallback": null
+    },
+    {
+      "name": "typeof comma operand reads",
+      "source": "typeof (0, w)",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 11, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "calls and arguments",
+      "source": "f(x); f(f); f?.(); new C(); eval(\"1\")",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 22, 1, 0, 1, 2, 0, 20, 6, 0, 22, 7, 0, 1, 8, 0, 20, 12, 0, 22, 13, 0, 1, 23, 0, 20, 28, 0, 19, 28, 0, 22, 32, 0, 1],
+      "fallback": null
+    },
+    {
+      "name": "template tag",
+      "source": "tag`a${b}`",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 22, 3, 0, 1, 7, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "shorthand values",
+      "source": "({x} = o); ({y = 1} = o); ({z})",
+      "scope": "__bunwasm_vm",
+      "edits": [2, 1, 23, 7, 0, 20, 13, 1, 23, 22, 0, 20, 26, 0, 19, 28, 1, 23],
+      "fallback": null
+    },
+    {
+      "name": "assignment targets",
+      "source": "x++; x += 1; [x] = a; for (x in o); delete x",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 20, 5, 0, 20, 14, 0, 20, 19, 0, 20, 27, 0, 20, 32, 0, 20, 36, 0, 19, 43, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "lexical shadowing",
+      "source": "let x = 1; x",
+      "scope": "__bunwasm_vm",
+      "edits": [11, 0, 19],
+      "fallback": null
+    },
+    {
+      "name": "function scope",
+      "source": "function g(y) { return y + arguments.length + q } g",
+      "scope": "__bunwasm_vm",
+      "edits": [46, 0, 20, 50, 0, 19],
+      "fallback": null
+    },
+    {
+      "name": "destructuring declarations",
+      "source": "const {a, b: [c]} = o; a + c + d",
+      "scope": "__bunwasm_vm",
+      "edits": [20, 0, 20, 23, 0, 19, 31, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "top-level var stays local",
+      "source": "var v = 1; v",
+      "scope": "__bunwasm_vm",
+      "edits": [11, 0, 19],
+      "fallback": null
+    },
+    {
+      "name": "returned closure",
+      "source": "(() => late)",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 7, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "commonjs names",
+      "source": "module.exports = exports.value + require",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20, 17, 0, 20, 33, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "declared exports",
+      "source": "var exports = 1; exports",
+      "scope": "__bunwasm_vm",
+      "edits": [17, 0, 19],
+      "fallback": null
+    },
+    {
+      "name": "escaped identifier",
+      "source": "\\u0078 + \\u{79}",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20, 9, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "unicode",
+      "source": "ünï + ({ü})",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20, 8, 1, 23],
+      "fallback": null
+    },
+    {
+      "name": "hygiene",
+      "source": "var __bunwasm_vm = 1; function f(__bunwasm_vm1_typeof) {} x",
+      "scope": "__bunwasm_vm2",
+      "edits": [58, 0, 19, 58, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "constant assignment",
+      "source": "const k = 1; k = 2; z",
+      "scope": "__bunwasm_vm",
+      "edits": [20, 0, 19, 20, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "strict undeclared write",
+      "source": "\"use strict\"; undeclared = 1",
+      "scope": "__bunwasm_vm",
+      "edits": [14, 0, 19, 14, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "non-final completion",
+      "source": "if (a) { 1 }",
+      "scope": "__bunwasm_vm",
+      "edits": [4, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "completion before declaration",
+      "source": "x; var y = 1",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "completion before function",
+      "source": "x; function h() {}",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "syntax error",
+      "source": "x +",
+      "scope": null,
+      "edits": [],
+      "fallback": "Unexpected end of file"
+    },
+    {
+      "name": "import",
+      "source": "import x from \"y\"",
+      "scope": null,
+      "edits": [],
+      "fallback": "Cannot use import statement outside a module"
+    },
+    {
+      "name": "export",
+      "source": "export const e = 1",
+      "scope": null,
+      "edits": [],
+      "fallback": "Unexpected token 'export'"
+    },
+    {
+      "name": "top-level return",
+      "source": "return 1",
+      "scope": null,
+      "edits": [],
+      "fallback": "Illegal return statement"
+    },
+    {
+      "name": "existing: globalThis write",
+      "source": "globalThis.__vmContextSentinel = 41",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "existing: globalThis compound",
+      "source": "globalThis.__vmContextSentinel += 1; globalThis.__vmContextSentinel",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 20, 37, 0, 19, 37, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "existing: custom globalThis",
+      "source": "globalThis.__vmContextSentinel = globalThis.marker",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20, 33, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "existing: globalThis read",
+      "source": "globalThis.marker",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "existing: bare read",
+      "source": "marker",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "existing: host fallback",
+      "source": "Math === globalThis.Math",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20, 9, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "existing: host call",
+      "source": "Math.max(3, 8)",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "bare write",
+      "source": "marker = 12",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "strict bare write",
+      "source": "\"use strict\"; marker = 12",
+      "scope": "__bunwasm_vm",
+      "edits": [14, 0, 19, 14, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "name added mid-call",
+      "source": "globalThis.added = 1; added",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 20, 22, 0, 19, 22, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "thrown by a call",
+      "source": "boom()",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 22, 4, 0, 1],
+      "fallback": null
+    },
+    {
+      "name": "thrown by a getter",
+      "source": "trap",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "bare call receiver",
+      "source": "whoami()",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 22, 6, 0, 1],
+      "fallback": null
+    },
+    {
+      "name": "right-hand side adds the target",
+      "source": "later = (globalThis.later = 1, 2)",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20, 9, 0, 20],
+      "fallback": null
+    },
+    {
+      "name": "prototype shorthand data key",
+      "source": "({__proto__})",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 2, 9, 23],
+      "fallback": null
+    },
+    {
+      "name": "escaped prototype shorthand data key",
+      "source": "({\\u005f_proto__})",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 2, 14, 23],
+      "fallback": null
+    },
+    {
+      "name": "strict reserved reference",
+      "source": "\"use strict\"; implements",
+      "scope": null,
+      "edits": [],
+      "fallback": "\"implements\" is a reserved word and cannot be used in strict mode"
+    },
+    {
+      "name": "strict identifier delete",
+      "source": "\"use strict\"; delete x",
+      "scope": null,
+      "edits": [],
+      "fallback": "Cannot delete an unqualified identifier in strict mode"
+    },
+    {
+      "name": "strict eval assignment",
+      "source": "\"use strict\"; eval = f",
+      "scope": null,
+      "edits": [],
+      "fallback": "Invalid assignment target"
+    },
+    {
+      "name": "strict arguments update",
+      "source": "\"use strict\"; arguments++",
+      "scope": null,
+      "edits": [],
+      "fallback": "Invalid assignment target"
+    },
+    {
+      "name": "class reserved reference",
+      "source": "class C { m() { return implements } }; new C().m()",
+      "scope": null,
+      "edits": [],
+      "fallback": "\"implements\" is a reserved word and cannot be used in strict mode"
+    },
+    {
+      "name": "sloppy reserved reference remains valid",
+      "source": "implements",
+      "scope": "__bunwasm_vm",
+      "edits": [0, 0, 19, 0, 0, 20],
+      "fallback": null
+    }
+  ]
+}

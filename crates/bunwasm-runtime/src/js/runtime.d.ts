@@ -1,6 +1,6 @@
 declare namespace BunWasm {
   type FunctionKind = "normal" | "async" | "generator" | "async-generator";
-  type PrepareGoal = "script" | "eval" | "wrapper";
+  type PrepareGoal = "script" | "eval" | "wrapper" | "vm-context";
   interface PreparedSource {
     version: number;
     alreadyPrepared: boolean;
@@ -9,12 +9,18 @@ declare namespace BunWasm {
     fallback: string | null;
     spreadEval: number;
     unhookedAwaitUsing: number;
+    /** Goal "vm-context": the scope parameter no declaration in the source shadows. */
+    scope?: string;
   }
   interface PreparedColumns { version: number; columns: Int32Array; }
   interface Internal {
     mainPath: string;
     prepareText(source: string, goal: PrepareGoal, origin: string, name?: string): string;
     prepareFunctionArgs(args: string[], kind: FunctionKind, name?: string): string[];
+    /** `(function (scope, scope_typeof) {…})` source for `evalScript(text, name, 0)`: references the
+     * source leaves free read their scope parameter, and the final top-level expression statement
+     * returns. Throws SyntaxError before anything runs when the parser rejects the source. */
+    prepareContextScript(source: string, name: string): string;
     preparedColumns: Map<string, PreparedColumns>;
     preparation: {
       version: number; realm: string; counters: Record<string, number>;
@@ -56,7 +62,7 @@ declare namespace BunWasm {
     hostClose(handle: number): number;
     registerObjectModule(name: string): string;
     clearObjectModules(): void;
-    readonly engine: "quickjs" | "jsc" | "host";
+    readonly engine: "quickjs" | "jsc" | "host" | "hermes";
     /** Optional slot 18: 0/0 dequeues; modes 0/1/2 publish DEFAULT/IGNORE/HANDLE, 3 raises. */
     hostSignal(signal: number, disposition: number): number;
     globMatch(pattern: string, path: string): boolean;

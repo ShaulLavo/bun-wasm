@@ -1,0 +1,16 @@
+const assert = require("node:assert/strict");
+const vm = require("node:vm");
+const manifest = 'globalThis.__RSC_MANIFEST=(globalThis.__RSC_MANIFEST||{});globalThis.__RSC_MANIFEST["/p"]={a:process.env.X}';
+const context = { process: { env: { X: "from context" } } };
+assert.deepEqual(vm.runInNewContext(manifest, context), { a: "from context" });
+assert.deepEqual(context.__RSC_MANIFEST, { "/p": { a: "from context" } });
+assert.equal("__RSC_MANIFEST" in globalThis, false);
+assert.deepEqual(vm.runInContext('(function(){return {webpackMode:"eager"};})()', vm.createContext(undefined)), { webpackMode: "eager" });
+assert.equal(vm.runInNewContext("typeof window", {}), "undefined");
+assert.equal(vm.runInNewContext("globalThis.added = 1; added", {}), 1);
+const read = vm.runInNewContext("(() => late)", context);
+context.late = 5;
+assert.equal(read(), 5);
+assert.throws(() => vm.runInNewContext('"use strict"; marker = 12', Object.freeze({ marker: 1 })), TypeError);
+assert.throws(() => vm.runInNewContext("x +", {}), SyntaxError);
+console.log("vm-context manifest, webpack comment and live lookups ok");
