@@ -282,15 +282,16 @@ jobs:
             printf 'run=%s\nsha=%s\njsc-build-dir=%s\nsysroot=%s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
             (cd "$bundle" && sha256sum prebuild.tar.zst sysroot.tar.zst)
           } > "$bundle/manifest"
-          ls -l "$bundle"
+          transfer="$RUNNER_TEMP/jsc-prebuild.tar"
+          tar --posix -C "$bundle" -cf "$transfer" prebuild.tar.zst sysroot.tar.zst jsc-prebuild.log manifest
+          ls -l "$bundle" "$transfer"
           echo "manifest-sha256=$(sha256sum "$bundle/manifest" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: jsc-prebuild
-          path: ${{ runner.temp }}/jsc-prebuild-artifact/
+          path: ${{ runner.temp }}/jsc-prebuild.tar
           if-no-files-found: error
           retention-days: 1
-          compression-level: 0
+          archive: false
 
   native-quality:
     name: Native quality checkpoint
@@ -518,10 +519,18 @@ jobs:
         run: |
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
           echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
-          name: jsc-prebuild
-          path: ${{ runner.temp }}/jsc-prebuild-artifact
+          name: jsc-prebuild.tar
+          path: ${{ runner.temp }}/jsc-prebuild-transfer
+      - name: Unpack the verified JSC prebuild transfer
+        run: |
+          set -euo pipefail
+          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
+          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
+          [[ ! -e "$bundle" ]]
+          mkdir "$bundle"
+          tar --posix -xf "$transfer" -C "$bundle"
       - name: Import the verified JSC prebuild and sysroot
         env:
           JOBS: "2"
@@ -544,7 +553,7 @@ jobs:
           zstd -dc "$bundle/prebuild.tar.zst" | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
           zstd -dc "$bundle/sysroot.tar.zst" | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
           mv "$bundle/jsc-prebuild.log" "$RUNNER_TEMP/jsc-prebuild.log"
-          rm -r -- "$bundle"
+          rm -r -- "$bundle" "$RUNNER_TEMP/jsc-prebuild-transfer"
           source jsc/common.sh
           check_jsc_inputs_stamp
       - name: Build patched WASI sysroot
@@ -863,10 +872,18 @@ jobs:
         run: |
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
           echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
-          name: jsc-prebuild
-          path: ${{ runner.temp }}/jsc-prebuild-artifact
+          name: jsc-prebuild.tar
+          path: ${{ runner.temp }}/jsc-prebuild-transfer
+      - name: Unpack the verified JSC prebuild transfer
+        run: |
+          set -euo pipefail
+          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
+          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
+          [[ ! -e "$bundle" ]]
+          mkdir "$bundle"
+          tar --posix -xf "$transfer" -C "$bundle"
       - name: Import the verified JSC prebuild and sysroot
         env:
           JOBS: "2"
@@ -889,7 +906,7 @@ jobs:
           zstd -dc "$bundle/prebuild.tar.zst" | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
           zstd -dc "$bundle/sysroot.tar.zst" | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
           mv "$bundle/jsc-prebuild.log" "$RUNNER_TEMP/jsc-prebuild.log"
-          rm -r -- "$bundle"
+          rm -r -- "$bundle" "$RUNNER_TEMP/jsc-prebuild-transfer"
           source jsc/common.sh
           check_jsc_inputs_stamp
       - name: Build patched WASI sysroot
