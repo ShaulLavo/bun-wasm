@@ -11,6 +11,7 @@ type SessionOptions = {
   rows: number;
   wasmUrl: URL;
   workerUrl: URL;
+  lineEditor?: { mode: "bash" | "zsh" };
   onOutput(bytes: Uint8Array): void;
   onState(state: SessionState, detail?: string): void;
 };
@@ -52,6 +53,7 @@ export class Shell {
         env: options.env,
         wasmUrl: options.wasmUrl,
         workerUrl: options.workerUrl,
+        lineEditor: options.lineEditor,
       }));
       if (session.disposed) throw new Error("Shell startup was cancelled.");
       session.shell = shell;

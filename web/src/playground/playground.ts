@@ -213,6 +213,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       cols: term.cols, rows: term.rows,
       wasmUrl: new URL("./programs/shell-engine.wasm", location.href),
       workerUrl: new URL("./shell-worker.js", location.href),
+      lineEditor: { mode: "zsh" },
       onOutput: bytes => term.write(bytes),
       onState: (state, detail) => this.shellChanged(state, detail),
     });
