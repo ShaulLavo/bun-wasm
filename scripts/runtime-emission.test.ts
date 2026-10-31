@@ -164,22 +164,98 @@ test("converted byte sink keeps its factory and copied-buffer behavior", async (
 
 test("converted Function adapter preserves construction and module origins", async () => {
   const { createContext, runInContext } = await import("node:vm");
-  const context = createContext({});
+  const context = createContext({ process: { pid: 1, env: {} }, performance });
   const generated = emit(join(root, "crates/bunwasm-runtime/src/js/function.ts"));
   const factory = runInContext(generated, context);
   const resolutions: unknown[][] = [];
-  factory({
+  const internal = {
     native: {
       engine: "quickjs",
-      functionImports: (strings: string[]) => strings.map(source => source.includes("import") ? [source.indexOf("import")] : []),
+      prepareFunction: (strings: string[]) => JSON.stringify(strings.map(source => ({
+        version: 6, alreadyPrepared: false, edits: source.includes("import") ? [source.indexOf("import"), 6, 16] : [],
+        columns: [], fallback: null, spreadEval: 0, unhookedAwaitUsing: 0,
+      }))),
       resolve(...args: unknown[]) { resolutions.push(args); return "/loaded.ts"; },
       importModule: async (path: string) => ({ path }),
     },
+    mainPath: "/entry.ts",
     require: () => ({ "bun:jsc": () => ({ callerSourceOrigin: () => "/entry.ts" }) }),
     defineGlobal(name: string, value: unknown) { context[name] = value; },
-  });
+  };
+  runInContext(emit(join(root, "crates/bunwasm-runtime/src/js/source_prepare.ts")), context)(internal);
+  factory(internal);
   expect(runInContext('new Function("return 7")()', context)).toBe(7);
   expect(() => runInContext('new Function("return @")', context)).toThrow();
   expect(await runInContext('new Function("return import(\\\"./leaf\\\")")()', context)).toEqual({ path: "/loaded.ts" });
   expect(resolutions).toEqual([["./leaf", "/entry.ts", false]]);
+});
+
+test("prepared spread eval preserves concurrent context and iterable semantics", async () => {
+  const { createContext, runInContext } = await import("node:vm");
+  let frame = "none";
+  const context = createContext({ process: { pid: 1, env: {} }, performance });
+  Object.assign(context, {
+    __bunwasm_capture: () => frame,
+    __bunwasm_resume(saved: string, value: unknown) { frame = saved; return value; },
+    __bunwasmSpreadFrame: () => frame,
+  });
+  const evaluated = "(async () => { await 0; return globalThis.__bunwasmSpreadFrame(); })()";
+  const native = {
+    engine: "host", contextHooks: true, prepareVersion: 6,
+    preparedColumns: new Map(),
+    prepareSource(source: string) {
+      const values = source.indexOf("values");
+      const awaitAt = source.indexOf("await");
+      const edits = source === "eval(...values)"
+        ? [values, 0, 18, values + "values".length, 0, 1]
+        : [awaitAt, 0, 0, source.indexOf("0", awaitAt) + 1, 0, 1];
+      return JSON.stringify({ version: 6, alreadyPrepared: false, edits, columns: [], fallback: null,
+        spreadEval: source === "eval(...values)" ? 1 : 0, unhookedAwaitUsing: 0 });
+    },
+  };
+  const internal = {
+    native,
+    mainPath: "/spread.ts",
+    require: () => ({ "bun:jsc": () => ({ callerSourceOrigin: () => "/spread.ts" }) }),
+    defineGlobal(name: string, value: unknown) { context[name] = value; },
+  };
+  const install = runInContext(emit(join(root, "crates/bunwasm-runtime/src/js/source_prepare.ts")), context);
+  const preparation = install(internal);
+  const call = preparation.prepareText("eval(...values)", "eval", "spread-test");
+  expect(call).toBe("eval(...__bunwasm_evalSpread(eval, values))");
+  const callable = runInContext(`new Function("values", ${JSON.stringify(`return ${call}`)})`, context);
+  const request = (name: string) => {
+    frame = name;
+    return callable([evaluated]);
+  };
+  expect(await Promise.all([request("A"), request("B")])).toEqual(["A", "B"]);
+  const raw = runInContext(`new Function("values", "return eval(...values)")`, context);
+  const rawRequest = (name: string) => {
+    frame = name;
+    return raw([evaluated]);
+  };
+  expect(await Promise.all([rawRequest("A"), rawRequest("B")])).not.toEqual(["A", "B"]);
+  expect(callable([])).toBeUndefined();
+  expect(callable([19, "ignored"])).toBe(19);
+  const nativeEval = context.eval;
+  const customCalls: unknown[][] = [];
+  try {
+    context.eval = (...values: unknown[]) => {
+      customCalls.push(values);
+      return "custom";
+    };
+    expect(callable(["await 0", 19])).toBe("custom");
+    expect(customCalls).toEqual([["await 0", 19]]);
+  } finally {
+    context.eval = nativeEval;
+  }
+  const failure = { marker: "same error" };
+  const bad = { [Symbol.iterator]() { return { next() { throw failure; } }; } };
+  let caught: unknown;
+  try {
+    callable(bad);
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBe(failure);
 });

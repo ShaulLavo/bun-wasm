@@ -174,9 +174,7 @@ for (const phase of ["success", "scope failure", "helper failure", "launch failu
   const create = spyOn(network, "createHelper").mockImplementation(options => {
     if (phase === "helper failure") throw new Error(phase);
     const helper = make(options);
-    const dispose = helper.dispose.bind(helper);
-    helper.dispose = () => { events.push("helper-dispose"); dispose(); };
-    return helper;
+    return { ...helper, dispose() { events.push("helper-dispose"); helper.dispose(); } };
   });
   const launches: Launch[] = [];
   const scope = networkPathScopeFixture(context, 19);

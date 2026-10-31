@@ -351,7 +351,7 @@ async function hotEdit(page: ProductPage, source: GuestSource, selector: string,
   return `Guest source edit rendered ${JSON.stringify(edit.replacement)} without a manual page reload after ${evidence.map(item => `${item.framework}:${item.event}`).join(", ")}`;
 }
 
-async function featureProbe(page: ProductPage, base: string, probe: FeatureProbe, timeout: number): Promise<string> {
+async function featureProbe(page: Pick<ProductPage, "goto" | "locator">, base: string, probe: FeatureProbe, timeout: number): Promise<string> {
   const response = await page.goto(new URL(probe.path.replace(/^\/+/, ""), base.endsWith("/") ? base : base + "/").href, { timeout });
   if (!response) throw new Error(`No response for ${probe.path}`);
   if (probe.kind === "response") {
@@ -380,7 +380,12 @@ export async function productObservations(page: ProductPage, base: string, check
     const edit = check.hmr;
     results.push(await observe("hmr", () => hotEdit(page, source, check.selector, edit, traffic, timeout)));
   }
-  for (const probe of check.probes ?? []) results.push(await observe(probe.id, () => featureProbe(page, base, probe, timeout)));
+  return results.concat(await featureObservations(page, base, check.probes ?? [], timeout));
+}
+
+export async function featureObservations(page: Pick<ProductPage, "goto" | "locator">, base: string, probes: readonly FeatureProbe[], timeout: number): Promise<Observation[]> {
+  const results: Observation[] = [];
+  for (const probe of probes) results.push(await observe(probe.id, () => featureProbe(page, base, probe, timeout)));
   return results;
 }
 

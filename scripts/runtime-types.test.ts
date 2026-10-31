@@ -30,7 +30,7 @@ const invalid: [string, string][] = [
   ["string optional flag", 'native.globScan("*", "/", false, false, false, false, true, "not a flag");'],
   ["non-string UTF-8 encoding", 'native.utf8Encode(7);'],
   ["non-byte concatenation", 'declare const internal: BunWasm.Internal; internal.concatBytes(["text"]);'],
-  ["unknown generated-function kind", 'native.functionImports([], "constructor");'],
+  ["unknown generated-function kind", 'native.prepareFunction([], "constructor", true);'],
   ["non-string module specifier", 'native.resolve(7, "/index.ts", false);'],
   ["builtin index text", 'native.bunBuiltinSource("module");'],
   ["builtin hook object", 'native.bunBuiltinHookName({});'],
@@ -51,7 +51,7 @@ test("accepts native byte-sink encoding and concatenation contracts", () => {
 });
 
 test("accepts generated-function parser and module-loader contracts", () => {
-  const result = check('native.functionImports(["return 1"], "normal");\nnative.importModule(native.resolve("./x", "/index.ts", false));');
+  const result = check('native.prepareFunction(["return 1"], "normal", true);\nnative.importModule(native.resolve("./x", "/index.ts", false));');
   expect(result.stdout.toString()).toBe("");
   expect(result.exitCode).toBe(0);
 });

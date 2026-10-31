@@ -13,6 +13,7 @@ test("restoring guest Date replaces an armed host wakeup with the earlier real t
   const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, isWasmMemoryBuffer, transferArrayBuffers, createScriptEvaluation, SLOT_NAMES });
   const EngineHost = runInContext(source + "\nEngineHost;", context);
   const host = Object.assign(Object.create(EngineHost.prototype), {
+    o: {},
     exited: false, timer: null, timerAt: Infinity,
   });
   const realDate = runInContext("Date", context);
@@ -41,6 +42,7 @@ test("the browser fake checkpoint drains runtime nextTicks synchronously", () =>
   const EngineHost = runInContext(source + "\nEngineHost;", context);
   let drained = false;
   const host = Object.assign(Object.create(EngineHost.prototype), {
+    o: {},
     tickQueued: true,
     internal: { runTicks() { drained = true; } },
     guard<T>(callback: () => T) { return callback(); },

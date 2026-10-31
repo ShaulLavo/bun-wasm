@@ -1,9 +1,9 @@
-import type { Runtime } from "waffle";
+import type { ProcessRuntime } from "../../../src/process-runtime.js";
 import { createSharedObjectBroker } from "./broker.ts";
 import { sharedError } from "./protocol.ts";
 
 const NativeMessagePort = globalThis.MessagePort;
-const installations = new WeakMap<Runtime, SharedObjectRuntime>();
+const installations = new WeakMap<ProcessRuntime, SharedObjectRuntime>();
 export interface SharedObjectRoute {
   readonly owner: string;
   accept(message: unknown): boolean;
@@ -17,7 +17,7 @@ export interface SharedObjectRuntime {
 }
 
 /** Internal host installation, deliberately separate from registering the public Bun adapter. */
-export function installRuntimeSharedObjects(runtime: Runtime): SharedObjectRuntime {
+export function installRuntimeSharedObjects(runtime: ProcessRuntime): SharedObjectRuntime {
   if (runtime.disposed) throw sharedError("Runtime is disposed");
   if (installations.has(runtime)) throw sharedError("Shared-object runtime is already installed");
   const broker = createSharedObjectBroker();
@@ -59,6 +59,6 @@ export function installRuntimeSharedObjects(runtime: Runtime): SharedObjectRunti
   return installation;
 }
 
-export function runtimeSharedObjectRoute(runtime: Runtime): SharedObjectRoute | undefined {
+export function runtimeSharedObjectRoute(runtime: ProcessRuntime): SharedObjectRoute | undefined {
   return installations.get(runtime)?.open();
 }

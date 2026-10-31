@@ -2,11 +2,14 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { memoryMaximumBytes } from "../src/engine-kind.ts";
+import { createMemoryReader } from "../web/src/memory-telemetry.ts";
+import { createMemoryChannel, createMemoryPublisher, readMemoryChannel } from "../web/src/memory-channel.ts";
 
 const root = resolve(import.meta.dir, "..");
 const wrapped = ["malloc", "calloc", "realloc", "free", "aligned_alloc", "posix_memalign", "__libc_malloc", "__libc_calloc", "__libc_free"];
 
-function fixture(run: (exports: WebAssembly.Exports, snapshot: () => bigint[]) => void): void {
+function fixture(run: (exports: WebAssembly.Exports, snapshot: () => bigint[], limitBytes: number | null) => void): void {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-memory-"));
   try {
     const output = join(directory, "allocator.wasm");
@@ -18,7 +21,8 @@ function fixture(run: (exports: WebAssembly.Exports, snapshot: () => bigint[]) =
       "-Wl,-z,stack-size=16384", "-Wl,--export=malloc_usable_size", "-Wl,--export=bun_memory_telemetry",
     ].concat(wrapped.flatMap(name => [`-Wl,--wrap=${name}`, `-Wl,--export=${name}`]), ["-o", output]));
     expect(built.exitCode, built.stderr.toString()).toBe(0);
-    const module = new WebAssembly.Module(readFileSync(output));
+    const bytes = readFileSync(output);
+    const module = new WebAssembly.Module(bytes);
     const imports: WebAssembly.Imports = {};
     for (const entry of WebAssembly.Module.imports(module)) {
       const namespace = imports[entry.module] ??= {};
@@ -33,7 +37,7 @@ function fixture(run: (exports: WebAssembly.Exports, snapshot: () => bigint[]) =
       const view = new DataView(memory.buffer, pointer, 80);
       return Array.from({ length: 10 }, (_, index) => view.getBigUint64(index * 8, true));
     };
-    run(exports, snapshot);
+    run(exports, snapshot, memoryMaximumBytes(bytes) ?? null);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -47,6 +51,91 @@ function call(exports: WebAssembly.Exports, name: string, ...args: number[]): nu
   if (typeof result !== "number") throw new Error(`Invalid result from ${name}`);
   return result;
 }
+
+function failureSnapshot(exports: WebAssembly.Exports): bigint[] {
+  const pointer = call(exports, "bun_memory_failure_telemetry");
+  const memory = exports.memory;
+  if (!(memory instanceof WebAssembly.Memory)) throw new Error("Missing memory");
+  const view = new DataView(memory.buffer, pointer, 72);
+  return Array.from({ length: 9 }, (_, index) => view.getBigUint64(index * 8, true));
+}
+
+test("first libc failure freezes old realloc ownership and failure-time counters", () => {
+  fixture((exports, snapshot) => {
+    const unknown = 0xffffffffffffffffn;
+    expect(failureSnapshot(exports)).toEqual([1n, 72n, unknown, 0n, unknown, unknown, unknown, unknown, unknown]);
+    const pointer = call(exports, "malloc", 4000);
+    const before = snapshot();
+    expect(call(exports, "realloc", pointer, 1048576)).toBe(0);
+    const frozen = failureSnapshot(exports);
+    expect(frozen).toEqual([1n, 72n, 1048576n, 3n, before[2]!, before[2]!, before[3]!, before[9]!, snapshot()[9]!]);
+    const later = call(exports, "malloc", 32);
+    expect(later).not.toBe(0);
+    call(exports, "free", pointer);
+    expect(snapshot()[2]).toBeLessThan(before[2]!);
+    expect(call(exports, "malloc", 2097152)).toBe(0);
+    expect(failureSnapshot(exports)).toEqual(frozen);
+    const counts = snapshot();
+    failureSnapshot(exports);
+    expect(snapshot()).toEqual(counts);
+    call(exports, "free", later);
+  });
+});
+
+test("first failure keeps realloc-null distinct from a non-realloc request", () => {
+  fixture((exports, snapshot) => {
+    const before = snapshot();
+    expect(call(exports, "realloc", 0, 1048576)).toBe(0);
+    expect(failureSnapshot(exports)).toEqual([1n, 72n, 1048576n, 3n, 0n, 0n, 0n, before[9]!, snapshot()[9]!]);
+  });
+  fixture((exports, snapshot) => {
+    expect(call(exports, "calloc", 0xffffffff, 2)).toBe(0);
+    expect(failureSnapshot(exports)).toEqual([
+      1n, 72n, 0xffffffffffffffffn, 2n, 0n, 0n, 0n, 0xffffffffffffffffn, snapshot()[9]!,
+    ]);
+  });
+});
+
+test("allocator control: separated holes can reject realloc below the memory maximum", () => {
+  fixture((exports, snapshot) => {
+    const first = call(exports, "malloc", 40000);
+    const old = call(exports, "malloc", 40000);
+    const hole = call(exports, "malloc", 40000);
+    const blocker = call(exports, "malloc", 40000);
+    expect([first, old, hole, blocker].every(pointer => pointer !== 0)).toBe(true);
+    call(exports, "free", first);
+    call(exports, "free", hole);
+    const before = snapshot();
+    expect(before[9]).toBe(196608n);
+    expect(before[9]! - before[2]!).toBeGreaterThan(100000n);
+    expect(call(exports, "realloc", old, 100000)).toBe(0);
+    expect(snapshot()[9]).toBe(before[9]);
+    expect(snapshot()[2]).toBe(before[2]);
+    expect(failureSnapshot(exports).slice(4)).toEqual([
+      BigInt(call(exports, "malloc_usable_size", old)), before[2]!, before[3]!, before[9]!, before[9]!,
+    ]);
+    call(exports, "free", blocker);
+    expect(call(exports, "realloc", old, 100000)).toBe(old);
+    expect(snapshot()[9]).toBe(before[9]);
+    call(exports, "free", old);
+    expect(snapshot()[2]).toBe(0n);
+  });
+});
+
+test("allocator control: realloc replacement can fail when a growth delta would fit", () => {
+  fixture((exports, snapshot) => {
+    const old = call(exports, "malloc", 140000);
+    expect(old).not.toBe(0);
+    const before = snapshot();
+    expect(before[9]).toBe(196608n);
+    expect(262144n - before[9]!).toBeGreaterThan(200000n - before[2]!);
+    expect(call(exports, "realloc", old, 200000)).toBe(0);
+    expect(snapshot()[9]).toBe(before[9]);
+    expect(snapshot()[2]).toBe(before[2]);
+    call(exports, "free", old);
+    expect(snapshot()[2]).toBe(0n);
+  });
+});
 
 test("libc allocations track usable live/peak, realloc failure preserves ownership and first request", () => {
   fixture((exports, snapshot) => {
@@ -109,5 +198,29 @@ test("libc internal aliases share the same accounting as the exported allocator"
     expect(snapshot()[2]).toBe(0n);
     expect(snapshot()[7]).toBe(2n);
     expect(snapshot()[8]).toBe(2n);
+  });
+});
+
+test("compiled core frozen record reaches the browser reader and shared host channel", () => {
+  fixture((exports, snapshot, limitBytes) => {
+    const reader = createMemoryReader("quickjs", { exports }, undefined, limitBytes);
+    const channel = createMemoryChannel();
+    const publisher = createMemoryPublisher(channel, reader);
+    expect(reader.sample().frozenAllocatorFailure).toBeNull();
+    expect(reader.sample().memoryLimitBytes).toBe(262144);
+    const pointer = call(exports, "malloc", 4000);
+    const before = snapshot();
+    expect(call(exports, "realloc", pointer, 1048576)).toBe(0);
+    const failed = publisher.capture(false, true);
+    expect(failed?.memoryLimitBytes).toBe(limitBytes);
+    expect(failed?.frozenAllocatorFailure).toEqual({ bytes: 1048576, category: "libc.realloc",
+      previousUsableBytes: Number(before[2]), allocatorLiveBytes: Number(before[2]), allocatorPeakBytes: Number(before[3]),
+      wasmCapacityBeforeBytes: Number(before[9]), wasmCapacityAfterBytes: Number(snapshot()[9]), reason: "unknown" });
+    call(exports, "free", pointer);
+    const terminal = publisher.finish();
+    expect(terminal?.allocatorLiveBytes).toBe(0);
+    expect(terminal?.memoryLimitBytes).toBe(limitBytes);
+    expect(terminal?.frozenAllocatorFailure).toEqual(failed?.frozenAllocatorFailure);
+    expect(readMemoryChannel(channel)).toEqual(terminal);
   });
 });

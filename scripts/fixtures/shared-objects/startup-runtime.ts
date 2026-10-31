@@ -49,6 +49,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
   };
   const empty = new Set(["stack_trace", "exit_provenance", "loop_scheduler", "builtins", "bun_builtin_globals", "function", "fake_timers"]);
   const native = {
+    engine: "host", contextHooks: false, prepareVersion: 6,
     mainPath: () => "/entry.ts", now: () => performance.now(), getAsyncContext() {}, setAsyncContext() {},
     base64Encode: (bytes: Uint8Array) => Buffer.from(bytes).toString("base64"),
     base64Decode: (text: string) => new Uint8Array(Buffer.from(text, "base64")),
@@ -58,7 +59,7 @@ export function startupRuntime(options: { service?: SharedObjectService; graph: 
     loadPolyfill(name: string) {
       if (name in modules) return () => modules[name];
       if (empty.has(name)) return () => ({});
-      if (name !== "worker_threads" && name !== "worker_codec" && name !== "module_compile") throw new Error(`Unexpected startup module ${name}`);
+      if (name !== "worker_threads" && name !== "worker_codec" && name !== "module_compile" && name !== "source_prepare") throw new Error(`Unexpected startup module ${name}`);
       const source = readFileSync(new URL(`${name}.ts`, runtimeRoot), "utf8");
       return runInContext(new Bun.Transpiler({ loader: "ts" }).transformSync(`globalThis.factory = ${source}`), context);
     },

@@ -1,12 +1,12 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { projectFiles } from "./apps.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
 import { boundedCleanup, closeOwnedBrowser, closeOwnedContext, HarnessCleanupError, withCleanupFailures } from "./cleanup.ts";
 import { browserDiagnostics, redactDiagnosticText } from "./browser-diagnostics.ts";
 import { verifyBrowserServer, stoppedPreviewError } from "./server-browser.ts";
-import { observeHmr } from "./hmr.ts";
+import { checkNativePage } from "./native-product.ts";
 import { observeProductTraffic, observeNativeProductTraffic, productObservations, waitForPreviewReady } from "./product-browser.ts";
 import { failure, stageOutput } from "./classify.ts";
 import { BlockedBrowserNetworkError } from "./product-campaign.ts";
@@ -176,23 +176,17 @@ export async function browserHost({ root, options, launch, stop }) {
 
   async function checkPage(url, check, project, timeout = options.timeout) {
     const page = await (await getBrowser()).newPage();
-    const verifyHmr = observeHmr(page);
     const diagnostics = browserDiagnostics(page);
-    const deadline = Date.now() + timeout;
-    const remaining = () => Math.max(1, deadline - Date.now());
     const errors = [];
     page.on("pageerror", error => errors.push(redactDiagnosticText(String(error))));
     let checked;
     let productError;
     try {
-      await page.goto(url, { timeout: remaining() });
-      await page.locator(check.selector).filter({ hasText: check.text }).waitFor({ timeout: remaining() });
-      const hmr = check.hmr && await verifyHmr(project, check.selector, check.hmr, remaining(), () => page.screenshot({ path: join(options.output, `${basename(project)}-dev.png`) }));
+      checked = await checkNativePage(page, url, check, project, timeout, () => page.screenshot({ path: join(options.output, `${basename(dirname(project))}-dev.png`) }));
       if (errors.length) throw new Error(errors.join("\n"));
-      checked = { status: "pass", assertion: `${check.selector} renders ${JSON.stringify(check.text)}${hmr ? `; ${hmr}` : ""}` };
     } catch (error) {
       productError = error;
-      checked = { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server"), productError: String(error), browserDiagnostics: diagnostics() };
+      checked = { status: "fail", observations: checked?.observations ?? [], timedOut: error?.name === "TimeoutError", ...failure(String(error), "server"), productError: String(error), browserDiagnostics: diagnostics() };
     }
     try { await closeContext(page.context(), productError); }
     catch (error) {
