@@ -128,6 +128,10 @@ fn ptr(bytes: &[u8]) -> i32 {
     bytes.as_ptr() as usize as i32
 }
 
+fn ptr_mut<T>(values: &mut [T]) -> i32 {
+    values.as_mut_ptr() as usize as i32
+}
+
 pub fn poll(timeout_ms: i32) -> i32 {
     call(Slot::Poll, [timeout_ms, 0, 0, 0]).unwrap_or(UNSUPPORTED)
 }
@@ -141,7 +145,7 @@ pub fn fetch(meta: &[u8], body: &[u8]) -> i32 {
 fn read_sized(slot_id: Slot, handle: i32) -> Result<Vec<u8>, i32> {
     let mut buf = vec![0u8; 1024];
     loop {
-        let n = call(slot_id, [handle, ptr(&buf), buf.len() as i32, 0]).ok_or(UNSUPPORTED)?;
+        let n = call(slot_id, [handle, ptr_mut(&mut buf), buf.len() as i32, 0]).ok_or(UNSUPPORTED)?;
         if n < 0 {
             return Err(n);
         }
@@ -168,7 +172,7 @@ pub fn peer_addr(handle: i32) -> Result<Vec<u8>, i32> {
 
 pub fn read(handle: i32, cap: usize) -> Result<Vec<u8>, i32> {
     let mut buf = vec![0u8; cap];
-    let n = call(Slot::Read, [handle, ptr(&buf), cap as i32, 0]).ok_or(UNSUPPORTED)?;
+    let n = call(Slot::Read, [handle, ptr_mut(&mut buf), cap as i32, 0]).ok_or(UNSUPPORTED)?;
     if n < 0 {
         return Err(n);
     }
