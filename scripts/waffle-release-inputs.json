@@ -1,30 +1,30 @@
 {
-  "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.103/waffle-0.0.103.tgz",
-  "sha256": "731baad2e853592484af5b087c7a8c0c782a9c21f27d7a41beb9472ad37a10bb",
-  "bytes": 2110749,
-  "version": "0.0.103",
-  "sourceCommit": "dc945b0ea353959c1d3d7589dd43afb57ceeb14d",
+  "url": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.105/waffle-0.0.105.tgz",
+  "sha256": "914400ac1a8268f151ffed30fca7b983c9e368925e48cc124e1624fdac62f510",
+  "bytes": 2186915,
+  "version": "0.0.105",
+  "sourceCommit": "a03b2a51f8a5eb40d1b93820f0f129867110b6c2",
   "packagePath": "packages/waffle",
   "files": {
-    "package.json": "04e8e89b472f170d545e8e96e3b0f13906cac8732c60cfb0fc465f9ce849ecf6",
+    "package.json": "8378ad412d158ff7228f4d74326ab3f17b5e8e5ff919e392ee53775c775290f0",
     "scripts/build-wasi-libc.sh": "85d6a1e6793390fe6c8c36762168f673cfe8fc7ecd5abc6daf27c05d82f7cf0e",
     "patches/wasi-libc/preopen-scan.patch": "856730a158d7fdaa08a787c572883a57baaf09a4d967b366c9d198a9c98de302"
   },
   "programs": {
-    "tag": "programs-v0.0.11",
-    "sourceCommit": "dc945b0ea353959c1d3d7589dd43afb57ceeb14d",
+    "tag": "programs-v0.0.13",
+    "sourceCommit": "3050f69d810fe7c851e487135517698b5dfd93e5",
     "manifest": {
-      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.11/program-release.json",
-      "bytes": 594867,
-      "sha256": "3182f15ab3c6169558b140ba7f3c00cac5773ea7c14e70ce852c4780a32b056f"
+      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/program-release.json",
+      "bytes": 605119,
+      "sha256": "420216c117f9b7443c3eec70ee5c1095ea23bc05c6e25ae612bb95844e83fb72"
     },
     "base": {
-      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.11/waffle-base-0.0.11.tgz",
-      "bytes": 1593,
-      "sha256": "89a5a28a59f4c7998b7fa771916c16187efe60a96e8d775b12636b9536bc97ef",
+      "url": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.13/waffle-base-0.0.13.tgz",
+      "bytes": 1658,
+      "sha256": "2c014679bfdb19f16834a2766ae0129429410f2ee038a2e55ac519589e91b3a1",
       "sourceDirectory": "packages/base",
-      "sourceTree": "9f89f8366eceb054ed40ae919420678ca514b3d4",
-      "version": "0.0.11"
+      "sourceTree": "a2795f209dd23bfac9161e9abeede51da25cad97",
+      "version": "0.0.13"
     }
   }
 }

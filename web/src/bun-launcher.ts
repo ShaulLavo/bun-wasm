@@ -3,7 +3,8 @@ import { programLinkPlan } from "../../src/assets.js";
 import { bunEnvironment } from "../../src/executable-paths.js";
 // Page-side launchers: one Waffle worker per Bun or preview1 process. The service owns admission,
 // descriptors, signals and filesystem fences; these only describe the worker to start.
-import type { GuestLauncher, Runtime, RuntimeNetworkHelper } from "waffle";
+import type { GuestLauncher, RuntimeNetworkHelper } from "waffle";
+import type { ProcessRuntime } from "../../src/process-runtime.js";
 import { normalize } from "waffle/core/path";
 import type { Engine, RunRequest } from "./bun-executor.js";
 import type { BunNetworkOptions } from "./net/helper.js";
@@ -20,7 +21,7 @@ export interface BunLauncherOptions {
    * helper, so its network poll also wakes on filesystem commits for fs.watch.
    */
   notificationWorkerUrl: string;
-  runtime: Runtime;
+  runtime: ProcessRuntime;
   network?: BunNetworkOptions;
   /** Optional tools artifact supplied by the embedding application, loaded only for lint/fmt. */
   loadTools?(): Promise<WebAssembly.Module>;
@@ -53,7 +54,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   const memoryTelemetryId = crypto.randomUUID();
   let revoked = false;
   let helper: RuntimeNetworkHelper | undefined;
-  let socketRoot: Awaited<ReturnType<Runtime["filesystem"]["directoryHandle"]>> | undefined;
+  let socketRoot: Awaited<ReturnType<ProcessRuntime["filesystem"]["directoryHandle"]>> | undefined;
   let moduleCache: string | null = null;
   let lookupChannel: BroadcastChannel | undefined;
   let disposeLookup: (() => void) | undefined;

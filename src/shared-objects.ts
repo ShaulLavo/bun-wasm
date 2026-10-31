@@ -1,4 +1,4 @@
-import type { Runtime } from "waffle";
+import type { ProcessRuntime } from "./process-runtime.js";
 import { installRuntimeSharedObjects } from "../web/src/shared-objects/runtime.js";
 
 export interface BunSharedObjects { close(): void }
@@ -8,6 +8,6 @@ export interface BunSharedObjects { close(): void }
  * across workers. Separate from installBunAdapters, whose dispose keeps live processes running;
  * close() here revokes their shared-object routes.
  */
-export function installBunSharedObjects(runtime: Runtime): BunSharedObjects {
+export function installBunSharedObjects(runtime: ProcessRuntime): BunSharedObjects {
   return installRuntimeSharedObjects(runtime);
 }
