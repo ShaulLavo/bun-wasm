@@ -135,6 +135,7 @@ function instrument(app: string): void {
       write = value.term.write.bind(value.term);
       value.term.write = writeOutput;
       value.term.onWriteParsed(parsed);
+      value.term.write("", parsed);
     },
   });
 }
@@ -162,6 +163,7 @@ async function summarize(rows: Download[], capture: Capture, root: string, app: 
     return { bytes: total.bytes + (file?.runtime?.bytes ?? 0), gzip: total.gzip + (file?.runtime?.gzip ?? 0) };
   }, { bytes: 0, gzip: 0 });
   return {
+    promptMode: app === "web" ? "default-on-public-receipt" : "not-applicable",
     promptMs: capture.prompt, firstSpawnMs: capture.spawn, firstOutputMs: capture.output,
     spawnToOutputMs: capture.output === null ? null : capture.output - split,
     commandCompleteMs: capture.complete, previewReadyMs: capture.previewReady, workers: capture.workers,

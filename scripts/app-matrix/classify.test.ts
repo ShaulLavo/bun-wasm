@@ -163,3 +163,9 @@ test("classifier callers and runner source hashes resolve the renamed source", (
     expect(readFileSync(new URL(match[1] ?? "", import.meta.url)).length).toBeGreaterThan(0);
   }
 });
+
+test("plain stage anchors reject multiline providers and command suffixes inside output", () => {
+  expect(() => stageOutput("repo on main\n❯ bun run dev\nbody\nrepo on main\n❯ ", "bun run dev")).toThrow("Missing stage boundary");
+  expect(() => stageOutput("$ printed $ bun run dev\nbody", "bun run dev")).toThrow("Missing stage boundary");
+  expect(stageOutput("[130] $ bun run dev\nbody\n[1] $ ", "bun run dev")).toBe("body");
+});

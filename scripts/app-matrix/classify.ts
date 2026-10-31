@@ -25,12 +25,11 @@ export function stageOutput(log: string, command: string): string {
 }
 
 function plainPrompt(line: string): boolean {
-  return /^(?:\[\d+\] )?\$(?: |$)/.test(line.trimStart());
+  return /^(?:\[\d+\] )?\$(?: |$)/.test(line);
 }
 
 function plainPromptCommand(line: string, command: string): boolean {
-  const candidate = line.trimStart();
-  return plainPrompt(candidate) && candidate.endsWith(`$ ${command}`);
+  return line.replace(/^\[\d+\] /, "") === `$ ${command}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -20,11 +20,13 @@ for (const [name, type, ctx] of [["desktop-chromium", chromium, { viewport: { wi
   const page = await (await browser.newContext(ctx)).newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
+  if (new URL(url).searchParams.get("prompt") === "off") throw new Error("Live visual checks require the default prompt-on page");
   await page.goto(url);
   await page.waitForFunction(() => {
-    const shell = Reflect.get(Reflect.get(globalThis, "playground"), "shell");
-    return shell.state === "ready" && shell.lastPrompt !== undefined && !shell.running;
-  });
+    const shell = Reflect.get(globalThis, "playground")?.shell;
+    return shell?.state === "ready" && shell.lastPrompt !== undefined && !shell.running;
+  }, null, { timeout: 60000 });
+  await waitFor(page, /❯/);
   const isolated = await page.evaluate(() => crossOriginIsolated);
   const t0 = Date.now();
   await run(page, "bun run index.ts");

@@ -63,7 +63,7 @@ test("retained Next, Prisma and playground logs classify actual current diagnost
   const log = name => readFileSync(join(import.meta.dir, "review-evidence", name), "utf8");
   expect(failure(log("next-quickjs-dev.log"), "dev")).toEqual({ category: "d", blocker: "dev: ReferenceError: module is not defined" });
   expect(failure(log("prisma-quickjs-install.log"), "install").category).toBe("d");
-  const current = stageOutput(log("vite-react-quickjs-playground.log"), "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port 3137");
+  const current = stageOutput(log("vite-react-quickjs-playground.log").replaceAll("user@bun:~$", "$"), "bun run node_modules/vite/bin/vite.js --host 127.0.0.1 --port 3137");
   expect(current).not.toContain("optional dependency");
   expect(failure(current, "dev")).toMatchObject({ category: "a" });
   expect(failure(current, "dev").blocker).toStartWith('error: Your current platform');

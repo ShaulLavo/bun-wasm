@@ -77,16 +77,8 @@ export function filesystemFixture() {
 }
 
 type FilesystemFixture = ReturnType<typeof filesystemFixture>;
-type PromptOptions = {
-  readonly filesystem: Runtime["filesystem"];
-  readonly versions: Readonly<Record<string, string>>;
-  readonly file?: boolean;
-  readonly logger?: (message: string, error?: unknown) => void;
-};
-type SessionOptions = {
-  readonly prompt?: unknown;
-  readonly runtime: Runtime;
-};
+type PromptOptions = Parameters<typeof import("bash-web/prompt").createPrompt>[0];
+type SessionOptions = Pick<import("bash-web/session").SessionOptions, "runtime" | "prompt" | "env" | "lineEditor">;
 export function filesystem(fixture: FilesystemFixture): Runtime["filesystem"] { return fixture.fs; }
 
 class TerminalFixture {

@@ -213,7 +213,7 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
       filesystem: runtime.filesystem,
       versions: HOST_VERSIONS,
       file: true,
-      logger: (message, error) => console.warn(`[prompt] ${message}`, error ?? ""),
+      logger: (message: string, error?: unknown) => console.warn(`[prompt] ${message}`, error ?? ""),
     });
     const shell = this.shell = await BrowserSession.create({
       runtime, cwd: HOME,

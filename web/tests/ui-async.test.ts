@@ -546,8 +546,10 @@ test("playground passes the borrowed filesystem and truthful prompt options to t
   expect(prompt?.versions).toEqual({});
   expect(prompt?.file).toBe(true);
   expect(prompt?.logger).toEqual(expect.any(Function));
-  expect(session?.runtime).toBe(page.runtime);
+  expect(Object.is(session?.runtime, page.runtime)).toBe(true);
   expect(session?.prompt).toBeDefined();
+  expect(session?.env?.PS1).toBe("$ ");
+  expect(session?.lineEditor).toEqual({ mode: "zsh" });
 });
 
 test("playground prompt-off arm skips the provider while keeping the session prompt empty", async () => {
@@ -557,4 +559,5 @@ test("playground prompt-off arm skips the provider while keeping the session pro
   await playground.start();
   expect(page.promptCreates).toEqual([]);
   expect(page.sessionCreates[0]?.prompt).toBeUndefined();
+  expect(page.sessionCreates[0]?.env?.PS1).toBe("$ ");
 });
