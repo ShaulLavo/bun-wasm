@@ -58,7 +58,7 @@ test.each([0, 7, 130])("submit drains exact output beyond one pump chunk before 
   const f = await heldPump();
   try {
     const done = f.session.submit(command);
-    expect(decoder.decode(await f.input)).toBe(`\x05\x15${command}\r`);
+    expect(decoder.decode(await f.input)).toBe(`\x05\x15\x0b${command}\r`);
     const payload = "x".repeat(65536).concat("\nPIPE_EDITOR_recovered\n", prompt);
     expect(f.bridge.write(encoder.encode(payload))).toBe(encoder.encode(payload).length);
     f.bridge.publishPrompt(status);

@@ -41,3 +41,28 @@ export async function checkClearTyping(page: Page, screenshot?: string): Promise
   });
   assert.equal(await page.evaluate(() => Reflect.get(globalThis, "playground").shell.lastExit), 0);
 }
+
+export async function checkRunReplacesMultilineDraft(page: Page): Promise<void> {
+  await page.locator(".xterm-helper-textarea").focus();
+  await page.evaluate(() => Reflect.get(globalThis, "playground").shell.input("\x1b[200~printf first\nprintf stale > /tmp/run-stale-draft\x1b[201~"));
+  await page.waitForFunction(() => {
+    const { term } = Reflect.get(globalThis, "playground");
+    const buffer = term.buffer.active;
+    return buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true).endsWith("printf stale > /tmp/run-stale-draft");
+  });
+  await page.keyboard.press("ArrowUp");
+  await page.waitForFunction(() => {
+    const { term } = Reflect.get(globalThis, "playground");
+    const buffer = term.buffer.active;
+    return buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true).endsWith("printf first");
+  });
+  const result = await page.evaluate(async () => {
+    const { shell, fs } = Reflect.get(globalThis, "playground");
+    await shell.submit("printf RUN_REPLACED > /tmp/run-requested-command");
+    return {
+      requested: new TextDecoder().decode(await fs.readFile("/tmp/run-requested-command")),
+      stale: Boolean(await fs.readFile("/tmp/run-stale-draft")),
+    };
+  });
+  assert.deepEqual(result, { requested: "RUN_REPLACED", stale: false }, "Run replaces every line of the zsh draft");
+}
