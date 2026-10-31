@@ -69,6 +69,8 @@ void* allocate(uint64_t bytes, Outcome outcome, int allocatorErrno)
     return storage;
 }
 
+// A host-chosen per-instance generation in 1..2^53-1.
+constexpr uint64_t generationA = 0x1f2e3d4c5b6a7;
 int vmA;
 int vmB;
 int globalA;
@@ -90,7 +92,7 @@ const BunjscAllocationBoundary& record()
 
 void armControl(BunjscCoreAllocatorSampler sampler = sampleFakeCore)
 {
-    assert(bunjsc_boundary_arm_control(&vmA, &globalA, sampler));
+    assert(bunjsc_boundary_arm_control(&vmA, &globalA, generationA, sampler));
     assert(record().state == BunjscBoundaryState::ControlArmed);
 }
 
@@ -102,21 +104,25 @@ void acknowledgeControl()
 }
 
 constexpr uint64_t allWords = bunjscBoundaryBeforeWords | bunjscBoundaryAfterCallWords | bunjscBoundaryHeapWords
-    | bunjscBoundaryCoreBeforeWords | bunjscBoundaryCoreAfterWords;
+    | bunjscBoundaryCoreBeforeWords | bunjscBoundaryCoreAfterWords | bunjscBoundaryGenerationWord;
 
 void checkLayout()
 {
-    static_assert(sizeof(BunjscAllocationBoundary) == 1000);
-    static_assert(offsetof(BunjscAllocationBoundary, last) == 88);
-    static_assert(offsetof(BunjscAllocationBoundary, control) == 392);
-    static_assert(offsetof(BunjscAllocationBoundary, subject) == 696);
+    static_assert(sizeof(BunjscAllocationBoundary) == 1032);
+    static_assert(offsetof(BunjscAllocationBoundary, generation) == 88);
+    static_assert(offsetof(BunjscAllocationBoundary, last) == 96);
+    static_assert(offsetof(BunjscAllocationBoundary, control) == 408);
+    static_assert(offsetof(BunjscAllocationBoundary, subject) == 720);
     static_assert(offsetof(BunjscAllocationBoundarySlot, errnoAfterCall) == 88);
     static_assert(offsetof(BunjscAllocationBoundarySlot, heapBefore) == 104);
     static_assert(offsetof(BunjscAllocationBoundarySlot, coreBefore) == 176);
     static_assert(offsetof(BunjscAllocationBoundarySlot, coreAfter) == 240);
-    static_assert(allWords == (uint64_t(1) << 38) - 1);
+    static_assert(offsetof(BunjscAllocationBoundarySlot, generation) == 304);
+    static_assert(allWords == (uint64_t(1) << 39) - 1);
+    static_assert(bunjscBoundaryGenerationLimit == 9007199254740991);
     assert(record().abiVersion == 1);
-    assert(record().byteLength == 1000);
+    assert(record().byteLength == 1032);
+    assert(record().generation == bunjscUnknownMemory && record().control.generation == bunjscUnknownMemory);
     assert(record().state == BunjscBoundaryState::Disarmed);
     assert(record().expectedVmAddress == bunjscUnknownMemory);
     assert(record().controlLength == 1001);
@@ -141,6 +147,7 @@ void checkControlSuccess()
     armControl();
     assert(record().coreSamplerBound == 1);
     assert(record().expectedVmAddress == reinterpret_cast<uintptr_t>(&vmA));
+    assert(record().generation == generationA);
     errno = 7;
     void* control = observe(&vmA, bunjscBoundaryControlLength, 1, true, Outcome::Success);
     assert(control == storage);
@@ -149,6 +156,7 @@ void checkControlSuccess()
     const auto& slot = record().control;
     assert(record().rejection == BunjscBoundaryRejection::None);
     assert(slot.recorded == 1 && slot.attempt == 1 && slot.availability == allWords);
+    assert(slot.generation == generationA);
     assert(slot.requestBytes == 1001 && slot.elementCount == 1001 && slot.elementSize == 1 && slot.zeroFill == 1);
     assert(slot.vmAddress == reinterpret_cast<uintptr_t>(&vmA));
     assert(slot.globalObjectAddress == reinterpret_cast<uintptr_t>(&globalA));
@@ -258,6 +266,7 @@ void checkSubjectLatch()
     const auto& subject = record().subject;
     assert(record().subjectFailures == 2 && record().coverageMisses == 1);
     assert(subject.recorded == 1 && subject.attempt == 3 && subject.availability == allWords);
+    assert(subject.generation == generationA && record().last.generation == generationA);
     assert(subject.requestBytes == 25297737 && subject.zeroFill == 1 && subject.resultNull == 1);
     assert(subject.errnoBefore == 3 && subject.errnoAfterCall == ENOMEM);
     assert(subject.coreAfter.failures == subject.coreBefore.failures + 1);
@@ -270,9 +279,10 @@ void checkSubjectLatch()
 void checkRearmRefused()
 {
     acknowledgeControl();
-    assert(!bunjsc_boundary_arm_control(&vmB, &globalA, sampleFakeCore));
+    assert(!bunjsc_boundary_arm_control(&vmB, &globalA, generationA + 1, sampleFakeCore));
     assert(bunjsc_boundary_acknowledge_control(false) == BunjscBoundaryState::SubjectArmed);
     assert(record().expectedVmAddress == reinterpret_cast<uintptr_t>(&vmA));
+    assert(record().generation == generationA);
 }
 
 void checkNoCollection()
@@ -282,6 +292,31 @@ void checkNoCollection()
     const auto& slot = record().control;
     assert(slot.heapBefore.sizeAfterLastCollection == bunjscUnknownMemory);
     assert(slot.availability == (allWords & ~bunjscBoundarySizeAfterLastCollectionWord));
+}
+
+// Without a valid host generation the record is rejected before any control and never arms.
+void checkGenerationAbsent(uint64_t generation)
+{
+    assert(!bunjsc_boundary_arm_control(&vmA, &globalA, generation, sampleFakeCore));
+    assert(record().generation == bunjscUnknownMemory && record().expectedVmAddress == bunjscUnknownMemory);
+    assert(bunjsc_boundary_acknowledge_control(true) == BunjscBoundaryState::Rejected);
+    assert(!bunjsc_boundary_arm_control(&vmA, &globalA, generationA, sampleFakeCore));
+    checkRejected(BunjscBoundaryRejection::GenerationAbsent);
+    assert(!record().control.recorded && !heap.reads);
+}
+
+void checkGenerationZero() { checkGenerationAbsent(0); }
+void checkGenerationAboveLimit() { checkGenerationAbsent(bunjscBoundaryGenerationLimit + 1); }
+void checkGenerationUnknown() { checkGenerationAbsent(bunjscUnknownMemory); }
+
+// The control is acknowledged only under the record's own generation.
+void checkControlGeneration()
+{
+    armControl();
+    void* control = observe(&vmA, bunjscBoundaryControlLength, 1, true, Outcome::Success);
+    bunjscAllocationBoundary.control.generation = generationA + 1;
+    assert(bunjsc_boundary_acknowledge_control(control) == BunjscBoundaryState::Rejected);
+    checkRejected(BunjscBoundaryRejection::ControlGeneration);
 }
 
 // A trap inside the allocator never reaches finish(): the before-values stay readable.
@@ -318,6 +353,8 @@ const Scenario scenarios[] = {
     { "sampler-unreadable", checkSamplerUnreadable }, { "coverage-miss", checkCoverageMiss },
     { "subject-latch", checkSubjectLatch }, { "rearm-refused", checkRearmRefused },
     { "no-collection", checkNoCollection }, { "trap-pending", checkTrapPending },
+    { "generation-zero", checkGenerationZero }, { "generation-above-limit", checkGenerationAboveLimit },
+    { "generation-unknown", checkGenerationUnknown }, { "control-generation", checkControlGeneration },
 };
 
 } // namespace

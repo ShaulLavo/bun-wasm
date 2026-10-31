@@ -611,7 +611,7 @@ diff --git a/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h b/Source/JavaSc
 new file mode 100644
 --- /dev/null
 +++ b/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h
-@@ -0,0 +1,358 @@
+@@ -0,0 +1,376 @@
 +#pragma once
 +
 +#include <cerrno>
@@ -692,6 +692,9 @@ new file mode 100644
 +
 +// Above JSArrayBufferView::fastSizeLimit (1000 elements), so the control takes the oversize branch.
 +constexpr uint64_t bunjscBoundaryControlLength = 1001;
++// A host-chosen per-instance generation the VM acknowledges in its record. At most 2^53 - 1 so a
++// JavaScript host reads it exactly; zero and larger values mean no generation was supplied.
++constexpr uint64_t bunjscBoundaryGenerationLimit = (uint64_t(1) << 53) - 1;
 +
 +enum class BunjscBoundaryState : uint64_t { Disarmed, ControlArmed, SubjectArmed, Rejected };
 +enum class BunjscBoundaryRejection : uint64_t {
@@ -705,6 +708,8 @@ new file mode 100644
 +    CoreUnavailable,
 +    CoreFailureCount,
 +    CoreAllocationCount,
++    GenerationAbsent,
++    ControlGeneration,
 +};
 +
 +// Raw values from the core's bun_memory_telemetry (live, peak, capacity, failures, allocations,
@@ -753,8 +758,9 @@ new file mode 100644
 +    BunjscBoundaryHeapBudget heapBefore;
 +    BunjscCoreAllocatorSample coreBefore;
 +    BunjscCoreAllocatorSample coreAfter;
++    uint64_t generation { bunjscUnknownMemory }; // The record's generation when this slot was written.
 +};
-+static_assert(sizeof(BunjscAllocationBoundarySlot) == 38 * sizeof(uint64_t));
++static_assert(sizeof(BunjscAllocationBoundarySlot) == 39 * sizeof(uint64_t));
 +
 +constexpr uint64_t bunjscBoundaryWords(size_t offset, size_t bytes)
 +{
@@ -769,6 +775,7 @@ new file mode 100644
 +constexpr uint64_t bunjscBoundarySizeAfterLastCollectionWord = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, heapBefore) + offsetof(BunjscBoundaryHeapBudget, sizeAfterLastCollection), sizeof(uint64_t));
 +constexpr uint64_t bunjscBoundaryCoreBeforeWords = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, coreBefore), sizeof(BunjscCoreAllocatorSample));
 +constexpr uint64_t bunjscBoundaryCoreAfterWords = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, coreAfter), sizeof(BunjscCoreAllocatorSample));
++constexpr uint64_t bunjscBoundaryGenerationWord = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, generation), sizeof(uint64_t));
 +
 +struct BunjscAllocationBoundary {
 +    uint64_t abiVersion { 1 };
@@ -782,11 +789,12 @@ new file mode 100644
 +    uint64_t armedAttempts { 0 };
 +    uint64_t subjectFailures { 0 };
 +    uint64_t coverageMisses { 0 }; // Oversize calls in another VM while armed; never recorded.
++    uint64_t generation { bunjscUnknownMemory }; // Set once when the control is armed.
 +    BunjscAllocationBoundarySlot last; // The latest armed attempt, written before its call.
 +    BunjscAllocationBoundarySlot control;
 +    BunjscAllocationBoundarySlot subject; // The first null result after the subject was armed.
 +};
-+static_assert(sizeof(BunjscAllocationBoundary) == 1000);
++static_assert(sizeof(BunjscAllocationBoundary) == 1032);
 +
 +inline constinit BunjscAllocationBoundary bunjscAllocationBoundary;
 +inline constinit BunjscCoreAllocatorSampler bunjscCoreAllocatorSampler { nullptr };
@@ -838,6 +846,8 @@ new file mode 100644
 +        return BunjscBoundaryRejection::ControlRequest;
 +    if (control.vmAddress != record.expectedVmAddress || control.globalObjectAddress != record.expectedGlobalObjectAddress)
 +        return BunjscBoundaryRejection::ControlIdentity;
++    if (control.generation != record.generation)
++        return BunjscBoundaryRejection::ControlGeneration;
 +    constexpr uint64_t core = bunjscBoundaryCoreBeforeWords | bunjscBoundaryCoreAfterWords;
 +    if ((control.availability & core) != core)
 +        return BunjscBoundaryRejection::CoreUnavailable;
@@ -848,12 +858,19 @@ new file mode 100644
 +    return BunjscBoundaryRejection::None;
 +}
 +
-+// Arms the control for one VM and context. Only a disarmed record arms.
-+inline bool bunjsc_boundary_arm_control(const void* vm, const void* globalObject, BunjscCoreAllocatorSampler sampler)
++// Arms the control for one VM, context and generation. Only a disarmed record arms; a missing
++// generation rejects the record for good.
++inline bool bunjsc_boundary_arm_control(const void* vm, const void* globalObject, uint64_t generation, BunjscCoreAllocatorSampler sampler)
 +{
 +    auto& record = bunjscAllocationBoundary;
 +    if (record.state != BunjscBoundaryState::Disarmed)
 +        return false;
++    if (!generation || generation > bunjscBoundaryGenerationLimit) {
++        record.state = BunjscBoundaryState::Rejected;
++        record.rejection = BunjscBoundaryRejection::GenerationAbsent;
++        return false;
++    }
++    record.generation = generation;
 +    bunjscCoreAllocatorSampler = sampler;
 +    record.coreSamplerBound = sampler != nullptr;
 +    record.expectedVmAddress = reinterpret_cast<uintptr_t>(vm);
@@ -943,9 +960,10 @@ new file mode 100644
 +        slot.vmAddress = reinterpret_cast<uintptr_t>(vm);
 +        slot.globalObjectAddress = reinterpret_cast<uintptr_t>(structure->globalObject());
 +        slot.errnoBefore = errnoBefore;
++        slot.generation = record.generation;
 +        uint64_t heapWords = bunjsc_boundary_read_heap(heap, slot.heapBefore);
 +        uint64_t coreWords = bunjsc_boundary_sample_core(slot.coreBefore, bunjscBoundaryCoreBeforeWords);
-+        slot.availability = bunjscBoundaryBeforeWords | heapWords | coreWords;
++        slot.availability = bunjscBoundaryBeforeWords | bunjscBoundaryGenerationWord | heapWords | coreWords;
 +    }
 +
 +    WASIAllocationBoundaryProbe(const WASIAllocationBoundaryProbe&) = delete;

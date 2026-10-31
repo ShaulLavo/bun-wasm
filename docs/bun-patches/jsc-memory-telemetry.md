@@ -152,14 +152,30 @@ after the two real oversize typed-array allocation calls (`Gigacage::tryZeroedMa
 typed-array failure to the system allocator call that returned null. It is off by default.
 
 **Arming.** `BUN_WASM_JSC_ALLOCATION_BOUNDARY=1` in a guest process's environment arms it. Each JSC
-process arms its own VM before any program code runs. Arming happens in two steps:
+process arms its own VM before any program code runs.
 
-1. The control step arms the record for the process's VM and global object. It then creates one
+**Generation.** For every armed JSC instance the browser executor picks a fresh random generation
+in 1 to 2^53 - 1 and passes it as `BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION`, replacing any
+value inherited from a parent process. The limit keeps the value exact as a JavaScript number in
+snapshots. The VM acknowledges the generation by writing it into the record header when it arms the
+control, and into every slot it writes. A missing, zero or out-of-range generation rejects the
+record (`generationAbsent`) before the control runs, so the process stops. Neither a guest pid
+nor a counter is used: both repeat across workers. The reader carries the host's value as
+`allocationBoundary.expectedGeneration` beside the record's `allocationBoundary.generation`.
+`boundaryGenerationFindings` in the reader treats a record as evidence only for the instance
+whose generation it acknowledges, in the header and in each recorded control or subject slot. It
+reports a missing challenge, a missing acknowledgement, a mismatch, and a generation that appears
+in two records, which means one record was copied or reused across instances.
+
+Arming then happens in two steps:
+
+1. The control step arms the record for the process's VM, global object and generation. It then creates one
    1001-element `Uint8Array` through the instrumented construction path. That size is above
    `fastSizeLimit` (1000), so it takes the oversize `ZeroFill` branch while staying far below the
    cap. The control is acknowledged only when the record shows exactly one observed attempt, in
-   the armed VM and context, with the exact request, a non-null result, a successful creation, no
-   oversize call in another VM, and core counters showing one allocation and no new failure.
+   the armed VM and context, written under the record's generation, with the exact request, a
+   non-null result, a successful creation, no oversize call in another VM, and core counters
+   showing one allocation and no new failure.
 2. Only then does the record move to `subjectArmed`. Any other outcome moves it to `rejected` with
    a reason, and the subject is never armed. The process then stops before running program code
    (a Rust panic naming the state and reason), so a run cannot proceed without coverage.
@@ -202,29 +218,32 @@ null. A core failure delta of exactly 1 with an unchanged allocation count shows
 wrapped libc entry ran and returned null. Nothing else runs between the two samples. A delta of 0
 means the null never reached the wrapper. No field proves fragmentation, refused memory growth, or
 which step inside wasi-libc's allocator failed, and the record computes no aggregate or headroom.
-The memory authority stays 1 GiB. Each wasm instance has its own record, so process identity comes
-from the host snapshot that carries it (`id`, `commandId`, `commandSequence`).
+The memory authority stays 1 GiB. The host snapshot's `id`, `commandId` and `commandSequence`
+are bookkeeping beside the record. The acknowledged generation, not that bookkeeping, ties a
+record to its instance.
 
-**Record layout.** 1000 bytes, 125 little-endian u64 words, ABI version 1. Unknown is `UINT64_MAX`.
+**Record layout.** 1032 bytes, 129 little-endian u64 words, ABI version 1. Unknown is `UINT64_MAX`.
 
 | Words | Field |
 | --- | --- |
-| 0-1 | `abiVersion` (1), `byteLength` (1000) |
+| 0-1 | `abiVersion` (1), `byteLength` (1032) |
 | 2 | `state`: 0 disarmed, 1 control armed, 2 subject armed, 3 rejected |
-| 3 | `rejection`: 0 none, 1 control not observed, 2 control attempts, 3 coverage miss, 4 control failed, 5 control request, 6 control identity, 7 core unavailable, 8 core failure count, 9 core allocation count |
+| 3 | `rejection`: 0 none, 1 control not observed, 2 control attempts, 3 coverage miss, 4 control failed, 5 control request, 6 control identity, 7 core unavailable, 8 core failure count, 9 core allocation count, 10 generation absent, 11 control generation |
 | 4 | `coreSamplerBound` |
 | 5-6 | `expectedVmAddress`, `expectedGlobalObjectAddress` |
 | 7 | `controlLength` (1001) |
 | 8-10 | `armedAttempts`, `subjectFailures`, `coverageMisses` |
-| 11-48, 49-86, 87-124 | slots `last`, `control`, `subject` |
+| 11 | `generation`, set once when the control is armed |
+| 12-50, 51-89, 90-128 | slots `last`, `control`, `subject` |
 
-Each slot has 38 words: `recorded`, `availability` (bit *i* set means word *i* was observed),
+Each slot has 39 words: `recorded`, `availability` (bit *i* set means word *i* was observed),
 `attempt`, `requestSequence`, `requestBytes`, `elementCount`, `elementSize`, `zeroFill`,
 `vmAddress`, `globalObjectAddress`, `errnoBefore`, `errnoAfterCall`, `resultNull`; nine heap
 values (`capacity`, `extraMemory`, `arrayBufferBytes`, `totalBytesAllocated`,
 `bytesAllocatedThisCycle`, `allocationBudgetThisCycle`, `maxHeapSize`, `sizeAfterLastCollection`,
 `ramSize`); and eight core values before and eight after (`live`, `peak`, `capacity`, `failures`,
-`allocations`, `frees`, `firstFailureSize`, `firstFailureCategory`). The C++ static asserts, the
+`allocations`, `frees`, `firstFailureSize`, `firstFailureCategory`); and the `generation` it was
+written under. The C++ static asserts, the
 Rust `const` asserts in `sys.rs` and the TypeScript reader's field count pin the same layout.
 
 **Qualifying a built side.** These source controls do not qualify any binary. For the later
@@ -275,10 +294,13 @@ export contract are unchanged.
 `crates/bunwasm-jsc/tests/allocation-boundary.cpp` against the patched header. It covers the
 layout, a disarmed probe (no getter or core read, `errno` and result unchanged), an acknowledged
 control, every rejection reason, an unbound or unreadable core, another VM, the subject latch with
-raw `errno`, refused re-arming, a heap before its first collection, and a trap before the call
-returns. A dump of the C++ record is decoded by the TypeScript reader. The test also checks that
+raw `errno`, refused re-arming, a heap before its first collection, a trap before the call
+returns, a zero, unknown or above-limit generation, and a control slot written under another
+generation. A dump of the C++ record is decoded by the TypeScript reader. The test also checks that
 the patch hunk wraps exactly the two Gigacage calls. `scripts/jsc-allocation-boundary.test.ts`
 covers the reader, post-failure reads, unchanged counters without the diagnostic, lazy loading,
-and both qualification modes. A future single canonical JSC build and composed
+generation findings (missing, mismatched, unacknowledged in a slot, repeated across instances),
+and both qualification modes. `web/tests/bun-executor.test.ts` checks that every armed JSC
+instance gets a distinct safe-integer generation that replaces an inherited one. A future single canonical JSC build and composed
 delivery must include the new patch; these source controls do not qualify an
 old side binary or replace the actual Next gate.

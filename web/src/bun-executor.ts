@@ -104,14 +104,16 @@ export function createBunExecutor(req: RunRequest, host: BunExecutorHost = globa
   let terminal: BunTerminal | undefined;
   const slots = req.adapter === "preview1" ? "off" : req.slots ?? "imports";
   const stackKib = smallStackKib()?.[req.engine];
-  const env = stackKib && !("BUN_WASM_STACK_KIB" in req.env) ? { ...req.env, BUN_WASM_STACK_KIB: stackKib } : req.env;
+  const baseEnv = stackKib && !("BUN_WASM_STACK_KIB" in req.env) ? { ...req.env, BUN_WASM_STACK_KIB: stackKib } : req.env;
+  const generation = allocationBoundaryGeneration(req);
+  const env = generation === undefined ? baseEnv : { ...baseEnv, BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION: String(generation) };
   const lookupClient: LookupClient | undefined = req.lookupPort
     ? createLookupClient(req.lookupPort)
     : req.lookupChannel && typeof BroadcastChannel === "function"
       ? createLookupClient(new BroadcastChannel(req.lookupChannel))
       : undefined;
   const lookup = lookupClient;
-  const linked = linkedExecutor(req, host);
+  const linked = linkedExecutor(req, host, generation);
   return {
     ...linked,
     hostCallFd: HOST_CALL_FD,
@@ -194,13 +196,21 @@ function finishHostServices(sharedObjects: SharedObjectService | undefined, look
   }
 }
 
-// The allocation-boundary reader is a separate chunk, fetched only for an armed JSC process.
-async function engineDiagnostics(req: RunRequest): Promise<EngineDiagnostics | undefined> {
+// An armed JSC instance gets a fresh random generation in 1..2^53-1 that its VM must acknowledge
+// in the boundary record; a value inherited from a parent process is replaced, never reused.
+function allocationBoundaryGeneration(req: RunRequest): number | undefined {
   if (req.engine !== "jsc" || req.env.BUN_WASM_JSC_ALLOCATION_BOUNDARY !== "1") return undefined;
-  return (await import("./jsc-allocation-boundary.js")).allocationBoundaryCounters;
+  const [high = 0, low = 0] = crypto.getRandomValues(new Uint32Array(2));
+  return (high & 0x1fffff) * 2 ** 32 + low || allocationBoundaryGeneration(req);
 }
 
-function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExecutor<RunRequest>, "instantiate" | "initialize" | "beforeFinish"> {
+// The allocation-boundary reader is a separate chunk, fetched only for an armed JSC process.
+async function engineDiagnostics(generation: number | undefined): Promise<EngineDiagnostics | undefined> {
+  if (generation === undefined) return undefined;
+  return (await import("./jsc-allocation-boundary.js")).allocationBoundaryDiagnostics(generation);
+}
+
+function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: number | undefined): Pick<WorkerExecutor<RunRequest>, "instantiate" | "initialize" | "beforeFinish"> {
   if (!req.linkPlan) return {};
   const request = { ...req, linkPlan: req.linkPlan };
   const limitBytes = memoryMaximumBytes(req.linkPlan.core.source) ?? null;
@@ -213,7 +223,7 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
     async instantiate(imports, context) {
       context.checkActive();
       if (finished || group) throw new Error("link executor already used");
-      diagnostics = await engineDiagnostics(req);
+      diagnostics = await engineDiagnostics(generation);
       const plan = await prepareLinkPlan(request.linkPlan);
       if (req.adapter !== "preview1" && req.engine !== "browser" && programKind(plan.entryModule) !== req.engine) throw new TypeError(`Selected ${req.engine} engine differs from paired core declaration`);
       context.checkActive();

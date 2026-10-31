@@ -153,6 +153,7 @@ pub struct BunjscAllocationBoundarySlot {
     pub heap_before: BunjscBoundaryHeapBudget,
     pub core_before: BunjscCoreAllocatorSample,
     pub core_after: BunjscCoreAllocatorSample,
+    pub generation: u64,
 }
 
 /// `state` of a JSC allocation-boundary record whose control was acknowledged.
@@ -174,21 +175,24 @@ pub struct BunjscAllocationBoundary {
     pub armed_attempts: u64,
     pub subject_failures: u64,
     pub coverage_misses: u64,
+    pub generation: u64,
     pub last: BunjscAllocationBoundarySlot,
     pub control: BunjscAllocationBoundarySlot,
     pub subject: BunjscAllocationBoundarySlot,
 }
 
 const _: () = {
-    assert!(std::mem::size_of::<BunjscAllocationBoundarySlot>() == 304);
+    assert!(std::mem::size_of::<BunjscAllocationBoundarySlot>() == 312);
     assert!(std::mem::offset_of!(BunjscAllocationBoundarySlot, errno_after_call) == 88);
     assert!(std::mem::offset_of!(BunjscAllocationBoundarySlot, heap_before) == 104);
     assert!(std::mem::offset_of!(BunjscAllocationBoundarySlot, core_before) == 176);
     assert!(std::mem::offset_of!(BunjscAllocationBoundarySlot, core_after) == 240);
-    assert!(std::mem::size_of::<BunjscAllocationBoundary>() == 1000);
-    assert!(std::mem::offset_of!(BunjscAllocationBoundary, last) == 88);
-    assert!(std::mem::offset_of!(BunjscAllocationBoundary, control) == 392);
-    assert!(std::mem::offset_of!(BunjscAllocationBoundary, subject) == 696);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundarySlot, generation) == 304);
+    assert!(std::mem::size_of::<BunjscAllocationBoundary>() == 1032);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundary, generation) == 88);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundary, last) == 96);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundary, control) == 408);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundary, subject) == 720);
 };
 
 unsafe extern "C" {
@@ -372,7 +376,7 @@ unsafe extern "C" {
     pub fn bunjsc_refresh_memory_telemetry(ctx: JSContextRef);
     pub fn bunjsc_memory_telemetry() -> *const BunjscMemoryTelemetry;
     pub fn bunjsc_allocation_boundary() -> *const BunjscAllocationBoundary;
-    pub fn bunjsc_allocation_boundary_qualify(ctx: JSContextRef) -> u64;
+    pub fn bunjsc_allocation_boundary_qualify(ctx: JSContextRef, generation: u64) -> u64;
     pub fn bunjsc_report_unhandled_error(ctx: JSContextRef, value: JSValueRef);
     pub fn bunjsc_is_error(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_is_detachable_buffer(ctx: JSContextRef, value: JSValueRef) -> bool;

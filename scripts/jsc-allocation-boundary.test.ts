@@ -1,17 +1,20 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { allocationBoundaryBytes, allocationBoundaryCounters, allocationBoundaryFromCounters, readAllocationBoundary } from "../web/src/jsc-allocation-boundary.ts";
+import { allocationBoundaryBytes, allocationBoundaryDiagnostics, allocationBoundaryFromCounters, boundaryGenerationFindings, readAllocationBoundary,
+  type AllocationBoundary } from "../web/src/jsc-allocation-boundary.ts";
 import { createMemoryReader } from "../web/src/memory-telemetry.ts";
 import { qualifyBinary, qualifyReadout } from "./jsc-allocation-boundary-qualify.ts";
 
 // Synthetic records and modules: they exercise the reader and qualifier, never a real guest.
 const root = resolve(import.meta.dir, "..");
 const unknown = 0xffffffffffffffffn;
-const slotWords = 38;
-const allWords = (1n << 38n) - 1n;
+const slotWords = 39;
+const allWords = (1n << 39n) - 1n;
 const RECORD = 1024;
 const VM = 5000;
+const GENERATION = 0x1f2e3d4c5b6a7;
+const allocationBoundaryCounters = allocationBoundaryDiagnostics(GENERATION);
 
 type SlotValues = Partial<Record<number, bigint>>;
 function slot(values: SlotValues): bigint[] {
@@ -19,12 +22,12 @@ function slot(values: SlotValues): bigint[] {
 }
 function recorded(requestBytes: bigint, coreDelta: { failures: bigint; allocations: bigint }, extra: SlotValues = {}): bigint[] {
   return slot({ 0: 1n, 1: allWords, 2: 1n, 3: 7n, 4: requestBytes, 5: requestBytes, 6: 1n, 7: 1n, 8: BigInt(VM), 9: 6000n,
-    10: 0n, 11: 0n, 12: 0n, 25: 3n, 26: 40n, 33: 3n + coreDelta.failures, 34: 40n + coreDelta.allocations, ...extra });
+    10: 0n, 11: 0n, 12: 0n, 25: 3n, 26: 40n, 33: 3n + coreDelta.failures, 34: 40n + coreDelta.allocations, 38: BigInt(GENERATION), ...extra });
 }
-function record(options: { state?: bigint; rejection?: bigint; misses?: bigint; control?: bigint[]; subject?: bigint[] } = {}): bigint[] {
+function record(options: { state?: bigint; rejection?: bigint; misses?: bigint; generation?: bigint; control?: bigint[]; subject?: bigint[] } = {}): bigint[] {
   const control = options.control ?? recorded(1001n, { failures: 0n, allocations: 1n });
   return [1n, BigInt(allocationBoundaryBytes), options.state ?? 2n, options.rejection ?? 0n, 1n, BigInt(VM), 6000n, 1001n, 1n, 0n,
-    options.misses ?? 0n].concat(slot({}), control, options.subject ?? slot({}));
+    options.misses ?? 0n, options.generation ?? BigInt(GENERATION)].concat(slot({}), control, options.subject ?? slot({}));
 }
 
 function fixture(words: bigint[]) {
@@ -35,12 +38,15 @@ function fixture(words: bigint[]) {
 }
 
 test("the reader decodes the fixed record and leaves unobserved words null", () => {
-  const trapped = slot({ 0: 1n, 1: allWords & ~((3n << 11n) | (0xffn << 30n)), 4: 25297737n, 11: 0n, 30: 9n });
+  const trapped = slot({ 0: 1n, 1: allWords & ~((3n << 11n) | (0xffn << 30n)), 4: 25297737n, 11: 0n, 30: 9n, 38: BigInt(GENERATION) });
   const words = record({ subject: trapped });
   expect(words.length * 8).toBe(allocationBoundaryBytes);
   const { memory, exports } = fixture(words);
-  const boundary = readAllocationBoundary(memory, exports);
+  const boundary = readAllocationBoundary(memory, exports, GENERATION);
   expect(boundary?.state).toBe(2);
+  expect(boundary?.generation).toBe(GENERATION);
+  expect(boundary?.expectedGeneration).toBe(GENERATION);
+  expect(boundary?.subject.generation).toBe(GENERATION);
   expect(boundary?.control.requestBytes).toBe(1001);
   expect(boundary?.control["coreAfter.allocations"]).toBe(41);
   expect(boundary?.last.recorded).toBe(0);
@@ -48,9 +54,11 @@ test("the reader decodes the fixed record and leaves unobserved words null", () 
   expect(boundary?.subject.requestBytes).toBe(25297737);
   expect(boundary?.subject.errnoAfterCall).toBeNull();
   expect(boundary?.subject["coreAfter.live"]).toBeNull();
-  expect(readAllocationBoundary(memory, {})).toBeNull();
+  expect(readAllocationBoundary(memory, {}, GENERATION)).toBeNull();
   expect(allocationBoundaryCounters(memory, {})).toEqual({});
   const counters = allocationBoundaryCounters(memory, exports);
+  expect(counters["allocationBoundary.expectedGeneration"]).toBe(GENERATION);
+  expect(counters["allocationBoundary.generation"]).toBe(GENERATION);
   expect(allocationBoundaryFromCounters(counters)).toEqual(boundary);
   expect(allocationBoundaryFromCounters({})).toBeNull();
 });
@@ -59,11 +67,36 @@ test("the reader rejects a different ABI, size or pointer instead of decoding it
   for (const [index, value] of [[0, 2n], [1, 192n]] as const) {
     const f = fixture(record());
     f.view.setBigUint64(RECORD + index * 8, value, true);
-    expect(() => readAllocationBoundary(f.memory, f.exports)).toThrow("ABI");
+    expect(() => readAllocationBoundary(f.memory, f.exports, GENERATION)).toThrow("ABI");
   }
   const f = fixture(record());
-  expect(() => readAllocationBoundary(f.memory, { jsc_allocation_boundary: () => RECORD + 4 })).toThrow("bounds");
-  expect(() => readAllocationBoundary(f.memory, { jsc_allocation_boundary: () => 65536 - 8 })).toThrow("bounds");
+  expect(() => readAllocationBoundary(f.memory, { jsc_allocation_boundary: () => RECORD + 4 }, GENERATION)).toThrow("bounds");
+  expect(() => readAllocationBoundary(f.memory, { jsc_allocation_boundary: () => 65536 - 8 }, GENERATION)).toThrow("bounds");
+});
+
+function decoded(generation: number | null, words: bigint[]): AllocationBoundary {
+  const f = fixture(words);
+  const boundary = readAllocationBoundary(f.memory, f.exports, generation);
+  if (!boundary) throw new Error("missing fixture record");
+  return boundary;
+}
+
+test("a record is evidence only for the instance whose generation it acknowledges", () => {
+  expect(boundaryGenerationFindings([decoded(GENERATION, record())])).toEqual([[]]);
+  expect(boundaryGenerationFindings([decoded(null, record())])).toEqual([["the host gave this instance no generation"]]);
+  expect(boundaryGenerationFindings([decoded(GENERATION, record({ generation: 0xffffffffffffffffn }))])).toEqual([["the record acknowledges no generation"]]);
+  expect(boundaryGenerationFindings([decoded(GENERATION + 1, record())])).toEqual([["the record acknowledges another instance's generation"]]);
+  const stale = recorded(1001n, { failures: 0n, allocations: 1n }, { 38: BigInt(GENERATION + 1) });
+  expect(boundaryGenerationFindings([decoded(GENERATION, record({ control: stale, subject: stale }))])).toEqual([[
+    "the control slot was not written under the record's generation", "the subject slot was not written under the record's generation"]]);
+  // The same record read for two instances: one of them is a copy.
+  const copied = boundaryGenerationFindings([decoded(GENERATION, record()), decoded(GENERATION + 1, record())]);
+  expect(copied).toEqual([["the generation appears in another instance's record"],
+    ["the record acknowledges another instance's generation", "the generation appears in another instance's record"]]);
+  const f = fixture(record());
+  const counters = allocationBoundaryDiagnostics(GENERATION + 1)(f.memory, f.exports);
+  const carried = allocationBoundaryFromCounters(counters);
+  expect(carried && boundaryGenerationFindings([carried])).toEqual([["the record acknowledges another instance's generation"]]);
 });
 
 function telemetryFixture(words: bigint[]) {
@@ -104,7 +137,7 @@ test("normal bundles load the diagnostic reader lazily and only for an armed JSC
   const executor = source("web/src/bun-executor.ts");
   expect(executor).not.toMatch(/^import .*jsc-allocation-boundary/m);
   expect(executor).toContain('if (req.engine !== "jsc" || req.env.BUN_WASM_JSC_ALLOCATION_BOUNDARY !== "1") return undefined;');
-  expect(executor).toContain('return (await import("./jsc-allocation-boundary.js")).allocationBoundaryCounters;');
+  expect(executor).toContain('return (await import("./jsc-allocation-boundary.js")).allocationBoundaryDiagnostics(generation);');
   expect(JSON.parse(source("package.json")).files).toContain("web/src/jsc-allocation-boundary.ts");
 });
 
@@ -113,10 +146,13 @@ test("the side exports a cached record and arms only in its own VM before progra
   const vm = source("crates/bunwasm-engine-jsc/src/vm.rs");
   expect(vm).toMatch(/pub extern "C" fn jsc_allocation_boundary\(\) -> \*const BunjscAllocationBoundary \{\s+unsafe \{ bunjsc_allocation_boundary\(\) \}\s+\}/);
   expect(vm).toContain('std::env::var_os("BUN_WASM_JSC_ALLOCATION_BOUNDARY")');
+  expect(vm).toContain('std::env::var("BUN_WASM_JSC_ALLOCATION_BOUNDARY_GENERATION")');
+  expect(vm).toContain("bunjsc_allocation_boundary_qualify(context, generation)");
   expect(vm).toMatch(/qualify_allocation_boundary\(c\);\s+#\[cfg\(test\)\]\s+install_regression_natives\(&Jsc\);\s+Jsc\s+\}/);
   const helpers = source("crates/bunwasm-jsc/cpp/helpers.cpp");
   expect(helpers).toMatch(/BunjscAllocationBoundary\* bunjsc_allocation_boundary\(\)\s+\{\s+return &bunjscAllocationBoundary;\s+\}/);
   expect(helpers).toContain("JSUint8Array::create(globalObject, structure, bunjscBoundaryControlLength)");
+  expect(helpers).toContain("bunjsc_boundary_arm_control(&vm, globalObject, generation, sampleCoreAllocator)");
   expect(helpers).not.toMatch(/bunjsc_refresh_memory_telemetry\(\w+\);/);
 });
 

@@ -376,14 +376,15 @@ BunjscAllocationBoundary* bunjsc_allocation_boundary()
     return &bunjscAllocationBoundary;
 }
 
-// Arms the allocation-boundary control in this context's VM, creates one oversize Uint8Array through
-// the instrumented construction path, and arms the subject only if the control was acknowledged.
-uint64_t bunjsc_allocation_boundary_qualify(JSContextRef ctx)
+// Arms the allocation-boundary control in this context's VM under the host's generation, creates one
+// oversize Uint8Array through the instrumented construction path, and arms the subject only if the
+// control was acknowledged.
+uint64_t bunjsc_allocation_boundary_qualify(JSContextRef ctx, uint64_t generation)
 {
     JSGlobalObject* globalObject = toJS(ctx);
     VM& vm = globalObject->vm();
     JSLockHolder lock(vm);
-    if (!bunjsc_boundary_arm_control(&vm, globalObject, sampleCoreAllocator))
+    if (!bunjsc_boundary_arm_control(&vm, globalObject, generation, sampleCoreAllocator))
         return static_cast<uint64_t>(bunjscAllocationBoundary.state);
     auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
     Structure* structure = globalObject->typedArrayStructureWithTypedArrayType<TypeUint8>();

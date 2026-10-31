@@ -5,7 +5,7 @@ import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { allocationBoundaryBytes, boundaryRejections, boundaryStates, decodeAllocationBoundary } from '../web/src/jsc-allocation-boundary.ts';
+import { allocationBoundaryBytes, boundaryGenerationFindings, boundaryRejections, boundaryStates, decodeAllocationBoundary } from '../web/src/jsc-allocation-boundary.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -72,7 +72,8 @@ function checkTypedArrayCallbacks(scratch: string, wasi: string): void {
 
 const boundaryScenarios = ['layout', 'disarmed', 'control-success', 'control-core-failure', 'control-null',
   'control-not-observed', 'control-request', 'control-attempts', 'sampler-unbound', 'sampler-unreadable',
-  'coverage-miss', 'subject-latch', 'rearm-refused', 'no-collection', 'trap-pending'];
+  'coverage-miss', 'subject-latch', 'rearm-refused', 'no-collection', 'trap-pending', 'generation-zero',
+  'generation-above-limit', 'generation-unknown', 'control-generation'];
 
 test('WASI JSC allocation boundary arms the subject only after an acknowledged control', () => {
   withTelemetryHeader((scratch) => {
@@ -84,10 +85,14 @@ test('WASI JSC allocation boundary arms the subject only after an acknowledged c
     }
     const words = execFileSync(binary, ['dump'], { encoding: 'utf8' }).trim().split('\n').map(BigInt);
     assert.equal(words.length * 8, allocationBoundaryBytes);
-    const record = decodeAllocationBoundary(words);
+    const record = decodeAllocationBoundary(words, 0x1f2e3d4c5b6a7);
     assert.equal(boundaryStates[record.state ?? -1], 'subjectArmed');
     assert.equal(boundaryRejections[record.rejection ?? -1], 'none');
     assert.equal(record.controlLength, 1001);
+    assert.equal(record.generation, 0x1f2e3d4c5b6a7);
+    assert.deepEqual(boundaryGenerationFindings([record]), [[]]);
+    assert.equal(record.control.generation, record.generation);
+    assert.equal(record.subject.generation, record.generation);
     assert.equal(record.subjectFailures, 2);
     assert.equal(record.coverageMisses, 1);
     assert.equal(record.control.requestBytes, 1001);
