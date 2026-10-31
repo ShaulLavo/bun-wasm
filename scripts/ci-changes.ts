@@ -83,7 +83,7 @@ export function needsJsc(paths: readonly string[]): boolean {
   return paths.some(path => sharedWebGuestInput(path) || jscFiles.has(path) || jscDirectories.some(root => path.startsWith(root)));
 }
 
-const hermesDirectories = ["hermes/", "crates/bunwasm-hermes/", "crates/bunwasm-engine-hermes/", "tests/hermes/"];
+const hermesDirectories = ["hermes/", "crates/bunwasm-hermes/", "crates/bunwasm-engine-hermes/", "tests/hermes/", "tests/fixtures/readline-async-iterator/"];
 const hermesFiles = new Set([
   "scripts/build-bun-hermes.sh", "scripts/build-engine-hermes.sh", "scripts/hermes-import-delta.ts",
   // hermes/check-build.ts imports the native header receipt from the producer closure.

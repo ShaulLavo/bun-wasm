@@ -12,6 +12,7 @@
     "**/generated/**",
     "src/guest-asset.generated.ts",
     "tests/fixtures/**",
+    "tests/hermes/fixtures/next-jest-worker/**",
     "tests/build/**",
     "tests/jsc/**",
     "tests/transpiler-hooks/expected.mjs",

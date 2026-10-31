@@ -27,6 +27,9 @@ use crate::engine::{
     Engine, ErrorKind, ModuleHost, ModuleSource, NativeError, PromiseState, Record, Val, ValueFn,
 };
 
+#[path = "source.rs"]
+mod source;
+
 /// Cached bytes only; does not enter the VM, including after a failed refresh.
 #[unsafe(no_mangle)]
 pub extern "C" fn hermes_memory_telemetry() -> *const sys::MemoryTelemetry {
@@ -760,6 +763,7 @@ impl Engine for Hermes {
 
     fn eval_script(&self, source: &str, filename: &str, first_line: i32) -> Result<HVal, HVal> {
         let source = fold_header_lines(source, first_line);
+        let source = source::adapt(&source, filename);
         let user_source = !filename.starts_with("bun-wasm:");
         let source = if user_source && source.contains("import") {
             module_host().lower_script(self, &source, filename)?.into()

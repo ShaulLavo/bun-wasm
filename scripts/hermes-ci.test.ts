@@ -17,7 +17,7 @@ const rust = workflow.split("\n  rust:\n")[1]!.split("\n  package:\n")[0]!;
 
 for (const path of [
   "hermes/build.sh", "hermes/hermes-wasi.patch", "crates/bunwasm-hermes/cpp/shim.cpp", "crates/bunwasm-engine-hermes/src/vm.rs",
-  "tests/hermes/hosts/module.mts", "scripts/build-engine-hermes.sh", "scripts/build-bun-hermes.sh",
+  "tests/hermes/hosts/module.mts", "tests/fixtures/readline-async-iterator/verify.ts", "scripts/build-engine-hermes.sh", "scripts/build-bun-hermes.sh",
   "crates/bunwasm-engine-quickjs/src/driver.rs", "crates/bunwasm-engine-quickjs/src/side_modules.rs", "crates/bunwasm-runtime/src/engine.rs",
   "crates/bunwasm-host/src/linked.rs", "scripts/quickjs-core-exports.txt", "scripts/src/engine-explicit-init.ts", "src/engine-kind.ts",
   "scripts/guest-engine-receipt.ts", "src/bun-adapter.ts", "web/scripts/node-linked.ts", "web/build.ts", "web/src/engine-loader.ts",
