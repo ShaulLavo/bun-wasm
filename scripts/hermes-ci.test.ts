@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { needsHermes, needsRust } from "./ci-changes.ts";
 import { discoverChecks } from "./test-checks.ts";
-import { captureProgramInputs, verifyProgramReceipt } from "./guest-core-receipt.ts";
+import { captureProgramInputs, verifyProgramReceipt, type ProgramBuildReceipt } from "./guest-core-receipt.ts";
 import { artifactIdentity } from "./guest-build-receipt.ts";
 import { appendCustomSection, ENGINE_SECTION } from "../src/engine-kind.ts";
 import { quickjsPair } from "../tests/package/quickjs-plan-fixture.ts";
@@ -74,7 +74,7 @@ test("Hermes custody archives the compiled Bun codegen and admits it before VM w
       const tagged = quickjsPair().core;
       const tagBytes = appendCustomSection(new Uint8Array(), ENGINE_SECTION, new TextEncoder().encode("quickjs")).byteLength;
       const core = tagged.subarray(0, tagged.length - tagBytes);
-      const receipt = { schema: 1, inputs: origin, artifact: artifactIdentity(core) };
+      const receipt = { schema: 1, inputs: origin, artifact: artifactIdentity(core) } satisfies ProgramBuildReceipt;
       writeFileSync(generated, "consumer regeneration\n");
       const changed = await captureProgramInputs(options, "core", { features: ["engine-split", "bun-transpiler", "bun-build"] });
       expect(() => verifyProgramReceipt(core, receipt, changed)).toThrow(/compatibility mismatch/);
