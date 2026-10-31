@@ -18,18 +18,14 @@ reads remain allocation-free and do not force collection. The QuickJS engine
 readout exports the raw fields as `automaticGcCount`,
 `mallocBytesAfterAutomaticGc`, `mallocGcThreshold`, and `currentMallocBytes`.
 
-The focused module experiment evaluates six unique ESM paths and then four
-revisions of the exact path `/reload/changed.mjs`. It drops each promise, runs
-pending jobs, forces a normal explicit GC, and samples the raw readout. On the
-current source `automaticGcCount` stayed at `1` and the automatic-GC floor
-stayed at `108,264` bytes. Unique paths rose from `mallocBytes = 125,568` to
-`133,168` and `structuralBytes = 114,001` to `119,586`; the changed path then
-rose from `151,136` to `155,504` and `structuralBytes = 137,134` to `140,323`.
-Because the floor grows after explicit collection while the automatic counter
-does not, the module declaration/source structures are retained by QuickJS's
-module lifetime rather than merely waiting for another automatic collection.
-The test bypasses Core's path caches, so it does not attribute any core
-module-cache or interpreted-Wasm ownership.
+The focused direct-declaration experiment requires all six unique ESM paths and
+all four revisions of `/reload/changed.mjs` to complete. It drops each promise,
+runs pending jobs, explicitly collects, and samples the raw readout. QuickJS
+marks the successful declarations in `JSContext.loaded_modules` until context
+release, so this experiment observes normal declaration-registry lifetime.
+It does not reproduce the actual Next webpack CommonJS reload path, which uses
+`native.compileCjs` and global script evaluation. It establishes neither a Next
+leak nor the owner of the earlier application memory limit failure.
 
 ## Classification
 
@@ -37,6 +33,6 @@ module-cache or interpreted-Wasm ownership.
 | --- | --- | --- |
 | `third_party/rquickjs-sys/quickjs/quickjs.c` | Host feature | Record automatic threshold-GC count, post-GC allocator floor, threshold, and live allocator bytes. |
 | `third_party/rquickjs-sys/quickjs/quickjs.h` | Host feature | Append the four raw counters to `JSBunwasmMemoryTelemetry`. |
-| `crates/bunwasm-engine-quickjs/src/vm.rs` | Original adapter | Match the 128-byte ABI and print the focused unique-module reload experiment. |
+| `crates/bunwasm-engine-quickjs/src/vm.rs` | Original adapter | Match the 128-byte ABI and require the complete direct-declaration control. |
 | `web/src/memory-telemetry.ts` | Original adapter | Decode and preserve the four raw fields without aggregation. |
 | `scripts/fixtures/quickjs-memory-telemetry.c`, `scripts/engine-memory-hook.test.ts` | Original test adapter | Assert ABI size and exercise automatic collection state. |

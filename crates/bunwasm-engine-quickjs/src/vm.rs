@@ -880,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_telemetry_identifies_quickjs_module_reload_floor() {
+    fn memory_telemetry_observes_direct_module_declarations() {
         let engine = QuickJs::new(Rc::new(InterruptHost::new(InterruptMode::Continue)));
         for _ in 0..10_000 {
             let value = engine
@@ -953,10 +953,20 @@ mod tests {
                 "{{\"path\":\"/reload/changed.mjs\",\"generation\":{generation},\"mallocBytes\":{malloc},\"structuralBytes\":{structural},\"automaticGcCount\":{gc_count},\"mallocBytesAfterAutomaticGc\":{after_gc},\"currentMallocBytes\":{current}}}"
             );
         }
-        let valid = !changed_path_samples.is_empty()
-            && samples
-                .iter()
-                .all(|sample| sample.3 > 0 && sample.4 != u64::MAX && sample.6 >= sample.4)
+        std::mem::forget(engine);
+        assert_eq!(
+            samples.len(),
+            6,
+            "all six unique declarations must complete"
+        );
+        assert_eq!(
+            changed_path_samples.len(),
+            4,
+            "all four same-path declarations must complete"
+        );
+        let valid = samples
+            .iter()
+            .all(|sample| sample.3 > 0 && sample.4 != u64::MAX && sample.6 >= sample.4)
             && samples.windows(2).all(|pair| pair[1].3 >= pair[0].3)
             && changed_path_samples.windows(2).all(|pair| {
                 pair[1].1 > pair[0].1
@@ -964,7 +974,6 @@ mod tests {
                     && pair[1].3 == pair[0].3
                     && pair[1].4 == pair[0].4
             });
-        std::mem::forget(engine);
         assert!(valid);
     }
 
