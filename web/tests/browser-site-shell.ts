@@ -43,7 +43,13 @@ async function contains(page: Page, text: string): Promise<void> {
   await page.waitForFunction(text => Reflect.get(globalThis, "siteShellScreen")().includes(text), text, { timeout: 30000 });
 }
 async function ready(page: Page): Promise<void> {
-  await page.waitForFunction(() => !Reflect.get(globalThis, "playground").shell.running && !document.querySelector<HTMLButtonElement>("#run")?.disabled);
+  await page.waitForFunction(() => {
+    const { shell } = Reflect.get(globalThis, "playground");
+    return shell.state === "ready" && shell.lastPrompt !== undefined && !shell.running;
+  });
+}
+async function runButtonReady(page: Page): Promise<void> {
+  await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>("#run")?.disabled);
 }
 async function exercise(page: Page, engine: string) {
   const base = `http://127.0.0.1:${port}/playground/`;
@@ -109,6 +115,7 @@ async function exercise(page: Page, engine: string) {
   await command(page, "printf 'RECOVERED_%s\\n' yes");
   await contains(page, "RECOVERED_yes");
   await ready(page);
+  await runButtonReady(page);
   await page.locator("#run").click();
   await contains(page, "Hello, world.");
   await ready(page);
