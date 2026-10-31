@@ -488,7 +488,7 @@ pub fn proc_close(fd: i32) -> i32 {
 /// Bytes read (empty at end of file), or the negative code. `cap` must be nonzero.
 pub fn proc_read(fd: i32, cap: usize) -> Result<Vec<u8>, i32> {
     let mut buf = vec![0u8; cap];
-    let n = proc_call!(runtime_proc::read(fd, ptr(&buf), cap as i32));
+    let n = proc_call!(runtime_proc::read(fd, ptr_mut(&mut buf), cap as i32));
     if n < 0 {
         return Err(n);
     }
