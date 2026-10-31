@@ -21,13 +21,18 @@ function slot(values: SlotValues): bigint[] {
   return Array.from({ length: slotWords }, (_, index) => values[index] ?? (index < 2 ? 0n : unknown));
 }
 function recorded(requestBytes: bigint, coreDelta: { failures: bigint; allocations: bigint }, extra: SlotValues = {}): bigint[] {
-  return slot({ 0: 1n, 1: allWords, 2: 1n, 3: 7n, 4: requestBytes, 5: requestBytes, 6: 1n, 7: 1n, 8: BigInt(VM), 9: 6000n,
-    10: 0n, 11: 0n, 12: 0n, 25: 3n, 26: 40n, 33: 3n + coreDelta.failures, 34: 40n + coreDelta.allocations, 38: BigInt(GENERATION), ...extra });
+  const observations = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [index + 13, 0n]));
+  return slot({ ...observations, 0: 1n, 1: allWords, 2: 1n, 3: 7n, 4: requestBytes, 5: requestBytes, 6: 1n, 7: 1n, 8: BigInt(VM), 9: 6000n,
+    10: 0n, 11: 0n, 12: 0n, 13: 8192n, 21: 1073741824n, 22: 10000n, 23: 12000n, 24: 65536n,
+    25: 3n, 26: 40n, 27: 10n, 30: 11008n, 31: 12000n, 32: 65536n, 33: 3n + coreDelta.failures,
+    34: 40n + coreDelta.allocations, 35: 10n, 38: BigInt(GENERATION), ...extra });
 }
-function record(options: { state?: bigint; rejection?: bigint; misses?: bigint; generation?: bigint; control?: bigint[]; subject?: bigint[] } = {}): bigint[] {
+function record(options: { state?: bigint; rejection?: bigint; misses?: bigint; generation?: bigint; control?: bigint[]; subject?: bigint[]; last?: bigint[] } = {}): bigint[] {
   const control = options.control ?? recorded(1001n, { failures: 0n, allocations: 1n });
-  return [1n, BigInt(allocationBoundaryBytes), options.state ?? 2n, options.rejection ?? 0n, 1n, BigInt(VM), 6000n, 1001n, 1n, 0n,
-    options.misses ?? 0n, options.generation ?? BigInt(GENERATION)].concat(slot({}), control, options.subject ?? slot({}));
+  const last = options.last ?? options.subject ?? control;
+  return [1n, BigInt(allocationBoundaryBytes), options.state ?? 2n, options.rejection ?? 0n, 1n, BigInt(VM), 6000n, 1001n,
+    last[2] ?? 0n, options.subject ? 1n : 0n, options.misses ?? 0n, options.generation ?? BigInt(GENERATION)]
+    .concat(last, control, options.subject ?? slot({}));
 }
 
 function fixture(words: bigint[]) {
@@ -39,7 +44,7 @@ function fixture(words: bigint[]) {
 
 test("the reader decodes the fixed record and leaves unobserved words null", () => {
   const trapped = slot({ 0: 1n, 1: allWords & ~((3n << 11n) | (0xffn << 30n)), 4: 25297737n, 11: 0n, 30: 9n, 38: BigInt(GENERATION) });
-  const words = record({ subject: trapped });
+  const words = record({ subject: trapped, last: slot({}) });
   expect(words.length * 8).toBe(allocationBoundaryBytes);
   const { memory, exports } = fixture(words);
   const boundary = readAllocationBoundary(memory, exports, GENERATION);
@@ -195,10 +200,10 @@ test("binary qualification checks imported and exported function types and the s
 
 function snapshot(words: bigint[], failure: { bytes: number; category: string } | null = null, id = "p1") {
   const f = fixture(words);
-  const engineCounters = { failedAllocationSequence: 7, ...allocationBoundaryCounters(f.memory, f.exports) };
+  const engineCounters: Record<string, number | null> = { failedAllocationSequence: failure ? 8 : 0, ...allocationBoundaryCounters(f.memory, f.exports) };
   return { id, engine: "jsc", engineFailure: failure, engineCounters };
 }
-const subjectFailure = recorded(25297737n, { failures: 1n, allocations: 0n }, { 12: 1n });
+const subjectFailure = recorded(25297737n, { failures: 1n, allocations: 0n }, { 2: 2n, 3: 8n, 12: 1n });
 const typedArrayFailure = { bytes: 25297737, category: "jsc.typedArray" };
 
 test("readout qualification needs an acknowledged control in every JSC process", () => {
@@ -221,7 +226,70 @@ test("a JSC typed-array failure must match the latched subject; the core delta o
   expect(matched.processes[0]?.wrappedLibcNull).toBe(true);
   const unlatched = qualifyReadout([snapshot(record(), typedArrayFailure)], false);
   expect(unlatched.processes[0]?.findings).toEqual(["the JSC typed-array failure has no latched subject"]);
-  const other = qualifyReadout([snapshot(record({ subject: recorded(4096n, { failures: 0n, allocations: 0n }, { 12: 1n }) }), typedArrayFailure)], false);
+  const other = qualifyReadout([snapshot(record({ subject: recorded(4096n, { failures: 0n, allocations: 0n }, { 2: 2n, 3: 8n, 12: 1n }) }), typedArrayFailure)], false);
   expect(other.processes[0]?.findings).toEqual(["subject does not match the cached JSC failure sequence and bytes"]);
-  expect(other.processes[0]?.wrappedLibcNull).toBe(false);
+  expect(other.processes[0]?.wrappedLibcNull).toBeNull();
+  const noWrappedFailure = recorded(25297737n, { failures: 0n, allocations: 0n }, { 2: 2n, 3: 8n, 12: 1n });
+  const valid = qualifyReadout([snapshot(record({ subject: noWrappedFailure }), typedArrayFailure)], true);
+  expect(valid.pass).toBe(true);
+  expect(valid.processes[0]?.wrappedLibcNull).toBe(false);
+});
+
+
+function alteredCounter(key: string, value: number | null) {
+  const result = snapshot(record());
+  result.engineCounters[`allocationBoundary.${key}`] = value;
+  return result;
+}
+
+test.each([
+  ["abiVersion", 2], ["byteLength", 192], ["coreSamplerBound", 0], ["armedAttempts", 2],
+  ["controlLength", 999], ["expectedVmAddress", 0], ["expectedGlobalObjectAddress", 0],
+  ["generation", 0], ["expectedGeneration", 0], ["expectedGeneration", GENERATION + 1],
+  ["control.generation", GENERATION + 1], ["control.availability", 0], ["control.availability", Number(allWords) + 1],
+  ["control.recorded", 0], ["control.attempt", 2], ["control.requestSequence", 0],
+  ["control.elementCount", 999], ["control.elementSize", 2], ["control.zeroFill", 0],
+  ["control.globalObjectAddress", 9999], ["control.vmAddress", VM + 1], ["control.resultNull", 1],
+  ["control.coreBefore.failures", null], ["control.heap.capacity", null], ["control.requestBytes", -1],
+  ["control.requestBytes", Number.NaN], ["control.requestBytes", Number.POSITIVE_INFINITY],
+  ["control.requestBytes", 1001.5], ["control.requestBytes", Number.MAX_SAFE_INTEGER + 1], ["control.errnoAfterCall", 0x100000000],
+] satisfies Array<[string, number | null]>)('readout rejects malformed control field %s=%s', (key, value) => {
+  expect(qualifyReadout([alteredCounter(key, value)], false).pass).toBe(false);
+});
+
+test.each([
+  ["vmAddress", VM + 1], ["globalObjectAddress", 9999], ["generation", GENERATION + 1],
+  ["availability", 0], ["resultNull", 0], ["attempt", 1], ["requestSequence", 7],
+  ["elementCount", 999], ["elementSize", 3], ["zeroFill", 2],
+] satisfies Array<[string, number]>)('readout rejects malformed subject field %s=%s', (key, value) => {
+  const result = snapshot(record({ subject: subjectFailure }), typedArrayFailure);
+  result.engineCounters[`allocationBoundary.subject.${key}`] = value;
+  expect(qualifyReadout([result], true).pass).toBe(false);
+});
+
+test.each([undefined, 1, [], {}, { category: "jsc.typedArray", bytes: "bad" },
+  { category: "", bytes: 7 }, { category: "jsc.typedArray", bytes: -1 },
+  { category: "jsc.typedArray", bytes: Number.NaN }].map(engineFailure => ({ engineFailure })))('malformed failure data is not normalized to no failure: %j', ({ engineFailure }) => {
+  expect(qualifyReadout([{ ...snapshot(record()), engineFailure }], false).pass).toBe(false);
+});
+
+test("readout rejects copied generations across instances and duplicate actor snapshots", () => {
+  expect(qualifyReadout([snapshot(record()), snapshot(record(), null, "p2")], false).pass).toBe(false);
+  expect(qualifyReadout([snapshot(record()), snapshot(record())], false).pass).toBe(false);
+});
+
+test("one acknowledged control permits later successful oversize attempts", () => {
+  const last = recorded(2048n, { failures: 0n, allocations: 1n }, { 2: 2n, 3: 8n });
+  expect(qualifyReadout([snapshot(record({ last }))], false).pass).toBe(true);
+  const afterSubject = recorded(2048n, { failures: 0n, allocations: 1n }, { 2: 3n, 3: 9n });
+  expect(qualifyReadout([snapshot(record({ subject: subjectFailure, last: afterSubject }), typedArrayFailure)], true).pass).toBe(true);
+});
+
+
+test("a pending latest attempt keeps only observed fields and never supplies a subject", () => {
+  const beforeOnly = allWords & ~((3n << 11n) | (0xffn << 30n));
+  const after = Object.fromEntries([11, 12].concat(Array.from({ length: 8 }, (_, index) => index + 30)).map(index => [index, unknown]));
+  const last = recorded(2048n, { failures: 0n, allocations: 0n }, { ...after, 1: beforeOnly, 2: 2n, 3: 8n });
+  expect(qualifyReadout([snapshot(record({ last }))], false).pass).toBe(true);
+  expect(qualifyReadout([snapshot(record({ last }))], true).pass).toBe(false);
 });

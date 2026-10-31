@@ -304,3 +304,19 @@ and both qualification modes. `web/tests/bun-executor.test.ts` checks that every
 instance gets a distinct safe-integer generation that replaces an inherited one. A future single canonical JSC build and composed
 delivery must include the new patch; these source controls do not qualify an
 old side binary or replace the actual Next gate.
+
+
+### Readout qualification after the control
+
+The readout tool accepts one latest snapshot per process. It rejects malformed failure objects,
+unsupported record ABI or length, missing sampler/availability data, invalid scalar widths,
+reused or unacknowledged generations, and control or subject VM/global-object mismatches.
+The control must be exactly one successful zero-filled 1001-element `Uint8Array`, with attempt
+ordinal 1, one core allocation and no added failure. Missing evidence stays a failed qualification,
+not a default zero or an absent failure.
+
+`armedAttempts` counts the control and all later oversize attempts. Its total is therefore not
+fixed at 1 after execution begins. Qualification checks the control's ordinal and matches the
+total to the latest attempt; any subject must follow the control within those observations.
+Pending latest attempts retain their unavailable after-call fields. They do not manufacture a
+completed result or a latched subject. Unqualified records support no wrapped-libc attribution.

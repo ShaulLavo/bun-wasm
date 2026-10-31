@@ -8,7 +8,7 @@
 // `readout` checks memory snapshots from a run with BUN_WASM_JSC_ALLOCATION_BOUNDARY=1.
 // Each prints a JSON verdict and exits 1 unless it passes.
 import { readFileSync } from "node:fs";
-import { allocationBoundaryFromCounters, boundaryRejections, boundaryStates, type AllocationBoundary, type BoundarySlot } from "../web/src/jsc-allocation-boundary.ts";
+import { allocationBoundaryBytes, allocationBoundaryFromCounters, boundaryGenerationFindings, boundaryRejections, boundaryStates, type AllocationBoundary, type BoundarySlot } from "../web/src/jsc-allocation-boundary.ts";
 
 type ValueType = "i32" | "i64" | "f32" | "f64" | "v128" | "funcref" | "externref";
 interface FunctionType { params: ValueType[]; results: ValueType[] }
@@ -181,68 +181,143 @@ function delta(slot: BoundarySlot, field: "failures" | "allocations"): number | 
   return before === null || after === null ? null : after - before;
 }
 
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isIdentity(value: unknown): value is number {
+  return isCount(value) && value > 0 && value <= 0xffffffff;
+}
+
+function observedFieldFinding(field: string, value: number | null, index: number, mask: bigint, label: string): string[] {
+  if (index < 2) return [];
+  const observed = ((mask >> BigInt(index)) & 1n) !== 0n;
+  if (observed && !isCount(value)) return [`${label}.${field} is not an observed safe integer`];
+  if (!observed && value !== null) return [`${label}.${field} is present without availability`];
+  if ((field === "errnoBefore" || field === "errnoAfterCall") && value !== null && value > 0xffffffff) return [`${label}.${field} exceeds the raw uint32 errno width`];
+  return [];
+}
+
+function availabilityFindings(slot: BoundarySlot, label: string, complete: boolean): string[] {
+  const fields = Object.keys(slot);
+  const full = (1n << BigInt(fields.length)) - 1n;
+  if (!isCount(slot.availability) || BigInt(slot.availability) > full) return [`${label} availability is malformed`];
+  const mask = BigInt(slot.availability);
+  const required = fields.reduce((bits, field, index) => {
+    const after = field.startsWith("coreAfter.") || field === "errnoAfterCall" || field === "resultNull";
+    return complete || !after ? bits | (1n << BigInt(index)) : bits;
+  }, 0n);
+  const findings = (mask & required) === required ? [] : [`${label} lacks required availability`];
+  return findings.concat(Object.entries(slot).flatMap(([field, value], index) => observedFieldFinding(field, value, index, mask, label)));
+}
+
+function slotFindings(slot: BoundarySlot, record: AllocationBoundary, label: string, complete: boolean): string[] {
+  const findings = availabilityFindings(slot, label, complete);
+  if (slot.recorded !== 1) findings.push(`${label} is not recorded`);
+  if (!isCount(slot.attempt) || slot.attempt === 0 || !isCount(slot.requestSequence) || slot.requestSequence === 0)
+    findings.push(`${label} has no positive attempt and allocation sequence`);
+  if (slot.vmAddress !== record.expectedVmAddress || !isIdentity(slot.vmAddress)) findings.push(`${label} VM is not the armed VM`);
+  if (slot.globalObjectAddress !== record.expectedGlobalObjectAddress || !isIdentity(slot.globalObjectAddress))
+    findings.push(`${label} global object is not the armed global object`);
+  if (slot.generation !== record.generation) findings.push(`${label} generation differs from the record`);
+  const { requestBytes, elementCount, elementSize, zeroFill } = slot;
+  if (!isCount(requestBytes) || !isCount(elementCount) || elementCount <= 1000 || !isCount(elementSize)
+    || ![1, 2, 4, 8].includes(elementSize) || !Number.isSafeInteger(elementCount * elementSize)
+    || requestBytes !== elementCount * elementSize || (zeroFill !== 0 && zeroFill !== 1)) findings.push(`${label} oversize request is malformed`);
+  if (slot.resultNull !== null && slot.resultNull !== 0 && slot.resultNull !== 1) findings.push(`${label} null-result flag is malformed`);
+  if (complete && slot.resultNull === null) findings.push(`${label} has no completed allocation result`);
+  return findings;
+}
+
 function controlFindings(record: AllocationBoundary): string[] {
   const findings: string[] = [];
+  if (record.abiVersion !== 1 || record.byteLength !== allocationBoundaryBytes) findings.push("record ABI or byte length is invalid");
+  if (record.coreSamplerBound !== 1) findings.push("core sampler is not bound");
+  if (!isIdentity(record.expectedVmAddress) || !isIdentity(record.expectedGlobalObjectAddress)) findings.push("armed VM/global identity is invalid");
+  if (!isCount(record.expectedGeneration) || record.expectedGeneration === 0 || !isCount(record.generation) || record.generation === 0)
+    findings.push("a positive safe host and acknowledged generation is required");
   const state = boundaryStates[record.state ?? -1] ?? "unknown";
   const rejection = boundaryRejections[record.rejection ?? -1] ?? "unknown";
   if (state !== "subjectArmed" || rejection !== "none") findings.push(`state ${state}, rejection ${rejection}`);
   const control = record.control;
-  if (control.recorded !== 1 || control.resultNull !== 0 || control.requestBytes !== record.controlLength) findings.push("control is not one successful exact request");
-  if (record.expectedVmAddress === null || control.vmAddress !== record.expectedVmAddress) findings.push("control VM is not the armed VM");
+  const requests = slotFindings(control, record, "control", true).concat(slotFindings(record.last, record, "last", false));
+  if (record.controlLength !== 1001 || control.attempt !== 1 || control.elementCount !== 1001 || control.elementSize !== 1
+    || control.zeroFill !== 1 || control.resultNull !== 0 || control.requestBytes !== 1001) findings.push("control is not one successful exact 1001-element Uint8Array request");
   if (delta(control, "failures") !== 0 || delta(control, "allocations") !== 1) findings.push("control core counters do not show one allocation and no new failure");
   if (record.coverageMisses !== 0) findings.push(`${record.coverageMisses ?? "unknown"} oversize calls in another VM`);
-  return findings;
-}
-
-function subjectFindings(record: AllocationBoundary, snapshot: Snapshot): string[] {
-  const failure = snapshot.engineFailure;
-  if (failure?.category !== "jsc.typedArray") return [];
-  const subject = record.subject;
-  if (subject.recorded !== 1) return ["the JSC typed-array failure has no latched subject"];
-  const findings: string[] = [];
-  if (subject.vmAddress !== record.expectedVmAddress) findings.push("subject VM is not the armed VM");
-  if (subject.requestSequence !== snapshot.engineCounters.failedAllocationSequence || subject.requestBytes !== failure.bytes) {
-    findings.push("subject does not match the cached JSC failure sequence and bytes");
-  }
-  return findings;
+  // armedAttempts counts the control AND subsequent subject attempts. Only control.attempt is fixed at one.
+  if (!isCount(record.armedAttempts) || record.armedAttempts === 0 || record.last.attempt !== record.armedAttempts)
+    findings.push("armed attempt count does not match the latest observation");
+  if (isCount(record.last.attempt) && record.last.attempt > 1 && (!isCount(record.last.requestSequence)
+    || !isCount(control.requestSequence) || record.last.requestSequence <= control.requestSequence)) findings.push("latest subject attempt does not follow the control");
+  return findings.concat(requests);
 }
 
 interface Snapshot { id: string; engine: string; engineFailure: { bytes: number | null; category: string } | null; engineCounters: Record<string, number | null> }
 
-function parseSnapshot(value: unknown): Snapshot | null {
-  if (!value || typeof value !== "object") return null;
-  const id: unknown = Reflect.get(value, "id");
-  const engine: unknown = Reflect.get(value, "engine");
-  const counters: unknown = Reflect.get(value, "engineCounters");
-  const failure: unknown = Reflect.get(value, "engineFailure");
-  if (typeof id !== "string" || typeof engine !== "string" || !counters || typeof counters !== "object") return null;
-  if (!Object.values(counters).every(entry => entry === null || typeof entry === "number")) return null;
-  return { id, engine, engineCounters: Object.fromEntries(Object.entries(counters)), engineFailure: parseFailure(failure) };
+function subjectFindings(record: AllocationBoundary, snapshot: Snapshot): string[] {
+  const failure = snapshot.engineFailure;
+  const subject = record.subject;
+  if (subject.recorded === 0) {
+    if (failure?.category === "jsc.typedArray") return ["the JSC typed-array failure has no latched subject"];
+    return record.subjectFailures === 0 ? [] : ["subject failure count has no latched subject"];
+  }
+  const findings = slotFindings(subject, record, "subject", true);
+  if (subject.resultNull !== 1 || !isCount(record.subjectFailures) || record.subjectFailures === 0) findings.push("subject is not a latched null result");
+  if (!isCount(subject.attempt) || subject.attempt <= 1 || !isCount(record.armedAttempts) || subject.attempt > record.armedAttempts
+    || !isCount(subject.requestSequence) || !isCount(record.control.requestSequence) || subject.requestSequence <= record.control.requestSequence
+    || !isCount(record.last.requestSequence) || subject.requestSequence > record.last.requestSequence) findings.push("subject does not follow the control within the recorded attempts");
+  if (failure?.category === "jsc.typedArray" && (subject.requestSequence !== snapshot.engineCounters.failedAllocationSequence || subject.requestBytes !== failure.bytes))
+    findings.push("subject does not match the cached JSC failure sequence and bytes");
+  return findings;
 }
 
-function parseFailure(value: unknown): Snapshot["engineFailure"] {
-  if (!value || typeof value !== "object") return null;
-  const bytes: unknown = Reflect.get(value, "bytes");
-  const category: unknown = Reflect.get(value, "category");
-  if (typeof category !== "string" || !(bytes === null || typeof bytes === "number")) return null;
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseFailure(value: unknown): Snapshot["engineFailure"] | undefined {
+  if (value === null) return null;
+  if (!isObject(value)) return undefined;
+  const { bytes, category } = value;
+  if (typeof category !== "string" || category.length === 0 || !(bytes === null || isCount(bytes))) return undefined;
   return { bytes, category };
 }
 
-function verdict(snapshot: Snapshot): ProcessVerdict {
-  const record = allocationBoundaryFromCounters(snapshot.engineCounters);
+function parseSnapshot(value: unknown): Snapshot | null {
+  if (!isObject(value)) return null;
+  const { id, engine, engineCounters } = value;
+  if (typeof id !== "string" || id.length === 0 || typeof engine !== "string" || !["jsc", "quickjs", "hermes", "browser"].includes(engine)
+    || !isObject(engineCounters)) return null;
+  const counters: Record<string, number | null> = {};
+  for (const [key, counter] of Object.entries(engineCounters)) {
+    if (!(counter === null || typeof counter === "number" && Number.isFinite(counter))) return null;
+    counters[key] = counter;
+  }
+  const engineFailure = parseFailure(value.engineFailure);
+  return engineFailure === undefined ? null : { id, engine, engineCounters: counters, engineFailure };
+}
+
+function verdict(snapshot: Snapshot, record: AllocationBoundary | null, generations: readonly string[]): ProcessVerdict {
   if (!record) return { id: snapshot.id, findings: ["no allocation-boundary record: the process was not armed or not read"], control: null, subject: null, wrappedLibcNull: null };
-  const findings = controlFindings(record).concat(subjectFindings(record, snapshot));
+  const findings = controlFindings(record).concat(subjectFindings(record, snapshot), generations);
   const subject = record.subject.recorded === 1 ? record.subject : null;
-  // Only an exact core delta ties a null result to the wrapped libc entry; it proves nothing about why.
-  const wrappedLibcNull = subject ? delta(subject, "failures") === 1 && delta(subject, "allocations") === 0 : null;
+  // An invalid record supports no attribution; a valid exact delta proves nothing about its cause.
+  const wrappedLibcNull = subject && !findings.length ? delta(subject, "failures") === 1 && delta(subject, "allocations") === 0 : null;
   return { id: snapshot.id, findings, control: record.control, subject, wrappedLibcNull };
 }
 
-/** Every JSC process must carry an acknowledged control; any JSC typed-array failure must match its subject. */
+/** One latest snapshot per process; every JSC process needs its exact acknowledged control. */
 export function qualifyReadout(snapshots: readonly unknown[], requireSubject: boolean) {
   const parsed = snapshots.map(parseSnapshot);
   const findings = parsed.some(snapshot => !snapshot) ? ["a snapshot is malformed"] : [];
-  const processes = parsed.filter((snapshot): snapshot is Snapshot => snapshot?.engine === "jsc").map(verdict);
+  const jsc = parsed.filter((snapshot): snapshot is Snapshot => snapshot?.engine === "jsc");
+  if (new Set(jsc.map(snapshot => snapshot.id)).size !== jsc.length) findings.push("duplicate JSC process snapshots");
+  const bound = jsc.map(snapshot => ({ snapshot, record: allocationBoundaryFromCounters(snapshot.engineCounters) }));
+  const records = bound.flatMap(({ record }) => record ? [record] : []);
+  const generations = boundaryGenerationFindings(records);
+  const byRecord = new Map(records.map((record, index) => [record, generations[index] ?? []]));
+  const processes = bound.map(({ snapshot, record }) => verdict(snapshot, record, record ? byRecord.get(record) ?? [] : []));
   if (!processes.length) findings.push("no JSC process snapshots");
   if (requireSubject && !processes.some(process => process.subject)) findings.push("no process latched a subject");
   const pass = !findings.length && processes.every(process => !process.findings.length);
