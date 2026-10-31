@@ -38,6 +38,7 @@ expect() {
 expect eval "2" -e 'console.log(1 + 1)'
 expect hello "hello 2" run tests/hermes/hello.cts
 expect jest-worker-require "jest-worker module-relative require and teardown ok" run tests/hermes/jest-worker-require.cts
+expect nft-require "nft module-relative require ok" run tests/hermes/nft-require.cts
 expect serve-self "200 hello from /hermes" run tests/hermes/serve.cts
 
 # The host fetches a guest server, then asks it to raise SIGINT on itself (guest signal path).
