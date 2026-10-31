@@ -134,7 +134,11 @@ function objectList(path: string): string[] {
 
 export function supportObjectNames(backend: string): string[] {
   const unified = backend.match(/^UNIFIED_CPPSRCS := (.+)$/m)?.[1]?.split(/\s+/) ?? [];
-  const sources = Array.from(backend.matchAll(/^CPPSRCS \+= (.+)$/gm), (match) => match[1]);
+  const sources = Array.from(backend.matchAll(/^CPPSRCS \+= (.+)$/gm), (match) => {
+    const source = match[1];
+    assert(source);
+    return source;
+  });
   const explicit = sources.filter((source) => source !== "$(UNIFIED_CPPSRCS)");
   assert(explicit.every((source) => source?.startsWith("$(srcdir)/") && source.endsWith(".cpp")), "unknown support source rule");
   return unified.concat(explicit).map((source) => {
