@@ -189,7 +189,13 @@ test("real workflow scripts preserve bytes, file modes, symlinks, mtimes and ups
       const bytes = execFileSync("zstd", ["-dc", join(bundle, `${archive}.tar.zst`)]);
       expect(bytes.includes(Buffer.from("fixture-auth-do-not-package"))).toBe(false);
     }
-    const imported = invoke("rust", unpackName, { ...changes, GITHUB_RUN_ATTEMPT: "8" });
+    const nativeSysrootSha = createHash("sha256").update(readFileSync(join(root, "temp/sysroot/bun-wasm-sysroot.json"))).digest("hex");
+    const imported = spawnSync(process.execPath, [join(root, "repo/scripts/ci-native-handoff.ts"), "unpack", join(root, "temp/native-quality-artifact")], {
+      cwd: join(root, "repo"),
+      env: { ...env, ...changes, GITHUB_RUN_ATTEMPT: "8", NATIVE_SYSROOT_SHA256: nativeSysrootSha, NATIVE_QUALITY_PRODUCER_ATTEMPT: "7" },
+      encoding: "utf8",
+      timeout: 10000,
+    });
     expect(imported.status, imported.stderr).toBe(0);
     const path = join(root, "repo/target/deps/native");
     expect(readFileSync(path, "utf8")).toBe("compiled fixture bytes\n");
@@ -205,6 +211,10 @@ test("real workflow scripts preserve bytes, file modes, symlinks, mtimes and ups
     expect(git(join(root, "temp/cargo/git/checkouts/public/abc"), "status", "--porcelain")).toBe("");
     expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("native-ready=true\n");
     expect(existsSync(join(root, "temp/source-verified"))).toBe(true);
+    expect(existsSync(join(root, "temp/native-quality-artifact/manifest.json"))).toBe(true);
+    for (const archive of ["target.tar.zst", "cargo.tar.zst", "sources.tar.zst"]) {
+      expect(existsSync(join(root, "temp/native-quality-artifact", archive))).toBe(false);
+    }
   });
 });
 
