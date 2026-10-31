@@ -284,9 +284,12 @@ jobs:
             (cd "$bundle" && sha256sum prebuild.tar.zst sysroot.tar.zst)
           } > "$bundle/manifest"
           transfer="$RUNNER_TEMP/jsc-prebuild.tar"
+          bun scripts/ci-storage.ts jsc-package-before "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT" "$bundle" "$transfer"
           tar --posix -C "$bundle" -cf "$transfer" prebuild.tar.zst sysroot.tar.zst jsc-prebuild.log manifest
-          ls -l "$bundle" "$transfer"
+          bun scripts/ci-storage.ts jsc-package-after "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT" "$bundle" "$transfer"
           echo "manifest-sha256=$(sha256sum "$bundle/manifest" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          rm -r -- "$bundle"
+          bun scripts/ci-storage.ts jsc-package-cleanup "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT" "$bundle" "$transfer"
       - uses: actions/upload-artifact@v7
         with:
           path: ${{ runner.temp }}/jsc-prebuild.tar
@@ -520,18 +523,14 @@ jobs:
         run: |
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
           echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
+      - name: Measure JSC prebuild transfer before download
+        run: bun scripts/ci-storage.ts jsc-download-before "$RUNNER_TEMP/jsc-prebuild-transfer"
       - uses: actions/download-artifact@v8
         with:
           name: jsc-prebuild.tar
           path: ${{ runner.temp }}/jsc-prebuild-transfer
-      - name: Unpack the verified JSC prebuild transfer
-        run: |
-          set -euo pipefail
-          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
-          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
-          [[ ! -e "$bundle" ]]
-          mkdir "$bundle"
-          tar --posix -xf "$transfer" -C "$bundle"
+      - name: Measure JSC prebuild transfer after download
+        run: bun scripts/ci-storage.ts jsc-download-after "$RUNNER_TEMP/jsc-prebuild-transfer"
       - name: Import the verified JSC prebuild and sysroot
         env:
           JOBS: "2"
@@ -540,21 +539,31 @@ jobs:
         run: |
           set -euo pipefail
           source env.sh
-          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
+          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
+          manifest="$RUNNER_TEMP/jsc-prebuild-manifest"
+          bun scripts/ci-storage.ts jsc-import-before "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
           # Only the manifest this run's prebuild job reported, for this commit and these paths.
           [[ "$JSC_PREBUILD_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          echo "$JSC_PREBUILD_MANIFEST_SHA256  $bundle/manifest" | sha256sum --check --strict
+          [[ "$(tar --posix -tf "$transfer")" == $'prebuild.tar.zst\nsysroot.tar.zst\njsc-prebuild.log\nmanifest' ]]
+          tar --posix -xOf "$transfer" manifest > "$manifest"
+          echo "$JSC_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict
           expected=$(printf 'run=%s\nsha=%s\njsc-build-dir=%s\nsysroot=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT")
-          [[ "$(head -n 4 "$bundle/manifest")" == "$expected" ]]
-          [[ "$(tail -n +5 "$bundle/manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
-          (cd "$bundle" && tail -n +5 manifest | sha256sum --check --strict)
+          [[ "$(head -n 4 "$manifest")" == "$expected" ]]
+          [[ "$(tail -n +5 "$manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
+          prebuild_digest=$(tail -n +5 "$manifest" | awk '$2 == "prebuild.tar.zst" { print $1 }')
+          sysroot_digest=$(tail -n +5 "$manifest" | awk '$2 == "sysroot.tar.zst" { print $1 }')
+          [[ "$(tar --posix -xOf "$transfer" prebuild.tar.zst | sha256sum | cut -d' ' -f1)" == "$prebuild_digest" ]]
+          [[ "$(tar --posix -xOf "$transfer" sysroot.tar.zst | sha256sum | cut -d' ' -f1)" == "$sysroot_digest" ]]
           # Never overlay another tree.
           [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]
           mkdir -p "$(dirname "$JSC_BUILD_DIR")" "$(dirname "$BUN_WASM_SYSROOT")"
-          zstd -dc "$bundle/prebuild.tar.zst" | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
-          zstd -dc "$bundle/sysroot.tar.zst" | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
-          mv "$bundle/jsc-prebuild.log" "$RUNNER_TEMP/jsc-prebuild.log"
-          rm -r -- "$bundle" "$RUNNER_TEMP/jsc-prebuild-transfer"
+          tar --posix -xOf "$transfer" prebuild.tar.zst | zstd -dc | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
+          bun scripts/ci-storage.ts jsc-import-after-prebuild "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
+          tar --posix -xOf "$transfer" sysroot.tar.zst | zstd -dc | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
+          bun scripts/ci-storage.ts jsc-import-after-sysroot "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
+          tar --posix -xOf "$transfer" jsc-prebuild.log > "$RUNNER_TEMP/jsc-prebuild.log"
+          rm -r -- "$manifest" "$RUNNER_TEMP/jsc-prebuild-transfer"
+          bun scripts/ci-storage.ts jsc-import-after-cleanup "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
           source jsc/common.sh
           check_jsc_inputs_stamp
       - name: Build patched WASI sysroot
@@ -671,14 +680,16 @@ jobs:
           source env.sh
           native_sysroot_sha256=$(sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" | cut -d' ' -f1)
           export NATIVE_SYSROOT_SHA256="$native_sysroot_sha256"
-          bun scripts/ci-native-handoff.ts pack "$RUNNER_TEMP/native-quality-artifact"
-      - uses: actions/upload-artifact@v4
+          transfer="$RUNNER_TEMP/native-quality-$NATIVE_QUALITY_PRODUCER_ATTEMPT.tar"
+          bun scripts/ci-storage.ts native-package-before "$CARGO_TARGET_DIR" "$CARGO_HOME" "$transfer"
+          bun scripts/ci-native-handoff.ts pack "$transfer"
+          bun scripts/ci-storage.ts native-package-after "$CARGO_TARGET_DIR" "$CARGO_HOME" "$transfer"
+      - uses: actions/upload-artifact@v7
         with:
-          name: native-quality-${{ steps.native-artifact.outputs.producer-attempt }}
-          path: ${{ runner.temp }}/native-quality-artifact/
+          path: ${{ runner.temp }}/native-quality-${{ steps.native-artifact.outputs.producer-attempt }}.tar
           if-no-files-found: error
           retention-days: 1
-          compression-level: 0
+          archive: false
 
   rust:
     name: Rust workspace tests (QuickJS host)
@@ -873,18 +884,14 @@ jobs:
         run: |
           echo "JSC_BUILD_DIR=$RUNNER_TEMP/jsc/prebuild" >> "$GITHUB_ENV"
           echo "JSC_ENGINE_BUILD_DIR=$RUNNER_TEMP/jsc/engine" >> "$GITHUB_ENV"
+      - name: Measure JSC prebuild transfer before download
+        run: bun scripts/ci-storage.ts jsc-download-before "$RUNNER_TEMP/jsc-prebuild-transfer"
       - uses: actions/download-artifact@v8
         with:
           name: jsc-prebuild.tar
           path: ${{ runner.temp }}/jsc-prebuild-transfer
-      - name: Unpack the verified JSC prebuild transfer
-        run: |
-          set -euo pipefail
-          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
-          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
-          [[ ! -e "$bundle" ]]
-          mkdir "$bundle"
-          tar --posix -xf "$transfer" -C "$bundle"
+      - name: Measure JSC prebuild transfer after download
+        run: bun scripts/ci-storage.ts jsc-download-after "$RUNNER_TEMP/jsc-prebuild-transfer"
       - name: Import the verified JSC prebuild and sysroot
         env:
           JOBS: "2"
@@ -893,21 +900,31 @@ jobs:
         run: |
           set -euo pipefail
           source env.sh
-          bundle="$RUNNER_TEMP/jsc-prebuild-artifact"
+          transfer="$RUNNER_TEMP/jsc-prebuild-transfer/jsc-prebuild.tar"
+          manifest="$RUNNER_TEMP/jsc-prebuild-manifest"
+          bun scripts/ci-storage.ts jsc-import-before "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
           # Only the manifest this run's prebuild job reported, for this commit and these paths.
           [[ "$JSC_PREBUILD_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          echo "$JSC_PREBUILD_MANIFEST_SHA256  $bundle/manifest" | sha256sum --check --strict
+          [[ "$(tar --posix -tf "$transfer")" == $'prebuild.tar.zst\nsysroot.tar.zst\njsc-prebuild.log\nmanifest' ]]
+          tar --posix -xOf "$transfer" manifest > "$manifest"
+          echo "$JSC_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict
           expected=$(printf 'run=%s\nsha=%s\njsc-build-dir=%s\nsysroot=%s' "$GITHUB_RUN_ID" "$GITHUB_SHA" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT")
-          [[ "$(head -n 4 "$bundle/manifest")" == "$expected" ]]
-          [[ "$(tail -n +5 "$bundle/manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
-          (cd "$bundle" && tail -n +5 manifest | sha256sum --check --strict)
+          [[ "$(head -n 4 "$manifest")" == "$expected" ]]
+          [[ "$(tail -n +5 "$manifest" | cut -d' ' -f3)" == $'prebuild.tar.zst\nsysroot.tar.zst' ]]
+          prebuild_digest=$(tail -n +5 "$manifest" | awk '$2 == "prebuild.tar.zst" { print $1 }')
+          sysroot_digest=$(tail -n +5 "$manifest" | awk '$2 == "sysroot.tar.zst" { print $1 }')
+          [[ "$(tar --posix -xOf "$transfer" prebuild.tar.zst | sha256sum | cut -d' ' -f1)" == "$prebuild_digest" ]]
+          [[ "$(tar --posix -xOf "$transfer" sysroot.tar.zst | sha256sum | cut -d' ' -f1)" == "$sysroot_digest" ]]
           # Never overlay another tree.
           [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]
           mkdir -p "$(dirname "$JSC_BUILD_DIR")" "$(dirname "$BUN_WASM_SYSROOT")"
-          zstd -dc "$bundle/prebuild.tar.zst" | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
-          zstd -dc "$bundle/sysroot.tar.zst" | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
-          mv "$bundle/jsc-prebuild.log" "$RUNNER_TEMP/jsc-prebuild.log"
-          rm -r -- "$bundle" "$RUNNER_TEMP/jsc-prebuild-transfer"
+          tar --posix -xOf "$transfer" prebuild.tar.zst | zstd -dc | tar -C "$(dirname "$JSC_BUILD_DIR")" -xf -
+          bun scripts/ci-storage.ts jsc-import-after-prebuild "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
+          tar --posix -xOf "$transfer" sysroot.tar.zst | zstd -dc | tar -C "$(dirname "$BUN_WASM_SYSROOT")" -xf -
+          bun scripts/ci-storage.ts jsc-import-after-sysroot "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
+          tar --posix -xOf "$transfer" jsc-prebuild.log > "$RUNNER_TEMP/jsc-prebuild.log"
+          rm -r -- "$manifest" "$RUNNER_TEMP/jsc-prebuild-transfer"
+          bun scripts/ci-storage.ts jsc-import-after-cleanup "$RUNNER_TEMP/jsc-prebuild-transfer" "$JSC_BUILD_DIR" "$BUN_WASM_SYSROOT"
           source jsc/common.sh
           check_jsc_inputs_stamp
       - name: Build patched WASI sysroot
@@ -938,10 +955,14 @@ jobs:
       # guarded by the sysroot/JSC receipts, effective tools, and native source hashes below.
       # These three audited Cargo sources change exact keys, not dependency compatibility.
       # All other native inputs remain hard guards; the new partition needs one cold seed.
-      - uses: actions/download-artifact@v4
+      - name: Measure native quality transfer before download
+        run: bun scripts/ci-storage.ts native-download-before "$RUNNER_TEMP/native-quality-transfer"
+      - uses: actions/download-artifact@v8
         with:
-          name: native-quality-${{ needs.native-quality.outputs.producer-attempt }}
-          path: ${{ runner.temp }}/native-quality-artifact
+          name: native-quality-${{ needs.native-quality.outputs.producer-attempt }}.tar
+          path: ${{ runner.temp }}/native-quality-transfer
+      - name: Measure native quality transfer after download
+        run: bun scripts/ci-storage.ts native-download-after "$RUNNER_TEMP/native-quality-transfer"
       - name: Import the verified native quality checkpoint
         id: native-import
         shell: bash
@@ -952,11 +973,16 @@ jobs:
           NATIVE_INPUTS_HASH: ${{ steps.native-inputs.outputs.hash }}
           JSC_PREBUILD_MANIFEST_SHA256: ${{ needs.jsc-prebuild.outputs.manifest-sha256 }}
         run: |
+          set -euo pipefail
           source env.sh
+          transfer="$RUNNER_TEMP/native-quality-transfer/native-quality-$NATIVE_QUALITY_PRODUCER_ATTEMPT.tar"
           native_sysroot_sha256=$(sha256sum "$BUN_WASM_SYSROOT/bun-wasm-sysroot.json" | cut -d' ' -f1)
           export NATIVE_SYSROOT_SHA256="$native_sysroot_sha256"
-          bun scripts/ci-native-handoff.ts unpack "$RUNNER_TEMP/native-quality-artifact"
-          rm -r -- "$RUNNER_TEMP/native-quality-artifact"
+          bun scripts/ci-storage.ts native-import-before "$RUNNER_TEMP/native-quality-transfer" "$CARGO_TARGET_DIR" "$CARGO_HOME" "$GITHUB_WORKSPACE/vendor/bun" "$GITHUB_WORKSPACE/vendor/boringssl"
+          bun scripts/ci-native-handoff.ts unpack "$transfer"
+          bun scripts/ci-storage.ts native-import-after "$RUNNER_TEMP/native-quality-transfer" "$CARGO_TARGET_DIR" "$CARGO_HOME" "$GITHUB_WORKSPACE/vendor/bun" "$GITHUB_WORKSPACE/vendor/boringssl"
+          rm -r -- "$RUNNER_TEMP/native-quality-transfer"
+          bun scripts/ci-storage.ts native-import-cleanup "$RUNNER_TEMP/native-quality-transfer" "$CARGO_TARGET_DIR" "$CARGO_HOME" "$GITHUB_WORKSPACE/vendor/bun" "$GITHUB_WORKSPACE/vendor/boringssl"
       - name: Carry the original native cache restore result
         id: native-cargo-cache
         env:
