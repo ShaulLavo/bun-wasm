@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { projectFiles } from "./apps.mjs";
 import { checkCommand, checkInstall } from "./checks.mjs";
@@ -182,7 +182,7 @@ export async function browserHost({ root, options, launch, stop }) {
     let checked;
     let productError;
     try {
-      checked = await checkNativePage(page, url, check, project, timeout, () => page.screenshot({ path: join(options.output, `${basename(project)}-dev.png`) }));
+      checked = await checkNativePage(page, url, check, project, timeout, () => page.screenshot({ path: join(options.output, `${basename(dirname(project))}-dev.png`) }));
       if (errors.length) throw new Error(errors.join("\n"));
     } catch (error) {
       productError = error;
