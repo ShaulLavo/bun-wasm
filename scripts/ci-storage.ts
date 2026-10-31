@@ -9,6 +9,7 @@ function existingPath(paths: readonly string[]): string {
 function diskBytes(path: string): number {
   const stat = lstatSync(path);
   if (!stat.isDirectory()) return stat.blocks * 512;
+  // GNU coreutils is supplied by the CI runner; knip.json declares this platform binary.
   const output = execFileSync("du", ["-sx", "--block-size=1", "--", path], { encoding: "utf8" });
   const bytes = Number(output.trim().split(/\s+/)[0]);
   if (!Number.isSafeInteger(bytes)) throw new Error(`Invalid disk usage for ${path}`);
