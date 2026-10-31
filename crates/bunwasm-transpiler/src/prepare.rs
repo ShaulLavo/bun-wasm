@@ -39,7 +39,7 @@ const SCOPE_READ: usize = 20;
 const SCOPE_TYPEOF: usize = 21;
 /// `(0, ${s}.`, closed by kind 1 after the name.
 const SCOPE_CALL: usize = 22;
-/// Replaces the name: `${name}: ${s}.${name}`.
+/// Replaces the name with a computed data key: `["${name}"]: ${s}.${name}`.
 const SCOPE_SHORTHAND: usize = 23;
 
 fn inserted_len(kind: usize, deleted: usize, scope: &str) -> usize {
@@ -47,7 +47,7 @@ fn inserted_len(kind: usize, deleted: usize, scope: &str) -> usize {
         SCOPE_READ => scope.len() + 1,
         SCOPE_TYPEOF => scope.len() + "_typeof.".len(),
         SCOPE_CALL => scope.len() + "(0, .".len(),
-        SCOPE_SHORTHAND => deleted + scope.len() + ": .".len(),
+        SCOPE_SHORTHAND => deleted + scope.len() + "[\"\"]: .".len(),
         _ => TEXT[kind].len() - deleted,
     }
 }
@@ -360,11 +360,19 @@ fn script(parsed: &bun_js_parser::parse::parse_entry::ParsedOnly) -> Result<Scri
     Ok(Script { completion, scope })
 }
 
-fn first_error(log: &bun_ast::Log) -> Option<String> {
+fn first_error(log: &bun_ast::Log, spans: &[Span]) -> Option<String> {
+    let runtime = spans
+        .iter()
+        .filter_map(|span| match span {
+            Span::RuntimeDiagnostic(index) => Some(*index),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
     log.msgs
         .iter()
-        .find(|msg| matches!(msg.kind, bun_ast::Kind::Err))
-        .map(|msg| String::from_utf8_lossy(&msg.data.text).into_owned())
+        .enumerate()
+        .find(|(index, msg)| matches!(msg.kind, bun_ast::Kind::Err) && !runtime.contains(index))
+        .map(|(_, msg)| String::from_utf8_lossy(&msg.data.text).into_owned())
 }
 
 /// Parses `source` as a script twice: once for its statements, once through the visit pass, whose
@@ -378,16 +386,31 @@ fn parse_context(source: &str) -> Result<(Script, Vec<Span>), String> {
     let mut log = bun_ast::Log::init();
     let parsed = bun_js_parser::Parser::init(options(), &mut log, &input, &define, &arena)
         .and_then(|parser| parser.parse_only(script));
+    if let Some(error) = first_error(&log, &[]) {
+        return Err(error);
+    }
     let script = match parsed {
         Ok(script) => script?,
-        Err(error) => return Err(first_error(&log).unwrap_or_else(|| format!("{error:?}"))),
+        Err(error) => return Err(format!("{error:?}")),
     };
     let mut log = bun_ast::Log::init();
     let parser = bun_js_parser::Parser::init(options(), &mut log, &input, &define, &arena)
         .map_err(|error| format!("{error:?}"))?;
-    // Syntax errors already failed the first parse. What the visit pass logs (an assignment to a
-    // constant) throws when it runs, so its error doesn't reject the script; the visit completes first.
-    let (_, spans) = bun_js_parser::with_bunwasm_splices(|| parser.parse());
+    // Only the recorded runtime-only diagnostics may survive the visit; early errors must reject.
+    let (visited, spans) = bun_js_parser::with_bunwasm_splices(|| parser.parse());
+    if let Some(error) = first_error(&log, &spans) {
+        return Err(error);
+    }
+    if spans.iter().any(|span| matches!(span, Span::StrictDelete)) {
+        return Err("Cannot delete an unqualified identifier in strict mode".to_owned());
+    }
+    if let Err(error) = visited
+        && !spans
+            .iter()
+            .any(|span| matches!(span, Span::RuntimeDiagnostic(_)))
+    {
+        return Err(format!("{error:?}"));
+    }
     Ok((script, spans))
 }
 
@@ -600,6 +623,12 @@ mod tests {
 
         let prepared = super::prepare("eval(...__bunwasm_evalSpread(eval, xs))", "script");
         assert_eq!(prepared["edits"], json!([]));
+    }
+
+    #[test]
+    fn measures_computed_shorthand_columns() {
+        let prepared = super::prepare("({__proto__})", "vm-context");
+        assert_eq!(prepared["columns"], json!([1, 1, 7, 1, 10, 28]));
     }
 
     #[test]

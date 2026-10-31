@@ -1,4 +1,4 @@
-From 09e4203ac07975b223d1f7e238c16a0550ddf12f Mon Sep 17 00:00:00 2001
+From 75786caad3175d3b3aec3b07b1f07dc227fe3359 Mon Sep 17 00:00:00 2001
 From: Shaul Lavochkin <shaul9191@gmail.com>
 Date: Thu, 29 Oct 2026 14:01:56 +0200
 Subject: [PATCH] wasm: collect runtime source splices and prepare eval
@@ -7,17 +7,17 @@ Subject: [PATCH] wasm: collect runtime source splices and prepare eval
 Co-Authored-By: Kimi Code <noreply@moonshot.cn>
 ---
  src/js_parser/lexer.rs                |  6 +++
- src/js_parser/lib.rs                  | 56 +++++++++++++++++++++++++++
- src/js_parser/parse/mod.rs            | 25 ++++++++++++
+ src/js_parser/lib.rs                  | 68 +++++++++++++++++++++++++++
+ src/js_parser/parse/mod.rs            | 25 ++++++++++
  src/js_parser/parse/parse_entry.rs    |  4 ++
- src/js_parser/parse/parse_fn.rs       | 10 +++++
+ src/js_parser/parse/parse_fn.rs       | 10 ++++
  src/js_parser/parse/parse_prefix.rs   |  4 ++
  src/js_parser/parse/parse_property.rs |  4 ++
- src/js_parser/parse/parse_stmt.rs     | 14 +++++++
- src/js_parser/parse/parse_suffix.rs   | 12 ++++++
- src/js_parser/visit/visit_expr.rs     | 18 +++++++++
- src/js_printer/lib.rs                 | 16 +++++++-
- 11 files changed, 167 insertions(+), 2 deletions(-)
+ src/js_parser/parse/parse_stmt.rs     | 14 ++++++
+ src/js_parser/parse/parse_suffix.rs   | 12 +++++
+ src/js_parser/visit/visit_expr.rs     | 21 +++++++++
+ src/js_printer/lib.rs                 | 16 ++++++-
+ 11 files changed, 182 insertions(+), 2 deletions(-)
 
 diff --git a/src/js_parser/lexer.rs b/src/js_parser/lexer.rs
 index 063d2206..7bd3ca9a 100644
@@ -72,10 +72,10 @@ index 063d2206..7bd3ca9a 100644
              previous_backslash_quote_in_jsx: Range::NONE,
              token: T::TEndOfFile,
 diff --git a/src/js_parser/lib.rs b/src/js_parser/lib.rs
-index 045bf990..52cbbaaf 100644
+index 045bf990..32222685 100644
 --- a/src/js_parser/lib.rs
 +++ b/src/js_parser/lib.rs
-@@ -799,3 +799,59 @@ fn bunwasm_dynamic_import(loc: bun_ast::Loc) {
+@@ -799,3 +799,71 @@ fn bunwasm_dynamic_import(loc: bun_ast::Loc) {
          }
      });
  }
@@ -104,6 +104,9 @@ index 045bf990..52cbbaaf 100644
 +    Typeof(usize),
 +    /// Visit pass: an identifier value of a shorthand object property.
 +    Shorthand(usize),
++    /// Visit diagnostic for a valid script that throws only when evaluated.
++    RuntimeDiagnostic(usize),
++    StrictDelete,
 +}
 +
 +pub fn with_bunwasm_splices<T>(f: impl FnOnce() -> T) -> (T, Vec<BunwasmSplice>) {
@@ -133,6 +136,15 @@ index 045bf990..52cbbaaf 100644
 +fn bunwasm_identifier_splice(expr: &bun_ast::Expr, record: fn(usize) -> BunwasmSplice) {
 +    if matches!(expr.data, bun_ast::ExprData::EIdentifier(..)) && expr.loc.start >= 0 {
 +        bunwasm_splice(record(expr.loc.start as usize));
++    }
++}
++
++fn bunwasm_runtime_diagnostic(before: usize, after: usize) {
++    if after > before { bunwasm_splice(BunwasmSplice::RuntimeDiagnostic(before)); }
++}
++fn bunwasm_strict_delete(strict: bool, value: &bun_ast::Expr) {
++    if strict && matches!(value.data, bun_ast::ExprData::EIdentifier(..)) {
++        bunwasm_splice(BunwasmSplice::StrictDelete);
 +    }
 +}
 diff --git a/src/js_parser/parse/mod.rs b/src/js_parser/parse/mod.rs
@@ -404,7 +416,7 @@ index 76c1603f..ada55198 100644
          let target = *left;
          *left = p.new_expr(
 diff --git a/src/js_parser/visit/visit_expr.rs b/src/js_parser/visit/visit_expr.rs
-index 23c08903..cee0ca51 100644
+index 23c08903..a5e206bc 100644
 --- a/src/js_parser/visit/visit_expr.rs
 +++ b/src/js_parser/visit/visit_expr.rs
 @@ -194,6 +194,18 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
@@ -426,7 +438,23 @@ index 23c08903..cee0ca51 100644
  
          // Handle assigning to a constant
          if in_.assign_target != js_ast::AssignTarget::None {
-@@ -659,6 +671,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -220,6 +232,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                 }]);
+ 
+                 let is_error = p.const_values.contains_key(&result.r#ref) || p.options.bundle;
++                let diagnostic = p.log().msgs.len();
+                 match is_error {
+                     true => p.log().add_range_error_fmt_with_notes(
+                         Some(p.source),
+@@ -241,6 +254,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                         ),
+                     ),
+                 }
++                crate::bunwasm_runtime_diagnostic(diagnostic, p.log().msgs.len());
+             } else if p.exports_ref.eql(e_.ref_) {
+                 // Assigning to `exports` in a CommonJS module must be tracked to undo the
+                 // `module.exports` -> `exports` optimization.
+@@ -659,6 +673,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
          let _ = in_;
          let mut e_ = expr.data.e_template().expect("infallible: variant checked");
          if let Some(tag) = e_.tag.as_mut() {
@@ -434,7 +462,7 @@ index 23c08903..cee0ca51 100644
              p.template_tag = tag.data;
              p.visit_expr(tag);
          }
-@@ -1152,6 +1165,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -1152,6 +1167,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
          let mut e_ = expr.data.e_unary().expect("infallible: variant checked");
          match e_.op {
              Op::UnTypeof => {
@@ -442,7 +470,15 @@ index 23c08903..cee0ca51 100644
                  let id_before = matches!(e_.value.data, Data::EIdentifier(..));
                  let assign_target = Op::unary_assign_target(e_.op);
                  p.visit_expr_in_out(
-@@ -1725,6 +1739,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -1209,6 +1225,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+                 }
+             }
+             Op::UnDelete => {
++                crate::bunwasm_strict_delete(p.is_strict_mode(), &e_.value);
+                 p.delete_target = e_.value.data;
+                 p.visit_expr_in_out(&mut e_.value, ExprIn::default());
+             }
+@@ -1725,6 +1742,9 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
              }
  
              if let Some(value) = &mut property.value {
@@ -452,7 +488,7 @@ index 23c08903..cee0ca51 100644
                  // Propagate name from property key for decorated anonymous class expressions
                  // e.g., { Foo: @dec class {} } should give the class .name = "Foo"
                  if in_.assign_target == js_ast::AssignTarget::None
-@@ -1872,6 +1889,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
+@@ -1872,6 +1892,7 @@ impl<'a, const TYPESCRIPT: bool, const SCAN_ONLY: bool> P<'a, TYPESCRIPT, SCAN_O
      fn e_call(p: &mut Self, e: &mut Expr, in_: ExprIn) {
          let expr = *e;
          let mut e_ = expr.data.e_call().expect("infallible: variant checked");

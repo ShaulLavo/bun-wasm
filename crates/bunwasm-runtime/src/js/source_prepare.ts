@@ -36,7 +36,7 @@
     if (kind === 20) return `${scope}.`;
     if (kind === 21) return `${scope}_typeof.`;
     if (kind === 22) return `(0, ${scope}.`;
-    return `${replaced}: ${scope}.${replaced}`;
+    return `["${replaced}"]: ${scope}.${replaced}`;
   }
   function hasWork(source: string): boolean {
     return source.includes("await") || source.includes("yield") || source.includes("eval") || source.includes("\\u") || source.includes("import");

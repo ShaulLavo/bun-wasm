@@ -144,6 +144,19 @@ describe.each(["quickjs", "hermes"] as const)("VM context global binding (%s)", 
     expect(Object.isFrozen(unbound)).toBe(true);
   });
 
+  test("keeps prototype-spelled shorthand keys as own data properties", () => {
+    const vm = vmModule(engine);
+    const value = { marker: 1 };
+    const context: Record<string, unknown> = {};
+    Object.defineProperty(context, "__proto__", { value, writable: true, enumerable: true, configurable: true });
+    for (const source of ["({__proto__})", String.raw`({\u005f_proto__})`]) {
+      const result: unknown = vm.runInNewContext(source, context);
+      if (result === null || typeof result !== "object") throw new Error("Expected a context object result");
+      expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+      expect(Object.getOwnPropertyDescriptor(result, "__proto__")).toEqual({ value, writable: true, enumerable: true, configurable: true });
+    }
+  });
+
   test("keeps the existing fallback-global partial realm", () => {
     const vm = vmModule(engine);
     const context = {};
@@ -236,6 +249,30 @@ describe("VM context scripts without with (hermes stub)", () => {
     expect(() => vm.runInNewContext("x +", context)).toThrow(new SyntaxError("Unexpected end of file"));
     expect(() => vm.runInNewContext("import x from \"y\"", context)).toThrow(SyntaxError);
     expect(() => vm.runInNewContext("return 1", context)).toThrow(SyntaxError);
+    expect(reads).toBe(0);
+  });
+
+  test("rejects strict-mode early errors before reading context properties", () => {
+    const vm = vmModule("hermes");
+    let reads = 0;
+    const context = Object.defineProperties({}, Object.fromEntries(["implements", "x", "eval", "f", "arguments"].map(name => [name, {
+      get() { reads++; return 1; }, configurable: true,
+    }])));
+    const names = ["strict reserved reference", "strict identifier delete", "strict eval assignment", "strict arguments update", "class reserved reference"];
+    for (const name of names) {
+      const value = fixture.cases.find(value => value.name === name);
+      if (!value) throw new Error(`Missing strict-mode fixture: ${name}`);
+      expect(() => vm.runInNewContext(value.source, context)).toThrow(SyntaxError);
+    }
+    expect(reads).toBe(0);
+    expect(vm.runInNewContext("implements", { implements: 7 })).toBe(7);
+  });
+
+  test("keeps constant reassignment as a runtime error", () => {
+    const vm = vmModule("hermes");
+    let reads = 0;
+    const context = { get z() { reads++; return 1; } };
+    expect(() => vm.runInNewContext("const k = 1; k = 2; z", context)).toThrow(TypeError);
     expect(reads).toBe(0);
   });
 

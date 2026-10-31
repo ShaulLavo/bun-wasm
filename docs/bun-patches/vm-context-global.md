@@ -29,12 +29,15 @@ Pinned Hermes rejects `with` statements, so on Hermes `runWith` does not compile
 the `with` runner. The parser prepares the context code once per distinct
 source. Every reference that no declaration in the source binds becomes a member
 of a scope parameter, `typeof` operands read a view that yields `undefined`,
-direct calls and template tags use `(0, scope.f)`, shorthand values are spelled
-out, and the final top-level expression statement returns its value. The scope
+direct calls and template tags use `(0, scope.f)`, shorthand values use computed
+data-property keys, and the final top-level expression statement returns its value. The scope
 name is the first `__bunwasm_vm` variant no scope in the source declares.
-Spans are the original text, so escaped identifiers stay escaped. Parse errors,
+Spans are the original text, so escaped identifiers stay escaped. Computed keys
+keep `__proto__`, including escaped spellings, as an own data property instead
+of an object-literal prototype setter. Parse errors, strict-mode early errors,
 `import`, `export` and a top-level `return` throw `SyntaxError` before the
-context is read.
+context is read. Constant reassignment remains a runtime error; only its
+specifically recorded diagnostic may survive the visit pass.
 
 The scope is a Proxy that resolves each name when it is evaluated: the context,
 own or inherited, first, then the host global, otherwise `ReferenceError`.
