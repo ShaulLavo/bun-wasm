@@ -34,7 +34,9 @@ The outputs inside that directory are:
 - `receipt/headers.json` and `receipt/archive-objects.txt`, the checked inputs.
 
 Repeated builds reuse the object directory and replace the packed archive.
-The caller owns teardown. Keep the receipts you need, then remove the private
-build directory after its processes stop. Do not retain the checkout or archive
-as an accepted engine generation. Engine integration still requires both tiers'
+The caller owns teardown. After any recipe change, rerun the checker and its
+replay before removing the object directory. Saved receipts alone cannot
+reproduce packing or certify a changed checker. Keep the receipts you need,
+then remove the private build directory after its processes stop. Do not retain
+the checkout or archive as an accepted engine generation. Engine integration still requires both tiers'
 interrupt smoke tests and producer admission.
