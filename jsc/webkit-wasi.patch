@@ -611,9 +611,11 @@ diff --git a/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h b/Source/JavaSc
 new file mode 100644
 --- /dev/null
 +++ b/Source/JavaScriptCore/runtime/WASIMemoryTelemetry.h
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,358 @@
 +#pragma once
 +
++#include <cerrno>
++#include <cstddef>
 +#include <cstdint>
 +#include <limits>
 +
@@ -683,6 +685,208 @@ new file mode 100644
 +    bunjscTelemetry.activeAllocationCategory = 0;
 +}
 +
++// Allocation-boundary diagnostic around the two oversize typed-array Gigacage calls in
++// JSArrayBufferView::ConstructionContext. Inert until the embedder arms it for one VM. It allocates
++// nothing, takes no lock, never writes errno, never collects and changes no allocation policy.
++// Every field is a little-endian u64; the record is cached and readable after a failure or trap.
++
++// Above JSArrayBufferView::fastSizeLimit (1000 elements), so the control takes the oversize branch.
++constexpr uint64_t bunjscBoundaryControlLength = 1001;
++
++enum class BunjscBoundaryState : uint64_t { Disarmed, ControlArmed, SubjectArmed, Rejected };
++enum class BunjscBoundaryRejection : uint64_t {
++    None,
++    ControlNotObserved,
++    ControlAttempts,
++    CoverageMiss,
++    ControlFailed,
++    ControlRequest,
++    ControlIdentity,
++    CoreUnavailable,
++    CoreFailureCount,
++    CoreAllocationCount,
++};
++
++// Raw values from the core's bun_memory_telemetry (live, peak, capacity, failures, allocations,
++// frees) and bun_memory_failure_telemetry (first failed size and category), including the
++// core's own UINT64_MAX and zero-category "none" values.
++struct BunjscCoreAllocatorSample {
++    uint64_t live { bunjscUnknownMemory };
++    uint64_t peak { bunjscUnknownMemory };
++    uint64_t capacity { bunjscUnknownMemory };
++    uint64_t failures { bunjscUnknownMemory };
++    uint64_t allocations { bunjscUnknownMemory };
++    uint64_t frees { bunjscUnknownMemory };
++    uint64_t firstFailureSize { bunjscUnknownMemory };
++    uint64_t firstFailureCategory { bunjscUnknownMemory };
++};
++// Bound by the side's helpers.cpp to the two core exports. False means the core record is unreadable.
++using BunjscCoreAllocatorSampler = bool (*)(BunjscCoreAllocatorSample&);
++
++// JSC heap pacing values before the call. Plain getters; mutator thread only.
++struct BunjscBoundaryHeapBudget {
++    uint64_t capacity { bunjscUnknownMemory };
++    uint64_t extraMemory { bunjscUnknownMemory };
++    uint64_t arrayBufferBytes { bunjscUnknownMemory };
++    uint64_t totalBytesAllocated { bunjscUnknownMemory };
++    uint64_t bytesAllocatedThisCycle { bunjscUnknownMemory };
++    uint64_t allocationBudgetThisCycle { bunjscUnknownMemory };
++    uint64_t maxHeapSize { bunjscUnknownMemory };
++    uint64_t sizeAfterLastCollection { bunjscUnknownMemory };
++    uint64_t ramSize { bunjscUnknownMemory };
++};
++
++struct BunjscAllocationBoundarySlot {
++    uint64_t recorded { 0 };
++    uint64_t availability { 0 }; // Bit i set: word i of this slot holds an observed value.
++    uint64_t attempt { 0 }; // Ordinal among armed attempts in the expected VM.
++    uint64_t requestSequence { bunjscUnknownMemory }; // bunjscTelemetry.allocationSequence
++    uint64_t requestBytes { bunjscUnknownMemory };
++    uint64_t elementCount { bunjscUnknownMemory };
++    uint64_t elementSize { bunjscUnknownMemory };
++    uint64_t zeroFill { bunjscUnknownMemory };
++    uint64_t vmAddress { bunjscUnknownMemory };
++    uint64_t globalObjectAddress { bunjscUnknownMemory };
++    uint64_t errnoBefore { bunjscUnknownMemory }; // Raw; read before any observer work.
++    uint64_t errnoAfterCall { bunjscUnknownMemory }; // Raw; read first after the call returns.
++    uint64_t resultNull { bunjscUnknownMemory };
++    BunjscBoundaryHeapBudget heapBefore;
++    BunjscCoreAllocatorSample coreBefore;
++    BunjscCoreAllocatorSample coreAfter;
++};
++static_assert(sizeof(BunjscAllocationBoundarySlot) == 38 * sizeof(uint64_t));
++
++constexpr uint64_t bunjscBoundaryWords(size_t offset, size_t bytes)
++{
++    uint64_t mask = 0;
++    for (size_t word = offset / sizeof(uint64_t); word < (offset + bytes) / sizeof(uint64_t); ++word)
++        mask |= uint64_t(1) << word;
++    return mask;
++}
++constexpr uint64_t bunjscBoundaryBeforeWords = bunjscBoundaryWords(0, offsetof(BunjscAllocationBoundarySlot, errnoAfterCall));
++constexpr uint64_t bunjscBoundaryAfterCallWords = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, errnoAfterCall), 2 * sizeof(uint64_t));
++constexpr uint64_t bunjscBoundaryHeapWords = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, heapBefore), sizeof(BunjscBoundaryHeapBudget));
++constexpr uint64_t bunjscBoundarySizeAfterLastCollectionWord = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, heapBefore) + offsetof(BunjscBoundaryHeapBudget, sizeAfterLastCollection), sizeof(uint64_t));
++constexpr uint64_t bunjscBoundaryCoreBeforeWords = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, coreBefore), sizeof(BunjscCoreAllocatorSample));
++constexpr uint64_t bunjscBoundaryCoreAfterWords = bunjscBoundaryWords(offsetof(BunjscAllocationBoundarySlot, coreAfter), sizeof(BunjscCoreAllocatorSample));
++
++struct BunjscAllocationBoundary {
++    uint64_t abiVersion { 1 };
++    uint64_t byteLength { sizeof(BunjscAllocationBoundary) };
++    BunjscBoundaryState state { BunjscBoundaryState::Disarmed };
++    BunjscBoundaryRejection rejection { BunjscBoundaryRejection::None };
++    uint64_t coreSamplerBound { 0 };
++    uint64_t expectedVmAddress { bunjscUnknownMemory };
++    uint64_t expectedGlobalObjectAddress { bunjscUnknownMemory };
++    uint64_t controlLength { bunjscBoundaryControlLength };
++    uint64_t armedAttempts { 0 };
++    uint64_t subjectFailures { 0 };
++    uint64_t coverageMisses { 0 }; // Oversize calls in another VM while armed; never recorded.
++    BunjscAllocationBoundarySlot last; // The latest armed attempt, written before its call.
++    BunjscAllocationBoundarySlot control;
++    BunjscAllocationBoundarySlot subject; // The first null result after the subject was armed.
++};
++static_assert(sizeof(BunjscAllocationBoundary) == 1000);
++
++inline constinit BunjscAllocationBoundary bunjscAllocationBoundary;
++inline constinit BunjscCoreAllocatorSampler bunjscCoreAllocatorSampler { nullptr };
++
++inline bool bunjsc_boundary_armed()
++{
++    auto state = bunjscAllocationBoundary.state;
++    return state == BunjscBoundaryState::ControlArmed || state == BunjscBoundaryState::SubjectArmed;
++}
++
++inline uint64_t bunjsc_boundary_sample_core(BunjscCoreAllocatorSample& sample, uint64_t words)
++{
++    if (!bunjscCoreAllocatorSampler || !bunjscCoreAllocatorSampler(sample))
++        return 0;
++    return words;
++}
++
++template<typename HeapType>
++inline uint64_t bunjsc_boundary_read_heap(HeapType& heap, BunjscBoundaryHeapBudget& budget)
++{
++    budget.capacity = heap.capacity();
++    budget.extraMemory = heap.extraMemorySize();
++    budget.arrayBufferBytes = heap.arrayBufferSize();
++    budget.totalBytesAllocated = heap.totalBytesAllocated();
++    budget.bytesAllocatedThisCycle = heap.bytesAllocatedThisCycle();
++    budget.allocationBudgetThisCycle = heap.allocationBudgetThisCycle();
++    budget.maxHeapSize = heap.maxHeapSize();
++    budget.ramSize = heap.ramSize();
++    if (!heap.lastCollectionScope())
++        return bunjscBoundaryHeapWords & ~bunjscBoundarySizeAfterLastCollectionWord;
++    budget.sizeAfterLastCollection = heap.sizeAfterLastCollection();
++    return bunjscBoundaryHeapWords;
++}
++
++// The control acknowledges only one exact, successful ZeroFill request in the armed VM and
++// context whose core wrapper counted one allocation and no new failure.
++inline BunjscBoundaryRejection bunjsc_boundary_control_rejection(const BunjscAllocationBoundary& record, bool created)
++{
++    const auto& control = record.control;
++    if (!control.recorded)
++        return BunjscBoundaryRejection::ControlNotObserved;
++    if (record.coverageMisses)
++        return BunjscBoundaryRejection::CoverageMiss;
++    if (record.armedAttempts != 1)
++        return BunjscBoundaryRejection::ControlAttempts;
++    if (!created || control.resultNull)
++        return BunjscBoundaryRejection::ControlFailed;
++    if (control.elementCount != record.controlLength || control.elementSize != 1 || control.requestBytes != record.controlLength || control.zeroFill != 1)
++        return BunjscBoundaryRejection::ControlRequest;
++    if (control.vmAddress != record.expectedVmAddress || control.globalObjectAddress != record.expectedGlobalObjectAddress)
++        return BunjscBoundaryRejection::ControlIdentity;
++    constexpr uint64_t core = bunjscBoundaryCoreBeforeWords | bunjscBoundaryCoreAfterWords;
++    if ((control.availability & core) != core)
++        return BunjscBoundaryRejection::CoreUnavailable;
++    if (control.coreAfter.failures != control.coreBefore.failures)
++        return BunjscBoundaryRejection::CoreFailureCount;
++    if (control.coreAfter.allocations != control.coreBefore.allocations + 1)
++        return BunjscBoundaryRejection::CoreAllocationCount;
++    return BunjscBoundaryRejection::None;
++}
++
++// Arms the control for one VM and context. Only a disarmed record arms.
++inline bool bunjsc_boundary_arm_control(const void* vm, const void* globalObject, BunjscCoreAllocatorSampler sampler)
++{
++    auto& record = bunjscAllocationBoundary;
++    if (record.state != BunjscBoundaryState::Disarmed)
++        return false;
++    bunjscCoreAllocatorSampler = sampler;
++    record.coreSamplerBound = sampler != nullptr;
++    record.expectedVmAddress = reinterpret_cast<uintptr_t>(vm);
++    record.expectedGlobalObjectAddress = reinterpret_cast<uintptr_t>(globalObject);
++    record.state = BunjscBoundaryState::ControlArmed;
++    return true;
++}
++
++// The only transition to SubjectArmed. A rejected control leaves the subject disarmed for good.
++inline BunjscBoundaryState bunjsc_boundary_acknowledge_control(bool created)
++{
++    auto& record = bunjscAllocationBoundary;
++    if (record.state != BunjscBoundaryState::ControlArmed)
++        return record.state;
++    record.rejection = bunjsc_boundary_control_rejection(record, created);
++    record.state = record.rejection == BunjscBoundaryRejection::None ? BunjscBoundaryState::SubjectArmed : BunjscBoundaryState::Rejected;
++    return record.state;
++}
++
++inline void bunjsc_boundary_latch(BunjscAllocationBoundary& record, const BunjscAllocationBoundarySlot& slot)
++{
++    if (record.state == BunjscBoundaryState::ControlArmed) {
++        if (!record.control.recorded)
++            record.control = slot;
++        return;
++    }
++    if (!slot.resultNull)
++        return;
++    ++record.subjectFailures;
++    if (!record.subject.recorded)
++        record.subject = slot;
++}
++
 +namespace JSC {
 +
 +// Nullable failure can be recorded before an OOM exception that may not unwind.
@@ -712,35 +916,111 @@ new file mode 100644
 +    bool m_failed;
 +};
 +
++// Observes one oversize typed-array allocation call. A disarmed record costs one state load.
++class WASIAllocationBoundaryProbe {
++public:
++    template<typename HeapType, typename StructureType>
++    WASIAllocationBoundaryProbe(const void* vm, StructureType* structure, HeapType& heap, uint64_t elementCount, uint64_t elementSize, uint64_t bytes, bool zeroFill)
++    {
++        if (!bunjsc_boundary_armed())
++            return;
++        uint64_t errnoBefore = static_cast<uint32_t>(errno);
++        auto& record = bunjscAllocationBoundary;
++        if (reinterpret_cast<uintptr_t>(vm) != record.expectedVmAddress) {
++            ++record.coverageMisses;
++            return;
++        }
++        m_active = true;
++        auto& slot = record.last;
++        slot = { };
++        slot.recorded = 1;
++        slot.attempt = ++record.armedAttempts;
++        slot.requestSequence = bunjscTelemetry.allocationSequence;
++        slot.requestBytes = bytes;
++        slot.elementCount = elementCount;
++        slot.elementSize = elementSize;
++        slot.zeroFill = zeroFill;
++        slot.vmAddress = reinterpret_cast<uintptr_t>(vm);
++        slot.globalObjectAddress = reinterpret_cast<uintptr_t>(structure->globalObject());
++        slot.errnoBefore = errnoBefore;
++        uint64_t heapWords = bunjsc_boundary_read_heap(heap, slot.heapBefore);
++        uint64_t coreWords = bunjsc_boundary_sample_core(slot.coreBefore, bunjscBoundaryCoreBeforeWords);
++        slot.availability = bunjscBoundaryBeforeWords | heapWords | coreWords;
++    }
++
++    WASIAllocationBoundaryProbe(const WASIAllocationBoundaryProbe&) = delete;
++    WASIAllocationBoundaryProbe& operator=(const WASIAllocationBoundaryProbe&) = delete;
++
++    void finish(const void* result)
++    {
++        if (!m_active)
++            return;
++        uint64_t errnoAfterCall = static_cast<uint32_t>(errno);
++        auto& record = bunjscAllocationBoundary;
++        auto& slot = record.last;
++        slot.errnoAfterCall = errnoAfterCall;
++        slot.resultNull = !result;
++        uint64_t coreWords = bunjsc_boundary_sample_core(slot.coreAfter, bunjscBoundaryCoreAfterWords);
++        slot.availability |= bunjscBoundaryAfterCallWords | coreWords;
++        bunjsc_boundary_latch(record, slot);
++    }
++
++private:
++    bool m_active { false };
++};
++
 +} // namespace JSC
 diff --git a/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp b/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
 --- a/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
 +++ b/Source/JavaScriptCore/runtime/JSArrayBufferView.cpp
-@@ -36,2 +36,6 @@
+@@ -35,4 +35,8 @@
+ #include <wtf/FastMalloc.h>
 
 +#if OS(WASI)
 +#include "WASIMemoryTelemetry.h"
 +#endif
 +
  WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
-@@ -66,2 +70,5 @@
+
+@@ -65,4 +69,7 @@
+ {
      ASSERT(!isResizableOrGrowableSharedTypedArrayIncludingDataView(structure->classInfoForCells()));
 +#if OS(WASI)
 +    WASIMemoryAllocationScope allocation(static_cast<uint64_t>(length) * elementSize, WASIMemoryAllocationScope::TypedArray);
 +#endif
 
-@@ -78,2 +85,5 @@
+     if (length <= fastSizeLimit) {
+@@ -77,4 +84,7 @@
+         m_vector = VectorType(temp);
          m_mode = FastTypedArray;
 +#if OS(WASI)
 +        allocation.succeed();
 +#endif
 
-@@ -106,2 +116,5 @@
+         if (mode == ZeroFill) {
+@@ -93,8 +103,14 @@
+
+     void* memory = nullptr;
++#if OS(WASI)
++    WASIAllocationBoundaryProbe boundary(&vm, structure, vm.heap, length, elementSize, size.value(), mode == ZeroFill);
++#endif
+     if (mode == ZeroFill)
+         memory = Gigacage::tryZeroedMalloc(Gigacage::Primitive, size.value());
+     else
+         memory = Gigacage::tryMalloc(Gigacage::Primitive, size.value());
++#if OS(WASI)
++    boundary.finish(memory);
++#endif
+     m_vector = VectorType(memory);
+     if (!m_vector)
+@@ -105,4 +121,7 @@
+     m_structure = structure;
      m_mode = OversizeTypedArray;
 +#if OS(WASI)
 +    allocation.succeed();
 +#endif
  }
+
 diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
 --- a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
 +++ b/Source/JavaScriptCore/runtime/ArrayBuffer.cpp
@@ -766,10 +1046,14 @@ diff --git a/Source/JavaScriptCore/runtime/ArrayBuffer.cpp b/Source/JavaScriptCo
 diff --git a/Source/JavaScriptCore/heap/Heap.h b/Source/JavaScriptCore/heap/Heap.h
 --- a/Source/JavaScriptCore/heap/Heap.h
 +++ b/Source/JavaScriptCore/heap/Heap.h
-@@ -400,2 +400,5 @@
+@@ -400,2 +400,9 @@
      size_t sizeAfterLastCollection() const { return m_sizeAfterLastCollect; }
 +#if OS(WASI)
 +    bool hasCompletedFullCollection() const { return static_cast<bool>(m_lastFullGCEndTime); }
++    // Allocation-boundary pacing inputs (runtime/WASIMemoryTelemetry.h). Plain field reads; mutator thread only.
++    size_t maxHeapSize() const { return m_maxHeapSize; }
++    size_t bytesAllocatedThisCycle() const { return m_nonOversizedBytesAllocatedThisCycle + m_oversizedBytesAllocatedThisCycle; }
++    size_t ramSize() const { return m_ramSize; }
 +#endif
      // Everything the mutator has allocated (cells and reported extra memory), the current cycle included. Mutator thread only.
 diff --git a/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h b/Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h

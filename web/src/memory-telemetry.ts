@@ -114,8 +114,12 @@ function engineReadout(engine: TelemetryEngine, memory: WebAssembly.Memory, expo
   };
 }
 
+export { read as readTelemetryRecord, count as telemetryCount };
+/** Opt-in cached side diagnostics merged into engine counters; loaded separately from this reader. */
+export type EngineDiagnostics = (memory: WebAssembly.Memory, exports: WebAssembly.Exports) => Record<string, number | null>;
+
 /** `limitBytes` is the core's declared memory maximum (crates/bunwasm-cli/max-memory.txt at link time). */
-export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side: WebAssembly.Instance | undefined, limitBytes: number | null, identity?: MemoryIdentity) {
+export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.Instance, side: WebAssembly.Instance | undefined, limitBytes: number | null, identity?: MemoryIdentity, diagnostics?: EngineDiagnostics) {
   const id = identity?.id ?? crypto.randomUUID();
   const provenance = identity ? { id, commandId: identity.commandId, commandStartedAt: identity.commandStartedAt, commandSequence: identity.commandSequence }
     : { id, commandId: id, commandStartedAt: Date.now(), commandSequence: 0 };
@@ -147,7 +151,7 @@ export function createMemoryReader(engine: TelemetryEngine, core: WebAssembly.In
         allocatorPeakBytes: allocator ? count(allocator[3]) : null,
         jsHeapBytes: data?.heap ?? null, arrayBufferBytes: data?.buffers ?? null,
         failedAllocation: data?.failure ?? allocatorFailure, allocatorFailure, frozenAllocatorFailure, engineFailure: data?.failure ?? null,
-        engineCounters: data?.counters ?? {},
+        engineCounters: diagnostics ? Object.assign({}, data?.counters, diagnostics(memory, side?.exports ?? {})) : data?.counters ?? {},
         notes: "Allocator counts outstanding libc usable bytes, including padding, from successful outer allocation calls. Realloc internal temporary peaks are not observed. VM counters overlap allocator bytes. JSC heap and ArrayBuffer counters are GC-accounted estimates; exact JSC backing stores and SWC bytes are unknown. Hermes heap includes allocated objects that may be unreachable; external bytes are GC-accounted, not an exact ArrayBuffer census. Cached engine counters reflect the last normal refresh. No forced GC.",
       };
     },

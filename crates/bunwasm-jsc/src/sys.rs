@@ -103,6 +103,94 @@ const _: () = {
     assert!(std::mem::offset_of!(BunjscMemoryTelemetry, allocation_budget_this_cycle) == 184);
 };
 
+/// Raw core allocator values copied at the allocation boundary.
+/// The corresponding C++ layout is `BunjscCoreAllocatorSample` in WebKit `runtime/WASIMemoryTelemetry.h`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct BunjscCoreAllocatorSample {
+    pub live: u64,
+    pub peak: u64,
+    pub capacity: u64,
+    pub failures: u64,
+    pub allocations: u64,
+    pub frees: u64,
+    pub first_failure_size: u64,
+    pub first_failure_category: u64,
+}
+
+/// JSC heap pacing values read before the boundary call.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct BunjscBoundaryHeapBudget {
+    pub capacity: u64,
+    pub extra_memory: u64,
+    pub array_buffer_bytes: u64,
+    pub total_bytes_allocated: u64,
+    pub bytes_allocated_this_cycle: u64,
+    pub allocation_budget_this_cycle: u64,
+    pub max_heap_size: u64,
+    pub size_after_last_collection: u64,
+    pub ram_size: u64,
+}
+
+/// One observed oversize typed-array allocation call. Bit `i` of `availability` marks word `i` observed.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct BunjscAllocationBoundarySlot {
+    pub recorded: u64,
+    pub availability: u64,
+    pub attempt: u64,
+    pub request_sequence: u64,
+    pub request_bytes: u64,
+    pub element_count: u64,
+    pub element_size: u64,
+    pub zero_fill: u64,
+    pub vm_address: u64,
+    pub global_object_address: u64,
+    pub errno_before: u64,
+    pub errno_after_call: u64,
+    pub result_null: u64,
+    pub heap_before: BunjscBoundaryHeapBudget,
+    pub core_before: BunjscCoreAllocatorSample,
+    pub core_after: BunjscCoreAllocatorSample,
+}
+
+/// `state` of a JSC allocation-boundary record whose control was acknowledged.
+pub const BUNJSC_BOUNDARY_SUBJECT_ARMED: u64 = 2;
+
+/// Allocation-free cached allocation-boundary record, readable after a failure or trap.
+/// The corresponding C++ layout is `BunjscAllocationBoundary` in WebKit `runtime/WASIMemoryTelemetry.h`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct BunjscAllocationBoundary {
+    pub abi_version: u64,
+    pub byte_length: u64,
+    pub state: u64,
+    pub rejection: u64,
+    pub core_sampler_bound: u64,
+    pub expected_vm_address: u64,
+    pub expected_global_object_address: u64,
+    pub control_length: u64,
+    pub armed_attempts: u64,
+    pub subject_failures: u64,
+    pub coverage_misses: u64,
+    pub last: BunjscAllocationBoundarySlot,
+    pub control: BunjscAllocationBoundarySlot,
+    pub subject: BunjscAllocationBoundarySlot,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<BunjscAllocationBoundarySlot>() == 304);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundarySlot, errno_after_call) == 88);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundarySlot, heap_before) == 104);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundarySlot, core_before) == 176);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundarySlot, core_after) == 240);
+    assert!(std::mem::size_of::<BunjscAllocationBoundary>() == 1000);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundary, last) == 88);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundary, control) == 392);
+    assert!(std::mem::offset_of!(BunjscAllocationBoundary, subject) == 696);
+};
+
 unsafe extern "C" {
     pub fn JSGlobalContextCreate(globalObjectClass: JSClassRef) -> JSGlobalContextRef;
     pub fn JSGlobalContextRelease(ctx: JSGlobalContextRef);
@@ -283,6 +371,8 @@ unsafe extern "C" {
     pub fn bunjsc_collect_garbage(ctx: JSContextRef);
     pub fn bunjsc_refresh_memory_telemetry(ctx: JSContextRef);
     pub fn bunjsc_memory_telemetry() -> *const BunjscMemoryTelemetry;
+    pub fn bunjsc_allocation_boundary() -> *const BunjscAllocationBoundary;
+    pub fn bunjsc_allocation_boundary_qualify(ctx: JSContextRef) -> u64;
     pub fn bunjsc_report_unhandled_error(ctx: JSContextRef, value: JSValueRef);
     pub fn bunjsc_is_error(ctx: JSContextRef, value: JSValueRef) -> bool;
     pub fn bunjsc_is_detachable_buffer(ctx: JSContextRef, value: JSValueRef) -> bool;

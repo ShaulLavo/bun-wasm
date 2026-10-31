@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { allocationBoundaryBytes, boundaryRejections, boundaryStates, decodeAllocationBoundary } from '../web/src/jsc-allocation-boundary.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -68,3 +69,60 @@ function checkTypedArrayCallbacks(scratch: string, wasi: string): void {
     assert.equal(execFileSync(binary, [scenario], { encoding: 'utf8' }).trim(), scenario);
   }
 }
+
+const boundaryScenarios = ['layout', 'disarmed', 'control-success', 'control-core-failure', 'control-null',
+  'control-not-observed', 'control-request', 'control-attempts', 'sampler-unbound', 'sampler-unreadable',
+  'coverage-miss', 'subject-latch', 'rearm-refused', 'no-collection', 'trap-pending'];
+
+test('WASI JSC allocation boundary arms the subject only after an acknowledged control', () => {
+  withTelemetryHeader((scratch) => {
+    const binary = join(scratch, 'allocation-boundary-test');
+    execFileSync('c++', ['-std=c++20', '-Wall', '-Wextra', '-Werror', '-I', scratch,
+      join(root, 'crates/bunwasm-jsc/tests/allocation-boundary.cpp'), '-o', binary]);
+    for (const scenario of boundaryScenarios) {
+      assert.equal(execFileSync(binary, [scenario], { encoding: 'utf8' }).trim(), scenario);
+    }
+    const words = execFileSync(binary, ['dump'], { encoding: 'utf8' }).trim().split('\n').map(BigInt);
+    assert.equal(words.length * 8, allocationBoundaryBytes);
+    const record = decodeAllocationBoundary(words);
+    assert.equal(boundaryStates[record.state ?? -1], 'subjectArmed');
+    assert.equal(boundaryRejections[record.rejection ?? -1], 'none');
+    assert.equal(record.controlLength, 1001);
+    assert.equal(record.subjectFailures, 2);
+    assert.equal(record.coverageMisses, 1);
+    assert.equal(record.control.requestBytes, 1001);
+    assert.equal(record.control['coreAfter.allocations'], (record.control['coreBefore.allocations'] ?? 0) + 1);
+    assert.equal(record.subject.requestBytes, 25297737);
+    assert.equal(record.subject.errnoAfterCall, constants.errno.ENOMEM, 'the raw value the fake allocator left');
+    assert.equal(record.subject['heap.ramSize'], 1073741824);
+    assert.equal(record.subject['coreAfter.failures'], (record.subject['coreBefore.failures'] ?? 0) + 1);
+    assert.equal(record.subject['coreBefore.firstFailureSize'], null, 'the core reports no failure as UINT64_MAX');
+    assert.equal(record.subject['coreBefore.firstFailureCategory'], 0);
+    assert.equal(record.last.requestBytes, 40000000);
+  });
+});
+
+test('the boundary probe wraps exactly the two oversize Gigacage calls', () => {
+  const section = patchSection('Source/JavaScriptCore/runtime/JSArrayBufferView.cpp').split('\n');
+  const probe = section.indexOf('+    WASIAllocationBoundaryProbe boundary(&vm, structure, vm.heap, length, elementSize, size.value(), mode == ZeroFill);');
+  assert.notEqual(probe, -1);
+  assert.deepEqual(section.slice(probe - 2, probe + 9), [
+    '     void* memory = nullptr;',
+    '+#if OS(WASI)',
+    '+    WASIAllocationBoundaryProbe boundary(&vm, structure, vm.heap, length, elementSize, size.value(), mode == ZeroFill);',
+    '+#endif',
+    '     if (mode == ZeroFill)',
+    '         memory = Gigacage::tryZeroedMalloc(Gigacage::Primitive, size.value());',
+    '     else',
+    '         memory = Gigacage::tryMalloc(Gigacage::Primitive, size.value());',
+    '+#if OS(WASI)',
+    '+    boundary.finish(memory);',
+    '+#endif',
+  ]);
+  assert.equal(section.filter(line => line.includes('WASIAllocationBoundaryProbe')).length, 1);
+  const heap = patchSection('Source/JavaScriptCore/heap/Heap.h');
+  for (const accessor of ['size_t maxHeapSize() const { return m_maxHeapSize; }', 'size_t ramSize() const { return m_ramSize; }',
+    'size_t bytesAllocatedThisCycle() const { return m_nonOversizedBytesAllocatedThisCycle + m_oversizedBytesAllocatedThisCycle; }']) {
+    assert.ok(heap.includes(`+    ${accessor}\n`), accessor);
+  }
+});

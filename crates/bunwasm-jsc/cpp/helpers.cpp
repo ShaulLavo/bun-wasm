@@ -30,6 +30,8 @@
 #include "ObjectConstructor.h"
 #include "JSLock.h"
 #include "JSArrayBuffer.h"
+#include "JSGenericTypedArrayViewInlines.h"
+#include "JSTypedArrays.h"
 #include "JSModuleLoader.h"
 #include "JSPromise.h"
 #include "JSSourceCode.h"
@@ -57,6 +59,10 @@ void bunjsc_host_uncaught(JSContextRef, JSValueRef);
 // Polls fatal host cancellation without entering JS or consuming handled signals.
 // True requests native, uncatchable termination after the callback has returned.
 bool bunjsc_host_interrupt();
+// Core allocator exports (crates/bunwasm-cli/memory-telemetry.c), imported by name. Plain loads and
+// one store of the current page capacity: no allocation, no lock and no errno write.
+const uint64_t* bun_memory_telemetry();
+const uint64_t* bun_memory_failure_telemetry();
 }
 
 extern "C" void Bun__reportUnhandledError(JSGlobalObject* globalObject, EncodedJSValue encoded)
@@ -191,6 +197,24 @@ static JSObject* createImportMeta(JSGlobalObject* globalObject, JSModuleLoader*,
 static bool interruptScriptBeforeTimeout(const JSGlobalObject*)
 {
     return bunjsc_host_interrupt();
+}
+
+// Copies the core's two allocator records. False when either ABI header is not version 1 at its size.
+static bool sampleCoreAllocator(BunjscCoreAllocatorSample& sample)
+{
+    const uint64_t* counters = bun_memory_telemetry();
+    const uint64_t* failure = bun_memory_failure_telemetry();
+    if (counters[0] != 1 || counters[1] != 80 || failure[0] != 1 || failure[1] != 72)
+        return false;
+    sample.live = counters[2];
+    sample.peak = counters[3];
+    sample.capacity = counters[9];
+    sample.failures = counters[6];
+    sample.allocations = counters[7];
+    sample.frees = counters[8];
+    sample.firstFailureSize = failure[2];
+    sample.firstFailureCategory = failure[3];
+    return true;
 }
 
 extern "C" {
@@ -345,6 +369,28 @@ void bunjsc_refresh_memory_telemetry(JSContextRef ctx)
     snapshot.generationalGcEnabled = Options::useGenerationalGC();
     snapshot.concurrentGcEnabled = Options::useConcurrentGC();
     ++snapshot.snapshotSequence;
+}
+
+BunjscAllocationBoundary* bunjsc_allocation_boundary()
+{
+    return &bunjscAllocationBoundary;
+}
+
+// Arms the allocation-boundary control in this context's VM, creates one oversize Uint8Array through
+// the instrumented construction path, and arms the subject only if the control was acknowledged.
+uint64_t bunjsc_allocation_boundary_qualify(JSContextRef ctx)
+{
+    JSGlobalObject* globalObject = toJS(ctx);
+    VM& vm = globalObject->vm();
+    JSLockHolder lock(vm);
+    if (!bunjsc_boundary_arm_control(&vm, globalObject, sampleCoreAllocator))
+        return static_cast<uint64_t>(bunjscAllocationBoundary.state);
+    auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
+    Structure* structure = globalObject->typedArrayStructureWithTypedArrayType<TypeUint8>();
+    bool created = JSUint8Array::create(globalObject, structure, bunjscBoundaryControlLength);
+    created = created && !scope.exception();
+    scope.clearException();
+    return static_cast<uint64_t>(bunjsc_boundary_acknowledge_control(created));
 }
 
 void bunjsc_collect_garbage(JSContextRef ctx)

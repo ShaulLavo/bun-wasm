@@ -1,7 +1,7 @@
 import { prepareLinkPlan, instantiateLinkPlan, type LinkedGroup, type LinkPlanSource } from "waffle/link";
 import { programKind } from "../../src/engine-kind.js";
 import { createMemoryPublisher, observeMemoryImports } from "./memory-channel.js";
-import { createMemoryReader, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
+import { createMemoryReader, type EngineDiagnostics, type MemorySnapshot, type MemoryTelemetryTransport } from "./memory-telemetry.js";
 import { memoryMaximumBytes } from "../../src/engine-kind.ts";
 // Bun's guest policy over Waffle's reusable process bootstrap. Importing this module has no
 // side effects: the worker entry (worker.ts) wires it to a worker's message port.
@@ -194,6 +194,12 @@ function finishHostServices(sharedObjects: SharedObjectService | undefined, look
   }
 }
 
+// The allocation-boundary reader is a separate chunk, fetched only for an armed JSC process.
+async function engineDiagnostics(req: RunRequest): Promise<EngineDiagnostics | undefined> {
+  if (req.engine !== "jsc" || req.env.BUN_WASM_JSC_ALLOCATION_BOUNDARY !== "1") return undefined;
+  return (await import("./jsc-allocation-boundary.js")).allocationBoundaryCounters;
+}
+
 function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExecutor<RunRequest>, "instantiate" | "initialize" | "beforeFinish"> {
   if (!req.linkPlan) return {};
   const request = { ...req, linkPlan: req.linkPlan };
@@ -201,11 +207,13 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
   let group: LinkedGroup | undefined;
   let reader: ReturnType<typeof createMemoryReader> | undefined;
   let publisher: ReturnType<typeof createMemoryPublisher> | undefined;
+  let diagnostics: EngineDiagnostics | undefined;
   let finished = false;
   return {
     async instantiate(imports, context) {
       context.checkActive();
       if (finished || group) throw new Error("link executor already used");
+      diagnostics = await engineDiagnostics(req);
       const plan = await prepareLinkPlan(request.linkPlan);
       if (req.adapter !== "preview1" && req.engine !== "browser" && programKind(plan.entryModule) !== req.engine) throw new TypeError(`Selected ${req.engine} engine differs from paired core declaration`);
       context.checkActive();
@@ -228,7 +236,7 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost): Pick<WorkerExec
       context.checkActive();
       if (!group || finished) throw new Error("link group is unavailable");
       group.initialize();
-      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, limitBytes, req.memoryTelemetry);
+      reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, limitBytes, req.memoryTelemetry, diagnostics);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
     },
     beforeFinish() {
