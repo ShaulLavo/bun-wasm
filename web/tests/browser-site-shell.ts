@@ -129,6 +129,7 @@ async function exercise(page: Page, engine: string) {
   assert.equal(await checkDelayedStop(page, base, "chromium", engine), true);
   await checkRootSignals(page, base, "chromium", engine);
   await checkPipelineReader(page, base, "chromium", engine);
+  await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
   const columns = await page.evaluate(() => Reflect.get(globalThis, "playground").term.cols);
   await page.setViewportSize({ width: 900, height: 700 });
   await page.waitForFunction(previous => Reflect.get(globalThis, "playground").term.cols !== previous, columns);
