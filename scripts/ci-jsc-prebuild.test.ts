@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { needsJsc, needsRust } from "./ci-changes";
@@ -251,7 +251,7 @@ function bash(h: Harness, script: string, env: Record<string, string> = {}) {
   return spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", script], { cwd: h.repo, env: { ...h.env, ...env }, encoding: "utf8", timeout: 20000 });
 }
 
-function produce(h: Harness): { digest: string; prebuild: string[]; sysroot: string[] } {
+function produceTransfer(h: Harness): { digest: string; prebuild: string[]; sysroot: string[] } {
   seedProducerTrees(h);
   const sysrootPath = join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched");
   const before = { prebuild: snapshot(h.env.JSC_BUILD_DIR!), sysroot: snapshot(sysrootPath) };
@@ -267,17 +267,18 @@ function produce(h: Harness): { digest: string; prebuild: string[]; sysroot: str
   mkdirSync(transferDirectory);
   renameSync(join(h.temp, "jsc-prebuild.tar"), join(transferDirectory, "jsc-prebuild.tar"));
   rmSync(bundle(h), { recursive: true, force: true });
-  mkdirSync(bundle(h));
-  const unpacked = spawnSync("tar", ["--posix", "-xf", join(transferDirectory, "jsc-prebuild.tar"), "-C", bundle(h)], { encoding: "utf8" });
-  expect(unpacked.status).toBe(0);
   return { digest, ...before };
 }
 
+function produce(h: Harness): ReturnType<typeof produceTransfer> {
+  const produced = produceTransfer(h);
+  const unpacked = bash(h, run(native, unpackName));
+  expect(unpacked.stderr).toBe("");
+  expect(unpacked.status).toBe(0);
+  return produced;
+}
+
 function consume(h: Harness, digest: string, env: Record<string, string> = {}) {
-  if (!existsSync(bundle(h))) {
-    const unpacked = bash(h, run(native, unpackName), env);
-    if (unpacked.status !== 0) return unpacked;
-  }
   return bash(h, run(native, importName), { JSC_PREBUILD_MANIFEST_SHA256: digest, ...env });
 }
 
@@ -288,6 +289,42 @@ function withHarness(body: (h: Harness) => void) {
 }
 
 const bundle = (h: Harness) => join(h.temp, "jsc-prebuild-artifact");
+
+for (const [label, job] of [["native quality", checkpoint], ["Rust", native]] satisfies [string, Job][]) {
+  test(`${label} unpacks the downloaded transfer with the actual workflow step`, () => withHarness(h => {
+    const produced = produceTransfer(h);
+    expect(existsSync(bundle(h))).toBe(false);
+    const result = bash(h, run(job, unpackName));
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(readdirSync(bundle(h)).toSorted()).toEqual(["jsc-prebuild.log", "manifest", "prebuild.tar.zst", "sysroot.tar.zst"]);
+    const imported = bash(h, run(job, importName), { JSC_PREBUILD_MANIFEST_SHA256: produced.digest });
+    expect(imported.status).toBe(0);
+    expect(snapshot(h.env.JSC_BUILD_DIR!)).toEqual(produced.prebuild);
+    expect(snapshot(join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched"))).toEqual(produced.sysroot);
+  }));
+
+  test(`${label} rejects a missing transfer before import`, () => withHarness(h => {
+    produceTransfer(h);
+    rmSync(join(h.temp, "jsc-prebuild-transfer/jsc-prebuild.tar"));
+    expectRejectedBeforeExtraction(h, bash(h, run(job, unpackName)));
+  }));
+
+  test(`${label} rejects a truncated transfer before import`, () => withHarness(h => {
+    produceTransfer(h);
+    truncateSync(join(h.temp, "jsc-prebuild-transfer/jsc-prebuild.tar"), 512);
+    expectRejectedBeforeExtraction(h, bash(h, run(job, unpackName)));
+  }));
+
+  test(`${label} refuses to unpack over an existing bundle`, () => withHarness(h => {
+    produceTransfer(h);
+    mkdirSync(bundle(h));
+    writeFileSync(join(bundle(h), "owner-file"), "untouched");
+    expectRejectedBeforeExtraction(h, bash(h, run(job, unpackName)));
+    expect(readdirSync(bundle(h))).toEqual(["owner-file"]);
+    expect(readFileSync(join(bundle(h), "owner-file"), "utf8")).toBe("untouched");
+  }));
+}
 
 test("the imported prebuild and sysroot are the producer's exact trees at the same absolute paths", () => withHarness(h => {
   const produced = produce(h);
