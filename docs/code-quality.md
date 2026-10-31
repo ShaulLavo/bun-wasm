@@ -294,16 +294,12 @@ clone boundary. The entire describeReceived bodies remain byte-identical to
 original source `ac43127c85addabed7e0c2a4883247ae074e858c`; only parameter types
 were added. Each conversion alone separates the pair into different scanner
 formats; their integration restores the same pair in TypeScript. No implementation
-was copied or refactored for this correction. The total remains 21 baseline
-entries with count 1 each. The other 19 entries, scan configuration and
+was copied or refactored for this correction. The current baseline has 13 entries
+with count 1 and a reviewed reason for each. The scan configuration and
 zero-new-clone limit stay unchanged. Both existing copy-rejection probes remain
 blocking.
 
-The explicit maintenance command is:
-
-```sh
-bunx --no-install jscpd --config .jscpd.json --baseline .jscpd-baseline.json --update-baseline --fail-on-empty
-```
+Do not use `jscpd --update-baseline`. Remove the source duplication first, then delete only the reviewed numeric fingerprint key and its required one-line reason in the same change. The duplicate gate compares the resulting allowance map with the immutable merge-parent baseline, so adding a new key or increasing a count fails.
 
 `quality:probes` injects temporary unused-variable, ambient-global, type, unused-file, exact-duplicate and
 structural-Rust violations and verifies each real gate fails. The baseline must pass before any injection. Every synthetic

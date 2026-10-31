@@ -63,6 +63,7 @@ jobs:
           (cd site && bun install --frozen-lockfile)
       - name: Blocking quality gates
         env:
+          JSCPD_BASE_REF: ${{ steps.refs.outputs.base }}
           TMPDIR: ${{ runner.temp }}
         run: bun run quality --javascript
       - name: Install lightweight CMake preflight tools
