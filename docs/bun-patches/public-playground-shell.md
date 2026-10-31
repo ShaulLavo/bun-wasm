@@ -3,7 +3,7 @@
 | Area | Classification | Source | Local change | Reason |
 | --- | --- | --- | --- | --- |
 | `web/src/playground/playground.ts` | Original Bun consumer adapter | Public `bash-web/session` entry at the exact bash-web revision pinned in the package manifests and shell builder | Pass the borrowed Waffle runtime, asset URLs, zsh editor option, terminal callbacks, and geometry to `BrowserSession.create` | Share the maintained session implementation instead of copying its input queue, bridge pump, or newline handling |
-| `crates/bunwasm-host/src/slots.rs::add_shell_imports` | Original native shell ABI adapter | bash-web `shell_terminal` imports at `0bf41ec6d7f149c77ec2ad00a97b5b9928b4a2e0` | Bind rows and the two-argument phase/status notification to inherited native stdio with fixed 80x24 geometry | The current shell must instantiate for native package scripts; phase notifications do not own native process cancellation |
+| `crates/bunwasm-host/src/slots.rs::add_shell_imports` | Original native shell ABI adapter | bash-web `src/runtime/guest-imports.ts` and `shell/engine/src/runtime_main.rs` at `54a296cb538a279d97506af558d815da94cf43e1` | Bind inherited native stdio, fixed 80x24 geometry, the two-argument phase/status notification, and the no-provider prompt imports (`prompt_names`, `prompt`, `prompt_update` return `-1`; `output_position` returns `0`) | The current shell must instantiate for native package scripts; prompt hooks are unavailable here and phase notifications do not own native process cancellation |
 | `crates/bunwasm-host/src/process/mod.rs`, `slots.rs::add_import` | Original native process ABI adapter | Waffle `docs/host-abi.md` and `packages/waffle/browser/worker.ts` at `ea051e5e9061bcd2bfed6faf363be0f21d211acc` (`waffle-v0.0.100`, `programs-v0.0.8`) | Capture sorted launch descriptors and expose `runtime_proc.inherited_fd` with the specified `-ENOENT` terminator | The released env utility forwards real inherited descriptors to npm-bin shebang commands |
 | Staged `env.wasm` | Host feature, unchanged upstream artifact | Waffle `packages/coreutils/dist/env.wasm`, `programs-v0.0.8`, source `ea051e5e9061bcd2bfed6faf363be0f21d211acc` | Copy to the native launcher guest path; no implementation changes | bash-web delegates external programs to the released Waffle families |
 
@@ -61,9 +61,13 @@ checksum receipt before writing the app's guest receipt.
 The native host supplies the same current terminal import signatures, including
 `rows() -> i32` and `phase(i32, i32)`. Its fixed geometry extends the existing
 80-column contract to 24 rows. Phase/status notifications are advisory on this
-host; the shell's actual process exit reports status. A compiled Wasm regression
-calls ready/running notifications with statuses 7, 130 and 0, checks geometry and
-confirms that notifications neither cancel the native process nor change stdin.
+host; the shell's actual process exit reports status. The four prompt imports use
+bash-web's canonical no-provider contract: `prompt_names`, `prompt` and
+`prompt_update` return `-1`, while `output_position` returns `0`; native package
+scripts do not start a prompt host. A compiled Wasm regression calls all four
+prompt imports and the ready/running notifications with statuses 7, 130 and 0,
+checks geometry, and confirms that notifications neither cancel the native process
+nor change stdin.
 
 The native process host supplies the released env utility's
 `runtime_proc.inherited_fd(index: u32) -> i32` import. It snapshots launch
