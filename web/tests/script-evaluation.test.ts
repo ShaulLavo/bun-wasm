@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { createScriptEvaluation } from "../src/script-evaluation.ts";
+import { productionHostEvaluation } from "../../scripts/module-compile-runtime.ts";
 
 function evaluator() {
   const context = createContext({});
@@ -57,4 +58,22 @@ test("generic evaluation still accepts user values and builtin-looking filenames
   expect(native.evalScript({ toString: () => "40 + 2" }, "bun-builtin:user-input")).toBe(42);
   expect(native.evalScript("42")).toBe(42);
   expect(native.mapPosition("unseen.ts", 2, 3)).toEqual([4, 6]);
+});
+
+test("trusted builtin evaluation preserves prepared columns and filenames through the real host projection", () => {
+  const native = productionHostEvaluation((_filename, line, column) => [line * 2, column * 2]);
+  const filename = native.preparedSourceURL(6, "bun-builtin:fixture", [2, 4, 3], "builtin-combination");
+  expect(native.preparedSourceName(filename)).toBe("bun-builtin:fixture");
+  expect(native.preparedSourceOrigin(filename)).toBe("builtin-combination");
+  expect(native.correctPreparedColumn(filename, 2, 12)).toBe(9);
+  expect(() => native.evalBuiltin('1;\nthrow new Error("prepared builtin failure")', filename, 9)).toThrow("prepared builtin failure");
+  expect(native.mapPosition(filename, 2, 12)).toEqual([2, 9]);
+  const named = "bun-builtin:named";
+  native.preparedColumns.set(named, { version: 6, columns: Int32Array.of(2, 4, 3) });
+  expect(native.evalBuiltin("42", named, 9)).toBe(42);
+  expect(native.mapPosition(named, 2, 12)).toEqual([10, 9]);
+  expect(native.evalScript("42", named)).toBe(42);
+  expect(native.mapPosition(named, 2, 12)).toEqual([4, 18]);
+  native.preparedColumns.clear();
+  expect(native.mapPosition(filename, 2, 12)).toEqual([2, 9]);
 });

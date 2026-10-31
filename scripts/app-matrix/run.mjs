@@ -15,7 +15,7 @@ import { networkGuardStage, runProductBrowserCase } from "./product-campaign.ts"
 import { guestProvenance, verifyPlaygroundBuilds } from "./product-provenance.ts";
 import { memorySampler } from "./memory.ts";
 import { boundedCleanup, HarnessCleanupError } from "./cleanup.ts";
-import { guestCommand as buildGuestCommand } from "./guest-command.ts";
+import { guestCommand as buildGuestCommand, prepareGuestProject, withGuestProject } from "./guest-command.ts";
 
 const interfaces = readFileSync("/proc/net/dev", "utf8").split("\n").filter(line => line.includes(":"));
 if (interfaces.some(line => line.split(":")[0].trim() !== "lo")) throw new Error("Use scripts/app-matrix.sh in its loopback-only network namespace");
@@ -159,17 +159,11 @@ function recordProductObservations(app, engine, host, stage, command, check, res
 }
 
 function prepare(app, name) {
-  const project = join(scratch, name);
-  mkdirSync(join(project, "tmp"), { recursive: true });
-  for (const [path, contents] of Object.entries(projectFiles(app, mirror.base))) {
-    mkdirSync(dirname(join(project, path)), { recursive: true });
-    writeFileSync(join(project, path), contents);
-  }
-  return project;
+  return prepareGuestProject(scratch, name, projectFiles(app, mirror.base));
 }
 
 async function checkPage(url, check, project, timeout) {
-  try { return await browserSession.checkPage(url, check, project, timeout); }
+  try { return await browserSession.checkPage(url, check, project.path, timeout); }
   catch (error) {
     if (error instanceof HarnessCleanupError) throw error;
     return { status: "fail", timedOut: error?.name === "TimeoutError", ...failure(String(error), "server") };
@@ -204,7 +198,7 @@ async function execute(app, engine, project, command, native = false) {
   const argv = native ? ["bun"].concat(args) : guestCommand(engine, project, args, port);
   const env = { PORT: String(port), CI: "1", NEXT_TELEMETRY_DISABLED: "1", ASTRO_TELEMETRY_DISABLED: "1", PRISMA_ENGINES_MIRROR: `${mirror.base}/blocked-prisma-engines` };
   if (["http", "page"].includes(command.check.kind)) {
-    const proc = launch(argv, project, logfile, env);
+    const proc = launch(argv, project.path, logfile, env);
     let checked;
     let stoppedByHarness;
     try {
@@ -213,17 +207,16 @@ async function execute(app, engine, project, command, native = false) {
     } finally { stop(proc.child); await proc.done; }
     return { ...checked, stoppedByHarness, ...exitProvenance({ ...await proc.done, timedOut: checked.timedOut, output: text(logfile) }) };
   }
-  const result = await capture(argv, project, logfile, env);
-  return { ...await checkCommand(command, result, path => text(join(project, path))), ...exitProvenance(result) };
+  const result = await capture(argv, project.path, logfile, env);
+  return { ...await checkCommand(command, result, path => text(join(project.path, path))), ...exitProvenance(result) };
 }
 
-async function nativeApp(app, engine, reference = false) {
-  const project = prepare(app, `${app.id}-${engine}`);
+async function nativeStages(app, engine, reference, project) {
   const logfile = join(options.output, `${app.id}-${engine}-install.log`);
   const args = ["install"];
   const argv = reference ? ["bun", "install", "--ignore-scripts", "--linker", "hoisted", "--registry", mirror.base] : guestCommand(engine, project, args, 0);
-  const installed = await capture(argv, project, logfile, { BUN_INSTALL_CACHE_DIR: join(project, ".native-cache"), DO_NOT_TRACK: "1" });
-  const install = record(app, engine, "native", "install", ["bun"].concat(args), { ...await checkInstall(app, installed, path => text(join(project, path))), ...exitProvenance(installed) });
+  const installed = await capture(argv, project.path, logfile, { BUN_INSTALL_CACHE_DIR: join(project.path, ".native-cache"), DO_NOT_TRACK: "1" });
+  const install = record(app, engine, "native", "install", ["bun"].concat(args), { ...await checkInstall(app, installed, path => text(join(project.path, path))), ...exitProvenance(installed) });
   const outcomes = new Map();
   for (const command of app.commands) {
     const prerequisite = command.after && outcomes.get(command.after);
@@ -235,7 +228,10 @@ async function nativeApp(app, engine, reference = false) {
     record(app, engine, "native", command.name, ["bun"].concat(command.args), result);
     if (result.harnessCleanup) throw new HarnessCleanupError(result.harnessCleanup, result.productError);
   }
-  rmSync(project, { recursive: true, force: true });
+}
+
+async function nativeApp(app, engine, reference = false) {
+  return withGuestProject(prepare(app, `${app.id}-${engine}`), project => nativeStages(app, engine, reference, project));
 }
 
 function report(provenance) {

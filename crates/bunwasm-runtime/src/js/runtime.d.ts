@@ -1,7 +1,37 @@
 declare namespace BunWasm {
   type FunctionKind = "normal" | "async" | "generator" | "async-generator";
+  type PrepareGoal = "script" | "eval" | "wrapper";
+  interface PreparedSource {
+    version: number;
+    alreadyPrepared: boolean;
+    edits: Int32Array;
+    columns: Int32Array;
+    fallback: string | null;
+    spreadEval: number;
+    unhookedAwaitUsing: number;
+  }
+  interface PreparedColumns { version: number; columns: Int32Array; }
+  interface Internal {
+    mainPath: string;
+    prepareText(source: string, goal: PrepareGoal, origin: string, name?: string): string;
+    prepareFunctionArgs(args: string[], kind: FunctionKind, name?: string): string[];
+    preparedColumns: Map<string, PreparedColumns>;
+    preparation: {
+      version: number; realm: string; counters: Record<string, number>;
+      correctPosition(name: string, line: number, column: number): number;
+      cacheBytes(): number; columnBytes(): number;
+    };
+  }
   interface Native {
-    functionImports(args: readonly string[], kind: FunctionKind): number[][];
+    readonly prepareVersion: number;
+    readonly contextHooks: boolean;
+    readonly preparedColumns: Map<string, PreparedColumns>;
+    preparedSourceURL(version: number, name: string, columns: readonly number[], origin: string): string;
+    preparedSourceName(filename: unknown): string | undefined;
+    preparedSourceOrigin(filename: unknown): string | undefined;
+    correctPreparedColumn(filename: string, line: number, column: number): number;
+    prepareSource(source: string, goal: PrepareGoal): string;
+    prepareFunction(args: readonly string[], kind: FunctionKind, hooks: boolean): string;
     resolve(specifier: string, referrer: string, require: boolean): string;
     importModule(path: string): Promise<unknown>;
     utf8Encode(value: string): Uint8Array<ArrayBuffer>;

@@ -269,7 +269,7 @@ async function withNativePageHost(close: "stalled" | "rejected", phase: "navigat
 
 function nativeRunner(host: Pick<Awaited<ReturnType<typeof browserHost>>, "checkPage">) {
   const source = ts.createSourceFile("run.mjs", readFileSync(new URL("./run.mjs", import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  const functions = new Set(["record", "recordProductObservations", "checkPage", "checkServer", "execute", "nativeApp"]);
+  const functions = new Set(["record", "recordProductObservations", "checkPage", "checkServer", "execute", "nativeStages", "nativeApp"]);
   const code = source.statements.filter(ts.isFunctionDeclaration).filter(node => functions.has(node.name?.text ?? "")).map(node => node.getText(source)).join("\n");
   const rows: { stage: string }[] = [];
   const writes: string[] = [];
@@ -282,7 +282,8 @@ function nativeRunner(host: Pick<Awaited<ReturnType<typeof browserHost>>, "check
     failure, HarnessCleanupError, earlyServerExit, exitProvenance, completeObservations, checkCommand, checkInstall, join,
     AbortSignal, Date, Map, Promise, JSON, console: { log() {} }, memory: { take: () => 0 }, results: rows,
     writeFileSync: (_path: string, content: string) => { writes.push(content); },
-    prepare: () => "/unused/project", capture: async () => ({ code: 0, output: "installed" }),
+    prepare: () => ({ root: "/unused/project", path: "/unused/project/app" }),
+    withGuestProject: async (project: unknown, run: (project: unknown) => Promise<unknown>) => run(project), capture: async () => ({ code: 0, output: "installed" }),
     guestCommand: () => ["unused"], launch: () => proc, stop: () => { stopped++; finish(); },
     freePort: async () => 3137, text: () => "retained native terminal output", rmSync() {},
     fetch: async () => ({ ok: true }), sleep: async () => {},

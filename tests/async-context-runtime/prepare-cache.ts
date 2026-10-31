@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+const testing = require("bun:internal-for-testing");
+const preparation = testing.preparation();
+const prepare = (source: string, goal = "script", name = "cache-hmr.js") => testing.prepareSource(source, goal, "cache-test", name);
+const source = 'async function cacheCase() { await 1; return 2; }';
+const hits = () => preparation.counters.cacheHits;
+prepare(source, "script");
+const before = hits();
+prepare(source, "wrapper");
+assert.equal(hits(), before);
+prepare(source, "wrapper");
+assert.equal(hits(), before + 1);
+const columns = preparation.columnBytes();
+for (let i = 0; i < 900; i++) {
+  prepare(`/*${i}:${"x".repeat(10000)}*/ ${source}`);
+  assert.ok(preparation.cacheBytes() <= 16 * 1024 * 1024);
+}
+assert.ok(preparation.columnBytes() <= columns + 1024);
+const evicted = hits();
+prepare(source, "script");
+assert.equal(hits(), evicted);
+const large = `/*${"x".repeat(2 * 1024 * 1024)}*/ ${source}`;
+prepare(large);
+const uncached = hits();
+prepare(large);
+assert.equal(hits(), uncached);
+const splitBody = "return async () => await a + b";
+const first = Function("a", "b", splitBody);
+Function("ab", splitBody);
+assert.equal(await first(1, 2)(), 3);
+console.log("PREPARE_CACHE_OK");
