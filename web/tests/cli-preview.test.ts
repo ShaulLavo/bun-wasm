@@ -1,12 +1,14 @@
 import { expect, test } from "bun:test";
 import { NetHost } from "waffle/browser/net/host";
+import { NetNamespace } from "waffle/browser/net/helper";
 import { createRing } from "waffle/browser/net/ring";
 import { NetHelper } from "../src/net/helper";
 import { createCliPreview } from "../scripts/cli-preview";
 
-function preview(guestPort: number, body: string) {
+async function preview(guestPort: number, body: string) {
   const ring = createRing();
-  const helper = new NetHelper(ring);
+  const namespace = await NetNamespace.create();
+  const helper = new NetHelper(ring, namespace);
   const host = new NetHost(ring, request => helper.handle(request));
   const listener = host.listen("127.0.0.1", guestPort);
   const server = createCliPreview(guestPort, helper);
@@ -25,9 +27,14 @@ function preview(guestPort: number, body: string) {
   }, 1);
   return { server, async dispose() {
     clearInterval(timer);
-    await server.stop(true);
-    for (const handle of connections) host.close(handle);
-    host.close(listener);
+    try {
+      await server.stop(true);
+      for (const handle of connections) host.close(handle);
+      host.close(listener);
+    } finally {
+      try { helper.dispose(); }
+      finally { namespace.dispose(); }
+    }
   } };
 }
 
@@ -35,10 +42,10 @@ test("independent CLI helpers isolate the same virtual port from a real listener
   const occupied = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("occupied") });
   const occupiedPort = occupied.port;
   if (occupiedPort === undefined) throw new Error("TCP listener has no port");
-  const owners: ReturnType<typeof preview>[] = [];
+  const owners: Awaited<ReturnType<typeof preview>>[] = [];
   try {
-    const first = preview(occupiedPort, "first"); owners.push(first);
-    const second = preview(occupiedPort, "second"); owners.push(second);
+    const first = await preview(occupiedPort, "first"); owners.push(first);
+    const second = await preview(occupiedPort, "second"); owners.push(second);
     expect(first.server.port).not.toBe(occupied.port);
     expect(second.server.port).not.toBe(occupied.port);
     expect(first.server.port).not.toBe(second.server.port);

@@ -5,8 +5,10 @@
 | Source | Class | Origin and change |
 | --- | --- | --- |
 | `jsc/webkit-wasi.patch`, `runtime/WASIMemoryTelemetry.h` | Port | Original WASI allocation recorder. No upstream implementation copied. |
-| WebKit `runtime/JSArrayBufferView.cpp`, `runtime/ArrayBuffer.cpp`, `runtime/JSGenericTypedArrayViewInlines.h`, and `heap/Heap.h` | Port | Minimal WASI-only allocation scopes, an observe-only direct typed-array request scope, and a read-only accessor for the existing completed-full-GC timestamp. |
+| WebKit `runtime/JSArrayBufferView.cpp`, `runtime/ArrayBuffer.cpp`, `runtime/JSGenericTypedArrayViewInlines.h`, and `heap/Heap.h` | Port | Minimal WASI-only allocation scopes, an observe-only direct typed-array request scope with an explicit nullable-failure latch before OOM exception construction, and a read-only accessor for the existing completed-full-GC timestamp. |
 | `crates/bunwasm-jsc/{cpp/helpers.cpp,src/sys.rs}` and `crates/bunwasm-engine-jsc/src/vm.rs` | Port | Original adapters to existing JSC heap and option APIs, plus a cached readout. No upstream implementation copied. |
+| `crates/bunwasm-jsc/tests/typed-array-create.h` | Port test fixture | Unchanged prefix of WebKit `Source/JavaScriptCore/runtime/JSGenericTypedArrayViewInlines.h` through its first `create` overload at the revision below, including its license. Replays the maintained patch without a full JSC build. |
+| `crates/bunwasm-jsc/tests/{memory-telemetry.cpp,typed-array-create.cpp}` and `scripts/jsc-memory-telemetry.test.ts` | Original test adapter | Compiles the patched recorder and actual patched `create` body against isolated callbacks. No VM, allocator, GC, or exception implementation is copied. |
 
 The upstream reference is Bun's WebKit fork at
 `3d3257150c40a1aabdc5f8b48d5b33d0413674cb`. The touched paths are
@@ -65,11 +67,25 @@ size_t length)` overload has an observe-only outer scope. Its original logical
 request is `uint64_t(length) * sizeof(Adaptor::Type)`. The scope stays active
 while the inner vector scope completes and the result cell is allocated and
 finished. `FailurePolicy::ObserveOnly` never reports a failed allocation from
-scope exit or abandonment. An inner vector scope can still report a returned
-failure. A result-cell assertion that traps instead leaves an active request
+scope exit or abandonment. When `ConstructionContext` returns failure, the
+existing `if (!context)` branch explicitly calls `request.fail()` before
+`throwOutOfMemoryError`. This writes the cached failure immediately, without
+ending the active scope or relying on exception construction to return or unwind.
+It leaves allocation, GC, returns, and exception behavior unchanged. An inner
+vector scope can also report a returned failure. Repeated reports for the same
+outer sequence retain the original request. A result-cell assertion after a
+successful context instead leaves an active request
 with no fabricated engine failure. The logical request is not the cell size,
 marked-block size, allocator padding, or proof that the vector allocation failed.
 Other overloads are unchanged.
+
+This hook cannot recover the historical request length from terminal text or
+an allocator slab failure. Those quantities remain unavailable. If a recorder
+caller has no exact logical request, `UINT64_MAX` remains the unknown-byte value
+and consumers leave bytes null. The core libc failure, the JSC cached latch, and
+raw terminal observations remain separate records. The 65,536-byte aligned
+allocation in the retained Next diagnostic is a libc request, not a typed-array
+length or proof of a particular memory-cap cause.
 
 The recorder is single-agent state, matching this WASI JSC port. The most recent scoped failure remains latched across samples and successful
 allocations. A later failed outermost scope replaces it. This change does not instrument every
@@ -138,3 +154,15 @@ adapter against retained WASI JSC headers. These checks establish recorder and
 source behavior only. Actual counter movement, exported-symbol retention, safe
 host reads after a real Wasm allocation failure, and acceptance without forced
 GC require the producer's composed engine pair.
+
+The source replay applies the actual typed-array patch hunks to the pinned
+upstream fixture, then compiles the resulting `create` body with both WASI and
+non-WASI callbacks. It checks success, nullable failure with an OOM callback
+that returns, nullable failure with an OOM callback that exits without scope
+unwinding, and a fatal result-cell callback after context success. Context,
+cell, finish, and throw-scope counts check the original control flow. The header
+controls also check explicit failure before scope exit and unknown bytes.
+ABI version 1, all 24 field offsets, the 192-byte record, and the cached-only
+export contract are unchanged. A future single canonical JSC build and composed
+delivery must include the new patch; these source controls do not qualify an
+old side binary or replace the actual Next gate.

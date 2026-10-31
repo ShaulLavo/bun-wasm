@@ -5,6 +5,7 @@ import { networkPathScopeFixture, socketDirectoryFixture } from "../../web/tests
 import { outcomeWord } from "waffle/proc/outcome";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import type { Runtime, GuestLauncher, ProgramDefinition, ProcessService } from "waffle";
+import type { ProcessRuntime } from "../../src/process-runtime.js";
 import { FilesystemClient } from "waffle/fs/client";
 import { MemoryBackend } from "waffle/fs/backend";
 import { FilesystemService } from "waffle/fs/service";
@@ -15,7 +16,7 @@ import { runtimeSharedObjectRoute } from "../../web/src/shared-objects/runtime.j
 const workerUrl = "https://example.test/worker.js";
 const notificationWorkerUrl = "https://example.test/notification-worker.js";
 type FixtureOptions = Omit<BunAdapterOptions, "workerUrl" | "notificationWorkerUrl"> & { workerUrl?: string | URL; notificationWorkerUrl?: string | URL };
-const installBunAdapters = (runtime: Runtime, options: FixtureOptions = {}) => installReal(runtime, { workerUrl, notificationWorkerUrl, ...options });
+const installBunAdapters = (runtime: ProcessRuntime, options: FixtureOptions = {}) => installReal(runtime, { workerUrl, notificationWorkerUrl, ...options });
 
 
 const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));

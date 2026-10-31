@@ -175,7 +175,8 @@ async function checkInstalledRelease(root: string) {
   if (!main) throw new Error("Missing main fixture");
   const runtime = resolveRuntimePackage(main);
   expect(runtime.metadata.version).toBe(release.version);
-  expect(Object.keys(runtime.metadata.exports)).toHaveLength(76);
+  const metadata = await Bun.file(join(runtime.path, "package.json")).bytes();
+  expect(new Bun.CryptoHasher("sha256").update(metadata).digest("hex")).toBe(release.files["package.json"]);
   for (const key of Object.keys(runtime.metadata.exports)) {
     const specifier = key === "." ? "waffle" : "waffle" + key.slice(1);
     expect(await Bun.file(runtime.source(specifier)).exists()).toBe(true);
@@ -187,7 +188,13 @@ async function checkInstalledRelease(root: string) {
   expect(result.success).toBe(true);
   if (!result.metafile) throw new Error("Missing bundle inputs");
   const inputs = Object.keys(result.metafile.inputs);
-  expect(inputs.filter(input => runtime.relativeInput(input) === "proc/worker-client.ts")).toHaveLength(1);
+  for (const module of ["proc/worker-client.ts", "browser/net/namespace.ts", "browser/net/module.ts"]) {
+    const selected = inputs.filter(input => input.endsWith("/" + module));
+    expect(selected).toHaveLength(1);
+    const input = selected[0];
+    if (!input) throw new Error(`Missing runtime module: ${module}`);
+    expect(runtime.relativeInput(input)).toBe(module);
+  }
   const loaders = result.outputs.filter(file => file.path.endsWith(".js"));
   const networkAssets = new Set<string>();
   for (const file of loaders) {

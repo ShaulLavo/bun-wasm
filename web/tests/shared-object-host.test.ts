@@ -8,7 +8,8 @@ import { bunLauncher } from "../src/bun-launcher";
 import { installBunSharedObjects } from "../../src/shared-objects";
 import { processRuntimeFixture } from "./process-runtime-fixture";
 import { networkPathScopeFixture, socketDirectoryFixture } from "./socket-runtime-fixture";
-import type { Runtime, RuntimeProcessContext, ProcessService } from "waffle";
+import type { RuntimeProcessContext, ProcessService } from "waffle";
+import type { ProcessRuntime } from "../../src/process-runtime.js";
 import type { RunRequest } from "../src/bun-executor";
 import type { SharedObjects } from "../src/shared-objects/protocol";
 import { memoryViews } from "waffle/core/memory-views";
@@ -41,7 +42,7 @@ function fixtureRuntime() {
   cleanup.add(() => runtime.dispose());
   return runtime;
 }
-function install(runtime: Runtime) {
+function install(runtime: ProcessRuntime) {
   const installation = installRuntimeSharedObjects(runtime);
   cleanup.add(installation.close);
   return installation;
@@ -57,7 +58,7 @@ function processContext() {
   return { context, failures, revoke() { for (const callback of Array.from(revocations)) callback(); } };
 }
 interface Launch { request: RunRequest; onMessage(message: unknown): void; cleanup(): void; }
-async function launch(runtime: Runtime, context: RuntimeProcessContext, rejected = false) {
+async function launch(runtime: ProcessRuntime, context: RuntimeProcessContext, rejected = false) {
   let launched: Launch | undefined;
   const service = { networkPathScope: networkPathScopeFixture, launchWorker(_context: unknown, options: Launch) {
     launched = options;
