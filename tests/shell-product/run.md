@@ -78,13 +78,14 @@ an inline `PORT=3001` override. Raw terminal output and screenshots are retained
 Task asset/registry servers, browsers, copied app sources, and scratch are removed
 on completion or interruption. The prepared packages and shared caches remain.
 
-The host-interface guard cannot accept the older metadata-free packages. Keep
-this migration in a draft branch until runtime 0.0.106 and programs 0.0.14 finish
-once through the existing exact-peer route. Then the upstream owner must publish
-a metadata-bearing runtime and a verified `waffle-program-release/2` family
-rebind, with unchanged artifact and receipt evidence. Update the checked archive,
-source, builder, patch, and family pins to those real assets before merging or
-running consumer acceptance. No unreleased pin is a substitute.
+The checked public inputs are runtime 0.0.107 and programs 0.0.15, with
+`waffleHostInterface: 1` and `waffle-program-release/2`. Their archive, source,
+builder, patch, manifest, and family pins remain separate integrity requirements.
+The qualified Bash source must carry matching metadata and programs 0.0.15.
+The retained runtime 0.0.106 Bash source is not that qualification. Do not edit
+its installed metadata or replace the frozen producer to bypass this gate.
+The parent owns the runtime 0.0.106 once-through seal and final acceptance.
+Keep this adoption draft until those prerequisites and independent review pass.
 
 ## Select the workflow
 

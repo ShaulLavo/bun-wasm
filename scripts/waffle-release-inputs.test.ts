@@ -130,3 +130,19 @@ for (const value of [undefined, 0, 1.5, "1", 2]) {
     } finally { await rm(f.root, { recursive: true, force: true }); }
   });
 }
+
+test("public adoption keeps the exact build pin separate from wildcard placement", async () => {
+  const root = join(import.meta.dir, "..");
+  const metadata = await Bun.file(join(root, "package.json")).json();
+  expect(metadata.peerDependencies.waffle).toBe("*");
+  expect(metadata.devDependencies.waffle).toBe(release.url);
+  expect(metadata.peerDependencies["waffle-base"]).toBe(release.programs.base.url);
+  expect(release.hostInterface).toBe(1);
+  expect(release.programs.schema).toBe("waffle-program-release/2");
+  expect(release.programs.toolCommit).toMatch(/^[a-f0-9]{40}$/);
+  for (const scope of ["web", "sandbox"]) {
+    const consumer = await Bun.file(join(root, scope, "package.json")).json();
+    expect(consumer.dependencies.waffle).toBe(release.url);
+    expect(consumer.dependencies["waffle-base"]).toBe(release.programs.base.url);
+  }
+});
