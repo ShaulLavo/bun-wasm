@@ -76,13 +76,15 @@ function readFrozenAllocatorFailure(memory: WebAssembly.Memory, exports: WebAsse
 interface EngineReadout { failure: FailedAllocation | null; heap: number | null; buffers: number | null; counters: Record<string, number | null> }
 function engineReadout(engine: TelemetryEngine, memory: WebAssembly.Memory, exports: WebAssembly.Exports): EngineReadout | null {
   if (engine === "quickjs") {
-    const data = read(memory, exports, "quickjs_memory_telemetry", 96);
+    const data = read(memory, exports, "quickjs_memory_telemetry", 128);
     if (!data) return null;
     return {
       failure: failure(data[8], data[9], quickjsCategories),
       heap: count(data[4]), buffers: count(data[5]),
       counters: { refreshSequence: count(data[2]), mallocBytes: count(data[3]), structuralHeapBytes: count(data[4]),
-        arrayBufferBytes: count(data[5]), arrayBufferCount: count(data[6]), countersValid: count(data[11]) },
+        arrayBufferBytes: count(data[5]), arrayBufferCount: count(data[6]), countersValid: count(data[11]),
+        automaticGcCount: count(data[12]), mallocBytesAfterAutomaticGc: count(data[13]),
+        mallocGcThreshold: count(data[14]), currentMallocBytes: count(data[15]) },
     };
   }
   if (engine === "hermes") {

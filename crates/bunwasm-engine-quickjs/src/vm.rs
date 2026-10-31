@@ -36,12 +36,16 @@ pub struct QuickJsMemoryTelemetry {
     pub failed_category: u64,
     pub failed_size_known: u64,
     pub counters_valid: u64,
+    pub automatic_gc_count: u64,
+    pub malloc_size_after_automatic_gc: u64,
+    pub malloc_gc_threshold: u64,
+    pub current_malloc_size: u64,
 }
 
-const _: () = assert!(std::mem::size_of::<QuickJsMemoryTelemetry>() == 96);
+const _: () = assert!(std::mem::size_of::<QuickJsMemoryTelemetry>() == 128);
 static NO_MEMORY_TELEMETRY: QuickJsMemoryTelemetry = QuickJsMemoryTelemetry {
     abi_version: 1,
-    byte_size: 96,
+    byte_size: 128,
     refresh_sequence: 0,
     malloc_size: u64::MAX,
     memory_used_size: u64::MAX,
@@ -52,6 +56,10 @@ static NO_MEMORY_TELEMETRY: QuickJsMemoryTelemetry = QuickJsMemoryTelemetry {
     failed_category: 0,
     failed_size_known: 0,
     counters_valid: 0,
+    automatic_gc_count: 0,
+    malloc_size_after_automatic_gc: u64::MAX,
+    malloc_gc_threshold: u64::MAX,
+    current_malloc_size: u64::MAX,
 };
 
 thread_local! {
@@ -812,7 +820,7 @@ mod tests {
         let engine = QuickJs::new(Rc::new(InterruptHost::new(InterruptMode::Continue)));
         // SAFETY: the bound runtime is live for this test; accessors return fixed cached data.
         let initial = unsafe { *quickjs_memory_telemetry() };
-        assert_eq!(initial.byte_size, 96);
+        assert_eq!(initial.byte_size, 128);
         assert_eq!(initial.counters_valid, 0);
         let baseline = engine.memory_usage();
         assert_eq!(memory_field(&baseline, "rss"), Val::Null);
@@ -869,6 +877,104 @@ mod tests {
             Val::Str("quickjs.arrayBuffer".into())
         );
         std::mem::forget(engine);
+    }
+
+    #[test]
+    fn memory_telemetry_observes_direct_module_declarations() {
+        let engine = QuickJs::new(Rc::new(InterruptHost::new(InterruptMode::Continue)));
+        for _ in 0..10_000 {
+            let value = engine
+                .eval_script(
+                    "(() => { const a = {}; a.self = a; a.payload = 'x'.repeat(4096); return a; })()",
+                    "automatic-gc-warmup",
+                    1,
+                )
+                .unwrap();
+            drop(value);
+            // SAFETY: this is a cached, allocation-free readout.
+            if unsafe { (*quickjs_memory_telemetry()).automatic_gc_count } > 0 {
+                break;
+            }
+        }
+        let mut samples = Vec::new();
+        for generation in 0..6 {
+            let name = format!("/reload/{generation}.mjs");
+            let payload = "x".repeat(16 * 1024);
+            let source = format!(
+                "export const generation = {generation}; export const payload = {payload:?};"
+            );
+            let promise = engine.eval_module(&name, &source).unwrap();
+            drop(promise);
+            while engine.run_jobs() {}
+            engine.gc();
+            // SAFETY: the runtime is live and the refresh is after a normal module turn.
+            let telemetry = unsafe { *quickjs_memory_telemetry_refresh() };
+            samples.push((
+                name,
+                telemetry.malloc_size,
+                telemetry.memory_used_size,
+                telemetry.automatic_gc_count,
+                telemetry.malloc_size_after_automatic_gc,
+                telemetry.malloc_gc_threshold,
+                telemetry.current_malloc_size,
+            ));
+        }
+        for (name, malloc, structural, gc_count, after_gc, threshold, current) in &samples {
+            println!(
+                "{{\"path\":{name:?},\"mallocBytes\":{malloc},\"structuralBytes\":{structural},\"automaticGcCount\":{gc_count},\"mallocBytesAfterAutomaticGc\":{after_gc},\"mallocGcThreshold\":{threshold},\"currentMallocBytes\":{current}}}"
+            );
+        }
+        let mut changed_path_samples = Vec::new();
+        for generation in 0..4 {
+            let source = format!(
+                "export const generation = {generation}; export const payload = {payload:?};",
+                payload = "y".repeat(16 * 1024)
+            );
+            let result = engine.eval_module("/reload/changed.mjs", &source);
+            let Ok(promise) = result else {
+                break;
+            };
+            drop(promise);
+            while engine.run_jobs() {}
+            engine.gc();
+            // SAFETY: the runtime is live and the refresh is after a normal module turn.
+            let telemetry = unsafe { *quickjs_memory_telemetry_refresh() };
+            changed_path_samples.push((
+                generation,
+                telemetry.malloc_size,
+                telemetry.memory_used_size,
+                telemetry.automatic_gc_count,
+                telemetry.malloc_size_after_automatic_gc,
+                telemetry.current_malloc_size,
+            ));
+        }
+        for (generation, malloc, structural, gc_count, after_gc, current) in &changed_path_samples {
+            println!(
+                "{{\"path\":\"/reload/changed.mjs\",\"generation\":{generation},\"mallocBytes\":{malloc},\"structuralBytes\":{structural},\"automaticGcCount\":{gc_count},\"mallocBytesAfterAutomaticGc\":{after_gc},\"currentMallocBytes\":{current}}}"
+            );
+        }
+        std::mem::forget(engine);
+        assert_eq!(
+            samples.len(),
+            6,
+            "all six unique declarations must complete"
+        );
+        assert_eq!(
+            changed_path_samples.len(),
+            4,
+            "all four same-path declarations must complete"
+        );
+        let valid = samples
+            .iter()
+            .all(|sample| sample.3 > 0 && sample.4 != u64::MAX && sample.6 >= sample.4)
+            && samples.windows(2).all(|pair| pair[1].3 >= pair[0].3)
+            && changed_path_samples.windows(2).all(|pair| {
+                pair[1].1 > pair[0].1
+                    && pair[1].2 > pair[0].2
+                    && pair[1].3 == pair[0].3
+                    && pair[1].4 == pair[0].4
+            });
+        assert!(valid);
     }
 
     #[test]

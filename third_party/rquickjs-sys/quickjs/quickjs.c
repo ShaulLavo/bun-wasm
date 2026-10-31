@@ -1723,8 +1723,12 @@ static void js_trigger_gc(JSRuntime *rt, size_t size)
         }
 #endif
         JS_RunGC(rt);
+        rt->bunwasm_memory_telemetry.automatic_gc_count++;
+        rt->bunwasm_memory_telemetry.malloc_size_after_automatic_gc =
+            rt->malloc_state.malloc_size;
         rt->malloc_gc_threshold = rt->malloc_state.malloc_size +
             (rt->malloc_state.malloc_size >> 1);
+        rt->bunwasm_memory_telemetry.malloc_gc_threshold = rt->malloc_gc_threshold;
     }
 }
 
@@ -2422,6 +2426,9 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
         .malloc_size = UINT64_MAX, .memory_used_size = UINT64_MAX,
         .array_buffer_size = UINT64_MAX, .array_buffer_count = UINT64_MAX,
         .wasm_capacity = UINT64_MAX, .failed_size = UINT64_MAX,
+        .malloc_size_after_automatic_gc = UINT64_MAX,
+        .malloc_gc_threshold = UINT64_MAX,
+        .current_malloc_size = UINT64_MAX,
     };
     rt->mf = *mf;
     if (!rt->mf.js_malloc_usable_size) {
@@ -2434,6 +2441,8 @@ JSRuntime *JS_NewRuntime2(const JSMallocFunctions *mf, void *opaque)
     rt->malloc_state = ms;
     js_arena_init(rt);
     rt->malloc_gc_threshold = 256 * 1024;
+    rt->bunwasm_memory_telemetry.malloc_gc_threshold = rt->malloc_gc_threshold;
+    rt->bunwasm_memory_telemetry.current_malloc_size = rt->malloc_state.malloc_size;
 
     init_list_head(&rt->context_list);
     init_list_head(&rt->gc_obj_list);
@@ -8048,6 +8057,8 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
 /* bun-wasm: accessor only returns cached bytes, including a failure latched in-place. */
 const JSBunwasmMemoryTelemetry *JS_bunwasm_MemoryTelemetry(JSRuntime *rt)
 {
+    rt->bunwasm_memory_telemetry.current_malloc_size = rt->malloc_state.malloc_size;
+    rt->bunwasm_memory_telemetry.malloc_gc_threshold = rt->malloc_gc_threshold;
     return &rt->bunwasm_memory_telemetry;
 }
 
@@ -8058,6 +8069,7 @@ const JSBunwasmMemoryTelemetry *JS_bunwasm_RefreshMemoryTelemetry(JSRuntime *rt)
     JSBunwasmMemoryTelemetry *cache = &rt->bunwasm_memory_telemetry;
     JS_ComputeMemoryUsage(rt, &usage);
     cache->malloc_size = usage.malloc_size;
+    cache->current_malloc_size = rt->malloc_state.malloc_size;
     cache->memory_used_size = usage.memory_used_size;
     cache->array_buffer_size = usage.array_buffer_size;
     cache->array_buffer_count = usage.array_buffer_count;
