@@ -97,7 +97,7 @@ export class Shell {
     if (!shell || this.disposed) throw new Error("Shell is closed");
     if (Atomics.load(this.bridge.state, control.phase) === 2) throw new Error("Shell is running a foreground command");
     const ready = await shell.waitForPrompt({ signal: this.admission.signal });
-    this.input(new TextEncoder().encode(`\x05\x15${command}\r`));
+    this.input(new TextEncoder().encode(`\x05\x15\x0b${command}\r`));
     this.acceptPrompt(await shell.waitForPrompt({ after: ready.generation, signal: this.admission.signal }));
   }
 
