@@ -9,10 +9,9 @@ import { parseArgs } from "node:util";
 import { gzipSync } from "node:zlib";
 import { chromium, type Browser, type Page } from "playwright";
 import { sourceAttribution } from "./measure-light-sources";
-import type { Shell } from "../web/src/shell";
 import type { openTerminal } from "../web/src/terminal-mount";
 
-type ObservedDemo = { term: Parameters<typeof openTerminal>[0]; shell?: Pick<Shell, "submit"> };
+type ObservedDemo = { term: Parameters<typeof openTerminal>[0]; shell?: { submit(command: string): Promise<void> } };
 
 interface Capture {
   prompt: number | null;

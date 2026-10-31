@@ -23,7 +23,7 @@ for (const app of ["web", "sandbox"]) test(`${app} keeps Bun execution lazy alon
       expect(eager.some(path => path.endsWith(`/web/src/${file}`) || path === `web/src/${file}`)).toBe(false);
     }
     expect(eager.some(path => path.endsWith("/engine-loader.ts"))).toBe(true);
-    for (const suffix of ["/proc/supervisor.ts", "/proc/registry.ts", "/browser/process-broker.ts"]) {
+    for (const suffix of ["/proc/supervisor.ts", "/proc/registry.ts", "/browser/process-broker.ts", "/proc/command-runner.ts", "/proc/command-stdio.ts"]) {
       expect(eager.some(path => path.endsWith(suffix))).toBe(false);
       expect(Object.keys(result.metafile!.inputs).some(path => path.endsWith(suffix))).toBe(true);
     }
