@@ -87,7 +87,7 @@ allocator bytes and must not be added to them.
 Only normal phase samples may invoke engine refresh. A detected failure or
 terminal cleanup permanently disables refresh for that process. Terminal
 snapshots use cached getters before linked-group disposal. The executor observes
-side imports during `instantiateLinkPlan()`, when pinned Waffle 0.0.105 creates
+side imports during `LinkedGroup.initialize()`, when pinned Waffle 0.0.107 creates
 the side instances, and restores the WASI import resolver in `finally`. The
 observer stays on each resolved import through initialization and entry. The
 Next hook reads host diagnostics, never process.memoryUsage or other JS on a faulted guest,
