@@ -108,7 +108,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     Previews: class { ready = Promise.resolve("ready"); register() {} unregister() {} url() { return "https://preview.test/"; } },
     HostedPreviews: class {},
     linkLocalUrls() {}, openTerminal() {},
-    Shell: class { static async create(options: { onState(state: "ready"): void }) { options.onState("ready"); return { running: false, dispose: async () => {}, submit: async () => {}, input() {}, resize() {} }; } },
+    BrowserSession: class { static async create(options: { onState(state: "ready"): void }) { options.onState("ready"); return { running: false, dispose: async () => {}, submit: async () => {}, input() {}, resize() {} }; } },
     startRun: (options: { args: string[] }) => { const run = { args: options.args, done: deferred<{ code: number }>(), kills: [] as number[] }; runs.push(run); return { done: run.done.promise, kill: (signal: number) => run.kills.push(signal) }; },
     examples: sources, HOME: "/home/user",
     location: { href: "https://example.test/", reloads: 0, reload() { this.reloads++; }, assign() {} },
@@ -127,7 +127,7 @@ export async function models(fixture = filesystemFixture(), sources: Record<stri
     "engine-loader": ["ENGINES", "WasmMissing", "isEngine", "loadWasm", "mb", "registerModuleScope"],
     "preview": ["Previews"], "hosted-previews": ["HostedPreviews"], "terminal-links": ["linkLocalUrls"],
     "terminal-mount": ["openTerminal"],
-    "runner": ["startRun"], "shell": ["Shell"], "examples": ["examples", "HOME"],
+    "runner": ["startRun"], "bash-web/session": ["BrowserSession"], "examples": ["examples", "HOME"],
   };
   const result = await Bun.build({
     entrypoints: ["ui-entry"], target: "bun", format: "esm",

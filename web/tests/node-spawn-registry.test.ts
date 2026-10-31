@@ -7,7 +7,7 @@ for (const executable of nodeExecutables) test(`Node host registry explicitly re
   const broker = new NodeProcessBroker({ module, launch() { throw new Error("unexpected launch"); } });
   try {
     const registry = createNodeExecutableRegistry(module, broker.preopens);
-    expect(await registry.resolve(executable)).toEqual({ module, adapter: "bun", interruptible: false });
+    expect(await registry.resolve(executable)).toEqual({ kind: "module", module, adapter: "bun", interruptible: false });
   } finally { await broker.dispose(); }
 });
 
@@ -85,7 +85,7 @@ for (const engine of ["quickjs", "jsc", "hermes"] as const) test(`explicit ${eng
   try {
     const registry = createNodeExecutableRegistry(module, broker.preopens, { [engine]: module });
     for (const command of ["bun", "node", "nodejs"]) {
-      expect(await registry.resolve(`/opt/bun/${engine}/bin/${command}`)).toEqual({ module, adapter: "bun", interruptible: false });
+      expect(await registry.resolve(`/opt/bun/${engine}/bin/${command}`)).toEqual({ kind: "module", module, adapter: "bun", interruptible: false });
     }
     await expect(registry.resolve(`/opt/bun/${engine === "hermes" ? "jsc" : "hermes"}/bin/bun`)).rejects.toMatchObject({ code: "ENOENT" });
   } finally { await broker.dispose(); }
