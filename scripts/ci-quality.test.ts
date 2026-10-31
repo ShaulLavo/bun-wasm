@@ -1379,12 +1379,15 @@ test("the JSC guest builds once in the background, overlapping only other builds
   expect(wait).toBeLessThan(rust.indexOf("name: Build the single tools fixture"));
   expect(rust.match(/bash scripts\/build-bun-jsc\.sh/g)).toHaveLength(1);
   const launch = workflowString(workflowField(nativeWorkflowStep("name", "Start the JSC Cargo guest build"), "run"));
-  expect(launch).toContain("setsid nice -n 19 bash -c");
-  expect(launch).toContain("< /dev/null &");
+  expect(launch).toContain('bun scripts/ci-jsc-worker.ts start "$RUNNER_TEMP/jsc-guest" 3600 nice -n 19 bash -c');
+  expect(launch).not.toContain('"$!"');
+  const cleanup = nativeWorkflowStep("name", "Stop the JSC Cargo guest build");
+  expect(workflowField(cleanup, "if")).toBe("${{ always() && needs.quality.outputs.jsc == 'true' }}");
+  expect(workflowField(cleanup, "run")).toBe('bun scripts/ci-jsc-worker.ts stop "$RUNNER_TEMP/jsc-guest"\n');
 });
 
 for (const [label, status, expected] of [
-  ["a finished build passes", "0", 0], ["a failed build fails", "3", 1],
+  ["a finished build passes", "0", 0], ["a failed build fails", "3", 3],
   ["a build that died without a status fails", undefined, 1],
 ] satisfies [string, string | undefined, number][]) {
   test(`JSC guest wait: ${label}`, () => {
@@ -1394,8 +1397,6 @@ for (const [label, status, expected] of [
       const state = join(directory, "jsc-guest");
       mkdirSync(state);
       writeFileSync(join(state, "build.log"), "background build log\n");
-      // Above Linux's largest pid_max, so the recorded build process is gone.
-      writeFileSync(join(state, "pid"), String(2 ** 22 + 1));
       if (status !== undefined) writeFileSync(join(state, "status"), `${status}\n`);
       const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-c", script], { env: { ...process.env, RUNNER_TEMP: directory }, encoding: "utf8", timeout: 5000 });
       expect(result.status).toBe(expected);
