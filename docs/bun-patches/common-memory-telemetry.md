@@ -87,10 +87,10 @@ allocator bytes and must not be added to them.
 Only normal phase samples may invoke engine refresh. A detected failure or
 terminal cleanup permanently disables refresh for that process. Terminal
 snapshots use cached getters before linked-group disposal. The executor observes
-side imports during `group.initialize()`, when Waffle creates the side instances,
-and restores the WASI import resolver in `finally`. The observer stays on each
-resolved import after initialization. The Next hook reads
-host diagnostics, never process.memoryUsage or other JS on a faulted guest,
+side imports during `instantiateLinkPlan()`, when pinned Waffle 0.0.105 creates
+the side instances, and restores the WASI import resolver in `finally`. The
+observer stays on each resolved import through initialization and entry. The
+Next hook reads host diagnostics, never process.memoryUsage or other JS on a faulted guest,
 and never requests GC. Counter and process identities remain in its result.
 
 
@@ -118,7 +118,7 @@ unrelated commands stay visible as separate raw facts. See the
 ## Linked-group lifecycle reference
 
 The executor's link lifecycle is adapted from Waffle `link/worker.ts` at the
-pinned `waffle-v0.0.95` release. It keeps Waffle's preparation, active checks,
+pinned `waffle-v0.0.105` release. It keeps Waffle's preparation, active checks,
 initialization, and group disposal. The local changes retain access to side
 instances for telemetry, establish an allocator-only reader before constructor
 execution, and publish cached terminal data before disposal. Linking and memory

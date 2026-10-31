@@ -26,7 +26,6 @@ let linkedInitializationFailure: Error | undefined;
 let linkedAllocatorCore: WebAssembly.Instance | undefined;
 let linkedDisposals = 0;
 let linkedSideReads = 0;
-let linkedInitializeProbe: ((wasi: Wasi) => void) | undefined;
 mock.module("waffle/link", () => ({ ...actualLink, instantiateLinkPlan(...args: Parameters<typeof actualLink.instantiateLinkPlan>) {
   const group = actualLink.instantiateLinkPlan(...args);
   return { ...group, entry: linkedAllocatorCore ?? group.entry,
@@ -34,11 +33,7 @@ mock.module("waffle/link", () => ({ ...actualLink, instantiateLinkPlan(...args: 
       quickjs_memory_telemetry() { linkedSideReads++; throw Error("faulted side read"); },
       jsc_memory_telemetry_refresh() { linkedSideReads++; throw Error("faulted side refresh"); },
     } } })) : group.libraries,
-    initialize() {
-      if (linkedInitializeProbe) linkedInitializeProbe(args[1].wasi);
-      if (linkedInitializationFailure) throw linkedInitializationFailure;
-      group.initialize();
-    },
+    initialize() { if (linkedInitializationFailure) throw linkedInitializationFailure; group.initialize(); },
     dispose() {
     linkedDisposals++;
     group.dispose();
@@ -485,14 +480,6 @@ for (const route of ["runtime_proc", "wasi_snapshot_preview1"] as const) {
   });
 }
 
-function importedFunctionModule(namespace: string, name: string): WebAssembly.Module {
-  const encoder = new TextEncoder();
-  const bytes = (value: string) => [value.length].concat(Array.from(encoder.encode(value)));
-  const type = [1, 4, 1, 0x60, 0, 0];
-  const imported = [1].concat(bytes(namespace), bytes(name), [0, 0]);
-  return new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0].concat(type, 2, imported.length).concat(imported)));
-}
-
 for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${boundary} keeps the refresh observer after initialization`, async () => {
   const { quickjsPair } = await import("../../tests/package/quickjs-plan-fixture");
   const { prepareProgram, programLinkPlan } = await import("../../src/assets");
@@ -506,12 +493,18 @@ for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${bounda
   const host: BunExecutorHost & RuntimeWorkerHost = { crossOriginIsolated: true, location: { href: "https://example.test/worker.js" },
     postMessage() {}, async fetch() { throw new Error("unexpected fetch"); } };
   let observed: WebAssembly.ImportValue | undefined;
+  let provider: WebAssembly.ImportValue | undefined;
+  let sideInstance: WebAssembly.Instance | undefined;
   let originalImports: Wasi["imports"] | undefined;
   let observation: { restored: boolean; before: boolean; after: boolean } | undefined;
-  linkedInitializeProbe = wasi => {
-    const imported = wasi.imports(importedFunctionModule("env", boundary), { env: { [boundary]: () => 0 } });
-    observed = imported.env?.[boundary];
-  };
+  const NativeInstance = WebAssembly.Instance;
+  WebAssembly.Instance = new Proxy(NativeInstance, { construct(Target, args: ConstructorParameters<typeof WebAssembly.Instance>) {
+    const instance = new Target(...args);
+    provider ??= instance.exports[boundary];
+    const value = args[1]?.env?.[boundary];
+    if (value) { observed = value; sideInstance = instance; }
+    return instance;
+  } });
   const executor = createBunExecutor(request, host);
   try {
     await bootstrap(request, { ...executor,
@@ -521,7 +514,7 @@ for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${bounda
       },
       instantiated(context) { originalImports = context.wasi.imports; },
       run(context) {
-        if (typeof observed !== "function") throw new Error("initializer did not capture side import");
+        if (typeof observed !== "function") throw new Error("side instance did not receive its wait import");
         const generation = requestMemoryChannel(channel, true);
         const before = memoryChannelReady(channel, generation, true);
         observed();
@@ -530,9 +523,12 @@ for (const boundary of ["bun_core_idle", "bun_core_poll"]) test(`linked ${bounda
         return 0;
       },
     }, host);
+    expect(sideInstance).toBeInstanceOf(NativeInstance);
+    expect(typeof provider).toBe("function");
+    expect(observed === provider).toBe(false);
     expect(observation).toEqual({ restored: true, before: false, after: true });
   } finally {
-    linkedInitializeProbe = undefined;
+    WebAssembly.Instance = NativeInstance;
     executor.beforeFinish?.();
     connection.client.port.close(); connection.server.port.close();
   }

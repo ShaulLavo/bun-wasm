@@ -229,8 +229,13 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: numb
       context.checkActive();
       if (finished) throw new Error("link executor finished during admission");
       const capture = (normal: boolean, force: boolean) => { if (normal) context.checkActive(); publisher?.capture(normal, force); };
-      const linked = instantiateLinkPlan(plan, { wasi: context.wasi,
-        coreImports: observeMemoryImports(imports, capture, false), checkActive: context.checkActive, bindMemory: context.bindMemory });
+      const originalImports = context.wasi.imports;
+      context.wasi.imports = (module, bindings) => observeMemoryImports(originalImports.call(context.wasi, module, bindings), capture, true);
+      let linked: LinkedGroup;
+      try {
+        linked = instantiateLinkPlan(plan, { wasi: context.wasi,
+          coreImports: observeMemoryImports(imports, capture, false), checkActive: context.checkActive, bindMemory: context.bindMemory });
+      } finally { context.wasi.imports = originalImports; }
       group = linked;
       reader = createMemoryReader(req.engine, linked.entry, undefined, limitBytes, req.memoryTelemetry);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
@@ -240,11 +245,7 @@ function linkedExecutor(req: RunRequest, host: BunExecutorHost, generation: numb
     initialize(context) {
       context.checkActive();
       if (!group || finished) throw new Error("link group is unavailable");
-      const capture = (normal: boolean, force: boolean) => { if (normal) context.checkActive(); publisher?.capture(normal, force); };
-      const originalImports = context.wasi.imports;
-      context.wasi.imports = (module, bindings) => observeMemoryImports(originalImports.call(context.wasi, module, bindings), capture, true);
-      try { group.initialize(); }
-      finally { context.wasi.imports = originalImports; }
+      group.initialize();
       reader = createMemoryReader(req.engine, group.entry, group.libraries.find(library => library.id === req.engine)?.instance, limitBytes, req.memoryTelemetry, diagnostics);
       if (req.memoryTelemetry) publisher = createMemoryPublisher(req.memoryTelemetry.buffer, reader);
     },
