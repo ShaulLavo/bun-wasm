@@ -52,18 +52,20 @@ export function createScriptEvaluation(evaluate: (source: string, filename: stri
     }
     return column - correction;
   }
+  function evalScript(code: unknown, filename?: string, firstLine = 1) {
+    const file = filename || "evalmachine.<anonymous>";
+    if (firstLine === 1) lineOffsets.delete(file);
+    else lineOffsets.set(file, firstLine - 1);
+    return evaluate(NativeString(code), file);
+  }
   return {
     preparedColumns,
     preparedSourceURL,
     preparedSourceName,
     preparedSourceOrigin,
     correctPreparedColumn,
-    evalScript(code: unknown, filename?: string, firstLine = 1) {
-      const file = filename || "evalmachine.<anonymous>";
-      if (firstLine === 1) lineOffsets.delete(file);
-      else lineOffsets.set(file, firstLine - 1);
-      return evaluate(NativeString(code), file);
-    },
+    evalScript,
+    evalBuiltin: evalScript,
     mapPosition(filename: string, line: number, column: number): ReturnType<MapPosition> {
       const corrected = correctPreparedColumn(filename, line, column);
       if (generatedSource(filename)) return [line, corrected];

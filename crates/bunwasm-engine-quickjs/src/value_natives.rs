@@ -3,6 +3,9 @@ use std::rc::Rc;
 use crate::Core;
 use crate::engine::{Engine, NativeError, PromiseState, Val, ValueFn};
 
+#[path = "runtime_js_measurement.rs"]
+mod measurement;
+
 fn arg<E: Engine>(e: &E, args: &[E::Value], i: usize) -> E::Value {
     args.get(i).cloned().unwrap_or_else(|| e.undefined())
 }
@@ -19,8 +22,33 @@ pub(crate) fn load_polyfill<E: Engine>(
     core: &Core<E>,
     name: &str,
 ) -> Result<E::Value, E::Value> {
-    let source = core.polyfill(name).map_err(|err| e.error_value(&err))?;
-    e.eval_script(&source, &format!("bun-wasm:{name}"), 1)
+    let source = measurement::measure(e.name(), "source-load", name, 0, || core.polyfill(name))
+        .map_err(|err| e.error_value(&err))?;
+    measurement::measure(e.name(), "factory-eval", name, source.len(), || {
+        e.eval_script(&source, &format!("bun-wasm:{name}"), 1)
+    })
+}
+
+fn eval_runtime_builtin<E: Engine>(
+    e: &E,
+    code: &str,
+    filename: &str,
+    first_line: i32,
+) -> Result<E::Value, E::Value> {
+    let name = filename.strip_prefix("bun-builtin:").unwrap_or("generated");
+    measurement::measure(e.name(), "builtin-eval", name, code.len(), || {
+        e.eval_script(code, filename, first_line)
+    })
+}
+
+fn eval_arguments<E: Engine>(e: &E, args: &[E::Value]) -> Result<(String, String, i32), E::Value> {
+    let code = arg_str(e, args, 0)?;
+    let filename = arg_str(e, args, 1).unwrap_or_else(|_| "evalmachine.<anonymous>".to_owned());
+    let first_line = match args.get(2).map(|value| e.to_val(value)) {
+        Some(Val::Num(line)) => line as i32,
+        _ => 1,
+    };
+    Ok((code, filename, first_line))
 }
 
 pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str, ValueFn<E>)> {
@@ -46,14 +74,15 @@ pub(crate) fn value_natives<E: Engine>(core: &Rc<Core<E>>) -> Vec<(&'static str,
     list.push((
         "evalScript",
         Rc::new(|e: &E, args: &[E::Value]| {
-            let code = arg_str(e, args, 0)?;
-            let filename =
-                arg_str(e, args, 1).unwrap_or_else(|_| "evalmachine.<anonymous>".to_owned());
-            let first_line = match args.get(2).map(|value| e.to_val(value)) {
-                Some(Val::Num(line)) => line as i32,
-                _ => 1,
-            };
+            let (code, filename, first_line) = eval_arguments(e, args)?;
             e.eval_script(&code, &filename, first_line)
+        }),
+    ));
+    list.push((
+        "evalBuiltin",
+        Rc::new(|e: &E, args: &[E::Value]| {
+            let (code, filename, first_line) = eval_arguments(e, args)?;
+            eval_runtime_builtin(e, &code, &filename, first_line)
         }),
     ));
     let c = core.clone();
@@ -217,7 +246,9 @@ pub(crate) fn bootstrap<E: Engine>(
     }
     e.set(&native, "engine", e.value_from(e.name().into()))?;
     let factory = load_polyfill(e, core, "bootstrap")?;
-    e.call(&factory, &e.undefined(), &[native])
+    measurement::measure(e.name(), "bootstrap-execute", "bootstrap", 0, || {
+        e.call(&factory, &e.undefined(), &[native])
+    })
 }
 
 /// `wasmMemoryBuffer(resource, previous)`: detach `previous`, the buffer of an older

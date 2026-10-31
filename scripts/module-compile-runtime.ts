@@ -29,7 +29,7 @@ function hostEvaluation(context: ReturnType<typeof createContext>, mapPosition: 
   const methods = host.slice(start, end);
   const evaluator: { valueNatives(mapPosition: ScriptEvaluation["mapPosition"]): ScriptEvaluation } = runInContext(`new (class { o = {}; ${methods} })`, context);
   const natives = evaluator.valueNatives(mapPosition);
-  return { evalScript: natives.evalScript, mapPosition: natives.mapPosition, preparedColumns: natives.preparedColumns, correctPreparedColumn: natives.correctPreparedColumn, preparedSourceURL: natives.preparedSourceURL, preparedSourceName: natives.preparedSourceName, preparedSourceOrigin: natives.preparedSourceOrigin };
+  return { evalScript: natives.evalScript, evalBuiltin: natives.evalBuiltin, mapPosition: natives.mapPosition, preparedColumns: natives.preparedColumns, correctPreparedColumn: natives.correctPreparedColumn, preparedSourceURL: natives.preparedSourceURL, preparedSourceName: natives.preparedSourceName, preparedSourceOrigin: natives.preparedSourceOrigin };
 }
 
 function runtimeContext() {
