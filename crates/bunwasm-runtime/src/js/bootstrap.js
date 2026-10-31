@@ -79,34 +79,38 @@
     return match ? match[1] : null;
   }
 
+  function formatPosition(file, line, col) {
+    if (typeof line !== "number") return file;
+    if (typeof col !== "number") return `${file}:${line}`;
+    return `${file}:${line}:${col}`;
+  }
+
   function formatCallSite(site) {
     // The host engine loads modules from blob:/data: URLs; show their paths.
     const rawFile = (typeof site.getScriptNameOrSourceURL === "function" && site.getScriptNameOrSourceURL()) || site.getFileName() || evalOriginFile(site);
     const generated = native.engine === "host" && native.preparedSourceName(rawFile) !== undefined;
     const file = internal.displayName ? internal.displayName(rawFile, typeof site.isEval === "function" && site.isEval()) : rawFile;
     const name = site.getFunctionName();
-    // A syntax error's location: no function, just file:line:col.
-    if (!isV8 && site.getFunction() === undefined && !name && file) {
-      return `${file}:${site.getLineNumber()}:${site.getColumnNumber()}`;
-    }
     let line = site.getLineNumber();
     let col = site.getColumnNumber();
-    if (line !== null && file && !internal.mappedCallSites?.has(site)) {
+    // A syntax error's location: no function, just file and any known position.
+    if (!isV8 && site.getFunction() === undefined && !name && file) return formatPosition(file, line, col);
+    const hasCompletePosition = typeof line === "number" && typeof col === "number";
+    if (hasCompletePosition && file && !internal.mappedCallSites?.has(site)) {
       const mapped = native.mapPosition(generated ? rawFile : file, line, col);
       if (mapped) [line, col] = mapped;
       if (isV8 && !generated) col = pastNew(file, line, col);
     }
     // Module and script top-level code prints bare, like JSC.
     const topLevel = isV8 ? !name && v8TopLevel(site) : isTopLevel(site.getFunction());
-    if ((!name || name === "__bunwasm_cjs__") && file && line !== null && (topLevel || name === "__bunwasm_cjs__")) return `${file}:${line}:${col}`;
+    if ((!name || name === "__bunwasm_cjs__") && file && typeof line === "number" && (topLevel || name === "__bunwasm_cjs__")) return formatPosition(file, line, col);
     const label = name || "<anonymous>";
     if (site.isNative()) return `${label} (native)`;
     if (file === null || file === undefined) {
       const evalFrame = typeof site.isEval === "function" && site.isEval();
       return `${label} (${evalFrame ? "unknown" : "native"})`;
     }
-    if (line === null) return `${label} (${file})`;
-    return `${label} (${file}:${line}:${col})`;
+    return `${label} (${formatPosition(file, line, col)})`;
   }
 
   // CommonJS wrappers (registered by evaluateModule) and ES module bodies,

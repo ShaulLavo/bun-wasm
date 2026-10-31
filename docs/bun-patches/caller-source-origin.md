@@ -12,10 +12,16 @@ an opaque caller frame instead of reporting a later ES module as the caller. ES 
 in WebKit, and CommonJS origins work in QuickJS, wasm JSC and the Node host.
 
 
+The bootstrap formatter maps a CallSite only when both its line and column are numbers.
+A missing column keeps the filename and line without inventing a column. A missing line
+keeps the filename. Complete positions retain source-map offsets, prepared-source names,
+and the host constructor-column adjustment. This is original adapter code, not copied
+Bun, Node, or WebKit source.
+
 ## Classification
 
 | Patch or source | Class | Change |
 | --- | --- | --- |
-| [`crates/bunwasm-runtime/src/js/{builtins,bootstrap}.js`, `web/src/engine-host.js`, caller origin](#caller-source-origin) | Host feature | Read caller origins through the existing engine stack parser. Original adapter. |
+| [`crates/bunwasm-runtime/src/js/{builtins,bootstrap}.js`, `web/src/engine-host.js`, caller origin](#caller-source-origin) | Host feature | Read caller origins through the existing engine stack parser and preserve incomplete CallSite positions before numeric mapping. Original adapter. |
 
 [Ledger scope and pinned revisions](scope.md).
