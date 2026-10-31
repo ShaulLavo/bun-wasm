@@ -132,8 +132,8 @@ async function hashTransferMember(transfer: string, name: string): Promise<strin
   });
   return digest.digest("hex");
 }
-function transferText(transfer: string, name: string): string {
-  return commandOutput("tar", ["--posix", "-xOf", transfer, name]);
+function transferBytes(transfer: string, name: string): Buffer {
+  return execFileSync("tar", ["--posix", "-xOf", transfer, name]);
 }
 function output(values: Record<string, string>): void {
   appendFileSync(required("GITHUB_OUTPUT"), Object.entries(values).map(([name, value]) => `${name}=${value}\n`).join(""));
@@ -198,9 +198,9 @@ async function inspect(state: Context, transfer: string) {
   if (!lstatSync(transfer).isFile()) throw new Error("Native handoff transfer must be a file");
   const entries = commandOutput("tar", ["--posix", "-tf", transfer]).split("\n").filter(Boolean);
   if (JSON.stringify(entries) !== JSON.stringify(transferNames)) throw new Error("Native transfer member whitelist mismatch");
-  const manifestText = transferText(transfer, "manifest.json");
-  if (createHash("sha256").update(manifestText).digest("hex") !== process.env.NATIVE_QUALITY_MANIFEST_SHA256) throw new Error("Native manifest digest mismatch");
-  const manifest = object(JSON.parse(manifestText));
+  const manifestBytes = transferBytes(transfer, "manifest.json");
+  if (createHash("sha256").update(manifestBytes).digest("hex") !== process.env.NATIVE_QUALITY_MANIFEST_SHA256) throw new Error("Native manifest digest mismatch");
+  const manifest = object(JSON.parse(manifestBytes.toString("utf8")));
   if (manifest.schema !== 1 || JSON.stringify(manifest.identity) !== JSON.stringify(state.identity)) throw new Error("Foreign native handoff identity");
   const archives = object(manifest.archives);
   if (JSON.stringify(Object.keys(archives)) !== JSON.stringify(archiveNames)) throw new Error("Native archive whitelist mismatch");

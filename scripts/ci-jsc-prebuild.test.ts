@@ -385,10 +385,43 @@ function rewriteTransfer(h: Harness, mutate: (directory: string) => void): void 
   try {
     execFileSync("tar", ["--posix", "-xf", transfer(h), "-C", directory]);
     mutate(directory);
-    execFileSync("tar", ["--posix", "-C", directory, "-cf", transfer(h)].concat(readdirSync(directory).toSorted()));
+    const names = ["prebuild.tar.zst", "sysroot.tar.zst", "jsc-prebuild.log", "manifest"];
+    const extra = readdirSync(directory).filter(name => !names.includes(name)).toSorted();
+    execFileSync("tar", ["--posix", "-C", directory, "-cf", transfer(h)].concat(names.concat(extra).filter(name => existsSync(join(directory, name)))));
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+function checkNoopTransfer(h: Harness, job: Job): void {
+  const produced = produceTransfer(h);
+  rewriteTransfer(h, () => {});
+  const imported = bash(h, run(job, importName), { JSC_PREBUILD_MANIFEST_SHA256: produced.digest });
+  expect(imported.status, imported.stderr).toBe(0);
+  expect(snapshot(h.env.JSC_BUILD_DIR!)).toEqual(produced.prebuild);
+  expect(snapshot(join(h.env.WASM_TOOLS!, "bun-wasm-sysroot-patched"))).toEqual(produced.sysroot);
+}
+
+function checkMemberDigest(h: Harness, job: Job, archive: string): void {
+  const produced = produceTransfer(h);
+  const emptyFrame = execFileSync("zstd", ["-q", "-c"], { input: Buffer.alloc(0) });
+  rewriteTransfer(h, directory => {
+    const path = join(directory, archive);
+    const original = readFileSync(path);
+    const changed = Buffer.concat([original, emptyFrame]);
+    expect(execFileSync("zstd", ["-dc"], { input: changed })).toEqual(execFileSync("zstd", ["-dc"], { input: original }));
+    writeFileSync(path, changed);
+  });
+  expectRejectedBeforeExtraction(h, bash(h, run(job, importName), { JSC_PREBUILD_MANIFEST_SHA256: produced.digest }));
+}
+
+const digestConsumers: readonly [string, Job][] = [["native quality", checkpoint], ["Rust", native]];
+for (const [label, job] of digestConsumers) {
+  test(`${label} accepts a canonical no-op transfer rewrite`, () => withHarness(h => checkNoopTransfer(h, job)));
+}
+const digestCases = digestConsumers.flatMap(([label, job]) => ["prebuild.tar.zst", "sysroot.tar.zst"].map(archive => ({ label, job, archive })));
+for (const { label, job, archive } of digestCases) {
+  test(`${label} rejects changed ${archive} bytes with identical valid decompressed content`, () => withHarness(h => checkMemberDigest(h, job, archive)));
 }
 
 for (const archive of ["prebuild.tar.zst", "sysroot.tar.zst"]) {

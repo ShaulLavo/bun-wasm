@@ -311,21 +311,43 @@ function rewriteTransfer(transfer: string, root: string, mutate: (directory: str
     rmSync(directory, { recursive: true, force: true });
   }
 }
+function corruptNativeArchive(path: string, root: string): void {
+  const archive = mkdtempSync(join(root, "native-inner-rewrite-"));
+  try {
+    const tar = execFileSync("zstd", ["-dc", path]);
+    execFileSync("tar", ["--posix", "-xf", "-", "-C", archive], { input: tar });
+    writeFileSync(join(archive, "deps/native"), "modified fixture bytes\n");
+    const updated = execFileSync("tar", ["--posix", "-C", archive, "-cf", "-", "."]);
+    execFileSync("zstd", ["-f", "-o", path], { input: updated, stdio: ["pipe", "ignore", "ignore"] });
+  } finally {
+    rmSync(archive, { recursive: true, force: true });
+  }
+}
+
+function checkManifestBytes(mode: "leading-space" | "trailing-newline"): void {
+  fixture((root, env, invoke) => {
+    const changes = prepareImport(root, env, invoke);
+    const transfer = join(root, "temp/native-quality-transfer/native-quality-7.tar");
+    rewriteTransfer(transfer, root, directory => {
+      const path = join(directory, "manifest.json");
+      const bytes = readFileSync(path);
+      writeFileSync(path, mode === "leading-space" ? Buffer.concat([Buffer.from(" "), bytes]) : Buffer.concat([bytes, Buffer.from("\n")]));
+    });
+    const imported = invoke("rust", unpackName, changes);
+    expect(imported.status).not.toBe(0);
+    expect(imported.stderr).toContain("Native manifest digest mismatch");
+    expect(existsSync(join(root, "repo/target"))).toBe(false);
+    expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("");
+  });
+}
+
+for (const mode of ["leading-space", "trailing-newline"] as const) {
+  test(`real import rejects manifest ${mode} with unchanged producer digest before destinations`, () => checkManifestBytes(mode));
+}
+
 function mutateFixture(mode: string, root: string, transfer: string, changes: Record<string, string>): void {
   rewriteTransfer(transfer, root, directory => {
-    if (mode === "corrupt") {
-      const path = join(directory, "target.tar.zst");
-      const archive = mkdtempSync(join(root, "native-inner-rewrite-"));
-      try {
-        const tar = execFileSync("zstd", ["-dc", path]);
-        execFileSync("tar", ["--posix", "-xf", "-", "-C", archive], { input: tar });
-        writeFileSync(join(archive, "deps/native"), "modified fixture bytes\n");
-        const updated = execFileSync("tar", ["--posix", "-C", archive, "-cf", "-", "."]);
-        execFileSync("zstd", ["-f", "-o", path], { input: updated, stdio: ["pipe", "ignore", "ignore"] });
-      } finally {
-        rmSync(archive, { recursive: true, force: true });
-      }
-    }
+    if (mode === "corrupt") corruptNativeArchive(join(directory, "target.tar.zst"), root);
     if (mode === "missing") rmSync(join(directory, "sources.tar.zst"));
     if (mode === "extra") writeFileSync(join(directory, "foreign"), "unexpected");
     if (mode === "overlay") mkdirSync(join(root, "repo/target"));
