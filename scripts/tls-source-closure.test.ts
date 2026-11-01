@@ -7,6 +7,9 @@ import { fixtureGit, withReceiptFixture } from "../tests/package/guest-receipt-f
 
 const paths = [
   "crates/bunwasm-crypto-sys/src/tls.rs",
+  "crates/bunwasm-glue/Cargo.toml",
+  "crates/bunwasm-glue/src/lib.rs",
+  "crates/bunwasm-glue/src/extra.rs",
   "crates/bunwasm-runtime/src/lib.rs",
   "crates/bunwasm-runtime/src/tls.rs",
   "crates/bunwasm-runtime/src/tls/bindings.rs",
