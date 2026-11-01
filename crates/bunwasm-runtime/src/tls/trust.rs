@@ -60,6 +60,7 @@ pub(super) fn snapshot_file(path: &std::path::Path) -> StartupExtras {
     }
 }
 
+#[cfg(any(target_os = "wasi", test))]
 fn read_bounded(mut file: File) -> IoResult<Vec<u8>> {
     let mut bytes = Vec::new();
     file.by_ref()
