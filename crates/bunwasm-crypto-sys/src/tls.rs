@@ -5,12 +5,12 @@
 //! `SSL_set_bio` transfers both BIO pointers to the SSL object, so callers must
 //! disarm their Rust-side BIO owners after that call.
 
+pub use crate::x509::{BIO_free, Bio};
 use std::ffi::{c_char, c_int, c_uint, c_void};
 
 pub enum SslCtx {}
 pub enum Ssl {}
 pub enum SslMethod {}
-pub enum Bio {}
 pub enum X509StoreCtx {}
 
 pub const SSL_FILETYPE_PEM: c_int = 1;
@@ -58,7 +58,6 @@ unsafe extern "C" {
         bio2: *mut *mut Bio,
         write2: usize,
     ) -> c_int;
-    pub fn BIO_free(bio: *mut Bio) -> c_int;
     pub fn BIO_read(bio: *mut Bio, out: *mut c_void, len: c_int) -> c_int;
     pub fn BIO_write(bio: *mut Bio, input: *const c_void, len: c_int) -> c_int;
     pub fn BIO_ctrl_pending(bio: *const Bio) -> usize;

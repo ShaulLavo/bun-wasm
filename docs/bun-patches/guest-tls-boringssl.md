@@ -21,7 +21,9 @@ The narrow Rust declarations expose library calls, not a registered runtime
 TLS API. The verification callback has its actual C function-pointer type.
 `ERR_get_error` returns the header's 32-bit unsigned value on native and WASI
 builds. `SSL_set_bio` transfers the inside BIO to `SSL`; the caller separately
-owns the network BIO.
+owns the network BIO. TLS reuses X.509's opaque `Bio` type and single
+`BIO_free` declaration, so Rust checks one C signature rather than two
+incompatible opaque pointer declarations.
 
 ## Run the standalone probe
 
