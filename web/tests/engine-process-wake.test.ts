@@ -220,7 +220,7 @@ test("terminal callback errors do not mask cleanup errors or skip completion", a
   f.host.internal.workerStartup.cancel = () => { throw cancellation; };
   f.host.native.tlsDispose = () => { throw disposal; };
   f.host.o.onExit = () => { throw onExit; };
-  f.host.resolveDone = code => { resolved.push(code); };
+  f.host.resolveDone = code => { if (code !== undefined) resolved.push(code); };
   let caught: unknown;
   try { f.host.exit(1); } catch (error) { caught = error; }
   expect(caught).toBeInstanceOf(AggregateError);
