@@ -183,7 +183,7 @@
   function selectTarget(options: BunWasm.TlsIdentityTargetOptions): BunWasm.TlsIdentityTarget | BunWasm.TlsIdentityError {
     const candidate = options.servername || (options.connectHost ?? options.originalTarget);
     if (!candidate) {
-      if (!options.rejectUnauthorized) return { kind: "none", hostname: undefined, servername: "" };
+      if (options.rejectUnauthorized === false) return { kind: "none", hostname: undefined, servername: "" };
       return identityError("ERR_TLS_HOSTNAME_REQUIRED", "Cannot verify hostname without a server name");
     }
     const hostname = unfqdn(candidate);
@@ -195,7 +195,7 @@
   }
 
   function failure(error: Error, rejectUnauthorized: boolean): BunWasm.TlsIdentityDecision {
-    return { kind: rejectUnauthorized ? "rejected" : "unauthorized", authorizationError: error };
+    return { kind: rejectUnauthorized === false ? "unauthorized" : "rejected", authorizationError: error };
   }
 
   function verifyIdentity(verification: BunWasm.TlsIdentityVerification): BunWasm.TlsIdentityDecision {

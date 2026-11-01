@@ -164,3 +164,13 @@ test("invalid callback return values fail without exposing the returned value", 
   const result: unknown = Reflect.apply(identity.verifyIdentity, identity, [request]);
   expect(result).toMatchObject({ kind: "rejected", authorizationError: { code: "ERR_INVALID_ARG_TYPE", message: "checkServerIdentity must return an Error or undefined" } });
 });
+
+
+test("only a literal false opts out of verification at the source boundary", () => {
+  for (const rejectUnauthorized of [undefined, null, 0, ""]) {
+    const target: unknown = Reflect.apply(identity.selectTarget, identity, [{ rejectUnauthorized }]);
+    expect(target).toMatchObject({ code: "ERR_TLS_HOSTNAME_REQUIRED" });
+    const decision: unknown = Reflect.apply(identity.verifyIdentity, identity, [{ chainVerified: false, authorizationError: new Error("chain"), rejectUnauthorized }]);
+    expect(decision).toMatchObject({ kind: "rejected" });
+  }
+});
