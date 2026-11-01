@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import type { Page } from "playwright";
+import type { Page, Route } from "playwright";
 import type { Terminal } from "@xterm/xterm";
 import type { BrowserSession } from "bash-web/session";
 import type { Runtime } from "waffle";
+import { importPromptRepository, promptRepositoryFixtures, type PromptRepositoryFixture } from "./shell-prompt-fixture";
 
 type ReadFile = Runtime["filesystem"]["readFile"];
 type ObservedPlayground = {
@@ -69,7 +70,8 @@ export async function installPromptReadBudget(filesystem: Pick<Runtime["filesyst
     await filesystem.remove(path);
     await filesystem.writeFile(path, '{"backgroundMs":60000}');
   } catch (error) {
-    await restore();
+    try { await restore(); }
+    catch (cleanup) { throw new AggregateError([error, cleanup], "Prompt budget installation and rollback failed", { cause: error }); }
     throw error;
   }
   return restore;
@@ -181,11 +183,15 @@ export async function checkPrompt(page: Page, browser: string, engine: string) {
   assert.deepEqual(failed, { text: "❯", fg: 1, rgb: false, bold: true }, "Failure character is ANSI red and bold");
   assert.deepEqual(passed, firstCharacter, "Success restores the default character color");
   await submit(page, "cd /home/user");
-  const late = await pendingUpdate(page, "draft", "echo typed", false);
-  const paste = await pendingUpdate(page, "paste", "printf first\nprintf second", false);
-  const interrupted = await pendingUpdate(page, "interrupt", "echo cancelled", true);
-  const narrow = await checkNarrowPrompt(page);
-  const git = await checkGitMarkers(page);
+  const repositories = await promptRepositoryFixtures();
+  const modified = repositories.find(fixture => fixture.step === "modified");
+  assert.ok(modified, "Qualified fixture includes a modified tracked file");
+  const late = await pendingUpdate(page, modified, "draft", "echo typed", false);
+  const paste = await pendingUpdate(page, modified, "paste", "printf first\nprintf second", false);
+  const interrupted = await pendingUpdate(page, modified, "interrupt", "echo cancelled", true);
+  const narrow = await checkNarrowPrompt(page, modified);
+  const git = await checkGitMarkers(page, repositories);
+  await prepareRepository(page, "draft", modified);
   const config = await checkConfig(page);
   const versions = await checkVersions(page);
   await submit(page, "cd /home/user");
@@ -193,36 +199,60 @@ export async function checkPrompt(page: Page, browser: string, engine: string) {
   return { mode: "on", browser, engine, initial, late, paste, interrupted, narrow, git, config, versions };
 }
 
-async function prepareRepository(page: Page, name: string): Promise<string> {
+async function prepareRepository(page: Pick<Page, "evaluate">, name: string, fixture: PromptRepositoryFixture): Promise<string> {
   const root = `/home/user/prompt-${name}`;
-  await submit(page, `mkdir -p ${root} && git -C ${root} init && printf base > ${root}/tracked.txt && printf '{}' > ${root}/bun.lock && git -C ${root} add tracked.txt bun.lock && git -C ${root} -c user.name=test -c user.email=test@example.test commit -m base`);
-  // The provider has never entered this repository, so no clean-file status cache can mask this read.
-  await page.evaluate(async path => {
-    const { fs }: ObservedPlayground = Reflect.get(globalThis, "playground");
-    await fs.writeFile(path, "modified tracked contents for the pending-read control");
-  }, `${root}/tracked.txt`);
+  // Each import has a fresh root, so the provider must read the actual tracked bytes.
+  await page.evaluate(`(${importPromptRepository.toString()})(globalThis.playground.fs, ${JSON.stringify(root)}, ${JSON.stringify(fixture.files)})`);
   return root;
 }
 
-async function installBarrier(page: Page, path: string): Promise<void> {
-  await page.evaluate(`globalThis.promptReadBarrier = (${armPromptReadBarrier.toString()})(globalThis.playground.runtime.filesystem, ${JSON.stringify(path)});
-globalThis.promptCapture = ${snapshotPrompt.toString()};
+/** Delay the original lazy status source, without changing bytes or a frozen runtime capability. */
+export function deferredPromptSource() {
+  const entered = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+  const pending = new Set<Promise<void>>();
+  const urls: string[] = [];
+  const errors: unknown[] = [];
+  function hold(url: string, proceed: () => Promise<void>): Promise<void> {
+    urls.push(url);
+    entered.resolve();
+    const request = released.promise.then(proceed);
+    pending.add(request);
+    void request.then(() => pending.delete(request), error => { errors.push(error); pending.delete(request); });
+    return request;
+  }
+  async function drain(): Promise<void> {
+    released.resolve();
+    await Promise.allSettled(Array.from(pending));
+    if (errors.length === 1) throw errors[0];
+    if (errors.length) throw new AggregateError(errors, "Prompt source transport failed");
+  }
+  return { entered: entered.promise, urls, hold, release: () => released.resolve(), drain };
+}
+
+async function installStatusBarrier(page: Page) {
+  const source = deferredPromptSource();
+  const pattern = /\/chunks\/status-[^/?]+\.js(?:\?.*)?$/;
+  const handler = (route: Route) => source.hold(route.request().url(), () => route.continue());
+  await page.route(pattern, handler);
+  async function restore(): Promise<void> {
+    source.release();
+    await page.unroute(pattern, handler);
+    await source.drain();
+  }
+  async function release(): Promise<void> {
+    assert.ok(source.urls.length, "A real status source request must be held");
+    source.release();
+    await source.drain();
+    // Wait for the same native module import to settle, not a substitute status result.
+    await page.evaluate(url => import(url).then(() => undefined), source.urls[0]!);
+  }
+  return { ...source, release, restore };
+}
+
+async function installPromptCapture(page: Page): Promise<void> {
+  await page.evaluate(`globalThis.promptCapture = ${snapshotPrompt.toString()};
 globalThis.promptLines = ${activePrompt.toString()};`);
-}
-
-async function waitForBlockedRead(page: Page): Promise<void> {
-  await page.waitForFunction(() => {
-    const barrier: PromptReadBarrier = Reflect.get(globalThis, "promptReadBarrier");
-    return barrier.blocked;
-  });
-}
-
-async function releaseBarrier(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    const barrier: PromptReadBarrier = Reflect.get(globalThis, "promptReadBarrier");
-    barrier.release();
-    await barrier.finished;
-  });
 }
 
 async function updatedStatus(page: Page, generation: string): Promise<void> {
@@ -235,43 +265,71 @@ async function updatedStatus(page: Page, generation: string): Promise<void> {
   }, generation);
 }
 
-async function pendingUpdate(page: Page, name: string, draft: string, interrupt: boolean) {
-  await page.evaluate(`async () => {
+export function promptReadBudgetSetup(): string {
+  return `(async () => {
     globalThis.restorePromptReadBudget = await (${installPromptReadBudget.toString()})(globalThis.playground.fs);
-  }`);
-  try {
-    const root = await prepareRepository(page, name);
-    await installBarrier(page, `${root}/tracked.txt`);
-    return await exercisePendingUpdate(page, root, draft, interrupt);
-  } finally {
-    await restorePendingFixture(page);
-    await submit(page, "cd /home/user");
+  })()`;
+}
+
+/** Always attempt every cleanup step. Keep the first failure as the cause and first error. */
+export async function withPromptFixture<T>(action: () => Promise<T>, cleanup: readonly (() => Promise<void>)[]): Promise<T> {
+  const errors: unknown[] = [];
+  const result: { kind: "success"; value: T } | { kind: "failure"; error: unknown } = await action().then(
+    value => ({ kind: "success", value }),
+    (error: unknown) => ({ kind: "failure", error }),
+  );
+  if (result.kind === "failure") errors.push(result.error);
+  for (const clean of cleanup) {
+    try { await clean(); }
+    catch (error) { errors.push(error); }
   }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "Prompt fixture failed; see cause for the first failure", { cause: errors[0] });
+  if (result.kind === "failure") throw result.error;
+  return result.value;
 }
 
-async function restorePendingFixture(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    const barrier: PromptReadBarrier | undefined = Reflect.get(globalThis, "promptReadBarrier");
-    const restoreBudget: () => Promise<void> = Reflect.get(globalThis, "restorePromptReadBudget");
-    try {
-      barrier?.restore();
-      if (barrier?.blocked) await barrier.finished;
-    } finally {
-      await restoreBudget();
-      Reflect.deleteProperty(globalThis, "promptReadBarrier");
-      Reflect.deleteProperty(globalThis, "promptCapture");
-      Reflect.deleteProperty(globalThis, "promptLines");
-      Reflect.deleteProperty(globalThis, "restorePromptReadBudget");
-    }
-  });
+async function pendingUpdate(page: Page, fixture: PromptRepositoryFixture, name: string, draft: string, interrupt: boolean, columns?: number) {
+  const barrier = await installStatusBarrier(page);
+  return withPromptFixture(async () => {
+    // Each arm has a fresh realm so the real lazy status module is not already evaluated.
+    await page.goto(page.url());
+    await ready(page);
+    if (columns) await page.evaluate(cols => Reflect.get(globalThis, "playground").term.resize(cols, 24), columns);
+    await page.evaluate(promptReadBudgetSetup());
+    const root = await prepareRepository(page, name, fixture);
+    await installPromptCapture(page);
+    return exercisePendingUpdate(page, root, draft, interrupt, barrier);
+  }, [barrier.restore, () => restorePendingFixture(page), () => submit(page, "cd /home/user")]);
 }
 
-async function exercisePendingUpdate(page: Page, root: string, draft: string, interrupt: boolean) {
+/** Self-contained: restore the method, drain admitted reads, restore config, then forget globals. */
+export async function restorePromptFixture(): Promise<void> {
+  const barrier: PromptReadBarrier | undefined = Reflect.get(globalThis, "promptReadBarrier");
+  const restoreBudget: (() => Promise<void>) | undefined = Reflect.get(globalThis, "restorePromptReadBudget");
+  const errors: unknown[] = [];
+  try { barrier?.restore(); }
+  catch (error) { errors.push(error); }
+  try { barrier?.release(); }
+  catch (error) { errors.push(error); }
+  try { if (barrier?.blocked) await barrier.finished; }
+  catch (error) { errors.push(error); }
+  try { await restoreBudget?.(); }
+  catch (error) { errors.push(error); }
+  for (const key of ["promptReadBarrier", "promptCapture", "promptLines", "restorePromptReadBudget"]) Reflect.deleteProperty(globalThis, key);
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "Prompt fixture cleanup failed", { cause: errors[0] });
+}
+
+async function restorePendingFixture(page: Pick<Page, "evaluate">): Promise<void> {
+  await page.evaluate(restorePromptFixture);
+}
+
+async function exercisePendingUpdate(page: Page, root: string, draft: string, interrupt: boolean, barrier: Awaited<ReturnType<typeof installStatusBarrier>>) {
   const submission = submit(page, `cd ${root}`);
   void submission.catch(() => {});
-  // Observe the actual uncached status read before accepting any redraw evidence.
-  await waitForBlockedRead(page);
-  await submission;
+  // Require an actual held dependency request and the initial real prompt before typing.
+  await Promise.all([barrier.entered, submission]);
   await page.evaluate(text => {
     const { shell }: ObservedPlayground = Reflect.get(globalThis, "playground");
     shell.input(`\x1b[200~${text}\x1b[201~`);
@@ -283,17 +341,17 @@ async function exercisePendingUpdate(page: Page, root: string, draft: string, in
   }, draft.split("\n").at(-1) ?? "");
   const before = await page.evaluate(snapshotPrompt);
   assertCaretAtEnd(before);
-  assert.doesNotMatch(activePrompt(before)[0] ?? "", /\[[^\]]*!/, "Actual status completion remains blocked while the draft is typed");
-  if (interrupt) return interruptPendingUpdate(page, before);
-  await releaseBarrier(page);
+  assert.doesNotMatch(activePrompt(before)[0] ?? "", /\[[^\]]*!/, "The real status source remains held while the draft is typed");
+  if (interrupt) return interruptPendingUpdate(page, before, barrier);
+  await barrier.release();
   await updatedStatus(page, before.generation);
   const after = await page.evaluate(snapshotPrompt);
   assertPreservedDraft(before, after);
   await submit(page, "cd /home/user");
-  return { kind: "redraw", before, after };
+  return { kind: "redraw", control: "held real status module, frozen filesystem unchanged", sourceRequests: barrier.urls.slice(), before, after };
 }
 
-async function interruptPendingUpdate(page: Page, before: PromptSnapshot) {
+async function interruptPendingUpdate(page: Page, before: PromptSnapshot, barrier: Awaited<ReturnType<typeof installStatusBarrier>>) {
   await page.locator(".xterm-helper-textarea").focus();
   await page.keyboard.press("Control+c");
   await page.waitForFunction(previous => {
@@ -303,14 +361,14 @@ async function interruptPendingUpdate(page: Page, before: PromptSnapshot) {
   // Leave the repository so the new turn cannot legitimately publish the old status marker.
   await submit(page, "cd /home/user");
   const fresh = await page.evaluate(snapshotPrompt);
-  await releaseBarrier(page);
+  await barrier.release();
   const after = await page.evaluate(snapshotPrompt);
-  assert.deepEqual(activePrompt(after), activePrompt(fresh), "Cancelled read never redraws the new prompt");
+  assert.deepEqual(activePrompt(after), activePrompt(fresh), "Cancelled status source never redraws the new prompt");
   assert.equal(after.generation, fresh.generation);
-  return { kind: "interrupt", before, fresh, after };
+  return { kind: "interrupt", control: "held real status module, frozen filesystem unchanged", sourceRequests: barrier.urls.slice(), before, fresh, after };
 }
 
-async function checkNarrowPrompt(page: Page) {
+async function checkNarrowPrompt(page: Page, fixture: PromptRepositoryFixture) {
   const geometry = await page.evaluate(() => {
     const { term }: ObservedPlayground = Reflect.get(globalThis, "playground");
     const dimensions = { cols: term.cols, rows: term.rows };
@@ -318,7 +376,7 @@ async function checkNarrowPrompt(page: Page) {
     return dimensions;
   });
   try {
-    const result = await pendingUpdate(page, "narrow-repository-that-wraps-the-first-line", "echo narrow", false);
+    const result = await pendingUpdate(page, fixture, "narrow-repository-that-wraps-the-first-line", "echo narrow", false, 32);
     assert.equal(result.kind, "redraw");
     assertActivePromptWrap(result.before);
     assert.match(activePrompt(result.before)[0] ?? "", /🥟/, "Width control includes the default Bun emoji");
@@ -403,49 +461,19 @@ async function promptText(page: Page, pattern: RegExp): Promise<string> {
   return activePrompt(await page.evaluate(snapshotPrompt))[0] ?? "";
 }
 
-async function checkGitMarkers(page: Page) {
-  const root = "/home/user/prompt-git";
-  await submit(page, `mkdir -p ${root} && cd ${root} && git init -b main && printf base > tracked.txt && git add tracked.txt && git -c user.name=test -c user.email=test@example.test commit -m base && git config user.name test && git config user.email test@example.test`);
-  const commandBacked: { step: string; prompt: string }[] = [];
-  const cases: readonly (readonly [string, string, RegExp])[] = [
-    ["branch", "true", /on .*main/],
-    ["detached", "git checkout --detach", /\([0-9a-f]{7}\)/],
-    ["modified", "git checkout main && printf modified > tracked.txt", /\[[^\]]*!/],
-    ["deleted", "rm tracked.txt", /\[[^\]]*✘/],
-    ["untracked", "git checkout -- tracked.txt && printf new > untracked.txt", /\[[^\]]*\?/],
-    ["staged", "git add untracked.txt", /\[[^\]]*\+/],
-    ["stash", "git stash push", /\[[^\]]*\$/],
-    ["ahead", "git branch prompt-upstream && git config branch.main.remote . && git config branch.main.merge refs/heads/prompt-upstream && printf ahead > ahead.txt && git add ahead.txt && git commit -m ahead", /⇡/],
-    ["behind", "git branch -f prompt-upstream HEAD && git reset --hard HEAD~1", /⇣/],
-    ["diverged", "printf diverged > diverged.txt && git add diverged.txt && git commit -m diverged", /⇕/],
-    ["missing upstream", "git config branch.main.merge refs/heads/prompt-missing", /…/],
-  ];
-  for (const [step, command, pattern] of cases) {
-    await submit(page, command);
-    commandBacked.push({ step, prompt: await promptText(page, pattern) });
+async function checkGitMarkers(page: Page, fixtures: readonly PromptRepositoryFixture[]) {
+  const providerStateFixtures: { step: string; prompt: string }[] = [];
+  for (const fixture of fixtures) {
+    const root = await prepareRepository(page, `git-${fixture.step.replaceAll(" ", "-")}`, fixture);
+    await submit(page, `cd ${root}`);
+    providerStateFixtures.push({ step: fixture.step, prompt: await promptText(page, fixture.pattern) });
   }
-  await submit(page, "git config --unset branch.main.remote && git config --unset branch.main.merge && git rev-parse HEAD > /tmp/prompt-head");
-  const providerStateFixtures = await checkProviderState(page, root);
   await submit(page, "cd /home/user");
-  return { commandBacked, providerStateFixtures };
-}
-
-async function checkProviderState(page: Page, root: string) {
-  // These direct metadata writes exercise provider states, not end-to-end Git commands.
-  await page.evaluate(async path => {
-    const { fs }: ObservedPlayground = Reflect.get(globalThis, "playground");
-    await fs.writeFile(`${path}/.git/MERGE_HEAD`, await fs.readFile("/tmp/prompt-head") ?? "");
-  }, root);
-  await submit(page, "true");
-  const merging = await promptText(page, /MERGING/);
-  await page.evaluate(async path => {
-    const { fs }: ObservedPlayground = Reflect.get(globalThis, "playground");
-    await fs.remove(`${path}/.git/MERGE_HEAD`);
-    await fs.remove(`${path}/.git/index`);
-    await fs.writeFile(`${path}/.git/index`, "corrupt index provider-state fixture");
-  }, root);
-  await submit(page, "true");
-  const unknown = await promptText(page, /…/);
-  assert.match(unknown, /…/, "Unreadable repository state must not claim clean");
-  return { evidenceKind: "provider-state-only", merging, corruptIndex: unknown, unsupportedFormat: "SHA-256/reftable command coverage requires actual qualified Git capability evidence" };
+  return {
+    evidenceKind: "provider-state-only",
+    fixtureSource: "Temporary host Git SHA-1/index-v2 snapshots; merge and corrupt-index metadata written directly",
+    commandBacked: [],
+    providerStateFixtures,
+    unsupportedFormat: "SHA-256/reftable command coverage requires actual qualified Git capability evidence",
+  };
 }

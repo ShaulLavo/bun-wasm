@@ -83,3 +83,32 @@ bindings in ascending descriptor order, excludes private preopens and returns
 `-ENOENT` after the list ends. Later descriptor closes and allocations do not
 change that snapshot. The real Wasm regression checks stdio and sparse launch
 bindings, including the maximum signed descriptor, before and after those changes.
+
+## Prompt test fixture evidence
+
+`web/tests/shell-prompt-fixture.ts` is an original test adapter, not an upstream
+patch. It creates temporary native Git SHA-1/index-v2 repositories and imports
+their file bytes into the page's borrowed filesystem. Its consumer contract is
+`bash-web/prompt` at `32b9103c762954bbe6e728fb86dc6cafa532edea`, documented upstream
+in `docs/prompt-git.md`, `docs/prompt-git-status.md` and `docs/prompt-git-objects.md`.
+Merge and corrupt-index cases use explicitly written metadata. Native Git's
+background maintenance and hooks are disabled; fixture repositories are removed
+before the snapshots return, including on failure.
+
+The admitted playground program set has no Git executable. Therefore the prompt
+check reports `provider-state-only` and an empty `commandBacked` list, never Git
+command acceptance. It preserves branch, detached, modified, deleted, untracked,
+staged, stash, ahead, behind, diverged, missing-upstream, merging and corrupt-index
+marker assertions. The late-redraw browser fixtures use fresh realms and repository paths. They hold
+the real lazy status-module request, continue it with unchanged response bytes
+after typing, and require the resulting real provider marker and same-generation
+redraw. The frozen runtime filesystem is never patched. This is dependency-delay
+evidence, not direct tracked-file-read interception. No mock provider, cached
+status response, host command injection or additional guest is installed.
+
+Source tests qualify the snapshots against the pinned provider and an in-memory
+Waffle filesystem. Serialized setup and teardown tests verify temporary budget
+installation, exact prior configuration bytes, held-read draining and preservation
+of the original failure when cleanup also fails. These checks do not qualify
+playground typing, caret behavior or real guest execution. Those still require the
+maintained browser driver against separately identified production assets.
