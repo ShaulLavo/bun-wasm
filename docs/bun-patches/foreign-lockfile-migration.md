@@ -22,7 +22,9 @@ rejects transport queries, and keeps configured authorization out of URLs and lo
 records. Host error text and optional warnings use the credential-aware redactor.
 The lock writer checks decoded strings for embedded npm authentication and
 configured secrets before publication. The original cache adapter uses the same
-check before persistence or reuse. Native and TypeScript host redirect adapters
+check before persistence or reuse and forwards the consumed unauthenticated
+tarball response before best-effort Cache Storage publication. Native and
+TypeScript host redirect adapters
 validate package destinations and remove sensitive headers on full-origin changes.
 Host tracing prints metadata sizes rather than header values or payload text.
 These redirect, trace and decoded-metadata guards are original adapters. The
