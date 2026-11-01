@@ -122,6 +122,10 @@ test("live owner is discovered once after producers and checkpoint verification"
   expect(workflow.match(/bun scripts\/test-checks\.ts native-probe\n/g)).toHaveLength(1);
   expect(rust).toContain("BUNWASM_TLS_PROBE_SHA256: ${{ needs.native-quality.outputs.tls-sha256 }}");
   expect(native).not.toContain("test-checks.ts native-probe");
+  expect(native).toContain("if: ${{ failure() && steps.tls-artifact.outcome == 'failure' }}");
+  expect(native).toContain("name: tls-link-failure-${{ github.run_attempt }}");
+  expect(native).toContain("target/tls-probe/output/*.map");
+  expect(native).toContain("retention-days: 1");
 });
 
 

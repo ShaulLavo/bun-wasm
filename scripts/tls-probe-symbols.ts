@@ -15,7 +15,7 @@ export function inspectProbeLinkMap(map: string) {
     for (const path of paths) assert.ok(path.includes("/wasm32-wasip1/"), `non-WASI runtime ${path}`);
   }
   assert.ok(!map.includes("libstdc++") && !map.includes("__cxa_allocate_exception") && !/\(__cxa_throw\)/.test(map), "no second or exception-enabled C++ runtime");
-  for (const name of ["SSL_do_handshake", "SSL_get_verify_result", "getentropy"]) {
+  for (const name of ["SSL_do_handshake", "SSL_get_verify_result", "__getentropy", "__wasi_random_get"]) {
     assert.equal(Array.from(map.matchAll(new RegExp(`\\(${name}\\)`, "g"))).length, 1, `one linked ${name}`);
   }
   return Object.fromEntries(Array.from(archives, ([name, paths]) => [name, Array.from(paths)]));

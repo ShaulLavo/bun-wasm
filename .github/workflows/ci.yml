@@ -671,6 +671,22 @@ jobs:
         run: |
           source env.sh
           bun scripts/tls-probe-ci.ts link
+      - name: Preserve TLS link failure diagnostics
+        if: ${{ failure() && steps.tls-artifact.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tls-link-failure-${{ github.run_attempt }}
+          path: |
+            target/tls-probe/prepared.json
+            target/tls-probe/cargo/*.json
+            target/tls-probe/output/*.json
+            target/tls-probe/output/*.jsonl
+            target/tls-probe/output/*.map
+            target/tls-probe/output/*.wasm
+            target/tls-probe/output/tls-probe-native
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
       - name: Save the native quality checkpoint
         if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-producers.outputs.native-ready == 'true' && steps.tls-artifact.outputs.tls-sha256 != '' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4

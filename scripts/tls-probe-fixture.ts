@@ -117,5 +117,5 @@ function syntheticCommand(executable: string, args: readonly string[], context: 
 
 function syntheticMap(context: TlsContext): string {
   for (const path of ["libc.a", "noeh/libc++.a"]) fixturePut(join(context.sysroot, "lib/wasm32-wasip1", path), syntheticArchive(syntheticObject("wasm32-wasip1")));
-  return [`${context.sysroot}/lib/wasm32-wasip1/libc.a(malloc.o):(malloc)`, `${context.sysroot}/lib/wasm32-wasip1/noeh/libc++.a(string.o):(string)`, "/archives/libssl.a(client.o):(SSL_do_handshake)", "/archives/libssl.a(cert.o):(SSL_get_verify_result)", `${context.sysroot}/lib/wasm32-wasip1/libc.a(rand.o):(getentropy)`].join("\n");
+  return [`${context.sysroot}/lib/wasm32-wasip1/libc.a(malloc.o):(malloc)`, `${context.sysroot}/lib/wasm32-wasip1/noeh/libc++.a(string.o):(string)`, "/archives/libssl.a(client.o):(SSL_do_handshake)", "/archives/libssl.a(cert.o):(SSL_get_verify_result)", `${context.sysroot}/lib/wasm32-wasip1/libc.a(getentropy.c.obj):(__getentropy)`, `${context.sysroot}/lib/wasm32-wasip1/libc.a(__wasilibc_real.c.obj):(__wasi_random_get)`].join("\n");
 }

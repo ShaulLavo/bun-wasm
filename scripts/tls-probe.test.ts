@@ -17,12 +17,16 @@ test("link map checks reject duplicate C runtimes and missing TLS symbols", () =
     "/sdk/lib/wasm32-wasip1/noeh/libc++.a(string.cpp.o):(string)",
     "/build/libssl.a(ssl_lib.cc.obj):(SSL_do_handshake)",
     "/build/libssl.a(ssl_x509.cc.obj):(SSL_get_verify_result)",
-    "/sdk/lib/wasm32-wasip1/libc.a(getentropy.o):(getentropy)",
+    "/sdk/lib/wasm32-wasip1/libc.a(__wasilibc_real.c.obj):(__wasi_random_get)",
+    "/sdk/lib/wasm32-wasip1/libc.a(getentropy.c.obj):(__getentropy)",
+    "       -      14e       32                 getentropy",
   ].join("\n");
   expect(inspectProbeLinkMap(map)["libc.a"]).toEqual(["/sdk/lib/wasm32-wasip1/libc.a"]);
   expect(() => inspectProbeLinkMap(map + "\n/other/libc.a(malloc.o):(malloc)")).toThrow("one linked libc.a");
   expect(() => inspectProbeLinkMap(map.replace("(SSL_do_handshake)", "(missing)"))).toThrow("one linked SSL_do_handshake");
   expect(() => inspectProbeLinkMap(map + "\n__cxa_allocate_exception")).toThrow("exception-enabled");
+  expect(() => inspectProbeLinkMap(map.replace("(__getentropy)", "(missing)"))).toThrow("one linked __getentropy");
+  expect(() => inspectProbeLinkMap(map.replace("(__wasi_random_get)", "(missing)"))).toThrow("one linked __wasi_random_get");
 });
 
 
