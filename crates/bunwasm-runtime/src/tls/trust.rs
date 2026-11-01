@@ -17,6 +17,7 @@ pub enum StartupExtras {
     Absent,
     #[cfg(any(target_os = "wasi", test))]
     Bytes(Vec<u8>),
+    #[cfg(any(target_os = "wasi", test))]
     Unavailable,
 }
 
@@ -149,6 +150,7 @@ impl Trust {
             StartupExtras::Absent => Ok(Vec::new()),
             #[cfg(any(target_os = "wasi", test))]
             StartupExtras::Bytes(bytes) => certificates(&bytes, &self.meter),
+            #[cfg(any(target_os = "wasi", test))]
             StartupExtras::Unavailable => Err(invalid_material()),
         };
         match result {
