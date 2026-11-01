@@ -40,7 +40,6 @@ mod semver;
 mod sourcemap;
 mod sqlite;
 mod streams;
-#[cfg(test)]
 mod tls;
 pub mod transpiler;
 mod wasm;
@@ -113,6 +112,7 @@ pub(crate) struct State {
     tick_pending: Cell<bool>,
     fds: RefCell<natives::FdTable>,
     directories: Rc<RefCell<directory::Directories>>,
+    tls: tls::SharedRegistry,
     start: Instant,
     argv: Vec<String>,
     exec_argv: Vec<String>,
@@ -147,6 +147,7 @@ impl State {
             tick_pending: Cell::new(false),
             fds: RefCell::new(natives::FdTable::default()),
             directories: Rc::new(RefCell::new(directory::Directories::default())),
+            tls: tls::new_shared_registry(tls::snapshot_startup_extras()),
             start: Instant::now(),
             argv,
             exec_argv,
@@ -177,6 +178,10 @@ impl State {
 
     pub(crate) fn flush(&self) {
         let _ = self.flush_stdout();
+    }
+
+    pub(crate) fn dispose_tls(&self) {
+        self.tls.borrow_mut().dispose();
     }
 
     /// Signal dispositions and delivery live in the process service (`runtime_proc.signal`). Only
@@ -216,6 +221,7 @@ impl State {
     }
 
     pub(crate) fn exit(&self, code: i32) -> ! {
+        self.dispose_tls();
         self.directories.borrow_mut().close_all();
         self.flush();
         // The linked engine program remains rooted until process exit.

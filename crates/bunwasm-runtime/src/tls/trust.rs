@@ -1,6 +1,10 @@
 use super::owned::{self, Kind, Meter, Owned};
 use super::{Failure, Result};
 use bunwasm_crypto_sys::tls as ffi;
+#[cfg(any(target_os = "wasi", test))]
+use std::fs::File;
+#[cfg(any(target_os = "wasi", test))]
+use std::io::{Read, Result as IoResult};
 use std::rc::Rc;
 
 pub const BUNDLE: &[u8] = include_bytes!("../../data/tls-roots.der");
@@ -8,9 +12,12 @@ pub const ROOT_COUNT: usize = 121;
 pub const MAX_MATERIAL: usize = 1024 * 1024;
 pub const MAX_CERTIFICATES: usize = 1024;
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum StartupExtras {
     Absent,
+    #[cfg(any(target_os = "wasi", test))]
     Bytes(Vec<u8>),
+    #[cfg(any(target_os = "wasi", test))]
     Unavailable,
 }
 
@@ -26,10 +33,48 @@ pub struct Trust {
     meter: Rc<Meter>,
 }
 
+pub fn snapshot_startup_extras() -> StartupExtras {
+    #[cfg(not(target_os = "wasi"))]
+    {
+        StartupExtras::Absent
+    }
+    #[cfg(target_os = "wasi")]
+    {
+        let Some(path) = std::env::var_os("NODE_EXTRA_CA_CERTS") else {
+            return StartupExtras::Absent;
+        };
+        let Some(path) = path.to_str() else {
+            return StartupExtras::Unavailable;
+        };
+        snapshot_file(std::path::Path::new(path))
+    }
+}
+
+#[cfg(any(target_os = "wasi", test))]
+pub(super) fn snapshot_file(path: &std::path::Path) -> StartupExtras {
+    let Ok(file) = File::open(path) else {
+        return StartupExtras::Unavailable;
+    };
+    match read_bounded(file) {
+        Ok(bytes) => StartupExtras::Bytes(bytes),
+        Err(_) => StartupExtras::Unavailable,
+    }
+}
+
+#[cfg(any(target_os = "wasi", test))]
+fn read_bounded(mut file: File) -> IoResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(MAX_MATERIAL as u64)
+        .read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 impl Trust {
     // The embedding process supplies startup-snapshotted guest bytes, never a path.
     pub fn new(extras: StartupExtras, meter: &Rc<Meter>) -> Self {
         let extras = match extras {
+            #[cfg(any(target_os = "wasi", test))]
             StartupExtras::Bytes(bytes) if bytes.len() > MAX_MATERIAL => StartupExtras::Unavailable,
             other => other,
         };
@@ -39,6 +84,12 @@ impl Trust {
             warning: false,
             meter: meter.clone(),
         }
+    }
+
+    pub fn dispose(&mut self) {
+        self.bundled = None;
+        self.extras = Extras::Parsed(Vec::new());
+        self.warning = false;
     }
 
     pub fn take_warning(&mut self) -> Option<&'static str> {
@@ -95,9 +146,11 @@ impl Trust {
         else {
             unreachable!()
         };
-        let result = match snapshot {
+        let result: std::result::Result<Vec<Owned<ffi::Certificate>>, Failure> = match snapshot {
             StartupExtras::Absent => Ok(Vec::new()),
+            #[cfg(any(target_os = "wasi", test))]
             StartupExtras::Bytes(bytes) => certificates(&bytes, &self.meter),
+            #[cfg(any(target_os = "wasi", test))]
             StartupExtras::Unavailable => Err(invalid_material()),
         };
         match result {

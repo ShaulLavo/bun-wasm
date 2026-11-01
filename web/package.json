@@ -33,8 +33,9 @@
     "@xterm/xterm": "^6.0.0",
     "bash-web": "git+https://github.com/ShaulLavo/bash-web.git#32b9103c762954bbe6e728fb86dc6cafa532edea",
     "codemirror": "^6.0.2",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.107/waffle-0.0.107.tgz",
-    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-base-0.0.15.tgz"
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.109/waffle-0.0.109.tgz",
+    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-base-0.0.15.tgz",
+    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.109/waffle-relay-0.0.109.tgz"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",

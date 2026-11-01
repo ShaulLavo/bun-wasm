@@ -251,7 +251,7 @@ export function loadExit(fake: ReturnType<typeof service>, options: { workerErro
   Object.assign(loaded.internal, options, { cancelIoWaiters() { cleanup.push("cancelIoWaiters"); } });
   const emitExit: (code: number) => void = runInNewContext(`${source}; emitExit`, {
     process: loaded.process, internal: loaded.internal,
-    native: { closeAllDirs() { cleanup.push("closeAllDirs"); } },
+    native: { tlsDispose() {}, closeAllDirs() { cleanup.push("closeAllDirs"); } },
     printError(error: unknown) { errors.push(error); },
   });
   return { ...loaded, emitExit, errors, cleanup };

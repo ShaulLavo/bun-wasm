@@ -769,7 +769,6 @@
     const process = globalThis.process;
     if (!process || process._exiting) return;
     process._exiting = true;
-    internal.cancelIoWaiters();
     function reportExitError(err) {
       // An exception inside an exit handler is itself fatal.
       if (internal.workerError) internal.workerError(err);
@@ -777,6 +776,8 @@
       if (!internal.workerError) printError(err);
     }
     try {
+      try { internal.cancelIoWaiters(); }
+      catch (err) { reportExitError(err); }
       process.emit("exit", code);
     } catch (err) {
       reportExitError(err);
@@ -786,9 +787,21 @@
       } catch (err) {
         reportExitError(err);
       }
-      internal.cancelIoWaiters();
-      if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
-      native.closeAllDirs();
+      try { internal.cancelIoWaiters(); }
+      catch (err) { reportExitError(err); }
+      try {
+        native.tlsDispose();
+      } catch (err) {
+        reportExitError(err);
+      }
+      try {
+        if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
+      } catch (err) {
+        reportExitError(err);
+      } finally {
+        try { native.closeAllDirs(); }
+        catch (err) { reportExitError(err); }
+      }
     }
   }
   internal.emitExit = emitExit;

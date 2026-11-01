@@ -9,7 +9,7 @@ import type { ProcessService, RuntimeSupervisor } from "waffle";
 import type { ProcessRuntime } from "../../src/process-runtime.js";
 import type { WorkerProcessMessage, WorkerProcessTransport } from "waffle/proc/worker-client";
 import type { FilesystemIdentity } from "waffle/fs";
-import { bunLauncher, preview1Launcher, siblingWorkerUrl } from "./bun-launcher.js";
+import { bunLauncher, preview1Launcher, siblingWorkerUrl, type Preview1LauncherOptions } from "./bun-launcher.js";
 import type { BunNetworkOptions } from "./net/helper.js";
 import type { Engine } from "./bun-executor.js";
 
@@ -21,6 +21,7 @@ export type ExecutableRegistration =
 
 export interface SubprocessBrokerOptions {
   network?: BunNetworkOptions;
+  preview1?: Preview1LauncherOptions;
   loadTools?(): Promise<WebAssembly.Module>;
   output?(fd: 1 | 2, data: Uint8Array): void;
   rootFilesystem?: FilesystemIdentity;
@@ -34,7 +35,7 @@ export class SubprocessBroker {
   private service?: ProcessService;
   private root?: SignalTransport & { pid: number; job: number };
   constructor(workerUrl: string, private runtime: ProcessRuntime, private options: SubprocessBrokerOptions = {}) {
-    installBunAdapters(runtime, workerUrl, options.loadTools, options.network);
+    installBunAdapters(runtime, workerUrl, options.loadTools, options.network, options.preview1);
   }
 
   register(name: string, entry: ExecutableRegistration): void {
@@ -123,10 +124,10 @@ export class SubprocessBroker {
 const programFiles = new WeakMap<ProcessRuntime, Promise<void>>();
 const installedAdapters = new WeakSet<ProcessRuntime>();
 /** Immutable engine-qualified registrations; concurrent runs never replace a global engine alias. */
-export function installBunAdapters(runtime: ProcessRuntime, workerUrl: string, loadTools?: () => Promise<WebAssembly.Module>, network?: BunNetworkOptions): void {
+export function installBunAdapters(runtime: ProcessRuntime, workerUrl: string, loadTools?: () => Promise<WebAssembly.Module>, network?: BunNetworkOptions, preview1?: Preview1LauncherOptions): void {
   if (installedAdapters.has(runtime)) return;
   installedAdapters.add(runtime);
-  runtime.registerAdapter("preview1", preview1Launcher({ workerUrl }));
+  runtime.registerAdapter("preview1", preview1Launcher({ workerUrl, runtime, network, preview1 }));
   const notificationWorkerUrl = siblingWorkerUrl(workerUrl, "notification-worker.js");
   const engines: readonly Engine[] = pairedEngines;
   for (const engine of engines.concat(["browser"])) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network }));

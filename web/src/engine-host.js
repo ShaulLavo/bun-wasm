@@ -1133,14 +1133,37 @@ class EngineHost {
   exit(code) {
     if (this.exited) return;
     this.exited = true;
-    this.internal?.workerStartup?.cancel();
-    this.o.sharedObjects?.close();
-    this.disposeNativeStreams?.();
-    this.native.closeAllDirs();
-    this.flush();
-    if (this.timer !== null) nativeClearTimeout(this.timer);
-    if (this.o.onExit) this.o.onExit(code);
-    this.resolveDone(code);
+    let cleanupError;
+    const recordCleanupError = error => {
+      if (!cleanupError) {
+        cleanupError = error;
+        return;
+      }
+      const previous = cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError];
+      cleanupError = new AggregateError(previous.concat(error), "Engine cleanup failed");
+    };
+    try {
+      this.internal?.workerStartup?.cancel();
+    } catch (error) {
+      recordCleanupError(error);
+    } finally {
+      try { this.o.sharedObjects?.close(); }
+      catch (error) { recordCleanupError(error); }
+      try { this.disposeNativeStreams?.(); }
+      catch (error) { recordCleanupError(error); }
+      try { this.native.tlsDispose(); }
+      catch (error) { recordCleanupError(error); }
+      try { this.native.closeAllDirs(); }
+      catch (error) { recordCleanupError(error); }
+      try { this.flush(); }
+      catch (error) { recordCleanupError(error); }
+      if (this.timer !== null) nativeClearTimeout(this.timer);
+      try { this.o.onExit?.(code); }
+      catch (error) { recordCleanupError(error); }
+      try { this.resolveDone(code); }
+      catch (error) { recordCleanupError(error); }
+    }
+    if (cleanupError) throw cleanupError;
   }
 }
 

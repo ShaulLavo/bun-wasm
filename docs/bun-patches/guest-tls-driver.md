@@ -15,7 +15,9 @@ Each installed native table captures one `Rc<RefCell<TlsRegistry>>`. The
 registry holds no socket, JavaScript object, engine value, or process-global
 connection map. It cannot call JavaScript or read files. Integration supplies
 `StartupExtras` from a once-per-process guest snapshot before application code
-runs. This source module is not registered by `lib.rs` or `natives.rs` yet.
+runs. The process-owned registry and terminal disposal wiring are recorded separately
+in `guest-tls-registry-lifecycle.md`; this record remains the driver and trust
+implementation contract.
 
 Contexts are immutable. A connection retains its context after the caller
 releases the context ID. Slot IDs contain a type tag, slot index, and checked

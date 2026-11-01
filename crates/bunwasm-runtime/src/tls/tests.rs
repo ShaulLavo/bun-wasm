@@ -569,6 +569,25 @@ fn explicit_empty_ca_replaces_the_valid_guest_extra_snapshot() {
 }
 
 #[test]
+fn startup_snapshot_distinguishes_missing_files_and_bounds_reads() {
+    #[cfg(not(target_os = "wasi"))]
+    assert_eq!(snapshot_startup_extras(), StartupExtras::Absent);
+    let scratch = Scratch::new();
+    let path = scratch.0.join("extra.pem");
+    let input = vec![b'x'; trust::MAX_MATERIAL + 1];
+    std::fs::write(&path, &input).unwrap();
+    let StartupExtras::Bytes(bytes) = trust::snapshot_file(&path) else {
+        panic!("expected bounded startup bytes");
+    };
+    assert_eq!(bytes.len(), trust::MAX_MATERIAL);
+    assert_eq!(bytes, input[..trust::MAX_MATERIAL]);
+    assert_eq!(
+        trust::snapshot_file(&scratch.0.join("missing.pem")),
+        StartupExtras::Unavailable
+    );
+}
+
+#[test]
 fn malformed_extra_snapshot_warns_once_and_contributes_no_trust() {
     let mut registry = TlsRegistry::new(StartupExtras::Bytes(b"bad PEM".to_vec()));
     let context = registry.create_context(ContextOptions::default()).unwrap();
@@ -915,8 +934,11 @@ fn paused_read_produces_no_plaintext_and_resumes_without_losing_bytes() {
 fn native_table_preserves_typed_release_and_drops_its_registry() {
     use crate::data::{Args, Val};
     let mut table = crate::natives::Table::default();
-    install(&mut table, StartupExtras::Absent);
-    assert_eq!(table.functions.len(), 6);
+    install(
+        &mut table,
+        super::new_shared_registry(StartupExtras::Absent),
+    );
+    assert_eq!(table.functions.len(), 7);
     let call = |name, values: &[Val]| {
         table
             .functions
@@ -950,6 +972,57 @@ fn native_table_preserves_typed_release_and_drops_its_registry() {
     )
     .unwrap();
     call("tlsRelease", &[Val::Str("connection".into()), connection]).unwrap();
+}
+
+#[test]
+fn native_table_disposal_is_idempotent_and_terminal() {
+    use crate::data::{Args, Val};
+    let mut table = crate::natives::Table::default();
+    install(
+        &mut table,
+        super::new_shared_registry(StartupExtras::Absent),
+    );
+    let call = |name, values: &[Val]| {
+        table
+            .functions
+            .iter()
+            .find(|(key, _)| key == &name)
+            .unwrap()
+            .1(Args(values))
+    };
+    let context = call("tlsCreateContext", &[Val::Object(Vec::new())]).unwrap();
+    let Val::Object(fields) = context else {
+        panic!("context result");
+    };
+    let id = fields.into_iter().find(|(key, _)| key == "id").unwrap().1;
+    call("tlsDispose", &[]).unwrap();
+    call("tlsDispose", &[]).unwrap();
+    let error = call("tlsCreateContext", &[Val::Object(Vec::new())]).unwrap_err();
+    assert_eq!(
+        error
+            .props
+            .iter()
+            .find(|(key, _)| key == "code")
+            .map(|(_, value)| value),
+        Some(&Val::Str("ERR_TLS_REGISTRY_DISPOSED".into()))
+    );
+    let Val::Object(fields) = call("tlsRelease", &[Val::Str("context".into()), id]).unwrap() else {
+        panic!("release result");
+    };
+    assert_eq!(
+        fields
+            .iter()
+            .find(|(key, _)| key == "released")
+            .map(|(_, value)| value),
+        Some(&Val::Bool(false))
+    );
+    assert_eq!(
+        fields
+            .iter()
+            .find(|(key, _)| key == "contexts")
+            .map(|(_, value)| value),
+        Some(&Val::Num(0.0))
+    );
 }
 
 #[test]

@@ -293,13 +293,15 @@
       this.onError = null;
       this.reading = false;
       this.writer = null;
+      this.ownership = internal.require("tls_transport").track(this);
     }
     get bufferedAmount() { return this.queue.reduce((size, item) => size + item.bytes.length, 0); }
     startReading() {
       if (this.reading || this.closed) return;
       this.reading = true;
+      const epoch = this.ownership.state.epoch;
       this.reader = addWaiter({
-        step: () => this.pumpRead(),
+        step: () => this.ownership.valid(epoch) ? this.pumpRead() : true,
         fail: (err) => this.fail(err),
         ref: this.referenced !== false,
       });
@@ -316,16 +318,22 @@
     }
     pumpRead() {
       if (this.closed) return true;
+      const epoch = this.ownership.state.epoch;
       let progressed = false;
-      for (;;) {
+      let bytes = 0;
+      for (let operations = 0; operations < 32 && bytes < 262144; operations++) {
+        if (!this.ownership.valid(epoch)) return true;
         if (this.canRead && !this.canRead()) return progressed ? "progress" : false;
         const chunk = native.hostRead(this.handle, this.readCapacity?.());
         if (chunk === AGAIN) return progressed ? "progress" : false;
         if (typeof chunk === "number") return this.finishRead(chunk);
         progressed = true;
-        if (this.onData) this.onData(chunk);
-        if (this.closed) return true;
+        bytes += chunk.length;
+        if (this.onData) this.ownership.dispatch(() => this.onData?.(chunk));
+        if (this.closed || !this.ownership.valid(epoch)) return true;
       }
+      if (native.wake) native.wake(0);
+      return progressed ? "progress" : false;
     }
     write(bytes, callback) {
       if (this.closed || this.closing) {
@@ -393,6 +401,7 @@
     destroy(err) {
       if (this.closed) return;
       this.closed = true;
+      this.ownership.close();
       this._writeError = err || Object.assign(new Error("Connection is closed"), { code: "ERR_STREAM_DESTROYED" });
       this.reading = false;
       if (this.reader) waiters.delete(this.reader);
@@ -401,6 +410,9 @@
       for (const item of this.queue.splice(0)) {
         if (item.callback) internal.nextTick(() => item.callback(this._writeError));
       }
+      const final = this._shutdownCallback;
+      this._shutdownCallback = null;
+      if (final && !this.writeEnded) internal.nextTick(() => final(this._writeError));
       native.hostClose(this.handle);
       if (this.onClose) this.onClose();
     }
@@ -1115,6 +1127,7 @@
     class Server extends EventEmitter {
       constructor(options, handler) {
         super();
+        if (protocol === "https:") throw Object.assign(new Error("TLS servers are not supported in bun-wasm"), { code: "ERR_TLS_NOT_SUPPORTED" });
         if (typeof options === "function") handler = options;
         this._options = typeof options === "object" && options !== null ? options : {};
         if (handler) this.on("request", handler);
@@ -1151,7 +1164,6 @@
         socket._conn = conn;
         socket._phase = "open";
         socket._updatePeer();
-        socket.encrypted = protocol === "https:";
         conn.onClose = () => socket.destroy();
         socket.on("error", error => this.emit("clientError", error, socket));
         trackServerConnection(this, conn);
