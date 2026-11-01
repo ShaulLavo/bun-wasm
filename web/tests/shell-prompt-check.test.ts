@@ -4,7 +4,7 @@ import { createContext, runInContext } from "node:vm";
 import { MemFS } from "waffle/fs/memory";
 import { createPrompt, type PromptContext } from "bash-web/prompt";
 import { importPromptRepository, promptRepositoryFixtures, type PromptRepositoryFixture } from "./shell-prompt-fixture";
-import { armPromptReadBarrier, assertActivePromptWrap, assertPreservedDraft, installPromptReadBudget, promptReadBudgetSetup, restorePromptFixture, withPromptFixture, type PromptSnapshot } from "./shell-prompt-check";
+import { armPromptReadBarrier, deferredPromptSource, assertActivePromptWrap, assertPreservedDraft, installPromptReadBudget, promptReadBudgetSetup, restorePromptFixture, withPromptFixture, type PromptSnapshot } from "./shell-prompt-check";
 
 function filesystem() {
   const calls: { receiver: unknown; path: string }[] = [];
@@ -434,4 +434,30 @@ test("cleanup releases and drains a read even when method restoration throws", a
   expect(budgetRestored).toBe(true);
   expect(barrier.blocked).toBe(false);
   expect(Object.hasOwn(realm, "promptReadBarrier")).toBe(false);
+});
+
+
+test("status transport barrier holds and releases the original request without changing frozen capabilities", async () => {
+  const fs = Object.freeze(filesystem().source);
+  const before = Object.getOwnPropertyDescriptors(fs);
+  const source = deferredPromptSource();
+  let calls = 0;
+  const request = source.hold("https://example.test/chunks/status-original.js", async () => { calls++; });
+  await source.entered;
+  expect(calls).toBe(0);
+  expect(source.urls).toEqual(["https://example.test/chunks/status-original.js"]);
+  source.release();
+  await request;
+  await source.drain();
+  expect(calls).toBe(1);
+  expect(Object.getOwnPropertyDescriptors(fs)).toEqual(before);
+});
+
+test("status transport cleanup releases held requests and preserves the original transport failure", async () => {
+  const source = deferredPromptSource();
+  const failure = new Error("original transport failure");
+  const request = source.hold("https://example.test/chunks/status-original.js", async () => { throw failure; });
+  void request.catch(() => {});
+  await source.entered;
+  await expect(source.drain()).rejects.toBe(failure);
 });

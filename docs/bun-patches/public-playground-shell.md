@@ -99,9 +99,12 @@ The admitted playground program set has no Git executable. Therefore the prompt
 check reports `provider-state-only` and an empty `commandBacked` list, never Git
 command acceptance. It preserves branch, detached, modified, deleted, untracked,
 staged, stash, ahead, behind, diverged, missing-upstream, merging and corrupt-index
-marker assertions. The late-redraw fixtures use fresh repository paths and hold
-the provider's actual uncached `tracked.txt` read. No mock provider, cached status
-response, host command injection or additional guest is installed.
+marker assertions. The late-redraw browser fixtures use fresh realms and repository paths. They hold
+the real lazy status-module request, continue it with unchanged response bytes
+after typing, and require the resulting real provider marker and same-generation
+redraw. The frozen runtime filesystem is never patched. This is dependency-delay
+evidence, not direct tracked-file-read interception. No mock provider, cached
+status response, host command injection or additional guest is installed.
 
 Source tests qualify the snapshots against the pinned provider and an in-memory
 Waffle filesystem. Serialized setup and teardown tests verify temporary budget

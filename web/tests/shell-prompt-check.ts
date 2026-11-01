@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { Page } from "playwright";
+import type { Page, Route } from "playwright";
 import type { Terminal } from "@xterm/xterm";
 import type { BrowserSession } from "bash-web/session";
 import type { Runtime } from "waffle";
@@ -205,25 +205,53 @@ export async function prepareRepository(page: Pick<Page, "evaluate">, name: stri
   return root;
 }
 
-async function installBarrier(page: Page, path: string): Promise<void> {
-  await page.evaluate(`globalThis.promptReadBarrier = (${armPromptReadBarrier.toString()})(globalThis.playground.runtime.filesystem, ${JSON.stringify(path)});
-globalThis.promptCapture = ${snapshotPrompt.toString()};
+/** Delay the original lazy status source, without changing bytes or a frozen runtime capability. */
+export function deferredPromptSource() {
+  const entered = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+  const pending = new Set<Promise<void>>();
+  const urls: string[] = [];
+  const errors: unknown[] = [];
+  function hold(url: string, proceed: () => Promise<void>): Promise<void> {
+    urls.push(url);
+    entered.resolve();
+    const request = released.promise.then(proceed);
+    pending.add(request);
+    void request.then(() => pending.delete(request), error => { errors.push(error); pending.delete(request); });
+    return request;
+  }
+  async function drain(): Promise<void> {
+    released.resolve();
+    await Promise.allSettled(Array.from(pending));
+    if (errors.length === 1) throw errors[0];
+    if (errors.length) throw new AggregateError(errors, "Prompt source transport failed");
+  }
+  return { entered: entered.promise, urls, hold, release: () => released.resolve(), drain };
+}
+
+async function installStatusBarrier(page: Page) {
+  const source = deferredPromptSource();
+  const pattern = /\/chunks\/status-[^/?]+\.js(?:\?.*)?$/;
+  const handler = (route: Route) => source.hold(route.request().url(), () => route.continue());
+  await page.route(pattern, handler);
+  async function restore(): Promise<void> {
+    source.release();
+    await page.unroute(pattern, handler);
+    await source.drain();
+  }
+  async function release(): Promise<void> {
+    assert.ok(source.urls.length, "A real status source request must be held");
+    source.release();
+    await source.drain();
+    // Wait for the same native module import to settle, not a substitute status result.
+    await page.evaluate(url => import(url).then(() => undefined), source.urls[0]!);
+  }
+  return { ...source, release, restore };
+}
+
+async function installPromptCapture(page: Page): Promise<void> {
+  await page.evaluate(`globalThis.promptCapture = ${snapshotPrompt.toString()};
 globalThis.promptLines = ${activePrompt.toString()};`);
-}
-
-async function waitForBlockedRead(page: Page): Promise<void> {
-  await page.waitForFunction(() => {
-    const barrier: PromptReadBarrier = Reflect.get(globalThis, "promptReadBarrier");
-    return barrier.blocked;
-  });
-}
-
-async function releaseBarrier(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    const barrier: PromptReadBarrier = Reflect.get(globalThis, "promptReadBarrier");
-    barrier.release();
-    await barrier.finished;
-  });
 }
 
 async function updatedStatus(page: Page, generation: string): Promise<void> {
@@ -260,13 +288,18 @@ export async function withPromptFixture<T>(action: () => Promise<T>, cleanup: re
   return result.value;
 }
 
-async function pendingUpdate(page: Page, fixture: PromptRepositoryFixture, name: string, draft: string, interrupt: boolean) {
+async function pendingUpdate(page: Page, fixture: PromptRepositoryFixture, name: string, draft: string, interrupt: boolean, columns?: number) {
+  const barrier = await installStatusBarrier(page);
   return withPromptFixture(async () => {
+    // Each arm has a fresh realm so the real lazy status module is not already evaluated.
+    await page.goto(page.url());
+    await ready(page);
+    if (columns) await page.evaluate(cols => Reflect.get(globalThis, "playground").term.resize(cols, 24), columns);
     await page.evaluate(promptReadBudgetSetup());
     const root = await prepareRepository(page, name, fixture);
-    await installBarrier(page, `${root}/tracked.txt`);
-    return exercisePendingUpdate(page, root, draft, interrupt);
-  }, [() => restorePendingFixture(page), () => submit(page, "cd /home/user")]);
+    await installPromptCapture(page);
+    return exercisePendingUpdate(page, root, draft, interrupt, barrier);
+  }, [barrier.restore, () => restorePendingFixture(page), () => submit(page, "cd /home/user")]);
 }
 
 /** Self-contained: restore the method, drain admitted reads, restore config, then forget globals. */
@@ -291,12 +324,11 @@ export async function restorePendingFixture(page: Pick<Page, "evaluate">): Promi
   await page.evaluate(restorePromptFixture);
 }
 
-async function exercisePendingUpdate(page: Page, root: string, draft: string, interrupt: boolean) {
+async function exercisePendingUpdate(page: Page, root: string, draft: string, interrupt: boolean, barrier: Awaited<ReturnType<typeof installStatusBarrier>>) {
   const submission = submit(page, `cd ${root}`);
   void submission.catch(() => {});
-  // Observe the actual uncached status read before accepting any redraw evidence.
-  await waitForBlockedRead(page);
-  await submission;
+  // Require an actual held dependency request and the initial real prompt before typing.
+  await Promise.all([barrier.entered, submission]);
   await page.evaluate(text => {
     const { shell }: ObservedPlayground = Reflect.get(globalThis, "playground");
     shell.input(`\x1b[200~${text}\x1b[201~`);
@@ -308,17 +340,17 @@ async function exercisePendingUpdate(page: Page, root: string, draft: string, in
   }, draft.split("\n").at(-1) ?? "");
   const before = await page.evaluate(snapshotPrompt);
   assertCaretAtEnd(before);
-  assert.doesNotMatch(activePrompt(before)[0] ?? "", /\[[^\]]*!/, "Actual status completion remains blocked while the draft is typed");
-  if (interrupt) return interruptPendingUpdate(page, before);
-  await releaseBarrier(page);
+  assert.doesNotMatch(activePrompt(before)[0] ?? "", /\[[^\]]*!/, "The real status source remains held while the draft is typed");
+  if (interrupt) return interruptPendingUpdate(page, before, barrier);
+  await barrier.release();
   await updatedStatus(page, before.generation);
   const after = await page.evaluate(snapshotPrompt);
   assertPreservedDraft(before, after);
   await submit(page, "cd /home/user");
-  return { kind: "redraw", before, after };
+  return { kind: "redraw", control: "held real status module, frozen filesystem unchanged", sourceRequests: barrier.urls.slice(), before, after };
 }
 
-async function interruptPendingUpdate(page: Page, before: PromptSnapshot) {
+async function interruptPendingUpdate(page: Page, before: PromptSnapshot, barrier: Awaited<ReturnType<typeof installStatusBarrier>>) {
   await page.locator(".xterm-helper-textarea").focus();
   await page.keyboard.press("Control+c");
   await page.waitForFunction(previous => {
@@ -328,11 +360,11 @@ async function interruptPendingUpdate(page: Page, before: PromptSnapshot) {
   // Leave the repository so the new turn cannot legitimately publish the old status marker.
   await submit(page, "cd /home/user");
   const fresh = await page.evaluate(snapshotPrompt);
-  await releaseBarrier(page);
+  await barrier.release();
   const after = await page.evaluate(snapshotPrompt);
-  assert.deepEqual(activePrompt(after), activePrompt(fresh), "Cancelled read never redraws the new prompt");
+  assert.deepEqual(activePrompt(after), activePrompt(fresh), "Cancelled status source never redraws the new prompt");
   assert.equal(after.generation, fresh.generation);
-  return { kind: "interrupt", before, fresh, after };
+  return { kind: "interrupt", control: "held real status module, frozen filesystem unchanged", sourceRequests: barrier.urls.slice(), before, fresh, after };
 }
 
 async function checkNarrowPrompt(page: Page, fixture: PromptRepositoryFixture) {
@@ -343,7 +375,7 @@ async function checkNarrowPrompt(page: Page, fixture: PromptRepositoryFixture) {
     return dimensions;
   });
   try {
-    const result = await pendingUpdate(page, fixture, "narrow-repository-that-wraps-the-first-line", "echo narrow", false);
+    const result = await pendingUpdate(page, fixture, "narrow-repository-that-wraps-the-first-line", "echo narrow", false, 32);
     assert.equal(result.kind, "redraw");
     assertActivePromptWrap(result.before);
     assert.match(activePrompt(result.before)[0] ?? "", /🥟/, "Width control includes the default Bun emoji");
