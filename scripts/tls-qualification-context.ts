@@ -15,10 +15,15 @@ export function assertPgResult(value: unknown, mode: QualificationCase) {
     || !("bits" in value) || typeof value.bits !== "number" || !Number.isSafeInteger(value.bits) || value.bits < 128) throw new Error("pg_stat_ssl did not prove TLS on this backend");
   return { kind: "tls-pg-result", mode, ssl: true, sameBackend: true, version: value.version, cipher: value.cipher, bits: value.bits };
 }
+export function lifecycleObservation(value: unknown) {
+  if (!value || typeof value !== "object" || !("runtimeDisposed" in value) || value.runtimeDisposed !== true
+    || !("liveConsumers" in value) || value.liveConsumers !== 0 || !("relayActive" in value) || value.relayActive !== 0) throw new Error("TLS lifecycle observations must show a disposed runtime, zero retained consumers and zero active relay connections");
+  return { runtimeDisposed: value.runtimeDisposed, liveConsumers: value.liveConsumers, relayActive: value.relayActive };
+}
 export function assertCaseContext(value: unknown, mode: QualificationCase, engine: QualificationEngine) {
-  if (!value || typeof value !== "object" || !("engine" in value) || value.engine !== engine || !("carrier" in value)
-    || value.carrier !== "websocket" || !("connections" in value) || value.connections !== 1
-    || !("runtimeDisposed" in value) || value.runtimeDisposed !== true || !("relayClosed" in value) || value.relayClosed !== true
-    || !("result" in value)) throw new Error("TLS engine/carrier/lifecycle context mismatch");
-  return { engine, carrier: "websocket", connections: 1, runtimeDisposed: true, relayClosed: true, result: assertPgResult(value.result, mode) };
+  if (!value || typeof value !== "object" || !("lifecycle" in value)) throw new Error("TLS lifecycle observations are required; completion booleans are not evidence");
+  const lifecycle = lifecycleObservation(value.lifecycle);
+  if ("runtimeDisposed" in value || "relayClosed" in value || !("engine" in value) || value.engine !== engine || !("carrier" in value)
+    || value.carrier !== "websocket" || !("connections" in value) || value.connections !== 1 || !("result" in value)) throw new Error("TLS engine/carrier/lifecycle context mismatch");
+  return { engine, carrier: "websocket", connections: 1, lifecycle, result: assertPgResult(value.result, mode) };
 }

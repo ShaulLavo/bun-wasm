@@ -2,6 +2,7 @@ import { createRuntime } from "waffle";
 import { loadBunWasm, parseBunWasmAsset } from "../../src/assets.ts";
 import { startRun, type Run } from "../src/runner.ts";
 import { assertPgResult, isCase, isEngine, type QualificationCase } from "../../scripts/tls-qualification-context.ts";
+import { TlsCleanup, acquireOwned, closeObservedCase, deadline, trackCaseRuntime } from "../../scripts/tls-qualification-lifecycle.ts";
 import type { ProcessRuntime } from "../../src/process-runtime.ts";
 
 function record(value: unknown): Record<string, unknown> {
@@ -18,7 +19,7 @@ async function bytes(path: string): Promise<Uint8Array> {
   if (!response.ok) throw new Error("TLS page seed missing");
   return new Uint8Array(await response.arrayBuffer());
 }
-async function seed(runtime: ReturnType<typeof createRuntime>, ca: string, mode: QualificationCase): Promise<void> {
+async function seed(runtime: ProcessRuntime, ca: string, mode: QualificationCase): Promise<void> {
   const paths = await json("/seed");
   if (!Array.isArray(paths)) throw new Error("Invalid TLS pg seed registry");
   await runtime.filesystem.mkdirp("/home/user/tls");
@@ -48,43 +49,54 @@ async function relayOwner(runtime: ProcessRuntime, endpoint: string, observed: s
   return { connect: value.connect, close: value.close.bind(value) };
 }
 let active: Run | undefined;
-let runtimeOwner: ReturnType<typeof createRuntime> | undefined;
+let runtimeOwner: ProcessRuntime | undefined;
+const shutdown = new AbortController();
 async function runCase(mode: unknown) {
+  shutdown.signal.throwIfAborted();
   if (!isCase(mode) || !crossOriginIsolated || location.hostname !== "127.0.0.1") throw new Error("TLS requires an isolated same-machine loopback page");
   const config = record(await json(`/case/${mode}`, "POST"));
   if (!isEngine(config.engine) || typeof config.endpoint !== "string" || new URL(config.endpoint).hostname !== "127.0.0.1"
     || typeof config.ca !== "string" || typeof config.password !== "string" || !config.password) throw new Error("Invalid private TLS configuration");
+  const { engine, endpoint, ca, password } = config;
   const asset = parseBunWasmAsset(config.asset);
-  const module = await loadBunWasm({ asset });
-  const runtime = createRuntime({ filesystem: { mode: "memory", workerURL: new URL("./fs-worker.js", location.href) } });
-  runtimeOwner = runtime;
+  const module = await deadline(loadBunWasm({ asset }), shutdown.signal, 90_000);
+  const owner = new TlsCleanup();
+  let tracked: ReturnType<typeof trackCaseRuntime> | undefined;
+  let lifecycle;
+  let parsed: ReturnType<typeof assertPgResult> | undefined;
   const observed: string[] = [];
   let relay: Awaited<ReturnType<typeof relayOwner>> | undefined;
   let output = "";
   try {
-    await seed(runtime, config.ca, mode);
-    relay = await relayOwner(runtime, config.endpoint, observed);
+    const actual = await acquireOwned(owner, shutdown.signal, () => createRuntime({ filesystem: { mode: "memory", workerURL: new URL("./fs-worker.js", location.href) } }), runtime => runtime.dispose());
+    tracked = trackCaseRuntime(actual);
+    const runtime = tracked.runtime;
+    runtimeOwner = runtime;
+    await deadline(seed(runtime, ca, mode), shutdown.signal, 30_000);
+    relay = await acquireOwned(owner, shutdown.signal, () => relayOwner(runtime, endpoint, observed), async relay => { await relay.close(); });
     const network = { fetch: undefined, connect: relay.connect };
     const extra: Record<string, string> = mode === "no-extra-ca" ? {} : { NODE_EXTRA_CA_CERTS: "/home/user/tls/ca.pem" };
-    active = startRun({ runtime, module, engine: config.engine, moduleScope: false, args: ["/home/user/query.ts"],
+    active = await acquireOwned(owner, shutdown.signal, () => { active = startRun({ runtime, module, engine, moduleScope: false, args: ["/home/user/query.ts"],
       env: { PWD: "/home/user", HOME: "/home/user", PATH: "/bin:/usr/bin", TLS_PG_CASE: mode,
-        PGHOST: mode === "hostname" ? "wrong.tls.test" : mode === "rejection" ? "reject.tls.test" : "pg.tls.test", PGPORT: "5432", PGPASSWORD: config.password, ...extra }, network },
-    { stdout: data => { if (output.length > 8192) throw new Error("TLS guest output exceeded limit"); output += new TextDecoder().decode(data); }, stderr() {} });
-    const result = await active.done;
+        PGHOST: mode === "hostname" ? "wrong.tls.test" : mode === "rejection" ? "reject.tls.test" : "pg.tls.test", PGPORT: "5432", PGPASSWORD: password, ...extra }, network },
+    { stdout: data => { if (output.length > 8192) throw new Error("TLS guest output exceeded limit"); output += new TextDecoder().decode(data); }, stderr() {} }); return active; }, async run => { run.kill(9); await run.done; });
+    const result = await deadline(active.done, shutdown.signal, 90_000);
     if (result.code !== 0 || result.error) throw new Error("Guest TLS pg case failed");
     if (observed.length !== 1 || observed[0] !== "websocket") throw new Error("TLS must use the forced WebSocket carrier on one TCP connection");
-    const parsed = assertPgResult(JSON.parse(output.trim()), mode);
-    return { engine: config.engine, carrier: observed[0], connections: observed.length, result: parsed, runtimeDisposed: true, relayClosed: true };
+    parsed = assertPgResult(JSON.parse(output.trim()), mode);
   } finally {
-    active?.kill(9);
-    await active?.done;
-    await runtime.dispose();
-    await relay?.close();
+    lifecycle = await closeObservedCase({ dispose: () => owner.close(), close: async () => { await relay?.close(); }, observe: async () => {
+      if (!tracked) throw new Error("Runtime lifecycle observer was not acquired");
+      const relayState = record(await json("/lifecycle", "POST"));
+      return { runtimeDisposed: tracked.runtime.disposed, liveConsumers: tracked.liveConsumers(), relayActive: relayState.relayActive };
+    } });
     active = undefined;
     runtimeOwner = undefined;
   }
+  if (!parsed) throw new Error("Missing guest result");
+  return { engine, carrier: observed[0], connections: observed.length, result: parsed, lifecycle };
 }
 Reflect.set(globalThis, "tlsQualification", {
   runCase,
-  async cancel() { active?.kill(9); await active?.done; await runtimeOwner?.dispose(); },
+  async cancel() { shutdown.abort(new Error("TLS page cancelled")); active?.kill(9); await runtimeOwner?.dispose(); },
 });

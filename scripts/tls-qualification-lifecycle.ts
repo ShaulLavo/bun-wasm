@@ -1,3 +1,5 @@
+import type { ProcessRuntime } from "../src/process-runtime.ts";
+import { lifecycleObservation } from "./tls-qualification-context.ts";
 export class TlsCleanup {
   private readonly closers: Array<() => void | Promise<void>> = [];
   private closing: Promise<void> | undefined;
@@ -14,11 +16,53 @@ export class TlsCleanup {
     if (failures.length) throw new AggregateError(failures, "TLS cleanup unconfirmed");
   }
 }
-export async function qualifiedRun<T, R>(validate: () => Promise<T>, setup: (input: T, owner: TlsCleanup) => Promise<R>, exercise: (services: R) => Promise<unknown>): Promise<unknown> {
+export async function qualifiedRun<T, R>(validate: () => Promise<T>, setup: (input: T, owner: TlsCleanup) => Promise<R>, exercise: (services: R) => Promise<unknown>, signal: AbortSignal = new AbortController().signal): Promise<unknown> {
+  signal.throwIfAborted();
   const input = await validate();
+  signal.throwIfAborted();
   const owner = new TlsCleanup();
-  try { return await exercise(await setup(input, owner)); }
-  finally { await owner.close(); }
+  let result: unknown;
+  try {
+    const services = await setup(input, owner);
+    signal.throwIfAborted();
+    result = await exercise(services);
+    signal.throwIfAborted();
+  } finally { await owner.close(); }
+  signal.throwIfAborted();
+  return result;
+}
+export async function acquireOwned<T>(owner: TlsCleanup, signal: AbortSignal, acquire: () => T | Promise<T>, release: (resource: T) => void | Promise<void>): Promise<T> {
+  signal.throwIfAborted();
+  let pending: Promise<T> | undefined;
+  owner.add(async () => {
+    if (!pending) return;
+    const settled = await Promise.allSettled([pending]);
+    const result = settled[0];
+    if (result?.status === "fulfilled") await release(result.value);
+  });
+  signal.throwIfAborted();
+  pending = Promise.resolve(acquire());
+  const resource = await pending;
+  signal.throwIfAborted();
+  return resource;
+}
+export async function closeObservedCase(operations: { dispose(): Promise<void>; close(): Promise<void>; observe(): unknown | Promise<unknown> }) {
+  const settled = await Promise.allSettled([Promise.resolve().then(operations.dispose), Promise.resolve().then(operations.close)]);
+  const failures = settled.filter(row => row.status === "rejected").map(row => row.reason);
+  if (failures.length) throw new AggregateError(failures, "TLS lifecycle cleanup failed");
+  return lifecycleObservation(await operations.observe());
+}
+export function trackCaseRuntime(runtime: ProcessRuntime) {
+  const leases = new Set<object>();
+  const retainConsumer: ProcessRuntime["retainConsumer"] = consumer => {
+    const lease = {};
+    const wrapped = { ...consumer, async stop() { await consumer.stop(); leases.delete(lease); } };
+    const release = runtime.retainConsumer(wrapped);
+    leases.add(lease);
+    return () => { release(); leases.delete(lease); };
+  };
+  const tracked: ProcessRuntime = { ...runtime, get disposed() { return runtime.disposed; }, retainConsumer };
+  return { runtime: tracked, liveConsumers: () => leases.size };
 }
 export async function deadline<T>(operation: Promise<T>, signal: AbortSignal, milliseconds: number): Promise<T> {
   const cancelled = Promise.withResolvers<never>();

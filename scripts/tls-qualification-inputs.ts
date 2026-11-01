@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, readFile, readdir } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { requireCompletePublicationFiles, verifyPublicationBuilds, verifyPublicationNativeBacking, type ProducerSource } from "./producer-closure.ts";
 
+export class MissingTlsInput extends Error { readonly code = "TLS_EXISTING_INPUT_CONTRACT_MISSING"; }
 export const deliveryContract = "bun-wasm.complete-producer-delivery.v2";
 export const parentOwner = "mcp:e5ea79c9-80ba-4f6e-b71a-4886c114af80";
 export interface FileIdentity { readonly bytes: number; readonly sha256: string }
@@ -72,13 +73,13 @@ export function deliveryPath(root: string, path: string): string {
   if (isAbsolute(path) || path.includes("\\") || path.split("/").some(part => !part || part === "." || part === "..")) throw new Error("Unsafe delivery path");
   return join(root, path);
 }
-async function walk(root: string, path = ""): Promise<string[]> {
-  const results: string[] = [];
+async function walk(root: string, path = "", label = "TLS delivery"): Promise<string[]> {
+  let results: string[] = [];
   for (const entry of await readdir(join(root, path), { withFileTypes: true })) {
     const name = path ? `${path}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) results.push(...await walk(root, name));
+    if (entry.isDirectory()) results = results.concat(await walk(root, name, label));
     else if (entry.isFile()) results.push(name);
-    else throw new Error("TLS delivery contains a symlink or special file");
+    else throw new Error(`${label} contains a symlink or special file`);
   }
   return results;
 }
@@ -139,12 +140,15 @@ export async function preflightTls(inputs: TlsEvidence) {
   if (release.kind !== "tested-producer-source-release") throw new Error("Tested source release required");
   const releasedTuple = object(release.tuple, "source release tuple");
   if (releasedTuple.runtime !== "0.0.109" || releasedTuple.relay !== "0.0.109" || releasedTuple.hostInterface !== 1) throw new Error("Reviewed TLS source release does not select runtime/relay109");
-  const reuse = await reference(parent.canonicalReuse);
-  await verifyReuse(root, reuse);
+  const reuseRef = namedIdentity(parent.canonicalReuse, "canonical reuse");
+  if (reuseRef.path !== join(root, "inputs/CANONICAL-REUSE.json")) throw new Error("Canonical reuse path mismatch");
+  const reuse = await reference(reuseRef);
+  const originals = await verifyReuse(root, reuse, files);
   const archive = namedIdentity(parent.sourceArchive, "source archive");
   if (archive.path !== join(root, "source.tar.gz")) throw new Error("Source archive path mismatch");
   await requireIdentity(archive.path, archive);
   await verifyCustody(root, files, object(object(parent.gates, "gates").beforeAfterPresealCustody, "custody"));
+  const dependencies = await preflightDependencies(inputs, files, originals);
   verifyHostSource(inputs.hostSource, inputs.reviewedSource);
   for (const name of ["waffle", "waffle-relay"]) {
     const metadata = object(JSON.parse(await readFile(join(inputs.hostSource, "web/node_modules", name, "package.json"), "utf8")), "installed runtime package");
@@ -153,17 +157,34 @@ export async function preflightTls(inputs: TlsEvidence) {
   const pg = object(JSON.parse(await readFile(join(inputs.pgModules, "pg/package.json"), "utf8")), "pg package");
   if (pg.version !== "8.16.3") throw new Error("Unmodified pg 8.16.3 must be staged separately");
   await verifyPgArchive(inputs);
-  return { inputs, files, source: inputs.reviewedSource, contract: deliveryContract, tuple: object(parent.tuple, "tuple") };
+  const references = await preflightReferences(inputs, parent, files);
+  const pgArchive = { path: inputs.pgArchive, ...await fileIdentity(inputs.pgArchive) };
+  if (pgArchive.sha256 !== inputs.pgArchiveSha256) throw new Error("pg archive changed before reference capture");
+  const selected = object(parent.tuple, "tuple");
+  const tuple = { runtime: selected.runtime, relay: selected.relay, hostInterface: selected.hostInterface, engines: selected.engines };
+  return { inputs, files, dependencies, references, pgArchive, source: inputs.reviewedSource, contract: deliveryContract, tuple };
 }
 export type TlsIntake = Awaited<ReturnType<typeof preflightTls>>;
-async function verifyReuse(root: string, reuse: Record<string, unknown>): Promise<void> {
+async function verifyReuse(root: string, reuse: Record<string, unknown>, files: readonly NamedIdentity[]): Promise<NamedIdentity[]> {
   if (!Array.isArray(reuse.staged)) throw new Error("Missing canonical original/reuse custody");
+  const members = new Map(files.map(row => [row.path, row]));
+  const seen = new Set<string>();
+  const originals: NamedIdentity[] = [];
   for (const value of reuse.staged) {
     const row = object(value, "reuse entry");
-    const expected = identity(row, "reuse entry");
-    await requireIdentity(text(row.originalPath, "original reuse path"), expected);
-    await requireIdentity(deliveryPath(root, text(row.path, "reuse delivery path")), expected);
+    const staged = namedIdentity(row, "reuse entry");
+    const originalPath = text(row.originalPath, "original reuse path");
+    if (!isAbsolute(originalPath) || resolve(originalPath) !== originalPath) throw new Error("Original reuse path must remain absolute and canonical");
+    if (seen.has(staged.path)) throw new Error("Duplicate staged reuse path");
+    seen.add(staged.path);
+    const member = members.get(staged.path);
+    if (!member) throw new Error("Reuse path must be a delivery manifest member");
+    if (member.bytes !== staged.bytes || member.sha256 !== staged.sha256) throw new Error("Reuse manifest byte/custody mismatch");
+    await requireIdentity(originalPath, staged);
+    await requireIdentity(deliveryPath(root, staged.path), staged);
+    originals.push({ path: originalPath, bytes: staged.bytes, sha256: staged.sha256 });
   }
+  return originals;
 }
 async function verifyCustody(root: string, files: readonly NamedIdentity[], parent: Record<string, unknown>): Promise<void> {
   for (const family of ["", "native-custody-", "vendor-custody-"]) {
@@ -202,4 +223,73 @@ async function verifyPgArchive(inputs: TlsEvidence): Promise<void> {
   }
   const actual = (await walk(join(inputs.pgModules, "pg"))).map(name => `package/${name}`).sort();
   if (JSON.stringify(actual) !== JSON.stringify(names.filter(name => !name.endsWith("/")).sort())) throw new Error("Staged pg differs from the pinned public tarball");
+}
+
+export interface DependencyTree { readonly root: string; readonly files: readonly NamedIdentity[] }
+export async function verifyDependencyTree(root: string, authenticated: readonly NamedIdentity[], label: string): Promise<DependencyTree> {
+  if (!isAbsolute(root) || resolve(root) !== root) throw new Error("Dependency root must preserve its original absolute path");
+  let info;
+  try { info = await lstat(root); }
+  catch (error) { if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") throw new MissingTlsInput(`Missing authenticated ${label} dependency tree`); throw error; }
+  if (!info.isDirectory()) throw new Error(`${label} dependency root must be an ordinary directory, not a symlink`);
+  const paths = (await walk(root, "", `${label} dependency`)).map(path => join(root, path)).sort();
+  const files = authenticated.filter(row => row.path.startsWith(root + "/")).toSorted((a, b) => a.path.localeCompare(b.path));
+  if (!files.length || JSON.stringify(paths) !== JSON.stringify(files.map(row => row.path).sort())) throw new MissingTlsInput(`Missing authenticated ${label} dependency coverage or unexpected files; require existing DELIVERY.json/canonical-reuse originalPath membership`);
+  for (const row of files) await requireIdentity(row.path, row);
+  return { root, files };
+}
+async function preflightDependencies(inputs: TlsEvidence, files: readonly NamedIdentity[], originals: readonly NamedIdentity[]) {
+  const admitted = new Map<string, NamedIdentity>();
+  for (const row of files.map(row => ({ ...row, path: deliveryPath(inputs.delivery, row.path) })).concat(originals)) {
+    const previous = admitted.get(row.path);
+    if (previous && (previous.bytes !== row.bytes || previous.sha256 !== row.sha256)) throw new Error("Conflicting authenticated dependency bytes");
+    admitted.set(row.path, row);
+  }
+  const records = Array.from(admitted.values());
+  const pg = await verifyDependencyTree(inputs.pgModules, records, "pg");
+  const host = [];
+  for (const root of [join(inputs.hostSource, "node_modules"), join(inputs.hostSource, "web/node_modules")]) host.push(await verifyDependencyTree(root, records, "host"));
+  const locks: NamedIdentity[] = [];
+  for (const root of [dirname(inputs.pgModules), inputs.hostSource, join(inputs.hostSource, "web")]) {
+    for (const name of ["package.json", "bun.lock"]) locks.push(await authenticatedFile(join(root, name), admitted));
+  }
+  return { pg, host, locks };
+}
+async function authenticatedFile(path: string, admitted: ReadonlyMap<string, NamedIdentity>): Promise<NamedIdentity> {
+  const row = admitted.get(path);
+  if (!row) throw new MissingTlsInput(`Missing authenticated frozen dependency lock/input ${path}; existing admission/canonical original inventory required`);
+  await requireIdentity(path, row);
+  return row;
+}
+export async function readVerifiedFile(row: NamedIdentity): Promise<Uint8Array<ArrayBuffer>> {
+  if (!(await lstat(row.path)).isFile()) throw new Error("Dependency must remain an ordinary file");
+  const bytes = await readFile(row.path);
+  if (bytes.length !== row.bytes || createHash("sha256").update(bytes).digest("hex") !== row.sha256) throw new Error("Dependency byte/custody mismatch immediately before use");
+  return bytes;
+}
+export async function preflightReferences(inputs: TlsEvidence, parent: Record<string, unknown>, files: readonly NamedIdentity[]) {
+  const parentIdentity = await fileIdentity(inputs.admission);
+  if (parentIdentity.sha256 !== inputs.admissionSha256) throw new Error("Parent intake changed before reference capture");
+  const references: NamedIdentity[] = [{ path: inputs.admission, ...parentIdentity }];
+  for (const key of ["deliveryManifest", "producerAdmission", "sourceRelease", "sourceArchive", "canonicalReuse"]) {
+    const row = namedIdentity(parent[key], key);
+    if (!isAbsolute(row.path)) throw new Error("Preflight reference must retain its original absolute path");
+    await requireIdentity(row.path, row);
+    references.push(row);
+  }
+  for (const family of ["", "native-custody-", "vendor-custody-"]) {
+    for (const phase of ["before", "after", "preseal"]) {
+      const row = files.find(row => row.path === `inputs/${family}${phase}.json`);
+      if (!row) throw new Error("Missing preflight custody reference");
+      const path = deliveryPath(inputs.delivery, row.path);
+      await requireIdentity(path, row);
+      references.push({ ...row, path });
+    }
+  }
+  return references;
+}
+
+export async function recheckDependencies(intake: TlsIntake): Promise<void> {
+  for (const tree of intake.dependencies.host.concat([intake.dependencies.pg])) await verifyDependencyTree(tree.root, tree.files, "preflighted");
+  for (const lock of intake.dependencies.locks) await requireIdentity(lock.path, lock);
 }
