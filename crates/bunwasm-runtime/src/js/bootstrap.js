@@ -794,8 +794,14 @@
       } catch (err) {
         reportExitError(err);
       }
-      if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
-      native.closeAllDirs();
+      try {
+        if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
+      } catch (err) {
+        reportExitError(err);
+      } finally {
+        try { native.closeAllDirs(); }
+        catch (err) { reportExitError(err); }
+      }
     }
   }
   internal.emitExit = emitExit;

@@ -116,3 +116,12 @@ test("bootstrap reports a failed disposal instead of a successful exit", () => {
   expect(f.process.exitCode).toBe(1);
   expect(f.order).toContain("worker:1");
 });
+
+test("bootstrap closes directories when worker exit publication throws", () => {
+  const f = terminalFixture();
+  const failure = new Error("worker exit marker");
+  f.internal.workerExit = () => { throw failure; };
+  f.exit(0);
+  expect(f.order).toContain("directories");
+  expect(f.errors).toContain(failure);
+});

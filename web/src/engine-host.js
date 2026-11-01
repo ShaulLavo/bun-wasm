@@ -1134,24 +1134,34 @@ class EngineHost {
     if (this.exited) return;
     this.exited = true;
     let cleanupError;
+    const recordCleanupError = error => {
+      if (!cleanupError) {
+        cleanupError = error;
+        return;
+      }
+      const previous = cleanupError instanceof AggregateError ? cleanupError.errors : [cleanupError];
+      cleanupError = new AggregateError(previous.concat(error), "Engine cleanup failed");
+    };
     try {
       this.internal?.workerStartup?.cancel();
     } catch (error) {
-      cleanupError = error;
+      recordCleanupError(error);
     } finally {
       try { this.o.sharedObjects?.close(); }
-      catch (error) { cleanupError = cleanupError ? new AggregateError([cleanupError, error], "Engine cleanup failed") : error; }
+      catch (error) { recordCleanupError(error); }
       try { this.disposeNativeStreams?.(); }
-      catch (error) { cleanupError = cleanupError ? new AggregateError([cleanupError, error], "Engine cleanup failed") : error; }
-      try { this.native.tlsDispose?.(); }
-      catch (error) { cleanupError = cleanupError ? new AggregateError([cleanupError, error], "Engine cleanup failed") : error; }
+      catch (error) { recordCleanupError(error); }
+      try { this.native.tlsDispose(); }
+      catch (error) { recordCleanupError(error); }
       try { this.native.closeAllDirs(); }
-      catch (error) { cleanupError = cleanupError ? new AggregateError([cleanupError, error], "Engine cleanup failed") : error; }
+      catch (error) { recordCleanupError(error); }
       try { this.flush(); }
-      catch (error) { cleanupError = cleanupError ? new AggregateError([cleanupError, error], "Engine cleanup failed") : error; }
+      catch (error) { recordCleanupError(error); }
       if (this.timer !== null) nativeClearTimeout(this.timer);
-      if (this.o.onExit) this.o.onExit(code);
-      this.resolveDone(code);
+      try { this.o.onExit?.(code); }
+      catch (error) { recordCleanupError(error); }
+      try { this.resolveDone(code); }
+      catch (error) { recordCleanupError(error); }
     }
     if (cleanupError) throw cleanupError;
   }

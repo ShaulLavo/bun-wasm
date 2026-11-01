@@ -210,3 +210,21 @@ test("terminal cleanup preserves cancellation and disposal failures", async () =
   if (!(caught instanceof AggregateError)) throw new Error("Expected both cleanup errors");
   expect(caught.errors).toEqual([cancellation, disposal]);
 });
+
+test("terminal callback errors do not mask cleanup errors or skip completion", async () => {
+  await using f = fixture();
+  const cancellation = new Error("cancel marker");
+  const disposal = new Error("TLS marker");
+  const onExit = new Error("onExit marker");
+  const resolved: number[] = [];
+  f.host.internal.workerStartup.cancel = () => { throw cancellation; };
+  f.host.native.tlsDispose = () => { throw disposal; };
+  f.host.o.onExit = () => { throw onExit; };
+  f.host.resolveDone = code => { resolved.push(code); };
+  let caught: unknown;
+  try { f.host.exit(1); } catch (error) { caught = error; }
+  expect(caught).toBeInstanceOf(AggregateError);
+  if (!(caught instanceof AggregateError)) throw new Error("Expected aggregate cleanup error");
+  expect(caught.errors).toEqual([cancellation, disposal, onExit]);
+  expect(resolved).toEqual([1]);
+});
