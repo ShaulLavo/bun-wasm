@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
-import { hostname } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { digest, preflightTls, recheckDependencies, MissingTlsInput, type TlsEvidence } from "./tls-qualification-inputs.ts";
 import { acquireOwned, qualifiedRun } from "./tls-qualification-lifecycle.ts";
 import { isEngine } from "./tls-qualification-context.ts";
@@ -61,7 +61,7 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
       const remoteBefore = execFileSync("mesh", ["ssh", options.services.databaseMachine, "--", "sh", "-c", "ps -eo pid,comm; command -v bun; command -v initdb; command -v postgres; command -v pg_isready; command -v openssl; df -Pk /work/tmp"], { encoding: "utf8", timeout: 15_000 });
       abort.signal.throwIfAborted();
       await writeFile(join(options.output, "resources.before.json"), JSON.stringify({ host: hostname(), localBefore: execFileSync("ps", ["-eo", "pid,comm"], { encoding: "utf8" }), remoteHost: options.services.databaseMachine, remoteBefore, creates: ["private remote PostgreSQL scratch and processes", "run-generated CA and password", "raw TCP audit proxy", "loopback authenticated relay and page", "Chromium context", "private local build scratch"], frozenDelivery: intake.inputs.delivery }, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-      const scratch = await acquireOwned(owner, abort.signal, () => mkdtemp("/work/tmp/bun-wasm-tls-browser-"), async scratch => { scratchObservation = await removeTlsScratch(scratch); });
+      const scratch = await acquireOwned(owner, abort.signal, () => mkdtemp(join(tmpdir(), "bun-wasm-tls-browser-")), async scratch => { scratchObservation = await removeTlsScratch(scratch); });
       const created: object[] = [];
       const record = async (resource: object) => { created.push(resource); await writeFile(join(options.output, "resources.created.json"), JSON.stringify(created, null, 2) + "\n", { mode: 0o600 }); };
       const services = await startTlsServices(intake, owner, options.services, abort.signal, record);

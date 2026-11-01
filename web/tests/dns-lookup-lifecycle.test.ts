@@ -39,7 +39,7 @@ async function verifyLookupLifetime(kind: LookupKind, rejects: boolean) {
     internal: { pumpSignals() {}, runTimers: () => -1, ioPending: () => 0, emitBeforeExit: () => false, beforeExit: () => 0 },
   });
   host.native = Object.assign(host.buildNative({ natives: [], constants: { hostCaps: {} } }), {
-    closeAllDirs() {}, flushOutput() {},
+    tlsDispose() {}, closeAllDirs() {}, flushOutput() {},
   });
   const facade = dnsFactory({ native: host.native, describe: String, require: () => ({ isIP: () => 0 }),
     nextTick(callback: (...args: unknown[]) => void, ...args: unknown[]) { queueMicrotask(() => callback(...args)); },

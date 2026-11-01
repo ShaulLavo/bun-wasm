@@ -33,7 +33,7 @@ function host(service?: ReturnType<typeof createSharedObjects>) {
     o: { sharedObjects: service, onExit(code: number) { exits.push(code); } },
     exited: false, pendingAsync: 0, timer: null,
     schedule(delay: number) { wakeups.push(delay); }, resolveDone() {}, flush() {},
-    native: { closeAllDirs() {} },
+    native: { tlsDispose() {}, closeAllDirs() {} },
   });
   return { value, wakeups, exits, api: value.valueNatives().sharedObjects as SharedObjects | undefined };
 }

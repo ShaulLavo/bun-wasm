@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, symlink, writeFile, rm } from "node:fs/promises";
 import { parseTlsArguments } from "./tls-qualification.ts";
@@ -210,7 +211,7 @@ describe("review corrections", () => {
     } finally { await fixture.close(); }
   });
   test("follow-up 3 tracked source mutation after preflight is rejected", async () => {
-    const root = await mkdtemp("/work/tmp/bun-wasm-tls-host-source-");
+    const root = await mkdtemp(join(tmpdir(), "bun-wasm-tls-host-source-"));
     try {
       execFileSync("git", ["init", "-q", root]);
       execFileSync("git", ["-C", root, "config", "user.email", "tls@test.invalid"]);
