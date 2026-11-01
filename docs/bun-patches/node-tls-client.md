@@ -10,7 +10,11 @@ name matching. The native guest TLS driver owns the TLS protocol and cryptograph
 ## Local files
 
 - `node_tls.ts` validates client options, keeps private immutable context snapshots,
-  and exposes `TLSSocket` over the existing Node stream implementation.
+  and exposes `TLSSocket` over the existing Node stream implementation. It passes
+  native chain results to the identity unit's `verifyIdentity` discriminated
+  request. A failed-chain request contains no callback. The client preserves the
+  returned authorized, unauthorized, or rejected decision and checks its lifetime
+  before accepting it natively.
 - `tls_transport.ts` reserves a raw socket synchronously, invalidates its old read
   generation, waits for callback unwind and the plaintext write fence, and moves
   unread binary input without more plaintext events.

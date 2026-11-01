@@ -107,7 +107,7 @@ declare namespace BunWasm.Tls {
   }
   interface DriverOptions {
     context(): ContextOptions; connection: ConnectionOptions;
-    verify(peer: Peer): { authorized: boolean; error?: Error };
+    verify(peer: Peer): BunWasm.TlsIdentityDecision;
     secure(peer: Peer, authorized: boolean, error?: Error): void;
     warning(message: string): void;
     connected(): void;
@@ -124,17 +124,12 @@ declare namespace BunWasm.Tls {
   }
   interface DriverConstructor { new(socket: Socket, options: DriverOptions): Connection }
   interface SecureContext { readonly context: object }
-  interface Certificate {
-    subject?: { CN?: string | readonly string[] }; subjectaltname?: string; raw?: Uint8Array;
+  interface Certificate extends BunWasm.TlsPeerCertificate {
+    raw?: Uint8Array;
     issuerCertificate?: Certificate;
     [key: string]: unknown;
   }
-  interface Identity {
-    checkServerIdentity(hostname: string, certificate: Certificate): Error | undefined;
-    selectTarget(options: { servername?: string; connectHost?: string; originalTarget?: string; rejectUnauthorized: boolean }):
-      { kind: "dns"; hostname: string; servername: string } | { kind: "ip"; hostname: string; servername: "" } |
-      { kind: "none"; hostname: undefined; servername: "" } | Error;
-  }
+  type Identity = BunWasm.TlsIdentity;
   interface X509 { toLegacyObject(): Certificate; readonly raw: Uint8Array }
   interface Crypto {
     X509Certificate: new(bytes: Uint8Array) => X509;

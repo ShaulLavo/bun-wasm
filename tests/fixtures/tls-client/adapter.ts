@@ -1,8 +1,9 @@
 import { Buffer } from "node:buffer";
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
-import { domainToASCII } from "node:url";
+import { domainToASCII, fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import * as util from "node:util";
 import { expect } from "bun:test";
@@ -65,11 +66,10 @@ export function adapter() {
   const contexts: object[] = [];
   const releases: [string, number][] = [];
   const connectionOptions: object[] = [];
-  const identityRequests: object[] = [];
   const decisions: object[] = [];
   const waiters = new Set<{ ref: boolean; step(): boolean | "progress"; fail?(error: unknown): void; cancel?(): void }>();
   const counters = { opens: 0, closes: 0, shutdowns: 0, reads: 0, warnings: 0, decryptedKeys: 0 };
-  const state = { identityTarget: { kind: "dns", hostname: "fixture.test", servername: "" }, credit: Number.MAX_SAFE_INTEGER, tcpReady: true, emitted: 0, accepted: false, insideNative: false, sequence: 0, peer: peer(), legacy: { subjectaltname: "DNS:fixture.test", subject: { CN: "fixture.test" } }, raw: undefined as Raw | undefined };
+  const state = { credit: Number.MAX_SAFE_INTEGER, tcpReady: true, emitted: 0, accepted: false, insideNative: false, sequence: 0, peer: peer(), legacy: { subjectaltname: "DNS:fixture.test", subject: { CN: "fixture.test" } }, raw: undefined as Raw | undefined };
   let respond = (_event: Event, _allowance: Allowance): Partial<Step> => ({});
   const nextTick = (callback: (...args: unknown[]) => void, ...args: unknown[]) => ticks.push(() => callback(...args));
   const unsupported = (name: string): never => { throw new Error(`Unexpected adapter operation ${name}`); };
@@ -100,13 +100,11 @@ export function adapter() {
     const cached = factories.get(name);
     if (cached) return cached;
     let source: string;
-    const identityPath = process.env.BUN_WASM_TLS_IDENTITY_SOURCE;
-    if (name === "tls_identity" && !identityPath) return () => ({
-      selectTarget(options: object) { identityRequests.push(structuredClone(options)); return structuredClone(state.identityTarget); },
-      checkServerIdentity() { return undefined; },
-    });
-    if (name === "tls_identity" && identityPath) source = readFileSync(identityPath, "utf8");
-    else try { source = readFileSync(new URL(`${name}.ts`, runtime), "utf8"); }
+    const identityCommit = process.env.BUN_WASM_TLS_IDENTITY_COMMIT;
+    if (name === "tls_identity" && identityCommit !== undefined) {
+      if (!/^[a-f0-9]{40}$/.test(identityCommit)) throw new Error("TLS identity test source must be an exact Git commit");
+      source = execFileSync("git", ["show", `${identityCommit}:crates/bunwasm-runtime/src/js/tls_identity.ts`], { cwd: fileURLToPath(root), encoding: "utf8" });
+    } else try { source = readFileSync(new URL(`${name}.ts`, runtime), "utf8"); }
     catch { source = readFileSync(new URL(`${name}.js`, runtime), "utf8"); }
     if (source.includes(": BunWasm.") || name !== "node_stream_core") source = new Bun.Transpiler({ loader: "ts" }).transformSync(source.replace("(function", "globalThis.__factory = (function"));
     const loaded = runInNewContext(source, context);
@@ -181,6 +179,7 @@ export function adapter() {
     },
     require(name: string): unknown {
       if (name === "events") return EventEmitter;
+      if (name === "util") return util;
       if (name === "buffer") return { Buffer };
       if (name === "websocket") return { clientClass: () => class {} };
       if (name === "net_address") return { ...objectModule(load(name)), isIP };
@@ -229,7 +228,7 @@ export function adapter() {
     expect(counters.closes).toBe(counters.opens);
     expect(releases.filter(([kind]) => kind === "context")).toHaveLength(contexts.length);
   }
-  return { tls, net, native, internal, runtimeNet, state, counters, calls, contexts, releases, decisions, connectionOptions, identityRequests, writes, reads, ticks, immediates, waiters, plain, pump, callbacks, cancel, cleanup,
+  return { tls, net, native, internal, runtimeNet, state, counters, calls, contexts, releases, decisions, connectionOptions, writes, reads, ticks, immediates, waiters, plain, pump, callbacks, cancel, cleanup,
     timers,
     expireTimers() { for (const timer of Array.from(timers)) { timers.delete(timer); timer.callback(); } },
     respond(handler: (event: Event, allowance: Allowance) => Partial<Step>) { respond = handler; },

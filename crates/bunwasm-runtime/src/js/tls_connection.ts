@@ -12,6 +12,9 @@
   const RECORD = 16384;
   const EMPTY = new Uint8Array(0);
   function error(code: string, message: string): Error { return Object.assign(new Error(message), { code }); }
+  function identityCode(value: Error): string {
+    return "code" in value && typeof value.code === "string" ? value.code : "ERR_TLS_IDENTITY_CALLBACK";
+  }
   function caught(value: unknown): Error { return value instanceof Error ? value : error("ERR_TLS_INTERNAL", "TLS operation failed"); }
 
   class TlsConnection implements BunWasm.Tls.Connection, BunWasm.Tls.TransferOwner {
@@ -278,13 +281,20 @@
     private verify(id: Id, peer: Peer, generation: number): void {
       const decision = this.options.verify(peer);
       if (this.generation !== generation || this.closed) return;
-      const rejected = Boolean(decision.error && this.options.connection.rejectUnauthorized);
-      internal.native.tlsAcceptIdentity(id, rejected ? { accepted: false, code: "ERR_TLS_CERT_ALTNAME_INVALID" } : { accepted: true });
-      if (rejected) { this.fail(decision.error ?? error("ERR_TLS_CERTIFICATE", "TLS peer rejected")); return; }
+      if (decision.kind === "rejected") {
+        internal.native.tlsAcceptIdentity(id, { accepted: false, code: identityCode(decision.authorizationError) });
+        this.fail(decision.authorizationError);
+        return;
+      }
+      internal.native.tlsAcceptIdentity(id, { accepted: true });
       const inspected = internal.native.tlsInspect(id, "peer");
       this.peerInfo = inspected.peer;
       this.phase = { kind: "open", id };
-      this.options.secure(inspected.peer, decision.authorized && inspected.authorized, decision.error);
+      switch (decision.kind) {
+        case "authorized": this.options.secure(inspected.peer, inspected.authorized); break;
+        case "unauthorized": this.options.secure(inspected.peer, false, decision.authorizationError); break;
+        default: { const unhandled: never = decision; return unhandled; }
+      }
       if (!this.closed) this.wake();
     }
     private fail(value: Error): void {

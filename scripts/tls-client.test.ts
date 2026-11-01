@@ -49,7 +49,6 @@ test("adapter opens only after a single deferred identity callback and keeps pg 
 
 test("adapter accepts positional connect overloads and calls back on secureConnect", () => {
   const state = fixture(); state.handshake();
-  state.state.identityTarget.servername = "fixture.test";
   let callback = 0;
   const socket = state.tls.connect(443, "fixture.test", { servername: "fixture.test", ALPNProtocols: ["h2", "http/1.1"] }, () => callback++);
   socket.on("error", () => {});
@@ -72,7 +71,6 @@ test("adapter preserves a wrapped socket's original IP target without IP SNI", (
   const state = fixture(); state.handshake();
   const raw = state.plain();
   raw._tlsTarget = { host: "192.0.2.8", port: 5432 };
-  state.state.identityTarget = { kind: "ip", hostname: "192.0.2.8", servername: "" };
   let checked = "";
   const socket = state.tls.connect({ socket: raw, checkServerIdentity(host: string) { checked = host; } });
   socket.on("error", () => {});
@@ -140,8 +138,8 @@ test("adapter reports callback exceptions and invalid returns once", () => {
   socket.on("error", value => errors.push(value));
   state.pump(); state.callbacks(); state.pump(); state.callbacks();
   expect(errors).toHaveLength(1);
-  expect(errors[0]).toMatchObject({ code: "ERR_INVALID_RETURN_VALUE" });
-  expect(state.decisions).toHaveLength(0);
+  expect(errors[0]).toMatchObject({ code: "ERR_INVALID_ARG_TYPE" });
+  expect(state.decisions).toEqual([{ accepted: false, code: "ERR_INVALID_ARG_TYPE" }]);
 });
 
 test("adapter snapshots secure contexts without retaining native context IDs", () => {
@@ -174,7 +172,7 @@ test("adapter decrypts passphrase keys after socket reservation and clears trans
 
 for (const options of [
   { pfx: "unsupported" }, { ciphers: "unsupported" }, { session: new Uint8Array(0) }, { isServer: true },
-  { rejectUnauthorized: "false" }, { ALPNProtocols: ["x".repeat(256)] }, { ALPNProtocols: new Uint8Array([4, 97]) },
+  { rejectUnauthorized: "false" }, { rejectUnauthorized: 0 }, { rejectUnauthorized: null }, { rejectUnauthorized: "" }, { ALPNProtocols: ["x".repeat(256)] }, { ALPNProtocols: new Uint8Array([4, 97]) },
   { minVersion: "TLSv1" }, { minVersion: "TLSv1.3", maxVersion: "TLSv1.2" }, { signal: {} },
   { highWaterMark: -1 }, { writableHighWaterMark: 1048577 }, { checkServerIdentity: false }, { cert: "CERT" },
 ]) {
@@ -245,7 +243,6 @@ test("adapter successful verification removes the handshake timeout", () => {
 
 test("adapter exposes the exact native option fields and releases its temporary context", () => {
   const state = fixture(); state.handshake();
-  state.state.identityTarget.servername = "fixture.test";
   const socket = state.tls.connect({ host: "fixture.test", port: 443, servername: "fixture.test", ALPNProtocols: ["h2"], ca: [], minVersion: "TLSv1.3" });
   socket.on("error", () => {});
   state.pump(); state.callbacks();
@@ -324,3 +321,24 @@ test("adapter keeps even an empty early write callback behind identity acceptanc
   expect(callbacks).toBe(1);
   expect(socket.authorized).toBe(true);
 });
+
+for (const behavior of ["throws", "invalid-return"]) {
+  test(`adapter honors an identity rejection under explicit opt-out when its callback ${behavior}`, () => {
+    const state = fixture(); state.handshake();
+    const socket = state.tls.connect({ host: "fixture.test", port: 443, rejectUnauthorized: false, checkServerIdentity() {
+      if (behavior === "throws") throw new Error("adapter callback failure");
+      return false;
+    } });
+    const errors: Error[] = [];
+    socket.on("error", value => errors.push(value));
+    let secured = 0; socket.on("secureConnect", () => secured++);
+    socket.write("startup", () => {});
+    state.pump(); state.callbacks(); state.pump(); state.callbacks();
+    expect(errors).toHaveLength(1);
+    expect(secured).toBe(0);
+    expect(socket.destroyed).toBe(true);
+    expect(state.decisions).toHaveLength(1);
+    expect(state.decisions[0]).toMatchObject({ accepted: false });
+    expect(state.calls.filter(call => call.event.kind === "plaintext")).toHaveLength(0);
+  });
+}

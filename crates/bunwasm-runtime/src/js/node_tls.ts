@@ -4,7 +4,7 @@
   type Context = BunWasm.Tls.ContextOptions;
   type Peer = BunWasm.Tls.Peer;
   type Certificate = BunWasm.Tls.Certificate;
-  type CheckIdentity = (hostname: string, certificate: Certificate) => Error | undefined;
+  type CheckIdentity = BunWasm.TlsCheckServerIdentity;
   type Snapshot = { material: Context; passphrase?: string | Uint8Array };
   const { Socket } = internal.builtin("node:net");
   const { Buffer } = internal.require("buffer");
@@ -173,15 +173,11 @@
     }
     return result;
   }
-  function checker(options: Options): CheckIdentity {
+  function checker(options: Options): CheckIdentity | undefined {
     const selected = options.checkServerIdentity;
-    if (selected === undefined) return identity.checkServerIdentity;
+    if (selected === undefined) return undefined;
     if (typeof selected !== "function") throw invalid("checkServerIdentity");
-    return (host, certificate) => {
-      const result: unknown = selected(host, certificate);
-      if (result !== undefined && !(result instanceof Error)) throw failure("ERR_INVALID_RETURN_VALUE", "checkServerIdentity must return Error or undefined", TypeError);
-      return result;
-    };
+    return (host, certificate) => selected(host, certificate);
   }
   function args(input: unknown[]): { options: Options; callback?: () => void } {
     const values = input.slice();
@@ -218,10 +214,11 @@
       const check = checker(options);
       const supplied = options.socket;
       const original = supplied instanceof Socket ? supplied._tlsTarget : undefined;
+      const connectHost = typeof options.host === "string" ? options.host : supplied ? undefined : "localhost";
       const target = identity.selectTarget({
-        servername: typeof options.servername === "string" ? options.servername : "",
-        connectHost: typeof options.host === "string" ? options.host : supplied ? undefined : "localhost",
-        originalTarget: original?.host,
+        ...(typeof options.servername === "string" ? { servername: options.servername } : {}),
+        ...(connectHost === undefined ? {} : { connectHost }),
+        ...(original === undefined ? {} : { originalTarget: original.host }),
         rejectUnauthorized: options.rejectUnauthorized !== false,
       });
       if (target instanceof Error) throw target;
@@ -242,7 +239,7 @@
       const driverOptions: BunWasm.Tls.DriverOptions = {
         context: () => copyMaterial(config),
         connection: { servername: target.servername, alpn: wireAlpn, rejectUnauthorized: options.rejectUnauthorized !== false },
-        verify: peer => this.verifyPeer(peer, target.hostname, check),
+        verify: peer => this.verifyPeer(peer, target, options.rejectUnauthorized !== false, check),
         secure: (peer, authorized, value) => this.accept(peer, authorized, value),
         connected: () => { this._updatePeer(); if (connecting) this.emit("connect"); },
         warning,
@@ -260,13 +257,19 @@
     }
     get connecting(): boolean { return this.tls?.connecting ?? false; }
     connect(): this { throw failure("ERR_TLS_SOCKET_OWNERSHIP", "TLSSocket already owns its connection"); }
-    private verifyPeer(peer: Peer, hostname: string | undefined, check: CheckIdentity): { authorized: boolean; error?: Error } {
-      if (!peer.chainVerified) { this.authorizationError = peer.authorizationError || "ERR_TLS_CERTIFICATE"; return { authorized: false, error: failure(this.authorizationError, "TLS certificate chain verification failed") }; }
-      if (!peer.certificates.length) return { authorized: false, error: failure("ERR_TLS_CERTIFICATE", "TLS peer did not supply a certificate") };
-      if (hostname === undefined) return { authorized: false, error: failure("ERR_TLS_HOSTNAME_REQUIRED", "TLS peer identity is unknown") };
-      const value = check(hostname, legacy(peer));
-      if (value) this.authorizationError = code(value);
-      return value ? { authorized: false, error: value } : { authorized: true };
+    private verifyPeer(peer: Peer, target: BunWasm.TlsIdentityTarget, rejectUnauthorized: boolean, check?: CheckIdentity): BunWasm.TlsIdentityDecision {
+      const decision = peer.chainVerified
+        ? identity.verifyIdentity({
+          chainVerified: true, cert: legacy(peer), target, rejectUnauthorized,
+          ...(check === undefined ? {} : { checkServerIdentity: check }),
+        })
+        : identity.verifyIdentity({
+          chainVerified: false,
+          authorizationError: failure(peer.authorizationError || "ERR_TLS_CERTIFICATE", "TLS certificate chain verification failed"),
+          rejectUnauthorized,
+        });
+      if (decision.kind !== "authorized") this.authorizationError = code(decision.authorizationError);
+      return decision;
     }
     private accept(peer: Peer, authorized: boolean, value?: Error): void {
       if (this.destroyed) return;
@@ -313,7 +316,7 @@
   }
   function code(value: Error): string {
     if ("code" in value && typeof value.code === "string") return value.code;
-    return "ERR_TLS_CERT_ALTNAME_INVALID";
+    return "ERR_TLS_IDENTITY_CALLBACK";
   }
   function connect(...input: unknown[]): TLSSocket {
     const parsed = args(input);
