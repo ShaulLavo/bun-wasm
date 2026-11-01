@@ -62,6 +62,9 @@ reuse provenance, current host and reader code, native JSC admission, and before
 after, and pre-seal input, vendor, and native custody. Missing one of these files
 is a failure, not a reduced publication profile. `verifyPublicationBuilds`
 accepts exactly the six supported raw guest names and their fingerprints.
+`verifyPublicationNativeBacking` accepts only JSC and the shared sysroot. Original
+Bash sidecars, runtime and program release inputs, vendor evidence, and the native
+JSC header manifest remain required delivery files.
 Decompressed served files must match the admitted raw bytes.
 
 Every remaining gate stays blocking:

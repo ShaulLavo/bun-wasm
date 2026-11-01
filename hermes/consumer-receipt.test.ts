@@ -219,4 +219,3 @@ test("compiler header aliases bind their resolved file and reject retargeting or
     expect(readFileSync(join(root, "wasi/lib/libhermesvm_bunwasm.a"), "utf8")).toBe("archive fixture");
   });
 });
-

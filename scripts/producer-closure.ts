@@ -78,7 +78,14 @@ export function completePublicationArtifactPaths(): string[] {
   return producerArtifactPaths("split").map(path => `split/${path}`).concat(guests, custody,
     [
       "source.tar.gz", "inputs/ADMISSION.json", "inputs/CANONICAL-REUSE.json", "inputs/publication-matrix.json",
-      "split/hook-cleanup.json",
+      "split/hook-cleanup.json", "inputs/NATIVE-CANDIDATE-ADMISSION.json", "inputs/browser-consumer.json",
+      "inputs/runtime107-release.tgz", "inputs/programs-release/program-release.json", "inputs/programs-release/SHA256SUMS",
+      "inputs/vendor-bun.bundle", "inputs/vendor-bundle-proof.json", "bash/ORIGIN.json", "bash/original-native.zip",
+      "bash/original-sidecars/SHA256SUMS", "bash/original-sidecars/cli-source.txt", "bash/original-sidecars/cli-sha256.txt",
+      "bash/original-sidecars/inputs", "bash/original-sidecars/THIRD_PARTY_NOTICES.txt",
+      "native/jsc/.bunwasm-artifacts", "native/jsc/.bunwasm-inputs", "native/jsc/native-header-manifest.json",
+      "native/jsc/build/jsc/CMakeCache.txt", "native/jsc/build/jsc/cmakeconfig.h", "native/jsc/build/jsc/compile_commands.json",
+      "native/jsc/inputs/wasi-jsc.cmake", "native/jsc/inputs/shim/wasi-compat.h", "native/jsc/inputs/shim/wasi-compat.c", "native/jsc/inputs/shim/madvise.c",
     ]);
 }
 
@@ -87,6 +94,15 @@ export function requireCompletePublicationFiles(files: readonly { readonly path:
   const paths = new Set(files.map(file => file.path));
   if (paths.size !== files.length) throw new Error("Repeated publication manifest path");
   for (const path of completePublicationArtifactPaths()) if (!paths.has(path)) throw new Error(`Missing complete publication artifact: ${path}`);
+}
+
+/** JSC and the shared sysroot retain their existing original-input admission checks. */
+export function verifyPublicationNativeBacking(value: unknown): void {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== "jsc,sysroot") throw new Error("Publication native backing must contain only JSC and the sysroot");
+  for (const name of ["jsc", "sysroot"]) {
+    const path: unknown = Reflect.get(value, name);
+    if (typeof path !== "string" || !path.startsWith("/")) throw new Error(`Invalid publication native backing: ${name}`);
+  }
 }
 
 export const workerProofLabels = ["worker-to-main wake", "worker plain store visible in main", "main-to-worker wake", "worker read main's store and answered", "buffer posted on the port aliases", "timed-out", "not-equal", "alias worker exit", "blocked worker started", "terminate cancels a blocked futex wait", "20 sequential members settled", "main still owns the buffer"];

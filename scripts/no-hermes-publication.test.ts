@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { pairedEngines, isPairedEngine } from "../src/engine-kind.ts";
 import { parseProgramInputs } from "./guest-core-receipt.ts";
 import { guestBuilds, hash } from "./guest-source-manifest.ts";
-import { completePublicationArtifactPaths, publicationAssets, publicationEngines, publicationGuestPaths, requireCompletePublicationFiles, verifyPublicationBuilds } from "./producer-closure.ts";
+import { completePublicationArtifactPaths, publicationAssets, publicationEngines, publicationGuestPaths, requireCompletePublicationFiles, verifyPublicationNativeBacking, verifyPublicationBuilds } from "./producer-closure.ts";
 import { dormantRustPackages, rustTestPackages } from "./rust-test-packages.ts";
 import { discoverChecks } from "./test-checks.ts";
 
@@ -98,4 +98,11 @@ test("normal native compilation excludes only the withdrawn Hermes crates", () =
     "-p", "bunwasm-engine-jsc", "-p", "bunwasm-engine-quickjs", "-p", "bunwasm-host", "-p", "bunwasm-runtime", "-p", "wasmi_core",
   ]);
   expect(read("scripts/quality-rust.ts")).toContain('dormantRustPackages.flatMap(name => ["--exclude", name])');
+});
+
+test("a final delivery cannot retain an old Hermes native backing reference", () => {
+  const backing = { jsc: "/admitted/jsc", sysroot: "/admitted/sysroot" };
+  expect(() => verifyPublicationNativeBacking(backing)).not.toThrow();
+  expect(() => verifyPublicationNativeBacking({ ...backing, hermes: "/old/hermes" })).toThrow("only JSC");
+  expect(() => verifyPublicationNativeBacking({ sysroot: backing.sysroot })).toThrow("only JSC");
 });
