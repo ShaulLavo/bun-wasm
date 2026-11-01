@@ -91,7 +91,7 @@ fi
 launcher="${BUN_WASM_LAUNCHER:-$CARGO_TARGET_DIR/release/bun-wasm}"
 start_test_server() {
   [[ -n "$server_pid" ]] && return 0
-  bun "$root/tests/servers/http.ts" >"$scratch/server.port" 2>"$scratch/server.err" &
+  TMPDIR="$scratch" bun "$root/tests/servers/http.ts" >"$scratch/server.port" 2>"$scratch/server.err" &
   server_pid=$!
   for _ in $(seq 50); do
     [[ -s "$scratch/server.port" ]] && break
