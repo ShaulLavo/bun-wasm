@@ -10,13 +10,15 @@ import { ENGINES, loadWasm, MODULE_SCOPE } from "./engine-loader";
 import { createBunNetworkHelper, dispatchBunNetwork, type BunNetworkOptions, type RuntimeNetworkHelper } from "./net/helper";
 import { createRing } from "./net/ring";
 import { SubprocessBroker, type ExecutableRegistration } from "./subprocess-broker";
-import { siblingWorkerUrl } from "./bun-launcher.js";
+import { siblingWorkerUrl, type Preview1LauncherOptions } from "./bun-launcher.js";
 import { createNotificationBridge, type NotificationBridge } from "waffle/browser/notification-relay";
+import { createPreview1Network } from "waffle/browser/preview1-network";
 import { isToolCommand } from "./tool-command";
 import { ENGINE_BIN, bunEnvironment, engineEnvironment } from "../../src/executable-paths.js";
 import { claimOutcome, readOutcome, type OutcomeWord } from "waffle/proc/outcome";
 import { waitStatus } from "waffle/proc/wait-status";
 import { installLookupServer } from "./net/lookup.js";
+import { runtimeRelay } from "./net/relay.js";
 import type { Engine, RunRequest, WorkerMessage } from "./bun-executor";
 import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
 import type { BunSharedConnection } from "./shared-objects/protocol.js";
@@ -37,6 +39,7 @@ export interface RunOptions {
   /** Shared service owned by the page, also used by editor and shell. */
   runtime: ProcessRuntime;
   network?: BunNetworkOptions;
+  preview1?: Preview1LauncherOptions;
   /** From registerModuleScope(): run the worker under ./__bunwasm/. */
   moduleScope: boolean;
   trace?: boolean;
@@ -71,6 +74,22 @@ function slotsMode(): RunRequest["slots"] {
 }
 
 const registeredPrograms = new WeakMap<ProcessRuntime, Set<string>>();
+
+async function preparePreview1Network(
+  options: RunOptions,
+  request: RunRequest,
+): Promise<Awaited<ReturnType<typeof createPreview1Network>> | undefined> {
+  if (options.adapter !== "preview1") return;
+  const sockets = options.preview1?.sockets ?? [];
+  if (!sockets.length) return;
+  const relay = await runtimeRelay(options.runtime, options.network?.relay);
+  const owner = await createPreview1Network(options.runtime, {
+    sockets,
+    connect: options.network?.connect ?? relay?.connect,
+  });
+  request.network = owner?.connection;
+  return owner;
+}
 
 function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<string>, engine: Engine, module: Extract<ExecutableRegistration, { adapter: "bun" }>["module"]): void {
   for (const command of ["bun", "node", "nodejs"]) {
@@ -115,6 +134,7 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
   const ring = options.adapter !== "preview1" && globalThis.crossOriginIsolated === true ? createRing() : null;
   const lookupChannel = options.engine === "browser" && options.adapter !== "preview1" ? new MessageChannel() : null;
   let helper: RuntimeNetworkHelper | undefined;
+  let networkOwner: Awaited<ReturnType<typeof createPreview1Network>> | undefined;
   let socketRoot: Awaited<ReturnType<typeof options.runtime.filesystem.directoryHandle>> | undefined;
   let disposeLookup: (() => void) | undefined;
   const moduleCache = options.moduleScope ? `bunwasm-m-${crypto.randomUUID()}` : null;
@@ -190,7 +210,13 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
     worker?.terminate();
     releaseNotifications(notifications);
     try { helper?.dispose(); }
-    finally { socketRoot?.release(); socketRoot = undefined; if (moduleCache) void caches.delete(moduleCache); }
+    finally {
+      networkOwner?.dispose();
+      networkOwner = undefined;
+      socketRoot?.release();
+      socketRoot = undefined;
+      if (moduleCache) void caches.delete(moduleCache);
+    }
   };
   const stopRoot = () => { if (rootStopped) return; rootStopped = true; stopWorker(); };
   const starting = performance.now();
@@ -365,6 +391,12 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
       request.linkPlan = programLinkPlan(request.module);
     }
     if (preparationStopped()) return;
+    networkOwner = await preparePreview1Network(options, request);
+    if (networkOwner && (preparationStopped() || workerStopped)) {
+      networkOwner.dispose();
+      networkOwner = undefined;
+      return;
+    }
     let network;
     if (ring || lookupChannel) {
       network = await options.runtime.network();
@@ -374,8 +406,11 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
         const root = await options.runtime.filesystem.directoryHandle("/");
         if (preparationStopped() || workerStopped) { root.release(); return; }
         socketRoot = root;
+        const relay = await runtimeRelay(options.runtime, options.network?.relay);
         helper = createBunNetworkHelper(network, ring, {
-          ...options.network, pathScope: { filesystem: request.filesystem, directory: root.handle },
+          ...options.network,
+          connect: options.network?.connect ?? relay?.connect,
+          pathScope: { filesystem: request.filesystem, directory: root.handle },
         });
         if (workerStopped) { helper.dispose(); socketRoot?.release(); socketRoot = undefined; return; }
       }
@@ -389,7 +424,10 @@ export function startRun(options: RunOptions, hooks: RunHooks): Run {
         notifications = createNotificationBridge(siblingWorkerUrl(workerUrl, "notification-worker.js"));
         request.notifications = notifications.connection;
       }
-      const transfers = [request.filesystem.port].concat(request.lookupPort ? [request.lookupPort] : [], request.notifications ? [request.notifications.port] : []);
+      const transfers = [request.filesystem.port]
+        .concat(request.lookupPort ? [request.lookupPort] : [])
+        .concat(request.notifications ? [request.notifications.port] : [])
+        .concat(request.network ? [request.network.port] : []);
       request.memoryTelemetry = beginMemorySnapshot(options.engine, memoryTelemetryId, memoryCommandId(options.runtime, rootJob));
       worker.postMessage(request, transfers);
       watchOutcome();

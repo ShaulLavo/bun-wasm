@@ -3,4 +3,4 @@ export { BUN_WASM_ASSET, BunWasmAssetError, loadBunWasm, type BunWasmAsset, type
 export { ENGINE_BIN, engineEnvironment } from "./executable-paths.js";
 export { installBunSharedObjects, type BunSharedObjects } from "./shared-objects.js";
 
-export type { BunNetworkOptions, RuntimeNetworkHelper } from "../web/src/net/helper.js";
+export type { BunNetworkOptions, BunRelayOptions, RuntimeNetworkHelper } from "../web/src/net/helper.js";

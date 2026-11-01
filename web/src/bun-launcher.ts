@@ -4,14 +4,20 @@ import { bunEnvironment } from "../../src/executable-paths.js";
 // Page-side launchers: one Waffle worker per Bun or preview1 process. The service owns admission,
 // descriptors, signals and filesystem fences; these only describe the worker to start.
 import type { GuestLauncher, RuntimeNetworkHelper } from "waffle";
+import type { Preview1SocketBinding } from "waffle/browser/preview1-network";
 import type { ProcessRuntime } from "../../src/process-runtime.js";
 import { normalize } from "waffle/core/path";
 import type { Engine, RunRequest } from "./bun-executor.js";
 import type { BunNetworkOptions } from "./net/helper.js";
+import { runtimeRelay } from "./net/relay.js";
 import { readOutcome } from "waffle/proc/outcome";
 import { isToolCommand } from "./tool-command.js";
 import { installLookupServer } from "./net/lookup.js";
 import { runtimeSharedObjectRoute, type SharedObjectRoute } from "./shared-objects/runtime.js";
+
+export interface Preview1LauncherOptions {
+  readonly sockets?: readonly Preview1SocketBinding[];
+}
 
 export interface BunLauncherOptions {
   /** The module worker URL that runs createBunExecutor (worker.ts). */
@@ -23,6 +29,7 @@ export interface BunLauncherOptions {
   notificationWorkerUrl: string;
   runtime: ProcessRuntime;
   network?: BunNetworkOptions;
+  preview1?: Preview1LauncherOptions;
   /** Optional tools artifact supplied by the embedding application, loaded only for lint/fmt. */
   loadTools?(): Promise<WebAssembly.Module>;
 }
@@ -54,6 +61,7 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
   const memoryTelemetryId = crypto.randomUUID();
   let revoked = false;
   let helper: RuntimeNetworkHelper | undefined;
+  let relay: Awaited<ReturnType<typeof runtimeRelay>>;
   let socketRoot: Awaited<ReturnType<ProcessRuntime["filesystem"]["directoryHandle"]>> | undefined;
   let moduleCache: string | null = null;
   let lookupChannel: BroadcastChannel | undefined;
@@ -67,15 +75,19 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     released = true;
     endMemorySnapshot(memoryTelemetryId);
     unregister();
+    const failures: unknown[] = [];
     try { helper?.dispose(); }
-    finally {
-      socketRoot?.release();
-      socketRoot = undefined;
-      sharedRoute?.close();
-      disposeLookup?.();
-      lookupChannel = undefined;
-      if (moduleCache) void caches.delete(moduleCache);
-    }
+    catch (error) { failures.push(error); }
+    try { socketRoot?.release(); }
+    catch (error) { failures.push(error); }
+    socketRoot = undefined;
+    sharedRoute?.close();
+    disposeLookup?.();
+    lookupChannel = undefined;
+    const cacheStore = globalThis.caches;
+    if (moduleCache && cacheStore) void cacheStore.delete(moduleCache);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length) throw new AggregateError(failures, "Bun launch cleanup failed");
   };
   const onMessage = (message: unknown) => {
     if (recordMemorySnapshot(message)) return;
@@ -99,7 +111,9 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
     socketRoot = await options.runtime.filesystem.directoryHandle("/");
     if (!active()) throw new Error("Bun process launch was revoked");
     const pathScope = service.networkPathScope(context, socketRoot.handle);
-    helper = createBunNetworkHelper(network, ring, { ...options.network, pathScope });
+    relay = await runtimeRelay(options.runtime, options.network?.relay);
+    if (!active()) throw new Error("Bun process launch was revoked");
+    helper = createBunNetworkHelper(network, ring, { ...options.network, connect: options.network?.connect ?? relay?.connect, pathScope });
     if (engine === "browser" && typeof BroadcastChannel === "function") {
       lookupChannel = new BroadcastChannel(`bun-wasm-dns-${crypto.randomUUID()}`);
       disposeLookup = installLookupServer(lookupChannel, network);
@@ -123,17 +137,76 @@ async function launchBunProcess(engine: Engine, options: BunLauncherOptions, con
       onMessage,
     });
   } catch (error) {
-    cleanup();
+    await cleanup();
     throw error;
   }
 }
 
 /** Launches a third-party preview1 program, with no Bun slots, in the sibling preview1 worker. */
-export function preview1Launcher(options: Pick<BunLauncherOptions, "workerUrl">): GuestLauncher {
-  return async (context, service) => {
-    return service.launchWorker(context, {
-      workerUrl: siblingWorkerUrl(options.workerUrl, "preview1-worker.js"),
-      request: { module: context.module, args: context.request.argv, env: { ...context.request.env, PWD: context.request.cwd }, interruptible: context.interruptible },
-    });
+export function preview1Launcher(options: Pick<BunLauncherOptions, "workerUrl" | "network" | "preview1"> & { runtime?: ProcessRuntime }): GuestLauncher {
+  return (context, service) => launchPreview1(options, context, service);
+}
+
+async function launchPreview1(
+  options: Pick<BunLauncherOptions, "workerUrl" | "network" | "preview1"> & { runtime?: ProcessRuntime },
+  context: Parameters<GuestLauncher>[0],
+  service: Parameters<GuestLauncher>[1],
+) {
+  const request = preview1Request(context);
+  const sockets = options.preview1?.sockets ?? [];
+  if (!sockets.length) return launchPreview1Worker(options.workerUrl, context, service, request);
+  if (!options.runtime) throw new TypeError("Preview1 sockets require a runtime");
+  const relay = await runtimeRelay(options.runtime, options.network?.relay);
+  const owner = await createPreview1Network(options.runtime, sockets, options.network?.connect ?? relay?.connect);
+  return launchOwnedPreview1(options.workerUrl, context, service, request, owner);
+}
+
+function preview1Request(context: Parameters<GuestLauncher>[0]) {
+  return {
+    module: context.module,
+    args: context.request.argv,
+    env: { ...context.request.env, PWD: context.request.cwd },
+    interruptible: context.interruptible,
   };
+}
+
+function launchPreview1Worker(
+  workerUrl: string,
+  context: Parameters<GuestLauncher>[0],
+  service: Parameters<GuestLauncher>[1],
+  request: ReturnType<typeof preview1Request>,
+) {
+  return service.launchWorker(context, {
+    workerUrl: siblingWorkerUrl(workerUrl, "preview1-worker.js"),
+    request,
+  });
+}
+
+async function createPreview1Network(
+  runtime: ProcessRuntime,
+  sockets: readonly Preview1SocketBinding[],
+  connect: BunNetworkOptions["connect"],
+) {
+  const { createPreview1Network: createNetwork } = await import("waffle/browser/preview1-network");
+  return createNetwork(runtime, { sockets, connect });
+}
+
+function launchOwnedPreview1(
+  workerUrl: string,
+  context: Parameters<GuestLauncher>[0],
+  service: Parameters<GuestLauncher>[1],
+  request: ReturnType<typeof preview1Request>,
+  owner: Awaited<ReturnType<typeof createPreview1Network>>,
+) {
+  if (!owner) return launchPreview1Worker(workerUrl, context, service, request);
+  try {
+    return service.launchWorker(context, {
+      workerUrl: siblingWorkerUrl(workerUrl, "preview1-worker.js"),
+      network: owner,
+      request,
+    });
+  } catch (error) {
+    owner.dispose();
+    throw error;
+  }
 }
