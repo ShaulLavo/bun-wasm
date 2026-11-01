@@ -276,3 +276,8 @@ for (const event of ["pull_request", "push"]) {
       .toBe("rust=false\njsc=false\nshared=false");
   });
 }
+
+test("TLS live inputs select native prerequisites while lightweight-only utility edits do not", () => {
+  for (const path of ["scripts/tls-probe.ts", "scripts/tls-probe-cargo.ts", "scripts/tls-probe-handoff.ts", "tests/native/tls-probe.cpp", "checks/native-probe-tls.json"]) expect(needsRust([path])).toBe(true);
+  expect(needsRust(["scripts/tls-probe.test.ts"])).toBe(false);
+});

@@ -83,7 +83,7 @@ test("native fixture groups cover every fixture once across parallel runs", () =
 });
 
 test("native fixture smoke selects the typed runtime behavior without another build", () => {
-  expect(rust.match(/bun scripts\/test-checks\.ts native/g)).toHaveLength(1);
+  expect(rust.match(/bun scripts\/test-checks\.ts native\n/g)).toHaveLength(1);
   const command = checkCommand("native");
   expect(command).toEqual(["bash", join(import.meta.dir, "test.sh"), "--no-build"].concat(selectChecks("native").map(path => path.slice("tests/fixtures/".length))));
   const baseline = oldSelections().native.toSorted().map(path => path.slice("tests/fixtures/".length));

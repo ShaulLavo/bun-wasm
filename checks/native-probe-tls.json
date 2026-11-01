@@ -1,0 +1,26 @@
+{
+  "owner": "native-probe",
+  "path": "scripts/tls-probe-live.test.ts",
+  "inputs": [
+    "scripts/tls-probe.ts",
+    "scripts/tls-probe-inputs.ts",
+    "scripts/tls-probe-archives.ts",
+    "scripts/tls-probe-cargo.ts",
+    "scripts/tls-probe-handoff.ts",
+    "scripts/tls-probe-ci.ts",
+    "scripts/tls-probe-symbols.ts",
+    "scripts/tls-probe-certificates.ts",
+    "scripts/tls-probe-server.ts",
+    "scripts/tls-probe-wasi.ts",
+    "tests/native/tls-probe.cpp",
+    "scripts/src/program-profile.ts",
+    "scripts/quality-command.ts",
+    "scripts/quality-rust.ts",
+    "scripts/quality-wasi.ts",
+    "crates/bunwasm-crypto-sys/build.rs",
+    "crates/bunwasm-crypto-sys/src/tls.rs",
+    "scripts/guest-source-manifest.ts",
+    "scripts/sync-crypto.sh",
+    "jsc/wasi-jsc.cmake"
+  ]
+}

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { run } from "./quality-command";
+import { run, runCargo } from "./quality-command";
 import { dormantRustPackages, rustTestPackages } from "./rust-test-packages";
 
 if (!process.argv.includes("--checks-only")) {
@@ -20,5 +20,5 @@ const jobs = process.env.QUALITY_RUST_JOBS ?? "1";
 run(["cargo", "clippy", "--locked", "--workspace"].concat(dormantRustPackages.flatMap(name => ["--exclude", name]), ["--all-targets", "--release", "--no-deps", "-j", jobs, "--", "-D", "warnings"]), env);
 // Every supported workspace member plus the path-patched crates, in one compile and run.
 const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--locked", "--no-deps", "--format-version", "1"], { encoding: "utf8", env, maxBuffer: 64 * 1024 * 1024 }));
-run(["cargo", "test", "--locked", "--release"].concat(rustTestPackages(metadata), ["-j", jobs]), env);
+await runCargo(["cargo", "test", "--locked", "--release"].concat(rustTestPackages(metadata), ["-j", jobs]), "host", env);
 run(["cargo", "machete", "crates"], env);

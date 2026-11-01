@@ -37,21 +37,22 @@ application payload. A pinned native libssl client supplies an additional
 linkage control. The same WASI binary runs with a failing `random_get` import;
 missing tools, timeouts, or generic process failures are not entropy passes.
 
-Use fresh task-owned paths and an external two-job, 4 GiB execution limit:
+The lightweight CMake owner runs only source utility assertions. The separate
+`native-probe` owner requires a trusted producer-job digest before any live TLS.
+Its native-quality prerequisite records package and exact output-directory
+events from the existing host Cargo test and final WASI Clippy invocation.
+It validates every archive object's ABI, compiler metadata, CMake cache, source,
+SDK, sysroot and split stamp. It never selects a first cache glob or runs another
+crypto build. Native and WASI archives remain distinct.
 
-```sh
-source env.sh
-bun scripts/tls-probe.ts --source "$TLS_SOURCE" \
-  --build "$TLS_BUILD" --output "$TLS_OUTPUT" --compile-only
-BUNWASM_TLS_PROBE_OUTPUT="$TLS_OUTPUT" bun scripts/test-checks.ts cmake
-```
-
-The builder compares the complete input directory with a fresh archive of
-the pinned upstream commit. `build.json` binds the probe bytes, native client,
-source inputs, flags, profile, and sysroot metadata. The selected check rejects
-missing or mismatched evidence and reruns the controls. It does not accept
-booleans from a previous result file. Each run removes its generated fixture
-keys and processes; the caller owns removal of its build and output directory.
+The producer links the client and matched baseline once from those archives.
+It saves each successful link hash before inspecting size, and retains the full
+map, symbols and exact commands. The existing native checkpoint carries those
+files. Intake recomputes current inputs and verifies the TLS digest from the
+producing job output, never from a self-asserted report directory. Only then does
+the live owner execute. Missing or changed evidence fails the blocking gate.
+Every fixture owns its processes and private keys; the job owns build cleanup.
+The old standalone crypto-builder CLI is removed.
 
 The matched size baseline compiles the same test source and archives with
 only the crypto entropy call retained. Stripped, gzip, and Brotli increments

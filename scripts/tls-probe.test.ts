@@ -3,22 +3,13 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { assertRejection, inspectProbe, qualifyProbe, requireProbeEvidence } from "./tls-probe.ts";
+import { assertRejection, requireProbeEvidence } from "./tls-probe.ts";
 
 test("selected TLS G0 fails closed without build evidence", () => {
   expect(() => requireProbeEvidence(undefined)).toThrow("cannot skip missing evidence");
   expect(() => requireProbeEvidence("/missing-tls-probe-evidence")).toThrow();
 });
 
-test("TLS G0 runs verified handshakes and live failure controls", async () => {
-  const output = process.env.BUNWASM_TLS_PROBE_OUTPUT;
-  const binary = requireProbeEvidence(output);
-  if (!output) throw new Error("Missing output");
-  const imports = await inspectProbe(binary);
-  const result = await qualifyProbe(binary, output);
-  expect(result.results.map(item => item.name)).toEqual(["tls12-valid", "tls13-valid", "unknown-ca-rejected", "expired-peer-rejected", "hostname-rejected"]);
-  writeFileSync(join(output, "result.json"), JSON.stringify({ imports, ...result }, null, 2) + "\n");
-}, 180_000);
 
 test("link map checks reject duplicate C runtimes and missing TLS symbols", () => {
   const map = [
