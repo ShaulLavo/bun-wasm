@@ -16,7 +16,8 @@ import { exportSharedObjects, type SharedObjectService } from "./shared-objects/
 import type { BunSharedConnection, BunSharedNativeHost } from "./shared-objects/protocol.js";
 import type { BunTerminal } from "./bun-terminal.js";
 
-export type Engine = "quickjs" | "jsc" | "browser" | "hermes";
+import type { Engine } from "../../src/engine-kind.js";
+export type { Engine } from "../../src/engine-kind.js";
 
 export interface RunRequest extends RuntimeWorkerRequest {
   engine: Engine;

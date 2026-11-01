@@ -81,7 +81,7 @@ function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<stri
 
 function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<string>, selected: Engine, adapter: RunRequest["adapter"], selectedModule: WebAssembly.Module): void {
   const engines: Engine[] = ["quickjs", "jsc", "browser"];
-  for (const engine of engines.concat(selected === "hermes" ? ["hermes"] : [])) {
+  for (const engine of engines) {
     const name = `${ENGINE_BIN[engine]}/bun`;
     if (programs.has(name)) continue;
     let loading: Promise<WebAssembly.Module> | undefined;

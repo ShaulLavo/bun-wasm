@@ -52,7 +52,8 @@ export class Playground extends TypedEventTarget<{ change: Event }> {
     super();
     this.params = new URLSearchParams(search);
     const requested = this.params.get("engine");
-    this.engine = isEngine(requested) ? requested : DEFAULT_ENGINE;
+    if (requested !== null && !isEngine(requested)) throw new TypeError(`Unknown Bun engine: ${requested}`);
+    this.engine = requested ?? DEFAULT_ENGINE;
   }
 
   get status(): Status {

@@ -1,4 +1,4 @@
-import { programKind, programProfile, type PairedEngine } from "../../src/engine-kind.ts";
+import { pairedEngines, programKind, programProfile, type PairedEngine } from "../../src/engine-kind.ts";
 import { prepareProgram } from "../../src/assets.ts";
 // Engine metadata and downloads are usable before the execution/process graph loads.
 import { activated } from "./preview";
@@ -13,8 +13,6 @@ export const ENGINES: Record<Engine, { name: string; wasm: string; script: strin
   quickjs: { name: "QuickJS", wasm: "bun.wasm", script: "scripts/build.sh" },
   jsc: { name: "JavaScriptCore", wasm: "bun-jsc.wasm", script: "scripts/build-bun-jsc.sh" },
   browser: { name: "Browser (native)", wasm: "bun-browser.wasm", script: "scripts/build-bun-browser.sh" },
-  // Opt-in: no default build makes bun-hermes.wasm, and the engine menu leaves it out.
-  hermes: { name: "Hermes", wasm: "bun-hermes.wasm", script: "scripts/build-bun-hermes.sh" },
 };
 
 export function isEngine(name: string | null): name is Engine {
@@ -35,7 +33,7 @@ export async function loadWasm(url: string, progress: (text: string) => void): P
   const requested = new URL(url, location.href);
   const name = requested.pathname;
   if (name.replace(/\.gz$/, "").endsWith("bun-tools.wasm")) return loadVerifiedTools(url, progress);
-  for (const kind of ["quickjs", "jsc", "hermes"] as const) {
+  for (const kind of pairedEngines) {
     const standard = new URL(ENGINES[kind].wasm, location.href);
     if (requested.origin === standard.origin && requested.pathname.replace(/\.gz$/, "") === standard.pathname) return loadPaired(url, kind, progress);
   }

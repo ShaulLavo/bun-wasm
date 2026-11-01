@@ -127,5 +127,5 @@ export function installBunAdapters(runtime: ProcessRuntime, workerUrl: string, l
   installedAdapters.add(runtime);
   runtime.registerAdapter("preview1", preview1Launcher({ workerUrl }));
   const notificationWorkerUrl = siblingWorkerUrl(workerUrl, "notification-worker.js");
-  for (const engine of ["quickjs", "jsc", "browser", "hermes"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network }));
+  for (const engine of ["quickjs", "jsc", "browser"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network }));
 }
