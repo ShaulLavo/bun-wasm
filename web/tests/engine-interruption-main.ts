@@ -492,20 +492,20 @@ async function testPreview1Clock(root: boolean): Promise<void> {
       if (root) {
         rootRuntime = await fixtureRuntime();
         instrumentPreview1Root = true;
-        try {
-          run = startRun({ engine: "browser", adapter: "preview1", module, args: [], env: { PWD: "/home/user" },
-            runtime: rootRuntime, moduleScope: false }, {
-            stdout(bytes) { stdout += decoder.decode(bytes); }, stderr(bytes) { stderr += decoder.decode(bytes); },
-          });
-        } finally { instrumentPreview1Root = false; }
+        run = startRun({ engine: "browser", adapter: "preview1", module, args: [], env: { PWD: "/home/user" },
+          runtime: rootRuntime, moduleScope: false }, {
+          stdout(bytes) { stdout += decoder.decode(bytes); }, stderr(bytes) { stderr += decoder.decode(bytes); },
+        });
         void run.done.then(() => { rootSettled = true; });
         await until(() => stderr.includes("ready\n"), "actual legacy Preview1 root ready", 15_000, () => guestFinished(guestWorkers.get(1)));
         worker = guestWorkers.get(1);
+        instrumentPreview1Root = false;
       } else {
         owned = await scope(module, "browser", "legacy", "preview1");
         child = owned.spawn(""); worker = await owned.ready(child);
       }
       truth(worker, "actual Preview1 production worker observed");
+      equal(controlLoad(worker.probe, probeCell.startEntered), 1, "Preview1 actual _start observer armed before shared-wait collection");
       const observed = worker;
       equal(observed.transport?.route, "runtimeProcess", "signal-only imports use the generic process transport");
       await until(() => controlLoad(observed.probe, probeCell.idleWaiting) === 1, "Preview1 clock entered actual shared interrupt wait", 15_000, () => guestFinished(observed));
@@ -599,10 +599,11 @@ async function loadCandidate(engine: Engine, name: string, prefix = "/") {
   const fingerprint = async (bytes: Uint8Array<ArrayBuffer>) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("");
   const hash = await fingerprint(bytes);
   const artifacts = [{ engine, name, sha256: hash, bytes: bytes.byteLength }];
-  const kind = programKind(new WebAssembly.Module(bytes));
+  const candidate = await WebAssembly.compile(bytes);
+  const kind = programKind(candidate);
   const expected = engine === "quickjs" || engine === "jsc" ? engine : "single";
   truth(kind === expected, `${engine} core declaration mismatch`);
-  if (kind === "single") return { module: await prepareProgram({ kind, core: bytes }), hash, artifacts };
+  if (kind === "single") return { module: candidate, hash, artifacts };
   const sideName = programProfile(kind).side;
   const responseSide = await fetch(`${prefix}${sideName}`); truth(responseSide.ok, `fresh artifact ${sideName}: HTTP ${responseSide.status}`);
   const side = new Uint8Array(await responseSide.arrayBuffer());
