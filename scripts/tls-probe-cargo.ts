@@ -60,6 +60,19 @@ export class CargoTlsMessages {
 function cacheValues(text: string): Map<string, string> {
   return new Map(Array.from(text.matchAll(/^([^#\n/:]+):[^=\n]+=([^\n]*)$/gm), match => [match[1]!, match[2]!]));
 }
+function inspectNinjaTarget(directory: string, abi: TlsAbi): void {
+  const source = readFileSync(join(directory, "CMakeFiles/rules.ninja"), "utf8");
+  const rules = Array.from(source.matchAll(/^rule (?:C|CXX)_COMPILER__[^\n]*\n((?:[ \t]+[^\n]*\n)+)/gm));
+  assert.ok(rules.length > 0, "Ninja compiler rules are missing");
+  const expected = abi === "wasm32-wasip1" ? ["--target=wasm32-wasip1"] : [];
+  for (const rule of rules) {
+    const command = /^[ \t]+command[ \t]*=[ \t]*([^\n]+)$/m.exec(rule[1] ?? "")?.[1];
+    assert.ok(command, "Ninja compiler command is missing");
+    const targets = Array.from(new Set(command.match(/--target=[^ \r\n]+/g) ?? []));
+    assert.deepEqual(targets, expected, "Ninja compiler target differs from invocation");
+  }
+}
+
 export async function inspectCryptoOutput(context: TlsContext, abi: TlsAbi, build: BuildScript) {
   const outDir = realpathSync(build.outDir);
   assert.ok(contained(context.target, outDir), "Cargo out_dir escapes private target");
@@ -92,9 +105,9 @@ export async function inspectCryptoOutput(context: TlsContext, abi: TlsAbi, buil
     const compilerInfo = readFileSync(path, "utf8");
     const selected = new RegExp(`set\\(CMAKE_${language}_COMPILER "([^"]+)"\\)`).exec(compilerInfo)?.[1];
     assert.ok(selected && realpathSync(selected) === compiler, "CMake compiler identity changed");
-    if (wasi) assert.ok(compilerInfo.includes(`set(CMAKE_${language}_COMPILER_TARGET "wasm32-wasip1")`), "CMake target changed");
     files.push(path);
   }
+  inspectNinjaTarget(directory, abi);
   const flags = "-DOPENSSL_NO_THREADS_CORRUPT_MEMORY_AND_LEAK_SECRETS_IF_THREADED -DOPENSSL_NO_SOCK";
   assert.equal(cache.get("CMAKE_C_FLAGS") ?? "", wasi ? flags : context.nativeFlags.c);
   assert.equal(cache.get("CMAKE_CXX_FLAGS") ?? "", wasi ? `${flags} -fno-exceptions -fno-rtti` : context.nativeFlags.cxx);

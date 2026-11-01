@@ -59,10 +59,14 @@ export async function fixtureCrypto(context: TlsContext, abi: "host" | "wasm32-w
   fixturePut(join(context.workspace, "jsc/wasi-jsc.cmake"), "synthetic toolchain input");
   const cache = { CMAKE_TOOLCHAIN_FILE: wasi ? join(context.workspace, "jsc/wasi-jsc.cmake") : "", CMAKE_HOME_DIRECTORY: context.source, CMAKE_BUILD_TYPE: "MinSizeRel", OPENSSL_NO_ASM: "1", BUILD_TESTING: "OFF", CMAKE_SYSROOT: wasi ? context.sysroot : "", CMAKE_C_COMPILER: cc, CMAKE_CXX_COMPILER: cxx, CMAKE_C_FLAGS: wasi ? tlsWasiFlags : "", CMAKE_CXX_FLAGS: wasi ? `${tlsWasiFlags} -fno-exceptions -fno-rtti` : "" };
   fixturePut(join(directory, "CMakeCache.txt"), Object.entries(cache).map(([key, value]) => `${key}:STRING=${value}\n`).join(""));
-  for (const path of ["build.ninja", "CMakeFiles/rules.ninja"]) fixturePut(join(directory, path), "synthetic Ninja input\n");
+  fixturePut(join(directory, "build.ninja"), "include CMakeFiles/rules.ninja\n");
+  const target = wasi ? " --target=wasm32-wasip1" : "";
+  const rules = [["C", cc], ["CXX", cxx]].map(([language, compiler]) =>
+    `rule ${language}_COMPILER__crypto_unscanned_MinSizeRel\n  depfile = $DEP_FILE\n  deps = gcc\n  command = ${compiler}${target} $DEFINES $INCLUDES $FLAGS -MD -MT $out -MF $DEP_FILE -o $out -c $in\n  description = Building ${language} object $out\n`);
+  fixturePut(join(directory, "CMakeFiles/rules.ninja"), rules.join("\n"));
   fixturePut(join(directory, "bunwasm-program-profile"), "split");
   fixturePut(join(directory, "CMakeFiles/4.4.4/CMakeSystem.cmake"), `set(CMAKE_SYSTEM_NAME "${wasi ? "WASI" : "Linux"}")\n`);
-  for (const [language, compiler] of [["C", cc], ["CXX", cxx]]) fixturePut(join(directory, `CMakeFiles/4.4.4/CMake${language}Compiler.cmake`), `set(CMAKE_${language}_COMPILER "${compiler}")\n` + (wasi ? `set(CMAKE_${language}_COMPILER_TARGET "wasm32-wasip1")\n` : ""));
+  for (const [language, compiler] of [["C", cc], ["CXX", cxx]]) fixturePut(join(directory, `CMakeFiles/4.4.4/CMake${language}Compiler.cmake`), `set(CMAKE_${language}_COMPILER "${compiler}")\n`);
   for (const lib of ["ssl", "crypto"]) fixturePut(join(directory, `lib${lib}.a`), syntheticArchive(syntheticObject(abi)));
   return { packageId: `path+${pathToFileURL(join(context.workspace, "crates/bunwasm-crypto-sys")).href}#0.0.0`, outDir, linkedPaths: [`native=${directory}`], linkedLibs: ["static=ssl", "static=crypto"] };
 }

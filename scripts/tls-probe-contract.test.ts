@@ -194,3 +194,43 @@ test("actual source/sysroot fingerprints change with bytes and reject absent inp
     await expect(treeIdentity(f.context.sysroot, ["header.h"])).rejects.toThrow();
   } finally { f.remove(); }
 });
+
+for (const abi of ["host", "wasm32-wasip1"] as const) test(`realistic ${abi} Ninja rules do not require invented compiler metadata`, async () => {
+  const f = await tlsFixture();
+  try {
+    const build = await fixtureCrypto(f.context, abi);
+    const metadata = join(build.outDir, "boringssl/CMakeFiles/4.4.4/CMakeCXXCompiler.cmake");
+    expect(readFileSync(metadata, "utf8")).not.toContain("COMPILER_TARGET");
+    await expect(inspectCryptoOutput(f.context, abi, build)).resolves.toMatchObject({ abi });
+  } finally { f.remove(); }
+});
+
+for (const mode of ["missing", "missing-target", "wrong-target", "conflicting-target", "native-target", "description-only"] as const) test(`Ninja compiler ${mode} cannot satisfy the target proof`, async () => {
+  const f = await tlsFixture();
+  try {
+    const abi = mode === "native-target" ? "host" : "wasm32-wasip1";
+    const build = await fixtureCrypto(f.context, abi);
+    const rules = join(build.outDir, "boringssl/CMakeFiles/rules.ninja");
+    let text = readFileSync(rules, "utf8");
+    if (mode === "missing") text = "# no compiler rules\n";
+    if (mode === "missing-target") text = text.replaceAll(" --target=wasm32-wasip1", "");
+    if (mode === "wrong-target") text = text.replaceAll("--target=wasm32-wasip1", "--target=wasm32-unknown-unknown");
+    if (mode === "conflicting-target") text = text.replaceAll("--target=wasm32-wasip1", "--target=wasm32-wasip1 --target=wasm32-unknown-unknown");
+    if (mode === "native-target") text = text.replaceAll(" $DEFINES", " --target=wasm32-wasip1 $DEFINES");
+    if (mode === "description-only") text = text.replaceAll(" --target=wasm32-wasip1", "").replaceAll(" object $out", " --target=wasm32-wasip1 object $out");
+    writeFileSync(rules, text);
+    await expect(inspectCryptoOutput(f.context, abi, build)).rejects.toThrow(/Ninja compiler/);
+  } finally { f.remove(); }
+});
+
+test("BoringSSL CXX-only Ninja graphs retain the actual target proof", async () => {
+  const f = await tlsFixture();
+  try {
+    const build = await fixtureCrypto(f.context, "wasm32-wasip1");
+    const rules = join(build.outDir, "boringssl/CMakeFiles/rules.ninja");
+    const text = readFileSync(rules, "utf8");
+    const cxx = text.slice(text.indexOf("rule CXX_COMPILER__"));
+    writeFileSync(rules, cxx);
+    await expect(inspectCryptoOutput(f.context, "wasm32-wasip1", build)).resolves.toMatchObject({ abi: "wasm32-wasip1" });
+  } finally { f.remove(); }
+});
