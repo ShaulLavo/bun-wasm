@@ -55,7 +55,11 @@ dispatcher. `node-install-net.ts` keeps the existing guest slots and publishes r
 heads before body completion. Each handle waits for full consumption of one compact
 body packet, at most 64 KiB, before sending another. The cumulative 256 MiB guard
 remains; the packet ceiling does not bound the current source chunk or process memory.
-Close aborts the request and releases its acknowledgment wait. Signal handling uses
+Close aborts the request and releases its acknowledgment wait. A typed worker
+bootstrap publishes startup, uncaught-callback and exit failures through the same
+synchronously read port and shared wake before loading the fetch module. The
+consumer does not depend on its blocked event-loop callbacks for those failures.
+Signal handling uses
 `runtime_proc.signal`, sharing the process wake signal. The slot installer loads
 Waffle's exported memory helper, whose source and generated Node modules are
 fingerprinted with every local host module by the upstream-suite resume gate.

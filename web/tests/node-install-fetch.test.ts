@@ -12,6 +12,7 @@ for (const [mode, description] of [
   ["protocol", "bounds unacknowledged packets and progresses independent handles"],
   ["races", "does not miss replies across the shared wake poll sequence"],
   ["worker-exit", "reports a terminated worker and disposes it"],
+  ["worker-failures", "reports worker startup, callback and exit failures without yielding the consumer"],
 ]) {
   test(`Node installer ${description}`, async () => {
     const lines = await fixture(mode!);
@@ -24,6 +25,7 @@ for (const [mode, description] of [
     }
     if (mode === "races") expect(lines.filter(line => line.startsWith("race-passed:"))).toHaveLength(5);
     if (mode === "worker-exit") expect(lines).toContain("worker-exit-reported");
+    if (mode === "worker-failures") expect(lines.filter(line => line.startsWith("worker-failure-sync:"))).toHaveLength(3);
     if (mode !== "protocol") return;
     const summary = lines.find(line => line.startsWith("protocol:"));
     expect(summary).toBeDefined();

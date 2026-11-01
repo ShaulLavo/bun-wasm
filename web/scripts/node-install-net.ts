@@ -22,11 +22,12 @@ type ControlMessage = { kind: "ack" | "close"; id: number };
 type WorkerMessage = RequestMessage | ControlMessage;
 type FetchHead = { status: number; statusText: string; url: string; redirected: boolean; headers: [string, string][] };
 type FetchError = { name: string; message: string };
-type WorkerPacket =
+type FetchPacket =
   | { kind: "head"; id: number; head: FetchHead }
   | { kind: "chunk"; id: number; body: Uint8Array<ArrayBuffer> }
   | { kind: "end"; id: number }
   | { kind: "error"; id: number; error: FetchError };
+type WorkerPacket = FetchPacket | { kind: "fatal"; error: FetchError };
 type InstallWorkerData = { installFetch: true; port: MessagePort; wake: Int32Array };
 type PendingRequest = { controller: AbortController; acknowledge?: () => void };
 type Completion = { kind: "pending" | "end" } | { kind: "error"; error: FetchError };
@@ -62,13 +63,18 @@ function isFetchHead(value: unknown): value is FetchHead {
     && typeof value.url === "string" && typeof value.redirected === "boolean" && isHeaders(value.headers);
 }
 
+function isFetchError(value: unknown): value is FetchError {
+  return isRecord(value) && typeof value.name === "string" && typeof value.message === "string";
+}
+
 function isWorkerPacket(value: unknown): value is WorkerPacket {
-  if (!isRecord(value) || typeof value.id !== "number") return false;
+  if (!isRecord(value)) return false;
+  if (value.kind === "fatal") return isFetchError(value.error);
+  if (typeof value.id !== "number") return false;
   if (value.kind === "head") return isFetchHead(value.head);
   if (value.kind === "chunk") return isBody(value.body) && value.body.length > 0 && value.body.buffer.byteLength <= PACKET_LIMIT;
   if (value.kind === "end") return true;
-  return value.kind === "error" && isRecord(value.error)
-    && typeof value.error.name === "string" && typeof value.error.message === "string";
+  return value.kind === "error" && isFetchError(value.error);
 }
 
 function isInstallWorkerData(value: unknown): value is InstallWorkerData {
@@ -115,7 +121,7 @@ async function splitChunk(source: Uint8Array, request: PendingRequest, send: (pa
 
 function serve({ port, wake }: InstallWorkerData): void {
   const requests = new Map<number, PendingRequest>();
-  function send(packet: WorkerPacket, transfer: ArrayBuffer[] = []): void {
+  function send(packet: FetchPacket, transfer: ArrayBuffer[] = []): void {
     port.postMessage(packet, transfer);
     notify(wake);
   }
@@ -152,6 +158,43 @@ function serve({ port, wake }: InstallWorkerData): void {
 
 if (isInstallWorkerData(workerData)) serve(workerData);
 
+// This typed bootstrap is serialized after type stripping. Its observers must be
+// installed before importing the fetch worker, while the consumer cannot yield.
+async function bootstrapWorker(entry: string): Promise<void> {
+  const { workerData: value, MessagePort } = await import("node:worker_threads");
+  const data: unknown = value;
+  if (!data || typeof data !== "object" || !("port" in data) || !(data.port instanceof MessagePort)) throw new TypeError("Invalid CLI fetch worker port");
+  if (!("wake" in data) || !(data.wake instanceof Int32Array) || data.wake.length === 0
+    || !(data.wake.buffer instanceof SharedArrayBuffer)) throw new TypeError("Invalid CLI fetch worker wake");
+  const port = data.port, wake = data.wake;
+  let reported = false;
+  const reportFailure = (error: unknown): void => {
+    if (reported) return;
+    reported = true;
+    port.postMessage({ kind: "fatal", error: { name: "TypeError", message: error instanceof Error ? error.message : String(error) } } satisfies WorkerPacket);
+    Atomics.add(wake, 0, 1);
+    Atomics.notify(wake, 0);
+  };
+  process.once("uncaughtExceptionMonitor", reportFailure);
+  process.once("exit", code => reportFailure(new Error(`CLI fetch worker exited (${code})`)));
+  try {
+    await import(entry);
+  } catch (error) {
+    reportFailure(error);
+    port.close();
+    process.exitCode = 1;
+  }
+}
+
+function applyFetchPacket(handle: Handle, packet: FetchPacket): void {
+  switch (packet.kind) {
+    case "head": handle.head = packet.head; break;
+    case "chunk": handle.packet = { body: packet.body, offset: 0 }; break;
+    case "end": handle.completion = { kind: "end" }; break;
+    case "error": handle.completion = { kind: "error", error: packet.error }; break;
+  }
+}
+
 /** Installs only the synchronous fetch slots; the JS engine keeps node-net.mjs. */
 export function installCliFetch(imports: NodeWasiImports, getInstance: () => WebAssembly.Instance, wake: Int32Array = new Int32Array(new SharedArrayBuffer(4))) {
   const { port1, port2 } = new MessageChannel();
@@ -165,37 +208,43 @@ export function installCliFetch(imports: NodeWasiImports, getInstance: () => Web
     return memory = memoryViews(exported);
   };
   const bytes = (ptr: number, length: number) => views().range(ptr, length);
+  function recordFailure(error: FetchError): void {
+    if (disposed) return;
+    failure ??= error;
+    for (const handle of handles.values()) {
+      if (handle.completion.kind === "pending") handle.completion = { kind: "error", error: failure };
+    }
+  }
+  function applyPacket(packet: WorkerPacket): boolean {
+    if (packet.kind === "fatal") {
+      recordFailure(packet.error);
+      return true;
+    }
+    const handle = handles.get(packet.id);
+    if (!handle) return false;
+    applyFetchPacket(handle, packet);
+    return true;
+  }
   function drain(): boolean {
     let changed = false;
     for (let received; (received = receiveMessageOnPort(port1));) {
       const packet: unknown = received.message;
-      if (!isWorkerPacket(packet)) continue;
-      const handle = handles.get(packet.id);
-      if (!handle) continue;
-      changed = true;
-      switch (packet.kind) {
-        case "head": handle.head = packet.head; break;
-        case "chunk": handle.packet = { body: packet.body, offset: 0 }; break;
-        case "end": handle.completion = { kind: "end" }; break;
-        case "error": handle.completion = { kind: "error", error: packet.error }; break;
-      }
+      if (isWorkerPacket(packet)) changed = applyPacket(packet) || changed;
     }
     return changed;
   }
   function fail(error: Error): void {
     if (disposed) return;
     drain();
-    failure = { name: "TypeError", message: error.message };
-    for (const handle of handles.values()) {
-      if (handle.completion.kind === "pending") handle.completion = { kind: "error", error: failure };
-    }
+    recordFailure({ name: "TypeError", message: error.message });
     notify(wake);
   }
   function start(meta: unknown, body: Uint8Array<ArrayBuffer>): number {
     if (disposed) return ERROR;
     if (!isFetchMeta(meta)) throw new TypeError("Invalid CLI fetch metadata");
     if (!worker) {
-      worker = new Worker(new URL(import.meta.url), { workerData: { installFetch: true, port: port2, wake }, transferList: [port2] });
+      const code = `(${bootstrapWorker.toString()})(${JSON.stringify(import.meta.url)})`;
+      worker = new Worker(code, { eval: true, workerData: { installFetch: true, port: port2, wake }, transferList: [port2] });
       worker.on("error", fail);
       worker.on("exit", code => fail(new Error(`CLI fetch worker exited (${code})`)));
     }

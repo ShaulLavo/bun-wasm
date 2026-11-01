@@ -293,6 +293,11 @@ function race(stage: string): void {
       wait(wake, 0, version, 25);
     }
   };
+  const releaseDuringWait = () => {
+    if (stage !== "in-wait" || released) return;
+    released = true;
+    milestone(`race-release:${stage}`);
+  };
   try {
     assert.equal(h.call(0, 0), 0); assert.equal(load(wake, 0), 41);
     const id = h.start(`/race-${stage}`);
@@ -311,7 +316,7 @@ function race(stage: string): void {
     Object.defineProperty(Atomics, "wait", { value: (array: Int32Array, index: number, version: number, timeout?: number) => {
       waits++;
       if (stage === "before-wait") release();
-      if (stage === "in-wait" && !released) { released = true; milestone(`race-release:${stage}`); }
+      releaseDuringWait();
       return wait(array, index, version, timeout);
     } });
     assert.equal(h.call(0, 4000), 1, `lost ${stage} reply`);
@@ -325,6 +330,56 @@ function race(stage: string): void {
     Object.defineProperty(Atomics, "load", { value: load }); Object.defineProperty(Atomics, "wait", { value: wait });
     h.adapter.dispose();
   }
+}
+
+function injectedWorkerEntry(filename: string | URL, mode: string): string | URL {
+  const entry = mode === "exit" ? "process.exit(7)" : mode === "async" ? 'setImmediate(() => { throw new Error("injected worker callback failure"); })' : 'throw new Error("injected worker startup failure")';
+  const url = `data:text/javascript,${encodeURIComponent(entry)}`;
+  if (typeof filename !== "string") return new URL(url);
+  const replaced = filename.replace(JSON.stringify(moduleUrl.href), JSON.stringify(url));
+  assert.notEqual(replaced, filename, "fault must replace only the actual worker entry, not its observer");
+  return replaced;
+}
+
+async function synchronousWorkerFailure(mode: string): Promise<void> {
+  const Original = workerThreads.Worker;
+  const workers: Worker[] = [];
+  workerThreads.Worker = class extends Original {
+    constructor(filename: string | URL, options?: WorkerOptions) {
+      super(injectedWorkerEntry(filename, mode), options);
+      workers.push(this);
+    }
+  };
+  syncBuiltinESMExports();
+  const wake = new Int32Array(new SharedArrayBuffer(4));
+  const h = host(wake);
+  let yielded = false;
+  void Promise.resolve().then(() => { yielded = true; });
+  try {
+    const id = h.start("/pending-worker-failure");
+    const result = h.wait(() => h.call(2, id, 2048, 4096));
+    assert.equal(yielded, false, "consumer must not yield before failure is visible");
+    assert.equal(result, ERROR);
+    assert(Atomics.load(wake, 0) > 0, "worker must notify the shared wake before the consumer yields");
+    completion(h, id, ERROR);
+    const error = JSON.parse(h.text(10, id));
+    assert.equal(error.name, "TypeError");
+    assert.match(error.message, mode === "exit" ? /CLI fetch worker exited \(7\)/ : /injected worker .* failure/);
+    h.close(id);
+    const later = h.start("/pending-after-worker-failure");
+    assert.equal(h.call(2, later, 2048, 4096), ERROR, "future handles must retain the failure without retrying the worker");
+    h.close(later);
+    milestone(`worker-failure-sync:${mode}`);
+  } finally {
+    h.adapter.dispose();
+    workerThreads.Worker = Original;
+    syncBuiltinESMExports();
+    await Promise.all(workers.map(worker => worker.terminate()));
+  }
+}
+
+async function workerFailures(): Promise<void> {
+  for (const mode of ["startup", "async", "exit"]) await synchronousWorkerFailure(mode);
 }
 
 async function workerExit(): Promise<void> {
@@ -359,6 +414,7 @@ try {
     case "protocol": await protocol(); break;
     case "races": for (const stage of ["queued", "before-load", "after-load", "before-wait", "in-wait"]) race(stage); break;
     case "worker-exit": await workerExit(); break;
+    case "worker-failures": await workerFailures(); break;
     default: throw new Error("unknown fixture mode");
   }
   milestone(`passed:${process.argv[2]}:${process.version}`);
