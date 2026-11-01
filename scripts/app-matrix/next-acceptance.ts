@@ -21,22 +21,34 @@ import { runAcceptancePhase } from "./next-acceptance-phase";
 import { acceptanceBudget, acceptanceTimeouts, timeoutOptions } from "./next-acceptance-options";
 import { routeCases, runRouteCase, overlappingRequests } from "./next-acceptance-cases";
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
-import { registryReceipt } from "./next-acceptance-registry";
+import { applyBrowserErrorPhaseObserver } from "./next-acceptance-observer";
+import { runPhaseObservationControl, runObservedRecovery } from "./next-acceptance-observer-control";
+import { assertPreviewPageOrigin, verifyReplayAdmission } from "./next-acceptance-admission";
 import { verifyAcceptanceAssets } from "./next-acceptance-assets";
 import { emptyMemory, memoryGate, parseMemory, resultTable, type AcceptanceEngine, type MemorySample, type Outcome, type PhaseResult } from "./next-acceptance-model";
 
 const { values } = parseArgs({ options: {
   engine: { type: "string" }, "web-root": { type: "string" }, output: { type: "string" },
   "runtime-revision": { type: "string" }, "runtime-receipt": { type: "string" },
-  registry: { type: "string" }, "registry-extra": { type: "string" }, "registry-overlay": { type: "string" }, "memory-hook": { type: "string" },
+  registry: { type: "string" }, "registry-identity": { type: "string" }, "registry-extra": { type: "string" }, "registry-overlay": { type: "string" }, "memory-hook": { type: "string" },
   port: { type: "string", default: "43701" }, cycles: { type: "string", default: "30" },
   phases: { type: "string", default: "install,build,start,dev" },
   ...timeoutOptions, "idle-ms": { type: "string", default: "1500" },
+  "phase-observation": { type: "boolean", default: false },
   "min-headroom-mib": { type: "string", default: "32" }, "max-growth-mib": { type: "string", default: "16" },
 } });
 if (values.engine !== "quickjs" && values.engine !== "jsc" && values.engine !== "browser") throw new Error("--engine quickjs|jsc|browser is required");
 if (!values["web-root"] || !values.output || !/^[a-f0-9]{40}$/.test(values["runtime-revision"] ?? "")) throw new Error("--web-root, --output and --runtime-revision <full SHA> are required");
 if (values["registry-overlay"] && !values["registry-extra"]) throw new Error("--registry-overlay requires --registry-extra");
+if (values.registry && values["registry-extra"]) throw new Error("Choose --registry or --registry-extra");
+const phaseObservation = values["phase-observation"] === true;
+if (phaseObservation && (values.engine !== "browser" || values.phases !== "install,dev" || values.cycles !== "0" || !values["runtime-receipt"] || !(values.registry || values["registry-extra"]))) {
+  throw new Error("--phase-observation requires Browser, --phases install,dev --cycles 0, a runtime receipt and complete pinned registry replay");
+}
+const registryPaths = values.registry ? [join(resolve(values.registry), "index.json")] : values["registry-extra"]
+  ? ["/work/cache/bun-wasm-app-matrix/index.json", join(resolve(values["registry-extra"]), "index.json")]
+    .concat(values["registry-overlay"] ? [join(resolve(values["registry-overlay"]), "index.json")] : []) : [];
+const replayAdmission = registryPaths.length ? verifyReplayAdmission(registryPaths, values["registry-identity"]) : undefined;
 const engine: AcceptanceEngine = values.engine;
 const webRoot = resolve(values["web-root"]);
 const output = resolve(values.output);
@@ -58,6 +70,7 @@ const maxGrowth = numeric("max-growth-mib", 0, 4096);
 const digest = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 const sources = fixtureSources(fixture);
 const staged = stageFixture(sources);
+const observerSources = phaseObservation ? applyBrowserErrorPhaseObserver(staged.files) : null;
 const rows: PhaseResult[] = [];
 const samples: MemorySample[] = [];
 const external: string[] = [];
@@ -89,12 +102,12 @@ let hook: ((input: { page: Page; phase: string; engine: AcceptanceEngine }) => P
 function save() {
   const report = {
     schema: 1, engine, observedEngine, browser: { name: "chromium", version: browserVersion },
-    fixture: { path: "examples/next-acceptance", sourceRevision, sha256: digest(JSON.stringify(sources)), lockSha256: digest(sources["bun.lock"] ?? ""), stagedSha256: digest(JSON.stringify(staged.files)), config: staged.config, dependencies: JSON.parse(sources["package.json"] ?? "{}").dependencies },
+    fixture: { path: "examples/next-acceptance", sourceRevision, sha256: digest(JSON.stringify(sources)), lockSha256: digest(sources["bun.lock"] ?? ""), stagedSha256: digest(JSON.stringify(staged.files)), config: staged.config, observerSources, dependencies: JSON.parse(sources["package.json"] ?? "{}").dependencies },
     runtime: { revision: values["runtime-revision"], revisionSource: "caller supplied; compare to producer receipt", assets, webRoot, receipt: values["runtime-receipt"] ? resolve(values["runtime-receipt"]) : null },
-    parameters: { cycles, ...timeouts, idleMs: idle, minHeadroomMiB: minHeadroom, maxGrowthMiB: maxGrowth, phases: Array.from(phases) },
+    parameters: { cycles, ...timeouts, idleMs: idle, minHeadroomMiB: minHeadroom, maxGrowthMiB: maxGrowth, phases: Array.from(phases), phaseObservation },
     completedCycles, devProcessId, droppedSamples, samplerErrors, failedAllocations, rebuilds, rows, samples,
     network: { mode: mirror ? "registry replay" : "live npm (diagnostic)", external, mirror: mirror?.snapshot() }, cleanup,
-    acceptance: rows.length > 0 && rows.every(row => row.status === "pass") && cleanup === "pass" && !samplerErrors.length && !droppedSamples,
+    acceptance: !phaseObservation && rows.length > 0 && rows.every(row => row.status === "pass") && cleanup === "pass" && !samplerErrors.length && !droppedSamples,
   };
   writeFileSync(join(output, "run.json"), JSON.stringify(report, null, 2) + "\n");
   writeFileSync(join(output, "results.md"), resultTable(rows));
@@ -232,11 +245,25 @@ async function stopServer(page: Page, mode: string) {
 }
 
 async function serverCases(owner: Page, page: Page, base: string, mode: "start" | "dev", source: GuestSource, traffic: Awaited<ReturnType<typeof observeNativeProductTraffic>>) {
-  await phase(`${mode}:http-ready`, async () => {
+  const httpReady = await phase(`${mode}:http-ready`, async () => {
+    const deadline = Date.now() + timeout;
     const probe = await page.context().newPage();
-    try { await waitForPreviewReady(probe, base, Date.now() + timeout, 1000); }
+    try { await waitForPreviewReady(probe, base, deadline, 1000); }
     finally { await probe.close(); }
+    const response = await page.goto(base, { waitUntil: "commit", timeout: Math.max(1, deadline - Date.now()) });
+    assert.ok(response?.ok(), "Request page navigation must be HTTP-ready");
+    assertPreviewPageOrigin(page.url(), base);
   }, mode);
+  if (phaseObservation) {
+    if (mode !== "dev" || !httpReady) return;
+    const identified = await phase("dev:process", async () => { devProcessId = await serverPid(page, base); }, "dev:http-ready");
+    if (!identified) return;
+    const controlled = await phase("dev:phase-observer-control", () => runPhaseObservationControl(page, base, timeout, owner, output), "dev:process");
+    if (!controlled) return;
+    await phase("dev:compile-recovery", () => runObservedRecovery(page, "compile-error", () => compileErrorRecovery(page, base, source, timeout)), "dev:phase-observer-control");
+    await phase("dev:application-recovery", () => runObservedRecovery(page, "application-error", () => runRouteCase("application-error", page, base, timeout)), "dev:compile-recovery");
+    return;
+  }
   for (const name of routeCases) await phase(`${mode}:${name}`, async () => { await alive(owner); await runRouteCase(name, page, base, timeout); await alive(owner); }, `${mode}:http-ready`);
   if (mode !== "dev") return;
   const warmed = routeCases.every(name => rows.find(row => row.phase === `dev:${name}`)?.status === "pass");
@@ -260,6 +287,7 @@ async function serverCases(owner: Page, page: Page, base: string, mode: "start" 
 }
 
 async function serverPid(page: Page, base: string): Promise<number> {
+  assertPreviewPageOrigin(page.url(), base);
   const response = await requestProbe(page, { url: new URL("api/context", base).href, deadline: Date.now() + timeout });
   const observed: unknown = JSON.parse(response.body);
   assert.ok(observed && typeof observed === "object" && "pid" in observed && typeof observed.pid === "number" && Number.isSafeInteger(observed.pid) && observed.pid > 0, "Next response must identify the serving process");
@@ -294,14 +322,11 @@ async function main() {
     const fn = module.sample;
     hook = async input => fn(input);
   }
-  if (values.registry && values["registry-extra"]) throw new Error("Choose --registry or --registry-extra");
   if (values.registry) mirror = await registry({ directory: resolve(values.registry), record: false });
   if (values["registry-extra"]) {
-    const indexPaths = ["/work/cache/bun-wasm-app-matrix/index.json", join(resolve(values["registry-extra"]), "index.json")]
-      .concat(values["registry-overlay"] ? [join(resolve(values["registry-overlay"]), "index.json")] : []);
-    const receipt = registryReceipt(indexPaths);
-    const replay = nextRegistry(resolve(values["registry-extra"]), 0, values["registry-overlay"] ? resolve(values["registry-overlay"]) : undefined);
-    mirror = { ...replay, errors: [], snapshot: () => ({ ...receipt, requests: replay.requests.length, misses: replay.misses, errors: [] }) };
+    assert.ok(replayAdmission);
+    const replay = nextRegistry(resolve(values["registry-extra"]), 0, values["registry-overlay"] ? resolve(values["registry-overlay"]) : undefined, replayAdmission.inputs.map(input => input.sha256));
+    mirror = { ...replay, errors: [], snapshot: () => ({ ...replayAdmission, requests: replay.requests.length, misses: replay.misses, errors: [] }) };
   }
   const match = await task.start(["serve.ts"], /at (http:\/\/\S+) \(cross-origin isolated\)/, { ROOT: webRoot, PORT: "0", PREVIEW_ORIGINS: "1" });
   const browser = await task.launch({ launch: async () => {
