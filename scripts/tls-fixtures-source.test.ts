@@ -33,6 +33,8 @@ describe("native TLS fixture source contract", () => {
     expect(serverSource).toContain('process.env.TMPDIR ?? tmpdir()');
     expect(serverSource).toContain('mkdtemp(join(base, "bun-wasm-tls-fixtures-"))');
     expect(serverSource).toContain('installSignalCleanup(close)');
+    expect(serverSource).toContain('process.exitCode = signalExitCode(signal)');
+    expect(serverSource).toContain('process.exit()');
     expect(serverSource).toContain('await rm(scratch, { recursive: true, force: true })');
     expect(serverSource).toContain('observerArmed');
     expect(serverSource).toContain('startTlsConnections');
@@ -45,9 +47,14 @@ describe("native TLS fixture source contract", () => {
     expect(guestSource).toContain('from "node:tls"');
     expect(guestSource).toContain("process.env.TEST_SERVER");
     expect(guestSource).toContain("new TLSSocket(raw");
+    expect(guestSource).toContain("response[0] !== 0x53");
+    expect(guestSource).toContain("raw.unshift(remainder)");
+    expect(guestSource).toContain('const expected = Buffer.from("starttls-payload")');
+    expect(guestSource).toContain("echoed = Buffer.concat([echoed, bytes])");
     expect(guestSource).toContain("Reflect.apply(tlsConnect");
     expect(guestSource).toContain("observerPlaintextBytes");
-    expect(guestSource).toContain("startTlsConnections");
+    expect(guestSource).toContain("starttlsState.connections === 1");
+    expect(guestSource).toContain("starttlsState.startTlsConnections === 1");
   });
 
   test("keeps output deterministic and free of endpoints or key material", () => {

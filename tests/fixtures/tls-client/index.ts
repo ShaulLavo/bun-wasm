@@ -168,16 +168,25 @@ async function startTls(): Promise<boolean> {
   const raw = netConnect({ host, port: manifest.starttls.port });
   const result = new Promise<boolean>((resolve, reject) => {
     let response = Buffer.alloc(0);
-    let echoed = false;
     const upgrade = (chunk: Buffer) => {
       response = Buffer.concat([response, chunk]);
       if (response.length < 1) return;
       raw.removeListener("data", upgrade);
-      if (response.toString("utf8") !== "S") { raw.destroy(); reject(new Error("STARTTLS upgrade rejected")); return; }
+      if (response[0] !== 0x53) { raw.destroy(); reject(new Error("STARTTLS upgrade rejected")); return; }
+      const remainder = response.subarray(1);
+      if (remainder.length) raw.unshift(remainder);
+      const expected = Buffer.from("starttls-payload");
+      let echoed = Buffer.alloc(0);
       const secureSocket = new TLSSocket(raw, { ...common });
-      secureSocket.once("secureConnect", () => secureSocket.end("starttls-payload"));
-      secureSocket.once("data", bytes => { echoed = Buffer.from(bytes).toString("utf8") === "starttls-payload"; });
-      secureSocket.once("close", () => resolve(echoed));
+      const collect = (bytes: Buffer) => {
+        echoed = Buffer.concat([echoed, bytes]);
+        if (echoed.length < expected.length) return;
+        secureSocket.removeListener("data", collect);
+        secureSocket.end();
+      };
+      secureSocket.once("secureConnect", () => secureSocket.write(expected));
+      secureSocket.on("data", collect);
+      secureSocket.once("close", () => resolve(echoed.length === expected.length && echoed.equals(expected)));
       secureSocket.once("error", reject);
     };
     raw.on("data", upgrade);
@@ -270,7 +279,7 @@ try {
   check(isRecord(after), "Invalid TLS fixture state");
   check(isRecord(after) && after.observerArmed === true && after.observerPlaintextBytes === 0, "TLS observer recorded rejected application bytes");
   const starttlsState = isRecord(after) ? after.starttls : undefined;
-  check(isRecord(starttlsState) && starttlsState.startTlsConnections === 1, "STARTTLS used more than one TCP connection");
+  check(isRecord(starttlsState) && starttlsState.connections === 1 && starttlsState.startTlsConnections === 1, "STARTTLS used more than one TCP connection");
   console.log("negative observer: armed and zero plaintext");
 } finally {
   await fetch(`${base}/tls-fixtures/close`, { method: "POST" });

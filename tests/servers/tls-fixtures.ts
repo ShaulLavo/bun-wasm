@@ -353,8 +353,27 @@ function stateOfEndpoint(endpoint: Endpoint): EndpointState {
   return { port: endpoint.port, connections: endpoint.connections, secureConnections: endpoint.secureConnections, applicationBytes: endpoint.applicationBytes, liveSockets: endpoint.liveSockets.size };
 }
 
+type FixtureSignal = "SIGINT" | "SIGTERM" | "SIGHUP";
+
+function signalExitCode(signal: FixtureSignal): number {
+  switch (signal) {
+    case "SIGINT": return 130;
+    case "SIGTERM": return 143;
+    case "SIGHUP": return 129;
+    default: { const unhandled: never = signal; return unhandled; }
+  }
+}
+
 function installSignalCleanup(close: () => Promise<void>): () => void {
-  const stop = () => { void close().catch(() => {}); };
+  let terminating = false;
+  const stop = (signal: FixtureSignal) => {
+    if (terminating) return;
+    terminating = true;
+    void close().then(
+      () => { process.exitCode = signalExitCode(signal); process.exit(); },
+      () => { process.exitCode = 1; process.exit(); },
+    );
+  };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   process.once("SIGHUP", stop);
