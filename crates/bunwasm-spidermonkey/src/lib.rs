@@ -1,7 +1,10 @@
 //! G2 only. The C++ shim owns JSAPI roots; no Engine implementation exists yet.
 extern crate encoding_c;
 extern crate encoding_c_mem;
-#[allow(unsafe_op_in_unsafe_fn)]
+#[allow(
+    unsafe_op_in_unsafe_fn,
+    reason = "Copied Mozilla C ABI glue keeps raw-pointer operations inside unsafe entry points"
+)]
 #[path = "glue/normalizer.rs"]
 mod normalizer;
 use core::ffi::c_char;
