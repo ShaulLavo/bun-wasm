@@ -52,3 +52,21 @@ describe("pinned TLS roots", () => {
     }
   });
 });
+
+
+test("native ALPN fixture uses the server selection callback", () => {
+  const fixture = readFileSync(new URL("../crates/bunwasm-runtime/src/tls/tests.rs", import.meta.url), "utf8");
+  expect(fixture).toContain("ffi::SSL_CTX_set_alpn_select_cb");
+  expect(fixture).not.toContain("ffi::SSL_CTX_set_alpn_protos");
+});
+
+test("root slices share adjacent boundaries and reject offset backtracking", () => {
+  const roots = parseRootBundle(bundle);
+  for (let index = 1; index < roots.length; index++) {
+    const previous = roots[index - 1]!;
+    expect(roots[index]!.byteOffset).toBe(previous.byteOffset + previous.byteLength);
+  }
+  const changed = Buffer.from(bundle);
+  changed.writeUInt32LE(0, 12);
+  expect(() => parseRootBundle(changed)).toThrow();
+});

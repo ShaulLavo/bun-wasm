@@ -102,6 +102,41 @@ pub(super) struct Server {
     failed: bool,
     read_closed: bool,
 }
+unsafe extern "C" fn select_http11(
+    _ssl: *mut ffi::Ssl,
+    output: *mut *const u8,
+    output_len: *mut u8,
+    input: *const u8,
+    input_len: std::ffi::c_uint,
+    _argument: *mut std::ffi::c_void,
+) -> std::ffi::c_int {
+    if input.is_null() || output.is_null() || output_len.is_null() || input_len > u16::MAX.into() {
+        return ffi::SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+    let protocols = unsafe { std::slice::from_raw_parts(input, input_len as usize) };
+    if !offers_http11(protocols) {
+        return ffi::SSL_TLSEXT_ERR_ALERT_FATAL;
+    }
+    unsafe {
+        *output = ALPN.as_ptr().add(1);
+        *output_len = ALPN[0];
+    }
+    ffi::SSL_TLSEXT_ERR_OK
+}
+
+fn offers_http11(mut protocols: &[u8]) -> bool {
+    let mut found = false;
+    while let Some((&length, tail)) = protocols.split_first() {
+        if length == 0 || usize::from(length) > tail.len() {
+            return false;
+        }
+        let (protocol, next) = tail.split_at(usize::from(length));
+        found |= protocol == &ALPN[1..];
+        protocols = next;
+    }
+    found
+}
+
 impl Server {
     pub(super) fn new(fixture: &Fixture, version: u16, client_auth: bool) -> Self {
         let meter = Rc::new(Meter::default());
@@ -114,12 +149,13 @@ impl Server {
             key: Some(&fixture.key),
         };
         let context = Rc::new(context::Context::server(options, &mut trust, &meter).unwrap());
-        assert_eq!(
-            unsafe {
-                ffi::SSL_CTX_set_alpn_protos(context.ssl.pointer(), ALPN.as_ptr(), ALPN.len())
-            },
-            0
-        );
+        unsafe {
+            ffi::SSL_CTX_set_alpn_select_cb(
+                context.ssl.pointer(),
+                Some(select_http11),
+                std::ptr::null_mut(),
+            );
+        }
         let session = Session::new(context.ssl.pointer(), &meter).unwrap();
         unsafe {
             ffi::SSL_set_accept_state(session.ssl.pointer());
@@ -950,4 +986,67 @@ fn releasing_a_suspended_write_frees_session_bios_context_and_native_buffer() {
         Release::AlreadyReleased
     );
     assert_eq!(pair.registry.counts().freed, freed);
+}
+
+#[test]
+fn identity_report_delivery_enables_exactly_one_decision() {
+    let fixture = Fixture::new();
+    let mut pair = Pair::new(
+        &fixture,
+        ffi::TLS1_3_VERSION,
+        CaMode::Explicit(vec![&fixture.certificate]),
+        StartupExtras::Absent,
+        false,
+        false,
+    );
+    pair.handshake().unwrap();
+    assert!(pair.peer.is_some());
+    assert!(!pair.registry.authorized(pair.id).unwrap());
+    pair.registry.accept_identity(pair.id, true, None).unwrap();
+    assert!(pair.registry.authorized(pair.id).unwrap());
+    assert_eq!(
+        pair.registry
+            .accept_identity(pair.id, true, None)
+            .unwrap_err()
+            .code,
+        "ERR_TLS_INVALID_STATE"
+    );
+}
+
+#[test]
+fn server_alpn_selector_validates_the_complete_wire_vector() {
+    let mut output = std::ptr::null();
+    let mut output_len = 0;
+    let protocols = b"\x02h2\x08http/1.1";
+    let selected = unsafe {
+        select_http11(
+            std::ptr::null_mut(),
+            &mut output,
+            &mut output_len,
+            protocols.as_ptr(),
+            protocols.len().try_into().unwrap(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(selected, ffi::SSL_TLSEXT_ERR_OK);
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(output, output_len.into()) },
+        b"http/1.1"
+    );
+    assert!(!offers_http11(b"\x02h2"));
+    assert!(!offers_http11(b"\x09http/1.1"));
+    assert!(!offers_http11(b"\x08http/1.1\x02x"));
+    assert!(!offers_http11(b"\x00"));
+}
+
+#[test]
+fn root_ranges_share_boundaries_and_reject_backtracking() {
+    let bundle = include_bytes!("../../data/tls-roots.der");
+    let roots = trust::bundle_slices(bundle).unwrap();
+    for pair in roots.windows(2) {
+        assert_eq!(pair[0].as_ptr_range().end, pair[1].as_ptr());
+    }
+    let mut changed = bundle.to_vec();
+    changed[12..16].copy_from_slice(&0_u32.to_le_bytes());
+    assert!(trust::bundle_slices(&changed).is_err());
 }

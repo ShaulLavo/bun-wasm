@@ -80,6 +80,8 @@ pub enum CryptoBuffer {}
 pub const TLS1_2_VERSION: u16 = 0x0303;
 pub const TLS1_3_VERSION: u16 = 0x0304;
 pub const SSL_MODE_ENABLE_PARTIAL_WRITE: u32 = 1;
+pub const SSL_TLSEXT_ERR_OK: c_int = 0;
+pub const SSL_TLSEXT_ERR_ALERT_FATAL: c_int = 2;
 
 unsafe extern "C" {
     pub fn SSL_CTX_set_verify_depth(ctx: *mut SslCtx, depth: c_int);
@@ -139,7 +141,20 @@ unsafe extern "C" {
 }
 
 unsafe extern "C" {
-    pub fn SSL_CTX_set_alpn_protos(ctx: *mut SslCtx, protocols: *const u8, len: usize) -> c_int;
+    pub fn SSL_CTX_set_alpn_select_cb(
+        ctx: *mut SslCtx,
+        callback: Option<
+            unsafe extern "C" fn(
+                ssl: *mut Ssl,
+                output: *mut *const u8,
+                output_len: *mut u8,
+                input: *const u8,
+                input_len: c_uint,
+                argument: *mut c_void,
+            ) -> c_int,
+        >,
+        argument: *mut c_void,
+    );
 }
 
 // Native tests use the library's explicit clock override, never production code.
