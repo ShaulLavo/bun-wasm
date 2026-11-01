@@ -1,6 +1,7 @@
 //! Process-owned, engine-independent TLS over caller-owned ciphertext transport.
 //! This module never owns a socket, invokes JavaScript, or reads host files.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 #[path = "tls/bindings.rs"]
@@ -20,7 +21,7 @@ pub use context::{CaMode, ContextOptions};
 pub use driver::{Allowance, ConnectionOptions, Event, Outcome, PeerInfo, Step, VerifyMode, Wait};
 pub use owned::{Counts, ErrorStack};
 pub use slots::{ConnectionId, ContextId, Release};
-pub use trust::StartupExtras;
+pub use trust::{StartupExtras, snapshot_startup_extras};
 
 pub const BIO_CAPACITY: usize = 64 * 1024;
 pub const MAX_BATCH: usize = 64 * 1024;
@@ -67,11 +68,14 @@ pub struct ResourceCounts {
     pub freed: Counts,
 }
 
+pub type SharedRegistry = Rc<RefCell<TlsRegistry>>;
+
 pub struct TlsRegistry {
     contexts: slots::Slots<Rc<context::Context>, ContextId>,
     connections: slots::Slots<driver::Connection, ConnectionId>,
     trust: trust::Trust,
     meter: Rc<owned::Meter>,
+    disposed: bool,
 }
 
 impl TlsRegistry {
@@ -82,10 +86,32 @@ impl TlsRegistry {
             connections: slots::Slots::new(4096),
             trust: trust::Trust::new(startup, &meter),
             meter,
+            disposed: false,
         }
     }
 
+    pub fn dispose(&mut self) {
+        if self.disposed {
+            return;
+        }
+        self.disposed = true;
+        self.connections.clear();
+        self.contexts.clear();
+        self.trust.dispose();
+    }
+
+    fn ensure_open(&self) -> Result<()> {
+        if self.disposed {
+            return Err(Failure::new(
+                "ERR_TLS_REGISTRY_DISPOSED",
+                "TLS registry has been disposed",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn create_context(&mut self, options: ContextOptions<'_>) -> Result<ContextId> {
+        self.ensure_open()?;
         let context = context::Context::new(options, &mut self.trust, &self.meter)?;
         self.contexts.insert(Rc::new(context))
     }
@@ -95,6 +121,7 @@ impl TlsRegistry {
         id: ContextId,
         options: ConnectionOptions<'_>,
     ) -> Result<ConnectionId> {
+        self.ensure_open()?;
         let context = self.contexts.get(id)?.clone();
         self.connections
             .insert(driver::Connection::new(context, options, &self.meter)?)
@@ -106,6 +133,7 @@ impl TlsRegistry {
         event: Event<'_>,
         allowance: Allowance,
     ) -> Result<Step> {
+        self.ensure_open()?;
         self.connections.get_mut(id)?.step(event, allowance)
     }
 
@@ -115,18 +143,22 @@ impl TlsRegistry {
         accepted: bool,
         code: Option<&str>,
     ) -> Result<()> {
+        self.ensure_open()?;
         self.connections
             .get_mut(id)?
             .accept_identity(accepted, code)
     }
 
     pub fn inspect(&self, id: ConnectionId) -> Result<PeerInfo> {
+        self.ensure_open()?;
         self.connections.get(id)?.inspect()
     }
     pub fn authorized(&self, id: ConnectionId) -> Result<bool> {
+        self.ensure_open()?;
         Ok(self.connections.get(id)?.authorized())
     }
     pub fn authorization_error(&self, id: ConnectionId) -> Result<Option<&'static str>> {
+        self.ensure_open()?;
         Ok(self.connections.get(id)?.authorization_error())
     }
     pub fn release_context(&mut self, id: ContextId) -> Result<Release> {
@@ -149,10 +181,13 @@ impl TlsRegistry {
     }
 }
 
-/// The caller must pass the once-per-process snapshot before application code runs.
-/// Integration deliberately lives outside this unregistered source module.
-pub(crate) fn install(table: &mut crate::natives::Table, startup: StartupExtras) {
-    bindings::install(table, startup);
+/// Install the existing typed operations against the process-owned registry.
+pub(crate) fn install(table: &mut crate::natives::Table, registry: SharedRegistry) {
+    bindings::install(table, registry);
+}
+
+pub(crate) fn new_shared_registry(startup: StartupExtras) -> SharedRegistry {
+    Rc::new(RefCell::new(TlsRegistry::new(startup)))
 }
 
 #[cfg(all(test, not(target_os = "wasi")))]

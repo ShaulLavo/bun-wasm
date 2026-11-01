@@ -787,6 +787,11 @@
         reportExitError(err);
       }
       internal.cancelIoWaiters();
+      try {
+        native.tlsDispose();
+      } catch (err) {
+        reportExitError(err);
+      }
       if (internal.workerExit) internal.workerExit((process.exitCode | 0) || code);
       native.closeAllDirs();
     }

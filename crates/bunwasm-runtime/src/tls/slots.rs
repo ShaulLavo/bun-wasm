@@ -147,6 +147,12 @@ impl<T, I: ObjectId> Slots<T, I> {
         Ok(Release::Released)
     }
 
+    pub fn clear(&mut self) {
+        for slot in &mut self.slots {
+            slot.value.take();
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.slots
             .iter()

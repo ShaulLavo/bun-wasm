@@ -1,11 +1,9 @@
 use super::{
     Allowance, CaMode, ConnectionId, ConnectionOptions, ContextId, ContextOptions, Counts, Event,
-    Failure, Outcome, PeerInfo, Release, StartupExtras, Step, TlsRegistry, VerifyMode, Wait,
+    Failure, Outcome, PeerInfo, Release, SharedRegistry, Step, TlsRegistry, VerifyMode, Wait,
 };
 use crate::data::{Args, NativeError, NativeResult, Record, Val};
 use crate::natives::Table;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 impl From<Failure> for NativeError {
     fn from(failure: Failure) -> Self {
@@ -13,8 +11,7 @@ impl From<Failure> for NativeError {
     }
 }
 
-pub fn install(table: &mut Table, startup: StartupExtras) {
-    let registry = Rc::new(RefCell::new(TlsRegistry::new(startup)));
+pub fn install(table: &mut Table, registry: SharedRegistry) {
     let create = registry.clone();
     table.add("tlsCreateContext", move |args| {
         create_context(args, &mut create.borrow_mut())
@@ -33,9 +30,21 @@ pub fn install(table: &mut Table, startup: StartupExtras) {
     table.add("tlsInspect", move |args| {
         inspect_connection(args, &inspect.borrow())
     });
+    let dispose_registry = registry.clone();
+    table.add("tlsDispose", move |args| {
+        dispose(args, &mut dispose_registry.borrow_mut())
+    });
     table.add("tlsRelease", move |args| {
         release(args, &mut registry.borrow_mut())
     });
+}
+
+fn dispose(args: Args<'_>, registry: &mut TlsRegistry) -> NativeResult {
+    if !args.0.is_empty() {
+        return Err(argument("TLS disposal does not accept arguments"));
+    }
+    registry.dispose();
+    Ok(Val::Undefined)
 }
 
 fn create_context(args: Args<'_>, registry: &mut TlsRegistry) -> NativeResult {
