@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 
 function source(path: string): string {
   return readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -46,6 +47,7 @@ describe("process-owned TLS registry source contract", () => {
     expect(trust).toContain("StartupExtras::Unavailable");
     expect(trust).toContain("File::open");
     expect(trust).toContain(".take(MAX_MATERIAL as u64)");
+    expect(trust).toContain("bytes.len() > MAX_MATERIAL");
     expect(runtime).toContain("tls::new_shared_registry(tls::snapshot_startup_extras())");
     expect(launcher).not.toContain("NODE_EXTRA_CA_CERTS");
   });
@@ -72,4 +74,45 @@ describe("process-owned TLS registry source contract", () => {
     expect(exit.slice(0, dispose)).toContain("process.emit(\"exit\", code)");
     expect(runtime).not.toContain("tls::new_shared_registry(tls::snapshot_startup_extras());\n        self.dispose_tls()");
   });
+});
+
+
+function terminalFixture() {
+  const order: string[] = [];
+  const errors: unknown[] = [];
+  const process = { _exiting: false, exitCode: 0, emit(_event: string, _code: number) { order.push("exit-listener"); } };
+  const internal = {
+    cancelIoWaiters() { order.push("cancel"); },
+    finalizeWorkerChildren() { order.push("children"); },
+    workerExit(code: number) { order.push(`worker:${code}`); },
+  };
+  const native = { tlsDispose() { order.push("tls"); }, closeAllDirs() { order.push("directories"); } };
+  const start = fieldIndex(bootstrap, "function emitExit");
+  const end = fieldIndex(bootstrap, "internal.emitExit = emitExit");
+  const run: unknown = runInNewContext(bootstrap.slice(start, end).concat("\nemitExit;"), {
+    process, internal, native, printError(error: unknown) { errors.push(error); },
+  });
+  if (typeof run !== "function") throw new Error("Expected the actual bootstrap terminal function");
+  return { order, errors, process, internal, native, exit(code: number) { Reflect.apply(run, undefined, [code]); } };
+}
+
+test("bootstrap attempts TLS disposal when I/O cancellation fails", () => {
+  const f = terminalFixture();
+  const failure = new Error("I/O cancellation marker");
+  f.internal.cancelIoWaiters = () => { throw failure; };
+  try { f.exit(0); } catch { /* Keep inspecting the real terminal edge after its failure. */ }
+  expect(f.order).toContain("tls");
+  expect(f.order.filter(event => event === "tls")).toHaveLength(1);
+  expect(f.process.exitCode).toBe(1);
+  expect(f.order.indexOf("tls")).toBeLessThan(f.order.indexOf("worker:1"));
+});
+
+test("bootstrap reports a failed disposal instead of a successful exit", () => {
+  const f = terminalFixture();
+  const failure = new Error("TLS disposal marker");
+  f.native.tlsDispose = () => { throw failure; };
+  f.exit(0);
+  expect(f.errors).toContain(failure);
+  expect(f.process.exitCode).toBe(1);
+  expect(f.order).toContain("worker:1");
 });

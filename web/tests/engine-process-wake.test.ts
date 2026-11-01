@@ -14,7 +14,7 @@ function engineMethods(atomics: object) {
     exit: EngineHost.prototype.exit,
   });`), {
     TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask,
-    SLOT_NAMES: [], Atomics: atomics,
+    SLOT_NAMES: [], Atomics: atomics, AggregateError,
   });
   if (typeof methods !== "object" || methods === null
     || !("pump" in methods) || typeof methods.pump !== "function"
@@ -47,8 +47,9 @@ function fixture(waitAsync = true, withWord = true) {
     exited: false, testComplete: false, pendingAsync: 0, wakeArmed: false,
     timer: null, timerAt: Infinity,
     o: { processWake: withWord ? word : undefined, onExit(_code: number) { publish(); } },
-    native: { hostCaps: { signal: true }, closeAllDirs() {} },
+    native: { hostCaps: { signal: true }, closeAllDirs() {}, tlsDispose() {} },
     internal: {
+      workerStartup: { cancel() {} },
       pumpSignals() { return false; }, runTimers() { return -1; },
       ioPending() { return 1; }, pumpIo() { return false; },
     },
@@ -168,4 +169,44 @@ test("process wake unreferenced I/O does not subscribe or keep the guest alive",
   expect(f.waits).toHaveLength(0);
   expect(f.delays).toHaveLength(0);
   expect(f.finished()).toBe(1);
+});
+
+
+test("terminal TLS disposal precedes onExit and is not repeated", async () => {
+  await using f = fixture();
+  const order: string[] = [];
+  f.host.native.tlsDispose = () => { order.push("tls"); };
+  f.host.o.onExit = () => { order.push("exit"); };
+  f.host.resolveDone = () => { order.push("done"); };
+  f.host.exit(0);
+  f.host.exit(0);
+  expect(order).toEqual(["tls", "exit", "done"]);
+});
+
+test("terminal TLS disposal still runs if startup cancellation throws", async () => {
+  await using f = fixture();
+  const failure = new Error("startup cancellation marker");
+  const order: string[] = [];
+  let caught: unknown;
+  f.host.internal.workerStartup.cancel = () => { throw failure; };
+  f.host.native.tlsDispose = () => { order.push("tls"); };
+  f.host.o.onExit = () => { order.push("exit"); };
+  try { f.host.exit(1); } catch (error) { caught = error; }
+  expect(caught).toBe(failure);
+  expect(order).toEqual(["tls", "exit"]);
+  f.host.exit(1);
+  expect(order).toEqual(["tls", "exit"]);
+});
+
+test("terminal cleanup preserves cancellation and disposal failures", async () => {
+  await using f = fixture();
+  const cancellation = new Error("startup cancellation marker");
+  const disposal = new Error("TLS disposal marker");
+  let caught: unknown;
+  f.host.internal.workerStartup.cancel = () => { throw cancellation; };
+  f.host.native.tlsDispose = () => { throw disposal; };
+  try { f.host.exit(1); } catch (error) { caught = error; }
+  expect(caught).toBeInstanceOf(AggregateError);
+  if (!(caught instanceof AggregateError)) throw new Error("Expected both cleanup errors");
+  expect(caught.errors).toEqual([cancellation, disposal]);
 });
