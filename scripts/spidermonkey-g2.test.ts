@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { compileArguments, parseCommands } from "../spidermonkey/rebuild-g2.ts";
 
 test("G2 compiler replay changes only source, output and the embed macro", () => {
@@ -21,7 +22,7 @@ test("G2 rejects incomplete or non-string compiler inputs before executing", () 
 type PatchState = "pristine" | "pre-applied";
 
 function patchFixture(state: PatchState) {
-  const root = mkdtempSync("/work/tmp/bun-wasm-smoke-patch-");
+  const root = mkdtempSync(join(tmpdir(), "bun-wasm-smoke-patch-"));
   try {
     const repo = join(root, "repo");
     const build = join(root, "g1");
