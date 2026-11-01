@@ -23,6 +23,7 @@
         "tests/package/fixtures/paired-asset-brand.ts",
         "scripts/**/*.test.ts",
         "scripts/fixtures/crypto-host-native-control.ts",
+        "scripts/fixtures/tls-identity/verify-upstream.ts",
         "scripts/fixtures/ci-jsc-worker-scenario.ts",
         "scripts/fixtures/event-rejections-control.ts",
         "scripts/fixtures/quickjs-async-context.ts",
