@@ -51,6 +51,11 @@ function validateEntry(entry: RegistryEntry, label: string): void {
   if (!/^[^\s/;]+\/[^\s;]+(?:;[^\r\n]*)?$/.test(entry.type)) throw new Error(`Invalid replay content type ${label}`);
 }
 
+function missingRegistryResponse(key: string, misses: string[], headers: Readonly<Record<string, string>>): Response {
+  misses.push(key);
+  return new Response(`Unrecorded ${key}`, { status: 503, headers: { ...headers, [recorderErrorHeader]: "1" } });
+}
+
 export function nextRegistry(directory: string, port: number, overlay?: string, originalIndexes?: readonly string[]) {
   if (originalIndexes && originalIndexes.length !== (overlay ? 3 : 2)) throw new Error("Original replay index selection mismatch");
   const borrowed = readRegistryIndex(shared, originalIndexes?.[0]);
@@ -71,7 +76,7 @@ export function nextRegistry(directory: string, port: number, overlay?: string, 
         const { key, method } = identity;
         requests.push(key);
         const entry = method === "POST" ? advisories[key] : supplemental[key] ?? borrowed[key];
-        if (!entry) { misses.push(key); return new Response(`Unrecorded ${key}`, { status: 503, headers: { ...headers, [recorderErrorHeader]: "1" } }); }
+        if (!entry) return missingRegistryResponse(key, misses, headers);
         const root = method === "POST" && overlay ? overlay : supplemental[key] ? directory : shared;
         const filename = join(root, "objects", entry.sha256);
         if (method === "POST" && statSync(filename).size > advisoryResponseLimit) throw new Error("Advisory response exceeds limit");
