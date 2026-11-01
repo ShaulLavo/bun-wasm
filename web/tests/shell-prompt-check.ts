@@ -199,7 +199,7 @@ export async function checkPrompt(page: Page, browser: string, engine: string) {
   return { mode: "on", browser, engine, initial, late, paste, interrupted, narrow, git, config, versions };
 }
 
-export async function prepareRepository(page: Pick<Page, "evaluate">, name: string, fixture: PromptRepositoryFixture): Promise<string> {
+async function prepareRepository(page: Pick<Page, "evaluate">, name: string, fixture: PromptRepositoryFixture): Promise<string> {
   const root = `/home/user/prompt-${name}`;
   // Each import has a fresh root, so the provider must read the actual tracked bytes.
   await page.evaluate(`(${importPromptRepository.toString()})(globalThis.playground.fs, ${JSON.stringify(root)}, ${JSON.stringify(fixture.files)})`);
@@ -321,7 +321,7 @@ export async function restorePromptFixture(): Promise<void> {
   if (errors.length > 1) throw new AggregateError(errors, "Prompt fixture cleanup failed", { cause: errors[0] });
 }
 
-export async function restorePendingFixture(page: Pick<Page, "evaluate">): Promise<void> {
+async function restorePendingFixture(page: Pick<Page, "evaluate">): Promise<void> {
   await page.evaluate(restorePromptFixture);
 }
 
