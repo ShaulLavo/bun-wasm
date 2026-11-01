@@ -42,6 +42,13 @@ function patchFixture(state: PatchState) {
     writeFileSync(join(build, "libspidermonkey_bunwasm.a"), "baseline archive");
     writeFileSync(join(build, "receipt/vm-library.json"), "baseline receipt");
     writeFileSync(join(bin, "node"), "#!/bin/sh\nprintf reached > \"$SPIDERMONKEY_G2_REPORT_DIR/node-called\"\nexit 7\n", { mode: 0o755 });
+    writeFileSync(join(bin, "df"), `#!/bin/sh
+if [ "$#" != 2 ] || [ "$1" != "-B1" ] || [ "$2" != "$SPIDERMONKEY_G2_DIR" ]; then
+  printf 'storage probe must target the G2 output directory\\n' >&2
+  exit 1
+fi
+printf 'fixture filesystem\\n'
+`, { mode: 0o755 });
     return { root, repo, build, source, report, bin, patch };
   } catch (error) {
     rmSync(root, { recursive: true, force: true });

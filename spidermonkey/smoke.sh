@@ -26,7 +26,7 @@ mkdir -p "$SPIDERMONKEY_G2_DIR" "$report"
 exec 9>"$SPIDERMONKEY_BUILD_DIR.g2-lock"
 flock -n 9
 ps -eo pid,ppid,args > "$report/processes-before.txt"
-df -B1 /work > "$report/storage-before.txt"
+df -B1 "$SPIDERMONKEY_G2_DIR" > "$report/storage-before.txt"
 patch_state=$(spidermonkey_patch_prepare "$SPIDERMONKEY_BUILD_DIR/firefox" "$repo/spidermonkey/spidermonkey-wasi.patch")
 cd "$repo"
 node spidermonkey/rebuild-g2.ts "$SPIDERMONKEY_BUILD_DIR" "$SPIDERMONKEY_G2_DIR"
