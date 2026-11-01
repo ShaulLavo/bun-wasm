@@ -49,12 +49,12 @@ impl Drop for Scratch {
     }
 }
 
-struct Fixture {
-    certificate: Vec<u8>,
+pub(super) struct Fixture {
+    pub(super) certificate: Vec<u8>,
     key: Vec<u8>,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let scratch = Scratch::new();
         scratch.openssl(&[
             "req",
@@ -95,15 +95,15 @@ impl Drop for Fixture {
     }
 }
 
-struct Server {
+pub(super) struct Server {
     session: Session,
     _context: Rc<context::Context>,
-    handshaken: bool,
+    pub(super) handshaken: bool,
     failed: bool,
     read_closed: bool,
 }
 impl Server {
-    fn new(fixture: &Fixture, version: u16, client_auth: bool) -> Self {
+    pub(super) fn new(fixture: &Fixture, version: u16, client_auth: bool) -> Self {
         let meter = Rc::new(Meter::default());
         let mut trust = trust::Trust::new(StartupExtras::Absent, &meter);
         let options = ContextOptions {
@@ -163,14 +163,14 @@ impl Server {
         result
     }
 
-    fn handshake(&mut self) {
+    pub(super) fn handshake(&mut self) {
         if self.handshaken || self.failed {
             return;
         }
         self.handshaken = self.call(|ssl| unsafe { ffi::SSL_do_handshake(ssl) }) == 1;
     }
 
-    fn feed(&mut self, queue: &mut VecDeque<u8>) {
+    pub(super) fn feed(&mut self, queue: &mut VecDeque<u8>) {
         let capacity = unsafe { ffi::BIO_ctrl_get_write_guarantee(self.session.network.pointer()) };
         let input: Vec<u8> = queue.iter().take(capacity.min(31)).copied().collect();
         if input.is_empty() {
@@ -187,7 +187,7 @@ impl Server {
         queue.drain(..written as usize);
     }
 
-    fn output(&mut self, queue: &mut VecDeque<u8>) {
+    pub(super) fn output(&mut self, queue: &mut VecDeque<u8>) {
         let pending = unsafe { ffi::BIO_ctrl_pending(self.session.network.pointer()) };
         let mut bytes = vec![0; pending.min(MAX_BATCH)];
         if bytes.is_empty() {
@@ -204,7 +204,7 @@ impl Server {
         queue.extend(bytes[..read as usize].iter().copied());
     }
 
-    fn read(&mut self) -> Vec<u8> {
+    pub(super) fn read(&mut self) -> Vec<u8> {
         let mut bytes = vec![0; MAX_PLAINTEXT];
         let result = self.call(|ssl| unsafe {
             ffi::SSL_read(ssl, bytes.as_mut_ptr().cast(), bytes.len() as i32)

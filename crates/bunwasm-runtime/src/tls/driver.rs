@@ -995,13 +995,15 @@ pub fn verification_code(result: i64) -> &'static str {
 #[cfg(all(test, not(target_os = "wasi")))]
 mod retry_tests {
     use super::*;
+    use crate::tls::tests::{Fixture, Server};
     use crate::tls::{BIO_CAPACITY, CaMode, ContextOptions, StartupExtras, TlsRegistry};
+    use std::collections::VecDeque;
 
-    fn connection(capacity: usize) -> Connection {
+    fn connection(capacity: usize, certificate: &[u8]) -> Connection {
         let mut registry = TlsRegistry::new(StartupExtras::Absent);
         let id = registry
             .create_context(ContextOptions {
-                ca: CaMode::Explicit(Vec::new()),
+                ca: CaMode::Explicit(vec![certificate]),
                 ..Default::default()
             })
             .unwrap();
@@ -1014,41 +1016,71 @@ mod retry_tests {
         .unwrap()
     }
 
-    #[test]
-    fn ssl_write_want_read_retries_original_pointer_and_length() {
-        let mut connection = connection(BIO_CAPACITY);
+    fn retry_to_success(capacity: usize, first_wait: Wait) {
+        let fixture = Fixture::new();
+        let mut server = Server::new(&fixture, ffi::TLS1_3_VERSION, false);
+        let mut connection = connection(capacity, &fixture.certificate);
+        let payload = b"retry payload";
         connection.pending = Pending::Write(WriteRetry {
-            bytes: b"retry payload".to_vec().into_boxed_slice(),
+            bytes: payload.to_vec().into_boxed_slice(),
             offset: 0,
         });
         let pointer = connection.pending_write_pointer().unwrap();
         let mut step = Step::new(0);
-        assert_eq!(
-            connection.write_pending(&mut step).unwrap(),
-            Wait::Ciphertext
-        );
+        assert_eq!(connection.write_pending(&mut step).unwrap(), first_wait);
         assert_eq!(connection.pending_write_pointer().unwrap(), pointer);
-        assert_eq!(
-            connection.write_pending(&mut step).unwrap(),
-            Wait::Ciphertext
-        );
+        assert_eq!(connection.write_pending(&mut step).unwrap(), first_wait);
         assert_eq!(connection.pending_write_pointer().unwrap(), pointer);
-        assert_eq!(step.committed_plaintext, 0);
+        let mut outbound = VecDeque::new();
+        let mut inbound = VecDeque::new();
+        let mut received = Vec::new();
+        let mut committed = 0;
+        for _ in 0..10_000 {
+            let mut step = Step::new(connection.emitted);
+            connection.drain(MAX_BATCH, &mut step).unwrap();
+            outbound.extend(step.ciphertext);
+            server.feed(&mut outbound);
+            server.handshake();
+            server.output(&mut inbound);
+            feed_retry(&mut connection, &mut inbound);
+            committed += retry_write(&mut connection, pointer);
+            if server.handshaken {
+                received.extend(server.read());
+            }
+            if committed == payload.len() && received == payload {
+                return;
+            }
+        }
+        panic!("native SSL_write did not complete after its forced WANT result");
+    }
+
+    fn feed_retry(connection: &mut Connection, inbound: &mut VecDeque<u8>) {
+        let bytes: Vec<_> = inbound.iter().take(31).copied().collect();
+        let mut step = Step::new(connection.emitted);
+        connection.feed(&bytes, &mut step).unwrap();
+        inbound.drain(..step.accepted_ciphertext);
+    }
+
+    fn retry_write(connection: &mut Connection, pointer: (*const u8, usize)) -> usize {
+        if !matches!(connection.pending, Pending::Write(_)) {
+            return 0;
+        }
+        assert_eq!(connection.pending_write_pointer().unwrap(), pointer);
+        let mut step = Step::new(connection.emitted);
+        connection.write_pending(&mut step).unwrap();
+        if step.committed_plaintext == 0 {
+            assert_eq!(connection.pending_write_pointer().unwrap(), pointer);
+        }
+        step.committed_plaintext
+    }
+
+    #[test]
+    fn ssl_write_want_read_retries_original_pointer_and_length() {
+        retry_to_success(BIO_CAPACITY, Wait::Ciphertext);
     }
 
     #[test]
     fn ssl_write_want_write_retries_original_pointer_and_length() {
-        let mut connection = connection(64);
-        connection.pending = Pending::Write(WriteRetry {
-            bytes: b"retry payload".to_vec().into_boxed_slice(),
-            offset: 0,
-        });
-        let pointer = connection.pending_write_pointer().unwrap();
-        let mut step = Step::new(0);
-        assert_eq!(connection.write_pending(&mut step).unwrap(), Wait::Output);
-        assert_eq!(connection.pending_write_pointer().unwrap(), pointer);
-        assert_eq!(connection.write_pending(&mut step).unwrap(), Wait::Output);
-        assert_eq!(connection.pending_write_pointer().unwrap(), pointer);
-        assert_eq!(step.committed_plaintext, 0);
+        retry_to_success(64, Wait::Output);
     }
 }
