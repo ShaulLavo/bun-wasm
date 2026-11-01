@@ -64,10 +64,9 @@ function createForwardingBody(response: Response, cache: Cache, url: string, sig
     signal?.removeEventListener("abort", abort);
   };
   const cancelReader = async (reason: unknown): Promise<void> => {
-    if (!cancelled) {
-      cancelled = true;
-      await reader.cancel(reason).catch(() => {});
-    }
+    if (cancelled) return release();
+    cancelled = true;
+    await reader.cancel(reason).catch(() => {});
     release();
   };
   const cancelUpstream = (reason: unknown): Promise<void> => {
