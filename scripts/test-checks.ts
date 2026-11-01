@@ -3,9 +3,12 @@ import { availableParallelism } from "node:os";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const owners = ["runtime", "web", "quality", "package-extra", "cmake", "web-browser", "native"] as const;
+const owners = ["runtime", "web", "quality", "package-extra", "cmake", "web-browser", "native", "native-probe"] as const;
 type Owner = typeof owners[number];
-type Check = { owner: Owner; path: string; localRuntime: boolean; batch: string };
+type Check = { path: string; localRuntime: boolean; batch: string } & (
+  | { owner: "native-probe"; inputs: string[] }
+  | { owner: Exclude<Owner, "native-probe">; inputs?: never }
+);
 const root = resolve(import.meta.dir, "..");
 
 function parseOwner(value: unknown): Owner {
@@ -16,7 +19,7 @@ function parseOwner(value: unknown): Owner {
 export function parseCheck(value: unknown, file: string): Check {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid check: ${file}`);
   if (!("owner" in value) || !("path" in value)) throw new Error(`Missing check fields: ${file}`);
-  if (Object.keys(value).some(key => !["owner", "path", "localRuntime", "batch"].includes(key))) throw new Error(`Unknown check fields: ${file}`);
+  if (Object.keys(value).some(key => !["owner", "path", "localRuntime", "batch", "inputs"].includes(key))) throw new Error(`Unknown check fields: ${file}`);
   const owner = parseOwner(value.owner);
   if (!file.startsWith(`${owner}-`)) throw new Error(`Owner must match manifest prefix: ${file}`);
   const path = value.path;
@@ -26,7 +29,14 @@ export function parseCheck(value: unknown, file: string): Check {
   if (typeof localRuntime !== "boolean" || (localRuntime && owner !== "runtime" && owner !== "web")) throw new Error(`Invalid local runtime selection: ${file}`);
   const batch = "batch" in value ? value.batch : "default";
   if (typeof batch !== "string" || (batch !== "default" && (owner !== "web" || !/^[0-9]{2}-[a-z0-9-]+$/.test(batch)))) throw new Error(`Invalid check batch: ${file}`);
-  return { owner, path, localRuntime, batch };
+  if (owner !== "native-probe") {
+    if ("inputs" in value) throw new Error(`Only native-probe checks declare input files: ${file}`);
+    return { owner, path, localRuntime, batch };
+  }
+  const inputs = "inputs" in value ? value.inputs : undefined;
+  if (!Array.isArray(inputs) || inputs.length === 0 || !inputs.every(input => typeof input === "string" && /^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*$/.test(input) && !input.split("/").includes(".."))) throw new Error(`Invalid native-probe input files: ${file}`);
+  if (new Set(inputs).size !== inputs.length) throw new Error(`Duplicate native-probe inputs: ${file}`);
+  return { owner, path, localRuntime, batch, inputs };
 }
 
 export function discoverChecks(directory = root): Check[] {

@@ -36,6 +36,7 @@ const healthy: Record<string, string> = {
   "steps.native-cargo-cache.outputs.cache-hit": "false", "steps.native-cargo-cache.outputs.cache-matched-key": "",
   "steps.native-cache.outputs.cache-hit": "false",
   "steps.native-producers.outputs.native-ready": "true", "steps.jsc-producer.outputs.jsc-ready": "true",
+  "steps.tls-artifact.outputs.tls-sha256": "a".repeat(64),
 };
 
 function allows(step: Record<string, unknown>, values: Record<string, string>, cancelled = false): boolean {
@@ -80,4 +81,11 @@ test("PRs retain all heavy restore paths and native/JSC checks remain blocking",
   expect(source).toContain("name: Blocking native fixture checks");
   expect(source).toContain("name: Blocking JSC embedding and allocation checks\n        if: needs.quality.outputs.jsc == 'true'");
   expect(source).not.toContain("continue-on-error:");
+});
+
+test("native checkpoint cache cannot publish without the TLS producer output", () => {
+  const checkpoint = saves.find(step => step.name === "Save the native quality checkpoint");
+  if (!checkpoint) throw new Error("Missing native checkpoint save");
+  expect(allows(checkpoint, healthy)).toBe(true);
+  expect(allows(checkpoint, { ...healthy, "steps.tls-artifact.outputs.tls-sha256": "" })).toBe(false);
 });

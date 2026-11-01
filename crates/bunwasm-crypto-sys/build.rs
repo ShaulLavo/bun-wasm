@@ -50,6 +50,7 @@ fn crypto(manifest: &Path, out: &Path) {
         println!("cargo:rerun-if-env-changed={name}");
     }
     println!("cargo:rerun-if-changed=c/rsa.c");
+    println!("cargo:rerun-if-changed=src/tls.rs");
     println!("cargo:rerun-if-changed=../../jsc/wasi-jsc.cmake");
     let source = std::env::var_os("BUNWASM_BORINGSSL_SOURCE")
         .map(std::path::PathBuf::from)
@@ -94,7 +95,7 @@ fn crypto(manifest: &Path, out: &Path) {
                 ))
                 .args([
                     format!("-DCMAKE_C_FLAGS={flags}"),
-                    format!("-DCMAKE_CXX_FLAGS={flags}"),
+                    format!("-DCMAKE_CXX_FLAGS={flags} -fno-exceptions -fno-rtti"),
                 ]);
         } else {
             configure.args([
@@ -112,7 +113,7 @@ fn crypto(manifest: &Path, out: &Path) {
             Command::new("cmake")
                 .arg("--build")
                 .arg(&build)
-                .args(["--target", "crypto", "--parallel", "2"])
+                .args(["--target", "crypto", "ssl", "--parallel", "2"])
                 .status()
                 .unwrap()
                 .success(),
@@ -147,6 +148,7 @@ fn crypto(manifest: &Path, out: &Path) {
         .include(source.join("include"))
         .compile("bunwasm_crypto");
     println!("cargo:rustc-link-search=native={}", build.display());
+    println!("cargo:rustc-link-lib=static=ssl");
     println!("cargo:rustc-link-lib=static=crypto");
     if wasm {
         let sysroot = std::env::var("BUN_WASM_SYSROOT").expect("source env.sh");

@@ -56,3 +56,19 @@ Feature PRs also run `scripts/feature-versions.ts <base-sha> <head-sha>` in qual
 CI. It rejects package, Cargo and local lockfile version churn. Release and
 required consumer-pin PRs use their corresponding `release` or `consumer-pin`
 label to identify the deliberate exception. No label is needed for feature work.
+
+## Native probes consume a producer checkpoint
+
+`native-probe` names a script test and a nonempty `inputs` list of exact
+repository paths. The native selector reads those paths and their manifest at
+the base, head, and merge ancestor, so deleted probes still select prerequisites.
+Lightweight `cmake` utilities must not execute a live probe.
+
+The native-quality job records exact host and WASI archive outputs from its
+existing Cargo commands. After both original quality gates finish, it links and
+inspects the TLS probe once, then packs it in the existing native checkpoint.
+The Rust job verifies that checkpoint and the separate producer-output TLS
+digest before running `native-probe` once. Missing inputs fail the blocking gate.
+The TLS context binds the run, producer attempt, source, compilers, split profile,
+SDK, sysroot, actual archive bytes, full link map, symbols, and link commands.
+Source fixture tests do not qualify those live controls.

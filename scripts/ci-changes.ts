@@ -32,7 +32,7 @@ export function needsSharedSysroot(paths: readonly string[]): boolean {
 }
 
 const nativeCheckInputs = discoverChecks().flatMap(checkInputPaths);
-const nativeCheckManifests = /^checks\/(?:native|runtime)-[a-z0-9-]+\.json$/;
+const nativeCheckManifests = /^checks\/(?:native|native-probe|runtime)-[a-z0-9-]+\.json$/;
 const nativeScripts = /^scripts\/(?:build[.-]|sync-|export-patches|generate-)/;
 const runtimeDeclaration = /^crates\/bunwasm-runtime\/src\/js\/.+\.d\.ts$/;
 

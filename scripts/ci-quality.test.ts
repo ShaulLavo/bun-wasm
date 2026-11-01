@@ -83,7 +83,7 @@ test("native fixture groups cover every fixture once across parallel runs", () =
 });
 
 test("native fixture smoke selects the typed runtime behavior without another build", () => {
-  expect(rust.match(/bun scripts\/test-checks\.ts native/g)).toHaveLength(1);
+  expect(rust.match(/bun scripts\/test-checks\.ts native\n/g)).toHaveLength(1);
   const command = checkCommand("native");
   expect(command).toEqual(["bash", join(import.meta.dir, "test.sh"), "--no-build"].concat(selectChecks("native").map(path => path.slice("tests/fixtures/".length))));
   const baseline = oldSelections().native.toSorted().map(path => path.slice("tests/fixtures/".length));
@@ -94,9 +94,20 @@ test("native fixture smoke selects the typed runtime behavior without another bu
   expect(rust.match(/"\$GUEST_CARGO" build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
 });
 
+const originalCmakeOwners = ["scripts/cmake-cache.test.ts", "scripts/jsc-memory-telemetry.test.ts"];
+
+function expectOriginalCmakeOwners(paths: readonly string[]): void {
+  expect(paths.filter(path => originalCmakeOwners.includes(path))).toEqual(originalCmakeOwners);
+}
+
+test("CMake owner migration accepts new features and rejects missing original owners", () => {
+  expectOriginalCmakeOwners(originalCmakeOwners.concat(["scripts/future-feature.test.ts"]));
+  expect(() => expectOriginalCmakeOwners(originalCmakeOwners.slice(1))).toThrow();
+});
+
 test("every migrated selection retains one blocking owner and the original local runtime set", () => {
   expect(proveCheckMigration().deduplicated).toHaveLength(7);
-  expect(selectChecks("cmake")).toEqual(["scripts/cmake-cache.test.ts", "scripts/jsc-memory-telemetry.test.ts"]);
+  expectOriginalCmakeOwners(selectChecks("cmake"));
   const checks = discoverChecks().map(check => check.path).concat(automaticChecks().map(check => check.path));
   expect(new Set(checks).size).toBe(checks.length);
   expect(selectChecks("quality")).toContain("scripts/runtime-ts-small.test.ts");
@@ -146,7 +157,9 @@ test("type projects have one successful CI owner", () => {
 
 test("both WASI feature graphs and the failing lint control stay blocking", () => {
   const wasi = readFileSync(new URL("./quality-wasi.ts", import.meta.url), "utf8");
-  expect(wasi.match(/run\(command\.concat/g)).toHaveLength(2);
+  expect(wasi.match(/\b(?:run|runCargo)\(command\.concat/g)).toHaveLength(2);
+  expect(wasi.match(/await runCargo\(command\.concat/g)).toHaveLength(1);
+  expect(wasi).toContain('"wasm32-wasip1", env');
   expect(wasi).toContain('"--no-default-features", "--features", "bunwasm-cli/engine-host,bunwasm-cli/bun-transpiler,bunwasm-cli/bun-build"');
   expect(wasi).toContain('await verifyWasiLint(["cargo", "clippy"');
 });
@@ -167,7 +180,8 @@ test("the full-key native fallback rejects incompatible toolchain and preflight 
       expect(key.slice(0, key.indexOf(" }}-", key.indexOf("hashFiles")))).toContain(`'${input}'`);
     }
   }
-  expect(keys[0]).toContain("hashFiles('crates/**', 'tests/fixtures/runtime-proc-spawn-requests.json', 'scripts/quality*.ts')");
+  const inputs = cachePatterns(keys[0] ?? "");
+  for (const input of ["crates/**", "tests/fixtures/runtime-proc-spawn-requests.json", "scripts/quality*.ts", "scripts/tls-probe*.ts", "checks/native-probe-*.json", "tests/native/tls-probe.cpp"]) expect(inputs).toContain(input);
 });
 
 test("the refined Cargo cache keeps Cargo inputs and leaves JSC-only inputs to the JSC layer", () => {
@@ -652,7 +666,10 @@ test("Rust build caches follow host tool versions, not the runner image", () => 
   const step = rust.indexOf("name: Identify host build tools");
   expect(step).toBeGreaterThan(rust.indexOf("name: Install native build tools"));
   expect(step).toBeLessThan(rust.indexOf("id: native-cargo-cache"));
-  expect(rust.match(/steps\.host-tools\.outputs\.hash/g)).toHaveLength(10);
+  const shell = rust.split("\n").find(line => line.includes("key: bash-web-shell-"))!;
+  const cacheKeys = ["native-v4", "native-cargo-v2", "jsc-cargo-v2"].flatMap(namespace => Object.values(nativeKeyTemplates(namespace))).concat([shell]);
+  expect(cacheKeys).toHaveLength(10);
+  for (const key of cacheKeys) expect(key).toContain("steps.host-tools.outputs.hash");
   const producerStep = prebuild.indexOf("name: Identify host build tools");
   expect(producerStep).toBeGreaterThan(prebuild.indexOf("name: Install native build tools"));
   expect(producerStep).toBeLessThan(prebuild.indexOf("id: sysroot-cache"));
@@ -669,8 +686,10 @@ test("native cache stays bounded per input revision, and the SDK is not copied p
   expect(prebuild.match(/uses: actions\/cache\/save@v4/g)).toHaveLength(4);
   expect(prebuild).not.toContain("github.run_id");
   expect(rust).toContain("steps.native-cargo-cache.outputs.cache-hit != 'true'");
-  expect(rust).not.toContain("github.run_id");
-  expect(rust).not.toContain("github.run_attempt");
+  for (const key of nativeCacheExpressions()) {
+    expect(key).not.toContain("github.run_id");
+    expect(key).not.toContain("github.run_attempt");
+  }
   const sdkKey = rust.split("\n").find(line => line.includes("key: wasi-sdk-"))!;
   expect(sdkKey).not.toContain("hashFiles");
   expect(sdkKey).not.toContain("steps.host-tools.outputs.hash");
@@ -782,6 +801,21 @@ function workflowField(value: unknown, key: string): unknown {
 function workflowString(value: unknown): string {
   if (typeof value !== "string") throw new Error("Expected workflow string");
   return value;
+}
+
+function cacheStepExpressions(step: unknown): string[] {
+  if (!step || typeof step !== "object" || !("uses" in step)) return [];
+  if (typeof step.uses !== "string" || !step.uses.startsWith("actions/cache/")) return [];
+  const settings = workflowField(step, "with");
+  if (!settings || typeof settings !== "object") throw new Error("Missing cache settings");
+  return ["key", "restore-keys"].flatMap(key => key in settings ? [workflowString(Reflect.get(settings, key))] : []);
+}
+
+function nativeCacheExpressions(): string[] {
+  const parsed: unknown = Bun.YAML.parse(`jobs:\n  rust:\n${rust}`);
+  const steps: unknown = workflowField(workflowField(workflowField(parsed, "jobs"), "rust"), "steps");
+  if (!Array.isArray(steps)) throw new Error("Missing native steps");
+  return steps.flatMap(cacheStepExpressions);
 }
 
 function nativeWorkflowStep(key: string, value: string, job = "rust"): unknown {
@@ -956,12 +990,14 @@ test("parsed native cache guards distinguish exact, prefix and missing restores 
       "needs.quality.outputs.jsc": "true",
       "steps.native-producers.outputs.native-ready": "true",
       "steps.jsc-producer.outputs.jsc-ready": "true",
+      "steps.tls-artifact.outputs.tls-sha256": "a".repeat(64),
     };
     expect([fallback, saves[2]!, saves[3]!].map(condition => cacheCondition(condition, outputs, true))).toEqual(expected);
     expect(saves.map(condition => cacheCondition(condition, outputs, false))).toEqual([true, false, false, expected[2]!]);
     expect(saves.map(condition => cacheCondition(condition, outputs, true, true))).toEqual([false, false, false, false]);
     const incomplete = { ...outputs, "steps.native-producers.outputs.native-ready": "", "steps.jsc-producer.outputs.jsc-ready": "" };
     expect(saves.map(condition => cacheCondition(condition, incomplete, false))).toEqual([false, false, false, false]);
+    expect(cacheCondition(saves[3]!, { ...outputs, "steps.tls-artifact.outputs.tls-sha256": "" }, true)).toBe(false);
     assertJscSaveSelection(saves.slice(0, 2), outputs);
     const pullRequest = { ...outputs, "github.event_name": "pull_request" };
     expect(cacheCondition(saves[2]!, pullRequest, true)).toBe(false);
@@ -1015,7 +1051,7 @@ function expandNativeKey(template: string, inputs: ReadonlyMap<string, Buffer>):
 
 for (const { id, saveName, condition, workflowCompatible } of [
   { id: "native-cargo-cache", saveName: "Save the refined native Cargo cache once per input revision", condition: "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-cargo-cache.outputs.cache-hit != 'true'", workflowCompatible: true },
-  { id: "native-cache", saveName: "Save the native quality checkpoint", condition: "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-producers.outputs.native-ready == 'true' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}", workflowCompatible: true },
+  { id: "native-cache", saveName: "Save the native quality checkpoint", condition: "${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-producers.outputs.native-ready == 'true' && steps.tls-artifact.outputs.tls-sha256 != '' && steps.native-cargo-cache.outputs.cache-matched-key == '' && steps.native-cache.outputs.cache-hit != 'true' }}", workflowCompatible: true },
 ]) {
   test(`${id} distinguishes tools builders and producers with its own guarded save`, () => {
     const contract = nativeCacheContract(id, saveName);
