@@ -58,7 +58,7 @@ function fixture(waitAsync = true, withWord = true) {
     exit(code: number) { Reflect.apply(methods.exit, this, [code]); },
     guard<T>(callback: () => T) { return callback(); },
     schedule(delay: number) { if (!this.exited) delays.push(delay); },
-    flush() {}, finish() { finished++; }, resolveDone() {},
+    flush() {}, finish() { finished++; }, resolveDone(_code?: number) {},
   };
   async function settle() { await Promise.all(waits.map(wait => wait.value)); }
   return {
