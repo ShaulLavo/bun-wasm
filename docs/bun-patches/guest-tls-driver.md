@@ -103,17 +103,20 @@ callback fences remain JavaScript integration responsibilities.
 
 ## Source checks and native tests
 
-`bun scripts/tls-roots-native-source.ts` checks host and WASI Rust metadata,
-including the native test source, with warnings denied. It uses the actual
-plain-data definitions and extracts the canonical native-table declaration.
-It does not link BoringSSL, execute a test binary, or qualify a guest.
+The test-only module declaration makes the existing workspace Cargo owner
+compile and execute the native driver tests without exposing TLS to programs.
+The normal host Clippy and WASI checks retain their existing owners and flags.
+The earlier standalone metadata helper is removed now that Cargo discovers the
+real module. Metadata alone was not native execution.
 
-After registration, the following command exercises the real native driver.
+To run the focused native tests:
 
 ```sh
+source env.sh
 cargo test -p bunwasm-runtime --no-default-features --features engine-host --lib tls::
-``` Tests own
-short-lived generated test keys in private scratch directories. They cover
+```
+
+Tests own short-lived generated test keys in private scratch directories. They cover
 trust replacement, guest extra snapshots, verifier dates, identity barriers,
 client credentials, both WANT retry directions, bounded output, half-close,
 truncation, typed retirement, and destruction counts. Native execution and

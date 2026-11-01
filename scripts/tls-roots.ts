@@ -13,7 +13,7 @@ export const rootPin = {
   bytes: 129635,
 };
 
-export function sha256(bytes: Uint8Array) {
+function sha256(bytes: Uint8Array) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
@@ -111,7 +111,7 @@ function sourceFileRecords(value: unknown) {
   });
 }
 
-export function verifyRootSource(odb: string, input: Uint8Array, source: unknown) {
+function verifyRootSource(odb: string, input: Uint8Array, source: unknown) {
   const result = verifyRootBundle(input, source);
   const upstream = (path: string) => execFileSync("git", ["-C", odb, "show", `${rootPin.commit}:${path}`], { maxBuffer: 4 * 1024 * 1024, timeout: 10_000 });
   if (!upstream(rootPin.path).equals(input)) throw new Error("TLS root bytes differ from the exact upstream Git object");
