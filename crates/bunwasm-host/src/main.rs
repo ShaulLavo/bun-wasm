@@ -918,3 +918,28 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod spidermonkey_g2 {
+    fn probe(core: &std::ffi::OsStr, tier: &str, oom: bool) {
+        let mut args = vec![tier.into()];
+        if oom {
+            args.push("--oom".into());
+        }
+        let options = super::Options {
+            wasm: Some(core.into()),
+            args,
+            ..Default::default()
+        };
+        assert_eq!(super::run(options).unwrap(), if oom { 134 } else { 0 });
+    }
+    #[test]
+    #[ignore = "requires the separately built G2 VM probe, not a production engine"]
+    fn real_side_loading() {
+        let core = std::env::var_os("SPIDERMONKEY_G2_CORE").expect("SPIDERMONKEY_G2_CORE");
+        for tier in ["interp", "pbl"] {
+            probe(&core, tier, false);
+            probe(&core, tier, true);
+        }
+    }
+}

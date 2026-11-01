@@ -19,7 +19,8 @@ It is the only copy. Everything else derives from it:
 - JSC's `forceRAMSize` (`crates/bunwasm-jsc/cpp/helpers.cpp`, which receives
   `BUN_WASM_MAX_MEMORY` from its build script), so JSC sizes its heap for the real
   maximum rather than wasi-libc's wrapped 4 GiB estimate;
-- the jsc shell and the QuickJS linker test.
+- the jsc shell, the QuickJS linker test and the experimental SpiderMonkey G2
+  standalone probe and VM-only bootstrap.
 
 Rust reads the file in `crates/bunwasm-cli/max_memory.rs`, TypeScript in
 `scripts/src/program-profile.ts`, and both accept only a page multiple in

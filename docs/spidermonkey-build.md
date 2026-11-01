@@ -40,3 +40,25 @@ reproduce packing or certify a changed checker. Keep the receipts you need,
 then remove the private build directory after its processes stop. Do not retain
 the checkout or archive as an accepted engine generation. Engine integration still requires both tiers'
 interrupt smoke tests and producer admission.
+
+## Run the G2 VM probe
+
+The probe needs an admitted G1 build directory with its generated inputs intact.
+It preserves that archive and receipts. It temporarily applies the embed patch
+under an exclusive lock, writes separate G2 objects and restores the source on exit.
+Run it through your build scheduler:
+
+```sh
+source env.sh
+export SPIDERMONKEY_BUILD_DIR=/path/to/admitted-g1
+export SPIDERMONKEY_G2_DIR=/path/to/separate-g2
+export SPIDERMONKEY_G2_REPORT_DIR=/path/to/retained-reports
+spidermonkey/smoke.sh
+```
+
+The probe runs both interpreter tiers with a 16 MiB Wasmtime stack. It checks
+initialization, evaluation, GC roots, catchable recursion, fatal OOM and
+uncatchable interrupts that bypass catch and finally. It also loads the real
+side through the native launcher's test-only profile using a small VM bootstrap.
+That bootstrap is not Bun's runtime, and this probe does not implement `Engine`.
+The outputs remain experimental and are not producer-admitted engine artifacts.

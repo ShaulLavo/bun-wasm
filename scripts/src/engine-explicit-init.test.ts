@@ -44,7 +44,7 @@ function fixture(options: { memory?: boolean; limits?: Limits; table?: boolean; 
   return Uint8Array.from(bytes.concat(start, section(10, [3, 2, 0, 0x0b, 2, 0, 0x0b, 2, 0, 0x0b])));
 }
 
-for (const kind of ["quickjs", "jsc"] as const) {
+for (const kind of ["quickjs", "jsc", "hermes", "spidermonkey"] as const) {
   test(`${kind} conversion retains imported identities and exact custom bytes without instantiation`, () => {
     const input = fixture();
     const snapshot = input.slice();
@@ -81,7 +81,7 @@ test("a shared-group side keeps its imported group memory and never exports it",
   expect(WebAssembly.Module.exports(module).map(entry => entry.name)).toContain("quickjs_initialize_memory");
   expect(() => convertEngineInitializers(fixture({ limits: GROUP }), "quickjs")).toThrow(/profile/);
   expect(() => convertEngineInitializers(fixture(), "quickjs", "shared-group")).toThrow(/profile/);
-  for (const engine of ["jsc", "hermes"] as const) {
+  for (const engine of ["jsc", "hermes", "spidermonkey"] as const) {
     expect(() => convertEngineInitializers(fixture({ limits: GROUP }), engine, "shared-group")).toThrow(/not qualified/);
   }
 });
