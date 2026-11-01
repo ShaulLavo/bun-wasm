@@ -73,7 +73,7 @@ function encodeExport(entry: { name: string; kind: number; index: number }): Buf
  * A shared-group side imports the group memory and must never export it (Waffle group admission).
  * Only QuickJS is qualified for the shared-group profile; JSC and Hermes inputs have no atomics.
  */
-export function convertEngineInitializers(bytes: Uint8Array, engine: "quickjs" | "jsc" | "hermes", profile: ProgramProfile = "split"): Uint8Array<ArrayBuffer> {
+export function convertEngineInitializers(bytes: Uint8Array, engine: "quickjs" | "jsc" | "hermes" | "spidermonkey", profile: ProgramProfile = "split"): Uint8Array<ArrayBuffer> {
     assert(profile === "split" || engine === "quickjs", `${engine} is not qualified for the shared-group profile`);
     const input = Buffer.from(bytes);
     const before = sections(input);
@@ -86,7 +86,8 @@ export function convertEngineInitializers(bytes: Uint8Array, engine: "quickjs" |
     assert(original.some((entry) => entry.name === "__wasm_call_ctors" && entry.kind === 0));
     assert(!original.some((entry) => ["quickjs_initialize_memory", "quickjs_apply_data_relocs", "quickjs_call_ctors",
         "jsc_initialize_memory", "jsc_apply_data_relocs", "jsc_call_ctors",
-        "hermes_initialize_memory", "hermes_apply_data_relocs", "hermes_call_ctors"].includes(entry.name)), "side is already converted or has contradictory initializers");
+        "hermes_initialize_memory", "hermes_apply_data_relocs", "hermes_call_ctors",
+        "spidermonkey_initialize_memory", "spidermonkey_apply_data_relocs", "spidermonkey_call_ctors"].includes(entry.name)), "side is already converted or has contradictory initializers");
     const imports = WebAssembly.Module.imports(new WebAssembly.Module(input));
     const memories = imports.filter((entry) => entry.kind === "memory");
     assert.deepEqual(memories, [{ module: "env", name: "memory", kind: "memory" }], "sole core-owned memory import");
@@ -158,8 +159,8 @@ export function convertCoreInitializers(bytes: Uint8Array): Uint8Array<ArrayBuff
 
 if (import.meta.main) {
     const [engine, input, output, flag] = process.argv.slice(2);
-    const usage = "usage: engine-explicit-init.ts quickjs|jsc|hermes|core input.wasm output.wasm [--group]";
-    assert((engine === "quickjs" || engine === "jsc" || engine === "hermes" || engine === "core") && input && output && (flag === undefined || flag === "--group"), usage);
+    const usage = "usage: engine-explicit-init.ts quickjs|jsc|hermes|spidermonkey|core input.wasm output.wasm [--group]";
+    assert((engine === "quickjs" || engine === "jsc" || engine === "hermes" || engine === "spidermonkey" || engine === "core") && input && output && (flag === undefined || flag === "--group"), usage);
     if (engine === "core") assert.equal(flag, "--group", "only a shared-group core has an explicit initializer");
     const bytes = readFileSync(input);
     writeFileSync(output, engine === "core" ? convertCoreInitializers(bytes) : convertEngineInitializers(bytes, engine, flag ? "shared-group" : "split"));
