@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { readFile, symlink } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, readFile, symlink, writeFile, rm } from "node:fs/promises";
 import { parseTlsArguments } from "./tls-qualification.ts";
-import { preflightTls, parseParentIntake, deliveryPath, fileIdentity, preflightReferences, verifyDependencyTree, readVerifiedFile, type TlsEvidence } from "./tls-qualification-inputs.ts";
+import { preflightTls, parseParentIntake, deliveryPath, fileIdentity, preflightReferences, verifyDependencyTree, readVerifiedFile, verifyReviewedHostSource, type TlsEvidence } from "./tls-qualification-inputs.ts";
 import { qualifiedRun, TlsCleanup, acquireOwned, closeObservedCase } from "./tls-qualification-lifecycle.ts";
 import { qualificationCases, assertCaseContext, assertPgResult } from "./tls-qualification-context.ts";
 import { qualificationFixture } from "./tls-qualification-fixture.ts";
@@ -185,6 +186,49 @@ describe("review corrections", () => {
     const validate = async () => { abort.abort(new Error("cancel after validation")); return 1; };
     await expect(qualifiedRun(validate, async () => { setups++; }, async () => {}, abort.signal)).rejects.toThrow("cancel after validation");
     expect(setups).toBe(0);
+  });
+  test("follow-up 1 qualified cleanup releases a late resource after abort", async () => {
+    const abort = new AbortController();
+    const deferred = Promise.withResolvers<string>();
+    const owner = new TlsCleanup();
+    let released = false;
+    const acquisition = acquireOwned(owner, abort.signal, () => deferred.promise, () => { released = true; });
+    abort.abort(new Error("late resource"));
+    await expect(acquisition).rejects.toThrow("late resource");
+    deferred.resolve("resource");
+    await owner.close();
+    expect(released).toBe(true);
+  });
+  test("follow-up 2 mutation after preflight rejects the guest artifact before use", async () => {
+    const fixture = await qualificationFixture();
+    try {
+      const path = join(fixture.delivery, "browser/default/bun-browser.wasm");
+      const identity = { path, ...await fileIdentity(path) };
+      await readVerifiedFile(identity);
+      await writeFile(path, "mutated guest bytes");
+      await expect(readVerifiedFile(identity)).rejects.toThrow("byte/custody mismatch");
+    } finally { await fixture.close(); }
+  });
+  test("follow-up 3 tracked source mutation after preflight is rejected", async () => {
+    const root = await mkdtemp("/work/tmp/bun-wasm-tls-host-source-");
+    try {
+      execFileSync("git", ["init", "-q", root]);
+      execFileSync("git", ["-C", root, "config", "user.email", "tls@test.invalid"]);
+      execFileSync("git", ["-C", root, "config", "user.name", "TLS test"]);
+      await writeFile(join(root, "tracked.ts"), "original");
+      execFileSync("git", ["-C", root, "add", "tracked.ts"]);
+      execFileSync("git", ["-C", root, "commit", "-qm", "source"]);
+      const expected = { head: execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(), tree: execFileSync("git", ["-C", root, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim() };
+      await writeFile(join(root, "tracked.ts"), "mutated");
+      await expect(verifyReviewedHostSource(root, expected)).rejects.toThrow("clean reviewed source");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+  test("follow-up 4 result source includes exact host dependency projections and bound", async () => {
+    const page = await readFile(new URL("../web/tests/tls-relay-browser.ts", import.meta.url), "utf8");
+    expect(page).toContain("hostDependencies: intake.dependencies.host");
+    expect(page).toContain("frozenLocks: intake.dependencies.locks");
+    const cli = await readFile(new URL("./tls-qualification.ts", import.meta.url), "utf8");
+    expect(cli).toContain("256 * 1024");
   });
 });
 

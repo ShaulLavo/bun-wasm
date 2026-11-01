@@ -197,9 +197,12 @@ async function verifyCustody(root: string, files: readonly NamedIdentity[], pare
   }
 }
 function git(root: string, ...args: string[]): string { return execFileSync("git", ["-C", root].concat(args), { encoding: "utf8" }).trim(); }
-function verifyHostSource(root: string, expected: ProducerSource): void {
+function verifyReviewedHostSourceSync(root: string, expected: ProducerSource): void {
   if (git(root, "rev-parse", "HEAD") !== expected.head || git(root, "rev-parse", "HEAD^{tree}") !== expected.tree) throw new Error("Host checkout differs from reviewed TLS source");
   if (git(root, "status", "--porcelain", "--untracked-files=normal")) throw new Error("Host checkout must be clean reviewed source");
+}
+function verifyHostSource(root: string, expected: ProducerSource): void {
+  verifyReviewedHostSourceSync(root, expected);
   for (const name of ["web/src/net/relay.ts", "web/src/runner.ts"]) {
     const path = resolve(root, name);
     if (relative(root, path).startsWith("..")) throw new Error("Invalid host source path");
@@ -266,6 +269,10 @@ export async function readVerifiedFile(row: NamedIdentity): Promise<Uint8Array<A
   const bytes = await readFile(row.path);
   if (bytes.length !== row.bytes || createHash("sha256").update(bytes).digest("hex") !== row.sha256) throw new Error("Dependency byte/custody mismatch immediately before use");
   return bytes;
+}
+export async function verifyReviewedHostSource(root: string, expected: ProducerSource): Promise<void> {
+  if (git(root, "rev-parse", "HEAD") !== expected.head || git(root, "rev-parse", "HEAD^{tree}") !== expected.tree) throw new Error("Host checkout differs from reviewed TLS source");
+  if (git(root, "status", "--porcelain", "--untracked-files=normal")) throw new Error("Host checkout must be clean reviewed source");
 }
 export async function preflightReferences(inputs: TlsEvidence, parent: Record<string, unknown>, files: readonly NamedIdentity[]) {
   const parentIdentity = await fileIdentity(inputs.admission);

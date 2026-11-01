@@ -33,16 +33,19 @@ export async function qualifiedRun<T, R>(validate: () => Promise<T>, setup: (inp
 }
 export async function acquireOwned<T>(owner: TlsCleanup, signal: AbortSignal, acquire: () => T | Promise<T>, release: (resource: T) => void | Promise<void>): Promise<T> {
   signal.throwIfAborted();
-  let pending: Promise<T> | undefined;
+  const pending = Promise.resolve().then(acquire);
   owner.add(async () => {
-    if (!pending) return;
     const settled = await Promise.allSettled([pending]);
     const result = settled[0];
     if (result?.status === "fulfilled") await release(result.value);
   });
-  signal.throwIfAborted();
-  pending = Promise.resolve(acquire());
-  const resource = await pending;
+  const cancelled = new Promise<never>((_, reject) => {
+    const stop = () => reject(signal.reason ?? new Error("TLS qualification cancelled"));
+    signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
+    void pending.then(() => signal.removeEventListener("abort", stop), () => signal.removeEventListener("abort", stop));
+  });
+  const resource = await Promise.race([pending, cancelled]);
   signal.throwIfAborted();
   return resource;
 }
