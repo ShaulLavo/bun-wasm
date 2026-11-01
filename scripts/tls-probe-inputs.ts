@@ -73,10 +73,12 @@ export async function tlsContext(env: NodeJS.ProcessEnv = process.env) {
   }
   const rustup = Bun.which("rustup", { PATH: env.PATH });
   assert.ok(rustup, "Missing Rustup tool resolver");
+  const rustToolchain = execFileSync(rustup, ["show", "active-toolchain"], { env, encoding: "utf8" }).trim().split(/\s+/)[0];
+  assert.ok(rustToolchain && /^[a-zA-Z0-9_.-]+$/.test(rustToolchain), "Missing or unsafe active Rustup toolchain");
   for (const tool of ["cargo", "rustc"]) selected[tool] = execFileSync(rustup, ["which", tool], { env, encoding: "utf8" }).trim();
   const tools = Object.fromEntries(await Promise.all(Object.entries(selected).map(async ([name, path]): Promise<[string, Awaited<ReturnType<typeof fileIdentity>> & { executable: string }]> => [name, { ...await fileIdentity(realpathSync(path)), executable: path }])));
   return {
-    schema: 1, run: required(env, "GITHUB_RUN_ID"), attempt, head: required(env, "GITHUB_SHA"), tree: git(workspace, "rev-parse", "HEAD^{tree}"),
+    schema: 1, rustToolchain, run: required(env, "GITHUB_RUN_ID"), attempt, head: required(env, "GITHUB_SHA"), tree: git(workspace, "rev-parse", "HEAD^{tree}"),
     workspace, target, sdk, sysroot, source, profile: "split", pin: tlsPin,
     hostTools: required(env, "NATIVE_HOST_TOOLS_HASH"), nativeInputs: required(env, "NATIVE_INPUTS_HASH"),
     repository: await treeIdentity(workspace, tlsRepositoryPaths.concat(readdirSync(join(workspace, "scripts")).filter(name => /^tls-probe.*\.ts$/.test(name) && !/\.test\.ts$|tls-probe-fixture\.ts$/.test(name)).map(name => `scripts/${name}`), ["checks/native-probe-tls.json"])),

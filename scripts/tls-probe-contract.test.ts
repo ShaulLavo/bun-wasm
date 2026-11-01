@@ -59,7 +59,7 @@ test("host and WASI object ABIs cannot stand in for each other", async () => {
   } finally { f.remove(); }
 });
 
-for (const field of ["upstream", "repository", "sysrootInputs", "sdkInputs", "head", "attempt", "hostTools", "profile"] as const) test(`trusted handoff rejects changed ${field}`, async () => {
+for (const field of ["upstream", "repository", "sysrootInputs", "sdkInputs", "head", "attempt", "hostTools", "profile", "rustToolchain"] as const) test(`trusted handoff rejects changed ${field}`, async () => {
   const f = await tlsFixture();
   try {
     const handoff = await fixtureHandoff(f.context);
@@ -232,5 +232,21 @@ test("BoringSSL CXX-only Ninja graphs retain the actual target proof", async () 
     const cxx = text.slice(text.indexOf("rule CXX_COMPILER__"));
     writeFileSync(rules, cxx);
     await expect(inspectCryptoOutput(f.context, "wasm32-wasip1", build)).resolves.toMatchObject({ abi: "wasm32-wasip1" });
+  } finally { f.remove(); }
+});
+
+for (const abi of ["host", "wasm32-wasip1"] as const) test(`recorded ${abi} Cargo pins compiler selection in dependency directories`, async () => {
+  const f = await tlsFixture();
+  try {
+    const build = await fixtureCrypto(f.context, abi);
+    const directory = join(f.context.target, "tls-probe/cargo");
+    const env = { ...process.env, GITHUB_WORKSPACE: f.context.workspace, BUNWASM_TLS_CARGO_RECORD_DIR: directory,
+      FIXTURE_MESSAGES: fixtureMessages(build), FIXTURE_EXPECT_TOOLCHAIN: f.context.rustToolchain,
+      FIXTURE_EXPECT_RUSTC: f.context.tools.rustc!.executable, RUSTUP_TOOLCHAIN: "foreign", RUSTC: "foreign" };
+    const command = ["cargo", abi === "host" ? "test" : "clippy", "--locked"].concat(abi === "host" ? [] : ["--target", abi]);
+    await recordCargo(command, abi, env, async () => f.context);
+    expect(await Bun.file(join(directory, `${abi}.json`)).exists()).toBe(true);
+    expect(env.RUSTUP_TOOLCHAIN).toBe("foreign");
+    expect(env.RUSTC).toBe("foreign");
   } finally { f.remove(); }
 });

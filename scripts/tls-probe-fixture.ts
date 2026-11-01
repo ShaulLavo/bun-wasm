@@ -31,6 +31,8 @@ export async function tlsFixture() {
   for (const path of [target, source, sdk, sysroot]) mkdirSync(path);
   const cargo = join(root, "fake-cargo.ts");
   fixturePut(cargo, `#!${process.execPath}\nimport { writeSync } from "node:fs";
+if (process.env.FIXTURE_EXPECT_TOOLCHAIN && process.env.RUSTUP_TOOLCHAIN !== process.env.FIXTURE_EXPECT_TOOLCHAIN) throw new Error("Cargo lost the selected Rustup toolchain");
+if (process.env.FIXTURE_EXPECT_RUSTC && process.env.RUSTC !== process.env.FIXTURE_EXPECT_RUSTC) throw new Error("Cargo lost the selected compiler");
 const text = process.env.FIXTURE_MESSAGES ?? "";
 for (const char of text) writeSync(1, char);
 process.stderr.write("fixture stderr\\n");
@@ -38,13 +40,13 @@ if (process.env.FIXTURE_SIGNAL) process.kill(process.pid, "SIGTERM");
 else process.exit(Number(process.env.FIXTURE_EXIT ?? "0"));\n`);
   chmodSync(cargo, 0o755);
   const tools: TlsContext["tools"] = {};
-  for (const name of ["clang", "cxx", "cc", "hostCxx", "wasm-tools", "cargo"]) {
+  for (const name of ["clang", "cxx", "cc", "hostCxx", "wasm-tools", "cargo", "rustc"]) {
     const path = name === "cargo" ? cargo : join(root, "tools", name);
     if (name !== "cargo") fixturePut(path, "synthetic tool bytes, never executed");
     tools[name] = { ...await fileIdentity(path), executable: path };
   }
   const context: TlsContext = {
-    schema: 1, run: "77", attempt: "2", head: "a".repeat(40), tree: "b".repeat(40), workspace: root, target, source, sdk, sysroot,
+    rustToolchain: "nightly-fixture-x86_64-unknown-linux-gnu", schema: 1, run: "77", attempt: "2", head: "a".repeat(40), tree: "b".repeat(40), workspace: root, target, source, sdk, sysroot,
     profile: "split", pin: "41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f", hostTools: "c".repeat(64), nativeInputs: "d".repeat(64),
     repository: "e".repeat(64), upstream: "f".repeat(64), sysrootInputs: "1".repeat(64), sdkInputs: "2".repeat(64), tools, nativeFlags: { c: "", cxx: "" },
   };

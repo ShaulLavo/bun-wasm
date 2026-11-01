@@ -147,7 +147,8 @@ export async function recordCargo(command: readonly string[], abi: TlsAbi, env: 
   const separator = command.indexOf("--");
   const at = separator < 0 ? command.length : separator;
   const args = command.slice(1, at).concat(["--message-format=json-render-diagnostics"], command.slice(at));
-  const child = spawn(checkedTool(before, "cargo"), args, { env, stdio: ["inherit", "pipe", "inherit"] });
+  const producerEnv = { ...env, RUSTUP_TOOLCHAIN: before.rustToolchain, RUSTC: checkedTool(before, "rustc") };
+  const child = spawn(checkedTool(before, "cargo"), args, { env: producerEnv, stdio: ["inherit", "pipe", "inherit"] });
   child.stdout.on("data", (chunk: Buffer) => messages.feed(chunk));
   const result = await new Promise<{ status: number | null; signal: string | null }>((resolve, reject) => {
     child.once("error", reject);
