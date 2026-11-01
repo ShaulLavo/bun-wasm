@@ -1,4 +1,5 @@
 import { beginMemorySnapshot, endMemorySnapshot, memoryCommandId, recordMemorySnapshot } from "./memory-telemetry.js";
+import { pairedEngines } from "../../src/engine-kind.ts";
 import { programLinkPlan } from "../../src/assets.js";
 // Running bun.wasm from a page: loading the engine's wasm, and starting one `bun …` command in a
 // fresh worker with its networking (fetch, Bun.serve previews). Shared by the playground (main.ts)
@@ -80,8 +81,8 @@ function registerEngineCommands(subprocess: SubprocessBroker, programs: Set<stri
 }
 
 function registerEnginePrograms(subprocess: SubprocessBroker, programs: Set<string>, selected: Engine, adapter: RunRequest["adapter"], selectedModule: WebAssembly.Module): void {
-  const engines: Engine[] = ["quickjs", "jsc", "browser"];
-  for (const engine of engines) {
+  const engines: readonly Engine[] = pairedEngines;
+  for (const engine of engines.concat(["browser"])) {
     const name = `${ENGINE_BIN[engine]}/bun`;
     if (programs.has(name)) continue;
     let loading: Promise<WebAssembly.Module> | undefined;

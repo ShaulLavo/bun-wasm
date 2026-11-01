@@ -32,6 +32,8 @@ staging and the complete maintained actual matching-version guest hook-smoke.
 The staged web asset registry requires both pairs, Browser, and tools. Missing
 assets or receipts prevent a reusable manifest. Old Hermes outputs, receipts,
 and asset registry entries are rejected even beside otherwise valid engines.
+Normal native Clippy and tests exclude the two dormant Hermes crates. Generic
+formatting and source-integrity scans still cover retained source.
 
 The producer builds one launcher with the pinned Cargo host recipe and records
 its source, command, and binary identity. `BUN_WASM_LAUNCHER` can select an

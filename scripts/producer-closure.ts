@@ -53,7 +53,7 @@ export const publicationGuestPaths = {
 } as const;
 const publicationPaired: readonly Engine[] = pairedEngines;
 export const publicationEngines: readonly Engine[] = publicationPaired.concat(["browser"]);
-export const publicationAssets: readonly string[] = pairedEngines.flatMap(engine => {
+export const publicationAssets: readonly string[] = pairedEngines.flatMap<string>(engine => {
   const profile = programProfile(engine);
   return [profile.core, profile.side];
 }).concat(["bun-browser.wasm", "bun-tools.wasm"]);

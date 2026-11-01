@@ -15,7 +15,9 @@ host registration description below records the original implementation, not a
 current capability. No original artifact or receipt is deleted or relabeled.
 Original compiler-input receipt helpers and their synthetic regressions now live
 in `hermes/consumer-receipt.ts` and `hermes/consumer-receipt.test.ts`, outside
-normal publication qualification. Their evidence format and validators are unchanged.
+normal publication qualification. Their evidence format and validators are unchanged. Import-delta, native telemetry,
+and source fixture probes also remain under `hermes/`, outside normal discovery.
+The dormant side recipe points to the relocated import-delta tool.
 Restoration requirements are in [Dormant Hermes source](../hermes-engine.md).
 
 ## Classification

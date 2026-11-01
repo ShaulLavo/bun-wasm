@@ -112,7 +112,10 @@ The owner withdrew Hermes publication on November 1, 2026. Its native VM, side,
 embedding, and app gates are retired rather than recorded as passing. The
 `quality-no-hermes-publication.json` check rejects its return to shipped selectors
 or publication contracts. All remaining native, JSC, Browser, and source-cache
-gates stay blocking.
+gates stay blocking. Generic formatting and source-integrity scans still cover
+retained source, but normal Clippy and workspace tests exclude the two dormant
+Hermes crates. Their old synthetic probes now live under `hermes/`, outside
+normal check discovery.
 
 Cold-run evidence reached Web checks at 59m50s, including 24m59s of native quality.
 The partition leaves 34m51s of that observed work in the consumer, before transfer

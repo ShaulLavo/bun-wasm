@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { importDelta } from "./hermes-import-delta.ts";
+import { importDelta } from "./import-delta.ts";
 
 const name = (text: string) => [text.length].concat(Array.from(new TextEncoder().encode(text)));
 const section = (id: number, bytes: number[]) => [id, bytes.length].concat(bytes);

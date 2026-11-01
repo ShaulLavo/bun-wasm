@@ -5,6 +5,7 @@ import { pairedEngines, isPairedEngine } from "../src/engine-kind.ts";
 import { parseProgramInputs } from "./guest-core-receipt.ts";
 import { guestBuilds, hash } from "./guest-source-manifest.ts";
 import { completePublicationArtifactPaths, publicationAssets, publicationEngines, publicationGuestPaths, requireCompletePublicationFiles, verifyPublicationBuilds } from "./producer-closure.ts";
+import { dormantRustPackages, rustTestPackages } from "./rust-test-packages.ts";
 import { discoverChecks } from "./test-checks.ts";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -79,4 +80,22 @@ test("web staging ignores dormant files and preserves both required paired-side 
   expect((await copy()).sort()).toEqual(publicationAssets.toSorted());
   await expect(copy("quickjs.wasm")).rejects.toThrow("QuickJS core requires its matching side");
   await expect(copy("jsc-engine.wasm")).rejects.toThrow("JSC core requires its matching side");
+});
+
+test("the native host rejects withdrawn tags instead of selecting a dormant companion", () => {
+  const source = read("crates/bunwasm-host/src/linked.rs");
+  expect(source).not.toMatch(/ProgramKind::Hermes|Self::Hermes|hermes-engine\.wasm/);
+  expect(source).toContain('b"quickjs" => ProgramKind::QuickJs');
+  expect(source).toContain('b"jsc" => ProgramKind::Jsc');
+  expect(source).toContain('fn withdrawn_engine_tag_is_rejected()');
+  expect(source).toContain('bail!("invalid bun-wasm-engine payload")');
+});
+
+test("normal native compilation excludes only the withdrawn Hermes crates", () => {
+  const names = ["bunwasm-host", "bunwasm-runtime", "bunwasm-engine-quickjs", "bunwasm-engine-jsc"].concat(dormantRustPackages);
+  const packages = names.map(name => ({ id: name, name }));
+  expect(rustTestPackages({ packages, workspace_members: names })).toEqual([
+    "-p", "bunwasm-engine-jsc", "-p", "bunwasm-engine-quickjs", "-p", "bunwasm-host", "-p", "bunwasm-runtime", "-p", "wasmi_core",
+  ]);
+  expect(read("scripts/quality-rust.ts")).toContain('dormantRustPackages.flatMap(name => ["--exclude", name])');
 });

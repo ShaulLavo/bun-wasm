@@ -115,7 +115,7 @@ test("measurement rejects incomplete and mismatched producer identities before e
     save({ ...manifest, source: { ...manifest.source, head: "c".repeat(40) } });
     expect(() => verifyMeasurementClosure(root)).toThrow("Launcher source");
     save({ ...manifest, profile: "shared-group" });
-    expect(() => verifyMeasurementClosure(root)).toThrow("three-engine split closure");
+    expect(() => verifyMeasurementClosure(root)).toThrow("supported paired-engine split closure");
     save({ ...manifest, launcher: { ...manifest.launcher, path: "/changed" } });
     expect(() => verifyMeasurementClosure(root)).toThrow("Manifest launcher differs");
     save(manifest);

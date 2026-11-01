@@ -206,7 +206,7 @@ async function build(): Promise<void> {
 async function verify(): Promise<void> {
   verifyOutputScope();
   const value: unknown = await Bun.file(join(output, "manifest.json")).json();
-  if (!value || typeof value !== "object" || !("status" in value) || value.status !== "reusable" || !("files" in value) || !Array.isArray(value.files)) throw new Error("Producer is not reusable");
+  if (!value || typeof value !== "object" || !("schema" in value) || value.schema !== 1 || !("status" in value) || value.status !== "reusable" || !("files" in value) || !Array.isArray(value.files)) throw new Error("Producer is not reusable");
   if (!("source" in value) || JSON.stringify(value.source) !== JSON.stringify(sourceIdentity())) throw new Error("Producer source identity differs from its manifest");
   if (!("profile" in value) || value.profile !== profile || !("engines" in value) || JSON.stringify(value.engines) !== JSON.stringify(engines)) throw new Error("Producer profile/engine registry differs from manifest");
   if ("hermesBuild" in value) throw new Error("Withdrawn engine native reference in producer manifest");
