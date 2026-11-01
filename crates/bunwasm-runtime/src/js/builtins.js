@@ -542,7 +542,7 @@
     "node:cluster": () => unsupportedModule("cluster", NO_PROCESSES, ["fork", "setupPrimary", "setupMaster", "disconnect"], { isPrimary: true, isMaster: true, isWorker: false, workers: {} }),
     "ws": () => internal.require("ws_builtin"),
     "node:net": () => Object.assign(internal.require("net").nodeNet(), internal.require("net_address")),
-    "node:tls": () => unsupportedModule("tls", NO_NETWORK, ["connect", "createServer", "createSecureContext", "TLSSocket", "Server", "checkServerIdentity"], { rootCertificates: [], DEFAULT_MIN_VERSION: "TLSv1.2", DEFAULT_MAX_VERSION: "TLSv1.3", DEFAULT_ECDH_CURVE: "auto" }),
+    "node:tls": lazy("node_tls"),
     "node:dgram": () => unsupportedModule("dgram", NO_NETWORK, ["createSocket", "Socket"]),
     "node:dns": () => dns.module(),
     "node:dns/promises": () => dns.promises(),

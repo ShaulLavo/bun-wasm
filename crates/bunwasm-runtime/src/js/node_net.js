@@ -26,6 +26,7 @@
         if (signal) this._useSignal(signal);
       }
       emit(event, ...args) {
+        if (event === "data" && this._tlsTransferred) return false;
         if (event === "close" && args.length === 0) return super.emit(event, Boolean(this._closeHadError));
         return super.emit(event, ...args);
       }
@@ -49,6 +50,7 @@
         else { signal.addEventListener("abort", abort, { once: true }); this.once("close", () => signal.removeEventListener("abort", abort)); }
       }
       _attach(conn) {
+        if (this._tlsOwner) { this._tlsOwner.connected(conn); return; }
         this._conn = conn;
         this._phase = "open";
         this._updatePeer();
@@ -78,6 +80,7 @@
         this.remoteFamily = peer.family;
       }
       connect(...args) {
+        if (this._tlsTransferred) throw error(Error, "ERR_TLS_SOCKET_OWNERSHIP", "Socket ownership has transferred to TLS");
         const [options, callback] = _normalizeArgs(args);
         if (options.host && typeof options.host !== "string") throw error(TypeError, "ERR_INVALID_ARG_TYPE", 'The "options.host" property must be of type string');
         if (!native.hostCaps.connect) throw error(Error, "ENOTSUP", "net.connect is not supported in bun-wasm without a networking host");
@@ -89,6 +92,7 @@
         const path = options.path === undefined ? undefined : internal.require("net_path").absolute(options.path);
         if (path === undefined && options.port === undefined) throw error(TypeError, "ERR_MISSING_ARGS", "The port or path argument is required");
         const targetPort = path === undefined ? port(options.port) : undefined;
+        this._tlsTarget = path === undefined ? { host: options.host || "localhost", port: targetPort } : undefined;
         this._unixPath = path;
         if (callback) this.once("connect", callback);
         if (this.destroyed) this._undestroy();
@@ -135,6 +139,7 @@
           return this;
         }
         this._conn = new Connection(handle);
+        if (this._tlsOwner) this._tlsOwner.reserveRaw(this._conn);
         this._attempt = { address: target, port: targetPort, family: family || 4 };
         this.emit("connectionAttempt", target, targetPort, family || 4);
         if (this.destroyed) return this;
@@ -158,6 +163,7 @@
         this._connecting = null;
         this._attempt = null;
         this._attach(conn);
+        if (this._tlsOwner) return true;
         const writing = this._pendingWrite;
         this._pendingWrite = null;
         if (writing) this._send(writing);
@@ -182,18 +188,43 @@
       _read() {
         this._readReady = true;
         this._onreadStopped = false;
+        if (this._conn?.readDemand) this._conn.readDemand();
         if (native.wake) native.wake(0);
       }
       read(size) {
+        if (this._tlsTransferred && size === 0) return null;
+        if (this._tlsTransferred) throw error(Error, "ERR_TLS_SOCKET_OWNERSHIP", "Socket ownership has transferred to TLS");
         if (this._onread) this._read();
         return super.read(size);
       }
       resume() {
+        if (this._tlsTransferred) throw error(Error, "ERR_TLS_SOCKET_OWNERSHIP", "Socket ownership has transferred to TLS");
         if (this._onread) this._read();
         return super.resume();
       }
+      write(...args) {
+        if (this._tlsTransferred) throw error(Error, "ERR_TLS_SOCKET_OWNERSHIP", "Socket ownership has transferred to TLS");
+        return super.write(...args);
+      }
+      end(...args) {
+        if (this._tlsTransferred) throw error(Error, "ERR_TLS_SOCKET_OWNERSHIP", "Socket ownership has transferred to TLS");
+        return super.end(...args);
+      }
+      unshift(chunk) {
+        return internal.require("tls_transport").unshift(this, chunk, value => super.unshift(value));
+      }
+      _tlsFence(callback) { Duplex.prototype.write.call(this, new Uint8Array(0), callback); }
+      _tlsClose() {
+        this._tlsOwner = undefined;
+        Duplex.prototype.destroy.call(this);
+      }
+      destroy(err) {
+        if (this._tlsOwner) { this._tlsOwner.destroy(err); return this; }
+        return super.destroy(err);
+      }
       _write(chunk, encoding, callback) {
-        const bytes = Buffer.from(chunk);
+        if (this._tlsOwner && !this._tlsOwner.drainingPlain) { callback(error(Error, "ERR_TLS_SOCKET_OWNERSHIP", "Socket ownership has transferred to TLS")); return; }
+        const bytes = chunk instanceof Uint8Array ? chunk : Buffer.from(chunk);
         this.bytesWritten += bytes.length;
         const item = { bytes, callback };
         if (this._phase === "open") this._send(item);
@@ -208,6 +239,7 @@
         else this._pendingFinal = callback;
       }
       _destroy(err, callback) {
+        if (this._tlsOwner) { this._tlsOwner.destroy(err); callback(err); return; }
         this._closeHadError = Boolean(err);
         const attempt = this.connecting ? this._attempt : null;
         const writeError = err || error(Error, this.pending ? "ERR_SOCKET_CLOSED_BEFORE_CONNECTION" : "ERR_STREAM_DESTROYED", this.pending ? "Socket closed before the connection was established" : "Cannot call write after a stream was destroyed");
@@ -232,6 +264,7 @@
       destroySoon() { this.end(); this.once("finish", () => this.destroy()); return this; }
       resetAndDestroy() { return this.destroy(); }
       setTimeout(ms, callback) {
+        if (this._tlsTransferred) throw error(Error, "ERR_TLS_SOCKET_OWNERSHIP", "Socket ownership has transferred to TLS");
         if (!Number.isFinite(ms) || ms < 0) throw error(RangeError, "ERR_OUT_OF_RANGE", "Invalid timeout");
         if (callback && ms > 0) this.once("timeout", callback);
         else if (callback) this.removeListener("timeout", callback);
@@ -241,7 +274,7 @@
       }
       _touch() {
         clearTimeout(this._timeoutTimer);
-        if (!this.timeout || this.destroyed) return;
+        if (!this.timeout || this.destroyed || this._tlsTransferred) return;
         this._timeoutTimer = setTimeout(() => this.emit("timeout"), this.timeout);
         if (!this._referenced) this._timeoutTimer.unref();
       }
@@ -252,8 +285,8 @@
         if (this._conn) this._conn.ref(this._referenced);
         if (this._timeoutTimer) this._referenced ? this._timeoutTimer.ref() : this._timeoutTimer.unref();
       }
-      ref() { this._referenced = true; this._setRef(); return this; }
-      unref() { this._referenced = false; this._setRef(); return this; }
+      ref() { if (this._tlsTransferred) throw error(Error, "ERR_TLS_SOCKET_OWNERSHIP", "Socket ownership has transferred to TLS"); this._referenced = true; this._setRef(); return this; }
+      unref() { if (this._tlsTransferred) throw error(Error, "ERR_TLS_SOCKET_OWNERSHIP", "Socket ownership has transferred to TLS"); this._referenced = false; this._setRef(); return this; }
       address() {
         if (!this._conn || this.destroyed) return {};
         const text = native.hostLocalAddr(this._conn.handle);
