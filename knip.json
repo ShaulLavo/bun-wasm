@@ -24,6 +24,7 @@
         "scripts/**/*.test.ts",
         "scripts/fixtures/crypto-host-native-control.ts",
         "scripts/fixtures/tls-identity/verify-upstream.ts",
+        "scripts/tls-qualification.ts",
         "scripts/fixtures/ci-jsc-worker-scenario.ts",
         "scripts/fixtures/event-rejections-control.ts",
         "scripts/fixtures/quickjs-async-context.ts",
@@ -138,7 +139,10 @@
     "rustc",
     "ss",
     "build.mjs",
-    "^c\\+\\+$"
+    "^c\\+\\+$",
+    "findmnt",
+    "mesh",
+    "postgres"
   ],
   "ignoreUnresolved": [
     "./space # \u00fc.mjs"
