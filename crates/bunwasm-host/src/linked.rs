@@ -42,6 +42,8 @@ struct Program {
 enum ProgramKind {
     QuickJs,
     Jsc,
+    #[cfg(test)]
+    SpiderMonkeyProbe,
 }
 
 impl ProgramKind {
@@ -49,6 +51,8 @@ impl ProgramKind {
         match self {
             Self::QuickJs => "quickjs.wasm",
             Self::Jsc => "jsc-engine.wasm",
+            #[cfg(test)]
+            Self::SpiderMonkeyProbe => "spidermonkey-engine.wasm",
         }
     }
 
@@ -66,6 +70,13 @@ impl ProgramKind {
                 "jsc_call_ctors",
                 "jsc_register",
             ],
+            #[cfg(test)]
+            Self::SpiderMonkeyProbe => &[
+                "spidermonkey_initialize_memory",
+                "spidermonkey_apply_data_relocs",
+                "spidermonkey_call_ctors",
+                "spidermonkey_register",
+            ],
         }
     }
 
@@ -73,13 +84,20 @@ impl ProgramKind {
         match self {
             Self::QuickJs => "quickjs_run",
             Self::Jsc => "jsc_run",
+            #[cfg(test)]
+            Self::SpiderMonkeyProbe => "spidermonkey_run",
         }
     }
 
     fn other_profiles(self) -> impl Iterator<Item = ProgramKind> {
-        [Self::QuickJs, Self::Jsc]
-            .into_iter()
-            .filter(move |kind| *kind != self)
+        [
+            Self::QuickJs,
+            Self::Jsc,
+            #[cfg(test)]
+            Self::SpiderMonkeyProbe,
+        ]
+        .into_iter()
+        .filter(move |kind| *kind != self)
     }
 }
 
@@ -258,6 +276,8 @@ fn parse_program_kind(bytes: &[u8], has_bind: bool) -> Result<Option<ProgramKind
         let kind = match section.data() {
             b"quickjs" => ProgramKind::QuickJs,
             b"jsc" => ProgramKind::Jsc,
+            #[cfg(test)]
+            b"spidermonkey-g2" => ProgramKind::SpiderMonkeyProbe,
             _ => bail!("invalid bun-wasm-engine payload"),
         };
         tag = Some(kind);
@@ -757,7 +777,7 @@ mod tests {
         assert_eq!(ProgramKind::Jsc.run(), "jsc_run");
         assert!(ProgramKind::Jsc.initializers().contains(&"jsc_register"));
         let others: Vec<_> = ProgramKind::QuickJs.other_profiles().collect();
-        assert_eq!(others, [ProgramKind::Jsc]);
+        assert_eq!(others, [ProgramKind::Jsc, ProgramKind::SpiderMonkeyProbe]);
     }
 
     #[test]

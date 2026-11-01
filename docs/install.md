@@ -59,10 +59,12 @@ dependencies and preserves the full lockfile.
 Tarballs and packuments are cached in `$BUN_INSTALL_CACHE_DIR`, or
 `$HOME/.bun/install/cache/bun-wasm` (relative to cwd when HOME is absent).
 Packuments expire after five minutes; integrity-checked tarballs do not expire.
-The browser also persists unauthenticated tarballs in Cache Storage under
-`bun-wasm-install-v1`, across worker runs. Metadata uses the guest cache, where
-configured credentials can be checked before persistence. These caches can be
-removed to reclaim space.
+The browser persists successful unauthenticated tarballs up to its 4 MiB
+cache-only capture budget in Cache Storage under `bun-wasm-install-v1`, after
+the response has been consumed. Larger downloads still stream to the guest and
+remain eligible for its integrity-checked cache. Metadata uses the guest cache,
+where configured credentials can be checked before persistence. These caches can
+be removed to reclaim space.
 `BUN_CONFIG_HTTP_IDLE_TIMEOUT` sets the download idle timeout in seconds, with
 a default of 300. Failed downloads are not retried.
 
