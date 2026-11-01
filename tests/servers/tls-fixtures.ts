@@ -321,6 +321,7 @@ async function closeServer(server: CloseableServer): Promise<void> {
 
 async function armObserver(endpoint: ObserverEndpoint, ca: string): Promise<void> {
   const socket = tlsConnect({ host: "127.0.0.1", port: endpoint.port, ca, servername: tlsName });
+  socket.resume();
   try {
     await new Promise<void>((resolve, reject) => {
       socket.once("error", reject);
