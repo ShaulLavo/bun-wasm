@@ -31,6 +31,23 @@ for (const path of ["hermes/engine.wasm", "dist/bun-hermes.wasm", "dist/bun-herm
   });
 }
 
+test("split closure retains the verified shell, network and program-family WASM assets", () => {
+  const dependencies = ["web/programs/shell-engine.wasm", "web/programs/env.wasm", "web/network.wasm", "web/chunks/network.wasm", "web/__bunwasm/network.wasm", "web/__bunwasm/chunks/network.wasm"];
+  for (const family of ["coreutils", "findutils", "grep", "ripgrep", "sed"]) {
+    for (const suffix of ["", ".gz", ".br"]) dependencies.push(`web/programs/base/waffle-${family}/dist/${family}.wasm${suffix}`);
+  }
+  const files = producerArtifactPaths("split").concat(dependencies).map(path => ({ path }));
+  expect(() => requireClosureFiles("split", files)).not.toThrow();
+  expect(() => requireClosureFiles("split", files.concat([{ path: "web/network.wasm" }]))).toThrow("Repeated");
+  expect(() => requireClosureFiles("shared-group", producerArtifactPaths("shared-group").concat(dependencies).map(path => ({ path })))).toThrow("Unexpected");
+});
+
+test("dependency WASM does not admit extra engine payloads or unknown dependency families", () => {
+  for (const path of ["web/bun-spidermonkey.wasm.gz", "web/unknown-engine.wasm", "web/quickjs.wasm", "web/quickjs.wasm.br", "web/programs/unknown.wasm", "web/programs/base/waffle-unknown/dist/unknown.wasm.gz", "web/__bunwasm/bun-spidermonkey.wasm.gz"]) {
+    expect(() => requireClosureFiles("split", producerArtifactPaths("split").concat([path]).map(path => ({ path })))).toThrow(`Unexpected producer manifest artifact: ${path}`);
+  }
+});
+
 test("launcher identity rejects changed bytes, stale source and nonexecutables", () => {
   const root = mkdtempSync(join(tmpdir(), "producer-launcher-"));
   try {

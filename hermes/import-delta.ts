@@ -19,7 +19,7 @@ export function importDelta(side: WebAssembly.Module, coreExports: ReadonlySet<s
 if (import.meta.main) {
   const [path] = process.argv.slice(2);
   if (!path) throw new Error("usage: hermes/import-delta.ts SIDE.wasm");
-  const list = readFileSync(join(import.meta.dir, "quickjs-core-exports.txt"), "utf8");
+  const list = readFileSync(join(import.meta.dir, "../scripts/quickjs-core-exports.txt"), "utf8");
   const coreExports = new Set(list.split(/\s+/).filter(Boolean));
   const delta = importDelta(new WebAssembly.Module(readFileSync(path)), coreExports);
   for (const name of delta) console.log(name);

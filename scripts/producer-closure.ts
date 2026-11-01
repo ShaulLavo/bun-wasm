@@ -30,6 +30,13 @@ export function producerArtifactPaths(profile: ProgramProfile): string[] {
     return [`${engine}/engine.wasm`, `${engine}/engine.wasm.engine.json`, `dist/${names.core}`, `dist/${names.core}.build.json`, `dist/${names.side}`, `dist/${names.side}.engine.json`, `${engine}-smoke.log`].concat(profile === "split" ? [`${engine}-node-smoke.log`] : []);
   }), profile === "split" ? ["dist/bun-jsc.wasm.embedding.json", "dist/bash-web-shell.wasm", "dist/bash-web-env.wasm", "dist/bash-web-guests.json", "web/index.html", "web/engine-builds.json", "hook-controls.log", "hook-smoke.json"] : ["core/cxx-runtime-members.json", "worker-proof.log"], profile === "split" ? publicationAssets.map(name => `web/${name}.gz`) : []);
 }
+function isWebClosureAsset(path: string): boolean {
+  if (!path.startsWith("web/")) return false;
+  if (!/\.wasm(?:\.|$)/.test(path)) return true;
+  return /^web\/programs\/(?:shell-engine|env)\.wasm$/.test(path)
+    || /^web\/(?:__bunwasm\/)?(?:chunks\/)?network\.wasm$/.test(path)
+    || /^web\/programs\/base\/waffle-(?:coreutils|findutils|grep|ripgrep|sed)\/dist\/[^/]+\.wasm(?:\.(?:br|gz))?$/.test(path);
+}
 export function requireClosureFiles(profile: ProgramProfile, files: readonly { readonly path: string }[]): void {
   for (const file of files) rejectWithdrawnPublicationPath(file.path);
   const paths = new Set(files.map(file => file.path));
@@ -37,7 +44,7 @@ export function requireClosureFiles(profile: ProgramProfile, files: readonly { r
   const required = new Set(producerArtifactPaths(profile));
   for (const path of required) if (!paths.has(path)) throw new Error(`Missing producer manifest artifact: ${path}`);
   for (const path of paths) {
-    if (required.has(path) || (profile === "split" && path.startsWith("web/") && !/\.wasm(?:\.|$)/.test(path))) continue;
+    if (required.has(path) || (profile === "split" && isWebClosureAsset(path))) continue;
     throw new Error(`Unexpected producer manifest artifact: ${path}`);
   }
 }

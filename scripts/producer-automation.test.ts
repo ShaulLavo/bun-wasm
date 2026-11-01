@@ -9,6 +9,7 @@ import { hash } from "./guest-source-manifest.ts";
 import { workerProofLabels } from "./producer-closure.ts";
 
 const repository = join(import.meta.dir, "..");
+const dependencyWebAssets = ["programs/shell-engine.wasm", "programs/env.wasm", "network.wasm", "__bunwasm/network.wasm", "chunks/network.wasm", "__bunwasm/chunks/network.wasm", "programs/base/waffle-coreutils/dist/coreutils.wasm.gz"];
 const source = `import {execFileSync} from "node:child_process";
 export const hash=(bytes)=>new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
 export const identity=()=>({head:execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),tree:execFileSync("git",["rev-parse","HEAD^{tree}"],{encoding:"utf8"}).trim()});
@@ -47,7 +48,7 @@ function fixture(run: (root: string, output: string, invoke: (command: string, p
     put("scripts/engine-memory-hook.test.ts", 'import {test} from "bun:test";test("synthetic boundary",()=>{});'); put("web/tests/bun-executor.test.ts", 'import {test} from "bun:test";test("synthetic boundary",()=>{});');
     put("web/scripts/node-host.ts", 'console.log("paired-smoke 42");');
     put("scripts/verify-engine-memory-browser.ts", 'import {writeFileSync} from "node:fs";if(process.env.FAIL_GATE)throw Error("synthetic downstream gate failed");writeFileSync(process.argv[2]+"/hook-smoke.json","synthetic, no browser");');
-    put("web/build.ts", 'import {readFileSync,writeFileSync,mkdirSync} from "node:fs";import {dirname} from "node:path";const dir=dirname(process.env.BUN_WASM);const names=["bun.wasm","quickjs.wasm","bun-jsc.wasm","jsc-engine.wasm"];mkdirSync("web/dist",{recursive:true});writeFileSync("web/dist/index.html","synthetic");for(const name of names.concat(["bun-browser.wasm","bun-tools.wasm"]))writeFileSync("web/dist/"+name+".gz","synthetic identity fixture only");writeFileSync("web/dist/engine-builds.json",JSON.stringify(Object.fromEntries(names.map(name=>[name,new Bun.CryptoHasher("sha256").update(readFileSync(dir+"/"+name)).digest("hex")]).concat([["bun-browser.wasm","0".repeat(64)],["bun-tools.wasm","1".repeat(64)]]))));');
+    put("web/build.ts", `import {readFileSync,writeFileSync,mkdirSync} from "node:fs";import {dirname} from "node:path";const dir=dirname(process.env.BUN_WASM);const names=["bun.wasm","quickjs.wasm","bun-jsc.wasm","jsc-engine.wasm"];mkdirSync("web/dist",{recursive:true});writeFileSync("web/dist/index.html","synthetic");for(const name of names.concat(["bun-browser.wasm","bun-tools.wasm"]))writeFileSync("web/dist/"+name+".gz","synthetic identity fixture only");for(const name of ${JSON.stringify(dependencyWebAssets)}){mkdirSync(dirname("web/dist/"+name),{recursive:true});writeFileSync("web/dist/"+name,"synthetic dependency identity only");}writeFileSync("web/dist/engine-builds.json",JSON.stringify(Object.fromEntries(names.map(name=>[name,new Bun.CryptoHasher("sha256").update(readFileSync(dir+"/"+name)).digest("hex")]).concat([["bun-browser.wasm","0".repeat(64)],["bun-tools.wasm","1".repeat(64)]]))));`);
     const pass = workerProofLabels.map(label => `PASS ${label}`).join("\n");
     put("scripts/native-cargo.sh", `#!/bin/sh\nprintf 'launcher\\n' >> "$FIXTURE_LOG"\nmkdir -p "$CARGO_TARGET_DIR/release"\ncp "${root}/scripts/launcher-fixture.sh" "$CARGO_TARGET_DIR/release/bun-wasm"\n`, 0o700);
     put("scripts/launcher-fixture.sh", `#!/bin/sh\ncase "$*" in *worker-alias.ts*) cat <<'PROOF'\n${pass}\nPROOF\n;; *) echo 'paired-smoke 42';; esac\n`, 0o700);
@@ -67,6 +68,7 @@ test("canonical split producer routes one core then two sides and records tested
     const built = invoke("build"); expect(built.exitCode, built.stderr?.toString()).toBe(0);
     const manifest = JSON.parse(readFileSync(join(output, "manifest.json"), "utf8"));
     expect(manifest.engines).toEqual(["quickjs", "jsc"]);
+    for (const name of dependencyWebAssets) expect(manifest.files.map((file: { path: string }) => file.path)).toContain(`web/${name}`);
     expect(manifest.inputOrigins.map((input: {scope: string}) => input.scope)).toEqual(["core", "quickjs", "jsc"]);
     const original = readFileSync(join(output, "jsc/engine.wasm.engine.json"), "utf8");
     expect(readFileSync(join(output, "dist/jsc-engine.wasm.engine.json"), "utf8")).toBe(original);
@@ -83,6 +85,12 @@ test("canonical split producer routes one core then two sides and records tested
     writeFileSync(path, JSON.stringify(manifest));
     expect(invoke("verify").exitCode).not.toBe(0);
     writeFileSync(path, originalManifest);
+    const dependency = join(output, "web/programs/shell-engine.wasm");
+    const originalDependency = readFileSync(dependency);
+    writeFileSync(dependency, "changed synthetic dependency");
+    expect(invoke("verify").exitCode).not.toBe(0);
+    writeFileSync(dependency, originalDependency);
+    expect(invoke("verify").exitCode).toBe(0);
     writeFileSync(join(output, "dist/jsc-engine.wasm"), "corrupt");
     expect(invoke("verify").exitCode).not.toBe(0);
     expect(readFileSync(join(output, "state.json"), "utf8")).toBe(state);
