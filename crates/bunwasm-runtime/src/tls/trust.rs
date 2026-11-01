@@ -1,7 +1,9 @@
 use super::owned::{self, Kind, Meter, Owned};
 use super::{Failure, Result};
 use bunwasm_crypto_sys::tls as ffi;
+#[cfg(any(target_os = "wasi", test))]
 use std::fs::File;
+#[cfg(any(target_os = "wasi", test))]
 use std::io::{Read, Result as IoResult};
 use std::rc::Rc;
 
@@ -13,6 +15,7 @@ pub const MAX_CERTIFICATES: usize = 1024;
 #[derive(Debug, PartialEq, Eq)]
 pub enum StartupExtras {
     Absent,
+    #[cfg(any(target_os = "wasi", test))]
     Bytes(Vec<u8>),
     Unavailable,
 }
@@ -32,7 +35,7 @@ pub struct Trust {
 pub fn snapshot_startup_extras() -> StartupExtras {
     #[cfg(not(target_os = "wasi"))]
     {
-        return StartupExtras::Absent;
+        StartupExtras::Absent
     }
     #[cfg(target_os = "wasi")]
     {
@@ -46,6 +49,7 @@ pub fn snapshot_startup_extras() -> StartupExtras {
     }
 }
 
+#[cfg(any(target_os = "wasi", test))]
 pub(super) fn snapshot_file(path: &std::path::Path) -> StartupExtras {
     let Ok(file) = File::open(path) else {
         return StartupExtras::Unavailable;
@@ -68,6 +72,7 @@ impl Trust {
     // The embedding process supplies startup-snapshotted guest bytes, never a path.
     pub fn new(extras: StartupExtras, meter: &Rc<Meter>) -> Self {
         let extras = match extras {
+            #[cfg(any(target_os = "wasi", test))]
             StartupExtras::Bytes(bytes) if bytes.len() > MAX_MATERIAL => StartupExtras::Unavailable,
             other => other,
         };
@@ -141,6 +146,7 @@ impl Trust {
         };
         let result = match snapshot {
             StartupExtras::Absent => Ok(Vec::new()),
+            #[cfg(any(target_os = "wasi", test))]
             StartupExtras::Bytes(bytes) => certificates(&bytes, &self.meter),
             StartupExtras::Unavailable => Err(invalid_material()),
         };
