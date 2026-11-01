@@ -101,7 +101,7 @@
     "typescript": "7.0.2",
     "typescript-api": "npm:typescript@6.0.2",
     "vite": "8.3.4",
-    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.107/waffle-0.0.107.tgz",
+    "waffle": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.110/waffle-0.0.110.tgz",
     "jscpd": "5.4.1",
     "knip": "6.41.0",
     "oxlint": "1.88.0",
