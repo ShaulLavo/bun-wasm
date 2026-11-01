@@ -31,7 +31,7 @@
 # `--update` runs native Bun in the scratch copy, where absolute paths would
 # land on the real filesystem.
 #
-#   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc|hermes|browser] [--context native|hooks] [name...]
+#   scripts/test.sh [--no-build] [--update] [--engine quickjs|jsc|hermes|spidermonkey|browser] [--context native|hooks] [name...]
 #     --engine jsc      run dist/bun-jsc.wasm (JavaScriptCore; scripts/build-bun-jsc.sh)
 #     --engine hermes   run dist/bun-hermes.wasm (Hermes, opt-in; scripts/build-bun-hermes.sh)
 #     --engine browser  run dist/bun-browser.wasm with Node's V8 as the host engine
@@ -68,8 +68,9 @@ case "$engine" in
   quickjs) wasm="$root/dist/bun.wasm"; build_script="$root/scripts/build.sh" ;;
   jsc) wasm="$root/dist/bun-jsc.wasm"; build_script="$root/scripts/build-bun-jsc.sh" ;;
   hermes) wasm="$root/dist/bun-hermes.wasm"; build_script="$root/scripts/build-bun-hermes.sh" ;;
+  spidermonkey) wasm="$root/dist/bun-spidermonkey.wasm"; build_script="$root/scripts/build-bun-spidermonkey.sh" ;;
   browser) wasm="$root/dist/bun-browser.wasm"; build_script="$root/scripts/build-bun-browser.sh" ;;
-  *) echo "unknown engine $engine (quickjs, jsc, hermes or browser)"; exit 2 ;;
+  *) echo "unknown engine $engine (quickjs, jsc, hermes, spidermonkey or browser)"; exit 2 ;;
 esac
 case "$context" in
   native) ;;

@@ -1419,6 +1419,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bunwasm-engine-spidermonkey"
+version = "0.0.53"
+dependencies = [
+ "bunwasm-spidermonkey",
+]
+
+[[package]]
 name = "bunwasm-glue"
 version = "0.0.53"
 dependencies = [
