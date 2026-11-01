@@ -43,6 +43,28 @@ async function withEnvironment<T>(cache: CacheDouble | undefined, fetcher: () =>
   }
 }
 
+async function observeBeforeDeadline<T>(pending: Promise<T>, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), 1000);
+  });
+  try {
+    return await Promise.race([pending, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function releasePendingResponse(pending: Promise<Response>, reader: ReadableStreamDefaultReader<Uint8Array> | undefined): Promise<void> {
+  const response = await pending.catch(() => undefined);
+  if (!reader) {
+    await response?.body?.cancel();
+    return;
+  }
+  await reader.cancel();
+  reader.releaseLock();
+}
+
 function requestOptions(signal?: AbortSignal): RequestInit {
   return { method: "GET", signal, headers: { accept: TARBALL } };
 }
@@ -90,35 +112,44 @@ function cacheDouble(overrides: Partial<CacheDouble> = {}): CacheDouble {
 test("cold cache miss exposes the first chunk before EOF and cache completion", async () => {
   const eof = deferred<void>();
   const putStarted = deferred<void>();
-  const putFinished = deferred<void>();
+  const publications: Promise<void>[] = [];
   const first = new TextEncoder().encode("first chunk");
   let cachedBytes = new Uint8Array();
   const cache = cacheDouble({
-    async put(_url, response) {
+    put(_url, response) {
       putStarted.resolve();
-      cachedBytes = new Uint8Array(await response.arrayBuffer());
-      putFinished.resolve();
+      const publication = response.arrayBuffer().then(value => { cachedBytes = new Uint8Array(value); });
+      publications.push(publication);
+      return publication;
     },
   });
   const source = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(first);
-      eof.promise.then(() => controller.close());
+      void eof.promise.then(() => controller.close());
     },
   });
   await withEnvironment(cache, async () => new Response(source), async () => {
-    const response = await installFetch("https://registry.invalid/pkg.tgz", requestOptions());
-    expect(await Promise.race([putStarted.promise.then(() => "started"), Promise.resolve("not-started")])).toBe("not-started");
-    const reader = response.body!.getReader();
-    const chunk = await reader.read();
-    expect(chunk.done).toBe(false);
-    expect(chunk.value).toEqual(first);
-    expect(await Promise.race([putStarted.promise.then(() => "started"), Promise.resolve("not-started")])).toBe("not-started");
-    eof.resolve();
-    expect((await reader.read()).done).toBe(true);
-    await putFinished.promise;
-    expect(cachedBytes).toEqual(first);
-    await reader.cancel();
+    const pending = installFetch("https://registry.invalid/pkg.tgz", requestOptions());
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const response = await observeBeforeDeadline(pending, "cache miss withheld response until EOF");
+      expect(await Promise.race([putStarted.promise.then(() => "started"), Promise.resolve("not-started")])).toBe("not-started");
+      reader = response.body!.getReader();
+      const chunk = await observeBeforeDeadline(reader.read(), "cache miss withheld first chunk until EOF");
+      expect(chunk.done).toBe(false);
+      expect(chunk.value).toEqual(first);
+      expect(await Promise.race([putStarted.promise.then(() => "started"), Promise.resolve("not-started")])).toBe("not-started");
+      eof.resolve();
+      expect((await reader.read()).done).toBe(true);
+      await observeBeforeDeadline(putStarted.promise, "cache did not publish after EOF");
+      await Promise.all(publications);
+      expect(cachedBytes).toEqual(first);
+    } finally {
+      eof.resolve();
+      await releasePendingResponse(pending, reader);
+      await Promise.all(publications);
+    }
   });
 });
 
@@ -285,29 +316,103 @@ test("body errors discard partial captures", async () => {
   });
 });
 
-test("response metadata survives body forwarding and cache publication", async () => {
-  const finalUrl = "https://cdn.invalid/final.tgz";
-  let published: Response | undefined;
-  const cache = cacheDouble({ async put(_url, response) { published = response; await response.arrayBuffer(); } });
-  await withEnvironment(cache, async () => {
-    const response = new Response(responseBody(bytes(5)), { status: 201, statusText: "Created", headers: { "x-test": "kept" } });
-    Object.defineProperties(response, {
-      url: { configurable: true, value: finalUrl },
-      redirected: { configurable: true, value: true },
-    });
-    return response;
-  }, async () => {
-    const response = await installFetch("https://registry.invalid/pkg.tgz", requestOptions());
-    expect(response.url).toBe(finalUrl);
-    expect(response.redirected).toBe(true);
-    expect(response.status).toBe(201);
-    expect(response.statusText).toBe("Created");
-    expect(response.headers.get("x-test")).toBe("kept");
-    expect((await readBody(response)).byteLength).toBe(5);
+function cloningCache(): { cache: CacheDouble; published: Promise<void> } {
+  const published = deferred<void>();
+  let stored: Response | undefined;
+  return {
+    published: published.promise,
+    cache: cacheDouble({
+      async match() { return stored && Response.prototype.clone.call(stored); },
+      async put(_url, response) {
+        stored = Response.prototype.clone.call(response);
+        await response.arrayBuffer();
+        published.resolve();
+      },
+    }),
+  };
+}
+
+async function expectResponseMetadata(response: Response, expected: Response): Promise<void> {
+  const clone = response.clone();
+  const secondClone = clone.clone();
+  try {
+    expect(response.url).toBe(expected.url);
+    expect(response.redirected).toBe(expected.redirected);
+    expect(response.status).toBe(expected.status);
+    expect(response.statusText).toBe(expected.statusText);
+    expect(Array.from(response.headers)).toEqual(Array.from(expected.headers));
+    expect(clone.url).toBe(expected.url);
+    expect(clone.redirected).toBe(expected.redirected);
+    expect(secondClone.url).toBe(expected.url);
+    expect(secondClone.redirected).toBe(expected.redirected);
+    expect(await Promise.all([response.text(), clone.text(), secondClone.text()])).toEqual(["metadata body", "metadata body", "metadata body"]);
+  } finally {
+    await Promise.allSettled([response.body?.cancel(), clone.body?.cancel(), secondClone.body?.cancel()]);
+  }
+}
+
+test("native response URL survives a native-cloned cache fill and hit", async () => {
+  const network = await fetch("data:text/plain,metadata%20body");
+  expect(network.url).not.toBe("");
+  const expected = network.clone();
+  const { cache, published } = cloningCache();
+  let networkCalls = 0;
+  await withEnvironment(cache, async () => { networkCalls++; return network; }, async () => {
+    const cold = await installFetch("https://registry.invalid/pkg.tgz", requestOptions());
+    expect(cold.url).toBe(expected.url);
+    expect(await cold.text()).toBe("metadata body");
+    await published;
+    await expectResponseMetadata(await installFetch("https://registry.invalid/pkg.tgz", requestOptions()), expected);
   });
-  await Bun.sleep(0);
-  expect(published?.url).toBe(finalUrl);
-  expect(published?.redirected).toBe(true);
+  expect(networkCalls).toBe(1);
+  await expected.body?.cancel();
+});
+
+test("status, redirect metadata and colliding headers survive native cache clones", async () => {
+  const network = new Response("metadata body", {
+    status: 201, statusText: "Created", headers: { "x-test": "kept", "x-bun-wasm-cache-metadata": "upstream-value" },
+  });
+  Object.defineProperties(network, {
+    url: { configurable: true, value: "https://cdn.invalid/final.tgz" },
+    redirected: { configurable: true, value: true },
+  });
+  const { cache, published } = cloningCache();
+  await withEnvironment(cache, async () => network, async () => {
+    await expectResponseMetadata(await installFetch("https://registry.invalid/pkg.tgz", requestOptions()), network);
+    await published;
+    await expectResponseMetadata(await installFetch("https://registry.invalid/pkg.tgz", requestOptions()), network);
+  });
+});
+
+test("empty cached responses preserve null bodies and metadata through native clones", async () => {
+  const network = new Response(null, { status: 204, headers: { "x-bun-wasm-cache-metadata": "upstream-value" } });
+  Object.defineProperty(network, "url", { value: "https://cdn.invalid/empty.tgz" });
+  const { cache, published } = cloningCache();
+  let networkCalls = 0;
+  await withEnvironment(cache, async () => { networkCalls++; return network; }, async () => {
+    expect((await installFetch("https://registry.invalid/pkg.tgz", requestOptions())).body).toBeNull();
+    await published;
+    const hit = await installFetch("https://registry.invalid/pkg.tgz", requestOptions());
+    expect(hit.body).toBeNull();
+    expect(hit.status).toBe(204);
+    expect(hit.url).toBe(network.url);
+    expect(hit.clone().url).toBe(network.url);
+    expect(Array.from(hit.headers)).toEqual(Array.from(network.headers));
+  });
+  expect(networkCalls).toBe(1);
+});
+
+test("cache hits with unrelated metadata headers remain unchanged", async () => {
+  const hit = new Response("cached", { headers: { "x-bun-wasm-cache-metadata": "ordinary-header-value" } });
+  let networkCalls = 0;
+  await withEnvironment(cacheDouble({ async match() { return hit; } }), async () => {
+    networkCalls++;
+    return new Response("unexpected network");
+  }, async () => {
+    expect(await installFetch("https://registry.invalid/pkg.tgz", requestOptions())).toBe(hit);
+    expect(await hit.text()).toBe("cached");
+  });
+  expect(networkCalls).toBe(0);
 });
 
 test("authentication, metadata and ordinary requests bypass tarball persistence", async () => {

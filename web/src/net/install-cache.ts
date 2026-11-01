@@ -3,6 +3,7 @@ import { packageFetch } from "./package-fetch.js";
 const METADATA = "application/vnd.npm.install-v1+json";
 const TARBALL = "application/vnd.bun.install-tarball";
 const CACHE = "bun-wasm-install-v1";
+const CACHE_METADATA_HEADER = "x-bun-wasm-cache-metadata";
 const CACHE_CAPTURE_LIMIT = 4 * 1024 * 1024;
 const BODY_FORBIDDEN_STATUS = new Set([204, 205, 304]);
 
@@ -27,7 +28,7 @@ export async function installFetch(url: string, options: RequestInit): Promise<R
   try {
     cache = await caches.open(CACHE);
     const cached = await cache.match(url);
-    if (cached && !refresh) return cached;
+    if (cached && !refresh) return restoreCachedResponse(cached);
   } catch {
     // Private browsing and exhausted quotas must not prevent an install.
   }
@@ -62,15 +63,15 @@ function createForwardingBody(response: Response, cache: Cache, url: string, sig
     reader.releaseLock();
     signal?.removeEventListener("abort", abort);
   };
+  const cancelReader = async (reason: unknown): Promise<void> => {
+    if (!cancelled) {
+      cancelled = true;
+      await reader.cancel(reason).catch(() => {});
+    }
+    release();
+  };
   const cancelUpstream = (reason: unknown): Promise<void> => {
-    if (cleanupPromise) return cleanupPromise;
-    cleanupPromise = (async () => {
-      if (!cancelled) {
-        cancelled = true;
-        await reader.cancel(reason).catch(() => {});
-      }
-      release();
-    })();
+    cleanupPromise ??= cancelReader(reason);
     return cleanupPromise;
   };
   const cancelCapture = () => {
@@ -96,7 +97,7 @@ function createForwardingBody(response: Response, cache: Cache, url: string, sig
     await cancelUpstream(error);
     controller?.error(error);
   };
-  const finish = async () => {
+  const finish = () => {
     const completed = completeCapture(state);
     if (completed) state = { kind: "completed", bytes: completed };
     release();
@@ -108,10 +109,7 @@ function createForwardingBody(response: Response, cache: Cache, url: string, sig
     try {
       const result = await reader.read();
       if (!isForwardingState(state)) return;
-      if (result.done) {
-        await finish();
-        return;
-      }
+      if (result.done) return finish();
       state = captureChunk(state, result.value);
       controller?.enqueue(result.value);
     } catch (error) {
@@ -164,25 +162,58 @@ function responseInit(response: Response): ResponseInit {
 }
 
 function createResponseWithBody(response: Response, body: ReadableStream<Uint8Array>): Response {
-  const wrapped = new Response(body, responseInit(response));
-  Object.defineProperties(wrapped, {
-    url: { configurable: true, value: response.url },
-    redirected: { configurable: true, value: response.redirected },
-  });
-  return wrapped;
+  return withResponseMetadata(new Response(body, responseInit(response)), response);
 }
 
-function createCachedResponse(response: Response, bytes: ArrayBuffer): Response {
-  const cached = new Response(bytes, responseInit(response));
-  Object.defineProperties(cached, {
-    url: { configurable: true, value: response.url },
-    redirected: { configurable: true, value: response.redirected },
+function withResponseMetadata(response: Response, metadata: Pick<Response, "url" | "redirected">): Response {
+  const { url, redirected } = metadata;
+  Object.defineProperties(response, {
+    url: { configurable: true, value: url },
+    redirected: { configurable: true, value: redirected },
+    clone: {
+      configurable: true, writable: true,
+      value(this: Response) { return withResponseMetadata(Response.prototype.clone.call(this), this); },
+    },
   });
-  return cached;
+  return response;
+}
+
+function createCachedResponse(response: Response, bytes: ArrayBuffer | null): Response {
+  const headers = new Headers(response.headers);
+  // Cache Storage clones native response fields, not JavaScript property overrides.
+  headers.set(CACHE_METADATA_HEADER, encodeURIComponent(JSON.stringify({
+    url: response.url, redirected: response.redirected, header: headers.get(CACHE_METADATA_HEADER),
+  })));
+  return new Response(bytes, { ...responseInit(response), headers });
+}
+
+function readCachedMetadata(encoded: string): (Pick<Response, "url" | "redirected"> & { header: string | null }) | undefined {
+  try {
+    const metadata: unknown = JSON.parse(decodeURIComponent(encoded));
+    if (typeof metadata !== "object" || metadata === null) return undefined;
+    if (!("url" in metadata) || typeof metadata.url !== "string") return undefined;
+    if (!("redirected" in metadata) || typeof metadata.redirected !== "boolean") return undefined;
+    if (!("header" in metadata) || metadata.header !== null && typeof metadata.header !== "string") return undefined;
+    return { url: metadata.url, redirected: metadata.redirected, header: metadata.header };
+  } catch {
+    return undefined;
+  }
+}
+
+function restoreCachedResponse(response: Response): Response {
+  const encoded = response.headers.get(CACHE_METADATA_HEADER);
+  if (!encoded) return response;
+  const metadata = readCachedMetadata(encoded);
+  if (!metadata) return response;
+  const headers = new Headers(response.headers);
+  if (metadata.header === null) headers.delete(CACHE_METADATA_HEADER);
+  else headers.set(CACHE_METADATA_HEADER, metadata.header);
+  const restored = new Response(response.body, { ...responseInit(response), headers });
+  return withResponseMetadata(restored, metadata);
 }
 
 function publishEmptyResponse(cache: Cache, url: string, response: Response): void {
-  void Promise.resolve().then(() => cache.put(url, response)).catch(() => {});
+  void Promise.resolve().then(() => cache.put(url, createCachedResponse(response, null))).catch(() => {});
 }
 
 function publishCapturedResponse(cache: Cache, url: string, response: Response, bytes: ArrayBuffer): void {
