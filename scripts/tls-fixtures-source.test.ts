@@ -29,6 +29,12 @@ describe("native TLS fixture source contract", () => {
     expect(await close?.json()).toEqual({ closed: true });
   });
 
+  test("completes observer arming before publishing the manifest", async () => {
+    const response = await handleTlsFixtureRequest(new Request("http://127.0.0.1/tls-fixtures"));
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toMatchObject({ version: 1 });
+  });
+
   test("owns generated credentials and live-server teardown in the route module", () => {
     expect(serverSource).toContain('process.env.TMPDIR ?? tmpdir()');
     expect(serverSource).toContain('mkdtemp(join(base, "bun-wasm-tls-fixtures-"))');
