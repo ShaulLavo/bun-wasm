@@ -21,11 +21,28 @@ export function observeCall<Method extends Function>(method: Method, observe: (e
 function observeSettlement(result: unknown, observe: (event: CallEvent) => void): void {
   // Side observation adds reactions and marks the original handled. Neither handler returns the observed value.
   try {
-    if (!(result instanceof Promise)) return;
+    if (!isSafeNativePromise(result)) return;
     Promise.prototype.then.call(result,
       (value: unknown) => { notify(observe, { stage: "resolve", value }); },
       (value: unknown) => { notify(observe, { stage: "reject", value }); });
   } catch {}
+}
+
+function isSafeNativePromise(value: unknown): value is Promise<unknown> {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
+  const seen = new Set<object>();
+  let current: object | null = value;
+  while (current !== null) {
+    if (seen.has(current)) return false;
+    seen.add(current);
+    const constructor = Object.getOwnPropertyDescriptor(current, "constructor");
+    if (constructor) {
+      if (!("value" in constructor)) return false;
+      return constructor.value === undefined || constructor.value === null || constructor.value === Promise;
+    }
+    current = Object.getPrototypeOf(current);
+  }
+  return false;
 }
 
 export function replaceMethod(prototype: object, name: string, wrap: (original: Function) => Function): boolean {

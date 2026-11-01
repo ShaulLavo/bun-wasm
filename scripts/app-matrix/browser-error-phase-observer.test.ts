@@ -79,6 +79,11 @@ test("promise observers retain original promises and never assimilate fulfilled 
   const thenable = { get then() { thenableReads++; throw new Error("thenable getter"); } };
   expect(observeCall(() => thenable, () => {})()).toBe(thenable);
   expect(thenableReads).toBe(0);
+  let constructorReads = 0;
+  const constructorGetterPromise = Promise.resolve("constructor-value");
+  Object.defineProperty(constructorGetterPromise, "constructor", { configurable: true, get() { constructorReads++; return Promise; } });
+  expect(observeCall(() => constructorGetterPromise, () => {})()).toBe(constructorGetterPromise);
+  expect(constructorReads).toBe(0);
 });
 
 async function rejectedIdentity(value: unknown): Promise<void> {
