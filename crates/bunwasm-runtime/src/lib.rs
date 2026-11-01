@@ -40,6 +40,8 @@ mod semver;
 mod sourcemap;
 mod sqlite;
 mod streams;
+#[cfg(test)]
+mod tls;
 pub mod transpiler;
 mod wasm;
 mod x509;
