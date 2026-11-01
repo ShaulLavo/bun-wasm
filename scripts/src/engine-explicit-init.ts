@@ -73,7 +73,7 @@ function encodeExport(entry: { name: string; kind: number; index: number }): Buf
  * A shared-group side imports the group memory and must never export it (Waffle group admission).
  * Only QuickJS is qualified for the shared-group profile; JSC inputs have no atomics.
  */
-export function convertEngineInitializers(bytes: Uint8Array, engine: PairedEngine, profile: ProgramProfile = "split"): Uint8Array<ArrayBuffer> {
+export function convertEngineInitializers(bytes: Uint8Array, engine: PairedEngine | "spidermonkey", profile: ProgramProfile = "split"): Uint8Array<ArrayBuffer> {
     assert(profile === "split" || engine === "quickjs", `${engine} is not qualified for the shared-group profile`);
     const input = Buffer.from(bytes);
     const before = sections(input);
@@ -89,6 +89,7 @@ export function convertEngineInitializers(bytes: Uint8Array, engine: PairedEngin
         const memory: readonly string[] = profile.initializeMemory;
         return memory.concat([profile.initialize[0]]);
     });
+    initializers.push("spidermonkey_initialize_memory", "spidermonkey_apply_data_relocs", "spidermonkey_call_ctors");
     assert(!original.some(entry => initializers.includes(entry.name)), "side is already converted or has contradictory initializers");
     const imports = WebAssembly.Module.imports(new WebAssembly.Module(input));
     const memories = imports.filter((entry) => entry.kind === "memory");
@@ -161,8 +162,8 @@ export function convertCoreInitializers(bytes: Uint8Array): Uint8Array<ArrayBuff
 
 if (import.meta.main) {
     const [engine, input, output, flag] = process.argv.slice(2);
-    const usage = "usage: engine-explicit-init.ts quickjs|jsc|core input.wasm output.wasm [--group]";
-    assert((isPairedEngine(engine) || engine === "core") && input && output && (flag === undefined || flag === "--group"), usage);
+    const usage = "usage: engine-explicit-init.ts quickjs|jsc|spidermonkey|core input.wasm output.wasm [--group]";
+    assert((isPairedEngine(engine) || engine === "spidermonkey" || engine === "core") && input && output && (flag === undefined || flag === "--group"), usage);
     if (engine === "core") assert.equal(flag, "--group", "only a shared-group core has an explicit initializer");
     const bytes = readFileSync(input);
     writeFileSync(output, engine === "core" ? convertCoreInitializers(bytes) : convertEngineInitializers(bytes, engine, flag ? "shared-group" : "split"));

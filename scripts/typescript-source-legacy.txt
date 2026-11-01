@@ -50,7 +50,6 @@ third_party/node-streams/adapters.js
 third_party/node-streams/end-of-stream.js
 web/scripts/live-check.mjs
 web/scripts/node-host.mjs
-web/scripts/node-install-net.mjs
 web/scripts/node-net.mjs
 web/src/crypto-host.js
 web/src/crypto-inputs.js
