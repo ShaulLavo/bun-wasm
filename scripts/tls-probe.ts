@@ -7,10 +7,12 @@ import { connect, type Socket } from "node:net";
 import { join, resolve } from "node:path";
 import { gzipSync, brotliCompressSync } from "node:zlib";
 import { inspectProbeLinkMap } from "./tls-probe-symbols.ts";
+import { tlsProbeServerPath } from "./tls-probe-server.ts";
+import { tlsProbeWasiPath } from "./tls-probe-wasi.ts";
 import { createProbeCertificates } from "./tls-probe-certificates.ts";
 
 const root = resolve(import.meta.dir, "..");
-export const boringSslPin = "41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f";
+const boringSslPin = "41bf9b59c2ebf277a7aa427e1ecad5cc80dd4d4f";
 const profileFlags = "-DOPENSSL_NO_THREADS_CORRUPT_MEMORY_AND_LEAK_SECRETS_IF_THREADED -DOPENSSL_NO_SOCK";
 const inputs = ["crates/bunwasm-crypto-sys/src/lib.rs", "scripts/tls-probe.test.ts", "checks/cmake-tls-probe.json", "scripts/tls-probe-symbols.ts", "crates/bunwasm-crypto-sys/build.rs", "crates/bunwasm-crypto-sys/src/tls.rs", "tests/native/tls-probe.cpp", "jsc/wasi-jsc.cmake", "scripts/tls-probe.ts", "scripts/tls-probe-wasi.ts", "scripts/tls-probe-server.ts", "scripts/tls-probe-certificates.ts"];
 type ProbeCase = { name: string; version: "1.2" | "1.3"; ca: string; cert: string; hostname: string; verify: number };
@@ -89,7 +91,7 @@ function bridge(child: ChildProcess, socket: Socket): { bytes: number } {
 
 async function runCase(binary: string, certificates: ReturnType<typeof createProbeCertificates>, test: ProbeCase) {
   const deadline = AbortSignal.timeout(30_000);
-  const server = spawn("node", [join(root, "scripts/tls-probe-server.ts"), certificates.key, test.cert, `TLSv${test.version}`], { stdio: ["ignore", "pipe", "pipe"], signal: deadline, detached: true });
+  const server = spawn("node", [tlsProbeServerPath, certificates.key, test.cert, `TLSv${test.version}`], { stdio: ["ignore", "pipe", "pipe"], signal: deadline, detached: true });
   const oracle = capture(server);
   let guest: ChildProcess | undefined;
   let socket: Socket | undefined;
@@ -151,7 +153,7 @@ export async function qualifyProbe(binary: string, scratchRoot: string) {
     for (const test of cases) results.push(await runCase(binary, certs, test));
     const native = join(scratchRoot, "tls-probe-native");
     const nativeResult = await runCase(native, certs, { name: "native-tls13-valid", version: "1.3", ca: certs.ca, cert: certs.cert, hostname: "tls-probe.test", verify: 0 });
-    const entropy = spawnSync("node", [join(root, "scripts/tls-probe-wasi.ts"), binary, certs.root, "fail", "/certs/ca.pem", "tls-probe.test", "1.3"], { encoding: "utf8", timeout: 10_000 });
+    const entropy = spawnSync("node", [tlsProbeWasiPath, binary, certs.root, "fail", "/certs/ca.pem", "tls-probe.test", "1.3"], { encoding: "utf8", timeout: 10_000 });
     if (entropy.error) throw entropy.error;
     assert.notEqual(entropy.status, 0, "failing random_get must abort");
     assert.ok(entropy.stderr.includes("tls-probe entropy-import-failure") && entropy.stderr.includes("unreachable"), entropy.stderr);
@@ -190,7 +192,7 @@ function authenticateSource(source: string, output: string) {
   }
 }
 
-export async function buildProbe(source: string, build: string, output: string) {
+async function buildProbe(source: string, build: string, output: string) {
   const { sdk, sysroot } = sdkPaths();
   if (process.env.BUN_WASM_PROGRAM_PROFILE) throw new Error("G0 requires the default unshared split profile");
   mkdirSync(build, { mode: 0o700 });

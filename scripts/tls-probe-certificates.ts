@@ -4,7 +4,9 @@ import { join } from "node:path";
 
 export function createProbeCertificates(root: string) {
   mkdirSync(root, { mode: 0o700 });
-  const openssl = (args: readonly string[]) => execFileSync("openssl", args, { cwd: root, stdio: ["ignore", "pipe", "pipe"], timeout: 15_000 });
+  const executable = Bun.which("openssl");
+  if (!executable) throw new Error("OpenSSL is required to generate private TLS test fixtures");
+  const openssl = (args: readonly string[]) => execFileSync(executable, args, { cwd: root, stdio: ["ignore", "pipe", "pipe"], timeout: 15_000 });
   for (const name of ["ca", "unknown"]) openssl([
     "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", `${name}.key`, "-out", `${name}.pem`, "-subj", `/CN=TLS Probe ${name}`, "-days", "2",
     "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
