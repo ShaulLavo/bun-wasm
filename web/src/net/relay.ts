@@ -41,6 +41,7 @@ async function createRuntimeRelay(
   let release: (() => void) | undefined;
   let client: RelayClient | undefined;
   let closing: Promise<void> | undefined;
+  let closed = false;
   try {
     release = runtime.retainConsumer({
       filesystem: identity,
@@ -49,10 +50,12 @@ async function createRuntimeRelay(
     });
     const { onCarrier, ...clientOptions } = options;
     const { createRelayConnect } = await import("waffle-relay");
+    if (closed || runtime.disposed) throw new Error("Runtime relay is disposed");
     const connected = createRelayConnect(clientOptions);
     client = {
       ...connected,
       async connect(target, signal) {
+        if (closed || runtime.disposed) throw new Error("Runtime relay is disposed");
         const stream = await connected.connect(target, signal);
         const carrier = connected.carrier;
         if (carrier) onCarrier?.(carrier);
@@ -70,6 +73,7 @@ async function createRuntimeRelay(
   }
 
   function close(): Promise<void> {
+    closed = true;
     if (closing) return closing;
     closing = Promise.resolve(client?.close()).finally(() => {
       if (!runtime.disposed) runtime.filesystem.reap(identity);

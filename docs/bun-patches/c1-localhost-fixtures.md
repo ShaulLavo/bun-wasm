@@ -1,7 +1,22 @@
-# C1 localhost acceptance fixtures
+# Raw TCP relay host integration
 
-Classification: original consumer test adapters and runners.
+Classification: original consumer adapters.
 
-The original files are `web/tests/c1-relay-inputs.ts`, `web/tests/c1-relay-localhost.ts`, `web/tests/c1-relay-page.ts`, `web/tests/c1-relay-services.ts`, `web/tests/c1-relay-localhost.test.ts`, `web/tests/c1-runner-preview1.test.ts`, and `web/tests/fixtures/c1-relay/{guests,protocol}.ts`.
+`web/src/net/relay.ts` owns one relay capability per borrowed process Runtime.
+The Bun launcher, manual runner, subprocess broker and network helper pass the
+released networking owners and transferable bindings to their process workers.
+They import the runtime and relay packages rather than copying their implementation.
+Root, web and sandbox select runtime 0.0.109; root and web select relay 0.0.109.
+Programs 0.0.15, manifest schema 2 and host interface 1 remain unchanged.
 
-They compose the existing Bun runner, publication artifact intake, page-owned relay client, Preview 1 socket bindings and released native relay. No production launcher API, upstream implementation or dependency pin changes are introduced. The Bun pg query follows the successful P1 source proof with `pg` 8.16.3, `ssl: false` and `SELECT 1`. The disposable database password is forwarded through the ordinary guest environment with explicit presence checks, while relay authorization stays page-owned. The plain Preview 1 fixture must come from the owner with its qualified byte identity and outside-echo contract. This lane creates no generic Waffle proof guest.
+Relay revocation is recorded independently of client creation. Disposal during
+the deferred import prevents later initialization. A stale connector rejects
+before token acquisition. The source regressions in
+`web/tests/network-consumer.test.ts` stop at a throwing token callback before I/O.
+They preserve the existing helper, child-launch and installer-cache assertions.
+
+Only the bounded host dependency is integrated here. The separate historical
+C1 fixture runner is not included. Source tests do not establish guest admission,
+raw TCP closure completion, PostgreSQL acceptance or a new producer delivery.
+Forced process stop still needs a target or relay observation of that process's
+connection closure, without closing a shared carrier used by other processes.

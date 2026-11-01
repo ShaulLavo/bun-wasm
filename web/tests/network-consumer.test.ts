@@ -198,3 +198,63 @@ test("Runtime-borrowed helpers retain the default installer tarball cache policy
     if (originalCaches) Object.defineProperty(globalThis, "caches", originalCaches); else Reflect.deleteProperty(globalThis, "caches");
   }
 });
+
+import { runtimeRelay } from "../src/net/relay";
+
+type TestRelay = NonNullable<Awaited<ReturnType<typeof runtimeRelay>>>;
+
+function relayOptions(counter: { calls: number }) {
+  return {
+    endpoint: "http://127.0.0.1:1/",
+    carriers: ["websocket"] as const,
+    getToken(): string {
+      counter.calls++;
+      throw new Error("source-only token marker, stop before I/O");
+    },
+  };
+}
+
+async function refusedRelayConnect(relay: TestRelay): Promise<unknown> {
+  try {
+    await relay.connect({ host: "source-only.example", port: 4321 }, new AbortController().signal);
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected the revoked relay to reject connection");
+}
+
+test("relay initialization cannot create a live connector after runtime disposal", async () => {
+  const runtime = processRuntimeFixture({});
+  const counter = { calls: 0 };
+  const observed = runtimeRelay(runtime, relayOptions(counter)).then(
+    relay => ({ kind: "returned", relay }) as const,
+    error => ({ kind: "rejected", error }) as const,
+  );
+  try {
+    await runtime.dispose();
+    const outcome = await observed;
+    if (outcome.kind === "returned" && outcome.relay) await refusedRelayConnect(outcome.relay);
+    expect(counter.calls).toBe(0);
+    expect(outcome.kind).toBe("rejected");
+  } finally {
+    const outcome = await observed;
+    if (outcome.kind === "returned") await outcome.relay?.close();
+    await runtime.dispose();
+  }
+});
+
+test("closed runtime relay rejects stale connect before token acquisition", async () => {
+  const runtime = processRuntimeFixture({});
+  const counter = { calls: 0 };
+  const relay = await runtimeRelay(runtime, relayOptions(counter));
+  if (!relay) throw new Error("Expected the configured runtime relay");
+  try {
+    await relay.close();
+    await relay.close();
+    expect(await refusedRelayConnect(relay)).toBeInstanceOf(Error);
+    expect(counter.calls).toBe(0);
+  } finally {
+    await relay.close();
+    await runtime.dispose();
+  }
+});
