@@ -10,6 +10,7 @@ import { ready, terminalText, writeFile } from "../web/tests/playground.mjs";
 import { stopForeground } from "../web/tests/foreground.ts";
 
 export const failedBytes = maxMemoryBytes() + 64 * 1024 * 1024;
+export const fixtureAllocationBytes = 1024 * 1024;
 const gate = `import fs from 'node:fs'; async function gate(name) { while (!fs.existsSync('/home/user/'+name)) await Bun.sleep(20); }`;
 
 const repository = resolve(import.meta.dir, "..");
@@ -194,7 +195,7 @@ async function verifyEngine(browser: Browser, url: string, engine: "quickjs" | "
       console.log('memory-baseline'); await gate('busy');
       console.log('memory-busy-start'); const until = Date.now()+5000; while(Date.now()<until) {}
       console.log('memory-busy-end'); await gate('allocate');
-      globalThis.kept = new Uint8Array(1048576); console.log('memory-allocated'); await gate('fail');
+      globalThis.kept = new Uint8Array(${fixtureAllocationBytes}); console.log('memory-allocated'); await gate('fail');
       try { globalThis.failed = new Uint8Array(${failedBytes}); } catch(e) { console.log('memory-failure'); }
       await gate('stop'); console.log('memory-finished');`);
     await waitMarker(page, engine, "memory-baseline");
