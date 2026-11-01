@@ -188,3 +188,4 @@ vprintf
 wcrtomb
 wcslen
 wcsnrtombs
+getpid

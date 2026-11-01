@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkArchive, checkObject, checkRelocations } from "./check-build.ts";
-import { importDelta } from "../scripts/hermes-import-delta.ts";
+import { importDelta } from "../scripts/side-import-delta.ts";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const [out, report] = process.argv.slice(2);
 assert(out && report);

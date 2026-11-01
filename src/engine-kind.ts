@@ -1,10 +1,11 @@
-export type PairedEngine = "quickjs" | "jsc" | "hermes";
+export type PairedEngine = "quickjs" | "jsc" | "hermes" | "spidermonkey";
 export type ProgramKind = "single" | PairedEngine;
 export type ProgramFiles<T> =
   | { readonly kind: "single"; readonly core: T }
   | { readonly kind: "quickjs"; readonly core: T; readonly side: T }
   | { readonly kind: "jsc"; readonly core: T; readonly side: T }
-  | { readonly kind: "hermes"; readonly core: T; readonly side: T };
+  | { readonly kind: "hermes"; readonly core: T; readonly side: T }
+  | { readonly kind: "spidermonkey"; readonly core: T; readonly side: T };
 export type PairedProgramFiles<T> = Exclude<ProgramFiles<T>, { kind: "single" }>;
 
 export const ENGINE_SECTION = "bun-wasm-engine";
@@ -12,8 +13,9 @@ const profiles = {
   quickjs: { core: "bun.wasm", side: "quickjs.wasm", initialize: ["quickjs_initialize_memory", "quickjs_apply_data_relocs", "quickjs_call_ctors", "quickjs_register"], run: "quickjs_run" },
   jsc: { core: "bun-jsc.wasm", side: "jsc-engine.wasm", initialize: ["jsc_initialize_memory", "jsc_apply_data_relocs", "jsc_call_ctors", "jsc_register"], run: "jsc_run" },
   hermes: { core: "bun-hermes.wasm", side: "hermes-engine.wasm", initialize: ["hermes_initialize_memory", "hermes_apply_data_relocs", "hermes_call_ctors", "hermes_register"], run: "hermes_run" },
+  spidermonkey: { core: "bun-spidermonkey.wasm", side: "spidermonkey-engine.wasm", initialize: ["spidermonkey_initialize_memory", "spidermonkey_apply_data_relocs", "spidermonkey_call_ctors", "spidermonkey_register"], run: "spidermonkey_run" },
 } as const;
-const pairedEngines: readonly PairedEngine[] = ["quickjs", "jsc", "hermes"];
+const pairedEngines: readonly PairedEngine[] = ["quickjs", "jsc", "hermes", "spidermonkey"];
 
 export function isPairedEngine(value: unknown): value is PairedEngine {
   return pairedEngines.some(engine => engine === value);
@@ -112,7 +114,7 @@ export function programKind(module: WebAssembly.Module): ProgramKind {
   const bytes = new Uint8Array(sections[0]!);
   const kind = pairedEngines.find(engine => bytes.length === engine.length && bytes.every((byte, index) => byte === engine.charCodeAt(index)));
   if (kind) return kind;
-  throw new TypeError("Invalid bun-wasm-engine section: expected exactly quickjs, jsc or hermes");
+  throw new TypeError("Invalid bun-wasm-engine section: expected exactly quickjs, jsc, hermes or spidermonkey");
 }
 
 export function verifyProgramSide(kind: PairedEngine, module: WebAssembly.Module): void {
@@ -176,6 +178,7 @@ export function programKindForBuild(build: unknown): ProgramKind {
     case "quickjs": case "quickjs-minimal": return "quickjs";
     case "jsc": return "jsc";
     case "hermes": return "hermes";
+    case "spidermonkey": return "spidermonkey";
     case "browser": case "source-cache-browser": case "tools": return "single";
     default: throw new TypeError(`Unknown guest build: ${String(build)}`);
   }

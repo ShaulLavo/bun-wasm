@@ -148,6 +148,7 @@ function verifyManifest(value: unknown): asserts value is SourceManifest {
   const required = ["repository", "bun", "waffle-libc", "sysroot", "sdk", "rust-target", "boringssl"];
   if (value.build === "jsc" || value.build === "tools") required.push("jsc-prebuild");
   if (value.build === "hermes") required.push("hermes-prebuild");
+  if (value.build === "spidermonkey") required.push("spidermonkey-prebuild");
   if (programKindForBuild(value.build) !== "single") required.push("rust-build-std");
   const names = value.groups.map(group => group.name);
   if (new Set(names).size !== names.length || required.some(name => !names.includes(name))) throw new Error("Missing guest source manifest group");

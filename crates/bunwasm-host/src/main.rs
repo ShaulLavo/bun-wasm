@@ -36,7 +36,7 @@ Runs bun.wasm (from --wasm, $BUN_WASM, or the build tree's dist/bun.wasm)
 with networking. Launcher options must come before the bun arguments:
 
   --wasm PATH         bun.wasm to run
-  --engine NAME=PATH  register quickjs or jsc at /opt/bun/NAME/bin (repeatable)
+  --engine NAME=PATH  register quickjs, jsc or spidermonkey at /opt/bun/NAME/bin (repeatable)
   --shell PATH        register bash-web's shell guest at /bin/sh and /bin/bash
   --env-utility PATH  register bash-web's env utility at /bin/env and /usr/bin/env
   --dir HOST[::GUEST] preopen a directory (repeatable); without any --dir
@@ -100,10 +100,10 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options> {
             "--engine" => {
                 let spec = value("--engine")?;
                 let Some((name, path)) = spec.split_once('=') else {
-                    bail!("--engine expects quickjs=PATH or jsc=PATH")
+                    bail!("--engine expects quickjs=PATH, jsc=PATH or spidermonkey=PATH")
                 };
-                if !matches!(name, "quickjs" | "jsc") || path.is_empty() {
-                    bail!("--engine expects quickjs=PATH or jsc=PATH")
+                if !matches!(name, "quickjs" | "jsc" | "spidermonkey") || path.is_empty() {
+                    bail!("--engine expects quickjs=PATH, jsc=PATH or spidermonkey=PATH")
                 }
                 if options.engines.iter().any(|(engine, _)| engine == name) {
                     bail!("--engine {name} was already supplied")

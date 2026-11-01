@@ -3,7 +3,7 @@ name = "bunwasm-spidermonkey"
 version.workspace = true
 edition = "2021"
 license.workspace = true
-description = "Experimental SpiderMonkey VM-only G2 shim"
+description = "Experimental SpiderMonkey JSAPI shim"
 
 [lib]
 crate-type = ["rlib", "staticlib"]

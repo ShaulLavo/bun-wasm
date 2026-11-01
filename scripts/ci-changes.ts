@@ -85,7 +85,7 @@ export function needsJsc(paths: readonly string[]): boolean {
 
 const hermesDirectories = ["hermes/", "crates/bunwasm-hermes/", "crates/bunwasm-engine-hermes/", "tests/hermes/", "tests/fixtures/readline-async-iterator/"];
 const hermesFiles = new Set([
-  "scripts/build-bun-hermes.sh", "scripts/build-engine-hermes.sh", "scripts/hermes-import-delta.ts",
+  "scripts/build-bun-hermes.sh", "scripts/build-engine-hermes.sh", "scripts/side-import-delta.ts",
   // hermes/check-build.ts imports the native header receipt from the producer closure.
   "scripts/producer-closure.ts",
   "scripts/hermes-hosts.ts", "scripts/hermes-hosts.test.ts", "scripts/hermes-ci.test.ts", "checks/quality-hermes-ci.json", "checks/quality-hermes-hosts.json",

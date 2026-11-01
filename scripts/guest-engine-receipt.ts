@@ -21,5 +21,5 @@ if (import.meta.main) {
     const expected = parseProgramInputs(await Bun.file(snapshot).json());
     if (expected.scope === "core") throw new Error("Expected engine program inputs");
     verifyProgramReceipt(await Bun.file(path).bytes(), await Bun.file(`${path}.engine.json`).json(), expected);
-  } else throw new Error("Usage: guest-engine-receipt.ts inputs quickjs|jsc|hermes [shared-group] | environment quickjs|jsc|hermes [shared-group] | write SIDE SNAPSHOT | verify SIDE SNAPSHOT");
+  } else throw new Error("Usage: guest-engine-receipt.ts inputs quickjs|jsc|hermes|spidermonkey [shared-group] | environment quickjs|jsc|hermes|spidermonkey [shared-group] | write SIDE SNAPSHOT | verify SIDE SNAPSHOT");
 }

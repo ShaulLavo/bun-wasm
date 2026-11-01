@@ -5,9 +5,10 @@ import { loadBunWasm, type LoadBunWasmOptions } from "./assets.js";
 
 import type { BunNetworkOptions } from "../web/src/net/helper.js";
 import { bunLauncher } from "../web/src/bun-launcher.js";
-import { isPairedEngine, programKind, type PairedEngine } from "./engine-kind.js";
+import { isPairedEngine, programKind } from "./engine-kind.js";
 import { ENGINE_BIN } from "./executable-paths.js";
-export type Engine = PairedEngine | "browser";
+import type { Engine } from "../web/src/bun-executor.js";
+export type { Engine } from "../web/src/bun-executor.js";
 
 export class BunWasmExecutableConflictError extends Error {
   readonly code = "BUN_WASM_EXECUTABLE_CONFLICT";

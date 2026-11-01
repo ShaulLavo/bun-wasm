@@ -43,8 +43,7 @@ enum ProgramKind {
     QuickJs,
     Jsc,
     Hermes,
-    #[cfg(test)]
-    SpiderMonkeyProbe,
+    SpiderMonkey,
 }
 
 impl ProgramKind {
@@ -53,8 +52,7 @@ impl ProgramKind {
             Self::QuickJs => "quickjs.wasm",
             Self::Jsc => "jsc-engine.wasm",
             Self::Hermes => "hermes-engine.wasm",
-            #[cfg(test)]
-            Self::SpiderMonkeyProbe => "spidermonkey-engine.wasm",
+            Self::SpiderMonkey => "spidermonkey-engine.wasm",
         }
     }
 
@@ -72,8 +70,7 @@ impl ProgramKind {
                 "jsc_call_ctors",
                 "jsc_register",
             ],
-            #[cfg(test)]
-            Self::SpiderMonkeyProbe => &[
+            Self::SpiderMonkey => &[
                 "spidermonkey_initialize_memory",
                 "spidermonkey_apply_data_relocs",
                 "spidermonkey_call_ctors",
@@ -93,21 +90,14 @@ impl ProgramKind {
             Self::QuickJs => "quickjs_run",
             Self::Jsc => "jsc_run",
             Self::Hermes => "hermes_run",
-            #[cfg(test)]
-            Self::SpiderMonkeyProbe => "spidermonkey_run",
+            Self::SpiderMonkey => "spidermonkey_run",
         }
     }
 
     fn other_profiles(self) -> impl Iterator<Item = ProgramKind> {
-        [
-            Self::QuickJs,
-            Self::Jsc,
-            Self::Hermes,
-            #[cfg(test)]
-            Self::SpiderMonkeyProbe,
-        ]
-        .into_iter()
-        .filter(move |kind| *kind != self)
+        [Self::QuickJs, Self::Jsc, Self::Hermes, Self::SpiderMonkey]
+            .into_iter()
+            .filter(move |kind| *kind != self)
     }
 }
 
@@ -287,8 +277,9 @@ fn parse_program_kind(bytes: &[u8], has_bind: bool) -> Result<Option<ProgramKind
             b"quickjs" => ProgramKind::QuickJs,
             b"jsc" => ProgramKind::Jsc,
             b"hermes" => ProgramKind::Hermes,
+            b"spidermonkey" => ProgramKind::SpiderMonkey,
             #[cfg(test)]
-            b"spidermonkey-g2" => ProgramKind::SpiderMonkeyProbe,
+            b"spidermonkey-g2" => ProgramKind::SpiderMonkey,
             _ => bail!("invalid bun-wasm-engine payload"),
         };
         tag = Some(kind);
@@ -794,13 +785,23 @@ mod tests {
                 .initializers()
                 .contains(&"hermes_register")
         );
+        assert_eq!(
+            ProgramKind::SpiderMonkey.companion(),
+            "spidermonkey-engine.wasm"
+        );
+        assert_eq!(ProgramKind::SpiderMonkey.run(), "spidermonkey_run");
+        assert!(
+            ProgramKind::SpiderMonkey
+                .initializers()
+                .contains(&"spidermonkey_register")
+        );
         let others: Vec<_> = ProgramKind::Hermes.other_profiles().collect();
         assert_eq!(
             others,
             [
                 ProgramKind::QuickJs,
                 ProgramKind::Jsc,
-                ProgramKind::SpiderMonkeyProbe
+                ProgramKind::SpiderMonkey
             ]
         );
     }

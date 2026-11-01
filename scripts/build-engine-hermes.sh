@@ -51,5 +51,5 @@ if [[ "$tags" != 0 ]]; then
   echo "error: $side declares $tags exception tags" >&2
   exit 1
 fi
-bun "$root/scripts/hermes-import-delta.ts" "$side" > "$out/import-delta.txt" || { cat "$out/import-delta.txt" >&2; exit 1; }
+bun "$root/scripts/side-import-delta.ts" "$side" > "$out/import-delta.txt" || { cat "$out/import-delta.txt" >&2; exit 1; }
 bun "$root/scripts/guest-engine-receipt.ts" write "$side" "$inputs"
