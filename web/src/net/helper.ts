@@ -29,6 +29,7 @@ export interface BunRelayOptions {
 export interface BunNetworkOptions {
   readonly fetch?: NetFetch;
   readonly relay?: BunRelayOptions;
+  readonly connect?: NetConnect;
   readonly pathScope?: Parameters<RuntimeNetwork["createHelper"]>[0]["pathScope"];
   listening?(port: number, helper: RuntimeNetworkHelper): void;
   stopped?(port: number, helper: RuntimeNetworkHelper): void;
@@ -38,12 +39,11 @@ export function createBunNetworkHelper(
   network: RuntimeNetwork,
   ring: SharedArrayBuffer,
   options: BunNetworkOptions = {},
-  connect?: NetConnect,
 ): RuntimeNetworkHelper {
   const fetch = options.fetch ?? installFetch;
   const listening = options.listening;
   const stopped = options.stopped;
-  const helper = network.createHelper({ ring, fetch, connect, pathScope: options.pathScope, hooks: {
+  const helper = network.createHelper({ ring, fetch, connect: options.connect, pathScope: options.pathScope, hooks: {
     listening: port => listening?.(port, helper),
     stopped: port => stopped?.(port, helper),
   } });

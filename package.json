@@ -94,7 +94,8 @@
   },
   "peerDependencies": {
     "waffle": "*",
-    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-base-0.0.15.tgz"
+    "waffle-base": "https://github.com/ShaulLavo/waffle/releases/download/programs-v0.0.15/waffle-base-0.0.15.tgz",
+    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.109/waffle-relay-0.0.109.tgz"
   },
   "devDependencies": {
     "@types/bun": "^1.4.3",
@@ -106,7 +107,6 @@
     "knip": "6.41.0",
     "oxlint": "1.88.0",
     "wrangler": "4.151.0",
-    "playwright": "1.64.1",
-    "waffle-relay": "https://github.com/ShaulLavo/waffle/releases/download/waffle-v0.0.109/waffle-relay-0.0.109.tgz"
+    "playwright": "1.64.1"
   }
 }

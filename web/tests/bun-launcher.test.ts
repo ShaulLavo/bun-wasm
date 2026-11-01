@@ -4,6 +4,7 @@ import { networkPathScopeFixture, socketDirectoryFixture } from "./socket-runtim
 import { outcomeWord } from "waffle/proc/outcome";
 import type { ProcessService, RuntimeProcessContext } from "waffle";
 import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
+import { runtimeRelay } from "../src/net/relay";
 
 // Only the launch request is under test; the real service and ABI are covered elsewhere.
 interface Launch { workerUrl: string; request: Record<string, any>; network?: { connection: Record<string, unknown>; dispose(): void }; cleanup?(): void | Promise<void>; executableName?(name: string): string }
@@ -248,6 +249,22 @@ test("relay opt-in stays page-owned and keeps token access lazy", async () => {
     expect(tokenCalls).toEqual([]);
   } finally {
     create.mockRestore();
+    await scopedRuntime.dispose();
+  }
+});
+
+test("relay client is shared by launches on one runtime", async () => {
+  const scopedRuntime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
+  const relay = {
+    endpoint: "http://127.0.0.1:8787/",
+    getToken: () => "unused",
+    carriers: ["websocket"] as const,
+  };
+  try {
+    const first = await runtimeRelay(scopedRuntime, relay);
+    const second = await runtimeRelay(scopedRuntime, relay);
+    expect(first).toBe(second);
+  } finally {
     await scopedRuntime.dispose();
   }
 });
