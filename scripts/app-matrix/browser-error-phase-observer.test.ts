@@ -84,6 +84,18 @@ test("promise observers retain original promises and never assimilate fulfilled 
   Object.defineProperty(constructorGetterPromise, "constructor", { configurable: true, get() { constructorReads++; return Promise; } });
   expect(observeCall(() => constructorGetterPromise, () => {})()).toBe(constructorGetterPromise);
   expect(constructorReads).toBe(0);
+  const speciesDescriptor = Object.getOwnPropertyDescriptor(Promise, Symbol.species);
+  let speciesReads = 0;
+  if (speciesDescriptor?.configurable) {
+    try {
+      Object.defineProperty(Promise, Symbol.species, { configurable: true, get() { speciesReads++; return Promise; } });
+      const speciesPromise = Promise.resolve("species-value");
+      expect(observeCall(() => speciesPromise, () => {})()).toBe(speciesPromise);
+      expect(speciesReads).toBe(0);
+    } finally {
+      Object.defineProperty(Promise, Symbol.species, speciesDescriptor);
+    }
+  }
 });
 
 async function rejectedIdentity(value: unknown): Promise<void> {

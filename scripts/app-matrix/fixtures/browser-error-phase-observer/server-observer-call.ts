@@ -28,18 +28,29 @@ function observeSettlement(result: unknown, observe: (event: CallEvent) => void)
   } catch {}
 }
 
+const nativeSpecies = Object.getOwnPropertyDescriptor(Promise, Symbol.species);
+
+function hasSafeNativeSpecies(): boolean {
+  const current = Object.getOwnPropertyDescriptor(Promise, Symbol.species);
+  if (!nativeSpecies) return !current;
+  return current?.get === nativeSpecies.get && current?.set === nativeSpecies.set;
+}
+
+function hasSafeConstructorValue(descriptor: PropertyDescriptor): boolean {
+  if (!("value" in descriptor)) return false;
+  return descriptor.value === undefined || descriptor.value === null || descriptor.value === Promise;
+}
+
 function isSafeNativePromise(value: unknown): value is Promise<unknown> {
   if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
+  if (!hasSafeNativeSpecies()) return false;
   const seen = new Set<object>();
   let current: object | null = value;
   while (current !== null) {
     if (seen.has(current)) return false;
     seen.add(current);
     const constructor = Object.getOwnPropertyDescriptor(current, "constructor");
-    if (constructor) {
-      if (!("value" in constructor)) return false;
-      return constructor.value === undefined || constructor.value === null || constructor.value === Promise;
-    }
+    if (constructor) return hasSafeConstructorValue(constructor);
     current = Object.getPrototypeOf(current);
   }
   return false;
