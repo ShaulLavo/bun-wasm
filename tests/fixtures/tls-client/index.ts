@@ -196,10 +196,18 @@ async function startTls(): Promise<boolean> {
   return result;
 }
 
+function isAbortError(value: unknown): boolean {
+  return value instanceof Error && "code" in value && value.code === "ABORT_ERR";
+}
+
 async function abortAndDestroy(): Promise<boolean> {
   const controller = new AbortController();
   const socket = tlsConnect(options(manifest.tls13.port, { signal: controller.signal }));
-  const closed = close(socket).then(() => true, () => false);
+  let abortError = false;
+  const closed = new Promise<boolean>(resolve => {
+    socket.once("error", error => { abortError = isAbortError(error); });
+    socket.once("close", hadError => resolve(abortError && hadError));
+  });
   controller.abort();
   socket.destroy();
   return closed;
