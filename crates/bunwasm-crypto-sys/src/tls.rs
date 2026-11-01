@@ -1,6 +1,7 @@
 //! Narrow BoringSSL client TLS declarations.
 //!
-//! Callers own every value returned by these functions. In particular,
+//! Constructors return owned contexts, sessions and BIOs. Method, protocol and
+//! ALPN pointers are borrowed from BoringSSL or their owning session. In particular,
 //! `SSL_set_bio` transfers both BIO pointers to the SSL object, so callers must
 //! disarm their Rust-side BIO owners after that call.
 

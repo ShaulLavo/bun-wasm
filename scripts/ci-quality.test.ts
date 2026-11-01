@@ -94,9 +94,20 @@ test("native fixture smoke selects the typed runtime behavior without another bu
   expect(rust.match(/"\$GUEST_CARGO" build[^\n]*--target wasm32-wasip1[^\n]*-p bunwasm-cli/g)).toHaveLength(1);
 });
 
+const originalCmakeOwners = ["scripts/cmake-cache.test.ts", "scripts/jsc-memory-telemetry.test.ts"];
+
+function expectOriginalCmakeOwners(paths: readonly string[]): void {
+  expect(paths.filter(path => originalCmakeOwners.includes(path))).toEqual(originalCmakeOwners);
+}
+
+test("CMake owner migration accepts new features and rejects missing original owners", () => {
+  expectOriginalCmakeOwners(originalCmakeOwners.concat(["scripts/future-feature.test.ts"]));
+  expect(() => expectOriginalCmakeOwners(originalCmakeOwners.slice(1))).toThrow();
+});
+
 test("every migrated selection retains one blocking owner and the original local runtime set", () => {
   expect(proveCheckMigration().deduplicated).toHaveLength(7);
-  expect(selectChecks("cmake")).toEqual(["scripts/cmake-cache.test.ts", "scripts/jsc-memory-telemetry.test.ts"]);
+  expectOriginalCmakeOwners(selectChecks("cmake"));
   const checks = discoverChecks().map(check => check.path).concat(automaticChecks().map(check => check.path));
   expect(new Set(checks).size).toBe(checks.length);
   expect(selectChecks("quality")).toContain("scripts/runtime-ts-small.test.ts");

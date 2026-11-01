@@ -114,6 +114,8 @@ async function runCase(binary: string, certificates: ReturnType<typeof createPro
     const elapsedMs = performance.now() - start;
     assert.equal(signal, null, `guest terminated: ${stderr.value}`);
     assert.equal(status, test.verify === 0 ? 0 : 10, stderr.value);
+    socket.end();
+    await waitForText(server, oracle, /^terminal applicationBytes=\d+$/m, deadline);
     if (test.verify === 0) {
       await waitForText(server, oracle, /peer-close-notify=ok/, deadline);
       assertSuccess(test, stderr.value, oracle.stdout);
@@ -133,8 +135,11 @@ function assertSuccess(test: ProbeCase, stderr: string, oracle: string): void {
   assert.ok(oracle.includes("payload=ok"), oracle);
 }
 
-function assertRejection(test: ProbeCase, stderr: string, oracle: string): void {
+export function assertRejection(test: Pick<ProbeCase, "verify">, stderr: string, oracle: string): void {
   assert.ok(stderr.includes(`rejected verify=${test.verify}\n`), stderr);
+  const terminal = Array.from(oracle.matchAll(/^terminal applicationBytes=(\d+)$/gm));
+  assert.equal(terminal.length, 1, "certificate control needs one terminal server observation");
+  assert.equal(terminal[0]?.[1], "0", "certificate failure must precede every application byte");
   assert.ok(!stderr.includes("success") && !oracle.includes("payload=ok"), "certificate failure must precede application bytes");
 }
 

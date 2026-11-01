@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { inspectProbe, qualifyProbe, requireProbeEvidence } from "./tls-probe.ts";
+import { assertRejection, inspectProbe, qualifyProbe, requireProbeEvidence } from "./tls-probe.ts";
 
 test("selected TLS G0 fails closed without build evidence", () => {
   expect(() => requireProbeEvidence(undefined)).toThrow("cannot skip missing evidence");
@@ -44,4 +44,16 @@ test("build evidence does not accept arbitrary result booleans", () => {
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+test("certificate rejection requires a terminal zero-byte observation", () => {
+  const test = { verify: 20 };
+  expect(() => assertRejection(test, "rejected verify=20\n", "")).toThrow();
+  expect(() => assertRejection(test, "rejected verify=20\n", "terminal applicationBytes=0\n")).not.toThrow();
+});
+
+test("certificate rejection catches the first byte and a delayed full payload", () => {
+  const test = { verify: 20 };
+  expect(() => assertRejection(test, "rejected verify=20\n", "application-bytes=1\nterminal applicationBytes=1\n")).toThrow();
+  expect(() => assertRejection(test, "rejected verify=20\n", "terminal applicationBytes=17\n")).toThrow();
 });
