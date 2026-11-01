@@ -146,7 +146,7 @@ impl Trust {
         else {
             unreachable!()
         };
-        let result = match snapshot {
+        let result: std::result::Result<Vec<Owned<ffi::Certificate>>, Failure> = match snapshot {
             StartupExtras::Absent => Ok(Vec::new()),
             #[cfg(any(target_os = "wasi", test))]
             StartupExtras::Bytes(bytes) => certificates(&bytes, &self.meter),
