@@ -191,6 +191,7 @@ export async function checkPrompt(page: Page, browser: string, engine: string) {
   const interrupted = await pendingUpdate(page, modified, "interrupt", "echo cancelled", true);
   const narrow = await checkNarrowPrompt(page, modified);
   const git = await checkGitMarkers(page, repositories);
+  await prepareRepository(page, "draft", modified);
   const config = await checkConfig(page);
   const versions = await checkVersions(page);
   await submit(page, "cd /home/user");

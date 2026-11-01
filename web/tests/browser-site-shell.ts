@@ -64,6 +64,7 @@ async function exercise(page: Page, engine: string) {
   });
   assert.equal(shared, true, "Editor and shell borrow one runtime filesystem and process service");
   const prompt = await checkPrompt(page, "chromium", engine);
+  await page.evaluate(`globalThis.siteShellScreen = ${screen.toString()}`);
   await checkClearTyping(page, output ? `${output}/${engine}-clear-typed.png` : undefined);
   await checkRunReplacesMultilineDraft(page);
   await page.locator(".xterm-helper-textarea").focus();
