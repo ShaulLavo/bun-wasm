@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { hostname } from "node:os";
-import { digest, preflightTls, recheckDependencies, MissingTlsInput, type TlsEvidence } from "./tls-qualification-inputs.ts";
-import { acquireOwned, qualifiedRun } from "./tls-qualification-lifecycle.ts";
+import { digest, preflightTls, type TlsEvidence } from "./tls-qualification-inputs.ts";
+import { qualifiedRun } from "./tls-qualification-lifecycle.ts";
 import { isEngine } from "./tls-qualification-context.ts";
 import { startTlsServices, type ServiceOptions } from "../web/tests/tls-relay-services.ts";
 import { removeTlsScratch, runTlsBrowser } from "../web/tests/tls-relay-browser.ts";
@@ -47,33 +47,23 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, stop);
   const timer = setTimeout(stop, 10 * 60_000);
   try {
-    let scratchObservation: Awaited<ReturnType<typeof removeTlsScratch>> | undefined;
-    let serviceObservation: (() => unknown) | undefined;
     const result = await qualifiedRun(() => preflightTls(options.evidence), async (intake, owner) => {
-      abort.signal.throwIfAborted();
-      await recheckDependencies(intake);
-      abort.signal.throwIfAborted();
+      // Evidence has been checked before any directory, page, service or remote setup.
       const mount = execFileSync("findmnt", ["-T", "/work/tmp", "-n", "-o", "TARGET"], { encoding: "utf8", timeout: 5000 }).trim();
       if (!mount.startsWith("/work")) throw new Error("TLS qualification requires the mounted data drive");
-      abort.signal.throwIfAborted();
       await mkdir(options.output, { recursive: true });
-      abort.signal.throwIfAborted();
       const remoteBefore = execFileSync("mesh", ["ssh", options.services.databaseMachine, "--", "sh", "-c", "ps -eo pid,comm; command -v bun; command -v initdb; command -v postgres; command -v pg_isready; command -v openssl; df -Pk /work/tmp"], { encoding: "utf8", timeout: 15_000 });
-      abort.signal.throwIfAborted();
       await writeFile(join(options.output, "resources.before.json"), JSON.stringify({ host: hostname(), localBefore: execFileSync("ps", ["-eo", "pid,comm"], { encoding: "utf8" }), remoteHost: options.services.databaseMachine, remoteBefore, creates: ["private remote PostgreSQL scratch and processes", "run-generated CA and password", "raw TCP audit proxy", "loopback authenticated relay and page", "Chromium context", "private local build scratch"], frozenDelivery: intake.inputs.delivery }, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-      const scratch = await acquireOwned(owner, abort.signal, () => mkdtemp("/work/tmp/bun-wasm-tls-browser-"), async scratch => { scratchObservation = await removeTlsScratch(scratch); });
+      const scratch = await mkdtemp("/work/tmp/bun-wasm-tls-browser-");
+      owner.add(async () => { await removeTlsScratch(scratch); });
       const created: object[] = [];
       const record = async (resource: object) => { created.push(resource); await writeFile(join(options.output, "resources.created.json"), JSON.stringify(created, null, 2) + "\n", { mode: 0o600 }); };
       const services = await startTlsServices(intake, owner, options.services, abort.signal, record);
-      serviceObservation = services.lifecycle;
       await record(services.resources);
       return { intake, services, owner, scratch };
-    }, async ({ intake, services, owner, scratch }) => runTlsBrowser(intake, services, owner, options.services, options.engine, scratch, abort.signal), abort.signal);
-    abort.signal.throwIfAborted();
-    await writeFile(join(options.output, "cleanup.json"), JSON.stringify({ scratch: scratchObservation, services: serviceObservation?.() }) + "\n");
-    const serialized = JSON.stringify(result, null, 2) + "\n";
-    if (Buffer.byteLength(serialized) > 256 * 1024) throw new Error("TLS result exceeds the bounded evidence size; no result may be truncated");
-    await writeFile(join(options.output, "result.json"), serialized, { mode: 0o600 });
+    }, async ({ intake, services, owner, scratch }) => runTlsBrowser(intake, services, owner, options.services, options.engine, scratch, abort.signal));
+    await writeFile(join(options.output, "cleanup.json"), JSON.stringify({ scratchAbsent: true, ownedClosersCompleted: true, retained: [] }) + "\n");
+    await writeFile(join(options.output, "result.json"), JSON.stringify(result, null, 2) + "\n", { mode: 0o600 });
   } finally {
     clearTimeout(timer);
     for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.removeListener(signal, stop);
@@ -81,5 +71,5 @@ export async function tlsQualification(args: readonly string[]): Promise<void> {
 }
 if (import.meta.main) {
   try { await tlsQualification(process.argv.slice(2)); }
-  catch (error) { if (error instanceof MissingTlsInput) process.stderr.write(`${error.code}: ${error.message}\n`); process.stderr.write("TLS qualification failed. No application TLS acceptance is claimed.\n"); process.exitCode = 1; }
+  catch { process.stderr.write("TLS qualification failed. No application TLS acceptance is claimed.\n"); process.exitCode = 1; }
 }

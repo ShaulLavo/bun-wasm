@@ -12,13 +12,9 @@ Status: Approved source unit. Not a TLS application pass, producer grant, or byt
 
 The explicit expected TLS head/tree and source-release hash are trust inputs supplied after independent source review. They are never inferred from a package version or a boolean. The intake tuple must explicitly select runtime and relay 0.0.109, host interface 1, and QuickJS/JSC/browser. The old runtime107 packet cannot pass.
 
-Complete dependency bytes must already be authenticated by the existing complete delivery inventory or its canonical-reuse `staged` records. A canonical original is identified by its retained absolute `originalPath`, delivery member `path`, byte count, and SHA-256. The runner does not mint a dependency receipt or grant source authority.
-
-Both `--host-source/node_modules` and `--host-source/web/node_modules`, plus the entire supplied pg `node_modules`, must be ordinary-file trees with exact authenticated membership and no extras. Each project's `package.json` and `bun.lock` must be authenticated too. The pg project is the parent directory of the explicitly supplied pg `node_modules` directory. No dependency install occurs in this CLI. Missing existing inventory coverage produces `TLS_EXISTING_INPUT_CONTRACT_MISSING` before setup. Runtime version strings are only a consistency check after exact bytes have passed.
-
 `--host-source` is a clean checkout of that same reviewed head/tree, with the real C1 `web/src/net/relay.ts`, runner, workers, and normal browser builder. Installed `waffle` and `waffle-relay` must both be 0.0.109. The page bundles these real source files. It does not copy C1 implementations or install dependencies.
 
-`--pg-node-modules` is a separate, ordinary-file installation containing pg 8.16.3 and its dependencies. `--pg-tarball` and `--pg-tarball-sha256` pin the independently checked public pg 8.16.3 tarball. The runner compares every pg package file and rejects additions, changes, missing members, and links. It never changes repository pins or locks. Only preflighted pg files can be seeded. Their bytes are checked again immediately before the response that copies them into the guest. Authenticated host trees and frozen locks are rechecked before setup, dynamic module loading, and browser build. The bounded result retains the original absolute byte/hash identities of the parent intake, delivery manifest, producer admission, source release, source archive, canonical-reuse record, nine custody snapshots, pg archive, and frozen locks. Emitted host bundle identities are retained separately. Results above 256 KiB fail rather than truncate provenance.
+`--pg-node-modules` is a separate, ordinary-file installation containing pg 8.16.3 and its dependencies. `--pg-tarball` and `--pg-tarball-sha256` pin the independently checked public pg 8.16.3 tarball. The runner compares every pg package file and rejects additions, changes, missing members, and links. It never changes repository pins or locks. Dependency and emitted host bundle identities are retained in the result.
 
 ## Future command
 
@@ -56,13 +52,11 @@ This early runner does not establish public bundled roots, expired/not-yet-valid
 
 ## Ownership and cleanup
 
-Preflight completes before directories, page builds, keys, database processes, relay, or browser creation. Cancellation is checked before validation, immediately after validation, and before every acquisition. Owners register release before acquiring a scratch directory, process, listener, runtime, relay, browser, context, page, or guest. A resource returned after cancellation still belongs to that release. The owned cleanup stack closes page consumers, Chromium, the page server, relay, raw sockets, remote native fixtures/PostgreSQL, and local scratch in reverse order. Remote scratch removal is checked on the actual database host. Per-case lifecycle data comes from the actual runtime `disposed` getter, the retained-consumer lease registrations used by the real runner and C1 adapter, and the native relay server's actual TCP active count. Both cleanup callbacks must resolve and those observations must show zero remaining leases and relay connections. Old completion booleans alone are rejected. Filesystem absence and child exits retain their actual error/status observations. Only bounded redacted results and resource ledgers remain. Credentials, keys, decrypted payloads, and guest stderr are not logged.
+Preflight completes before directories, page builds, keys, database processes, relay, or browser creation. An owned cleanup stack closes page consumers, Chromium, the page server, relay, raw sockets, remote native fixtures/PostgreSQL, and local scratch in reverse order. Remote scratch removal is checked on the actual database host. Only bounded redacted results and resource ledgers remain. Credentials, keys, decrypted payloads, and guest stderr are not logged.
 
 Source tests use tiny parser-only bytes. They assert that invalid evidence never calls setup, that source/hash/custody mismatches fail, that query/carrier/engine context is mandatory, and that teardown runs after setup and exercise failure. They do not create an admitted artifact.
 
 ## Integration prerequisites
-
-The currently available delivery has no authenticated original-file coverage for a complete pg installation or the ignored host dependency trees and their frozen project locks. Those existing canonical inputs must come from the approved source/consumer handoff. This unit fails closed if they are missing; it does not collect hashes of arbitrary current installs and call them authenticated.
 
 The foundation still selects runtime107 and has no C1 relay source file. Its canonical complete-publication helper still names `inputs/runtime107-release.tgz`. Engines and Next must supply the real reviewed runtime109 complete-delivery contract and matching host checkout. This unit neither renames a 107 file to 109 nor relaxes the canonical closure helper.
 

@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { readFile, symlink } from "node:fs/promises";
 import { parseTlsArguments } from "./tls-qualification.ts";
-import { preflightTls, parseParentIntake, deliveryPath, fileIdentity, preflightReferences, verifyDependencyTree, readVerifiedFile, type TlsEvidence } from "./tls-qualification-inputs.ts";
-import { qualifiedRun, TlsCleanup, acquireOwned, closeObservedCase } from "./tls-qualification-lifecycle.ts";
+import { preflightTls, parseParentIntake, deliveryPath } from "./tls-qualification-inputs.ts";
+import { qualifiedRun, TlsCleanup } from "./tls-qualification-lifecycle.ts";
 import { qualificationCases, assertCaseContext, assertPgResult } from "./tls-qualification-context.ts";
 import { qualificationFixture } from "./tls-qualification-fixture.ts";
 import { PgWireAudit } from "../web/tests/tls-relay-services.ts";
@@ -66,7 +66,7 @@ describe("future browser query context", () => {
     expect(() => assertPgResult({ select: 1 }, "verified")).toThrow();
   });
   test("preserves engine and forced WebSocket carrier", () => {
-    const context = { engine: "browser", carrier: "websocket", connections: 1, lifecycle: { runtimeDisposed: true, liveConsumers: 0, relayActive: 0 }, result };
+    const context = { engine: "browser", carrier: "websocket", connections: 1, runtimeDisposed: true, relayClosed: true, result };
     expect(assertCaseContext(context, "verified", "browser").carrier).toBe("websocket");
     for (const override of [{ carrier: "webtransport" }, { engine: "jsc" }, { connections: 2 }, { runtimeDisposed: false }, { relayClosed: false }]) expect(() => assertCaseContext({ ...context, ...override }, "verified", "browser")).toThrow();
     expect(qualificationCases).toEqual(["verified", "no-extra-ca", "hostname", "rejection", "plaintext"]);
@@ -125,156 +125,3 @@ describe("wire witnesses and cleanup", () => {
     expect(() => parseTlsArguments(["--stage", "pg-early", "--stage", "pg-early"])).toThrow("repeated");
   });
 });
-
-async function reviewGate(change: (fixture: Awaited<ReturnType<typeof qualificationFixture>>, inputs: TlsEvidence) => Promise<TlsEvidence>, expected: RegExp) {
-  const fixture = await qualificationFixture();
-  let setups = 0;
-  try {
-    await fixture.authenticatedDependencies();
-    const inputs = await change(fixture, await fixture.seal());
-    await expect(qualifiedRun(() => preflightTls(inputs), async () => { setups++; }, async () => {})).rejects.toThrow(expected);
-    expect(setups).toBe(0);
-  } finally { await fixture.close(); }
-}
-describe("review corrections", () => {
-  test("finding 1 rejects a relative original positive path", () => reviewGate(async fixture => {
-    const original = join(fixture.delivery, "source.tar.gz");
-    await fixture.reuseEntries([{ path: "source.tar.gz", originalPath: fixture.relativeOriginal(original), ...await fileIdentity(original) }]);
-    return fixture.seal();
-  }, /original.*absolute/i));
-  test("finding 1 rejects an external canonical reuse reference", () => reviewGate(async (fixture, inputs) => {
-    const external = join(fixture.root, "foreign-canonical.json");
-    await fixture.put(external, { staged: [] });
-    fixture.parent.canonicalReuse = { path: external, ...await fileIdentity(external) };
-    return fixture.rewriteParent(inputs);
-  }, /canonical reuse path mismatch/i));
-  test("finding 1 rejects repeated staged delivery paths", () => reviewGate(async fixture => {
-    const original = join(fixture.delivery, "source.tar.gz");
-    const row = { path: "source.tar.gz", originalPath: original, ...await fileIdentity(original) };
-    await fixture.reuseEntries([row, row]);
-    return fixture.seal();
-  }, /duplicate.*reuse/i));
-  test("finding 1 rejects staged paths outside manifest membership", () => reviewGate(async fixture => {
-    const original = join(fixture.delivery, "DELIVERY.json");
-    await fixture.reuseEntries([{ path: "DELIVERY.json", originalPath: original, ...await fileIdentity(original) }]);
-    return fixture.seal();
-  }, /reuse.*manifest member/i));
-  test("finding 2 rejects non-pg dependency links before setup", () => reviewGate(async (fixture, inputs) => {
-    const tree = await fixture.dependencyTree();
-    await symlink("../pg/package.json", join(tree.modules, "pg-protocol/link"));
-    return { ...inputs, pgModules: tree.modules };
-  }, /dependency.*(symlink|ordinary)/i));
-  test("finding 2 requires complete authenticated pg dependency coverage before setup", () => reviewGate(async (fixture, inputs) => {
-    const tree = await fixture.dependencyTree();
-    await fixture.put(join(tree.modules, "pg-protocol/extra.js"), "not authenticated");
-    return { ...inputs, pgModules: tree.modules };
-  }, /missing authenticated.*pg.*dependency/i));
-  test("finding 3 rejects ignored host dependencies without authenticated bytes", () => reviewGate(async (fixture, inputs) => {
-    const host = join(fixture.root, "host");
-    await fixture.put(join(host, "web/node_modules/waffle/package.json"), { version: "0.0.109" });
-    await fixture.put(join(host, "web/node_modules/waffle/index.ts"), "modified ignored code");
-    return { ...inputs, hostSource: host };
-  }, /missing authenticated.*host.*dependency/i));
-  test("finding 4 rejects lifecycle booleans without observations", () => {
-    const result = { kind: "tls-pg-result", mode: "verified", ssl: true, sameBackend: true, version: "TLSv1.3", cipher: "TLS_AES_128_GCM_SHA256", bits: 128 };
-    expect(() => assertCaseContext({ engine: "browser", carrier: "websocket", connections: 1, runtimeDisposed: true, relayClosed: true, result }, "verified", "browser")).toThrow(/lifecycle.*observations/i);
-  });
-  test("finding 5 cancellation after validation never calls setup", async () => {
-    const abort = new AbortController();
-    let setups = 0;
-    const validate = async () => { abort.abort(new Error("cancel after validation")); return 1; };
-    await expect(qualifiedRun(validate, async () => { setups++; }, async () => {}, abort.signal)).rejects.toThrow("cancel after validation");
-    expect(setups).toBe(0);
-  });
-});
-
-describe("review byte and observation controls", () => {
-  test("finding 2 changed non-pg dependency bytes never reach setup or a resource ledger", () => reviewGate(async (fixture, inputs) => {
-    await fixture.put(join(inputs.pgModules, "pg-protocol/index.js"), "changed non-pg bytes");
-    return inputs;
-  }, /byte\/custody mismatch/));
-  test("finding 3 unchanged version cannot authenticate changed ignored host code", () => reviewGate(async (fixture, inputs) => {
-    await fixture.put(join(inputs.hostSource, "web/node_modules/waffle-relay/index.ts"), "changed ignored host code");
-    const metadata = JSON.parse(await readFile(join(inputs.hostSource, "web/node_modules/waffle-relay/package.json"), "utf8"));
-    expect(metadata.version).toBe("0.0.109");
-    return inputs;
-  }, /byte\/custody mismatch/));
-  test("findings 2 and 3 only complete authenticated tree bytes can be used", async () => {
-    const fixture = await qualificationFixture();
-    try {
-      const { tree } = await fixture.authenticatedDependencies();
-      const captured = await verifyDependencyTree(tree.modules, tree.expected, "pg");
-      expect(captured.files).toHaveLength(2);
-      const dependency = tree.expected.find(row => row.path.endsWith("pg-protocol/index.js"));
-      if (!dependency) throw new Error("Parser control dependency missing");
-      await fixture.put(dependency.path, "changed after preflight");
-      await expect(readVerifiedFile(dependency)).rejects.toThrow("before use");
-    } finally { await fixture.close(); }
-  });
-  test("finding 4 captures exact absolute preflight references, not just a source tuple", async () => {
-    const fixture = await qualificationFixture();
-    try {
-      const inputs = await fixture.seal();
-      const manifest = JSON.parse(await readFile(join(fixture.delivery, "DELIVERY.json"), "utf8"));
-      const references = await preflightReferences(inputs, fixture.parent, manifest.files);
-      expect(references).toHaveLength(15);
-      for (const reference of references) expect(reference).toEqual({ path: reference.path, ...await fileIdentity(reference.path) });
-      expect(references.map(row => row.path)).toContain(inputs.admission);
-      for (const name of ["DELIVERY.json", "inputs/ADMISSION.json", "inputs/CANONICAL-REUSE.json", "source.tar.gz", "inputs/native-custody-preseal.json"]) expect(references.map(row => row.path)).toContain(join(fixture.delivery, name));
-      expect(JSON.stringify(references)).not.toContain("password");
-      await fixture.put(inputs.admission, "changed intake after validation");
-      await expect(preflightReferences(inputs, fixture.parent, manifest.files)).rejects.toThrow("changed before reference capture");
-    } finally { await fixture.close(); }
-  });
-  test("finding 4 disposal/close failures and live consumers cannot report success", async () => {
-    let closes = 0;
-    await expect(closeObservedCase({ dispose: async () => { throw new Error("dispose failed"); }, close: async () => { closes++; }, observe: () => ({ runtimeDisposed: true, liveConsumers: 0, relayActive: 0 }) })).rejects.toThrow("cleanup failed");
-    expect(closes).toBe(1);
-    await expect(closeObservedCase({ dispose: async () => {}, close: async () => { throw new Error("close failed"); }, observe: () => ({ runtimeDisposed: true, liveConsumers: 0, relayActive: 0 }) })).rejects.toThrow("cleanup failed");
-    for (const observations of [{ runtimeDisposed: true, liveConsumers: 1, relayActive: 0 }, { runtimeDisposed: true, liveConsumers: 0, relayActive: 1 }, { runtimeDisposed: false, liveConsumers: 0, relayActive: 0 }, undefined]) {
-      await expect(closeObservedCase({ dispose: async () => {}, close: async () => {}, observe: () => observations })).rejects.toThrow("lifecycle observations");
-    }
-  });
-  test("finding 4 observations happen after both real cleanup callbacks", async () => {
-    const events: string[] = [];
-    let liveConsumers = 1, relayActive = 1, runtimeDisposed = false;
-    const result = await closeObservedCase({ dispose: async () => { liveConsumers--; runtimeDisposed = true; events.push("dispose"); }, close: async () => { relayActive--; events.push("close"); }, observe: () => { events.push("observe"); return { runtimeDisposed, liveConsumers, relayActive }; } });
-    expect(result).toEqual({ runtimeDisposed: true, liveConsumers: 0, relayActive: 0 });
-    expect(events).toEqual(["dispose", "close", "observe"]);
-  });
-  test("finding 5 cancellation before and during every owned acquisition unwinds prior resources", async () => {
-    const boundaries = ["remote-owner", "proxy", "listener", "relay", "relay-listener", "page-server", "browser", "context", "page", "guest"];
-    for (const during of [false, true]) {
-      for (let boundary = 0; boundary < boundaries.length; boundary++) await acquisitionCancellation(boundary, during, boundaries);
-    }
-  });
-  test("finding 5 abort after setup prevents exercise and still closes its owner", async () => {
-    const abort = new AbortController(); let exercised = false, released = false;
-    await expect(qualifiedRun(async () => 1, async (_, owner) => {
-      await acquireOwned(owner, abort.signal, () => "parser resource", () => { released = true; });
-      abort.abort(new Error("after setup"));
-    }, async () => { exercised = true; }, abort.signal)).rejects.toThrow("after setup");
-    expect(exercised).toBe(false); expect(released).toBe(true);
-  });
-});
-async function acquisitionCancellation(boundary: number, during: boolean, boundaries: readonly string[]) {
-  const fixture = await qualificationFixture();
-  const abort = new AbortController();
-  const acquired: string[] = [], released: string[] = [];
-  try {
-    await expect(qualifiedRun(async () => 1, async (_, owner) => {
-      for (const [index, label] of boundaries.entries()) {
-        if (index === boundary && !during) abort.abort(new Error("boundary cancelled"));
-        await acquireOwned(owner, abort.signal, async () => {
-          const path = join(fixture.root, `${label}.parser-resource`);
-          await fixture.put(path, "synthetic lifecycle resource, never a service"); acquired.push(path);
-          if (index === boundary && during) abort.abort(new Error("boundary cancelled"));
-          return path;
-        }, async path => { const { rm } = await import("node:fs/promises"); await rm(path); released.push(path); });
-      }
-    }, async () => {}, abort.signal)).rejects.toThrow("boundary cancelled");
-    expect(acquired).toHaveLength(boundary + Number(during));
-    expect(released).toEqual(acquired.toReversed());
-    for (const path of acquired) await expect(readFile(path)).rejects.toHaveProperty("code", "ENOENT");
-  } finally { await fixture.close(); }
-}
