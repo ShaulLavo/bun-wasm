@@ -785,13 +785,23 @@ mod tests {
                 .initializers()
                 .contains(&"hermes_register")
         );
+        assert_eq!(
+            ProgramKind::SpiderMonkey.companion(),
+            "spidermonkey-engine.wasm"
+        );
+        assert_eq!(ProgramKind::SpiderMonkey.run(), "spidermonkey_run");
+        assert!(
+            ProgramKind::SpiderMonkey
+                .initializers()
+                .contains(&"spidermonkey_register")
+        );
         let others: Vec<_> = ProgramKind::Hermes.other_profiles().collect();
         assert_eq!(
             others,
             [
                 ProgramKind::QuickJs,
                 ProgramKind::Jsc,
-                ProgramKind::SpiderMonkeyProbe
+                ProgramKind::SpiderMonkey
             ]
         );
     }
