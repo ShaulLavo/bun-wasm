@@ -4,13 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
 import { emptyCounters } from "../web/src/memory-telemetry.ts";
-import { actorSnapshot, verifyAllocation, verifyFailure, verifyChild, installActorObserver, selectActor } from "./verify-engine-memory-browser.ts";
+import { actorSnapshot, failedBytes, verifyAllocation, verifyFailure, verifyChild, installActorObserver, selectActor } from "./verify-engine-memory-browser.ts";
+import { maxMemoryBytes } from "./src/program-profile.ts";
 
 const engine = "quickjs";
 const actor = { authority: "host-worker-launch", id: "fixture", engine, path: "/home/user/memory-producer.ts" } as const;
 const child = { ...actor, id: "child", path: "/home/user/memory-child.ts" };
 const parent = { ...actor, id: "parent", path: "/home/user/memory-parent.ts" };
-const failed = { bytes: 600 * 1024 * 1024, category: "quickjs.arrayBuffer" };
+const failed = { bytes: failedBytes, category: "quickjs.arrayBuffer" };
+
+test("fixture requests an allocation beyond the authoritative guest maximum", () => {
+  expect(failedBytes).toBeGreaterThan(maxMemoryBytes());
+});
 function snapshot(id: string = actor.id, changes: Record<string, unknown> = {}) {
   return { ...emptyCounters, id, engine, time: 1, terminal: false, allocatorLiveBytes: 100,
     allocatorPeakBytes: 200, jsHeapBytes: 40, arrayBufferBytes: 1048576, engineCounters: { refreshSequence: 7 }, ...changes };
