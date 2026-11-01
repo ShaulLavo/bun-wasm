@@ -16,7 +16,7 @@ const result = await Bun.build({
   outdir: out,
   format: "esm",
   target: "browser",
-  external: ["waffle", "waffle/*", "waffle-relay"],
+  external: ["waffle", "waffle/*"],
   splitting: true,
   naming: { entry: "[name].js", chunk: "chunks/[name]-[hash].js" },
   sourcemap: "external",

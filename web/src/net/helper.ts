@@ -1,7 +1,6 @@
 // Bun's network policy adapter. Generic I/O and ring handling belong to the runtime;
 // only Bun's installer download cache is selected here.
 import { NetHelper as RuntimeNetHelper, type NetNamespace, type NetHelperHooks } from "waffle/browser/net/helper";
-import type { NetConnect } from "waffle/browser/net/outbound";
 import { installFetch } from "./install-cache.js";
 
 export type { ConnectionSink, NetFetch, NetHelperHooks, PreviewConnection, PreviewSink } from "waffle/browser/net/helper";
@@ -17,33 +16,18 @@ import type { RuntimeNetwork, RuntimeNetworkHelper } from "waffle";
 import type { NetFetch } from "waffle/browser/net/helper";
 import type { NetRequest } from "waffle/browser/net/protocol";
 
-export interface BunRelayOptions {
-  readonly endpoint: string | URL;
-  readonly getToken: () => string | Promise<string>;
-  readonly carriers?: readonly ("webtransport" | "websocket")[];
-  readonly windowBytes?: number;
-  readonly connectTimeoutMs?: number;
-  readonly onCarrier?: (carrier: "webtransport" | "websocket") => void;
-}
-
 export interface BunNetworkOptions {
   readonly fetch?: NetFetch;
-  readonly relay?: BunRelayOptions;
-  readonly connect?: NetConnect;
   readonly pathScope?: Parameters<RuntimeNetwork["createHelper"]>[0]["pathScope"];
   listening?(port: number, helper: RuntimeNetworkHelper): void;
   stopped?(port: number, helper: RuntimeNetworkHelper): void;
 }
 
-export function createBunNetworkHelper(
-  network: RuntimeNetwork,
-  ring: SharedArrayBuffer,
-  options: BunNetworkOptions = {},
-): RuntimeNetworkHelper {
+export function createBunNetworkHelper(network: RuntimeNetwork, ring: SharedArrayBuffer, options: BunNetworkOptions = {}): RuntimeNetworkHelper {
   const fetch = options.fetch ?? installFetch;
   const listening = options.listening;
   const stopped = options.stopped;
-  const helper = network.createHelper({ ring, fetch, connect: options.connect, pathScope: options.pathScope, hooks: {
+  const helper = network.createHelper({ ring, fetch, pathScope: options.pathScope, hooks: {
     listening: port => listening?.(port, helper),
     stopped: port => stopped?.(port, helper),
   } });

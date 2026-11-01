@@ -6,29 +6,6 @@ import type { ProcessService, RuntimeProcessContext } from "waffle";
 import { bunLauncher } from "../src/bun-launcher";
 import type { RunRequest } from "../src/bun-executor";
 
-test("no relay keeps loopback and rejects external TCP with ENOTSUP", async () => {
-  const runtime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
-  const network = await runtime.network();
-  const ring = createRing();
-  const helper = createBunNetworkHelper(network, ring);
-  const host = new NetHost(ring, request => dispatchBunNetwork(helper, { type: "net", req: request }), undefined, { shared: true });
-  try {
-    const listener = host.listen("localhost", 0);
-    const port = host.localPort(listener);
-    const client = host.connect("localhost", port);
-    expect(client).toBeGreaterThan(0);
-    await Bun.sleep(0);
-    expect(host.accept(listener)).toBeGreaterThan(0);
-    const external = host.connect("outside.example", 443);
-    expect(external).toBeLessThan(0);
-    expect(JSON.parse(String(host.error(0)))).toMatchObject({ code: "ENOTSUP" });
-  } finally {
-    host.dispose();
-    helper.dispose();
-    await runtime.dispose();
-  }
-});
-
 test("Bun child launches receive a per-process networking ring", async () => {
   const module = new WebAssembly.Module(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
   const context = { identity: { pid: 1, parentPid: 0, host: null }, outcome: outcomeWord(), registerRevocation: () => () => {}, module, interruptible: false, request: { executable: "/bin/bun", argv: ["bun", "-e", "0"], env: {}, cwd: "/" } } as unknown as RuntimeProcessContext;

@@ -4,11 +4,10 @@ import { networkPathScopeFixture, socketDirectoryFixture } from "./socket-runtim
 import { outcomeWord } from "waffle/proc/outcome";
 import type { ProcessService, RuntimeProcessContext } from "waffle";
 import { bunLauncher, preview1Launcher } from "../src/bun-launcher";
-import { runtimeRelay } from "../src/net/relay";
 
 // Only the launch request is under test; the real service and ABI are covered elsewhere.
-interface Launch { workerUrl: string; request: Record<string, any>; network?: { connection: Record<string, unknown>; dispose(): void }; cleanup?(): void | Promise<void>; executableName?(name: string): string }
-const activeCleanups: Array<() => void | Promise<void>> = [];
+interface Launch { workerUrl: string; request: Record<string, any>; cleanup?(): void; executableName?(name: string): string }
+const activeCleanups: Array<() => void> = [];
 function service(launches: Launch[]): ProcessService {
   return { networkPathScope: networkPathScopeFixture, launchWorker(_context: unknown, options: Launch) { launches.push(options); if (options.cleanup) activeCleanups.push(options.cleanup); return { terminate() {} }; } } as unknown as ProcessService;
 }
@@ -24,8 +23,8 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "location", { configurable: true, value: new URL("https://example.test/app/") });
   Object.defineProperty(globalThis, "caches", { configurable: true, value: { delete: async (name: string) => { deleted.push(name); return true; } } });
 });
-afterEach(async () => {
-  for (const cleanup of activeCleanups.splice(0)) await cleanup();
+afterEach(() => {
+  for (const cleanup of activeCleanups.splice(0)) cleanup();
   for (const [name, descriptor] of [["location", location], ["caches", caches]] as const) {
     if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name);
   }
@@ -217,121 +216,4 @@ test("revocation while awaiting a directory lease releases it without creating a
     expect(create).not.toHaveBeenCalled();
     expect(events).toEqual(["root-release"]);
   } finally { create.mockRestore(); await scopedRuntime.dispose(); }
-});
-
-
-test("relay opt-in stays page-owned and keeps token access lazy", async () => {
-  const scopedRuntime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
-  const network = await scopedRuntime.network();
-  const create = spyOn(network, "createHelper");
-  const tokenCalls: string[] = [];
-  const launches: Launch[] = [];
-  const relay = {
-    endpoint: "http://127.0.0.1:8787/",
-    getToken() { tokenCalls.push("guest must not call this"); return "secret"; },
-    carriers: ["websocket"] as const,
-  };
-  try {
-    await bunLauncher("quickjs", {
-      runtime: scopedRuntime,
-      workerUrl: "./worker.js",
-      notificationWorkerUrl: "./notification-worker.js",
-      network: { relay },
-    })(context, service(launches));
-    expect(create).toHaveBeenCalledTimes(1);
-    const options = create.mock.calls[0]?.[0];
-    if (!options) throw new Error("network helper options were not captured");
-    expect(options.connect).toBeFunction();
-    expect(tokenCalls).toEqual([]);
-    expect(launches[0]!.request).not.toHaveProperty("relay");
-    expect(launches[0]!.request).not.toHaveProperty("connect");
-    await launches[0]!.cleanup?.();
-    expect(tokenCalls).toEqual([]);
-  } finally {
-    create.mockRestore();
-    await scopedRuntime.dispose();
-  }
-});
-
-test("relay client is shared by launches on one runtime", async () => {
-  const scopedRuntime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
-  const relay = {
-    endpoint: "http://127.0.0.1:8787/",
-    getToken: () => "unused",
-    carriers: ["websocket"] as const,
-  };
-  try {
-    const first = await runtimeRelay(scopedRuntime, relay);
-    const second = await runtimeRelay(scopedRuntime, relay);
-    expect(first).toBe(second);
-  } finally {
-    await scopedRuntime.dispose();
-  }
-});
-
-test("preview1 launcher transfers only cloneable socket metadata and keeps owner disposal page-side", async () => {
-  const scopedRuntime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
-  const launches: Launch[] = [];
-  const sockets = [{ fd: 3, socket: { connect: { host: "echo.example", port: 4321 } } }] as const;
-  try {
-    await preview1Launcher({
-      runtime: scopedRuntime,
-      workerUrl: "./worker.js",
-      preview1: { sockets },
-    })(context, service(launches));
-    const owner = launches[0]!.network;
-    expect(owner).toBeDefined();
-    expect(owner!.connection.ring).toBeInstanceOf(SharedArrayBuffer);
-    expect(owner!.connection.port).toBeInstanceOf(MessagePort);
-    expect(owner!.connection.sockets).toEqual(sockets);
-    expect(owner!.connection).not.toHaveProperty("connect");
-    expect(owner!.connection).not.toHaveProperty("relay");
-    owner!.dispose();
-  } finally {
-    await scopedRuntime.dispose();
-  }
-});
-
-test("empty preview1 socket bindings stay lazy", async () => {
-  const scopedRuntime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
-  const network = spyOn(scopedRuntime, "network");
-  const launches: Launch[] = [];
-  try {
-    await preview1Launcher({ runtime: scopedRuntime, workerUrl: "./worker.js" })(context, service(launches));
-    expect(network).not.toHaveBeenCalled();
-    expect(launches[0]!.network).toBeUndefined();
-  } finally {
-    network.mockRestore();
-    await scopedRuntime.dispose();
-  }
-});
-
-
-for (const withRelay of [false, true]) test(`broker preview1 preserves the explicit connector with relay ${withRelay}`, async () => {
-  const scopedRuntime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
-  const network = await scopedRuntime.network();
-  const create = spyOn(network, "createHelper");
-  const launches: Launch[] = [];
-  const connect = async () => { throw new Error("setup must not open a connection"); };
-  const relay = withRelay ? {
-    endpoint: "http://127.0.0.1:8787/",
-    getToken() { throw new Error("setup must not request a token"); },
-    carriers: ["websocket"] as const,
-  } : undefined;
-  try {
-    await preview1Launcher({
-      runtime: scopedRuntime,
-      workerUrl: "./worker.js",
-      network: { connect, relay },
-      preview1: { sockets: [{ fd: 3, socket: { connect: { host: "echo.example", port: 4321 } } }] },
-    })(context, service(launches));
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create.mock.calls[0]?.[0].connect).toBe(connect);
-    expect(launches[0]?.network?.connection).not.toHaveProperty("connect");
-    expect(launches[0]?.network?.connection).not.toHaveProperty("relay");
-  } finally {
-    launches[0]?.network?.dispose();
-    create.mockRestore();
-    await scopedRuntime.dispose();
-  }
 });
