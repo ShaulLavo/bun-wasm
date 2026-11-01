@@ -10,7 +10,7 @@ import { ready, terminalText, writeFile } from "../web/tests/playground.mjs";
 import { stopForeground } from "../web/tests/foreground.ts";
 
 export const failedBytes = maxMemoryBytes() + 64 * 1024 * 1024;
-export const fixtureAllocationBytes = 1024 * 1024;
+export const fixtureAllocationBytes = 8 * 1024 * 1024;
 const gate = `import fs from 'node:fs'; async function gate(name) { while (!fs.existsSync('/home/user/'+name)) await Bun.sleep(20); }`;
 
 const repository = resolve(import.meta.dir, "..");
