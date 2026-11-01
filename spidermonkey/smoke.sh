@@ -7,10 +7,11 @@ export SPIDERMONKEY_G2_DIR=${SPIDERMONKEY_G2_DIR:?set a distinct successor direc
 [[ "$SPIDERMONKEY_G2_DIR" != "$SPIDERMONKEY_BUILD_DIR" ]] || exit 2
 export CARGO_TARGET_DIR="$SPIDERMONKEY_G2_DIR/target"
 source "$repo/env.sh"
-patched=0
+source "$repo/spidermonkey/patch-lifecycle.sh"
+patch_state=untouched
 cleanup() {
   status=$?
-  if [[ "$patched" == 1 ]]; then git -C "$SPIDERMONKEY_BUILD_DIR/firefox" apply -R "$repo/spidermonkey/spidermonkey-wasi.patch"; fi
+  spidermonkey_patch_restore "$patch_state" "$SPIDERMONKEY_BUILD_DIR/firefox" "$repo/spidermonkey/spidermonkey-wasi.patch"
   {
     echo "exit=$status"; date --iso-8601=seconds
     git -C "$SPIDERMONKEY_BUILD_DIR/firefox" status --short
@@ -26,8 +27,7 @@ exec 9>"$SPIDERMONKEY_BUILD_DIR.g2-lock"
 flock -n 9
 ps -eo pid,ppid,args > "$report/processes-before.txt"
 df -B1 /work > "$report/storage-before.txt"
-git -C "$SPIDERMONKEY_BUILD_DIR/firefox" apply "$repo/spidermonkey/spidermonkey-wasi.patch"
-patched=1
+patch_state=$(spidermonkey_patch_prepare "$SPIDERMONKEY_BUILD_DIR/firefox" "$repo/spidermonkey/spidermonkey-wasi.patch")
 cd "$repo"
 node spidermonkey/rebuild-g2.ts "$SPIDERMONKEY_BUILD_DIR" "$SPIDERMONKEY_G2_DIR"
 export CXXFLAGS_wasm32_wasip1="--sysroot=$BUN_WASM_SYSROOT -fPIC -fno-exceptions"

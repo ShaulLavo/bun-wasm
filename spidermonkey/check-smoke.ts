@@ -28,7 +28,7 @@ const relocationCounts = checkRelocations(relocs);
 const linkedLog = readFileSync(join(report, "linked.log"), "utf8");
 assert(linkedLog.includes("test result: ok. 1 passed; 0 failed"));
 for (const tier of ["interp", "pbl"]) {
-  const text = readFileSync(join(report, `${tier}.log`), "utf8");
+  const text: string = readFileSync(join(report, `${tier}.log`), "utf8");
   for (const marker of ["ok init tier=" + tier, "ok rooted value across GC", "ok catchable stack overflow RangeError",
     "ok uncatchable interrupt loop; catch=0 finally=0", "ok uncatchable interrupt inside catch; catch=0 finally=0",
     "ok uncatchable interrupt inside finally; catch=0 finally=0"]) assert(text.includes(marker), `${tier}: ${marker}`);
