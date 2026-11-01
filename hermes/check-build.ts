@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { hermesConsumerReceipt } from "../scripts/producer-closure.ts";
+import { hermesConsumerReceipt } from "./consumer-receipt.ts";
 import { execFileSync } from "node:child_process";
 
 const root = process.argv[2];

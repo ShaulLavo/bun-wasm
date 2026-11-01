@@ -7,7 +7,7 @@ import { hash, sourceOptions } from "./guest-source-manifest.ts";
 import { programProfile, tagProgramCore, type PairedEngine } from "../src/engine-kind.ts";
 import { pinnedBashWeb, verifiedGuests } from "./bash-web-guests.ts";
 import { parseProgramProfile, sharedGroupEnvironment } from "./src/program-profile.ts";
-import { launcherReceipt, producerArtifactPaths, producerEngines, producerScopes, producerSelection, requireClosureFiles, verifyHermesLibrary, verifyLauncher, verifyWorkerProof, type ProducerSource } from "./producer-closure.ts";
+import { launcherReceipt, producerArtifactPaths, producerEngines, producerScopes, producerSelection, requireClosureFiles, rejectWithdrawnPublicationPath, verifyPublicationBuilds, verifyLauncher, verifyWorkerProof, type ProducerSource } from "./producer-closure.ts";
 
 const repository = resolve(import.meta.dir, "..");
 const [command, selectedProfile, ...extra] = process.argv.slice(2);
@@ -33,12 +33,8 @@ function recordedPath(key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 const prebuild = resolve(process.env.JSC_BUILD_DIR ?? recordedPath("nativePrebuild") ?? join(output, "native-jsc"));
-const hermesPath = process.env.HERMES_BUILD_DIR ?? recordedPath("hermesBuild");
-const hermesBuild = hermesPath ? resolve(hermesPath) : undefined;
-if (hermesBuild) process.env.HERMES_BUILD_DIR = hermesBuild;
-const hermesReceipt = process.env.HERMES_VM_RECEIPT ?? (recorded ? join(output, "inputs/hermes-vm.json") : undefined);
 const environment = { ...process.env, JSC_BUILD_DIR: prebuild, BUN_CORE_BUILD_DIR: join(output, "core"),
-  QUICKJS_BUILD_DIR: join(output, "quickjs"), JSC_ENGINE_BUILD_DIR: join(output, "jsc"), HERMES_ENGINE_BUILD_DIR: join(output, "hermes"),
+  QUICKJS_BUILD_DIR: join(output, "quickjs"), JSC_ENGINE_BUILD_DIR: join(output, "jsc"),
   QUICKJS_PROFILE: profile, CARGO_BUILD_JOBS: "2", JOBS: "2" };
 process.env.JSC_BUILD_DIR = prebuild;
 const launcher = join(output, "launcher/bun-wasm");
@@ -54,13 +50,7 @@ function sourceIdentity(): ProducerSource {
   if (git("status", "--porcelain", "--untracked-files=normal")) throw new Error("Producer source must be committed and clean");
   return { head: git("rev-parse", "HEAD"), tree: git("rev-parse", "HEAD^{tree}") };
 }
-function nativeInputs(): void {
-  if (profile !== "split") return;
-  if (!hermesBuild || !hermesReceipt) throw new Error("Set HERMES_BUILD_DIR and HERMES_VM_RECEIPT for the admitted native generation");
-  verifyHermesLibrary(repository, hermesBuild, hermesReceipt);
-}
 async function inputs(): Promise<ProgramInputSnapshot[]> {
-  nativeInputs();
   const captured: ProgramInputSnapshot[] = [];
   for (const scope of scopes) captured.push(await captureProgramInputs(sourceOptions(repository, sysroot!, scope === "core" ? "browser" : scope), scope, scope === "core" ? selection : undefined, profile));
   return captured;
@@ -155,7 +145,7 @@ function stageShell(): void {
 }
 function webBuild(): void {
   execFileSync(process.execPath, [join(repository, "web/build.ts")], { cwd: repository, stdio: "inherit", env: { ...environment,
-    BUN_WASM: join(output, "dist/bun.wasm"), JSC_WASM: join(output, "dist/bun-jsc.wasm"), HERMES_WASM: join(output, "dist/bun-hermes.wasm"),
+    BUN_WASM: join(output, "dist/bun.wasm"), JSC_WASM: join(output, "dist/bun-jsc.wasm"),
     BASH_WEB_GUESTS_DIR: join(output, "dist"), BASH_WEB_GUESTS: "required" } });
 }
 function webFiles(directory: string, prefix: string): string[] {
@@ -168,7 +158,8 @@ async function splitAssets(): Promise<void> {
   stageShell(); state("web-build"); webBuild();
   rmSync(join(output, "web"), { recursive: true, force: true });
   cpSync(join(repository, "web/dist"), join(output, "web"), { recursive: true });
-  const builds = JSON.parse(readFileSync(join(output, "web/engine-builds.json"), "utf8"));
+  const builds: unknown = JSON.parse(readFileSync(join(output, "web/engine-builds.json"), "utf8"));
+  verifyPublicationBuilds(builds);
   const names = engines.flatMap(engine => [programProfile(engine).core, programProfile(engine).side]);
   for (const name of names) if (builds[name] !== hash(await Bun.file(join(output, "dist", name)).bytes())) throw new Error(`Missing or stale browser asset: ${name}`);
   state("hook-controls");
@@ -176,12 +167,21 @@ async function splitAssets(): Promise<void> {
   state("hook-smoke");
   execFileSync(process.execPath, [join(repository, "scripts/verify-engine-memory-browser.ts"), output], { cwd: repository, env: environment, stdio: "inherit" });
 }
+function verifyOutputScope(): void {
+  if (!existsSync(output)) return;
+  for (const entry of readdirSync(output)) rejectWithdrawnPublicationPath(entry);
+  for (const directory of ["dist", "web", "inputs"]) {
+    const root = join(output, directory);
+    if (!existsSync(root)) continue;
+    for (const path of webFiles(root, directory)) rejectWithdrawnPublicationPath(path);
+  }
+}
 async function build(): Promise<void> {
+  verifyOutputScope();
   if (existsSync(join(output, "manifest.json"))) { await verify(); return; }
   mkdirSync(join(output, "inputs"), { recursive: true }); mkdirSync(join(output, "dist"), { recursive: true }); mkdirSync(join(output, "smoke-tmp"), { recursive: true });
   const source = sourceIdentity();
   state("checking-inputs"); const current = await inputs(); lockedInputs(current);
-  if (profile === "split") copyFileSync(hermesReceipt!, join(output, "inputs/hermes-vm.json"));
   state("building-core"); recipe("scripts/build-bun-core.sh", profile === "split" ? [] : ["--shared-group"]);
   for (const engine of engines) { state(`building-${engine}`); recipe(`scripts/build-engine-${engine}.sh`); }
   state("composing"); for (const engine of engines) await compose(engine);
@@ -192,9 +192,11 @@ async function build(): Promise<void> {
   else workerProof();
   if (JSON.stringify(await inputs()) !== JSON.stringify(current)) throw new Error("Producer inputs changed during validation");
   if (JSON.stringify(sourceIdentity()) !== JSON.stringify(source)) throw new Error("Producer source changed during validation");
-  const paths = producerArtifactPaths(profile).concat(profile === "split" ? webFiles(join(output, "web"), "web").filter(path => path !== "web/index.html" && path !== "web/engine-builds.json") : []);
+  const required = producerArtifactPaths(profile);
+  const requiredPaths = new Set(required);
+  const paths = required.concat(profile === "split" ? webFiles(join(output, "web"), "web").filter(path => !requiredPaths.has(path)) : []);
   const files = await identities(paths); requireClosureFiles(profile, files);
-  writeFileSync(join(output, "manifest.json"), JSON.stringify({ schema: 1, status: "reusable", profile, engines, source, nativePrebuild: profile === "split" ? prebuild : null, hermesBuild: profile === "split" ? hermesBuild : null,
+  writeFileSync(join(output, "manifest.json"), JSON.stringify({ schema: 1, status: "reusable", profile, engines, source, nativePrebuild: profile === "split" ? prebuild : null,
     inputs: current.map(input => ({ scope: input.scope, contentSha256: input.contentSha256 })), inputOrigins: JSON.parse(readFileSync(join(output, "inputs/programs.json"), "utf8")), files,
     launcher: { path: launcher, receipt: launcherProof, ...verifyLauncher(launcher, JSON.parse(readFileSync(launcherProof, "utf8")), source) },
     webRoot: profile === "split" ? join(output, "web") : null, hook: join(repository, "scripts/app-matrix/engine-memory-hook.ts"),
@@ -202,10 +204,18 @@ async function build(): Promise<void> {
   rmSync(join(output, "smoke-tmp"), { recursive: true, force: true }); state("reusable");
 }
 async function verify(): Promise<void> {
+  verifyOutputScope();
   const value: unknown = await Bun.file(join(output, "manifest.json")).json();
   if (!value || typeof value !== "object" || !("status" in value) || value.status !== "reusable" || !("files" in value) || !Array.isArray(value.files)) throw new Error("Producer is not reusable");
   if (!("source" in value) || JSON.stringify(value.source) !== JSON.stringify(sourceIdentity())) throw new Error("Producer source identity differs from its manifest");
   if (!("profile" in value) || value.profile !== profile || !("engines" in value) || JSON.stringify(value.engines) !== JSON.stringify(engines)) throw new Error("Producer profile/engine registry differs from manifest");
+  if ("hermesBuild" in value) throw new Error("Withdrawn engine native reference in producer manifest");
+  if (profile === "split") {
+    if (!("engineBuilds" in value)) throw new Error("Missing publication asset registry");
+    verifyPublicationBuilds(value.engineBuilds);
+    const staged: unknown = JSON.parse(readFileSync(join(output, "web/engine-builds.json"), "utf8"));
+    if (JSON.stringify(staged) !== JSON.stringify(value.engineBuilds)) throw new Error("Manifest publication assets differ from staged registry");
+  }
   for (const file of value.files) {
     if (!file || typeof file !== "object" || typeof file.path !== "string" || file.path.startsWith("/") || file.path.split("/").includes("..") || typeof file.sha256 !== "string" || typeof file.bytes !== "number") throw new Error("Invalid manifest artifact");
     const bytes = await Bun.file(join(output, file.path)).bytes();

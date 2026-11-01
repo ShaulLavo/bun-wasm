@@ -19,7 +19,7 @@ function host(trace: number[], shared: boolean): LinkHost {
   } } };
 }
 
-for (const kind of ["quickjs", "jsc", "hermes"] as const) {
+for (const kind of ["quickjs", "jsc"] as const) {
   test(`${kind} split links passive side data before relocation, constructors and registration`, async () => {
     const trace: number[] = [];
     const source = await engineLinkPlan(initializationPair(kind));

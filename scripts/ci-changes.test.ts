@@ -136,9 +136,9 @@ for (const path of ["jsc/wasi-jsc.cmake", "tests/fixtures/runtime-proc-spawn-req
 
 test.each(["pull_request", "push"])("shared proof changes select only the dedicated job through a real %s diff", event => {
   expect(selectionOutput(base, commitInput("scripts/shared-sysroot-proof.ts"), event))
-    .toBe("rust=false\njsc=false\nshared=true\nhermes=false");
+    .toBe("rust=false\njsc=false\nshared=true");
   expect(selectionOutput(base, commitInput("docs/code-quality.md"), event))
-    .toBe("rust=false\njsc=false\nshared=false\nhermes=false");
+    .toBe("rust=false\njsc=false\nshared=false");
 });
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -269,12 +269,10 @@ for (const path of ["crates/bunwasm-host/src/linked.rs", "crates/bunwasm-engine-
 }
 
 for (const event of ["pull_request", "push"]) {
-  test(`Hermes paths select its blocking job through an actual ${event} diff`, () => {
-    const selected = selectionOutput(base, commitInput("hermes/build.sh"), event);
-    expect(selected).toBe("rust=true\njsc=false\nshared=false\nhermes=true");
-    expect(selectionOutput(base, commitInput("scripts/producer-closure.ts"), event))
-      .toBe("rust=true\njsc=false\nshared=false\nhermes=true");
+  test(`dormant Hermes recipes do not select native production through an actual ${event} diff`, () => {
+    expect(selectionOutput(base, commitInput("hermes/build.sh"), event))
+      .toBe("rust=false\njsc=false\nshared=false");
     expect(selectionOutput(base, commitInput("docs/hermes-engine.md"), event))
-      .toBe("rust=false\njsc=false\nshared=false\nhermes=false");
+      .toBe("rust=false\njsc=false\nshared=false");
   });
 }

@@ -80,13 +80,13 @@ for (const cancel of [false, true]) test(`Node startup diagnostic is asynchronou
   } finally { await broker.dispose(); }
 });
 
-for (const engine of ["quickjs", "jsc", "hermes"] as const) test(`explicit ${engine} fixture paths use only their registered module`, async () => {
+for (const engine of ["quickjs", "jsc"] as const) test(`explicit ${engine} fixture paths use only their registered module`, async () => {
   const broker = new NodeProcessBroker({ module, engines: { [engine]: module }, launch() { throw new Error("unexpected launch"); } });
   try {
     const registry = createNodeExecutableRegistry(module, broker.preopens, { [engine]: module });
     for (const command of ["bun", "node", "nodejs"]) {
       expect(await registry.resolve(`/opt/bun/${engine}/bin/${command}`)).toEqual({ kind: "module", module, adapter: "bun", interruptible: false });
     }
-    await expect(registry.resolve(`/opt/bun/${engine === "hermes" ? "jsc" : "hermes"}/bin/bun`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(registry.resolve(`/opt/bun/hermes/bin/bun`)).rejects.toMatchObject({ code: "ENOENT" });
   } finally { await broker.dispose(); }
 });

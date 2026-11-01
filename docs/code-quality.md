@@ -107,8 +107,12 @@ producer's outputs, not its own current attempt. The manifest still requires the
 same run, source and toolchain. A rerun of the quality producer creates an
 attempt-specific artifact and publishes its new digest only after packaging.
 A needed failed, cancelled or skipped quality producer explicitly fails the
-existing native check. Documentation-only selection and downstream Hermes and
-Processes conditions are unchanged.
+existing native check. Documentation-only selection and downstream Processes conditions are unchanged.
+The owner withdrew Hermes publication on November 1, 2026. Its native VM, side,
+embedding, and app gates are retired rather than recorded as passing. The
+`quality-no-hermes-publication.json` check rejects its return to shipped selectors
+or publication contracts. All remaining native, JSC, Browser, and source-cache
+gates stay blocking.
 
 Cold-run evidence reached Web checks at 59m50s, including 24m59s of native quality.
 The partition leaves 34m51s of that observed work in the consumer, before transfer

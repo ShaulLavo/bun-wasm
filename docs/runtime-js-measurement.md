@@ -77,7 +77,8 @@ do not separate parse-only cost or capture every later lazy function compilation
 * JSC's maintained helper calls `JSC::evaluate` with `SourceCode`, combining parsing,
   compilation and execution. Its internal `SourceProvider` bytecode-cache API is not
   exposed by our shim. `JSCheckScriptSyntax` is not compile-cost attribution.
-* Hermes's `bh_eval` calls `createBCProviderFromSrc` then `runBytecode`. These are
+* Dormant Hermes source, excluded from current measurements and publication, has
+  `bh_eval` that calls `createBCProviderFromSrc` then `runBytecode`. These are
   separable in C++, but not through the current shim. Our VM enables lazy compilation
   above 64 KiB unless optimization is enabled. Initial evaluation omits compilation
   performed by later calls. Do not change those flags to make a timing look cleaner.

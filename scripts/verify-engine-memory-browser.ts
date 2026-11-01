@@ -106,7 +106,7 @@ export function installActorObserver({ engine, executable, paths }: { engine: En
 }
 export function selectActor(observations: unknown, expected: Pick<Actor, "engine" | "path">): Actor {
   assert(Array.isArray(observations), "host launch observations unavailable");
-  assert(expected.engine === "quickjs" || expected.engine === "jsc", "only QJS/JSC are qualified; Hermes needs its own merged heap ABI and controls");
+  assert(expected.engine === "quickjs" || expected.engine === "jsc", "only supported paired engines QJS/JSC are qualified");
   const matches = observations.filter((value: unknown) => value && typeof value === "object" && Reflect.get(value, "path") === expected.path);
   assert.equal(matches.length, 1, `unique host fixture launch required: ${expected.path}`);
   const value: unknown = matches[0];
