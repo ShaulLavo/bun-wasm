@@ -9,7 +9,7 @@ import { guestBuilds, hash, type GuestBuild, type SourceOptions } from "../../sc
 import type { GuestBuildReceipt } from "../../scripts/guest-build-receipt.ts";
 import waffleRelease from "../../scripts/waffle-release-inputs.json";
 
-export const receiptCliSources = ["guest-build-receipt.ts", "guest-source-manifest.ts", "guest-core-receipt.ts", "guest-engine-receipt.ts", "waffle-release-inputs.ts", "waffle-release-inputs.json", "src/program-profile.ts"];
+export const receiptCliSources = ["guest-build-receipt.ts", "guest-source-manifest.ts", "guest-core-receipt.ts", "guest-engine-receipt.ts", "waffle-release-inputs.ts", "waffle-release-inputs.json", "src/program-profile.ts", "../spidermonkey/prepare-engine-inputs.ts"];
 
 export const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 export function fixtureReceipt(bytes: Uint8Array, build: GuestBuild, side?: Uint8Array): GuestBuildReceipt {
@@ -120,11 +120,12 @@ export async function withCliReceiptFixture<T>(action: (fixture: CliFixture) => 
   return withReceiptFixture(async (options, artifact) => {
     const root = options.repository;
     await mkdir(join(root, "scripts/src"), { recursive: true });
+    await mkdir(join(root, "spidermonkey"), { recursive: true });
     for (const name of receiptCliSources) await copyFile(new URL(`../../scripts/${name}`, import.meta.url), join(root, "scripts", name));
     await writeFile(join(root, ".gitignore"), (await readFile(join(root, ".gitignore"), "utf8")) + "node_modules/\nnative-tools/\n");
     await mkdir(join(root, "src"));
     await copyFile(new URL("../../src/engine-kind.ts", import.meta.url), join(root, "src/engine-kind.ts"));
-    fixtureGit(root, "add", "scripts", "src", ".gitignore");
+    fixtureGit(root, "add", "scripts", "src", "spidermonkey", ".gitignore");
     fixtureGit(root, "commit", "-m", "synthetic CLI probes, no compilation");
     const bin = join(options.sdk, "bin");
     const rustc = join(root, "private/toolchain/bin/rustc");
