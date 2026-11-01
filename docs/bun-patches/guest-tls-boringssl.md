@@ -59,5 +59,6 @@ include newly reachable verifier and TLS code. These are probe measurements,
 not the size, startup, or heap increment of an application guest.
 
 This preparation does not qualify shared-group globals, concurrent execution,
-process teardown, browser behavior, PostgreSQL, or a release. Source-manifest
-and CI input handoffs remain separately owned. No application guest is built.
+process teardown, browser behavior, PostgreSQL, or a release. The source manifest now inventories `ssl/` for guest and common-core inputs,
+without changing separate engine inputs. Roots are not added until consumed.
+CI input integration remains a separate gate. No application guest is built.

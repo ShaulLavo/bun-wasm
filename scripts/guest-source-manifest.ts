@@ -150,7 +150,7 @@ export async function captureSourceManifest(options: SourceOptions, scope: "gues
   if (scope === "guest" || scope === "core") {
     await committedGroup("bun", bun, ["src", "Cargo.toml", "Cargo.lock"], "within-repository");
     groups.push(await group("bun", bun, ["src", "Cargo.toml", "Cargo.lock", "build/debug/codegen", "vendor/lolhtml", "vendor/rust-argon2"]));
-    groups.push(await group("boringssl", boringssl, ["CMakeLists.txt", "cmake", "include", "crypto", "gen", "third_party", "util", "decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h"]));
+    groups.push(await group("boringssl", boringssl, ["CMakeLists.txt", "cmake", "include", "crypto", "ssl", "gen", "third_party", "util", "decrepit/cfb/cfb.cc", "decrepit/blowfish/blowfish.cc", "decrepit/macros.h"]));
   }
   if (scope === "jsc") groups.push(await committedGroup("bun-version", bun, ["package.json"]));
   groups.push(await group("waffle-libc", waffle, ["package.json", "scripts/build-wasi-libc.sh", "patches/wasi-libc/preopen-scan.patch"]));

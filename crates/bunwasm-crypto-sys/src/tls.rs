@@ -1,6 +1,6 @@
-//! Narrow BoringSSL TLS declarations shared by the native driver and probes.
+//! Narrow BoringSSL client TLS declarations.
 //!
-//! The driver owns every value returned by these functions.  In particular,
+//! Callers own every value returned by these functions. In particular,
 //! `SSL_set_bio` transfers both BIO pointers to the SSL object, so callers must
 //! disarm their Rust-side BIO owners after that call.
 
