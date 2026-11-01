@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { requireCompletePublicationFiles, verifyPublicationBuilds, verifyPublicationNativeBacking, type ProducerSource } from "./producer-closure.ts";
 
 export class MissingTlsInput extends Error { readonly code = "TLS_EXISTING_INPUT_CONTRACT_MISSING"; }
-export const deliveryContract = "bun-wasm.complete-producer-delivery.v2";
+const deliveryContract = "bun-wasm.complete-producer-delivery.v2";
 export const parentOwner = "mcp:e5ea79c9-80ba-4f6e-b71a-4886c114af80";
 export interface FileIdentity { readonly bytes: number; readonly sha256: string }
 export interface NamedIdentity extends FileIdentity { readonly path: string }
@@ -35,16 +35,16 @@ export function digest(value: unknown, label: string, length = 64): string {
   if (!new RegExp(`^[a-f0-9]{${length}}$`).test(result)) throw new Error(`Invalid ${label}`);
   return result;
 }
-export function identity(value: unknown, label: string): FileIdentity {
+function identity(value: unknown, label: string): FileIdentity {
   const row = object(value, label);
   if (typeof row.bytes !== "number" || !Number.isSafeInteger(row.bytes) || row.bytes < 1) throw new Error(`Invalid ${label} bytes`);
   return { bytes: row.bytes, sha256: digest(row.sha256, `${label} SHA-256`) };
 }
-export function namedIdentity(value: unknown, label: string): NamedIdentity {
+function namedIdentity(value: unknown, label: string): NamedIdentity {
   const row = object(value, label);
   return { path: text(row.path, `${label} path`), ...identity(row, label) };
 }
-export function source(value: unknown): ProducerSource {
+function source(value: unknown): ProducerSource {
   const row = object(value, "source");
   return { head: digest(row.head ?? row.commit, "source head", 40), tree: digest(row.tree, "source tree", 40) };
 }
@@ -59,7 +59,7 @@ export async function fileIdentity(path: string): Promise<FileIdentity> {
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return { bytes: info.size, sha256: hash.digest("hex") };
 }
-export async function requireIdentity(path: string, expected: FileIdentity): Promise<void> {
+async function requireIdentity(path: string, expected: FileIdentity): Promise<void> {
   const actual = await fileIdentity(path);
   if (actual.bytes !== expected.bytes || actual.sha256 !== expected.sha256) throw new Error(`TLS byte/custody mismatch for ${path}`);
 }
@@ -83,7 +83,7 @@ async function walk(root: string, path = "", label = "TLS delivery"): Promise<st
   }
   return results;
 }
-export async function verifyInventory(root: string, value: unknown): Promise<NamedIdentity[]> {
+async function verifyInventory(root: string, value: unknown): Promise<NamedIdentity[]> {
   if (!Array.isArray(value)) throw new Error("Missing complete TLS delivery inventory");
   const files = value.map(row => namedIdentity(row, "delivery file"));
   requireCompletePublicationFiles(files);

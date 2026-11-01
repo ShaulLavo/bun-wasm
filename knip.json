@@ -107,7 +107,8 @@
       ],
       "ignoreDependencies": [
         "benchmark",
-        "miniflare"
+        "miniflare",
+        "pg"
       ],
       "ignoreUnresolved": [
         "../src/subprocess.js"
