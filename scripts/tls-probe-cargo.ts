@@ -92,8 +92,6 @@ export async function inspectCryptoOutput(context: TlsContext, abi: TlsAbi, buil
   const c = context.tools[wasi ? "clang" : "cc"]?.path;
   const cxx = context.tools[wasi ? "cxx" : "hostCxx"]?.path;
   assert.ok(c && cxx, "Missing compiler identities");
-  assert.equal(realpathSync(cache.get("CMAKE_C_COMPILER") ?? ""), c);
-  assert.equal(realpathSync(cache.get("CMAKE_CXX_COMPILER") ?? ""), cxx);
   const metadata = readdirSync(join(directory, "CMakeFiles")).filter(name => /^\d+\.\d+(?:\.\d+)?$/.test(name));
   assert.equal(metadata.length, 1, "ambiguous CMake compiler metadata");
   const version = join(directory, "CMakeFiles", metadata[0]!);
@@ -101,6 +99,8 @@ export async function inspectCryptoOutput(context: TlsContext, abi: TlsAbi, buil
   assert.ok(system.includes(`set(CMAKE_SYSTEM_NAME "${wasi ? "WASI" : "Linux"}")`), "CMake ABI differs from invocation");
   const files = ["CMakeCache.txt", "build.ninja", "CMakeFiles/rules.ninja", "bunwasm-program-profile"].map(path => join(directory, path)).concat([join(version, "CMakeSystem.cmake")]);
   for (const [language, compiler] of [["C", c], ["CXX", cxx]]) {
+    const cachedCompiler = cache.get(`CMAKE_${language}_COMPILER`);
+    if (cachedCompiler !== undefined) assert.equal(realpathSync(cachedCompiler), compiler);
     const path = join(version, `CMake${language}Compiler.cmake`);
     const compilerInfo = readFileSync(path, "utf8");
     const selected = new RegExp(`set\\(CMAKE_${language}_COMPILER "([^"]+)"\\)`).exec(compilerInfo)?.[1];

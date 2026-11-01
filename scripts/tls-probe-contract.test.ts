@@ -152,7 +152,8 @@ for (const change of ["source", "compiler", "sysroot", "flags", "profile", "meta
     const cache = join(directory, "CMakeCache.txt");
     if (change === "profile") writeFileSync(join(directory, "bunwasm-program-profile"), "shared-group");
     if (change === "metadata") rmSync(join(directory, "CMakeFiles/4.4.4/CMakeCCompiler.cmake"));
-    const key = { source: "CMAKE_HOME_DIRECTORY", compiler: "CMAKE_C_COMPILER", sysroot: "CMAKE_SYSROOT", flags: "CMAKE_CXX_FLAGS" };
+    if (change === "compiler") writeFileSync(join(directory, "CMakeFiles/4.4.4/CMakeCCompiler.cmake"), 'set(CMAKE_C_COMPILER "/foreign/compiler")\n');
+    const key = { source: "CMAKE_HOME_DIRECTORY", sysroot: "CMAKE_SYSROOT", flags: "CMAKE_CXX_FLAGS" };
     const selected = Object.entries(key).find(([name]) => name === change)?.[1];
     if (selected) writeFileSync(cache, readFileSync(cache, "utf8").replace(new RegExp(`^${selected}:STRING=.*$`, "m"), `${selected}:STRING=foreign`));
     await expect(inspectCryptoOutput(f.context, "wasm32-wasip1", build)).rejects.toThrow();
@@ -248,5 +249,26 @@ for (const abi of ["host", "wasm32-wasip1"] as const) test(`recorded ${abi} Carg
     expect(await Bun.file(join(directory, `${abi}.json`)).exists()).toBe(true);
     expect(env.RUSTUP_TOOLCHAIN).toBe("foreign");
     expect(env.RUSTC).toBe("foreign");
+  } finally { f.remove(); }
+});
+
+test("WASI toolchain compiler metadata does not require compiler cache entries", async () => {
+  const f = await tlsFixture();
+  try {
+    const build = await fixtureCrypto(f.context, "wasm32-wasip1");
+    const cache = readFileSync(join(build.outDir, "boringssl/CMakeCache.txt"), "utf8");
+    expect(cache).not.toContain("CMAKE_C_COMPILER:");
+    expect(cache).not.toContain("CMAKE_CXX_COMPILER:");
+    await expect(inspectCryptoOutput(f.context, "wasm32-wasip1", build)).resolves.toMatchObject({ abi: "wasm32-wasip1" });
+  } finally { f.remove(); }
+});
+
+for (const language of ["C", "CXX"]) test(`WASI rejects conflicting cached ${language} compiler even with valid metadata`, async () => {
+  const f = await tlsFixture();
+  try {
+    const build = await fixtureCrypto(f.context, "wasm32-wasip1");
+    const cache = join(build.outDir, "boringssl/CMakeCache.txt");
+    writeFileSync(cache, readFileSync(cache, "utf8") + `CMAKE_${language}_COMPILER:FILEPATH=/foreign/compiler\n`);
+    await expect(inspectCryptoOutput(f.context, "wasm32-wasip1", build)).rejects.toThrow();
   } finally { f.remove(); }
 });

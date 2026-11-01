@@ -60,7 +60,7 @@ export async function fixtureCrypto(context: TlsContext, abi: "host" | "wasm32-w
   const cxx = context.tools[wasi ? "cxx" : "hostCxx"]!.path;
   fixturePut(join(context.workspace, "jsc/wasi-jsc.cmake"), "synthetic toolchain input");
   const cache = { CMAKE_TOOLCHAIN_FILE: wasi ? join(context.workspace, "jsc/wasi-jsc.cmake") : "", CMAKE_HOME_DIRECTORY: context.source, CMAKE_BUILD_TYPE: "MinSizeRel", OPENSSL_NO_ASM: "1", BUILD_TESTING: "OFF", CMAKE_SYSROOT: wasi ? context.sysroot : "", CMAKE_C_COMPILER: cc, CMAKE_CXX_COMPILER: cxx, CMAKE_C_FLAGS: wasi ? tlsWasiFlags : "", CMAKE_CXX_FLAGS: wasi ? `${tlsWasiFlags} -fno-exceptions -fno-rtti` : "" };
-  fixturePut(join(directory, "CMakeCache.txt"), Object.entries(cache).map(([key, value]) => `${key}:STRING=${value}\n`).join(""));
+  fixturePut(join(directory, "CMakeCache.txt"), Object.entries(cache).filter(([key]) => !wasi || !["CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER"].includes(key)).map(([key, value]) => `${key}:STRING=${value}\n`).join(""));
   fixturePut(join(directory, "build.ninja"), "include CMakeFiles/rules.ninja\n");
   const target = wasi ? " --target=wasm32-wasip1" : "";
   const rules = [["C", cc], ["CXX", cxx]].map(([language, compiler]) =>
