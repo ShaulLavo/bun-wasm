@@ -245,3 +245,14 @@ for (const build of ["quickjs", "quickjs-minimal", "jsc"] as const) test(`${buil
     await expect(writeGuestBuildReceipt(selected, artifact, inputs)).rejects.toThrow(programProfile(kind).side);
   });
 });
+
+for (const retired of ["build", "program", "prebuild"]) test(`withdrawn Hermes ${retired} cannot enter a new guest receipt`, () => {
+  const receipt = fixtureReceipt(wasm, "browser");
+  if (retired === "build") Reflect.set(receipt.sourceManifest, "build", "hermes");
+  if (retired === "program") Reflect.set(receipt.program, "kind", "hermes");
+  if (retired === "prebuild") Reflect.set(receipt.sourceManifest, "groups", receipt.sourceManifest.groups.concat([
+    { name: "hermes-prebuild", files: [{ path: "wasi/lib/libhermesvm_bunwasm.a", sha256: "0".repeat(64), bytes: 1 }] },
+  ]));
+  Reflect.set(receipt, "sourceManifestSha256", hash(JSON.stringify(receipt.sourceManifest)));
+  expect(() => verifyGuestBuildReceipt(wasm, receipt)).toThrow();
+});

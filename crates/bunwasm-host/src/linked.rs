@@ -42,7 +42,6 @@ struct Program {
 enum ProgramKind {
     QuickJs,
     Jsc,
-    Hermes,
     #[cfg(test)]
     SpiderMonkeyProbe,
 }
@@ -52,7 +51,6 @@ impl ProgramKind {
         match self {
             Self::QuickJs => "quickjs.wasm",
             Self::Jsc => "jsc-engine.wasm",
-            Self::Hermes => "hermes-engine.wasm",
             #[cfg(test)]
             Self::SpiderMonkeyProbe => "spidermonkey-engine.wasm",
         }
@@ -79,12 +77,6 @@ impl ProgramKind {
                 "spidermonkey_call_ctors",
                 "spidermonkey_register",
             ],
-            Self::Hermes => &[
-                "hermes_initialize_memory",
-                "hermes_apply_data_relocs",
-                "hermes_call_ctors",
-                "hermes_register",
-            ],
         }
     }
 
@@ -92,7 +84,6 @@ impl ProgramKind {
         match self {
             Self::QuickJs => "quickjs_run",
             Self::Jsc => "jsc_run",
-            Self::Hermes => "hermes_run",
             #[cfg(test)]
             Self::SpiderMonkeyProbe => "spidermonkey_run",
         }
@@ -102,7 +93,6 @@ impl ProgramKind {
         [
             Self::QuickJs,
             Self::Jsc,
-            Self::Hermes,
             #[cfg(test)]
             Self::SpiderMonkeyProbe,
         ]
@@ -137,7 +127,7 @@ impl Programs {
             side == profile,
             "paired {kind:?} engine profile {side:?} does not match core profile {profile:?}"
         );
-        // Only the QuickJS pair is qualified for shared groups; JSC and Hermes inputs have no atomics.
+        // Only the QuickJS pair is qualified for shared groups; JSC inputs have no atomics.
         ensure!(
             profile == group::Profile::Split || kind == ProgramKind::QuickJs,
             "a {kind:?} pair is not qualified for the shared-group profile"
@@ -286,7 +276,6 @@ fn parse_program_kind(bytes: &[u8], has_bind: bool) -> Result<Option<ProgramKind
         let kind = match section.data() {
             b"quickjs" => ProgramKind::QuickJs,
             b"jsc" => ProgramKind::Jsc,
-            b"hermes" => ProgramKind::Hermes,
             #[cfg(test)]
             b"spidermonkey-g2" => ProgramKind::SpiderMonkeyProbe,
             _ => bail!("invalid bun-wasm-engine payload"),
@@ -787,30 +776,13 @@ mod tests {
         assert_eq!(ProgramKind::Jsc.companion(), "jsc-engine.wasm");
         assert_eq!(ProgramKind::Jsc.run(), "jsc_run");
         assert!(ProgramKind::Jsc.initializers().contains(&"jsc_register"));
-        assert_eq!(ProgramKind::Hermes.companion(), "hermes-engine.wasm");
-        assert_eq!(ProgramKind::Hermes.run(), "hermes_run");
-        assert!(
-            ProgramKind::Hermes
-                .initializers()
-                .contains(&"hermes_register")
-        );
-        let others: Vec<_> = ProgramKind::Hermes.other_profiles().collect();
-        assert_eq!(
-            others,
-            [
-                ProgramKind::QuickJs,
-                ProgramKind::Jsc,
-                ProgramKind::SpiderMonkeyProbe
-            ]
-        );
+        let others: Vec<_> = ProgramKind::QuickJs.other_profiles().collect();
+        assert_eq!(others, [ProgramKind::Jsc, ProgramKind::SpiderMonkeyProbe]);
     }
 
     #[test]
-    fn hermes_engine_tag_selects_the_hermes_profile() {
+    fn withdrawn_engine_tag_is_rejected() {
         let bytes = wasm_custom(b"bun-wasm-engine", b"hermes");
-        assert_eq!(
-            parse_program_kind(&bytes, true).unwrap(),
-            Some(ProgramKind::Hermes)
-        );
+        assert!(parse_program_kind(&bytes, true).is_err());
     }
 }

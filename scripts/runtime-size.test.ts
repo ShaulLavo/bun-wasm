@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { resolveRuntimePackage } from "./browser-build";
 import { join } from "node:path";
+import ts from "typescript-api";
 import { initialJavaScript, checkCoreBudget, checkLazyProcessService, checkLazyInterruptRewriter, processServiceInputs, bunProcessAdapterInputs, moduleContributions } from "./runtime-size";
 
 const runtime = resolveRuntimePackage(join(import.meta.dir, "../web/src/main.ts"));
@@ -88,4 +89,29 @@ test("module attribution sums JS outputs, normalizes installed paths, and exclud
     { path: "web/src/runner.ts", minified: 10 },
     { path: "core/path.ts", minified: 5 },
   ]);
+});
+
+
+test("command definitions are an inert error type, not a process service", async () => {
+  const source = await Bun.file(installed("proc/command.ts")).text();
+  const parsed = ts.createSourceFile("command.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const values = parsed.statements.filter(node => !ts.isInterfaceDeclaration(node) && !ts.isTypeAliasDeclaration(node));
+  expect(values).toHaveLength(1);
+  const error = values[0];
+  if (!error || !ts.isClassDeclaration(error)) throw new Error("Expected only the command error declaration");
+  expect(error.name?.text).toBe("CommandStdioError");
+  expect(error.modifiers?.map(modifier => modifier.kind)).toEqual([ts.SyntaxKind.ExportKeyword]);
+  expect(error.heritageClauses?.map(clause => clause.getText(parsed))).toEqual(["extends Error"]);
+  expect(error.members).toHaveLength(1);
+  const constructor = error.members[0];
+  if (!constructor || !ts.isConstructorDeclaration(constructor)) throw new Error("Command error must have no static blocks, methods or field initializers");
+  expect(constructor.modifiers).toBeUndefined();
+  expect(constructor.parameters.flatMap(parameter => Array.from(parameter.modifiers ?? [], modifier => modifier.kind))).toEqual([ts.SyntaxKind.ReadonlyKeyword]);
+  expect(constructor.body?.getText(parsed).replace(/\s+/g, " ")).toBe('{ super(message); this.name = "CommandStdioError"; }');
+  expect(new Bun.Transpiler({ loader: "ts" }).scan(source).imports).toEqual([]);
+  expect(() => checkLazyProcessService([installed("proc/command.ts"), installed("dist/proc/command.js")], runtime)).not.toThrow();
+  for (const service of ["command-runner", "command-stdio", "command-future"]) {
+    expect(() => checkLazyProcessService([installed(`proc/${service}.ts`)], runtime)).toThrow("process service is eager");
+  }
+  expect(moduleContributions({ "main.js": { inputs: { [installed("proc/command.ts")]: { bytesInOutput: 98 } } } }, runtime)).toEqual([{ path: "proc/command.ts", minified: 98 }]);
 });

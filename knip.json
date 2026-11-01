@@ -41,8 +41,6 @@
         "scripts/generate-*.{ts,mjs}",
         "scripts/guest-core-receipt.ts",
         "scripts/guest-engine-receipt.ts",
-        "scripts/hermes-import-delta.ts",
-        "scripts/hermes-hosts.ts",
         "scripts/measure-suite-dependencies.ts",
         "scripts/refresh-compatibility-docs.ts",
         "scripts/group-suite-category-d.ts",
@@ -95,7 +93,6 @@
         "tests/fixtures/{editor-execution,filesystem-lifecycle,safari-driver-listener,site-assets-host,startup-filesystem}.ts",
         "tests/bun-runtime-proc-main.ts",
         "tests/wasm-transfer-page.ts",
-        "tests/hermes-host-page.ts",
         "tests/safari-{observers,open-descriptor-worker}.ts",
         "tests/worker-bootstrap-browser.ts",
         "tests/worker-bootstrap-browser-main.ts"

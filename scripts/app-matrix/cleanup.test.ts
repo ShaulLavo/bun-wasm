@@ -68,7 +68,7 @@ function fixture(stop: () => Promise<unknown>, productError = new Error("page.go
     page, context: { newPage: async () => pages.shift() },
     command: { name: "dev", args: ["run", "dev"], check: { kind: "page", text: "matrix" } },
     app: { id: "next" }, engine: "browser", options: { timeout: 90_000, cleanupTimeout: 20, output },
-    terminalText: async () => "user@bun:~$ bun run .matrix-command.ts dev\noriginal product output\n",
+    terminalText: async () => "$ bun run .matrix-command.ts dev\noriginal product output\n",
   };
   return { input, releases, preview, probe };
 }

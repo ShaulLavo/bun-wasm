@@ -42,3 +42,25 @@ test("candidate artifact block prepares three engines from five files", async ()
     await expect(loadCandidate("quickjs", "bun.wasm")).rejects.toThrow("quickjs.wasm: HTTP 404");
   } finally { globalThis.fetch = original; }
 });
+
+test("candidate loader uses asynchronous compilation for every engine", async () => {
+  const quickjs = quickjsPair(), jsc = quickjsPair("jsc");
+  const files = new Map([
+    ["/bun.wasm", quickjs.core], ["/quickjs.wasm", quickjs.side],
+    ["/bun-jsc.wasm", jsc.core], ["/jsc-engine.wasm", jsc.side],
+    ["/bun-browser.wasm", new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])],
+  ]);
+  const originalFetch = globalThis.fetch, Module = WebAssembly.Module;
+  try {
+    Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: Parameters<typeof fetch>[0]) => {
+      const bytes = files.get(String(input));
+      return bytes ? new Response(bytes) : new Response(null, { status: 404 });
+    } });
+    WebAssembly.Module = new Proxy(Module, { construct() { throw new Error("synchronous candidate compilation"); } });
+    for (const [engine, name] of [["quickjs", "bun.wasm"], ["jsc", "bun-jsc.wasm"], ["browser", "bun-browser.wasm"]] as const) {
+      const loaded = await loadCandidate(engine, name);
+      expect(loaded.module).toBeInstanceOf(Module);
+      expect(loaded.artifacts[0]?.engine).toBe(engine);
+    }
+  } finally { globalThis.fetch = originalFetch; WebAssembly.Module = Module; }
+});

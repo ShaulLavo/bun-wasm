@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { run } from "./quality-command";
-import { rustTestPackages } from "./rust-test-packages";
+import { dormantRustPackages, rustTestPackages } from "./rust-test-packages";
 
 if (!process.argv.includes("--checks-only")) {
   // rustfmt follows #[path] modules into vendor/bun unless skip_children is set.
@@ -17,8 +17,8 @@ const env = { ...process.env };
 // env.sh's WASI warning cap must not mask this host correctness gate.
 delete env.CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS;
 const jobs = process.env.QUALITY_RUST_JOBS ?? "1";
-run(["cargo", "clippy", "--locked", "--workspace", "--all-targets", "--release", "--no-deps", "-j", jobs, "--", "-D", "warnings"], env);
-// Every workspace member plus the path-patched crates with local tests, in one compile and run.
+run(["cargo", "clippy", "--locked", "--workspace"].concat(dormantRustPackages.flatMap(name => ["--exclude", name]), ["--all-targets", "--release", "--no-deps", "-j", jobs, "--", "-D", "warnings"]), env);
+// Every supported workspace member plus the path-patched crates, in one compile and run.
 const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--locked", "--no-deps", "--format-version", "1"], { encoding: "utf8", env, maxBuffer: 64 * 1024 * 1024 }));
 run(["cargo", "test", "--locked", "--release"].concat(rustTestPackages(metadata), ["-j", jobs]), env);
 run(["cargo", "machete", "crates"], env);

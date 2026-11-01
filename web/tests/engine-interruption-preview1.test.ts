@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { runInNewContext } from "node:vm";
 import { WasiExit } from "waffle/core";
 import { preview1SignalClockGuest } from "./engine-interruption-preview1";
 
@@ -48,4 +50,29 @@ test("Preview1 guest rejects a clock timeout masquerading as signal interruption
   try { (state.instance.exports._start as Function)(); throw new Error("guest did not reject missing EINTR"); }
   catch (error) { expect(error).toBeInstanceOf(WasiExit); expect((error as WasiExit).code).toBe(102); }
   expect(state.output).toEqual(["ready\n"]);
+});
+
+
+test("Preview1 root observation covers asynchronous worker acquisition", async () => {
+  const source = await readFile(new URL("./engine-interruption-main.ts", import.meta.url), "utf8");
+  const begin = source.indexOf("        rootRuntime = await fixtureRuntime();");
+  const end = source.indexOf("\n      } else {", begin);
+  expect(begin).toBeGreaterThan(0); expect(end).toBeGreaterThan(begin);
+  const setup = new Bun.Transpiler({ loader: "ts" }).transformSync(source.slice(begin, end));
+  const result = await runInNewContext(`(async () => {
+    let instrumentPreview1Root = false, captured = false;
+    let rootRuntime, run, rootSettled = false, worker, stdout = "", stderr = "";
+    const startRun = (_options, hooks) => ({ done: Promise.resolve().then(() => {
+      captured = instrumentPreview1Root;
+      hooks.stderr(new TextEncoder().encode("ready\\n"));
+    }) });
+    const until = async condition => { await Promise.resolve(); if (!condition()) throw Error("root did not become ready"); };
+    ${setup}
+    return { captured, worker };
+  })()`, {
+    fixtureRuntime: async () => ({}), module: {}, decoder: new TextDecoder(), TextEncoder,
+    guestWorkers: new Map([[1, "observed-root"]]), guestFinished: () => false,
+  }, { timeout: 100 });
+  expect(result.worker).toBe("observed-root");
+  expect(result.captured).toBe(true);
 });

@@ -4,13 +4,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { selectMemorySnapshots } from "./app-matrix/engine-memory-hook.ts";
 import { emptyCounters } from "../web/src/memory-telemetry.ts";
-import { actorSnapshot, verifyAllocation, verifyFailure, verifyChild, installActorObserver, selectActor } from "./verify-engine-memory-browser.ts";
+import { actorSnapshot, failedBytes, fixtureAllocationBytes, verifyAllocation, verifyFailure, verifyChild, installActorObserver, selectActor } from "./verify-engine-memory-browser.ts";
+import { maxMemoryBytes } from "./src/program-profile.ts";
 
 const engine = "quickjs";
 const actor = { authority: "host-worker-launch", id: "fixture", engine, path: "/home/user/memory-producer.ts" } as const;
 const child = { ...actor, id: "child", path: "/home/user/memory-child.ts" };
 const parent = { ...actor, id: "parent", path: "/home/user/memory-parent.ts" };
-const failed = { bytes: 600 * 1024 * 1024, category: "quickjs.arrayBuffer" };
+const failed = { bytes: failedBytes, category: "quickjs.arrayBuffer" };
+
+test("fixture requests an allocation beyond the authoritative guest maximum", () => {
+  expect(failedBytes).toBeGreaterThan(maxMemoryBytes());
+});
+
+test("fixture allocation survives JSC collection churn in the live allocator check", () => {
+  expect(fixtureAllocationBytes).toBeGreaterThanOrEqual(8 * 1024 * 1024);
+});
 function snapshot(id: string = actor.id, changes: Record<string, unknown> = {}) {
   return { ...emptyCounters, id, engine, time: 1, terminal: false, allocatorLiveBytes: 100,
     allocatorPeakBytes: 200, jsHeapBytes: 40, arrayBufferBytes: 1048576, engineCounters: { refreshSequence: 7 }, ...changes };
@@ -95,7 +104,7 @@ test("proxy: retained child checks name both actors and ignore unrelated command
   expect(() => verifyChild(good.live, good.failure, frame(snapshot(parent.id), snapshot(child.id, { failedAllocation: failed, terminal: true })), parent, child)).toThrow();
 });
 
-test("proxy: observer binds exact host launch argv to telemetry transport and preserves posting", () => {
+test("proxy: observer binds exact host launch authority and argv to telemetry transport and preserves posting", () => {
   const oldWorker = Object.getOwnPropertyDescriptor(globalThis, "Worker");
   const oldObserver = Object.getOwnPropertyDescriptor(globalThis, "__bunMemoryVerifierActors");
   const sent: unknown[][] = [];
@@ -107,7 +116,7 @@ test("proxy: observer binds exact host launch argv to telemetry transport and pr
     if (typeof serialized !== "function") throw new Error("observer cannot serialize for page init");
     serialized({ engine, executable: "/opt/bun/quickjs/bin/bun", paths: [actor.path, child.path] });
     const worker = new FakeWorker();
-    const message = { engine, args: ["/opt/bun/quickjs/bin/bun", "run", actor.path], memoryTelemetry: { id: actor.id, buffer: new SharedArrayBuffer(8) } };
+    const message = { engine, args: ["/opt/bun/quickjs/bin/bun", "run", actor.path], env: { BUNWASM_EXEC_PATH: "/opt/bun/quickjs/bin/bun" }, memoryTelemetry: { id: actor.id, buffer: new SharedArrayBuffer(8) } };
     const transfer: unknown[] = [];
     worker.postMessage({ type: "other" });
     worker.postMessage(message, transfer);
@@ -121,6 +130,8 @@ test("proxy: observer binds exact host launch argv to telemetry transport and pr
     expect(() => selectActor(getter(), actor)).toThrow();
     const invalids = [
       { ...message, engine: "jsc" },
+      { ...message, env: undefined },
+      { ...message, env: { BUNWASM_EXEC_PATH: "/wrong/bun" } },
       { ...message, args: ["/wrong/bun", "run", child.path] },
       { ...message, args: [message.args[0], "eval", child.path] },
       { ...message, args: message.args.concat(["extra"]) },

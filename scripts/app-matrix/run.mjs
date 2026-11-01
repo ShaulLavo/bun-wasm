@@ -28,7 +28,7 @@ for (const arg of process.argv.slice(2)) {
   flags.set(key.slice(2), value);
 }
 if (flags.has("help")) {
-  console.log("scripts/app-matrix.sh [--product] [--record] [--reference] [--strict] --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-app-matrix/run [--apps=hono,drizzle] [--engines=quickjs,jsc,browser,hermes] [--hosts=native,playground] [--preview-origins] [--timeout=90] [--launcher=PATH]\nDefault is offline replay. --record permits missing npm records to be downloaded. App failures are census results unless --strict is set; missing cache records or host artifacts exit nonzero.");
+  console.log("scripts/app-matrix.sh [--product] [--record] [--reference] [--strict] --cache=/work/cache/bun-wasm-app-matrix --output=/work/reports/bun-wasm-app-matrix/run [--apps=hono,drizzle] [--engines=quickjs,jsc,browser] [--hosts=native,playground] [--preview-origins] [--timeout=90] [--launcher=PATH]\nDefault is offline replay. --record permits missing npm records to be downloaded. App failures are census results unless --strict is set; missing cache records or host artifacts exit nonzero.");
   process.exit(0);
 }
 const apps = flags.has("product") ? (await import("./product.ts")).productApps : legacyApps;
@@ -44,14 +44,14 @@ const options = {
   strict: flags.has("strict"), product: flags.has("product"), record: flags.has("record"), reference: flags.has("reference"),
 };
 if (!Number.isFinite(options.timeout) || options.timeout < 1000) throw new Error("--timeout must be at least one second");
-for (const engine of options.engines) if (!["quickjs", "jsc", "browser", "hermes"].includes(engine)) throw new Error(`Unknown engine ${engine}`);
+for (const engine of options.engines) if (!["quickjs", "jsc", "browser"].includes(engine)) throw new Error(`Unknown engine ${engine}`);
 for (const host of options.hosts) if (!["native", "playground"].includes(host)) throw new Error(`Unknown host ${host}`);
 const requested = flags.has("apps") ? flags.get("apps").split(",") : apps.map(app => app.id);
 for (const id of requested) if (!apps.some(app => app.id === id)) throw new Error(`Unknown app ${id}`);
 const selected = apps.filter(app => requested.includes(app.id));
-const wasmName = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm", hermes: "bun-hermes.wasm" };
+const wasmName = { quickjs: "bun.wasm", jsc: "bun-jsc.wasm", browser: "bun-browser.wasm" };
 for (const engine of options.engines) if (!existsSync(join(root, "dist", wasmName[engine]))) throw new Error(`Build dist/${wasmName[engine]} first`);
-for (const [engine, side] of Object.entries({ quickjs: "quickjs.wasm", jsc: "jsc-engine.wasm", hermes: "hermes-engine.wasm" })) {
+for (const [engine, side] of Object.entries({ quickjs: "quickjs.wasm", jsc: "jsc-engine.wasm" })) {
   if (options.engines.includes(engine) && !existsSync(join(root, "dist", side))) throw new Error(`Build the matching dist/${side} first`);
 }
 if (options.hosts.includes("native") && options.engines.some(engine => engine !== "browser") && !existsSync(options.launcher)) throw new Error(`Build launcher ${options.launcher} first`);

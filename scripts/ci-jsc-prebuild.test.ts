@@ -92,7 +92,7 @@ const graphCases: GraphCase[] = ["success", "failure"].flatMap(quality => ["true
   ["success", "failure", "cancelled"].flatMap(outcome => [false, true].map(cancelled => ({ quality, rust, jsc, outcome, cancelled }))))));
 
 function checkGraph({ quality, rust, jsc, outcome, cancelled }: GraphCase) {
-  const qualityNeed = { result: quality, outputs: { rust, jsc, hermes: "false", shared: "false" } };
+  const qualityNeed = { result: quality, outputs: { rust, jsc, shared: "false" } };
   const prebuildRuns = jobRuns(producer, { quality: qualityNeed }, cancelled);
   const prebuild = { result: prebuildRuns ? outcome : "skipped" };
   const nativeRuns = jobRuns(native, { quality: qualityNeed, "jsc-prebuild": prebuild, "native-quality": { result: prebuild.result } }, cancelled);
@@ -103,9 +103,7 @@ function checkGraph({ quality, rust, jsc, outcome, cancelled }: GraphCase) {
   if (!nativeRuns) return;
   expect(guard(prebuild.result)).toBe(outcome === "success" ? 0 : 1);
   if (outcome === "success") return;
-  // Later consumers of native outputs do not run after a failed native job.
-  const hermes = { ...qualityNeed, outputs: { ...qualityNeed.outputs, hermes: "true" } };
-  expect(jobRuns(record(jobs.hermes), { quality: hermes, rust: { result: "failure" } }, cancelled)).toBe(false);
+
 }
 
 test("the native check fails, never skips, when its selected prebuild did not succeed", () => {

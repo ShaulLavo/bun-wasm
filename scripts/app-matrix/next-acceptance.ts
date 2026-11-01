@@ -314,7 +314,7 @@ async function main() {
   owner = await context.newPage();
   const page = owner;
   const loaded = await phase("engine", async () => {
-    await page.goto(`${match[1]}?root-previews&engine=${engine}`);
+    await page.goto(`${match[1]}?root-previews&engine=${engine}&prompt=off`);
     observedEngine = (await ready(page, timeout)).replaceAll(" MB", " MiB");
     const label = { quickjs: "QuickJS", jsc: "JavaScriptCore", browser: "Browser" }[engine];
     assert.ok(observedEngine.includes("ready") && observedEngine.includes(label), `Wrong engine: ${observedEngine}`);

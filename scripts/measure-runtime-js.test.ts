@@ -102,7 +102,7 @@ test("measurement consumes the current complete closure and original launcher re
     expect(closure.artifacts).toHaveLength(manifest.files.length);
     expect(readFileSync(join(root, "manifest.json"), "utf8")).toBe(before);
     expect(closure.launcher.sha256).toBe(manifest.launcher.artifact.sha256);
-    writeFileSync(join(root, "dist/hermes-engine.wasm"), "changed companion");
+    writeFileSync(join(root, "dist/jsc-engine.wasm"), "changed companion");
     expect(() => verifyMeasurementClosure(root)).toThrow("Producer artifact changed");
   });
 });
@@ -115,7 +115,7 @@ test("measurement rejects incomplete and mismatched producer identities before e
     save({ ...manifest, source: { ...manifest.source, head: "c".repeat(40) } });
     expect(() => verifyMeasurementClosure(root)).toThrow("Launcher source");
     save({ ...manifest, profile: "shared-group" });
-    expect(() => verifyMeasurementClosure(root)).toThrow("three-engine split closure");
+    expect(() => verifyMeasurementClosure(root)).toThrow("supported paired-engine split closure");
     save({ ...manifest, launcher: { ...manifest.launcher, path: "/changed" } });
     expect(() => verifyMeasurementClosure(root)).toThrow("Manifest launcher differs");
     save(manifest);
@@ -125,6 +125,6 @@ test("measurement rejects incomplete and mismatched producer identities before e
 });
 
 test("measurement invocation follows canonical producer core paths and explicit guest opt-in", () => {
-  expect(measurementArgs("/closure", "hermes", "1", false)).toEqual(["--wasm", "/closure/dist/bun-hermes.wasm", "--", "-e", "1"]);
+  expect(measurementArgs("/closure", "jsc", "1", false)).toEqual(["--wasm", "/closure/dist/bun-jsc.wasm", "--", "-e", "1"]);
   expect(measurementArgs("/closure", "quickjs", "1", true)).toEqual(["--wasm", "/closure/dist/bun.wasm", "--env", "BUN_WASM_MEASURE_RUNTIME_JS=1", "--", "-e", "1"]);
 });

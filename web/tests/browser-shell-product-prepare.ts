@@ -3,7 +3,7 @@ import { cp, mkdir, mkdtemp, readdir, rename, rm, symlink } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { PreparationFlow, restorePackedBun } from "../../tests/shell-product/prepare-flow";
-import { stageReleasedWaffle, stageWaffle, waffleCommits, waffleSourceRoot, writeWaffleSelection } from "../../tests/shell-product/waffle-stage";
+import { assertInstalledWaffle, assertWafflePeer, stageReleasedWaffle, stageWaffle, waffleCommits, waffleSourceRoot, writeWaffleSelection } from "../../tests/shell-product/waffle-stage";
 
 const root = resolve(import.meta.dir, "../..");
 function directory(name: string) {
@@ -61,8 +61,9 @@ async function prepareConsumer() {
   const installedWaffle = join(destination, "node_modules/waffle");
   const shell = join(destination, "node_modules/bash-web");
   await restorePackedBun(flow, { archive: join(temporary, archive), destination: join(destination, "node_modules/bun-wasm") });
-  assert.equal(await peer(shell), waffle, "Reject mismatched public Shell before any fixture build");
-  assert.equal(await peer(join(destination, "node_modules/bun-wasm")), waffle, "Reject mismatched public Bun before any fixture build");
+  assertWafflePeer(await peer(shell), waffle, "Reject mismatched public Shell before any fixture build");
+  assertWafflePeer(await peer(join(destination, "node_modules/bun-wasm")), waffle, "Reject mismatched public Bun before any fixture build");
+  await assertInstalledWaffle(destination, waffle);
   flow.check();
   await detachPackage(shell);
   if (!gitPeer)

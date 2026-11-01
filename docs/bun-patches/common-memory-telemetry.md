@@ -87,7 +87,7 @@ allocator bytes and must not be added to them.
 Only normal phase samples may invoke engine refresh. A detected failure or
 terminal cleanup permanently disables refresh for that process. Terminal
 snapshots use cached getters before linked-group disposal. The executor observes
-side imports during `instantiateLinkPlan()`, when pinned Waffle 0.0.105 creates
+side imports during `LinkedGroup.initialize()`, when pinned Waffle 0.0.107 creates
 the side instances, and restores the WASI import resolver in `finally`. The
 observer stays on each resolved import through initialization and entry. The
 Next hook reads host diagnostics, never process.memoryUsage or other JS on a faulted guest,
@@ -118,9 +118,12 @@ unrelated commands stay visible as separate raw facts. See the
 ## Linked-group lifecycle reference
 
 The executor's link lifecycle is adapted from Waffle `link/worker.ts` at the
-pinned `waffle-v0.0.105` release. It keeps Waffle's preparation, active checks,
-initialization, and group disposal. The local changes retain access to side
-instances for telemetry, establish an allocator-only reader before constructor
-execution, and publish cached terminal data before disposal. Linking and memory
-reservation remain Waffle's public implementation. The shared cells, schema,
-allocator wrappers, and root attribution are original adapters.
+pinned `waffle-v0.0.107` release. It keeps Waffle's preparation, active checks,
+initialization, and group disposal. Because Waffle creates side instances during
+group initialization, the local WASI import resolver is wrapped for that
+initialization call so each side wait import retains the refresh observer. The
+local changes retain access to side instances for telemetry, establish an
+allocator-only reader before constructor execution, and publish cached terminal
+data before disposal. Linking and memory reservation remain Waffle's public
+implementation. The shared cells, schema, allocator wrappers, and root
+attribution are original adapters.

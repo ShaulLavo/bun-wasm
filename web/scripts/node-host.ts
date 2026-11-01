@@ -20,7 +20,7 @@ import { createNodeAsyncContext } from "./async-context.ts";
 import { createNodeProcess, type NodeWasiImports } from "./node-process.ts";
 import { loadNodeProgram, linkNodeProgram, startNodeProgram } from "./node-linked.ts";
 import { createNodeWorker } from "./node-worker.ts";
-import { isPairedEngine, type PairedEngine } from "../../src/engine-kind.ts";
+import { pairedEngines, isPairedEngine, type PairedEngine } from "../../src/engine-kind.ts";
 import type { LinkPlanSource, LinkedGroup } from "waffle/link";
 
 const STACK_MB = 32, GUEST_STACK_KIB = "6144";
@@ -59,7 +59,7 @@ function settings(): Settings {
     if (arg === "--wasm") result.wasmPath = argv[++i]!;
     else if (arg === "--engine") {
       const value = argv[++i] ?? "", equal = value.indexOf("="), engine = value.slice(0, equal);
-      if (!isPairedEngine(engine) || equal < 0 || !value.slice(equal + 1)) throw new Error("--engine requires quickjs=PATH, jsc=PATH or hermes=PATH");
+      if (!isPairedEngine(engine) || equal < 0 || !value.slice(equal + 1)) throw new Error("--engine requires quickjs=PATH or jsc=PATH");
       result.engines[engine] = resolve(value.slice(equal + 1));
     }
     else if (arg === "--net") result.withNet = true;
@@ -91,7 +91,7 @@ async function main() {
   if (base.linkPlan) programs.set(baseModule, base.linkPlan);
   const module = await nodeModule({ args: config.args, baseModule, wasmPath: config.wasmPath });
   const engines: Partial<Record<PairedEngine, WebAssembly.Module>> = {};
-  for (const engine of ["quickjs", "jsc", "hermes"] as const) {
+  for (const engine of pairedEngines) {
     const path = config.engines[engine];
     if (!path) continue;
     const program = await loadNodeProgram(path, engine);

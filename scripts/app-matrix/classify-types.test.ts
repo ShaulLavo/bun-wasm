@@ -30,7 +30,7 @@ test("accepts readonly rows and retains extra fields and narrow classification o
     }
     const category: "a" | "b" | "c" | "d" = failure("Error: missing", "build").category;
     const diagnostic: string = firstError("Error: missing");
-    const output: string = stageOutput("user@bun:~$ bun run\\nbody", "bun run");
+    const output: string = stageOutput("$ bun run\\nbody", "bun run");
     void [category, diagnostic, output];
   `);
   expect(result.stdout.toString() + result.stderr.toString()).toBe("");

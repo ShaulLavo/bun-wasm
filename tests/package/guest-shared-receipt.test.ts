@@ -46,7 +46,7 @@ test("shared compose passes its explicit profile to original side capture and pr
       expect(await readFile(`${sidePath}.engine.json`, "utf8")).toBe(original);
       expect(() => verifyGuestBuildReceipt(core, { ...receipt, profile: undefined })).toThrow(/profile/);
       await expect(prepareGuestBuildInputs(selected)).rejects.toThrow(/profile differs/);
-      await expect(prepareGuestBuildInputs({ ...options, build: "hermes" }, "shared-group")).rejects.toThrow(/Only QuickJS/);
+      await expect(prepareGuestBuildInputs({ ...options, build: "jsc" }, "shared-group")).rejects.toThrow(/Only QuickJS/);
     });
   });
 });

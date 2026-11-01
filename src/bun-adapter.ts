@@ -5,9 +5,9 @@ import { loadBunWasm, type LoadBunWasmOptions } from "./assets.js";
 
 import type { BunNetworkOptions } from "../web/src/net/helper.js";
 import { bunLauncher } from "../web/src/bun-launcher.js";
-import { isPairedEngine, programKind, type PairedEngine } from "./engine-kind.js";
+import { isPairedEngine, pairedEngines, programKind, type Engine } from "./engine-kind.js";
 import { ENGINE_BIN } from "./executable-paths.js";
-export type Engine = PairedEngine | "browser";
+export type { Engine } from "./engine-kind.js";
 
 export class BunWasmExecutableConflictError extends Error {
   readonly code = "BUN_WASM_EXECUTABLE_CONFLICT";
@@ -92,8 +92,8 @@ export async function installBunAdapters(runtime: ProcessRuntime, options: BunAd
     // every installer operation observes only its own completion, including EEXIST.
     await runtime.filesystem.resolvePath("/");
     filesystem = new FilesystemClient(runtime.filesystem.fork());
-    const adapters: readonly Engine[] = engine === "hermes" ? ["quickjs", "jsc", "browser", "hermes"] : ["quickjs", "jsc", "browser"];
-    for (const name of adapters) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), notificationWorkerUrl: options.notificationWorkerUrl.toString(), runtime, network: options.network })));
+    const adapters: readonly Engine[] = pairedEngines;
+    for (const name of adapters.concat(["browser"])) unregisters.push(runtime.registerAdapter(`bun:${name}`, bunLauncher(name, { workerUrl: options.workerUrl.toString(), notificationWorkerUrl: options.notificationWorkerUrl.toString(), runtime, network: options.network })));
     for (const name of names) unregisters.push(runtime.registerProgram(name, {
       adapter: `bun:${engine}`, cooperative: true,
       module: async () => {

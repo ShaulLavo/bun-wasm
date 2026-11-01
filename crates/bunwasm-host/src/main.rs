@@ -772,6 +772,8 @@ mod tests {
             vec!["--engine", "jsc"],
             vec!["--engine", "jsc="],
             vec!["--engine", "browser=b.wasm"],
+            vec!["--engine", "hermes=h.wasm"],
+            vec!["--engine", "spidermonkey=sm.wasm"],
             vec!["--engine=jsc=a", "--engine=jsc=b"],
         ] {
             assert!(parse_args(args.into_iter().map(str::to_string)).is_err());

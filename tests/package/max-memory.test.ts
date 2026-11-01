@@ -98,7 +98,7 @@ test("the QuickJS linker test refuses an out-of-range maximum before anything el
   }
 });
 
-// JSC (and Hermes) report process.memoryUsage().rss as null, so `rss < limit` never ends there and
+// JSC reports process.memoryUsage().rss as null, so `rss < limit` never ends there and
 // the ballast filled the whole 1 GiB on JSC. The fixture measures the one linear memory instead.
 test("the high-address fixture stops on the shared linear memory, not an engine's rss", () => {
   const fixture = read("tests/fixtures/strings-above-512mib/index.ts");

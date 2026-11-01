@@ -80,7 +80,7 @@ async function sourceFixture(root: string, child: boolean) {
   const packageRoot = child ? join(repository, "packages/waffle") : repository;
   await mkdir(join(packageRoot, "tooling"), { recursive: true });
   await Bun.write(join(repository, "package.json"), JSON.stringify({ name: "waffle-monorepo", private: true, workspaces: ["packages/*"] }));
-  await Bun.write(join(packageRoot, "package.json"), JSON.stringify({ name: "waffle", version: release.version, private: child }));
+  await Bun.write(join(packageRoot, "package.json"), JSON.stringify({ name: "waffle", version: release.version, waffleHostInterface: release.hostInterface, private: child }));
   await Bun.write(join(packageRoot, "scripts/build-wasi-libc.sh"), "selected child builder");
   await Bun.write(join(packageRoot, "patches/wasi-libc/preopen-scan.patch"), "selected child patch");
   await Bun.write(join(packageRoot, "prepare.ts"), 'await Bun.write("prepared.txt", "canonical package root");');
@@ -101,7 +101,7 @@ async function checkSourceVariant(root: string, child: boolean, prepared: string
   await stageWaffle(flow, { repository: f.repository, commit: f.commit, archive: join(root, "source # archive.tar"), destination, prepared, env: process.env });
   expect(await readFile(join(destination, "prepared.txt"), "utf8")).toBe("canonical package root");
   expect(await Bun.file(join(destination, "packages/waffle/package.json")).exists()).toBe(false);
-  expect(await Bun.file(join(destination, "package.json")).json()).toEqual({ name: "waffle", version: release.version, private: child });
+  expect(await Bun.file(join(destination, "package.json")).json()).toEqual({ name: "waffle", version: release.version, waffleHostInterface: release.hostInterface, private: child });
   expect(await readFile(join(destination, "scripts/build-wasi-libc.sh"), "utf8")).toBe("selected child builder");
   expect(await readFile(join(destination, "patches/wasi-libc/preopen-scan.patch"), "utf8")).toBe("selected child patch");
   await Bun.write(join(f.packageRoot, "package.json"), JSON.stringify({ name: "wrong-package" }));
@@ -211,3 +211,17 @@ test("installed release exports, network assets and shared worker imports resolv
     await checkInstalledRelease(root);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+for (const child of [false, true]) {
+  test(`exact ${child ? "monorepo child" : "historical Git"} source cannot infer missing host metadata`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "bun-wasm-source-interface-"));
+    try {
+      const f = await sourceFixture(root, child);
+      await Bun.write(join(f.packageRoot, "package.json"), JSON.stringify({ name: "waffle", version: release.version, private: child }));
+      git(f.repository, "add", ".");
+      git(f.repository, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "missing metadata");
+      expect(() => waffleSourceRoot(f.repository, git(f.repository, "rev-parse", "HEAD"), !child)).toThrow("waffleHostInterface");
+      expect(waffleSourceRoot(f.repository, f.commit, !child)).toBe(child ? "packages/waffle" : "");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}

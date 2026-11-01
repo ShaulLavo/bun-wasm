@@ -1,3 +1,4 @@
+import { pairedEngines } from "../../src/engine-kind.ts";
 // Bun's composition over the page runtime's process service. The service owns admission,
 // supervision, descriptors, signals and worker lifetimes; this adds Bun's engine programs, the
 // run that roots a process tree. Executable resolution belongs to the guest and its PATH.
@@ -127,5 +128,6 @@ export function installBunAdapters(runtime: ProcessRuntime, workerUrl: string, l
   installedAdapters.add(runtime);
   runtime.registerAdapter("preview1", preview1Launcher({ workerUrl }));
   const notificationWorkerUrl = siblingWorkerUrl(workerUrl, "notification-worker.js");
-  for (const engine of ["quickjs", "jsc", "browser", "hermes"] as const) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network }));
+  const engines: readonly Engine[] = pairedEngines;
+  for (const engine of engines.concat(["browser"])) runtime.registerAdapter(`bun:${engine}`, bunLauncher(engine, { workerUrl, notificationWorkerUrl, loadTools, runtime, network }));
 }

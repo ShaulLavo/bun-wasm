@@ -1,3 +1,4 @@
+import type { Engine } from "../src/engine-kind.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -9,7 +10,7 @@ import { networkGuardStage } from "./app-matrix/product-campaign.ts";
 import { record } from "./guest-core-receipt.ts";
 import { distribution, engineOrder } from "./bench-engines.ts";
 
-const engines = ["quickjs", "jsc", "hermes"];
+const engines: readonly Exclude<Engine, "browser">[] = ["quickjs", "jsc"];
 const root = resolve(import.meta.dirname, "..");
 const hash = (bytes: string) => createHash("sha256").update(bytes).digest("hex");
 type ExpectedApp = { id: string; stages: string[] };
