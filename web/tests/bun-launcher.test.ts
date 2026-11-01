@@ -305,3 +305,33 @@ test("empty preview1 socket bindings stay lazy", async () => {
     await scopedRuntime.dispose();
   }
 });
+
+
+for (const withRelay of [false, true]) test(`broker preview1 preserves the explicit connector with relay ${withRelay}`, async () => {
+  const scopedRuntime = processRuntimeFixture({ directoryHandle: socketDirectoryFixture });
+  const network = await scopedRuntime.network();
+  const create = spyOn(network, "createHelper");
+  const launches: Launch[] = [];
+  const connect = async () => { throw new Error("setup must not open a connection"); };
+  const relay = withRelay ? {
+    endpoint: "http://127.0.0.1:8787/",
+    getToken() { throw new Error("setup must not request a token"); },
+    carriers: ["websocket"] as const,
+  } : undefined;
+  try {
+    await preview1Launcher({
+      runtime: scopedRuntime,
+      workerUrl: "./worker.js",
+      network: { connect, relay },
+      preview1: { sockets: [{ fd: 3, socket: { connect: { host: "echo.example", port: 4321 } } }] },
+    })(context, service(launches));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0]?.[0].connect).toBe(connect);
+    expect(launches[0]?.network?.connection).not.toHaveProperty("connect");
+    expect(launches[0]?.network?.connection).not.toHaveProperty("relay");
+  } finally {
+    launches[0]?.network?.dispose();
+    create.mockRestore();
+    await scopedRuntime.dispose();
+  }
+});

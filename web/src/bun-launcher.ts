@@ -157,7 +157,7 @@ async function launchPreview1(
   if (!sockets.length) return launchPreview1Worker(options.workerUrl, context, service, request);
   if (!options.runtime) throw new TypeError("Preview1 sockets require a runtime");
   const relay = await runtimeRelay(options.runtime, options.network?.relay);
-  const owner = await createPreview1Network(options.runtime, sockets, relay?.connect);
+  const owner = await createPreview1Network(options.runtime, sockets, options.network?.connect ?? relay?.connect);
   return launchOwnedPreview1(options.workerUrl, context, service, request, owner);
 }
 
