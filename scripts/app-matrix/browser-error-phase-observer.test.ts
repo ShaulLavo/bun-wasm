@@ -14,6 +14,16 @@ import { applyBrowserErrorPhaseObserver, observerHooks, requireServingObserver }
 import { fixtureSources, stageFixture } from "./next-acceptance-fixture";
 
 const fixture = join(import.meta.dir, "../../examples/next-acceptance");
+let speciesReads = 0;
+
+function readSpecies(): typeof Promise {
+  speciesReads++;
+  return Promise;
+}
+
+function observeSpeciesPromise(promise: Promise<string>): Promise<string> {
+  return observeCall(() => promise, () => {})();
+}
 
 test("observer stages only dedicated diagnostic files and the positive sender before compilation", () => {
   const source = fixtureSources(fixture);
@@ -85,12 +95,12 @@ test("promise observers retain original promises and never assimilate fulfilled 
   expect(observeCall(() => constructorGetterPromise, () => {})()).toBe(constructorGetterPromise);
   expect(constructorReads).toBe(0);
   const speciesDescriptor = Object.getOwnPropertyDescriptor(Promise, Symbol.species);
-  let speciesReads = 0;
+  speciesReads = 0;
   if (speciesDescriptor?.configurable) {
     try {
-      Object.defineProperty(Promise, Symbol.species, { configurable: true, get() { speciesReads++; return Promise; } });
+      Object.defineProperty(Promise, Symbol.species, { configurable: true, get: readSpecies });
       const speciesPromise = Promise.resolve("species-value");
-      expect(observeCall(() => speciesPromise, () => {})()).toBe(speciesPromise);
+      expect(observeSpeciesPromise(speciesPromise)).toBe(speciesPromise);
       expect(speciesReads).toBe(0);
     } finally {
       Object.defineProperty(Promise, Symbol.species, speciesDescriptor);
