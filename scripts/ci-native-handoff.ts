@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { nativeTargetRoots } from "./ci-native-handoff-paths";
 
 const archiveNames = ["target.tar.zst", "cargo.tar.zst", "sources.tar.zst"] as const;
 const transferNames = ["target.tar.zst", "cargo.tar.zst", "sources.tar.zst", "manifest.json"] as const;
@@ -43,7 +44,7 @@ function context() {
 }
 function layout(state: Context) {
   return [
-    { name: archiveNames[0], directory: state.target, roots: ["."] },
+    { name: archiveNames[0], directory: state.target, roots: nativeTargetRoots.map(root => root.path) },
     { name: archiveNames[1], directory: state.cargo, roots: ["registry", "git", "bin/cargo-machete"] },
     { name: archiveNames[2], directory: state.workspace, roots: ["vendor/bun", "vendor/boringssl"] },
   ];
