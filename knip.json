@@ -13,6 +13,7 @@
         "scripts/app-matrix/reclassify.mjs",
         "scripts/app-matrix/next-acceptance.ts",
         "scripts/app-matrix/next-acceptance-reference.ts",
+        "scripts/app-matrix/fixtures/browser-error-phase-observer/instrumentation.ts",
         "scripts/app-matrix/*.test.{ts,mjs}",
         "tests/package/*.test.ts",
         "tests/memory-telemetry.test.ts",
