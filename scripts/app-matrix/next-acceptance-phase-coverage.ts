@@ -16,7 +16,7 @@ export const phaseSenderControl = {
   source: 'export function getServerSideProps() { return { props: { marker: "NEXT phase class sender" } }; }\nexport default function Page({ marker }: { marker: string }) { return <main>{marker}</main>; }\n',
 };
 
-export function observerRecords(terminal: string, probe: string): PhaseRecord[] {
+function observerRecords(terminal: string, probe: string): PhaseRecord[] {
   return terminal.split("\n").flatMap(line => {
     const prefix = "[guest-error-phase] ";
     if (!line.startsWith(prefix)) return [];

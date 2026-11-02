@@ -1,4 +1,4 @@
-export type ObserverRecord = {
+type ObserverRecord = {
   probe: string;
   stage: string;
   at: number;

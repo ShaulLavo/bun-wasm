@@ -11,7 +11,7 @@ import { phaseControlRequests, routeCoverage, verifyPhaseObservationControls } f
 type Control = typeof phaseControlRequests[number];
 type Response = Awaited<ReturnType<typeof requestProbe>>;
 
-export function verifyPhaseControlResponse(control: Control, response: Response): void {
+function verifyPhaseControlResponse(control: Control, response: Response): void {
   assert.equal(response.kind, "complete", `Control ${control.probe} must reach EOF`);
   assert.equal(response.status, routeCoverage[control.route].status, `Control ${control.probe} HTTP status`);
   assert.ok(response.bytesRead > 0, `Control ${control.probe} has no response bytes`);
