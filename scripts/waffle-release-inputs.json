@@ -26,8 +26,6 @@
       "sourceDirectory": "packages/base",
       "sourceTree": "a2795f209dd23bfac9161e9abeede51da25cad97",
       "version": "0.0.15"
-    },
-    "schema": "waffle-program-release/2",
-    "toolCommit": "acd64c19a6381c27edd602316e66d81df78abf25"
+    }
   }
 }
