@@ -21,7 +21,7 @@ const mutations: [string, string, string, string][] = [
   ["unbounded tracked source listing", controller, '"ls-files", "-z", "--", ":(glob)**/node_modules", ":(glob)**/node_modules/**"', '"ls-files", "-z"'],
   ["tracked dependency fixtures omitted", controller, 'path.split("/").includes("node_modules") && !tracked.has(path)', 'path.split("/").includes("node_modules")'],
   ["untracked installs included", controller, 'path.split("/").includes("node_modules") && !tracked.has(path)', "false"],
-  ["native manifest unchecked", controller, 'createHash("sha256").update(manifestText).digest("hex") !== process.env.NATIVE_QUALITY_MANIFEST_SHA256', "false"],
+  ["native manifest unchecked", controller, 'createHash("sha256").update(manifestBytes).digest("hex") !== process.env.NATIVE_QUALITY_MANIFEST_SHA256', "false"],
   ["native source/tool identity unchecked", controller, 'manifest.schema !== 1 || JSON.stringify(manifest.identity) !== JSON.stringify(state.identity)', "false"],
   ["native transfer whitelist unchecked", controller, 'JSON.stringify(entries) !== JSON.stringify(transferNames)', "false"],
   ["native archive unchecked", controller, 'archives[name] !== await hashTransferMember(transfer, name)', "false"],
