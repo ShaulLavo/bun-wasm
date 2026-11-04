@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildToolPins, installBuildTools, verifyBuildToolArchive } from "./ci-build-tools";
@@ -12,8 +12,23 @@ const installName = "Install pinned CMake and Ninja";
 
 function withRoot(body: (root: string) => void | Promise<void>) {
   const root = mkdtempSync(join(tmpdir(), "bun-wasm-build-tools-"));
-  return Promise.resolve(body(root)).finally(() => rmSync(root, { recursive: true, force: true }));
+  return Promise.resolve().then(() => body(root)).finally(() => rmSync(root, { recursive: true, force: true }));
 }
+
+test.each(["throw", "reject"])("build tool fixtures clean up after callbacks %s", async kind => {
+  const failure = new Error("Fixture callback failed");
+  let directory = "";
+  try {
+    await expect(withRoot(root => {
+      directory = root;
+      if (kind === "throw") throw failure;
+      return Promise.reject(failure);
+    })).rejects.toBe(failure);
+    expect(existsSync(directory)).toBe(false);
+  } finally {
+    if (directory) rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 for (const pin of buildToolPins) for (const contents of ["tampered archive", ""]) {
   test(`${pin.name} setup rejects a ${contents ? "tampered" : "empty"} cached archive`, () => withRoot(async root => {
