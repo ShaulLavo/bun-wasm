@@ -23,18 +23,20 @@ function esm(key: string) {
 
 type Write = { url: string; settle(error?: Error): void; settled: boolean };
 
+function holdWrite(url: string, writes: Write[]): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const write: Write = { url, settled: false, settle(error) { write.settled = true; if (error) reject(error); else resolve(); } };
+    writes.push(write);
+  });
+}
+
 /** An EngineHost whose named store holds every write until the test settles it. */
 function host(moduleUrls: "blob" | "data") {
   const writes: Write[] = [];
   const imported: { url: string; pending: number }[] = [];
   const modules = {
     url: (key: string) => `memory:/m/${key}`,
-    put(url: string) {
-      return new Promise<void>((resolve, reject) => {
-        const write: Write = { url, settled: false, settle(error) { write.settled = true; if (error) reject(error); else resolve(); } };
-        writes.push(write);
-      });
-    },
+    put: (url: string) => holdWrite(url, writes),
   };
   const context = createContext({ TextEncoder, TextDecoder, URL, Blob, setTimeout, clearTimeout, queueMicrotask, isWasmMemoryBuffer, transferArrayBuffers, createScriptEvaluation, SLOT_NAMES, ContentModules, memoryViews: () => ({}) });
   const EngineHost = runInContext(source + "\nEngineHost;", context, {
