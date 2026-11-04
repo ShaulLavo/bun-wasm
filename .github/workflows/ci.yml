@@ -112,6 +112,25 @@ jobs:
           test -s /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
+      # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
+      # land on different runner images. Every producer and consumer uses the same pinned bytes.
+      - uses: actions/cache/restore@v4
+        id: build-tools-cache
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: build-tools-cmake-4.4.5-ninja-1.13.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-build-tools.ts') }}
+      - name: Install pinned CMake and Ninja
+        run: bun scripts/ci-build-tools.ts
+      - name: Save completed build-tools-cache setup
+        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: ${{ steps.build-tools-cache.outputs.cache-primary-key }}
       # Image updates change many unrelated packages. Build caches follow the host
       # tools these builds run; each layer's own input hash covers its toolchain.
       - name: Identify host build tools
@@ -372,6 +391,25 @@ jobs:
           test -s /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
+      # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
+      # land on different runner images. Every producer and consumer uses the same pinned bytes.
+      - uses: actions/cache/restore@v4
+        id: build-tools-cache
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: build-tools-cmake-4.4.5-ninja-1.13.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-build-tools.ts') }}
+      - name: Install pinned CMake and Ninja
+        run: bun scripts/ci-build-tools.ts
+      - name: Save completed build-tools-cache setup
+        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: ${{ steps.build-tools-cache.outputs.cache-primary-key }}
       # Image updates change many unrelated packages. Build caches follow the host
       # tools these builds run; each layer's own input hash covers its toolchain.
       - name: Identify host build tools
@@ -787,6 +825,25 @@ jobs:
           test -s /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build nasm clang libclang-dev pkg-config ruby gperf bison
+      # The JSC stamp and sysroot receipt fingerprint CMake and Ninja, and jobs of one run can
+      # land on different runner images. Every producer and consumer uses the same pinned bytes.
+      - uses: actions/cache/restore@v4
+        id: build-tools-cache
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: build-tools-cmake-4.4.5-ninja-1.13.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci-build-tools.ts') }}
+      - name: Install pinned CMake and Ninja
+        run: bun scripts/ci-build-tools.ts
+      - name: Save completed build-tools-cache setup
+        if: steps.build-tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.WASM_TOOLS }}/cmake-4.4.5-linux-x86_64.tar.gz
+            ${{ env.WASM_TOOLS }}/ninja-1.13.2-linux.zip
+          key: ${{ steps.build-tools-cache.outputs.cache-primary-key }}
       # Image updates change many unrelated packages. Build caches follow the host
       # tools these builds run; each layer's own input hash covers its toolchain.
       - name: Identify host build tools

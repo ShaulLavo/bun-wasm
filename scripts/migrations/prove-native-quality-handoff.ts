@@ -17,6 +17,7 @@ const mutations: [string, string, string, string][] = [
   ["prebuild identity unchecked", workflow, '          [[ "$(head -n 4 "$manifest")" == "$expected" ]]\n', ""],
   ["prebuild transfer members unchecked", workflow, `          [[ "$(tar --posix -tf "$transfer")" == $'prebuild.tar.zst\\nsysroot.tar.zst\\njsc-prebuild.log\\nmanifest' ]]\n`, ""],
   ["prebuild archive unchecked", workflow, `          [[ "$(tar --posix -xOf "$transfer" prebuild.tar.zst | sha256sum | cut -d' ' -f1)" == "$prebuild_digest" ]]\n          [[ "$(tar --posix -xOf "$transfer" sysroot.tar.zst | sha256sum | cut -d' ' -f1)" == "$sysroot_digest" ]]\n`, ""],
+  ["CMake and Ninja left to the runner image", workflow, "        run: bun scripts/ci-build-tools.ts\n", "        run: true\n"],
   ["prebuild overlay", workflow, '          [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]\n', ""],
   ["prebuild stamp unchecked", workflow, "          source jsc/common.sh\n          check_jsc_inputs_stamp\n", ""],
   ["prebuild group unowned", workflow, "          set -m\n          (\n            set +m\n", "          (\n"],
@@ -42,7 +43,7 @@ const mutations: [string, string, string, string][] = [
   ["duplicate common core", workflow, "          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh", "          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh\n          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh"],
   ["PR heavy save", workflow, "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-cargo-cache.outputs.cache-hit != 'true'", "steps.native-cargo-cache.outputs.cache-hit != 'true'"],
 ];
-const tests = ["scripts/ci-native-handoff.test.ts", "scripts/ci-jsc-prebuild.test.ts", "scripts/ci-cache-inputs.test.ts", "scripts/ci-cache-policy.test.ts", "scripts/ci-quality.test.ts", "scripts/test-web-guests.test.ts"];
+const tests = ["scripts/ci-build-tools.test.ts", "scripts/ci-native-handoff.test.ts", "scripts/ci-jsc-prebuild.test.ts", "scripts/ci-cache-inputs.test.ts", "scripts/ci-cache-policy.test.ts", "scripts/ci-quality.test.ts", "scripts/test-web-guests.test.ts"];
 function probe(): number {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-native-mutations-"));
   try {
