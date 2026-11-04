@@ -39,6 +39,12 @@ test.each(["scripts/waffle-release-inputs.ts", "scripts/waffle-release-inputs.js
   expect(needsJsc([path])).toBe(true);
 });
 
+test("native handoff roots alone select producer and consumer engine gates", () => {
+  const paths = ["scripts/ci-native-handoff-paths.ts"];
+  expect(needsRust(paths)).toBe(true);
+  expect(needsJsc(paths)).toBe(true);
+});
+
 test.each(["src/index.ts", "web/src/worker.ts", "sandbox/src/main.ts", "site/src/main.ts", "docs/code-quality.md", "scripts/ci-quality.test.ts", "checks/web-leaf.json", "checks/quality-leaf.json"])("JavaScript/documentation input %s needs no Rust compilation", path => {
   expect(needsRust([path])).toBe(false);
 });
