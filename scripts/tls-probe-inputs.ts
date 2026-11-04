@@ -42,6 +42,12 @@ export async function treeIdentity(root: string, paths: readonly string[], allow
   for (const path of paths) files = files.concat(await treeFiles(root, path, allowed));
   return digest(JSON.stringify(files));
 }
+// Bun's readdirSync returns raw filesystem order, which differs between runner images:
+// sort the probe scripts so producer and consumer bind the same bytes in the same order.
+export function tlsRepositoryIdentity(workspace: string) {
+  const probes = readdirSync(join(workspace, "scripts")).filter(name => /^tls-probe.*\.ts$/.test(name) && !/\.test\.ts$|tls-probe-fixture\.ts$/.test(name)).sort();
+  return treeIdentity(workspace, tlsRepositoryPaths.concat(probes.map(name => `scripts/${name}`), ["checks/native-probe-tls.json"]));
+}
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name];
   assert.ok(value && !/[\0\r\n]/.test(value), `Missing or unsafe ${name}`);
@@ -81,7 +87,7 @@ export async function tlsContext(env: NodeJS.ProcessEnv = process.env) {
     schema: 1, rustToolchain, run: required(env, "GITHUB_RUN_ID"), attempt, head: required(env, "GITHUB_SHA"), tree: git(workspace, "rev-parse", "HEAD^{tree}"),
     workspace, target, sdk, sysroot, source, profile: "split", pin: tlsPin,
     hostTools: required(env, "NATIVE_HOST_TOOLS_HASH"), nativeInputs: required(env, "NATIVE_INPUTS_HASH"),
-    repository: await treeIdentity(workspace, tlsRepositoryPaths.concat(readdirSync(join(workspace, "scripts")).filter(name => /^tls-probe.*\.ts$/.test(name) && !/\.test\.ts$|tls-probe-fixture\.ts$/.test(name)).map(name => `scripts/${name}`), ["checks/native-probe-tls.json"])),
+    repository: await tlsRepositoryIdentity(workspace),
     upstream: await treeIdentity(source, tlsSourcePaths),
     sysrootInputs: await treeIdentity(sysroot, ["bun-wasm-sysroot.json", "include", "lib"], [sysroot, sdk]),
     sdkInputs: await treeIdentity(sdk, ["VERSION", "lib/clang"]), tools,

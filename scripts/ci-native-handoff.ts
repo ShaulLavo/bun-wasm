@@ -176,8 +176,10 @@ function preflightDestinations(state: Context): void {
 }
 async function inspect(state: Context, bundle: string) {
   digestText(required("NATIVE_QUALITY_MANIFEST_SHA256"));
-  if (await hash(join(bundle, "manifest.json")) !== process.env.NATIVE_QUALITY_MANIFEST_SHA256) throw new Error("Native manifest digest mismatch");
-  const manifest = object(JSON.parse(readFileSync(join(bundle, "manifest.json"), "utf8")));
+  // Hash and parse the same bytes, so the admitted digest covers exactly what is decoded.
+  const manifestBytes = readFileSync(join(bundle, "manifest.json"));
+  if (createHash("sha256").update(manifestBytes).digest("hex") !== process.env.NATIVE_QUALITY_MANIFEST_SHA256) throw new Error("Native manifest digest mismatch");
+  const manifest = object(JSON.parse(manifestBytes.toString("utf8")));
   if (manifest.schema !== 1 || JSON.stringify(manifest.identity) !== JSON.stringify(state.identity)) throw new Error("Foreign native handoff identity");
   const archives = object(manifest.archives);
   if (JSON.stringify(Object.keys(archives)) !== JSON.stringify(archiveNames)) throw new Error("Native archive whitelist mismatch");

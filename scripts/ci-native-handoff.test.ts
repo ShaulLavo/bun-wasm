@@ -376,6 +376,42 @@ function mutateFixture(mode: string, root: string, bundle: string, changes: Reco
   changes.NATIVE_QUALITY_MANIFEST_SHA256 = createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+for (const mode of ["leading-space", "trailing-newline"] as const) test(`real import rejects manifest ${mode} under the producer digest before destinations`, () => {
+  fixture((root, env, invoke) => {
+    const changes = prepareImport(root, env, invoke);
+    const path = join(root, "temp/native-quality-artifact/manifest.json");
+    const bytes = readFileSync(path);
+    // Still valid JSON with the same decoded value; only the exact bytes differ.
+    writeFileSync(path, mode === "leading-space" ? Buffer.concat([Buffer.from(" "), bytes]) : Buffer.concat([bytes, Buffer.from("\n")]));
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(JSON.parse(bytes.toString("utf8")));
+    const imported = invoke("rust", unpackName, changes);
+    expect(imported.status).not.toBe(0);
+    expect(imported.stderr).toContain("Native manifest digest mismatch");
+    expect(existsSync(join(root, "repo/target"))).toBe(false);
+    expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("");
+  });
+});
+
+test("real import deletes each verified member right after extracting it, then the bundle", () => {
+  fixture((root, env, invoke) => {
+    const changes = prepareImport(root, env, invoke);
+    const bundle = join(root, "temp/native-quality-artifact");
+    const bin = join(root, "observe-bin"), seen = join(root, "zstd-seen");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "zstd"), `#!/bin/bash\necho "$(ls -A "${bundle}")" | tr '\\n' ' ' >> "${seen}"\necho >> "${seen}"\nexec ${Bun.which("zstd")} "$@"\n`, { mode: 0o755 });
+    const imported = invoke("rust", unpackName, { ...changes, PATH: `${bin}:${process.env.PATH}` });
+    expect(imported.status, imported.stderr).toBe(0);
+    expect(readFileSync(seen, "utf8")).toBe([
+      "cargo.tar.zst manifest.json sources.tar.zst target.tar.zst ",
+      "cargo.tar.zst manifest.json sources.tar.zst ",
+      "manifest.json sources.tar.zst ",
+      "",
+    ].join("\n"));
+    expect(existsSync(bundle)).toBe(false);
+    expect(readFileSync(env.GITHUB_OUTPUT!, "utf8")).toBe("native-ready=true\n");
+  });
+});
+
 for (const tool of ["tar", "zstd"]) test(`real package cannot advertise a checkpoint after ${tool} fails`, () => {
   fixture((root, env, invoke) => {
     const bin = join(root, "fault-bin");

@@ -13,20 +13,24 @@ const mutations: [string, string, string, string][] = [
   ["prebuild selected by JSC only", workflow, "    needs: quality\n    if: needs.quality.outputs.rust == 'true'\n    runs-on: ubuntu-latest\n    # A cold", "    needs: quality\n    if: needs.quality.outputs.jsc == 'true'\n    runs-on: ubuntu-latest\n    # A cold"],
   ["native cap raised", workflow, "    timeout-minutes: 60\n", "    timeout-minutes: 90\n"],
   ["quality cap raised", workflow, "    timeout-minutes: 45\n    env:", "    timeout-minutes: 60\n    env:"],
-  ["prebuild digest unchecked", workflow, '          echo "$JSC_PREBUILD_MANIFEST_SHA256  $bundle/manifest" | sha256sum --check --strict\n', ""],
-  ["prebuild identity unchecked", workflow, '          [[ "$(head -n 4 "$bundle/manifest")" == "$expected" ]]\n', ""],
-  ["prebuild archive unchecked", workflow, '          (cd "$bundle" && tail -n +5 manifest | sha256sum --check --strict)\n', ""],
+  ["prebuild digest unchecked", workflow, '          echo "$JSC_PREBUILD_MANIFEST_SHA256  $manifest" | sha256sum --check --strict\n', ""],
+  ["prebuild identity unchecked", workflow, '          [[ "$(head -n 4 "$manifest")" == "$expected" ]]\n', ""],
+  ["prebuild transfer members unchecked", workflow, `          [[ "$(tar --posix -tf "$transfer")" == $'prebuild.tar.zst\\nsysroot.tar.zst\\njsc-prebuild.log\\nmanifest' ]]\n`, ""],
+  ["prebuild archive unchecked", workflow, `          [[ "$(tar --posix -xOf "$transfer" prebuild.tar.zst | sha256sum | cut -d' ' -f1)" == "$prebuild_digest" ]]\n          [[ "$(tar --posix -xOf "$transfer" sysroot.tar.zst | sha256sum | cut -d' ' -f1)" == "$sysroot_digest" ]]\n`, ""],
+  ["CMake and Ninja left to the runner image", workflow, "        run: bun scripts/ci-build-tools.ts\n", "        run: true\n"],
   ["prebuild overlay", workflow, '          [[ ! -e "$JSC_BUILD_DIR" && ! -e "$BUN_WASM_SYSROOT" ]]\n', ""],
   ["prebuild stamp unchecked", workflow, "          source jsc/common.sh\n          check_jsc_inputs_stamp\n", ""],
   ["prebuild group unowned", workflow, "          set -m\n          (\n            set +m\n", "          (\n"],
   ["unbounded tracked source listing", controller, '"ls-files", "-z", "--", ":(glob)**/node_modules", ":(glob)**/node_modules/**"', '"ls-files", "-z"'],
   ["tracked dependency fixtures omitted", controller, 'path.split("/").includes("node_modules") && !tracked.has(path)', 'path.split("/").includes("node_modules")'],
   ["untracked installs included", controller, 'path.split("/").includes("node_modules") && !tracked.has(path)', "false"],
-  ["native manifest unchecked", controller, 'await hash(join(bundle, "manifest.json")) !== process.env.NATIVE_QUALITY_MANIFEST_SHA256', "false"],
+  ["native manifest unchecked", controller, 'createHash("sha256").update(manifestBytes).digest("hex") !== process.env.NATIVE_QUALITY_MANIFEST_SHA256', "false"],
   ["native source/tool identity unchecked", controller, 'manifest.schema !== 1 || JSON.stringify(manifest.identity) !== JSON.stringify(state.identity)', "false"],
   ["native archive whitelist unchecked", controller, 'JSON.stringify(Object.keys(archives)) !== JSON.stringify(archiveNames)', "false"],
   ["native archive unchecked", controller, 'archives[name] !== await hash(join(bundle, name))', "false"],
   ["native overlay", controller, "  preflightDestinations(state);", ""],
+  ["native member retained", controller, "    rmSync(join(bundle, item.name));\n", ""],
+  ["native members deleted only at the end", controller, "    rmSync(join(bundle, item.name));\n  }\n", "  }\n  for (const item of layout(state)) rmSync(join(bundle, item.name));\n"],
   ["consumer attempt substituted", controller, 'const attempt = required("NATIVE_QUALITY_PRODUCER_ATTEMPT");', 'const attempt = required("GITHUB_RUN_ATTEMPT");'],
   ["source verifier removed", controller, '  execFileSync("bash", [join(state.workspace, "scripts/sync-bun.sh"), "--check"], { stdio: "inherit" });', ""],
   ["Git identity unchecked", controller, 'git(bun, "rev-parse", "HEAD") !== manifest.bun.head || git(bun, "rev-parse", "HEAD^{tree}") !== manifest.bun.tree', "false"],
@@ -39,7 +43,7 @@ const mutations: [string, string, string, string][] = [
   ["duplicate common core", workflow, "          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh", "          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh\n          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh"],
   ["PR heavy save", workflow, "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-cargo-cache.outputs.cache-hit != 'true'", "steps.native-cargo-cache.outputs.cache-hit != 'true'"],
 ];
-const tests = ["scripts/ci-native-handoff.test.ts", "scripts/ci-jsc-prebuild.test.ts", "scripts/ci-cache-inputs.test.ts", "scripts/ci-cache-policy.test.ts", "scripts/ci-quality.test.ts", "scripts/test-web-guests.test.ts"];
+const tests = ["scripts/ci-build-tools.test.ts", "scripts/ci-native-handoff.test.ts", "scripts/ci-jsc-prebuild.test.ts", "scripts/ci-cache-inputs.test.ts", "scripts/ci-cache-policy.test.ts", "scripts/ci-quality.test.ts", "scripts/test-web-guests.test.ts"];
 function probe(): number {
   const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-native-mutations-"));
   try {
