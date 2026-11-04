@@ -112,7 +112,9 @@ check_jsc_webkit_tree() (
   rm -f -- "$index" || return 1
   GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" read-tree HEAD || return 1
   GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" apply --cached "$JSC_SRC/webkit-wasi.patch" || return 1
-  expected=$(GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" write-tree) || return 1
+  # --missing-ok gives the same tree id without checking that every blob exists: in this
+  # blobless clone that check fetched all of WebKit (~1.8 GB) into .git, which CI then shipped.
+  expected=$(GIT_INDEX_FILE="$index" git -C "$WEBKIT_DIR" write-tree --missing-ok) || return 1
   git -C "$WEBKIT_DIR" diff --quiet "$expected" --
 )
 
