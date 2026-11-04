@@ -180,7 +180,7 @@ test("the prebuild job saves its completed cache, and the native job imports it 
   expect(script).not.toContain("run_native_checks");
   expect(script).not.toContain("continue-on-error");
   expect(script).not.toContain("uses: actions/cache/save");
-  expect(rust).toContain('mv "$bundle/jsc-prebuild.log" "$RUNNER_TEMP/jsc-prebuild.log"');
+  expect(rust).toContain('tar --posix -xOf "$transfer" jsc-prebuild.log > "$RUNNER_TEMP/jsc-prebuild.log"');
   expect(rust).toContain("dist/web-guests-*.log\n            ${{ runner.temp }}/jsc-prebuild.log");
   expect(rust).toContain("if: always()\n        with:\n          name: web-guest-fixture-receipts");
 });
