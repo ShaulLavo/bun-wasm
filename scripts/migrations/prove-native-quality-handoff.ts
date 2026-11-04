@@ -5,7 +5,8 @@ import { join } from "node:path";
 
 const workflow = ".github/workflows/ci.yml";
 const controller = "scripts/ci-native-handoff.ts";
-const originals = new Map([workflow, controller].map(path => [path, readFileSync(path, "utf8")]));
+const targetRoots = "scripts/ci-native-handoff-paths.ts";
+const originals = new Map([workflow, controller, targetRoots].map(path => [path, readFileSync(path, "utf8")]));
 const mutations: [string, string, string, string][] = [
   ["needs-induced skip", workflow, "if: ${{ !cancelled() && needs.quality.result == 'success' && needs.quality.outputs.rust == 'true' }}", "if: needs.quality.outputs.rust == 'true'"],
   ["failed quality accepted", workflow, ' || "$NATIVE_QUALITY_RESULT" != success', ""],
@@ -30,6 +31,9 @@ const mutations: [string, string, string, string][] = [
   ["source verifier removed", controller, '  execFileSync("bash", [join(state.workspace, "scripts/sync-bun.sh"), "--check"], { stdio: "inherit" });', ""],
   ["Git identity unchecked", controller, 'git(bun, "rev-parse", "HEAD") !== manifest.bun.head || git(bun, "rev-parse", "HEAD^{tree}") !== manifest.bun.tree', "false"],
   ["credential config included", controller, '/^(?:HEAD|index|shallow|packed-refs)$/.test(metadata.rest)', '/^(?:HEAD|index|shallow|packed-refs|config)$/.test(metadata.rest)'],
+  ["missing required target root accepted", controller, '    else if (root.presence === "required") throw new Error(`Missing required native handoff root: ${root.path}`);\n', ""],
+  ["arbitrary target handed off", controller, "roots: nativeTargetRoots }", 'roots: requiredRoots(["."]) }'],
+  ["TLS probe root dropped", targetRoots, '  { path: "tls-probe", presence: "required",', '  { path: "tls-probe", presence: "optional",'],
   ["mtimes discarded", controller, "tar --posix --no-recursion", "tar --posix --mtime=@0 --no-recursion"],
   ["symlinks dereferenced", controller, "tar --posix --no-recursion", "tar --posix --dereference --no-recursion"],
   ["duplicate common core", workflow, "          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh", "          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh\n          CARGO_BUILD_JOBS=2 bash scripts/build-bun-core.sh"],

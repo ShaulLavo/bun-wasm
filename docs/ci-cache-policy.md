@@ -12,7 +12,10 @@ Exact hits are not saved again. Bash-web uses separate restore/save actions so
 its post-job action cannot create a large PR-scoped archive.
 The native Cargo restore and main-only v4 quality checkpoint belong to
 `Native quality checkpoint`. Its run artifact transfers compiled state to the
-existing native job. That job does not restore over the handoff. Its original
+existing native job. That job does not restore over the handoff. The target
+archive holds only the typed roots in `scripts/ci-native-handoff-paths.ts`:
+required roots that every producer run writes, and guest outputs that exist only
+after a warm cache restore. A missing required root fails packing. Its original
 main-only v2 final save uses the original restore hit/matched-key outputs passed
 from the quality producer. All primary and compatibility key inputs stay intact.
 The handoff queries Git only for tracked `node_modules` fixture paths, not the
