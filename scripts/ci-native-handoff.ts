@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { nativeTargetRoots, type NativeHandoffRoot } from "./ci-native-handoff-paths";
 
 const archiveNames = ["target.tar.zst", "cargo.tar.zst", "sources.tar.zst"] as const;
 type ArchiveName = typeof archiveNames[number];
@@ -40,12 +41,20 @@ function context() {
     },
   };
 }
-function layout(state: Context) {
+type Root = Pick<NativeHandoffRoot, "path" | "presence">;
+function requiredRoots(paths: readonly string[]): Root[] {
+  return paths.map(path => ({ path, presence: "required" }));
+}
+function layout(state: Context): { name: ArchiveName; directory: string; roots: readonly Root[] }[] {
   return [
-    { name: archiveNames[0], directory: state.target, roots: ["."] },
-    { name: archiveNames[1], directory: state.cargo, roots: ["registry", "git", "bin/cargo-machete"] },
-    { name: archiveNames[2], directory: state.workspace, roots: ["vendor/bun", "vendor/boringssl"] },
+    { name: archiveNames[0], directory: state.target, roots: nativeTargetRoots },
+    { name: archiveNames[1], directory: state.cargo, roots: requiredRoots(["registry", "git", "bin/cargo-machete"]) },
+    { name: archiveNames[2], directory: state.workspace, roots: requiredRoots(["vendor/bun", "vendor/boringssl"]) },
   ];
+}
+function missing(path: string): boolean {
+  try { lstatSync(path); return false; }
+  catch (error) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return true; throw error; }
 }
 function safeRelative(path: string): string {
   if (!path || isAbsolute(path) || path.split("/").includes("..") || /[\r\n\0]/.test(path)) throw new Error(`Unsafe archive path: ${path}`);
@@ -81,7 +90,15 @@ function trackDependencies(directory: string, path: string, tracked: Set<string>
     ancestors(tracked, path === "." ? file : `${path}/${file}`);
   }
 }
-function inventory(directory: string, roots: string[], archive: ArchiveName, repositories: GitDirectory[]): string[] {
+function presentRoots(directory: string, roots: readonly Root[]): string[] {
+  const present: string[] = [];
+  for (const root of roots) {
+    if (!missing(join(directory, safeRelative(root.path)))) present.push(root.path);
+    else if (root.presence === "required") throw new Error(`Missing required native handoff root: ${root.path}`);
+  }
+  return present;
+}
+function inventory(directory: string, roots: readonly string[], archive: ArchiveName, repositories: GitDirectory[]): string[] {
   const paths: string[] = [];
   const tracked = new Set<string>();
   function visit(path: string): void {
@@ -125,12 +142,13 @@ async function packArchives(state: Context, bundle: string, scratch: string): Pr
   mkdirSync(join(state.cargo, "git"), { recursive: true });
   for (const item of layout(state)) {
     const start = performance.now();
-    const paths = inventory(item.directory, item.roots, item.name, repositories);
+    const roots = presentRoots(item.directory, item.roots);
+    const paths = inventory(item.directory, roots, item.name, repositories);
     const list = join(scratch, "files");
     writeFileSync(list, paths.join("\0") + "\0");
     shell('tar --posix --no-recursion --null -C "$1" -T "$2" -cpf - | zstd -T2 -o "$3"', item.directory, list, join(bundle, item.name));
     archives[item.name] = await hash(join(bundle, item.name));
-    console.log(JSON.stringify({ archive: item.name, bytes: statSync(join(bundle, item.name)).size, packMs: Math.round(performance.now() - start) }));
+    console.log(JSON.stringify({ archive: item.name, roots, bytes: statSync(join(bundle, item.name)).size, packMs: Math.round(performance.now() - start) }));
   }
   const bun = { head: git(join(state.workspace, "vendor/bun"), "rev-parse", "HEAD"), tree: git(join(state.workspace, "vendor/bun"), "rev-parse", "HEAD^{tree}") };
   const manifest = { schema: 1, identity: state.identity, archives, repositories, bun };
@@ -151,9 +169,7 @@ function parseGit(value: unknown): GitDirectory {
   return { archive: name, path, bare: item.bare };
 }
 function absent(path: string): void {
-  try { lstatSync(path); }
-  catch (error) { if (error instanceof Error && "code" in error && error.code === "ENOENT") return; throw error; }
-  throw new Error(`Refusing to overlay native state: ${path}`);
+  if (!missing(path)) throw new Error(`Refusing to overlay native state: ${path}`);
 }
 function preflightDestinations(state: Context): void {
   for (const path of [state.target, join(state.cargo, "registry"), join(state.cargo, "git"), join(state.cargo, "bin/cargo-machete"), join(state.workspace, "vendor/bun"), join(state.workspace, "vendor/boringssl")]) absent(path);

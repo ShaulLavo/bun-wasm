@@ -9,8 +9,10 @@ import { memorySampler } from "./memory";
 test("memory sampler retains a sampled child peak until take and resets it", async () => {
   const directory = mkdtempSync(join(tmpdir(), "bun-wasm-memory-"));
   const executable = join(directory, "headless_shell");
-  symlinkSync("/usr/bin/sleep", executable);
-  const child = spawn(executable, ["60"]);
+  // Ubuntu 26.04's multicall coreutils picks the utility from the executable name, so a renamed
+  // `sleep` exits at once. Bun ignores its name and keeps running until it is killed.
+  symlinkSync(process.execPath, executable);
+  const child = spawn(executable, ["-e", "setInterval(() => {}, 60_000)"], { cwd: directory });
   const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
   const setInterval = spyOn(globalThis, "setInterval");
   const sampler = memorySampler(process.pid, 60_000);
@@ -21,6 +23,7 @@ test("memory sampler retains a sampled child peak until take and resets it", asy
     sample();
     child.kill();
     await closed;
+    expect(child.signalCode).toBe("SIGTERM");
     expect(sampler.take()).toBeGreaterThan(0);
     expect(sampler.take()).toBe(0);
   } finally {

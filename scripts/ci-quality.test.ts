@@ -465,15 +465,20 @@ for (const { job, install } of [
     const directory = mkdtempSync(join(tmpdir(), "bun-wasm-browser-apt-"));
     try {
       const mirrors = join(directory, "apt-mirrors.txt");
+      const sources = join(directory, "ubuntu.sources");
+      const security = "Types: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\n";
+      writeFileSync(sources, security);
       const fallbacks = "https://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n";
       const unrelated = "https://azure.archive.ubuntu.com/ubuntu/\tpriority:4\nhttp://azureXarchiveXubuntuXcom/ubuntu/\tpriority:5\n# http://azure.archive.ubuntu.com/ubuntu/\n";
       const preserved = fallbacks + unrelated;
-      writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n" + preserved);
-      const run = command.replaceAll("sudo ", "").replaceAll("/etc/apt/apt-mirrors.txt", mirrors);
+      writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:1\n" + preserved);
+      const run = command.replaceAll("sudo ", "").replaceAll("/etc/apt/apt-mirrors.txt", mirrors)
+        .replaceAll("/etc/apt/sources.list.d/ubuntu.sources", sources);
       const result = spawnSync("bash", ["-euc", run], { encoding: "utf8" });
       expect(result.stderr).toBe("");
       expect(result.status).toBe(0);
       expect(readFileSync(mirrors, "utf8")).toBe(preserved);
+      expect(readFileSync(sources, "utf8")).toBe(security.replace("http:", "https:"));
       expect(spawnSync("bash", ["-euc", run]).status).toBe(0);
       expect(readFileSync(mirrors, "utf8")).toBe(preserved);
       writeFileSync(mirrors, "http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\n");
