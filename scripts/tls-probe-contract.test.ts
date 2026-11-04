@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CargoTlsMessages, inspectCryptoOutput, recordCargo } from "./tls-probe-cargo.ts";
 import { sealTlsHandoff, verifyTlsHandoff } from "./tls-probe-handoff.ts";
-import { fileIdentity, treeIdentity } from "./tls-probe-inputs.ts";
+import { fileIdentity, tlsRepositoryIdentity, treeIdentity } from "./tls-probe-inputs.ts";
 import { tlsFixture, fixtureCrypto, fixtureHandoff, fixtureMessages, syntheticArchive, syntheticObject } from "./tls-probe-fixture.ts";
 import { discoverChecks, selectChecks } from "./test-checks.ts";
 
@@ -275,4 +276,30 @@ for (const language of ["C", "CXX"]) test(`WASI rejects conflicting cached ${lan
     writeFileSync(cache, readFileSync(cache, "utf8") + `CMAKE_${language}_COMPILER:FILEPATH=/foreign/compiler\n`);
     await expect(inspectCryptoOutput(f.context, "wasm32-wasip1", build)).rejects.toThrow();
   } finally { f.remove(); }
+});
+
+// Run 41815007941: the producer and consumer runner images listed the same scripts/tls-probe*.ts
+// bytes in different directory orders, so identical sources got different repository digests.
+const repositoryInputs = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "env.sh", "crates/bunwasm-crypto-sys", "jsc/wasi-jsc.cmake", "scripts/check-cmake-cache.cmake", "tests/native/tls-probe.cpp", "scripts/quality-command.ts", "scripts/quality-rust.ts", "scripts/quality-wasi.ts", "scripts/src/program-profile.ts", "checks/native-probe-tls.json"];
+function repositoryCopy(root: string, probes: readonly string[]): string {
+  const repo = join(import.meta.dir, "..");
+  for (const path of repositoryInputs) cpSync(join(repo, path), join(root, path), { recursive: true });
+  for (const name of probes) cpSync(join(repo, "scripts", name), join(root, "scripts", name));
+  return root;
+}
+test("TLS repository identity binds probe script bytes independently of directory order", async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "bun-wasm-tls-repository-"));
+  try {
+    const probes = readdirSync(join(import.meta.dir)).filter(name => /^tls-probe.*\.ts$/.test(name) && !/\.test\.ts$|tls-probe-fixture\.ts$/.test(name)).toSorted();
+    expect(probes.length).toBeGreaterThan(2);
+    for (const name of ["forward", "reverse"]) mkdirSync(join(scratch, name, "scripts"), { recursive: true });
+    const forward = repositoryCopy(join(scratch, "forward"), probes);
+    const reverse = repositoryCopy(join(scratch, "reverse"), probes.toReversed());
+    const listed = (root: string) => readdirSync(join(root, "scripts")).filter(name => name.startsWith("tls-probe"));
+    // The two copies really list in different orders, as the two runner images did.
+    expect(listed(forward)).not.toEqual(listed(reverse));
+    expect(await tlsRepositoryIdentity(reverse)).toBe(await tlsRepositoryIdentity(forward));
+    writeFileSync(join(reverse, "scripts", probes[0]!), readFileSync(join(reverse, "scripts", probes[0]!), "utf8") + "\n");
+    expect(await tlsRepositoryIdentity(reverse)).not.toBe(await tlsRepositoryIdentity(forward));
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
