@@ -38,6 +38,15 @@ without discarding successful reentrant imports. The Node host keeps its existin
 named module loader. `web/tests/browser-worker-modules.ts` repeats atomic transfer rollback twenty
 times per browser and also starts children outside the module scope.
 
+`EngineHost.importReady` and `watchWrite` in `web/src/engine-host.js` share active
+module-store writes across concurrent imports. Every waiting import observes a
+write's rejection. Settled writes leave the active set, preserving later sequential
+import behavior. This fixes a caller draining the pending list before another
+caller could await publication. The original test adapter in
+`web/tests/engine-host-module-writes.test.ts` controls writes for cyclic graphs in
+blob and data URL modes. It covers overlapping imports, shared write failures,
+and settlement cleanup. No upstream source or comparison revision changed.
+
 The inspected upstream implementation is `src/js/node/worker_threads.ts` at Bun
 revision `9510e74152073d850a18758ca41114d8f214ffa6`. Its module initialization needs
 `Worker.cpp` native bindings and the native web-worker constructor, so it cannot

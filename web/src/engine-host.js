@@ -378,8 +378,10 @@ class EngineHost {
     this.building = new Set();
     // promise -> {state, value}, for console.log and Bun.peek.
     this.promiseStates = new WeakMap();
-    // Pending writes to o.modules, awaited before the next import().
+    // New writes to o.modules, moved to `writing` by the next import(). `writing` keeps each
+    // write until it settles, so every import that overlaps it waits for it.
     this.storing = [];
+    this.writing = new Set();
     this.paths = new Map();
     this.contentModules = o.moduleUrls === "blob" ? new ContentModules({
       named: o.modules, source: key => this.moduleSource(key), contentUrl: (source, key) => this.url(source, key),
@@ -603,8 +605,15 @@ class EngineHost {
   /** Builds module `key` and its static dependencies, waits until the store has them, imports it. */
   async importReady(key) {
     const url = this.ensureModule(key);
-    if (this.storing.length > 0) await Promise.all(this.storing.splice(0));
+    for (const write of this.storing.splice(0)) this.watchWrite(write);
+    if (this.writing.size > 0) await Promise.all(this.writing);
     return import(url);
+  }
+
+  watchWrite(write) {
+    this.writing.add(write);
+    const settled = () => this.writing.delete(write);
+    write.then(settled, settled);
   }
 
   /** The URL of module `key` (a path or a builtin name), built with its dependencies. */
